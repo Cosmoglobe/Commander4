@@ -1,6 +1,10 @@
+from .detector import Detector
 from .scan import Scan
 
-class Detector:
+class SimpleDetector(Detector):
+    def __init__(self, scanlist):
+        self._scanlist = scanlist
+
     @property
     def blm(self):
         """Returns the spherical harmonic coefficients of the beam associated
@@ -20,8 +24,7 @@ class Detector:
 
     @property
     def scans(self) -> list[Scan]:
-        """Returns a list of Scan objects associated with this detector."""
-        raise NotImplementedError()
+        return self._scanlist
 
     @property
     def bandShape(self):
