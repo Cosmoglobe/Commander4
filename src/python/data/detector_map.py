@@ -20,7 +20,7 @@ class Detector:
 
     @property
     def map(self) -> np.array:
-        """Returns the map of the detector."""
+        """Returns the sky map of the detector."""
         raise NotImplementedError()
 
     @property
