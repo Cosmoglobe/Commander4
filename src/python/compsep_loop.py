@@ -59,7 +59,7 @@ def compsep_loop(comm, tod_master: int):
             print("Compsep: new job obtained")
 
         # get next data set for component separation
-        data = MPI.COMM_WORLD.recv(source=tod_master) if master else None 
+        data, iter, chain = MPI.COMM_WORLD.recv(source=tod_master) if master else None 
         # Broadcast te data to all tasks, or do anything else that's appropriate
         data = comm.bcast(data, root=0)
         if master:
