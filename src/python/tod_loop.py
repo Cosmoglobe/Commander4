@@ -1,21 +1,69 @@
 import numpy as np
 from mpi4py import MPI
-import time
 import h5py
 import healpy as hp
 from data import SimpleScan, SimpleDetector, SimpleDetectorGroup, SimpleBand, TodProcData
 from compsep_loop import compsep_loop
 
+def alm2map(alm, nside, lmax):
+    base = ducc0.healpix.Healpix_Base(nside, "RING")
+    geom = base.sht_info()
+    return ducc0.sht.synthesis(alm=alm.reshape((1,-1)),
+                               lmax=lmax,
+                               spin=0,
+                               nthreads=nthreads, **geom).reshape((-1,))
+
+# this is currently a list[list[list[alm]]]
+# the outermost list is over bands
+# the next inner list is over detector groups
+# the innermost list is over detectors
 class Compsep2TodprocData:
     pass
 
+# this is currently a list[list[list[(map, map_rms)]]]
+# the outermost list is over bands
+# the next inner list is over detector groups
+# the innermost list is over detectors
 class Tod2CompsepData:
     pass
 
+def get_empty_compsep_output(staticData: TodProcData) -> Compsep2TodprocData:
+    res = []
+    for band in staticData.bands:
+        resband = []
+        for detgrp in band.detectorGroups:
+            resgrp = []
+            for det in detgrp.detectors:
+                lmax = band.lmax
+                resgrp.append(np.zeros(hp.Alm.getsize(lmax), dtype=np.complex256))
+            resband.append(resgrp)
+        res.append(resband)
+    return res
 
 class MapMaker:
     def tod2map(staticData: TodProcData, compsepData: Compsep2TodprocData) -> Tod2CompsepData:
-        pass
+        res = []
+        for band, csband in zip(staticData.bands, compsepData):
+            resband = []
+            for detgrp, csdetgrp in zip(band.detectorGroups, csband):
+                resgrp = []
+                for det, det_cs_alm in zip(detgrp.detectors, csdetgrp):
+                    lmax = hp.Alm.getlmax(det_cs_alm.shape[0])
+                    nside = lmax//2
+                    map_estimate = alm2map(det_cs_alm, nside, lmax)
+                    for scan in det.scans:
+                        val, theta, phi, psi = scan.data
+                        pix = hp.ang2pix(nside, theta, phi)
+                        tod_unroll = map_estimate[pix]
+                        sigma0 = np.std(tod_unroll-val)/np.sqrt(2)
+                        detmap += np.bincount(pix, weights=val/sigma0**2, minlength=12*nside**2)
+                        detmap_inv_var += np.bincount(pix, weights=1.0/sigma0**2*np.ones(self.ntod), minlength=12*nside**2)
+                    detmap_rms =  1.0/np.sqrt(detmap_inv_var)
+                    detmap /= detmap_inv_var
+                    resgrp.append[(detmap, detmap_rms)]
+                resband.append(resgrp)
+            res.append(resband)
+        return res
 
 # adhoc TOD data reader, to be improved
 def read_data() -> TodProcData:
@@ -58,7 +106,7 @@ def tod_loop(comm, compsep_master, niter_gibbs):
 
     # we start with a fake output of component separation, containing
     # a completely empty sky(?)
-    compsep_output_black = FIXME!
+    compsep_output_black = get_empty_compsep_output(experiment_data)
 
     todproc_output_chain1 = mapMaker.tod2map(experiment_data, compsep_output_black)
 

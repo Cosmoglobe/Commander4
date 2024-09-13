@@ -5,10 +5,6 @@
 
 import numpy as np
 from mpi4py import MPI
-import time
-import h5py
-import healpy as hp
-from data import SimpleScan, SimpleDetector, SimpleDetectorGroup, SimpleBand, TodProcData
 from tod_loop import tod_loop
 from compsep_loop import compsep_loop
 
@@ -21,8 +17,6 @@ ntask_compsep = 1
 
 # number of iterations for the Gibbs loop
 niter_gibbs=10
-
-
 
 if __name__ == "__main__":
     # get data about world communicator
