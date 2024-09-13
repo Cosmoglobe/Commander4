@@ -5,5 +5,5 @@ class TodProcData:
         self._data = inp
 
     @property
-    def data(self) -> tuple[Band, ...]:
+    def bands(self) -> tuple[Band, ...]:
         return self._data
