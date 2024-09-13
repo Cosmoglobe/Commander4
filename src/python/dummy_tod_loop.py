@@ -75,20 +75,20 @@ class MapMaker:
 # adhoc TOD data reader, to be improved
 def read_data() -> TodProcData:
     h5_filename = '../../../commander4_sandbox/src/python/preproc_scripts/tod_example_64_s1.0_b20_dust.h5'
-    bands = ['0030', '0100', '0217', '0353']
+    bands = ['0030', '0100', '0353', '0545', '0857']
     nside = 64
     lmax = 128
     nscan=2
-    ntod=1000
     out=[]
     with h5py.File(h5_filename) as f:
         bandlist = []
         for band in bands:
             scanlist = []
             for iscan in range(nscan):
-                tod = f[f'{iscan+1:06}/{band}/tod'][:ntod].astype(np.float64)
-                pix = f[f'{iscan+1:06}/{band}/pix'][:ntod]
-                psi = f[f'{iscan+1:06}/{band}/psi'][:ntod].astype(np.float64)
+                print(band, iscan)
+                tod = f[f'{iscan+1:06}/{band}/tod'][()].astype(np.float64)
+                pix = f[f'{iscan+1:06}/{band}/pix'][()]
+                psi = f[f'{iscan+1:06}/{band}/psi'][()].astype(np.float64)
                 theta, phi = hp.pix2ang(nside, pix)
                 scanlist.append(SimpleScan(tod, theta, phi, psi, 0.))
             det = SimpleDetector(scanlist)  #, fsamp, ...)
