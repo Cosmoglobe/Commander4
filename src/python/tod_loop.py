@@ -15,7 +15,7 @@ def alm2map(alm, nside, lmax):
                                spin=0,
                                nthreads=nthreads, **geom).reshape((-1,))
 
-# this is currently a list[list[list[alm]]]
+# this is currently a list[list[list[map]]
 # the outermost list is over bands
 # the next inner list is over detector groups
 # the innermost list is over detectors
@@ -37,7 +37,8 @@ def get_empty_compsep_output(staticData: TodProcData) -> Compsep2TodprocData:
             resgrp = []
             for det in detgrp.detectors:
                 lmax = band.lmax
-                resgrp.append(np.zeros(hp.Alm.getsize(lmax), dtype=np.complex128))
+#                resgrp.append(np.zeros(hp.Alm.getsize(lmax), dtype=np.complex128))
+                resgrp.append(np.zeros(12*64**2,dtype=np.float64))
             resband.append(resgrp)
         res.append(resband)
     return res
@@ -52,16 +53,15 @@ class MapMaker:
             resband = []
             for detgrp, csdetgrp in zip(band.detectorGroups, csband):
                 resgrp = []
-                for det, det_cs_alm in zip(detgrp.detectors, csdetgrp):
-                    lmax = hp.Alm.getlmax(det_cs_alm.shape[0])
-                    nside = lmax//2
-                    map_estimate = alm2map(det_cs_alm, nside, lmax)
+                for det, det_cs_map in zip(detgrp.detectors, csdetgrp):
+                    print(det_cs_map.shape)
+                    nside = hp.npix2nside(det_cs_map.shape[0])
                     detmap = np.zeros(12*nside**2)
                     detmap_inv_var = np.zeros(12*nside**2)
                     for scan in det.scans:
                         val, theta, phi, psi = scan.data
                         pix = hp.ang2pix(nside, theta, phi)
-                        tod_unroll = map_estimate[pix]
+                        tod_unroll = det_cs_map[pix]
                         sigma0 = np.std(tod_unroll-val)/np.sqrt(2)
                         detmap += np.bincount(pix, weights=val/sigma0**2, minlength=12*nside**2)
                         detmap_inv_var += np.bincount(pix, minlength=12*nside**2)/sigma0**2

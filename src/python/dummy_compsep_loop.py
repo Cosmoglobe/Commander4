@@ -32,9 +32,9 @@ def compsep_loop(comm, tod_master: int):
                 for detgrp in band:
                     resgrp = []
                     for _ in detgrp:
-                        lmax = 128
-                        alm = np.zeros(hp.Alm.getsize(lmax=lmax), dtype=np.complex128)
-                        resgrp.append(alm)
+                        nside=64
+                        map = np.zeros(12*nside**2,dtype=np.float64)
+                        resgrp.append(map)
                     resband.append(resgrp)
                 res.append(resband)
             MPI.COMM_WORLD.send(res, dest=tod_master)
