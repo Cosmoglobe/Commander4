@@ -14,4 +14,5 @@ class SkyModel:
         """
         skymap = np.zeros((npix))
         for component in self.components:
-            skymap += component.get_sed(nu)
+            skymap += component.get_sky(nu)
+        return skymap

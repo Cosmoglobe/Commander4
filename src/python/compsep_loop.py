@@ -7,6 +7,7 @@ from data import SimpleScan, SimpleDetector, SimpleDetectorGroup, SimpleBand, To
 from data import SimpleDetectorMap, SimpleDetectorGroupMap, SimpleBandMap
 from model.component import CMB, ThermalDust
 from model.sky_model import SkyModel
+import matplotlib.pyplot as plt
 
 class Compsep2TodprocData:
     pass
@@ -75,14 +76,20 @@ def compsep_loop(comm, tod_master: int):
         for i_band in range(len(data)):
             band = data[i_band]
             for i_detgrp in range(len(band)):
-                detector_group = band.detgrplist[i_detgrp]
+                # detector_group = band.detgrplist[i_detgrp]
+                detector_group = band[i_detgrp]
                 for i_det in range(len(detector_group)):
-                    detector = detector_group.detlist[i_det]
+                    print(i_band, i_detgrp, i_det)
+                    # detector = detector_group.detlist[i_det]
+                    detector = detector_group[i_det]
                     # signal_maps.append(band.map_sky)
                     # rms_maps.append(band.map_rms)
                     signal_maps.append(detector[0])
                     rms_maps.append(detector[1])
-        
+                    hp.mollview(signal_maps[-1])
+                    plt.savefig(f"map_test_{i_band}_{i_det}.png")
+                    hp.mollview(rms_maps[-1])
+                    plt.savefig(f"rms_test_{i_band}_{i_det}.png")
         signal_maps = np.array(signal_maps)
         rms_maps = np.array(rms_maps)
         band_freqs = np.arange(1, signal_maps.shape[0]+1)
@@ -97,19 +104,39 @@ def compsep_loop(comm, tod_master: int):
 
         sky_model = SkyModel(component_list)
 
-        out_data = []
-        for i_band in range(len(detector)):
+        band_maps = []
+        for i_band in range(len(data)):
             band = data[i_band]
-            for i_detgrp in range(len(data)):
-                detector_group = band.detgrplist[i_detgrp]
-                detector_group_maps = []
+            detector_group_maps = []
+            for i_detgrp in range(len(band)):
+                detector_group = band[i_detgrp]
+                detector_maps = []
                 for i_det in range(len(detector_group)):
-                    detector = detector_group.detlist[i_det]
+                    detector = detector_group[i_det]
+                    detector_map = sky_model.get_sky_at_nu(1.0, 12*64**2)
+                    detector_maps.append(detector_map)
+                    hp.mollview(detector_map)
+                    plt.savefig(f"skymap_test_{i_band}_{i_det}.png")
+                detector_group_maps.append(detector_maps)
+            band_maps.append(detector_group_maps)
 
-                    detector_map = SimpleDetectorMap(sky_model.get_sky_at_nu(detector.nu))
-                    
-                    
-        out_data = SimpleDetectorGroup()
+        # band_maps = []
+        # for i_band in range(len(data)):
+        #     band = data[i_band]
+        #     detector_group_maps = []
+        #     for i_detgrp in range(len(band)):
+        #         # detector_group = band.detgrplist[i_detgrp]
+        #         detector_group = band[i_detgrp]
+        #         detector_maps = []
+        #         for i_det in range(len(detector_group)):
+        #             # detector = detector_group.detlist[i_det]
+        #             detector = detector_group[i_det]
+        #             # detector_map = SimpleDetectorMap(sky_model.get_sky_at_nu(detector.nu))
+        #             detector_map = SimpleDetectorMap(sky_model.get_sky_at_nu(1.0, 64), None)
+        #             detector_maps.append(detector_map)
+        #         detector_group_maps.append(detector_maps)
+        #     band_maps.append(detector_group_maps)
+        # out_data = SimpleBandMap(band_maps)
         
 
 
@@ -121,6 +148,6 @@ def compsep_loop(comm, tod_master: int):
 # detector would see. Probably best described as a set of a_lm
 
         if master:
-            MPI.COMM_WORLD.send(out_data, dest=tod_master)
+            MPI.COMM_WORLD.send(band_maps, dest=tod_master)
             print("Compsep: results sent back")
 
