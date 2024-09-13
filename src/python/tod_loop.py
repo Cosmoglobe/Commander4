@@ -118,7 +118,7 @@ def tod_loop(comm, compsep_master, niter_gibbs):
 
     todproc_output_chain1 = mapMaker.tod2map(experiment_data, compsep_output_black)
 
-    compset_output_chain2 = compsep_output_black
+    compsep_output_chain2 = compsep_output_black
  
     for i in range(niter_gibbs):
         if master:
