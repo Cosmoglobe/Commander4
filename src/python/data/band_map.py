@@ -1,6 +1,6 @@
 from .detector_group_map import DetectorGroupMap
 
-class Band:
+class BandMap:
     @property
     def lmax(self) -> int:
         """Returns the band limit necessary to work with data in this band. TBD"""

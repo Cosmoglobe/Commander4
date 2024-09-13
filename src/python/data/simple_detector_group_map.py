@@ -1,5 +1,5 @@
-from .detector_group import DetectorGroupMap
-from .detector import DetectorMap
+from .detector_group_map import DetectorGroupMap
+from .detector_map import DetectorMap
 
 class SimpleDetectorGroupMap(DetectorGroupMap):
     def __init__(self, detlist):

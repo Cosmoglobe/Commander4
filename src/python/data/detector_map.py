@@ -1,6 +1,6 @@
 import numpy as np
 
-class Detector:
+class DetectorMap:
     @property
     def blm(self):
         """Returns the spherical harmonic coefficients of the beam associated
