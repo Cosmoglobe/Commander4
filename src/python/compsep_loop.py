@@ -38,6 +38,11 @@ def amplitude_sampling_per_pix(map_sky, map_rms, freqs) -> np.array:
 
 # Component separation loop
 def compsep_loop(comm, tod_master: int):
+    try:
+        os.mkdir('maps')
+    except FileExistsError:
+        pass
+
     # am I the master of the compsep communicator?
     master = comm.Get_rank() == 0
     if master:
@@ -63,7 +68,7 @@ def compsep_loop(comm, tod_master: int):
         # Broadcast te data to all tasks, or do anything else that's appropriate
         data = comm.bcast(data, root=0)
         if master:
-            print("Compsep: data obtained. Working on it ...")
+            print("Compsep: data obtained for iteration {iter}. Working on it ...")
 
         # do stuff with data
         # time.sleep(1)
@@ -86,10 +91,10 @@ def compsep_loop(comm, tod_master: int):
                     # rms_maps.append(band.map_rms)
                     signal_maps.append(detector[0])
                     rms_maps.append(detector[1])
-                    hp.mollview(signal_maps[-1])
-                    plt.savefig(f"map_test_{i_band}_{i_det}.png")
+                    hp.mollview(signal_maps[-1], cmap="RdBu_r")
+                    plt.savefig(f"maps/map_sky_band{i_band}_det{i_det}_iter{iter}.png")
                     hp.mollview(rms_maps[-1])
-                    plt.savefig(f"rms_test_{i_band}_{i_det}.png")
+                    plt.savefig(f"maps/map_rms_band{i_band}_det{i_det}_iter{iter}.png")
         signal_maps = np.array(signal_maps)
         rms_maps = np.array(rms_maps)
         band_freqs = np.arange(1, signal_maps.shape[0]+1)
@@ -116,7 +121,7 @@ def compsep_loop(comm, tod_master: int):
                     detector_map = sky_model.get_sky_at_nu(1.0, 12*64**2)
                     detector_maps.append(detector_map)
                     hp.mollview(detector_map)
-                    plt.savefig(f"skymap_test_{i_band}_{i_det}.png")
+                    plt.savefig(f"maps/sky_realization_band{i_band}_det{i_det}_iter{iter}.png")
                 detector_group_maps.append(detector_maps)
             band_maps.append(detector_group_maps)
 
