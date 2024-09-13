@@ -69,7 +69,7 @@ def compsep_loop(comm, tod_master: int):
         # Broadcast te data to all tasks, or do anything else that's appropriate
         data = comm.bcast(data, root=0)
         if master:
-            print("Compsep: data obtained for iteration {iter}. Working on it ...")
+            print(f"Compsep: data obtained for iteration {iter}. Working on it ...")
 
         # do stuff with data
         # time.sleep(1)
@@ -94,8 +94,10 @@ def compsep_loop(comm, tod_master: int):
                     rms_maps.append(detector[1])
                     hp.mollview(signal_maps[-1], cmap="RdBu_r")
                     plt.savefig(f"maps/map_sky_band{i_band}_det{i_det}_iter{iter}.png")
+                    plt.close()
                     hp.mollview(rms_maps[-1])
                     plt.savefig(f"maps/map_rms_band{i_band}_det{i_det}_iter{iter}.png")
+                    plt.close()
         signal_maps = np.array(signal_maps)
         rms_maps = np.array(rms_maps)
         band_freqs = np.array([30, 100, 353, 545, 857])
@@ -123,6 +125,7 @@ def compsep_loop(comm, tod_master: int):
                     detector_maps.append(detector_map)
                     hp.mollview(detector_map)
                     plt.savefig(f"maps/sky_realization_band{i_band}_det{i_det}_iter{iter}.png")
+                    plt.close()
                 detector_group_maps.append(detector_maps)
             band_maps.append(detector_group_maps)
 
