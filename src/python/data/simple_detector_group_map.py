@@ -1,7 +1,7 @@
 from .detector_group import DetectorGroupMap
 from .detector import DetectorMap
 
-class SimpleDetectorGroup(DetectorGroupMap):
+class SimpleDetectorGroupMap(DetectorGroupMap):
     def __init__(self, detlist):
         self._detlist = detlist
 

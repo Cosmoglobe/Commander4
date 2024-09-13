@@ -4,13 +4,35 @@ import time
 import h5py
 import healpy as hp
 from data import SimpleScan, SimpleDetector, SimpleDetectorGroup, SimpleBand, TodProcData
-from tod_loop import tod_loop
+from data import SimpleDetectorMap, SimpleDetectorGroupMap, SimpleBandMap
+from model.component import CMB, ThermalDust
+from model.sky_model import SkyModel
 
 class Compsep2TodprocData:
     pass
 
 class Tod2CompsepData:
     pass
+
+def amplitude_sampling_per_pix(map_sky, map_rms, freqs) -> np.array:
+    ncomp = 2
+    nband, npix = map_sky.shape
+    comp_maps = np.zeros((ncomp, npix))
+    A = np.zeros((ncomp, ncomp, npix))
+    M = np.zeros((nband, ncomp))
+    cmb = CMB()
+    dust = ThermalDust()
+    for i in range(npix):
+        M[:,0] = cmb.get_sed(freqs)
+        M[:,1] = dust.get_sed(freqs)
+        x = M.T.dot((1/map_rms[:,i]**2*map_sky[:,i]))
+        x += M.T.dot(np.random.randn(nband)/map_rms[:,i])
+        A = (M.T.dot(np.diag(1/map_rms[:,i]**2)).dot(M))
+        try:
+            comp_maps[:,i] = np.linalg.solve(A, x)
+        except np.linalg.LinAlgError:
+            comp_maps[:,i] = 0
+    return comp_maps
 
 
 # Component separation loop
@@ -43,8 +65,55 @@ def compsep_loop(comm, tod_master: int):
             print("Compsep: data obtained. Working on it ...")
 
         # do stuff with data
-        time.sleep(1)
-        result = 2*data  # dummy
+        # time.sleep(1)
+        # result = 2*data  # dummy
+
+        # Assuming "data" is a nested list of shape (detgroups, dets, bands)
+        signal_maps = []
+        rms_maps = []
+        # band_freqs = []
+        for i_band in range(len(data)):
+            band = data[i_band]
+            for i_detgrp in range(len(band)):
+                detector_group = band.detgrplist[i_detgrp]
+                for i_det in range(len(detector_group)):
+                    detector = detector_group.detlist[i_det]
+                    # signal_maps.append(band.map_sky)
+                    # rms_maps.append(band.map_rms)
+                    signal_maps.append(detector[0])
+                    rms_maps.append(detector[1])
+        
+        signal_maps = np.array(signal_maps)
+        rms_maps = np.array(rms_maps)
+        band_freqs = np.arange(1, signal_maps.shape[0]+1)
+        comp_maps = amplitude_sampling_per_pix(signal_maps, rms_maps, band_freqs)
+
+        component_types = [CMB, ThermalDust]
+        component_list = []
+        for i, component_type in enumerate(component_types):
+            component = component_type()
+            component.component_map = comp_maps[i]
+            component_list.append(component)
+
+        sky_model = SkyModel(component_list)
+
+        out_data = []
+        for i_band in range(len(detector)):
+            band = data[i_band]
+            for i_detgrp in range(len(data)):
+                detector_group = band.detgrplist[i_detgrp]
+                detector_group_maps = []
+                for i_det in range(len(detector_group)):
+                    detector = detector_group.detlist[i_det]
+
+                    detector_map = SimpleDetectorMap(sky_model.get_sky_at_nu(detector.nu))
+                    
+                    
+        out_data = SimpleDetectorGroup()
+        
+
+
+
 
         # assemble result on master, via reduce, gather, whatever ...
         # send result
@@ -52,6 +121,6 @@ def compsep_loop(comm, tod_master: int):
 # detector would see. Probably best described as a set of a_lm
 
         if master:
-            MPI.COMM_WORLD.send(result, dest=tod_master)
+            MPI.COMM_WORLD.send(out_data, dest=tod_master)
             print("Compsep: results sent back")
 
