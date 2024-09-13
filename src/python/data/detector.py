@@ -19,7 +19,7 @@ class Detector:
         raise NotImplementedError()
 
     @property
-    def scans(self) -> list[Scan]:
+    def scans(self) -> tuple[Scan, ...]:
         """Returns a list of Scan objects associated with this detector."""
         raise NotImplementedError()
 

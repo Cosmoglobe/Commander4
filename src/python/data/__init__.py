@@ -2,6 +2,7 @@ from .scan import Scan
 from .detector import Detector
 from .detector_group import DetectorGroup
 from .band import Band
+from .tod_proc_data import TodProcData
 
 from .simple_scan import SimpleScan
 from .simple_detector import SimpleDetector

@@ -8,7 +8,7 @@ from mpi4py import MPI
 import time
 import h5py
 import healpy as hp
-from data import SimpleScan, SimpleDetector, SimpleDetectorGroup, SimpleBand
+from data import SimpleScan, SimpleDetector, SimpleDetectorGroup, SimpleBand, TodProcData
 
 # PARAMETERS (will be obtained from a parameter file or similar
 #             in the production version)
@@ -20,8 +20,18 @@ ntask_compsep = 1
 # number of iterations for the Gibbs loop
 niter_gibbs=10
 
+class Compsep2TodprocData:
+    pass
+
+class Tod2CompsepData:
+    pass
+
+class MapMaker:
+    def tod2map(staticData: TodProcData, compsepData: Compsep2TodprocData) -> Tod2CompsepData:
+        pass
+
 # adhoc TOD data reader, to be improved
-def read_data():
+def read_data() -> TodProcData:
     h5_filename = '../../../commander4_sandbox/src/python/preproc_scripts/tod_example_64_s1.0_b20_dust.h5'
     bands = ['0030', '0100', '0217', '0353']
     nside = 64
@@ -42,11 +52,11 @@ def read_data():
             det = SimpleDetector(scanlist)  #, fsamp, ...)
             detGroup = SimpleDetectorGroup([det])
             bandlist.append(SimpleBand([detGroup]))
-    return bandlist
+    return TodProcData(bandlist)
 
 
 # Component separation loop
-def compsep_loop(comm, tod_master):
+def compsep_loop(comm, tod_master: int):
     # am I the master of the compsep communicator?
     master = comm.Get_rank() == 0
     if master:
@@ -94,7 +104,7 @@ def tod_loop(comm, compsep_master):
     master = comm.Get_rank() == 0
 
     # Initialization for all TOD processing tasks goes here
-    experimental_data = read_data()
+    experiment_data = read_data()
 
 #    mapMaker = buildMapMaker(....)
 
@@ -105,7 +115,7 @@ def tod_loop(comm, compsep_master):
     # a completely empty sky(?)
     compsep_output_black = FIXME!
 
-    todproc_output_chain1 = mapMaker.tod2map(experimental_data, compsep_output_black)
+    todproc_output_chain1 = mapMaker.tod2map(experiment_data, compsep_output_black)
 
     compset_output_chain2 = compsep_output_black
  
@@ -119,7 +129,7 @@ def tod_loop(comm, compsep_master):
         # Chain #2
         # do TOD processing, resulting in compsep_input
         # at the same time, compsep is working on chain #1 data
-        todproc_output_chain2 = mapMaker.tod2map(experimental_data, compsep_output_chain2)
+        todproc_output_chain2 = mapMaker.tod2map(experiment_data, compsep_output_chain2)
         # del compsep_output_chain2
 
         # get compsep results for chain #1
@@ -136,7 +146,7 @@ def tod_loop(comm, compsep_master):
         # Chain #1
         # do TOD processing, resulting in compsep_input
         # at the same time, compsep is working on chain #2 data
-        todproc_output_chain1 = mapMaker.tod2map(experimental_data, compsep_output_chain1)
+        todproc_output_chain1 = mapMaker.tod2map(experiment_data, compsep_output_chain1)
         # del compsep_output_chain1
 
         # get compsep results for chain #2

@@ -7,6 +7,6 @@ class Band:
         raise NotImplementedError()
 
     @property
-    def detectorGroups(self) -> list[DetectorGroup]:
+    def detectorGroups(self) -> tuple[DetectorGroup, ...]:
         """Returns a list of Detector group objects associated with this band."""
         raise NotImplementedError()
