@@ -8,6 +8,7 @@ from data import SimpleDetectorMap, SimpleDetectorGroupMap, SimpleBandMap
 from model.component import CMB, ThermalDust
 from model.sky_model import SkyModel
 import matplotlib.pyplot as plt
+import os
 
 class Compsep2TodprocData:
     pass
@@ -97,7 +98,7 @@ def compsep_loop(comm, tod_master: int):
                     plt.savefig(f"maps/map_rms_band{i_band}_det{i_det}_iter{iter}.png")
         signal_maps = np.array(signal_maps)
         rms_maps = np.array(rms_maps)
-        band_freqs = np.arange(1, signal_maps.shape[0]+1)
+        band_freqs = np.array([30, 100, 353, 545, 857])
         comp_maps = amplitude_sampling_per_pix(signal_maps, rms_maps, band_freqs)
 
         component_types = [CMB, ThermalDust]
