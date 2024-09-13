@@ -86,7 +86,6 @@ def read_data() -> TodProcData:
         for band in bands:
             scanlist = []
             for iscan in range(nscan):
-                print(iscan, band)
                 tod = f[f'{iscan+1:06}/{band}/tod'][:ntod].astype(np.float64)
                 pix = f[f'{iscan+1:06}/{band}/pix'][:ntod]
                 psi = f[f'{iscan+1:06}/{band}/psi'][:ntod].astype(np.float64)
@@ -96,7 +95,6 @@ def read_data() -> TodProcData:
             detGroup = SimpleDetectorGroup([det])
             bandlist.append(SimpleBand([detGroup], lmax))
     return TodProcData(bandlist)
-
 
 
 # TOD processing loop
