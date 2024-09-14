@@ -151,6 +151,8 @@ def tod_loop(comm, compsep_master, niter_gibbs):
         # do TOD processing, resulting in compsep_input
         # at the same time, compsep is working on chain #2 data
         todproc_output_chain1 = mapMaker.tod2map(experiment_data, compsep_output_chain1)
+        # temporary hack: add band frequencies
+        todproc_output_chain1 = list(zip(todproc_output_chain1, freqlist))
         # del compsep_output_chain1
 
         # get compsep results for chain #2
