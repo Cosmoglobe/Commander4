@@ -13,6 +13,7 @@ from compsep_loop import compsep_loop
 
 # the number of MPI tasks we want to work on component separation;
 # the remaining tasks will do TOD processing
+ntask_tod = 1
 ntask_compsep = 1
 
 # number of iterations for the Gibbs loop
@@ -29,15 +30,27 @@ if __name__ == "__main__":
     # split the world communicator into a communicator for compsep and one for TOD
     # world rank [0; ntask_compsep[ => compsep
     # world rank [ntask_compsep; ntasks_total[ => TOD processing
-    mycomm = MPI.COMM_WORLD.Split(worldrank<ntask_compsep, key=worldrank)
+    if worldrank < ntask_tod:
+        color = 0  # TOD
+    elif worldrank < ntask_tod + ntask_compsep:
+        color = 1  # Compsep
+    else:
+        color = 2  # Constrained CMB
+    mycomm = MPI.COMM_WORLD.Split(color, key=worldrank)
+    print(f"MPI split performed, hi from worldrank {worldrank}, subcomrank {mycomm.Get_rank()} from color {color} of size {mycomm.Get_size()}.")
 
     # Determine the world ranks of the respective master tasks for compsep and TOD
     # We ensured that this works by the "key=worldrank" in the split command.
-    compsep_master = 0
-    tod_master = ntask_compsep
+    tod_master = 0 
+    compsep_master = ntask_tod
 
     # execute the appropriate part of the code (MPMD)
-    if worldrank < ntask_compsep:
-        compsep_loop(mycomm, tod_master)
-    else:
+    if color == 0:
+        print(f"Worldrank {worldrank}, subrank {mycomm.Get_rank()} going into compsep loop.")
         tod_loop(mycomm, compsep_master, niter_gibbs)
+    elif color == 1:
+        print(f"Worldrank {worldrank}, subrank {mycomm.Get_rank()} going into TOD loop.")
+        compsep_loop(mycomm, tod_master)
+    elif color == 2:
+        print(f"Worldrank {worldrank}, subrank {mycomm.Get_rank()} going into CMB loop.")
+        # constrained_cmb_loop(mycomm, tod_master)
