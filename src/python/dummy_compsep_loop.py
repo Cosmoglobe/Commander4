@@ -21,7 +21,7 @@ def compsep_loop(comm, tod_master: int):
         if master:
             print("Compsep: new job obtained; producing dummy output data")
 
-        data = MPI.COMM_WORLD.recv(source=tod_master) if master else None 
+        data, iter, chain = MPI.COMM_WORLD.recv(source=tod_master) if master else None 
         # Broadcast te data to all tasks, or do anything else that's appropriate
         data = comm.bcast(data, root=0)
         if master:

@@ -22,7 +22,7 @@ def alm2map(alm, nside, lmax):
 class Compsep2TodprocData:
     pass
 
-# this is currently a list[list[list[(map, map_rms)]]]
+# this is currently a list[tuple[(list[list[(map, map_rms)]],float]]
 # the outermost list is over bands
 # the next inner list is over detector groups
 # the innermost list is over detectors
@@ -67,7 +67,7 @@ class MapMaker:
                         detmap_inv_var += np.bincount(pix, minlength=12*nside**2)/sigma0**2
                     detmap_rms =  1.0/np.sqrt(detmap_inv_var)
                     detmap /= detmap_inv_var
-                    resgrp.append((detmap, detmap_rms))
+                    resgrp.append((detmap, detmap_rms,))
                 resband.append(resgrp)
             res.append(resband)
         return res
@@ -82,6 +82,7 @@ def read_data() -> TodProcData:
     out=[]
     with h5py.File(h5_filename) as f:
         bandlist = []
+        freqlist = []
         for band in bands:
             scanlist = []
             for iscan in range(nscan):
@@ -93,7 +94,8 @@ def read_data() -> TodProcData:
             det = SimpleDetector(scanlist)  #, fsamp, ...)
             detGroup = SimpleDetectorGroup([det])
             bandlist.append(SimpleBand([detGroup], lmax))
-    return TodProcData(bandlist)
+            freqlist.append(float(band))
+    return TodProcData(bandlist), freqlist
 
 
 # TOD processing loop
@@ -102,7 +104,7 @@ def tod_loop(comm, compsep_master, niter_gibbs):
     master = comm.Get_rank() == 0
 
     # Initialization for all TOD processing tasks goes here
-    experiment_data = read_data()
+    experiment_data, freqlist = read_data()
 
     mapMaker = MapMaker()
 
@@ -114,6 +116,8 @@ def tod_loop(comm, compsep_master, niter_gibbs):
     compsep_output_black = get_empty_compsep_output(experiment_data)
 
     todproc_output_chain1 = mapMaker.tod2map(experiment_data, compsep_output_black)
+    # temporary hack: add band frequencies
+    todproc_output_chain1 = list(zip(todproc_output_chain1, freqlist))
 
     compsep_output_chain2 = compsep_output_black
  
@@ -128,6 +132,8 @@ def tod_loop(comm, compsep_master, niter_gibbs):
         # do TOD processing, resulting in compsep_input
         # at the same time, compsep is working on chain #1 data
         todproc_output_chain2 = mapMaker.tod2map(experiment_data, compsep_output_chain2)
+        # temporary hack: add band frequencies
+        todproc_output_chain2 = list(zip(todproc_output_chain2, freqlist))
         # del compsep_output_chain2
 
         # get compsep results for chain #1

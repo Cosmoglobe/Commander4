@@ -6,7 +6,7 @@
 import numpy as np
 from mpi4py import MPI
 from tod_loop import tod_loop
-from dummy_compsep_loop import compsep_loop
+from compsep_loop import compsep_loop
 
 # PARAMETERS (will be obtained from a parameter file or similar
 #             in the production version)

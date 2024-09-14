@@ -65,9 +65,13 @@ def compsep_loop(comm, tod_master: int):
             print("Compsep: new job obtained")
 
         # get next data set for component separation
-        data, iter, chain = MPI.COMM_WORLD.recv(source=tod_master) if master else None 
+        data, iter, chain = MPI.COMM_WORLD.recv(source=tod_master) if master else None
         # Broadcast te data to all tasks, or do anything else that's appropriate
         data = comm.bcast(data, root=0)
+        # temporary hack: extract band frequencies from data
+        data, band_freqs = zip(*data)
+        band_freqs = np.array(band_freqs)
+
         if master:
             print(f"Compsep: data obtained for iteration {iter}. Working on it ...")
 
@@ -100,7 +104,8 @@ def compsep_loop(comm, tod_master: int):
                     plt.close()
         signal_maps = np.array(signal_maps)
         rms_maps = np.array(rms_maps)
-        band_freqs = np.array([30, 100, 353, 545, 857])
+# MR: should be no longer needed
+#        band_freqs = np.array([30, 100, 353, 545, 857])
         comp_maps = amplitude_sampling_per_pix(signal_maps, rms_maps, band_freqs)
 
         component_types = [CMB, ThermalDust]
