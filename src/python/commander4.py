@@ -7,6 +7,7 @@ import numpy as np
 from mpi4py import MPI
 from tod_loop import tod_loop
 from compsep_loop import compsep_loop
+from constrained_cmb_loop_MPI import constrained_cmb_loop_MPI
 from constrained_cmb_loop import constrained_cmb_loop
 
 # PARAMETERS (will be obtained from a parameter file or similar
@@ -14,9 +15,10 @@ from constrained_cmb_loop import constrained_cmb_loop
 
 # the number of MPI tasks we want to work on component separation;
 # the remaining tasks will do TOD processing
+use_MPI_for_CMB = True
 ntask_tod = 1
 ntask_compsep = 1
-ntask_cmb = 1
+ntask_cmb = 4
 doing_cmb = ntask_cmb > 0
 
 # number of iterations for the Gibbs loop
@@ -27,7 +29,13 @@ if __name__ == "__main__":
     worldsize, worldrank = MPI.COMM_WORLD.Get_size(), MPI.COMM_WORLD.Get_rank()
 
     if worldsize != (ntask_tod + ntask_compsep + ntask_cmb):
-        raise ValueError(f"Total number of MPI tasks ({worldsize}) must equal the sum of tasks for TOD ({ntask_tod}) + CompSep ({ntask_compsep}) + CMB realization ({ntask_cmb}).")
+        raise RuntimeError(f"Total number of MPI tasks ({worldsize}) must equal the sum of tasks for TOD ({ntask_tod}) + CompSep ({ntask_compsep}) + CMB realization ({ntask_cmb}).")
+    if (not use_MPI_for_CMB) and (ntask_cmb > 1):
+        raise RuntimeError(f"Number of MPI tasks allocated to CMB realization cannot be > 1 if 'use_MPI_for_CMB' is False.")
+    if ntask_tod > 1:
+        raise RuntimeError(f"TOD processing currently doesn't support more than 1 MPI task.")
+    if ntask_compsep > 1:
+        raise RuntimeError(f"CompSep currently doesn't support more than 1 MPI task.")
 
     # check if we have at least ntask_compsep+1 MPI tasks, otherwise abort
     if ntask_compsep+1 > worldsize:
@@ -60,7 +68,10 @@ if __name__ == "__main__":
         tod_loop(mycomm, compsep_master, niter_gibbs)
     elif color == 1:
         print(f"Worldrank {worldrank}, subrank {mycomm.Get_rank()} going into TOD loop.")
-        compsep_loop(mycomm, tod_master, cmb_master)
+        compsep_loop(mycomm, tod_master, cmb_master, use_MPI_for_CMB=True)
     elif color == 2:
         print(f"Worldrank {worldrank}, subrank {mycomm.Get_rank()} going into CMB loop.")
-        constrained_cmb_loop(mycomm, compsep_master)
+        if use_MPI_for_CMB:
+            constrained_cmb_loop_MPI(mycomm, compsep_master)
+        else:
+            constrained_cmb_loop(mycomm, compsep_master)

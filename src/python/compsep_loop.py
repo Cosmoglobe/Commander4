@@ -30,7 +30,7 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
 
 
 # Component separation loop
-def compsep_loop(comm, tod_master: int, cmb_master: int):
+def compsep_loop(comm, tod_master: int, cmb_master: int, use_MPI_for_CMB=True):
     try:
         os.mkdir('maps_comps')
     except FileExistsError:
@@ -75,11 +75,7 @@ def compsep_loop(comm, tod_master: int, cmb_master: int):
         rms_maps = []
         band_freqs = []
         for i_det in range(len(data)):
-            print(i_det)
-            # detector = detector_group.detlist[i_det]
             detector = data[i_det]
-            # signal_maps.append(band.map_sky)
-            # rms_maps.append(band.map_rms)
             signal_maps.append(detector.map_sky)
             rms_maps.append(detector.map_rms)
             band_freqs.append(detector.nu)
@@ -135,9 +131,12 @@ def compsep_loop(comm, tod_master: int, cmb_master: int):
             MPI.COMM_WORLD.send(detector_maps, dest=tod_master)
             print("Compsep: results sent back")
 
-            if not cmb_master is None:
+            if not cmb_master is None:  # cmb_master is set to None of we aren't doing CMB realizations.
                 MPI.COMM_WORLD.send(False, dest=cmb_master)  # we don't want to stop yet
                 # Sending maps to CMB loop. Not sending the last band, as it's very dust-contaminated
-                MPI.COMM_WORLD.send([[foreground_subtracted_maps[:4], rms_maps[:4]], iter, chain], dest=cmb_master)
+                if use_MPI_for_CMB:
+                    for i in range(4):
+                        MPI.COMM_WORLD.send([[foreground_subtracted_maps[i], rms_maps[i]], iter, chain], dest=cmb_master+i)
+                else:
+                    MPI.COMM_WORLD.send([[foreground_subtracted_maps[:4], rms_maps[:4]], iter, chain], dest=cmb_master)
                 print("Compsep: Sent results to CMB loop.")
-
