@@ -16,7 +16,7 @@ from constrained_cmb_loop import constrained_cmb_loop
 # the remaining tasks will do TOD processing
 ntask_tod = 1
 ntask_compsep = 1
-ntask_cmb = 0
+ntask_cmb = 1
 doing_cmb = ntask_cmb > 0
 
 # number of iterations for the Gibbs loop
@@ -25,6 +25,9 @@ niter_gibbs=6
 if __name__ == "__main__":
     # get data about world communicator
     worldsize, worldrank = MPI.COMM_WORLD.Get_size(), MPI.COMM_WORLD.Get_rank()
+
+    if worldsize != (ntask_tod + ntask_compsep + ntask_cmb):
+        raise ValueError(f"Total number of MPI tasks ({worldsize}) must equal the sum of tasks for TOD ({ntask_tod}) + CompSep ({ntask_compsep}) + CMB realization ({ntask_cmb}).")
 
     # check if we have at least ntask_compsep+1 MPI tasks, otherwise abort
     if ntask_compsep+1 > worldsize:
