@@ -62,7 +62,7 @@ class MapMaker:
                         val, theta, phi, psi = scan.data
                         pix = hp.ang2pix(nside, theta, phi)
                         tod_unroll = det_cs_map[pix]
-                        sigma0 = np.std(tod_unroll-val)/np.sqrt(2)
+                        sigma0 = np.std((tod_unroll-val)[1:] - (tod_unroll-val)[:-1])/np.sqrt(2)
                         detmap += np.bincount(pix, weights=val/sigma0**2, minlength=12*nside**2)
                         detmap_inv_var += np.bincount(pix, minlength=12*nside**2)/sigma0**2
                     detmap_rms =  1.0/np.sqrt(detmap_inv_var)
