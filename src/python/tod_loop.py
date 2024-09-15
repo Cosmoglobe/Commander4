@@ -3,7 +3,7 @@ from mpi4py import MPI
 import h5py
 import healpy as hp
 import ducc0
-from data import SimpleScan, SimpleDetector, DetectorMap
+from data_models import ScanTOD, DetectorTOD, DetectorMap
 
 nthreads=1
 
@@ -16,7 +16,7 @@ def alm2map(alm, nside, lmax):
                                nthreads=nthreads, **geom).reshape((-1,))
 
 
-def get_empty_compsep_output(staticData: list[SimpleDetector]) -> list[np.array]:
+def get_empty_compsep_output(staticData: list[DetectorTOD]) -> list[np.array]:
     res = []
     for i_det in range(len(staticData)):
         res.append(np.zeros(12*64**2,dtype=np.float64))
@@ -26,7 +26,7 @@ class MapMaker:
     def __init__(self):
         pass
 
-    def tod2map(self, staticData: list[SimpleDetector], compsepData: list[np.array]) -> list[DetectorMap]:
+    def tod2map(self, staticData: list[DetectorTOD], compsepData: list[np.array]) -> list[DetectorMap]:
         res = []
         for i_det in range(len(staticData)):
             det_cs_map = compsepData[i_det]
@@ -48,7 +48,7 @@ class MapMaker:
         return res
 
 
-def read_data() -> list[SimpleScan]:
+def read_data() -> list[ScanTOD]:
     h5_filename = '../../../commander4_sandbox/src/python/preproc_scripts/tod_example_64_s1.0_b20_dust.h5'
     bands = ['0030', '0100', '0353', '0545', '0857']
     nside = 64
@@ -62,8 +62,8 @@ def read_data() -> list[SimpleScan]:
                 pix = f[f'{iscan+1:06}/{band}/pix'][()]
                 psi = f[f'{iscan+1:06}/{band}/psi'][()].astype(np.float64)
                 theta, phi = hp.pix2ang(nside, pix)
-                scanlist.append(SimpleScan(tod, theta, phi, psi, 0.))
-            det = SimpleDetector(scanlist, float(band))
+                scanlist.append(ScanTOD(tod, theta, phi, psi, 0.))
+            det = DetectorTOD(scanlist, float(band))
             det_list.append(det)
     return det_list
 
