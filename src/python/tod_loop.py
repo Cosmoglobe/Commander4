@@ -78,7 +78,7 @@ def read_data() -> TodProcData:
     bands = ['0030', '0100', '0353', '0545', '0857']
     nside = 64
     lmax = 128
-    nscan=2
+    nscan=2001
     out=[]
     with h5py.File(h5_filename) as f:
         bandlist = []

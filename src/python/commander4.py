@@ -7,6 +7,7 @@ import numpy as np
 from mpi4py import MPI
 from tod_loop import tod_loop
 from compsep_loop import compsep_loop
+from constrained_cmb_loop import constrained_cmb_loop
 
 # PARAMETERS (will be obtained from a parameter file or similar
 #             in the production version)
@@ -17,7 +18,7 @@ ntask_tod = 1
 ntask_compsep = 1
 
 # number of iterations for the Gibbs loop
-niter_gibbs=10
+niter_gibbs=6
 
 if __name__ == "__main__":
     # get data about world communicator
@@ -43,6 +44,7 @@ if __name__ == "__main__":
     # We ensured that this works by the "key=worldrank" in the split command.
     tod_master = 0 
     compsep_master = ntask_tod
+    cmb_master = ntask_tod + ntask_compsep
 
     # execute the appropriate part of the code (MPMD)
     if color == 0:
@@ -50,7 +52,7 @@ if __name__ == "__main__":
         tod_loop(mycomm, compsep_master, niter_gibbs)
     elif color == 1:
         print(f"Worldrank {worldrank}, subrank {mycomm.Get_rank()} going into TOD loop.")
-        compsep_loop(mycomm, tod_master)
+        compsep_loop(mycomm, tod_master, cmb_master)
     elif color == 2:
         print(f"Worldrank {worldrank}, subrank {mycomm.Get_rank()} going into CMB loop.")
-        # constrained_cmb_loop(mycomm, tod_master)
+        constrained_cmb_loop(mycomm, compsep_master)
