@@ -133,7 +133,7 @@ def tod_loop(comm, compsep_master, niter_gibbs):
         if master:
             print("TOD: sending chain2 data")
             MPI.COMM_WORLD.send(False, dest=compsep_master)  # we don't want to stop yet
-            MPI.COMM_WORLD.send((todproc_output_chain2, i, 1), dest=compsep_master)
+            MPI.COMM_WORLD.send((todproc_output_chain2, i, 2), dest=compsep_master)
             # del todproc_output_chain2
 
         # get compsep results for chain #2
