@@ -3,7 +3,7 @@ from mpi4py import MPI
 import h5py
 import healpy as hp
 import ducc0
-from data import SimpleScan, SimpleDetector, SimpleDetectorGroup, SimpleBand, TodProcData
+from data import SimpleScan, SimpleDetector, DetectorMap
 
 nthreads=1
 
@@ -15,74 +15,46 @@ def alm2map(alm, nside, lmax):
                                spin=0,
                                nthreads=nthreads, **geom).reshape((-1,))
 
-# this is currently a list[list[list[map]]
-# the outermost list is over bands
-# the next inner list is over detector groups
-# the innermost list is over detectors
-class Compsep2TodprocData:
-    pass
 
-# this is currently a list[tuple[(list[list[(map, map_rms)]],float]]
-# the outermost list is over bands
-# the next inner list is over detector groups
-# the innermost list is over detectors
-class Tod2CompsepData:
-    pass
-
-def get_empty_compsep_output(staticData: TodProcData) -> Compsep2TodprocData:
+def get_empty_compsep_output(staticData: list[SimpleDetector]) -> list[np.array]:
     res = []
-    for band in staticData.bands:
-        resband = []
-        for detgrp in band.detectorGroups:
-            resgrp = []
-            for det in detgrp.detectors:
-                lmax = band.lmax
-#                resgrp.append(np.zeros(hp.Alm.getsize(lmax), dtype=np.complex128))
-                resgrp.append(np.zeros(12*64**2,dtype=np.float64))
-            resband.append(resgrp)
-        res.append(resband)
+    for i_det in range(len(staticData)):
+        res.append(np.zeros(12*64**2,dtype=np.float64))
     return res
 
 class MapMaker:
     def __init__(self):
         pass
 
-    def tod2map(self, staticData: TodProcData, compsepData: Compsep2TodprocData) -> Tod2CompsepData:
+    def tod2map(self, staticData: list[SimpleDetector], compsepData: list[np.array]) -> list[DetectorMap]:
         res = []
-        for band, csband in zip(staticData.bands, compsepData):
-            resband = []
-            for detgrp, csdetgrp in zip(band.detectorGroups, csband):
-                resgrp = []
-                for det, det_cs_map in zip(detgrp.detectors, csdetgrp):
-                    print(det_cs_map.shape)
-                    nside = hp.npix2nside(det_cs_map.shape[0])
-                    detmap = np.zeros(12*nside**2)
-                    detmap_inv_var = np.zeros(12*nside**2)
-                    for scan in det.scans:
-                        val, theta, phi, psi = scan.data
-                        pix = hp.ang2pix(nside, theta, phi)
-                        tod_unroll = det_cs_map[pix]
-                        sigma0 = np.std((tod_unroll-val)[1:] - (tod_unroll-val)[:-1])/np.sqrt(2)
-                        detmap += np.bincount(pix, weights=val/sigma0**2, minlength=12*nside**2)
-                        detmap_inv_var += np.bincount(pix, minlength=12*nside**2)/sigma0**2
-                    detmap_rms =  1.0/np.sqrt(detmap_inv_var)
-                    detmap /= detmap_inv_var
-                    resgrp.append((detmap, detmap_rms,))
-                resband.append(resgrp)
-            res.append(resband)
+        for i_det in range(len(staticData)):
+            det_cs_map = compsepData[i_det]
+            det_static = staticData[i_det]
+            nside = hp.npix2nside(det_cs_map.shape[0])
+            detmap_signal = np.zeros(12*nside**2)
+            detmap_inv_var = np.zeros(12*nside**2)
+            for scan in det_static.scans:
+                val, theta, phi, psi = scan.data
+                pix = hp.ang2pix(nside, theta, phi)
+                tod_unroll = det_cs_map[pix]
+                sigma0 = np.std((tod_unroll-val)[1:] - (tod_unroll-val)[:-1])/np.sqrt(2)
+                detmap_signal += np.bincount(pix, weights=val/sigma0**2, minlength=12*nside**2)
+                detmap_inv_var += np.bincount(pix, minlength=12*nside**2)/sigma0**2
+            detmap_rms =  1.0/np.sqrt(detmap_inv_var)
+            detmap_signal /= detmap_inv_var
+            detmap = DetectorMap(detmap_signal, detmap_rms, det_static.nu)
+            res.append(detmap)
         return res
 
-# adhoc TOD data reader, to be improved
-def read_data() -> TodProcData:
+
+def read_data() -> list[SimpleScan]:
     h5_filename = '../../../commander4_sandbox/src/python/preproc_scripts/tod_example_64_s1.0_b20_dust.h5'
     bands = ['0030', '0100', '0353', '0545', '0857']
     nside = 64
-    lmax = 128
     nscan=2001
-    out=[]
     with h5py.File(h5_filename) as f:
-        bandlist = []
-        freqlist = []
+        det_list = []
         for band in bands:
             scanlist = []
             for iscan in range(nscan):
@@ -91,11 +63,9 @@ def read_data() -> TodProcData:
                 psi = f[f'{iscan+1:06}/{band}/psi'][()].astype(np.float64)
                 theta, phi = hp.pix2ang(nside, pix)
                 scanlist.append(SimpleScan(tod, theta, phi, psi, 0.))
-            det = SimpleDetector(scanlist)  #, fsamp, ...)
-            detGroup = SimpleDetectorGroup([det])
-            bandlist.append(SimpleBand([detGroup], lmax))
-            freqlist.append(float(band))
-    return TodProcData(bandlist), freqlist
+            det = SimpleDetector(scanlist, float(band))
+            det_list.append(det)
+    return det_list
 
 
 # TOD processing loop
@@ -104,20 +74,16 @@ def tod_loop(comm, compsep_master, niter_gibbs):
     master = comm.Get_rank() == 0
 
     # Initialization for all TOD processing tasks goes here
-    experiment_data, freqlist = read_data()
+    experiment_data = read_data()
 
     mapMaker = MapMaker()
 
     # Chain #1
     # do TOD processing, resulting in maps_chain1
-
-    # we start with a fake output of component separation, containing
-    # a completely empty sky(?)
+    # we start with a fake output of component separation, containing a completely empty sky
     compsep_output_black = get_empty_compsep_output(experiment_data)
 
     todproc_output_chain1 = mapMaker.tod2map(experiment_data, compsep_output_black)
-    # temporary hack: add band frequencies
-    todproc_output_chain1 = list(zip(todproc_output_chain1, freqlist))
 
     compsep_output_chain2 = compsep_output_black
  
@@ -129,12 +95,8 @@ def tod_loop(comm, compsep_master, niter_gibbs):
             # del todproc_output_chain1
 
         # Chain #2
-        # do TOD processing, resulting in compsep_input
-        # at the same time, compsep is working on chain #1 data
+        # do TOD processing, resulting in compsep_input at the same time, compsep is working on chain #1 data
         todproc_output_chain2 = mapMaker.tod2map(experiment_data, compsep_output_chain2)
-        # temporary hack: add band frequencies
-        todproc_output_chain2 = list(zip(todproc_output_chain2, freqlist))
-        # del compsep_output_chain2
 
         # get compsep results for chain #1
         if master:
@@ -148,12 +110,8 @@ def tod_loop(comm, compsep_master, niter_gibbs):
             # del todproc_output_chain2
 
         # Chain #1
-        # do TOD processing, resulting in compsep_input
-        # at the same time, compsep is working on chain #2 data
+        # do TOD processing, resulting in compsep_input at the same time, compsep is working on chain #2 data
         todproc_output_chain1 = mapMaker.tod2map(experiment_data, compsep_output_chain1)
-        # temporary hack: add band frequencies
-        todproc_output_chain1 = list(zip(todproc_output_chain1, freqlist))
-        # del compsep_output_chain1
 
         # get compsep results for chain #2
         if master:

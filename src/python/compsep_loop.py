@@ -3,20 +3,12 @@ from mpi4py import MPI
 import time
 import h5py
 import healpy as hp
-from data import SimpleScan, SimpleDetector, SimpleDetectorGroup, SimpleBand, TodProcData
-from data import SimpleDetectorMap, SimpleDetectorGroupMap, SimpleBandMap
 from model.component import CMB, ThermalDust
 from model.sky_model import SkyModel
 import matplotlib.pyplot as plt
 import os
 
-class Compsep2TodprocData:
-    pass
-
-class Tod2CompsepData:
-    pass
-
-def amplitude_sampling_per_pix(map_sky, map_rms, freqs) -> np.array:
+def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:
     ncomp = 2
     nband, npix = map_sky.shape
     comp_maps = np.zeros((ncomp, npix))
@@ -75,42 +67,33 @@ def compsep_loop(comm, tod_master: int, cmb_master: int):
         data, iter, chain = MPI.COMM_WORLD.recv(source=tod_master) if master else None
         # Broadcast te data to all tasks, or do anything else that's appropriate
         data = comm.bcast(data, root=0)
-        # temporary hack: extract band frequencies from data
-        data, band_freqs = zip(*data)
-        band_freqs = np.array(band_freqs)
 
         if master:
             print(f"Compsep: data obtained for chain {chain}, iteration {iter}. Working on it ...")
 
-        # do stuff with data
-        # time.sleep(1)
-        # result = 2*data  # dummy
-
-        # Assuming "data" is a nested list of shape (detgroups, dets, bands)
         signal_maps = []
         rms_maps = []
-        # band_freqs = []
-        for i_band in range(len(data)):
-            band = data[i_band]
-            for i_detgrp in range(len(band)):
-                # detector_group = band.detgrplist[i_detgrp]
-                detector_group = band[i_detgrp]
-                for i_det in range(len(detector_group)):
-                    print(i_band, i_detgrp, i_det)
-                    # detector = detector_group.detlist[i_det]
-                    detector = detector_group[i_det]
-                    # signal_maps.append(band.map_sky)
-                    # rms_maps.append(band.map_rms)
-                    signal_maps.append(detector[0])
-                    rms_maps.append(detector[1])
-                    hp.mollview(signal_maps[-1], cmap="RdBu_r", title=f"Signal map, band {i_band}, det {i_det}, chain {chain}, iter {iter}")
-                    plt.savefig(f"maps_sky/map_sky_band{i_band}_det{i_det}_chain{chain}_iter{iter}.png")
-                    plt.close()
-                    hp.mollview(rms_maps[-1], title=f"RMS map, band {i_band}, det {i_det}, chain {chain}, iter {iter}")
-                    plt.savefig(f"maps_sky/map_rms_band{i_band}_det{i_det}_chain{chain}_iter{iter}.png")
-                    plt.close()
+        band_freqs = []
+        for i_det in range(len(data)):
+            print(i_det)
+            # detector = detector_group.detlist[i_det]
+            detector = data[i_det]
+            # signal_maps.append(band.map_sky)
+            # rms_maps.append(band.map_rms)
+            signal_maps.append(detector.map_sky)
+            rms_maps.append(detector.map_rms)
+            band_freqs.append(detector.nu)
+            hp.mollview(signal_maps[-1], cmap="RdBu_r", title=f"Signal map, det {i_det}, chain {chain}, iter {iter}")
+            plt.savefig(f"maps_sky/map_sky_det{i_det}_chain{chain}_iter{iter}.png")
+            plt.close()
+            hp.mollview(rms_maps[-1], title=f"RMS map, det {i_det}, chain {chain}, iter {iter}")
+            plt.savefig(f"maps_sky/map_rms_det{i_det}_chain{chain}_iter{iter}.png")
+            plt.close()
+
+
         signal_maps = np.array(signal_maps)
         rms_maps = np.array(rms_maps)
+        band_freqs = np.array(band_freqs)
         comp_maps = amplitude_sampling_per_pix(signal_maps, rms_maps, band_freqs)
 
         component_types = [CMB, ThermalDust]
@@ -122,43 +105,34 @@ def compsep_loop(comm, tod_master: int, cmb_master: int):
 
         sky_model = SkyModel(component_list)
 
-        band_maps = []
+        npix = signal_maps.shape[-1]
+        detector_maps = []
         foreground_maps = []
-        for i_band in range(len(data)):
-            band = data[i_band]
-            detector_group_maps = []
-            for i_detgrp in range(len(band)):
-                detector_group = band[i_detgrp]
-                detector_maps = []
-                for i_det in range(len(detector_group)):
-                    detector = detector_group[i_det]
-                    detector_map = sky_model.get_sky_at_nu(band_freqs[i_band], 12*64**2)
-                    detector_maps.append(detector_map)
-                    cmb_sky = component_list[0].get_sky(band_freqs[i_band])
-                    dust_sky = component_list[1].get_sky(band_freqs[i_band])
-                    foreground_maps.append(dust_sky)
-                    hp.mollview(detector_map, title=f"Full sky realization at {band_freqs[i_band]:.2f}GHz")
-                    plt.savefig(f"maps_comps/sky_realization_band{i_band}_det{i_det}_chain{chain}_iter{iter}.png")
-                    plt.close()
-                    hp.mollview(cmb_sky, title=f"CMB realization at {band_freqs[i_band]:.2f}GHz, band {i_band}, det {i_det}, chain {chain}, iter {iter}")
-                    plt.savefig(f"maps_comps/CMB_realization_band{i_band}_det{i_det}_chain{chain}_iter{iter}.png")
-                    plt.close()
-                    hp.mollview(dust_sky, title=f"Thermal dust realization at {band_freqs[i_band]:.2f}GHz, band {i_band}, det {i_det}, chain {chain}, iter {iter}")
-                    plt.savefig(f"maps_comps/Dust_realization_band{i_band}_det{i_det}_chain{chain}_iter{iter}.png")
-                    plt.close()
-                    hp.mollview(signal_maps[i_band]-dust_sky, title=f"Foreground subtracted sky at {band_freqs[i_band]:.2f}GHz, band {i_band}, det {i_det}, chain {chain}, iter {iter}")
-                    plt.savefig(f"maps_comps/foreground_subtr_band{i_band}_det{i_det}_chain{chain}_iter{iter}.png")
-                    plt.close()
-                detector_group_maps.append(detector_maps)
-            band_maps.append(detector_group_maps)
+        for i_det in range(len(data)):
+            detector_map = sky_model.get_sky_at_nu(band_freqs[i_det], 12*64**2)
+            detector_maps.append(detector_map)
+            cmb_sky = component_list[0].get_sky(band_freqs[i_det])
+            dust_sky = component_list[1].get_sky(band_freqs[i_det])
+            foreground_maps.append(sky_model.get_foreground_sky_at_nu(band_freqs[i_det], npix))
+            hp.mollview(detector_map, title=f"Full sky realization at {band_freqs[i_det]:.2f}GHz")
+            plt.savefig(f"maps_comps/sky_realization_det{i_det}_chain{chain}_iter{iter}.png")
+            plt.close()
+            hp.mollview(cmb_sky, title=f"CMB realization at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
+            plt.savefig(f"maps_comps/CMB_realization_det{i_det}_chain{chain}_iter{iter}.png")
+            plt.close()
+            hp.mollview(dust_sky, title=f"Thermal dust realization at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
+            plt.savefig(f"maps_comps/Dust_realization_det{i_det}_chain{chain}_iter{iter}.png")
+            plt.close()
+            hp.mollview(signal_maps[i_det]-dust_sky, title=f"Foreground subtracted sky at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
+            plt.savefig(f"maps_comps/foreground_subtr_det{i_det}_chain{chain}_iter{iter}.png")
+            plt.close()
+            detector_maps.append(detector_map)
 
         foreground_maps = np.array(foreground_maps)
         foreground_subtracted_maps = signal_maps - foreground_maps
 
-
-
         if master:
-            MPI.COMM_WORLD.send(band_maps, dest=tod_master)
+            MPI.COMM_WORLD.send(detector_maps, dest=tod_master)
             print("Compsep: results sent back")
 
             if not cmb_master is None:

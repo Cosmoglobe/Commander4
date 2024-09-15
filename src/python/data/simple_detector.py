@@ -2,8 +2,13 @@ from .detector import Detector
 from .scan import Scan
 
 class SimpleDetector(Detector):
-    def __init__(self, scanlist):
+    def __init__(self, scanlist, nu):
         self._scanlist = scanlist
+        self._nu = nu
+
+    @property
+    def nu(self):
+        return self._nu
 
     @property
     def blm(self):
