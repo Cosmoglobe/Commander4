@@ -16,6 +16,8 @@ from constrained_cmb_loop import constrained_cmb_loop
 # the remaining tasks will do TOD processing
 ntask_tod = 1
 ntask_compsep = 1
+ntask_cmb = 0
+doing_cmb = ntask_cmb > 0
 
 # number of iterations for the Gibbs loop
 niter_gibbs=6
@@ -44,7 +46,10 @@ if __name__ == "__main__":
     # We ensured that this works by the "key=worldrank" in the split command.
     tod_master = 0 
     compsep_master = ntask_tod
-    cmb_master = ntask_tod + ntask_compsep
+    if doing_cmb:
+        cmb_master = ntask_tod + ntask_compsep
+    else:
+        cmb_master = None
 
     # execute the appropriate part of the code (MPMD)
     if color == 0:

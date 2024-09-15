@@ -64,8 +64,9 @@ def compsep_loop(comm, tod_master: int, cmb_master: int):
         if stop:
             if master:
                 print("Compsep: stop requested; exiting")
-                print("Compsep: Sending stop signal to CMB")
-                MPI.COMM_WORLD.send(True, dest=cmb_master)
+                if not cmb_master is None:
+                    print("Compsep: Sending stop signal to CMB")
+                    MPI.COMM_WORLD.send(True, dest=cmb_master)
             return
         if master:
             print("Compsep: new job obtained")
@@ -160,8 +161,9 @@ def compsep_loop(comm, tod_master: int, cmb_master: int):
             MPI.COMM_WORLD.send(band_maps, dest=tod_master)
             print("Compsep: results sent back")
 
-            MPI.COMM_WORLD.send(False, dest=cmb_master)  # we don't want to stop yet
-            # Sending maps to CMB loop
-            MPI.COMM_WORLD.send([[foreground_subtracted_maps, rms_maps], iter, chain], dest=cmb_master)
-            print("Compsep: Sent results to CMB loop.")
+            if not cmb_master is None:
+                MPI.COMM_WORLD.send(False, dest=cmb_master)  # we don't want to stop yet
+                # Sending maps to CMB loop. Not sending the last band, as it's very dust-contaminated
+                MPI.COMM_WORLD.send([[foreground_subtracted_maps[:4], rms_maps[:4]], iter, chain], dest=cmb_master)
+                print("Compsep: Sent results to CMB loop.")
 

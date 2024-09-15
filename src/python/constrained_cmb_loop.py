@@ -6,7 +6,7 @@ from mpi4py import MPI
 import matplotlib.pyplot as plt
 import os
 
-nthreads = 32  # Number of threads to use for ducc SHTs.
+nthreads = 32  # Number of threads to use for ducc S
 VERBOSE = False
 
 
@@ -197,10 +197,14 @@ def constrained_cmb_loop(comm, compsep_master: int):
             plt.savefig(f"maps_CMB/CMB_fluct_chain{chain}_iter{iter}.png")
             plt.close()
 
+            hp.mollview(CMB_mean_field_map+CMB_fluct_map, cmap="RdBu_r", title=f"Joint constrained CMB realization chain{chain} iter{iter}")
+            plt.savefig(f"maps_CMB/CMB_joint_realization_chain{chain}_iter{iter}.png")
+            plt.close()
+
             plt.figure()
             plt.plot(ell, Z*CMB_mean_field_Cl, label="Cl CMB mean field")
             plt.plot(ell, Z*CMB_fluct_Cl, label="Cl CMB fluct")
-            plt.plot(ell, Z*CMB_mean_field_Cl + CMB_fluct_Cl, label="Cl CMB joint (sum)")
+            plt.plot(ell, Z*CMB_mean_field_Cl + CMB_fluct_Cl, label="Cl CMB joint")
             plt.plot(ell, Z*hp.alm2cl(hp.map2alm(signal_maps[0])), label="CL observed sky")
             plt.plot(ell, Z*constrained_cmb_solver.Cl_true, label="True CMB Cl", c="k")
             plt.legend()
