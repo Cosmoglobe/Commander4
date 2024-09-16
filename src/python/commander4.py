@@ -4,6 +4,7 @@
 # uppercase MPI functions.
 
 import numpy as np
+import os
 from mpi4py import MPI
 from tod_loop import tod_loop
 from compsep_loop import compsep_loop
@@ -27,6 +28,10 @@ niter_gibbs=6
 if __name__ == "__main__":
     # get data about world communicator
     worldsize, worldrank = MPI.COMM_WORLD.Get_size(), MPI.COMM_WORLD.Get_rank()
+
+    if worldrank == 0:
+        if not os.path.isdir("../../output/"):
+            os.mkdir("../../output/")
 
     if worldsize != (ntask_tod + ntask_compsep + ntask_cmb):
         raise RuntimeError(f"Total number of MPI tasks ({worldsize}) must equal the sum of tasks for TOD ({ntask_tod}) + CompSep ({ntask_compsep}) + CMB realization ({ntask_cmb}).")

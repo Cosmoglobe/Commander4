@@ -143,15 +143,13 @@ class ConstrainedCMB:
 
 
 def constrained_cmb_loop(comm, compsep_master: int):
-    try:
-        os.mkdir('maps_CMB')
-    except FileExistsError:
-        pass
-    try:
-        os.mkdir('plots')
-    except FileExistsError:
-        pass
     master = comm.Get_rank() == 0
+    if master:
+        if not os.path.isdir("../../output/maps_CMB/"):
+            os.mkdir("../../output/maps_CMB/")
+        if not os.path.isdir("../../output/plots/"):
+            os.mkdir("../../output/plots/")
+
     while True:
         # check for simulation end
         stop = MPI.COMM_WORLD.recv(source=compsep_master) if master else False
@@ -190,15 +188,15 @@ def constrained_cmb_loop(comm, compsep_master: int):
             ell = constrained_cmb_solver.ell
             Z = ell*(ell+1)/(2*np.pi)
             hp.mollview(CMB_mean_field_map, cmap="RdBu_r", title=f"Constrained mean field CMB realization chain{chain} iter{iter}")
-            plt.savefig(f"maps_CMB/CMB_mean_field_chain{chain}_iter{iter}.png")
+            plt.savefig(f"../../output/maps_CMB/CMB_mean_field_chain{chain}_iter{iter}.png")
             plt.close()
 
             hp.mollview(CMB_fluct_map, cmap="RdBu_r", title=f"Constrained fluctuation CMB realization chain{chain} iter{iter}")
-            plt.savefig(f"maps_CMB/CMB_fluct_chain{chain}_iter{iter}.png")
+            plt.savefig(f"../../output/maps_CMB/CMB_fluct_chain{chain}_iter{iter}.png")
             plt.close()
 
             hp.mollview(CMB_mean_field_map+CMB_fluct_map, cmap="RdBu_r", title=f"Joint constrained CMB realization chain{chain} iter{iter}")
-            plt.savefig(f"maps_CMB/CMB_joint_realization_chain{chain}_iter{iter}.png")
+            plt.savefig(f"../../output/maps_CMB/CMB_joint_realization_chain{chain}_iter{iter}.png")
             plt.close()
 
             plt.figure()
@@ -211,4 +209,4 @@ def constrained_cmb_loop(comm, compsep_master: int):
             plt.xscale("log")
             plt.yscale("log")
             plt.ylim(1e-2, 1e6)
-            plt.savefig(f"plots/Cl_CMB_chain{chain}_iter{iter}.png")
+            plt.savefig(f"../../output/plots/Cl_CMB_chain{chain}_iter{iter}.png")

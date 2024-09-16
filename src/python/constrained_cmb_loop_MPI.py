@@ -6,7 +6,6 @@ from mpi4py import MPI
 import matplotlib.pyplot as plt
 import os
 
-CG_TAG = 55
 
 nthreads = 32  # Number of threads to use for ducc SHTs.
 VERBOSE = False
@@ -158,7 +157,7 @@ class ConstrainedCMB:
             maxiter = 351
         while CG_solver.err > err_tol:
             for irank in range(1, self.nprocs):
-                self.comm.send(False, irank, tag=CG_TAG)
+                self.comm.send(False, irank)  # Send "don't stop" signal to worked tasks.
 
             CG_solver.step()
             self.iter += 1
@@ -168,7 +167,7 @@ class ConstrainedCMB:
                 print(f"Warning: Maximum number of iterations ({maxiter}) reached in CG.")
                 break
         for irank in range(1, self.nprocs):
-            self.comm.send(True, irank, tag=CG_TAG)
+            self.comm.send(True, irank)  # Send "stop" signal to worker tasks.
         print(f"CG finished after {self.iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {err_tol})")
         s_bestfit = CG_solver.x
 
@@ -178,14 +177,11 @@ class ConstrainedCMB:
 def constrained_cmb_loop_MPI(comm, compsep_master: int):
     master = comm.Get_rank() == 0
     if master:
-        try:
-            os.mkdir('maps_CMB')
-        except FileExistsError:
-            pass
-        try:
-            os.mkdir('plots')
-        except FileExistsError:
-            pass
+        if not os.path.isdir("../../output/maps_CMB/"):
+            os.mkdir("../../output/maps_CMB/")
+        if not os.path.isdir("../../output/plots/"):
+            os.mkdir("../../output/plots/")
+
     while True:
         # check for simulation end
         stop = MPI.COMM_WORLD.recv(source=compsep_master) if master else False
@@ -215,8 +211,8 @@ def constrained_cmb_loop_MPI(comm, compsep_master: int):
             CMB_mean_field_Cl = hp.alm2cl(CMB_mean_field_alms)
             CMB_mean_field_map = alm2map(CMB_mean_field_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax)
         else:
-            while not comm.recv(source=0, tag=CG_TAG):
-                constrained_cmb_solver.worker_LHS_func()
+            while not comm.recv(source=0):  # Looking for "stop" signal.
+                constrained_cmb_solver.worker_LHS_func()  # If not asked to stop, compute LHS.
 
         constrained_cmb_solver = ConstrainedCMB(signal_maps, rms_maps, iter, comm)
         if master:
@@ -225,19 +221,19 @@ def constrained_cmb_loop_MPI(comm, compsep_master: int):
             CMB_fluct_Cl = hp.alm2cl(CMB_fluct_alms)
             CMB_fluct_map = alm2map(CMB_fluct_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax)
         else:
-            while not comm.recv(source=0, tag=CG_TAG):
-                constrained_cmb_solver.worker_LHS_func()
+            while not comm.recv(source=0):  # Looking for "stop" signal.
+                constrained_cmb_solver.worker_LHS_func()  # If not asked to stop, compute LHS.
 
         if master:
             # Plotting stuff
             ell = constrained_cmb_solver.ell
             Z = ell*(ell+1)/(2*np.pi)
             hp.mollview(CMB_mean_field_map, cmap="RdBu_r", title=f"Constrained mean field CMB realization chain{chain} iter{iter}")
-            plt.savefig(f"maps_CMB/CMB_mean_field_chain{chain}_iter{iter}.png")
+            plt.savefig(f"../../output/maps_CMB/CMB_mean_field_chain{chain}_iter{iter}.png")
             plt.close()
 
             hp.mollview(CMB_fluct_map, cmap="RdBu_r", title=f"Constrained fluctuation CMB realization chain{chain} iter{iter}")
-            plt.savefig(f"maps_CMB/CMB_fluct_chain{chain}_iter{iter}.png")
+            plt.savefig(f"../../output/maps_CMB/CMB_fluct_chain{chain}_iter{iter}.png")
             plt.close()
 
             plt.figure()
@@ -250,4 +246,4 @@ def constrained_cmb_loop_MPI(comm, compsep_master: int):
             plt.xscale("log")
             plt.yscale("log")
             plt.ylim(1e-2, 1e6)
-            plt.savefig(f"plots/Cl_CMB_chain{chain}_iter{iter}.png")
+            plt.savefig(f"../../output/plots/Cl_CMB_chain{chain}_iter{iter}.png")
