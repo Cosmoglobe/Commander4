@@ -1,0 +1,11 @@
+output_paths:
+  plots: "../../plots/"
+
+
+niter_gibbs: 5
+
+MPI_config:
+  ntask_tod: 1
+  ntask_compsep: 1
+  ntask_cmb: 4
+  use_MPI_for_CMB: True

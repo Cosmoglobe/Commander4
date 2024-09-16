@@ -70,7 +70,7 @@ def read_data() -> list[ScanTOD]:
 
 
 # TOD processing loop
-def tod_loop(comm, compsep_master, niter_gibbs):
+def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
     # am I the master of the TOD communicator?
     master = comm.Get_rank() == 0
 
