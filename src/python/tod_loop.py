@@ -4,6 +4,7 @@ import h5py
 import healpy as hp
 import ducc0
 from data_models import ScanTOD, DetectorTOD, DetectorMap
+from utils import single_det_mapmaker_python
 
 nthreads=1
 
@@ -22,30 +23,30 @@ def get_empty_compsep_output(staticData: list[DetectorTOD]) -> list[np.array]:
         res.append(np.zeros(12*64**2,dtype=np.float64))
     return res
 
-class MapMaker:
-    def __init__(self):
-        pass
 
-    def tod2map(self, staticData: list[DetectorTOD], compsepData: list[np.array]) -> list[DetectorMap]:
-        res = []
-        for i_det in range(len(staticData)):
-            det_cs_map = compsepData[i_det]
-            det_static = staticData[i_det]
-            nside = hp.npix2nside(det_cs_map.shape[0])
-            detmap_signal = np.zeros(12*nside**2)
-            detmap_inv_var = np.zeros(12*nside**2)
-            for scan in det_static.scans:
-                val, theta, phi, psi = scan.data
-                pix = hp.ang2pix(nside, theta, phi)
-                tod_unroll = det_cs_map[pix]
-                sigma0 = np.std((tod_unroll-val)[1:] - (tod_unroll-val)[:-1])/np.sqrt(2)
-                detmap_signal += np.bincount(pix, weights=val/sigma0**2, minlength=12*nside**2)
-                detmap_inv_var += np.bincount(pix, minlength=12*nside**2)/sigma0**2
-            detmap_rms =  1.0/np.sqrt(detmap_inv_var)
-            detmap_signal /= detmap_inv_var
-            detmap = DetectorMap(detmap_signal, detmap_rms, det_static.nu)
-            res.append(detmap)
-        return res
+def tod2map(staticData: list[DetectorTOD], compsepData: list[np.array]) -> list[DetectorMap]:
+    res = []
+    for i_det in range(len(staticData)):
+        det_cs_map = compsepData[i_det]
+        det_static = staticData[i_det]
+
+        # nside = hp.npix2nside(det_cs_map.shape[0])
+        # detmap_signal = np.zeros(12*nside**2)
+        # detmap_inv_var = np.zeros(12*nside**2)
+        # for scan in det_static.scans:
+        #     scan_map, theta, phi, psi = scan.data
+        #     pix = hp.ang2pix(nside, theta, phi)
+        #     sky_subtracted_tod = det_cs_map[pix] - scan_map
+        #     sigma0 = np.std(sky_subtracted_tod[1:] - sky_subtracted_tod[:-1])/np.sqrt(2)
+        #     detmap_signal += np.bincount(pix, weights=scan_map/sigma0**2, minlength=12*nside**2)
+        #     detmap_inv_var += np.bincount(pix, minlength=12*nside**2)/sigma0**2
+        # detmap_rms =  1.0/np.sqrt(detmap_inv_var)
+        # detmap_signal /= detmap_inv_var
+
+        detmap_signal, detmap_rms = single_det_mapmaker_python(det_static, det_cs_map)
+        detmap = DetectorMap(detmap_signal, detmap_rms, det_static.nu)
+        res.append(detmap)
+    return res
 
 
 def read_data() -> list[ScanTOD]:
@@ -76,14 +77,12 @@ def tod_loop(comm, compsep_master, niter_gibbs):
     # Initialization for all TOD processing tasks goes here
     experiment_data = read_data()
 
-    mapMaker = MapMaker()
-
     # Chain #1
     # do TOD processing, resulting in maps_chain1
     # we start with a fake output of component separation, containing a completely empty sky
     compsep_output_black = get_empty_compsep_output(experiment_data)
 
-    todproc_output_chain1 = mapMaker.tod2map(experiment_data, compsep_output_black)
+    todproc_output_chain1 = tod2map(experiment_data, compsep_output_black)
 
     compsep_output_chain2 = compsep_output_black
  
@@ -96,7 +95,7 @@ def tod_loop(comm, compsep_master, niter_gibbs):
 
         # Chain #2
         # do TOD processing, resulting in compsep_input at the same time, compsep is working on chain #1 data
-        todproc_output_chain2 = mapMaker.tod2map(experiment_data, compsep_output_chain2)
+        todproc_output_chain2 = tod2map(experiment_data, compsep_output_chain2)
 
         # get compsep results for chain #1
         if master:
@@ -111,7 +110,7 @@ def tod_loop(comm, compsep_master, niter_gibbs):
 
         # Chain #1
         # do TOD processing, resulting in compsep_input at the same time, compsep is working on chain #2 data
-        todproc_output_chain1 = mapMaker.tod2map(experiment_data, compsep_output_chain1)
+        todproc_output_chain1 = tod2map(experiment_data, compsep_output_chain1)
 
         # get compsep results for chain #2
         if master:
