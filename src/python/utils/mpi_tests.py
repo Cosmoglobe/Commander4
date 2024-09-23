@@ -1,11 +1,30 @@
 import numpy as np
 from mpi4py import MPI
 from time import time
+import argparse
+
+
+def do_benchmark(comm, work, name, msg_size):
+    comm.Barrier()
+    t0 = time()
+    work()
+    t1 = time()
+    tmax = comm.allreduce(t1-t0, MPI.MAX)
+    if comm.rank == 0:
+        print(f"{name}: {tmax}s, {1e-9*msg_size/tmax}GB/s")
+
 
 def collectiveBench(comm, size):
     """Tests performance of collective communications of the given size
        on the given communicator. Uses the buffer protocol-based mpi4py
-       scheme, i.e. requires array-like objects."""
+       scheme, i.e. requires array-like objects.
+
+    Parameters
+    ----------
+    comm : MPI comunicator to use
+    size : float
+        message size in bytes
+    """
     if comm.rank == 0 and size < 1e6:
         print("Warning: small message size. You may not get good estimates for actual performance")
 
@@ -15,38 +34,25 @@ def collectiveBench(comm, size):
     # warming up
     for i in range(10):
         comm.Barrier()
-    t0 = time()
-    comm.Barrier()
-    t1 = time()
-    if comm.rank == 0:
-        print(f"Barrier time: {t1-t0}s")
+    do_benchmark(comm, lambda : comm.Barrier(), "Barrier", 0)
     buf = np.ones(int(size/8), dtype=np.float64)
     recvbuf = buf.copy()
-    t0 = time()
-    comm.Bcast(buf, 0)
-    comm.Barrier()
-    t1 = time()
-    if comm.rank == 0:
-        print(f"Broadcast: {t1-t0}s, {1e-9*size*(comm.size-1)/(t1-t0)}GB/s")
-    comm.Barrier()
-    t0 = time()
-    comm.Reduce(buf, recvbuf, MPI.SUM, 0)
-    comm.Barrier()
-    t1 = time()
-    if comm.rank == 0:
-        print(f"Reduce to master: {t1-t0}s, {1e-9*size*(comm.size-1)/(t1-t0)}GB/s")
-    comm.Barrier()
-    t0 = time()
-    comm.Allreduce(buf, recvbuf, MPI.SUM)
-    comm.Barrier()
-    t1 = time()
-    if comm.rank == 0:
-        print(f"Allreduce: {t1-t0}s, {1e-9*size*(2*(comm.size-1))/(t1-t0)}GB/s")
+    do_benchmark(comm, lambda : comm.Bcast(buf, 0), "Bcast", size*(comm.size-1))
+    do_benchmark(comm, lambda : comm.Reduce(buf, recvbuf, MPI.SUM, 0), "Reduce", size*(comm.size-1))
+    do_benchmark(comm, lambda : comm.Allreduce(buf, recvbuf, MPI.SUM), "Allreduce", size*2*(comm.size-1))
+
 
 def collectiveBenchSimple(comm, size):
     """Tests performance of collective communications of the given size
        on the given communicator. Uses the "simple" mpi4py scheme, i.e. without
-       relying on the buffer protocol."""
+       relying on the buffer protocol.
+
+    Parameters
+    ----------
+    comm : MPI comunicator to use
+    size : float
+        message size in bytes
+    """
     if comm.rank == 0 and size < 1e6:
         print("Warning: small message size. You may not get good estimates for actual performance")
 
@@ -56,35 +62,19 @@ def collectiveBenchSimple(comm, size):
     # warming up
     for i in range(10):
         comm.Barrier()
-    t0 = time()
-    comm.Barrier()
-    t1 = time()
-    if comm.rank == 0:
-        print(f"Barrier time: {t1-t0}s")
-    buf = np.ones(int(size/8), dtype=np.float64)
-    t0 = time()
-    recvbuf = comm.bcast(buf, 0)
-    comm.Barrier()
-    t1 = time()
-    del recvbuf
-    if comm.rank == 0:
-        print(f"Broadcast: {t1-t0}s, {1e-9*size*(comm.size-1)/(t1-t0)}GB/s")
-    comm.Barrier()
-    t0 = time()
-    recvbuf = comm.reduce(buf, MPI.SUM, 0)
-    comm.Barrier()
-    t1 = time()
-    del recvbuf
-    if comm.rank == 0:
-        print(f"Reduce to master: {t1-t0}s, {1e-9*size*(comm.size-1)/(t1-t0)}GB/s")
-    comm.Barrier()
-    t0 = time()
-    recvbuf = comm.allreduce(buf, MPI.SUM)
-    comm.Barrier()
-    t1 = time()
-    del recvbuf
-    if comm.rank == 0:
-        print(f"Allreduce: {t1-t0}s, {1e-9*size*(2*(comm.size-1))/(t1-t0)}GB/s")
 
-collectiveBench(MPI.COMM_WORLD, 1e8)
-collectiveBenchSimple(MPI.COMM_WORLD, 1e8)
+    do_benchmark(comm, lambda : comm.Barrier(), "Barrier", 0)
+    buf = np.ones(int(size/8), dtype=np.float64)
+    do_benchmark(comm, lambda : comm.bcast(buf, 0), "bcast", size*(comm.size-1))
+    do_benchmark(comm, lambda : comm.reduce(buf, MPI.SUM, 0), "reduce", size*(comm.size-1))
+    do_benchmark(comm, lambda : comm.allreduce(buf, MPI.SUM), "allreduce", size*2*(comm.size-1))
+
+
+parser = argparse.ArgumentParser(
+                    prog='mpi_tests',
+                    description='Simple MPI benchmarks')
+parser.add_argument('message_size', type=float, help="message size in bytes")
+args = parser.parse_args()
+
+collectiveBench(MPI.COMM_WORLD, args.message_size)
+collectiveBenchSimple(MPI.COMM_WORLD, args.message_size)
