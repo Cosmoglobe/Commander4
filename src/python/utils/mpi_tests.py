@@ -2,6 +2,7 @@ import numpy as np
 from mpi4py import MPI
 from time import time
 import argparse
+from numpy.testing import assert_ as myassert
 
 
 def do_benchmark(comm, work, name, msg_size):
@@ -38,8 +39,14 @@ def collectiveBench(comm, size):
     buf = np.ones(int(size/8), dtype=np.float64)
     recvbuf = buf.copy()
     do_benchmark(comm, lambda : comm.Bcast(buf, 0), "Bcast", size*(comm.size-1))
-    do_benchmark(comm, lambda : comm.Reduce(buf, recvbuf, MPI.SUM, 0), "Reduce", size*(comm.size-1))
+    myassert((buf==1).all(), "Bcast problem")
+    do_benchmark(comm, lambda : comm.Reduce(buf, recvbuf if comm.rank == 0 else None, MPI.SUM, 0), "Reduce", size*(comm.size-1))
+    myassert((buf==1).all(), "Bcast problem")
+    if comm.rank == 0:
+        myassert((recvbuf==comm.size).all(), "Reduce problem")
     do_benchmark(comm, lambda : comm.Allreduce(buf, recvbuf, MPI.SUM), "Allreduce", size*2*(comm.size-1))
+    myassert((buf==1).all(), "Bcast problem")
+    myassert((recvbuf==comm.size).all(), "Allreduce problem")
 
 
 def collectiveBenchInplace(comm, size):
@@ -58,7 +65,7 @@ def collectiveBenchInplace(comm, size):
         print("Warning: small message size. You may not get good estimates for actual performance")
 
     if comm.rank == 0:
-        print(f"Testing buffer-based collective communications on {comm.size} tasks with a message size of {size/1e9}GB")
+        print(f"Testing in-place buffer-based collective communications on {comm.size} tasks with a message size of {size/1e9}GB")
 
     # warming up
     for i in range(10):
@@ -66,8 +73,11 @@ def collectiveBenchInplace(comm, size):
     do_benchmark(comm, lambda : comm.Barrier(), "Barrier", 0)
     buf = np.ones(int(size/8), dtype=np.float64)
     do_benchmark(comm, lambda : comm.Bcast(buf, 0), "Bcast", size*(comm.size-1))
-    do_benchmark(comm, lambda : comm.Reduce(MPI.IN_PLACE, buf, MPI.SUM, 0), "Reduce", size*(comm.size-1))
+    myassert((buf==1).all(), "Bcast problem")
+    do_benchmark(comm, lambda : comm.Reduce(MPI.IN_PLACE if comm.rank==0 else buf, buf if comm.rank==0 else None, MPI.SUM, 0), "Reduce", size*(comm.size-1))
+    myassert((buf==(comm.size if comm.rank == 0 else 1)).all(), "Reduce problem")
     do_benchmark(comm, lambda : comm.Allreduce(MPI.IN_PLACE, buf, MPI.SUM), "Allreduce", size*2*(comm.size-1))
+    myassert((buf==2*comm.size-1).all(), "Reduce problem")
 
 
 def collectiveBenchPersistent(comm, size):
@@ -130,8 +140,11 @@ def collectiveBenchSimple(comm, size):
     do_benchmark(comm, lambda : comm.Barrier(), "Barrier", 0)
     buf = np.ones(int(size/8), dtype=np.float64)
     do_benchmark(comm, lambda : comm.bcast(buf, 0), "bcast", size*(comm.size-1))
+    myassert((buf==1).all(), "Bcast problem")
     do_benchmark(comm, lambda : comm.reduce(buf, MPI.SUM, 0), "reduce", size*(comm.size-1))
+    myassert((buf==1).all(), "Bcast problem")
     do_benchmark(comm, lambda : comm.allreduce(buf, MPI.SUM), "allreduce", size*2*(comm.size-1))
+    myassert((buf==1).all(), "Bcast problem")
 
 
 parser = argparse.ArgumentParser(
@@ -142,5 +155,5 @@ args = parser.parse_args()
 
 collectiveBench(MPI.COMM_WORLD, args.message_size)
 collectiveBenchSimple(MPI.COMM_WORLD, args.message_size)
-#collectiveBenchInplace(MPI.COMM_WORLD, args.message_size)
+collectiveBenchInplace(MPI.COMM_WORLD, args.message_size)
 #collectiveBenchPersistent(MPI.COMM_WORLD, args.message_size)
