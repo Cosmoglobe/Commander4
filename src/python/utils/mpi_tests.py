@@ -27,7 +27,7 @@ def collectiveBench(comm, size):
         message size in bytes
     """
     if comm.rank == 0 and size < 1e6:
-        print("Warning: small message size. You may not get good estimates for actual performance")
+        print("Warning: small message size. You may not get good estimates for actual performance. We recommend using 1e6 or higher.")
 
     if comm.rank == 0:
         print(f"Testing buffer-based collective communications on {comm.size} tasks with a message size of {size/1e9}GB")
@@ -85,7 +85,7 @@ def collectiveBenchPersistent(comm, size):
     on the given communicator. Uses the buffer protocol-based mpi4py
     scheme, i.e. requires array-like objects.
     This routine uses persistent collective, a feature introcuced in the
-    MPI 4 standard. It might not work wir most current MPI libraries.
+    MPI 4 standard. It might not work with most current MPI libraries.
 
     Parameters
     ----------
@@ -146,6 +146,25 @@ def collectiveBenchSimple(comm, size):
     do_benchmark(comm, lambda : comm.allreduce(buf, MPI.SUM), "allreduce", size*2*(comm.size-1))
     myassert((buf==1).all(), "Bcast problem")
 
+
+def report_status():
+    for i in range(MPI.COMM_WORLD.size):
+        if i == MPI.COMM_WORLD.rank:
+            print(f"task #{MPI.COMM_WORLD.rank}:")
+            import sys
+            print("Python", sys.version)
+            vers = MPI.Get_version()
+            print(f"mpi4py {vers[0]}.{vers[1]}")
+            print("MPI:", MPI.Get_library_version())
+            print()
+            print("initialized: ", MPI.Is_initialized())
+        MPI.COMM_WORLD.Barrier()
+   
+
+if not MPI.Is_initialized():
+    MPI.Init()
+
+report_status()
 
 parser = argparse.ArgumentParser(
                     prog='mpi_tests',
