@@ -11,6 +11,7 @@ from tod_loop import tod_loop
 from compsep_loop import compsep_loop
 from constrained_cmb_loop_MPI import constrained_cmb_loop_MPI
 from constrained_cmb_loop import constrained_cmb_loop
+from traceback import print_exc
 
 
 def main():
@@ -77,6 +78,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        print(error)
-        print("Error encountered, calling MPI abort.")
+        print_exc()  # Print the full exception raise, including trace-back.
+        print(f">>>>>>>> Error encountered on rank {MPI.COMM_WORLD.Get_rank()}, calling MPI abort.")
         MPI.COMM_WORLD.Abort()
