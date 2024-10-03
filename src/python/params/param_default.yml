@@ -5,7 +5,7 @@ output_paths:
 niter_gibbs: 5
 
 MPI_config:
-  ntask_tod: 1
+  ntask_tod: 11
   ntask_compsep: 1
-  ntask_cmb: 4
+  ntask_cmb: 0
   use_MPI_for_CMB: True
