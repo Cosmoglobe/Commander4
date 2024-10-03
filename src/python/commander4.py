@@ -12,11 +12,11 @@ from compsep_loop import compsep_loop
 from constrained_cmb_loop_MPI import constrained_cmb_loop_MPI
 from constrained_cmb_loop import constrained_cmb_loop
 
-# Parse parameter file
-from parse_params import params
 
-if __name__ == "__main__":
-
+def main():
+    # Parse parameter file
+    from parse_params import params
+        
     worldsize, worldrank = MPI.COMM_WORLD.Get_size(), MPI.COMM_WORLD.Get_rank()
     if worldrank == 0:
         print("### PARAMETERS ###\n", yaml.dump(params, allow_unicode=True, default_flow_style=False))
@@ -71,3 +71,12 @@ if __name__ == "__main__":
             constrained_cmb_loop_MPI(mycomm, compsep_master, params)
         else:
             constrained_cmb_loop(mycomm, compsep_master, params)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        print(error)
+        print("Error encountered, calling MPI abort.")
+        MPI.COMM_WORLD.Abort()
