@@ -4,7 +4,7 @@ import h5py
 import healpy as hp
 import ducc0
 from data_models import ScanTOD, DetectorTOD, DetectorMap
-from utils import single_det_mapmaker_python
+from utils import single_det_mapmaker_python, single_det_mapmaker
 
 nthreads=1
 
@@ -43,7 +43,8 @@ def tod2map(staticData: list[DetectorTOD], compsepData: list[np.array]) -> list[
         # detmap_rms =  1.0/np.sqrt(detmap_inv_var)
         # detmap_signal /= detmap_inv_var
 
-        detmap_signal, detmap_rms = single_det_mapmaker_python(det_static, det_cs_map)
+        # detmap_signal, detmap_rms = single_det_mapmaker_python(det_static, det_cs_map)
+        detmap_signal, detmap_rms = single_det_mapmaker(det_static, det_cs_map)
         detmap = DetectorMap(detmap_signal, detmap_rms, det_static.nu)
         res.append(detmap)
     return res
