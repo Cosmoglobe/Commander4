@@ -3,8 +3,9 @@ from mpi4py import MPI
 import h5py
 import healpy as hp
 import ducc0
+import math
 from data_models import ScanTOD, DetectorTOD, DetectorMap
-from utils import single_det_mapmaker_python, single_det_mapmaker
+from utils import single_det_mapmaker_python, single_det_mapmaker, single_det_map_accumulator
 
 nthreads=1
 
@@ -18,13 +19,10 @@ def alm2map(alm, nside, lmax):
 
 
 def get_empty_compsep_output(staticData: list[DetectorTOD]) -> list[np.array]:
-    res = []
-    for i_det in range(len(staticData)):
-        res.append(np.zeros(12*64**2,dtype=np.float64))
-    return res
+    return np.zeros(12*64**2,dtype=np.float64)
 
 
-def tod2map(staticData: list[DetectorTOD], compsepData: list[np.array]) -> list[DetectorMap]:
+def tod2map_old(staticData: list[DetectorTOD], compsepData: list[np.array]) -> list[DetectorMap]:
     res = []
     for i_det in range(len(staticData)):
         det_cs_map = compsepData[i_det]
@@ -50,73 +48,120 @@ def tod2map(staticData: list[DetectorTOD], compsepData: list[np.array]) -> list[
     return res
 
 
-def read_data() -> list[ScanTOD]:
+def tod2map(comm, det_static: DetectorTOD, det_cs_map: np.array) -> DetectorMap:
+    detmap_signal, detmap_inv_var = single_det_map_accumulator(det_static, det_cs_map)
+    map_signal = np.zeros_like(detmap_signal)
+    map_inv_var = np.zeros_like(detmap_inv_var)
+    if comm.Get_rank() == 0:
+        comm.Reduce(detmap_signal, map_signal, op=MPI.SUM, root=0)
+        comm.Reduce(detmap_inv_var, map_inv_var, op=MPI.SUM, root=0)
+    else:
+        comm.Reduce(detmap_signal, None, op=MPI.SUM, root=0)
+        comm.Reduce(detmap_inv_var, None, op=MPI.SUM, root=0)
+
+    if comm.Get_rank() == 0:
+        map_signal[map_signal != 0] /= map_inv_var
+        map_rms = np.zeros_like(map_inv_var) + np.inf
+        map_rms[map_inv_var != 0] = 1.0/np.sqrt(map_inv_var)
+        1.0/np.sqrt(map_inv_var)
+        detmap = DetectorMap(map_signal, map_rms, det_static.nu)
+        return detmap
+
+
+def read_data(band_idx, scan_idx_start, scan_idx_stop) -> list[ScanTOD]:
     h5_filename = '../../../commander4_sandbox/src/python/preproc_scripts/tod_example_64_s1.0_b20_dust.h5'
     bands = ['0030', '0100', '0353', '0545', '0857']
     nside = 64
     nscan=2001
     with h5py.File(h5_filename) as f:
         det_list = []
-        for band in bands:
-            scanlist = []
-            for iscan in range(nscan):
-                tod = f[f'{iscan+1:06}/{band}/tod'][()].astype(np.float64)
-                pix = f[f'{iscan+1:06}/{band}/pix'][()]
-                psi = f[f'{iscan+1:06}/{band}/psi'][()].astype(np.float64)
-                theta, phi = hp.pix2ang(nside, pix)
-                scanlist.append(ScanTOD(tod, theta, phi, psi, 0.))
-            det = DetectorTOD(scanlist, float(band))
-            det_list.append(det)
-    return det_list
+        # for band in bands:
+        band = bands[band_idx]
+        scanlist = []
+        for iscan in range(scan_idx_start, scan_idx_stop):
+            tod = f[f'{iscan+1:06}/{band}/tod'][()].astype(np.float64)
+            pix = f[f'{iscan+1:06}/{band}/pix'][()]
+            psi = f[f'{iscan+1:06}/{band}/psi'][()].astype(np.float64)
+            theta, phi = hp.pix2ang(nside, pix)
+            scanlist.append(ScanTOD(tod, theta, phi, psi, 0.))
+        det = DetectorTOD(scanlist, float(band))
+    return det
 
 
 # TOD processing loop
 def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
+    bands = ['0030', '0100', '0353', '0545', '0857']
+    num_bands = len(bands)    
+    num_scans = 2001
+
     # am I the master of the TOD communicator?
-    master = comm.Get_rank() == 0
+    MPIsize_tod, MPIrank_tod = comm.Get_size(), comm.Get_rank()
+    master = MPIrank_tod == 0
+    if master:
+        print(f"TOD: {MPIsize_tod} tasks allocated to TOD processing of {num_bands} bands.")
+        assert MPIsize_tod >= num_bands, f"Number of MPI tasks dedicated to TOD processing ({MPIsize_tod}) must be equal to or larger than the number of bands ({num_bands})."
+
+    MPIcolor_band = MPIrank_tod%num_bands  # Spread the MPI tasks over the different bands.
+    MPIcomm_band = comm.Split(MPIcolor_band, key=MPIrank_tod)  # Create communicators for each different band.
+    MPIsize_band, MPIrank_band = MPIcomm_band.Get_size(), MPIcomm_band.Get_rank()  # Get my local rank, and the total size of, the band-communicator I'm on.
+    print(f"TOD: Hello from TOD-rank {MPIrank_tod}, dedicated to band {MPIcolor_band}, with local rank {MPIrank_band} (local communicator size: {MPIsize_band}).")
+    
+    master_band = MPIrank_band == 0  # Am I the master of my local band.
+
+    scans_per_rank = math.ceil(num_scans/MPIsize_band)
+    my_scans_start, my_scans_stop = scans_per_rank*MPIrank_band, scans_per_rank*(MPIrank_band + 1)
+    print(f"TOD: Rank {MPIrank_tod} assigned scans {my_scans_start} - {my_scans_stop} on band{MPIcolor_band}.")
 
     # Initialization for all TOD processing tasks goes here
-    experiment_data = read_data()
+    experiment_data = read_data(MPIcolor_band, my_scans_start, my_scans_stop)
 
     # Chain #1
     # do TOD processing, resulting in maps_chain1
     # we start with a fake output of component separation, containing a completely empty sky
     compsep_output_black = get_empty_compsep_output(experiment_data)
 
-    todproc_output_chain1 = tod2map(experiment_data, compsep_output_black)
+    todproc_output_chain1 = tod2map(MPIcomm_band, experiment_data, compsep_output_black)
 
+    compsep_output_chain1 = None
     compsep_output_chain2 = compsep_output_black
  
     for i in range(niter_gibbs):
-        if master:
-            print("TOD: sending chain1 data")
-            MPI.COMM_WORLD.send(False, dest=compsep_master)  # we don't want to stop yet
+        if master:  # If we are the master, tell the compsep-master not to stop.
+            print(f"TOD: Master sending 'dont stop' signal to CompSep master.")
+            MPI.COMM_WORLD.send(False, dest=compsep_master)
+
+        if master_band:  # If we are the master of our respective band, send compsep-master our band-data.
+            print(f"TOD: Rank {MPIrank_tod} sending chain1 data to CompSep master.")
             MPI.COMM_WORLD.send((todproc_output_chain1, i, 1), dest=compsep_master)
             # del todproc_output_chain1
 
         # Chain #2
         # do TOD processing, resulting in compsep_input at the same time, compsep is working on chain #1 data
-        todproc_output_chain2 = tod2map(experiment_data, compsep_output_chain2)
+        todproc_output_chain2 = tod2map(MPIcomm_band, experiment_data, compsep_output_chain2)
 
         # get compsep results for chain #1
-        if master:
+        if master_band:
             compsep_output_chain1 = MPI.COMM_WORLD.recv(source=compsep_master)
-            print("TOD: received chain1 data")
+            print(f"TOD: Rank {MPIrank_tod} received chain1 data (iter {i}).")
+        compsep_output_chain1 = MPIcomm_band.bcast(compsep_output_chain1, root=0)
 
         if master:
-            print("TOD: sending chain2 data")
+            print(f"TOD: Master sending 'dont stop' signal to CompSep master.")
             MPI.COMM_WORLD.send(False, dest=compsep_master)  # we don't want to stop yet
+        if master_band:
+            print(f"TOD: Rank {MPIrank_tod} sending chain2 data to CompSep master.")
             MPI.COMM_WORLD.send((todproc_output_chain2, i, 2), dest=compsep_master)
             # del todproc_output_chain2
 
         # Chain #1
         # do TOD processing, resulting in compsep_input at the same time, compsep is working on chain #2 data
-        todproc_output_chain1 = tod2map(experiment_data, compsep_output_chain1)
+        todproc_output_chain1 = tod2map(MPIcomm_band, experiment_data, compsep_output_chain1)
 
         # get compsep results for chain #2
-        if master:
+        if master_band:
             compsep_output_chain2 = MPI.COMM_WORLD.recv(source=compsep_master)
-            print("TOD: received chain2 data")
+            print(f"TOD: Rank {MPIrank_tod} received chain2 data (iter {i}).")
+        compsep_output_chain2 = MPIcomm_band.bcast(compsep_output_chain2, root=0)
 
     # stop compsep machinery
     if master:

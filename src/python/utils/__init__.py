@@ -1,2 +1,3 @@
 from .mapmaker import single_det_mapmaker_python
 from .mapmaker import single_det_mapmaker
+from .mapmaker import single_det_map_accumulator

@@ -28,8 +28,8 @@ def main():
         raise RuntimeError(f"Total number of MPI tasks ({worldsize}) must equal the sum of tasks for TOD ({params['MPI_config']['ntask_tod']}) + CompSep ({params['MPI_config']['ntask_compsep']}) + CMB realization ({params['MPI_config']['ntask_cmb']}).")
     if (not params["MPI_config"]["use_MPI_for_CMB"]) and (params["MPI_config"]["ntask_cmb"] > 1):
         raise RuntimeError(f"Number of MPI tasks allocated to CMB realization cannot be > 1 if 'use_MPI_for_CMB' is False.")
-    if params["MPI_config"]["ntask_tod"] > 1:
-        raise RuntimeError(f"TOD processing currently doesn't support more than 1 MPI task.")
+    # if params["MPI_config"]["ntask_tod"] > 1:
+    #     raise RuntimeError(f"TOD processing currently doesn't support more than 1 MPI task.")
     if params["MPI_config"]["ntask_compsep"] > 1:
         raise RuntimeError(f"CompSep currently doesn't support more than 1 MPI task.")
     # check if we have at least ntask_compsep+1 MPI tasks, otherwise abort

@@ -45,6 +45,7 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
 
     # we wait for new jobs until we get a stop signal
     while True:
+        print("CompSep new loop iteration...")
         # check for simulation end
         stop = MPI.COMM_WORLD.recv(source=tod_master) if master else False
         stop = comm.bcast(stop, root=0)
@@ -56,12 +57,26 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
                     MPI.COMM_WORLD.send(True, dest=cmb_master)
             return
         if master:
-            print("Compsep: new job obtained")
+            print("Compsep: Not asked to stop, obtaining new job...")
 
         # get next data set for component separation
-        data, iter, chain = MPI.COMM_WORLD.recv(source=tod_master) if master else None
+        data, iter, chain = [], [], []
+        if master:
+            for i in range(5):
+                _data, _iter, _chain = MPI.COMM_WORLD.recv(source=tod_master+i)
+                print(f"Compsep: Received data from rank {tod_master+i} for chain {_chain} iteration {_iter}.")
+                data.append(_data)
+                iter.append(_iter)
+                chain.append(_chain)
+            data = np.array(data)
+            assert np.all([i == iter[0] for i in iter]), "Different CompSep tasks received different Gibbs iteration number from TOD loop!"
+            assert np.all([i == chain[0] for i in chain]), "Different CompSep tasks received different Gibbs chain number from TOD loop!"
+            chain = chain[0]
+            iter = iter[0]
         # Broadcast te data to all tasks, or do anything else that's appropriate
         data = comm.bcast(data, root=0)
+        iter = comm.bcast(iter, root=0)
+        chain = comm.bcast(chain, root=0)
 
         if master:
             print(f"Compsep: data obtained for chain {chain}, iteration {iter}. Working on it ...")
@@ -117,16 +132,18 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
             hp.mollview(signal_maps[i_det]-dust_sky, title=f"Foreground subtracted sky at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
             plt.savefig(params["output_paths"]["plots"] + f"maps_comps/foreground_subtr_det{i_det}_chain{chain}_iter{iter}.png")
             plt.close()
-            detector_maps.append(detector_map)
 
         foreground_maps = np.array(foreground_maps)
         foreground_subtracted_maps = signal_maps - foreground_maps
 
         if master:
-            MPI.COMM_WORLD.send(detector_maps, dest=tod_master)
+            for i in range(len(detector_maps)):
+                print(f"CompSep: Sending back data for band {i} (chain {chain} iter {iter}).")
+                MPI.COMM_WORLD.send(detector_maps[i], dest=tod_master+i)
             print("Compsep: results sent back")
 
             if not cmb_master is None:  # cmb_master is set to None of we aren't doing CMB realizations.
+                print(f"CompSep: Sending relevant data to CMB realiztaion master...")
                 MPI.COMM_WORLD.send(False, dest=cmb_master)  # we don't want to stop yet
                 # Sending maps to CMB loop. Not sending the last band, as it's very dust-contaminated
                 if use_MPI_for_CMB:
