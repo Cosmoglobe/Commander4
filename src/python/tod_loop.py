@@ -69,7 +69,8 @@ def tod2map(comm, det_static: DetectorTOD, det_cs_map: np.array) -> DetectorMap:
 
 
 def read_data(band_idx, scan_idx_start, scan_idx_stop) -> list[ScanTOD]:
-    h5_filename = '../../../commander4_sandbox/src/python/preproc_scripts/tod_example_64_s1.0_b20_dust.h5'
+    #h5_filename = '../../../commander4_sandbox/src/python/preproc_scripts/tod_example_64_s1.0_b20_dust.h5'
+    h5_filename = '/mn/stornext/d5/data/artemba/Commander4_sim_data/tod_sim_64_s1.0_b20.h5'
     bands = ['0030', '0100', '0353', '0545', '0857']
     nside = 64
     nscan=2001
