@@ -66,3 +66,14 @@ class ThermalDust(DiffuseComponent):
     def get_sed(self, nu):
         # Modified blackbody, in uK_CMB
         return g(nu)/g(self.nu0) * (nu/self.nu0)**self.beta * blackbody(nu, self.T)/blackbody(self.nu0, self.T)
+
+
+class Synchrotron(DiffuseComponent):
+    def __init__(self):
+        super().__init__()
+        self.beta = -3.1
+        self.nu0 = 23.0
+
+    def get_sed(self, nu):
+        # power law with spectral index beta
+        return g(nu)/g(self.nu0) * (nu/self.nu0)**self.beta 

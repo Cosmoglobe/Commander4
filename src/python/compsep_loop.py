@@ -3,22 +3,24 @@ from mpi4py import MPI
 import time
 import h5py
 import healpy as hp
-from model.component import CMB, ThermalDust
+from model.component import CMB, ThermalDust, Synchrotron
 from model.sky_model import SkyModel
 import matplotlib.pyplot as plt
 import os
 
 def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:
-    ncomp = 2
+    ncomp = 3
     nband, npix = map_sky.shape
     comp_maps = np.zeros((ncomp, npix))
     A = np.zeros((ncomp, ncomp, npix))
     M = np.zeros((nband, ncomp))
     cmb = CMB()
     dust = ThermalDust()
+    sync = Synchrotron()
     for i in range(npix):
         M[:,0] = cmb.get_sed(freqs)
         M[:,1] = dust.get_sed(freqs)
+        M[:,2] = sync.get_sed(freqs)
         x = M.T.dot((1/map_rms[:,i]**2*map_sky[:,i]))
         x += M.T.dot(np.random.randn(nband)/map_rms[:,i])
         A = (M.T.dot(np.diag(1/map_rms[:,i]**2)).dot(M))
