@@ -1,11 +1,24 @@
-output_paths:
-  plots: "../../plots/"
-
-
-niter_gibbs: 5
-
 MPI_config:
   ntask_tod: 11
   ntask_compsep: 1
   ntask_cmb: 0
   use_MPI_for_CMB: True
+
+input_paths:
+  tod_filename: "../../../commander4_sandbox/src/python/preproc_scripts/tod_example_64_s1.0_b20_dust.h5"
+
+output_paths:
+  plots: "../../plots/"
+
+niter_gibbs: 5
+
+nside: 64
+
+num_scans: 2001
+
+bands:
+  - 30
+  - 100
+  - 353
+  - 545
+  - 857

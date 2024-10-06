@@ -18,8 +18,8 @@ def alm2map(alm, nside, lmax):
                                nthreads=nthreads, **geom).reshape((-1,))
 
 
-def get_empty_compsep_output(staticData: list[DetectorTOD]) -> list[np.array]:
-    return np.zeros(12*64**2,dtype=np.float64)
+def get_empty_compsep_output(staticData: list[DetectorTOD], params) -> list[np.array]:
+    return np.zeros(12*params.nside**2,dtype=np.float64)
 
 
 def tod2map_old(staticData: list[DetectorTOD], compsepData: list[np.array]) -> list[DetectorMap]:
@@ -68,22 +68,18 @@ def tod2map(comm, det_static: DetectorTOD, det_cs_map: np.array) -> DetectorMap:
         return detmap
 
 
-def read_data(band_idx, scan_idx_start, scan_idx_stop) -> list[ScanTOD]:
-    #h5_filename = '../../../commander4_sandbox/src/python/preproc_scripts/tod_example_64_s1.0_b20_dust.h5'
-    h5_filename = '/mn/stornext/d5/data/artemba/Commander4_sim_data/tod_sim_64_s1.0_b20.h5'
-    bands = ['0030', '0100', '0353', '0545', '0857']
-    nside = 64
-    nscan=2001
+def read_data(band_idx, scan_idx_start, scan_idx_stop, params) -> list[ScanTOD]:
+    h5_filename = params.input_paths.tod_filename
     with h5py.File(h5_filename) as f:
-        det_list = []
         # for band in bands:
-        band = bands[band_idx]
+        band = params.bands[band_idx]
+        band_formatted = f"{band:04d}"
         scanlist = []
         for iscan in range(scan_idx_start, scan_idx_stop):
-            tod = f[f'{iscan+1:06}/{band}/tod'][()].astype(np.float64)
-            pix = f[f'{iscan+1:06}/{band}/pix'][()]
-            psi = f[f'{iscan+1:06}/{band}/psi'][()].astype(np.float64)
-            theta, phi = hp.pix2ang(nside, pix)
+            tod = f[f'{iscan+1:06}/{band_formatted}/tod'][()].astype(np.float64)
+            pix = f[f'{iscan+1:06}/{band_formatted}/pix'][()]
+            psi = f[f'{iscan+1:06}/{band_formatted}/psi'][()].astype(np.float64)
+            theta, phi = hp.pix2ang(params.nside, pix)
             scanlist.append(ScanTOD(tod, theta, phi, psi, 0.))
         det = DetectorTOD(scanlist, float(band))
     return det
@@ -91,9 +87,7 @@ def read_data(band_idx, scan_idx_start, scan_idx_stop) -> list[ScanTOD]:
 
 # TOD processing loop
 def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
-    bands = ['0030', '0100', '0353', '0545', '0857']
-    num_bands = len(bands)    
-    num_scans = 2001
+    num_bands = len(params.bands)
 
     # am I the master of the TOD communicator?
     MPIsize_tod, MPIrank_tod = comm.Get_size(), comm.Get_rank()
@@ -109,17 +103,17 @@ def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
     
     master_band = MPIrank_band == 0  # Am I the master of my local band.
 
-    scans_per_rank = math.ceil(num_scans/MPIsize_band)
+    scans_per_rank = math.ceil(params.num_scans/MPIsize_band)
     my_scans_start, my_scans_stop = scans_per_rank*MPIrank_band, scans_per_rank*(MPIrank_band + 1)
     print(f"TOD: Rank {MPIrank_tod} assigned scans {my_scans_start} - {my_scans_stop} on band{MPIcolor_band}.")
 
     # Initialization for all TOD processing tasks goes here
-    experiment_data = read_data(MPIcolor_band, my_scans_start, my_scans_stop)
+    experiment_data = read_data(MPIcolor_band, my_scans_start, my_scans_stop, params)
 
     # Chain #1
     # do TOD processing, resulting in maps_chain1
     # we start with a fake output of component separation, containing a completely empty sky
-    compsep_output_black = get_empty_compsep_output(experiment_data)
+    compsep_output_black = get_empty_compsep_output(experiment_data, params)
 
     todproc_output_chain1 = tod2map(MPIcomm_band, experiment_data, compsep_output_black)
 

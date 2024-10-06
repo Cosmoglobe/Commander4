@@ -37,6 +37,8 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
     # am I the master of the compsep communicator?
     master = comm.Get_rank() == 0
 
+    num_bands = len(params.bands)
+
     if master:
         print("Compsep: loop started")
         if not os.path.isdir(params.output_paths.plots + "maps_comps/"):
@@ -64,7 +66,7 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
         # get next data set for component separation
         data, iter, chain = [], [], []
         if master:
-            for i in range(5):
+            for i in range(num_bands):
                 _data, _iter, _chain = MPI.COMM_WORLD.recv(source=tod_master+i)
                 print(f"Compsep: Received data from rank {tod_master+i} for chain {_chain} iteration {_iter}.")
                 data.append(_data)
@@ -149,7 +151,7 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
                 MPI.COMM_WORLD.send(False, dest=cmb_master)  # we don't want to stop yet
                 # Sending maps to CMB loop. Not sending the last band, as it's very dust-contaminated
                 if use_MPI_for_CMB:
-                    for i in range(4):
+                    for i in range(num_bands-1):
                         MPI.COMM_WORLD.send([[foreground_subtracted_maps[i], rms_maps[i]], iter, chain], dest=cmb_master+i)
                 else:
                     MPI.COMM_WORLD.send([[foreground_subtracted_maps[:4], rms_maps[:4]], iter, chain], dest=cmb_master)
