@@ -22,6 +22,7 @@ class Component:
 class DiffuseComponent(Component):
     def __init__(self):
         self._component_map = None
+        self.nside_comp_map = 2048
 
     @property
     def component_map(self):
@@ -73,6 +74,7 @@ class Synchrotron(DiffuseComponent):
         super().__init__()
         self.beta = -3.1
         self.nu0 = 23.0
+        self.nside_comp_map = 512
 
     def get_sed(self, nu):
         # power law with spectral index beta
