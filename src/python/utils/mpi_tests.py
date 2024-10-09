@@ -147,10 +147,11 @@ def collectiveBenchSimple(comm, size):
     myassert((buf==1).all(), "Bcast problem")
 
 
-def report_status():
-    for i in range(MPI.COMM_WORLD.size):
-        if i == MPI.COMM_WORLD.rank:
-            print(f"task #{MPI.COMM_WORLD.rank}:")
+def report_status(comm):
+    for i in range(comm.size):
+        if i == comm.rank:
+            print(f"task #{comm.rank}:")
+            print(f"running on node '{MPI.Get_processor_name()}'")
             import sys
             print("Python", sys.version)
             vers = MPI.Get_version()
@@ -158,21 +159,45 @@ def report_status():
             print("MPI:", MPI.Get_library_version())
             print()
             print("initialized: ", MPI.Is_initialized())
-        MPI.COMM_WORLD.Barrier()
+        comm.Barrier()
    
+
+def one_task_per_node_comm(comm_in):
+    # get MPI processor name (will be unique for each compute node)
+    procname = MPI.Get_processor_name()
+    # get unique list of MPI processor names
+    names = list(set(comm_in.allgather(procname)))
+    # we need to make sure that "names" has the same ordering everywhere,
+    # so we broadcast the version on the root 
+    names = comm_in.bcast(names)
+    # determine unique index of this task's node
+    mynode = names.index(procname)
+    # new communicator containing all tasks on this node
+    nodecomm = comm_in.Split(mynode, comm_in.rank)
+    # am I the master of nodecomm?
+    local_master = 1 if nodecomm.rank == 0 else 0
+    # split comm_in into a communicator containing all "node masters"
+    # and another containing all remaining tasks (which we will ignore)
+    mastercomm = comm_in.Split(local_master)
+    # if we belong to the remaining tasks, return COMM_NULL
+    if not local_master:
+        mastercomm = MPI.COMM_NULL
+    return mastercomm
+
 
 if not MPI.Is_initialized():
     MPI.Init()
 
-report_status()
+comm2 = one_task_per_node_comm(MPI.COMM_WORLD)
+if comm2 != MPI.COMM_NULL:
+    report_status(comm2)
+    parser = argparse.ArgumentParser(
+                        prog='mpi_tests',
+                        description='Simple MPI benchmarks')
+    parser.add_argument('message_size', type=float, help="message size in bytes")
+    args = parser.parse_args()
 
-parser = argparse.ArgumentParser(
-                    prog='mpi_tests',
-                    description='Simple MPI benchmarks')
-parser.add_argument('message_size', type=float, help="message size in bytes")
-args = parser.parse_args()
-
-collectiveBench(MPI.COMM_WORLD, args.message_size)
-collectiveBenchSimple(MPI.COMM_WORLD, args.message_size)
-collectiveBenchInplace(MPI.COMM_WORLD, args.message_size)
-#collectiveBenchPersistent(MPI.COMM_WORLD, args.message_size)
+    collectiveBench(comm2, args.message_size)
+    collectiveBenchSimple(comm2, args.message_size)
+    collectiveBenchInplace(comm2, args.message_size)
+    #collectiveBenchPersistent(comm2, args.message_size)
