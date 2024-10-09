@@ -71,18 +71,15 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
     ncomp = 3
     nband, npix = map_sky.shape
     comp_maps = np.zeros((ncomp, npix))
-    A = np.zeros((ncomp, ncomp, npix))
-    M = np.zeros((nband, ncomp))
-    cmb = CMB()
-    dust = ThermalDust()
-    sync = Synchrotron()
+    M = np.empty((nband, ncomp))
+    M[:,0] = CMB().get_sed(freqs)
+    M[:,1] = ThermalDust().get_sed(freqs)
+    M[:,2] = Synchrotron().get_sed(freqs)
     for i in range(npix):
-        M[:,0] = cmb.get_sed(freqs)
-        M[:,1] = dust.get_sed(freqs)
-        M[:,2] = sync.get_sed(freqs)
-        x = M.T.dot((1/map_rms[:,i]**2*map_sky[:,i]))
-        x += M.T.dot(np.random.randn(nband)/map_rms[:,i])
-        A = (M.T.dot(np.diag(1/map_rms[:,i]**2)).dot(M))
+        xmap = 1/map_rms[:,i]
+        x = M.T.dot((xmap**2*map_sky[:,i]))
+        x += M.T.dot(np.random.randn(nband)*xmap)
+        A = (M.T.dot(np.diag(xmap**2)).dot(M))
         try:
             comp_maps[:,i] = np.linalg.solve(A, x)
         except np.linalg.LinAlgError:
