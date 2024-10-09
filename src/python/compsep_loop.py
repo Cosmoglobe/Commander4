@@ -23,27 +23,33 @@ def P_operator(x: np.array, comp: DiffuseComponent, M: np.array) -> np.array:
     fwhm = 20 # [arcmin] should be in param file
 
     # mixing matrix application in map space
-    mp = math_op.alm_to_map(x, nside=comp.nside_comp_map) # Y a_lm
+    mp = math_op.alm_to_map(x, nside=comp.nside_comp_map, lmax=lmax) # Y a_lm
     mp = M * mp # M Y a_lm
-    x = math_op.map_to_alm(mp, lmax=3*2048-1) # Y^T M Y a_lm
+    # transpose Y^T is represented by the adjoint operator
+    x = math_op.alm_to_map_adjoint(mp, nside=comp.nside_comp_map, lmax=lmax) # Y^T M Y a_lm
+
 
     # beam 
     x = math_op.spherical_beam_applied_to_alm(x, fwhm)
-    mp = math_op.alm_to_map(x, nside=comp.nside_comp_map)
+    mp = math_op.alm_to_map(x, nside=comp.nside_comp_map, lmax=lmax)
     return mp
 
 
-def A_operator(x: np.array, comp_list: list, M: np.array) -> np.array:
+def A_operator(x: np.array, comp_list: list, M: np.array, map_rms: np.array) -> np.array:
     # x - spherical harmonics alm
+    # comp_list - [ncomp] list of DiffuseComponent class objects for relevant components
+    # M - [nband, ncomp] array of mixing matricies
+    # map_rms - [nbands, npix] array of RMS maps
     #
     # A = (S^-1 + P^T N^-1 P)
     # P = Y B Y^T M Y
 
     ncomp, _ = x.shape
     for i in range(ncomp):
-        mp = P_operator(x[i], comp_list[i], M[:,i])
-        # mp has different size for different component, so N^-1 should too
+        mp = P_operator(x[i], comp_list[i], M[:,i]) # P_alm
 
+        N = hp.ud_grade(map_rms, comp_list[i].nside_comp_map, power=2)
+        mp /= N # N^-1 P a_lm
 
 
 def alm_comp_sampling_CG(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:

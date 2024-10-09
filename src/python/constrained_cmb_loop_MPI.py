@@ -5,28 +5,10 @@ from pixell import utils
 from mpi4py import MPI
 import matplotlib.pyplot as plt
 import os
-
+from utils.math_operations import alm_to_map, alm_to_map_adjoint
 
 nthreads = 32  # Number of threads to use for ducc SHTs.
 VERBOSE = False
-
-
-def alm2map(alm, nside, lmax):
-    base = ducc0.healpix.Healpix_Base(nside, "RING")
-    geom = base.sht_info()
-    return ducc0.sht.synthesis(alm=alm.reshape((1,-1)),
-                               lmax=lmax,
-                               spin=0,
-                               nthreads=nthreads, **geom).reshape((-1,))
-
-
-def alm2map_adjoint(map, nside, lmax):
-    base = ducc0.healpix.Healpix_Base(nside, "RING")
-    geom = base.sht_info()
-    return ducc0.sht.adjoint_synthesis(map=map.reshape((1,-1)),
-                                       lmax=lmax,
-                                       spin=0,
-                                       nthreads=nthreads, **geom).reshape((-1,))
 
 
 class ConstrainedCMB:
@@ -72,9 +54,9 @@ class ConstrainedCMB:
         self.comm.Bcast(x, root=0)  # Sending up-to-date x 
         LHS_sum = np.zeros_like(x)
         Ax = hp.smoothalm(x, self.fwhm, inplace=False)
-        YAx = alm2map(Ax, self.nside, self.lmax)
+        YAx = alm_to_map(Ax, self.nside, self.lmax, nthreads=nthreads)
         NYAx = YAx.copy()/self.map_rms**2
-        YTNYAx = alm2map_adjoint(NYAx, self.nside, self.lmax)
+        YTNYAx = alm_to_map_adjoint(NYAx, self.nside, self.lmax, nthreads=nthreads)
         ATYTNYAx = hp.smoothalm(YTNYAx, self.fwhm, inplace=False)
 
         self.comm.Reduce(ATYTNYAx,  # Receiving the LHS contribution from other ranks.
@@ -92,9 +74,9 @@ class ConstrainedCMB:
         x = np.zeros(self.alm_len, dtype=np.complex128)
         self.comm.Bcast(x, root=0)
         Ax = hp.smoothalm(x, self.fwhm, inplace=False)
-        YAx = alm2map(Ax, self.nside, self.lmax)
+        YAx = alm_to_map(Ax, self.nside, self.lmax, nthreads=nthreads)
         NYAx = YAx.copy()/self.map_rms**2
-        YTNYAx = alm2map_adjoint(NYAx, self.nside, self.lmax)
+        YTNYAx = alm_to_map_adjoint(NYAx, self.nside, self.lmax, nthreads=nthreads)
         ATYTNYAx = hp.smoothalm(YTNYAx, self.fwhm, inplace=False)
         self.comm.Reduce(ATYTNYAx,  # Sending our part of the LHS equation to rank 0.
                         None,
@@ -109,7 +91,7 @@ class ConstrainedCMB:
         """
         RHS_sum = np.zeros(self.alm_len, dtype=np.complex128)
         Nd = self.map_sky/self.map_rms**2
-        YTNd = alm2map_adjoint(Nd, self.nside, self.lmax)
+        YTNd = alm_to_map_adjoint(Nd, self.nside, self.lmax, nthreads=nthreads)
         ATYTNd = hp.smoothalm(YTNd, self.fwhm, inplace=False)
         self.comm.Allreduce([ATYTNd, MPI.DOUBLE],
                          [RHS_sum, MPI.DOUBLE],
@@ -128,7 +110,7 @@ class ConstrainedCMB:
 
         omega1 = np.random.normal(0, 1, self.npix)
         Nomega1 = omega1/self.map_rms
-        YTNomega1 = alm2map_adjoint(Nomega1, self.nside, self.lmax)
+        YTNomega1 = alm_to_map_adjoint(Nomega1, self.nside, self.lmax, nthreads=nthreads)
         ATYTNomega1 = hp.smoothalm(YTNomega1, self.fwhm, inplace=False)
         self.comm.Allreduce([ATYTNomega1, MPI.DOUBLE],
                          [RHS_sum, MPI.DOUBLE],
@@ -209,7 +191,7 @@ def constrained_cmb_loop_MPI(comm, compsep_master: int, params: dict):
             print("CMB: Solving for mean-field map")
             CMB_mean_field_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.master_LHS_func, RHS_mean_field)
             CMB_mean_field_Cl = hp.alm2cl(CMB_mean_field_alms)
-            CMB_mean_field_map = alm2map(CMB_mean_field_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax)
+            CMB_mean_field_map = alm_to_map(CMB_mean_field_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax, nthreads=nthreads)
         else:
             while not comm.recv(source=0):  # Looking for "stop" signal.
                 constrained_cmb_solver.worker_LHS_func()  # If not asked to stop, compute LHS.
@@ -219,7 +201,7 @@ def constrained_cmb_loop_MPI(comm, compsep_master: int, params: dict):
             print("CMB: Solving for fluctuation map")
             CMB_fluct_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.master_LHS_func, RHS_fluct)
             CMB_fluct_Cl = hp.alm2cl(CMB_fluct_alms)
-            CMB_fluct_map = alm2map(CMB_fluct_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax)
+            CMB_fluct_map = alm_to_map(CMB_fluct_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax, nthreads=nthreads)
         else:
             while not comm.recv(source=0):  # Looking for "stop" signal.
                 constrained_cmb_solver.worker_LHS_func()  # If not asked to stop, compute LHS.
