@@ -165,11 +165,14 @@ def report_status(comm):
 def one_task_per_node_comm(comm_in):
     # get MPI processor name (will be unique for each compute node)
     procname = MPI.Get_processor_name()
-    # get unique list of MPI procesor names
+    # get unique list of MPI processor names
     names = list(set(comm_in.allgather(procname)))
+    # we need to make sure that "names" has the same ordering everywhere,
+    # so we broadcast the version on the root 
+    names = comm_in.bcast(names)
     # determine unique index of this task's node
     mynode = names.index(procname)
-    # new communicator containing all task on this node
+    # new communicator containing all tasks on this node
     nodecomm = comm_in.Split(mynode, comm_in.rank)
     # am I the master of nodecomm?
     local_master = 1 if nodecomm.rank == 0 else 0
