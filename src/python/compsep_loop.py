@@ -7,6 +7,65 @@ from model.component import CMB, ThermalDust, Synchrotron
 from model.sky_model import SkyModel
 import matplotlib.pyplot as plt
 import os
+import utils.math_operations as math_op
+
+def S_inv_prior(lmax, beta) -> np.array:
+    q = np.arange(lmax)**beta
+    return np.diagflat(q)
+
+
+def P_operator(x: np.array, comp: DiffuseComponent, M: np.array) -> np.array:
+    # x - array of alm for a given component
+    # comp - class for a given component model 
+    # M - mixing matrix for a given component
+
+    lmax = 3*2048-1 # should be in param file
+    fwhm = 20 # [arcmin] should be in param file
+
+    # mixing matrix application in map space
+    mp = math_op.alm_to_map(x, nside=comp.nside_comp_map) # Y a_lm
+    mp = M * mp # M Y a_lm
+    x = math_op.map_to_alm(mp, lmax=3*2048-1) # Y^T M Y a_lm
+
+    # beam 
+    x = math_op.spherical_beam_applied_to_alm(x, fwhm)
+    mp = math_op.alm_to_map(x, nside=comp.nside_comp_map)
+    return mp
+
+
+def A_operator(x: np.array, comp_list: list, M: np.array) -> np.array:
+    # x - spherical harmonics alm
+    #
+    # A = (S^-1 + P^T N^-1 P)
+    # P = Y B Y^T M Y
+
+    ncomp, _ = x.shape
+    for i in range(ncomp):
+        mp = P_operator(x[i], comp_list[i], M[:,i])
+        # mp has different size for different component, so N^-1 should too
+
+
+
+def alm_comp_sampling_CG(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:
+    # preparation
+    ncomp = 3 # should be in parameter file
+    lmax = 3*2048-1
+    alm_size = hp.map2alm(np.zeros(hp.nside2npix(2048)), lmax=lmax).size
+    nband, npix = map_sky.shape
+
+    # create mixing matrix
+    M = np.zeros((nband, ncomp))
+    cmb = CMB()
+    dust = ThermalDust()
+    sync = Synchrotron()
+    components = [cmb, dust, sync]
+    comp_alm = np.zeros((ncomp, alm_size))
+    for i in range(ncomp):
+        M[:,i] = components[i].get_sed(freqs)
+    
+    A_operator(comp_alm, components, M)
+
+
 
 def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:
     ncomp = 3
