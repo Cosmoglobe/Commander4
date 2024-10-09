@@ -28,7 +28,6 @@ def P_operator(x: np.array, comp: DiffuseComponent, M: np.array) -> np.array:
     # transpose Y^T is represented by the adjoint operator
     x = math_op.alm_to_map_adjoint(mp, nside=comp.nside_comp_map, lmax=lmax) # Y^T M Y a_lm
 
-
     # beam 
     x = math_op.spherical_beam_applied_to_alm(x, fwhm)
     mp = math_op.alm_to_map(x, nside=comp.nside_comp_map, lmax=lmax)
