@@ -10,6 +10,8 @@ import os
 import utils.math_operations as math_op
 
 def S_inv_prior(lmax, beta) -> np.array:
+    # use hp.almxfl()
+    # need to figure out l^beta for each components and add it to component class
     q = np.arange(lmax)**beta
     return np.diagflat(q)
 
@@ -34,6 +36,26 @@ def P_operator(x: np.array, comp: DiffuseComponent, M: np.array) -> np.array:
     return mp
 
 
+def P_operator_transpose(x: np.array, comp: DiffuseComponent, M: np.array) -> np.array:
+    # x - array of maps for a given component
+    # comp - class for a given component model 
+    # M - mixing matrix for a given component
+
+    lmax = 3*2048-1 # should be in param file
+    fwhm = 20 # [arcmin] should be in param file
+
+    # beam B^T Y^T m
+    alm = math_op.alm_to_map_adjoint(x, nside=comp.nside_comp_map, lmax=lmax)
+    alm = math_op.spherical_beam_applied_to_alm(alm, fwhm) 
+
+    # mixing matrix Y^T M^T Y
+    mp = math_op.alm_to_map(alm, nside=comp.nside_comp_map, lmax=lmax)
+    mp = M * mp
+    alm = math_op.alm_to_map_adjoint(mp, nside=comp.nside_comp_map, lmax=lmax)
+
+    return alm
+
+
 def A_operator(x: np.array, comp_list: list, M: np.array, map_rms: np.array) -> np.array:
     # x - spherical harmonics alm
     # comp_list - [ncomp] list of DiffuseComponent class objects for relevant components
@@ -45,10 +67,14 @@ def A_operator(x: np.array, comp_list: list, M: np.array, map_rms: np.array) -> 
 
     ncomp, _ = x.shape
     for i in range(ncomp):
-        mp = P_operator(x[i], comp_list[i], M[:,i]) # P_alm
+        mp = P_operator(x[i], comp_list[i], M[:,i]) # P alm
 
         N = hp.ud_grade(map_rms, comp_list[i].nside_comp_map, power=2)
         mp /= N # N^-1 P a_lm
+
+        alm = P_operator_transpose(mp, comp_list[i], M[:,i]) # P^T N^-1 P alm
+
+        
 
 
 def alm_comp_sampling_CG(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:
