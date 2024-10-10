@@ -1,9 +1,29 @@
+# On OpenMPI, run with
+# mpirun -np <number of nodes> --map-by node --bind-to none python3 mpi_tests.py 1e9 <number of cores per node>
+
+
 import numpy as np
 from mpi4py import MPI
 from time import time
 import argparse
 from numpy.testing import assert_ as myassert
+import ducc0
 
+
+def nalm(lmax, mmax):
+    return ((mmax+1)*(mmax+2))//2 + (mmax+1)*(lmax-mmax)
+
+
+def random_alm(lmax, mmax, spin, ncomp, rng):
+    res = rng.uniform(-1., 1., (ncomp, nalm(lmax, mmax))) \
+     + 1j*rng.uniform(-1., 1., (ncomp, nalm(lmax, mmax)))
+    # make a_lm with m==0 real-valued
+    res[:, 0:lmax+1].imag = 0.
+    ofs=0
+    for s in range(spin):
+        res[:, ofs:ofs+spin-s] = 0.
+        ofs += lmax+1-s
+    return res
 
 def do_benchmark(comm, work, name, msg_size):
     comm.Barrier()
@@ -13,6 +33,16 @@ def do_benchmark(comm, work, name, msg_size):
     tmax = comm.allreduce(t1-t0, MPI.MAX)
     if comm.rank == 0:
         print(f"{name}: {tmax}s, {1e-9*msg_size/tmax}GB/s")
+
+
+def alm_to_map(alm: np.array, map: np.array, nside: int, lmax: int, nthreads=1) -> np.array:
+    base = ducc0.healpix.Healpix_Base(nside, "RING")
+    geom = base.sht_info()
+    return ducc0.sht.synthesis(alm=alm.reshape((1,-1)),
+                               map=map,
+                               lmax=lmax,
+                               spin=0,
+                               nthreads=nthreads, **geom).reshape((-1,))
 
 
 def collectiveBench(comm, size):
@@ -147,6 +177,22 @@ def collectiveBenchSimple(comm, size):
     myassert((buf==1).all(), "Bcast problem")
 
 
+def bench_SHT(comm, nside, max_nthreads):
+    if comm.rank == 0:
+        print(f"Benchmarking independent SHTs on every task with 1<=nthreads<={max_nthreads}.")
+    lmax = 2*nside
+    rng = np.random.default_rng(48)
+    alm = random_alm(lmax, lmax, 0, 1, rng)
+    map = np.ones((1,12*nside**2))
+    for nthreads in range(1, max_nthreads+1):
+        comm.Barrier()
+        t0 = time()
+        alm_to_map(alm, map, nside, lmax, nthreads=nthreads)
+        t0 = time() - t0
+        tmin, tmax = comm.allreduce(t0, MPI.MIN), comm.allreduce(t0, MPI.MAX)
+        if comm.rank == 0:
+            print(f"nthreads={nthreads}: tmin={tmin}, tmax={tmax}")
+
 def report_status(comm):
     for i in range(comm.size):
         if i == comm.rank:
@@ -157,8 +203,6 @@ def report_status(comm):
             vers = MPI.Get_version()
             print(f"mpi4py {vers[0]}.{vers[1]}")
             print("MPI:", MPI.Get_library_version())
-            print()
-            print("initialized: ", MPI.Is_initialized())
         comm.Barrier()
    
 
@@ -195,9 +239,12 @@ if comm2 != MPI.COMM_NULL:
                         prog='mpi_tests',
                         description='Simple MPI benchmarks')
     parser.add_argument('message_size', type=float, help="message size in bytes")
+    parser.add_argument('threads_per_node', type=int, help="number of threads to use per node")
     args = parser.parse_args()
 
     collectiveBench(comm2, args.message_size)
     collectiveBenchSimple(comm2, args.message_size)
     collectiveBenchInplace(comm2, args.message_size)
     #collectiveBenchPersistent(comm2, args.message_size)
+
+    bench_SHT(comm2, 2048, args.threads_per_node)
