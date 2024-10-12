@@ -22,3 +22,5 @@ bands:
   - 353
   - 545
   - 857
+
+make_plots: True

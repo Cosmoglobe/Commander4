@@ -3,7 +3,7 @@ from mpi4py import MPI
 import time
 import h5py
 import healpy as hp
-from model.component import CMB, ThermalDust, Synchrotron
+from model.component import CMB, ThermalDust, Synchrotron, DiffuseComponent
 from model.sky_model import SkyModel
 import matplotlib.pyplot as plt
 import os
@@ -180,12 +180,13 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
             signal_maps.append(detector.map_sky)
             rms_maps.append(detector.map_rms)
             band_freqs.append(detector.nu)
-            hp.mollview(signal_maps[-1], cmap="RdBu_r", title=f"Signal map, det {i_det}, chain {chain}, iter {iter}")
-            plt.savefig(params.output_paths.plots + f"maps_sky/map_sky_det{i_det}_chain{chain}_iter{iter}.png")
-            plt.close()
-            hp.mollview(rms_maps[-1], title=f"RMS map, det {i_det}, chain {chain}, iter {iter}")
-            plt.savefig(params.output_paths.plots + f"maps_sky/map_rms_det{i_det}_chain{chain}_iter{iter}.png")
-            plt.close()
+            if params.make_plots:
+                hp.mollview(signal_maps[-1], cmap="RdBu_r", title=f"Signal map, det {i_det}, chain {chain}, iter {iter}")
+                plt.savefig(params.output_paths.plots + f"maps_sky/map_sky_det{i_det}_chain{chain}_iter{iter}.png")
+                plt.close()
+                hp.mollview(rms_maps[-1], title=f"RMS map, det {i_det}, chain {chain}, iter {iter}")
+                plt.savefig(params.output_paths.plots + f"maps_sky/map_rms_det{i_det}_chain{chain}_iter{iter}.png")
+                plt.close()
 
 
         signal_maps = np.array(signal_maps)
@@ -213,25 +214,26 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
             sync_sky = component_list[2].get_sky(band_freqs[i_det])
             foreground_maps.append(sky_model.get_foreground_sky_at_nu(band_freqs[i_det], npix))
 
-            hp.mollview(detector_map, title=f"Full sky realization at {band_freqs[i_det]:.2f}GHz")
-            plt.savefig(params.output_paths.plots + f"maps_comps/sky_realization_det{i_det}_chain{chain}_iter{iter}.png")
-            plt.close()
+            if params.make_plots:
+                hp.mollview(detector_map, title=f"Full sky realization at {band_freqs[i_det]:.2f}GHz")
+                plt.savefig(params.output_paths.plots + f"maps_comps/sky_realization_det{i_det}_chain{chain}_iter{iter}.png")
+                plt.close()
 
-            hp.mollview(cmb_sky, title=f"CMB realization at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
-            plt.savefig(params.output_paths.plots + f"maps_comps/CMB_realization_det{i_det}_chain{chain}_iter{iter}.png")
-            plt.close()
+                hp.mollview(cmb_sky, title=f"CMB realization at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
+                plt.savefig(params.output_paths.plots + f"maps_comps/CMB_realization_det{i_det}_chain{chain}_iter{iter}.png")
+                plt.close()
 
-            hp.mollview(dust_sky, title=f"Thermal dust realization at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
-            plt.savefig(params.output_paths.plots + f"maps_comps/Dust_realization_det{i_det}_chain{chain}_iter{iter}.png")
-            plt.close()
-           
-            hp.mollview(sync_sky, title=f"Synchrotron realization at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
-            plt.savefig(params.output_paths.plots + f"maps_comps/Sync_realization_det{i_det}_chain{chain}_iter{iter}.png")
-            plt.close()
+                hp.mollview(dust_sky, title=f"Thermal dust realization at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
+                plt.savefig(params.output_paths.plots + f"maps_comps/Dust_realization_det{i_det}_chain{chain}_iter{iter}.png")
+                plt.close()
+            
+                hp.mollview(sync_sky, title=f"Synchrotron realization at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
+                plt.savefig(params.output_paths.plots + f"maps_comps/Sync_realization_det{i_det}_chain{chain}_iter{iter}.png")
+                plt.close()
 
-            hp.mollview(signal_maps[i_det]-dust_sky-sync_sky, title=f"Foreground subtracted sky at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
-            plt.savefig(params.output_paths.plots + f"maps_comps/foreground_subtr_det{i_det}_chain{chain}_iter{iter}.png")
-            plt.close()
+                hp.mollview(signal_maps[i_det]-dust_sky-sync_sky, title=f"Foreground subtracted sky at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
+                plt.savefig(params.output_paths.plots + f"maps_comps/foreground_subtr_det{i_det}_chain{chain}_iter{iter}.png")
+                plt.close()
 
         foreground_maps = np.array(foreground_maps)
         foreground_subtracted_maps = signal_maps - foreground_maps
