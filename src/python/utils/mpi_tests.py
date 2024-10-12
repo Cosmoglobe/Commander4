@@ -68,7 +68,7 @@ def collectiveBench(comm, size):
     if comm.rank == 0:
         print(f"Testing buffer-based collective communications on {comm.size} tasks with a message size of {size/1e9}GB")
         print(f"For 1-to-all or all-to-1 communication, {num_comm_rounds} 'rounds' of communications are needed.")
-        print(f"{'':12s}  {'Time':>12s} {'Tot. speed':>16s} {'Speed/comm-round':>19s}")
+        print(f"{'':12s}  {'Time':>12s} {'Tot. speed':>16s} {'Speed/comm':>16s}")
 
     # warming up
     for i in range(10):
@@ -198,20 +198,23 @@ def collectiveBenchSimple(comm, size):
 def bench_SHT(comm, nside, max_nthreads):
     if comm.rank == 0:
         print(f"Benchmarking independent SHTs on every task with 1<=nthreads<={max_nthreads}.")
-        print(f"{'nthreads':>10s}   {'tmin':>11s}  {'tmax':>11s}")
+        print(f"{'nthreads':>10s}   {'tmin':>11s}  {'tmax':>11s} {'Speedup':>11s}")
     lmax = 2*nside
     rng = np.random.default_rng(48)
     alm = random_alm(lmax, lmax, 0, 1, rng)
     map = np.ones((1,12*nside**2))
     nthreads = 1
+    time_first = 0.0
     while nthreads <= max_nthreads:
         comm.Barrier()
         t0 = time()
         alm_to_map(alm, map, nside, lmax, nthreads=nthreads)
         t0 = time() - t0
         tmin, tmax = comm.allreduce(t0, MPI.MIN), comm.allreduce(t0, MPI.MAX)
+        if nthreads == 1:
+            time_first = tmax
         if comm.rank == 0:
-            print(f"{nthreads:10d}: {tmin:12.3f}s{tmax:12.3f}s")
+            print(f"{nthreads:10d}: {tmin:12.3f}s{tmax:12.3f}s{time_first/tmax:10.1f}")
         nthreads *= 2
 
 def report_status(comm):
