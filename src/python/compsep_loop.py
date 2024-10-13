@@ -171,6 +171,7 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
 
         if master:
             print(f"Compsep: data obtained for chain {chain}, iteration {iter}. Working on it ...")
+            t0 = time.time()
 
         signal_maps = []
         rms_maps = []
@@ -207,7 +208,7 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
         detector_maps = []
         foreground_maps = []
         for i_det in range(len(data)):
-            detector_map = sky_model.get_sky_at_nu(band_freqs[i_det], 12*64**2)
+            detector_map = sky_model.get_sky_at_nu(band_freqs[i_det], 12*params.nside**2)
             detector_maps.append(detector_map)
             cmb_sky = component_list[0].get_sky(band_freqs[i_det])
             dust_sky = component_list[1].get_sky(band_freqs[i_det])
@@ -239,6 +240,7 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
         foreground_subtracted_maps = signal_maps - foreground_maps
 
         if master:
+            print(f"Compsep: Finished chain {chain}, iteration {iter} in {time.time()-t0:.2f}s.")
             for i in range(len(detector_maps)):
                 print(f"CompSep: Sending back data for band {i} (chain {chain} iter {iter}).")
                 MPI.COMM_WORLD.send(detector_maps[i], dest=tod_master+i)
