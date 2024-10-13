@@ -1,17 +1,15 @@
-# NOTE: I'm using simple MPI communication here (lowercase names, dealing with
-# high level Python objects), to make the code shorter and easier to read.
-# In the final version, communication should of course be done with the
-# uppercase MPI functions.
-
 import numpy as np
 import os
 import yaml
 from mpi4py import MPI
+import cProfile
+import pstats
+from traceback import print_exc
+
 from tod_loop import tod_loop
 from compsep_loop import compsep_loop
 from constrained_cmb_loop_MPI import constrained_cmb_loop_MPI
 from constrained_cmb_loop import constrained_cmb_loop
-from traceback import print_exc
 
 
 def main():
@@ -76,7 +74,16 @@ def main():
 
 if __name__ == "__main__":
     try:
+        profiler = cProfile.Profile()
+        profiler.enable()
         main()
+        profiler.disable()
+
+        stats = pstats.Stats(profiler).sort_stats('tottime')
+        print(f"Rank {MPI.COMM_WORLD.Get_rank()} cProfile stats:")
+        stats.print_stats(10)
+        
+        stats.dump_stats(f'stats-{MPI.COMM_WORLD.Get_rank()}')
     except Exception as error:
         print_exc()  # Print the full exception raise, including trace-back.
         print(f">>>>>>>> Error encountered on rank {MPI.COMM_WORLD.Get_rank()}, calling MPI abort.")
