@@ -1,0 +1,3 @@
+[submodule "ducc0"]
+	path = external/ducc0
+	url = https://gitlab.mpcdf.mpg.de/mtr/ducc.git
