@@ -1,8 +1,8 @@
 # PARAMETER FILE TO RUN A SIMULATED 
 # DATA CREATION
 
-OUTPUT_FOLDER = '/mn/stornext/d5/data/artemba/Commander4_sim_data/'
-POINTING_PATH = '/mn/stornext/d5/data/artemba/other/extracted_pointing_no_skip_the_whole_survey_shifted.h5'
+OUTPUT_FOLDER = '/home/martin/codes/Commander4/sim_data/'
+POINTING_PATH = None #'/mn/stornext/d5/data/artemba/other/extracted_pointing_no_skip_the_whole_survey_shifted.h5'
 
 # general map characteristics
 NSIDE = 64
@@ -34,4 +34,3 @@ beta_sync = -3.1 # check the preset
 SIGMA0 = [100, 80, 30, 100, 200] # tod level white noise [uK_CMB] 
 SIGMA_SCALE = 1.0 # scale noise level
 SAMP_FREQ = 180 # sampling frequency [Hz]
-

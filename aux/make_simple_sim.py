@@ -108,6 +108,7 @@ def generate_sync():
 
 def get_pointing():
     if param.POINTING_PATH is None:
+        ntod=param.NTOD
         pix = np.arange(ntod) % npix
         return pix.astype('int32')
 
