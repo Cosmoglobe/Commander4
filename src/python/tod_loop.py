@@ -4,6 +4,7 @@ import h5py
 import healpy as hp
 import ducc0
 import math
+import time
 from data_models import ScanTOD, DetectorTOD, DetectorMap
 from utils import single_det_mapmaker_python, single_det_mapmaker, single_det_map_accumulator
 
@@ -60,10 +61,9 @@ def tod2map(comm, det_static: DetectorTOD, det_cs_map: np.array) -> DetectorMap:
         comm.Reduce(detmap_inv_var, None, op=MPI.SUM, root=0)
 
     if comm.Get_rank() == 0:
-        map_signal[map_signal != 0] /= map_inv_var
+        map_signal[map_signal != 0] /= map_inv_var[map_signal != 0]
         map_rms = np.zeros_like(map_inv_var) + np.inf
-        map_rms[map_inv_var != 0] = 1.0/np.sqrt(map_inv_var)
-        1.0/np.sqrt(map_inv_var)
+        map_rms[map_inv_var != 0] = 1.0/np.sqrt(map_inv_var[map_inv_var != 0])
         detmap = DetectorMap(map_signal, map_rms, det_static.nu)
         return detmap
 
@@ -79,8 +79,9 @@ def read_data(band_idx, scan_idx_start, scan_idx_stop, params) -> list[ScanTOD]:
             tod = f[f'{iscan+1:06}/{band_formatted}/tod'][()].astype(np.float64)
             pix = f[f'{iscan+1:06}/{band_formatted}/pix'][()]
             psi = f[f'{iscan+1:06}/{band_formatted}/psi'][()].astype(np.float64)
+            assert np.max(pix) < 12*params.nside**2, f"Nside is {params.nside}, but found pixel index exceeding 12nside^2 ({np.max(npix)})"
             theta, phi = hp.pix2ang(params.nside, pix)
-            scanlist.append(ScanTOD(tod, theta, phi, psi, 0.))
+            scanlist.append(ScanTOD(tod, theta, phi, psi, 0., iscan))
         det = DetectorTOD(scanlist, float(band))
     return det
 
@@ -132,13 +133,19 @@ def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
 
         # Chain #2
         # do TOD processing, resulting in compsep_input at the same time, compsep is working on chain #1 data
+        print(f"TOD: Rank {MPIrank_tod} starting chain 2, iter {i}.")
+        t0 = time.time()
         todproc_output_chain2 = tod2map(MPIcomm_band, experiment_data, compsep_output_chain2)
+        print(f"TOD: Rank {MPIrank_tod} finished chain 2, iter {i} in {t0-time.time():.2f}s.")
 
         # get compsep results for chain #1
         if master_band:
             compsep_output_chain1 = MPI.COMM_WORLD.recv(source=compsep_master)
             print(f"TOD: Rank {MPIrank_tod} received chain1 data (iter {i}).")
+        print(f"TOD: Rank {MPIrank_tod} starting chain 1, iter {i}.")
+        t0 = time.time()
         compsep_output_chain1 = MPIcomm_band.bcast(compsep_output_chain1, root=0)
+        print(f"TOD: Rank {MPIrank_tod} finished chain 1, iter {i} in {t0-time.time():.2f}s.")
 
         if master:
             print(f"TOD: Master sending 'dont stop' signal to CompSep master.")

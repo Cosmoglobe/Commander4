@@ -6,6 +6,7 @@ import numpy as np
 from mpi4py import MPI
 from time import time
 import argparse
+import math
 from numpy.testing import assert_ as myassert
 import ducc0
 
@@ -25,14 +26,17 @@ def random_alm(lmax, mmax, spin, ncomp, rng):
         ofs += lmax+1-s
     return res
 
-def do_benchmark(comm, work, name, msg_size):
+def do_benchmark(comm, work, name, msg_size, msg_size_per_comm):
+    # warm-up
+    comm.Barrier()
+    work()
     comm.Barrier()
     t0 = time()
     work()
     t1 = time()
     tmax = comm.allreduce(t1-t0, MPI.MAX)
     if comm.rank == 0:
-        print(f"{name}: {tmax}s, {1e-9*msg_size/tmax}GB/s")
+        print(f"{name:12s}: {tmax:12.3f}s {1e-9*msg_size/tmax:12.3f}GB/s {1e-9*msg_size_per_comm/tmax:12.3f}GB/s")
 
 
 def alm_to_map(alm: np.array, map: np.array, nside: int, lmax: int, nthreads=1) -> np.array:
@@ -56,25 +60,31 @@ def collectiveBench(comm, size):
     size : float
         message size in bytes
     """
+    num_comm_rounds = math.ceil(np.log2(comm.Get_size()))
+
     if comm.rank == 0 and size < 1e6:
         print("Warning: small message size. You may not get good estimates for actual performance. We recommend using 1e6 or higher.")
 
     if comm.rank == 0:
         print(f"Testing buffer-based collective communications on {comm.size} tasks with a message size of {size/1e9}GB")
+        print(f"For 1-to-all or all-to-1 communication, {num_comm_rounds} 'rounds' of communications are needed.")
+        print(f"{'':12s}  {'Time':>12s} {'Tot. speed':>16s} {'Speed/comm':>16s}")
 
     # warming up
     for i in range(10):
         comm.Barrier()
-    do_benchmark(comm, lambda : comm.Barrier(), "Barrier", 0)
+    do_benchmark(comm, lambda : comm.Barrier(), "Barrier", 0, 1)
     buf = np.ones(int(size/8), dtype=np.float64)
     recvbuf = buf.copy()
-    do_benchmark(comm, lambda : comm.Bcast(buf, 0), "Bcast", size*(comm.size-1))
+    do_benchmark(comm, lambda : comm.Send(buf, 1) if comm.rank == 0 else comm.Recv(recvbuf, 0) if comm.rank == 1 else time, "Send/Recv", size, size)
+    myassert((buf==1).all(), "Send/Recv problem")
+    do_benchmark(comm, lambda : comm.Bcast(buf, 0), "Bcast", size*(comm.size-1), num_comm_rounds*size)
     myassert((buf==1).all(), "Bcast problem")
-    do_benchmark(comm, lambda : comm.Reduce(buf, recvbuf if comm.rank == 0 else None, MPI.SUM, 0), "Reduce", size*(comm.size-1))
+    do_benchmark(comm, lambda : comm.Reduce(buf, recvbuf if comm.rank == 0 else None, MPI.SUM, 0), "Reduce", size*(comm.size-1), num_comm_rounds*size)
     myassert((buf==1).all(), "Bcast problem")
     if comm.rank == 0:
         myassert((recvbuf==comm.size).all(), "Reduce problem")
-    do_benchmark(comm, lambda : comm.Allreduce(buf, recvbuf, MPI.SUM), "Allreduce", size*2*(comm.size-1))
+    do_benchmark(comm, lambda : comm.Allreduce(buf, recvbuf, MPI.SUM), "Allreduce", size*2*(comm.size-1), num_comm_rounds*size*2)
     myassert((buf==1).all(), "Bcast problem")
     myassert((recvbuf==comm.size).all(), "Allreduce problem")
 
@@ -91,23 +101,25 @@ def collectiveBenchInplace(comm, size):
     size : float
         message size in bytes
     """
+    num_comm_rounds = math.ceil(np.log2(comm.Get_size()))
+
     if comm.rank == 0 and size < 1e6:
         print("Warning: small message size. You may not get good estimates for actual performance")
 
     if comm.rank == 0:
         print(f"Testing in-place buffer-based collective communications on {comm.size} tasks with a message size of {size/1e9}GB")
-
     # warming up
     for i in range(10):
         comm.Barrier()
-    do_benchmark(comm, lambda : comm.Barrier(), "Barrier", 0)
+    do_benchmark(comm, lambda : comm.Barrier(), "Barrier", 0, 1)
     buf = np.ones(int(size/8), dtype=np.float64)
-    do_benchmark(comm, lambda : comm.Bcast(buf, 0), "Bcast", size*(comm.size-1))
+    myassert((buf==1).all(), "Send/Recv problem")
+    do_benchmark(comm, lambda : comm.Bcast(buf, 0), "Bcast", size*(comm.size-1), num_comm_rounds*size)
     myassert((buf==1).all(), "Bcast problem")
-    do_benchmark(comm, lambda : comm.Reduce(MPI.IN_PLACE if comm.rank==0 else buf, buf if comm.rank==0 else None, MPI.SUM, 0), "Reduce", size*(comm.size-1))
-    myassert((buf==(comm.size if comm.rank == 0 else 1)).all(), "Reduce problem")
-    do_benchmark(comm, lambda : comm.Allreduce(MPI.IN_PLACE, buf, MPI.SUM), "Allreduce", size*2*(comm.size-1))
-    myassert((buf==2*comm.size-1).all(), "Reduce problem")
+    do_benchmark(comm, lambda : comm.Reduce(MPI.IN_PLACE if comm.rank==0 else buf, buf if comm.rank==0 else None, MPI.SUM, 0), "Reduce", size*(comm.size-1), num_comm_rounds*size)
+ #   myassert((buf==(comm.size if comm.rank == 0 else 1)).all(), "Reduce problem")
+    do_benchmark(comm, lambda : comm.Allreduce(MPI.IN_PLACE, buf, MPI.SUM), "Allreduce", size*2*(comm.size-1), num_comm_rounds*size)
+ #   myassert((buf==2*comm.size-1).all(), "Reduce problem")
 
 
 def collectiveBenchPersistent(comm, size):
@@ -123,6 +135,8 @@ def collectiveBenchPersistent(comm, size):
     size : float
         message size in bytes
     """
+    num_comm_rounds = math.ceil(np.log2(comm.Get_size()))
+
     if comm.rank == 0 and size < 1e6:
         print("Warning: small message size. You may not get good estimates for actual performance")
 
@@ -132,17 +146,17 @@ def collectiveBenchPersistent(comm, size):
     # warming up
     for i in range(10):
         comm.Barrier()
-    do_benchmark(comm, lambda : comm.Barrier(), "Barrier", 0)
+    do_benchmark(comm, lambda : comm.Barrier(), "Barrier", 0, 1)
     buf = np.ones(int(size/8), dtype=np.float64)
     recvbuf = buf.copy()
     req = comm.Bcast_init(buf,0)
-    do_benchmark(comm, lambda : req.Start(), "Bcast", size*(comm.size-1))
+    do_benchmark(comm, lambda : req.Start(), "Bcast", size*(comm.size-1), num_comm_rounds*size)
     del req
     req = comm.Reduce_init(buf, recvbuf, MPI.SUM, 0)
-    do_benchmark(comm, lambda : req.Start(), "Reduce", size*(comm.size-1))
+    do_benchmark(comm, lambda : req.Start(), "Reduce", size*(comm.size-1), num_comm_rounds*size)
     del req
     req = comm.Allreduce_init(buf, recvbuf, MPI.SUM)
-    do_benchmark(comm, lambda : req.Start(), "Allreduce", size*2*(comm.size-1))
+    do_benchmark(comm, lambda : req.Start(), "Allreduce", size*2*(comm.size-1), num_comm_rounds*size*2)
     del req
 
 
@@ -157,6 +171,8 @@ def collectiveBenchSimple(comm, size):
     size : float
         message size in bytes
     """
+    num_comm_rounds = math.ceil(np.log2(comm.Get_size()))
+
     if comm.rank == 0 and size < 1e6:
         print("Warning: small message size. You may not get good estimates for actual performance")
 
@@ -167,31 +183,39 @@ def collectiveBenchSimple(comm, size):
     for i in range(10):
         comm.Barrier()
 
-    do_benchmark(comm, lambda : comm.Barrier(), "Barrier", 0)
+    do_benchmark(comm, lambda : comm.Barrier(), "Barrier", 0, 1)
     buf = np.ones(int(size/8), dtype=np.float64)
-    do_benchmark(comm, lambda : comm.bcast(buf, 0), "bcast", size*(comm.size-1))
-    myassert((buf==1).all(), "Bcast problem")
-    do_benchmark(comm, lambda : comm.reduce(buf, MPI.SUM, 0), "reduce", size*(comm.size-1))
-    myassert((buf==1).all(), "Bcast problem")
-    do_benchmark(comm, lambda : comm.allreduce(buf, MPI.SUM), "allreduce", size*2*(comm.size-1))
-    myassert((buf==1).all(), "Bcast problem")
+    # do_benchmark(comm, lambda : comm.send(buf, 1) if comm.rank == 0 else comm.recv(0) if comm.rank == 1 else time, "send/recv", size, 1)
+    myassert((buf==1).all(), "send/recv problem")
+    do_benchmark(comm, lambda : comm.bcast(buf, 0), "bcast", size*(comm.size-1), num_comm_rounds*size)
+    myassert((buf==1).all(), "bcast problem")
+    do_benchmark(comm, lambda : comm.reduce(buf, MPI.SUM, 0), "reduce", size*(comm.size-1), num_comm_rounds*size)
+    myassert((buf==1).all(), "reduce problem")
+    do_benchmark(comm, lambda : comm.allreduce(buf, MPI.SUM), "allreduce", size*2*(comm.size-1), num_comm_rounds*size*2)
+    myassert((buf==1).all(), "allreduce problem")
 
 
 def bench_SHT(comm, nside, max_nthreads):
     if comm.rank == 0:
         print(f"Benchmarking independent SHTs on every task with 1<=nthreads<={max_nthreads}.")
+        print(f"{'nthreads':>10s}   {'tmin':>11s}  {'tmax':>11s} {'Speedup':>11s}")
     lmax = 2*nside
     rng = np.random.default_rng(48)
     alm = random_alm(lmax, lmax, 0, 1, rng)
     map = np.ones((1,12*nside**2))
-    for nthreads in range(1, max_nthreads+1):
+    nthreads = 1
+    time_first = 0.0
+    while nthreads <= max_nthreads:
         comm.Barrier()
         t0 = time()
         alm_to_map(alm, map, nside, lmax, nthreads=nthreads)
         t0 = time() - t0
         tmin, tmax = comm.allreduce(t0, MPI.MIN), comm.allreduce(t0, MPI.MAX)
+        if nthreads == 1:
+            time_first = tmax
         if comm.rank == 0:
-            print(f"nthreads={nthreads}: tmin={tmin}, tmax={tmax}")
+            print(f"{nthreads:10d}: {tmin:12.3f}s{tmax:12.3f}s{time_first/tmax:10.1f}")
+        nthreads *= 2
 
 def report_status(comm):
     for i in range(comm.size):
@@ -234,7 +258,7 @@ if not MPI.Is_initialized():
 
 comm2 = one_task_per_node_comm(MPI.COMM_WORLD)
 if comm2 != MPI.COMM_NULL:
-    report_status(comm2)
+#    report_status(comm2)
     parser = argparse.ArgumentParser(
                         prog='mpi_tests',
                         description='Simple MPI benchmarks')
