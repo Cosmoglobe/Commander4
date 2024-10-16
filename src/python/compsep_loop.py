@@ -26,9 +26,11 @@ def P_operator(x: np.array, comp: DiffuseComponent, M: np.array) -> np.array:
 
     # mixing matrix application in map space
     mp = math_op.alm_to_map(x, nside=comp.nside_comp_map, lmax=lmax) # Y a_lm
-    mp = M * mp # M Y a_lm
+    mp_new = np.zeros((M.size, mp.size))
+    for i in range(M.size):
+        mp_new[i] = M[i] * mp # M Y a_lm
     # transpose Y^T is represented by the adjoint operator
-    x = math_op.alm_to_map_adjoint(mp, nside=comp.nside_comp_map, lmax=lmax) # Y^T M Y a_lm
+    x = math_op.alm_to_map_adjoint(mp_new, nside=comp.nside_comp_map, lmax=lmax) # Y^T M Y a_lm
 
     # beam 
     x = math_op.spherical_beam_applied_to_alm(x, fwhm)
@@ -36,13 +38,16 @@ def P_operator(x: np.array, comp: DiffuseComponent, M: np.array) -> np.array:
     return mp
 
 
-def P_operator_transpose(x: np.array, comp: DiffuseComponent, M: np.array) -> np.array:
-    # x - array of maps for a given component
+def P_operator_transpose(x: np.array, comp: DiffuseComponent, M_T: np.array) -> np.array:
+    # x - [nbands, npix] array of maps for a given component
     # comp - class for a given component model 
-    # M - mixing matrix for a given component
+    # M_T - [nbands, ncomp] transpose of a mixing matrix
 
     lmax = 3*2048-1 # should be in param file
     fwhm = 20 # [arcmin] should be in param file
+    nbands = M_T[0].size
+    ncomp = M_T[1].size
+    npix = x[1].size
 
     # beam B^T Y^T m
     alm = math_op.alm_to_map_adjoint(x, nside=comp.nside_comp_map, lmax=lmax)
@@ -50,14 +55,17 @@ def P_operator_transpose(x: np.array, comp: DiffuseComponent, M: np.array) -> np
 
     # mixing matrix Y^T M^T Y
     mp = math_op.alm_to_map(alm, nside=comp.nside_comp_map, lmax=lmax)
-    mp = M * mp
-    alm = math_op.alm_to_map_adjoint(mp, nside=comp.nside_comp_map, lmax=lmax)
+    mp_new = np.zeros((ncomp, npix))
+    for i in range(ncomp):
+        for j in range(nbands):
+            mp_new[i] += M_T[i,j]*mp[j]
+    alm = math_op.alm_to_map_adjoint(mp_new, nside=comp.nside_comp_map, lmax=lmax)
 
     return alm
 
 
 def A_operator(x: np.array, comp_list: list, M: np.array, map_rms: np.array) -> np.array:
-    # x - spherical harmonics alm
+    # x - [ncomp, nalms] spherical harmonics alm
     # comp_list - [ncomp] list of DiffuseComponent class objects for relevant components
     # M - [nband, ncomp] array of mixing matricies
     # map_rms - [nbands, npix] array of RMS maps
@@ -65,14 +73,22 @@ def A_operator(x: np.array, comp_list: list, M: np.array, map_rms: np.array) -> 
     # A = (S^-1 + P^T N^-1 P)
     # P = Y B Y^T M Y
 
-    ncomp, _ = x.shape
+    ncomp, nalms = x.shape
+    mp_list = [] # list because maps for different comp are of different nsize
     for i in range(ncomp):
         mp = P_operator(x[i], comp_list[i], M[:,i]) # P alm
 
         N = hp.ud_grade(map_rms, comp_list[i].nside_comp_map, power=2)
         mp /= N # N^-1 P a_lm
 
-        alm = P_operator_transpose(mp, comp_list[i], M[:,i]) # P^T N^-1 P alm
+        mp_list += [mp]
+
+    alm_new = np.zeros(x.shape)
+    for j in range(ncomp):
+        alm = P_operator_transpose(mp_list[j], comp_list[j], M.T) # P^T N^-1 P alm
+        alm_new += alm
+
+    return alm_new
 
         
 
