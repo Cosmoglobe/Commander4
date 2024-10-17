@@ -21,8 +21,6 @@ using namespace ducc0;
 namespace py = pybind11;
 auto None = py::none();
 
-#if 1
-
 struct SingularError {};
 
 //!  Find pivot element
@@ -61,10 +59,8 @@ int pivot(vmav<double,2> &a, vmav<int,1> &order, int jcol)
 	   }
   if (std::abs(big)<TINY)
     throw SingularError();
-//	 MR_assert(std::abs(big)>TINY); // otherwise Matrix is singular
-	
+
 	 /* Interchange pivot row (ipvt) with current row (jcol). */
-	
  	if (ipvt==jcol) return 0;
 	 //a.swaprows(jcol,ipvt);
   for (int i=0; i<n; ++i)
@@ -150,15 +146,10 @@ void solvlu(const cmav<double,2> &a, const cmav<double,1> &b, vmav<double,1> &x,
 	 int n = a.shape(0);
 
 	 /* rearrange the elements of the b vector. x is used to hold them. */
-
  	for (int i=0; i<n; i++)
-    {
-	  	int j = order(i);
-  		x(i) = b(j);
-   	}
+  		x(i) = b(order(i));
 
  	/* do forward substitution, replacing x vector. */
-
   x(0) /= a(0,0);
  	for (int i=1; i<n; i++)
     {
@@ -177,7 +168,6 @@ void solvlu(const cmav<double,2> &a, const cmav<double,1> &b, vmav<double,1> &x,
   		x(i) -= sum;
 	   }
   }
-#endif
 
 py::array Py_amplitude_sampling_per_pix_helper (
   const py::array &map_sky_,
@@ -203,9 +193,8 @@ py::array Py_amplitude_sampling_per_pix_helper (
   {
   py::gil_scoped_release release;
 
-/* do computations here */
-  execStatic(npix, nthreads, 0,[&](auto &sched) {
-
+  execStatic(npix, nthreads, 0,[&](auto &sched)
+    {
     vmav<double,1> x({ncomp}), xmap({nband}), tmap({nband}), comp({ncomp});
     vmav<int,1> order({ncomp});
     vmav<double,2> A({ncomp,ncomp});
@@ -221,32 +210,29 @@ py::array Py_amplitude_sampling_per_pix_helper (
           {
           x(i) = 0;
           for (size_t j=0; j<nband; ++j)
-            {
             x(i) += M(j,i)*tmap(j);
-            }
           }
         for (size_t i=0; i<ncomp; ++i)
           for (size_t j=0; j<ncomp; ++j)
             {
             A(i,j) = 0;
             for (size_t k=0; k<nband; ++k)
-              {
               A(i,j) += M(k,i)*M(k,j)*xmap(k)*xmap(k);
-              }
             }
-        try {
+        try
+          {
           ludcmp(A, order);
           solvlu(A, x, comp, order);
           for (size_t i=0; i<ncomp; ++i)
             comp_maps(i,it) = comp(i);
-        }
-        catch (SingularError) {
+          }
+        catch (SingularError)
+          {
           for (size_t i=0; i<ncomp; ++i)
             comp_maps(i,it) = 0;
-        }
+          }
         }
     });
-
   }
   return comp_maps_;
   }
