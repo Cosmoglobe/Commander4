@@ -106,15 +106,25 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
     M[:,0] = CMB().get_sed(freqs)
     M[:,1] = ThermalDust().get_sed(freqs)
     M[:,2] = Synchrotron().get_sed(freqs)
+    rand = np.random.randn(npix,nband)
+    from time import time
+    t0 = time()
     for i in range(npix):
         xmap = 1/map_rms[:,i]
         x = M.T.dot((xmap**2*map_sky[:,i]))
-        x += M.T.dot(np.random.randn(nband)*xmap)
+        x += M.T.dot(rand[i]*xmap)
         A = (M.T.dot(np.diag(xmap**2)).dot(M))
         try:
             comp_maps[:,i] = np.linalg.solve(A, x)
         except np.linalg.LinAlgError:
             comp_maps[:,i] = 0
+    print(f"Time for Python solution: {time()-t0}s.")
+    import cmdr4_support
+    t0 = time()
+    comp_maps2 = cmdr4_support.utils.amplitude_sampling_per_pix_helper(map_sky, map_rms, M, rand, nthreads=1)
+    print(f"Time for native solution: {time()-t0}s.")
+    import ducc0
+    print(f"L2 error between solutions: {ducc0.misc.l2error(comp_maps, comp_maps2)}.")
     return comp_maps
 
 

@@ -3,6 +3,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/functional.h>
 #include <vector>
+#include <algorithm>
 #include <cmath>
 #include <complex>
 
@@ -20,11 +21,169 @@ using namespace ducc0;
 namespace py = pybind11;
 auto None = py::none();
 
+#if 1
+
+struct SingularError {};
+
+//!  Find pivot element
+/*!
+*   The function pivot finds the largest element for a pivot in "jcol"
+*   of Matrix "a", performs interchanges of the appropriate
+*   rows in "a", and also interchanges the corresponding elements in
+*   the order vector.
+*
+*
+*  \param     a      -  n by n Matrix of coefficients
+*  \param   order  - integer vector to hold row ordering
+*  \param    jcol   - column of "a" being searched for pivot element
+*
+*/
+int pivot(vmav<double,2> &a, vmav<int,1> &order, int jcol)
+  {
+  constexpr double TINY=1e-20;
+	 int n = a.shape(0);
+
+ 	/*
+  	*  Find biggest element on or below diagonal.
+	  *  This will be the pivot row.
+	  */
+
+ 	int ipvt = jcol;
+	 double big = std::abs(a(ipvt,ipvt));
+	 for (int i = ipvt+1; i<n; i++)
+    {
+		  double anext = std::abs(a(i,jcol));
+	  	if (anext>big)
+      {
+			   big = anext;
+			   ipvt = i;
+		    }
+	   }
+  if (std::abs(big)<TINY)
+    throw SingularError();
+//	 MR_assert(std::abs(big)>TINY); // otherwise Matrix is singular
+	
+	 /* Interchange pivot row (ipvt) with current row (jcol). */
+	
+ 	if (ipvt==jcol) return 0;
+	 //a.swaprows(jcol,ipvt);
+  for (int i=0; i<n; ++i)
+    swap(a(jcol,i), a(ipvt,i));
+  swap(order(jcol), order(ipvt));
+ 	return 1;
+  }
+
+int ludcmp(vmav<double,2> &a, vmav<int,1> &order)
+  {
+	 int flag = 1;    /* changes sign with each row interchange */
+
+ 	int n = a.shape(0);
+	 MR_assert(a.shape(1)==size_t(n));
+  MR_assert(order.shape(0)==size_t(n));
+
+	 /* establish initial ordering in order vector */
+	 for (int i=0; i<n; i++)
+    order(i) = i;
+
+	 /* do pivoting for first column and check for singularity */
+	 if (pivot(a,order,0))
+    flag = -flag;
+	 double diag = 1.0/a(0,0);
+	 for (int i=1; i<n; i++)
+    a(0,i) *= diag;
+	
+ 	/* Now complete the computing of L and U elements.
+ 	 * The general plan is to compute a column of L's, then
+  	* call pivot to interchange rows, and then compute
+  	* a row of U's. */
+
+ 	int nm1 = n - 1;
+ 	for (int j=1; j<nm1; j++)
+    {
+	  	/* column of L's */
+	  	for (int i=j; i<n; i++)
+      {
+		   	double sum = 0.0;
+		   	for (int k=0; k<j; k++)
+        sum += a(i,k)*a(k,j);
+      a(i,j) -= sum;
+		    }
+		  /* pivot, and check for singularity */
+		  if (pivot(a,order,j))
+      flag = -flag;
+		  /* row of U's */
+		  diag = 1.0/a(j,j);
+		  for (int k=j+1; k<n; k++)
+      {
+			   double sum = 0.0;
+		   	for (int i=0; i<j; i++)
+        sum += a(j,i)*a(i,k);
+	   		a(j,k) = (a(j,k)-sum)*diag;
+		    }
+	   }
+
+ 	/* still need to get last element in L Matrix */
+
+	 double sum = 0.0;
+	 for (int k=0; k<nm1; k++)
+    sum += a(nm1,k)*a(k,nm1);
+	 a(nm1,nm1) -= sum;
+	 return flag;
+  }
+
+
+//!  This function is used to find the solution to a system of equations,
+/*!   A x = b, after LU decomposition of A has been found.
+*    Within this routine, the elements of b are rearranged in the same way
+*    that the rows of a were interchanged, using the order vector.
+*    The solution is returned in x.
+*
+*
+*  \param  a     - the LU decomposition of the original coefficient Matrix.
+*  \param  b     - the vector of right-hand sides
+*  \param       x     - the solution vector
+*  \param    order - integer array of row order as arranged during pivoting
+*
+*/
+void solvlu(const cmav<double,2> &a, const cmav<double,1> &b, vmav<double,1> &x, const cmav<int,1> &order)
+  {
+	 int n = a.shape(0);
+
+	 /* rearrange the elements of the b vector. x is used to hold them. */
+
+ 	for (int i=0; i<n; i++)
+    {
+	  	int j = order(i);
+  		x(i) = b(j);
+   	}
+
+ 	/* do forward substitution, replacing x vector. */
+
+  x(0) /= a(0,0);
+ 	for (int i=1; i<n; i++)
+    {
+		  double sum = 0.0;
+		  for (int j=0; j<i; j++)
+      sum += a(i,j)*x(j);
+	  	x(i) = (x(i)-sum)/a(i,i);
+	   }
+
+ 	/* now get the solution vector, x[n-1] is already done */
+ 	for (int i=n-2; i>=0; i--)
+    {
+		  double sum = 0.0;
+	  	for (int j=i+1; j<n; j++)
+      sum += a(i,j) * x(j);
+  		x(i) -= sum;
+	   }
+  }
+#endif
 
 py::array Py_amplitude_sampling_per_pix_helper (
   const py::array &map_sky_,
   const py::array &map_rms_,
   const py::array &M_,
+  const py::array &random_,
   py::object &comp_maps__,
   size_t nthreads)
   {
@@ -36,12 +195,57 @@ py::array Py_amplitude_sampling_per_pix_helper (
   const auto M = to_cmav<double,2>(M_);
   size_t ncomp = M.shape(1);
   MR_assert(M.shape(0)==nband, "M shape mismatch");
+  const auto random = to_cmav<double,2>(random_);
+  MR_assert(random.shape(0)==npix, "random numbers shape mismatch");
+  MR_assert(random.shape(1)==nband, "random numbers shape mismatch");
   auto comp_maps_ = get_optional_Pyarr<double>(comp_maps__, {ncomp, npix});
   auto comp_maps = to_vmav<double,2>(comp_maps_);
   {
   py::gil_scoped_release release;
 
 /* do computations here */
+  execStatic(npix, nthreads, 0,[&](auto &sched) {
+
+    vmav<double,1> x({ncomp}), xmap({nband}), tmap({nband}), comp({ncomp});
+    vmav<int,1> order({ncomp});
+    vmav<double,2> A({ncomp,ncomp});
+    while (auto rng=sched.getNext())
+      for (size_t it=rng.lo; it<rng.hi; ++it)
+        {
+        for (size_t i=0; i<nband; ++i)
+          {
+          xmap(i) = 1./map_rms(i,it);
+          tmap(i) = xmap(i)*(xmap(i)*map_sky(i,it) + random(it,i));
+          }
+        for (size_t i=0; i<ncomp; ++i)
+          {
+          x(i) = 0;
+          for (size_t j=0; j<nband; ++j)
+            {
+            x(i) += M(j,i)*tmap(j);
+            }
+          }
+        for (size_t i=0; i<ncomp; ++i)
+          for (size_t j=0; j<ncomp; ++j)
+            {
+            A(i,j) = 0;
+            for (size_t k=0; k<nband; ++k)
+              {
+              A(i,j) += M(k,i)*M(k,j)*xmap(k)*xmap(k);
+              }
+            }
+        try {
+          ludcmp(A, order);
+          solvlu(A, x, comp, order);
+          for (size_t i=0; i<ncomp; ++i)
+            comp_maps(i,it) = comp(i);
+        }
+        catch (SingularError) {
+          for (size_t i=0; i<ncomp; ++i)
+            comp_maps(i,it) = 0;
+        }
+        }
+    });
 
   }
   return comp_maps_;
@@ -59,6 +263,7 @@ void add_utils(py::module_ &msup)
         "map_sky"_a,
         "map_rms"_a,
         "M"_a,
+        "random"_a,
         "comp_maps"_a=None,
         "nthreads"_a=1);
   }
