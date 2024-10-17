@@ -237,6 +237,30 @@ py::array Py_amplitude_sampling_per_pix_helper (
   return comp_maps_;
   }
 
+constexpr const char *Py_amplitude_sampling_per_pix_helper_DS = R"""(
+Helper function for amplitude_ampling_per_pix.
+
+Parameters
+----------
+map_sky: numpy.ndarray((nband, npix), dtype=np.float64)
+    the sky maps for all bands
+map_rms: numpy.ndarray((nband, npix), dtype=np.float64)
+    the RMS maps for all bands
+M: numpy.ndarray((nband, ncomp), dtype=np.float64)
+    the mixing matrix
+random: numpy.ndarray((npix, nband), dtype=np.float64)
+    normal-distributed random numbers
+    NOTE: the transposed shape is only for performance reasons
+comp_maps: numpy.ndarray((npix, ncomp), dtype=np.float64) or None
+    If provided, the results will be stored in this array
+
+Returns
+-------
+numpy.ndarray((npix, ncomp), dtype=np.float64)
+    The component maps
+    If comp_maps was provided, this array is identical to comp_maps
+)""";
+
 void add_utils(py::module_ &msup)
   {
   using namespace pybind11::literals;
@@ -245,7 +269,7 @@ void add_utils(py::module_ &msup)
 
   m.def("amplitude_sampling_per_pix_helper",
         Py_amplitude_sampling_per_pix_helper,
-//        Py_amplitude_sampling_per_pix_helper_DS,
+        Py_amplitude_sampling_per_pix_helper_DS,
         "map_sky"_a,
         "map_rms"_a,
         "M"_a,
