@@ -23,6 +23,7 @@ class DiffuseComponent(Component):
     def __init__(self):
         self._component_map = None
         self.nside_comp_map = 2048
+        self.prior_l_power_law = 0 # l^alpha as in S^-1 in comp sep
 
     @property
     def component_map(self):
@@ -63,6 +64,7 @@ class ThermalDust(DiffuseComponent):
         self.beta = 1.5
         self.T = 20.0
         self.nu0 = 857.0
+        self.prior_l_power_law = 2.5
 
     def get_sed(self, nu):
         # Modified blackbody, in uK_CMB
@@ -75,6 +77,7 @@ class Synchrotron(DiffuseComponent):
         self.beta = -3.1
         self.nu0 = 23.0
         self.nside_comp_map = 512
+        self.prior_l_power_law = -3
 
     def get_sed(self, nu):
         # power law with spectral index beta

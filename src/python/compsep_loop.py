@@ -9,11 +9,15 @@ import matplotlib.pyplot as plt
 import os
 import utils.math_operations as math_op
 
-def S_inv_prior(lmax, beta) -> np.array:
-    # use hp.almxfl()
+def S_inv_prior(x: np.array, comp: DiffuseComponent) -> np.array:
+    # x - array of alm for a given component
+    # comp - class for a given component model 
+    #
     # need to figure out l^beta for each components and add it to component class
-    q = np.arange(lmax)**beta
-    return np.diagflat(q)
+
+    lmax = 3*2048-1 # should be in param file
+    q = np.arange(lmax)**comp.prior_l_power_law
+    return hp.almxfl(x, q)
 
 
 def P_operator(x: np.array, comp: DiffuseComponent, M: np.array) -> np.array:
@@ -26,9 +30,8 @@ def P_operator(x: np.array, comp: DiffuseComponent, M: np.array) -> np.array:
 
     # mixing matrix application in map space
     mp = math_op.alm_to_map(x, nside=comp.nside_comp_map, lmax=lmax) # Y a_lm
-    mp_new = np.zeros((M.size, mp.size))
-    for i in range(M.size):
-        mp_new[i] = M[i] * mp # M Y a_lm
+    mp = np.array(M.size*[mp])
+    mp_new = M[:,None] * mp # M Y a_lm
     # transpose Y^T is represented by the adjoint operator
     x = math_op.alm_to_map_adjoint(mp_new, nside=comp.nside_comp_map, lmax=lmax) # Y^T M Y a_lm
 
@@ -55,10 +58,7 @@ def P_operator_transpose(x: np.array, comp: DiffuseComponent, M_T: np.array) -> 
 
     # mixing matrix Y^T M^T Y
     mp = math_op.alm_to_map(alm, nside=comp.nside_comp_map, lmax=lmax)
-    mp_new = np.zeros((ncomp, npix))
-    for i in range(ncomp):
-        for j in range(nbands):
-            mp_new[i] += M_T[i,j]*mp[j]
+    mp_new = M_T.dot(mp)
     alm = math_op.alm_to_map_adjoint(mp_new, nside=comp.nside_comp_map, lmax=lmax)
 
     return alm
@@ -84,9 +84,13 @@ def A_operator(x: np.array, comp_list: list, M: np.array, map_rms: np.array) -> 
         mp_list += [mp]
 
     alm_new = np.zeros(x.shape)
-    for j in range(ncomp):
-        alm = P_operator_transpose(mp_list[j], comp_list[j], M.T) # P^T N^-1 P alm
+    for i in range(ncomp):
+        alm = P_operator_transpose(mp_list[i], comp_list[i], M.T) # P^T N^-1 P alm
         alm_new += alm
+
+        S_inv_alm = S_inv_prior(x[i], comp_list[i]) # S^-1 alm
+        alm_new[i] += S_inv_alm
+
 
     return alm_new
 
