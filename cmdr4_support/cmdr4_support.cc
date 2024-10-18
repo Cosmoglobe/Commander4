@@ -1,5 +1,5 @@
 #include <pybind11/pybind11.h>
-#include "python/utils_pymod.cc"
+#include "utils_pymod.cc"
 
 using namespace cmdr4;
 

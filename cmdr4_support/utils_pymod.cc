@@ -24,6 +24,8 @@ auto None = py::none();
 // exception type for signalling a (nearly) singular matrix)
 struct SingularError {};
 
+// LU decomposition code taken from https://www.johnloomis.org/ece538/notes/2008/Matrix/ludcmp.html
+
 //!  Find pivot element
 /*!
 *   The function pivot finds the largest element for a pivot in "jcol"
@@ -93,7 +95,6 @@ int ludcmp(vmav<double,2> &a, vmav<int,1> &order)
  	 * The general plan is to compute a column of L's, then
   	* call pivot to interchange rows, and then compute
   	* a row of U's. */
-
  	int nm1 = n - 1;
  	for (int j=1; j<nm1; j++)
     {
