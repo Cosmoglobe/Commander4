@@ -1,0 +1,24 @@
+[project]
+name = "cmdr4_support"
+description = "Compiled support code for Commander4"
+authors = [
+  {name = "Martin Reinecke", email = "martin@mpa-garching.mpg.de"},
+]
+readme = "README.md"
+license = {file = "LICENSE"}
+classifiers = [
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Mathematics",
+  "Topic :: Scientific/Engineering :: Physics",
+  "License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)",
+  "Operating System :: OS Independent",
+  "Programming Language :: C++",
+  "Programming Language :: Python",
+]
+requires-python = ">=3.8"
+dependencies = ["numpy>=1.17.0"]
+dynamic = ["version"]
+
+[build-system]
+requires = ["setuptools >= 40.6.0", "pybind11 >= 2.6.0", "numpy >= 1.17.0"]
+build-backend = "setuptools.build_meta"

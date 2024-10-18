@@ -136,7 +136,7 @@ def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
         print(f"TOD: Rank {MPIrank_tod} starting chain 2, iter {i}.")
         t0 = time.time()
         todproc_output_chain2 = tod2map(MPIcomm_band, experiment_data, compsep_output_chain2)
-        print(f"TOD: Rank {MPIrank_tod} finished chain 2, iter {i} in {t0-time.time():.2f}s.")
+        print(f"TOD: Rank {MPIrank_tod} finished chain 2, iter {i} in {time.time()-t0:.2f}s.")
 
         # get compsep results for chain #1
         if master_band:
@@ -145,7 +145,7 @@ def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
         print(f"TOD: Rank {MPIrank_tod} starting chain 1, iter {i}.")
         t0 = time.time()
         compsep_output_chain1 = MPIcomm_band.bcast(compsep_output_chain1, root=0)
-        print(f"TOD: Rank {MPIrank_tod} finished chain 1, iter {i} in {t0-time.time():.2f}s.")
+        print(f"TOD: Rank {MPIrank_tod} finished chain 1, iter {i} in {time.time()-t0:.2f}s.")
 
         if master:
             print(f"TOD: Master sending 'dont stop' signal to CompSep master.")
