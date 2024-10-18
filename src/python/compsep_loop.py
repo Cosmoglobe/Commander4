@@ -106,8 +106,10 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
     M[:,0] = CMB().get_sed(freqs)
     M[:,1] = ThermalDust().get_sed(freqs)
     M[:,2] = Synchrotron().get_sed(freqs)
-    rand = np.random.randn(npix,nband)
     from time import time
+    t0 = time()
+    rand = np.random.randn(npix,nband)
+    print(f"time for random numbers: {time()-t0}s.")
     t0 = time()
     for i in range(npix):
         xmap = 1/map_rms[:,i]

@@ -21,6 +21,7 @@ using namespace ducc0;
 namespace py = pybind11;
 auto None = py::none();
 
+// exception type for signalling a (nearly) singular matrix)
 struct SingularError {};
 
 //!  Find pivot element
