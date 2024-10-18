@@ -8,6 +8,7 @@ from model.sky_model import SkyModel
 import matplotlib.pyplot as plt
 import os
 import utils.math_operations as math_op
+from conjugate_gradient import conjugate_gradient as CG_driver
 
 def S_inv_prior(x: np.array, comp: DiffuseComponent) -> np.array:
     # x - array of alm for a given component
@@ -42,9 +43,9 @@ def P_operator(x: np.array, comp: DiffuseComponent, M: np.array) -> np.array:
 
 
 def P_operator_transpose(x: np.array, comp: DiffuseComponent, M_T: np.array) -> np.array:
-    # x - [nbands, npix] array of maps for a given component
+    # x - [nband, npix] array of maps for a given component
     # comp - class for a given component model 
-    # M_T - [nbands, ncomp] transpose of a mixing matrix
+    # M_T - [nband, ncomp] transpose of a mixing matrix
 
     lmax = 3*2048-1 # should be in param file
     fwhm = 20 # [arcmin] should be in param file
@@ -67,8 +68,8 @@ def P_operator_transpose(x: np.array, comp: DiffuseComponent, M_T: np.array) -> 
 def A_operator(x: np.array, comp_list: list, M: np.array, map_rms: np.array) -> np.array:
     # x - [ncomp, nalms] spherical harmonics alm
     # comp_list - [ncomp] list of DiffuseComponent class objects for relevant components
-    # M - [nband, ncomp] array of mixing matricies
-    # map_rms - [nbands, npix] array of RMS maps
+    # M - [nband, ncomp] array of mixing matrix
+    # map_rms - [nband, npix] array of RMS maps
     #
     # A = (S^-1 + P^T N^-1 P)
     # P = Y B Y^T M Y
@@ -94,8 +95,38 @@ def A_operator(x: np.array, comp_list: list, M: np.array, map_rms: np.array) -> 
 
     return alm_new
 
-        
 
+def B_matrix(map_sky: np.array, map_rms: np.array, comp_list: list, M: np.array, nalm: int) -> np.array:
+    # map_sky - [nband, npix] - observed sky maps in different bands
+    # map_rms - [nband, npix] array of RMS maps
+    # comp_list - [ncomp] list of DiffuseComponent class objects
+    # M - [nband, ncomp] array of mixing matrix
+    # nalm - the size of alm array
+    #
+    # B = P^T N^-1 m + P^T N^-0.5 eta_1 + S^-1 eta_2
+
+    npix = map_sky.shape[1]
+    ncomp = len(comp_list)
+
+    # P^T N^-1 m
+    mp = map_sky/map_rms**2 # N^-1 m
+    fake_comp = DiffuseComponent()
+    fake_comp.nside_comp_map = hp.npix2nside(npix)
+    data_alm = P_operator_transpose(mp, fake_comp, M.T) # P^T N^-1 m
+
+    # P^T N^-0.5 eta_1
+    eta_1 = np.random.normal(size=map_sky.shape)
+    eta_1 /= map_rms
+    alm_eta_1 = P_operator_transpose(eta_1, fake_comp, M.T)
+
+    # S^-1 eta_2
+    eta_2 = np.random.normal(size=(ncomp, nalm))
+    S_inv_eta_2 = np.zeros(eta_2.shape)
+    for i in range(ncomp):
+        S_inv_eta_2[i] = S_inv_prior(eta_2[i], comp_list[i])
+
+    return data_alm + alm_eta_1 + S_inv_eta_2
+    
 
 def alm_comp_sampling_CG(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:
     # preparation
@@ -114,8 +145,13 @@ def alm_comp_sampling_CG(map_sky: np.array, map_rms: np.array, freqs: np.array) 
     for i in range(ncomp):
         M[:,i] = components[i].get_sed(freqs)
     
-    A_operator(comp_alm, components, M)
+    B = B_matrix(map_sky, map_rms, components, M, alm_size)
 
+    # this method works in map space if there is a mask, but we don't have it,
+    # so should work for alms
+    x0 = np.zeros(comp_alm.shape)
+    M_inv = np.ones(comp_alm.shape)
+    x, _ = CG_driver(A_operator, B, x0, M_inv) # this wouldn't work because A_operator has several required parameters. I need to either modify A and make all of sampling into a class, or modify CG_driver() function
 
 
 def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:
