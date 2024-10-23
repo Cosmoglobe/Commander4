@@ -18,6 +18,7 @@ import pysm3.units as u
 from commander_tod import commander_tod
 import matplotlib.pyplot as plt
 import h5py
+from  mpi4py import MPI
 
 import camb
 from camb import model, initialpower
@@ -36,11 +37,19 @@ def mixmat_s(nu, nu_0, beta):
     M = (nu/nu_0)**beta
     return M
 
+# initiliazing MPI
+comm = MPI.COMM_WORLD
+size = comm.Get_size()
+rank = comm.Get_rank()
 
+
+# reading in main parameters
 nside = param.NSIDE
 lmax = 3*nside-1
 npix = 12*nside**2
 chunk_size = npix//40
+if chunk_size % 2 != 0:
+    chunk_size += 1
 fwhm_arcmin = param.FWHM
 fwhm = fwhm_arcmin*u.arcmin
 sigma_fac = param.SIGMA_SCALE
@@ -130,7 +139,6 @@ def get_pointing():
 
 def sim_noise(sigma0):
     # white noise + 1/f noise
-    chunk_size = npix//40
     n_chunks = param.NTOD // chunk_size
     f_samp = param.SAMP_FREQ
     f_chunk = f_samp / chunk_size
@@ -138,47 +146,98 @@ def sim_noise(sigma0):
     noise = np.random.randn(ntod)*sigma0
     f = np.fft.rfftfreq(chunk_size, d = 1/f_samp)
     sel = (f >= f_chunk)
-    for i in range(n_chunks-1):
+
+    b = n_chunks-1
+    perrank = b//size
+    comm.Barrier()
+    for i in range(rank*perrank, (rank+1)*perrank):
         Fx = np.fft.rfft(noise[i*chunk_size:(i+1)*chunk_size])
         Fx[sel] = Fx[sel]*(1 + 1/f[sel])
         Fx[f < f_chunk] = Fx[sel][0]
         chunk_noise = np.fft.irfft(Fx)
         noise[i*chunk_size:(i+1)*chunk_size] = chunk_noise
 
-    if param.NTOD % chunk_size != 0:
-        Fx = np.fft.rfft(noise[n_chunks*chunk_size:])
-        f = np.fft.rfftfreq(ntod-n_chunks*chunk_size, d = 1/f_samp)
-        sel = (f >= f_chunk)
-        Fx[sel] = Fx[sel]*(1 + 1/f[sel])
-        Fx[f < f_chunk] = Fx[sel][0]
-        chunk_noise = np.fft.irfft(Fx)
-        noise[n_chunks*chunk_size:] = chunk_noise
+    if rank == 0:
+        total = np.zeros(ntod)
+    else:
+        total = None
 
-    return noise
+    comm.Barrier()
+    comm.Reduce(noise, total, op=MPI.SUM, root=0)
+
+    if rank == 0:
+        for i in range(size*perrank, b):
+            Fx = np.fft.rfft(noise[i*chunk_size:(i+1)*chunk_size])
+            Fx[sel] = Fx[sel]*(1 + 1/f[sel])
+            Fx[f < f_chunk] = Fx[sel][0]
+            chunk_noise = np.fft.irfft(Fx)
+            total[i*chunk_size:(i+1)*chunk_size] = chunk_noise
+
+    
+        if param.NTOD % chunk_size != 0:
+            Fx = np.fft.rfft(noise[n_chunks*chunk_size:])
+            f = np.fft.rfftfreq(ntod-n_chunks*chunk_size, d = 1/f_samp)
+            sel = (f >= f_chunk)
+            Fx[sel] = Fx[sel]*(1 + 1/f[sel])
+            Fx[f < f_chunk] = Fx[sel][0]
+            chunk_noise = np.fft.irfft(Fx)
+            total[n_chunks*chunk_size:] = chunk_noise
+
+    return total
 
         
+if size >= 3:
+    comm.Barrier()
+    mp_c = np.zeros((len(freqs), 3, npix))
+    if rank == 0:
+        mp_c = generate_thermal_dust()
+    if rank == 1:
+        mp_c = generate_sync()
+    if rank == 2:
+        mp_c = generate_cmb()
+        print(mp_c.shape)
 
+    if rank == 0:
+        m_s = np.zeros((len(freqs), 3, npix))
+    else:
+        m_s = None
 
-dust_s = generate_thermal_dust()
-sync_s = generate_sync()
-cmb_s = generate_cmb()
+    comm.Barrier()
+    comm.Reduce(mp_c, m_s, op=MPI.SUM, root=0)
+    if rank == 0:
+        print(m_s.shape)
+
+#dust_s = generate_thermal_dust()
+#sync_s = generate_sync()
+#cmb_s = generate_cmb()
+
 repeat = 50
 ntod = param.NTOD
 
-pix = get_pointing()
-psi = np.repeat(np.arange(repeat)*np.pi/repeat, npix)
+if rank == 0:
+    pix = get_pointing()
+    psi = np.repeat(np.arange(repeat)*np.pi/repeat, npix)
+    ds = []
 
-ds = []
 for i in range(len(freqs)):
-    m_s = cmb_s[i] + dust_s[i] + sync_s[i]
-    I,Q,U = m_s
-    if param.pol:
-        d = I[pix] + Q[pix]*np.cos(2*psi) + U[pix]*np.sin(2*psi)
-    else:
-        d = I[pix]
-    #d = d.to(u.uK_CMB, equivalencies=u.cmb_equivalencies(freqs[i]*u.GHz))
-    noise = sim_noise(sigma0s[i].value)
-    ds.append((d + noise).astype('float32'))
+    #m_s = cmb_s[i] + dust_s[i] + sync_s[i]
 
-hp.write_map(param.OUTPUT_FOLDER + "true_sky_full_{0}.fits".format(nside), m_s, overwrite=True)
-save_to_h5_file(ds, pix, psi)
+    if rank == 0:
+        I,Q,U = m_s[i]
+        if param.pol:
+            d = I[pix] + Q[pix]*np.cos(2*psi) + U[pix]*np.sin(2*psi)
+        else:
+            d = I[pix]
+        #d = d.to(u.uK_CMB, equivalencies=u.cmb_equivalencies(freqs[i]*u.GHz))
+
+    
+    noise = sim_noise(sigma0s[i].value)
+
+    if rank == 0:    
+        ds += [(d + noise).astype('float32')]
+
+
+if rank == 0:
+    for i in range(len(freq)):
+        hp.write_map(param.OUTPUT_FOLDER + "true_sky_full_{0}_{1}.fits".format(nside, freq[i]), m_s[i], overwrite=True)
+    save_to_h5_file(ds, pix, psi)
