@@ -238,6 +238,6 @@ for i in range(len(freqs)):
 
 
 if rank == 0:
-    for i in range(len(freq)):
-        hp.write_map(param.OUTPUT_FOLDER + "true_sky_full_{0}_{1}.fits".format(nside, freq[i]), m_s[i], overwrite=True)
+    for i in range(len(freqs)):
+        hp.write_map(param.OUTPUT_FOLDER + "true_sky_full_{0}_{1}.fits".format(nside, freqs[i]), m_s[i], overwrite=True)
     save_to_h5_file(ds, pix, psi)
