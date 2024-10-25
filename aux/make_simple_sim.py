@@ -80,7 +80,7 @@ def generate_cmb():
     cmb = hp.alm2map(alms, nside, pixwin=False)
     hp.write_map(param.OUTPUT_FOLDER + "true_sky_cmb_{0}.fits".format(nside), cmb, overwrite=True)
     cmb_s = hp.smoothing(cmb, fwhm=fwhm.to('rad').value) * u.uK_CMB
-    cmb_s = [cmb_s.to(u.uK_CMB, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs]
+    cmb_s = [cmb_s.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs]
     return np.array(cmb_s)
 
 
