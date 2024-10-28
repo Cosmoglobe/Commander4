@@ -53,9 +53,16 @@ if chunk_size % 2 != 0:
 fwhm_arcmin = param.FWHM
 fwhm = fwhm_arcmin*u.arcmin
 sigma_fac = param.SIGMA_SCALE
+unit = param.unit
+if unit == 'MJ/sr':
+    units = u.MJy/u.sr
+elif unit == 'uK_RJ':
+    units = u.uK_RJ
 
-sigma0s = np.array(param.SIGMA0)*sigma_fac*u.uK_CMB
+sigma0s = np.array(param.SIGMA0)*sigma_fac*u.uK_RJ
 freqs = np.array(param.FREQ)
+
+
 
 
 def generate_cmb():
@@ -80,7 +87,7 @@ def generate_cmb():
     cmb = hp.alm2map(alms, nside, pixwin=False)
     hp.write_map(param.OUTPUT_FOLDER + "true_sky_cmb_{0}.fits".format(nside), cmb, overwrite=True)
     cmb_s = hp.smoothing(cmb, fwhm=fwhm.to('rad').value) * u.uK_CMB
-    cmb_s = [cmb_s.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs]
+    cmb_s = [cmb_s.to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs]
     return np.array(cmb_s)
 
 
@@ -89,8 +96,8 @@ def generate_thermal_dust():
     beta = param.beta_dust
     T = param.T_dust
 
-    dust = pysm3.Sky(nside=1024, preset_strings=["d0"]) #d0 = constant beta 1.54 and T = 20
-    dust_ref = dust.get_emission(nu_dust*u.GHz).to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_dust*u.GHz))
+    dust = pysm3.Sky(nside=1024, preset_strings=["d0"], output_unit=u.Unit(unit)) #d0 = constant beta 1.54 and T = 20
+    dust_ref = dust.get_emission(nu_dust*u.GHz)#.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_dust*u.GHz))
     dust_ref_smoothed = hp.smoothing(dust_ref, fwhm=fwhm.to('rad').value)*dust_ref.unit
     hp.write_map(param.OUTPUT_FOLDER + "true_sky_dust_{0}.fits".format(1024), dust_ref_smoothed, overwrite=True)
 
@@ -104,8 +111,8 @@ def generate_sync():
     nu_sync = param.nu_ref_sync
     beta_s = param.beta_sync
 
-    sync = pysm3.Sky(nside=1024, preset_strings=["s5"]) # s5 = const beta -3.1
-    sync_ref = sync.get_emission(nu_sync*u.GHz).to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_sync*u.GHz))
+    sync = pysm3.Sky(nside=1024, preset_strings=["s5"], output_unit=u.Unit(unit)) # s5 = const beta -3.1
+    sync_ref = sync.get_emission(nu_sync*u.GHz)#.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_sync*u.GHz))
     sync_ref_smoothed = hp.smoothing(sync_ref, fwhm=fwhm.to('rad').value)*sync_ref.unit
     hp.write_map(param.OUTPUT_FOLDER + "true_sky_sync_{0}.fits".format(1024), sync_ref_smoothed, overwrite=True)
 

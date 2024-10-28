@@ -5,11 +5,12 @@ OUTPUT_FOLDER = '/mn/stornext/d5/data/artemba/Commander4_sim_data/'
 POINTING_PATH = '/mn/stornext/d5/data/artemba/other/extracted_pointing_no_skip_the_whole_survey_shifted.h5'
 
 # general map characteristics
-NSIDE = 64
-NTOD = 12*64**2 * 50
+NSIDE = 2048
+NTOD = 12*2048**2 * 50
 FWHM = 20 # [arcmin]
 FREQ = [30, 100, 353, 545, 857] # [GHz]
-pol = True # include (Q,U) polarization
+pol = False # include (Q,U) polarization
+unit = 'uK_RJ' #'MJ/sr' # or 'uK_RJ'
 
 # cosmology parameters
 H0 = 67.5
@@ -31,7 +32,7 @@ nu_ref_sync = 23 # [GHz]
 beta_sync = -3.1 # check the preset
 
 # noise parameters
-SIGMA0 = [100, 80, 30, 100, 200] # tod level white noise [uK_CMB] 
+SIGMA0 = [100, 80, 30, 100, 200] # tod level white noise [uK_RJ] 
 SIGMA_SCALE = 1.0 # scale noise level
 SAMP_FREQ = 180 # sampling frequency [Hz]
 
