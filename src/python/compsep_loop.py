@@ -8,7 +8,7 @@ from model.sky_model import SkyModel
 import matplotlib.pyplot as plt
 import os
 import utils.math_operations as math_op
-from conjugate_gradient import conjugate_gradient as CG_driver
+from conjugate_gradient import conjugate_gradient_alm as CG_driver
 
 def S_inv_prior(x: np.array, comp: DiffuseComponent) -> np.array:
     # x - array of alm for a given component
@@ -131,8 +131,8 @@ def B_matrix(map_sky: np.array, map_rms: np.array, comp_list: list, M: np.array,
 def alm_comp_sampling_CG(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:
     # preparation
     ncomp = 3 # should be in parameter file
-    lmax = 3*2048-1
-    alm_size = hp.map2alm(np.zeros(hp.nside2npix(2048)), lmax=lmax).size
+    lmax = 3*2048-1 # should be in parameter file
+    alm_size = math_op.alm_to_map_adjoint(np.zeros(hp.nside2npix(2048)), nside=2048, lmax=lmax).size
     nband, npix = map_sky.shape
 
     # create mixing matrix
@@ -147,11 +147,11 @@ def alm_comp_sampling_CG(map_sky: np.array, map_rms: np.array, freqs: np.array) 
     
     B = B_matrix(map_sky, map_rms, components, M, alm_size)
 
-    # this method works in map space if there is a mask, but we don't have it,
-    # so should work for alms
+    # initiliazing CG solver with 0 starting guess and preconditioner M = 1
     x0 = np.zeros(comp_alm.shape)
     M_inv = np.ones(comp_alm.shape)
-    x, _ = CG_driver(A_operator, B, x0, M_inv) # this wouldn't work because A_operator has several required parameters. I need to either modify A and make all of sampling into a class, or modify CG_driver() function
+    A_op = lambda x: A_operator(x, components, M, map_rms) # redefining A_operator so that there is just one argument for CG solver
+    x, _ = CG_driver(A_op, B, x0, M_inv)
 
 
 def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:

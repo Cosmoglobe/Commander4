@@ -37,3 +37,10 @@ def spherical_beam_applied_to_alm(alm: np.array, fwhm: float) -> np.array:
     fwhm = (fwhm*u.arcmin).to('rad').value
     return hp.smoothalm(alm, fwhm)
 
+
+def alm_dot_product(alm1: np.array, alm2: np.array, lmax: int) -> np.array:
+    """ Function calculating the dot product of two alms, given that they follow the Healpy standard,
+        where alms are represented as complex numbers, but with the conjugate 'negative' ms missing.
+    """
+    return np.sum((alm1[:lmax]*alm2[:lmax]).real) + np.sum((alm1[lmax:]*np.conj(alm2[lmax:])).real*2)
+
