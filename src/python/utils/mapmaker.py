@@ -102,8 +102,8 @@ def single_det_map_accumulator(det_static: DetectorTOD, det_cs_map: np.array) ->
         n_corr_est_fft = n_corr_est_fft_WF + n_corr_est_fft_fluct
         n_corr_est_fft[0] = 0.0
         n_corr_est_fft_WF[0] = 0.0
-        n_corr_est_WF = irfft(n_corr_est_fft_WF)
-        n_corr_est = irfft(n_corr_est_fft)
+        n_corr_est_WF = irfft(n_corr_est_fft_WF, n=sky_subtracted_tod.shape[0])
+        n_corr_est = irfft(n_corr_est_fft, n=sky_subtracted_tod.shape[0])
 
 
         # if scan.scanID < 10:
