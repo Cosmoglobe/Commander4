@@ -1,5 +1,5 @@
 import numpy as np
-from math_operations import alm_dot_product
+from utils.math_operations import alm_dot_product
 
 def conjugate_gradient(A, b, x0, M_inv, NPIX=1, pix_obs=[False], tol=1e-5, max_iter=1000):
     # Conjugate Gradient Method for solving the linear system Ax = b.
@@ -62,13 +62,14 @@ def conjugate_gradient(A, b, x0, M_inv, NPIX=1, pix_obs=[False], tol=1e-5, max_i
     return x_map, r_map
 
 
-def conjugate_gradient_alm(A, b, x0, M_inv, tol=1e-5, max_iter=1000, write_output=True):
+def conjugate_gradient_alm(A, b, x0, M_inv, lmax, tol=1e-5, max_iter=1000, write_output=True):
     # Conjugate Gradient Method for solving the linear system Ax = b.
     #
     # A - The coefficient operator/matrix (square, symmetric, positive-definite).
     # b - The right-hand side vector.
     # x0 - Initial guess for the solution.
     # M_inv - The inverse of the preconditioner matrix.
+    # lmax - number of miltipole moments l
     # tol - Tolerance for convergence.
     # max_iter - Maximum number of iterations.
     # write_output - whether to write convergance info into a txt file
@@ -80,8 +81,8 @@ def conjugate_gradient_alm(A, b, x0, M_inv, tol=1e-5, max_iter=1000, write_outpu
 
     x = x0
     r = b - A(x)
-    d = alm_dot_product(M_inv, r)
-    delta = alm_dot_product(r, d)
+    d = alm_dot_product(M_inv, r, lmax)
+    delta = alm_dot_product(r, d, lmax)
     delta0 = delta
 
     if write_output:
@@ -91,12 +92,12 @@ def conjugate_gradient_alm(A, b, x0, M_inv, tol=1e-5, max_iter=1000, write_outpu
 
     for k in range(max_iter):
         q = A(d)
-        alpha = delta / alm_dot_product(d, q)
+        alpha = delta / alm_dot_product(d, q, lmax)
         x += alpha * d
         r -= alpha * q
 
-        s = alm_dot_product(M_inv, r)
-        delta_new = alm_dot_product(r, s)
+        s = alm_dot_product(M_inv, r, lmax)
+        delta_new = alm_dot_product(r, s, lmax)
 
         if write_output:
             file = open('delta_CG_{0}.txt'.format(experiment_name), 'a')

@@ -8,7 +8,7 @@ from model.sky_model import SkyModel
 import matplotlib.pyplot as plt
 import os
 import utils.math_operations as math_op
-from conjugate_gradient import conjugate_gradient_alm as CG_driver
+from utils.conjugate_gradient import conjugate_gradient_alm as CG_driver
 
 def S_inv_prior(x: np.array, comp: DiffuseComponent) -> np.array:
     # x - array of alm for a given component
@@ -17,56 +17,69 @@ def S_inv_prior(x: np.array, comp: DiffuseComponent) -> np.array:
     # need to figure out l^beta for each components and add it to component class
 
     lmax = 3*2048-1 # should be in param file
-    q = np.arange(lmax)**comp.prior_l_power_law
+    q = np.arange(lmax, dtype=float)**comp.prior_l_power_law
     return hp.almxfl(x, q)
 
 
 def P_operator(x: np.array, comp: DiffuseComponent, M: np.array) -> np.array:
-    # x - array of alm for a given component
+    # x - [nalm] array of alm for a given component
     # comp - class for a given component model 
-    # M - mixing matrix for a given component
+    # M - [nband] mixing matrix for a given component
 
     lmax = 3*2048-1 # should be in param file
     fwhm = 20 # [arcmin] should be in param file
+    nalm = x.size
+    nband = len(M)
+    npix = hp.nside2npix(comp.nside_comp_map)
 
     # mixing matrix application in map space
     mp = math_op.alm_to_map(x, nside=comp.nside_comp_map, lmax=lmax) # Y a_lm
     mp = np.array(M.size*[mp])
     mp_new = M[:,None] * mp # M Y a_lm
     # transpose Y^T is represented by the adjoint operator
-    x = math_op.alm_to_map_adjoint(mp_new, nside=comp.nside_comp_map, lmax=lmax) # Y^T M Y a_lm
+    x = np.zeros((nband, nalm), dtype=complex)
+    for i in range(nband):
+        x[i] = math_op.alm_to_map_adjoint(mp_new[i], nside=comp.nside_comp_map, lmax=lmax) # Y^T M Y a_lm
 
     # beam 
     x = math_op.spherical_beam_applied_to_alm(x, fwhm)
-    mp = math_op.alm_to_map(x, nside=comp.nside_comp_map, lmax=lmax)
+    mp = np.zeros((nband, npix))
+    for i in range(nband):
+        mp[i] = math_op.alm_to_map(x[i], nside=comp.nside_comp_map, lmax=lmax)
     return mp
 
 
-def P_operator_transpose(x: np.array, comp: DiffuseComponent, M_T: np.array) -> np.array:
+def P_operator_transpose(x: np.array, comp: DiffuseComponent, M_T: np.array, nalm: int) -> np.array:
     # x - [nband, npix] array of maps for a given component
     # comp - class for a given component model 
-    # M_T - [nband, ncomp] transpose of a mixing matrix
+    # M_T - [ncomp, nband] transpose of a mixing matrix
+    # nalm - size of alm array
 
     lmax = 3*2048-1 # should be in param file
     fwhm = 20 # [arcmin] should be in param file
-    nbands = M_T[0].size
-    ncomp = M_T[1].size
-    npix = x[1].size
+    ncomp, nband = M_T.shape
+    _, npix = x.shape
 
     # beam B^T Y^T m
-    alm = math_op.alm_to_map_adjoint(x, nside=comp.nside_comp_map, lmax=lmax)
+    alm = np.zeros((nband, nalm), dtype=complex)
+    for i in range(nband):
+        alm[i] = math_op.alm_to_map_adjoint(x[i], nside=comp.nside_comp_map, lmax=lmax)
     alm = math_op.spherical_beam_applied_to_alm(alm, fwhm) 
 
     # mixing matrix Y^T M^T Y
-    mp = math_op.alm_to_map(alm, nside=comp.nside_comp_map, lmax=lmax)
+    mp = np.zeros((nband, npix))
+    for i in range(nband):
+        mp[i] = math_op.alm_to_map(alm[i], nside=comp.nside_comp_map, lmax=lmax)
     mp_new = M_T.dot(mp)
-    alm = math_op.alm_to_map_adjoint(mp_new, nside=comp.nside_comp_map, lmax=lmax)
+    alm = np.zeros((ncomp, nalm), dtype=complex)
+    for i in range(ncomp):
+        alm[i] = math_op.alm_to_map_adjoint(mp_new[i], nside=comp.nside_comp_map, lmax=lmax)
 
     return alm
 
 
 def A_operator(x: np.array, comp_list: list, M: np.array, map_rms: np.array) -> np.array:
-    # x - [ncomp, nalms] spherical harmonics alm
+    # x - [ncomp, nalm] spherical harmonics alm
     # comp_list - [ncomp] list of DiffuseComponent class objects for relevant components
     # M - [nband, ncomp] array of mixing matrix
     # map_rms - [nband, npix] array of RMS maps
@@ -74,7 +87,7 @@ def A_operator(x: np.array, comp_list: list, M: np.array, map_rms: np.array) -> 
     # A = (S^-1 + P^T N^-1 P)
     # P = Y B Y^T M Y
 
-    ncomp, nalms = x.shape
+    ncomp, nalm = x.shape
     mp_list = [] # list because maps for different comp are of different nsize
     for i in range(ncomp):
         mp = P_operator(x[i], comp_list[i], M[:,i]) # P alm
@@ -84,9 +97,9 @@ def A_operator(x: np.array, comp_list: list, M: np.array, map_rms: np.array) -> 
 
         mp_list += [mp]
 
-    alm_new = np.zeros(x.shape)
+    alm_new = np.zeros(x.shape, dtype=complex)
     for i in range(ncomp):
-        alm = P_operator_transpose(mp_list[i], comp_list[i], M.T) # P^T N^-1 P alm
+        alm = P_operator_transpose(mp_list[i], comp_list[i], M.T, nalm) # P^T N^-1 P alm
         alm_new += alm
 
         S_inv_alm = S_inv_prior(x[i], comp_list[i]) # S^-1 alm
@@ -112,12 +125,12 @@ def B_matrix(map_sky: np.array, map_rms: np.array, comp_list: list, M: np.array,
     mp = map_sky/map_rms**2 # N^-1 m
     fake_comp = DiffuseComponent()
     fake_comp.nside_comp_map = hp.npix2nside(npix)
-    data_alm = P_operator_transpose(mp, fake_comp, M.T) # P^T N^-1 m
+    data_alm = P_operator_transpose(mp, fake_comp, M.T, nalm) # P^T N^-1 m
 
     # P^T N^-0.5 eta_1
     eta_1 = np.random.normal(size=map_sky.shape)
     eta_1 /= map_rms
-    alm_eta_1 = P_operator_transpose(eta_1, fake_comp, M.T)
+    alm_eta_1 = P_operator_transpose(eta_1, fake_comp, M.T, nalm)
 
     # S^-1 eta_2
     eta_2 = np.random.normal(size=(ncomp, nalm))
@@ -141,17 +154,19 @@ def alm_comp_sampling_CG(map_sky: np.array, map_rms: np.array, freqs: np.array) 
     dust = ThermalDust()
     sync = Synchrotron()
     components = [cmb, dust, sync]
-    comp_alm = np.zeros((ncomp, alm_size))
+    comp_alm = np.zeros((ncomp, alm_size), dtype=complex)
     for i in range(ncomp):
         M[:,i] = components[i].get_sed(freqs)
-    
+       
     B = B_matrix(map_sky, map_rms, components, M, alm_size)
 
     # initiliazing CG solver with 0 starting guess and preconditioner M = 1
-    x0 = np.zeros(comp_alm.shape)
+    x0 = np.zeros(comp_alm.shape, dtype=complex)
     M_inv = np.ones(comp_alm.shape)
     A_op = lambda x: A_operator(x, components, M, map_rms) # redefining A_operator so that there is just one argument for CG solver
-    x, _ = CG_driver(A_op, B, x0, M_inv)
+    x, _ = CG_driver(A_op, B, x0, M_inv, lmax)
+
+    return x
 
 
 def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:
@@ -249,13 +264,19 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
         signal_maps = np.array(signal_maps)
         rms_maps = np.array(rms_maps)
         band_freqs = np.array(band_freqs)
-        comp_maps = amplitude_sampling_per_pix(signal_maps, rms_maps, band_freqs)
+        #comp_maps = amplitude_sampling_per_pix(signal_maps, rms_maps, band_freqs)
+        print(signal_maps.shape)
+
+        comp_alm = alm_comp_sampling_CG(signal_maps, rms_maps, band_freqs)
+        lmax = 3*2048-1 # should be in param file 
+        print('alm_comp_sampling_CG done')
 
         component_types = [CMB, ThermalDust, Synchrotron]
         component_list = []
         for i, component_type in enumerate(component_types):
             component = component_type()
-            component.component_map = comp_maps[i]
+            #component.component_map = comp_maps[i]
+            component.component_map = math_op.alm_to_map(comp_alm[i], nside=component.nside_comp_map, lmax=lmax)
             component_list.append(component)
 
         sky_model = SkyModel(component_list)
