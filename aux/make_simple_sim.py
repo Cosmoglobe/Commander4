@@ -19,12 +19,14 @@ from commander_tod import commander_tod
 import matplotlib.pyplot as plt
 import h5py
 from  mpi4py import MPI
+from tqdm import trange
+import time
 
 import camb
 from camb import model, initialpower
 
 from astropy.modeling.physical_models import BlackBody
-import paramfile_sim as param
+import paramfile_sim256 as param
 from save_sim_to_h5 import save_to_h5_file
 
 def mixmat_d(nu, nu_0, beta, T):
@@ -173,7 +175,7 @@ def sim_noise(sigma0):
     comm.Reduce(noise, total, op=MPI.SUM, root=0)
 
     if rank == 0:
-        for i in range(size*perrank, b):
+        for i in trange(size*perrank, b):
             Fx = np.fft.rfft(noise[i*chunk_size:(i+1)*chunk_size])
             Fx[sel] = Fx[sel]*(1 + 1/f[sel])
             Fx[f < f_chunk] = Fx[sel][0]
@@ -197,12 +199,20 @@ if size >= 3:
     comm.Barrier()
     mp_c = np.zeros((len(freqs), 3, npix))
     if rank == 0:
+        t0 = time.time()
+        print(f"Rank 0 generating thermal dust")
         mp_c = generate_thermal_dust()
+        print(f"Rank 0 finished thermal dust in {time.time()-t0:.1f}s.")
     if rank == 1:
+        t0 = time.time()
+        print(f"Rank 1 generating synchrotron")
         mp_c = generate_sync()
+        print(f"Rank 1 finished synchrotron in {time.time()-t0:.1f}s.")
     if rank == 2:
+        t0 = time.time()
+        print(f"Rank 2 generating CMB")
         mp_c = generate_cmb()
-        print(mp_c.shape)
+        print(f"Rank 2 finished CMB in {time.time()-t0:.1f}s.")
 
     if rank == 0:
         m_s = np.zeros((len(freqs), 3, npix))
@@ -211,8 +221,6 @@ if size >= 3:
 
     comm.Barrier()
     comm.Reduce(mp_c, m_s, op=MPI.SUM, root=0)
-    if rank == 0:
-        print(m_s.shape)
 
 #dust_s = generate_thermal_dust()
 #sync_s = generate_sync()
@@ -222,29 +230,42 @@ repeat = 50
 ntod = param.NTOD
 
 if rank == 0:
+    t0 = time.time()
+    print(f"Rank 1 calculating pointing")
     pix = get_pointing()
     psi = np.repeat(np.arange(repeat)*np.pi/repeat, npix)
     ds = []
+    print(f"Rank 1 finished calculating pointing in {time.time()-t0:.1f}s.")
 
 for i in range(len(freqs)):
     #m_s = cmb_s[i] + dust_s[i] + sync_s[i]
 
     if rank == 0:
+        t0 = time.time()
+        print(f"Rank 1 calculating sky signal")
         I,Q,U = m_s[i]
         if param.pol:
             d = I[pix] + Q[pix]*np.cos(2*psi) + U[pix]*np.sin(2*psi)
         else:
             d = I[pix]
+        print(f"Rank 1 finished calculating sky signal in {time.time()-t0:.1f}s.")
         #d = d.to(u.uK_CMB, equivalencies=u.cmb_equivalencies(freqs[i]*u.GHz))
 
+    if rank == 0:
+        t0 = time.time()
+        print(f"All ranks starting noise simulations.")
     
     noise = sim_noise(sigma0s[i].value)
 
     if rank == 0:    
+        print(f"Finished noise simulations in {time.time()-t0:.1f}s.")
         ds += [(d + noise).astype('float32')]
 
 
 if rank == 0:
+    t0 = time.time()
+    print(f"Rank 0 writing simulation to file.")
     for i in range(len(freqs)):
         hp.write_map(param.OUTPUT_FOLDER + "true_sky_full_{0}_{1}.fits".format(nside, freqs[i]), m_s[i], overwrite=True)
     save_to_h5_file(ds, pix, psi)
+    print(f"Rank 0 finished writing to file in {time.time()-t0:.1f}s.")

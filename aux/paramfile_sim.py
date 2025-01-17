@@ -1,7 +1,7 @@
 # PARAMETER FILE TO RUN A SIMULATED 
 # DATA CREATION
 
-OUTPUT_FOLDER = '/mn/stornext/d5/data/artemba/Commander4_sim_data/'
+OUTPUT_FOLDER = '../sim_data/'
 POINTING_PATH = '/mn/stornext/d5/data/artemba/other/extracted_pointing_no_skip_the_whole_survey_shifted.h5'
 
 # general map characteristics
