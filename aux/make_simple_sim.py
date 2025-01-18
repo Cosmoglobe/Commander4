@@ -21,23 +21,20 @@ import h5py
 from  mpi4py import MPI
 from tqdm import trange
 import time
+import sys
+import os
 
 import camb
 from camb import model, initialpower
 
 from astropy.modeling.physical_models import BlackBody
-import paramfile_sim256 as param
+import paramfile_sim as param
 from save_sim_to_h5 import save_to_h5_file
 
-def mixmat_d(nu, nu_0, beta, T):
-    bb = BlackBody(temperature=T*u.K)
-    M = (nu/nu_0)**beta
-    M *= bb(nu*u.GHz)/bb(nu_0*u.GHz)
-    return M
 
-def mixmat_s(nu, nu_0, beta):
-    M = (nu/nu_0)**beta
-    return M
+sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))) # Add the parent directory of this file, which is the Commander 4 root directory, to PATH, so that we can import packages from e.g. src/.
+
+from src.python.model.component import ThermalDust, Synchrotron
 
 # initiliazing MPI
 comm = MPI.COMM_WORLD
@@ -87,7 +84,7 @@ def generate_cmb():
     np.random.seed(0)
     alms = hp.synalm(Cls, lmax=lmax, new=True)
     cmb = hp.alm2map(alms, nside, pixwin=False)
-    hp.write_map(param.OUTPUT_FOLDER + "true_sky_cmb_{0}.fits".format(nside), cmb, overwrite=True)
+    hp.write_map(param.OUTPUT_FOLDER + "true_sky_cmb_{nside}.fits", cmb, overwrite=True)
     cmb_s = hp.smoothing(cmb, fwhm=fwhm.to('rad').value) * u.uK_CMB
     cmb_s = [cmb_s.to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs]
     return np.array(cmb_s)
@@ -101,9 +98,10 @@ def generate_thermal_dust():
     dust = pysm3.Sky(nside=1024, preset_strings=["d0"], output_unit=u.Unit(unit)) #d0 = constant beta 1.54 and T = 20
     dust_ref = dust.get_emission(nu_dust*u.GHz)#.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_dust*u.GHz))
     dust_ref_smoothed = hp.smoothing(dust_ref, fwhm=fwhm.to('rad').value)*dust_ref.unit
-    hp.write_map(param.OUTPUT_FOLDER + "true_sky_dust_{0}.fits".format(1024), dust_ref_smoothed, overwrite=True)
+    hp.write_map(param.OUTPUT_FOLDER + "true_sky_dust_{nside}.fits", dust_ref_smoothed, overwrite=True)
 
-    dust_s = [dust_ref_smoothed*mixmat_d(f, nu_dust, beta, T) for f in freqs]
+    dust = ThermalDust()
+    dust_s = [dust_ref_smoothed*dust.get_sed(f) for f in freqs]
     #dust_s = [d.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(f*u.GHz)) for d,f in zip(dust_s,freqs)]
     dust_s = [hp.ud_grade(d.value, nside)*d.unit for d in dust_s]
     return np.array(dust_s)
@@ -116,9 +114,10 @@ def generate_sync():
     sync = pysm3.Sky(nside=1024, preset_strings=["s5"], output_unit=u.Unit(unit)) # s5 = const beta -3.1
     sync_ref = sync.get_emission(nu_sync*u.GHz)#.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_sync*u.GHz))
     sync_ref_smoothed = hp.smoothing(sync_ref, fwhm=fwhm.to('rad').value)*sync_ref.unit
-    hp.write_map(param.OUTPUT_FOLDER + "true_sky_sync_{0}.fits".format(1024), sync_ref_smoothed, overwrite=True)
+    hp.write_map(param.OUTPUT_FOLDER + "true_sky_sync_{nside}.fits", sync_ref_smoothed, overwrite=True)
 
-    sync_s = [sync_ref_smoothed*mixmat_s(f, nu_sync, beta_s) for f in freqs]
+    sync = Synchrotron()
+    sync_s = [sync_ref_smoothed*sync.get_sed(f) for f in freqs]
     #sync_s = [d.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(f*u.GHz)) for d,f in zip(sync_s,freqs)]
     sync_s = [hp.ud_grade(d.value, nside)*d.unit for d in sync_s]
     return np.array(sync_s)
@@ -202,16 +201,28 @@ if size >= 3:
         t0 = time.time()
         print(f"Rank 0 generating thermal dust")
         mp_c = generate_thermal_dust()
+        for i in range(len(freqs)):
+            hp.mollview(mp_c[i,0], title=f"True thermal dust at {freqs[i]:.2f}GHz")
+            plt.savefig(param.OUTPUT_FOLDER + f"true_thermal_dust_{nside}_{freqs[i]}.png")
+            plt.close()
         print(f"Rank 0 finished thermal dust in {time.time()-t0:.1f}s.")
     if rank == 1:
         t0 = time.time()
         print(f"Rank 1 generating synchrotron")
         mp_c = generate_sync()
+        for i in range(len(freqs)):
+            hp.mollview(mp_c[i,0], title=f"True synchrotron at {freqs[i]:.2f}GHz")
+            plt.savefig(param.OUTPUT_FOLDER + f"true_synchrotron_{nside}_{freqs[i]}.png")
+            plt.close()
         print(f"Rank 1 finished synchrotron in {time.time()-t0:.1f}s.")
     if rank == 2:
         t0 = time.time()
         print(f"Rank 2 generating CMB")
         mp_c = generate_cmb()
+        for i in range(len(freqs)):
+            hp.mollview(mp_c[i,0], title=f"True CMB at {freqs[i]:.2f}GHz")
+            plt.savefig(param.OUTPUT_FOLDER + f"true_CMB_{nside}_{freqs[i]}.png")
+            plt.close()
         print(f"Rank 2 finished CMB in {time.time()-t0:.1f}s.")
 
     if rank == 0:
@@ -266,6 +277,7 @@ if rank == 0:
     t0 = time.time()
     print(f"Rank 0 writing simulation to file.")
     for i in range(len(freqs)):
-        hp.write_map(param.OUTPUT_FOLDER + "true_sky_full_{0}_{1}.fits".format(nside, freqs[i]), m_s[i], overwrite=True)
+        hp.write_map(param.OUTPUT_FOLDER + f"true_sky_full_{nside}_{freqs[i]}.fits", m_s[i], overwrite=True)
+
     save_to_h5_file(ds, pix, psi)
     print(f"Rank 0 finished writing to file in {time.time()-t0:.1f}s.")
