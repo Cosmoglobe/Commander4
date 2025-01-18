@@ -193,49 +193,47 @@ def sim_noise(sigma0):
 
     return total
 
-        
-if size >= 3:
-    comm.Barrier()
-    mp_c = np.zeros((len(freqs), 3, npix))
-    if rank == 0:
-        t0 = time.time()
-        print(f"Rank 0 generating thermal dust")
-        mp_c = generate_thermal_dust()
-        for i in range(len(freqs)):
-            hp.mollview(mp_c[i,0], title=f"True thermal dust at {freqs[i]:.2f}GHz")
-            plt.savefig(param.OUTPUT_FOLDER + f"true_thermal_dust_{nside}_{freqs[i]}.png")
-            plt.close()
-        print(f"Rank 0 finished thermal dust in {time.time()-t0:.1f}s.")
-    if rank == 1:
-        t0 = time.time()
-        print(f"Rank 1 generating synchrotron")
-        mp_c = generate_sync()
-        for i in range(len(freqs)):
-            hp.mollview(mp_c[i,0], title=f"True synchrotron at {freqs[i]:.2f}GHz")
-            plt.savefig(param.OUTPUT_FOLDER + f"true_synchrotron_{nside}_{freqs[i]}.png")
-            plt.close()
-        print(f"Rank 1 finished synchrotron in {time.time()-t0:.1f}s.")
-    if rank == 2:
-        t0 = time.time()
-        print(f"Rank 2 generating CMB")
-        mp_c = generate_cmb()
-        for i in range(len(freqs)):
-            hp.mollview(mp_c[i,0], title=f"True CMB at {freqs[i]:.2f}GHz")
-            plt.savefig(param.OUTPUT_FOLDER + f"true_CMB_{nside}_{freqs[i]}.png")
-            plt.close()
-        print(f"Rank 2 finished CMB in {time.time()-t0:.1f}s.")
 
-    if rank == 0:
-        m_s = np.zeros((len(freqs), 3, npix))
-    else:
-        m_s = None
+if size < 3:
+    raise ValueError("Please run this script with at least 3 MPI tasks.")
 
-    comm.Barrier()
-    comm.Reduce(mp_c, m_s, op=MPI.SUM, root=0)
+comm.Barrier()
+mp_c = np.zeros((len(freqs), 3, npix))
+if rank == 0:
+    t0 = time.time()
+    print(f"Rank 0 generating thermal dust")
+    mp_c = generate_thermal_dust()
+    for i in range(len(freqs)):
+        hp.mollview(mp_c[i,0], title=f"True thermal dust at {freqs[i]:.2f}GHz")
+        plt.savefig(param.OUTPUT_FOLDER + f"true_thermal_dust_{nside}_{freqs[i]}.png")
+        plt.close()
+    print(f"Rank 0 finished thermal dust in {time.time()-t0:.1f}s.")
+if rank == 1:
+    t0 = time.time()
+    print(f"Rank 1 generating synchrotron")
+    mp_c = generate_sync()
+    for i in range(len(freqs)):
+        hp.mollview(mp_c[i,0], title=f"True synchrotron at {freqs[i]:.2f}GHz")
+        plt.savefig(param.OUTPUT_FOLDER + f"true_synchrotron_{nside}_{freqs[i]}.png")
+        plt.close()
+    print(f"Rank 1 finished synchrotron in {time.time()-t0:.1f}s.")
+if rank == 2:
+    t0 = time.time()
+    print(f"Rank 2 generating CMB")
+    mp_c = generate_cmb()
+    for i in range(len(freqs)):
+        hp.mollview(mp_c[i,0], title=f"True CMB at {freqs[i]:.2f}GHz")
+        plt.savefig(param.OUTPUT_FOLDER + f"true_CMB_{nside}_{freqs[i]}.png")
+        plt.close()
+    print(f"Rank 2 finished CMB in {time.time()-t0:.1f}s.")
 
-#dust_s = generate_thermal_dust()
-#sync_s = generate_sync()
-#cmb_s = generate_cmb()
+if rank == 0:
+    m_s = np.zeros((len(freqs), 3, npix))
+else:
+    m_s = None
+
+comm.Barrier()
+comm.Reduce(mp_c, m_s, op=MPI.SUM, root=0)
 
 repeat = 50
 ntod = param.NTOD
