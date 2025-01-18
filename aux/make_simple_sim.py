@@ -28,7 +28,7 @@ import camb
 from camb import model, initialpower
 
 from astropy.modeling.physical_models import BlackBody
-import paramfile_sim as param
+import paramfile_sim as params
 from save_sim_to_h5 import save_to_h5_file
 
 
@@ -36,38 +36,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))) # 
 
 from src.python.model.component import ThermalDust, Synchrotron
 
-# initiliazing MPI
-comm = MPI.COMM_WORLD
-size = comm.Get_size()
-rank = comm.Get_rank()
 
-
-# reading in main parameters
-nside = param.NSIDE
-lmax = 3*nside-1
-npix = 12*nside**2
-chunk_size = npix//40
-if chunk_size % 2 != 0:
-    chunk_size += 1
-fwhm_arcmin = param.FWHM
-fwhm = fwhm_arcmin*u.arcmin
-sigma_fac = param.SIGMA_SCALE
-unit = param.unit
-if unit == 'MJ/sr':
-    units = u.MJy/u.sr
-elif unit == 'uK_RJ':
-    units = u.uK_RJ
-
-sigma0s = np.array(param.SIGMA0)*sigma_fac*u.uK_RJ
-freqs = np.array(param.FREQ)
-
-
-
-
-def generate_cmb():
-    pars = camb.set_params(H0=param.H0, ombh2=param.ombh2, omch2=param.omch2, 
-                           mnu=param.mnu, omk=param.omk, tau=param.tau, As=param.As, 
-                           ns=param.ns, halofit_version='mead', lmax=lmax)
+def generate_cmb(freqs, fwhm, units, nside, lmax):
+    pars = camb.set_params(H0=params.H0, ombh2=params.ombh2, omch2=params.omch2, 
+                           mnu=params.mnu, omk=params.omk, tau=params.tau, As=params.As, 
+                           ns=params.ns, halofit_version='mead', lmax=lmax)
 
     results = camb.get_results(pars)
     powers = results.get_cmb_power_spectra(pars, CMB_unit='muK', raw_cl=True)
@@ -84,21 +57,21 @@ def generate_cmb():
     np.random.seed(0)
     alms = hp.synalm(Cls, lmax=lmax, new=True)
     cmb = hp.alm2map(alms, nside, pixwin=False)
-    hp.write_map(param.OUTPUT_FOLDER + "true_sky_cmb_{nside}.fits", cmb, overwrite=True)
+    hp.write_map(params.OUTPUT_FOLDER + f"true_sky_cmb_{nside}.fits", cmb, overwrite=True)
     cmb_s = hp.smoothing(cmb, fwhm=fwhm.to('rad').value) * u.uK_CMB
     cmb_s = [cmb_s.to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs]
     return np.array(cmb_s)
 
 
-def generate_thermal_dust():
-    nu_dust = param.nu_ref_dust
-    beta = param.beta_dust
-    T = param.T_dust
+def generate_thermal_dust(freqs, fwhm, units, nside):
+    nu_dust = params.nu_ref_dust
+    beta = params.beta_dust
+    T = params.T_dust
 
-    dust = pysm3.Sky(nside=1024, preset_strings=["d0"], output_unit=u.Unit(unit)) #d0 = constant beta 1.54 and T = 20
+    dust = pysm3.Sky(nside=1024, preset_strings=["d0"], output_unit=units) #d0 = constant beta 1.54 and T = 20
     dust_ref = dust.get_emission(nu_dust*u.GHz)#.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_dust*u.GHz))
     dust_ref_smoothed = hp.smoothing(dust_ref, fwhm=fwhm.to('rad').value)*dust_ref.unit
-    hp.write_map(param.OUTPUT_FOLDER + "true_sky_dust_{nside}.fits", dust_ref_smoothed, overwrite=True)
+    hp.write_map(params.OUTPUT_FOLDER + f"true_sky_dust_{nside}.fits", dust_ref_smoothed, overwrite=True)
 
     dust = ThermalDust()
     dust_s = [dust_ref_smoothed*dust.get_sed(f) for f in freqs]
@@ -107,14 +80,14 @@ def generate_thermal_dust():
     return np.array(dust_s)
 
 
-def generate_sync():
-    nu_sync = param.nu_ref_sync
-    beta_s = param.beta_sync
+def generate_sync(freqs, fwhm, units, nside):
+    nu_sync = params.nu_ref_sync
+    beta_s = params.beta_sync
 
-    sync = pysm3.Sky(nside=1024, preset_strings=["s5"], output_unit=u.Unit(unit)) # s5 = const beta -3.1
+    sync = pysm3.Sky(nside=1024, preset_strings=["s5"], output_unit=units) # s5 = const beta -3.1
     sync_ref = sync.get_emission(nu_sync*u.GHz)#.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_sync*u.GHz))
     sync_ref_smoothed = hp.smoothing(sync_ref, fwhm=fwhm.to('rad').value)*sync_ref.unit
-    hp.write_map(param.OUTPUT_FOLDER + "true_sky_sync_{nside}.fits", sync_ref_smoothed, overwrite=True)
+    hp.write_map(params.OUTPUT_FOLDER + f"true_sky_sync_{nside}.fits", sync_ref_smoothed, overwrite=True)
 
     sync = Synchrotron()
     sync_s = [sync_ref_smoothed*sync.get_sed(f) for f in freqs]
@@ -123,35 +96,39 @@ def generate_sync():
     return np.array(sync_s)
 
 
-def get_pointing():
-    if param.POINTING_PATH is None:
+def get_pointing(npix):
+    if params.POINTING_PATH is None:
         pix = np.arange(ntod) % npix
         return pix.astype('int32')
 
-    with h5py.File(param.POINTING_PATH, 'r') as file:
+    with h5py.File(params.POINTING_PATH, 'r') as file:
         pix = file['pix'][()]
         file.close()
 
-    if param.NTOD is None:
+    if params.NTOD is None:
         ntod = len(pix)
     else:
-        indc = np.linspace(0, len(pix)-1, param.NTOD, dtype=int)
+        indc = np.linspace(0, len(pix)-1, params.NTOD, dtype=int)
         pix = pix[indc]
 
-    if param.NSIDE != 2048:
+    if params.NSIDE != 2048:
         vec = hp.pix2vec(2048, pix.astype(int))
-        pix = hp.vec2pix(param.NSIDE, vec[0], vec[1], vec[2])
+        pix = hp.vec2pix(params.NSIDE, vec[0], vec[1], vec[2])
 
     return pix.astype('int32')
 
 
-def sim_noise(sigma0):
+def sim_noise(sigma0, chunk_size, with_corr_noise):
     # white noise + 1/f noise
-    n_chunks = param.NTOD // chunk_size
-    f_samp = param.SAMP_FREQ
+    ntod = params.NTOD
+    n_chunks = ntod // chunk_size
+    f_samp = params.SAMP_FREQ
     f_chunk = f_samp / chunk_size
 
     noise = np.random.randn(ntod)*sigma0
+    if not with_corr_noise:
+        return noise
+
     f = np.fft.rfftfreq(chunk_size, d = 1/f_samp)
     sel = (f >= f_chunk)
 
@@ -182,7 +159,7 @@ def sim_noise(sigma0):
             total[i*chunk_size:(i+1)*chunk_size] = chunk_noise
 
     
-        if param.NTOD % chunk_size != 0:
+        if params.NTOD % chunk_size != 0:
             Fx = np.fft.rfft(noise[n_chunks*chunk_size:])
             f = np.fft.rfftfreq(ntod-n_chunks*chunk_size, d = 1/f_samp)
             sel = (f >= f_chunk)
@@ -194,88 +171,117 @@ def sim_noise(sigma0):
     return total
 
 
-if size < 3:
-    raise ValueError("Please run this script with at least 3 MPI tasks.")
+if __name__ == "__main__":
 
-comm.Barrier()
-mp_c = np.zeros((len(freqs), 3, npix))
-if rank == 0:
-    t0 = time.time()
-    print(f"Rank 0 generating thermal dust")
-    mp_c = generate_thermal_dust()
-    for i in range(len(freqs)):
-        hp.mollview(mp_c[i,0], title=f"True thermal dust at {freqs[i]:.2f}GHz")
-        plt.savefig(param.OUTPUT_FOLDER + f"true_thermal_dust_{nside}_{freqs[i]}.png")
-        plt.close()
-    print(f"Rank 0 finished thermal dust in {time.time()-t0:.1f}s.")
-if rank == 1:
-    t0 = time.time()
-    print(f"Rank 1 generating synchrotron")
-    mp_c = generate_sync()
-    for i in range(len(freqs)):
-        hp.mollview(mp_c[i,0], title=f"True synchrotron at {freqs[i]:.2f}GHz")
-        plt.savefig(param.OUTPUT_FOLDER + f"true_synchrotron_{nside}_{freqs[i]}.png")
-        plt.close()
-    print(f"Rank 1 finished synchrotron in {time.time()-t0:.1f}s.")
-if rank == 2:
-    t0 = time.time()
-    print(f"Rank 2 generating CMB")
-    mp_c = generate_cmb()
-    for i in range(len(freqs)):
-        hp.mollview(mp_c[i,0], title=f"True CMB at {freqs[i]:.2f}GHz")
-        plt.savefig(param.OUTPUT_FOLDER + f"true_CMB_{nside}_{freqs[i]}.png")
-        plt.close()
-    print(f"Rank 2 finished CMB in {time.time()-t0:.1f}s.")
+    # initiliazing MPI
+    comm = MPI.COMM_WORLD
+    size = comm.Get_size()
+    rank = comm.Get_rank()
 
-if rank == 0:
-    m_s = np.zeros((len(freqs), 3, npix))
-else:
-    m_s = None
 
-comm.Barrier()
-comm.Reduce(mp_c, m_s, op=MPI.SUM, root=0)
+    # reading in main parameters
+    nside = params.NSIDE
+    lmax = 3*nside-1
+    npix = 12*nside**2
+    chunk_size = npix//40
+    if chunk_size % 2 != 0:
+        chunk_size += 1
+    fwhm_arcmin = params.FWHM
+    fwhm = fwhm_arcmin*u.arcmin
+    sigma_fac = params.SIGMA_SCALE
+    unit = params.unit
+    if unit == 'MJ/sr':
+        units = u.MJy/u.sr
+    elif unit == 'uK_RJ':
+        units = u.uK_RJ
 
-repeat = 50
-ntod = param.NTOD
+    sigma0s = np.array(params.SIGMA0)*sigma_fac*u.uK_RJ
+    freqs = np.array(params.FREQ)
 
-if rank == 0:
-    t0 = time.time()
-    print(f"Rank 1 calculating pointing")
-    pix = get_pointing()
-    psi = np.repeat(np.arange(repeat)*np.pi/repeat, npix)
-    ds = []
-    print(f"Rank 1 finished calculating pointing in {time.time()-t0:.1f}s.")
 
-for i in range(len(freqs)):
-    #m_s = cmb_s[i] + dust_s[i] + sync_s[i]
+    if size < 3:
+        raise ValueError("Please run this script with at least 3 MPI tasks.")
+
+    comm.Barrier()
+    mp_c = np.zeros((len(freqs), 3, npix))
+    if rank == 0 and "dust" in params.components:
+        t0 = time.time()
+        print(f"Rank 0 generating thermal dust")
+        mp_c = generate_thermal_dust(freqs, fwhm, units, nside)
+        for i in range(len(freqs)):
+            hp.mollview(mp_c[i,0], title=f"True thermal dust at {freqs[i]:.2f}GHz")
+            plt.savefig(params.OUTPUT_FOLDER + f"true_thermal_dust_{nside}_{freqs[i]}.png")
+            plt.close()
+        print(f"Rank 0 finished thermal dust in {time.time()-t0:.1f}s.")
+    if rank == 1 and "sync" in params.components:
+        t0 = time.time()
+        print(f"Rank 1 generating synchrotron")
+        mp_c = generate_sync(freqs, fwhm, units, nside)
+        for i in range(len(freqs)):
+            hp.mollview(mp_c[i,0], title=f"True synchrotron at {freqs[i]:.2f}GHz")
+            plt.savefig(params.OUTPUT_FOLDER + f"true_synchrotron_{nside}_{freqs[i]}.png")
+            plt.close()
+        print(f"Rank 1 finished synchrotron in {time.time()-t0:.1f}s.")
+    if rank == 2 and "CMB" in params.components:
+        t0 = time.time()
+        print(f"Rank 2 generating CMB")
+        mp_c = generate_cmb(freqs, fwhm, units, nside, lmax)
+        for i in range(len(freqs)):
+            hp.mollview(mp_c[i,0], title=f"True CMB at {freqs[i]:.2f}GHz")
+            plt.savefig(params.OUTPUT_FOLDER + f"true_CMB_{nside}_{freqs[i]}.png")
+            plt.close()
+        print(f"Rank 2 finished CMB in {time.time()-t0:.1f}s.")
+
+    if rank == 0:
+        m_s = np.zeros((len(freqs), 3, npix))
+    else:
+        m_s = None
+
+    comm.Barrier()
+    comm.Reduce(mp_c, m_s, op=MPI.SUM, root=0)
+
+    repeat = 50
+    ntod = params.NTOD
 
     if rank == 0:
         t0 = time.time()
-        print(f"Rank 1 calculating sky signal")
-        I,Q,U = m_s[i]
-        if param.pol:
-            d = I[pix] + Q[pix]*np.cos(2*psi) + U[pix]*np.sin(2*psi)
-        else:
-            d = I[pix]
-        print(f"Rank 1 finished calculating sky signal in {time.time()-t0:.1f}s.")
-        #d = d.to(u.uK_CMB, equivalencies=u.cmb_equivalencies(freqs[i]*u.GHz))
+        print(f"Rank 1 calculating pointing")
+        pix = get_pointing(npix)
+        psi = np.repeat(np.arange(repeat)*np.pi/repeat, npix)
+        ds = []
+        print(f"Rank 1 finished calculating pointing in {time.time()-t0:.1f}s.")
+
+    for i in range(len(freqs)):
+        #m_s = cmb_s[i] + dust_s[i] + sync_s[i]
+
+        if rank == 0:
+            t0 = time.time()
+            print(f"Rank 1 calculating sky signal")
+            I,Q,U = m_s[i]
+            if params.pol:
+                d = I[pix] + Q[pix]*np.cos(2*psi) + U[pix]*np.sin(2*psi)
+            else:
+                d = I[pix]
+            print(f"Rank 1 finished calculating sky signal in {time.time()-t0:.1f}s.")
+            #d = d.to(u.uK_CMB, equivalencies=u.cmb_equivalencies(freqs[i]*u.GHz))
+
+        if rank == 0:
+            t0 = time.time()
+            print(f"All ranks starting noise simulations.")
+
+        with_corr_noise = "corr_noise" in params.components
+        noise = sim_noise(sigma0s[i].value, chunk_size, with_corr_noise)
+
+        if rank == 0:    
+            print(f"Finished noise simulations in {time.time()-t0:.1f}s.")
+            ds += [(d + noise).astype('float32')]
+
 
     if rank == 0:
         t0 = time.time()
-        print(f"All ranks starting noise simulations.")
-    
-    noise = sim_noise(sigma0s[i].value)
+        print(f"Rank 0 writing simulation to file.")
+        for i in range(len(freqs)):
+            hp.write_map(params.OUTPUT_FOLDER + f"true_sky_full_{nside}_{freqs[i]}.fits", m_s[i], overwrite=True)
 
-    if rank == 0:    
-        print(f"Finished noise simulations in {time.time()-t0:.1f}s.")
-        ds += [(d + noise).astype('float32')]
-
-
-if rank == 0:
-    t0 = time.time()
-    print(f"Rank 0 writing simulation to file.")
-    for i in range(len(freqs)):
-        hp.write_map(param.OUTPUT_FOLDER + f"true_sky_full_{nside}_{freqs[i]}.fits", m_s[i], overwrite=True)
-
-    save_to_h5_file(ds, pix, psi)
-    print(f"Rank 0 finished writing to file in {time.time()-t0:.1f}s.")
+        save_to_h5_file(ds, pix, psi)
+        print(f"Rank 0 finished writing to file in {time.time()-t0:.1f}s.")

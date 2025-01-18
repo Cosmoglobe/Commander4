@@ -1,12 +1,12 @@
 # PARAMETER FILE TO RUN A SIMULATED 
 # DATA CREATION
 
-OUTPUT_FOLDER = '../sim_data/'
+OUTPUT_FOLDER = 'sim_data_cmb_dust/'
 POINTING_PATH = '/mn/stornext/d5/data/artemba/other/extracted_pointing_no_skip_the_whole_survey_shifted.h5'
 
 # general map characteristics
-NSIDE = 2048
-NTOD = 12*2048**2 * 50
+NSIDE = 256
+NTOD = 12*256**2 * 50
 FWHM = 20 # [arcmin]
 FREQ = [30, 100, 353, 545, 857] # [GHz]
 pol = False # include (Q,U) polarization
@@ -21,6 +21,9 @@ omk = 0
 tau = 0.06
 As = 2.e-9
 ns = 0.965
+
+# components = ["CMB", "dust", "sync", "corr_noise"]  # Remove components from this list to remove them from simulation.
+components = ["CMB", "dust"]
 
 # thermal dust parameters
 nu_ref_dust = 857 # [GHz]
