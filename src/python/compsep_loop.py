@@ -268,6 +268,9 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
                 hp.mollview(signal_maps[-1], cmap="RdBu_r", title=f"Signal map, det {i_det}, chain {chain}, iter {iter}")
                 plt.savefig(params.output_paths.plots + f"maps_sky/map_sky_det{i_det}_chain{chain}_iter{iter}.png")
                 plt.close()
+                hp.mollview(detector.map_corr_noise, cmap="RdBu_r", title=f"Corr noise map, det {i_det}, chain {chain}, iter {iter}")
+                plt.savefig(params.output_paths.plots + f"maps_sky/map_corr_noise_det{i_det}_chain{chain}_iter{iter}.png")
+                plt.close()
                 hp.mollview(rms_maps[-1], title=f"RMS map, det {i_det}, chain {chain}, iter {iter}")
                 plt.savefig(params.output_paths.plots + f"maps_sky/map_rms_det{i_det}_chain{chain}_iter{iter}.png")
                 plt.close()
@@ -283,7 +286,7 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
         lmax = 3*2048-1 # should be in param file 
         print('alm_comp_sampling_CG done')
 
-        component_types = [CMB, ThermalDust, Synchrotron]
+        component_types = [CMB, ThermalDust, Synchrotron]  # At the moment we always sample all components. #TODO: Move to parameter file.
         component_list = []
         for i, component_type in enumerate(component_types):
             component = component_type()

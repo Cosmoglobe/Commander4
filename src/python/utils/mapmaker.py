@@ -67,8 +67,9 @@ def single_det_map_accumulator(det_static: DetectorTOD, det_cs_map: np.array) ->
     """
     npix = det_cs_map.shape[-1]
     nside = hp.npix2nside(npix)
-    detmap_signal = np.zeros(npix)
-    detmap_inv_var = np.zeros(npix)
+    detmap_corr_noise = np.zeros(npix)  # Healpix map holding the accumulated correlated noise realizations.
+    detmap_signal = np.zeros(npix)  # Healpix map holding the accumulated sky signal map.
+    detmap_inv_var = np.zeros(npix)  # Healpix map holding the accumulated inverse variance.
 
     maplib = ct.cdll.LoadLibrary(os.path.join(src_dir_path, "cpp/mapmaker.so"))
     ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
@@ -105,7 +106,6 @@ def single_det_map_accumulator(det_static: DetectorTOD, det_cs_map: np.array) ->
         n_corr_est_WF = irfft(n_corr_est_fft_WF, n=sky_subtracted_tod.shape[0])
         n_corr_est = irfft(n_corr_est_fft, n=sky_subtracted_tod.shape[0])
 
-
         # if scan.scanID < 10:
         #     plt.figure(figsize=(20,10))
         #     plt.plot(det_cs_map[pix], label="observed sky")
@@ -129,5 +129,6 @@ def single_det_map_accumulator(det_static: DetectorTOD, det_cs_map: np.array) ->
         # detmap_inv_var += np.bincount(pix, minlength=npix)/sigma0**2
         maplib.map_weight_accumulator(detmap_inv_var, inv_var, pix, ntod, npix)
         maplib.map_accumulator(detmap_signal, scan_map, inv_var, pix, ntod, npix)
+        maplib.map_accumulator(detmap_corr_noise, n_corr_est, inv_var, pix, ntod, npix)
 
-    return detmap_signal, detmap_inv_var
+    return detmap_signal, detmap_corr_noise, detmap_inv_var

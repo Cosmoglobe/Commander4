@@ -50,21 +50,25 @@ def tod2map_old(staticData: list[DetectorTOD], compsepData: list[np.array]) -> l
 
 
 def tod2map(comm, det_static: DetectorTOD, det_cs_map: np.array) -> DetectorMap:
-    detmap_signal, detmap_inv_var = single_det_map_accumulator(det_static, det_cs_map)
+    detmap_signal, detmap_corr_noise, detmap_inv_var = single_det_map_accumulator(det_static, det_cs_map)
     map_signal = np.zeros_like(detmap_signal)
+    map_corr_noise = np.zeros_like(detmap_corr_noise)
     map_inv_var = np.zeros_like(detmap_inv_var)
     if comm.Get_rank() == 0:
         comm.Reduce(detmap_signal, map_signal, op=MPI.SUM, root=0)
+        comm.Reduce(detmap_corr_noise, map_corr_noise, op=MPI.SUM, root=0)
         comm.Reduce(detmap_inv_var, map_inv_var, op=MPI.SUM, root=0)
     else:
         comm.Reduce(detmap_signal, None, op=MPI.SUM, root=0)
+        comm.Reduce(detmap_corr_noise, None, op=MPI.SUM, root=0)
         comm.Reduce(detmap_inv_var, None, op=MPI.SUM, root=0)
 
     if comm.Get_rank() == 0:
         map_signal[map_signal != 0] /= map_inv_var[map_signal != 0]
+        map_corr_noise[map_corr_noise != 0] /= map_inv_var[map_corr_noise != 0]
         map_rms = np.zeros_like(map_inv_var) + np.inf
         map_rms[map_inv_var != 0] = 1.0/np.sqrt(map_inv_var[map_inv_var != 0])
-        detmap = DetectorMap(map_signal, map_rms, det_static.nu)
+        detmap = DetectorMap(map_signal, map_corr_noise, map_rms, det_static.nu)
         return detmap
 
 
@@ -79,7 +83,7 @@ def read_data(band_idx, scan_idx_start, scan_idx_stop, params) -> list[ScanTOD]:
             tod = f[f'{iscan+1:06}/{band_formatted}/tod'][()].astype(np.float64)
             pix = f[f'{iscan+1:06}/{band_formatted}/pix'][()]
             psi = f[f'{iscan+1:06}/{band_formatted}/psi'][()].astype(np.float64)
-            assert np.max(pix) < 12*params.nside**2, f"Nside is {params.nside}, but found pixel index exceeding 12nside^2 ({np.max(npix)})"
+            assert np.max(pix) < 12*params.nside**2, f"Nside is {params.nside}, but found pixel index exceeding 12nside^2 ({np.max(12*params.nside**2)})"
             theta, phi = hp.pix2ang(params.nside, pix)
             scanlist.append(ScanTOD(tod, theta, phi, psi, 0., iscan))
         det = DetectorTOD(scanlist, float(band))
