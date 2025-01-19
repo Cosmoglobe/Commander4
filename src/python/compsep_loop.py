@@ -192,12 +192,12 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
         except np.linalg.LinAlgError:
             comp_maps[:,i] = 0
     print(f"Time for Python solution: {time()-t0}s.")
-    import cmdr4_support
-    t0 = time()
-    comp_maps2 = cmdr4_support.utils.amplitude_sampling_per_pix_helper(map_sky, map_rms, M, rand, nthreads=1)
-    print(f"Time for native solution: {time()-t0}s.")
-    import ducc0
-    print(f"L2 error between solutions: {ducc0.misc.l2error(comp_maps, comp_maps2)}.")
+    # import cmdr4_support
+    # t0 = time()
+    # comp_maps2 = cmdr4_support.utils.amplitude_sampling_per_pix_helper(map_sky, map_rms, M, rand, nthreads=1)
+    # print(f"Time for native solution: {time()-t0}s.")
+    # import ducc0
+    # print(f"L2 error between solutions: {ducc0.misc.l2error(comp_maps, comp_maps2)}.")
     return comp_maps
 
 
@@ -276,10 +276,10 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
         signal_maps = np.array(signal_maps)
         rms_maps = np.array(rms_maps)
         band_freqs = np.array(band_freqs)
-        #comp_maps = amplitude_sampling_per_pix(signal_maps, rms_maps, band_freqs)
+        comp_maps = amplitude_sampling_per_pix(signal_maps, rms_maps, band_freqs)
         print(signal_maps.shape)
 
-        comp_alm = alm_comp_sampling_CG(signal_maps, rms_maps, band_freqs)
+        # comp_alm = alm_comp_sampling_CG(signal_maps, rms_maps, band_freqs)
         lmax = 3*2048-1 # should be in param file 
         print('alm_comp_sampling_CG done')
 
@@ -287,8 +287,8 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
         component_list = []
         for i, component_type in enumerate(component_types):
             component = component_type()
-            #component.component_map = comp_maps[i]
-            component.component_map = math_op.alm_to_map(comp_alm[i], nside=component.nside_comp_map, lmax=lmax)
+            component.component_map = comp_maps[i]
+            # component.component_map = math_op.alm_to_map(comp_alm[i], nside=component.nside_comp_map, lmax=lmax)
             component_list.append(component)
 
         sky_model = SkyModel(component_list)
