@@ -105,11 +105,9 @@ def get_pointing(npix):
         pix = file['pix'][()]
         file.close()
 
-    if params.NTOD is None:
-        ntod = len(pix)
-    else:
-        indc = np.linspace(0, len(pix)-1, params.NTOD, dtype=int)
-        pix = pix[indc]
+    ntod = params.NTOD
+    indc = np.linspace(0, len(pix)-1, params.NTOD, dtype=int)
+    pix = pix[indc]
 
     if params.NSIDE != 2048:
         vec = hp.pix2vec(2048, pix.astype(int))
