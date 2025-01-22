@@ -57,10 +57,23 @@ def generate_cmb(freqs, fwhm, units, nside, lmax):
     np.random.seed(0)
     alms = hp.synalm(Cls, lmax=lmax, new=True)
     cmb = hp.alm2map(alms, nside, pixwin=False)
+    cmb_us = cmb * u.uK_CMB
     hp.write_map(params.OUTPUT_FOLDER + f"true_sky_cmb_{nside}.fits", cmb, overwrite=True)
     cmb_s = hp.smoothing(cmb, fwhm=fwhm.to('rad').value) * u.uK_CMB
-    cmb_s = [cmb_s.to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs]
-    return np.array(cmb_s)
+    hp.write_map(params.OUTPUT_FOLDER + f"true_sky_cmb_smoothed_{nside}.fits", cmb, overwrite=True)
+    cmb_us = np.array([cmb_us.to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs])
+    cmb_s = np.array([cmb_s.to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs])
+
+    for i in range(len(freqs)):
+        hp.mollview(cmb_us[i,0], title=f"True CMB at {freqs[i]:.2f}GHz")
+        plt.savefig(params.OUTPUT_FOLDER + f"true_CMB_{nside}_{freqs[i]}.png")
+        plt.close()
+    for i in range(len(freqs)):
+        hp.mollview(cmb_s[i,0], title=f"True smoothed CMB at {freqs[i]:.2f}GHz")
+        plt.savefig(params.OUTPUT_FOLDER + f"true_CMB_smoothed_{nside}_{freqs[i]}_b{fwhm}.png")
+        plt.close()
+
+    return cmb_s
 
 
 def generate_thermal_dust(freqs, fwhm, units, nside):
@@ -70,14 +83,26 @@ def generate_thermal_dust(freqs, fwhm, units, nside):
 
     dust = pysm3.Sky(nside=1024, preset_strings=["d0"], output_unit=units) #d0 = constant beta 1.54 and T = 20
     dust_ref = dust.get_emission(nu_dust*u.GHz)#.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_dust*u.GHz))
+    hp.write_map(params.OUTPUT_FOLDER + f"true_sky_dust_{nside}.fits", dust_ref, overwrite=True)
     dust_ref_smoothed = hp.smoothing(dust_ref, fwhm=fwhm.to('rad').value)*dust_ref.unit
-    hp.write_map(params.OUTPUT_FOLDER + f"true_sky_dust_{nside}.fits", dust_ref_smoothed, overwrite=True)
+    hp.write_map(params.OUTPUT_FOLDER + f"true_sky_dust_smooth_{nside}.fits", dust_ref_smoothed, overwrite=True)
 
     dust = ThermalDust()
+    dust_us = [dust_ref*dust.get_sed(f) for f in freqs]
+    dust_us = np.array([hp.ud_grade(d.value, nside)*d.unit for d in dust_us])
     dust_s = [dust_ref_smoothed*dust.get_sed(f) for f in freqs]
-    #dust_s = [d.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(f*u.GHz)) for d,f in zip(dust_s,freqs)]
-    dust_s = [hp.ud_grade(d.value, nside)*d.unit for d in dust_s]
-    return np.array(dust_s)
+    dust_s = np.array([hp.ud_grade(d.value, nside)*d.unit for d in dust_s])
+
+    for i in range(len(freqs)):
+        hp.mollview(dust_us[i,0], title=f"True thermal dust at {freqs[i]:.2f}GHz")
+        plt.savefig(params.OUTPUT_FOLDER + f"true_thermal_dust_{nside}_{freqs[i]}.png")
+        plt.close()
+    for i in range(len(freqs)):
+        hp.mollview(dust_s[i,0], title=f"True smoothed thermal dust at {freqs[i]:.2f}GHz")
+        plt.savefig(params.OUTPUT_FOLDER + f"true_thermal_dust_smoothed_{nside}_{freqs[i]}_b{fwhm}.png")
+        plt.close()
+
+    return dust_s
 
 
 def generate_sync(freqs, fwhm, units, nside):
@@ -86,14 +111,26 @@ def generate_sync(freqs, fwhm, units, nside):
 
     sync = pysm3.Sky(nside=1024, preset_strings=["s5"], output_unit=units) # s5 = const beta -3.1
     sync_ref = sync.get_emission(nu_sync*u.GHz)#.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_sync*u.GHz))
+    hp.write_map(params.OUTPUT_FOLDER + f"true_sky_sync_{nside}.fits", sync_ref, overwrite=True)
     sync_ref_smoothed = hp.smoothing(sync_ref, fwhm=fwhm.to('rad').value)*sync_ref.unit
-    hp.write_map(params.OUTPUT_FOLDER + f"true_sky_sync_{nside}.fits", sync_ref_smoothed, overwrite=True)
+    hp.write_map(params.OUTPUT_FOLDER + f"true_sky_sync_smoothed_{nside}.fits", sync_ref_smoothed, overwrite=True)
 
     sync = Synchrotron()
+    sync_us = [sync_ref*sync.get_sed(f) for f in freqs]
+    sync_us = np.array([hp.ud_grade(d.value, nside)*d.unit for d in sync_us])
     sync_s = [sync_ref_smoothed*sync.get_sed(f) for f in freqs]
-    #sync_s = [d.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(f*u.GHz)) for d,f in zip(sync_s,freqs)]
-    sync_s = [hp.ud_grade(d.value, nside)*d.unit for d in sync_s]
-    return np.array(sync_s)
+    sync_s = np.array([hp.ud_grade(d.value, nside)*d.unit for d in sync_s])
+
+    for i in range(len(freqs)):
+        hp.mollview(sync_us[i,0], title=f"True synchrotron at {freqs[i]:.2f}GHz")
+        plt.savefig(params.OUTPUT_FOLDER + f"true_synchrotron_{nside}_{freqs[i]}.png")
+        plt.close()
+    for i in range(len(freqs)):
+        hp.mollview(sync_s[i,0], title=f"True smoothed synchrotron at {freqs[i]:.2f}GHz")
+        plt.savefig(params.OUTPUT_FOLDER + f"true_synchrotron_smoothed_{nside}_{freqs[i]}_b{fwhm}.png")
+        plt.close()
+
+    return sync_s
 
 
 def get_pointing(npix):
@@ -206,28 +243,16 @@ if __name__ == "__main__":
         t0 = time.time()
         print(f"Rank 0 generating thermal dust")
         mp_c = generate_thermal_dust(freqs, fwhm, units, nside)
-        for i in range(len(freqs)):
-            hp.mollview(mp_c[i,0], title=f"True thermal dust at {freqs[i]:.2f}GHz")
-            plt.savefig(params.OUTPUT_FOLDER + f"true_thermal_dust_{nside}_{freqs[i]}.png")
-            plt.close()
         print(f"Rank 0 finished thermal dust in {time.time()-t0:.1f}s.")
     if rank == 1 and "sync" in params.components:
         t0 = time.time()
         print(f"Rank 1 generating synchrotron")
         mp_c = generate_sync(freqs, fwhm, units, nside)
-        for i in range(len(freqs)):
-            hp.mollview(mp_c[i,0], title=f"True synchrotron at {freqs[i]:.2f}GHz")
-            plt.savefig(params.OUTPUT_FOLDER + f"true_synchrotron_{nside}_{freqs[i]}.png")
-            plt.close()
         print(f"Rank 1 finished synchrotron in {time.time()-t0:.1f}s.")
     if rank == 2 and "CMB" in params.components:
         t0 = time.time()
         print(f"Rank 2 generating CMB")
         mp_c = generate_cmb(freqs, fwhm, units, nside, lmax)
-        for i in range(len(freqs)):
-            hp.mollview(mp_c[i,0], title=f"True CMB at {freqs[i]:.2f}GHz")
-            plt.savefig(params.OUTPUT_FOLDER + f"true_CMB_{nside}_{freqs[i]}.png")
-            plt.close()
         print(f"Rank 2 finished CMB in {time.time()-t0:.1f}s.")
 
     if rank == 0:
