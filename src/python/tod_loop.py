@@ -80,9 +80,15 @@ def read_data(band_idx, scan_idx_start, scan_idx_stop, params) -> list[ScanTOD]:
         band_formatted = f"{band:04d}"
         scanlist = []
         for iscan in range(scan_idx_start, scan_idx_stop):
-            tod = f[f'{iscan+1:06}/{band_formatted}/tod'][()].astype(np.float64)
-            pix = f[f'{iscan+1:06}/{band_formatted}/pix'][()]
-            psi = f[f'{iscan+1:06}/{band_formatted}/psi'][()].astype(np.float64)
+            try:
+                tod = f[f'{iscan+1:06}/{band_formatted}/tod'][()].astype(np.float64)
+                pix = f[f'{iscan+1:06}/{band_formatted}/pix'][()]
+                psi = f[f'{iscan+1:06}/{band_formatted}/psi'][()].astype(np.float64)
+            except KeyError:
+                print(iscan)
+                print(band_formatted)
+                print(list(f))
+                raise KeyError
             assert np.max(pix) < 12*params.nside**2, f"Nside is {params.nside}, but found pixel index exceeding 12nside^2 ({np.max(12*params.nside**2)})"
             theta, phi = hp.pix2ang(params.nside, pix)
             scanlist.append(ScanTOD(tod, theta, phi, psi, 0., iscan))
@@ -109,7 +115,9 @@ def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
     master_band = MPIrank_band == 0  # Am I the master of my local band.
 
     scans_per_rank = math.ceil(params.num_scans/MPIsize_band)
-    my_scans_start, my_scans_stop = scans_per_rank*MPIrank_band, scans_per_rank*(MPIrank_band + 1)
+    my_scans_start = scans_per_rank * MPIrank_band
+    my_scans_stop = min(scans_per_rank * (MPIrank_band + 1), params.num_scans) # In case the number of scans is not divisible by the number of ranks
+#    my_scans_start, my_scans_stop = scans_per_rank*MPIrank_band, scans_per_rank*(MPIrank_band + 1)
     print(f"TOD: Rank {MPIrank_tod} assigned scans {my_scans_start} - {my_scans_stop} on band{MPIcolor_band}.")
 
     # Initialization for all TOD processing tasks goes here
