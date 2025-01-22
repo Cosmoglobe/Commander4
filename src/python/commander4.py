@@ -17,6 +17,7 @@ def main():
     from parse_params import params, params_dict
         
     worldsize, worldrank = MPI.COMM_WORLD.Get_size(), MPI.COMM_WORLD.Get_rank()
+
     if worldrank == 0:
         print("### PARAMETERS ###\n", yaml.dump(params_dict, allow_unicode=True, default_flow_style=False))
         if not os.path.isdir(params.output_paths.plots):
@@ -24,17 +25,22 @@ def main():
 
     if worldsize != (params.MPI_config.ntask_tod + params.MPI_config.ntask_compsep + params.MPI_config.ntask_cmb):
         raise RuntimeError(f"Total number of MPI tasks ({worldsize}) must equal the sum of tasks for TOD ({params.MPI_config.ntask_tod}) + CompSep ({params.MPI_config.ntask_compsep}) + CMB realization ({params.MPI_config.ntask_cmb}).")
+
     if (not params.MPI_config.use_MPI_for_CMB) and (params.MPI_config.ntask_cmb > 1):
         raise RuntimeError(f"Number of MPI tasks allocated to CMB realization cannot be > 1 if 'use_MPI_for_CMB' is False.")
-    # if params.MPI_config.ntask_tod > 1:
-    #     raise RuntimeError(f"TOD processing currently doesn't support more than 1 MPI task.")
+
     if params.MPI_config.ntask_compsep > 1:
         raise RuntimeError(f"CompSep currently doesn't support more than 1 MPI task.")
+
     # check if we have at least ntask_compsep+1 MPI tasks, otherwise abort
     if params.MPI_config.ntask_compsep+1 > worldsize:
         raise RuntimeError("not enough MPI tasks started; need at least", params.MPI_config.ntask_compsep+1)
 
     doing_cmb = params.MPI_config.ntask_cmb > 0
+    if doing_cmb:
+        num_bands = len(params.bands)
+        if num_bands > params.MPI_config.ntask_cmb:
+            raise RuntimeError("If running with concurrent CMB sampling, ntask_cmb must be greater than or equal to the number of bands")
 
     # split the world communicator into a communicator for compsep and one for TOD
     # world rank [0; ntask_compsep[ => compsep
