@@ -121,6 +121,7 @@ def single_det_map_accumulator(det_static: DetectorTOD, det_cs_map: np.array, pa
         # detmap_inv_var += np.bincount(pix, minlength=npix)/sigma0**2
         maplib.map_weight_accumulator(detmap_inv_var, inv_var, pix, ntod, npix)
         maplib.map_accumulator(detmap_signal, scan_map, inv_var, pix, ntod, npix)
-        maplib.map_accumulator(detmap_corr_noise, n_corr_est, inv_var, pix, ntod, npix)
+        if params.sample_corr_noise:
+            maplib.map_accumulator(detmap_corr_noise, n_corr_est, inv_var, pix, ntod, npix)
 
     return detmap_signal, detmap_corr_noise, detmap_inv_var
