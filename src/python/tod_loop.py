@@ -41,7 +41,7 @@ def tod2map_old(staticData: list[DetectorTOD], compsepData: list[np.array]) -> l
 
 
 def tod2map(comm, det_static: DetectorTOD, det_cs_map: np.array, params: bunch) -> DetectorMap:
-    detmap_signal, detmap_corr_noise, detmap_inv_var = single_det_map_accumulator(det_static, det_cs_map, params.galactic_mask)
+    detmap_signal, detmap_corr_noise, detmap_inv_var = single_det_map_accumulator(det_static, det_cs_map, params)
     map_signal = np.zeros_like(detmap_signal)
     map_corr_noise = np.zeros_like(detmap_corr_noise)
     map_inv_var = np.zeros_like(detmap_inv_var)
