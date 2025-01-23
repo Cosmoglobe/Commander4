@@ -24,3 +24,6 @@ bands:
   - 857
 
 make_plots: True
+
+galactic_mask: True
+sample_corr_noise: False

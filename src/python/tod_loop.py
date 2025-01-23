@@ -2,22 +2,13 @@ import numpy as np
 from mpi4py import MPI
 import h5py
 import healpy as hp
-import ducc0
 import math
 import time
 from data_models import ScanTOD, DetectorTOD, DetectorMap
-from utils import single_det_mapmaker_python, single_det_mapmaker, single_det_map_accumulator
+from utils import single_det_mapmaker, single_det_map_accumulator
+from pixell import bunch
 
 nthreads=1
-
-def alm2map(alm, nside, lmax):
-    base = ducc0.healpix.Healpix_Base(nside, "RING")
-    geom = base.sht_info()
-    return ducc0.sht.synthesis(alm=alm.reshape((1,-1)),
-                               lmax=lmax,
-                               spin=0,
-                               nthreads=nthreads, **geom).reshape((-1,))
-
 
 def get_empty_compsep_output(staticData: list[DetectorTOD], params) -> list[np.array]:
     return np.zeros(12*params.nside**2,dtype=np.float64)
@@ -49,8 +40,8 @@ def tod2map_old(staticData: list[DetectorTOD], compsepData: list[np.array]) -> l
     return res
 
 
-def tod2map(comm, det_static: DetectorTOD, det_cs_map: np.array) -> DetectorMap:
-    detmap_signal, detmap_corr_noise, detmap_inv_var = single_det_map_accumulator(det_static, det_cs_map)
+def tod2map(comm, det_static: DetectorTOD, det_cs_map: np.array, params: bunch) -> DetectorMap:
+    detmap_signal, detmap_corr_noise, detmap_inv_var = single_det_map_accumulator(det_static, det_cs_map, params.galactic_mask)
     map_signal = np.zeros_like(detmap_signal)
     map_corr_noise = np.zeros_like(detmap_corr_noise)
     map_inv_var = np.zeros_like(detmap_inv_var)
@@ -72,7 +63,7 @@ def tod2map(comm, det_static: DetectorTOD, det_cs_map: np.array) -> DetectorMap:
         return detmap
 
 
-def read_data(band_idx, scan_idx_start, scan_idx_stop, params) -> list[ScanTOD]:
+def read_data(band_idx, scan_idx_start, scan_idx_stop, params: bunch) -> list[ScanTOD]:
     h5_filename = params.input_paths.tod_filename
     with h5py.File(h5_filename) as f:
         # for band in bands:
@@ -128,7 +119,7 @@ def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
     # we start with a fake output of component separation, containing a completely empty sky
     compsep_output_black = get_empty_compsep_output(experiment_data, params)
 
-    todproc_output_chain1 = tod2map(MPIcomm_band, experiment_data, compsep_output_black)
+    todproc_output_chain1 = tod2map(MPIcomm_band, experiment_data, compsep_output_black, params)
 
     compsep_output_chain1 = None
     compsep_output_chain2 = compsep_output_black
@@ -147,7 +138,7 @@ def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
         # do TOD processing, resulting in compsep_input at the same time, compsep is working on chain #1 data
         print(f"TOD: Rank {MPIrank_tod} starting chain 2, iter {i}.")
         t0 = time.time()
-        todproc_output_chain2 = tod2map(MPIcomm_band, experiment_data, compsep_output_chain2)
+        todproc_output_chain2 = tod2map(MPIcomm_band, experiment_data, compsep_output_chain2, params)
         print(f"TOD: Rank {MPIrank_tod} finished chain 2, iter {i} in {time.time()-t0:.2f}s.")
 
         # get compsep results for chain #1
@@ -169,7 +160,7 @@ def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
 
         # Chain #1
         # do TOD processing, resulting in compsep_input at the same time, compsep is working on chain #2 data
-        todproc_output_chain1 = tod2map(MPIcomm_band, experiment_data, compsep_output_chain1)
+        todproc_output_chain1 = tod2map(MPIcomm_band, experiment_data, compsep_output_chain1, params)
 
         # get compsep results for chain #2
         if master_band:
