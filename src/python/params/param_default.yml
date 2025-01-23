@@ -9,6 +9,7 @@ input_paths:
 
 output_paths:
   plots: "../../plots/"
+  stats: "/mn/stornext/u3/eirikgje/data/Commander4/stats/"
 
 niter_gibbs: 5
 
@@ -26,6 +27,7 @@ bands:
   - 857
 
 make_plots: True
+output_stats: True
 
 galactic_mask: True  # Applies a mask to the galactic plane when calculating sigma0
 sample_corr_noise: False  # Whether to sample and subtract correlated noise during TOD processing.

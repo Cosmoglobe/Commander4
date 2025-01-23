@@ -12,9 +12,7 @@ from constrained_cmb_loop_MPI import constrained_cmb_loop_MPI
 from constrained_cmb_loop import constrained_cmb_loop
 
 
-def main():
-    # Parse parameter file
-    from parse_params import params, params_dict
+def main(params, params_dict):
         
     worldsize, worldrank = MPI.COMM_WORLD.Get_size(), MPI.COMM_WORLD.Get_rank()
 
@@ -79,17 +77,19 @@ def main():
 
 
 if __name__ == "__main__":
+    # Parse parameter file
+    from parse_params import params, params_dict
     try:
-        profiler = cProfile.Profile()
-        profiler.enable()
-        main()
-        profiler.disable()
-
-        stats = pstats.Stats(profiler).sort_stats('tottime')
-        print(f"Rank {MPI.COMM_WORLD.Get_rank()} cProfile stats:")
-        stats.print_stats(10)
-        
-        stats.dump_stats(f'stats-{MPI.COMM_WORLD.Get_rank()}')
+        if params.output_stats:
+            profiler = cProfile.Profile()
+            profiler.enable()
+        main(params, params_dict)
+        if params.output_stats:
+            profiler.disable()
+            stats = pstats.Stats(profiler).sort_stats('tottime')
+            print(f"Rank {MPI.COMM_WORLD.Get_rank()} cProfile stats:")
+            stats.print_stats(10)
+            stats.dump_stats(f'{params.output_paths.stats}/stats-{MPI.COMM_WORLD.Get_rank()}')
     except Exception as error:
         print_exc()  # Print the full exception raise, including trace-back.
         print(f">>>>>>>> Error encountered on rank {MPI.COMM_WORLD.Get_rank()}, calling MPI abort.")
