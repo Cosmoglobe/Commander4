@@ -1,7 +1,7 @@
 MPI_config:
   ntask_tod: 11
   ntask_compsep: 1
-  ntask_cmb: 0
+  ntask_cmb: 0  # Set to 0 to not perform additional CMB realizations per Gibbs iteration, beyond the one performed during CompSep.
   use_MPI_for_CMB: True
 
 input_paths:
@@ -14,6 +14,8 @@ niter_gibbs: 5
 
 nside: 64
 
+fwhm: 20
+
 num_scans: 2001
 
 bands:
@@ -25,5 +27,6 @@ bands:
 
 make_plots: True
 
-galactic_mask: True
-sample_corr_noise: False
+galactic_mask: True  # Applies a mask to the galactic plane when calculating sigma0
+sample_corr_noise: False  # Whether to sample and subtract correlated noise during TOD processing.
+pixel_compsep_sampling: False  # Pixel-by-pixel component separation, as opposed to global (which will take beam into account).
