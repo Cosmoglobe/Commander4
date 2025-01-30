@@ -1,13 +1,17 @@
 # PARAMETER FILE TO RUN A SIMULATED 
 # DATA CREATION
 
-OUTPUT_FOLDER = 'sim_data_cmb_dust/'
-POINTING_PATH = '/mn/stornext/d5/data/artemba/other/extracted_pointing_no_skip_the_whole_survey_shifted.h5'
+OUTPUT_FOLDER = 'sim_data_cmb_dust_sync_nside64_beam20_noise0.1/'
+POINTING_PATH = '/mn/stornext/d23/cmbco/commander4_shared/aux_data/sim_pointing/planck_pointing_fullsurvey_nside2048_downx1000.h5'
+# There exists downsampled versions of above pointing file, for sparser pointing. Useful if running at lower nsides.
+# The not-downsampled pointing contains 13.6 billion pointings. Make sure NTOD*down is smaller than this,
+# but as Planck only covered the full sky about ~8 times during this, also try and make NTOD*down as close to 13.6 billion as possible.
 
 # general map characteristics
-NSIDE = 256
-NTOD = 12*256**2 * 50
-FWHM = 20 # [arcmin]
+NSIDE = 64
+NTOD = 12*128**2 * 50
+#FWHM = [32.2, 9.6, 4.8, 4.7, 4.3] # [arcmin]
+FWHM = [20.0, 20.0, 20.0, 20.0, 20.0] # [arcmin]
 FREQ = [30, 100, 353, 545, 857] # [GHz]
 pol = False # include (Q,U) polarization
 unit = 'uK_RJ' #'MJ/sr' # or 'uK_RJ'
@@ -23,7 +27,7 @@ As = 2.e-9
 ns = 0.965
 
 # components = ["CMB", "dust", "sync", "corr_noise"]  # Remove components from this list to remove them from simulation.
-components = ["CMB", "dust"]
+components = ["CMB", "dust", "sync"]  # Remove components from this list to remove them from simulation.
 
 # thermal dust parameters
 nu_ref_dust = 857 # [GHz]
@@ -36,6 +40,6 @@ beta_sync = -3.1 # check the preset
 
 # noise parameters
 SIGMA0 = [100, 80, 30, 100, 200] # tod level white noise [uK_RJ] 
-SIGMA_SCALE = 1.0 # scale noise level
+SIGMA_SCALE = 0.1 # scale noise level
 SAMP_FREQ = 180 # sampling frequency [Hz]
 

@@ -15,7 +15,7 @@ def save_to_h5_file(ds, pix, psi, fname=None):
     comm_tod = commander_tod(output_path, "", version, overwrite=True)
 
     if fname is None:
-        hdf_filename = f'tod_sim_{param.NSIDE}_s{param.SIGMA_SCALE}_b{param.FWHM}'
+        hdf_filename = f'tod_sim_{param.NSIDE}_s{param.SIGMA_SCALE}_b{param.FWHM[0]:.0f}'
 
     COMMON_GROUP = "/common"
     HUFFMAN_COMPRESSION = ["huffman", {"dictNum": 1}]

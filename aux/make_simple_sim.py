@@ -59,10 +59,13 @@ def generate_cmb(freqs, fwhm, units, nside, lmax):
     cmb = hp.alm2map(alms, nside, pixwin=False)
     cmb_us = cmb * u.uK_CMB
     hp.write_map(params.OUTPUT_FOLDER + f"true_sky_cmb_{nside}.fits", cmb, overwrite=True)
-    cmb_s = hp.smoothing(cmb, fwhm=fwhm.to('rad').value) * u.uK_CMB
-    hp.write_map(params.OUTPUT_FOLDER + f"true_sky_cmb_smoothed_{nside}.fits", cmb, overwrite=True)
     cmb_us = np.array([cmb_us.to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs])
-    cmb_s = np.array([cmb_s.to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs])
+    
+    cmb_s = [hp.smoothing(cmb, fwhm=fwhm[iband].to('rad').value) * u.uK_CMB for iband in range(len(freqs))]
+    cmb_s = np.array([cmb_s[i].to(units, equivalencies=u.cmb_equivalencies(freqs[i]*u.GHz)) for i in range(len(freqs))])
+
+    for i in range(len(freqs)):
+        hp.write_map(params.OUTPUT_FOLDER + f"true_sky_cmb_smoothed_{nside}_b{fwhm[i].value:.0f}.fits", cmb_s[i], overwrite=True)
 
     for i in range(len(freqs)):
         hp.mollview(cmb_us[i,0], title=f"True CMB at {freqs[i]:.2f}GHz")
@@ -70,10 +73,9 @@ def generate_cmb(freqs, fwhm, units, nside, lmax):
         plt.close()
     for i in range(len(freqs)):
         hp.mollview(cmb_s[i,0], title=f"True smoothed CMB at {freqs[i]:.2f}GHz")
-        plt.savefig(params.OUTPUT_FOLDER + f"true_CMB_smoothed_{nside}_{freqs[i]}_b{fwhm}.png")
+        plt.savefig(params.OUTPUT_FOLDER + f"true_CMB_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
         plt.close()
-
-    return cmb_s
+    return cmb_us, cmb_s
 
 
 def generate_thermal_dust(freqs, fwhm, units, nside):
@@ -81,16 +83,18 @@ def generate_thermal_dust(freqs, fwhm, units, nside):
     beta = params.beta_dust
     T = params.T_dust
 
-    dust = pysm3.Sky(nside=1024, preset_strings=["d0"], output_unit=units) #d0 = constant beta 1.54 and T = 20
+    dust = pysm3.Sky(nside=min(1024,nside), preset_strings=["d0"], output_unit=units) #d0 = constant beta 1.54 and T = 20
     dust_ref = dust.get_emission(nu_dust*u.GHz)#.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_dust*u.GHz))
     hp.write_map(params.OUTPUT_FOLDER + f"true_sky_dust_{nside}.fits", dust_ref, overwrite=True)
-    dust_ref_smoothed = hp.smoothing(dust_ref, fwhm=fwhm.to('rad').value)*dust_ref.unit
-    hp.write_map(params.OUTPUT_FOLDER + f"true_sky_dust_smooth_{nside}.fits", dust_ref_smoothed, overwrite=True)
+    dust_ref_smoothed = []
+    for iband in range(len(freqs)):
+        dust_ref_smoothed.append(hp.smoothing(dust_ref, fwhm=fwhm[iband].to('rad').value)*dust_ref.unit)
+        hp.write_map(params.OUTPUT_FOLDER + f"true_sky_dust_smooth_{nside}_b{fwhm[iband].value:.0f}.fits", dust_ref_smoothed[-1], overwrite=True)
 
     dust = ThermalDust()
     dust_us = [dust_ref*dust.get_sed(f) for f in freqs]
     dust_us = np.array([hp.ud_grade(d.value, nside)*d.unit for d in dust_us])
-    dust_s = [dust_ref_smoothed*dust.get_sed(f) for f in freqs]
+    dust_s = [dust_ref_smoothed[i]*dust.get_sed(freqs[i]) for i in range(len(freqs))]
     dust_s = np.array([hp.ud_grade(d.value, nside)*d.unit for d in dust_s])
 
     for i in range(len(freqs)):
@@ -99,26 +103,28 @@ def generate_thermal_dust(freqs, fwhm, units, nside):
         plt.close()
     for i in range(len(freqs)):
         hp.mollview(dust_s[i,0], title=f"True smoothed thermal dust at {freqs[i]:.2f}GHz")
-        plt.savefig(params.OUTPUT_FOLDER + f"true_thermal_dust_smoothed_{nside}_{freqs[i]}_b{fwhm}.png")
+        plt.savefig(params.OUTPUT_FOLDER + f"true_thermal_dust_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
         plt.close()
 
-    return dust_s
+    return dust_us, dust_s
 
 
 def generate_sync(freqs, fwhm, units, nside):
     nu_sync = params.nu_ref_sync
     beta_s = params.beta_sync
 
-    sync = pysm3.Sky(nside=1024, preset_strings=["s5"], output_unit=units) # s5 = const beta -3.1
+    sync = pysm3.Sky(nside=min(1024,nside), preset_strings=["s5"], output_unit=units) # s5 = const beta -3.1
     sync_ref = sync.get_emission(nu_sync*u.GHz)#.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_sync*u.GHz))
     hp.write_map(params.OUTPUT_FOLDER + f"true_sky_sync_{nside}.fits", sync_ref, overwrite=True)
-    sync_ref_smoothed = hp.smoothing(sync_ref, fwhm=fwhm.to('rad').value)*sync_ref.unit
-    hp.write_map(params.OUTPUT_FOLDER + f"true_sky_sync_smoothed_{nside}.fits", sync_ref_smoothed, overwrite=True)
+    sync_ref_smoothed = []
+    for iband in range(len(freqs)):
+        sync_ref_smoothed.append(hp.smoothing(sync_ref, fwhm=fwhm[iband].to('rad').value)*sync_ref.unit)
+        hp.write_map(params.OUTPUT_FOLDER + f"true_sky_sync_smoothed_{nside}_b{fwhm[iband].value:.0f}.fits", sync_ref_smoothed[-1], overwrite=True)
 
     sync = Synchrotron()
     sync_us = [sync_ref*sync.get_sed(f) for f in freqs]
     sync_us = np.array([hp.ud_grade(d.value, nside)*d.unit for d in sync_us])
-    sync_s = [sync_ref_smoothed*sync.get_sed(f) for f in freqs]
+    sync_s = [sync_ref_smoothed[i]*sync.get_sed(freqs[i]) for i in range(len(freqs))]
     sync_s = np.array([hp.ud_grade(d.value, nside)*d.unit for d in sync_s])
 
     for i in range(len(freqs)):
@@ -127,24 +133,25 @@ def generate_sync(freqs, fwhm, units, nside):
         plt.close()
     for i in range(len(freqs)):
         hp.mollview(sync_s[i,0], title=f"True smoothed synchrotron at {freqs[i]:.2f}GHz")
-        plt.savefig(params.OUTPUT_FOLDER + f"true_synchrotron_smoothed_{nside}_{freqs[i]}_b{fwhm}.png")
+        plt.savefig(params.OUTPUT_FOLDER + f"true_synchrotron_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
         plt.close()
 
-    return sync_s
+    return sync_us, sync_s
 
 
 def get_pointing(npix):
+    ntod = params.NTOD
     if params.POINTING_PATH is None:
         pix = np.arange(ntod) % npix
         return pix.astype('int32')
 
     with h5py.File(params.POINTING_PATH, 'r') as file:
-        pix = file['pix'][()]
-        file.close()
+        pix = file['pix'][:ntod]
 
-    ntod = params.NTOD
-    indc = np.linspace(0, len(pix)-1, params.NTOD, dtype=int)
-    pix = pix[indc]
+    # indc = np.linspace(0, len(pix)-1, params.NTOD, dtype=int)
+    # pix = pix[indc]
+
+    assert pix.shape[0] == ntod, f"Parameter file ntod {ntod} does not match pixel length {pix.shape[0]}, likely because desired length is longer than entire pointing file."
 
     if params.NSIDE != 2048:
         vec = hp.pix2vec(2048, pix.astype(int))
@@ -238,32 +245,32 @@ if __name__ == "__main__":
         raise ValueError("Please run this script with at least 3 MPI tasks.")
 
     comm.Barrier()
-    mp_c = np.zeros((len(freqs), 3, npix))
+    comp = np.zeros((len(freqs), 3, npix))
+    comp_smoothed = np.zeros((len(freqs), 3, npix))
     if rank == 0 and "dust" in params.components:
         t0 = time.time()
         print(f"Rank 0 generating thermal dust")
-        mp_c = generate_thermal_dust(freqs, fwhm, units, nside)
+        comp, comp_smoothed = generate_thermal_dust(freqs, fwhm, units, nside)
         print(f"Rank 0 finished thermal dust in {time.time()-t0:.1f}s.")
     if rank == 1 and "sync" in params.components:
         t0 = time.time()
         print(f"Rank 1 generating synchrotron")
-        mp_c = generate_sync(freqs, fwhm, units, nside)
+        comp, comp_smoothed = generate_sync(freqs, fwhm, units, nside)
         print(f"Rank 1 finished synchrotron in {time.time()-t0:.1f}s.")
     if rank == 2 and "CMB" in params.components:
         t0 = time.time()
         print(f"Rank 2 generating CMB")
-        mp_c = generate_cmb(freqs, fwhm, units, nside, lmax)
+        comp, comp_smoothed = generate_cmb(freqs, fwhm, units, nside, lmax)
         print(f"Rank 2 finished CMB in {time.time()-t0:.1f}s.")
 
     if rank == 0:
-        m_s = np.zeros((len(freqs), 3, npix))
+        comps_sum_smoothed = np.zeros((len(freqs), 3, npix))
     else:
-        m_s = None
+        comps_sum_smoothed = None
 
-    comm.Barrier()
-    comm.Reduce(mp_c, m_s, op=MPI.SUM, root=0)
+    comm.Reduce(comp_smoothed, comps_sum_smoothed, op=MPI.SUM, root=0)
 
-    repeat = 50
+    repeat = params.NTOD//npix
     ntod = params.NTOD
 
     if rank == 0:
@@ -271,22 +278,23 @@ if __name__ == "__main__":
         print(f"Rank 1 calculating pointing")
         pix = get_pointing(npix)
         psi = np.repeat(np.arange(repeat)*np.pi/repeat, npix)
+        print(psi.shape, npix, np.arange(repeat).shape)
         ds = []
         print(f"Rank 1 finished calculating pointing in {time.time()-t0:.1f}s.")
 
+        noise_map = np.zeros((len(freqs), npix))
+
     for i in range(len(freqs)):
-        #m_s = cmb_s[i] + dust_s[i] + sync_s[i]
 
         if rank == 0:
             t0 = time.time()
             print(f"Rank 1 calculating sky signal")
-            I,Q,U = m_s[i]
+            I,Q,U = comps_sum_smoothed[i]
             if params.pol:
                 d = I[pix] + Q[pix]*np.cos(2*psi) + U[pix]*np.sin(2*psi)
             else:
                 d = I[pix]
             print(f"Rank 1 finished calculating sky signal in {time.time()-t0:.1f}s.")
-            #d = d.to(u.uK_CMB, equivalencies=u.cmb_equivalencies(freqs[i]*u.GHz))
 
         if rank == 0:
             t0 = time.time()
@@ -298,13 +306,34 @@ if __name__ == "__main__":
         if rank == 0:    
             print(f"Finished noise simulations in {time.time()-t0:.1f}s.")
             ds += [(d + noise).astype('float32')]
+            noise_map[i] = np.bincount(pix, weights=noise, minlength=npix)
+            hitmap = np.bincount(pix, minlength=npix)
+            assert (hitmap > 0).all(), f"{np.sum(hitmap == 0)} out of {hitmap.shape[0]} pixels were never hit by the scanning strategy."
+            if (hitmap <= 10).any():
+                print(f"Warning: {np.sum(hitmap <= 10)} out of {hitmap.shape[0]} pixels were hit 10 or fewer times by scanning strategy.")
+            else:
+                print(f"Lowest pixel hit count is {np.min(hitmap)}.")
+            noise_map[i] /= hitmap
 
 
     if rank == 0:
         t0 = time.time()
         print(f"Rank 0 writing simulation to file.")
         for i in range(len(freqs)):
-            hp.write_map(params.OUTPUT_FOLDER + f"true_sky_full_{nside}_{freqs[i]}.fits", m_s[i], overwrite=True)
+            hp.write_map(params.OUTPUT_FOLDER + f"true_sky_full_{nside}_{freqs[i]}.fits", comps_sum_smoothed[i], overwrite=True)
+            
+            hp.mollview(comps_sum_smoothed[i,0], title=f"Full 'clean' sky smoothed {freqs[i]:.2f}GHz")
+            plt.savefig(params.OUTPUT_FOLDER + f"sky_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
+            plt.close()
 
+            hp.mollview(comps_sum_smoothed[i,0]+noise_map[i], title=f"Full observed sky smoothed {freqs[i]:.2f}GHz")
+            plt.savefig(params.OUTPUT_FOLDER + f"sky_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
+            plt.close()
+
+            hp.mollview(noise_map[i], title=f"Noise {freqs[i]:.2f}GHz")
+            plt.savefig(params.OUTPUT_FOLDER + f"noise_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
+            plt.close()
+
+        print(ds[0].shape, psi.shape)
         save_to_h5_file(ds, pix, psi)
         print(f"Rank 0 finished writing to file in {time.time()-t0:.1f}s.")
