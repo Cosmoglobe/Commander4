@@ -28,7 +28,8 @@ import camb
 from camb import model, initialpower
 
 from astropy.modeling.physical_models import BlackBody
-import paramfile_sim as params
+#import paramfile_sim as params
+from parse_params import params, params_dict
 from save_sim_to_h5 import save_to_h5_file
 
 
@@ -209,7 +210,7 @@ def sim_noise(sigma0, chunk_size, with_corr_noise):
             sel = (f >= f_chunk)
             Fx[sel] = Fx[sel]*(1 + 1/f[sel])
             Fx[f < f_chunk] = Fx[sel][0]
-            chunk_noise = np.fft.irfft(Fx)
+            chunk_noise = np.fft.irfft(Fx, n=total[n_chunks*chunk_size:].shape[0])
             total[n_chunks*chunk_size:] = chunk_noise
 
     return total
