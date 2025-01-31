@@ -15,21 +15,14 @@ niter_gibbs: 5
 
 nside: 64
 
-fwhm:
-  - 20.0
-  - 20.0
-  - 20.0
-  - 20.0
-  - 20.0
+fwhm: [20.0, 20.0, 20.0, 20.0, 20.0]
 
 num_scans: 2001
 
-bands:
-  - 30
-  - 100
-  - 353
-  - 545
-  - 857
+bands: [30, 100, 353, 545, 857]
+
+CG_max_iter: 400
+CG_err_tol: 0.0000001 # 1e-7
 
 make_plots: True
 output_stats: True

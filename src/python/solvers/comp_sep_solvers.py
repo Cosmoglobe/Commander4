@@ -41,7 +41,9 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
 
 
 class CompSepSolver:
-    def __init__(self, map_sky, map_rms, freqs, fwhm):
+    def __init__(self, map_sky, map_rms, freqs, fwhm, max_iter, err_tol):
+        self.max_iter = max_iter
+        self.err_tol = err_tol
         self.map_sky = map_sky
         self.map_rms = map_rms
         self.freqs = freqs
@@ -161,7 +163,7 @@ class CompSepSolver:
         return a.flatten()
 
 
-    def solve_CG(self, LHS, RHS, x0, maxiter):
+    def solve_CG(self, LHS, RHS, x0):
         """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG from the pixell package.
             Assumes that both x and b are in alm space.
 
@@ -173,16 +175,19 @@ class CompSepSolver:
         """
         # CG_solver = utils.CG(LHS, RHS, x0=x0, dot=self.alm_dot_product)
         CG_solver = utils.CG(LHS, RHS, x0=x0)
-        err_tol = 1e-8
         iter = 0
-        while CG_solver.err > err_tol:
+        self.CG_residuals = np.zeros((self.max_iter))
+        while CG_solver.err > self.err_tol:
             CG_solver.step()
+            self.CG_residuals[iter] = CG_solver.err
             iter += 1
-            print(f"CG iter {iter:3d} - Residual {CG_solver.err:.3e}")
-            if iter >= maxiter:
-                print(f"Warning: Maximum number of iterations ({maxiter}) reached in CG.")
+            if iter%10 == 0:
+                print(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-10:iter]):.3e}")
+            if iter >= self.max_iter:
+                print(f"Warning: Maximum number of iterations ({self.max_iter}) reached in CG.")
                 break
-        print(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {err_tol})")
+        self.CG_residuals = self.CG_residuals[:iter]
+        print(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.err_tol})")
         s_bestfit = CG_solver.x
         return s_bestfit
 
@@ -234,7 +239,7 @@ class CompSepSolver:
         x0 = np.random.normal(0.0, 1.0, (self.ncomp, self.alm_len_real))
         x0 = x0.flatten()
 
-        sol = self.solve_CG(self.apply_LHS_matrix, b, x0, 1000)
+        sol = self.solve_CG(self.apply_LHS_matrix, b, x0)
         sol = sol.reshape((self.ncomp, self.alm_len_real))
         sol_map = np.zeros((self.ncomp, self.npix))
         for icomp in range(self.ncomp):
