@@ -24,3 +24,13 @@ and then do
 git submodule init
 git submodule update
 ```
+## Development / Contributing
+### Git workflow
+1. Make sure you are on main (`git checkout main`) and up to date (`git pull`).
+2. Create a new local branch (`git checkout -b dev-compsep`).
+3. Make commits from small self-contained changes to the code. The individual commits should not break the code, but should otherwise be as limited in scope as possible.
+4. After each commit, push to remote. First such commit must specify upstream (`git push --set-upstream origin dev-compsep`).
+5. Create a pull request from your branch to main whenever you have made a meaningful self-contained change to the code. This could be as small as a single bug fix, or a larger new feature, but it should ideally not be so large that it contains several completely unrelated updates to the code.
+6. If the pull request is small and unlikely to break anything or affect others, simply merge it yourself.
+7. If you are not immediately planning to keep developing the same features on the same branch, it is best to check out to main (`git checkout main`) and delete your local branch (`git branch -d dev-compsep`) (you can always re-branch with the exact same name later). The exception is if you intend to keep working on the same features in the code, that depends on the new changes you made.
+8. If you are the reviewer of a pull request, always delete the merged branch immediately after merging. There will be a prompt for this on GitHub.
