@@ -23,13 +23,12 @@ from tqdm import trange
 import time
 import sys
 import os
+from traceback import print_exc
 
 import camb
 from camb import model, initialpower
 
 from astropy.modeling.physical_models import BlackBody
-#import paramfile_sim as params
-from parse_params import params, params_dict
 from save_sim_to_h5 import save_to_h5_file
 
 
@@ -224,13 +223,7 @@ def sim_noise(sigma0, chunk_size, with_corr_noise):
     return total
 
 
-if __name__ == "__main__":
-
-    # initiliazing MPI
-    comm = MPI.COMM_WORLD
-    size = comm.Get_size()
-    rank = comm.Get_rank()
-
+def main():
 
     # reading in main parameters
     nside = params.NSIDE
@@ -350,3 +343,17 @@ if __name__ == "__main__":
 
         save_to_h5_file(ds, pix, psi)
         print(f"Rank 0 finished writing to file in {time.time()-t0:.1f}s.")
+
+if __name__ == "__main__":
+    # initiliazing MPI
+    comm = MPI.COMM_WORLD
+    size = comm.Get_size()
+    rank = comm.Get_rank()
+
+    from parse_params import params, params_dict
+    try:
+        main()
+    except Exception as error:
+        print_exc()  # Print the full exception raise, including trace-back.
+        print(f">>>>>>>> Error encountered on rank {MPI.COMM_WORLD.Get_rank()}, calling MPI abort.")
+        MPI.COMM_WORLD.Abort()
