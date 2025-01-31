@@ -15,7 +15,12 @@ niter_gibbs: 5
 
 nside: 64
 
-fwhm: 20
+fwhm:
+  - 20.0
+  - 20.0
+  - 20.0
+  - 20.0
+  - 20.0
 
 num_scans: 2001
 
