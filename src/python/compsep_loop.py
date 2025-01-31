@@ -24,7 +24,8 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
             os.mkdir(params.output_paths.plots + "maps_comps/")
         if not os.path.isdir(params.output_paths.plots + "maps_sky/"):
             os.mkdir(params.output_paths.plots + "maps_sky/")
-
+        if not os.path.isdir(params.output_paths.plots + "CG_res/"):
+            os.mkdir(params.output_paths.plots + "CG_res/")
 
     # we wait for new jobs until we get a stop signal
     while True:
@@ -91,8 +92,14 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
         if params.pixel_compsep_sampling:
             comp_maps = amplitude_sampling_per_pix(signal_maps, rms_maps, band_freqs)
         else:
-            compsep_solver = CompSepSolver(signal_maps, rms_maps, band_freqs, params.fwhm)
+            compsep_solver = CompSepSolver(signal_maps, rms_maps, band_freqs, params.fwhm, params.CG_max_iter, params.CG_err_tol)
             comp_maps = compsep_solver.solve()
+            if params.make_plots:
+                plt.figure()
+                plt.loglog(np.arange(compsep_solver.CG_residuals.shape[0]), compsep_solver.CG_residuals)
+                plt.axhline(params.CG_err_tol, ls="--", c="k")
+                plt.savefig(params.output_paths.plots + f"CG_res/CG_res_chain{chain}_iter{iter}.png")
+                plt.close()
 
         component_types = [CMB, ThermalDust, Synchrotron]  # At the moment we always sample all components. #TODO: Move to parameter file.
         component_list = []
