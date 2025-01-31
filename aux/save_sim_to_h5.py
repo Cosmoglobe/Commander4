@@ -1,21 +1,21 @@
 from commander_tod import commander_tod
 import numpy as np
-import paramfile_sim as param
+from parse_params import params, params_dict
 
 def save_to_h5_file(ds, pix, psi, fname=None):
-    nside = param.NSIDE
+    nside = params.NSIDE
     npix = 12*nside**2
     chunk_size = npix//40
-    ntod = param.NTOD
-    n_chunks = param.NTOD // chunk_size
+    ntod = params.NTOD
+    n_chunks = params.NTOD // chunk_size
     print(f'Number of scans is {n_chunks}')
 
-    output_path = param.OUTPUT_FOLDER
+    output_path = params.OUTPUT_FOLDER
     version = 'v1'
     comm_tod = commander_tod(output_path, "", version, overwrite=True)
 
     if fname is None:
-        hdf_filename = f'tod_sim_{param.NSIDE}_s{param.SIGMA_SCALE}_b{param.FWHM[0]:.0f}'
+        hdf_filename = f'tod_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}'
 
     COMMON_GROUP = "/common"
     HUFFMAN_COMPRESSION = ["huffman", {"dictNum": 1}]
@@ -26,7 +26,7 @@ def save_to_h5_file(ds, pix, psi, fname=None):
     for pid in range(n_chunks):
         pid_label = f'{pid+1:06}'
         pid_common_group = pid_label + "/common"
-        for i, freq in enumerate(param.FREQ):
+        for i, freq in enumerate(params.FREQ):
             pid_data_group = f'{pid_label}/{freq:04}'
 
             comm_tod.add_field(pid_common_group + "/ntod", [chunk_size])
@@ -45,7 +45,7 @@ def save_to_h5_file(ds, pix, psi, fname=None):
         pid = n_chunks
         pid_label = f'{pid+1:06}'
         pid_common_group = pid_label + "/common"
-        for i, freq in enumerate(param.FREQ):
+        for i, freq in enumerate(params.FREQ):
             pid_data_group = f'{pid_label}/{freq:04}'
 
             tod_chunk_i = ds[i][pid*chunk_size : ]

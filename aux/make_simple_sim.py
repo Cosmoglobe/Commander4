@@ -28,7 +28,8 @@ import camb
 from camb import model, initialpower
 
 from astropy.modeling.physical_models import BlackBody
-import paramfile_sim as params
+#import paramfile_sim as params
+from parse_params import params, params_dict
 from save_sim_to_h5 import save_to_h5_file
 
 
@@ -146,8 +147,10 @@ def get_pointing(npix):
         return pix.astype('int32')
 
     with h5py.File(params.POINTING_PATH, 'r') as file:
+        tot_file_len = file['pix'].shape[0]
         pix = file['pix'][:ntod]
 
+    print(f"Reading {ntod} out of {tot_file_len} points from pointing file ({100*ntod/tot_file_len:.1f}%)")
     # indc = np.linspace(0, len(pix)-1, params.NTOD, dtype=int)
     # pix = pix[indc]
 
@@ -207,7 +210,7 @@ def sim_noise(sigma0, chunk_size, with_corr_noise):
             sel = (f >= f_chunk)
             Fx[sel] = Fx[sel]*(1 + 1/f[sel])
             Fx[f < f_chunk] = Fx[sel][0]
-            chunk_noise = np.fft.irfft(Fx)
+            chunk_noise = np.fft.irfft(Fx, n=total[n_chunks*chunk_size:].shape[0])
             total[n_chunks*chunk_size:] = chunk_noise
 
     return total
