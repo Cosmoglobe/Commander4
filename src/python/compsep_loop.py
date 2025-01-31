@@ -143,6 +143,10 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
                 plt.savefig(params.output_paths.plots + f"maps_comps/foreground_subtr_det{i_det}_chain{chain}_iter{iter}.png")
                 plt.close()
 
+                hp.mollview(signal_maps[i_det]-dust_sky-sync_sky-cmb_sky, title=f"Residual sky at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
+                plt.savefig(params.output_paths.plots + f"maps_comps/residual_det{i_det}_chain{chain}_iter{iter}.png")
+                plt.close()
+
         foreground_maps = np.array(foreground_maps)
         foreground_subtracted_maps = signal_maps - foreground_maps
 
