@@ -146,8 +146,10 @@ def get_pointing(npix):
         return pix.astype('int32')
 
     with h5py.File(params.POINTING_PATH, 'r') as file:
+        tot_file_len = file['pix'].shape[0]
         pix = file['pix'][:ntod]
 
+    print(f"Reading {ntod} out of {tot_file_len} points from pointing file ({100*ntod/tot_file_len:.1f}%)")
     # indc = np.linspace(0, len(pix)-1, params.NTOD, dtype=int)
     # pix = pix[indc]
 
