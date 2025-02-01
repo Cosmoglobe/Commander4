@@ -1,0 +1,44 @@
+OUTPUT_FOLDER: '/mn/stornext/d23/cmbco/commander4_shared/cron_tests/sim_test_data/'
+POINTING_PATH: '/mn/stornext/d23/cmbco/commander4_shared/aux_data/sim_pointing/planck_pointing_fullsurvey_nside2048_downx100000.h5'
+# There exists downsampled versions of above pointing file, for sparser pointing. Useful if running at lower nsides.
+# The not-downsampled pointing contains 13.6 billion pointings. Make sure NTOD*down is smaller than this,
+# but as Planck only covered the full sky about ~8 times during this, also try and make NTOD*down as close to 13.6 billion as possible.
+# It might be a good idea to simply set NTOD to the entire length of your selected downgraded file.
+
+# general map characteristics
+NSIDE: 16
+NTOD: 136761 # Full length of downx100000 pointing file.
+#FWHM: [32.2, 9.6, 4.8, 4.7, 4.3] # [arcmin]
+FWHM: [800, 400, 200, 100, 50] # [arcmin]
+FREQ: [30, 100, 353, 545, 857] # [GHz]
+pol: False # include (Q,U) polarization
+unit: 'uK_RJ' #'MJ/sr' # or 'uK_RJ'
+
+# cosmology parameters
+H0: 67.5
+ombh2: 0.022
+omch2: 0.122
+mnu: 0.06
+omk: 0
+tau: 0.06
+As: 2.e-9
+ns: 0.965
+
+components: ["CMB", "dust", "sync", "corr_noise"]  # Remove components from this list to remove them from simulation.
+
+# thermal dust parameters
+nu_ref_dust: 857 # [GHz]
+beta_dust: 1.54 # check the preset
+T_dust: 20 # [K]
+
+# synchrotron parameters
+nu_ref_sync: 23 # [GHz]
+beta_sync: -3.1 # check the preset
+
+# noise parameters
+SIGMA0: [100, 80, 30, 100, 200] # tod level white noise [uK_RJ] 
+SIGMA_SCALE: 0.1 # scale noise level
+SAMP_FREQ: 180 # sampling frequency [Hz]
+
+make_plots: False  # Whether to write healpix maps of various things to disk.
+write_fits: False  # Whether to write sky component data to fits files (as only the TOD is actually needed by Commander 4).

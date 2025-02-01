@@ -1,0 +1,32 @@
+MPI_config:
+  ntask_tod: 11
+  ntask_compsep: 1
+  ntask_cmb: 0  # Set to 0 to not perform additional CMB realizations per Gibbs iteration, beyond the one performed during CompSep.
+  use_MPI_for_CMB: True
+
+input_paths:
+  tod_filename: "/mn/stornext/d23/cmbco/commander4_shared/cron_tests/sim_test_data/tod_sim_16_s0.1_b800.h5"
+
+output_paths:
+  plots: "/mn/stornext/d23/cmbco/commander4_shared/cron_tests/output_plots/"
+  stats: "/mn/stornext/d23/cmbco/commander4_shared/cron_tests/stats/"
+
+niter_gibbs: 3
+
+nside: 16
+
+fwhm: [800, 400, 200, 100, 50]
+
+num_scans: 1799
+
+bands: [30, 100, 353, 545, 857]
+
+CG_max_iter: 200
+CG_err_tol: 0.000001 # 1e-6
+
+make_plots: True
+output_stats: True
+
+galactic_mask: True  # Applies a mask to the galactic plane when calculating sigma0
+sample_corr_noise: True  # Whether to sample and subtract correlated noise during TOD processing.
+pixel_compsep_sampling: False  # Pixel-by-pixel component separation, as opposed to global (which will take beam into account).
