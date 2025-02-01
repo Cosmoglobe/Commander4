@@ -283,7 +283,8 @@ def main():
         pix = get_pointing(npix)
         psi = np.repeat(np.arange(repeat)*np.pi/repeat, npix)
         psi = psi[:ntod]
-        ds = []
+        signal_tod = []
+        noise_tod = []
         print(f"Rank 1 finished calculating pointing in {time.time()-t0:.1f}s.")
 
         noise_map = np.zeros((len(freqs), npix))
@@ -309,7 +310,9 @@ def main():
 
         if rank == 0:    
             print(f"Finished noise simulations in {time.time()-t0:.1f}s.")
-            ds += [(d + noise).astype('float32')]
+            signal_tod.append((d + noise).astype('float32'))
+            noise_tod.append(noise.astype('float32'))
+
             noise_map[i] = np.bincount(pix, weights=noise, minlength=npix)
             hitmap = np.bincount(pix, minlength=npix)
             assert (hitmap > 0).all(), f"{np.sum(hitmap == 0)} out of {hitmap.shape[0]} pixels were never hit by the scanning strategy."
@@ -319,7 +322,7 @@ def main():
                 print(f"Lowest pixel hit count is {np.min(hitmap)}.")
             noise_map[i] /= hitmap
 
-            assert ds[-1].shape == psi.shape, f"Shape of simulated TOD {ds[-1].shape} differs from generated psi {psi.shape}"
+            assert signal_tod[-1].shape == psi.shape, f"Shape of simulated TOD {signal_tod[-1].shape} differs from generated psi {psi.shape}"
 
 
     if rank == 0:
@@ -341,7 +344,8 @@ def main():
                 plt.savefig(params.OUTPUT_FOLDER + f"noise_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
                 plt.close()
 
-        save_to_h5_file(ds, pix, psi)
+        save_to_h5_file(signal_tod, pix, psi, fname=f'tod_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
+        save_to_h5_file(noise_tod, pix, psi, fname=f'noise_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
         print(f"Rank 0 finished writing to file in {time.time()-t0:.1f}s.")
 
 if __name__ == "__main__":
