@@ -21,7 +21,7 @@ parser.add_argument("-p",
 commandline_params = parser.parse_args()
 
 if not os.path.isfile(commandline_params.parameter_file):
-    raise FileExistsError(f"Could not find parameter file {parser.parameter_file}")
+    raise FileExistsError(f"Could not find parameter file {commandline_params.parameter_file}")
 
 with open(commandline_params.parameter_file, "r") as f:
     params_dict = yaml.safe_load(f)
