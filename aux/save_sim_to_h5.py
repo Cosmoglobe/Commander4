@@ -15,12 +15,12 @@ def save_to_h5_file(ds, pix, psi, fname=None):
     comm_tod = commander_tod(output_path, "", version, overwrite=True)
 
     if fname is None:
-        hdf_filename = f'tod_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}'
+        fname = f'tod_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}'
 
     COMMON_GROUP = "/common"
     HUFFMAN_COMPRESSION = ["huffman", {"dictNum": 1}]
 
-    comm_tod.init_file(freq=hdf_filename, od="", mode="w")
+    comm_tod.init_file(freq=fname, od="", mode="w")
     comm_tod.add_field(COMMON_GROUP + "/nside", [nside])
 
     for pid in range(n_chunks):
