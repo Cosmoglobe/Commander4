@@ -47,8 +47,18 @@ def main(params, params_dict):
     # world rank [ntask_compsep; ntasks_total[ => TOD processing
     if worldrank < params.MPI_config.ntask_tod:
         color = 0  # TOD
+        os.environ["OMP_NUM_THREADS"] = "1"  # Setting threading configuration depending on tasks. Important to do before Numpy is imported, as Numpy will not respect changes to these.
+        os.environ["OPENBLAS_NUM_THREADS"] = "1"
+        os.environ["MKL_NUM_THREADS"] = "1"
+        os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+        os.environ["NUMEXPR_NUM_THREADS"] = "1"
     elif worldrank < params.MPI_config.ntask_tod + params.MPI_config.ntask_compsep:
         color = 1  # Compsep
+        os.environ["OMP_NUM_THREADS"] = f"{params.nthreads_compsep}"
+        os.environ["OPENBLAS_NUM_THREADS"] = f"{params.nthreads_compsep}"
+        os.environ["MKL_NUM_THREADS"] = f"{params.nthreads_compsep}"
+        os.environ["VECLIB_MAXIMUM_THREADS"] = f"{params.nthreads_compsep}"
+        os.environ["NUMEXPR_NUM_THREADS"] = f"{params.nthreads_compsep}"
     else:
         color = 2  # Constrained CMB
     mycomm = MPI.COMM_WORLD.Split(color, key=worldrank)
