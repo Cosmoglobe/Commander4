@@ -20,6 +20,8 @@ def main(params, params_dict):
         print("### PARAMETERS ###\n", yaml.dump(params_dict, allow_unicode=True, default_flow_style=False))
         if not os.path.isdir(params.output_paths.plots):
             os.mkdir(params.output_paths.plots)
+        if not os.path.isdir(params.output_paths.stats):
+            os.mkdir(params.output_paths.stats)
 
     if worldsize != (params.MPI_config.ntask_tod + params.MPI_config.ntask_compsep + params.MPI_config.ntask_cmb):
         raise RuntimeError(f"Total number of MPI tasks ({worldsize}) must equal the sum of tasks for TOD ({params.MPI_config.ntask_tod}) + CompSep ({params.MPI_config.ntask_compsep}) + CMB realization ({params.MPI_config.ntask_cmb}).")
