@@ -236,6 +236,7 @@ class CompSepSolver:
 
         b = b.flatten()
 
+        np.random.seed(42)
         x0 = np.random.normal(0.0, 1.0, (self.ncomp, self.alm_len_real))
         x0 = x0.flatten()
 
