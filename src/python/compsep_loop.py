@@ -92,7 +92,7 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
         if params.pixel_compsep_sampling:
             comp_maps = amplitude_sampling_per_pix(signal_maps, rms_maps, band_freqs)
         else:
-            compsep_solver = CompSepSolver(signal_maps, rms_maps, band_freqs, params.fwhm, params.CG_max_iter, params.CG_err_tol)
+            compsep_solver = CompSepSolver(signal_maps, rms_maps, band_freqs, params)
             comp_maps = compsep_solver.solve()
             if params.make_plots:
                 plt.figure()

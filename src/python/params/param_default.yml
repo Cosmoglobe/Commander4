@@ -3,6 +3,7 @@ MPI_config:
   ntask_compsep: 1
   ntask_cmb: 0  # Set to 0 to not perform additional CMB realizations per Gibbs iteration, beyond the one performed during CompSep.
   use_MPI_for_CMB: True
+nthreads_compsep: 32  # Threads dedicated to performing individual SHTs for each ntask_compsep.
 
 input_paths:
   tod_filename: "../../../commander4_sandbox/src/python/preproc_scripts/tod_example_64_s1.0_b20_dust.h5"

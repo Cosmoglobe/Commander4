@@ -1,5 +1,6 @@
 import numpy as np
 import healpy as hp
+import time
 from pixell import utils, curvedsky
 
 from model.component import CMB, ThermalDust, Synchrotron
@@ -31,7 +32,7 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
     print(f"Time for Python solution: {time()-t0}s.")
     # import cmdr4_support
     # t0 = time()
-    # comp_maps2 = cmdr4_support.utils.amplitude_sampling_per_pix_helper(map_sky, map_rms, M, rand, nthreads=1)
+    # comp_maps2 = cmdr4_support.utils.amplitude_sampling_per_pix_helper(map_sky, map_rms, M, rand, nnthreads=1)
     # print(f"Time for native solution: {time()-t0}s.")
     # import ducc0
     # print(f"L2 error between solutions: {ducc0.misc.l2error(comp_maps, comp_maps2)}.")
@@ -41,9 +42,8 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
 
 
 class CompSepSolver:
-    def __init__(self, map_sky, map_rms, freqs, fwhm, max_iter, err_tol):
-        self.max_iter = max_iter
-        self.err_tol = err_tol
+    def __init__(self, map_sky, map_rms, freqs, params):
+        self.params = params
         self.map_sky = map_sky
         self.map_rms = map_rms
         self.freqs = freqs
@@ -57,8 +57,8 @@ class CompSepSolver:
         self.ainfo = curvedsky.alm_info(lmax=self.lmax)
         self.comps_SED = np.array([CMB().get_sed(freqs), ThermalDust().get_sed(freqs), Synchrotron().get_sed(freqs)])
         self.ncomp = 3  # Should be in parameter file, but also needs to match length of above list.
-        assert len(fwhm) == len(self.freqs), f"Number of bands {len(freqs)} does not match length of FWHM ({len(self.fwhm)})."
-        self.fwhm = np.array(fwhm)/60.0*(np.pi/180.0)  # Converting arcmin to radians.
+        assert len(self.params.fwhm) == len(self.freqs), f"Number of bands {len(freqs)} does not match length of FWHM ({len(self.fwhm)})."
+        self.fwhm = np.array(self.params.fwhm)/60.0*(np.pi/180.0)  # Converting arcmin to radians.
 
 
     def alm_imag2real(self, alm):
@@ -97,7 +97,7 @@ class CompSepSolver:
         a = np.zeros((self.ncomp, self.npix))
         for icomp in range(self.ncomp):
             # a[icomp] = hp.alm2map(a_old[icomp], self.nside, self.lmax)
-            a[icomp] = alm_to_map(a_old[icomp], self.nside, self.lmax)
+            a[icomp] = alm_to_map(a_old[icomp], self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
 
         # M Y a
         a_old = a.copy()
@@ -109,7 +109,7 @@ class CompSepSolver:
         # Y^-1 M Y a
         a_old = a.copy()
         a = np.zeros((self.nband, self.alm_len_complex), dtype=np.complex128)
-        pixell_curvedsky.map2alm_healpix(a_old, a, niter=3, spin=0)
+        pixell_curvedsky.map2alm_healpix(a_old, a, niter=3, spin=0, nthread=self.params.nthreads_compsep)
 
         # B Y^-1 M Y a
         for iband in range(self.nband):
@@ -120,7 +120,7 @@ class CompSepSolver:
         a = np.zeros((self.nband, self.npix))
         for iband in range(self.nband):
             # a[icomp] = hp.alm2map(a_old[icomp], self.nside, self.lmax)
-            a[iband] = alm_to_map(a_old[iband], self.nside, self.lmax)
+            a[iband] = alm_to_map(a_old[iband], self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
 
         # N^-1 Y B Y^-1 M Y a
         a = a/self.map_rms**2
@@ -130,7 +130,7 @@ class CompSepSolver:
         a = np.zeros((self.nband, self.alm_len_complex), dtype=np.complex128)
         for iband in range(self.nband):
             # a[icomp] = hp.alm2map(a_old[icomp], self.nside, self.lmax)
-            a[iband] = alm_to_map_adjoint(a_old[iband], self.nside, self.lmax)
+            a[iband] = alm_to_map_adjoint(a_old[iband], self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
 
         # B^T Y^T N^-1 Y B Y^-1 M Y a
         for iband in range(self.nband):
@@ -139,7 +139,7 @@ class CompSepSolver:
         # Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         a_old = a.copy()
         a = np.zeros((self.nband, self.npix))
-        pixell_curvedsky.map2alm_healpix(a, a_old, niter=3, adjoint=True, spin=0)
+        pixell_curvedsky.map2alm_healpix(a, a_old, niter=3, adjoint=True, spin=0, nthread=self.params.nthreads_compsep)
 
         # M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         a_old = a.copy()
@@ -152,7 +152,7 @@ class CompSepSolver:
         a_old = a.copy()
         a = np.zeros((self.ncomp, self.alm_len_complex), dtype=np.complex128)
         for icomp in range(self.ncomp):
-            a[icomp] = alm_to_map_adjoint(a_old[icomp], self.nside, self.lmax)
+            a[icomp] = alm_to_map_adjoint(a_old[icomp], self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
 
         # Converting back from complex alms to real alms
         a_old = a.copy()
@@ -176,18 +176,20 @@ class CompSepSolver:
         # CG_solver = utils.CG(LHS, RHS, x0=x0, dot=self.alm_dot_product)
         CG_solver = utils.CG(LHS, RHS, x0=x0)
         iter = 0
-        self.CG_residuals = np.zeros((self.max_iter))
-        while CG_solver.err > self.err_tol:
+        self.CG_residuals = np.zeros((self.params.CG_max_iter))
+        t0 = time.time()
+        while CG_solver.err > self.params.CG_err_tol:
             CG_solver.step()
             self.CG_residuals[iter] = CG_solver.err
             iter += 1
             if iter%10 == 0:
-                print(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-10:iter]):.3e}")
-            if iter >= self.max_iter:
-                print(f"Warning: Maximum number of iterations ({self.max_iter}) reached in CG.")
+                print(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-10:iter]):.3e} ({(time.time() - t0)/10.0:.1f}s/iter)")
+                t0 = time.time()
+            if iter >= self.params.CG_max_iter:
+                print(f"Warning: Maximum number of iterations ({self.params.CG_max_iter}) reached in CG.")
                 break
         self.CG_residuals = self.CG_residuals[:iter]
-        print(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.err_tol})")
+        print(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.params.CG_err_tol})")
         s_bestfit = CG_solver.x
         return s_bestfit
 
@@ -204,7 +206,7 @@ class CompSepSolver:
         b_old = b.copy()
         b = np.zeros((self.nband, self.alm_len_complex), dtype=np.complex128)
         for iband in range(self.nband):
-            b[iband] = alm_to_map_adjoint(b_old[iband], self.nside, self.lmax)
+            b[iband] = alm_to_map_adjoint(b_old[iband], self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
 
         # B^T Y^T N^-1 d
         for iband in range(self.nband):
@@ -213,7 +215,7 @@ class CompSepSolver:
         # Y^-1^T B^T Y^T N^-1 d
         b_old = b.copy()
         b = np.zeros((self.nband, self.npix))
-        pixell_curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0)
+        pixell_curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
 
         # M^T Y^-1^T B^T Y^T N^-1 d
         b_old = b.copy()
@@ -226,7 +228,7 @@ class CompSepSolver:
         b_old = b.copy()
         b = np.zeros((self.ncomp, self.alm_len_complex), dtype=np.complex128)
         for icomp in range(self.ncomp):
-            b[icomp] = alm_to_map_adjoint(b_old[icomp], self.nside, self.lmax)
+            b[icomp] = alm_to_map_adjoint(b_old[icomp], self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
             # b[icomp] = hp.map2alm(b_old[icomp], self.lmax)
         
         b_old = b.copy()
@@ -244,5 +246,5 @@ class CompSepSolver:
         sol = sol.reshape((self.ncomp, self.alm_len_real))
         sol_map = np.zeros((self.ncomp, self.npix))
         for icomp in range(self.ncomp):
-            sol_map[icomp] = alm_to_map(self.alm_real2imag(sol[icomp]), self.nside, self.lmax)
+            sol_map[icomp] = alm_to_map(self.alm_real2imag(sol[icomp]), self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
         return sol_map

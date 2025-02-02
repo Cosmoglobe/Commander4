@@ -3,6 +3,7 @@ MPI_config:
   ntask_compsep: 1
   ntask_cmb: 0  # Set to 0 to not perform additional CMB realizations per Gibbs iteration, beyond the one performed during CompSep.
   use_MPI_for_CMB: True
+nthreads_compsep: 8
 
 input_paths:
   tod_filename: "/mn/stornext/d23/cmbco/commander4_shared/cron_tests/sim_test_data/tod_sim_16_s0.1_b800.h5"
