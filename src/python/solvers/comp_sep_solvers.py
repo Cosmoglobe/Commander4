@@ -194,7 +194,7 @@ class CompSepSolver:
         return s_bestfit
 
 
-    def solve(self) -> np.array:
+    def solve(self, seed=None) -> np.array:
 
         # d
         b = self.map_sky.copy()
@@ -238,7 +238,8 @@ class CompSepSolver:
 
         b = b.flatten()
 
-        np.random.seed(42)
+        if not seed is None:
+            np.random.seed(seed)
         x0 = np.random.normal(0.0, 1.0, (self.ncomp, self.alm_len_real))
         x0 = x0.flatten()
 
