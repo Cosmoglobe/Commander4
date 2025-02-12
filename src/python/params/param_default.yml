@@ -12,6 +12,8 @@ output_paths:
   plots: "../../plots/"
   stats: "/mn/stornext/u3/eirikgje/data/Commander4/stats/"
 
+components: ["CMB", "ThermalDust", "Synchrotron"]  # List of components to sample over. Each needs to exactly match the name of a class in the model/components.py file.
+
 niter_gibbs: 5
 
 nside: 64

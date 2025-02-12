@@ -3,8 +3,8 @@ from mpi4py import MPI
 import time
 import h5py
 import healpy as hp
-from model.component import CMB, ThermalDust, Synchrotron, DiffuseComponent
 from model.sky_model import SkyModel
+import model.component
 import matplotlib.pyplot as plt
 import os
 from solvers.comp_sep_solvers import CompSepSolver, amplitude_sampling_per_pix
@@ -89,10 +89,17 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
         signal_maps = np.array(signal_maps)
         rms_maps = np.array(rms_maps)
         band_freqs = np.array(band_freqs)
+
+        components = []
+        for i, component_str in enumerate(params.components):
+            component = getattr(model.component, component_str)()
+            components.append(component)
+        sky_model = SkyModel(components)
+
         if params.pixel_compsep_sampling:
             comp_maps = amplitude_sampling_per_pix(signal_maps, rms_maps, band_freqs)
         else:
-            compsep_solver = CompSepSolver(signal_maps, rms_maps, band_freqs, params)
+            compsep_solver = CompSepSolver(sky_model, signal_maps, rms_maps, band_freqs, params)
             comp_maps = compsep_solver.solve(seed=9999*chain+11*iter)
             if params.make_plots:
                 plt.figure()
@@ -101,15 +108,8 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
                 plt.savefig(params.output_paths.plots + f"CG_res/CG_res_chain{chain}_iter{iter}.png")
                 plt.close()
 
-        component_types = [CMB, ThermalDust, Synchrotron]  # At the moment we always sample all components. #TODO: Move to parameter file.
-        component_list = []
-        for i, component_type in enumerate(component_types):
-            component = component_type()
-            component.component_map = comp_maps[i]
-            # component.component_map = math_op.alm_to_map(comp_alm[i], nside=component.nside_comp_map, lmax=lmax)
-            component_list.append(component)
-
-        sky_model = SkyModel(component_list)
+        for i in range(len(sky_model.components)):
+            sky_model.components[i].component_map = comp_maps[i]
 
         npix = signal_maps.shape[-1]
         detector_maps = []
@@ -117,9 +117,9 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
         for i_det in range(len(data)):
             detector_map = sky_model.get_sky_at_nu(band_freqs[i_det], 12*params.nside**2)
             detector_maps.append(detector_map)
-            cmb_sky = component_list[0].get_sky(band_freqs[i_det])
-            dust_sky = component_list[1].get_sky(band_freqs[i_det])
-            sync_sky = component_list[2].get_sky(band_freqs[i_det])
+            cmb_sky = sky_model.components[0].get_sky(band_freqs[i_det])
+            dust_sky = sky_model.components[1].get_sky(band_freqs[i_det])
+            sync_sky = sky_model.components[2].get_sky(band_freqs[i_det])
             foreground_maps.append(sky_model.get_foreground_sky_at_nu(band_freqs[i_det], npix))
 
             if params.make_plots:

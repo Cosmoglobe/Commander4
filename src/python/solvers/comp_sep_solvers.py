@@ -42,7 +42,7 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
 
 
 class CompSepSolver:
-    def __init__(self, map_sky, map_rms, freqs, params):
+    def __init__(self, sky_model, map_sky, map_rms, freqs, params):
         self.params = params
         self.map_sky = map_sky
         self.map_rms = map_rms
@@ -55,8 +55,8 @@ class CompSepSolver:
         self.alm_len_complex = ((self.lmax+1)*(self.lmax+2))//2
         self.alm_len_real = (self.lmax+1)**2
         self.ainfo = curvedsky.alm_info(lmax=self.lmax)
-        self.comps_SED = np.array([CMB().get_sed(freqs), ThermalDust().get_sed(freqs), Synchrotron().get_sed(freqs)])
-        self.ncomp = 3  # Should be in parameter file, but also needs to match length of above list.
+        self.comps_SED = np.array([component.get_sed(freqs) for component in sky_model.components])
+        self.ncomp = len(self.comps_SED)
         assert len(self.params.fwhm) == len(self.freqs), f"Number of bands {len(freqs)} does not match length of FWHM ({len(self.fwhm)})."
         self.fwhm = np.array(self.params.fwhm)/60.0*(np.pi/180.0)  # Converting arcmin to radians.
 
