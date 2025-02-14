@@ -1,6 +1,7 @@
 import numpy as np
 import ducc0
 import healpy as hp
+import logging
 from pixell import utils
 from mpi4py import MPI
 import matplotlib.pyplot as plt
@@ -132,11 +133,11 @@ class ConstrainedCMB:
             CG_solver.step()
             self.iter += 1
             if VERBOSE and self.iter%10 == 1:
-                print(f"CG iter {self.iter:3d} - Residual {CG_solver.err:.3e}")
+                logger.info(f"CG iter {self.iter:3d} - Residual {CG_solver.err:.3e}")
             if self.iter >= maxiter:
-                print(f"Warning: Maximum number of iterations ({maxiter}) reached in CG.")
+                logger.warning(f"Maximum number of iterations ({maxiter}) reached in CG.")
                 break
-        print(f"CG finished after {self.iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {err_tol})")
+        logger.info(f"CG finished after {self.iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {err_tol})")
         s_bestfit = CG_solver.x
 
         return s_bestfit
@@ -144,6 +145,7 @@ class ConstrainedCMB:
 
 def constrained_cmb_loop(comm, compsep_master: int, params: dict):
     master = comm.Get_rank() == 0
+    logger = logging.getLogger(__name__)
     if master:
         if not os.path.isdir(params["output_paths"]["plots"] + "maps_CMB/"):
             os.mkdir(params["output_paths"]["plots"] + "maps_CMB/")
@@ -156,29 +158,29 @@ def constrained_cmb_loop(comm, compsep_master: int, params: dict):
         stop = comm.bcast(stop, root=0)
         if stop:
             if master:
-                print("CMB: stop requested; exiting")
+                logger.warning("CMB: stop requested; exiting")
             return
         if master:
-            print("CMB: new job obtained")
+            logger.info("CMB: new job obtained")
 
         data, iter, chain = MPI.COMM_WORLD.recv(source=compsep_master) if master else None
         # Broadcast te data to all tasks, or do anything else that's appropriate
         data = comm.bcast(data, root=0)
         if master:
-            print("CMB: successfully got data.")
+            logger.info("CMB: successfully got data.")
         if master:
             signal_maps, rms_maps = data
             signal_maps = signal_maps[:2]  # Ignore highest frequency band - very dust contaminated.
             rms_maps = rms_maps[:2]
             constrained_cmb_solver = ConstrainedCMB(signal_maps, rms_maps, iter)
-            print("CMB: Solving for mean-field map")
+            logger.info("CMB: Solving for mean-field map")
             RHS_mean_field = constrained_cmb_solver.get_RHS_eqn_mean()
             CMB_mean_field_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.LHS_func, RHS_mean_field)
             CMB_mean_field_Cl = hp.alm2cl(CMB_mean_field_alms)
             CMB_mean_field_map = alm2map(CMB_mean_field_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax)
 
             constrained_cmb_solver = ConstrainedCMB(signal_maps, rms_maps, iter)
-            print("CMB: Solving for fluctuation map")
+            logger.info("CMB: Solving for fluctuation map")
             RHS_fluct = constrained_cmb_solver.get_RHS_eqn_fluct()
             CMB_fluct_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.LHS_func, RHS_fluct)
             CMB_fluct_Cl = hp.alm2cl(CMB_fluct_alms)

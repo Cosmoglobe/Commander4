@@ -1,17 +1,20 @@
 import numpy as np
 from mpi4py import MPI
 import time
+import logging
 import h5py
 import healpy as hp
 from model.component import CMB, ThermalDust, Synchrotron, DiffuseComponent
 from model.sky_model import SkyModel
 import matplotlib.pyplot as plt
+import output
 import os
 from solvers.comp_sep_solvers import CompSepSolver, amplitude_sampling_per_pix
 
 
 # Component separation loop
 def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_for_CMB=True):
+    logger = logging.getLogger(__name__)
 
     # am I the master of the compsep communicator?
     master = comm.Get_rank() == 0
@@ -19,7 +22,7 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
     num_bands = len(params.bands)
 
     if master:
-        print("Compsep: loop started")
+        logger.info("Compsep: loop started")
         if not os.path.isdir(params.output_paths.plots + "maps_comps/"):
             os.mkdir(params.output_paths.plots + "maps_comps/")
         if not os.path.isdir(params.output_paths.plots + "maps_sky/"):
@@ -29,32 +32,32 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
 
     # we wait for new jobs until we get a stop signal
     while True:
-        print("CompSep new loop iteration...")
+        logger.info("CompSep new loop iteration...")
         # check for simulation end
         stop = MPI.COMM_WORLD.recv(source=tod_master) if master else False
         stop = comm.bcast(stop, root=0)
         if stop:
             if master:
-                print("Compsep: stop requested; exiting")
+                logger.warning("Compsep: stop requested; exiting")
                 if not cmb_master is None:
-                    print("Compsep: Sending stop signal to CMB")
+                    logger.warning("Compsep: Sending stop signal to CMB")
                     MPI.COMM_WORLD.send(True, dest=cmb_master)
             return
         if master:
-            print("Compsep: Not asked to stop, obtaining new job...")
+            logger.info("Compsep: Not asked to stop, obtaining new job...")
 
         # get next data set for component separation
         data, iter, chain = [], [], []
         if master:
             for i in range(num_bands):
                 _data, _iter, _chain = MPI.COMM_WORLD.recv(source=tod_master+i)
-                print(f"Compsep: Received data from rank {tod_master+i} for chain {_chain} iteration {_iter}.")
+                logger.info(f"Compsep: Received data from rank {tod_master+i} for chain {_chain} iteration {_iter}.")
                 data.append(_data)
                 iter.append(_iter)
                 chain.append(_chain)
             data = np.array(data)
-            assert np.all([i == iter[0] for i in iter]), "Different CompSep tasks received different Gibbs iteration number from TOD loop!"
-            assert np.all([i == chain[0] for i in chain]), "Different CompSep tasks received different Gibbs chain number from TOD loop!"
+            output.logassert(np.all([i == iter[0] for i in iter]), "Different CompSep tasks received different Gibbs iteration number from TOD loop!", logger)
+            output.logassert(np.all([i == chain[0] for i in chain]), "Different CompSep tasks received different Gibbs chain number from TOD loop!", logger)
             chain = chain[0]
             iter = iter[0]
         # Broadcast te data to all tasks, or do anything else that's appropriate
@@ -63,7 +66,7 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
         chain = comm.bcast(chain, root=0)
 
         if master:
-            print(f"Compsep: data obtained for chain {chain}, iteration {iter}. Working on it ...")
+            logger.info(f"Compsep: data obtained for chain {chain}, iteration {iter}. Working on it ...")
             t0 = time.time()
 
         signal_maps = []
@@ -151,14 +154,14 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
         foreground_subtracted_maps = signal_maps - foreground_maps
 
         if master:
-            print(f"Compsep: Finished chain {chain}, iteration {iter} in {time.time()-t0:.2f}s.")
+            logger.info(f"Compsep: Finished chain {chain}, iteration {iter} in {time.time()-t0:.2f}s.")
             for i in range(len(detector_maps)):
-                print(f"CompSep: Sending back data for band {i} (chain {chain} iter {iter}).")
+                logger.info(f"CompSep: Sending back data for band {i} (chain {chain} iter {iter}).")
                 MPI.COMM_WORLD.send(detector_maps[i], dest=tod_master+i)
-            print("Compsep: results sent back")
+            logger.info("Compsep: results sent back")
 
             if not cmb_master is None:  # cmb_master is set to None of we aren't doing CMB realizations.
-                print(f"CompSep: Sending relevant data to CMB realiztaion master...")
+                logger.info(f"CompSep: Sending relevant data to CMB realiztaion master...")
                 MPI.COMM_WORLD.send(False, dest=cmb_master)  # we don't want to stop yet
                 # Sending maps to CMB loop. Not sending the last band, as it's very dust-contaminated
                 if use_MPI_for_CMB:
@@ -166,4 +169,4 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
                         MPI.COMM_WORLD.send([[foreground_subtracted_maps[i], rms_maps[i]], iter, chain], dest=cmb_master+i)
                 else:
                     MPI.COMM_WORLD.send([[foreground_subtracted_maps[:4], rms_maps[:4]], iter, chain], dest=cmb_master)
-                print("Compsep: Sent results to CMB loop.")
+                logger.info("Compsep: Sent results to CMB loop.")

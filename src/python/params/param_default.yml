@@ -12,6 +12,13 @@ output_paths:
   plots: "../../plots/"
   stats: "/mn/stornext/u3/eirikgje/data/Commander4/stats/"
 
+logging:
+  console:
+    level: 'info'
+  file:
+    level: 'info'
+    filename: '/mn/stornext/u3/eirikgje/data/Commander4/output.log'
+
 niter_gibbs: 5
 
 nside: 64

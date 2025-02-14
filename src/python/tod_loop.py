@@ -4,9 +4,11 @@ import h5py
 import healpy as hp
 import math
 import time
+import logging
 from data_models import ScanTOD, DetectorTOD, DetectorMap
 from utils import single_det_mapmaker, single_det_map_accumulator
 from pixell import bunch
+import output
 
 nthreads=1
 
@@ -64,6 +66,7 @@ def tod2map(comm, det_static: DetectorTOD, det_cs_map: np.array, params: bunch) 
 
 
 def read_data(band_idx, scan_idx_start, scan_idx_stop, params: bunch) -> list[ScanTOD]:
+    logger = logging.getLogger(__name__)
     h5_filename = params.input_paths.tod_filename
     with h5py.File(h5_filename) as f:
         # for band in bands:
@@ -76,11 +79,9 @@ def read_data(band_idx, scan_idx_start, scan_idx_stop, params: bunch) -> list[Sc
                 pix = f[f'{iscan+1:06}/{band_formatted}/pix'][()]
                 psi = f[f'{iscan+1:06}/{band_formatted}/psi'][()].astype(np.float64)
             except KeyError:
-                print(iscan)
-                print(band_formatted)
-                print(list(f))
+                logger.exception(f"{iscan}\n{band_formatted}\n{list(f)}")
                 raise KeyError
-            assert np.max(pix) < 12*params.nside**2, f"Nside is {params.nside}, but found pixel index exceeding 12nside^2 ({np.max(12*params.nside**2)})"
+            output.logassert(np.max(pix) < 12*params.nside**2, f"Nside is {params.nside}, but found pixel index exceeding 12nside^2 ({np.max(12*params.nside**2)})", logger)
             theta, phi = hp.pix2ang(params.nside, pix)
             scanlist.append(ScanTOD(tod, theta, phi, psi, 0., iscan))
         det = DetectorTOD(scanlist, float(band))
@@ -89,19 +90,20 @@ def read_data(band_idx, scan_idx_start, scan_idx_stop, params: bunch) -> list[Sc
 
 # TOD processing loop
 def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
+    logger = logging.getLogger(__name__)
     num_bands = len(params.bands)
 
     # am I the master of the TOD communicator?
     MPIsize_tod, MPIrank_tod = comm.Get_size(), comm.Get_rank()
     master = MPIrank_tod == 0
     if master:
-        print(f"TOD: {MPIsize_tod} tasks allocated to TOD processing of {num_bands} bands.")
-        assert MPIsize_tod >= num_bands, f"Number of MPI tasks dedicated to TOD processing ({MPIsize_tod}) must be equal to or larger than the number of bands ({num_bands})."
+        logger.info(f"TOD: {MPIsize_tod} tasks allocated to TOD processing of {num_bands} bands.")
+        output.logassert(MPIsize_tod >= num_bands, f"Number of MPI tasks dedicated to TOD processing ({MPIsize_tod}) must be equal to or larger than the number of bands ({num_bands}).", logger)
 
     MPIcolor_band = MPIrank_tod%num_bands  # Spread the MPI tasks over the different bands.
     MPIcomm_band = comm.Split(MPIcolor_band, key=MPIrank_tod)  # Create communicators for each different band.
     MPIsize_band, MPIrank_band = MPIcomm_band.Get_size(), MPIcomm_band.Get_rank()  # Get my local rank, and the total size of, the band-communicator I'm on.
-    print(f"TOD: Hello from TOD-rank {MPIrank_tod}, dedicated to band {MPIcolor_band}, with local rank {MPIrank_band} (local communicator size: {MPIsize_band}).")
+    logger.info(f"TOD: Hello from TOD-rank {MPIrank_tod}, dedicated to band {MPIcolor_band}, with local rank {MPIrank_band} (local communicator size: {MPIsize_band}).")
     
     master_band = MPIrank_band == 0  # Am I the master of my local band.
 
@@ -109,7 +111,7 @@ def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
     my_scans_start = scans_per_rank * MPIrank_band
     my_scans_stop = min(scans_per_rank * (MPIrank_band + 1), params.num_scans) # In case the number of scans is not divisible by the number of ranks
 #    my_scans_start, my_scans_stop = scans_per_rank*MPIrank_band, scans_per_rank*(MPIrank_band + 1)
-    print(f"TOD: Rank {MPIrank_tod} assigned scans {my_scans_start} - {my_scans_stop} on band{MPIcolor_band}.")
+    logger.info(f"TOD: Rank {MPIrank_tod} assigned scans {my_scans_start} - {my_scans_stop} on band{MPIcolor_band}.")
 
     # Initialization for all TOD processing tasks goes here
     experiment_data = read_data(MPIcolor_band, my_scans_start, my_scans_stop, params)
@@ -126,35 +128,35 @@ def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
  
     for i in range(niter_gibbs):
         if master:  # If we are the master, tell the compsep-master not to stop.
-            print(f"TOD: Master sending 'dont stop' signal to CompSep master.")
+            logger.info(f"TOD: Master sending 'dont stop' signal to CompSep master.")
             MPI.COMM_WORLD.send(False, dest=compsep_master)
 
         if master_band:  # If we are the master of our respective band, send compsep-master our band-data.
-            print(f"TOD: Rank {MPIrank_tod} sending chain1 data to CompSep master.")
+            logger.info(f"TOD: Rank {MPIrank_tod} sending chain1 data to CompSep master.")
             MPI.COMM_WORLD.send((todproc_output_chain1, i, 1), dest=compsep_master)
             # del todproc_output_chain1
 
         # Chain #2
         # do TOD processing, resulting in compsep_input at the same time, compsep is working on chain #1 data
-        print(f"TOD: Rank {MPIrank_tod} starting chain 2, iter {i}.")
+        logger.info(f"TOD: Rank {MPIrank_tod} starting chain 2, iter {i}.")
         t0 = time.time()
         todproc_output_chain2 = tod2map(MPIcomm_band, experiment_data, compsep_output_chain2, params)
-        print(f"TOD: Rank {MPIrank_tod} finished chain 2, iter {i} in {time.time()-t0:.2f}s.")
+        logger.info(f"TOD: Rank {MPIrank_tod} finished chain 2, iter {i} in {time.time()-t0:.2f}s.")
 
         # get compsep results for chain #1
         if master_band:
             compsep_output_chain1 = MPI.COMM_WORLD.recv(source=compsep_master)
-            print(f"TOD: Rank {MPIrank_tod} received chain1 data (iter {i}).")
-        print(f"TOD: Rank {MPIrank_tod} starting chain 1, iter {i}.")
+            logger.info(f"TOD: Rank {MPIrank_tod} received chain1 data (iter {i}).")
+        logger.info(f"TOD: Rank {MPIrank_tod} starting chain 1, iter {i}.")
         t0 = time.time()
         compsep_output_chain1 = MPIcomm_band.bcast(compsep_output_chain1, root=0)
-        print(f"TOD: Rank {MPIrank_tod} finished chain 1, iter {i} in {time.time()-t0:.2f}s.")
+        logger.info(f"TOD: Rank {MPIrank_tod} finished chain 1, iter {i} in {time.time()-t0:.2f}s.")
 
         if master:
-            print(f"TOD: Master sending 'dont stop' signal to CompSep master.")
+            logger.info(f"TOD: Master sending 'dont stop' signal to CompSep master.")
             MPI.COMM_WORLD.send(False, dest=compsep_master)  # we don't want to stop yet
         if master_band:
-            print(f"TOD: Rank {MPIrank_tod} sending chain2 data to CompSep master.")
+            logger.info(f"TOD: Rank {MPIrank_tod} sending chain2 data to CompSep master.")
             MPI.COMM_WORLD.send((todproc_output_chain2, i, 2), dest=compsep_master)
             # del todproc_output_chain2
 
@@ -165,10 +167,10 @@ def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
         # get compsep results for chain #2
         if master_band:
             compsep_output_chain2 = MPI.COMM_WORLD.recv(source=compsep_master)
-            print(f"TOD: Rank {MPIrank_tod} received chain2 data (iter {i}).")
+            logger.info(f"TOD: Rank {MPIrank_tod} received chain2 data (iter {i}).")
         compsep_output_chain2 = MPIcomm_band.bcast(compsep_output_chain2, root=0)
 
     # stop compsep machinery
     if master:
-        print("TOD: sending STOP signal to compsep")
+        logger.info("TOD: sending STOP signal to compsep")
         MPI.COMM_WORLD.send(True, dest=compsep_master)

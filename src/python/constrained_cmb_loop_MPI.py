@@ -1,5 +1,6 @@
 import numpy as np
 import ducc0
+import logging
 import healpy as hp
 from pixell import utils
 from mpi4py import MPI
@@ -131,6 +132,7 @@ class ConstrainedCMB:
             Returns:
                 m_bestfit: The resulting best-fit solution, in alm space.
         """
+        logger = logging.getLogger(__name__)
         CG_solver = utils.CG(LHS, RHS, dot=self.dot_alm)
         err_tol = 1e-6
         if self.iter == 0:
@@ -144,13 +146,13 @@ class ConstrainedCMB:
             CG_solver.step()
             self.iter += 1
             if VERBOSE and self.iter%10 == 1:
-                print(f"CG iter {self.iter:3d} - Residual {CG_solver.err:.3e}")
+                logger.info(f"CG iter {self.iter:3d} - Residual {CG_solver.err:.3e}")
             if self.iter >= maxiter:
-                print(f"Warning: Maximum number of iterations ({maxiter}) reached in CG.")
+                logger.warning(f"Maximum number of iterations ({maxiter}) reached in CG.")
                 break
         for irank in range(1, self.nprocs):
             self.comm.send(True, irank)  # Send "stop" signal to worker tasks.
-        print(f"CG finished after {self.iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {err_tol})")
+        logger.info(f"CG finished after {self.iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {err_tol})")
         s_bestfit = CG_solver.x
 
         return s_bestfit
@@ -158,6 +160,7 @@ class ConstrainedCMB:
 
 def constrained_cmb_loop_MPI(comm, compsep_master: int, params: dict):
     master = comm.Get_rank() == 0
+    logger = logging.getLogger(__name__)
     if master:
         if not os.path.isdir(params["output_paths"]["plots"] + "maps_CMB/"):
             os.mkdir(params["output_paths"]["plots"] + "maps_CMB/")
@@ -170,15 +173,15 @@ def constrained_cmb_loop_MPI(comm, compsep_master: int, params: dict):
         stop = comm.bcast(stop, root=0)
         if stop:
             if master:
-                print("CMB: stop requested; exiting")
+                logger.warning("CMB: stop requested; exiting")
             return
         if master:
-            print("CMB: new job obtained")
+            logger.info("CMB: new job obtained")
 
         # data, iter, chain = MPI.COMM_WORLD.recv(source=compsep_master) if master else None
         data, iter, chain = MPI.COMM_WORLD.recv(source=compsep_master) 
         if master:
-            print("CMB: successfully got data.")
+            logger.info("CMB: successfully got data.")
         # Broadcast te data to all tasks, or do anything else that's appropriate
         # data = comm.bcast(data, root=0)
 
@@ -188,7 +191,7 @@ def constrained_cmb_loop_MPI(comm, compsep_master: int, params: dict):
         RHS_fluct = constrained_cmb_solver.get_RHS_eqn_fluct()
 
         if master:
-            print("CMB: Solving for mean-field map")
+            logger.info("CMB: Solving for mean-field map")
             CMB_mean_field_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.master_LHS_func, RHS_mean_field)
             CMB_mean_field_Cl = hp.alm2cl(CMB_mean_field_alms)
             CMB_mean_field_map = alm_to_map(CMB_mean_field_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax, nthreads=nthreads)
@@ -198,7 +201,7 @@ def constrained_cmb_loop_MPI(comm, compsep_master: int, params: dict):
 
         constrained_cmb_solver = ConstrainedCMB(signal_maps, rms_maps, iter, comm)
         if master:
-            print("CMB: Solving for fluctuation map")
+            logger.info("CMB: Solving for fluctuation map")
             CMB_fluct_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.master_LHS_func, RHS_fluct)
             CMB_fluct_Cl = hp.alm2cl(CMB_fluct_alms)
             CMB_fluct_map = alm_to_map(CMB_fluct_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax, nthreads=nthreads)
