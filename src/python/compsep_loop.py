@@ -113,7 +113,7 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
                                        cmb=cmb_sky,
                                        dust=dust_sky,
                                        sync=sync_sky,
-                                       signal_map=signal_maps[i_det])
+                                       signal=signal_maps[i_det])
 
         foreground_maps = np.array(foreground_maps)
         foreground_subtracted_maps = signal_maps - foreground_maps
