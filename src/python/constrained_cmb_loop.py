@@ -146,11 +146,6 @@ class ConstrainedCMB:
 def constrained_cmb_loop(comm, compsep_master: int, params: dict):
     master = comm.Get_rank() == 0
     logger = logging.getLogger(__name__)
-    if master:
-        if not os.path.isdir(params["output_paths"]["plots"] + "maps_CMB/"):
-            os.mkdir(params["output_paths"]["plots"] + "maps_CMB/")
-        if not os.path.isdir(params["output_paths"]["plots"] + "plots/"):
-            os.mkdir(params["output_paths"]["plots"] + "plots/")
 
     while True:
         # check for simulation end
@@ -186,29 +181,8 @@ def constrained_cmb_loop(comm, compsep_master: int, params: dict):
             CMB_fluct_Cl = hp.alm2cl(CMB_fluct_alms)
             CMB_fluct_map = alm2map(CMB_fluct_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax)
 
-            # Plotting stuff
-            ell = constrained_cmb_solver.ell
-            Z = ell*(ell+1)/(2*np.pi)
-            hp.mollview(CMB_mean_field_map, cmap="RdBu_r", title=f"Constrained mean field CMB realization chain{chain} iter{iter}")
-            plt.savefig(params["output_paths"]["plots"] + f"maps_CMB/CMB_mean_field_chain{chain}_iter{iter}.png")
-            plt.close()
-
-            hp.mollview(CMB_fluct_map, cmap="RdBu_r", title=f"Constrained fluctuation CMB realization chain{chain} iter{iter}")
-            plt.savefig(params["output_paths"]["plots"] + f"maps_CMB/CMB_fluct_chain{chain}_iter{iter}.png")
-            plt.close()
-
-            hp.mollview(CMB_mean_field_map+CMB_fluct_map, cmap="RdBu_r", title=f"Joint constrained CMB realization chain{chain} iter{iter}")
-            plt.savefig(params["output_paths"]["plots"] + f"maps_CMB/CMB_joint_realization_chain{chain}_iter{iter}.png")
-            plt.close()
-
-            plt.figure()
-            plt.plot(ell, Z*CMB_mean_field_Cl, label="Cl CMB mean field")
-            plt.plot(ell, Z*CMB_fluct_Cl, label="Cl CMB fluct")
-            plt.plot(ell, Z*CMB_mean_field_Cl + CMB_fluct_Cl, label="Cl CMB joint")
-            plt.plot(ell, Z*hp.alm2cl(hp.map2alm(signal_maps[0])), label="CL observed sky")
-            plt.plot(ell, Z*constrained_cmb_solver.Cl_true, label="True CMB Cl", c="k")
-            plt.legend()
-            plt.xscale("log")
-            plt.yscale("log")
-            plt.ylim(1e-2, 1e6)
-            plt.savefig(params["output_paths"]["plots"] + f"plots/Cl_CMB_chain{chain}_iter{iter}.png")
+            if params.make_plots:
+                output.plot_constrained_cmb_results(
+                    master, params, detector, chain, iter,
+                    constrained_cmb_solver.ell, CMB_mean_field_map,
+                    CMB_fluct_map, signal_maps[0], constrained_cmb_solver.Cl_true)

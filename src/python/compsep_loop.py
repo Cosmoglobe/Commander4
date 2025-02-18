@@ -6,9 +6,7 @@ import h5py
 import healpy as hp
 from model.component import CMB, ThermalDust, Synchrotron, DiffuseComponent
 from model.sky_model import SkyModel
-import matplotlib.pyplot as plt
 import output
-import os
 from solvers.comp_sep_solvers import CompSepSolver, amplitude_sampling_per_pix
 
 
@@ -23,13 +21,6 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
 
     if master:
         logger.info("Compsep: loop started")
-        if not os.path.isdir(params.output_paths.plots + "maps_comps/"):
-            os.mkdir(params.output_paths.plots + "maps_comps/")
-        if not os.path.isdir(params.output_paths.plots + "maps_sky/"):
-            os.mkdir(params.output_paths.plots + "maps_sky/")
-        if not os.path.isdir(params.output_paths.plots + "CG_res/"):
-            os.mkdir(params.output_paths.plots + "CG_res/")
-
     # we wait for new jobs until we get a stop signal
     while True:
         logger.info("CompSep new loop iteration...")
@@ -78,17 +69,10 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
             rms_maps.append(detector.map_rms)
             band_freqs.append(detector.nu)
             if params.make_plots:
-                hp.mollview(signal_maps[-1], cmap="RdBu_r", title=f"Signal map, det {i_det}, chain {chain}, iter {iter}")
-                plt.savefig(params.output_paths.plots + f"maps_sky/map_sky_det{i_det}_chain{chain}_iter{iter}.png")
-                plt.close()
-                hp.mollview(detector.map_corr_noise, cmap="RdBu_r", title=f"Corr noise map, det {i_det}, chain {chain}, iter {iter}")
-                plt.savefig(params.output_paths.plots + f"maps_sky/map_corr_noise_det{i_det}_chain{chain}_iter{iter}.png")
-                plt.close()
-                hp.mollview(rms_maps[-1], title=f"RMS map, det {i_det}, chain {chain}, iter {iter}")
-                plt.savefig(params.output_paths.plots + f"maps_sky/map_rms_det{i_det}_chain{chain}_iter{iter}.png")
-                plt.close()
-
-
+                output.plot_data_maps(master, params, i_det, chain, iter,
+                                      map_signal=signal_maps[-1],
+                                      map_corr_noise=detector.map_corr_noise,
+                                      map_rms=rms_maps[-1])
         signal_maps = np.array(signal_maps)
         rms_maps = np.array(rms_maps)
         band_freqs = np.array(band_freqs)
@@ -98,11 +82,8 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
             compsep_solver = CompSepSolver(signal_maps, rms_maps, band_freqs, params)
             comp_maps = compsep_solver.solve(seed=9999*chain+11*iter)
             if params.make_plots:
-                plt.figure()
-                plt.loglog(np.arange(compsep_solver.CG_residuals.shape[0]), compsep_solver.CG_residuals)
-                plt.axhline(params.CG_err_tol, ls="--", c="k")
-                plt.savefig(params.output_paths.plots + f"CG_res/CG_res_chain{chain}_iter{iter}.png")
-                plt.close()
+                output.plot_cg_res(master, params, chain, iter,
+                                   compsep_solver.CG_residuals)
 
         component_types = [CMB, ThermalDust, Synchrotron]  # At the moment we always sample all components. #TODO: Move to parameter file.
         component_list = []
@@ -126,29 +107,13 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
             foreground_maps.append(sky_model.get_foreground_sky_at_nu(band_freqs[i_det], npix))
 
             if params.make_plots:
-                hp.mollview(detector_map, title=f"Full sky realization at {band_freqs[i_det]:.2f}GHz")
-                plt.savefig(params.output_paths.plots + f"maps_comps/sky_realization_det{i_det}_chain{chain}_iter{iter}.png")
-                plt.close()
-
-                hp.mollview(cmb_sky, title=f"CMB realization at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
-                plt.savefig(params.output_paths.plots + f"maps_comps/CMB_realization_det{i_det}_chain{chain}_iter{iter}.png")
-                plt.close()
-
-                hp.mollview(dust_sky, title=f"Thermal dust realization at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
-                plt.savefig(params.output_paths.plots + f"maps_comps/Dust_realization_det{i_det}_chain{chain}_iter{iter}.png")
-                plt.close()
-            
-                hp.mollview(sync_sky, title=f"Synchrotron realization at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
-                plt.savefig(params.output_paths.plots + f"maps_comps/Sync_realization_det{i_det}_chain{chain}_iter{iter}.png")
-                plt.close()
-
-                hp.mollview(signal_maps[i_det]-dust_sky-sync_sky, title=f"Foreground subtracted sky at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
-                plt.savefig(params.output_paths.plots + f"maps_comps/foreground_subtr_det{i_det}_chain{chain}_iter{iter}.png")
-                plt.close()
-
-                hp.mollview(signal_maps[i_det]-dust_sky-sync_sky-cmb_sky, title=f"Residual sky at {band_freqs[i_det]:.2f}GHz, det {i_det}, chain {chain}, iter {iter}")
-                plt.savefig(params.output_paths.plots + f"maps_comps/residual_det{i_det}_chain{chain}_iter{iter}.png")
-                plt.close()
+                output.plot_components(master, params, band_freqs[i_det],
+                                       i_det, chain, iter,
+                                       sky=detector_map,
+                                       cmb=cmb_sky,
+                                       dust=dust_sky,
+                                       sync=sync_sky,
+                                       signal_map=signal_maps[i_det])
 
         foreground_maps = np.array(foreground_maps)
         foreground_subtracted_maps = signal_maps - foreground_maps

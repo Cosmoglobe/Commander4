@@ -3,7 +3,6 @@ import os
 import healpy as hp
 import ctypes as ct
 from data_models import DetectorTOD, DetectorMap
-import matplotlib.pyplot as plt
 from scipy.fft import rfft, irfft
 from pixell import bunch
 
