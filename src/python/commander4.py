@@ -6,6 +6,7 @@ import cProfile
 import pstats
 import logging
 import output
+import io
 from traceback import print_exc
 
 from tod_loop import tod_loop
