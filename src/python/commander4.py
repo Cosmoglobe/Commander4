@@ -104,10 +104,10 @@ if __name__ == "__main__":
         main(params, params_dict)
         if params.output_stats:
             profiler.disable()
-            s = io.IoStream()
+            s = io.StringIO()
             stats = pstats.Stats(profiler, stream=s).sort_stats('tottime')
             stats.print_stats(10)
-            logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} cProfile stats: {s}")
+            logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} cProfile stats: {s.getvalue()}")
 
             stats.dump_stats(f'{params.output_paths.stats}/stats-{MPI.COMM_WORLD.Get_rank()}')
     except Exception as error:
