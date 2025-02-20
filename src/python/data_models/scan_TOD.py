@@ -1,14 +1,14 @@
 import numpy as np
-import output
+from output import log
 import logging
 from numpy.testing import assert_ as myassert
 
 class ScanTOD:
     def __init__ (self, value, theta, phi, psi, startTime, scanID):
         logger = logging.getLogger(__name__)
-        output.logassert_np(value.ndim==1, "'value' must be a 1D array", logger)
-        output.logassert_np(value.dtype==np.float64, "'value' dtype must be np.float64", logger)
-        output.logassert_np(theta.shape==value.shape and phi.shape==value.shape and psi.shape==value.shape,
+        log.logassert_np(value.ndim==1, "'value' must be a 1D array", logger)
+        log.logassert_np(value.dtype==np.float64, "'value' dtype must be np.float64", logger)
+        log.logassert_np(theta.shape==value.shape and phi.shape==value.shape and psi.shape==value.shape,
             f"shape mismatch between input arrays. Theta: {theta.shape}, phi: {phi.shape}, psi: {psi.shape}, value: {value.shape}", logger)
         self._value = value
         self._theta = theta

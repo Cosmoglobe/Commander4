@@ -5,7 +5,7 @@ from mpi4py import MPI
 import cProfile
 import pstats
 import logging
-import output
+from output import log
 import io
 from traceback import print_exc
 
@@ -28,23 +28,23 @@ def main(params, params_dict):
             os.mkdir(params.output_paths.stats)
 
     if worldsize != (params.MPI_config.ntask_tod + params.MPI_config.ntask_compsep + params.MPI_config.ntask_cmb):
-        output.lograise(RuntimeError, f"Total number of MPI tasks ({worldsize}) must equal the sum of tasks for TOD ({params.MPI_config.ntask_tod}) + CompSep ({params.MPI_config.ntask_compsep}) + CMB realization ({params.MPI_config.ntask_cmb}).", logger)
+        log.lograise(RuntimeError, f"Total number of MPI tasks ({worldsize}) must equal the sum of tasks for TOD ({params.MPI_config.ntask_tod}) + CompSep ({params.MPI_config.ntask_compsep}) + CMB realization ({params.MPI_config.ntask_cmb}).", logger)
 
     if (not params.MPI_config.use_MPI_for_CMB) and (params.MPI_config.ntask_cmb > 1):
-        output.lograise(RuntimeError, f"Number of MPI tasks allocated to CMB realization cannot be > 1 if 'use_MPI_for_CMB' is False.", logger)
+        log.lograise(RuntimeError, f"Number of MPI tasks allocated to CMB realization cannot be > 1 if 'use_MPI_for_CMB' is False.", logger)
 
     if params.MPI_config.ntask_compsep > 1:
-        output.lograise(RuntimeError, f"CompSep currently doesn't support more than 1 MPI task.")
+        log.lograise(RuntimeError, f"CompSep currently doesn't support more than 1 MPI task.")
 
     # check if we have at least ntask_compsep+1 MPI tasks, otherwise abort
     if params.MPI_config.ntask_compsep+1 > worldsize:
-        output.lograise(RuntimeError, f"not enough MPI tasks started; need at least {params.MPI_config.ntask_compsep+1}", logger)
+        log.lograise(RuntimeError, f"not enough MPI tasks started; need at least {params.MPI_config.ntask_compsep+1}", logger)
 
     doing_cmb = params.MPI_config.ntask_cmb > 0
     if doing_cmb:
         num_bands = len(params.bands)
         if num_bands > params.MPI_config.ntask_cmb:
-            output.lograise(RuntimeError, "If running with concurrent CMB sampling, ntask_cmb must be greater than or equal to the number of bands", logger)
+            log.lograise(RuntimeError, "If running with concurrent CMB sampling, ntask_cmb must be greater than or equal to the number of bands", logger)
 
     # split the world communicator into a communicator for compsep and one for TOD
     # world rank [0; ntask_compsep[ => compsep
@@ -95,7 +95,7 @@ def main(params, params_dict):
 if __name__ == "__main__":
     # Parse parameter file
     from parse_params import params, params_dict
-    output.init_loggers(params.logging)
+    log.init_loggers(params.logging)
     logger = logging.getLogger(__name__)
     try:
         if params.output_stats:

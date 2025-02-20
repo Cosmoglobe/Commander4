@@ -6,7 +6,7 @@ import h5py
 import healpy as hp
 from model.component import CMB, ThermalDust, Synchrotron, DiffuseComponent
 from model.sky_model import SkyModel
-import output
+from output import log, plotting
 from solvers.comp_sep_solvers import CompSepSolver, amplitude_sampling_per_pix
 
 
@@ -47,8 +47,8 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
                 iter.append(_iter)
                 chain.append(_chain)
             data = np.array(data)
-            output.logassert(np.all([i == iter[0] for i in iter]), "Different CompSep tasks received different Gibbs iteration number from TOD loop!", logger)
-            output.logassert(np.all([i == chain[0] for i in chain]), "Different CompSep tasks received different Gibbs chain number from TOD loop!", logger)
+            log.logassert(np.all([i == iter[0] for i in iter]), "Different CompSep tasks received different Gibbs iteration number from TOD loop!", logger)
+            log.logassert(np.all([i == chain[0] for i in chain]), "Different CompSep tasks received different Gibbs chain number from TOD loop!", logger)
             chain = chain[0]
             iter = iter[0]
         # Broadcast te data to all tasks, or do anything else that's appropriate
@@ -69,10 +69,10 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
             rms_maps.append(detector.map_rms)
             band_freqs.append(detector.nu)
             if params.make_plots:
-                output.plot_data_maps(master, params, i_det, chain, iter,
-                                      map_signal=signal_maps[-1],
-                                      map_corr_noise=detector.map_corr_noise,
-                                      map_rms=rms_maps[-1])
+                plotting.plot_data_maps(master, params, i_det, chain, iter,
+                                        map_signal=signal_maps[-1],
+                                        map_corr_noise=detector.map_corr_noise,
+                                        map_rms=rms_maps[-1])
         signal_maps = np.array(signal_maps)
         rms_maps = np.array(rms_maps)
         band_freqs = np.array(band_freqs)
@@ -82,8 +82,8 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
             compsep_solver = CompSepSolver(signal_maps, rms_maps, band_freqs, params)
             comp_maps = compsep_solver.solve(seed=9999*chain+11*iter)
             if params.make_plots:
-                output.plot_cg_res(master, params, chain, iter,
-                                   compsep_solver.CG_residuals)
+                plotting.plot_cg_res(master, params, chain, iter,
+                                     compsep_solver.CG_residuals)
 
         component_types = [CMB, ThermalDust, Synchrotron]  # At the moment we always sample all components. #TODO: Move to parameter file.
         component_list = []
@@ -107,13 +107,11 @@ def compsep_loop(comm, tod_master: int, cmb_master: int, params: dict, use_MPI_f
             foreground_maps.append(sky_model.get_foreground_sky_at_nu(band_freqs[i_det], npix))
 
             if params.make_plots:
-                output.plot_components(master, params, band_freqs[i_det],
-                                       i_det, chain, iter,
-                                       sky=detector_map,
-                                       cmb=cmb_sky,
-                                       dust=dust_sky,
-                                       sync=sync_sky,
-                                       signal=signal_maps[i_det])
+                plotting.plot_components(master, params, band_freqs[i_det],
+                                         i_det, chain, iter, sky=detector_map,
+                                         cmb=cmb_sky, dust=dust_sky,
+                                         sync=sync_sky,
+                                         signal=signal_maps[i_det])
 
         foreground_maps = np.array(foreground_maps)
         foreground_subtracted_maps = signal_maps - foreground_maps

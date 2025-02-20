@@ -4,7 +4,7 @@ import time
 from pixell import utils, curvedsky
 import logging
 
-import output
+from output import log
 from model.component import CMB, ThermalDust, Synchrotron
 from utils.math_operations import alm_to_map, alm_to_map_adjoint
 from pixell import curvedsky as pixell_curvedsky
@@ -53,7 +53,7 @@ class CompSepSolver:
         self.freqs = freqs
         self.nband, self.npix = map_rms.shape
         self.nside = np.sqrt(self.npix//12)
-        output.logassert(self.nside.is_integer(), f"Npix dimension of map ({self.npix}) resulting in a non-integer nside ({self.nside}).", logger)
+        log.logassert(self.nside.is_integer(), f"Npix dimension of map ({self.npix}) resulting in a non-integer nside ({self.nside}).", logger)
         self.nside = int(self.nside)
         self.lmax = 3*self.nside-1
         self.alm_len_complex = ((self.lmax+1)*(self.lmax+2))//2
@@ -61,7 +61,7 @@ class CompSepSolver:
         self.ainfo = curvedsky.alm_info(lmax=self.lmax)
         self.comps_SED = np.array([CMB().get_sed(freqs), ThermalDust().get_sed(freqs), Synchrotron().get_sed(freqs)])
         self.ncomp = 3  # Should be in parameter file, but also needs to match length of above list.
-        output.logassert(len(self.params.fwhm) == len(self.freqs), f"Number of bands {len(freqs)} does not match length of FWHM ({len(self.params.fwhm)}).", logger)
+        log.logassert(len(self.params.fwhm) == len(self.freqs), f"Number of bands {len(freqs)} does not match length of FWHM ({len(self.params.fwhm)}).", logger)
         self.fwhm = np.array(self.params.fwhm)/60.0*(np.pi/180.0)  # Converting arcmin to radians.
 
 
@@ -90,8 +90,8 @@ class CompSepSolver:
         logger = logging.getLogger(__name__)
         # B^T Y^T M^T N^-1 M Y B a
         a = a.reshape((self.ncomp, self.alm_len_real))
-        output.logassert(a.dtype == np.float64, "Provided component array is not of type np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
-        # output.logassert(a.dtype == np.complex128, "Provided component array is not of type np.complex128, which is required.", logger)
+        log.logassert(a.dtype == np.float64, "Provided component array is not of type np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
+        # log.logassert(a.dtype == np.complex128, "Provided component array is not of type np.complex128, which is required.", logger)
         a_old = a.copy()
         a = np.zeros((self.ncomp, self.alm_len_complex), dtype=np.complex128)
         for icomp in range(self.ncomp):

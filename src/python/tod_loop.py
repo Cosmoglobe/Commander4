@@ -8,7 +8,7 @@ import logging
 from data_models import ScanTOD, DetectorTOD, DetectorMap
 from utils import single_det_mapmaker, single_det_map_accumulator
 from pixell import bunch
-import output
+from output import log 
 
 nthreads=1
 
@@ -81,7 +81,7 @@ def read_data(band_idx, scan_idx_start, scan_idx_stop, params: bunch) -> list[Sc
             except KeyError:
                 logger.exception(f"{iscan}\n{band_formatted}\n{list(f)}")
                 raise KeyError
-            output.logassert(np.max(pix) < 12*params.nside**2, f"Nside is {params.nside}, but found pixel index exceeding 12nside^2 ({np.max(12*params.nside**2)})", logger)
+            log.logassert(np.max(pix) < 12*params.nside**2, f"Nside is {params.nside}, but found pixel index exceeding 12nside^2 ({np.max(12*params.nside**2)})", logger)
             theta, phi = hp.pix2ang(params.nside, pix)
             scanlist.append(ScanTOD(tod, theta, phi, psi, 0., iscan))
         det = DetectorTOD(scanlist, float(band))
@@ -98,7 +98,7 @@ def tod_loop(comm, compsep_master: int, niter_gibbs: int, params: dict):
     master = MPIrank_tod == 0
     if master:
         logger.info(f"TOD: {MPIsize_tod} tasks allocated to TOD processing of {num_bands} bands.")
-        output.logassert(MPIsize_tod >= num_bands, f"Number of MPI tasks dedicated to TOD processing ({MPIsize_tod}) must be equal to or larger than the number of bands ({num_bands}).", logger)
+        log.logassert(MPIsize_tod >= num_bands, f"Number of MPI tasks dedicated to TOD processing ({MPIsize_tod}) must be equal to or larger than the number of bands ({num_bands}).", logger)
 
     MPIcolor_band = MPIrank_tod%num_bands  # Spread the MPI tasks over the different bands.
     MPIcomm_band = comm.Split(MPIcolor_band, key=MPIrank_tod)  # Create communicators for each different band.
