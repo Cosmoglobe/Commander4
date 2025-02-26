@@ -19,6 +19,10 @@ def init_loggers(logger_params):
                 file: Needs a 'level' parameter like console, as well as a
                     'filename' entry, giving the output file name.
     """
+
+    # This part is to configure the healpy logger, and should be relatively independent of the main logger stuff
+    hp_logger = logging.getLogger("healpy")
+    hp_logger.setLevel(logging.WARNING)
     config_dict = {
         'version': 1,
         'disable_existing_loggers': False,
