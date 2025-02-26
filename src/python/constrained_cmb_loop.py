@@ -1,10 +1,12 @@
 import numpy as np
 import ducc0
 import healpy as hp
+import logging
 from pixell import utils
 from mpi4py import MPI
 import matplotlib.pyplot as plt
 import os
+from output import plotting
 
 nthreads = 32  # Number of threads to use for ducc S
 VERBOSE = False
@@ -132,11 +134,11 @@ class ConstrainedCMB:
             CG_solver.step()
             self.iter += 1
             if VERBOSE and self.iter%10 == 1:
-                print(f"CG iter {self.iter:3d} - Residual {CG_solver.err:.3e}")
+                logger.info(f"CG iter {self.iter:3d} - Residual {CG_solver.err:.3e}")
             if self.iter >= maxiter:
-                print(f"Warning: Maximum number of iterations ({maxiter}) reached in CG.")
+                logger.warning(f"Maximum number of iterations ({maxiter}) reached in CG.")
                 break
-        print(f"CG finished after {self.iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {err_tol})")
+        logger.info(f"CG finished after {self.iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {err_tol})")
         s_bestfit = CG_solver.x
 
         return s_bestfit
@@ -144,11 +146,7 @@ class ConstrainedCMB:
 
 def constrained_cmb_loop(comm, compsep_master: int, params: dict):
     master = comm.Get_rank() == 0
-    if master:
-        if not os.path.isdir(params["output_paths"]["plots"] + "maps_CMB/"):
-            os.mkdir(params["output_paths"]["plots"] + "maps_CMB/")
-        if not os.path.isdir(params["output_paths"]["plots"] + "plots/"):
-            os.mkdir(params["output_paths"]["plots"] + "plots/")
+    logger = logging.getLogger(__name__)
 
     while True:
         # check for simulation end
@@ -156,57 +154,37 @@ def constrained_cmb_loop(comm, compsep_master: int, params: dict):
         stop = comm.bcast(stop, root=0)
         if stop:
             if master:
-                print("CMB: stop requested; exiting")
+                logger.warning("CMB: stop requested; exiting")
             return
         if master:
-            print("CMB: new job obtained")
+            logger.info("CMB: new job obtained")
 
         data, iter, chain = MPI.COMM_WORLD.recv(source=compsep_master) if master else None
         # Broadcast te data to all tasks, or do anything else that's appropriate
         data = comm.bcast(data, root=0)
         if master:
-            print("CMB: successfully got data.")
+            logger.info("CMB: successfully got data.")
         if master:
             signal_maps, rms_maps = data
             signal_maps = signal_maps[:2]  # Ignore highest frequency band - very dust contaminated.
             rms_maps = rms_maps[:2]
             constrained_cmb_solver = ConstrainedCMB(signal_maps, rms_maps, iter)
-            print("CMB: Solving for mean-field map")
+            logger.info("CMB: Solving for mean-field map")
             RHS_mean_field = constrained_cmb_solver.get_RHS_eqn_mean()
             CMB_mean_field_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.LHS_func, RHS_mean_field)
             CMB_mean_field_Cl = hp.alm2cl(CMB_mean_field_alms)
             CMB_mean_field_map = alm2map(CMB_mean_field_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax)
 
             constrained_cmb_solver = ConstrainedCMB(signal_maps, rms_maps, iter)
-            print("CMB: Solving for fluctuation map")
+            logger.info("CMB: Solving for fluctuation map")
             RHS_fluct = constrained_cmb_solver.get_RHS_eqn_fluct()
             CMB_fluct_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.LHS_func, RHS_fluct)
             CMB_fluct_Cl = hp.alm2cl(CMB_fluct_alms)
             CMB_fluct_map = alm2map(CMB_fluct_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax)
 
-            # Plotting stuff
-            ell = constrained_cmb_solver.ell
-            Z = ell*(ell+1)/(2*np.pi)
-            hp.mollview(CMB_mean_field_map, cmap="RdBu_r", title=f"Constrained mean field CMB realization chain{chain} iter{iter}")
-            plt.savefig(params["output_paths"]["plots"] + f"maps_CMB/CMB_mean_field_chain{chain}_iter{iter}.png")
-            plt.close()
-
-            hp.mollview(CMB_fluct_map, cmap="RdBu_r", title=f"Constrained fluctuation CMB realization chain{chain} iter{iter}")
-            plt.savefig(params["output_paths"]["plots"] + f"maps_CMB/CMB_fluct_chain{chain}_iter{iter}.png")
-            plt.close()
-
-            hp.mollview(CMB_mean_field_map+CMB_fluct_map, cmap="RdBu_r", title=f"Joint constrained CMB realization chain{chain} iter{iter}")
-            plt.savefig(params["output_paths"]["plots"] + f"maps_CMB/CMB_joint_realization_chain{chain}_iter{iter}.png")
-            plt.close()
-
-            plt.figure()
-            plt.plot(ell, Z*CMB_mean_field_Cl, label="Cl CMB mean field")
-            plt.plot(ell, Z*CMB_fluct_Cl, label="Cl CMB fluct")
-            plt.plot(ell, Z*CMB_mean_field_Cl + CMB_fluct_Cl, label="Cl CMB joint")
-            plt.plot(ell, Z*hp.alm2cl(hp.map2alm(signal_maps[0])), label="CL observed sky")
-            plt.plot(ell, Z*constrained_cmb_solver.Cl_true, label="True CMB Cl", c="k")
-            plt.legend()
-            plt.xscale("log")
-            plt.yscale("log")
-            plt.ylim(1e-2, 1e6)
-            plt.savefig(params["output_paths"]["plots"] + f"plots/Cl_CMB_chain{chain}_iter{iter}.png")
+            if params.make_plots:
+                plotting.plot_constrained_cmb_results(
+                    master, params, detector, chain, iter,
+                    constrained_cmb_solver.ell, CMB_mean_field_map,
+                    CMB_fluct_map, signal_maps[0],
+                    constrained_cmb_solver.Cl_true)

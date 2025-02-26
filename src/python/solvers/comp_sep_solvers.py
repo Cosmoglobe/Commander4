@@ -2,12 +2,15 @@ import numpy as np
 import healpy as hp
 import time
 from pixell import utils, curvedsky
+import logging
 
+from output import log
 from model.component import CMB, ThermalDust, Synchrotron
 from utils.math_operations import alm_to_map, alm_to_map_adjoint
 from pixell import curvedsky as pixell_curvedsky
 
 def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:
+    logger = logging.getLogger(__name__)
     ncomp = 3
     nband, npix = map_sky.shape
     comp_maps = np.zeros((ncomp, npix))
@@ -18,7 +21,7 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
     from time import time
     t0 = time()
     rand = np.random.randn(npix,nband)
-    print(f"time for random numbers: {time()-t0}s.")
+    logger.info(f"time for random numbers: {time()-t0}s.")
     t0 = time()
     for i in range(npix):
         xmap = 1/map_rms[:,i]
@@ -29,13 +32,13 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
             comp_maps[:,i] = np.linalg.solve(A, x)
         except np.linalg.LinAlgError:
             comp_maps[:,i] = 0
-    print(f"Time for Python solution: {time()-t0}s.")
+    logger.info(f"Time for Python solution: {time()-t0}s.")
     # import cmdr4_support
     # t0 = time()
     # comp_maps2 = cmdr4_support.utils.amplitude_sampling_per_pix_helper(map_sky, map_rms, M, rand, nnthreads=1)
-    # print(f"Time for native solution: {time()-t0}s.")
+    # logger.info(f"Time for native solution: {time()-t0}s.")
     # import ducc0
-    # print(f"L2 error between solutions: {ducc0.misc.l2error(comp_maps, comp_maps2)}.")
+    # logger.info(f"L2 error between solutions: {ducc0.misc.l2error(comp_maps, comp_maps2)}.")
     return comp_maps
 
 
@@ -43,13 +46,14 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
 
 class CompSepSolver:
     def __init__(self, map_sky, map_rms, freqs, params):
+        logger = logging.getLogger(__name__)
         self.params = params
         self.map_sky = map_sky
         self.map_rms = map_rms
         self.freqs = freqs
         self.nband, self.npix = map_rms.shape
         self.nside = np.sqrt(self.npix//12)
-        assert self.nside.is_integer(), f"Npix dimension of map ({self.npix}) resulting in a non-integer nside ({self.nside})."
+        log.logassert(self.nside.is_integer(), f"Npix dimension of map ({self.npix}) resulting in a non-integer nside ({self.nside}).", logger)
         self.nside = int(self.nside)
         self.lmax = 3*self.nside-1
         self.alm_len_complex = ((self.lmax+1)*(self.lmax+2))//2
@@ -57,7 +61,7 @@ class CompSepSolver:
         self.ainfo = curvedsky.alm_info(lmax=self.lmax)
         self.comps_SED = np.array([CMB().get_sed(freqs), ThermalDust().get_sed(freqs), Synchrotron().get_sed(freqs)])
         self.ncomp = 3  # Should be in parameter file, but also needs to match length of above list.
-        assert len(self.params.fwhm) == len(self.freqs), f"Number of bands {len(freqs)} does not match length of FWHM ({len(self.fwhm)})."
+        log.logassert(len(self.params.fwhm) == len(self.freqs), f"Number of bands {len(freqs)} does not match length of FWHM ({len(self.params.fwhm)}).", logger)
         self.fwhm = np.array(self.params.fwhm)/60.0*(np.pi/180.0)  # Converting arcmin to radians.
 
 
@@ -83,10 +87,11 @@ class CompSepSolver:
             Returns:
                 Aa: (nband*alm_len_rea,) array from applying the full A matrix to a.
         """
+        logger = logging.getLogger(__name__)
         # B^T Y^T M^T N^-1 M Y B a
         a = a.reshape((self.ncomp, self.alm_len_real))
-        assert a.dtype == np.float64, "Provided component array is not of type np.float64. This operator takes and returns real alms (and converts to and from complex interally)."
-        # assert a.dtype == np.complex128, "Provided component array is not of type np.complex128, which is required."
+        log.logassert(a.dtype == np.float64, "Provided component array is not of type np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
+        # log.logassert(a.dtype == np.complex128, "Provided component array is not of type np.complex128, which is required.", logger)
         a_old = a.copy()
         a = np.zeros((self.ncomp, self.alm_len_complex), dtype=np.complex128)
         for icomp in range(self.ncomp):
@@ -173,6 +178,7 @@ class CompSepSolver:
             Returns:
                 m_bestfit: The resulting best-fit solution, in alm space.
         """
+        logger = logging.getLogger(__name__)
         # CG_solver = utils.CG(LHS, RHS, x0=x0, dot=self.alm_dot_product)
         CG_solver = utils.CG(LHS, RHS, x0=x0)
         iter = 0
@@ -183,13 +189,13 @@ class CompSepSolver:
             self.CG_residuals[iter] = CG_solver.err
             iter += 1
             if iter%10 == 0:
-                print(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-10:iter]):.3e} ({(time.time() - t0)/10.0:.1f}s/iter)")
+                logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-10:iter]):.3e} ({(time.time() - t0)/10.0:.1f}s/iter)")
                 t0 = time.time()
             if iter >= self.params.CG_max_iter:
-                print(f"Warning: Maximum number of iterations ({self.params.CG_max_iter}) reached in CG.")
+                logger.warning(f"Maximum number of iterations ({self.params.CG_max_iter}) reached in CG.")
                 break
         self.CG_residuals = self.CG_residuals[:iter]
-        print(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.params.CG_err_tol})")
+        logger.info(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.params.CG_err_tol})")
         s_bestfit = CG_solver.x
         return s_bestfit
 
