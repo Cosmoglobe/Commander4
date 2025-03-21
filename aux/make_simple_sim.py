@@ -170,57 +170,62 @@ def get_pointing(npix):
     return pix.astype('int32')
 
 
+
 def sim_noise(sigma0, chunk_size, with_corr_noise):
     # white noise + 1/f noise
     ntod = params.NTOD
+    if not with_corr_noise:
+        if rank==0:
+            return np.random.randn(ntod)*sigma0
+        else:
+            return None
+
     n_chunks = ntod // chunk_size
     f_samp = params.SAMP_FREQ
     f_chunk = f_samp / chunk_size
 
-    noise = np.random.randn(ntod)*sigma0
-    if not with_corr_noise:
-        return noise
+    # noise = np.random.randn(ntod)*sigma0
+    noise_full = np.zeros(ntod, dtype='float32')
 
     f = np.fft.rfftfreq(chunk_size, d = 1/f_samp)
     sel = (f >= f_chunk)
 
     b = n_chunks-1
-    perrank = b//size
+    perrank = b//(size+1)
     comm.Barrier()
-    for i in range(rank*perrank, (rank+1)*perrank):
-        Fx = np.fft.rfft(noise[i*chunk_size:(i+1)*chunk_size])
-        Fx[sel] = Fx[sel]*(1 + 1/f[sel])
-        Fx[f < f_chunk] = Fx[sel][0]
-        chunk_noise = np.fft.irfft(Fx)
-        noise[i*chunk_size:(i+1)*chunk_size] = chunk_noise
-
-    if rank == 0:
-        total = np.zeros(ntod)
+    if rank != 0:
+        for i in range((rank-1)*perrank, rank*perrank):
+            noise_segment = np.random.randn(chunk_size)*sigma0
+            Fx = np.fft.rfft(noise_segment)
+            Fx[sel] = Fx[sel]*(1 + 1/f[sel])
+            Fx[f < f_chunk] = Fx[sel][0]
+            noise_segment = np.fft.irfft(Fx).astype('float32')
+            comm.Send(noise_segment, dest=0, tag=rank)
     else:
-        total = None
-
-    comm.Barrier()
-    comm.Reduce(noise, total, op=MPI.SUM, root=0)
+        for irank in range(1, size):
+            for i in range((irank-1)*perrank, irank*perrank):
+                temp = np.zeros(chunk_size, dtype=np.float32)
+                comm.Recv(temp, source=irank, tag=irank)
+                noise_full[i*chunk_size:(i+1)*chunk_size] = temp
 
     if rank == 0:
-        for i in trange(size*perrank, b):
-            Fx = np.fft.rfft(noise[i*chunk_size:(i+1)*chunk_size])
+        for i in range((size-1)*perrank, b):
+            Fx = np.fft.rfft(np.random.randn(chunk_size)*sigma0)
             Fx[sel] = Fx[sel]*(1 + 1/f[sel])
             Fx[f < f_chunk] = Fx[sel][0]
             chunk_noise = np.fft.irfft(Fx)
-            total[i*chunk_size:(i+1)*chunk_size] = chunk_noise
+            noise_full[i*chunk_size:(i+1)*chunk_size] = chunk_noise
 
-    
         if params.NTOD % chunk_size != 0:
-            Fx = np.fft.rfft(noise[n_chunks*chunk_size:])
+            Fx = np.fft.rfft(np.random.randn(noise_full[n_chunks*chunk_size:].shape[0])*sigma0)
             f = np.fft.rfftfreq(ntod-n_chunks*chunk_size, d = 1/f_samp)
             sel = (f >= f_chunk)
             Fx[sel] = Fx[sel]*(1 + 1/f[sel])
             Fx[f < f_chunk] = Fx[sel][0]
-            chunk_noise = np.fft.irfft(Fx, n=total[n_chunks*chunk_size:].shape[0])
-            total[n_chunks*chunk_size:] = chunk_noise
+            chunk_noise = np.fft.irfft(Fx, n=noise_full[n_chunks*chunk_size:].shape[0])
+            noise_full[n_chunks*chunk_size:] = chunk_noise
 
-    return total
+    return noise_full
 
 
 def main():
