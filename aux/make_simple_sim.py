@@ -266,28 +266,37 @@ def main():
         print(f"Rank 2 finished CMB in {time.time()-t0:.1f}s.")
 
     if rank == 0:
-        comps_sum_smoothed = np.zeros((len(freqs), 3, npix))
-        
-        # Add own component if it was computed
         if "dust" in params.components:
-            comps_sum_smoothed += comp_smoothed
+            comps_sum_smoothed = comp_smoothed
+        else:
+            comps_sum_smoothed = np.zeros((len(freqs), 3, npix), dtype=np.float32)
         
         # Receive from other computing ranks
         if "sync" in params.components:
-            temp = np.empty((len(freqs), 3, npix))
-            comm.Recv(temp, source=1, tag=1)
-            comps_sum_smoothed += temp
+            temp = np.empty((npix), dtype=np.float32)
+            for ifreq in range(len(freqs)):
+                for ipol in range(3):
+                    comm.Recv(temp, source=1, tag=1)
+                    comps_sum_smoothed[ifreq,ipol] += temp
         
         if "CMB" in params.components:
-            temp = np.empty((len(freqs), 3, npix))
-            comm.Recv(temp, source=2, tag=2)
-            comps_sum_smoothed += temp
+            temp = np.empty((npix), dtype=np.float32)
+            for ifreq in range(len(freqs)):
+                for ipol in range(3):
+                    comm.Recv(temp, source=2, tag=2)
+                    comps_sum_smoothed[ifreq,ipol] += temp
 
     elif rank == 1 and "sync" in params.components:
-        comm.Send(comp_smoothed, dest=0, tag=1)
+        for ifreq in range(len(freqs)):
+            for ipol in range(3):
+                comm.Send(comp_smoothed[ifreq,ipol], dest=0, tag=1)
+        del(comp_smoothed)
 
     elif rank == 2 and "CMB" in params.components:
-        comm.Send(comp_smoothed, dest=0, tag=2)
+        for ifreq in range(len(freqs)):
+            for ipol in range(3):
+                comm.Send(comp_smoothed[ifreq,ipol], dest=0, tag=2)
+        del(comp_smoothed)
 
     repeat = params.NTOD//npix+1
     ntod = params.NTOD
