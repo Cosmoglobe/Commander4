@@ -58,10 +58,10 @@ def generate_cmb(freqs, fwhm, units, nside, lmax):
     alms = hp.synalm(Cls, lmax=lmax, new=True)
     cmb = hp.alm2map(alms, nside, pixwin=False)
     cmb_us = cmb * u.uK_CMB
-    cmb_us = np.array([cmb_us.to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs])
+    cmb_us = np.array([cmb_us.to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs], dtype=np.float32)
     
     cmb_s = [hp.smoothing(cmb, fwhm=fwhm[iband].to('rad').value) * u.uK_CMB for iband in range(len(freqs))]
-    cmb_s = np.array([cmb_s[i].to(units, equivalencies=u.cmb_equivalencies(freqs[i]*u.GHz)) for i in range(len(freqs))])
+    cmb_s = np.array([cmb_s[i].to(units, equivalencies=u.cmb_equivalencies(freqs[i]*u.GHz)) for i in range(len(freqs))], dtype=np.float32)
 
     if params.write_fits:
         hp.write_map(params.OUTPUT_FOLDER + f"true_sky_cmb_{nside}.fits", cmb, overwrite=True)
@@ -77,7 +77,7 @@ def generate_cmb(freqs, fwhm, units, nside, lmax):
             hp.mollview(cmb_s[i,0], title=f"True smoothed CMB at {freqs[i]:.2f}GHz")
             plt.savefig(params.OUTPUT_FOLDER + f"true_CMB_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
             plt.close()
-    return cmb_us, cmb_s
+    return cmb_s
 
 
 def generate_thermal_dust(freqs, fwhm, units, nside):
@@ -97,9 +97,9 @@ def generate_thermal_dust(freqs, fwhm, units, nside):
 
     dust = ThermalDust()
     dust_us = [dust_ref*dust.get_sed(f) for f in freqs]
-    dust_us = np.array([hp.ud_grade(d.value, nside)*d.unit for d in dust_us])
+    dust_us = np.array([hp.ud_grade(d.value, nside)*d.unit for d in dust_us], dtype=np.float32)
     dust_s = [dust_ref_smoothed[i]*dust.get_sed(freqs[i]) for i in range(len(freqs))]
-    dust_s = np.array([hp.ud_grade(d.value, nside)*d.unit for d in dust_s])
+    dust_s = np.array([hp.ud_grade(d.value, nside)*d.unit for d in dust_s], dtype=np.float32)
 
     if params.make_plots:
         for i in range(len(freqs)):
@@ -111,7 +111,7 @@ def generate_thermal_dust(freqs, fwhm, units, nside):
             plt.savefig(params.OUTPUT_FOLDER + f"true_thermal_dust_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
             plt.close()
 
-    return dust_us, dust_s
+    return dust_s
 
 
 def generate_sync(freqs, fwhm, units, nside):
@@ -130,9 +130,9 @@ def generate_sync(freqs, fwhm, units, nside):
 
     sync = Synchrotron()
     sync_us = [sync_ref*sync.get_sed(f) for f in freqs]
-    sync_us = np.array([hp.ud_grade(d.value, nside)*d.unit for d in sync_us])
+    sync_us = np.array([hp.ud_grade(d.value, nside)*d.unit for d in sync_us], dtype=np.float32)
     sync_s = [sync_ref_smoothed[i]*sync.get_sed(freqs[i]) for i in range(len(freqs))]
-    sync_s = np.array([hp.ud_grade(d.value, nside)*d.unit for d in sync_s])
+    sync_s = np.array([hp.ud_grade(d.value, nside)*d.unit for d in sync_s], dtype=np.float32)
 
     if params.make_plots:
         for i in range(len(freqs)):
@@ -144,7 +144,7 @@ def generate_sync(freqs, fwhm, units, nside):
             plt.savefig(params.OUTPUT_FOLDER + f"true_synchrotron_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
             plt.close()
 
-    return sync_us, sync_s
+    return sync_s
 
 
 def get_pointing(npix):
@@ -249,30 +249,45 @@ def main():
         raise ValueError("Please run this script with at least 3 MPI tasks.")
 
     comm.Barrier()
-    comp = np.zeros((len(freqs), 3, npix))
-    comp_smoothed = np.zeros((len(freqs), 3, npix))
     if rank == 0 and "dust" in params.components:
         t0 = time.time()
         print(f"Rank 0 generating thermal dust")
-        comp, comp_smoothed = generate_thermal_dust(freqs, fwhm, units, nside)
+        comp_smoothed = generate_thermal_dust(freqs, fwhm, units, nside)
         print(f"Rank 0 finished thermal dust in {time.time()-t0:.1f}s.")
-    if rank == 1 and "sync" in params.components:
+    elif rank == 1 and "sync" in params.components:
         t0 = time.time()
         print(f"Rank 1 generating synchrotron")
-        comp, comp_smoothed = generate_sync(freqs, fwhm, units, nside)
+        comp_smoothed = generate_sync(freqs, fwhm, units, nside)
         print(f"Rank 1 finished synchrotron in {time.time()-t0:.1f}s.")
-    if rank == 2 and "CMB" in params.components:
+    elif rank == 2 and "CMB" in params.components:
         t0 = time.time()
         print(f"Rank 2 generating CMB")
-        comp, comp_smoothed = generate_cmb(freqs, fwhm, units, nside, lmax)
+        comp_smoothed = generate_cmb(freqs, fwhm, units, nside, lmax)
         print(f"Rank 2 finished CMB in {time.time()-t0:.1f}s.")
 
     if rank == 0:
         comps_sum_smoothed = np.zeros((len(freqs), 3, npix))
-    else:
-        comps_sum_smoothed = None
+        
+        # Add own component if it was computed
+        if "dust" in params.components:
+            comps_sum_smoothed += comp_smoothed
+        
+        # Receive from other computing ranks
+        if "sync" in params.components:
+            temp = np.empty((len(freqs), 3, npix))
+            comm.Recv(temp, source=1, tag=1)
+            comps_sum_smoothed += temp
+        
+        if "CMB" in params.components:
+            temp = np.empty((len(freqs), 3, npix))
+            comm.Recv(temp, source=2, tag=2)
+            comps_sum_smoothed += temp
 
-    comm.Reduce(comp_smoothed, comps_sum_smoothed, op=MPI.SUM, root=0)
+    elif rank == 1 and "sync" in params.components:
+        comm.Send(comp_smoothed, dest=0, tag=1)
+
+    elif rank == 2 and "CMB" in params.components:
+        comm.Send(comp_smoothed, dest=0, tag=2)
 
     repeat = params.NTOD//npix+1
     ntod = params.NTOD
