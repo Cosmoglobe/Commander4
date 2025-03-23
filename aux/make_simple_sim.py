@@ -55,29 +55,43 @@ def generate_cmb(freqs, fwhm, units, nside, lmax):
     Cls = np.array([Cl, Cl_EE, Cl_BB, Cl_TE])
 
     np.random.seed(0)
+    t0 = time.time()
     alms = hp.synalm(Cls, lmax=lmax, new=True)
+    print(f"Finished CMB synALMs in {time.time()-t0:.1f}s."); t0 = time.time()
+    smooth_alms = np.zeros((len(freqs), 3, hp.Alm.getsize(lmax)), dtype=np.complex128)
+    print(smooth_alms.dtype)
+    for i in range(len(freqs)):
+        smooth_alms[i] = hp.smoothalm(alms, fwhm=fwhm[i].to('rad').value)
+    print(smooth_alms.dtype)
+    print(f"Finished CMB smoothing in {time.time()-t0:.1f}s."); t0 = time.time()
+    cmb = np.zeros(12*nside**2, dtype=np.float32)
     cmb = hp.alm2map(alms, nside, pixwin=False)
-    cmb_us = cmb * u.uK_CMB
-    cmb_us = np.array([cmb_us.to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs], dtype=np.float32)
+    cmb_smooth = np.zeros((len(freqs), 3, 12*nside**2), dtype=np.float32)
+    for i in range(len(freqs)):
+        cmb_smooth[i] = hp.alm2map(smooth_alms[i], nside, pixwin=False)
+    print(f"Finished CMB alm2map in {time.time()-t0:.1f}s."); t0 = time.time()
+    cmb = cmb * u.uK_CMB
+    cmb = np.array([cmb.to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs], dtype=np.float32)
+    cmb_smooth = cmb_smooth * u.uK_CMB
+    cmb_smooth = np.array([cmb_smooth[i].to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for i, f in enumerate(freqs)], dtype=np.float32)
     
-    cmb_s = [hp.smoothing(cmb, fwhm=fwhm[iband].to('rad').value) * u.uK_CMB for iband in range(len(freqs))]
-    cmb_s = np.array([cmb_s[i].to(units, equivalencies=u.cmb_equivalencies(freqs[i]*u.GHz)) for i in range(len(freqs))], dtype=np.float32)
+    print(f"Finished CMB casting to right units in {time.time()-t0:.1f}s."); t0 = time.time()
 
     if params.write_fits:
-        hp.write_map(params.OUTPUT_FOLDER + f"true_sky_cmb_{nside}.fits", cmb, overwrite=True)
+        hp.write_map(params.OUTPUT_FOLDER + f"true_sky_cmb_{nside}.fits", cmb[0], overwrite=True)
         for i in range(len(freqs)):
-            hp.write_map(params.OUTPUT_FOLDER + f"true_sky_cmb_smoothed_{nside}_b{fwhm[i].value:.0f}.fits", cmb_s[i], overwrite=True)
+            hp.write_map(params.OUTPUT_FOLDER + f"true_sky_cmb_smoothed_{nside}_b{fwhm[i].value:.0f}.fits", cmb_smooth[i], overwrite=True)
 
     if params.make_plots:
         for i in range(len(freqs)):
-            hp.mollview(cmb_us[i,0], title=f"True CMB at {freqs[i]:.2f}GHz")
+            hp.mollview(cmb[i,0], title=f"True CMB at {freqs[i]:.2f}GHz")
             plt.savefig(params.OUTPUT_FOLDER + f"true_CMB_{nside}_{freqs[i]}.png")
             plt.close()
         for i in range(len(freqs)):
-            hp.mollview(cmb_s[i,0], title=f"True smoothed CMB at {freqs[i]:.2f}GHz")
+            hp.mollview(cmb_smooth[i,0], title=f"True smoothed CMB at {freqs[i]:.2f}GHz")
             plt.savefig(params.OUTPUT_FOLDER + f"true_CMB_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
             plt.close()
-    return cmb_s
+    return cmb_smooth
 
 
 def generate_thermal_dust(freqs, fwhm, units, nside):
