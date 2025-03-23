@@ -59,10 +59,8 @@ def generate_cmb(freqs, fwhm, units, nside, lmax):
     alms = hp.synalm(Cls, lmax=lmax, new=True)
     print(f"Finished CMB synALMs in {time.time()-t0:.1f}s."); t0 = time.time()
     smooth_alms = np.zeros((len(freqs), 3, hp.Alm.getsize(lmax)), dtype=np.complex128)
-    print(smooth_alms.dtype)
     for i in range(len(freqs)):
         smooth_alms[i] = hp.smoothalm(alms, fwhm=fwhm[i].to('rad').value)
-    print(smooth_alms.dtype)
     print(f"Finished CMB smoothing in {time.time()-t0:.1f}s."); t0 = time.time()
     cmb = np.zeros(12*nside**2, dtype=np.float32)
     cmb = hp.alm2map(alms, nside, pixwin=False)
