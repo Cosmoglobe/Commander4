@@ -178,8 +178,13 @@ def get_pointing(npix):
     assert pix.shape[0] == ntod, f"Parameter file ntod {ntod} does not match pixel length {pix.shape[0]}, likely because desired length is longer than entire pointing file."
 
     if params.NSIDE != 2048:
-        vec = hp.pix2vec(2048, pix.astype(int))
-        pix = hp.vec2pix(params.NSIDE, vec[0], vec[1], vec[2])
+        np.random.seed(42)
+        ang = hp.pix2ang(2048, pix.astype(int))
+        ang1 = ang[0] + np.random.uniform(-0.025, 0.025, ang[0].shape)
+        ang2 = ang[1] + np.random.uniform(-0.025, 0.025, ang[1].shape)
+        ang1 = np.clip(ang1, 0, np.pi)
+        ang2 = np.clip(ang2, 0, 2*np.pi)
+        pix = hp.ang2pix(params.NSIDE, ang1, ang2)
 
     return pix.astype('int32')
 
