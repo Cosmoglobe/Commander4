@@ -55,29 +55,41 @@ def generate_cmb(freqs, fwhm, units, nside, lmax):
     Cls = np.array([Cl, Cl_EE, Cl_BB, Cl_TE])
 
     np.random.seed(0)
+    t0 = time.time()
     alms = hp.synalm(Cls, lmax=lmax, new=True)
+    print(f"Finished CMB synALMs in {time.time()-t0:.1f}s."); t0 = time.time()
+    smooth_alms = np.zeros((len(freqs), 3, hp.Alm.getsize(lmax)), dtype=np.complex128)
+    for i in range(len(freqs)):
+        smooth_alms[i] = hp.smoothalm(alms, fwhm=fwhm[i].to('rad').value)
+    print(f"Finished CMB smoothing in {time.time()-t0:.1f}s."); t0 = time.time()
+    cmb = np.zeros(12*nside**2, dtype=np.float32)
     cmb = hp.alm2map(alms, nside, pixwin=False)
-    cmb_us = cmb * u.uK_CMB
-    cmb_us = np.array([cmb_us.to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs])
+    cmb_smooth = np.zeros((len(freqs), 3, 12*nside**2), dtype=np.float32)
+    for i in range(len(freqs)):
+        cmb_smooth[i] = hp.alm2map(smooth_alms[i], nside, pixwin=False)
+    print(f"Finished CMB alm2map in {time.time()-t0:.1f}s."); t0 = time.time()
+    cmb = cmb * u.uK_CMB
+    cmb = np.array([cmb.to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for f in freqs], dtype=np.float32)
+    cmb_smooth = cmb_smooth * u.uK_CMB
+    cmb_smooth = np.array([cmb_smooth[i].to(units, equivalencies=u.cmb_equivalencies(f*u.GHz)) for i, f in enumerate(freqs)], dtype=np.float32)
     
-    cmb_s = [hp.smoothing(cmb, fwhm=fwhm[iband].to('rad').value) * u.uK_CMB for iband in range(len(freqs))]
-    cmb_s = np.array([cmb_s[i].to(units, equivalencies=u.cmb_equivalencies(freqs[i]*u.GHz)) for i in range(len(freqs))])
+    print(f"Finished CMB casting to right units in {time.time()-t0:.1f}s."); t0 = time.time()
 
     if params.write_fits:
-        hp.write_map(params.OUTPUT_FOLDER + f"true_sky_cmb_{nside}.fits", cmb, overwrite=True)
+        hp.write_map(params.OUTPUT_FOLDER + f"true_sky_cmb_{nside}.fits", cmb[0], overwrite=True)
         for i in range(len(freqs)):
-            hp.write_map(params.OUTPUT_FOLDER + f"true_sky_cmb_smoothed_{nside}_b{fwhm[i].value:.0f}.fits", cmb_s[i], overwrite=True)
+            hp.write_map(params.OUTPUT_FOLDER + f"true_sky_cmb_smoothed_{nside}_b{fwhm[i].value:.0f}.fits", cmb_smooth[i], overwrite=True)
 
     if params.make_plots:
         for i in range(len(freqs)):
-            hp.mollview(cmb_us[i,0], title=f"True CMB at {freqs[i]:.2f}GHz")
+            hp.mollview(cmb[i,0], title=f"True CMB at {freqs[i]:.2f}GHz")
             plt.savefig(params.OUTPUT_FOLDER + f"true_CMB_{nside}_{freqs[i]}.png")
             plt.close()
         for i in range(len(freqs)):
-            hp.mollview(cmb_s[i,0], title=f"True smoothed CMB at {freqs[i]:.2f}GHz")
+            hp.mollview(cmb_smooth[i,0], title=f"True smoothed CMB at {freqs[i]:.2f}GHz")
             plt.savefig(params.OUTPUT_FOLDER + f"true_CMB_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
             plt.close()
-    return cmb_us, cmb_s
+    return cmb_smooth
 
 
 def generate_thermal_dust(freqs, fwhm, units, nside):
@@ -97,9 +109,9 @@ def generate_thermal_dust(freqs, fwhm, units, nside):
 
     dust = ThermalDust()
     dust_us = [dust_ref*dust.get_sed(f) for f in freqs]
-    dust_us = np.array([hp.ud_grade(d.value, nside)*d.unit for d in dust_us])
+    dust_us = np.array([hp.ud_grade(d.value, nside)*d.unit for d in dust_us], dtype=np.float32)
     dust_s = [dust_ref_smoothed[i]*dust.get_sed(freqs[i]) for i in range(len(freqs))]
-    dust_s = np.array([hp.ud_grade(d.value, nside)*d.unit for d in dust_s])
+    dust_s = np.array([hp.ud_grade(d.value, nside)*d.unit for d in dust_s], dtype=np.float32)
 
     if params.make_plots:
         for i in range(len(freqs)):
@@ -111,7 +123,7 @@ def generate_thermal_dust(freqs, fwhm, units, nside):
             plt.savefig(params.OUTPUT_FOLDER + f"true_thermal_dust_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
             plt.close()
 
-    return dust_us, dust_s
+    return dust_s
 
 
 def generate_sync(freqs, fwhm, units, nside):
@@ -130,9 +142,9 @@ def generate_sync(freqs, fwhm, units, nside):
 
     sync = Synchrotron()
     sync_us = [sync_ref*sync.get_sed(f) for f in freqs]
-    sync_us = np.array([hp.ud_grade(d.value, nside)*d.unit for d in sync_us])
+    sync_us = np.array([hp.ud_grade(d.value, nside)*d.unit for d in sync_us], dtype=np.float32)
     sync_s = [sync_ref_smoothed[i]*sync.get_sed(freqs[i]) for i in range(len(freqs))]
-    sync_s = np.array([hp.ud_grade(d.value, nside)*d.unit for d in sync_s])
+    sync_s = np.array([hp.ud_grade(d.value, nside)*d.unit for d in sync_s], dtype=np.float32)
 
     if params.make_plots:
         for i in range(len(freqs)):
@@ -144,7 +156,7 @@ def generate_sync(freqs, fwhm, units, nside):
             plt.savefig(params.OUTPUT_FOLDER + f"true_synchrotron_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
             plt.close()
 
-    return sync_us, sync_s
+    return sync_s
 
 
 def get_pointing(npix):
@@ -164,63 +176,73 @@ def get_pointing(npix):
     assert pix.shape[0] == ntod, f"Parameter file ntod {ntod} does not match pixel length {pix.shape[0]}, likely because desired length is longer than entire pointing file."
 
     if params.NSIDE != 2048:
-        vec = hp.pix2vec(2048, pix.astype(int))
-        pix = hp.vec2pix(params.NSIDE, vec[0], vec[1], vec[2])
+        np.random.seed(42)
+        ang = hp.pix2ang(2048, pix.astype(int))
+        ang1 = ang[0] + np.random.uniform(-0.025, 0.025, ang[0].shape)
+        ang2 = ang[1] + np.random.uniform(-0.025, 0.025, ang[1].shape)
+        ang1 = np.clip(ang1, 0, np.pi)
+        ang2 = np.clip(ang2, 0, 2*np.pi)
+        pix = hp.ang2pix(params.NSIDE, ang1, ang2)
 
     return pix.astype('int32')
+
 
 
 def sim_noise(sigma0, chunk_size, with_corr_noise):
     # white noise + 1/f noise
     ntod = params.NTOD
+    if not with_corr_noise:
+        if rank==0:
+            return np.random.randn(ntod)*sigma0
+        else:
+            return None
+
     n_chunks = ntod // chunk_size
     f_samp = params.SAMP_FREQ
     f_chunk = f_samp / chunk_size
 
-    noise = np.random.randn(ntod)*sigma0
-    if not with_corr_noise:
-        return noise
+    # noise = np.random.randn(ntod)*sigma0
+    noise_full = np.zeros(ntod, dtype='float32')
 
     f = np.fft.rfftfreq(chunk_size, d = 1/f_samp)
     sel = (f >= f_chunk)
 
     b = n_chunks-1
-    perrank = b//size
+    perrank = b//(size+1)
     comm.Barrier()
-    for i in range(rank*perrank, (rank+1)*perrank):
-        Fx = np.fft.rfft(noise[i*chunk_size:(i+1)*chunk_size])
-        Fx[sel] = Fx[sel]*(1 + 1/f[sel])
-        Fx[f < f_chunk] = Fx[sel][0]
-        chunk_noise = np.fft.irfft(Fx)
-        noise[i*chunk_size:(i+1)*chunk_size] = chunk_noise
-
-    if rank == 0:
-        total = np.zeros(ntod)
+    if rank != 0:
+        for i in range((rank-1)*perrank, rank*perrank):
+            noise_segment = np.random.randn(chunk_size)*sigma0
+            Fx = np.fft.rfft(noise_segment)
+            Fx[sel] = Fx[sel]*(1 + 1/f[sel])
+            Fx[f < f_chunk] = Fx[sel][0]
+            noise_segment = np.fft.irfft(Fx).astype('float32')
+            comm.Send(noise_segment, dest=0, tag=rank)
     else:
-        total = None
-
-    comm.Barrier()
-    comm.Reduce(noise, total, op=MPI.SUM, root=0)
+        for irank in range(1, size):
+            for i in range((irank-1)*perrank, irank*perrank):
+                temp = np.zeros(chunk_size, dtype=np.float32)
+                comm.Recv(temp, source=irank, tag=irank)
+                noise_full[i*chunk_size:(i+1)*chunk_size] = temp
 
     if rank == 0:
-        for i in trange(size*perrank, b):
-            Fx = np.fft.rfft(noise[i*chunk_size:(i+1)*chunk_size])
+        for i in range((size-1)*perrank, b):
+            Fx = np.fft.rfft(np.random.randn(chunk_size)*sigma0)
             Fx[sel] = Fx[sel]*(1 + 1/f[sel])
             Fx[f < f_chunk] = Fx[sel][0]
             chunk_noise = np.fft.irfft(Fx)
-            total[i*chunk_size:(i+1)*chunk_size] = chunk_noise
+            noise_full[i*chunk_size:(i+1)*chunk_size] = chunk_noise
 
-    
         if params.NTOD % chunk_size != 0:
-            Fx = np.fft.rfft(noise[n_chunks*chunk_size:])
+            Fx = np.fft.rfft(np.random.randn(noise_full[n_chunks*chunk_size:].shape[0])*sigma0)
             f = np.fft.rfftfreq(ntod-n_chunks*chunk_size, d = 1/f_samp)
             sel = (f >= f_chunk)
             Fx[sel] = Fx[sel]*(1 + 1/f[sel])
             Fx[f < f_chunk] = Fx[sel][0]
-            chunk_noise = np.fft.irfft(Fx, n=total[n_chunks*chunk_size:].shape[0])
-            total[n_chunks*chunk_size:] = chunk_noise
+            chunk_noise = np.fft.irfft(Fx, n=noise_full[n_chunks*chunk_size:].shape[0])
+            noise_full[n_chunks*chunk_size:] = chunk_noise
 
-    return total
+    return noise_full
 
 
 def main():
@@ -249,30 +271,54 @@ def main():
         raise ValueError("Please run this script with at least 3 MPI tasks.")
 
     comm.Barrier()
-    comp = np.zeros((len(freqs), 3, npix))
-    comp_smoothed = np.zeros((len(freqs), 3, npix))
     if rank == 0 and "dust" in params.components:
         t0 = time.time()
         print(f"Rank 0 generating thermal dust")
-        comp, comp_smoothed = generate_thermal_dust(freqs, fwhm, units, nside)
+        comp_smoothed = generate_thermal_dust(freqs, fwhm, units, nside)
         print(f"Rank 0 finished thermal dust in {time.time()-t0:.1f}s.")
-    if rank == 1 and "sync" in params.components:
+    elif rank == 1 and "sync" in params.components:
         t0 = time.time()
         print(f"Rank 1 generating synchrotron")
-        comp, comp_smoothed = generate_sync(freqs, fwhm, units, nside)
+        comp_smoothed = generate_sync(freqs, fwhm, units, nside)
         print(f"Rank 1 finished synchrotron in {time.time()-t0:.1f}s.")
-    if rank == 2 and "CMB" in params.components:
+    elif rank == 2 and "CMB" in params.components:
         t0 = time.time()
         print(f"Rank 2 generating CMB")
-        comp, comp_smoothed = generate_cmb(freqs, fwhm, units, nside, lmax)
+        comp_smoothed = generate_cmb(freqs, fwhm, units, nside, lmax)
         print(f"Rank 2 finished CMB in {time.time()-t0:.1f}s.")
 
     if rank == 0:
-        comps_sum_smoothed = np.zeros((len(freqs), 3, npix))
-    else:
-        comps_sum_smoothed = None
+        if "dust" in params.components:
+            comps_sum_smoothed = comp_smoothed
+        else:
+            comps_sum_smoothed = np.zeros((len(freqs), 3, npix), dtype=np.float32)
+        
+        # Receive from other computing ranks
+        if "sync" in params.components:
+            temp = np.empty((npix), dtype=np.float32)
+            for ifreq in range(len(freqs)):
+                for ipol in range(3):
+                    comm.Recv(temp, source=1, tag=1)
+                    comps_sum_smoothed[ifreq,ipol] += temp
+        
+        if "CMB" in params.components:
+            temp = np.empty((npix), dtype=np.float32)
+            for ifreq in range(len(freqs)):
+                for ipol in range(3):
+                    comm.Recv(temp, source=2, tag=2)
+                    comps_sum_smoothed[ifreq,ipol] += temp
 
-    comm.Reduce(comp_smoothed, comps_sum_smoothed, op=MPI.SUM, root=0)
+    elif rank == 1 and "sync" in params.components:
+        for ifreq in range(len(freqs)):
+            for ipol in range(3):
+                comm.Send(comp_smoothed[ifreq,ipol], dest=0, tag=1)
+        del(comp_smoothed)
+
+    elif rank == 2 and "CMB" in params.components:
+        for ifreq in range(len(freqs)):
+            for ipol in range(3):
+                comm.Send(comp_smoothed[ifreq,ipol], dest=0, tag=2)
+        del(comp_smoothed)
 
     repeat = params.NTOD//npix+1
     ntod = params.NTOD
