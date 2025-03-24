@@ -65,8 +65,7 @@ def logassert(assertion, errmsg, logger):
     try:
         assert assertion
     except AssertionError as err:
-        logger.exception(errmsg)
-        raise err
+        lograise(err, errmsg, logger)
 
 
 def logassert_np(assertion, errmsg, logger):
@@ -75,5 +74,11 @@ def logassert_np(assertion, errmsg, logger):
     try:
         myassert(assertion, '')
     except AssertionError as err:
-        logger.exception(errmsg)
-        raise err
+        lograise(err, errmsg, logger)
+
+
+def lograise(error, errmsg, logger):
+    "Prints to logger and raises an error"
+
+    logger.exception(errmsg)
+    raise error
