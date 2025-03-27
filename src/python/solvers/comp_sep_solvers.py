@@ -109,7 +109,7 @@ class CompSepSolver:
             # a[icomp] = hp.alm2map(a_old[icomp], self.nside, self.lmax)
             if icomp == self.CompSep_comm.Get_rank():
                 a[icomp] = alm_to_map(a_old[icomp], self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
-        a = self.CompSep_comm.allreduce(a, op=MPI.SUM)
+        self.CompSep_comm.Allreduce(MPI.IN_PLACE, a, op=MPI.SUM)
 
         # M Y a
         a_old = a.copy()
@@ -153,7 +153,7 @@ class CompSepSolver:
             for icomp in range(self.ncomp):
                 if iband == self.my_band_idx:
                     a[icomp] += self.comps_SED[icomp,iband]*a_old
-        a = self.CompSep_comm.allreduce(a, op=MPI.SUM)
+        self.CompSep_comm.Allreduce(MPI.IN_PLACE, a, op=MPI.SUM)
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         a_old = a.copy()
@@ -161,7 +161,7 @@ class CompSepSolver:
         for icomp in range(self.ncomp):
             if icomp == self.CompSep_comm.Get_rank():
                 a[icomp] = alm_to_map_adjoint(a_old[icomp], self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
-        a = self.CompSep_comm.allreduce(a, op=MPI.SUM)
+        self.CompSep_comm.Allreduce(MPI.IN_PLACE, a, op=MPI.SUM)
 
         # Converting back from complex alms to real alms
         a_old = a.copy()
