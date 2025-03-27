@@ -92,7 +92,6 @@ class CompSepSolver:
                 Aa: (nband*alm_len_rea,) array from applying the full A matrix to a.
         """
         logger = logging.getLogger(__name__)
-        logger.info(f"Rank {self.CompSep_comm.Get_rank()} entering LHS matrix application.")
 
         a = self.CompSep_comm.bcast(a, root=0)  # Send a to all worker ranks (which are called with a dummy a).
         a = a.reshape((self.ncomp, self.alm_len_real))
