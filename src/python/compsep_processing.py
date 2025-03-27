@@ -1,15 +1,13 @@
 import numpy as np
 from mpi4py import MPI
 from mpi4py.MPI import Comm
-import time
 import logging
-import h5py
-import healpy as hp
+from pixell import bunch
+
 from data_models import DetectorMap
 from model.component import CMB, ThermalDust, Synchrotron, DiffuseComponent
 from model.sky_model import SkyModel
 from output import log, plotting
-from pixell import bunch
 from solvers.comp_sep_solvers import CompSepSolver, amplitude_sampling_per_pix
 
 
@@ -84,45 +82,10 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int,
 
     if params.make_plots:
         detector_to_plot = proc_comm.Get_rank()
-        plotting.plot_components(proc_master, params, band_freq,
+        plotting.plot_components(params, band_freq,
                                     detector_to_plot, chain, iter, sky=detector_map,
                                     cmb=cmb_sky, dust=dust_sky,
                                     sync=sync_sky,
                                     signal=signal_map)
 
-    return detector_map
-
-
-def send_compsep(my_band_idx: int, detector_map: np.array, destinations: list[int]):
-    """ MPI-send the results from compsep to a set of other destinations.
-
-    Assumes the COMM_WORLD communicator.
-
-    Input:
-        my_band_idx (int): The index of the band for which the current process is responsible.
-        detector_map (np.array[float]): A sky realization at a given band frequency.
-        destinations (list of ints): The world ranks of the destination processes, one per band.
-    """
-
-    MPI.COMM_WORLD.send(detector_map, dest=destinations[my_band_idx])
-
-
-def receive_compsep(band_comm: Comm, my_band_idx: int, band_master: bool, compsep_band_masters: list[int]):
-    """ MPI-receive the results from compsep (used in conjunction with send_compsep).
-
-    Input:
-        band_comm (MPI.Comm): The inter-band communicator.
-        my_band_idx (int): The index of the band for which the current process is responsible.
-        compsep_band_masters list(int): List of the World ranks of the senders of the compsep information.
-
-    Returns:
-        detector_map (np.array): The detector map of a single band,
-            distributed to all processes belonging to the band communicator.
-    """
-    # detector_map = None
-    if band_master:
-        detector_map = MPI.COMM_WORLD.recv(source=compsep_band_masters[my_band_idx])
-    else:
-        detector_map = None
-    detector_map = band_comm.bcast(detector_map, root=0)  # Currently all TOD MPI ranks need a copy of the relevant detector map, which is a little wasteful - a reason for doing OpenMP for mapmaking.
     return detector_map

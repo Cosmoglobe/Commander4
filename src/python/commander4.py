@@ -10,8 +10,9 @@ import io
 import time
 from traceback import print_exc
 
-from tod_processing import process_tod, receive_tod, send_tod, init_tod_processing, get_empty_compsep_output
-from compsep_processing import process_compsep, receive_compsep, send_compsep, init_compsep_processing
+from tod_processing import process_tod, init_tod_processing, get_empty_compsep_output
+from compsep_processing import process_compsep, init_compsep_processing
+from communication import receive_tod, send_tod, receive_compsep, send_compsep
 
 
 def main(params, params_dict):
@@ -33,8 +34,8 @@ def main(params, params_dict):
     if (not params.MPI_config.use_MPI_for_CMB) and (params.MPI_config.ntask_cmb > 1):
         log.lograise(RuntimeError, f"Number of MPI tasks allocated to CMB realization cannot be > 1 if 'use_MPI_for_CMB' is False.", logger)
 
-    if params.MPI_config.ntask_compsep == len(params.bands):
-        log.lograise(RuntimeError, f"CompSep currently needs exactly as many MPI tasks as there are bands.")
+    if params.MPI_config.ntask_compsep != len(params.bands):
+        log.lograise(RuntimeError, f"CompSep currently needs exactly as many MPI tasks {params.MPI_config.ntask_compsep} as there are bands {len(params.bands)}.")
 
     # check if we have at least ntask_compsep+1 MPI tasks, otherwise abort
     if params.MPI_config.ntask_compsep+1 > worldsize:
@@ -102,11 +103,11 @@ def main(params, params_dict):
         compsep_output_black = get_empty_compsep_output(experiment_data, params)
 
         curr_tod_output = process_tod(band_comm, experiment_data, compsep_output_black, params)
-        send_tod(tod_band_masters, compsep_band_masters, curr_tod_output, 0, 1)
+        send_tod(tod_band_masters, compsep_band_masters, curr_tod_output)
         curr_compsep_output = compsep_output_black
 
     elif color == 1:
-        curr_tod_output, iter_num, chain_num = receive_tod(tod_band_masters, proc_comm.rank)
+        curr_tod_output = receive_tod(tod_band_masters, proc_comm.rank)
 
     ###### Main loop ######
     for i in range(1, 2 * params.niter_gibbs): # 2 because we have two chains
@@ -114,23 +115,25 @@ def main(params, params_dict):
         if color == 0:
             logger.info(f"Worldrank {worldrank}, subrank {proc_comm.Get_rank()} starting TOD iteration.")
             t0 = time.time()
-            chain_num = int(i % 2) + 1
-            iter_num = int(i / 2) + 1
+            iter_num = (i + 1)//2  # Since TOD already did iteration 0 for chain 1, it is "half" an iteration ahead.
+            chain_num = i % 2 + 1
             curr_tod_output = process_tod(band_comm, experiment_data, curr_compsep_output, params)
             logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
             curr_compsep_output = receive_compsep(band_comm, my_band_idx, band_comm.Get_rank()==0, compsep_band_masters)
             logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished receiving results for chain {chain_num+1}, iter {iter_num+1}. Sending TOD results")
-            send_tod(tod_band_masters, compsep_band_masters, curr_tod_output, iter_num, chain_num)
+            send_tod(tod_band_masters, compsep_band_masters, curr_tod_output)
             logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished sending results for chain {chain_num}, iter {iter_num}. Sending TOD results")
 
         elif color == 1:
+            iter_num = i // 2  # Compsep has not done iteration 0 for neither chain yet.
+            chain_num = i % 2
             logger.info(f"Worldrank {worldrank}, subrank {proc_comm.Get_rank()} going into compsep loop for chain {chain_num}, iter {iter_num}.")
             t0 = time.time()
             curr_compsep_output = process_compsep(curr_tod_output, iter_num, chain_num, params, proc_master, proc_comm)
             logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Sending results.")
             send_compsep(proc_comm.Get_rank(), curr_compsep_output, tod_band_masters)
             logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished sending results for chain {chain_num}, iter {iter_num}. Receiving TOD results.")
-            curr_tod_output, iter_num, chain_num = receive_tod(tod_band_masters, proc_comm.rank)
+            curr_tod_output = receive_tod(tod_band_masters, proc_comm.rank)
             logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished receiving TOD results for chain {chain_num}, iter {iter_num}.")
     # stop compsep machinery
     if world_master:

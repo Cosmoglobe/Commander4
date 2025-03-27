@@ -63,7 +63,7 @@ def plot_cg_res(params, chain, iteration, residual):
     plt.close()
 
 
-def plot_components(master, params, freq, detector, chain, iteration, **kwargs):
+def plot_components(params, freq, detector, chain, iteration, **kwargs):
     """
     Plots the resulting component maps produced by component separation.
 
@@ -89,7 +89,7 @@ def plot_components(master, params, freq, detector, chain, iteration, **kwargs):
         signal (np.array): The data signal map for the detector in question.
     """
 
-    if master and not os.path.isdir(params.output_paths.plots + "maps_comps/"):
+    if not os.path.isdir(params.output_paths.plots + "maps_comps/"):
         os.mkdir(params.output_paths.plots + "maps_comps/")
     
     signal_map = kwargs['signal']
