@@ -33,8 +33,8 @@ def main(params, params_dict):
     if (not params.MPI_config.use_MPI_for_CMB) and (params.MPI_config.ntask_cmb > 1):
         log.lograise(RuntimeError, f"Number of MPI tasks allocated to CMB realization cannot be > 1 if 'use_MPI_for_CMB' is False.", logger)
 
-    if params.MPI_config.ntask_compsep > 1:
-        log.lograise(RuntimeError, f"CompSep currently doesn't support more than 1 MPI task.")
+    if params.MPI_config.ntask_compsep == len(params.bands):
+        log.lograise(RuntimeError, f"CompSep currently needs exactly as many MPI tasks as there are bands.")
 
     # check if we have at least ntask_compsep+1 MPI tasks, otherwise abort
     if params.MPI_config.ntask_compsep+1 > worldsize:
@@ -66,7 +66,9 @@ def main(params, params_dict):
     else:
         color = 2  # Constrained CMB
     proc_comm = MPI.COMM_WORLD.Split(color, key=worldrank)
-    logger.info(f"MPI split performed, hi from worldrank {worldrank}, subcomrank {proc_comm.Get_rank()} from color {color} of size {proc_comm.Get_size()}.")
+    MPI.COMM_WORLD.barrier()
+    time.sleep(worldrank*1e-2)  # Small sleep to get prints in nice order.
+    logger.info(f"MPI split performed, hi from worldrank {worldrank} (on machine {MPI.Get_processor_name()}) subcomrank {proc_comm.Get_rank()} from color {color} of size {proc_comm.Get_size()}.")
 
     # Determine the world ranks of the respective master tasks for compsep and TOD
     # We ensured that this works by the "key=worldrank" in the split command.
@@ -79,25 +81,34 @@ def main(params, params_dict):
     masters = {'tod': tod_master,
                'compsep': compsep_master,
                'cmb': cmb_master}
+    compsep_band_masters = np.array([compsep_master+i for i in range(len(params.bands))])
 
+    MPI.COMM_WORLD.barrier()
+    time.sleep(worldrank*1e-2)  # Small sleep to get prints in nice order.
+
+    ###### Initizatization ######
     if color == 0:
-        proc_master, proc_comm, band_comm, band_master, experiment_data = init_tod_processing(proc_comm, params)
-        # Initialization for all TOD processing tasks goes here
+        proc_master, proc_comm, band_comm, my_band_idx, tod_band_masters, experiment_data = init_tod_processing(proc_comm, params)
+    elif color == 1:
+        proc_master, proc_comm, num_bands = init_compsep_processing(proc_comm, params)
+        tod_band_masters = None
+    tod_band_masters = MPI.COMM_WORLD.bcast(tod_band_masters, root=tod_master)  # TOD tells the rest which TOD ranks are band masters.
 
+    ###### Sending empty data back and forth ######
+    if color == 0:
         # Chain #1
         # do TOD processing, resulting in maps_chain1
         # we start with a fake output of component separation, containing a completely empty sky
         compsep_output_black = get_empty_compsep_output(experiment_data, params)
 
-        curr_tod_output = process_tod(band_comm, experiment_data,
-                                      compsep_output_black, params)
-        send_tod(band_master, curr_tod_output, 0, 1, masters['compsep'])
+        curr_tod_output = process_tod(band_comm, experiment_data, compsep_output_black, params)
+        send_tod(tod_band_masters, compsep_band_masters, curr_tod_output, 0, 1)
         curr_compsep_output = compsep_output_black
 
     elif color == 1:
-        proc_master, proc_comm, num_bands = init_compsep_processing(proc_comm, params)
-        curr_tod_output, iter_num, chain_num = receive_tod(proc_master, proc_comm, [masters['tod'] + i for i in range(num_bands)], num_bands)
+        curr_tod_output, iter_num, chain_num = receive_tod(tod_band_masters, proc_comm.rank)
 
+    ###### Main loop ######
     for i in range(1, 2 * params.niter_gibbs): # 2 because we have two chains
         # execute the appropriate part of the code (MPMD)
         if color == 0:
@@ -107,24 +118,19 @@ def main(params, params_dict):
             iter_num = int(i / 2) + 1
             curr_tod_output = process_tod(band_comm, experiment_data, curr_compsep_output, params)
             logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
-            curr_compsep_output = receive_compsep(band_master, band_comm, masters['compsep'])
+            curr_compsep_output = receive_compsep(band_comm, my_band_idx, band_comm.Get_rank()==0, compsep_band_masters)
             logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished receiving results for chain {chain_num+1}, iter {iter_num+1}. Sending TOD results")
-            send_tod(band_master, curr_tod_output, iter_num, chain_num, masters['compsep'])
+            send_tod(tod_band_masters, compsep_band_masters, curr_tod_output, iter_num, chain_num)
             logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished sending results for chain {chain_num}, iter {iter_num}. Sending TOD results")
 
         elif color == 1:
             logger.info(f"Worldrank {worldrank}, subrank {proc_comm.Get_rank()} going into compsep loop for chain {chain_num}, iter {iter_num}.")
             t0 = time.time()
-            curr_compsep_output, curr_foreground_maps = process_compsep(
-                curr_tod_output, iter_num, chain_num, params, proc_master)
+            curr_compsep_output = process_compsep(curr_tod_output, iter_num, chain_num, params, proc_master, proc_comm)
             logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Sending results.")
-            send_compsep(
-                proc_master, curr_compsep_output, [masters['tod']+i for i in
-                                                   range(num_bands)])
+            send_compsep(proc_comm.Get_rank(), curr_compsep_output, tod_band_masters)
             logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished sending results for chain {chain_num}, iter {iter_num}. Receiving TOD results.")
-            curr_tod_output, iter_num, chain_num = receive_tod(
-                proc_master, proc_comm, [masters['tod'] + i for i in
-                                         range(num_bands)], num_bands)
+            curr_tod_output, iter_num, chain_num = receive_tod(tod_band_masters, proc_comm.rank)
             logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished receiving TOD results for chain {chain_num}, iter {iter_num}.")
     # stop compsep machinery
     if world_master:
@@ -142,6 +148,7 @@ if __name__ == "__main__":
             profiler = cProfile.Profile()
             profiler.enable()
         main(params, params_dict)
+        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} finished Commander 4 and is shutting down. Goodbye.")
         if params.output_stats:
             profiler.disable()
             s = io.StringIO()

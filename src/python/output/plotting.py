@@ -38,7 +38,7 @@ def plot_data_maps(master, params, detector, chain, iteration, **kwargs):
         plt.close()
 
 
-def plot_cg_res(master, params, chain, iteration, residual):
+def plot_cg_res(params, chain, iteration, residual):
     """
     Plots the CG residuals on a loglog scale, with the tolerance plotted along
     with it.
@@ -54,7 +54,7 @@ def plot_cg_res(master, params, chain, iteration, residual):
         residual (np.array): The CG residual.
     """
 
-    if master and not os.path.isdir(params.output_paths.plots + "CG_res/"):
+    if not os.path.isdir(params.output_paths.plots + "CG_res/"):
         os.mkdir(params.output_paths.plots + "CG_res/")
     plt.figure()
     plt.loglog(np.arange(residual.shape[0]), residual)
