@@ -34,8 +34,11 @@ def main(params, params_dict):
     if (not params.MPI_config.use_MPI_for_CMB) and (params.MPI_config.ntask_cmb > 1):
         log.lograise(RuntimeError, f"Number of MPI tasks allocated to CMB realization cannot be > 1 if 'use_MPI_for_CMB' is False.", logger)
 
-    if params.MPI_config.ntask_compsep != len(params.bands):
-        log.lograise(RuntimeError, f"CompSep currently needs exactly as many MPI tasks {params.MPI_config.ntask_compsep} as there are bands {len(params.bands)}.")
+    if not params.betzy_mode and params.MPI_config.ntask_compsep != len(params.bands):
+        log.lograise(RuntimeError, f"CompSep currently needs exactly as many MPI tasks {params.MPI_config.ntask_compsep} as there are bands {len(params.bands)}.", logger)
+
+    if params.betzy_mode and params.MPI_config.ntask_compsep != params.nthreads_compsep*len(params.bands):
+        log.lograise(RuntimeError, f"For Betzy mode, CompSep currently needs exactly as many MPI tasks {params.MPI_config.ntask_compsep} as there are bands {len(params.bands)} times CompSep threads per rank ({params.nthreads_compsep}).", logger)
 
     # check if we have at least ntask_compsep+1 MPI tasks, otherwise abort
     if params.MPI_config.ntask_compsep+1 > worldsize:
@@ -58,7 +61,13 @@ def main(params, params_dict):
         os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
         os.environ["NUMEXPR_NUM_THREADS"] = "1"
     elif worldrank < params.MPI_config.ntask_tod + params.MPI_config.ntask_compsep:
-        color = 1  # Compsep
+        if params.betzy_mode:  # Betzy doesn't like heterogeneous MPI setups, so we oversubscribe the compsep ranks with cores we will in practice use as threads.
+            if worldrank%params.nthreads_compsep == 0:  # Every nthreads_compsep rank is a real compsep rank, and gets to stay alive.
+                color = 1  # Compsep
+            else:
+                color = 99  # Dummy rank
+        else:
+            color = 1  # Compsep
         os.environ["OMP_NUM_THREADS"] = f"{params.nthreads_compsep}"
         os.environ["OPENBLAS_NUM_THREADS"] = f"{params.nthreads_compsep}"
         os.environ["MKL_NUM_THREADS"] = f"{params.nthreads_compsep}"
@@ -82,17 +91,20 @@ def main(params, params_dict):
     masters = {'tod': tod_master,
                'compsep': compsep_master,
                'cmb': cmb_master}
-    compsep_band_masters = np.array([compsep_master+i for i in range(len(params.bands))])
+    if params.betzy_mode:
+        compsep_band_masters = np.array([compsep_master+i*params.nthreads_compsep for i in range(len(params.bands))])
+    else:
+        compsep_band_masters = np.array([compsep_master+i for i in range(len(params.bands))])
 
     MPI.COMM_WORLD.barrier()
     time.sleep(worldrank*1e-2)  # Small sleep to get prints in nice order.
 
     ###### Initizatization ######
+    tod_band_masters = None
     if color == 0:
         proc_master, proc_comm, band_comm, my_band_idx, tod_band_masters, experiment_data = init_tod_processing(proc_comm, params)
     elif color == 1:
         proc_master, proc_comm, num_bands = init_compsep_processing(proc_comm, params)
-        tod_band_masters = None
     tod_band_masters = MPI.COMM_WORLD.bcast(tod_band_masters, root=tod_master)  # TOD tells the rest which TOD ranks are band masters.
 
     ###### Sending empty data back and forth ######
