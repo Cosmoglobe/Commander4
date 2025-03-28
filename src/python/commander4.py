@@ -122,13 +122,14 @@ def main(params, params_dict):
         curr_tod_output = receive_tod(tod_band_masters, proc_comm.rank)
 
     ###### Main loop ######
+    # Iteration numbers are 1-indexed, and chain 1 iter 1 TOD step is already done pre-loop.
     for i in range(1, 2 * params.niter_gibbs): # 2 because we have two chains
         # execute the appropriate part of the code (MPMD)
         if color == 0:
             logger.info(f"Worldrank {worldrank}, subrank {proc_comm.Get_rank()} starting TOD iteration.")
             t0 = time.time()
-            iter_num = (i + 1)//2  # Since TOD already did iteration 0 for chain 1, it is "half" an iteration ahead.
-            chain_num = i % 2 + 1
+            iter_num = (i + 2) // 2  # [1, 2, 2, 3, 3,...] -  Since TOD already did iteration 1 for chain 1, it is "half" an iteration ahead.
+            chain_num = i % 2 + 1  # [2, 1, 2, 1,...] - TOD has already been done for chain 1 iter 1 pre-loop, so we start with TOD for chain 2.
             curr_tod_output = process_tod(band_comm, experiment_data, curr_compsep_output, params)
             logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
             curr_compsep_output = receive_compsep(band_comm, my_band_idx, band_comm.Get_rank()==0, compsep_band_masters)
@@ -137,8 +138,8 @@ def main(params, params_dict):
             logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished sending results for chain {chain_num}, iter {iter_num}. Sending TOD results")
 
         elif color == 1:
-            iter_num = i // 2  # Compsep has not done iteration 0 for neither chain yet.
-            chain_num = i % 2
+            iter_num = (i + 1) // 2  # [1, 1, 2, 2, 3,...] Compsep has not done iteration 1 for neither chain yet.
+            chain_num = (i + 1) % 2 + 1  # [1, 2, 1, 2,...] We start as chain 1, since that's the chain that has already done a TOD step pre-loop.
             logger.info(f"Worldrank {worldrank}, subrank {proc_comm.Get_rank()} going into compsep loop for chain {chain_num}, iter {iter_num}.")
             t0 = time.time()
             curr_compsep_output = process_compsep(curr_tod_output, iter_num, chain_num, params, proc_master, proc_comm)
