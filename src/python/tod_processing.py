@@ -96,9 +96,15 @@ def init_tod_processing(proc_comm: Comm, params: bunch):
     MPIcolor_band = MPIrank_tod%num_bands  # Spread the MPI tasks over the different bands.
     band_comm = proc_comm.Split(MPIcolor_band, key=MPIrank_tod)  # Create communicators for each different band.
     MPIsize_band, MPIrank_band = band_comm.Get_size(), band_comm.Get_rank()  # Get my local rank, and the total size of, the band-communicator I'm on.
-    logger.info(f"TOD: Hello from TOD-rank {MPIrank_tod}, dedicated to band {MPIcolor_band}, with local rank {MPIrank_band} (local communicator size: {MPIsize_band}).")
+    logger.info(f"TOD: Hello from TOD-rank {MPIrank_tod} (on machine {MPI.Get_processor_name()}), dedicated to band {MPIcolor_band}, with local rank {MPIrank_band} (local communicator size: {MPIsize_band}).")
     
     band_master = MPIrank_band == 0  # Am I the master of my local band.
+
+    # Creating "tod_band_masters", an array which maps the band index to the rank of the master of that band.
+    data = (MPIcolor_band, proc_comm.Get_rank()) if band_comm.Get_rank() == 0 else None
+    all_data = proc_comm.allgather(data)
+    tod_band_masters_dict = {item[0]: item[1] for item in all_data if item is not None}
+    tod_band_masters = np.array([tod_band_masters_dict[i] for i in range(num_bands)])
 
     scans_per_rank = math.ceil(params.num_scans/MPIsize_band)
     my_scans_start = scans_per_rank * MPIrank_band
@@ -107,7 +113,7 @@ def init_tod_processing(proc_comm: Comm, params: bunch):
     logger.info(f"TOD: Rank {MPIrank_tod} assigned scans {my_scans_start} - {my_scans_stop} on band{MPIcolor_band}.")
     experiment_data = read_data(MPIcolor_band, my_scans_start, my_scans_stop, params)
 
-    return proc_master, proc_comm, band_comm, band_master, experiment_data
+    return proc_master, proc_comm, band_comm, MPIcolor_band, tod_band_masters, experiment_data
 
 
 def process_tod(band_comm: Comm, experiment_data: DetectorTOD,
@@ -128,62 +134,3 @@ def process_tod(band_comm: Comm, experiment_data: DetectorTOD,
     """
     todproc_output = tod2map(band_comm, experiment_data, compsep_output, params)
     return todproc_output
-
-
-def send_tod(band_master: bool, tod_map: DetectorMap, iter_idx: int,
-             chain_idx: int, destination: int):
-    """ MPI-send the results from a single band TOD processing to another
-        destination.
-
-    Assumes the COMM_WORLD communicator.
-
-    Input:
-        band_master (bool): Whether this is the master band process.
-        tod_map (DetectorMap): The output map from process_tod for the band
-            belonging to this process.
-        iter_idx (int): The current Gibbs iteration.
-        chain_idx (int): The current chain.
-        destination (ints): The world rank of the destination
-            process.
-    """
-
-    if band_master:
-        MPI.COMM_WORLD.send((tod_map, iter_idx, chain_idx), dest=destination)
-
-
-def receive_tod(proc_master: bool, proc_comm: Comm, senders: list[int],
-                num_bands: int):
-    """ MPI-receive the results from the TOD processing (used in conjunction
-        with send_tod).
-
-    Input:
-        proc_master (bool): Whether this is the master of the TOD processing
-            communicator.
-        proc_comm (MPI.Comm): The TOD processing communicator.
-        senders (list of int): The sender world rank of the compsep information.
-        num_bands (int): The number of bands to receive from (should be same as
-            length of 'senders').
-
-    Returns:
-        data (list of DetectorMaps): nbands (DetectorMap)
-        iter (int): The Gibbs iteration of the data being received.
-        chain (int): The chain of the data being received.
-    """
-
-    logger = logging.getLogger(__name__)
-    data, iter, chain = [], [], []
-    if proc_master:
-        for i in range(num_bands):
-            _data, _iter, _chain = MPI.COMM_WORLD.recv(source=senders[i])
-            data.append(_data)
-            iter.append(_iter)
-            chain.append(_chain)
-        log.logassert(np.all([i == iter[0] for i in iter]), "Different CompSep tasks received different Gibbs iteration number from TOD loop!", logger)
-        log.logassert(np.all([i == chain[0] for i in chain]), "Different CompSep tasks received different Gibbs chain number from TOD loop!", logger)
-        chain = chain[0]
-        iter = iter[0]
-
-    data = proc_comm.bcast(data, root=0)
-    iter = proc_comm.bcast(iter, root=0)
-    chain = proc_comm.bcast(chain, root=0)
-    return data, iter, chain

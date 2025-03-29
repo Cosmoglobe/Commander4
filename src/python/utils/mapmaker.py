@@ -85,8 +85,9 @@ def single_det_map_accumulator(det_static: DetectorTOD, det_cs_map: np.array, pa
         if params.galactic_mask:
             galactic_mask = np.abs(theta - np.pi/2.0) > 5.0*np.pi/180.0
             sky_subtracted_maksed_tod = det_cs_map[pix][galactic_mask] - scan_map[galactic_mask]
-            sigma0 = np.std(sky_subtracted_maksed_tod[1:] - sky_subtracted_maksed_tod[:-1])/np.sqrt(2)
-            if np.sum(galactic_mask) < 50:
+            if np.sum(galactic_mask) > 50:  # If we have enough data points to estimate the noise, we use the masked version.
+                sigma0 = np.std(sky_subtracted_maksed_tod[1:] - sky_subtracted_maksed_tod[:-1])/np.sqrt(2)
+            else:
                 sigma0 = np.std(sky_subtracted_tod[1:] - sky_subtracted_tod[:-1])/np.sqrt(2)
         else:
             sigma0 = np.std(sky_subtracted_tod[1:] - sky_subtracted_tod[:-1])/np.sqrt(2)
