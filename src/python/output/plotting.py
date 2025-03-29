@@ -84,19 +84,32 @@ def plot_components(params: bunch, freq: float, detector: int, chain: int,
     """
 
     os.makedirs(params.output_paths.plots + "maps_comps/", exist_ok=True)
+    os.makedirs(params.output_paths.plots + "spectra_comps/", exist_ok=True)
     
     foreground_subtracted = np.zeros_like(signal_map)
     foreground_subtracted[:] = signal_map
     residual = np.zeros_like(signal_map)
     residual[:] = signal_map
+
+    ells = np.arange(3 * params.nside)
+    Z = ells * (ells+1) / (2 * np.pi)
     for component in components_list:
-        comp_map = component.get_sky(freq)
+        comp_map = component.get_sky(freq).copy()
+        comp_map = hp.smoothing(comp_map, component.params.smoothing_scale*np.pi/(180*60), verbose=False)
         if component.shortname != "cmb":
             foreground_subtracted -= comp_map
         residual -= comp_map
 
         hp.mollview(comp_map, title=f"{component.longname} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(comp_map, 2), max=np.percentile(comp_map, 98))
         plt.savefig(params.output_paths.plots + f"maps_comps/{component.shortname}_realization_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+        plt.close()
+        
+        Cl = hp.alm2cl(hp.map2alm(comp_map))
+        plt.figure()
+        plt.plot(ells, Z * Cl, label=component.longname)
+        plt.xscale("log")
+        plt.yscale("log")
+        plt.savefig(params.output_paths.plots + f"spectra_comps/{component.shortname}_Cl_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
         plt.close()
 
     hp.mollview(foreground_subtracted, title=f"Foreground subtracted sky at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(foreground_subtracted, 2), max=np.percentile(foreground_subtracted, 98))

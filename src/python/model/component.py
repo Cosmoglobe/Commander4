@@ -17,6 +17,7 @@ def g(nu):
 # First tier component classes
 class Component:
     def __init__(self, params):
+        self.params = params
         self.longname = params.longname if "longname" in params else "Unknown Component"
         self.shortname = params.shortname if "shortname" in params else "comp"
 

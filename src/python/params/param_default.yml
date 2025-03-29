@@ -4,7 +4,7 @@ MPI_config:  # Specifying how many MPI tasks to allocate to different workloads.
   ntask_cmb: 0  # Set to 0 to not perform additional CMB realizations per Gibbs iteration, beyond the one performed during CompSep.
   use_MPI_for_CMB: True
 nthreads_compsep: 32  # Threads dedicated to performing individual SHTs for each ntask_compsep. Set to total number of avaible cores on each node performing CompSep.
-betzy_mode: false
+betzy_mode: false  # Turn on if running on Betzy and you understand the Commander 4 oversampling implementation.
 
 input_paths:
   tod_filename: "../../../commander4_sandbox/src/python/preproc_scripts/tod_example_64_s1.0_b20_dust.h5"
@@ -22,12 +22,13 @@ logging:
 
 components:
   CMB:
-    component_class: "CMB"
-    enabled: true
+    component_class: "CMB"  # Needs to match class name in the models.component module.
+    enabled: true  # Turn on or off.
     params:
-      longname: "CMB"
-      shortname: "cmb"
-      lmax: "full"
+      longname: "CMB"  # Used for titles etc.
+      shortname: "cmb"  # Used for filenames etc.
+      lmax: "full"  # Maximum multipole to use for the CMB component.
+      smoothing_scale: 50  # Smoothing scale for plotting and final output (doens't affect the component separation).
 
   ThermalDust:
     component_class: "ThermalDust"
@@ -39,6 +40,7 @@ components:
       T: 20
       nu0: 857
       lmax: "full"
+      smoothing_scale: 50
 
   Synchrotron:
     component_class: "Synchrotron"
@@ -49,6 +51,7 @@ components:
       beta: -3.1
       nu0: 23
       lmax: "full"
+      smoothing_scale: 300
 
 niter_gibbs: 5
 
