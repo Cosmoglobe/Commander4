@@ -5,7 +5,8 @@ import logging
 from pixell import bunch
 
 from data_models import DetectorMap
-from model.component import CMB, ThermalDust, Synchrotron, DiffuseComponent
+from model.component import CMB, ThermalDust, Synchrotron, DiffuseComponent, Component
+import model.component
 from model.sky_model import SkyModel
 from output import log, plotting
 from solvers.comp_sep_solvers import CompSepSolver, amplitude_sampling_per_pix
@@ -29,11 +30,20 @@ def init_compsep_processing(proc_comm: Comm, params: bunch):
     proc_master = proc_comm.Get_rank() == 0
     logger.info(f"CompSep: Hello from TOD-rank {proc_comm.rank} (on machine {MPI.Get_processor_name()}), dedicated to band {proc_comm.rank}.")
     num_bands = len(params.bands)
-    return proc_master, proc_comm, num_bands
+
+    components = []
+    for component_str in params.components:
+        component = params.components[component_str]
+        if component.enabled:
+            # getattr loads the class specified by "component_class" from the model.component file.
+            # This class is then instantiated with the "params" specified, and appended to the components list.
+            components.append(getattr(model.component, component.component_class)(component.params))
+
+    return proc_master, proc_comm, num_bands, components
 
 
 def process_compsep(detector_data: DetectorMap, iter: int, chain: int,
-                    params: bunch, proc_master: bool, proc_comm: Comm):
+                    params: bunch, proc_master: bool, proc_comm: Comm, comp_list: list[Component]):
     """ Performs a single component separation iteration.
         Called by each compsep process, which are each responsible for a single band.
     
@@ -60,32 +70,26 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int,
     if params.pixel_compsep_sampling:
         comp_maps = amplitude_sampling_per_pix(signal_map, rms_map, band_freq)
     else:
-        compsep_solver = CompSepSolver(signal_map, rms_map, band_freq, params, proc_comm)
-        comp_maps = compsep_solver.solve(seed=9999*chain+11*iter)
+        compsep_solver = CompSepSolver(comp_list, signal_map, rms_map, band_freq, params, proc_comm)
+        comp_list = compsep_solver.solve(seed=9999*chain+11*iter)
         if params.make_plots and proc_master:
             plotting.plot_cg_res(params, chain, iter, compsep_solver.CG_residuals)
 
-    component_types = [CMB, ThermalDust, Synchrotron]  # At the moment we always sample all components. #TODO: Move to parameter file.
-    component_list = []
-    for i, component_type in enumerate(component_types):
-        component = component_type()
-        component.component_map = comp_maps[i]
-        component_list.append(component)
-
-    sky_model = SkyModel(component_list)
+    sky_model = SkyModel(comp_list)
 
     npix = signal_map.shape[-1]
     detector_map = sky_model.get_sky_at_nu(band_freq, 12*params.nside**2)
-    cmb_sky = component_list[0].get_sky(band_freq)
-    dust_sky = component_list[1].get_sky(band_freq)
-    sync_sky = component_list[2].get_sky(band_freq)
+    # cmb_sky = component_list[0].get_sky(band_freq)
+    # dust_sky = component_list[1].get_sky(band_freq)
+    # sync_sky = component_list[2].get_sky(band_freq)
 
     if params.make_plots:
         detector_to_plot = proc_comm.Get_rank()
-        plotting.plot_components(params, band_freq,
-                                    detector_to_plot, chain, iter, sky=detector_map,
-                                    cmb=cmb_sky, dust=dust_sky,
-                                    sync=sync_sky,
-                                    signal=signal_map)
+        plotting.plot_components(params, band_freq, detector_to_plot, chain, iter, signal_map, comp_list)
+        # plotting.plot_components(params, band_freq,
+        #                             detector_to_plot, chain, iter, sky=detector_map,
+        #                             cmb=cmb_sky, dust=dust_sky,
+        #                             sync=sync_sky,
+        #                             signal=signal_map)
 
-    return detector_map
+    return detector_map  # Return the full sky realization for my band.

@@ -7,7 +7,7 @@ from mpi4py.MPI import Comm
 from mpi4py import MPI
 
 from output import log
-from model.component import CMB, ThermalDust, Synchrotron
+from model.component import CMB, ThermalDust, Synchrotron, Component
 from utils.math_operations import alm_to_map, alm_to_map_adjoint
 from pixell import curvedsky as pixell_curvedsky
 
@@ -47,7 +47,7 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
 
 
 class CompSepSolver:
-    def __init__(self, map_sky, map_rms, freqs, params, CompSep_comm: Comm):
+    def __init__(self, comp_list: list[Component], map_sky, map_rms, freqs, params, CompSep_comm: Comm):
         # TODO: 1. Find better way of passing all frequencies (all ranks need the mixing matrix).
         logger = logging.getLogger(__name__)
         self.CompSep_comm = CompSep_comm
@@ -65,8 +65,9 @@ class CompSepSolver:
         self.alm_len_complex = ((self.lmax+1)*(self.lmax+2))//2
         self.alm_len_real = (self.lmax+1)**2
         self.ainfo = curvedsky.alm_info(lmax=self.lmax)
-        self.comps_SED = np.array([CMB().get_sed(self.freqs), ThermalDust().get_sed(self.freqs), Synchrotron().get_sed(self.freqs)])
-        self.ncomp = 3  # Should be in parameter file, but also needs to match length of above list.
+        self.comp_list = comp_list
+        self.comps_SED = np.array([comp.get_sed(self.freqs) for comp in comp_list])
+        self.ncomp = len(self.comps_SED)
         log.logassert(len(self.params.fwhm) == len(self.freqs), f"Number of bands {len(self.freqs)} does not match length of FWHM ({len(self.params.fwhm)}).", logger)
         self.fwhm = np.array(self.params.fwhm[self.my_band_idx])/60.0*(np.pi/180.0)  # Converting arcmin to radians.
 
@@ -267,7 +268,6 @@ class CompSepSolver:
         sol = self.solve_CG(self.apply_LHS_matrix, b, x0)
         sol = self.CompSep_comm.bcast(sol, root=0)
         sol = sol.reshape((self.ncomp, self.alm_len_real))
-        sol_map = np.zeros((self.ncomp, self.npix))
         for icomp in range(self.ncomp):
-            sol_map[icomp] = alm_to_map(self.alm_real2imag(sol[icomp]), self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
-        return sol_map
+            self.comp_list[icomp].component_map = alm_to_map(self.alm_real2imag(sol[icomp]), self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
+        return self.comp_list

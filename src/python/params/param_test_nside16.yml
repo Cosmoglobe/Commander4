@@ -14,6 +14,36 @@ output_paths:
   plots: "/mn/stornext/d23/cmbco/commander4_shared/cron_tests/output_plots/"
   stats: "/mn/stornext/d23/cmbco/commander4_shared/cron_tests/stats/"
 
+components:
+  CMB:
+    component_class: "CMB"
+    enabled: true
+    params:
+      longname: "CMB"
+      shortname: "cmb"
+      lmax: "full"
+
+  ThermalDust:
+    component_class: "ThermalDust"
+    enabled: true
+    params:
+      longname: "Thermal Dust"
+      shortname: "dust"
+      beta: 1.54
+      T: 20
+      nu0: 857
+      lmax: "full"
+
+  Synchrotron:
+    component_class: "Synchrotron"
+    enabled: true
+    params:
+      longname: "Synchrotron"
+      shortname: "sync"
+      beta: -3.1
+      nu0: 23
+      lmax: "full"
+      
 niter_gibbs: 3
 
 nside: 16

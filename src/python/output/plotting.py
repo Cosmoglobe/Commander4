@@ -2,6 +2,8 @@ import healpy as hp
 import matplotlib.pyplot as plt
 import os
 import numpy as np
+from pixell import bunch
+from model.component import Component
 
 
 def plot_data_maps(master, params, detector, chain, iteration, **kwargs):
@@ -23,8 +25,7 @@ def plot_data_maps(master, params, detector, chain, iteration, **kwargs):
         map_corr_noise (np.array): The correlated noise map for the detector in question.
         map_rms (np_array): The RMS map for the detector in question.
     """
-    if master and not os.path.isdir(params.output_paths.plots + "maps_data/"):
-        os.mkdir(params.output_paths.plots + "maps_data/")
+    os.makedirs(params.output_paths.plots + "maps_data/", exist_ok=True)
     for maptype, mapdesc in zip(['map_signal', 'map_corr_noise', 'map_rms'],
                                 ['Signal map', 'Corr noise map', 'RMS map']):
         if maptype not in kwargs:
@@ -63,63 +64,50 @@ def plot_cg_res(params, chain, iteration, residual):
     plt.close()
 
 
-def plot_components(params, freq, detector, chain, iteration, **kwargs):
+def plot_components(params: bunch, freq: float, detector: int, chain: int,
+                    iteration: int, signal_map: np.array, components_list: list[Component]):
     """
-    Plots the resulting component maps produced by component separation.
-
-    Can plot the total sky map, the cmb, dust, and synchrotron map. It will
+    Plots the resulting component maps produced by component separation. It will
     also plot the total sky map minus the foregrounds, as well as the total map
-    minus the foregrounds and the CMB. If the CMB or foregrounds are not
-    present, these will still be plotted.
+    minus the foregrounds and the CMB.
     
     The plots are placed in the [params.output_paths.plots]/maps_comps/ folder,
     which will be created if it does not exist.
 
     Arguments:
-        master (bool): Whether this is the master process
         params (bunch): The parameter bundle, at root level.
         freq (float): The frequency of the detector.
         detector, chain, iteration (integers): The indices representing the
             detector, chain and iteration, respectively.
-    Optional named arguments:
-        sky (np.array): The full sky map for the detector in question.
-        cmb (np.array): The cmb map for the detector in question.
-        dust (np.array): The dust map for the detector in question.
-        sync (np.array): The synchotron map for the detector in question.
-        signal (np.array): The data signal map for the detector in question.
+        signal_map (np.array): The corr-noise subtracted sky signal map for the detector in question.
+        components_list (list[Component]): The list of components to plot.
     """
 
-    if not os.path.isdir(params.output_paths.plots + "maps_comps/"):
-        os.mkdir(params.output_paths.plots + "maps_comps/")
+    os.makedirs(params.output_paths.plots + "maps_comps/", exist_ok=True)
     
-    signal_map = kwargs['signal']
     foreground_subtracted = np.zeros_like(signal_map)
     foreground_subtracted[:] = signal_map
     residual = np.zeros_like(signal_map)
     residual[:] = signal_map
-    for maptype, mapdesc in zip(['sky', 'cmb', 'dust', 'sync'],
-                                ['Full sky realization',
-                                 'CMB realization',
-                                 'Dust realization',
-                                 'Synchrotron realization']):
-        if maptype not in kwargs:
-            continue
-        if maptype not in ('cmb', 'sky'):
-            foreground_subtracted -= kwargs[maptype]
-        if maptype != 'sky':
-            residual -= kwargs[maptype]
-        residual -= kwargs[maptype]
-        hp.mollview(kwargs[maptype], title=f"{mapdesc} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}")
-        plt.savefig(params.output_paths.plots + f"maps_comps/{maptype}_realization_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+    for component in components_list:
+        comp_map = component.get_sky(freq)
+        if component.shortname != "cmb":
+            foreground_subtracted -= comp_map
+        residual -= comp_map
+
+        hp.mollview(comp_map, title=f"{component.longname} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(comp_map, 2), max=np.percentile(comp_map, 98))
+        plt.savefig(params.output_paths.plots + f"maps_comps/{component.shortname}_realization_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
         plt.close()
 
-    hp.mollview(foreground_subtracted, title=f"Foreground subtracted sky at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}")
+    hp.mollview(foreground_subtracted, title=f"Foreground subtracted sky at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(foreground_subtracted, 2), max=np.percentile(foreground_subtracted, 98))
     plt.savefig(params.output_paths.plots + f"maps_comps/foreground_subtr_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches="tight")
     plt.close()
 
-    hp.mollview(residual, title=f"Residual sky at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}")
+    hp.mollview(residual, title=f"Residual sky at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(residual, 2), max=np.percentile(residual, 98))
     plt.savefig(params.output_paths.plots + f"maps_comps/residual_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches="tight")
     plt.close()
+
+
 
 def plot_constrained_cmb_results(master, params, detector, chain, iteration, ells,
                                  CMB_mean_field_map, CMB_fluct_map,

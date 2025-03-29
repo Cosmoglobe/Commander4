@@ -23,10 +23,8 @@ def main(params, params_dict):
 
     if world_master:
         logger.info(f"### PARAMETERS ###\n {yaml.dump(params_dict, allow_unicode=True, default_flow_style=False)}")
-        if not os.path.isdir(params.output_paths.plots):
-            os.mkdir(params.output_paths.plots)
-        if not os.path.isdir(params.output_paths.stats):
-            os.mkdir(params.output_paths.stats)
+        os.makedirs(params.output_paths.plots, exist_ok=True)
+        os.makedirs(params.output_paths.stats, exist_ok=True)
 
     if worldsize != (params.MPI_config.ntask_tod + params.MPI_config.ntask_compsep + params.MPI_config.ntask_cmb):
         log.lograise(RuntimeError, f"Total number of MPI tasks ({worldsize}) must equal the sum of tasks for TOD ({params.MPI_config.ntask_tod}) + CompSep ({params.MPI_config.ntask_compsep}) + CMB realization ({params.MPI_config.ntask_cmb}).", logger)
@@ -104,7 +102,7 @@ def main(params, params_dict):
     if color == 0:
         proc_master, proc_comm, band_comm, my_band_idx, tod_band_masters, experiment_data = init_tod_processing(proc_comm, params)
     elif color == 1:
-        proc_master, proc_comm, num_bands = init_compsep_processing(proc_comm, params)
+        proc_master, proc_comm, num_bands, components = init_compsep_processing(proc_comm, params)
     tod_band_masters = MPI.COMM_WORLD.bcast(tod_band_masters, root=tod_master)  # TOD tells the rest which TOD ranks are band masters.
 
     ###### Sending empty data back and forth ######
@@ -142,7 +140,7 @@ def main(params, params_dict):
             chain_num = (i + 1) % 2 + 1  # [1, 2, 1, 2,...] We start as chain 1, since that's the chain that has already done a TOD step pre-loop.
             logger.info(f"Worldrank {worldrank}, subrank {proc_comm.Get_rank()} going into compsep loop for chain {chain_num}, iter {iter_num}.")
             t0 = time.time()
-            curr_compsep_output = process_compsep(curr_tod_output, iter_num, chain_num, params, proc_master, proc_comm)
+            curr_compsep_output = process_compsep(curr_tod_output, iter_num, chain_num, params, proc_master, proc_comm, components)
             logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Sending results.")
             send_compsep(proc_comm.Get_rank(), curr_compsep_output, tod_band_masters)
             logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished sending results for chain {chain_num}, iter {iter_num}. Receiving TOD results.")

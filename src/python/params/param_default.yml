@@ -20,6 +20,36 @@ logging:
     level: 'info'
     filename: '/mn/stornext/u3/eirikgje/data/Commander4/output.log'
 
+components:
+  CMB:
+    component_class: "CMB"
+    enabled: true
+    params:
+      longname: "CMB"
+      shortname: "cmb"
+      lmax: "full"
+
+  ThermalDust:
+    component_class: "ThermalDust"
+    enabled: true
+    params:
+      longname: "Thermal Dust"
+      shortname: "dust"
+      beta: 1.54
+      T: 20
+      nu0: 857
+      lmax: "full"
+
+  Synchrotron:
+    component_class: "Synchrotron"
+    enabled: true
+    params:
+      longname: "Synchrotron"
+      shortname: "sync"
+      beta: -3.1
+      nu0: 23
+      lmax: "full"
+
 niter_gibbs: 5
 
 nside: 64
