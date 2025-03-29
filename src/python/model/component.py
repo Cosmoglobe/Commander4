@@ -36,8 +36,8 @@ class DiffuseComponent(Component):
 
     @component_map.setter
     def component_map(self, map):
-        if not self._component_map is None:
-            raise ValueError("DiffuseComponent does not allow for overwriting already set component_map parameter.")
+        # if not self._component_map is None:  # Temporarily disabled, might want to add back later.
+        #     raise ValueError("DiffuseComponent does not allow for overwriting already set component_map parameter.")
         self._component_map = map
 
     def get_sky(self, nu):
