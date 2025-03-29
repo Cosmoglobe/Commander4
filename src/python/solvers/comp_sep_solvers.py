@@ -218,8 +218,7 @@ class CompSepSolver:
                 stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
                 iter += 1
 
-    def solve(self, seed=None) -> np.array:
-
+    def calc_RHS_mean(self):
         # d
         b = self.map_sky.copy()
 
@@ -260,12 +259,63 @@ class CompSepSolver:
             b[icomp] = self.alm_imag2real(b_old[icomp])
         b = b.flatten()
 
+        return b
+
+
+    def calc_RHS_fluct(self):
+        # d
+        b = np.random.normal(0.0, 1.0, self.map_rms.shape)
+
+        # N^-1 d
+        b = b/self.map_rms
+
+        # Y^T N^-1 d
+        b_old = b.copy()
+        b = np.zeros((self.alm_len_complex), dtype=np.complex128)
+        b = alm_to_map_adjoint(b_old, self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
+
+        # B^T Y^T N^-1 d
+        hp.smoothalm(b, self.fwhm, inplace=True)
+
+        # Y^-1^T B^T Y^T N^-1 d
+        b_old = b.copy()
+        b = np.zeros((self.npix))
+        pixell_curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
+
+        # M^T Y^-1^T B^T Y^T N^-1 d
+        b_old = b.copy()
+        b = np.zeros((self.ncomp, self.npix))
+        for icomp in range(self.ncomp):
+            b[icomp] += self.comps_SED[icomp,self.my_band_idx]*b_old
+        b = self.CompSep_comm.allreduce(b, op=MPI.SUM)
+
+        # Y^T M^T Y^-1^T B^T Y^T N^-1 d
+        b_old = b.copy()
+        b = np.zeros((self.ncomp, self.alm_len_complex), dtype=np.complex128)
+        for icomp in range(self.ncomp):
+            if icomp == self.CompSep_comm.Get_rank():
+                b[icomp] = alm_to_map_adjoint(b_old[icomp], self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
+        b = self.CompSep_comm.allreduce(b, op=MPI.SUM)
+
+        b_old = b.copy()
+        b = np.zeros((self.ncomp, self.alm_len_real), dtype=np.float64)
+        for icomp in range(self.ncomp):
+            b[icomp] = self.alm_imag2real(b_old[icomp])
+        b = b.flatten()
+
+        return b
+
+
+    def solve(self, seed=None) -> np.array:
+
+        LHS = self.calc_RHS_mean() + self.calc_RHS_fluct()
+
         if not seed is None:
             np.random.seed(seed)
         x0 = np.random.normal(0.0, 1.0, (self.ncomp, self.alm_len_real))
         x0 = x0.flatten()
 
-        sol = self.solve_CG(self.apply_LHS_matrix, b, x0)
+        sol = self.solve_CG(self.apply_LHS_matrix, LHS, x0)
         sol = self.CompSep_comm.bcast(sol, root=0)
         sol = sol.reshape((self.ncomp, self.alm_len_real))
         for icomp in range(self.ncomp):
