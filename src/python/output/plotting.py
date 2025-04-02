@@ -94,8 +94,8 @@ def plot_components(params: bunch, freq: float, detector: int, chain: int,
     ells = np.arange(3 * params.nside)
     Z = ells * (ells+1) / (2 * np.pi)
     for component in components_list:
-        comp_map = component.get_sky(freq).copy()
-        comp_map = hp.smoothing(comp_map, component.params.smoothing_scale*np.pi/(180*60), verbose=False)
+        smoothing_scale_radians = component.params.smoothing_scale*np.pi/(180*60)
+        comp_map = component.get_sky(freq, params.nside, fwhm=smoothing_scale_radians)
         if component.shortname != "cmb":
             foreground_subtracted -= comp_map
         residual -= comp_map

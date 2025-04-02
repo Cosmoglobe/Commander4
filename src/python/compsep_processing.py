@@ -37,6 +37,8 @@ def init_compsep_processing(proc_comm: Comm, params: bunch):
         if component.enabled:
             # getattr loads the class specified by "component_class" from the model.component file.
             # This class is then instantiated with the "params" specified, and appended to the components list.
+            if component.params.lmax == "full":
+                component.params.lmax = 3*params.nside-1
             components.append(getattr(model.component, component.component_class)(component.params))
 
     return proc_master, proc_comm, num_bands, components
@@ -78,7 +80,7 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int,
     sky_model = SkyModel(comp_list)
 
     npix = signal_map.shape[-1]
-    detector_map = sky_model.get_sky_at_nu(band_freq, 12*params.nside**2)
+    detector_map = sky_model.get_sky_at_nu(band_freq, params.nside, fwhm=compsep_solver.fwhm)
     # cmb_sky = component_list[0].get_sky(band_freq)
     # dust_sky = component_list[1].get_sky(band_freq)
     # sync_sky = component_list[2].get_sky(band_freq)
