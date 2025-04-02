@@ -331,14 +331,14 @@ class CompSepSolver:
 
     def solve(self, seed=None) -> np.array:
 
-        LHS = self.calc_RHS_mean() + self.calc_RHS_fluct()
+        RHS = self.calc_RHS_mean() + self.calc_RHS_fluct()
 
         if not seed is None:
             np.random.seed(seed)
         x0 = [np.random.normal(0.0, 1.0, self.alm_len_real_percomp[icomp]) for icomp in range(self.ncomp)]
         x0 = np.concatenate(x0)
 
-        sol_array = self.solve_CG(self.apply_LHS_matrix, LHS, x0)
+        sol_array = self.solve_CG(self.apply_LHS_matrix, RHS, x0)
         sol_array = self.CompSep_comm.bcast(sol_array, root=0)
         sol = []
         idx_start = 0
