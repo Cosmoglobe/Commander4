@@ -2,6 +2,8 @@ import astropy.units as u
 import astropy.constants as c
 import numpy as np
 import pysm3.units as pysm3u
+from utils.math_operations import alm_to_map
+import healpy as hp
 
 A = (2*c.h*u.GHz**3/c.c**2).to('MJy').value
 h_over_k = (c.h/c.k_B/(1*u.K)).to('GHz-1').value
@@ -18,6 +20,7 @@ def g(nu):
 class Component:
     def __init__(self, params):
         self.params = params
+        self.lmax = params.lmax
         self.longname = params.longname if "longname" in params else "Unknown Component"
         self.shortname = params.shortname if "shortname" in params else "comp"
 
@@ -25,24 +28,20 @@ class Component:
 class DiffuseComponent(Component):
     def __init__(self, params):
         super().__init__(params)
-        self._component_map = None
-        self.nside_comp_map = 2048
-        self.prior_l_power_law = 0 # l^alpha as in S^-1 in comp sep
+        self.component_alms = None
+        # self.nside_comp_map = 2048
+        # self.prior_l_power_law = 0 # l^alpha as in S^-1 in comp sep
 
-    @property
-    def component_map(self):
-        if self._component_map is None:
-            raise ValueError("component_map property not set.")
-        return self._component_map
+    def get_component_map(self, nside, fwhm=None):
+        if self.component_alms is None:
+            raise ValueError("component_alms property not set.")
+        if fwhm is None:
+            return alm_to_map(self.component_alms, nside, self.lmax)
+        else:
+            return alm_to_map(hp.smoothalm(self.component_alms, fwhm), nside, self.lmax)
 
-    @component_map.setter
-    def component_map(self, map):
-        # if not self._component_map is None:  # Temporarily disabled, might want to add back later.
-        #     raise ValueError("DiffuseComponent does not allow for overwriting already set component_map parameter.")
-        self._component_map = map
-
-    def get_sky(self, nu):
-        return self.component_map*self.get_sed(nu)
+    def get_sky(self, nu, nside, fwhm=None):
+        return self.get_component_map(nside, fwhm)*self.get_sed(nu)
 
 class PointSourceComponent(Component):
     pass

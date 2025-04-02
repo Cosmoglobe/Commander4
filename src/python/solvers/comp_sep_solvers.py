@@ -64,26 +64,30 @@ class CompSepSolver:
         self.lmax = 3*self.nside-1
         self.alm_len_complex = ((self.lmax+1)*(self.lmax+2))//2
         self.alm_len_real = (self.lmax+1)**2
-        self.ainfo = curvedsky.alm_info(lmax=self.lmax)
         self.comp_list = comp_list
         self.comps_SED = np.array([comp.get_sed(self.freqs) for comp in comp_list])
         self.ncomp = len(self.comps_SED)
+        self.lmax_per_comp = np.array([comp.lmax for comp in comp_list])
+        self.alm_len_complex_percomp = np.array([((lmax+1)*(lmax+2))//2 for lmax in self.lmax_per_comp])
+        self.alm_len_real_percomp = np.array([(lmax+1)**2 for lmax in self.lmax_per_comp])
         log.logassert(len(self.params.fwhm) == len(self.freqs), f"Number of bands {len(self.freqs)} does not match length of FWHM ({len(self.params.fwhm)}).", logger)
         self.fwhm = np.array(self.params.fwhm[self.my_band_idx])/60.0*(np.pi/180.0)  # Converting arcmin to radians.
 
-    def alm_imag2real(self, alm):
-        i = int(self.ainfo.mstart[1]+1)
+    def alm_imag2real(self, alm, lmax):
+        ainfo = curvedsky.alm_info(lmax=lmax)
+        i = int(ainfo.mstart[1]+1)
         return np.concatenate([alm[:i].real,np.sqrt(2.)*alm[i:].view(np.float64)])
 
 
-    def alm_real2imag(self, x):
-        i    = int(self.ainfo.mstart[1]+1)
-        oalm = np.zeros(self.ainfo.nelem, np.complex128)
+    def alm_real2imag(self, x, lmax):
+        ainfo = curvedsky.alm_info(lmax=lmax)
+        i    = int(ainfo.mstart[1]+1)
+        oalm = np.zeros(ainfo.nelem, np.complex128)
         oalm[:i] = x[:i]
         oalm[i:] = x[i:].view(np.complex128)/np.sqrt(2.)
         return oalm
 
-    def apply_LHS_matrix(self, a: np.array):
+    def apply_LHS_matrix(self, a_array: np.array):
         """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of the Ax=b system for global component separation.
             The full A matrix can be written B^T Y^T M^T N^-1 M Y B, where B is the beam smoothing, M is the mixing matrix, and N is the noise covariance matrix.
 
@@ -94,23 +98,32 @@ class CompSepSolver:
         """
         logger = logging.getLogger(__name__)
 
-        a = self.CompSep_comm.bcast(a, root=0)  # Send a to all worker ranks (which are called with a dummy a).
-        a = a.reshape((self.ncomp, self.alm_len_real))
-        
-        log.logassert(a.dtype == np.float64, "Provided component array is not of type np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
-        a_old = a.copy()
-        a = np.zeros((self.ncomp, self.alm_len_complex), dtype=np.complex128)
+        a_array = self.CompSep_comm.bcast(a_array, root=0)  # Send a to all worker ranks (which are called with a dummy a).
+        log.logassert(a_array.dtype == np.float64, "Provided component array is not of type np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
+
+        a = []
+        idx_start = 0
+        idx_stop = 0
         for icomp in range(self.ncomp):
-            a[icomp] = self.alm_real2imag(a_old[icomp])
+            idx_stop += self.alm_len_real_percomp[icomp]
+            a.append(a_array[idx_start:idx_stop])
+            idx_start = idx_stop
+
+        a_old = a.copy()
+        a = []
+        for icomp in range(self.ncomp):
+            a.append(self.alm_real2imag(a_old[icomp], lmax=self.lmax_per_comp[icomp]))
 
         # Y a
         a_old = a.copy()
-        a = np.zeros((self.ncomp, self.npix))
+        a = []
         for icomp in range(self.ncomp):
-            # a[icomp] = hp.alm2map(a_old[icomp], self.nside, self.lmax)
             if icomp == self.CompSep_comm.Get_rank():
-                a[icomp] = alm_to_map(a_old[icomp], self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
-        self.CompSep_comm.Allreduce(MPI.IN_PLACE, a, op=MPI.SUM)
+                a.append(alm_to_map(a_old[icomp], self.nside, self.lmax_per_comp[icomp], nthreads=self.params.nthreads_compsep))
+            else:
+                a.append(np.zeros((self.npix), dtype=np.float64))
+        for icomp in range(self.ncomp):
+            self.CompSep_comm.Allreduce(MPI.IN_PLACE, a[icomp], op=MPI.SUM)
 
         # M Y a
         a_old = a.copy()
@@ -158,19 +171,23 @@ class CompSepSolver:
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         a_old = a.copy()
-        a = np.zeros((self.ncomp, self.alm_len_complex), dtype=np.complex128)
+        a = []
         for icomp in range(self.ncomp):
             if icomp == self.CompSep_comm.Get_rank():
-                a[icomp] = alm_to_map_adjoint(a_old[icomp], self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
-        self.CompSep_comm.Allreduce(MPI.IN_PLACE, a, op=MPI.SUM)
+                a.append(alm_to_map_adjoint(a_old[icomp], self.nside, self.lmax_per_comp[icomp], nthreads=self.params.nthreads_compsep))
+            else:
+                a.append(np.zeros((self.alm_len_complex_percomp[icomp]), dtype=np.complex128))
+        for icomp in range(self.ncomp):
+            self.CompSep_comm.Allreduce(MPI.IN_PLACE, a[icomp], op=MPI.SUM)
 
         # Converting back from complex alms to real alms
         a_old = a.copy()
-        a = np.zeros((self.ncomp, self.alm_len_real), dtype=np.float64)
+        a = []
         for icomp in range(self.ncomp):
-            a[icomp] = self.alm_imag2real(a_old[icomp])
+            a.append(self.alm_imag2real(a_old[icomp], lmax=self.lmax_per_comp[icomp]))
+        a = np.concatenate(a)
 
-        return a.flatten()
+        return a#.flatten()
 
 
     def solve_CG(self, LHS, RHS, x0):
@@ -247,17 +264,20 @@ class CompSepSolver:
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 d
         b_old = b.copy()
-        b = np.zeros((self.ncomp, self.alm_len_complex), dtype=np.complex128)
+        b = []
         for icomp in range(self.ncomp):
             if icomp == self.CompSep_comm.Get_rank():
-                b[icomp] = alm_to_map_adjoint(b_old[icomp], self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
-        b = self.CompSep_comm.allreduce(b, op=MPI.SUM)
+                b.append(alm_to_map_adjoint(b_old[icomp], self.nside, self.lmax_per_comp[icomp], nthreads=self.params.nthreads_compsep))
+            else:
+                b.append(np.zeros((self.alm_len_complex_percomp[icomp]), dtype=np.complex128))
+        for icomp in range(self.ncomp):
+            b[icomp] = self.CompSep_comm.allreduce(b[icomp], op=MPI.SUM)
 
         b_old = b.copy()
-        b = np.zeros((self.ncomp, self.alm_len_real), dtype=np.float64)
+        b = []
         for icomp in range(self.ncomp):
-            b[icomp] = self.alm_imag2real(b_old[icomp])
-        b = b.flatten()
+            b.append(self.alm_imag2real(b_old[icomp], lmax=self.lmax_per_comp[icomp]))
+        b = np.concatenate(b)
 
         return b
 
@@ -291,17 +311,20 @@ class CompSepSolver:
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 d
         b_old = b.copy()
-        b = np.zeros((self.ncomp, self.alm_len_complex), dtype=np.complex128)
+        b = []
         for icomp in range(self.ncomp):
             if icomp == self.CompSep_comm.Get_rank():
-                b[icomp] = alm_to_map_adjoint(b_old[icomp], self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
-        b = self.CompSep_comm.allreduce(b, op=MPI.SUM)
+                b.append(alm_to_map_adjoint(b_old[icomp], self.nside, self.lmax_per_comp[icomp], nthreads=self.params.nthreads_compsep))
+            else:
+                b.append(np.zeros((self.alm_len_complex_percomp[icomp]), dtype=np.complex128))
+        for icomp in range(self.ncomp):
+            b[icomp] = self.CompSep_comm.allreduce(b[icomp], op=MPI.SUM)
 
         b_old = b.copy()
-        b = np.zeros((self.ncomp, self.alm_len_real), dtype=np.float64)
+        b = []
         for icomp in range(self.ncomp):
-            b[icomp] = self.alm_imag2real(b_old[icomp])
-        b = b.flatten()
+            b.append(self.alm_imag2real(b_old[icomp], lmax=self.lmax_per_comp[icomp]))
+        b = np.concatenate(b)
 
         return b
 
@@ -312,12 +335,18 @@ class CompSepSolver:
 
         if not seed is None:
             np.random.seed(seed)
-        x0 = np.random.normal(0.0, 1.0, (self.ncomp, self.alm_len_real))
-        x0 = x0.flatten()
+        x0 = [np.random.normal(0.0, 1.0, self.alm_len_real_percomp[icomp]) for icomp in range(self.ncomp)]
+        x0 = np.concatenate(x0)
 
-        sol = self.solve_CG(self.apply_LHS_matrix, LHS, x0)
-        sol = self.CompSep_comm.bcast(sol, root=0)
-        sol = sol.reshape((self.ncomp, self.alm_len_real))
+        sol_array = self.solve_CG(self.apply_LHS_matrix, LHS, x0)
+        sol_array = self.CompSep_comm.bcast(sol_array, root=0)
+        sol = []
+        idx_start = 0
+        idx_stop = 0
         for icomp in range(self.ncomp):
-            self.comp_list[icomp].component_map = alm_to_map(self.alm_real2imag(sol[icomp]), self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
+            idx_stop += self.alm_len_real_percomp[icomp]
+            sol.append(sol_array[idx_start:idx_stop])
+            idx_start = idx_stop
+        for icomp in range(self.ncomp):
+            self.comp_list[icomp].component_alms = self.alm_real2imag(sol[icomp], lmax=self.lmax_per_comp[icomp])
         return self.comp_list
