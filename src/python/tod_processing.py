@@ -4,12 +4,12 @@ from mpi4py.MPI import Comm
 import h5py
 import healpy as hp
 import math
-import time
 import logging
 from data_models import ScanTOD, DetectorTOD, DetectorMap
-from utils import single_det_mapmaker, single_det_map_accumulator
+from utils import single_det_map_accumulator
 from pixell import bunch
-from output import log 
+from output import log
+from scipy.fft import rfft, irfft, rfftfreq
 
 nthreads=1
 
@@ -64,6 +64,28 @@ def read_data(band_idx, scan_idx_start, scan_idx_stop, params: bunch) -> list[Sc
     return det
 
 
+def find_unique_pixels(scanlist: list[ScanTOD], params: bunch) -> np.array:
+    """Finds the unique pixels in the list of scans.
+
+    Input:
+        scanlist (list[ScanTOD]): The list of scans.
+        params (bunch): The parameters from the input parameter file.
+
+    Output:
+        unique_pixels (np.array): The unique pixels in the scans.
+    """
+    logger = logging.getLogger(__name__)
+    nside = params.nside
+    unique_pixels = np.zeros(12*nside**2, dtype=np.float64)
+    for scan in scanlist:
+        scan_map, theta, phi, psi = scan.data
+        ntod = scan_map.shape[0]
+        pix = hp.ang2pix(nside, theta, phi)
+        unique_pixels[pix] += 1
+    unique_pixels[unique_pixels != 0] = 1
+    return unique_pixels
+
+
 def init_tod_processing(proc_comm: Comm, params: bunch):
     """To be run once before starting TOD processing.
 
@@ -116,6 +138,78 @@ def init_tod_processing(proc_comm: Comm, params: bunch):
     return proc_master, proc_comm, band_comm, MPIcolor_band, tod_band_masters, experiment_data
 
 
+
+def subtract_sky_model(experiment_data: DetectorTOD, det_compsep_map: np.array, params: bunch):
+    """Subtracts the sky model from the TOD data.
+    Input:
+        experiment_data (DetectorTOD): The experiment TOD object.
+        det_compsep_map (np.array): The current estimate of the sky model as seen by the band belonging to the current process.
+        params (bunch): The parameters from the input parameter file.
+    Output:
+        experiment_data (DetectorTOD): The experiment TOD with the estimated white noise level added to each scan.
+    """
+    nside = params.nside
+    for scan in experiment_data.scans:
+        scan_map, theta, phi, psi = scan.data
+        ntod = scan_map.shape[0]
+        pix = hp.ang2pix(nside, theta, phi)
+        scan.sky_subtracted_tod = scan_map - det_compsep_map[pix]
+        if params.galactic_mask:
+            scan.galactic_mask_array = np.abs(theta - np.pi/2.0) > 5.0*np.pi/180.0
+    return experiment_data
+
+
+
+def estimate_white_noise(experiment_data: DetectorTOD, params: bunch) -> DetectorTOD:
+    """Estimate the white noise level in the TOD data, add it to the scans, and return the updated experiment data.
+    Input:
+        experiment_data (DetectorTOD): The experiment TOD object.
+        params (bunch): The parameters from the input parameter file.
+    Output:
+        experiment_data (DetectorTOD): The experiment TOD with the estimated white noise level added to each scan.
+    """
+    for scan in experiment_data.scans:
+        if params.galactic_mask and np.sum(scan.galactic_mask_array) > 50:  # If we have enough data points to estimate the noise, we use the masked version.
+            sigma0 = np.std(scan.sky_subtracted_tod[scan.galactic_mask_array][1:] - scan.sky_subtracted_tod[scan.galactic_mask_array][:-1])/np.sqrt(2)
+        else:
+            sigma0 = np.std(scan.sky_subtracted_tod[1:] - scan.sky_subtracted_tod[:-1])/np.sqrt(2)
+        scan.sigma0 = sigma0
+    return experiment_data
+
+
+
+def sample_noise(band_comm: Comm, experiment_data: DetectorTOD, params: bunch) -> DetectorTOD:
+    nside = params.nside
+    for scan in experiment_data.scans:
+        f_samp = 180 # params.fsamp
+        scan_map, theta, phi, psi = scan.data
+        ntod = scan_map.shape[0]
+        freq = rfftfreq(ntod, d = 1/f_samp)
+        fknee = 1.0
+        alpha = -1.0
+        N = freq.shape[0]
+
+        if params.sample_corr_noise:
+            C_wn = scan.sigma0*np.ones(N)
+            C_1f_inv = np.zeros(N)  # 1.0/C_1f
+            C_1f_inv[1:] = freq[1:]/scan.sigma0
+
+            const = 1.0  # This is the normalization constant for FFT, which I'm unsure what is for scipys FFT, might be wrong!
+            w1 = (np.random.normal(0, 1, N) + 1.j*np.random.normal(0, 1, N))/np.sqrt(2)
+            w2 = (np.random.normal(0, 1, N) + 1.j*np.random.normal(0, 1, N))/np.sqrt(2)
+            # I'm always a bit confused about when it's fine to use rfft as opposed to full fft, so might want to double check this:
+            n_corr_est_fft_WF = rfft(scan.sky_subtracted_tod)/(1 + C_wn*C_1f_inv)
+            n_corr_est_fft_fluct = (const*(np.sqrt(C_wn)*w1 + C_wn*np.sqrt(C_1f_inv)*w2))/(1 + C_wn*C_1f_inv)
+            n_corr_est_fft = n_corr_est_fft_WF + n_corr_est_fft_fluct
+            n_corr_est_fft[0] = 0.0
+            n_corr_est_fft_WF[0] = 0.0
+            # n_corr_est_WF = irfft(n_corr_est_fft_WF, n=scan.sky_subtracted_tod.shape[0])
+            scan.n_corr_est = irfft(n_corr_est_fft, n=scan.sky_subtracted_tod.shape[0])
+            scan.sky_subtracted_tod -= scan.n_corr_est
+    return experiment_data
+
+
+
 def process_tod(band_comm: Comm, experiment_data: DetectorTOD,
                 compsep_output: np.array, params: bunch) -> DetectorMap:
     """ Performs a single TOD iteration.
@@ -132,5 +226,8 @@ def process_tod(band_comm: Comm, experiment_data: DetectorTOD,
         DetectorMap instance which represents the correlated noise subtracted
             TOD data for the band belonging to the current process.
     """
+    experiment_data = subtract_sky_model(experiment_data, compsep_output, params)
+    experiment_data = estimate_white_noise(experiment_data, params)
+    experiment_data = sample_noise(band_comm, experiment_data, params)
     todproc_output = tod2map(band_comm, experiment_data, compsep_output, params)
     return todproc_output

@@ -32,3 +32,15 @@ class ScanTOD:
     @property
     def scanID(self):
         return self._scanID
+
+    # @property
+    # def sky_subtracted_tod(self):
+    #     if self._component_map is None:
+    #         raise ValueError("sky_subtracted_tod property not set. Gibbs iter = {self._sky_subtracted_tod_Gibbs_iter}")
+    #     return self._component_map
+
+    # @sky_subtracted_tod.setter
+    # def sky_subtracted_tod(self, tod):
+    #     if not self._component_map is None:  # Temporarily disabled, might want to add back later.
+    #         raise ValueError("DiffuseComponent does not allow for overwriting already set component_map parameter.")
+    #     self._component_map = map
