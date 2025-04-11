@@ -55,8 +55,7 @@ def plot_cg_res(params, chain, iteration, residual):
         residual (np.array): The CG residual.
     """
 
-    if not os.path.isdir(params.output_paths.plots + "CG_res/"):
-        os.mkdir(params.output_paths.plots + "CG_res/")
+    os.makedirs(params.output_paths.plots + "CG_res/", exist_ok=True)
     plt.figure()
     plt.loglog(np.arange(residual.shape[0]), residual)
     plt.axhline(params.CG_err_tol, ls="--", c="k")
@@ -121,63 +120,34 @@ def plot_components(params: bunch, freq: float, detector: int, chain: int,
     plt.close()
 
 
-
-def plot_constrained_cmb_results(master, params, detector, chain, iteration, ells,
-                                 CMB_mean_field_map, CMB_fluct_map,
-                                 signal_map, true_cl):
-    """
-    Plots the maps produced by the constrained CMB realization procedure.
-
-    Plots the mean field map, the fluctuation map, the signal map (both in map
-    and cl space) and the true CLs.
-    
-    The plots are placed in the [params.output_paths.plots]/maps_CMB/ folder
-    (for the CMB maps) and the [params.output_paths.plots]/plots/ folder (for
-    the Cl plots) which will be created if they do not exist.
-
-    Arguments:
-        master (bool): Whether this is the master process
-        params (bunch): The parameter bundle, at root level.
-        detector, chain, iteration (integers): The indices representing the
-            detector, chain and iteration, respectively.
-        ells (np.array): The l range for which to plot.
-        CMB_mean_field_map (np.array): The mean field map.
-        CMB_fluct_map (np.array): The fluctuation map map.
-        signal_map (np.array): The observed CMB sky.
-        true_cl (np.array) (currently): The true CLs.
-    """
-
-    if master:
-        if not os.path.isdir(params.output_paths.plots + "maps_CMB/"):
-            os.mkdir(params.output_paths.plots + "maps_CMB/")
-        if not os.path.isdir(params["output_paths"]["plots"] + "plots/"):
-            os.mkdir(params["output_paths"]["plots"] + "plots/")
-
-    Z = ells * (ells+1) / (2 * np.pi)
-
-    cmap = "RdBu_r"
-    title_base = f"CMB realization chain {chain} iter {iteration}"
-
-    hp.mollview(CMB_mean_field_map, cmap=cmap, title=f"Constrained mean field {title_base}")
-    plt.savefig(params.output_paths.plots + f"maps_CMB/CMB_mean_field_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+def alm_plotter(alm, filename="alm_plot.png"):
+    alm_len = alm.shape[-1]
+    lmax = int(np.sqrt(2*alm_len + 0.25) - 1.5)
+    mesh_real = np.zeros((lmax+1, lmax+1))
+    mesh_imag = np.zeros((lmax+1, lmax+1))
+    for l in range(lmax + 1):
+        for m in range(0, l + 1):
+            idx = hp.Alm.getidx(lmax, l, m)
+            mesh_real[l, m] = alm[idx].real
+            mesh_imag[l, m] = alm[idx].imag
+    for l in range(lmax + 1):
+        for m in range(l + 1, lmax + 1):
+            idx = hp.Alm.getidx(lmax, l, -m)
+            mesh_real[l, m] = np.nan
+            mesh_imag[l, m] = np.nan
+    vmax = max(np.nanmax(np.abs(mesh_real.flatten()[1:])), np.nanmax(np.abs(mesh_imag)))
+    vmin = -vmax
+    fig, ax = plt.subplots(1, 2, figsize=(12, 6))
+    img = ax[0].imshow(mesh_real, cmap='magma', interpolation='nearest', vmin=vmin, vmax=vmax)
+    plt.colorbar(img, ax=ax[0])
+    ax[0].set_title("Real Part")
+    ax[0].set_xlabel("m")
+    ax[0].set_ylabel("l")
+    img = ax[1].imshow(mesh_imag, cmap='magma', interpolation='nearest', vmin=vmin, vmax=vmax)
+    plt.colorbar(img, ax=ax[1])
+    ax[1].set_title("Imaginary Part")
+    ax[1].set_xlabel("m")
+    ax[1].set_ylabel("l")
+    plt.tight_layout()
+    plt.savefig(filename)
     plt.close()
-
-    hp.mollview(CMB_fluct_map, cmap=cmap, title=f"Constrained fluctuation {title_base}")
-    plt.savefig(params.output_paths.plots + f"maps_CMB/CMB_fluct_chain{chain}_iter{iteration}.png", bbox_inches='tight')
-    plt.close()
-
-    hp.mollview(CMB_mean_field_map+CMB_fluct_map, cmap=cmap, title=f"Joint constrained {title_base}")
-    plt.savefig(params.output_paths.plots + f"maps_CMB/CMB_joint_realization_chain{chain}_iter{iteration}.png", bbox_inches='tight')
-    plt.close()
-
-    plt.figure()
-    plt.plot(ell, Z*CMB_mean_field_Cl, label="Cl CMB mean field")
-    plt.plot(ell, Z*CMB_fluct_Cl, label="Cl CMB fluct")
-    plt.plot(ell, Z*CMB_mean_field_Cl + CMB_fluct_Cl, label="Cl CMB joint")
-    plt.plot(ell, Z*hp.alm2cl(hp.map2alm(signal_map)), label="CL observed sky")
-    plt.plot(ell, Z*true_cl, label="True CMB Cl", c="k")
-    plt.legend()
-    plt.xscale("log")
-    plt.yscale("log")
-    plt.ylim(1e-2, 1e6)
-    plt.savefig(params.output_paths.plots + f"plots/Cl_CMB_chain{chain}_iter{iteration}.png", bbox_inches="tight")
