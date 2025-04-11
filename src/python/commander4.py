@@ -121,7 +121,7 @@ def main(params, params_dict):
 
     ###### Main loop ######
     # Iteration numbers are 1-indexed, and chain 1 iter 1 TOD step is already done pre-loop.
-    for i in range(1, 2 * params.niter_gibbs): # 2 because we have two chains
+    for i in range(1, 2 * params.niter_gibbs + 1): # 2 because we have two chains
         # execute the appropriate part of the code (MPMD)
         if color == 0:
             logger.info(f"Worldrank {worldrank}, subrank {proc_comm.Get_rank()} starting TOD iteration.")

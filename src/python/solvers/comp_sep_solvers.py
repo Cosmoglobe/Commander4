@@ -190,20 +190,25 @@ class CompSepSolver:
         return a#.flatten()
 
 
-    def solve_CG(self, LHS, RHS, x0):
+    def solve_CG(self, LHS, RHS, x0, M=None):
         """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG from the pixell package.
             Assumes that both x and b are in alm space.
 
             Args:
-                LHS: A callable taking x as argument and returning Ax.
-                RHS: A Numpy array representing b, in alm space.
+                LHS (callable): A function/callable taking x as argument and returning Ax.
+                RHS (np.array): A Numpy array representing b, in alm space.
+                x0 (np.array): Initial guess for x.
+                M (callable): Preconditioner for the CG solver. A function/callable which approximates A^-1 (optional).
             Returns:
                 m_bestfit: The resulting best-fit solution, in alm space.
         """
         logger = logging.getLogger(__name__)
         # CG_solver = utils.CG(LHS, RHS, x0=x0, dot=self.alm_dot_product)
         if self.CompSep_comm.Get_rank() == 0:
-            CG_solver = utils.CG(LHS, RHS, x0=x0)
+            if M is None:
+                CG_solver = utils.CG(LHS, RHS, x0=x0)
+            else:
+                CG_solver = utils.CG(LHS, RHS, x0=x0, M=M)
             self.CG_residuals = np.zeros((self.params.CG_max_iter))
             logger.info(f"CG starting up!")
             iter = 0
