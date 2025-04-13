@@ -6,7 +6,7 @@ import healpy as hp
 import math
 import logging
 from data_models import ScanTOD, DetectorTOD, DetectorMap
-from utils import single_det_map_accumulator
+from utils.mapmaker import single_det_map_accumulator
 from pixell import bunch
 from output import log
 from scipy.fft import rfft, irfft, rfftfreq

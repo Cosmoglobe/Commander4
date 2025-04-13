@@ -7,9 +7,13 @@ from mpi4py.MPI import Comm
 from mpi4py import MPI
 
 from output import log
+from output.plotting import alm_plotter
 from model.component import CMB, ThermalDust, Synchrotron, Component
 from utils.math_operations import alm_to_map, alm_to_map_adjoint
 from pixell import curvedsky as pixell_curvedsky
+from solvers.dense_matrix_math import DenseMatrix
+import solvers.preconditioners
+
 
 def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:
     logger = logging.getLogger(__name__)
@@ -49,7 +53,7 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
 class CompSepSolver:
     def __init__(self, comp_list: list[Component], map_sky, map_rms, freqs, params, CompSep_comm: Comm):
         # TODO: 1. Find better way of passing all frequencies (all ranks need the mixing matrix).
-        logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger(__name__)
         self.CompSep_comm = CompSep_comm
         self.params = params
         self.map_sky = map_sky
@@ -59,7 +63,7 @@ class CompSepSolver:
         self.nband = len(params.bands)
         self.my_band_idx = CompSep_comm.Get_rank()
         self.nside = np.sqrt(self.npix//12)
-        log.logassert(self.nside.is_integer(), f"Npix dimension of map ({self.npix}) resulting in a non-integer nside ({self.nside}).", logger)
+        log.logassert(self.nside.is_integer(), f"Npix dimension of map ({self.npix}) resulting in a non-integer nside ({self.nside}).", self.logger)
         self.nside = int(self.nside)
         self.lmax = 3*self.nside-1
         self.alm_len_complex = ((self.lmax+1)*(self.lmax+2))//2
@@ -70,8 +74,10 @@ class CompSepSolver:
         self.lmax_per_comp = np.array([comp.lmax for comp in comp_list])
         self.alm_len_complex_percomp = np.array([((lmax+1)*(lmax+2))//2 for lmax in self.lmax_per_comp])
         self.alm_len_real_percomp = np.array([(lmax+1)**2 for lmax in self.lmax_per_comp])
-        log.logassert(len(self.params.fwhm) == len(self.freqs), f"Number of bands {len(self.freqs)} does not match length of FWHM ({len(self.params.fwhm)}).", logger)
-        self.fwhm = np.array(self.params.fwhm[self.my_band_idx])/60.0*(np.pi/180.0)  # Converting arcmin to radians.
+        log.logassert(len(self.params.fwhm) == len(self.freqs), f"Number of bands {len(self.freqs)} does not match length of FWHM ({len(self.params.fwhm)}).", self.logger)
+        self.fwhm_rad_allbands = np.array(self.params.fwhm)/60.0*(np.pi/180.0)  # Converting arcmin to radians.
+        self.fwhm_rad = self.fwhm_rad_allbands[self.my_band_idx]
+
 
     def alm_imag2real(self, alm, lmax):
         ainfo = curvedsky.alm_info(lmax=lmax)
@@ -86,6 +92,7 @@ class CompSepSolver:
         oalm[:i] = x[:i]
         oalm[i:] = x[i:].view(np.complex128)/np.sqrt(2.)
         return oalm
+
 
     def apply_LHS_matrix(self, a_array: np.array):
         """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of the Ax=b system for global component separation.
@@ -137,7 +144,7 @@ class CompSepSolver:
         pixell_curvedsky.map2alm_healpix(a_old, a, niter=3, spin=0, nthread=self.params.nthreads_compsep)
 
         # B Y^-1 M Y a
-        hp.smoothalm(a, self.fwhm, inplace=True)
+        hp.smoothalm(a, self.fwhm_rad, inplace=True)
 
         # Y B Y^-1 M Y a
         a_old = a.copy()
@@ -153,7 +160,7 @@ class CompSepSolver:
         a = alm_to_map_adjoint(a_old, self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
 
         # B^T Y^T N^-1 Y B Y^-1 M Y a
-        hp.smoothalm(a, self.fwhm, inplace=True)
+        hp.smoothalm(a, self.fwhm_rad, inplace=True)
 
         # Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         a_old = a.copy()
@@ -190,7 +197,7 @@ class CompSepSolver:
         return a#.flatten()
 
 
-    def solve_CG(self, LHS, RHS, x0, M=None):
+    def solve_CG(self, LHS, RHS, x0, M=None, x_true=None):
         """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG from the pixell package.
             Assumes that both x and b are in alm space.
 
@@ -199,17 +206,22 @@ class CompSepSolver:
                 RHS (np.array): A Numpy array representing b, in alm space.
                 x0 (np.array): Initial guess for x.
                 M (callable): Preconditioner for the CG solver. A function/callable which approximates A^-1 (optional).
+                x_true (np.array): True solution for x, in order to print the true error (optional, used for testing).
             Returns:
                 m_bestfit: The resulting best-fit solution, in alm space.
         """
         logger = logging.getLogger(__name__)
-        # CG_solver = utils.CG(LHS, RHS, x0=x0, dot=self.alm_dot_product)
+        checkpoint_interval = 10
         if self.CompSep_comm.Get_rank() == 0:
             if M is None:
                 CG_solver = utils.CG(LHS, RHS, x0=x0)
             else:
                 CG_solver = utils.CG(LHS, RHS, x0=x0, M=M)
             self.CG_residuals = np.zeros((self.params.CG_max_iter))
+            if not x_true is None:
+                self.CG_errors_true = np.zeros((self.params.CG_max_iter//checkpoint_interval))
+                self.CG_Anorm_error = np.zeros((self.params.CG_max_iter//checkpoint_interval))
+                self.xtrue_A_xtrue = x_true.dot(LHS(x_true))  # The normalization factor for the true error.
             logger.info(f"CG starting up!")
             iter = 0
             t0 = time.time()
@@ -218,8 +230,12 @@ class CompSepSolver:
                 CG_solver.step()
                 self.CG_residuals[iter] = CG_solver.err
                 iter += 1
-                if iter%10 == 0:
+                if iter%checkpoint_interval == 0:
                     logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-10:iter]):.3e} ({(time.time() - t0)/10.0:.1f}s/iter)")
+                    if not x_true is None:
+                        self.CG_errors_true[iter//checkpoint_interval-1] = np.linalg.norm(CG_solver.x-x_true)/np.linalg.norm(x_true)
+                        self.CG_Anorm_error[iter//checkpoint_interval-1] = (CG_solver.x-x_true).dot(LHS(CG_solver.x-x_true))/self.xtrue_A_xtrue
+                        logger.info(f"True error: {self.CG_errors_true[iter//checkpoint_interval-1]:.3e} - Anorm error: {self.CG_Anorm_error[iter//checkpoint_interval-1]:.3e}")
                     t0 = time.time()
                 if iter >= self.params.CG_max_iter:
                     logger.warning(f"Maximum number of iterations ({self.params.CG_max_iter}) reached in CG.")
@@ -232,13 +248,18 @@ class CompSepSolver:
             s_bestfit = CG_solver.x
             return s_bestfit
         else:
-            self.apply_LHS_matrix(None)
+            LHS(None)  # Calling the LHS operator because the initialization of the CG driver will call it.
+            if not x_true is None:
+                LHS(None)  # Second call, for the xtrue_A_xtrue calculation.
             stop_CG = False
             iter = 0
             while not stop_CG:
-                self.apply_LHS_matrix(None)
-                stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
+                LHS(None)
                 iter += 1
+                if not x_true is None and iter%checkpoint_interval == 0:  # Every nth iteration, if we have a true solution, we do an extra LHS calculation in order to determine the true error.
+                    LHS(None)
+                stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
+
 
     def calc_RHS_mean(self):
         # d
@@ -253,7 +274,7 @@ class CompSepSolver:
         b = alm_to_map_adjoint(b_old, self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
 
         # B^T Y^T N^-1 d
-        hp.smoothalm(b, self.fwhm, inplace=True)
+        hp.smoothalm(b, self.fwhm_rad, inplace=True)
 
         # Y^-1^T B^T Y^T N^-1 d
         b_old = b.copy()
@@ -300,7 +321,7 @@ class CompSepSolver:
         b = alm_to_map_adjoint(b_old, self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
 
         # B^T Y^T N^-1 d
-        hp.smoothalm(b, self.fwhm, inplace=True)
+        hp.smoothalm(b, self.fwhm_rad, inplace=True)
 
         # Y^-1^T B^T Y^T N^-1 d
         b_old = b.copy()
@@ -337,13 +358,37 @@ class CompSepSolver:
     def solve(self, seed=None) -> np.array:
 
         RHS = self.calc_RHS_mean() + self.calc_RHS_fluct()
+        debug_mode = self.params.compsep.dense_matrix_debug_mode
+
+        # Initialize the precondidioner class, which is in the module "solvers.preconditioners", and has a name specified by self.params.compsep.preconditioner.
+        precond = getattr(solvers.preconditioners, self.params.compsep.preconditioner)(self)
+
+        if debug_mode:  # For testing preconditioner with a true solution as reference, first solving for exact solution with dense matrix math.
+            dense_matrix = DenseMatrix(self.CompSep_comm, self.apply_LHS_matrix, np.sum(self.alm_len_real_percomp))
+            x_true = None
+            if self.CompSep_comm.Get_rank() == 0:
+                x_true = dense_matrix.solve_by_inversion(RHS)
+            x_true = self.CompSep_comm.bcast(x_true, root=0)
+            if self.CompSep_comm.Get_rank() == 0:
+                cond_num = dense_matrix.get_conditioning_number()
+                self.logger.info(f"Condition number of regular (A) matrix: {cond_num:.3e}")
+            def M_A_matrix(a):
+                if self.CompSep_comm.Get_rank() == 0:
+                    a = precond(a)
+                a = self.apply_LHS_matrix(a)
+                return a
+
+            dense_matrix = DenseMatrix(self.CompSep_comm, M_A_matrix, np.sum(self.alm_len_real_percomp))
+            if self.CompSep_comm.Get_rank() == 0:
+                cond_num = dense_matrix.get_conditioning_number()
+                self.logger.info(f"Condition number of preconditioned (MA) matrix: {cond_num:.3e}")
+
 
         if not seed is None:
             np.random.seed(seed)
         x0 = [np.random.normal(0.0, 1.0, self.alm_len_real_percomp[icomp]) for icomp in range(self.ncomp)]
         x0 = np.concatenate(x0)
-
-        sol_array = self.solve_CG(self.apply_LHS_matrix, RHS, x0)
+        sol_array = self.solve_CG(self.apply_LHS_matrix, RHS, x0, M=precond, x_true=x_true if debug_mode else None)
         sol_array = self.CompSep_comm.bcast(sol_array, root=0)
         sol = []
         idx_start = 0

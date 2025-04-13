@@ -53,6 +53,10 @@ components:
       lmax: "full"
       smoothing_scale: 300
 
+compsep:
+  dense_matrix_debug_mode: false  # Solve system first with dense matrix math, for debugging CG. Very slow for nside>32.
+  preconditioner: BeamOnlyPreconditioner
+
 niter_gibbs: 5
 
 nside: 64

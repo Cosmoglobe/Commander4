@@ -2,7 +2,7 @@ import astropy.units as u
 import astropy.constants as c
 import numpy as np
 import pysm3.units as pysm3u
-from utils.math_operations import alm_to_map
+from utils import alm_to_map
 import healpy as hp
 
 A = (2*c.h*u.GHz**3/c.c**2).to('MJy').value
