@@ -248,7 +248,7 @@ class CompSepSolver:
             s_bestfit = CG_solver.x
             return s_bestfit
         else:
-            LHS(None)  # Calling the LHS operator because the intialzation of the CG driver will call it.
+            LHS(None)  # Calling the LHS operator because the initialization of the CG driver will call it.
             if not x_true is None:
                 LHS(None)  # Second call, for the xtrue_A_xtrue calculation.
             stop_CG = False
@@ -370,7 +370,7 @@ class CompSepSolver:
                 x_true = dense_matrix.solve_by_inversion(RHS)
             x_true = self.CompSep_comm.bcast(x_true, root=0)
             if self.CompSep_comm.Get_rank() == 0:
-                cond_num = dense_matrix.get_condioning_number()
+                cond_num = dense_matrix.get_conditioning_number()
                 self.logger.info(f"Condition number of regular (A) matrix: {cond_num:.3e}")
             def M_A_matrix(a):
                 if self.CompSep_comm.Get_rank() == 0:
@@ -380,7 +380,7 @@ class CompSepSolver:
 
             dense_matrix = DenseMatrix(self.CompSep_comm, M_A_matrix, np.sum(self.alm_len_real_percomp))
             if self.CompSep_comm.Get_rank() == 0:
-                cond_num = dense_matrix.get_condioning_number()
+                cond_num = dense_matrix.get_conditioning_number()
                 self.logger.info(f"Condition number of preconditioned (MA) matrix: {cond_num:.3e}")
 
 

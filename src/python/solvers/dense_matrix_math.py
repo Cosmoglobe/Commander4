@@ -56,7 +56,7 @@ class DenseMatrix:
             return x_bestfit
 
 
-    def get_condioning_number(self):
+    def get_conditioning_number(self):
         """ Calculates the condition number of the matrix A using the SVD method.
             This is done by calculating the singular values of A and taking the ratio of the largest to smallest.
             Returns:
