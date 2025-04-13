@@ -355,7 +355,7 @@ class CompSepSolver:
         return b
 
 
-    def solve(self, seed=None, debug_mode=False) -> np.array:
+    def solve(self, seed=None) -> np.array:
 
         RHS = self.calc_RHS_mean() + self.calc_RHS_fluct()
         debug_mode = self.params.compsep.dense_matrix_debug_mode
