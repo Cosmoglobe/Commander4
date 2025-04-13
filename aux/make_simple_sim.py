@@ -15,20 +15,17 @@ import numpy as np
 import healpy as hp
 import pysm3
 import pysm3.units as u
-from commander_tod import commander_tod
 import matplotlib.pyplot as plt
 import h5py
 from  mpi4py import MPI
-from tqdm import trange
 import time
 import sys
 import os
 from traceback import print_exc
+from pixell.bunch import Bunch
 
 import camb
-from camb import model, initialpower
 
-from astropy.modeling.physical_models import BlackBody
 from save_sim_to_h5 import save_to_h5_file
 
 
@@ -107,7 +104,8 @@ def generate_thermal_dust(freqs, fwhm, units, nside):
         for iband in range(len(freqs)):
             hp.write_map(params.OUTPUT_FOLDER + f"true_sky_dust_smooth_{nside}_b{fwhm[iband].value:.0f}.fits", dust_ref_smoothed[-1], overwrite=True)
 
-    dust = ThermalDust()
+    dust_params = Bunch({"beta": beta, "T": T, "nu0": nu_dust, "lmax": "full"})
+    dust = ThermalDust(dust_params)
     dust_us = [dust_ref*dust.get_sed(f) for f in freqs]
     dust_us = np.array([hp.ud_grade(d.value, nside)*d.unit for d in dust_us], dtype=np.float32)
     dust_s = [dust_ref_smoothed[i]*dust.get_sed(freqs[i]) for i in range(len(freqs))]
@@ -140,7 +138,8 @@ def generate_sync(freqs, fwhm, units, nside):
         for iband in range(len(freqs)):
             hp.write_map(params.OUTPUT_FOLDER + f"true_sky_sync_{nside}.fits", sync_ref, overwrite=True)
 
-    sync = Synchrotron()
+    sync_params = Bunch({"beta": beta_s, "nu0": nu_sync, "lmax": "full"})
+    sync = Synchrotron(sync_params)
     sync_us = [sync_ref*sync.get_sed(f) for f in freqs]
     sync_us = np.array([hp.ud_grade(d.value, nside)*d.unit for d in sync_us], dtype=np.float32)
     sync_s = [sync_ref_smoothed[i]*sync.get_sed(freqs[i]) for i in range(len(freqs))]
@@ -246,6 +245,7 @@ def sim_noise(sigma0, chunk_size, with_corr_noise):
 
 
 def main():
+    os.makedirs(params.OUTPUT_FOLDER, exist_ok=True)
 
     # reading in main parameters
     nside = params.NSIDE
