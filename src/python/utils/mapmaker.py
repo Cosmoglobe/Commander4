@@ -2,7 +2,7 @@ import numpy as np
 import os
 import healpy as hp
 import ctypes as ct
-from data_models import DetectorTOD, DetectorMap
+from data_models.detector_TOD import DetectorTOD
 from pixell import bunch
 
 current_dir_path = os.path.dirname(os.path.realpath(__file__))

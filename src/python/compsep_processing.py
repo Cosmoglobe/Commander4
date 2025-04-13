@@ -80,7 +80,7 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int,
     sky_model = SkyModel(comp_list)
 
     npix = signal_map.shape[-1]
-    detector_map = sky_model.get_sky_at_nu(band_freq, params.nside, fwhm=compsep_solver.fwhm)
+    detector_map = sky_model.get_sky_at_nu(band_freq, params.nside, fwhm=compsep_solver.fwhm_rad)
     # cmb_sky = component_list[0].get_sky(band_freq)
     # dust_sky = component_list[1].get_sky(band_freq)
     # sync_sky = component_list[2].get_sky(band_freq)
