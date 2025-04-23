@@ -2,9 +2,10 @@ from mpi4py import MPI
 from mpi4py.MPI import Comm
 import numpy as np
 import logging
+from pixell import bunch
+import healpy as hp
 
-from data_models import DetectorMap
-from output import log, plotting
+from src.python.data_models.detector_map import DetectorMap
 
 
 def send_compsep(my_band_idx: int, detector_map: np.array, destinations: list[int]):

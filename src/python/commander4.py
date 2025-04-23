@@ -8,12 +8,17 @@ import logging
 from output import log
 import io
 import time
+import sys
 from traceback import print_exc
 
-from tod_processing import process_tod, init_tod_processing, get_empty_compsep_output
-from compsep_processing import process_compsep, init_compsep_processing
-from communication import receive_tod, send_tod, receive_compsep, send_compsep
+# Current solution to making sure the root directory is in the path. I don't like it, but it works for now (alternative seems to be running the entire thing as a module).
+module_root_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(module_root_path)
 
+from src.python.tod_processing import process_tod, init_tod_processing, get_empty_compsep_output
+from src.python.compsep_processing import process_compsep, init_compsep_processing
+from src.python.communication import receive_tod, send_tod, receive_compsep, send_compsep
+import src.python.output.log as log
 
 def main(params, params_dict):
     logger = logging.getLogger(__name__)
@@ -154,7 +159,7 @@ def main(params, params_dict):
 
 if __name__ == "__main__":
     # Parse parameter file
-    from parse_params import params, params_dict
+    from src.python.parse_params import params, params_dict
     log.init_loggers(params.logging)
     logger = logging.getLogger(__name__)
     try:

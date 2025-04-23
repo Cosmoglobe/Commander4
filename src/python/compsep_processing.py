@@ -4,12 +4,12 @@ from mpi4py.MPI import Comm
 import logging
 from pixell import bunch
 
-from data_models import DetectorMap
-from model.component import CMB, ThermalDust, Synchrotron, DiffuseComponent, Component
-import model.component
-from model.sky_model import SkyModel
-from output import log, plotting
-from solvers.comp_sep_solvers import CompSepSolver, amplitude_sampling_per_pix
+from src.python.data_models.detector_map import DetectorMap
+from src.python.model.component import CMB, ThermalDust, Synchrotron, DiffuseComponent, Component
+import src.python.model.component as component_lib
+from src.python.model.sky_model import SkyModel
+import src.python.output.plotting as plotting
+from src.python.solvers.comp_sep_solvers import CompSepSolver, amplitude_sampling_per_pix
 
 
 def init_compsep_processing(proc_comm: Comm, params: bunch):
@@ -39,7 +39,7 @@ def init_compsep_processing(proc_comm: Comm, params: bunch):
             # This class is then instantiated with the "params" specified, and appended to the components list.
             if component.params.lmax == "full":
                 component.params.lmax = 3*params.nside-1
-            components.append(getattr(model.component, component.component_class)(component.params))
+            components.append(getattr(component_lib, component.component_class)(component.params))
 
     return proc_master, proc_comm, num_bands, components
 

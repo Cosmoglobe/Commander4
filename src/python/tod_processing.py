@@ -5,11 +5,14 @@ import h5py
 import healpy as hp
 import math
 import logging
-from data_models import ScanTOD, DetectorTOD, DetectorMap
-from utils.mapmaker import single_det_map_accumulator
 from pixell import bunch
 from output import log
 from scipy.fft import rfft, irfft, rfftfreq
+
+from src.python.data_models.detector_map import DetectorMap
+from src.python.data_models.detector_TOD import DetectorTOD
+from src.python.data_models.scan_TOD import ScanTOD
+from src.python.utils.mapmaker import single_det_map_accumulator
 
 nthreads=1
 

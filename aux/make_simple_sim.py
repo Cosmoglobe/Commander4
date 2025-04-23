@@ -23,14 +23,12 @@ import sys
 import os
 from traceback import print_exc
 from pixell.bunch import Bunch
-
 import camb
 
+module_root_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.append(module_root_path) # Add the parent directory of this file, which is the Commander 4 root directory, to PATH, so that we can import packages from e.g. src/.
+
 from save_sim_to_h5 import save_to_h5_file
-
-
-sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))) # Add the parent directory of this file, which is the Commander 4 root directory, to PATH, so that we can import packages from e.g. src/.
-
 from src.python.model.component import ThermalDust, Synchrotron
 
 

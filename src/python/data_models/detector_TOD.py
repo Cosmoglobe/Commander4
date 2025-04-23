@@ -1,4 +1,4 @@
-from .scan_TOD import ScanTOD
+from src.python.data_models.scan_TOD import ScanTOD
 
 class DetectorTOD:
     def __init__(self, scanlist: list[ScanTOD], nu):

@@ -3,7 +3,8 @@ import matplotlib.pyplot as plt
 import os
 import numpy as np
 from pixell import bunch
-from model.component import Component
+
+from src.python.model.component import Component
 
 
 def plot_data_maps(master, params, detector, chain, iteration, **kwargs):

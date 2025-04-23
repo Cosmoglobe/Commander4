@@ -2,17 +2,17 @@ import numpy as np
 import healpy as hp
 import time
 from pixell import utils, curvedsky
+from pixell import curvedsky as pixell_curvedsky
 import logging
 from mpi4py.MPI import Comm
 from mpi4py import MPI
 
-from output import log
-from output.plotting import alm_plotter
-from model.component import CMB, ThermalDust, Synchrotron, Component
-from utils.math_operations import alm_to_map, alm_to_map_adjoint
-from pixell import curvedsky as pixell_curvedsky
-from solvers.dense_matrix_math import DenseMatrix
-import solvers.preconditioners
+from src.python.output.log import logassert
+from src.python.output.plotting import alm_plotter
+from src.python.model.component import CMB, ThermalDust, Synchrotron, Component
+from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint
+from src.python.solvers.dense_matrix_math import DenseMatrix
+import src.python.solvers.preconditioners as preconditioners
 
 
 def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:
