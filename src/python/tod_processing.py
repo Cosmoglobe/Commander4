@@ -40,16 +40,16 @@ def tod2map(band_comm, det_static: DetectorTOD, det_cs_map: np.array, params: bu
         map_corr_noise[map_corr_noise != 0] /= map_inv_var[map_corr_noise != 0]
         map_rms = np.zeros_like(map_inv_var) + np.inf
         map_rms[map_inv_var != 0] = 1.0/np.sqrt(map_inv_var[map_inv_var != 0])
-        detmap = DetectorMap(map_signal, map_corr_noise, map_rms, det_static.nu)
+        detmap = DetectorMap(map_signal, map_corr_noise, map_rms, det_static.nu, det_static.fwhm)
         return detmap
 
 
-def read_data(band_idx, scan_idx_start, scan_idx_stop, params: bunch) -> list[ScanTOD]:
+def read_TOD_data(h5_filename: str, band: int, scan_idx_start, scan_idx_stop, nside: int, fwhm: float) -> list[ScanTOD]:
     logger = logging.getLogger(__name__)
-    h5_filename = params.input_paths.tod_filename
+    # h5_filename = params.input_paths.tod_filename
     with h5py.File(h5_filename) as f:
         # for band in bands:
-        band = params.bands[band_idx]
+        # band = params.bands[band_idx]
         band_formatted = f"{band:04d}"
         scanlist = []
         for iscan in range(scan_idx_start, scan_idx_stop):
@@ -60,10 +60,10 @@ def read_data(band_idx, scan_idx_start, scan_idx_stop, params: bunch) -> list[Sc
             except KeyError:
                 logger.exception(f"{iscan}\n{band_formatted}\n{list(f)}")
                 raise KeyError
-            log.logassert(np.max(pix) < 12*params.nside**2, f"Nside is {params.nside}, but found pixel index exceeding 12nside^2 ({np.max(12*params.nside**2)})", logger)
-            theta, phi = hp.pix2ang(params.nside, pix)
+            log.logassert(np.max(pix) < 12*nside**2, f"Nside is {nside}, but found pixel index exceeding 12nside^2 ({np.max(12*nside**2)})", logger)
+            theta, phi = hp.pix2ang(nside, pix)
             scanlist.append(ScanTOD(tod, theta, phi, psi, 0., iscan))
-        det = DetectorTOD(scanlist, float(band))
+        det = DetectorTOD(scanlist, float(band), fwhm)
     return det
 
 
@@ -89,7 +89,7 @@ def find_unique_pixels(scanlist: list[ScanTOD], params: bunch) -> np.array:
     return unique_pixels
 
 
-def init_tod_processing(proc_comm: Comm, params: bunch):
+def init_tod_processing(tod_comm: Comm, params: bunch):
     """To be run once before starting TOD processing.
 
     Determines whether the process is TOD master, creates the band communicator
@@ -97,48 +97,79 @@ def init_tod_processing(proc_comm: Comm, params: bunch):
     experiment data.
 
     Input:
-        proc_comm (MPI.Comm): Communicator for the TOD processes.
+        tod_comm (MPI.Comm): Communicator for the TOD processes.
         params (bunch): The parameters from the input parameter file.
 
     Output:
-        proc_master (bool): Whether this process is the master of the TOD process.
-        proc_comm (MPI.Comm): The same as the input communicator (just returned for clarity).
+        tod_master (bool): Whether this process is the master of the TOD process.
+        tod_comm (MPI.Comm): The same as the input communicator (just returned for clarity).
         band_master (bool): Whether this process is the master of the inter-band communicator.
         band_comm (MPI.Comm): The inter-band communicator.
         experiment_data (DetectorTOD): THe TOD data for the band of this process.
     """
 
     logger = logging.getLogger(__name__)
-    num_bands = len(params.bands)
+    # num_bands = len(params.bands)
+    # bands_per_experiment = []
+    # experiment_names = []
+    global_rank = 0
+    for experiment in params.experiments:
+        if params.experiments[experiment].enabled:
+            # experiment_names.append(experiment)
+            # bands_per_experiment.append(len(params.experiments[experiment].bands))
+            for band in params.experiments[experiment].bands:
+                if params.experiments[experiment].bands[band].enabled:
+                    if tod_comm.Get_rank() == global_rank:
+                        my_experiment_name = experiment
+                        my_band_name = band
+                        my_experiment = params.experiments[experiment]
+                        my_band = params.experiments[experiment].bands[band]
+                        my_num_scans = params.experiments[experiment].num_scans
+                    global_rank += 1
+    tot_num_bands = global_rank
+
+    # rank_to_assignment = {}
+    # current_rank_offset = 0
+    # for exp_idx, num_bands in enumerate(bands_per_experiment):
+    #     for band_idx in range(num_bands):
+    #         global_rank = current_rank_offset + band_idx
+    #         # rank_to_assignment[global_rank] = (exp_idx, band_idx)
+    #         rank_to_assignment[global_rank] = (exp_idx, band_idx)
+    #     current_rank_offset += num_bands
+    # my_experiment_idx, my_band_idx = rank_to_assignment[tod_comm.Get_rank()]
+    # my_experiment_name = experiment_names[my_experiment_idx]
+    # my_experiment = params.experiments[my_experiment_name]
+    # my_band = my_experiment.bands[my_band_idx]
 
     # am I the master of the TOD communicator?
-    MPIsize_tod, MPIrank_tod = proc_comm.Get_size(), proc_comm.Get_rank()
-    proc_master = MPIrank_tod == 0
-    if proc_master:
-        logger.info(f"TOD: {MPIsize_tod} tasks allocated to TOD processing of {num_bands} bands.")
-        log.logassert(MPIsize_tod >= num_bands, f"Number of MPI tasks dedicated to TOD processing ({MPIsize_tod}) must be equal to or larger than the number of bands ({num_bands}).", logger)
+    MPIsize_tod, MPIrank_tod = tod_comm.Get_size(), tod_comm.Get_rank()
+    tod_master = MPIrank_tod == 0
+    if tod_master:
+        logger.info(f"TOD: {MPIsize_tod} tasks allocated to TOD processing of {tot_num_bands} bands.")
+        log.logassert(MPIsize_tod >= tot_num_bands, f"Number of MPI tasks dedicated to TOD processing ({MPIsize_tod}) must be equal to or larger than the number of bands ({tot_num_bands}).", logger)
 
-    MPIcolor_band = MPIrank_tod%num_bands  # Spread the MPI tasks over the different bands.
-    band_comm = proc_comm.Split(MPIcolor_band, key=MPIrank_tod)  # Create communicators for each different band.
+    MPIcolor_band = MPIrank_tod%tot_num_bands  # Spread the MPI tasks over the different bands.
+    band_comm = tod_comm.Split(MPIcolor_band, key=MPIrank_tod)  # Create communicators for each different band.
     MPIsize_band, MPIrank_band = band_comm.Get_size(), band_comm.Get_rank()  # Get my local rank, and the total size of, the band-communicator I'm on.
     logger.info(f"TOD: Hello from TOD-rank {MPIrank_tod} (on machine {MPI.Get_processor_name()}), dedicated to band {MPIcolor_band}, with local rank {MPIrank_band} (local communicator size: {MPIsize_band}).")
     
     band_master = MPIrank_band == 0  # Am I the master of my local band.
 
     # Creating "tod_band_masters", an array which maps the band index to the rank of the master of that band.
-    data = (MPIcolor_band, proc_comm.Get_rank()) if band_comm.Get_rank() == 0 else None
-    all_data = proc_comm.allgather(data)
+    my_band_identifier = f"{my_experiment_name}$$${my_band_name}"
+    data = (my_band_identifier, MPI.COMM_WORLD.Get_rank()) if band_comm.Get_rank() == 0 else None
+    # data = (MPIcolor_band, tod_comm.Get_rank()) if band_comm.Get_rank() == 0 else None
+    all_data = tod_comm.allgather(data)
     tod_band_masters_dict = {item[0]: item[1] for item in all_data if item is not None}
-    tod_band_masters = np.array([tod_band_masters_dict[i] for i in range(num_bands)])
-
-    scans_per_rank = math.ceil(params.num_scans/MPIsize_band)
+    # tod_band_masters = np.array([tod_band_masters_dict[i] for i in range(tot_num_bands)])
+    scans_per_rank = math.ceil(my_num_scans/MPIsize_band)
     my_scans_start = scans_per_rank * MPIrank_band
-    my_scans_stop = min(scans_per_rank * (MPIrank_band + 1), params.num_scans) # In case the number of scans is not divisible by the number of ranks
+    my_scans_stop = min(scans_per_rank * (MPIrank_band + 1), my_num_scans) # "min" in case the number of scans is not divisible by the number of ranks
 #    my_scans_start, my_scans_stop = scans_per_rank*MPIrank_band, scans_per_rank*(MPIrank_band + 1)
     logger.info(f"TOD: Rank {MPIrank_tod} assigned scans {my_scans_start} - {my_scans_stop} on band{MPIcolor_band}.")
-    experiment_data = read_data(MPIcolor_band, my_scans_start, my_scans_stop, params)
+    experiment_data = read_TOD_data(my_experiment.data_path, my_band.freq, my_scans_start, my_scans_stop, my_experiment.nside, my_band.fwhm)
 
-    return proc_master, proc_comm, band_comm, MPIcolor_band, tod_band_masters, experiment_data
+    return tod_master, tod_comm, band_comm, my_band_identifier, tod_band_masters_dict, experiment_data
 
 
 

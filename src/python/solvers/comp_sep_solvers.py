@@ -51,19 +51,18 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
 
 
 class CompSepSolver:
-    def __init__(self, comp_list: list[Component], map_sky, map_rms, freqs, params, CompSep_comm: Comm):
-        # TODO: 1. Find better way of passing all frequencies (all ranks need the mixing matrix).
+    def __init__(self, comp_list: list[Component], map_sky, map_rms, freq, fwhm, params, CompSep_comm: Comm):
         self.logger = logging.getLogger(__name__)
         self.CompSep_comm = CompSep_comm
         self.params = params
         self.map_sky = map_sky
         self.map_rms = map_rms
-        self.freqs = np.array(params.bands) #freqs
+        self.freqs = np.array(CompSep_comm.allgather(freq))
         self.npix = map_rms.shape[0]
-        self.nband = len(params.bands)
+        self.nband = len(self.freqs)
         self.my_band_idx = CompSep_comm.Get_rank()
         self.nside = np.sqrt(self.npix//12)
-        log.logassert(self.nside.is_integer(), f"Npix dimension of map ({self.npix}) resulting in a non-integer nside ({self.nside}).", self.logger)
+        logassert(self.nside.is_integer(), f"Npix dimension of map ({self.npix}) resulting in a non-integer nside ({self.nside}).", self.logger)
         self.nside = int(self.nside)
         self.lmax = 3*self.nside-1
         self.alm_len_complex = ((self.lmax+1)*(self.lmax+2))//2
@@ -74,9 +73,8 @@ class CompSepSolver:
         self.lmax_per_comp = np.array([comp.lmax for comp in comp_list])
         self.alm_len_complex_percomp = np.array([((lmax+1)*(lmax+2))//2 for lmax in self.lmax_per_comp])
         self.alm_len_real_percomp = np.array([(lmax+1)**2 for lmax in self.lmax_per_comp])
-        log.logassert(len(self.params.fwhm) == len(self.freqs), f"Number of bands {len(self.freqs)} does not match length of FWHM ({len(self.params.fwhm)}).", self.logger)
-        self.fwhm_rad_allbands = np.array(self.params.fwhm)/60.0*(np.pi/180.0)  # Converting arcmin to radians.
-        self.fwhm_rad = self.fwhm_rad_allbands[self.my_band_idx]
+        self.fwhm_rad = fwhm/60.0*(np.pi/180.0)
+        self.fwhm_rad_allbands = np.array(CompSep_comm.allgather(fwhm))
 
 
     def alm_imag2real(self, alm, lmax):
@@ -106,7 +104,7 @@ class CompSepSolver:
         logger = logging.getLogger(__name__)
 
         a_array = self.CompSep_comm.bcast(a_array, root=0)  # Send a to all worker ranks (which are called with a dummy a).
-        log.logassert(a_array.dtype == np.float64, "Provided component array is not of type np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
+        logassert(a_array.dtype == np.float64, "Provided component array is not of type np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
 
         a = []
         idx_start = 0
@@ -361,7 +359,7 @@ class CompSepSolver:
         debug_mode = self.params.compsep.dense_matrix_debug_mode
 
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners", and has a name specified by self.params.compsep.preconditioner.
-        precond = getattr(solvers.preconditioners, self.params.compsep.preconditioner)(self)
+        precond = getattr(preconditioners, self.params.compsep.preconditioner)(self)
 
         if debug_mode:  # For testing preconditioner with a true solution as reference, first solving for exact solution with dense matrix math.
             dense_matrix = DenseMatrix(self.CompSep_comm, self.apply_LHS_matrix, np.sum(self.alm_len_real_percomp))
@@ -370,8 +368,9 @@ class CompSepSolver:
                 x_true = dense_matrix.solve_by_inversion(RHS)
             x_true = self.CompSep_comm.bcast(x_true, root=0)
             if self.CompSep_comm.Get_rank() == 0:
-                cond_num = dense_matrix.get_conditioning_number()
-                self.logger.info(f"Condition number of regular (A) matrix: {cond_num:.3e}")
+                sing_vals = dense_matrix.get_sing_vals()
+                self.logger.info(f"Condition number of regular (A) matrix: {sing_vals[0]/sing_vals[-1]:.3e}")
+                self.logger.info(f"Sing-vals: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
             def M_A_matrix(a):
                 if self.CompSep_comm.Get_rank() == 0:
                     a = precond(a)
@@ -380,8 +379,9 @@ class CompSepSolver:
 
             dense_matrix = DenseMatrix(self.CompSep_comm, M_A_matrix, np.sum(self.alm_len_real_percomp))
             if self.CompSep_comm.Get_rank() == 0:
-                cond_num = dense_matrix.get_conditioning_number()
-                self.logger.info(f"Condition number of preconditioned (MA) matrix: {cond_num:.3e}")
+                sing_vals = dense_matrix.get_sing_vals()
+                self.logger.info(f"Condition number of preconditioned (MA) matrix: {sing_vals[0]/sing_vals[-1]:.3e}")
+                self.logger.info(f"Sing-vals: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
 
 
         if not seed is None:

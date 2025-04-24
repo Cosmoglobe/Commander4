@@ -12,7 +12,7 @@ import src.python.output.plotting as plotting
 from src.python.solvers.comp_sep_solvers import CompSepSolver, amplitude_sampling_per_pix
 
 
-def init_compsep_processing(proc_comm: Comm, params: bunch):
+def init_compsep_processing(CompSep_comm: Comm, params: bunch):
     """To be run once before starting component separation processing.
 
     Determines whether the process is compsep master, and the number of bands.
@@ -27,10 +27,11 @@ def init_compsep_processing(proc_comm: Comm, params: bunch):
         num_bands (int): The number of data bands.
     """
     logger = logging.getLogger(__name__)
-    proc_master = proc_comm.Get_rank() == 0
-    logger.info(f"CompSep: Hello from TOD-rank {proc_comm.rank} (on machine {MPI.Get_processor_name()}), dedicated to band {proc_comm.rank}.")
-    num_bands = len(params.bands)
+    proc_master = CompSep_comm.Get_rank() == 0
+    logger.info(f"CompSep: Hello from CompSep-rank {CompSep_comm.rank} (on machine {MPI.Get_processor_name()}), dedicated to band {CompSep_comm.rank}.")
+    num_bands = len(params.CompSep_bands)
 
+    ### Creating list of all components ###
     components = []
     for component_str in params.components:
         component = params.components[component_str]
@@ -41,7 +42,23 @@ def init_compsep_processing(proc_comm: Comm, params: bunch):
                 component.params.lmax = 3*params.nside-1
             components.append(getattr(component_lib, component.component_class)(component.params))
 
-    return proc_master, proc_comm, num_bands, components
+    ### Setting up info for each band, including where to get the data from (map from file, or receive from TOD processing) ###
+    current_band_idx = 0
+    for band_str in params.CompSep_bands:
+        if params.CompSep_bands[band_str].enabled:
+            if current_band_idx == CompSep_comm.Get_rank():  # Each rank is responsible for one band, for simplicity the band matching the index of their rank.
+                my_band = params.CompSep_bands[band_str]
+                if my_band.get_from != "file":
+                    band_identifier = f"{my_band.get_from}$$${band_str}"
+                else:
+                    band_identifier = band_str
+            current_band_idx += 1
+
+    data = (band_identifier, MPI.COMM_WORLD.Get_rank())
+    all_data = CompSep_comm.allgather(data)
+    CompSep_band_masters_dict = {item[0]: item[1] for item in all_data if item is not None}
+
+    return proc_master, CompSep_comm, num_bands, components, band_identifier, CompSep_band_masters_dict, my_band
 
 
 def process_compsep(detector_data: DetectorMap, iter: int, chain: int,
@@ -64,6 +81,7 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int,
     signal_map = detector_data.map_sky
     rms_map = detector_data.map_rms
     band_freq = detector_data.nu
+    fwhm = detector_data.fwhm
     if params.make_plots:
         detector_to_plot = proc_comm.Get_rank()
         logging.info(f"Rank {proc_comm.Get_rank()} plotting detector map.")
@@ -72,7 +90,7 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int,
     if params.pixel_compsep_sampling:
         comp_maps = amplitude_sampling_per_pix(signal_map, rms_map, band_freq)
     else:
-        compsep_solver = CompSepSolver(comp_list, signal_map, rms_map, band_freq, params, proc_comm)
+        compsep_solver = CompSepSolver(comp_list, signal_map, rms_map, band_freq, fwhm, params, proc_comm)
         comp_list = compsep_solver.solve(seed=9999*chain+11*iter)
         if params.make_plots and proc_master:
             plotting.plot_cg_res(params, chain, iter, compsep_solver.CG_residuals)
