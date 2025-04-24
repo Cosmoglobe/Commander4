@@ -332,6 +332,7 @@ def main():
         print(f"Rank 1 finished calculating pointing in {time.time()-t0:.1f}s.")
 
         noise_map = np.zeros((len(freqs), npix))
+        inv_var_map = np.zeros((len(freqs), npix))
 
     for i in range(len(freqs)):
 
@@ -365,16 +366,19 @@ def main():
             else:
                 print(f"Lowest pixel hit count is {np.min(hitmap)}.")
             noise_map[i] /= hitmap
-
+            inv_var_map[i] = hitmap/sigma0s[i].value**2
             assert signal_tod[-1].shape == psi.shape, f"Shape of simulated TOD {signal_tod[-1].shape} differs from generated psi {psi.shape}"
 
 
     if rank == 0:
         t0 = time.time()
         print(f"Rank 0 writing simulation to file.")
-        if params.make_plots:
+        if params.write_fits:
             for i in range(len(freqs)):
                 hp.write_map(params.OUTPUT_FOLDER + f"true_sky_full_{nside}_{freqs[i]}.fits", comps_sum_smoothed[i], overwrite=True)
+                hp.write_map(params.OUTPUT_FOLDER + f"rms_map_{nside}_{freqs[i]}.fits", 1.0/np.sqrt(inv_var_map[i]), overwrite=True)
+        if params.make_plots:
+            for i in range(len(freqs)):
                 
                 hp.mollview(comps_sum_smoothed[i,0], title=f"Full 'clean' sky smoothed {freqs[i]:.2f}GHz")
                 plt.savefig(params.OUTPUT_FOLDER + f"sky_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
