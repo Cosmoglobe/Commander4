@@ -35,10 +35,8 @@ def main(params, params_dict):
     tot_num_compsep_bands = len(params.CompSep_bands)
     tot_num_compsep_bands_from_TOD = len([band for band in params.CompSep_bands if params.CompSep_bands[band].get_from != "file"])  # Number of the bands on CompSep side that come from the TOD side.
 
-    if worldsize != (params.MPI_config.ntask_tod + params.MPI_config.ntask_compsep + params.MPI_config.ntask_cmb):
-        log.lograise(RuntimeError, f"Total number of MPI tasks ({worldsize}) must equal the sum of tasks for TOD ({params.MPI_config.ntask_tod}) + CompSep ({params.MPI_config.ntask_compsep}) + CMB realization ({params.MPI_config.ntask_cmb}).", logger)
-    if (not params.MPI_config.use_MPI_for_CMB) and (params.MPI_config.ntask_cmb > 1):
-        log.lograise(RuntimeError, f"Number of MPI tasks allocated to CMB realization cannot be > 1 if 'use_MPI_for_CMB' is False.", logger)
+    if worldsize != (params.MPI_config.ntask_tod + params.MPI_config.ntask_compsep):
+        log.lograise(RuntimeError, f"Total number of MPI tasks ({worldsize}) must equal the sum of tasks for TOD ({params.MPI_config.ntask_tod}) + CompSep ({params.MPI_config.ntask_compsep}).", logger)
     if not params.betzy_mode and params.MPI_config.ntask_compsep != tot_num_compsep_bands:
         log.lograise(RuntimeError, f"CompSep needs exactly as many MPI tasks {params.MPI_config.ntask_compsep} as there are bands {tot_num_compsep_bands}.", logger)
     if params.betzy_mode and params.MPI_config.ntask_compsep != params.nthreads_compsep*tot_num_experiment_bands:
@@ -46,11 +44,6 @@ def main(params, params_dict):
     # check if we have at least ntask_compsep+1 MPI tasks, otherwise abort
     # if params.MPI_config.ntask_compsep+1 > worldsize:
     #     log.lograise(RuntimeError, f"not enough MPI tasks started; need at least {params.MPI_config.ntask_compsep+1}", logger)
-
-    doing_cmb = params.MPI_config.ntask_cmb > 0
-    if doing_cmb:
-        if tot_num_compsep_bands > params.MPI_config.ntask_cmb:
-            log.lograise(RuntimeError, "If running with concurrent CMB sampling, ntask_cmb must be greater than or equal to the number of bands", logger)
 
     # split the world communicator into a communicator for compsep and one for TOD
     # world rank [0; ntask_compsep[ => compsep
@@ -75,8 +68,7 @@ def main(params, params_dict):
         os.environ["MKL_NUM_THREADS"] = f"{params.nthreads_compsep}"
         os.environ["VECLIB_MAXIMUM_THREADS"] = f"{params.nthreads_compsep}"
         os.environ["NUMEXPR_NUM_THREADS"] = f"{params.nthreads_compsep}"
-    else:
-        color = 2  # Constrained CMB
+
     proc_comm = MPI.COMM_WORLD.Split(color, key=worldrank)
     MPI.COMM_WORLD.barrier()
     time.sleep(worldrank*1e-2)  # Small sleep to get prints in nice order.
@@ -86,10 +78,6 @@ def main(params, params_dict):
     # We ensured that this works by the "key=worldrank" in the split command.
     tod_master = 0 if params.MPI_config.ntask_tod > 0 else None
     compsep_master = params.MPI_config.ntask_tod
-    if doing_cmb:
-        cmb_master = params.MPI_config.ntask_tod + params.MPI_config.ntask_compsep
-    else:
-        cmb_master = None
 
     if params.betzy_mode:
         compsep_band_masters = np.array([compsep_master+i*params.nthreads_compsep for i in range(len(params.CompSep_bands))])

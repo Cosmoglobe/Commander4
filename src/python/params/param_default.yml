@@ -1,8 +1,6 @@
 MPI_config:  # Specifying how many MPI tasks to allocate to different workloads. Sum needs to match total number of tasks allocated to MPI.
   ntask_tod: 11  # TOD sampling, which only relies on MPI, not OpenMP, and this can therefore be set as high as desired.
   ntask_compsep: 2  # Component Separation (currently only =1 supported), where each MPI tasks should correspond to 1 node, and threads are used for efficient SHTs.
-  ntask_cmb: 0  # Set to 0 to not perform additional CMB realizations per Gibbs iteration, beyond the one performed during CompSep.
-  use_MPI_for_CMB: True
 nthreads_compsep: 32  # Threads dedicated to performing individual SHTs for each ntask_compsep. Set to total number of avaible cores on each node performing CompSep.
 betzy_mode: false  # Turn on if running on Betzy and you understand the Commander 4 oversampling implementation.
 
