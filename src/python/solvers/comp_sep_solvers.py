@@ -2,10 +2,11 @@ import numpy as np
 import healpy as hp
 import time
 from pixell import utils, curvedsky
-from pixell import curvedsky as pixell_curvedsky
+from pixell.bunch import Bunch
 import logging
-from mpi4py.MPI import Comm
 from mpi4py import MPI
+from numpy.typing import NDArray
+from typing import Callable
 
 from src.python.output.log import logassert
 from src.python.output.plotting import alm_plotter
@@ -51,7 +52,7 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
 
 
 class CompSepSolver:
-    def __init__(self, comp_list: list[Component], map_sky, map_rms, freq, fwhm, params, CompSep_comm: Comm):
+    def __init__(self, comp_list: list[Component], map_sky: NDArray, map_rms: NDArray, freq: float, fwhm: float, params: Bunch, CompSep_comm: MPI.Comm):
         self.logger = logging.getLogger(__name__)
         self.CompSep_comm = CompSep_comm
         self.params = params
@@ -77,13 +78,13 @@ class CompSepSolver:
         self.fwhm_rad_allbands = np.array(CompSep_comm.allgather(fwhm))
 
 
-    def alm_imag2real(self, alm, lmax):
+    def alm_imag2real(self, alm: NDArray[np.complex128], lmax: int) -> NDArray[np.float64]:
         ainfo = curvedsky.alm_info(lmax=lmax)
         i = int(ainfo.mstart[1]+1)
         return np.concatenate([alm[:i].real,np.sqrt(2.)*alm[i:].view(np.float64)])
 
 
-    def alm_real2imag(self, x, lmax):
+    def alm_real2imag(self, x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128]:
         ainfo = curvedsky.alm_info(lmax=lmax)
         i    = int(ainfo.mstart[1]+1)
         oalm = np.zeros(ainfo.nelem, np.complex128)
@@ -92,7 +93,7 @@ class CompSepSolver:
         return oalm
 
 
-    def apply_LHS_matrix(self, a_array: np.array):
+    def apply_LHS_matrix(self, a_array: NDArray) -> NDArray:
         """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of the Ax=b system for global component separation.
             The full A matrix can be written B^T Y^T M^T N^-1 M Y B, where B is the beam smoothing, M is the mixing matrix, and N is the noise covariance matrix.
 
@@ -139,7 +140,7 @@ class CompSepSolver:
         # Y^-1 M Y a
         a_old = a.copy()
         a = np.zeros((self.alm_len_complex), dtype=np.complex128)
-        pixell_curvedsky.map2alm_healpix(a_old, a, niter=3, spin=0, nthread=self.params.nthreads_compsep)
+        curvedsky.map2alm_healpix(a_old, a, niter=3, spin=0, nthread=self.params.nthreads_compsep)
 
         # B Y^-1 M Y a
         hp.smoothalm(a, self.fwhm_rad, inplace=True)
@@ -163,7 +164,7 @@ class CompSepSolver:
         # Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         a_old = a.copy()
         a = np.zeros((self.npix))
-        pixell_curvedsky.map2alm_healpix(a, a_old, niter=3, adjoint=True, spin=0, nthread=self.params.nthreads_compsep)
+        curvedsky.map2alm_healpix(a, a_old, niter=3, adjoint=True, spin=0, nthread=self.params.nthreads_compsep)
 
         # M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         a_old = a.copy()
@@ -195,7 +196,7 @@ class CompSepSolver:
         return a#.flatten()
 
 
-    def solve_CG(self, LHS, RHS, x0, M=None, x_true=None):
+    def solve_CG(self, LHS: Callable, RHS: NDArray, x0: NDArray, M = None, x_true = None) -> NDArray|None:
         """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG from the pixell package.
             Assumes that both x and b are in alm space.
 
@@ -206,7 +207,10 @@ class CompSepSolver:
                 M (callable): Preconditioner for the CG solver. A function/callable which approximates A^-1 (optional).
                 x_true (np.array): True solution for x, in order to print the true error (optional, used for testing).
             Returns:
-                m_bestfit: The resulting best-fit solution, in alm space.
+                if self.CompSep_comm.Get_rank() == 0:
+                    m_bestfit (np.array): The resulting best-fit solution, in alm space.
+                else:
+                    None
         """
         logger = logging.getLogger(__name__)
         checkpoint_interval = 10
@@ -259,7 +263,7 @@ class CompSepSolver:
                 stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
 
 
-    def calc_RHS_mean(self):
+    def calc_RHS_mean(self) -> NDArray:
         # d
         b = self.map_sky.copy()
 
@@ -277,7 +281,7 @@ class CompSepSolver:
         # Y^-1^T B^T Y^T N^-1 d
         b_old = b.copy()
         b = np.zeros((self.npix))
-        pixell_curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
+        curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
 
         # M^T Y^-1^T B^T Y^T N^-1 d
         b_old = b.copy()
@@ -306,7 +310,7 @@ class CompSepSolver:
         return b
 
 
-    def calc_RHS_fluct(self):
+    def calc_RHS_fluct(self) -> NDArray:
         # d
         b = np.random.normal(0.0, 1.0, self.map_rms.shape)
 
@@ -324,7 +328,7 @@ class CompSepSolver:
         # Y^-1^T B^T Y^T N^-1 d
         b_old = b.copy()
         b = np.zeros((self.npix))
-        pixell_curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
+        curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
 
         # M^T Y^-1^T B^T Y^T N^-1 d
         b_old = b.copy()
@@ -353,7 +357,7 @@ class CompSepSolver:
         return b
 
 
-    def solve(self, seed=None) -> np.array:
+    def solve(self, seed=None) -> list[Component]:
 
         RHS = self.calc_RHS_mean() + self.calc_RHS_fluct()
         debug_mode = self.params.compsep.dense_matrix_debug_mode

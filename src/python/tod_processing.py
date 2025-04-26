@@ -1,13 +1,13 @@
 import numpy as np
 from mpi4py import MPI
-from mpi4py.MPI import Comm
 import h5py
 import healpy as hp
 import math
 import logging
-from pixell import bunch
+from pixell.bunch import Bunch
 from output import log
 from scipy.fft import rfft, irfft, rfftfreq
+from numpy.typing import NDArray
 
 from src.python.data_models.detector_map import DetectorMap
 from src.python.data_models.detector_TOD import DetectorTOD
@@ -16,12 +16,12 @@ from src.python.utils.mapmaker import single_det_map_accumulator
 
 nthreads=1
 
-def get_empty_compsep_output(staticData: list[DetectorTOD], params) -> list[np.array]:
+def get_empty_compsep_output(staticData: list[DetectorTOD], params) -> NDArray[np.float64]:
     "Creates a dummy compsep output for a single band"
     return np.zeros(12*params.nside**2,dtype=np.float64)
 
 
-def tod2map(band_comm, det_static: DetectorTOD, det_cs_map: np.array, params: bunch) -> DetectorMap:
+def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, params: Bunch) -> DetectorMap:
     detmap_signal, detmap_corr_noise, detmap_inv_var = single_det_map_accumulator(det_static, det_cs_map, params)
     map_signal = np.zeros_like(detmap_signal)
     map_corr_noise = np.zeros_like(detmap_corr_noise)
@@ -44,7 +44,7 @@ def tod2map(band_comm, det_static: DetectorTOD, det_cs_map: np.array, params: bu
         return detmap
 
 
-def read_TOD_data(h5_filename: str, band: int, scan_idx_start, scan_idx_stop, nside: int, fwhm: float) -> list[ScanTOD]:
+def read_TOD_data(h5_filename: str, band: int, scan_idx_start: int, scan_idx_stop: int, nside: int, fwhm: float) -> list[ScanTOD]:
     logger = logging.getLogger(__name__)
     # h5_filename = params.input_paths.tod_filename
     with h5py.File(h5_filename) as f:
@@ -67,12 +67,12 @@ def read_TOD_data(h5_filename: str, band: int, scan_idx_start, scan_idx_stop, ns
     return det
 
 
-def find_unique_pixels(scanlist: list[ScanTOD], params: bunch) -> np.array:
+def find_unique_pixels(scanlist: list[ScanTOD], params: Bunch) -> NDArray[np.float64]:
     """Finds the unique pixels in the list of scans.
 
     Input:
         scanlist (list[ScanTOD]): The list of scans.
-        params (bunch): The parameters from the input parameter file.
+        params (Bunch): The parameters from the input parameter file.
 
     Output:
         unique_pixels (np.array): The unique pixels in the scans.
@@ -89,7 +89,7 @@ def find_unique_pixels(scanlist: list[ScanTOD], params: bunch) -> np.array:
     return unique_pixels
 
 
-def init_tod_processing(tod_comm: Comm, params: bunch):
+def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[MPI.Comm, MPI.Comm, str, dict[str,int], DetectorTOD]:
     """To be run once before starting TOD processing.
 
     Determines whether the process is TOD master, creates the band communicator
@@ -98,13 +98,13 @@ def init_tod_processing(tod_comm: Comm, params: bunch):
 
     Input:
         tod_comm (MPI.Comm): Communicator for the TOD processes.
-        params (bunch): The parameters from the input parameter file.
+        params (Bunch): The parameters from the input parameter file.
 
     Output:
-        tod_master (bool): Whether this process is the master of the TOD process.
-        tod_comm (MPI.Comm): The same as the input communicator (just returned for clarity).
-        band_master (bool): Whether this process is the master of the inter-band communicator.
-        band_comm (MPI.Comm): The inter-band communicator.
+        is_band_master (bool): Whether this process is the master of the band communicator.
+        band_comm (MPI.Comm): A new communicator for the ranks working on the same band within TOD processing.
+        my_band_identifier (str): Unique string identifier for the experiment+band this process is responsible for.
+        tod_band_masters_dict (dict[str->int]): Dictionary mapping band identifiers to the global rank of the process responsible for that band.
         experiment_data (DetectorTOD): THe TOD data for the band of this process.
     """
 
@@ -153,7 +153,7 @@ def init_tod_processing(tod_comm: Comm, params: bunch):
     MPIsize_band, MPIrank_band = band_comm.Get_size(), band_comm.Get_rank()  # Get my local rank, and the total size of, the band-communicator I'm on.
     logger.info(f"TOD: Hello from TOD-rank {MPIrank_tod} (on machine {MPI.Get_processor_name()}), dedicated to band {MPIcolor_band}, with local rank {MPIrank_band} (local communicator size: {MPIsize_band}).")
     
-    band_master = MPIrank_band == 0  # Am I the master of my local band.
+    is_band_master = MPIrank_band == 0  # Am I the master of my local band.
 
     # Creating "tod_band_masters", an array which maps the band index to the rank of the master of that band.
     my_band_identifier = f"{my_experiment_name}$$${my_band_name}"
@@ -169,16 +169,16 @@ def init_tod_processing(tod_comm: Comm, params: bunch):
     logger.info(f"TOD: Rank {MPIrank_tod} assigned scans {my_scans_start} - {my_scans_stop} on band{MPIcolor_band}.")
     experiment_data = read_TOD_data(my_experiment.data_path, my_band.freq, my_scans_start, my_scans_stop, my_experiment.nside, my_band.fwhm)
 
-    return tod_master, tod_comm, band_comm, my_band_identifier, tod_band_masters_dict, experiment_data
+    return is_band_master, band_comm, my_band_identifier, tod_band_masters_dict, experiment_data
 
 
 
-def subtract_sky_model(experiment_data: DetectorTOD, det_compsep_map: np.array, params: bunch):
+def subtract_sky_model(experiment_data: DetectorTOD, det_compsep_map: np.array, params: Bunch) -> DetectorTOD:
     """Subtracts the sky model from the TOD data.
     Input:
         experiment_data (DetectorTOD): The experiment TOD object.
         det_compsep_map (np.array): The current estimate of the sky model as seen by the band belonging to the current process.
-        params (bunch): The parameters from the input parameter file.
+        params (Bunch): The parameters from the input parameter file.
     Output:
         experiment_data (DetectorTOD): The experiment TOD with the estimated white noise level added to each scan.
     """
@@ -194,11 +194,11 @@ def subtract_sky_model(experiment_data: DetectorTOD, det_compsep_map: np.array, 
 
 
 
-def estimate_white_noise(experiment_data: DetectorTOD, params: bunch) -> DetectorTOD:
+def estimate_white_noise(experiment_data: DetectorTOD, params: Bunch) -> DetectorTOD:
     """Estimate the white noise level in the TOD data, add it to the scans, and return the updated experiment data.
     Input:
         experiment_data (DetectorTOD): The experiment TOD object.
-        params (bunch): The parameters from the input parameter file.
+        params (Bunch): The parameters from the input parameter file.
     Output:
         experiment_data (DetectorTOD): The experiment TOD with the estimated white noise level added to each scan.
     """
@@ -212,7 +212,7 @@ def estimate_white_noise(experiment_data: DetectorTOD, params: bunch) -> Detecto
 
 
 
-def sample_noise(band_comm: Comm, experiment_data: DetectorTOD, params: bunch) -> DetectorTOD:
+def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, params: Bunch) -> DetectorTOD:
     nside = params.nside
     for scan in experiment_data.scans:
         f_samp = 180 # params.fsamp
@@ -244,8 +244,8 @@ def sample_noise(band_comm: Comm, experiment_data: DetectorTOD, params: bunch) -
 
 
 
-def process_tod(band_comm: Comm, experiment_data: DetectorTOD,
-                compsep_output: np.array, params: bunch) -> DetectorMap:
+def process_tod(band_comm: MPI.Comm, experiment_data: DetectorTOD,
+                compsep_output: np.array, params: Bunch) -> DetectorMap:
     """ Performs a single TOD iteration.
 
     Input:
@@ -254,7 +254,7 @@ def process_tod(band_comm: Comm, experiment_data: DetectorTOD,
             belonging to the current process.
         compsep_output (np.array): The current best estimate of the sky model
             as seen by the band belonging to the current process.
-        params (bunch): The parameters from the input parameter file.
+        params (Bunch): The parameters from the input parameter file.
 
     Output:
         DetectorMap instance which represents the correlated noise subtracted

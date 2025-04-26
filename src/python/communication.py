@@ -2,72 +2,68 @@ from mpi4py import MPI
 from mpi4py.MPI import Comm
 import numpy as np
 import logging
-from pixell import bunch
+from pixell.bunch import Bunch
 import healpy as hp
+from numpy.typing import NDArray
 
 from src.python.data_models.detector_map import DetectorMap
 
 
-def send_compsep(my_band_identifier: int, detector_map: np.array, destinations: list[int]):
-    """ MPI-send the results from compsep to a set of other destinations.
-
+def send_compsep(my_band_identifier: int, detector_map: np.array, destinations: dict[str, int]) -> None:
+    """ MPI-send the results from compsep to a destinations on the TOD processing side (used in conjunction with receive_compsep).
     Assumes the COMM_WORLD communicator.
 
     Input:
-        my_band_idx (int): The index of the band for which the current process is responsible.
+        my_band_identifier (str): The string uniquely indentifying the experiment+band of this rank (example: 'PlanckLFI$$$30GHz').
         detector_map (np.array[float]): A sky realization at a given band frequency.
-        destinations (list of ints): The world ranks of the destination processes, one per band.
+        destinations (dict[str->int]): A dictionary mapping the string in 'my_band_identifier' to the world rank of the destination task (on the TOD side).
     """
     if destinations is not None:
         MPI.COMM_WORLD.send(detector_map, dest=destinations[my_band_identifier])
 
 
-def receive_compsep(band_comm: Comm, my_band_identifier: int, band_master: bool, CompSep_band_masters_dict: list[int]):
+def receive_compsep(band_comm: Comm, my_band_identifier: int, band_master: bool, senders: dict[str, int]) -> NDArray[np.floating]:
     """ MPI-receive the results from compsep (used in conjunction with send_compsep).
 
     Input:
         band_comm (MPI.Comm): The inter-band communicator.
-        my_band_idx (int): The index of the band for which the current process is responsible.
-        compsep_band_masters list(int): List of the World ranks of the senders of the compsep information.
+        my_band_identifier (str): The string uniquely indentifying the experiment+band of this rank (example: 'PlanckLFI$$$30GHz').
+        senders (dict[str->int]): A dictionary mapping the string in 'my_band_identifier' to the world rank of the senbder task (on the CompSep side).
 
     Returns:
-        detector_map (np.array): The detector map of a single band,
-            distributed to all processes belonging to the band communicator.
+        detector_map (np.array): The detector map of a single band, distributed to all processes belonging to the band communicator.
     """
     if band_master:
-        detector_map = MPI.COMM_WORLD.recv(source=CompSep_band_masters_dict[my_band_identifier])
+        detector_map = MPI.COMM_WORLD.recv(source=senders[my_band_identifier])
     else:
         detector_map = None
     detector_map = band_comm.bcast(detector_map, root=0)  # Currently all TOD MPI ranks need a copy of the relevant detector map, which is a little wasteful - a reason for doing OpenMP for mapmaking.
     return detector_map
 
 
-def send_tod(tod_map: DetectorMap, CompSep_band_masters_dict, my_band_identifier):
-    """ MPI-send the results from a single band TOD processing to another
-        destination.
+def send_tod(band_master: bool, tod_map: DetectorMap, CompSep_band_masters_dict, my_band_identifier) -> None:
+    """ MPI-send the results from a single band TOD processing to a task on the CompSep side (used in conjunction with receive_tod).
 
     Assumes the COMM_WORLD communicator.
 
     Input:
         band_master (bool): Whether this is the master band process.
-        tod_map (DetectorMap): The output map from process_tod for the band
-            belonging to this process.
-        destination (ints): The world rank of the destination process.
+        tod_map (DetectorMap): The output map from process_tod for the band belonging to this process.
+        CompSep_band_masters_dict (dict [str -> int]): The world rank of the destination process.
     """
-    MPI.COMM_WORLD.send(tod_map, dest=CompSep_band_masters_dict[my_band_identifier])
+    if band_master:
+        MPI.COMM_WORLD.send(tod_map, dest=CompSep_band_masters_dict[my_band_identifier])
 
 
-def receive_tod(senders, my_compsep_rank, my_band, band_identifier, curr_tod_output):
-    """ MPI-receive the results from the TOD processing (used in conjunction
-        with send_tod).
+def receive_tod(senders: dict[str,int], my_compsep_rank: int, my_band: Bunch, band_identifier: str, curr_tod_output: DetectorMap|None) -> DetectorMap:
+    """ MPI-receive the results from the TOD processing (used in conjunction with send_tod).
 
     Input:
-        proc_master (bool): Whether this is the master of the TOD processing
-            communicator.
-        proc_comm (MPI.Comm): The TOD processing communicator.
-        senders (list of int): The sender world rank of the compsep information.
-        num_bands (int): The number of bands to receive from (should be same as
-            length of 'senders').
+        senders: (dict[str->int]): A dictionary mapping a string uniquely identifying each experiment+band to the world rank of the sender task (on the CompSep side).
+        my_compsep_rank (int): Rank of the current process within the CompSep communicator. Only used for prints.
+        my_band (Bunch): The section of the parameter file corresponding to this CompSep band, as a "Bunch" type.
+        band_identifier (str): The string uniquely indentifying the experiment+band of this rank (example: 'PlanckLFI$$$30GHz').
+        curr_tod_output (DetectorMap): The current map output from the TOD process. Should be None unless map is read from file already in a previous iteration.
 
     Returns:
         data (list of DetectorMaps): nbands (DetectorMap)
@@ -86,7 +82,7 @@ def receive_tod(senders, my_compsep_rank, my_band, band_identifier, curr_tod_out
     return curr_tod_output
 
 
-def read_map_from_file(my_band: bunch):
+def read_map_from_file(my_band: Bunch) -> DetectorMap:
     """To be run once before starting TOD processing.
 
     Determines whether the process is TOD master, creates the band communicator
@@ -94,18 +90,14 @@ def read_map_from_file(my_band: bunch):
     experiment data.
 
     Input:
-        proc_comm (MPI.Comm): Communicator for the TOD processes.
-        params (bunch): The parameters from the input parameter file.
+        my_band (Bunch): The section of the parameter file corresponding to this CompSep band, as a "Bunch" type.
 
     Output:
-        proc_master (bool): Whether this process is the master of the TOD process.
-        proc_comm (MPI.Comm): The same as the input communicator (just returned for clarity).
-        band_master (bool): Whether this process is the master of the inter-band communicator.
-        band_comm (MPI.Comm): The inter-band communicator.
-        experiment_data (DetectorTOD): THe TOD data for the band of this process.
+        data (list of DetectorMaps): nbands (DetectorMap)
     """
 
     map_signal = hp.read_map(my_band.path_signal_map)
-    map_rms = hp.read_map(my_band.path_rms_map)  # map_rms = np.ones_like(map_signal)
+    map_rms = hp.read_map(my_band.path_rms_map)
+    # map_rms = map_rms = np.ones_like(map_signal)
     detmap = DetectorMap(map_signal, None, map_rms, my_band.freq, my_band.fwhm)
     return detmap
