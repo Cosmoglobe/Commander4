@@ -52,6 +52,10 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
 
 
 class CompSepSolver:
+    """ Class for performing global component separation using the conjugate gradient method.
+        After initializing the class, the solve() method should be called to perform the component separation.
+        Note that the solve() method will in-place update (as well as return) the 'comp_list' argument passed to the constructor.
+    """
     def __init__(self, comp_list: list[Component], map_sky: NDArray, map_rms: NDArray, freq: float, fwhm: float, params: Bunch, CompSep_comm: MPI.Comm):
         self.logger = logging.getLogger(__name__)
         self.CompSep_comm = CompSep_comm
@@ -78,13 +82,29 @@ class CompSepSolver:
         self.fwhm_rad_allbands = np.array(CompSep_comm.allgather(fwhm))
 
 
-    def alm_imag2real(self, alm: NDArray[np.complex128], lmax: int) -> NDArray[np.float64]:
+    def alm_complex2real(self, alm: NDArray[np.complex128], lmax: int) -> NDArray[np.float64]:
+        """ Coverts from the complex convention of storing alms when the map is real, to the real convention.
+            In the real convention, the all m modes are stored, but they are all stored as real values, not complex.
+            Args:
+                alm (np.array): Complex alm array of length ((lmax+1)*(lmax+2))/2.
+                lmax (int): The lmax of the alm array.
+            Returns:
+                x (np.array): Real alm array of length (lmax+1)^2.
+        """
         ainfo = curvedsky.alm_info(lmax=lmax)
         i = int(ainfo.mstart[1]+1)
         return np.concatenate([alm[:i].real,np.sqrt(2.)*alm[i:].view(np.float64)])
 
 
-    def alm_real2imag(self, x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128]:
+    def alm_real2complex(self, x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128]:
+        """ Coverts from the real convention of storing alms when the map is real, to the complex convention.
+            In the complex convention, the only m>=0 is stored, but are stored as complex numbers (m=0 still always real).
+            Args:
+                x (np.array): Real alm array of length (lmax+1)^2.
+                lmax (int): The lmax of the alm array.
+            Returns:
+                oalm (np.array): Complex alm array of length ((lmax+1)*(lmax+2))/2.
+        """
         ainfo = curvedsky.alm_info(lmax=lmax)
         i    = int(ainfo.mstart[1]+1)
         oalm = np.zeros(ainfo.nelem, np.complex128)
@@ -118,7 +138,7 @@ class CompSepSolver:
         a_old = a.copy()
         a = []
         for icomp in range(self.ncomp):
-            a.append(self.alm_real2imag(a_old[icomp], lmax=self.lmax_per_comp[icomp]))
+            a.append(self.alm_real2complex(a_old[icomp], lmax=self.lmax_per_comp[icomp]))
 
         # Y a
         a_old = a.copy()
@@ -190,7 +210,7 @@ class CompSepSolver:
         a_old = a.copy()
         a = []
         for icomp in range(self.ncomp):
-            a.append(self.alm_imag2real(a_old[icomp], lmax=self.lmax_per_comp[icomp]))
+            a.append(self.alm_complex2real(a_old[icomp], lmax=self.lmax_per_comp[icomp]))
         a = np.concatenate(a)
 
         return a#.flatten()
@@ -304,7 +324,7 @@ class CompSepSolver:
         b_old = b.copy()
         b = []
         for icomp in range(self.ncomp):
-            b.append(self.alm_imag2real(b_old[icomp], lmax=self.lmax_per_comp[icomp]))
+            b.append(self.alm_complex2real(b_old[icomp], lmax=self.lmax_per_comp[icomp]))
         b = np.concatenate(b)
 
         return b
@@ -351,7 +371,7 @@ class CompSepSolver:
         b_old = b.copy()
         b = []
         for icomp in range(self.ncomp):
-            b.append(self.alm_imag2real(b_old[icomp], lmax=self.lmax_per_comp[icomp]))
+            b.append(self.alm_complex2real(b_old[icomp], lmax=self.lmax_per_comp[icomp]))
         b = np.concatenate(b)
 
         return b
@@ -402,5 +422,5 @@ class CompSepSolver:
             sol.append(sol_array[idx_start:idx_stop])
             idx_start = idx_stop
         for icomp in range(self.ncomp):
-            self.comp_list[icomp].component_alms = self.alm_real2imag(sol[icomp], lmax=self.lmax_per_comp[icomp])
+            self.comp_list[icomp].component_alms = self.alm_real2complex(sol[icomp], lmax=self.lmax_per_comp[icomp])
         return self.comp_list
