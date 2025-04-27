@@ -109,37 +109,27 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[MPI.Comm, MP
     """
 
     logger = logging.getLogger(__name__)
-    # num_bands = len(params.bands)
-    # bands_per_experiment = []
-    # experiment_names = []
-    global_rank = 0
+    is_assigned_band = False  # Whether this process is assigned a band.
+    TOD_rank = 0
     for experiment in params.experiments:
         if params.experiments[experiment].enabled:
             # experiment_names.append(experiment)
             # bands_per_experiment.append(len(params.experiments[experiment].bands))
             for band in params.experiments[experiment].bands:
                 if params.experiments[experiment].bands[band].enabled:
-                    if tod_comm.Get_rank() == global_rank:
+                    if tod_comm.Get_rank() == TOD_rank:
+                        if is_assigned_band:
+                            log.lograise(f"Multiple bands assigned to the same rank ({TOD_rank}).", logger)
                         my_experiment_name = experiment
                         my_band_name = band
                         my_experiment = params.experiments[experiment]
                         my_band = params.experiments[experiment].bands[band]
                         my_num_scans = params.experiments[experiment].num_scans
-                    global_rank += 1
-    tot_num_bands = global_rank
-
-    # rank_to_assignment = {}
-    # current_rank_offset = 0
-    # for exp_idx, num_bands in enumerate(bands_per_experiment):
-    #     for band_idx in range(num_bands):
-    #         global_rank = current_rank_offset + band_idx
-    #         # rank_to_assignment[global_rank] = (exp_idx, band_idx)
-    #         rank_to_assignment[global_rank] = (exp_idx, band_idx)
-    #     current_rank_offset += num_bands
-    # my_experiment_idx, my_band_idx = rank_to_assignment[tod_comm.Get_rank()]
-    # my_experiment_name = experiment_names[my_experiment_idx]
-    # my_experiment = params.experiments[my_experiment_name]
-    # my_band = my_experiment.bands[my_band_idx]
+                        is_assigned_band = True
+                    TOD_rank += 1
+    if not is_assigned_band:
+        log.lograise(f"No band assigned to rank {tod_comm.Get_rank()}.", logger)
+    tot_num_bands = TOD_rank
 
     # am I the master of the TOD communicator?
     MPIsize_tod, MPIrank_tod = tod_comm.Get_size(), tod_comm.Get_rank()
