@@ -109,31 +109,33 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[MPI.Comm, MP
     """
 
     logger = logging.getLogger(__name__)
-    is_assigned_band = False  # Whether this process is assigned a band.
+
+    MPIsize_tod, MPIrank_tod = tod_comm.Get_size(), tod_comm.Get_rank()
+    tod_master = MPIrank_tod == 0
+
+    # We now loop over all bands in all experiments, and allocate them to the first ranks of the TOD MPI communicator.
+    # These ranks will then become the "band masters" for those bands, handling all communication with CompSep.
+    my_experiment_name = None  # All the non-master ranks will have None values, and receive them from master further down.
+    my_band_name = None
+    my_experiment = None
+    my_band = None
+    my_num_scans = 0
     TOD_rank = 0
     for experiment in params.experiments:
         if params.experiments[experiment].enabled:
-            # experiment_names.append(experiment)
-            # bands_per_experiment.append(len(params.experiments[experiment].bands))
             for band in params.experiments[experiment].bands:
                 if params.experiments[experiment].bands[band].enabled:
                     if tod_comm.Get_rank() == TOD_rank:
-                        if is_assigned_band:
-                            log.lograise(RuntimeError, f"Multiple bands assigned to the same rank ({TOD_rank}).", logger)
                         my_experiment_name = experiment
                         my_band_name = band
                         my_experiment = params.experiments[experiment]
                         my_band = params.experiments[experiment].bands[band]
                         my_num_scans = params.experiments[experiment].num_scans
-                        is_assigned_band = True
                     TOD_rank += 1
-    if not is_assigned_band:
-        log.lograise(RuntimeError, f"No band assigned to rank {tod_comm.Get_rank()}.", logger)
     tot_num_bands = TOD_rank
+    if tot_num_bands > MPIsize_tod:
+        log.lograise(RuntimeError, f"Total number of experiment bands {tot_num_bands} exceed number of TOD MPI tasks {MPIsize_tod}.")
 
-    # am I the master of the TOD communicator?
-    MPIsize_tod, MPIrank_tod = tod_comm.Get_size(), tod_comm.Get_rank()
-    tod_master = MPIrank_tod == 0
     if tod_master:
         logger.info(f"TOD: {MPIsize_tod} tasks allocated to TOD processing of {tot_num_bands} bands.")
         log.logassert(MPIsize_tod >= tot_num_bands, f"Number of MPI tasks dedicated to TOD processing ({MPIsize_tod}) must be equal to or larger than the number of bands ({tot_num_bands}).", logger)
@@ -144,6 +146,11 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[MPI.Comm, MP
     logger.info(f"TOD: Hello from TOD-rank {MPIrank_tod} (on machine {MPI.Get_processor_name()}), dedicated to band {MPIcolor_band}, with local rank {MPIrank_band} (local communicator size: {MPIsize_band}).")
     
     is_band_master = MPIrank_band == 0  # Am I the master of my local band.
+    my_experiment_name = band_comm.bcast(my_experiment_name, root=0)  # Surely there is a more elegant way of doing this, but it'll do for now.
+    my_band_name = band_comm.bcast(my_band_name, root=0)
+    my_experiment = band_comm.bcast(my_experiment, root=0)
+    my_band = band_comm.bcast(my_band, root=0)
+    my_num_scans = band_comm.bcast(my_num_scans, root=0)
 
     # Creating "tod_band_masters", an array which maps the band index to the rank of the master of that band.
     my_band_identifier = f"{my_experiment_name}$$${my_band_name}"
