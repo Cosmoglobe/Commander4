@@ -1,11 +1,21 @@
 MPI_config:  # Specifying how many MPI tasks to allocate to different workloads. Sum needs to match total number of tasks allocated to MPI.
-  ntask_tod: 11  # TOD sampling, which only relies on MPI, not OpenMP, and this can therefore be set as high as desired.
-  ntask_compsep: 1  # Component Separation (currently only =1 supported), where each MPI tasks should correspond to 1 node, and threads are used for efficient SHTs.
-  ntask_cmb: 0  # Set to 0 to not perform additional CMB realizations per Gibbs iteration, beyond the one performed during CompSep.
-  use_MPI_for_CMB: True
+  ntask_tod: 5  # TOD sampling, which only relies on MPI, not OpenMP, and this can therefore be set as high as desired.
+  ntask_compsep: 5  # Component Separation (currently only =1 supported), where each MPI tasks should correspond to 1 node, and threads are used for efficient SHTs.
 nthreads_compsep: 8  # Threads dedicated to performing individual SHTs for each ntask_compsep. Set to total number of avaible cores on each node performing CompSep.
 betzy_mode: false
 
+niter_gibbs: 1
+nside: 16
+
+make_plots: False
+output_stats: False
+
+galactic_mask: True
+sample_corr_noise: True
+pixel_compsep_sampling: False
+
+CG_max_iter: 20
+CG_err_tol: 0.0000001 # 1e-7
 
 input_paths:
   tod_filename: "/mn/stornext/d23/cmbco/commander4_shared/cron_tests/sim_test_data/tod_sim_16_s0.1_b800.h5"
@@ -13,6 +23,13 @@ input_paths:
 output_paths:
   plots: "/mn/stornext/d23/cmbco/commander4_shared/cron_tests/output_plots/"
   stats: "/mn/stornext/d23/cmbco/commander4_shared/cron_tests/stats/"
+
+logging:
+  console:
+    level: 'info'
+  file:
+    level: 'info'
+    filename: '/mn/stornext/d23/cmbco/jonas/c4_testing/com4_logs/output_n16.log'
 
 components:
   CMB:
@@ -48,22 +65,59 @@ compsep:
   dense_matrix_debug_mode: false  # Solve system first with dense matrix math, for debugging CG. Very slow for nside>32.
   preconditioner: BeamOnlyPreconditioner
 
-niter_gibbs: 3
+CompSep_bands:
+  Planck30GHz:
+    enabled: true
+    get_from: "PlanckLFI"
+  Planck100GHz:
+    enabled: true
+    get_from: "PlanckHFI"
+  Planck353GHz:
+    enabled: true
+    get_from: "PlanckHFI"
+  Planck545GHz:
+    enabled: true
+    get_from: "PlanckHFI"
+  Planck857GHz:
+    enabled: true
+    get_from: "PlanckHFI"
 
-nside: 16
 
-fwhm: [800, 400, 200, 100, 50]
+experiments:
+  PlanckLFI:
+    enabled: true
+    MPI_ranks: 1
+    data_type: "TOD"
+    data_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/com4_sim_data/sim_data_cmb_dust_sync_corrnoise_nside16_beam800_noise0.1/tod_sim_16_s0.1_b800.h5"
+    num_scans: 1799
+    nside: 16
+    bands:
+      Planck30GHz:
+        enabled: true
+        fwhm: 800 # [arcmin]
+        freq: 30 # [GHz]
 
-num_scans: 1799
-
-bands: [30, 100, 353, 545, 857]
-
-CG_max_iter: 200
-CG_err_tol: 0.000001 # 1e-6
-
-make_plots: True
-output_stats: True
-
-galactic_mask: True  # Applies a mask to the galactic plane when calculating sigma0
-sample_corr_noise: True  # Whether to sample and subtract correlated noise during TOD processing.
-pixel_compsep_sampling: False  # Pixel-by-pixel component separation, as opposed to global (which will take beam into account).
+  PlanckHFI:
+    enabled: true
+    MPI_ranks: 4
+    data_type: "TOD"
+    data_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/com4_sim_data/sim_data_cmb_dust_sync_corrnoise_nside16_beam800_noise0.1/tod_sim_16_s0.1_b800.h5"
+    num_scans: 1799
+    nside: 16
+    bands:
+      Planck100GHz:
+        enabled: true
+        fwhm: 400 # [arcmin]
+        freq: 100 # [GHz]
+      Planck353GHz:
+        enabled: true
+        fwhm: 200 # [arcmin]
+        freq: 353 # [GHz]
+      Planck545GHz:
+        enabled: true
+        fwhm: 100 # [arcmin]
+        freq: 545 # [GHz]
+      Planck857GHz:
+        enabled: true
+        fwhm: 50 # [arcmin]
+        freq: 857 # [GHz]
