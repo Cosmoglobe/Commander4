@@ -2,17 +2,18 @@ import numpy as np
 import healpy as hp
 import time
 from pixell import utils, curvedsky
+from pixell.bunch import Bunch
 import logging
-from mpi4py.MPI import Comm
 from mpi4py import MPI
+from numpy.typing import NDArray
+from typing import Callable
 
-from output import log
-from output.plotting import alm_plotter
-from model.component import CMB, ThermalDust, Synchrotron, Component
-from utils.math_operations import alm_to_map, alm_to_map_adjoint
-from pixell import curvedsky as pixell_curvedsky
-from solvers.dense_matrix_math import DenseMatrix
-import solvers.preconditioners
+from src.python.output.log import logassert
+from src.python.output.plotting import alm_plotter
+from src.python.model.component import CMB, ThermalDust, Synchrotron, Component
+from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint
+from src.python.solvers.dense_matrix_math import DenseMatrix
+import src.python.solvers.preconditioners as preconditioners
 
 
 def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:
@@ -51,19 +52,18 @@ def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.a
 
 
 class CompSepSolver:
-    def __init__(self, comp_list: list[Component], map_sky, map_rms, freqs, params, CompSep_comm: Comm):
-        # TODO: 1. Find better way of passing all frequencies (all ranks need the mixing matrix).
+    def __init__(self, comp_list: list[Component], map_sky: NDArray, map_rms: NDArray, freq: float, fwhm: float, params: Bunch, CompSep_comm: MPI.Comm):
         self.logger = logging.getLogger(__name__)
         self.CompSep_comm = CompSep_comm
         self.params = params
         self.map_sky = map_sky
         self.map_rms = map_rms
-        self.freqs = np.array(params.bands) #freqs
+        self.freqs = np.array(CompSep_comm.allgather(freq))
         self.npix = map_rms.shape[0]
-        self.nband = len(params.bands)
+        self.nband = len(self.freqs)
         self.my_band_idx = CompSep_comm.Get_rank()
         self.nside = np.sqrt(self.npix//12)
-        log.logassert(self.nside.is_integer(), f"Npix dimension of map ({self.npix}) resulting in a non-integer nside ({self.nside}).", self.logger)
+        logassert(self.nside.is_integer(), f"Npix dimension of map ({self.npix}) resulting in a non-integer nside ({self.nside}).", self.logger)
         self.nside = int(self.nside)
         self.lmax = 3*self.nside-1
         self.alm_len_complex = ((self.lmax+1)*(self.lmax+2))//2
@@ -74,18 +74,17 @@ class CompSepSolver:
         self.lmax_per_comp = np.array([comp.lmax for comp in comp_list])
         self.alm_len_complex_percomp = np.array([((lmax+1)*(lmax+2))//2 for lmax in self.lmax_per_comp])
         self.alm_len_real_percomp = np.array([(lmax+1)**2 for lmax in self.lmax_per_comp])
-        log.logassert(len(self.params.fwhm) == len(self.freqs), f"Number of bands {len(self.freqs)} does not match length of FWHM ({len(self.params.fwhm)}).", self.logger)
-        self.fwhm_rad_allbands = np.array(self.params.fwhm)/60.0*(np.pi/180.0)  # Converting arcmin to radians.
-        self.fwhm_rad = self.fwhm_rad_allbands[self.my_band_idx]
+        self.fwhm_rad = fwhm/60.0*(np.pi/180.0)
+        self.fwhm_rad_allbands = np.array(CompSep_comm.allgather(fwhm))
 
 
-    def alm_imag2real(self, alm, lmax):
+    def alm_imag2real(self, alm: NDArray[np.complex128], lmax: int) -> NDArray[np.float64]:
         ainfo = curvedsky.alm_info(lmax=lmax)
         i = int(ainfo.mstart[1]+1)
         return np.concatenate([alm[:i].real,np.sqrt(2.)*alm[i:].view(np.float64)])
 
 
-    def alm_real2imag(self, x, lmax):
+    def alm_real2imag(self, x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128]:
         ainfo = curvedsky.alm_info(lmax=lmax)
         i    = int(ainfo.mstart[1]+1)
         oalm = np.zeros(ainfo.nelem, np.complex128)
@@ -94,7 +93,7 @@ class CompSepSolver:
         return oalm
 
 
-    def apply_LHS_matrix(self, a_array: np.array):
+    def apply_LHS_matrix(self, a_array: NDArray) -> NDArray:
         """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of the Ax=b system for global component separation.
             The full A matrix can be written B^T Y^T M^T N^-1 M Y B, where B is the beam smoothing, M is the mixing matrix, and N is the noise covariance matrix.
 
@@ -106,7 +105,7 @@ class CompSepSolver:
         logger = logging.getLogger(__name__)
 
         a_array = self.CompSep_comm.bcast(a_array, root=0)  # Send a to all worker ranks (which are called with a dummy a).
-        log.logassert(a_array.dtype == np.float64, "Provided component array is not of type np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
+        logassert(a_array.dtype == np.float64, "Provided component array is not of type np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
 
         a = []
         idx_start = 0
@@ -141,7 +140,7 @@ class CompSepSolver:
         # Y^-1 M Y a
         a_old = a.copy()
         a = np.zeros((self.alm_len_complex), dtype=np.complex128)
-        pixell_curvedsky.map2alm_healpix(a_old, a, niter=3, spin=0, nthread=self.params.nthreads_compsep)
+        curvedsky.map2alm_healpix(a_old, a, niter=3, spin=0, nthread=self.params.nthreads_compsep)
 
         # B Y^-1 M Y a
         hp.smoothalm(a, self.fwhm_rad, inplace=True)
@@ -165,7 +164,7 @@ class CompSepSolver:
         # Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         a_old = a.copy()
         a = np.zeros((self.npix))
-        pixell_curvedsky.map2alm_healpix(a, a_old, niter=3, adjoint=True, spin=0, nthread=self.params.nthreads_compsep)
+        curvedsky.map2alm_healpix(a, a_old, niter=3, adjoint=True, spin=0, nthread=self.params.nthreads_compsep)
 
         # M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         a_old = a.copy()
@@ -197,7 +196,7 @@ class CompSepSolver:
         return a#.flatten()
 
 
-    def solve_CG(self, LHS, RHS, x0, M=None, x_true=None):
+    def solve_CG(self, LHS: Callable, RHS: NDArray, x0: NDArray, M = None, x_true = None) -> NDArray|None:
         """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG from the pixell package.
             Assumes that both x and b are in alm space.
 
@@ -208,7 +207,10 @@ class CompSepSolver:
                 M (callable): Preconditioner for the CG solver. A function/callable which approximates A^-1 (optional).
                 x_true (np.array): True solution for x, in order to print the true error (optional, used for testing).
             Returns:
-                m_bestfit: The resulting best-fit solution, in alm space.
+                if self.CompSep_comm.Get_rank() == 0:
+                    m_bestfit (np.array): The resulting best-fit solution, in alm space.
+                else:
+                    None
         """
         logger = logging.getLogger(__name__)
         checkpoint_interval = 10
@@ -261,7 +263,7 @@ class CompSepSolver:
                 stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
 
 
-    def calc_RHS_mean(self):
+    def calc_RHS_mean(self) -> NDArray:
         # d
         b = self.map_sky.copy()
 
@@ -279,7 +281,7 @@ class CompSepSolver:
         # Y^-1^T B^T Y^T N^-1 d
         b_old = b.copy()
         b = np.zeros((self.npix))
-        pixell_curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
+        curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
 
         # M^T Y^-1^T B^T Y^T N^-1 d
         b_old = b.copy()
@@ -308,7 +310,7 @@ class CompSepSolver:
         return b
 
 
-    def calc_RHS_fluct(self):
+    def calc_RHS_fluct(self) -> NDArray:
         # d
         b = np.random.normal(0.0, 1.0, self.map_rms.shape)
 
@@ -326,7 +328,7 @@ class CompSepSolver:
         # Y^-1^T B^T Y^T N^-1 d
         b_old = b.copy()
         b = np.zeros((self.npix))
-        pixell_curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
+        curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
 
         # M^T Y^-1^T B^T Y^T N^-1 d
         b_old = b.copy()
@@ -355,13 +357,13 @@ class CompSepSolver:
         return b
 
 
-    def solve(self, seed=None) -> np.array:
+    def solve(self, seed=None) -> list[Component]:
 
         RHS = self.calc_RHS_mean() + self.calc_RHS_fluct()
         debug_mode = self.params.compsep.dense_matrix_debug_mode
 
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners", and has a name specified by self.params.compsep.preconditioner.
-        precond = getattr(solvers.preconditioners, self.params.compsep.preconditioner)(self)
+        precond = getattr(preconditioners, self.params.compsep.preconditioner)(self)
 
         if debug_mode:  # For testing preconditioner with a true solution as reference, first solving for exact solution with dense matrix math.
             dense_matrix = DenseMatrix(self.CompSep_comm, self.apply_LHS_matrix, np.sum(self.alm_len_real_percomp))
@@ -370,8 +372,9 @@ class CompSepSolver:
                 x_true = dense_matrix.solve_by_inversion(RHS)
             x_true = self.CompSep_comm.bcast(x_true, root=0)
             if self.CompSep_comm.Get_rank() == 0:
-                cond_num = dense_matrix.get_conditioning_number()
-                self.logger.info(f"Condition number of regular (A) matrix: {cond_num:.3e}")
+                sing_vals = dense_matrix.get_sing_vals()
+                self.logger.info(f"Condition number of regular (A) matrix: {sing_vals[0]/sing_vals[-1]:.3e}")
+                self.logger.info(f"Sing-vals: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
             def M_A_matrix(a):
                 if self.CompSep_comm.Get_rank() == 0:
                     a = precond(a)
@@ -380,8 +383,9 @@ class CompSepSolver:
 
             dense_matrix = DenseMatrix(self.CompSep_comm, M_A_matrix, np.sum(self.alm_len_real_percomp))
             if self.CompSep_comm.Get_rank() == 0:
-                cond_num = dense_matrix.get_conditioning_number()
-                self.logger.info(f"Condition number of preconditioned (MA) matrix: {cond_num:.3e}")
+                sing_vals = dense_matrix.get_sing_vals()
+                self.logger.info(f"Condition number of preconditioned (MA) matrix: {sing_vals[0]/sing_vals[-1]:.3e}")
+                self.logger.info(f"Sing-vals: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
 
 
         if not seed is None:

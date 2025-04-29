@@ -1,13 +1,18 @@
-from .scan_TOD import ScanTOD
+from src.python.data_models.scan_TOD import ScanTOD
 
 class DetectorTOD:
-    def __init__(self, scanlist: list[ScanTOD], nu):
+    def __init__(self, scanlist: list[ScanTOD], nu, fwhm):
         self._scanlist = scanlist
         self._nu = nu
+        self._fwhm = fwhm
 
     @property
     def nu(self):
         return self._nu
+
+    @property
+    def fwhm(self):
+        return self._fwhm
 
     @property
     def blm(self):

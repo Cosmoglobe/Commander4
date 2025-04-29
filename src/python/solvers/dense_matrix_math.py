@@ -56,16 +56,15 @@ class DenseMatrix:
             return x_bestfit
 
 
-    def get_conditioning_number(self):
-        """ Calculates the condition number of the matrix A using the SVD method.
+    def get_sing_vals(self):
+        """ Calculates the singular values of the matrix A using the SVD method.
             This is done by calculating the singular values of A and taking the ratio of the largest to smallest.
             Returns:
-                cond_num: The condition number of the matrix A (if rank==0, else None).
+                cond_num: The singular values of the matrix A, in descending order (if rank==0, else None).
         """
         if self.is_master:
             s = svd(self.A_matrix, compute_uv=False)
-            cond_num = s[0] / s[-1]
-            return cond_num
+            return s
 
 
     def test_matrix_symmetry(self):

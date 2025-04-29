@@ -1,6 +1,6 @@
-from commander_tod import commander_tod
 import numpy as np
-from parse_params import params, params_dict
+from src.python.parse_params import params, params_dict
+from commander_tod import commander_tod
 
 def save_to_h5_file(ds, pix, psi, fname=None):
     nside = params.NSIDE
