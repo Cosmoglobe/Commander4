@@ -119,7 +119,7 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[MPI.Comm, MP
                 if params.experiments[experiment].bands[band].enabled:
                     if tod_comm.Get_rank() == TOD_rank:
                         if is_assigned_band:
-                            log.lograise(f"Multiple bands assigned to the same rank ({TOD_rank}).", logger)
+                            log.lograise(RuntimeError, f"Multiple bands assigned to the same rank ({TOD_rank}).", logger)
                         my_experiment_name = experiment
                         my_band_name = band
                         my_experiment = params.experiments[experiment]
@@ -128,7 +128,7 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[MPI.Comm, MP
                         is_assigned_band = True
                     TOD_rank += 1
     if not is_assigned_band:
-        log.lograise(f"No band assigned to rank {tod_comm.Get_rank()}.", logger)
+        log.lograise(RuntimeError, f"No band assigned to rank {tod_comm.Get_rank()}.", logger)
     tot_num_bands = TOD_rank
 
     # am I the master of the TOD communicator?
