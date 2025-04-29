@@ -134,7 +134,7 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[MPI.Comm, MP
                     TOD_rank += 1
     tot_num_bands = TOD_rank
     if tot_num_bands > MPIsize_tod:
-        log.lograise(RuntimeError, f"Total number of experiment bands {tot_num_bands} exceed number of TOD MPI tasks {MPIsize_tod}.")
+        log.lograise(RuntimeError, f"Total number of experiment bands {tot_num_bands} exceed number of TOD MPI tasks {MPIsize_tod}.", logger)
 
     if tod_master:
         logger.info(f"TOD: {MPIsize_tod} tasks allocated to TOD processing of {tot_num_bands} bands.")
