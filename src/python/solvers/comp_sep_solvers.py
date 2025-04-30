@@ -141,14 +141,17 @@ class CompSepSolver:
         mythreads = self.params.nthreads_compsep
 
 # split the input; we only need "our" component
-        idxstart = sum(self.alm_len_real_percomp[:mycomp])
-        idxstop = idxstart + self.alm_len_real_percomp[mycomp]
-        # directly convert to complex a_lm
-        a = self.alm_real2complex(a_array[idx_start:idx_stop],
-                                  lmax=self.lmax_per_comp[mycomp])
+        if mycomp < self.ncomp:  # this task actually holds a component
+            idx_start = sum(self.alm_len_real_percomp[:mycomp])
+            idx_stop = idx_start + self.alm_len_real_percomp[mycomp]
+            # directly convert to complex a_lm
+            a = self.alm_real2complex(a_array[idx_start:idx_stop],
+                                      lmax=self.lmax_per_comp[mycomp])
 
-        # Y a
-        a = alm_to_map(a, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
+            # Y a
+            a = alm_to_map(a, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
+        else:
+            a = None
 
         # M Y a
         a_old = a
@@ -190,24 +193,29 @@ class CompSepSolver:
         for icomp in range(self.ncomp):
             tmp = a_old * self.comps_SED[icomp,self.my_band_idx]
             # accumulate tmp onto the relevant task
-            self.CompSep_comm.Reduce(MPI.IN_PLACE, tmp, op=MPI.SUM, root=icomp)
+# For some reason, the Reduce call does not work. Using the lame high level call for now.
+#            self.CompSep_comm.Reduce(MPI.IN_PLACE, tmp, op=MPI.SUM, root=icomp)
+            tmp = self.CompSep_comm.reduce(tmp, op=MPI.SUM, root=icomp)
             if icomp == mycomp:
                 a = tmp
         del a_old
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
-        a = alm_to_map_adjoint(a, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
+        if mycomp < self.ncomp:
+            a = alm_to_map_adjoint(a, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
 
-        # Converting back from complex alms to real alms
-        a = self.alm_complex2real(a, lmax=self.lmax_per_comp[mycomp])
+            # Converting back from complex alms to real alms
+            a = self.alm_complex2real(a, lmax=self.lmax_per_comp[mycomp])
+        else:
+            a = None
 
         # For now, every task holds every a_lm, so let's gather them together
         a_old = a
-        a=np.empty(a_array.shape())
+        a=np.empty(a_array.shape)
         idx_start = 0
         for icomp in range(self.ncomp):
             idx_stop = idx_start + self.alm_len_real_percomp[icomp]
-            a[idex_start:idx_stop] = self.CompSep_comm.bcast(a_old if icomp == mycomp else None, root=icomp)
+            a[idx_start:idx_stop] = self.CompSep_comm.bcast(a_old if icomp == mycomp else None, root=icomp)
             idx_start = idx_stop
 
         return a#.flatten()
@@ -308,10 +316,13 @@ class CompSepSolver:
                 b = tmp
         
         # Y^T M^T Y^-1^T B^T Y^T N^-1 d
-        b = alm_to_map_adjoint(b, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
+        if mycomp < self.ncomp:  # This task actually holds a component
+            b = alm_to_map_adjoint(b, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
 
-        # complex to real
-        b = self.alm_complex2real(b, lmax=self.lmax_per_comp[mycomp])
+            # complex to real
+            b = self.alm_complex2real(b, lmax=self.lmax_per_comp[mycomp])
+        else:
+            b = None
 
         # For now, every task holds every a_lm, so let's gather them together
         b_old = b
