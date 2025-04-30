@@ -158,7 +158,8 @@ class CompSepSolver:
         a = np.zeros(self.npix)
         for icomp in range(self.ncomp):
             # successively broadcast a_old and build a from it
-            tmp = self.CompSep_comm.bcast(a_old if icomp == mycomp else None, root=icomp)
+            tmp = a_old if mycomp == icomp else np.empty(self.npix)
+            self.CompSep_comm.Bcast(tmp, root=icomp)
             a += self.comps_SED[icomp,self.my_band_idx]*tmp
         del tmp
 
@@ -193,9 +194,8 @@ class CompSepSolver:
         for icomp in range(self.ncomp):
             tmp = a_old * self.comps_SED[icomp,self.my_band_idx]
             # accumulate tmp onto the relevant task
-# For some reason, the Reduce call does not work. Using the lame high level call for now.
-#            self.CompSep_comm.Reduce(MPI.IN_PLACE, tmp, op=MPI.SUM, root=icomp)
-            tmp = self.CompSep_comm.reduce(tmp, op=MPI.SUM, root=icomp)
+            send, recv = (MPI.IN_PLACE, tmp) if icomp == mycomp else (tmp, None)
+            self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=icomp)
             if icomp == mycomp:
                 a = tmp
         del a_old
@@ -215,7 +215,9 @@ class CompSepSolver:
         idx_start = 0
         for icomp in range(self.ncomp):
             idx_stop = idx_start + self.alm_len_real_percomp[icomp]
-            a[idx_start:idx_stop] = self.CompSep_comm.bcast(a_old if icomp == mycomp else None, root=icomp)
+            if icomp == mycomp:
+                a[idx_start:idx_stop] = a_old
+            self.CompSep_comm.Bcast(a[idx_start:idx_stop], root=icomp)
             idx_start = idx_stop
 
         return a#.flatten()
@@ -288,13 +290,10 @@ class CompSepSolver:
                 stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
 
 
-    def calc_RHS_mean(self) -> NDArray:
+    def _calc_RHS_from_input_array(self, b: NDArray) -> NDArray:
 # shorthands
         mycomp = self.CompSep_comm.Get_rank()
         mythreads = self.params.nthreads_compsep
-
-        # N^-1 d
-        b = self.map_sky/self.map_rms**2
 
         # Y^T N^-1 d
         b = alm_to_map_adjoint(b, self.nside, self.lmax, nthreads=mythreads)
@@ -311,10 +310,11 @@ class CompSepSolver:
         b_old = b
         for icomp in range(self.ncomp):
             tmp = self.comps_SED[icomp,self.my_band_idx]*b_old
-            tmp = self.CompSep_comm.allreduce(tmp, op=MPI.SUM)
+            send, recv = (MPI.IN_PLACE, tmp) if icomp == mycomp else (tmp, None)
+            self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=icomp)
             if icomp == mycomp:
                 b = tmp
-        
+
         # Y^T M^T Y^-1^T B^T Y^T N^-1 d
         if mycomp < self.ncomp:  # This task actually holds a component
             b = alm_to_map_adjoint(b, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
@@ -326,13 +326,23 @@ class CompSepSolver:
 
         # For now, every task holds every a_lm, so let's gather them together
         b_old = b
-        b = []
+        b = np.empty(sum(self.alm_len_real_percomp))
+        idx_start = 0
         for icomp in range(self.ncomp):
-            b.append(self.CompSep_comm.bcast(b_old if icomp == mycomp else None, root=icomp))
-
-        b = np.concatenate(b)
+            idx_stop = idx_start + self.alm_len_real_percomp[icomp]
+            if icomp == mycomp:
+                b[idx_start:idx_stop] = b_old
+            self.CompSep_comm.Bcast(b[idx_start:idx_stop], root=icomp)
+            idx_start = idx_stop
 
         return b
+
+
+    def calc_RHS_mean(self) -> NDArray:
+        # N^-1 d
+        b = self.map_sky/self.map_rms**2
+
+        return self._calc_RHS_from_input_array(b)
 
 
     def calc_RHS_fluct(self) -> NDArray:
@@ -340,46 +350,9 @@ class CompSepSolver:
         b = np.random.normal(0.0, 1.0, self.map_rms.shape)
 
         # N^-1 d
-        b = b/self.map_rms
+        b /= self.map_rms
 
-        # Y^T N^-1 d
-        b_old = b.copy()
-        b = np.zeros((self.alm_len_complex), dtype=np.complex128)
-        b = alm_to_map_adjoint(b_old, self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
-
-        # B^T Y^T N^-1 d
-        hp.smoothalm(b, self.fwhm_rad, inplace=True)
-
-        # Y^-1^T B^T Y^T N^-1 d
-        b_old = b.copy()
-        b = np.zeros((self.npix))
-        curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
-
-        # M^T Y^-1^T B^T Y^T N^-1 d
-        b_old = b.copy()
-        b = np.zeros((self.ncomp, self.npix))
-        for icomp in range(self.ncomp):
-            b[icomp] += self.comps_SED[icomp,self.my_band_idx]*b_old
-        b = self.CompSep_comm.allreduce(b, op=MPI.SUM)
-
-        # Y^T M^T Y^-1^T B^T Y^T N^-1 d
-        b_old = b.copy()
-        b = []
-        for icomp in range(self.ncomp):
-            if icomp == self.CompSep_comm.Get_rank():
-                b.append(alm_to_map_adjoint(b_old[icomp], self.nside, self.lmax_per_comp[icomp], nthreads=self.params.nthreads_compsep))
-            else:
-                b.append(np.zeros((self.alm_len_complex_percomp[icomp]), dtype=np.complex128))
-        for icomp in range(self.ncomp):
-            b[icomp] = self.CompSep_comm.allreduce(b[icomp], op=MPI.SUM)
-
-        b_old = b.copy()
-        b = []
-        for icomp in range(self.ncomp):
-            b.append(self.alm_complex2real(b_old[icomp], lmax=self.lmax_per_comp[icomp]))
-        b = np.concatenate(b)
-
-        return b
+        return self._calc_RHS_from_input_array(b)
 
 
     def solve(self, seed=None) -> list[Component]:
