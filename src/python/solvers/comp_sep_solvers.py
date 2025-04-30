@@ -145,7 +145,7 @@ class CompSepSolver:
         idxstop = idxstart + self.alm_len_real_percomp[mycomp]
         # directly convert to complex a_lm
         a = self.alm_real2complex(a_array[idx_start:idx_stop],
-                                  lmax=self.lmax_per_comp[mycomp]))
+                                  lmax=self.lmax_per_comp[mycomp])
 
         # Y a
         a = alm_to_map(a, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
@@ -199,7 +199,7 @@ class CompSepSolver:
         a = alm_to_map_adjoint(a, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
 
         # Converting back from complex alms to real alms
-        a = self.alm_complex2real(a, lmax=self.lmax_per_comp[mycomp]))
+        a = self.alm_complex2real(a, lmax=self.lmax_per_comp[mycomp])
 
         # For now, every task holds every a_lm, so let's gather them together
         a_old = a
@@ -308,7 +308,7 @@ class CompSepSolver:
                 b = tmp
         
         # Y^T M^T Y^-1^T B^T Y^T N^-1 d
-        b = alm_to_map_adjoint(b, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads))
+        b = alm_to_map_adjoint(b, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
 
         # complex to real
         b = self.alm_complex2real(b, lmax=self.lmax_per_comp[mycomp])
@@ -317,7 +317,7 @@ class CompSepSolver:
         b_old = b
         b = []
         for icomp in range(self.ncomp):
-            b.append(self.CompSep_comm.bcast(b if icomp == mycomp else None, root=icomp)
+            b.append(self.CompSep_comm.bcast(b_old if icomp == mycomp else None, root=icomp))
 
         b = np.concatenate(b)
 
