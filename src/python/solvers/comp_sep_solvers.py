@@ -127,90 +127,91 @@ class CompSepSolver:
         a_array = self.CompSep_comm.bcast(a_array, root=0)  # Send a to all worker ranks (which are called with a dummy a).
         logassert(a_array.dtype == np.float64, "Provided component array is not of type np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
 
-        a = []
+# MR: General idea of the changes:
+# I try to never hold lists or arrays of a_lm/maps; it should be sufficient to
+# work on a single one at any time.
+# For function input/output this currently does not work; for that we need
+# to change the interface, but let's first see how this works out.
+# I also try to replace sum reductions with only a single contributor
+# by broadcasts, which should be more efficient.
+# (Currently these are lowercase "bcast"s, so they may be slow, but we can fix that.)
+
+# shorthands
+        mycomp = self.CompSep_comm.Get_rank()
+        mythreads = self.params.nthreads_compsep
+
+# split the input; we only need "our" component
         idx_start = 0
         idx_stop = 0
         for icomp in range(self.ncomp):
             idx_stop += self.alm_len_real_percomp[icomp]
-            a.append(a_array[idx_start:idx_stop])
+            if icomp == mycomp:
+                a = a_array[idx_start:idx_stop]
+                # directly convert to complex a_lm
+                a = self.alm_real2complex(a_array[idx_start:idx_stop],
+                                          lmax=self.lmax_per_comp[mycomp]))
             idx_start = idx_stop
 
-        a_old = a.copy()
-        a = []
-        for icomp in range(self.ncomp):
-            a.append(self.alm_real2complex(a_old[icomp], lmax=self.lmax_per_comp[icomp]))
-
         # Y a
-        a_old = a.copy()
-        a = []
-        for icomp in range(self.ncomp):
-            if icomp == self.CompSep_comm.Get_rank():
-                a.append(alm_to_map(a_old[icomp], self.nside, self.lmax_per_comp[icomp], nthreads=self.params.nthreads_compsep))
-            else:
-                a.append(np.zeros((self.npix), dtype=np.float64))
-        for icomp in range(self.ncomp):
-            self.CompSep_comm.Allreduce(MPI.IN_PLACE, a[icomp], op=MPI.SUM)
+        a = alm_to_map(a, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
 
         # M Y a
-        a_old = a.copy()
-        a = np.zeros((self.npix))
+        a_old = a
+        a = np.zeros(self.npix)
         for icomp in range(self.ncomp):
-            a += self.comps_SED[icomp,self.my_band_idx]*a_old[icomp]
+            # successively broadcast a_old and build a from it
+            tmp = self.CompSep_comm.bcast(a_old if icomp == mycomp else None, root=icomp)
+            a += self.comps_SED[icomp,self.my_band_idx]*tmp
+        del tmp
 
         # Y^-1 M Y a
-        a_old = a.copy()
-        a = np.zeros((self.alm_len_complex), dtype=np.complex128)
-        curvedsky.map2alm_healpix(a_old, a, niter=3, spin=0, nthread=self.params.nthreads_compsep)
+        a_old = a
+        a = np.empty((self.alm_len_complex,), dtype=np.complex128)
+        curvedsky.map2alm_healpix(a_old, a, niter=3, spin=0, nthread=mythreads)
+        del a_old
 
         # B Y^-1 M Y a
         hp.smoothalm(a, self.fwhm_rad, inplace=True)
 
         # Y B Y^-1 M Y a
-        a_old = a.copy()
-        a = np.zeros((self.npix))
-        a = alm_to_map(a_old, self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
+        a = alm_to_map(a, self.nside, self.lmax, nthreads=mythreads)
 
         # N^-1 Y B Y^-1 M Y a
-        a = a/self.map_rms**2
+        a /= self.map_rms**2
 
         # Y^T N^-1 Y B Y^-1 M Y a
-        a_old = a.copy()
-        a = np.zeros((self.alm_len_complex), dtype=np.complex128)
-        a = alm_to_map_adjoint(a_old, self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
+        a = alm_to_map_adjoint(a, self.nside, self.lmax, nthreads=mythreads)
 
         # B^T Y^T N^-1 Y B Y^-1 M Y a
         hp.smoothalm(a, self.fwhm_rad, inplace=True)
 
         # Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
-        a_old = a.copy()
-        a = np.zeros((self.npix))
-        curvedsky.map2alm_healpix(a, a_old, niter=3, adjoint=True, spin=0, nthread=self.params.nthreads_compsep)
+        a_old = a
+        a = np.empty((self.npix,))
+        curvedsky.map2alm_healpix(a, a_old, niter=3, adjoint=True, spin=0, nthread=mythreads)
 
         # M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
-        a_old = a.copy()
-        a = np.zeros((self.ncomp, self.npix))
-        for iband in range(self.nband):
-            for icomp in range(self.ncomp):
-                if iband == self.my_band_idx:
-                    a[icomp] += self.comps_SED[icomp,iband]*a_old
-        self.CompSep_comm.Allreduce(MPI.IN_PLACE, a, op=MPI.SUM)
+        a_old = a
+        for icomp in range(self.ncomp):
+            tmp = a_old * self.comps_SED[icomp,self.my_band_idx]
+            # accumulate tmp onto the relevant task
+            self.CompSep_comm.Reduce(MPI.IN_PLACE, tmp, op=MPI.SUM, root=icomp)
+            if icomp == mycomp:
+                a = tmp
+        del a_old
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
-        a_old = a.copy()
-        a = []
-        for icomp in range(self.ncomp):
-            if icomp == self.CompSep_comm.Get_rank():
-                a.append(alm_to_map_adjoint(a_old[icomp], self.nside, self.lmax_per_comp[icomp], nthreads=self.params.nthreads_compsep))
-            else:
-                a.append(np.zeros((self.alm_len_complex_percomp[icomp]), dtype=np.complex128))
-        for icomp in range(self.ncomp):
-            self.CompSep_comm.Allreduce(MPI.IN_PLACE, a[icomp], op=MPI.SUM)
+        a = alm_to_map_adjoint(a, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
 
         # Converting back from complex alms to real alms
-        a_old = a.copy()
+        a = self.alm_complex2real(a, lmax=self.lmax_per_comp[mycomp]))
+
+        # For now, every task holds every a_lm, so let's gather them together
+        a_old = a
         a = []
         for icomp in range(self.ncomp):
-            a.append(self.alm_complex2real(a_old[icomp], lmax=self.lmax_per_comp[icomp]))
+            a.append(self.CompSep_comm.bcast(a_old if icomp == mycomp else None, root=icomp)
+
         a = np.concatenate(a)
 
         return a#.flatten()
@@ -284,47 +285,44 @@ class CompSepSolver:
 
 
     def calc_RHS_mean(self) -> NDArray:
-        # d
-        b = self.map_sky.copy()
+# shorthands
+        mycomp = self.CompSep_comm.Get_rank()
+        mythreads = self.params.nthreads_compsep
 
         # N^-1 d
-        b = b/self.map_rms**2
+        b = self.map_sky/self.map_rms**2
 
         # Y^T N^-1 d
-        b_old = b.copy()
-        b = np.zeros((self.alm_len_complex), dtype=np.complex128)
-        b = alm_to_map_adjoint(b_old, self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
+        b = alm_to_map_adjoint(b, self.nside, self.lmax, nthreads=mythreads)
 
         # B^T Y^T N^-1 d
         hp.smoothalm(b, self.fwhm_rad, inplace=True)
 
         # Y^-1^T B^T Y^T N^-1 d
-        b_old = b.copy()
-        b = np.zeros((self.npix))
+        b_old = b
+        b = np.empty((self.npix,))
         curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
 
         # M^T Y^-1^T B^T Y^T N^-1 d
-        b_old = b.copy()
-        b = np.zeros((self.ncomp, self.npix))
+        b_old = b
         for icomp in range(self.ncomp):
-            b[icomp] += self.comps_SED[icomp,self.my_band_idx]*b_old
-        b = self.CompSep_comm.allreduce(b, op=MPI.SUM)
-
+            tmp = self.comps_SED[icomp,self.my_band_idx]*b_old
+            tmp = self.CompSep_comm.allreduce(tmp, op=MPI.SUM)
+            if icomp == mycomp:
+                b = tmp
+        
         # Y^T M^T Y^-1^T B^T Y^T N^-1 d
-        b_old = b.copy()
-        b = []
-        for icomp in range(self.ncomp):
-            if icomp == self.CompSep_comm.Get_rank():
-                b.append(alm_to_map_adjoint(b_old[icomp], self.nside, self.lmax_per_comp[icomp], nthreads=self.params.nthreads_compsep))
-            else:
-                b.append(np.zeros((self.alm_len_complex_percomp[icomp]), dtype=np.complex128))
-        for icomp in range(self.ncomp):
-            b[icomp] = self.CompSep_comm.allreduce(b[icomp], op=MPI.SUM)
+        b = alm_to_map_adjoint(b, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads))
 
-        b_old = b.copy()
+        # complex to real
+        b = self.alm_complex2real(b, lmax=self.lmax_per_comp[mycomp])
+
+        # For now, every task holds every a_lm, so let's gather them together
+        b_old = b
         b = []
         for icomp in range(self.ncomp):
-            b.append(self.alm_complex2real(b_old[icomp], lmax=self.lmax_per_comp[icomp]))
+            b.append(self.CompSep_comm.bcast(b if icomp == mycomp else None, root=icomp)
+
         b = np.concatenate(b)
 
         return b

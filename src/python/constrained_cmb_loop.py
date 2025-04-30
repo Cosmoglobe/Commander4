@@ -73,7 +73,7 @@ class ConstrainedCMB:
         for iband in range(self.nband):
             Ax = hp.smoothalm(x, self.fwhm[iband], inplace=False)
             YAx = alm2map(Ax, self.nside, self.lmax)
-            NYAx = YAx.copy()/self.map_rms[iband]**2
+            NYAx = YAx/self.map_rms[iband]**2
             YTNYAx = alm2map_adjoint(NYAx, self.nside, self.lmax)
             ATYTNYAx = hp.smoothalm(YTNYAx, self.fwhm[iband], inplace=False)
             LHS_sum += ATYTNYAx
