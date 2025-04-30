@@ -141,16 +141,11 @@ class CompSepSolver:
         mythreads = self.params.nthreads_compsep
 
 # split the input; we only need "our" component
-        idx_start = 0
-        idx_stop = 0
-        for icomp in range(self.ncomp):
-            idx_stop += self.alm_len_real_percomp[icomp]
-            if icomp == mycomp:
-                a = a_array[idx_start:idx_stop]
-                # directly convert to complex a_lm
-                a = self.alm_real2complex(a_array[idx_start:idx_stop],
-                                          lmax=self.lmax_per_comp[mycomp]))
-            idx_start = idx_stop
+        idxstart = sum(self.alm_len_real_percomp[:mycomp])
+        idxstop = idxstart + self.alm_len_real_percomp[mycomp]
+        # directly convert to complex a_lm
+        a = self.alm_real2complex(a_array[idx_start:idx_stop],
+                                  lmax=self.lmax_per_comp[mycomp]))
 
         # Y a
         a = alm_to_map(a, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
@@ -208,11 +203,12 @@ class CompSepSolver:
 
         # For now, every task holds every a_lm, so let's gather them together
         a_old = a
-        a = []
+        a=np.empty(a_array.shape())
+        idx_start = 0
         for icomp in range(self.ncomp):
-            a.append(self.CompSep_comm.bcast(a_old if icomp == mycomp else None, root=icomp)
-
-        a = np.concatenate(a)
+            idx_stop = idx_start + self.alm_len_real_percomp[icomp]
+            a[idex_start:idx_stop] = self.CompSep_comm.bcast(a_old if icomp == mycomp else None, root=icomp)
+            idx_start = idx_stop
 
         return a#.flatten()
 
