@@ -44,7 +44,7 @@ class BeamOnlyPreconditioner:
 
         if mycomp >= compsep.ncomp:  # nothing to do
             return a_array
-        a = compsep.alm_real2complex(a_array, lmax=compsep.lmax_per_comp[mycomp])
+        a = a_array.copy()  # I'm not sure if the copy is needed
         
         lmax = compsep.lmax_per_comp[mycomp]
         beam_window_squared_sum = np.zeros(lmax + 1)
@@ -62,8 +62,6 @@ class BeamOnlyPreconditioner:
         # Apply inverse squared beam (divide by beam window squared)
         a = hp.almxfl(a, 1.0/beam_window_squared_sum)
 
-        a = compsep.alm_complex2real(a, lmax=compsep.lmax_per_comp[mycomp])
-
         return a
 
 
@@ -80,58 +78,46 @@ class NoiseOnlyPreconditioner:
         import py3nj
         self.compsep = compsep
         is_master = compsep.CompSep_comm.Get_rank() == 0
+        mycomp = compsep.CompSep_comm.Get_rank()
 
         w = 1.0/compsep.map_rms**2
         w_alm = hp.map2alm(w, lmax=compsep.lmax)
+        # MR FIXME: the next two lines look like an expensive no-op to me ...
+        # or is compsep.map_rms different on different tasks?
         w_alm = compsep.CompSep_comm.allreduce(w_alm, op=MPI.SUM)
         w_alm /= compsep.CompSep_comm.Get_size()
-        if is_master:
-            self.YTNY = []
-            for icomp in range(compsep.ncomp):
-                self.YTNY.append(np.zeros(compsep.alm_len_complex_percomp[icomp], dtype=np.complex128))
-                lmax = compsep.lmax_per_comp[icomp]
-                w_alm_only_m0 = np.zeros(lmax + 1, dtype=np.complex128)
-                for l in range(lmax + 1):
-                    idx = hp.Alm.getidx(lmax, l, 0)
-                    w_alm_only_m0[l] = w_alm[idx]
 
-                inv_sqrt_4pi = 1.0/np.sqrt(4*np.pi)
-                for l in range(lmax + 1):
-                    l3_max = min(lmax, 2 * l)
-                    for m in range(0, l + 1):
-                        l3_arr = np.arange(0, l3_max + 1)
-                        l_arr = np.full_like(l3_arr, l)
-                        m_arr = np.full_like(l3_arr, m)
+        if mycomp >= compsep.ncomp:
+            return
 
-                        value = (-1)**m*py3nj.wigner3j(2*l_arr, 2*l_arr, 2*l3_arr, 2*m_arr, -2*m_arr, 0) * \
-                            py3nj.wigner3j(2*l_arr, 2*l_arr, 2*l3_arr, 0, 0, 0) * w_alm_only_m0[l3_arr] * \
-                            np.sqrt((2*l_arr + 1)**2*(2*l3_arr + 1))*inv_sqrt_4pi
-                        idx = hp.Alm.getidx(lmax, l, m)
-                        self.YTNY[icomp][idx] += np.sum(value)
-                # alm_plotter(self.YTNY[icomp], lmax, filename=f"YTNY_{icomp}.png")
+        self.YTNY = np.zeros(compsep.alm_len_complex_percomp[mycomp], dtype=np.complex128)
+        lmax = compsep.lmax_per_comp[mycomp]
+        w_alm_only_m0 = np.zeros(lmax + 1, dtype=np.complex128)
+        for l in range(lmax + 1):
+            idx = hp.Alm.getidx(lmax, l, 0)
+            w_alm_only_m0[l] = w_alm[idx]
+
+        inv_sqrt_4pi = 1.0/np.sqrt(4*np.pi)
+        for l in range(lmax + 1):
+            l3_max = min(lmax, 2 * l)
+            for m in range(0, l + 1):
+                l3_arr = np.arange(0, l3_max + 1)
+                l_arr = np.full_like(l3_arr, l)
+                m_arr = np.full_like(l3_arr, m)
+
+                value = (-1)**m*py3nj.wigner3j(2*l_arr, 2*l_arr, 2*l3_arr, 2*m_arr, -2*m_arr, 0) * \
+                    py3nj.wigner3j(2*l_arr, 2*l_arr, 2*l3_arr, 0, 0, 0) * w_alm_only_m0[l3_arr] * \
+                    np.sqrt((2*l_arr + 1)**2*(2*l3_arr + 1))*inv_sqrt_4pi
+                idx = hp.Alm.getidx(lmax, l, m)
+                self.YTNY[idx] += np.sum(value)
+        # alm_plotter(self.YTNY[icomp], lmax, filename=f"YTNY_{icomp}.png")
 
 
     def __call__(self, a_array: np.array):
         compsep = self.compsep
-        a = []
-        idx_start = 0
-        idx_stop = 0
-        for icomp in range(compsep.ncomp):
-            idx_stop += compsep.alm_len_real_percomp[icomp]
-            a.append(a_array[idx_start:idx_stop])
-            idx_start = idx_stop
+        mycomp = compsep.CompSep_comm.Get_rank()
 
-        a_old = a.copy()
-        a = []
-        for icomp in range(compsep.ncomp):
-            a.append(compsep.alm_real2complex(a_old[icomp], lmax=compsep.lmax_per_comp[icomp]))
-        
-            a[icomp] = a[icomp]/self.YTNY[icomp]
+        if mycomp >= compsep.ncomp:  # nothing to do
+            return a_array
 
-        a_old = a.copy()
-        a = []
-        for icomp in range(compsep.ncomp):
-            a.append(compsep.alm_complex2real(a_old[icomp], lmax=compsep.lmax_per_comp[icomp]))
-        a = np.concatenate(a)
-
-        return a
+        return a_array / self.YTNY

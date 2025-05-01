@@ -124,7 +124,7 @@ class CompSepSolver:
         """
         logger = logging.getLogger(__name__)
 
-        logassert(a_array.dtype == np.float64, "Provided component array is not of type np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
+        logassert(a_array.dtype == np.complex128, "Provided component array is not of type np.complex128. This operator takes and returns complex alms.", logger)
 
 # MR: General idea of the changes:
 # I try to never hold lists or arrays of a_lm/maps; it should be sufficient to
@@ -140,10 +140,8 @@ class CompSepSolver:
         mythreads = self.params.nthreads_compsep
 
         if mycomp < self.ncomp:  # this task actually holds a component
-            a = self.alm_real2complex(a_array,
-                                      lmax=self.lmax_per_comp[mycomp])
             # Y a
-            a = alm_to_map(a, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
+            a = alm_to_map(a_array, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
         else:
             a = None
 
@@ -197,11 +195,8 @@ class CompSepSolver:
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         if mycomp < self.ncomp:
             a = alm_to_map_adjoint(a, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
-
-            # Converting back from complex alms to real alms
-            a = self.alm_complex2real(a, lmax=self.lmax_per_comp[mycomp])
         else:
-            a = np.zeros((0,))  # zero-sized array
+            a = np.zeros((0,), dtype=np.complex128)  # zero-sized array
 
         # For now, every task holds every a_lm, so let's gather them together
         return a
@@ -269,7 +264,13 @@ class CompSepSolver:
 
 
     def _calc_dot(self, a: NDArray, b: NDArray):
-        return self.CompSep_comm.allreduce(np.dot(a,b), op=MPI.SUM)
+        mycomp = self.CompSep_comm.Get_rank()
+        res = 0.
+        if mycomp < self.ncomp:
+            a = self.alm_complex2real(a, self.lmax_per_comp[mycomp])
+            b = self.alm_complex2real(b, self.lmax_per_comp[mycomp])
+            res = np.dot(a,b)
+        return self.CompSep_comm.allreduce(res, op=MPI.SUM)
 
 
     def _calc_RHS_from_input_array(self, b: NDArray) -> NDArray:
@@ -300,11 +301,8 @@ class CompSepSolver:
         # Y^T M^T Y^-1^T B^T Y^T N^-1 d
         if mycomp < self.ncomp:  # This task actually holds a component
             b = alm_to_map_adjoint(b, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
-
-            # complex to real
-            b = self.alm_complex2real(b, lmax=self.lmax_per_comp[mycomp])
         else:
-            b = np.zeros((0,))
+            b = np.zeros((0,), dtype=np.complex128)
 
         return b
 
@@ -362,13 +360,16 @@ class CompSepSolver:
         if seed is not None:
             np.random.seed(seed)
         if mycomp < self.ncomp:
+            # FIXME: these are not uniformly random a_lm!
+            # Components with m>0 need a factor of sqrt(2).
             x0 = np.random.normal(0.0, 1.0, self.alm_len_real_percomp[mycomp])
+            x0 = self.alm_real2complex(x0, self.lmax_per_comp[mycomp])
         else:
-            x0 = np.zeros((0,))
+            x0 = np.zeros((0,), dtype=np.complex128)
         sol_array = self.solve_CG(self.apply_LHS_matrix, RHS, x0, M=precond, x_true=x_true if debug_mode else None)
 
         for icomp in range(self.ncomp):
             tmp = self.CompSep_comm.bcast(sol_array, root=icomp)
-            self.comp_list[icomp].component_alms = self.alm_real2complex(tmp, lmax=self.lmax_per_comp[icomp])
+            self.comp_list[icomp].component_alms = tmp
 
         return self.comp_list
