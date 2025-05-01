@@ -40,42 +40,29 @@ class BeamOnlyPreconditioner:
 
     def __call__(self, a_array: np.array):
         compsep = self.compsep
+        mycomp = compsep.CompSep_comm.Get_rank()
 
-        a = []
-        idx_start = 0
-        idx_stop = 0
-        for icomp in range(compsep.ncomp):
-            idx_stop += compsep.alm_len_real_percomp[icomp]
-            a.append(a_array[idx_start:idx_stop])
-            idx_start = idx_stop
-
-        a_old = a.copy()
-        a = []
-        for icomp in range(compsep.ncomp):
-            a.append(compsep.alm_real2complex(a_old[icomp], lmax=compsep.lmax_per_comp[icomp]))
+        if mycomp >= compsep.ncomp:  # nothing to do
+            return a_array
+        a = compsep.alm_real2complex(a_array, lmax=compsep.lmax_per_comp[mycomp])
         
-        for icomp in range(compsep.ncomp):
-            lmax = compsep.lmax_per_comp[icomp]
-            beam_window_squared_sum = np.zeros(lmax + 1)
+        lmax = compsep.lmax_per_comp[mycomp]
+        beam_window_squared_sum = np.zeros(lmax + 1)
 
-            for fwhm in compsep.fwhm_rad_allbands:
-                # Create beam window function. Square the beam window since it appears twice in the system matrix
-                beam_window_squared = hp.gauss_beam(fwhm, lmax=lmax)**2
+        for fwhm in compsep.fwhm_rad_allbands:
+            # Create beam window function. Square the beam window since it appears twice in the system matrix
+            beam_window_squared = hp.gauss_beam(fwhm, lmax=lmax)**2
                 
-                # Add regularization to avoid division by very small values
-                min_beam = 1e-10
-                beam_window_squared = np.maximum(beam_window_squared, min_beam)
+            # Add regularization to avoid division by very small values
+            min_beam = 1e-10
+            beam_window_squared = np.maximum(beam_window_squared, min_beam)
 
-                # Add up the individual contributions to the beam from each frequency.                
-                beam_window_squared_sum += beam_window_squared
-            # Apply inverse squared beam (divide by beam window squared)
-            a[icomp] = hp.almxfl(a[icomp], 1.0/beam_window_squared_sum)
+            # Add up the individual contributions to the beam from each frequency.                
+            beam_window_squared_sum += beam_window_squared
+        # Apply inverse squared beam (divide by beam window squared)
+        a = hp.almxfl(a, 1.0/beam_window_squared_sum)
 
-        a_old = a.copy()
-        a = []
-        for icomp in range(compsep.ncomp):
-            a.append(compsep.alm_complex2real(a_old[icomp], lmax=compsep.lmax_per_comp[icomp]))
-        a = np.concatenate(a)
+        a = compsep.alm_complex2real(a, lmax=compsep.lmax_per_comp[mycomp])
 
         return a
 

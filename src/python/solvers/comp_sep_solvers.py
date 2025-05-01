@@ -118,13 +118,12 @@ class CompSepSolver:
             The full A matrix can be written B^T Y^T M^T N^-1 M Y B, where B is the beam smoothing, M is the mixing matrix, and N is the noise covariance matrix.
 
             Args:
-                a: (ncomp*alm_len_real,) array containing real, flattened alms of each component.
+                a_array: the a_lm of the component residing on this task (may be zero-sized).
             Returns:
-                Aa: (nband*alm_len_rea,) array from applying the full A matrix to a.
+                Aa: the result of A(a_array) of the component residing on this task (may be zero-sized).
         """
         logger = logging.getLogger(__name__)
 
-        a_array = self.CompSep_comm.bcast(a_array, root=0)  # Send a to all worker ranks (which are called with a dummy a).
         logassert(a_array.dtype == np.float64, "Provided component array is not of type np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
 
 # MR: General idea of the changes:
@@ -140,14 +139,9 @@ class CompSepSolver:
         mycomp = self.CompSep_comm.Get_rank()
         mythreads = self.params.nthreads_compsep
 
-# split the input; we only need "our" component
         if mycomp < self.ncomp:  # this task actually holds a component
-            idx_start = sum(self.alm_len_real_percomp[:mycomp])
-            idx_stop = idx_start + self.alm_len_real_percomp[mycomp]
-            # directly convert to complex a_lm
-            a = self.alm_real2complex(a_array[idx_start:idx_stop],
+            a = self.alm_real2complex(a_array,
                                       lmax=self.lmax_per_comp[mycomp])
-
             # Y a
             a = alm_to_map(a, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
         else:
@@ -207,20 +201,10 @@ class CompSepSolver:
             # Converting back from complex alms to real alms
             a = self.alm_complex2real(a, lmax=self.lmax_per_comp[mycomp])
         else:
-            a = None
+            a = np.zeros((0,))  # zero-sized array
 
         # For now, every task holds every a_lm, so let's gather them together
-        a_old = a
-        a=np.empty(a_array.shape)
-        idx_start = 0
-        for icomp in range(self.ncomp):
-            idx_stop = idx_start + self.alm_len_real_percomp[icomp]
-            if icomp == mycomp:
-                a[idx_start:idx_stop] = a_old
-            self.CompSep_comm.Bcast(a[idx_start:idx_stop], root=icomp)
-            idx_start = idx_stop
-
-        return a#.flatten()
+        return a
 
 
     def solve_CG(self, LHS: Callable, RHS: NDArray, x0: NDArray, M = None, x_true = None) -> NDArray|None:
@@ -241,53 +225,51 @@ class CompSepSolver:
         """
         logger = logging.getLogger(__name__)
         checkpoint_interval = 10
-        if self.CompSep_comm.Get_rank() == 0:
-            if M is None:
-                CG_solver = utils.CG(LHS, RHS, x0=x0)
-            else:
-                CG_solver = utils.CG(LHS, RHS, x0=x0, M=M)
-            self.CG_residuals = np.zeros((self.params.CG_max_iter))
-            if not x_true is None:
-                self.CG_errors_true = np.zeros((self.params.CG_max_iter//checkpoint_interval))
-                self.CG_Anorm_error = np.zeros((self.params.CG_max_iter//checkpoint_interval))
-                self.xtrue_A_xtrue = x_true.dot(LHS(x_true))  # The normalization factor for the true error.
-            logger.info(f"CG starting up!")
-            iter = 0
-            t0 = time.time()
-            stop_CG = False
-            while not stop_CG:
-                CG_solver.step()
-                self.CG_residuals[iter] = CG_solver.err
-                iter += 1
-                if iter%checkpoint_interval == 0:
-                    logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-10:iter]):.3e} ({(time.time() - t0)/10.0:.1f}s/iter)")
-                    if not x_true is None:
-                        self.CG_errors_true[iter//checkpoint_interval-1] = np.linalg.norm(CG_solver.x-x_true)/np.linalg.norm(x_true)
-                        self.CG_Anorm_error[iter//checkpoint_interval-1] = (CG_solver.x-x_true).dot(LHS(CG_solver.x-x_true))/self.xtrue_A_xtrue
-                        logger.info(f"True error: {self.CG_errors_true[iter//checkpoint_interval-1]:.3e} - Anorm error: {self.CG_Anorm_error[iter//checkpoint_interval-1]:.3e}")
-                    t0 = time.time()
-                if iter >= self.params.CG_max_iter:
-                    logger.warning(f"Maximum number of iterations ({self.params.CG_max_iter}) reached in CG.")
-                    stop_CG = True
-                if CG_solver.err < self.params.CG_err_tol:
-                    stop_CG = True
-                stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
-            self.CG_residuals = self.CG_residuals[:iter]
-            logger.info(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.params.CG_err_tol})")
-            s_bestfit = CG_solver.x
-            return s_bestfit
+        master = self.CompSep_comm.Get_rank() == 0
+
+        mydot = lambda a,b: self._calc_dot(a,b)
+        if M is None:
+            CG_solver = utils.CG(LHS, RHS, dot=mydot, x0=x0)
         else:
-            LHS(None)  # Calling the LHS operator because the initialization of the CG driver will call it.
-            if not x_true is None:
-                LHS(None)  # Second call, for the xtrue_A_xtrue calculation.
-            stop_CG = False
-            iter = 0
-            while not stop_CG:
-                LHS(None)
-                iter += 1
-                if not x_true is None and iter%checkpoint_interval == 0:  # Every nth iteration, if we have a true solution, we do an extra LHS calculation in order to determine the true error.
-                    LHS(None)
-                stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
+            CG_solver = utils.CG(LHS, RHS, dot=mydot, x0=x0, M=M)
+        self.CG_residuals = np.zeros((self.params.CG_max_iter))
+        if x_true is not None:
+            self.CG_errors_true = np.zeros((self.params.CG_max_iter//checkpoint_interval))
+            self.CG_Anorm_error = np.zeros((self.params.CG_max_iter//checkpoint_interval))
+            self.xtrue_A_xtrue = x_true.dot(LHS(x_true))  # The normalization factor for the true error.
+        if master:
+            logger.info(f"CG starting up!")
+        iter = 0
+        t0 = time.time()
+        stop_CG = False
+        while not stop_CG:
+            CG_solver.step()
+            self.CG_residuals[iter] = CG_solver.err
+            iter += 1
+            if iter%checkpoint_interval == 0:
+                if master:
+                    logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-10:iter]):.3e} ({(time.time() - t0)/10.0:.1f}s/iter)")
+                if x_true is not None:
+                    self.CG_errors_true[iter//checkpoint_interval-1] = np.linalg.norm(CG_solver.x-x_true)/np.linalg.norm(x_true)
+                    self.CG_Anorm_error[iter//checkpoint_interval-1] = (CG_solver.x-x_true).dot(LHS(CG_solver.x-x_true))/self.xtrue_A_xtrue
+                    logger.info(f"True error: {self.CG_errors_true[iter//checkpoint_interval-1]:.3e} - Anorm error: {self.CG_Anorm_error[iter//checkpoint_interval-1]:.3e}")
+                t0 = time.time()
+            if iter >= self.params.CG_max_iter:
+                if master:
+                    logger.warning(f"Maximum number of iterations ({self.params.CG_max_iter}) reached in CG.")
+                stop_CG = True
+            if CG_solver.err < self.params.CG_err_tol:
+                stop_CG = True
+            stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
+        self.CG_residuals = self.CG_residuals[:iter]
+        if master:
+            logger.info(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.params.CG_err_tol})")
+        s_bestfit = CG_solver.x
+        return s_bestfit
+
+
+    def _calc_dot(self, a: NDArray, b: NDArray):
+        return self.CompSep_comm.allreduce(np.dot(a,b), op=MPI.SUM)
 
 
     def _calc_RHS_from_input_array(self, b: NDArray) -> NDArray:
@@ -322,18 +304,7 @@ class CompSepSolver:
             # complex to real
             b = self.alm_complex2real(b, lmax=self.lmax_per_comp[mycomp])
         else:
-            b = None
-
-        # For now, every task holds every a_lm, so let's gather them together
-        b_old = b
-        b = np.empty(sum(self.alm_len_real_percomp))
-        idx_start = 0
-        for icomp in range(self.ncomp):
-            idx_stop = idx_start + self.alm_len_real_percomp[icomp]
-            if icomp == mycomp:
-                b[idx_start:idx_stop] = b_old
-            self.CompSep_comm.Bcast(b[idx_start:idx_stop], root=icomp)
-            idx_start = idx_stop
+            b = np.zeros((0,))
 
         return b
 
@@ -356,6 +327,8 @@ class CompSepSolver:
 
 
     def solve(self, seed=None) -> list[Component]:
+# shorthands
+        mycomp = self.CompSep_comm.Get_rank()
 
         RHS = self.calc_RHS_mean() + self.calc_RHS_fluct()
         debug_mode = self.params.compsep.dense_matrix_debug_mode
@@ -386,19 +359,16 @@ class CompSepSolver:
                 self.logger.info(f"Sing-vals: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
 
 
-        if not seed is None:
+        if seed is not None:
             np.random.seed(seed)
-        x0 = [np.random.normal(0.0, 1.0, self.alm_len_real_percomp[icomp]) for icomp in range(self.ncomp)]
-        x0 = np.concatenate(x0)
+        if mycomp < self.ncomp:
+            x0 = np.random.normal(0.0, 1.0, self.alm_len_real_percomp[mycomp])
+        else:
+            x0 = np.zeros((0,))
         sol_array = self.solve_CG(self.apply_LHS_matrix, RHS, x0, M=precond, x_true=x_true if debug_mode else None)
-        sol_array = self.CompSep_comm.bcast(sol_array, root=0)
-        sol = []
-        idx_start = 0
-        idx_stop = 0
+
         for icomp in range(self.ncomp):
-            idx_stop += self.alm_len_real_percomp[icomp]
-            sol.append(sol_array[idx_start:idx_stop])
-            idx_start = idx_stop
-        for icomp in range(self.ncomp):
-            self.comp_list[icomp].component_alms = self.alm_real2complex(sol[icomp], lmax=self.lmax_per_comp[icomp])
+            tmp = self.CompSep_comm.bcast(sol_array, root=icomp)
+            self.comp_list[icomp].component_alms = self.alm_real2complex(tmp, lmax=self.lmax_per_comp[icomp])
+
         return self.comp_list
