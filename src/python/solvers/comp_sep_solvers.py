@@ -362,7 +362,7 @@ class CompSepSolver:
         if seed is not None:
             np.random.seed(seed)
         if mycomp < self.ncomp:
-            x0 = np.zeros(self.alm_len_complex_percomp[mycomp], dtype=np.complex128)
+            x0 = np.zeros((self.alm_len_complex_percomp[mycomp],), dtype=np.complex128)
         else:
             x0 = np.zeros((0,), dtype=np.complex128)
         sol_array = self.solve_CG(self.apply_LHS_matrix, RHS, x0, M=precond, x_true=x_true if debug_mode else None)
