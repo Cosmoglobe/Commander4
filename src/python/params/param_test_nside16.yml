@@ -17,9 +17,6 @@ pixel_compsep_sampling: False
 CG_max_iter: 20
 CG_err_tol: 0.0000001 # 1e-7
 
-input_paths:
-  tod_filename: "/mn/stornext/d23/cmbco/commander4_shared/cron_tests/sim_test_data/tod_sim_16_s0.1_b800.h5"
-
 output_paths:
   plots: "/mn/stornext/d23/cmbco/commander4_shared/cron_tests/output_plots/"
   stats: "/mn/stornext/d23/cmbco/commander4_shared/cron_tests/stats/"
@@ -88,7 +85,7 @@ experiments:
     enabled: true
     MPI_ranks: 1
     data_type: "TOD"
-    data_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/com4_sim_data/sim_data_cmb_dust_sync_corrnoise_nside16_beam800_noise0.1/tod_sim_16_s0.1_b800.h5"
+    data_path: "/mn/stornext/d23/cmbco/commander4_shared/cron_tests/sim_test_data/tod_sim_16_s0.1_b800.h5"
     num_scans: 1799
     nside: 16
     bands:
@@ -101,7 +98,7 @@ experiments:
     enabled: true
     MPI_ranks: 4
     data_type: "TOD"
-    data_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/com4_sim_data/sim_data_cmb_dust_sync_corrnoise_nside16_beam800_noise0.1/tod_sim_16_s0.1_b800.h5"
+    data_path: "/mn/stornext/d23/cmbco/commander4_shared/cron_tests/sim_test_data/tod_sim_16_s0.1_b800.h5"
     num_scans: 1799
     nside: 16
     bands:
