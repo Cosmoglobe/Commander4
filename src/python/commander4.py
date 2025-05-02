@@ -52,7 +52,8 @@ def main(params, params_dict):
     from src.python.tod_processing import process_tod, init_tod_processing, get_empty_compsep_output
     from src.python.compsep_processing import process_compsep, init_compsep_processing
     from src.python.communication import receive_tod, send_tod, receive_compsep, send_compsep
-    np.random.seed(hash(("Commander4", worldrank))%(2**32))  # Slightly better than seeding with just the worldranks. Optimal solution would require carrying around an instance of a "np.random.default_rng" (https://numpy.org/doc/2.2/reference/random/parallel.html).
+    seed = hash((1995, worldrank))%(2**32)  # Unique seed per worldrank. Has it for slightly improved entropy. Modulus because seed needs to be 32 bit.
+    np.random.seed(seed)  # The optimal seed solution would require carrying around an instance of a "np.random.default_rng" (see https://numpy.org/doc/2.2/reference/random/parallel.html).
 
     tot_num_experiment_bands = np.sum([len(params.experiments[experiment].bands) for experiment in params.experiments if params.experiments[experiment].enabled])
     tot_num_compsep_bands = len(params.CompSep_bands)
