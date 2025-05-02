@@ -14,6 +14,8 @@ def nalm(lmax, mmax):
 
 # MR FIXME: I'm not absolutely sure that this is fully correct. Please double-check!
 def gaussian_random_alm(lmax, mmax, spin, ncomp):
+    """ Calculates Gaussianly distributed alms for the complex alm convension (not storing m<0 because map is real.)
+    """
     res = np.random.normal(0., 1., (ncomp, nalm(lmax, mmax))) \
      + 1j*np.random.normal(0., 1., (ncomp, nalm(lmax, mmax)))
     # make a_lm with m==0 real-valued

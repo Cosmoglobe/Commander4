@@ -95,16 +95,6 @@ class CompSepSolver:
 
         logassert(a_array.dtype == np.complex128, "Provided component array is not of type np.complex128. This operator takes and returns complex alms.", logger)
 
-# MR: General idea of the changes:
-# I try to never hold lists or arrays of a_lm/maps; it should be sufficient to
-# work on a single one at any time.
-# For function input/output this currently does not work; for that we need
-# to change the interface, but let's first see how this works out.
-# I also try to replace sum reductions with only a single contributor
-# by broadcasts, which should be more efficient.
-# (Currently these are lowercase "bcast"s, so they may be slow, but we can fix that.)
-
-# shorthands
         mycomp = self.CompSep_comm.Get_rank()
         mythreads = self.params.nthreads_compsep
 
@@ -233,6 +223,9 @@ class CompSepSolver:
 
 
     def _calc_dot(self, a: NDArray, b: NDArray):
+        """ Calculates the dot product of two sets of complex a_lms which are distributed across the
+            self.ncomp first ranks of the self.CompSep_comm communicator.
+        """
         mycomp = self.CompSep_comm.Get_rank()
         res = 0.
         if mycomp < self.ncomp:
@@ -245,7 +238,9 @@ class CompSepSolver:
 
 
     def _calc_RHS_from_input_array(self, b: NDArray) -> NDArray:
-# shorthands
+        """ Applies the matrices Y^T M^T Y^-1^T B^T to a vector b, which is the terms in common
+            for b_mean and b_fluct of the RHS of the CompSep Ax=b equation.
+        """
         mycomp = self.CompSep_comm.Get_rank()
         mythreads = self.params.nthreads_compsep
 
@@ -279,24 +274,29 @@ class CompSepSolver:
 
 
     def calc_RHS_mean(self) -> NDArray:
-        # N^-1 d
-        b = self.map_sky/self.map_rms**2
+        """ Caculates the right-hand-side b-vector of the Ax=b CompSep equation for the Wiener filtered (or mean-field) solution.
+            If used alone on the right-hand-side, gives the deterministic maximum likelihood map-space solution, but a biased PS solution.
+        """
+        # N^-1 b_mean
+        b_mean = self.map_sky/self.map_rms**2
 
-        return self._calc_RHS_from_input_array(b)
+        return self._calc_RHS_from_input_array(b_mean)
 
 
     def calc_RHS_fluct(self) -> NDArray:
-        # d
-        b = np.random.normal(0.0, 1.0, self.map_rms.shape)
+        """ Calculates the right-hand-side fluctuation vector. Provides unbiased realizations (of foregrounds or the CMB) if added
+            together with the right-hand-side of the Wiener filtered solution : Ax = b_mean + b_fluct.
+        """
+        # b_fluct
+        b_fluct = np.random.normal(0.0, 1.0, self.map_rms.shape)
 
-        # N^-1 d
-        b /= self.map_rms
+        # N^-1/2 b_fluct
+        b_fluct /= self.map_rms
 
-        return self._calc_RHS_from_input_array(b)
+        return self._calc_RHS_from_input_array(b_fluct)
 
 
     def solve(self, seed=None) -> list[Component]:
-# shorthands
         mycomp = self.CompSep_comm.Get_rank()
 
         RHS = self.calc_RHS_mean() + self.calc_RHS_fluct()
