@@ -82,37 +82,6 @@ class CompSepSolver:
         self.fwhm_rad_allbands = np.array(CompSep_comm.allgather(fwhm))
 
 
-    # def alm_complex2real(self, alm: NDArray[np.complex128], lmax: int) -> NDArray[np.float64]:
-        # """ Coverts from the complex convention of storing alms when the map is real, to the real convention.
-            # In the real convention, the all m modes are stored, but they are all stored as real values, not complex.
-            # Args:
-                # alm (np.array): Complex alm array of length ((lmax+1)*(lmax+2))/2.
-                # lmax (int): The lmax of the alm array.
-            # Returns:
-                # x (np.array): Real alm array of length (lmax+1)^2.
-        # """
-        # ainfo = curvedsky.alm_info(lmax=lmax)
-        # i = int(ainfo.mstart[1]+1)
-        # return np.concatenate([alm[:i].real,np.sqrt(2.)*alm[i:].view(np.float64)])
-
-
-    # def alm_real2complex(self, x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128]:
-        # """ Coverts from the real convention of storing alms when the map is real, to the complex convention.
-            # In the complex convention, the only m>=0 is stored, but are stored as complex numbers (m=0 still always real).
-            # Args:
-                # x (np.array): Real alm array of length (lmax+1)^2.
-                # lmax (int): The lmax of the alm array.
-            # Returns:
-                # oalm (np.array): Complex alm array of length ((lmax+1)*(lmax+2))/2.
-        # """
-        # ainfo = curvedsky.alm_info(lmax=lmax)
-        # i    = int(ainfo.mstart[1]+1)
-        # oalm = np.zeros(ainfo.nelem, np.complex128)
-        # oalm[:i] = x[:i]
-        # oalm[i:] = x[i:].view(np.complex128)/np.sqrt(2.)
-        # return oalm
-
-
     def apply_LHS_matrix(self, a_array: NDArray) -> NDArray:
         """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of the Ax=b system for global component separation.
             The full A matrix can be written B^T Y^T M^T N^-1 M Y B, where B is the beam smoothing, M is the mixing matrix, and N is the noise covariance matrix.
