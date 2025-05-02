@@ -410,7 +410,7 @@ class CompSepSolver:
 
         if not seed is None:
             np.random.seed(seed)
-        x0 = [np.random.normal(0.0, 1.0, self.alm_len_real_percomp[icomp]) for icomp in range(self.ncomp)]
+        x0 = [np.zeros(self.alm_len_real_percomp[icomp]) for icomp in range(self.ncomp)]
         x0 = np.concatenate(x0)
         sol_array = self.solve_CG(self.apply_LHS_matrix, RHS, x0, M=precond, x_true=x_true if debug_mode else None)
         sol_array = self.CompSep_comm.bcast(sol_array, root=0)
