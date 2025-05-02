@@ -11,7 +11,7 @@ from typing import Callable
 from src.python.output.log import logassert
 from src.python.output.plotting import alm_plotter
 from src.python.model.component import CMB, ThermalDust, Synchrotron, Component
-from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint
+from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, gaussian_random_alm
 from src.python.solvers.dense_matrix_math import DenseMatrix
 import src.python.solvers.preconditioners as preconditioners
 
@@ -82,35 +82,35 @@ class CompSepSolver:
         self.fwhm_rad_allbands = np.array(CompSep_comm.allgather(fwhm))
 
 
-    def alm_complex2real(self, alm: NDArray[np.complex128], lmax: int) -> NDArray[np.float64]:
-        """ Coverts from the complex convention of storing alms when the map is real, to the real convention.
-            In the real convention, the all m modes are stored, but they are all stored as real values, not complex.
-            Args:
-                alm (np.array): Complex alm array of length ((lmax+1)*(lmax+2))/2.
-                lmax (int): The lmax of the alm array.
-            Returns:
-                x (np.array): Real alm array of length (lmax+1)^2.
-        """
-        ainfo = curvedsky.alm_info(lmax=lmax)
-        i = int(ainfo.mstart[1]+1)
-        return np.concatenate([alm[:i].real,np.sqrt(2.)*alm[i:].view(np.float64)])
+    # def alm_complex2real(self, alm: NDArray[np.complex128], lmax: int) -> NDArray[np.float64]:
+        # """ Coverts from the complex convention of storing alms when the map is real, to the real convention.
+            # In the real convention, the all m modes are stored, but they are all stored as real values, not complex.
+            # Args:
+                # alm (np.array): Complex alm array of length ((lmax+1)*(lmax+2))/2.
+                # lmax (int): The lmax of the alm array.
+            # Returns:
+                # x (np.array): Real alm array of length (lmax+1)^2.
+        # """
+        # ainfo = curvedsky.alm_info(lmax=lmax)
+        # i = int(ainfo.mstart[1]+1)
+        # return np.concatenate([alm[:i].real,np.sqrt(2.)*alm[i:].view(np.float64)])
 
 
-    def alm_real2complex(self, x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128]:
-        """ Coverts from the real convention of storing alms when the map is real, to the complex convention.
-            In the complex convention, the only m>=0 is stored, but are stored as complex numbers (m=0 still always real).
-            Args:
-                x (np.array): Real alm array of length (lmax+1)^2.
-                lmax (int): The lmax of the alm array.
-            Returns:
-                oalm (np.array): Complex alm array of length ((lmax+1)*(lmax+2))/2.
-        """
-        ainfo = curvedsky.alm_info(lmax=lmax)
-        i    = int(ainfo.mstart[1]+1)
-        oalm = np.zeros(ainfo.nelem, np.complex128)
-        oalm[:i] = x[:i]
-        oalm[i:] = x[i:].view(np.complex128)/np.sqrt(2.)
-        return oalm
+    # def alm_real2complex(self, x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128]:
+        # """ Coverts from the real convention of storing alms when the map is real, to the complex convention.
+            # In the complex convention, the only m>=0 is stored, but are stored as complex numbers (m=0 still always real).
+            # Args:
+                # x (np.array): Real alm array of length (lmax+1)^2.
+                # lmax (int): The lmax of the alm array.
+            # Returns:
+                # oalm (np.array): Complex alm array of length ((lmax+1)*(lmax+2))/2.
+        # """
+        # ainfo = curvedsky.alm_info(lmax=lmax)
+        # i    = int(ainfo.mstart[1]+1)
+        # oalm = np.zeros(ainfo.nelem, np.complex128)
+        # oalm[:i] = x[:i]
+        # oalm[i:] = x[i:].view(np.complex128)/np.sqrt(2.)
+        # return oalm
 
 
     def apply_LHS_matrix(self, a_array: NDArray) -> NDArray:
@@ -267,10 +267,12 @@ class CompSepSolver:
         mycomp = self.CompSep_comm.Get_rank()
         res = 0.
         if mycomp < self.ncomp:
-            a = self.alm_complex2real(a, self.lmax_per_comp[mycomp])
-            b = self.alm_complex2real(b, self.lmax_per_comp[mycomp])
-            res = np.dot(a,b)
-        return self.CompSep_comm.allreduce(res, op=MPI.SUM)
+            lmax = self.lmax_per_comp[mycomp]
+            res = np.dot(a[0:lmax+1].real, b[0:lmax+1].real)
+            res += 2 * np.dot(a[lmax+1:].real, b[lmax+1:].real)
+            res += 2 * np.dot(a[lmax+1:].imag, b[lmax+1:].imag)
+        res = self.CompSep_comm.allreduce(res, op=MPI.SUM)
+        return res
 
 
     def _calc_RHS_from_input_array(self, b: NDArray) -> NDArray:
@@ -360,10 +362,7 @@ class CompSepSolver:
         if seed is not None:
             np.random.seed(seed)
         if mycomp < self.ncomp:
-            # FIXME: these are not uniformly random a_lm!
-            # Components with m>0 need a factor of sqrt(2).
-            x0 = np.random.normal(0.0, 1.0, self.alm_len_real_percomp[mycomp])
-            x0 = self.alm_real2complex(x0, self.lmax_per_comp[mycomp])
+            x0 = gaussian_random_alm(self.lmax_per_comp[mycomp], self.lmax_per_comp[mycomp], 0, 1)[0]
         else:
             x0 = np.zeros((0,), dtype=np.complex128)
         sol_array = self.solve_CG(self.apply_LHS_matrix, RHS, x0, M=precond, x_true=x_true if debug_mode else None)

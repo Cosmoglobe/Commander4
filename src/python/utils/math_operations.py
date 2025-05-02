@@ -8,6 +8,24 @@ import pysm3.units as u
 import ducc0
 
 
+def nalm(lmax, mmax):
+    return ((mmax+1)*(mmax+2))//2 + (mmax+1)*(lmax-mmax)
+
+
+# MR FIXME: I'm not absolutely sure that this is fully correct. Please double-check!
+def gaussian_random_alm(lmax, mmax, spin, ncomp):
+    res = np.random.normal(0., 1., (ncomp, nalm(lmax, mmax))) \
+     + 1j*np.random.normal(0., 1., (ncomp, nalm(lmax, mmax)))
+    # make a_lm with m==0 real-valued
+    res[:, 0:lmax+1].imag = 0.
+    ofs=0
+    for s in range(spin):
+        res[:, ofs:ofs+spin-s] = 0.
+        ofs += lmax+1-s
+    res[lmax+1:] *= np.sqrt(2.)
+    return res
+
+
 def alm_to_map(alm: np.array, nside: int, lmax: int, nthreads=1) -> np.array:
     base = ducc0.healpix.Healpix_Base(nside, "RING")
     geom = base.sht_info()
