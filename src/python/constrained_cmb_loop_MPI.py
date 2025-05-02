@@ -55,7 +55,7 @@ class ConstrainedCMB:
         LHS_sum = np.zeros_like(x)
         Ax = hp.smoothalm(x, self.fwhm, inplace=False)
         YAx = alm_to_map(Ax, self.nside, self.lmax, nthreads=nthreads)
-        NYAx = YAx.copy()/self.map_rms**2
+        NYAx = YAx/self.map_rms**2
         YTNYAx = alm_to_map_adjoint(NYAx, self.nside, self.lmax, nthreads=nthreads)
         ATYTNYAx = hp.smoothalm(YTNYAx, self.fwhm, inplace=False)
 
@@ -75,7 +75,7 @@ class ConstrainedCMB:
         self.comm.Bcast(x, root=0)
         Ax = hp.smoothalm(x, self.fwhm, inplace=False)
         YAx = alm_to_map(Ax, self.nside, self.lmax, nthreads=nthreads)
-        NYAx = YAx.copy()/self.map_rms**2
+        NYAx = YAx/self.map_rms**2
         YTNYAx = alm_to_map_adjoint(NYAx, self.nside, self.lmax, nthreads=nthreads)
         ATYTNYAx = hp.smoothalm(YTNYAx, self.fwhm, inplace=False)
         self.comm.Reduce(ATYTNYAx,  # Sending our part of the LHS equation to rank 0.

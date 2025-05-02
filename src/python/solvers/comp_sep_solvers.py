@@ -11,7 +11,7 @@ from typing import Callable
 from src.python.output.log import logassert
 from src.python.output.plotting import alm_plotter
 from src.python.model.component import CMB, ThermalDust, Synchrotron, Component
-from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint
+from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, gaussian_random_alm
 from src.python.solvers.dense_matrix_math import DenseMatrix
 import src.python.solvers.preconditioners as preconditioners
 
@@ -82,138 +82,83 @@ class CompSepSolver:
         self.fwhm_rad_allbands = np.array(CompSep_comm.allgather(fwhm))
 
 
-    def alm_complex2real(self, alm: NDArray[np.complex128], lmax: int) -> NDArray[np.float64]:
-        """ Coverts from the complex convention of storing alms when the map is real, to the real convention.
-            In the real convention, the all m modes are stored, but they are all stored as real values, not complex.
-            Args:
-                alm (np.array): Complex alm array of length ((lmax+1)*(lmax+2))/2.
-                lmax (int): The lmax of the alm array.
-            Returns:
-                x (np.array): Real alm array of length (lmax+1)^2.
-        """
-        ainfo = curvedsky.alm_info(lmax=lmax)
-        i = int(ainfo.mstart[1]+1)
-        return np.concatenate([alm[:i].real,np.sqrt(2.)*alm[i:].view(np.float64)])
-
-
-    def alm_real2complex(self, x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128]:
-        """ Coverts from the real convention of storing alms when the map is real, to the complex convention.
-            In the complex convention, the only m>=0 is stored, but are stored as complex numbers (m=0 still always real).
-            Args:
-                x (np.array): Real alm array of length (lmax+1)^2.
-                lmax (int): The lmax of the alm array.
-            Returns:
-                oalm (np.array): Complex alm array of length ((lmax+1)*(lmax+2))/2.
-        """
-        ainfo = curvedsky.alm_info(lmax=lmax)
-        i    = int(ainfo.mstart[1]+1)
-        oalm = np.zeros(ainfo.nelem, np.complex128)
-        oalm[:i] = x[:i]
-        oalm[i:] = x[i:].view(np.complex128)/np.sqrt(2.)
-        return oalm
-
-
     def apply_LHS_matrix(self, a_array: NDArray) -> NDArray:
         """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of the Ax=b system for global component separation.
             The full A matrix can be written B^T Y^T M^T N^-1 M Y B, where B is the beam smoothing, M is the mixing matrix, and N is the noise covariance matrix.
 
             Args:
-                a: (ncomp*alm_len_real,) array containing real, flattened alms of each component.
+                a_array: the a_lm of the component residing on this task (may be zero-sized).
             Returns:
-                Aa: (nband*alm_len_rea,) array from applying the full A matrix to a.
+                Aa: the result of A(a_array) of the component residing on this task (may be zero-sized).
         """
         logger = logging.getLogger(__name__)
 
-        a_array = self.CompSep_comm.bcast(a_array, root=0)  # Send a to all worker ranks (which are called with a dummy a).
-        logassert(a_array.dtype == np.float64, "Provided component array is not of type np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
+        logassert(a_array.dtype == np.complex128, "Provided component array is not of type np.complex128. This operator takes and returns complex alms.", logger)
 
-        a = []
-        idx_start = 0
-        idx_stop = 0
-        for icomp in range(self.ncomp):
-            idx_stop += self.alm_len_real_percomp[icomp]
-            a.append(a_array[idx_start:idx_stop])
-            idx_start = idx_stop
+        mycomp = self.CompSep_comm.Get_rank()
+        mythreads = self.params.nthreads_compsep
 
-        a_old = a.copy()
-        a = []
-        for icomp in range(self.ncomp):
-            a.append(self.alm_real2complex(a_old[icomp], lmax=self.lmax_per_comp[icomp]))
-
-        # Y a
-        a_old = a.copy()
-        a = []
-        for icomp in range(self.ncomp):
-            if icomp == self.CompSep_comm.Get_rank():
-                a.append(alm_to_map(a_old[icomp], self.nside, self.lmax_per_comp[icomp], nthreads=self.params.nthreads_compsep))
-            else:
-                a.append(np.zeros((self.npix), dtype=np.float64))
-        for icomp in range(self.ncomp):
-            self.CompSep_comm.Allreduce(MPI.IN_PLACE, a[icomp], op=MPI.SUM)
+        if mycomp < self.ncomp:  # this task actually holds a component
+            # Y a
+            a = alm_to_map(a_array, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
+        else:
+            a = None
 
         # M Y a
-        a_old = a.copy()
-        a = np.zeros((self.npix))
+        a_old = a
+        a = np.zeros(self.npix)
         for icomp in range(self.ncomp):
-            a += self.comps_SED[icomp,self.my_band_idx]*a_old[icomp]
+            # successively broadcast a_old and build a from it
+            tmp = a_old if mycomp == icomp else np.empty(self.npix)
+            self.CompSep_comm.Bcast(tmp, root=icomp)
+            a += self.comps_SED[icomp,self.my_band_idx]*tmp
+        del tmp
 
         # Y^-1 M Y a
-        a_old = a.copy()
-        a = np.zeros((self.alm_len_complex), dtype=np.complex128)
-        curvedsky.map2alm_healpix(a_old, a, niter=3, spin=0, nthread=self.params.nthreads_compsep)
+        a_old = a
+        a = np.empty((self.alm_len_complex,), dtype=np.complex128)
+        curvedsky.map2alm_healpix(a_old, a, niter=3, spin=0, nthread=mythreads)
+        del a_old
 
         # B Y^-1 M Y a
         hp.smoothalm(a, self.fwhm_rad, inplace=True)
 
         # Y B Y^-1 M Y a
-        a_old = a.copy()
-        a = np.zeros((self.npix))
-        a = alm_to_map(a_old, self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
+        a = alm_to_map(a, self.nside, self.lmax, nthreads=mythreads)
 
         # N^-1 Y B Y^-1 M Y a
-        a = a/self.map_rms**2
+        a /= self.map_rms**2
 
         # Y^T N^-1 Y B Y^-1 M Y a
-        a_old = a.copy()
-        a = np.zeros((self.alm_len_complex), dtype=np.complex128)
-        a = alm_to_map_adjoint(a_old, self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
+        a = alm_to_map_adjoint(a, self.nside, self.lmax, nthreads=mythreads)
 
         # B^T Y^T N^-1 Y B Y^-1 M Y a
         hp.smoothalm(a, self.fwhm_rad, inplace=True)
 
         # Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
-        a_old = a.copy()
-        a = np.zeros((self.npix))
-        curvedsky.map2alm_healpix(a, a_old, niter=3, adjoint=True, spin=0, nthread=self.params.nthreads_compsep)
+        a_old = a
+        a = np.empty((self.npix,))
+        curvedsky.map2alm_healpix(a, a_old, niter=3, adjoint=True, spin=0, nthread=mythreads)
 
         # M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
-        a_old = a.copy()
-        a = np.zeros((self.ncomp, self.npix))
-        for iband in range(self.nband):
-            for icomp in range(self.ncomp):
-                if iband == self.my_band_idx:
-                    a[icomp] += self.comps_SED[icomp,iband]*a_old
-        self.CompSep_comm.Allreduce(MPI.IN_PLACE, a, op=MPI.SUM)
+        a_old = a
+        for icomp in range(self.ncomp):
+            tmp = a_old * self.comps_SED[icomp,self.my_band_idx]
+            # accumulate tmp onto the relevant task
+            send, recv = (MPI.IN_PLACE, tmp) if icomp == mycomp else (tmp, None)
+            self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=icomp)
+            if icomp == mycomp:
+                a = tmp
+        del a_old
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
-        a_old = a.copy()
-        a = []
-        for icomp in range(self.ncomp):
-            if icomp == self.CompSep_comm.Get_rank():
-                a.append(alm_to_map_adjoint(a_old[icomp], self.nside, self.lmax_per_comp[icomp], nthreads=self.params.nthreads_compsep))
-            else:
-                a.append(np.zeros((self.alm_len_complex_percomp[icomp]), dtype=np.complex128))
-        for icomp in range(self.ncomp):
-            self.CompSep_comm.Allreduce(MPI.IN_PLACE, a[icomp], op=MPI.SUM)
+        if mycomp < self.ncomp:
+            a = alm_to_map_adjoint(a, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
+        else:
+            a = np.zeros((0,), dtype=np.complex128)  # zero-sized array
 
-        # Converting back from complex alms to real alms
-        a_old = a.copy()
-        a = []
-        for icomp in range(self.ncomp):
-            a.append(self.alm_complex2real(a_old[icomp], lmax=self.lmax_per_comp[icomp]))
-        a = np.concatenate(a)
-
-        return a#.flatten()
+        # For now, every task holds every a_lm, so let's gather them together
+        return a
 
 
     def solve_CG(self, LHS: Callable, RHS: NDArray, x0: NDArray, M = None, x_true = None) -> NDArray|None:
@@ -234,150 +179,125 @@ class CompSepSolver:
         """
         logger = logging.getLogger(__name__)
         checkpoint_interval = 10
-        if self.CompSep_comm.Get_rank() == 0:
-            if M is None:
-                CG_solver = utils.CG(LHS, RHS, x0=x0)
-            else:
-                CG_solver = utils.CG(LHS, RHS, x0=x0, M=M)
-            self.CG_residuals = np.zeros((self.params.CG_max_iter))
-            if not x_true is None:
-                self.CG_errors_true = np.zeros((self.params.CG_max_iter//checkpoint_interval))
-                self.CG_Anorm_error = np.zeros((self.params.CG_max_iter//checkpoint_interval))
-                self.xtrue_A_xtrue = x_true.dot(LHS(x_true))  # The normalization factor for the true error.
-            logger.info(f"CG starting up!")
-            iter = 0
-            t0 = time.time()
-            stop_CG = False
-            while not stop_CG:
-                CG_solver.step()
-                self.CG_residuals[iter] = CG_solver.err
-                iter += 1
-                if iter%checkpoint_interval == 0:
-                    logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-10:iter]):.3e} ({(time.time() - t0)/10.0:.1f}s/iter)")
-                    if not x_true is None:
-                        self.CG_errors_true[iter//checkpoint_interval-1] = np.linalg.norm(CG_solver.x-x_true)/np.linalg.norm(x_true)
-                        self.CG_Anorm_error[iter//checkpoint_interval-1] = (CG_solver.x-x_true).dot(LHS(CG_solver.x-x_true))/self.xtrue_A_xtrue
-                        logger.info(f"True error: {self.CG_errors_true[iter//checkpoint_interval-1]:.3e} - Anorm error: {self.CG_Anorm_error[iter//checkpoint_interval-1]:.3e}")
-                    t0 = time.time()
-                if iter >= self.params.CG_max_iter:
-                    logger.warning(f"Maximum number of iterations ({self.params.CG_max_iter}) reached in CG.")
-                    stop_CG = True
-                if CG_solver.err < self.params.CG_err_tol:
-                    stop_CG = True
-                stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
-            self.CG_residuals = self.CG_residuals[:iter]
-            logger.info(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.params.CG_err_tol})")
-            s_bestfit = CG_solver.x
-            return s_bestfit
+        master = self.CompSep_comm.Get_rank() == 0
+
+        mydot = lambda a,b: self._calc_dot(a,b)
+        if M is None:
+            CG_solver = utils.CG(LHS, RHS, dot=mydot, x0=x0)
         else:
-            LHS(None)  # Calling the LHS operator because the initialization of the CG driver will call it.
-            if not x_true is None:
-                LHS(None)  # Second call, for the xtrue_A_xtrue calculation.
-            stop_CG = False
-            iter = 0
-            while not stop_CG:
-                LHS(None)
-                iter += 1
-                if not x_true is None and iter%checkpoint_interval == 0:  # Every nth iteration, if we have a true solution, we do an extra LHS calculation in order to determine the true error.
-                    LHS(None)
-                stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
+            CG_solver = utils.CG(LHS, RHS, dot=mydot, x0=x0, M=M)
+        self.CG_residuals = np.zeros((self.params.CG_max_iter))
+        if x_true is not None:
+            self.CG_errors_true = np.zeros((self.params.CG_max_iter//checkpoint_interval))
+            self.CG_Anorm_error = np.zeros((self.params.CG_max_iter//checkpoint_interval))
+            self.xtrue_A_xtrue = x_true.dot(LHS(x_true))  # The normalization factor for the true error.
+        if master:
+            logger.info(f"CG starting up!")
+        iter = 0
+        t0 = time.time()
+        stop_CG = False
+        while not stop_CG:
+            CG_solver.step()
+            self.CG_residuals[iter] = CG_solver.err
+            iter += 1
+            if iter%checkpoint_interval == 0:
+                if master:
+                    logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-10:iter]):.3e} ({(time.time() - t0)/10.0:.1f}s/iter)")
+                if x_true is not None:
+                    self.CG_errors_true[iter//checkpoint_interval-1] = np.linalg.norm(CG_solver.x-x_true)/np.linalg.norm(x_true)
+                    self.CG_Anorm_error[iter//checkpoint_interval-1] = (CG_solver.x-x_true).dot(LHS(CG_solver.x-x_true))/self.xtrue_A_xtrue
+                    logger.info(f"True error: {self.CG_errors_true[iter//checkpoint_interval-1]:.3e} - Anorm error: {self.CG_Anorm_error[iter//checkpoint_interval-1]:.3e}")
+                t0 = time.time()
+            if iter >= self.params.CG_max_iter:
+                if master:
+                    logger.warning(f"Maximum number of iterations ({self.params.CG_max_iter}) reached in CG.")
+                stop_CG = True
+            if CG_solver.err < self.params.CG_err_tol:
+                stop_CG = True
+            stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
+        self.CG_residuals = self.CG_residuals[:iter]
+        if master:
+            logger.info(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.params.CG_err_tol})")
+        s_bestfit = CG_solver.x
+        return s_bestfit
+
+
+    def _calc_dot(self, a: NDArray, b: NDArray):
+        """ Calculates the dot product of two sets of complex a_lms which are distributed across the
+            self.ncomp first ranks of the self.CompSep_comm communicator.
+        """
+        mycomp = self.CompSep_comm.Get_rank()
+        res = 0.
+        if mycomp < self.ncomp:
+            lmax = self.lmax_per_comp[mycomp]
+            res = np.dot(a[0:lmax+1].real, b[0:lmax+1].real)
+            res += 2 * np.dot(a[lmax+1:].real, b[lmax+1:].real)
+            res += 2 * np.dot(a[lmax+1:].imag, b[lmax+1:].imag)
+        res = self.CompSep_comm.allreduce(res, op=MPI.SUM)
+        return res
+
+
+    def _calc_RHS_from_input_array(self, b: NDArray) -> NDArray:
+        """ Applies the matrices Y^T M^T Y^-1^T B^T to a vector b, which is the terms in common
+            for b_mean and b_fluct of the RHS of the CompSep Ax=b equation.
+        """
+        mycomp = self.CompSep_comm.Get_rank()
+        mythreads = self.params.nthreads_compsep
+
+        # Y^T N^-1 d
+        b = alm_to_map_adjoint(b, self.nside, self.lmax, nthreads=mythreads)
+
+        # B^T Y^T N^-1 d
+        hp.smoothalm(b, self.fwhm_rad, inplace=True)
+
+        # Y^-1^T B^T Y^T N^-1 d
+        b_old = b
+        b = np.empty((self.npix,))
+        curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
+
+        # M^T Y^-1^T B^T Y^T N^-1 d
+        b_old = b
+        for icomp in range(self.ncomp):
+            tmp = self.comps_SED[icomp,self.my_band_idx]*b_old
+            send, recv = (MPI.IN_PLACE, tmp) if icomp == mycomp else (tmp, None)
+            self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=icomp)
+            if icomp == mycomp:
+                b = tmp
+
+        # Y^T M^T Y^-1^T B^T Y^T N^-1 d
+        if mycomp < self.ncomp:  # This task actually holds a component
+            b = alm_to_map_adjoint(b, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
+        else:
+            b = np.zeros((0,), dtype=np.complex128)
+
+        return b
 
 
     def calc_RHS_mean(self) -> NDArray:
-        # d
-        b = self.map_sky.copy()
+        """ Caculates the right-hand-side b-vector of the Ax=b CompSep equation for the Wiener filtered (or mean-field) solution.
+            If used alone on the right-hand-side, gives the deterministic maximum likelihood map-space solution, but a biased PS solution.
+        """
+        # N^-1 b_mean
+        b_mean = self.map_sky/self.map_rms**2
 
-        # N^-1 d
-        b = b/self.map_rms**2
-
-        # Y^T N^-1 d
-        b_old = b.copy()
-        b = np.zeros((self.alm_len_complex), dtype=np.complex128)
-        b = alm_to_map_adjoint(b_old, self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
-
-        # B^T Y^T N^-1 d
-        hp.smoothalm(b, self.fwhm_rad, inplace=True)
-
-        # Y^-1^T B^T Y^T N^-1 d
-        b_old = b.copy()
-        b = np.zeros((self.npix))
-        curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
-
-        # M^T Y^-1^T B^T Y^T N^-1 d
-        b_old = b.copy()
-        b = np.zeros((self.ncomp, self.npix))
-        for icomp in range(self.ncomp):
-            b[icomp] += self.comps_SED[icomp,self.my_band_idx]*b_old
-        b = self.CompSep_comm.allreduce(b, op=MPI.SUM)
-
-        # Y^T M^T Y^-1^T B^T Y^T N^-1 d
-        b_old = b.copy()
-        b = []
-        for icomp in range(self.ncomp):
-            if icomp == self.CompSep_comm.Get_rank():
-                b.append(alm_to_map_adjoint(b_old[icomp], self.nside, self.lmax_per_comp[icomp], nthreads=self.params.nthreads_compsep))
-            else:
-                b.append(np.zeros((self.alm_len_complex_percomp[icomp]), dtype=np.complex128))
-        for icomp in range(self.ncomp):
-            b[icomp] = self.CompSep_comm.allreduce(b[icomp], op=MPI.SUM)
-
-        b_old = b.copy()
-        b = []
-        for icomp in range(self.ncomp):
-            b.append(self.alm_complex2real(b_old[icomp], lmax=self.lmax_per_comp[icomp]))
-        b = np.concatenate(b)
-
-        return b
+        return self._calc_RHS_from_input_array(b_mean)
 
 
     def calc_RHS_fluct(self) -> NDArray:
-        # d
-        b = np.random.normal(0.0, 1.0, self.map_rms.shape)
+        """ Calculates the right-hand-side fluctuation vector. Provides unbiased realizations (of foregrounds or the CMB) if added
+            together with the right-hand-side of the Wiener filtered solution : Ax = b_mean + b_fluct.
+        """
+        # b_fluct
+        b_fluct = np.random.normal(0.0, 1.0, self.map_rms.shape)
 
-        # N^-1 d
-        b = b/self.map_rms
+        # N^-1/2 b_fluct
+        b_fluct /= self.map_rms
 
-        # Y^T N^-1 d
-        b_old = b.copy()
-        b = np.zeros((self.alm_len_complex), dtype=np.complex128)
-        b = alm_to_map_adjoint(b_old, self.nside, self.lmax, nthreads=self.params.nthreads_compsep)
-
-        # B^T Y^T N^-1 d
-        hp.smoothalm(b, self.fwhm_rad, inplace=True)
-
-        # Y^-1^T B^T Y^T N^-1 d
-        b_old = b.copy()
-        b = np.zeros((self.npix))
-        curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
-
-        # M^T Y^-1^T B^T Y^T N^-1 d
-        b_old = b.copy()
-        b = np.zeros((self.ncomp, self.npix))
-        for icomp in range(self.ncomp):
-            b[icomp] += self.comps_SED[icomp,self.my_band_idx]*b_old
-        b = self.CompSep_comm.allreduce(b, op=MPI.SUM)
-
-        # Y^T M^T Y^-1^T B^T Y^T N^-1 d
-        b_old = b.copy()
-        b = []
-        for icomp in range(self.ncomp):
-            if icomp == self.CompSep_comm.Get_rank():
-                b.append(alm_to_map_adjoint(b_old[icomp], self.nside, self.lmax_per_comp[icomp], nthreads=self.params.nthreads_compsep))
-            else:
-                b.append(np.zeros((self.alm_len_complex_percomp[icomp]), dtype=np.complex128))
-        for icomp in range(self.ncomp):
-            b[icomp] = self.CompSep_comm.allreduce(b[icomp], op=MPI.SUM)
-
-        b_old = b.copy()
-        b = []
-        for icomp in range(self.ncomp):
-            b.append(self.alm_complex2real(b_old[icomp], lmax=self.lmax_per_comp[icomp]))
-        b = np.concatenate(b)
-
-        return b
+        return self._calc_RHS_from_input_array(b_fluct)
 
 
     def solve(self, seed=None) -> list[Component]:
+        mycomp = self.CompSep_comm.Get_rank()
 
         RHS = self.calc_RHS_mean() + self.calc_RHS_fluct()
         debug_mode = self.params.compsep.dense_matrix_debug_mode
@@ -408,19 +328,16 @@ class CompSepSolver:
                 self.logger.info(f"Sing-vals: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
 
 
-        if not seed is None:
+        if seed is not None:
             np.random.seed(seed)
-        x0 = [np.zeros(self.alm_len_real_percomp[icomp]) for icomp in range(self.ncomp)]
-        x0 = np.concatenate(x0)
+        if mycomp < self.ncomp:
+            x0 = np.zeros((self.alm_len_complex_percomp[mycomp],), dtype=np.complex128)
+        else:
+            x0 = np.zeros((0,), dtype=np.complex128)
         sol_array = self.solve_CG(self.apply_LHS_matrix, RHS, x0, M=precond, x_true=x_true if debug_mode else None)
-        sol_array = self.CompSep_comm.bcast(sol_array, root=0)
-        sol = []
-        idx_start = 0
-        idx_stop = 0
+
         for icomp in range(self.ncomp):
-            idx_stop += self.alm_len_real_percomp[icomp]
-            sol.append(sol_array[idx_start:idx_stop])
-            idx_start = idx_stop
-        for icomp in range(self.ncomp):
-            self.comp_list[icomp].component_alms = self.alm_real2complex(sol[icomp], lmax=self.lmax_per_comp[icomp])
+            tmp = self.CompSep_comm.bcast(sol_array, root=icomp)
+            self.comp_list[icomp].component_alms = tmp
+
         return self.comp_list
