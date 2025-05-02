@@ -92,7 +92,7 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
         comp_maps = amplitude_sampling_per_pix(signal_map, rms_map, band_freq)
     else:
         compsep_solver = CompSepSolver(comp_list, signal_map, rms_map, band_freq, fwhm, params, proc_comm)
-        comp_list = compsep_solver.solve(seed=9999*chain+11*iter)
+        comp_list = compsep_solver.solve()
         if params.make_plots and is_CompSep_master:
             plotting.plot_cg_res(params, chain, iter, compsep_solver.CG_residuals)
 
