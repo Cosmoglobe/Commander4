@@ -310,11 +310,12 @@ class CompSepSolver:
             x_true = dense_matrix.solve_by_inversion(RHS)
             x_true = self.CompSep_comm.bcast(x_true, root=0)
             if self.CompSep_comm.Get_rank() == 0:
-                if not dense_matrix.test_matrix_symmetry():
-                    self.logger.warning(f"LHS matrix (A) is NOT SYMMETRIC!")
+                is_symmetric, diff = dense_matrix.test_matrix_symmetry()
+                if not is_symmetric:
+                    self.logger.warning(f"LHS matrix (A) is NOT SYMMETRIC! mean(A^T - A)/std(A) = {diff}")
                 sing_vals = dense_matrix.get_sing_vals()
                 self.logger.info(f"Condition number of regular (A) matrix: {sing_vals[0]/sing_vals[-1]:.3e}")
-                # self.logger.info(f"Sing-vals: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
+                self.logger.info(f"Sing-vals: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
             def M_A_matrix(a):
                 a = precond(a)
                 a = self.apply_LHS_matrix(a)
@@ -323,8 +324,9 @@ class CompSepSolver:
             dense_matrix = DenseMatrix(self.CompSep_comm, M_A_matrix, self.alm_len_percomp, self.lmax_per_comp)
 
             if self.CompSep_comm.Get_rank() == 0:
-                if not dense_matrix.test_matrix_symmetry():
-                    self.logger.warning(f"Preconditioned matrix (MA) is NOT SYMMETRIC!")
+                is_symmetric, diff = dense_matrix.test_matrix_symmetry()
+                if not is_symmetric:
+                    self.logger.warning(f"Preconditioned matrix (MA) is NOT SYMMETRIC! mean(A^T - A)/std(A) = {diff}")
                 sing_vals = dense_matrix.get_sing_vals()
                 self.logger.info(f"Condition number of preconditioned (MA) matrix: {sing_vals[0]/sing_vals[-1]:.3e}")
                 self.logger.info(f"Sing-vals: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")

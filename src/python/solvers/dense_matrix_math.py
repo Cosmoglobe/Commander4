@@ -96,5 +96,6 @@ class DenseMatrix:
                 is_symmetric: True if the matrix is symmetric, False otherwise (if rank==0, else None).
         """
         if self.is_master:
+            diff = np.mean(np.abs(self.A_matrix - self.A_matrix.T))/np.std(self.A_matrix)
             is_symmetric = np.allclose(self.A_matrix, self.A_matrix.T)
-            return is_symmetric
+            return is_symmetric, diff
