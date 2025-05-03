@@ -9,14 +9,13 @@ from numpy.typing import NDArray
 from typing import Callable
 
 from src.python.output.log import logassert
-from src.python.output.plotting import alm_plotter
-from src.python.model.component import CMB, ThermalDust, Synchrotron, Component
-from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, gaussian_random_alm
+from src.python.model.component import CMB, ThermalDust, Synchrotron, DiffuseComponent
+from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint
 from src.python.solvers.dense_matrix_math import DenseMatrix
 import src.python.solvers.preconditioners as preconditioners
 
 
-def amplitude_sampling_per_pix(map_sky: np.array, map_rms: np.array, freqs: np.array) -> np.array:
+def amplitude_sampling_per_pix(map_sky: NDArray, map_rms: NDArray, freqs: NDArray) -> NDArray:
     logger = logging.getLogger(__name__)
     ncomp = 3
     nband, npix = map_sky.shape
@@ -56,7 +55,7 @@ class CompSepSolver:
         After initializing the class, the solve() method should be called to perform the component separation.
         Note that the solve() method will in-place update (as well as return) the 'comp_list' argument passed to the constructor.
     """
-    def __init__(self, comp_list: list[Component], map_sky: NDArray, map_rms: NDArray, freq: float, fwhm: float, params: Bunch, CompSep_comm: MPI.Comm):
+    def __init__(self, comp_list: list[DiffuseComponent], map_sky: NDArray, map_rms: NDArray, freq: float, fwhm: float, params: Bunch, CompSep_comm: MPI.Comm):
         self.logger = logging.getLogger(__name__)
         self.CompSep_comm = CompSep_comm
         self.params = params
@@ -187,7 +186,7 @@ class CompSepSolver:
         if x_true is not None:
             self.xtrue_A_xtrue = x_true.dot(LHS(x_true))  # The normalization factor for the true error.
         if master:
-            logger.info(f"CG starting up!")
+            logger.info("CG starting up!")
         iter = 0
         t0 = time.time()
         stop_CG = False
@@ -295,7 +294,7 @@ class CompSepSolver:
         return self._calc_RHS_from_input_array(b_fluct)
 
 
-    def solve(self, seed=None) -> list[Component]:
+    def solve(self, seed=None) -> list[DiffuseComponent]:
         mycomp = self.CompSep_comm.Get_rank()
 
         RHS = self.calc_RHS_mean() + self.calc_RHS_fluct()

@@ -6,14 +6,14 @@ from pixell.bunch import Bunch
 from numpy.typing import NDArray
 
 from src.python.data_models.detector_map import DetectorMap
-from src.python.model.component import CMB, ThermalDust, Synchrotron, DiffuseComponent, Component
+from src.python.model.component import DiffuseComponent
 import src.python.model.component as component_lib
 from src.python.model.sky_model import SkyModel
 import src.python.output.plotting as plotting
 from src.python.solvers.comp_sep_solvers import CompSepSolver, amplitude_sampling_per_pix
 
 
-def init_compsep_processing(CompSep_comm: Comm, params: Bunch) -> tuple[list[Component], str, dict[str, int], Bunch]:
+def init_compsep_processing(CompSep_comm: Comm, params: Bunch) -> tuple[list[DiffuseComponent], str, dict[str, int], Bunch]:
     """To be run once before starting component separation processing.
 
     Determines whether the process is compsep master, and the number of bands.
@@ -62,7 +62,7 @@ def init_compsep_processing(CompSep_comm: Comm, params: Bunch) -> tuple[list[Com
 
 
 def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: Bunch,
-                    proc_comm: Comm, comp_list: list[Component]) -> NDArray[np.float64]:
+                    proc_comm: Comm, comp_list: list[DiffuseComponent]) -> NDArray[np.float64]:
     """ Performs a single component separation iteration.
         Called by each compsep process, which are each responsible for a single band.
     
@@ -98,19 +98,10 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
 
     sky_model = SkyModel(comp_list)
 
-    npix = signal_map.shape[-1]
     detector_map = sky_model.get_sky_at_nu(band_freq, params.nside, fwhm=compsep_solver.fwhm_rad)
-    # cmb_sky = component_list[0].get_sky(band_freq)
-    # dust_sky = component_list[1].get_sky(band_freq)
-    # sync_sky = component_list[2].get_sky(band_freq)
 
     if params.make_plots:
         detector_to_plot = proc_comm.Get_rank()
         plotting.plot_components(params, band_freq, detector_to_plot, chain, iter, signal_map, comp_list)
-        # plotting.plot_components(params, band_freq,
-        #                             detector_to_plot, chain, iter, sky=detector_map,
-        #                             cmb=cmb_sky, dust=dust_sky,
-        #                             sync=sync_sky,
-        #                             signal=signal_map)
 
     return detector_map  # Return the full sky realization for my band.

@@ -3,7 +3,10 @@ import astropy.constants as c
 import numpy as np
 import pysm3.units as pysm3u
 import healpy as hp
+from pixell.bunch import Bunch
+import logging
 
+from src.python.output import log
 from src.python.utils.math_operations import alm_to_map
 
 
@@ -20,7 +23,7 @@ def g(nu):
 
 # First tier component classes
 class Component:
-    def __init__(self, params):
+    def __init__(self, params: Bunch):
         self.params = params
         self.lmax = params.lmax
         self.longname = params.longname if "longname" in params else "Unknown Component"
@@ -28,22 +31,26 @@ class Component:
 
 # Second tier component classes
 class DiffuseComponent(Component):
-    def __init__(self, params):
+    def __init__(self, params: Bunch):
         super().__init__(params)
         self.component_alms = None
         # self.nside_comp_map = 2048
         # self.prior_l_power_law = 0 # l^alpha as in S^-1 in comp sep
 
-    def get_component_map(self, nside, fwhm=None):
+    def get_component_map(self, nside:int, fwhm:int=0):
         if self.component_alms is None:
             raise ValueError("component_alms property not set.")
-        if fwhm is None:
+        if fwhm == 0:
             return alm_to_map(self.component_alms, nside, self.lmax)
         else:
             return alm_to_map(hp.smoothalm(self.component_alms, fwhm), nside, self.lmax)
 
     def get_sky(self, nu, nside, fwhm=None):
         return self.get_component_map(nside, fwhm)*self.get_sed(nu)
+    
+    def get_sed(self, nu):
+        logger = logging.getLogger(__name__)
+        log.lograise(NotImplementedError, "", logger)
 
 class PointSourceComponent(Component):
     pass
@@ -53,10 +60,11 @@ class TemplateComponent(Component):
 
 # Third tier component classes
 class CMB(DiffuseComponent):
-    def __init__(self, params):
+    def __init__(self, params: Bunch):
         super().__init__(params)
         self.longname = params.longname if "longname" in params else "CMB"
         self.shortname = params.shortname if "shortname" in params else "cmb"
+
     def get_sed(self, nu):
         # Assuming we are working in uK_CMB units
         return (np.ones_like(nu)*pysm3u.uK_CMB).to("uK_RJ", equivalencies=pysm3u.cmb_equivalencies(nu*u.GHz)).value
@@ -68,7 +76,7 @@ class CMBRelQuad(TemplateComponent):
     pass
 
 class ThermalDust(DiffuseComponent):
-    def __init__(self, params):
+    def __init__(self, params: Bunch):
         super().__init__(params)
         self.beta = params.beta
         self.T = params.T
@@ -84,7 +92,7 @@ class ThermalDust(DiffuseComponent):
 
 
 class Synchrotron(DiffuseComponent):
-    def __init__(self, params):
+    def __init__(self, params: Bunch):
         super().__init__(params)
         self.beta = params.beta
         self.nu0 = params.nu0

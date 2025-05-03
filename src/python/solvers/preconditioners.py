@@ -3,6 +3,7 @@ import numpy as np
 import healpy as hp
 from mpi4py import MPI
 import typing
+from numpy.typing import NDArray
 
 if typing.TYPE_CHECKING:  # Only import when performing type checking, avoiding circular import during normal runtime.
     from src.python.solvers.comp_sep_solvers import CompSepSolver
@@ -20,7 +21,7 @@ class NoPreconditioner:
         self.compsep = compsep
 
 
-    def __call__(self, a_array: np.array):
+    def __call__(self, a_array: NDArray):
         return a_array
 
 
@@ -38,7 +39,7 @@ class BeamOnlyPreconditioner:
         self.compsep = compsep
 
 
-    def __call__(self, a_array: np.array):
+    def __call__(self, a_array: NDArray):
         compsep = self.compsep
         mycomp = compsep.CompSep_comm.Get_rank()
 
@@ -77,7 +78,6 @@ class NoiseOnlyPreconditioner:
         """
         import py3nj
         self.compsep = compsep
-        is_master = compsep.CompSep_comm.Get_rank() == 0
         mycomp = compsep.CompSep_comm.Get_rank()
 
         w = 1.0/compsep.map_rms**2
@@ -113,7 +113,7 @@ class NoiseOnlyPreconditioner:
         # alm_plotter(self.YTNY[icomp], lmax, filename=f"YTNY_{icomp}.png")
 
 
-    def __call__(self, a_array: np.array):
+    def __call__(self, a_array: NDArray):
         compsep = self.compsep
         mycomp = compsep.CompSep_comm.Get_rank()
 

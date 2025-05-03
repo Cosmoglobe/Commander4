@@ -44,19 +44,16 @@ def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, p
         return detmap
 
 
-def read_TOD_data(h5_filename: str, band: int, scan_idx_start: int, scan_idx_stop: int, nside: int, fwhm: float) -> list[ScanTOD]:
+def read_TOD_data(h5_filename: str, band: int, scan_idx_start: int, scan_idx_stop: int, nside: int, fwhm: float) -> DetectorTOD:
     logger = logging.getLogger(__name__)
-    # h5_filename = params.input_paths.tod_filename
     with h5py.File(h5_filename) as f:
-        # for band in bands:
-        # band = params.bands[band_idx]
         band_formatted = f"{band:04d}"
         scanlist = []
         for iscan in range(scan_idx_start, scan_idx_stop):
             try:
-                tod = f[f'{iscan+1:06}/{band_formatted}/tod'][()].astype(np.float64)
-                pix = f[f'{iscan+1:06}/{band_formatted}/pix'][()]
-                psi = f[f'{iscan+1:06}/{band_formatted}/psi'][()].astype(np.float64)
+                tod = f[f"{iscan+1:06}/{band_formatted}/tod"][()].astype(np.float64)
+                pix = f[f"{iscan+1:06}/{band_formatted}/pix"][()]
+                psi = f[f"{iscan+1:06}/{band_formatted}/psi"][()].astype(np.float64)
             except KeyError:
                 logger.exception(f"{iscan}\n{band_formatted}\n{list(f)}")
                 raise KeyError
@@ -89,7 +86,7 @@ def find_unique_pixels(scanlist: list[ScanTOD], params: Bunch) -> NDArray[np.flo
     return unique_pixels
 
 
-def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[MPI.Comm, MPI.Comm, str, dict[str,int], DetectorTOD]:
+def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Comm, str, dict[str,int], DetectorTOD]:
     """To be run once before starting TOD processing.
 
     Determines whether the process is TOD master, creates the band communicator
@@ -170,7 +167,7 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[MPI.Comm, MP
 
 
 
-def subtract_sky_model(experiment_data: DetectorTOD, det_compsep_map: np.array, params: Bunch) -> DetectorTOD:
+def subtract_sky_model(experiment_data: DetectorTOD, det_compsep_map: NDArray, params: Bunch) -> DetectorTOD:
     """Subtracts the sky model from the TOD data.
     Input:
         experiment_data (DetectorTOD): The experiment TOD object.
@@ -242,7 +239,7 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, params: Bunc
 
 
 def process_tod(band_comm: MPI.Comm, experiment_data: DetectorTOD,
-                compsep_output: np.array, params: Bunch) -> DetectorMap:
+                compsep_output: NDArray, params: Bunch) -> DetectorMap:
     """ Performs a single TOD iteration.
 
     Input:

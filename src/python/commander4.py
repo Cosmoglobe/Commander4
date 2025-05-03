@@ -4,18 +4,20 @@ from mpi4py import MPI
 import cProfile
 import pstats
 import logging
-from output import log
 import io
 import time
 import sys
+from pixell.bunch import Bunch
 from traceback import print_exc
+
+from src.python.output import log
 
 # Current solution to making sure the root directory is in the path. I don't like it, but it works for now (alternative seems to be running the entire thing as a module).
 module_root_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(module_root_path)
 
 
-def main(params, params_dict):
+def main(params: Bunch, params_dict: dict):
     logger = logging.getLogger(__name__)
         
     worldsize, worldrank = MPI.COMM_WORLD.Get_size(), MPI.COMM_WORLD.Get_rank()
@@ -88,7 +90,7 @@ def main(params, params_dict):
     elif color == 1:
         components, my_band_identifier, CompSep_band_masters_dict, my_band = init_compsep_processing(proc_comm, params)
     CompSep_band_masters_dict = MPI.COMM_WORLD.bcast(CompSep_band_masters_dict, root=compsep_master)  # CompSep tells the rest which compsep ranks are band masters.
-    if not tod_master is None:
+    if tod_master is not None:
         tod_band_masters_dict = MPI.COMM_WORLD.bcast(tod_band_masters_dict, root=tod_master)  # TOD tells the rest which TOD ranks are band masters.
 
     ###### Sending empty data back and forth ######

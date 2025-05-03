@@ -2,9 +2,10 @@ import healpy as hp
 import matplotlib.pyplot as plt
 import os
 import numpy as np
-from pixell import bunch
+from numpy.typing import NDArray
+from pixell.bunch import Bunch
 
-from src.python.model.component import Component
+from src.python.model.component import DiffuseComponent
 
 
 def plot_data_maps(master, params, detector, chain, iteration, **kwargs):
@@ -64,8 +65,8 @@ def plot_cg_res(params, chain, iteration, residual):
     plt.close()
 
 
-def plot_components(params: bunch, freq: float, detector: int, chain: int,
-                    iteration: int, signal_map: np.array, components_list: list[Component]):
+def plot_components(params: Bunch, freq: float, detector: int, chain: int,
+                    iteration: int, signal_map: NDArray, components_list: list[DiffuseComponent]):
     """
     Plots the resulting component maps produced by component separation. It will
     also plot the total sky map minus the foregrounds, as well as the total map

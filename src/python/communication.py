@@ -9,7 +9,7 @@ from numpy.typing import NDArray
 from src.python.data_models.detector_map import DetectorMap
 
 
-def send_compsep(my_band_identifier: int, detector_map: np.array, destinations: dict[str, int]) -> None:
+def send_compsep(my_band_identifier: str, detector_map: NDArray[np.floating], destinations: dict[str, int]|None) -> None:
     """ MPI-send the results from compsep to a destinations on the TOD processing side (used in conjunction with receive_compsep).
     Assumes the COMM_WORLD communicator.
 
@@ -22,7 +22,7 @@ def send_compsep(my_band_identifier: int, detector_map: np.array, destinations: 
         MPI.COMM_WORLD.send(detector_map, dest=destinations[my_band_identifier])
 
 
-def receive_compsep(band_comm: Comm, my_band_identifier: int, band_master: bool, senders: dict[str, int]) -> NDArray[np.floating]:
+def receive_compsep(band_comm: Comm, my_band_identifier: str, band_master: bool, senders: dict[str, int]) -> NDArray[np.floating]:
     """ MPI-receive the results from compsep (used in conjunction with send_compsep).
 
     Input:
@@ -41,7 +41,7 @@ def receive_compsep(band_comm: Comm, my_band_identifier: int, band_master: bool,
     return detector_map
 
 
-def send_tod(band_master: bool, tod_map: DetectorMap, CompSep_band_masters_dict, my_band_identifier) -> None:
+def send_tod(band_master: bool, tod_map: DetectorMap, CompSep_band_masters_dict: dict[str, int], my_band_identifier: str) -> None:
     """ MPI-send the results from a single band TOD processing to a task on the CompSep side (used in conjunction with receive_tod).
 
     Assumes the COMM_WORLD communicator.
@@ -98,6 +98,6 @@ def read_map_from_file(my_band: Bunch) -> DetectorMap:
 
     map_signal = hp.read_map(my_band.path_signal_map)
     map_rms = hp.read_map(my_band.path_rms_map)
-    # map_rms = map_rms = np.ones_like(map_signal)
+    # map_rms = np.ones_like(map_signal)
     detmap = DetectorMap(map_signal, None, map_rms, my_band.freq, my_band.fwhm)
     return detmap
