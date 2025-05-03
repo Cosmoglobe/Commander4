@@ -6,13 +6,15 @@
 import numpy as np
 from tqdm import trange
 from pixell import utils
+from mpi4py import MPI
 from mpi4py.MPI import Comm
 import scipy
 from collections.abc import Callable
 from scipy.linalg import svd
 
+
 class DenseMatrix:
-    def __init__(self, CompSep_comm: Comm, A_operator: Callable, size: int):
+    def __init__(self, CompSep_comm: Comm, A_operator: Callable, alm_len_percomp, lmax_per_comp):
         """ Class for performing dense matrix math, specifically designed to work with the CompSep class (regarding MPI setup).
         Args:
             CompSep_comm (MPI.Comm): MPI communicator for the component separation processes, which should contain one rank per band.
@@ -22,7 +24,10 @@ class DenseMatrix:
         self.CompSep_comm = CompSep_comm
         self.is_master = self.CompSep_comm.Get_rank() == 0
         self.A_operator = A_operator
-        self.size = size
+        self.alm_len_percomp = alm_len_percomp
+        self.ncomps = self.alm_len_percomp.shape[0]
+        self.full_size = np.sum(alm_len_percomp)
+        self.lmax_per_comp = lmax_per_comp
         self.construct_dense_matrix()
 
 
@@ -32,14 +37,29 @@ class DenseMatrix:
             Both of these are stored in the master task (rank 0).
         """
         if self.is_master:
-            self.A_matrix = np.zeros((self.size, self.size))
-            for i in trange(self.size):
-                u = utils.uvec(self.size, i)
-                self.A_matrix[i] = self.A_operator(u)
-            self.A_diag = np.diag(self.A_matrix)
+            range_func = trange
         else:
-            for i in trange(self.size):
-                self.A_operator(None)  # The helper tasks need to call the A-operator, but do not store the results.
+            range_func = range
+        my_rank = self.CompSep_comm.Get_rank()
+        self.A_matrix = np.zeros((self.full_size, self.full_size), dtype=np.complex128)
+        if my_rank < self.ncomps:
+            my_size = self.alm_len_percomp[my_rank]
+            my_start_idx = np.sum(self.alm_len_percomp[:my_rank])
+            my_stop_idx = my_start_idx + my_size
+        else:
+            my_size = 0
+            my_start_idx = -1
+            my_stop_idx = -1
+        for i in range_func(self.full_size):
+            if i >= my_start_idx and i < my_stop_idx:
+                unit_vec = utils.uvec(my_size, i-my_start_idx, dtype=np.complex128)
+            else:
+                unit_vec = np.zeros(my_size, dtype=np.complex128)
+            out_vec = self.A_operator(unit_vec)
+            if my_rank < self.ncomps:
+                self.A_matrix[i,my_start_idx:my_stop_idx] = out_vec
+        self.CompSep_comm.Allreduce(MPI.IN_PLACE, self.A_matrix, op=MPI.SUM)
+        self.A_diag = np.diag(self.A_matrix)
 
 
     def solve_by_inversion(self, RHS):
@@ -51,7 +71,9 @@ class DenseMatrix:
             Returns:
                 x_bestfit: The resulting best-fit solution to x (if rank==0, else None).
         """
+        RHS = self.CompSep_comm.gather(RHS, root=0)
         if self.is_master:
+            RHS = np.concatenate(RHS)
             x_bestfit = scipy.linalg.solve(self.A_matrix, RHS)
             return x_bestfit
 

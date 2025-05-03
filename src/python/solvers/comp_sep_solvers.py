@@ -304,24 +304,27 @@ class CompSepSolver:
         precond = getattr(preconditioners, self.params.compsep.preconditioner)(self)
 
         if debug_mode:  # For testing preconditioner with a true solution as reference, first solving for exact solution with dense matrix math.
-            dense_matrix = DenseMatrix(self.CompSep_comm, self.apply_LHS_matrix, np.sum(self.alm_len_percomp))
+            dense_matrix = DenseMatrix(self.CompSep_comm, self.apply_LHS_matrix, self.alm_len_percomp, self.lmax_per_comp)
             x_true = None
-            if self.CompSep_comm.Get_rank() == 0:
-                x_true = dense_matrix.solve_by_inversion(RHS)
+            # if self.CompSep_comm.Get_rank() == 0:
+            x_true = dense_matrix.solve_by_inversion(RHS)
             x_true = self.CompSep_comm.bcast(x_true, root=0)
             if self.CompSep_comm.Get_rank() == 0:
+                if not dense_matrix.test_matrix_symmetry():
+                    self.logger.warning(f"LHS matrix (A) is NOT SYMMETRIC!")
                 sing_vals = dense_matrix.get_sing_vals()
                 self.logger.info(f"Condition number of regular (A) matrix: {sing_vals[0]/sing_vals[-1]:.3e}")
-                self.logger.info(f"Sing-vals: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
+                # self.logger.info(f"Sing-vals: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
             def M_A_matrix(a):
-                if self.CompSep_comm.Get_rank() == 0:
-                    a = precond(a)
+                a = precond(a)
                 a = self.apply_LHS_matrix(a)
                 return a
 
-            dense_matrix = DenseMatrix(self.CompSep_comm, M_A_matrix, np.sum(self.alm_len_percomp))
+            dense_matrix = DenseMatrix(self.CompSep_comm, M_A_matrix, self.alm_len_percomp, self.lmax_per_comp)
 
             if self.CompSep_comm.Get_rank() == 0:
+                if not dense_matrix.test_matrix_symmetry():
+                    self.logger.warning(f"Preconditioned matrix (MA) is NOT SYMMETRIC!")
                 sing_vals = dense_matrix.get_sing_vals()
                 self.logger.info(f"Condition number of preconditioned (MA) matrix: {sing_vals[0]/sing_vals[-1]:.3e}")
                 self.logger.info(f"Sing-vals: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
