@@ -159,7 +159,7 @@ class CompSepSolver:
         return a
 
 
-    def solve_CG(self, LHS: Callable, RHS: NDArray, x0: NDArray, M = None, x_true = None) -> NDArray|None:
+    def solve_CG(self, LHS: Callable, RHS: NDArray, x0: NDArray, M = None, x_true = None) -> NDArray:
         """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG from the pixell package.
             Assumes that both x and b are in alm space.
 
@@ -170,14 +170,13 @@ class CompSepSolver:
                 M (callable): Preconditioner for the CG solver. A function/callable which approximates A^-1 (optional).
                 x_true (np.array): True solution for x, in order to print the true error (optional, used for testing).
             Returns:
-                if self.CompSep_comm.Get_rank() == 0:
-                    m_bestfit (np.array): The resulting best-fit solution, in alm space.
-                else:
-                    None
+                m_bestfit (np.array): The resulting best-fit solution, in alm space, for the component held by this rank.
+                                      A zero-sized array for ranks holding no component.
         """
         logger = logging.getLogger(__name__)
         checkpoint_interval = 10
         master = self.CompSep_comm.Get_rank() == 0
+        mycomp = self.CompSep_comm.Get_rank()
 
         mydot = lambda a,b: self._calc_dot(a,b)
         if M is None:
@@ -186,8 +185,6 @@ class CompSepSolver:
             CG_solver = utils.CG(LHS, RHS, dot=mydot, x0=x0, M=M)
         self.CG_residuals = np.zeros((self.params.CG_max_iter))
         if x_true is not None:
-            self.CG_errors_true = np.zeros((self.params.CG_max_iter//checkpoint_interval))
-            self.CG_Anorm_error = np.zeros((self.params.CG_max_iter//checkpoint_interval))
             self.xtrue_A_xtrue = x_true.dot(LHS(x_true))  # The normalization factor for the true error.
         if master:
             logger.info(f"CG starting up!")
@@ -199,13 +196,17 @@ class CompSepSolver:
             self.CG_residuals[iter] = CG_solver.err
             iter += 1
             if iter%checkpoint_interval == 0:
-                if master:
-                    logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-10:iter]):.3e} ({(time.time() - t0)/10.0:.1f}s/iter)")
-                if x_true is not None:
-                    self.CG_errors_true[iter//checkpoint_interval-1] = np.linalg.norm(CG_solver.x-x_true)/np.linalg.norm(x_true)
-                    self.CG_Anorm_error[iter//checkpoint_interval-1] = (CG_solver.x-x_true).dot(LHS(CG_solver.x-x_true))/self.xtrue_A_xtrue
-                    logger.info(f"True error: {self.CG_errors_true[iter//checkpoint_interval-1]:.3e} - Anorm error: {self.CG_Anorm_error[iter//checkpoint_interval-1]:.3e}")
-                t0 = time.time()
+                if mycomp < self.ncomp:
+                    if master:
+                        logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-10:iter]):.3e} ({(time.time() - t0)/10.0:.1f}s/iter)")
+                    if x_true is not None:
+                        CG_errors_true = np.linalg.norm(CG_solver.x-x_true)/np.linalg.norm(x_true)
+                        CG_Anorm_error = (CG_solver.x-x_true).dot(LHS(CG_solver.x-x_true))/self.xtrue_A_xtrue
+                        time.sleep(0.01*mycomp)  # Getting the prints in the same order every time.
+                        logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].longname} - True error: {CG_errors_true:.3e} - Anorm error: {CG_Anorm_error:.3e}")
+                    t0 = time.time()
+                else:
+                    LHS(np.zeros((0,), dtype=np.complex128))  # Matching LHS call for the calculation of LHS(CG_solver.x-x_true).
             if iter >= self.params.CG_max_iter:
                 if master:
                     logger.warning(f"Maximum number of iterations ({self.params.CG_max_iter}) reached in CG.")
@@ -308,7 +309,7 @@ class CompSepSolver:
             x_true = None
             # if self.CompSep_comm.Get_rank() == 0:
             x_true = dense_matrix.solve_by_inversion(RHS)
-            x_true = self.CompSep_comm.bcast(x_true, root=0)
+            # x_true = self.CompSep_comm.bcast(x_true, root=0)
             if self.CompSep_comm.Get_rank() == 0:
                 is_symmetric, diff = dense_matrix.test_matrix_symmetry()
                 if not is_symmetric:

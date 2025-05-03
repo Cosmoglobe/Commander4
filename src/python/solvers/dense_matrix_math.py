@@ -22,12 +22,22 @@ class DenseMatrix:
             size (int): Size of the matrix.
         """
         self.CompSep_comm = CompSep_comm
-        self.is_master = self.CompSep_comm.Get_rank() == 0
+        self.lmax_per_comp = lmax_per_comp
         self.A_operator = A_operator
         self.alm_len_percomp = alm_len_percomp
+        self.is_master = self.CompSep_comm.Get_rank() == 0
+        self.my_comp = self.CompSep_comm.Get_rank()
         self.ncomps = self.alm_len_percomp.shape[0]
+        self.is_holding_comp = self.my_comp < self.ncomps
         self.full_size = np.sum(alm_len_percomp)
-        self.lmax_per_comp = lmax_per_comp
+        if self.is_holding_comp:
+            self.my_size = self.alm_len_percomp[self.my_comp]
+            self.my_start_idx = np.sum(self.alm_len_percomp[:self.my_comp])
+            self.my_stop_idx = self.my_start_idx + self.my_size
+        else:
+            self.my_size = 0
+            self.my_start_idx = -1
+            self.my_stop_idx = -1
         self.construct_dense_matrix()
 
 
@@ -42,22 +52,14 @@ class DenseMatrix:
             range_func = range
         my_rank = self.CompSep_comm.Get_rank()
         self.A_matrix = np.zeros((self.full_size, self.full_size), dtype=np.complex128)
-        if my_rank < self.ncomps:
-            my_size = self.alm_len_percomp[my_rank]
-            my_start_idx = np.sum(self.alm_len_percomp[:my_rank])
-            my_stop_idx = my_start_idx + my_size
-        else:
-            my_size = 0
-            my_start_idx = -1
-            my_stop_idx = -1
         for i in range_func(self.full_size):
-            if i >= my_start_idx and i < my_stop_idx:
-                unit_vec = utils.uvec(my_size, i-my_start_idx, dtype=np.complex128)
+            if i >= self.my_start_idx and i < self.my_stop_idx:
+                unit_vec = utils.uvec(self.my_size, i-self.my_start_idx, dtype=np.complex128)
             else:
-                unit_vec = np.zeros(my_size, dtype=np.complex128)
+                unit_vec = np.zeros(self.my_size, dtype=np.complex128)
             out_vec = self.A_operator(unit_vec)
             if my_rank < self.ncomps:
-                self.A_matrix[i,my_start_idx:my_stop_idx] = out_vec
+                self.A_matrix[i,self.my_start_idx:self.my_stop_idx] = out_vec
         self.CompSep_comm.Allreduce(MPI.IN_PLACE, self.A_matrix, op=MPI.SUM)
         self.A_diag = np.diag(self.A_matrix)
 
@@ -69,13 +71,20 @@ class DenseMatrix:
             Args:
                 RHS: A Numpy array representing b, in alm space.
             Returns:
-                x_bestfit: The resulting best-fit solution to x (if rank==0, else None).
+                x_bestfit: The resulting best-fit solution to x for the component owned by this rank.
         """
         RHS = self.CompSep_comm.gather(RHS, root=0)
         if self.is_master:
             RHS = np.concatenate(RHS)
             x_bestfit = scipy.linalg.solve(self.A_matrix, RHS)
-            return x_bestfit
+        else:
+            x_bestfit = None
+        x_bestfit = self.CompSep_comm.bcast(x_bestfit, root=0)
+        if self.is_holding_comp:
+            x_bestfit = x_bestfit[self.my_start_idx:self.my_stop_idx]
+        else:
+            x_bestfit = np.zeros((0,), dtype=np.complex128)
+        return x_bestfit
 
 
     def get_sing_vals(self):
