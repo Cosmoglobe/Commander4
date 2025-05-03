@@ -90,7 +90,7 @@ class NoiseOnlyPreconditioner:
         if mycomp >= compsep.ncomp:
             return
 
-        self.YTNY = np.zeros(compsep.alm_len_complex_percomp[mycomp], dtype=np.complex128)
+        self.YTNY = np.zeros(compsep.alm_len_percomp[mycomp], dtype=np.complex128)
         lmax = compsep.lmax_per_comp[mycomp]
         w_alm_only_m0 = np.zeros(lmax + 1, dtype=np.complex128)
         for l in range(lmax + 1):
