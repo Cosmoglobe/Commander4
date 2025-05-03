@@ -70,14 +70,12 @@ class CompSepSolver:
         logassert(self.nside.is_integer(), f"Npix dimension of map ({self.npix}) resulting in a non-integer nside ({self.nside}).", self.logger)
         self.nside = int(self.nside)
         self.lmax = 3*self.nside-1
-        self.alm_len_complex = ((self.lmax+1)*(self.lmax+2))//2
-        self.alm_len_real = (self.lmax+1)**2
+        self.alm_len = ((self.lmax+1)*(self.lmax+2))//2
         self.comp_list = comp_list
         self.comps_SED = np.array([comp.get_sed(self.freqs) for comp in comp_list])
         self.ncomp = len(self.comps_SED)
         self.lmax_per_comp = np.array([comp.lmax for comp in comp_list])
-        self.alm_len_complex_percomp = np.array([((lmax+1)*(lmax+2))//2 for lmax in self.lmax_per_comp])
-        self.alm_len_real_percomp = np.array([(lmax+1)**2 for lmax in self.lmax_per_comp])
+        self.alm_len_percomp = np.array([((lmax+1)*(lmax+2))//2 for lmax in self.lmax_per_comp])
         self.fwhm_rad = fwhm/60.0*(np.pi/180.0)
         self.fwhm_rad_allbands = np.array(CompSep_comm.allgather(fwhm))
 
@@ -116,7 +114,7 @@ class CompSepSolver:
 
         # Y^-1 M Y a
         a_old = a
-        a = np.empty((self.alm_len_complex,), dtype=np.complex128)
+        a = np.empty((self.alm_len,), dtype=np.complex128)
         curvedsky.map2alm_healpix(a_old, a, niter=3, spin=0, nthread=mythreads)
         del a_old
 
@@ -306,7 +304,7 @@ class CompSepSolver:
         precond = getattr(preconditioners, self.params.compsep.preconditioner)(self)
 
         if debug_mode:  # For testing preconditioner with a true solution as reference, first solving for exact solution with dense matrix math.
-            dense_matrix = DenseMatrix(self.CompSep_comm, self.apply_LHS_matrix, np.sum(self.alm_len_real_percomp))
+            dense_matrix = DenseMatrix(self.CompSep_comm, self.apply_LHS_matrix, np.sum(self.alm_len_percomp))
             x_true = None
             if self.CompSep_comm.Get_rank() == 0:
                 x_true = dense_matrix.solve_by_inversion(RHS)
@@ -321,7 +319,8 @@ class CompSepSolver:
                 a = self.apply_LHS_matrix(a)
                 return a
 
-            dense_matrix = DenseMatrix(self.CompSep_comm, M_A_matrix, np.sum(self.alm_len_real_percomp))
+            dense_matrix = DenseMatrix(self.CompSep_comm, M_A_matrix, np.sum(self.alm_len_percomp))
+
             if self.CompSep_comm.Get_rank() == 0:
                 sing_vals = dense_matrix.get_sing_vals()
                 self.logger.info(f"Condition number of preconditioned (MA) matrix: {sing_vals[0]/sing_vals[-1]:.3e}")
@@ -331,7 +330,7 @@ class CompSepSolver:
         if seed is not None:
             np.random.seed(seed)
         if mycomp < self.ncomp:
-            x0 = np.zeros((self.alm_len_complex_percomp[mycomp],), dtype=np.complex128)
+            x0 = np.zeros((self.alm_len_percomp[mycomp],), dtype=np.complex128)
         else:
             x0 = np.zeros((0,), dtype=np.complex128)
         sol_array = self.solve_CG(self.apply_LHS_matrix, RHS, x0, M=precond, x_true=x_true if debug_mode else None)
