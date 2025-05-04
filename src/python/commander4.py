@@ -10,11 +10,11 @@ import sys
 from pixell.bunch import Bunch
 from traceback import print_exc
 
-from src.python.output import log
-
 # Current solution to making sure the root directory is in the path. I don't like it, but it works for now (alternative seems to be running the entire thing as a module).
 module_root_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(module_root_path)
+
+from src.python.output import log
 
 
 def main(params: Bunch, params_dict: dict):
