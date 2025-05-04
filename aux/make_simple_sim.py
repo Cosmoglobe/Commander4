@@ -363,8 +363,7 @@ def main():
             assert (hitmap > 0).all(), f"{np.sum(hitmap == 0)} out of {hitmap.shape[0]} pixels were never hit by the scanning strategy."
             if (hitmap <= 10).any():
                 print(f"Warning: {np.sum(hitmap <= 10)} out of {hitmap.shape[0]} pixels were hit 10 or fewer times by scanning strategy.")
-            else:
-                print(f"Lowest pixel hit count is {np.min(hitmap)}.")
+            print(f"Lowest pixel hit count is {np.min(hitmap)}.")
             noise_map[i] /= hitmap
             inv_var_map[i] = hitmap/sigma0s[i].value**2
             assert signal_tod[-1].shape == psi.shape, f"Shape of simulated TOD {signal_tod[-1].shape} differs from generated psi {psi.shape}"
@@ -379,7 +378,9 @@ def main():
                 hp.write_map(params.OUTPUT_FOLDER + f"rms_map_{nside}_{freqs[i]}.fits", 1.0/np.sqrt(inv_var_map[i]), overwrite=True)
         if params.make_plots:
             for i in range(len(freqs)):
-                
+                hp.mollview(1.0/np.sqrt(inv_var_map[i]), title=f"Uncertainty {freqs[i]:.2f}GHz")
+                plt.savefig(params.OUTPUT_FOLDER + f"rms_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
+                plt.close()
                 hp.mollview(comps_sum_smoothed[i,0], title=f"Full 'clean' sky smoothed {freqs[i]:.2f}GHz")
                 plt.savefig(params.OUTPUT_FOLDER + f"sky_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
                 plt.close()
