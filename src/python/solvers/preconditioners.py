@@ -4,6 +4,7 @@ import healpy as hp
 from mpi4py import MPI
 import typing
 from numpy.typing import NDArray
+from pixell import curvedsky
 
 if typing.TYPE_CHECKING:  # Only import when performing type checking, avoiding circular import during normal runtime.
     from src.python.solvers.comp_sep_solvers import CompSepSolver
@@ -121,3 +122,41 @@ class NoiseOnlyPreconditioner:
             return a_array
 
         return a_array / self.YTNY
+
+
+class MixingMatrixPreconditioner:
+    def __init__(self, compsep: CompSepSolver):
+        self.compsep = compsep
+        M = np.empty((compsep.nband, compsep.ncomp), dtype=np.float64)
+        for icomp in range(compsep.ncomp):
+            comp = compsep.comp_list[icomp]
+            M[:,icomp] = comp.get_sed(compsep.freqs)
+        MT_M = np.matmul(M.T, M)
+        self.MT_M_inv = np.linalg.inv(MT_M)
+
+        self.my_comp = compsep.CompSep_comm.Get_rank()
+        self.is_holding_comp = self.my_comp < compsep.ncomp
+        self.full_size = np.sum(compsep.alm_len_percomp)
+        if self.is_holding_comp:
+            self.my_size = compsep.alm_len_percomp[self.my_comp]
+            color = 0
+        else:
+            self.my_size = 0
+            color = MPI.UNDEFINED
+        self.CompSep_subcomm = self.compsep.CompSep_comm.Split(color, key=self.my_comp)
+        
+
+
+    def __call__(self, a_array: NDArray):
+        if self.is_holding_comp:
+            a_map = np.empty((self.compsep.npix,), dtype=np.float64)
+            curvedsky.map2alm_healpix(a_map, a_array, niter=3, adjoint=True, spin=0, nthread=self.compsep.params.nthreads_compsep)
+            # print("1", np.min(a_map), np.max(a_map), np.mean(a_map), np.sum(np.isfinite(a_map)))
+            a_map_all = self.CompSep_subcomm.allgather(a_map)
+            a_map_all = np.array(a_map_all)
+            # print("2", np.min(a_map_all), np.max(a_map_all), np.mean(a_map_all), np.sum(np.isfinite(a_map_all)))
+            a_map_all = np.matmul(self.MT_M_inv, a_map_all)
+            # print("3", np.min(a_map_all), np.max(a_map_all), np.mean(a_map_all), np.sum(np.isfinite(a_map_all)))
+            curvedsky.map2alm_healpix(a_map_all, a_array, niter=3, spin=0, nthread=self.compsep.params.nthreads_compsep)
+            a_array = a_array[self.my_comp]
+        return a_array
