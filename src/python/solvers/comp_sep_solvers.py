@@ -211,7 +211,8 @@ class CompSepSolver:
                         logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].longname} - True error: {CG_errors_true:.3e} - Anorm error: {CG_Anorm_error:.3e}")
                     t0 = time.time()
                 else:
-                    LHS(np.zeros((0,), dtype=np.complex128))  # Matching LHS call for the calculation of LHS(CG_solver.x-x_true).
+                    if x_true is not None:
+                        LHS(np.zeros((0,), dtype=np.complex128))  # Matching LHS call for the calculation of LHS(CG_solver.x-x_true).
             if iter >= self.params.CG_max_iter:
                 if master:
                     logger.warning(f"Maximum number of iterations ({self.params.CG_max_iter}) reached in CG.")
