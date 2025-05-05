@@ -151,12 +151,9 @@ class MixingMatrixPreconditioner:
         if self.is_holding_comp:
             a_map = np.empty((self.compsep.npix,), dtype=np.float64)
             curvedsky.map2alm_healpix(a_map, a_array, niter=3, adjoint=True, spin=0, nthread=self.compsep.params.nthreads_compsep)
-            # print("1", np.min(a_map), np.max(a_map), np.mean(a_map), np.sum(np.isfinite(a_map)))
             a_map_all = self.CompSep_subcomm.allgather(a_map)
             a_map_all = np.array(a_map_all)
-            # print("2", np.min(a_map_all), np.max(a_map_all), np.mean(a_map_all), np.sum(np.isfinite(a_map_all)))
             a_map_all = np.matmul(self.MT_M_inv, a_map_all)
-            # print("3", np.min(a_map_all), np.max(a_map_all), np.mean(a_map_all), np.sum(np.isfinite(a_map_all)))
-            curvedsky.map2alm_healpix(a_map_all, a_array, niter=3, spin=0, nthread=self.compsep.params.nthreads_compsep)
-            a_array = a_array[self.my_comp]
+            a_map_me = a_map_all[self.my_comp]
+            curvedsky.map2alm_healpix(a_map_me, a_array, niter=3, spin=0, nthread=self.compsep.params.nthreads_compsep)
         return a_array
