@@ -98,7 +98,7 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
 
     sky_model = SkyModel(comp_list)
 
-    detector_map = sky_model.get_sky_at_nu(band_freq, params.nside, fwhm=compsep_solver.fwhm_rad)
+    detector_map = sky_model.get_sky_at_nu(band_freq, params.nside, fwhm=compsep_solver.my_band_fwhm_rad)
 
     if params.make_plots:
         detector_to_plot = proc_comm.Get_rank()

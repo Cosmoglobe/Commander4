@@ -64,19 +64,24 @@ class CompSepSolver:
         self.freqs = np.array(CompSep_comm.allgather(freq))
         self.npix = map_rms.shape[0]
         self.nband = len(self.freqs)
-        self.my_band_idx = CompSep_comm.Get_rank()
+        self.my_rank = CompSep_comm.Get_rank()
         self.nside = np.sqrt(self.npix//12)
         logassert(self.nside.is_integer(), f"Npix dimension of map ({self.npix}) resulting in a non-integer nside ({self.nside}).", self.logger)
         self.nside = int(self.nside)
-        self.lmax = 3*self.nside-1
-        self.alm_len = ((self.lmax+1)*(self.lmax+2))//2
+        self.lmax_bands = 3*self.nside-1
+        self.alm_len_bands = ((self.lmax_bands+1)*(self.lmax_bands+2))//2
         self.comp_list = comp_list
         self.comps_SED = np.array([comp.get_sed(self.freqs) for comp in comp_list])
         self.ncomp = len(self.comps_SED)
+        self.is_holding_comp = self.my_rank < self.ncomp
         self.lmax_per_comp = np.array([comp.lmax for comp in comp_list])
         self.alm_len_percomp = np.array([((lmax+1)*(lmax+2))//2 for lmax in self.lmax_per_comp])
-        self.fwhm_rad = fwhm/60.0*(np.pi/180.0)
-        self.fwhm_rad_allbands = np.array(CompSep_comm.allgather(fwhm))
+        self.my_band_fwhm_rad = fwhm/60.0*(np.pi/180.0)
+        if self.is_holding_comp:
+            self.my_comp_lmax = comp_list[self.my_rank].lmax
+            self.my_comp_alm_len = ((self.my_comp_lmax+1)*(self.my_comp_lmax+2))//2
+        else:
+            self.my_comp_alm_len = 0
 
 
     def apply_LHS_matrix(self, a_array: NDArray) -> NDArray:
@@ -90,14 +95,15 @@ class CompSepSolver:
         """
         logger = logging.getLogger(__name__)
 
-        logassert(a_array.dtype == np.complex128, "Provided component array is not of type np.complex128. This operator takes and returns complex alms.", logger)
+        logassert(a_array.dtype == np.complex128, f"Provided component array is of type {a_array.dtype}, not np.complex128. This operator takes and returns complex alms.", logger)
+        logassert(a_array.shape[0] == self.my_comp_alm_len, f"Provided component array is of length {a_array.shape[0]}, not {self.my_comp_alm_len}.", logger)
 
         mycomp = self.CompSep_comm.Get_rank()
         mythreads = self.params.nthreads_compsep
 
         if mycomp < self.ncomp:  # this task actually holds a component
             # Y a
-            a = alm_to_map(a_array, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
+            a = alm_to_map(a_array, self.nside, self.my_comp_lmax, nthreads=mythreads)
         else:
             a = None
 
@@ -108,29 +114,29 @@ class CompSepSolver:
             # successively broadcast a_old and build a from it
             tmp = a_old if mycomp == icomp else np.empty(self.npix)
             self.CompSep_comm.Bcast(tmp, root=icomp)
-            a += self.comps_SED[icomp,self.my_band_idx]*tmp
+            a += self.comps_SED[icomp,self.my_rank]*tmp
         del tmp
 
         # Y^-1 M Y a
         a_old = a
-        a = np.empty((self.alm_len,), dtype=np.complex128)
+        a = np.empty((self.alm_len_bands,), dtype=np.complex128)
         curvedsky.map2alm_healpix(a_old, a, niter=3, spin=0, nthread=mythreads)
         del a_old
 
         # B Y^-1 M Y a
-        hp.smoothalm(a, self.fwhm_rad, inplace=True)
+        hp.smoothalm(a, self.my_band_fwhm_rad, inplace=True)
 
         # Y B Y^-1 M Y a
-        a = alm_to_map(a, self.nside, self.lmax, nthreads=mythreads)
+        a = alm_to_map(a, self.nside, self.lmax_bands, nthreads=mythreads)
 
         # N^-1 Y B Y^-1 M Y a
         a /= self.map_rms**2
 
         # Y^T N^-1 Y B Y^-1 M Y a
-        a = alm_to_map_adjoint(a, self.nside, self.lmax, nthreads=mythreads)
+        a = alm_to_map_adjoint(a, self.nside, self.lmax_bands, nthreads=mythreads)
 
         # B^T Y^T N^-1 Y B Y^-1 M Y a
-        hp.smoothalm(a, self.fwhm_rad, inplace=True)
+        hp.smoothalm(a, self.my_band_fwhm_rad, inplace=True)
 
         # Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         a_old = a
@@ -140,7 +146,7 @@ class CompSepSolver:
         # M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         a_old = a
         for icomp in range(self.ncomp):
-            tmp = a_old * self.comps_SED[icomp,self.my_band_idx]
+            tmp = a_old * self.comps_SED[icomp,self.my_rank]
             # accumulate tmp onto the relevant task
             send, recv = (MPI.IN_PLACE, tmp) if icomp == mycomp else (tmp, None)
             self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=icomp)
@@ -150,7 +156,7 @@ class CompSepSolver:
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         if mycomp < self.ncomp:
-            a = alm_to_map_adjoint(a, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
+            a = alm_to_map_adjoint(a, self.nside, self.my_comp_lmax, nthreads=mythreads)
         else:
             a = np.zeros((0,), dtype=np.complex128)  # zero-sized array
 
@@ -224,10 +230,9 @@ class CompSepSolver:
         """ Calculates the dot product of two sets of complex a_lms which are distributed across the
             self.ncomp first ranks of the self.CompSep_comm communicator.
         """
-        mycomp = self.CompSep_comm.Get_rank()
         res = 0.
-        if mycomp < self.ncomp:
-            lmax = self.lmax_per_comp[mycomp]
+        if self.is_holding_comp:
+            lmax = self.my_comp_lmax
             res = np.dot(a[0:lmax+1].real, b[0:lmax+1].real)
             res += 2 * np.dot(a[lmax+1:].real, b[lmax+1:].real)
             res += 2 * np.dot(a[lmax+1:].imag, b[lmax+1:].imag)
@@ -243,10 +248,10 @@ class CompSepSolver:
         mythreads = self.params.nthreads_compsep
 
         # Y^T N^-1 d
-        b = alm_to_map_adjoint(b, self.nside, self.lmax, nthreads=mythreads)
+        b = alm_to_map_adjoint(b, self.nside, self.lmax_bands, nthreads=mythreads)
 
         # B^T Y^T N^-1 d
-        hp.smoothalm(b, self.fwhm_rad, inplace=True)
+        hp.smoothalm(b, self.my_band_fwhm_rad, inplace=True)
 
         # Y^-1^T B^T Y^T N^-1 d
         b_old = b
@@ -256,15 +261,15 @@ class CompSepSolver:
         # M^T Y^-1^T B^T Y^T N^-1 d
         b_old = b
         for icomp in range(self.ncomp):
-            tmp = self.comps_SED[icomp,self.my_band_idx]*b_old
+            tmp = self.comps_SED[icomp,self.my_rank]*b_old
             send, recv = (MPI.IN_PLACE, tmp) if icomp == mycomp else (tmp, None)
             self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=icomp)
             if icomp == mycomp:
                 b = tmp
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 d
-        if mycomp < self.ncomp:  # This task actually holds a component
-            b = alm_to_map_adjoint(b, self.nside, self.lmax_per_comp[mycomp], nthreads=mythreads)
+        if self.is_holding_comp:  # This task actually holds a component
+            b = alm_to_map_adjoint(b, self.nside, self.my_comp_lmax, nthreads=mythreads)
         else:
             b = np.zeros((0,), dtype=np.complex128)
 
