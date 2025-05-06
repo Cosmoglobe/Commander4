@@ -239,6 +239,14 @@ py::array Py_amplitude_sampling_per_pix_helper (
   return comp_maps_;
   }
 
+template<typename T1, typename T2> double dotfunc(const py::array_t<T1> &a,
+  const py::array_t<T1> &b)
+  {
+  double res = 0;
+  // do stuff
+  return res;
+  }
+
 constexpr const char *Py_amplitude_sampling_per_pix_helper_DS = R"""(
 Helper function for amplitude_ampling_per_pix.
 
@@ -278,6 +286,11 @@ void add_utils(py::module_ &msup)
         "random"_a,
         "comp_maps"_a=None,
         "nthreads"_a=1);
+
+  m.def("dotfunc", dotfunc<float,float>, "a"_a, "b"_a);
+  m.def("dotfunc", dotfunc<double,float>, "a"_a, "b"_a);
+  // etc.
+
   }
 
 }
