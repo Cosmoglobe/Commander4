@@ -51,12 +51,12 @@ class DenseMatrix:
         else:
             range_func = range
         my_rank = self.CompSep_comm.Get_rank()
-        self.A_matrix = np.zeros((self.full_size, self.full_size), dtype=np.complex128)
+        self.A_matrix = np.zeros((self.full_size, self.full_size))
         for i in range_func(self.full_size):
             if i >= self.my_start_idx and i < self.my_stop_idx:
-                unit_vec = utils.uvec(self.my_size, i-self.my_start_idx, dtype=np.complex128)
+                unit_vec = utils.uvec(self.my_size, i-self.my_start_idx)
             else:
-                unit_vec = np.zeros(self.my_size, dtype=np.complex128)
+                unit_vec = np.zeros(self.my_size)
             out_vec = self.A_operator(unit_vec)
             if my_rank < self.ncomps:
                 self.A_matrix[i,self.my_start_idx:self.my_stop_idx] = out_vec
@@ -83,7 +83,7 @@ class DenseMatrix:
         if self.is_holding_comp:
             x_bestfit = x_bestfit[self.my_start_idx:self.my_stop_idx]
         else:
-            x_bestfit = np.zeros((0,), dtype=np.complex128)
+            x_bestfit = np.zeros((0,))
         return x_bestfit
 
 
