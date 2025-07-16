@@ -237,6 +237,56 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, params: Bunc
     return experiment_data
 
 
+def fill_gaps(TOD, mask, noise_sigma0, window_size=20):
+    """ In-place fills the gaps in the provided TOD array with linearly interpolated
+        values plus a white noise term.
+    Args:
+        TOD (np.ndarray): The data array with gaps. This array will changed in-place!
+        mask (np.ndarray): A boolean array of same shape as TOD where False indicates a gap to be filled.
+        noise_std (float): The standard deviation of the white noise to add.
+        window_size (int): The number of points to average on each side of a gap.
+    """
+    # Find the start and end of each gap by looking at when the masks changes value.
+    gap_starts = np.where(np.diff(mask.astype(int)) == -1)[0] + 1
+    gap_ends = np.where(np.diff(mask.astype(int)) == 1)[0] + 1
+
+    if not mask[0]:  # Special case: If first sample is masked.
+        gap_starts = np.insert(gap_starts, 0, 0)
+    if not mask[-1]:  # If last sample is masked.
+        gap_ends = np.append(gap_ends, len(mask))
+        
+    for start, end in zip(gap_starts, gap_ends):
+        gap_len = end - start
+
+        # Case 1: Gap is at the beginning of the data: Use only right anchor.
+        if start == 0:
+            right_window = TOD[end:end + window_size]
+            right_mask_window = mask[end:end + window_size]
+            anchor = np.mean(right_window[right_mask_window])
+            interp_values = np.full(gap_len, anchor)
+        
+        # Case 2: Gap is at the end of the data: Use only left anchor.
+        elif end == len(mask):
+            left_window = TOD[max(0, start - window_size):start]
+            left_mask_window = mask[max(0, start - window_size):start]
+            anchor = np.mean(left_window[left_mask_window])
+            interp_values = np.full(gap_len, anchor)
+
+        # Case 3: Gap is not at either end: Linearly interpolate between anchors.
+        else:
+            left_window = TOD[max(0, start - window_size):start]
+            left_mask_window = mask[max(0, start - window_size):start]
+            left_anchor = np.mean(left_window[left_mask_window])
+
+            right_window = TOD[end:end + window_size]
+            right_mask_window = mask[end:end + window_size]
+            right_anchor = np.mean(right_window[right_mask_window])
+            
+            interp_values = np.linspace(left_anchor, right_anchor, gap_len)
+        
+        # Add a white noise to the interpolated (or constant) values.
+        TOD[start:end] = interp_values + np.random.normal(0, noise_sigma0, gap_len)
+
 
 def process_tod(band_comm: MPI.Comm, experiment_data: DetectorTOD,
                 compsep_output: NDArray, params: Bunch) -> DetectorMap:
