@@ -39,7 +39,7 @@ def init_compsep_processing(CompSep_comm: Comm, params: Bunch) -> tuple[list[Dif
             # getattr loads the class specified by "component_class" from the model.component file.
             # This class is then instantiated with the "params" specified, and appended to the components list.
             if component.params.lmax == "full":
-                component.params.lmax = 3*params.nside-1
+                component.params.lmax = (params.nside*5)//2
             components.append(getattr(component_lib, component.component_class)(component.params))
 
     ### Setting up info for each band, including where to get the data from (map from file, or receive from TOD processing) ###
