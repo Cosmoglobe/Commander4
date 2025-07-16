@@ -133,7 +133,7 @@ class NoiseOnlyPreconditioner:
         # Convert from real to complex alms, apply the Y^T N^-1 Y matrix, and then convert back.
         a_array_out = alm_real2complex(a_array, self.my_comp_lmax)
         a_array_out /= self.YTNY
-        a_array_out = alm_complex2real(a_array, self.my_comp_lmax)
+        a_array_out = alm_complex2real(a_array_out, self.my_comp_lmax)
         return a_array_out
 
 
