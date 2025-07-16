@@ -11,7 +11,6 @@ from mpi4py import MPI
 from mpi4py.MPI import Comm
 import scipy
 from collections.abc import Callable
-from scipy.linalg import svd
 
 
 class DenseMatrix:
@@ -98,7 +97,7 @@ class DenseMatrix:
             Useful for debugging CG preconditioners, as their primary purpose is to improve the condition number.
         """
         if self.is_master:
-            sing_vals = svd(self.A_matrix, compute_uv=False)
+            sing_vals = scipy.linalg.svd(self.A_matrix, compute_uv=False)
             self.logger.info(f"Condition number of matrix {self.matrix_name}: {sing_vals[0]/sing_vals[-1]:.3e}")
             self.logger.info(f"Singular values of matrix {self.matrix_name}: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
 
@@ -113,7 +112,7 @@ class DenseMatrix:
             if is_hermitian:
                 self.logger.info(f"Matrix {self.matrix_name} is Hermitian with mean(A^H - A)/std(A) = {diff:.2e}")
             else:
-                self.logger.warning(f"Matrix {self.matrix_name} is NOT HERMITIAN with mean(A^T - A)/std(A) = {diff:.2e}")
+                self.logger.warning(f"Matrix {self.matrix_name} is NOT HERMITIAN with mean(A^H - A)/std(A) = {diff:.2e}")
 
 
     def print_matrix_diag(self):
@@ -127,6 +126,9 @@ class DenseMatrix:
 
 
     def test_matrix_eigenvalues(self):
+        """ Calculate and print the eigenvalues of the A-matrix.
+            Prints a warning if they do not align with a Hermitian positive definite matrix. 
+        """
         if self.is_master:
             eigvals = scipy.linalg.eigvals(self.A_matrix)
             min_eigval = np.min(np.abs(eigvals))
