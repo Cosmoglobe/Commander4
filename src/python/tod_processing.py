@@ -222,7 +222,7 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, params: Bunc
             C_1f_inv = np.zeros(N)  # 1.0/C_1f
             C_1f_inv[1:] = freq[1:]/scan.sigma0
 
-            const = 1.0  # This is the normalization constant for FFT, which I'm unsure what is for scipys FFT, might be wrong!
+            const = np.sqrt(ntod)  # I think this should be the correct normalization for scipy.fft (same as fftw).
             w1 = (np.random.normal(0, 1, N) + 1.j*np.random.normal(0, 1, N))/np.sqrt(2)
             w2 = (np.random.normal(0, 1, N) + 1.j*np.random.normal(0, 1, N))/np.sqrt(2)
             # I'm always a bit confused about when it's fine to use rfft as opposed to full fft, so might want to double check this:
