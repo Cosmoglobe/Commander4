@@ -81,9 +81,13 @@ class CompSepSolver:
         if self.is_holding_comp:
             self.my_comp_lmax = comp_list[self.my_rank].lmax
             self.my_comp_alm_len = self.alm_len_percomp[self.my_rank] #((self.my_comp_lmax+1)*(self.my_comp_lmax+2))//2
+            color = 0
         else:
             self.my_comp_lmax = 0
             self.my_comp_alm_len = 0
+            color = MPI.UNDEFINED  # If we are not holding a component, we will not be part of the component communicator.
+        self.CompSep_holdingcomp_comm = self.CompSep_comm.Split(color, key=self.my_rank)  # Split off a new communicator for ranks holding components.
+
 
 
     def apply_LHS_matrix(self, a_array: NDArray) -> NDArray:
@@ -194,7 +198,9 @@ class CompSepSolver:
             CG_solver = utils.CG(LHS, RHS, dot=mydot, x0=x0, M=M)
         self.CG_residuals = np.zeros((self.params.CG_max_iter))
         if x_true is not None:
-            self.xtrue_A_xtrue = x_true.dot(LHS(x_true))  # The normalization factor for the true error.
+            # self.x_true_allcomps = self.CompSep_comm.allgather()
+            self.xtrue_A_xtrue = x_true.dot(LHS(x_true))  # The normalization factor for the true error (contribution from my rank).
+            self.xtrue_A_xtrue = self.CompSep_comm.allreduce(self.xtrue_A_xtrue, MPI.SUM)  # Dot product is linear, so we can just sum the contributions.
         if master:
             logger.info("CG starting up!")
         iter = 0
@@ -210,9 +216,12 @@ class CompSepSolver:
                         logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-10:iter]):.3e} ({(time.time() - t0)/10.0:.1f}s/iter)")
                     if x_true is not None:
                         CG_errors_true = np.linalg.norm(CG_solver.x-x_true)/np.linalg.norm(x_true)
-                        CG_Anorm_error = (CG_solver.x-x_true).dot(LHS(CG_solver.x-x_true))/self.xtrue_A_xtrue
+                        CG_Anorm_error = (CG_solver.x-x_true).dot(LHS(CG_solver.x-x_true))
+                        CG_Anorm_error = self.CompSep_holdingcomp_comm.allreduce(CG_Anorm_error, MPI.SUM)/self.xtrue_A_xtrue  # Collect error contributions from all ranks.
                         time.sleep(0.01*mycomp)  # Getting the prints in the same order every time.
-                        logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].longname} - True L2 error: {CG_errors_true:.3e} - True A-norm error: {CG_Anorm_error:.3e}")
+                        if master:
+                            logger.info(f"CG iter {iter:3d} - True A-norm error: {CG_Anorm_error:.3e}")  # A-norm error is only defined for the full vector.
+                        logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].longname} - True L2 error: {CG_errors_true:.3e}")  # We can print the individual component L2 errors.
                     t0 = time.time()
                 else:
                     if x_true is not None:
@@ -236,17 +245,27 @@ class CompSepSolver:
 
 
     def _calc_dot(self, a: NDArray, b: NDArray):
-        """ Calculates the dot product of two sets of complex a_lms which are distributed across the
+        """ Calculates the dot product of two sets of real a_lms which are distributed across the
             self.ncomp first ranks of the self.CompSep_comm communicator.
         """
         res = 0.
         if self.is_holding_comp:
             res = np.dot(a, b)
-            # Old code for complex alms
-            # lmax = self.my_comp_lmax
-            # res = np.dot(a[0:lmax+1].real, b[0:lmax+1].real)
-            # res += 2 * np.dot(a[lmax+1:].real, b[lmax+1:].real)
-            # res += 2 * np.dot(a[lmax+1:].imag, b[lmax+1:].imag)
+        res = self.CompSep_comm.allreduce(res, op=MPI.SUM)
+        return res
+
+
+    def _calc_dot_complex(self, a: NDArray, b: NDArray):
+        """ Calculates the dot product of two sets of complex a_lms which are distributed across the
+            self.ncomp first ranks of the self.CompSep_comm communicator.
+            NB: This function is currently NOT USED, as we transitioned to using real alms in the CG.
+        """
+        res = 0.
+        if self.is_holding_comp:
+            lmax = self.my_comp_lmax
+            res = np.dot(a[0:lmax+1].real, b[0:lmax+1].real)
+            res += 2 * np.dot(a[lmax+1:].real, b[lmax+1:].real)
+            res += 2 * np.dot(a[lmax+1:].imag, b[lmax+1:].imag)
         res = self.CompSep_comm.allreduce(res, op=MPI.SUM)
         return res
 
@@ -332,11 +351,11 @@ class CompSepSolver:
             # Testing the preconditioning matrix (M) alone
             dense_matrix = DenseMatrix(self.CompSep_comm, precond, self.alm_len_percomp, matrix_name="M")
             dense_matrix.test_matrix_hermitian()  # Preconditioner matrix needs to be Hermitian.
+            dense_matrix.test_matrix_eigenvalues()  # and to have positive and real eigenvalues
 
-            # Testing the combined preconditioned system (MA)
+            # Testing the combined preconditioned system (MA)  (this combined matrix will generally not be Hermitian positive-definite).
             dense_matrix = DenseMatrix(self.CompSep_comm, M_A_matrix, self.alm_len_percomp, matrix_name="MA")
             dense_matrix.print_sing_vals()  # Check how much singular values (condition number) of preconditioned system improved.
-            dense_matrix.test_matrix_eigenvalues()
             dense_matrix.print_matrix_diag()
 
 
