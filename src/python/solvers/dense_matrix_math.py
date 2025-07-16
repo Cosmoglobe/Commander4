@@ -3,6 +3,7 @@
 ### Ideally this class would support calculating e.g. the conditioning number without constructing the full matrix, ###
 ### but that would need to be fine-tailored with the MPI implementation of the Ax application, which I haven't bothered. ###
 
+import logging
 import numpy as np
 from tqdm import trange
 from pixell import utils
@@ -14,15 +15,18 @@ from scipy.linalg import svd
 
 
 class DenseMatrix:
-    def __init__(self, CompSep_comm: Comm, A_operator: Callable, alm_len_percomp, lmax_per_comp):
+    def __init__(self, CompSep_comm: Comm, A_operator: Callable, alm_len_percomp: int, matrix_name: str = ""):
         """ Class for performing dense matrix math, specifically designed to work with the CompSep class (regarding MPI setup).
         Args:
             CompSep_comm (MPI.Comm): MPI communicator for the component separation processes, which should contain one rank per band.
             A_operator (Callable): Function to apply the matrix A to a vector, in an MPI-distributed fashion (master and helper tasks).
             size (int): Size of the matrix.
+            alm_len_percomp (int): The size of the alms of each component (each held by one MPI rank). 
+            matrix_name (str): Name used for printing.
         """
+        self.logger = logging.getLogger(__name__)
+        self.matrix_name = matrix_name
         self.CompSep_comm = CompSep_comm
-        self.lmax_per_comp = lmax_per_comp
         self.A_operator = A_operator
         self.alm_len_percomp = alm_len_percomp
         self.is_master = self.CompSep_comm.Get_rank() == 0
@@ -43,11 +47,11 @@ class DenseMatrix:
 
     def construct_dense_matrix(self):
         """ Function for constructing the dense matrix A, and storing it as "self.A_matrix".
-            Also calculates the diagonal of the matrix and stores it as "self.A_diag".
-            Both of these are stored in the master task (rank 0).
+            The matrix is stored on all ranks.
         """
         if self.is_master:
             range_func = trange
+            self.logger.info(f"Starting construction of dense matrix {self.matrix_name}")
         else:
             range_func = range
         my_rank = self.CompSep_comm.Get_rank()
@@ -61,7 +65,6 @@ class DenseMatrix:
             if my_rank < self.ncomps:
                 self.A_matrix[i,self.my_start_idx:self.my_stop_idx] = out_vec
         self.CompSep_comm.Allreduce(MPI.IN_PLACE, self.A_matrix, op=MPI.SUM)
-        self.A_diag = np.diag(self.A_matrix)
 
 
     def solve_by_inversion(self, RHS):
@@ -73,6 +76,9 @@ class DenseMatrix:
             Returns:
                 x_bestfit: The resulting best-fit solution to x for the component owned by this rank.
         """
+        if self.CompSep_comm.Get_rank() == 0:
+            self.logger.info("Solving LHS matrix by direct inversion.")
+
         RHS = self.CompSep_comm.gather(RHS, root=0)
         if self.is_master:
             RHS = np.concatenate(RHS)
@@ -87,24 +93,45 @@ class DenseMatrix:
         return x_bestfit
 
 
-    def get_sing_vals(self):
-        """ Calculates the singular values of the matrix A using the SVD method.
-            This is done by calculating the singular values of A and taking the ratio of the largest to smallest.
-            Returns:
-                cond_num: The singular values of the matrix A, in descending order (if rank==0, else None).
+    def print_sing_vals(self):
+        """ Calculates and prints the singular values of the dense matrix A, as well as the condition number.
+            Useful for debugging CG preconditioners, as their primary purpose is to improve the condition number.
         """
         if self.is_master:
-            s = svd(self.A_matrix, compute_uv=False)
-            return s
+            sing_vals = svd(self.A_matrix, compute_uv=False)
+            self.logger.info(f"Condition number of matrix {self.matrix_name}: {sing_vals[0]/sing_vals[-1]:.3e}")
+            self.logger.info(f"Singular values of matrix {self.matrix_name}: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
 
 
-    def test_matrix_symmetry(self):
-        """ Tests the symmetry of the matrix A by checking if A == A^T.
+    def test_matrix_hermitian(self):
+        """ Cheks that the dense matrix is Hermitian by checking if A^H == A, and the deviation from this.
             Useful for debugging CG, as it requires a symmetric matrix.
-            Returns:
-                is_symmetric: True if the matrix is symmetric, False otherwise (if rank==0, else None).
         """
         if self.is_master:
-            diff = np.mean(np.abs(self.A_matrix - self.A_matrix.T))/np.std(self.A_matrix)
-            is_symmetric = np.allclose(self.A_matrix, self.A_matrix.T)
-            return is_symmetric, diff
+            diff = np.mean(np.abs(self.A_matrix - np.conjugate(self.A_matrix.T)))/np.std(self.A_matrix)
+            is_hermitian = np.allclose(self.A_matrix, np.conjugate(self.A_matrix.T))
+            if is_hermitian:
+                self.logger.info(f"Matrix {self.matrix_name} is Hermitian with mean(A^H - A)/std(A) = {diff:.2e}")
+            else:
+                self.logger.warning(f"Matrix {self.matrix_name} is NOT HERMITIAN with mean(A^T - A)/std(A) = {diff:.2e}")
+
+
+    def print_matrix_diag(self):
+        """ Prints 8 uniformily space diagonal elements of the dense matrix.
+            Can be used to see whether the preconditioner was able to accurately capture diagonal of matrix.
+        """
+        if self.is_master:
+            diag = np.diag(self.A_matrix)
+            size = diag.shape[0]
+            self.logger.info(f"Matrix {self.matrix_name} diag: {diag[0]:.1e} .. {diag[size//8]:.1e} .. {diag[(2*size)//8]:.1e} .. {diag[(3*size)//8]:.1e} .. {diag[(4*size)//8]:.1e} .. {diag[(5*size)//8]:.1e} .. {diag[(6*size)//8]:.1e} .. {diag[(7*size)//8]:.1e} .. {diag[-1]:.1e}")
+
+
+    def test_matrix_eigenvalues(self):
+        if self.is_master:
+            eigvals = scipy.linalg.eigvals(self.A_matrix)
+            min_eigval = np.min(np.abs(eigvals))
+            max_eigval = np.max(np.abs(eigvals))
+            imag_max_eigval = np.max(eigvals.imag)
+            if imag_max_eigval > 1e-10 or min_eigval < -1e-10:
+                self.logger.warning(f"Matrix {self.matrix_name} IS NOT symmetric positive-definite!")
+            self.logger.info(f"Eigvals: min={min_eigval:.1e}, max={max_eigval:.1e} highest imag={imag_max_eigval:.1e}")

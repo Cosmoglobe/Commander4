@@ -212,7 +212,7 @@ class CompSepSolver:
                         CG_errors_true = np.linalg.norm(CG_solver.x-x_true)/np.linalg.norm(x_true)
                         CG_Anorm_error = (CG_solver.x-x_true).dot(LHS(CG_solver.x-x_true))/self.xtrue_A_xtrue
                         time.sleep(0.01*mycomp)  # Getting the prints in the same order every time.
-                        logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].longname} - True error: {CG_errors_true:.3e} - Anorm error: {CG_Anorm_error:.3e}")
+                        logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].longname} - True L2 error: {CG_errors_true:.3e} - True A-norm error: {CG_Anorm_error:.3e}")
                     t0 = time.time()
                 else:
                     if x_true is not None:
@@ -315,37 +315,29 @@ class CompSepSolver:
         mycomp = self.CompSep_comm.Get_rank()
 
         RHS = self.calc_RHS_mean() + self.calc_RHS_fluct()
-        debug_mode = self.params.compsep.dense_matrix_debug_mode
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners", and has a name specified by self.params.compsep.preconditioner.
         precond = getattr(preconditioners, self.params.compsep.preconditioner)(self)
 
-        if debug_mode:  # For testing preconditioner with a true solution as reference, first solving for exact solution with dense matrix math.
-            dense_matrix = DenseMatrix(self.CompSep_comm, self.apply_LHS_matrix, self.alm_len_percomp, self.lmax_per_comp)
-            x_true = None
-            # if self.CompSep_comm.Get_rank() == 0:
+        if self.params.compsep.dense_matrix_debug_mode:  # For testing preconditioner with a true solution as reference, first solving for exact solution with dense matrix math.
+            M_A_matrix = lambda a : self.apply_LHS_matrix(precond(a))
+
+            # Testing the initial LHS (A) matrix
+            dense_matrix = DenseMatrix(self.CompSep_comm, self.apply_LHS_matrix, self.alm_len_percomp, matrix_name="A")
             x_true = dense_matrix.solve_by_inversion(RHS)
-            # x_true = self.CompSep_comm.bcast(x_true, root=0)
-            if self.CompSep_comm.Get_rank() == 0:
-                is_symmetric, diff = dense_matrix.test_matrix_symmetry()
-                if not is_symmetric:
-                    self.logger.warning(f"LHS matrix (A) is NOT SYMMETRIC! mean(A^T - A)/std(A) = {diff}")
-                sing_vals = dense_matrix.get_sing_vals()
-                self.logger.info(f"Condition number of regular (A) matrix: {sing_vals[0]/sing_vals[-1]:.3e}")
-                self.logger.info(f"Sing-vals: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
-            def M_A_matrix(a):
-                a = precond(a)
-                a = self.apply_LHS_matrix(a)
-                return a
+            dense_matrix.test_matrix_hermitian()
+            dense_matrix.print_sing_vals()
+            dense_matrix.test_matrix_eigenvalues()
+            dense_matrix.print_matrix_diag()
 
-            dense_matrix = DenseMatrix(self.CompSep_comm, M_A_matrix, self.alm_len_percomp, self.lmax_per_comp)
+            # Testing the preconditioning matrix (M) alone
+            dense_matrix = DenseMatrix(self.CompSep_comm, precond, self.alm_len_percomp, matrix_name="M")
+            dense_matrix.test_matrix_hermitian()  # Preconditioner matrix needs to be Hermitian.
 
-            if self.CompSep_comm.Get_rank() == 0:
-                is_symmetric, diff = dense_matrix.test_matrix_symmetry()
-                if not is_symmetric:
-                    self.logger.warning(f"Preconditioned matrix (MA) is NOT SYMMETRIC! mean(A^T - A)/std(A) = {diff}")
-                sing_vals = dense_matrix.get_sing_vals()
-                self.logger.info(f"Condition number of preconditioned (MA) matrix: {sing_vals[0]/sing_vals[-1]:.3e}")
-                self.logger.info(f"Sing-vals: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
+            # Testing the combined preconditioned system (MA)
+            dense_matrix = DenseMatrix(self.CompSep_comm, M_A_matrix, self.alm_len_percomp, matrix_name="MA")
+            dense_matrix.print_sing_vals()  # Check how much singular values (condition number) of preconditioned system improved.
+            dense_matrix.test_matrix_eigenvalues()
+            dense_matrix.print_matrix_diag()
 
 
         if seed is not None:
@@ -354,8 +346,7 @@ class CompSepSolver:
             x0 = np.zeros((self.alm_len_percomp[mycomp],))
         else:
             x0 = np.zeros((0,), dtype=np.float64)
-        sol_array = self.solve_CG(self.apply_LHS_matrix, RHS, x0, M=precond, x_true=x_true if debug_mode else None)
-
+        sol_array = self.solve_CG(self.apply_LHS_matrix, RHS, x0, M=precond, x_true=x_true if self.params.compsep.dense_matrix_debug_mode else None)
         for icomp in range(self.ncomp):
             tmp = self.CompSep_comm.bcast(sol_array, root=icomp)
             self.comp_list[icomp].component_alms = tmp
