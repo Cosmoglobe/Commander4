@@ -112,17 +112,16 @@ def corr_noise_realization_with_gaps(TOD, mask, sigma0, C_corr_inv, err_tol=1e-1
     # Then, apply U^T to extract the values at the flagged locations.
     b_small = m_inv_b[~mask]
 
-    CG_solver = utils.CG(apply_LHS, b_small)
-    for i in range(1, max_iter+1):
-        if CG_solver.err > err_tol:
-            CG_solver.step()
-        else:
-            break
-    if i == max_iter:
-        print(f"Corr noise CG failed to converge after {max_iter} iterations. Residual = {CG_solver.err} (err tol = {err_tol:.2e})")
+    if b_small.size > 0:
+        CG_solver = utils.CG(apply_LHS, b_small)
+        for i in range(1, max_iter+1):
+            if CG_solver.err > err_tol:
+                CG_solver.step()
+            else:
+                break
+        x_small = CG_solver.x
     else:
-        print(f"Corr noise CG converged after {i} iterations. Residual = {CG_solver.err} (err tol = {err_tol:.2e})")
-    x_small = CG_solver.x
+        x_small = np.zeros((0,))
 
     correction_gaps_only = np.zeros(Ntod)
     correction_gaps_only[~mask] = x_small
