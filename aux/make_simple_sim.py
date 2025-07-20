@@ -204,14 +204,16 @@ def sim_noise(sigma0, chunk_size, with_corr_noise):
     f = np.fft.rfftfreq(chunk_size, d = 1/f_samp)
     sel = (f >= f_chunk)
 
+    noisePS = sigma0**2*(1 + f[sel]/params.NOISE_FKNEE)**params.NOISE_ALPHA
+
     b = n_chunks-1
     perrank = b//(size+1)
     comm.Barrier()
     if rank != 0:
         for i in range((rank-1)*perrank, rank*perrank):
-            noise_segment = np.random.randn(chunk_size)*sigma0
+            noise_segment = np.random.randn(chunk_size)
             Fx = np.fft.rfft(noise_segment)
-            Fx[sel] = Fx[sel]*(1 + 1/f[sel])
+            Fx[sel] = Fx[sel]*np.sqrt(noisePS)
             Fx[f < f_chunk] = Fx[sel][0]
             noise_segment = np.fft.irfft(Fx).astype('float32')
             comm.Send(noise_segment, dest=0, tag=rank)
@@ -225,7 +227,7 @@ def sim_noise(sigma0, chunk_size, with_corr_noise):
     if rank == 0:
         for i in range((size-1)*perrank, b):
             Fx = np.fft.rfft(np.random.randn(chunk_size)*sigma0)
-            Fx[sel] = Fx[sel]*(1 + 1/f[sel])
+            Fx[sel] = Fx[sel]*np.sqrt(noisePS)
             Fx[f < f_chunk] = Fx[sel][0]
             chunk_noise = np.fft.irfft(Fx)
             noise_full[i*chunk_size:(i+1)*chunk_size] = chunk_noise
@@ -234,7 +236,7 @@ def sim_noise(sigma0, chunk_size, with_corr_noise):
             Fx = np.fft.rfft(np.random.randn(noise_full[n_chunks*chunk_size:].shape[0])*sigma0)
             f = np.fft.rfftfreq(ntod-n_chunks*chunk_size, d = 1/f_samp)
             sel = (f >= f_chunk)
-            Fx[sel] = Fx[sel]*(1 + 1/f[sel])
+            Fx[sel] = Fx[sel]*np.sqrt(noisePS)
             Fx[f < f_chunk] = Fx[sel][0]
             chunk_noise = np.fft.irfft(Fx, n=noise_full[n_chunks*chunk_size:].shape[0])
             noise_full[n_chunks*chunk_size:] = chunk_noise
