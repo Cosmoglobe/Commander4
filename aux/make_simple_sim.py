@@ -164,7 +164,7 @@ def get_pointing(npix):
 
     with h5py.File(params.POINTING_PATH, 'r') as file:
         tot_file_len = file['pix'].shape[0]
-        pix = file['pix'][:ntod]
+        pix = file['pix'][:ntod].astype('int32')
 
     print(f"Reading {ntod} out of {tot_file_len} points from pointing file ({100*ntod/tot_file_len:.1f}%)")
     # indc = np.linspace(0, len(pix)-1, params.NTOD, dtype=int)
@@ -172,14 +172,19 @@ def get_pointing(npix):
 
     assert pix.shape[0] == ntod, f"Parameter file ntod {ntod} does not match pixel length {pix.shape[0]}, likely because desired length is longer than entire pointing file."
 
-    if params.NSIDE != 2048:
+    # if params.NSIDE != 2048:
+    if params.NSIDE > 2048:
+        print("Warning: NSIDE is larger than 2048, which is the resolution of the loaded pointing files.")
         np.random.seed(42)
-        ang = hp.pix2ang(2048, pix.astype(int))
+        ang = hp.pix2ang(2048, pix)
         ang1 = ang[0] + np.random.uniform(-0.025, 0.025, ang[0].shape)
         ang2 = ang[1] + np.random.uniform(-0.025, 0.025, ang[1].shape)
         ang1 = np.clip(ang1, 0, np.pi)
         ang2 = np.clip(ang2, 0, 2*np.pi)
         pix = hp.ang2pix(params.NSIDE, ang1, ang2)
+    else:
+        theta, phi = hp.pix2ang(2048, pix)
+        pix = hp.ang2pix(params.NSIDE, theta, phi)
 
     return pix.astype('int32')
 
@@ -236,6 +241,7 @@ def sim_noise(sigma0, chunk_size, with_corr_noise):
             Fx = np.fft.rfft(np.random.randn(noise_full[n_chunks*chunk_size:].shape[0])*sigma0)
             f = np.fft.rfftfreq(ntod-n_chunks*chunk_size, d = 1/f_samp)
             sel = (f >= f_chunk)
+            noisePS = sigma0**2*(1 + f[sel]/params.NOISE_FKNEE)**params.NOISE_ALPHA
             Fx[sel] = Fx[sel]*np.sqrt(noisePS)
             Fx[f < f_chunk] = Fx[sel][0]
             chunk_noise = np.fft.irfft(Fx, n=noise_full[n_chunks*chunk_size:].shape[0])
