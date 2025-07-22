@@ -70,7 +70,7 @@ def sample_noise_PS_params(n_corr, sigma0, freqs, freq_max=3.0, n_grid=100, n_bu
 
 
 
-def corr_noise_realization_with_gaps(TOD, mask, sigma0, C_corr_inv, err_tol=1e-12, max_iter=300, rnd_seed=None):
+def corr_noise_realization_with_gaps(TOD, mask, sigma0, C_corr_inv, err_tol=1e-12, max_iter=100, rnd_seed=None):
     """ Draws a correlated noise realization given a TOD (with gaps/masked samples) a correlated noise power spectrum.
         Requires solving a CG, which this function solves in a very efficient way by splitting up the problem
         such that the CG only has to be performed on the missing data, not the full TOD (see arXiv:2011.06024).
@@ -119,6 +119,11 @@ def corr_noise_realization_with_gaps(TOD, mask, sigma0, C_corr_inv, err_tol=1e-1
                 CG_solver.step()
             else:
                 break
+        if i == max_iter:
+            print(f"Corr noise CG failed to converge after {max_iter} iterations. Residual = {CG_solver.err} (err tol = {err_tol:.2e})")
+        else:
+            # print(f"Corr noise CG converged after {i} iterations. Residual = {CG_solver.err} (err tol = {err_tol:.2e})")
+            pass
         x_small = CG_solver.x
     else:
         x_small = np.zeros((0,))
@@ -133,7 +138,7 @@ def corr_noise_realization_with_gaps(TOD, mask, sigma0, C_corr_inv, err_tol=1e-1
 
 
 
-def inefficient_corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool], sigma0: float, C_corr_inv: NDArray, err_tol=1e-12, max_iter=300, rnd_seed=None):
+def inefficient_corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigma0: float, C_corr_inv: NDArray, err_tol=1e-12, max_iter=300, rnd_seed=None):
     """ A simpler and less efficient implementation of the function 'corr_noise_realization_with_gaps'.
         This function performs the 'full' straight-forward CG search. Should only be used to test the proper function.
     """

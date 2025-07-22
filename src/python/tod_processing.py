@@ -210,12 +210,12 @@ def estimate_white_noise(experiment_data: DetectorTOD, params: Bunch) -> Detecto
 def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, params: Bunch) -> DetectorTOD:
     nside = params.nside
     for scan in experiment_data.scans:
-        f_samp = 180 # params.fsamp
+        f_samp = 6.0 #180 # params.fsamp
         scan_map, theta, phi, psi = scan.data
         ntod = scan_map.shape[0]
         freq = rfftfreq(ntod, d = 1/f_samp)
-        fknee = 1.0
-        alpha = -2.0
+        fknee = 0.75
+        alpha = -1.6
         N = freq.shape[0]
 
         if params.sample_corr_noise:
@@ -238,7 +238,8 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, params: Bunc
             # scan.sky_subtracted_tod -= scan.n_corr_est
 
             scan.n_corr_est = corr_noise_realization_with_gaps(scan.sky_subtracted_tod, scan.galactic_mask_array, scan.sigma0, C_1f_inv, err_tol=1e-12, max_iter=30, rnd_seed=None)
-            scan.sky_subtracted_tod -= scan.n_corr_est
+            # scan.sky_subtracted_tod -= scan.n_corr_est
+            scan._value -= scan.n_corr_est
 
     return experiment_data
 
