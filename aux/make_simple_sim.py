@@ -167,12 +167,11 @@ def get_pointing(npix):
         pix = file['pix'][:ntod].astype('int32')
 
     print(f"Reading {ntod} out of {tot_file_len} points from pointing file ({100*ntod/tot_file_len:.1f}%)")
-    # indc = np.linspace(0, len(pix)-1, params.NTOD, dtype=int)
-    # pix = pix[indc]
+    indc = np.linspace(0, len(pix)-1, params.NTOD, dtype=int)
+    pix = pix[indc]
 
     assert pix.shape[0] == ntod, f"Parameter file ntod {ntod} does not match pixel length {pix.shape[0]}, likely because desired length is longer than entire pointing file."
 
-    # if params.NSIDE != 2048:
     if params.NSIDE > 2048:
         print("Warning: NSIDE is larger than 2048, which is the resolution of the loaded pointing files.")
         np.random.seed(42)
@@ -186,7 +185,7 @@ def get_pointing(npix):
         theta, phi = hp.pix2ang(2048, pix)
         pix = hp.ang2pix(params.NSIDE, theta, phi)
 
-    return pix.astype('int32')
+    return pix
 
 
 
@@ -201,25 +200,22 @@ def sim_noise(sigma0, chunk_size, with_corr_noise):
 
     n_chunks = ntod // chunk_size
     f_samp = params.SAMP_FREQ
-    f_chunk = f_samp / chunk_size
 
-    # noise = np.random.randn(ntod)*sigma0
     noise_full = np.zeros(ntod, dtype='float32')
 
     f = np.fft.rfftfreq(chunk_size, d = 1/f_samp)
-    sel = (f >= f_chunk)
 
-    noisePS = sigma0**2*(1 + f[sel]/params.NOISE_FKNEE)**params.NOISE_ALPHA
+    noisePS = np.zeros_like(f)
+    # noisePS[1:] = sigma0**2*(1 + (f[1:]/params.NOISE_FKNEE)**params.NOISE_ALPHA)
+    noisePS[1:] = sigma0**2*((f[1:]/params.NOISE_FKNEE)**params.NOISE_ALPHA)
 
-    b = n_chunks-1
-    perrank = b//(size+1)
+    b = n_chunks
+    perrank = b//size
     comm.Barrier()
     if rank != 0:
         for i in range((rank-1)*perrank, rank*perrank):
-            noise_segment = np.random.randn(chunk_size)
-            Fx = np.fft.rfft(noise_segment)
-            Fx[sel] = Fx[sel]*np.sqrt(noisePS)
-            Fx[f < f_chunk] = Fx[sel][0]
+            Fx = np.fft.rfft(np.random.randn(chunk_size))
+            Fx *= np.sqrt(noisePS)
             noise_segment = np.fft.irfft(Fx).astype('float32')
             comm.Send(noise_segment, dest=0, tag=rank)
     else:
@@ -231,21 +227,25 @@ def sim_noise(sigma0, chunk_size, with_corr_noise):
 
     if rank == 0:
         for i in range((size-1)*perrank, b):
-            Fx = np.fft.rfft(np.random.randn(chunk_size)*sigma0)
-            Fx[sel] = Fx[sel]*np.sqrt(noisePS)
-            Fx[f < f_chunk] = Fx[sel][0]
-            chunk_noise = np.fft.irfft(Fx)
-            noise_full[i*chunk_size:(i+1)*chunk_size] = chunk_noise
+            Fx = np.fft.rfft(np.random.randn(chunk_size))
+            Fx *= np.sqrt(noisePS)
+            noise_segment = np.fft.irfft(Fx)
+            noise_full[i*chunk_size:(i+1)*chunk_size] = noise_segment
 
         if params.NTOD % chunk_size != 0:
-            Fx = np.fft.rfft(np.random.randn(noise_full[n_chunks*chunk_size:].shape[0])*sigma0)
+            Fx = np.fft.rfft(np.random.randn(noise_full[n_chunks*chunk_size:].shape[0]))
             f = np.fft.rfftfreq(ntod-n_chunks*chunk_size, d = 1/f_samp)
-            sel = (f >= f_chunk)
-            noisePS = sigma0**2*(1 + f[sel]/params.NOISE_FKNEE)**params.NOISE_ALPHA
-            Fx[sel] = Fx[sel]*np.sqrt(noisePS)
-            Fx[f < f_chunk] = Fx[sel][0]
-            chunk_noise = np.fft.irfft(Fx, n=noise_full[n_chunks*chunk_size:].shape[0])
-            noise_full[n_chunks*chunk_size:] = chunk_noise
+            noisePS = np.zeros_like(f)
+            # noisePS[1:] = sigma0**2*(1 + (f[1:]/params.NOISE_FKNEE)**params.NOISE_ALPHA)
+            noisePS[1:] = sigma0**2*((f[1:]/params.NOISE_FKNEE)**params.NOISE_ALPHA)
+            Fx *= np.sqrt(noisePS)
+            noise_segment = np.fft.irfft(Fx, n=noise_full[n_chunks*chunk_size:].shape[0])
+            noise_full[n_chunks*chunk_size:] = noise_segment
+        
+        ### Sanity checks to see if everything went as planned ###
+        num_zeros = np.sum(noise_full == 0)
+        if num_zeros > 0:
+            print(f"ERROR: There are {num_zeros} 0-valued elements in noise-simulation of size {noise_full.size}")
 
     return noise_full
 
@@ -257,9 +257,12 @@ def main():
     nside = params.NSIDE
     lmax = 3*nside-1
     npix = 12*nside**2
-    chunk_size = npix//40
+    chunk_size = int(3600*params.SAMP_FREQ) # 1 hour  # npix//40
     if chunk_size % 2 != 0:
         chunk_size += 1
+    n_chunks = params.NTOD // chunk_size
+    if rank == 0:
+        print(f'Number of scans is {n_chunks}')
     fwhm_arcmin = params.FWHM
     fwhm = fwhm_arcmin*u.arcmin
     sigma_fac = params.SIGMA_SCALE
@@ -336,10 +339,13 @@ def main():
         psi = np.repeat(np.arange(repeat)*np.pi/repeat, npix)
         psi = psi[:ntod]
         signal_tod = []
-        noise_tod = []
+        corr_noise_tod = []
+        white_noise_tod = []
         print(f"Rank 1 finished calculating pointing in {time.time()-t0:.1f}s.")
 
-        noise_map = np.zeros((len(freqs), npix))
+        white_noise_map = np.zeros((len(freqs), npix))
+        corr_noise_map = np.zeros((len(freqs), npix))
+        hit_map = np.zeros((len(freqs), npix), dtype=int)
         inv_var_map = np.zeros((len(freqs), npix))
 
     for i in range(len(freqs)):
@@ -359,21 +365,26 @@ def main():
             print(f"All ranks starting noise simulations.")
 
         with_corr_noise = "corr_noise" in params.components
-        noise = sim_noise(sigma0s[i].value, chunk_size, with_corr_noise)
+        corr_noise = sim_noise(sigma0s[i].value, chunk_size, with_corr_noise)
 
-        if rank == 0:    
+        if rank == 0:
+            white_noise = np.random.normal(0, sigma0s[i].value, ntod)
+    
             print(f"Finished noise simulations in {time.time()-t0:.1f}s.")
-            signal_tod.append((d + noise).astype('float32'))
-            noise_tod.append(noise.astype('float32'))
+            signal_tod.append((d + white_noise + corr_noise).astype('float32'))
+            white_noise_tod.append(white_noise.astype('float32'))
+            corr_noise_tod.append(corr_noise.astype('float32'))
 
-            noise_map[i] = np.bincount(pix, weights=noise, minlength=npix)
-            hitmap = np.bincount(pix, minlength=npix)
-            assert (hitmap > 0).all(), f"{np.sum(hitmap == 0)} out of {hitmap.shape[0]} pixels were never hit by the scanning strategy."
-            if (hitmap <= 10).any():
-                print(f"Warning: {np.sum(hitmap <= 10)} out of {hitmap.shape[0]} pixels were hit 10 or fewer times by scanning strategy.")
-            print(f"Lowest pixel hit count is {np.min(hitmap)}.")
-            noise_map[i] /= hitmap
-            inv_var_map[i] = hitmap/sigma0s[i].value**2
+            white_noise_map[i] = np.bincount(pix, weights=white_noise, minlength=npix)
+            corr_noise_map[i] = np.bincount(pix, weights=corr_noise, minlength=npix)
+            hit_map[i] = np.bincount(pix, minlength=npix)
+            assert (hit_map[i] > 0).all(), f"{np.sum(hit_map[i] == 0)} out of {hit_map[i].shape[0]} pixels were never hit by the scanning strategy."
+            if (hit_map[i] <= 10).any():
+                print(f"Warning: {np.sum(hit_map[i] <= 10)} out of {hit_map[i].shape[0]} pixels were hit 10 or fewer times by scanning strategy.")
+            print(f"Lowest pixel hit count is {np.min(hit_map[i])}.")
+            white_noise_map[i] /= hit_map[i]
+            corr_noise_map[i] /= hit_map[i]
+            inv_var_map[i] = hit_map[i]/sigma0s[i].value**2
             assert signal_tod[-1].shape == psi.shape, f"Shape of simulated TOD {signal_tod[-1].shape} differs from generated psi {psi.shape}"
 
 
@@ -393,16 +404,25 @@ def main():
                 plt.savefig(params.OUTPUT_FOLDER + f"sky_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
                 plt.close()
 
-                hp.mollview(comps_sum_smoothed[i,0]+noise_map[i], title=f"Full observed sky smoothed {freqs[i]:.2f}GHz")
-                plt.savefig(params.OUTPUT_FOLDER + f"sky_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
+                hp.mollview(comps_sum_smoothed[i,0]+white_noise_map[i]+corr_noise_map[i], title=f"Full observed sky smoothed {freqs[i]:.2f}GHz")
+                plt.savefig(params.OUTPUT_FOLDER + f"observed_sky_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
                 plt.close()
 
-                hp.mollview(noise_map[i], title=f"Noise {freqs[i]:.2f}GHz")
-                plt.savefig(params.OUTPUT_FOLDER + f"noise_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
+                hp.mollview(white_noise_map[i], title=f"White noise {freqs[i]:.2f}GHz")
+                plt.savefig(params.OUTPUT_FOLDER + f"noise_white_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
                 plt.close()
+
+                hp.mollview(corr_noise_map[i], title=f"Corr noise {freqs[i]:.2f}GHz")
+                plt.savefig(params.OUTPUT_FOLDER + f"noise_corr_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
+                plt.close()
+
+            hp.mollview(hit_map[0], title=f"Hits", norm="log")
+            plt.savefig(params.OUTPUT_FOLDER + f"hits_{nside}_b{fwhm[i].value:.0f}.png")
+            plt.close()
 
         save_to_h5_file(signal_tod, pix, psi, fname=f'tod_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
-        save_to_h5_file(noise_tod, pix, psi, fname=f'noise_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
+        save_to_h5_file(white_noise_tod, pix, psi, fname=f'white_noise_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
+        save_to_h5_file(corr_noise_tod, pix, psi, fname=f'corr_noise_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
         print(f"Rank 0 finished writing to file in {time.time()-t0:.1f}s.")
 
 if __name__ == "__main__":
