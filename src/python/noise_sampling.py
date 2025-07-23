@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.fft import rfft, irfft
+from scipy.fft import rfft, irfft, rfftfreq
 from pixell import utils
 from numpy.typing import NDArray
 
@@ -21,8 +21,7 @@ def _inversion_sampler_1d(lnL, grid_points):
     sample = np.interp(u, cdf, grid_points)  # Find the x-value that matches the y-value we drew.
     return sample
 
-
-def sample_noise_PS_params(n_corr, sigma0, freqs, freq_max=3.0, n_grid=100, n_burnin=10):
+def sample_noise_PS_params(n_corr, sigma0, f_samp, freq_max=3.0, n_grid=50, n_burnin=5):
     """ Function for drawing a sample of the fknee and alpha parameters for the correlated noise under the
         power spectrum data model PS = sigma0*(f/fknee)**alpha, where sigma0 is known.
         Note that this relates *only* to the correlated noise, without the "flat" white noise.
@@ -30,7 +29,7 @@ def sample_noise_PS_params(n_corr, sigma0, freqs, freq_max=3.0, n_grid=100, n_bu
             n_corr (np.array): 1D array of the correlated noise time series.
             sigma0 (float): White noise level of full data. Since this data model does not have a
                 white noise floor, this essentially just scales the resulting fnee value.
-            freqs (np.array): The frequencies at which to evaluate the PS.
+            f_samp (float): The sampling rate of the data (n_corr), in Hertz.
             freq_max (float): Maximum frequency to consider for the PS (all 1/f information is contained at low freqs).
             n_grid (int): Number of grid points used for the inverse sampling.
             n_burnin (int): Number of burn-in samples before drawing the "actual" sample of fknee and alpha.
@@ -39,35 +38,38 @@ def sample_noise_PS_params(n_corr, sigma0, freqs, freq_max=3.0, n_grid=100, n_bu
             alpha_sample (float): A single sample of alpha.
     """
     Ntod = len(n_corr)
-    n_corr_power = 1/Ntod*np.abs(rfft(n_corr))**2
-    
+    freqs = rfftfreq(Ntod, 1.0/f_samp)
+    n_corr_power = (1.0 / Ntod) * np.abs(rfft(n_corr))**2
     f_min = freqs[1]
     freq_mask = (freqs >= f_min) & (freqs <= freq_max)
-    
-    fknee_grid = np.logspace(np.log10(f_min * 2), np.log10(freq_max / 2), n_grid)
-    alpha_grid = np.linspace(-2.5, -0.5, n_grid)
+    log_freqs_masked = np.log(freqs[freq_mask])
+    n_corr_power_masked = n_corr_power[freq_mask]
 
-    alpha_current = -1.5
+    # --- Setup Grids and Initial State ---
+    fknee_grid = np.logspace(np.log10(f_min * 4), np.log10(freq_max / 4), n_grid)
+    log_fknee_grid = np.log(fknee_grid)
+    alpha_grid = np.linspace(-2, -0.75, n_grid)
+    alpha_current = -1.6
 
+    # --- Main Gibbs Loop ---
     for _ in range(n_burnin + 1):
-        log_L_fknee = []
-        for fknee_val in fknee_grid:
-            N_corr_psd = sigma0**2 * (freqs / fknee_val)**alpha_current
-            N_corr_binned = N_corr_psd
-            log_L = -np.sum(n_corr_power[freq_mask] / N_corr_binned[freq_mask] + np.log(N_corr_binned[freq_mask]))
-            log_L_fknee.append(log_L)
+        # 1. Sample f_knee, given a fixed alpha
+        log_sigma0_sq = np.log(sigma0**2)
+        # Calculate log of the model power spectrum for all fknee values
+        log_N_corr_ps = log_sigma0_sq + alpha_current * (log_freqs_masked[:, np.newaxis] - log_fknee_grid)
+        # Calculate likelihood for all grid points
+        log_L_fknee = -np.sum(n_corr_power_masked[:, np.newaxis] / np.exp(log_N_corr_ps) + log_N_corr_ps, axis=0)
         fknee_sample = _inversion_sampler_1d(log_L_fknee, fknee_grid)
-
-        log_L_alpha = []
-        for alpha_val in alpha_grid:
-            N_corr_psd = sigma0**2 * (freqs / fknee_sample)**alpha_val
-            N_corr_binned = N_corr_psd
-            log_L = -np.sum(n_corr_power[freq_mask] / N_corr_binned[freq_mask] + np.log(N_corr_binned[freq_mask]))
-            log_L_alpha.append(log_L)
+        
+        # 2. Sample alpha, given the newly sampled f_knee
+        log_fknee_sample = np.log(fknee_sample)
+        # Calculate log of the model power spectrum for all alpha values
+        log_N_corr_ps = log_sigma0_sq + alpha_grid * (log_freqs_masked[:, np.newaxis] - log_fknee_sample)
+        # Calculate likelihood
+        log_L_alpha = -np.sum(n_corr_power_masked[:, np.newaxis] / np.exp(log_N_corr_ps) + log_N_corr_ps, axis=0)
         alpha_current = _inversion_sampler_1d(log_L_alpha, alpha_grid)
         
     return fknee_sample, alpha_current
-
 
 
 def corr_noise_realization_with_gaps(TOD, mask, sigma0, C_corr_inv, err_tol=1e-12, max_iter=100, rnd_seed=None):
