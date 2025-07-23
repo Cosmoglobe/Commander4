@@ -300,7 +300,7 @@ def fill_gaps(TOD, mask, noise_sigma0, window_size=20):
 
 
 def process_tod(band_comm: MPI.Comm, experiment_data: DetectorTOD,
-                compsep_output: NDArray, params: Bunch) -> DetectorMap:
+                compsep_output: NDArray, params: Bunch, chain, iter) -> DetectorMap:
     """ Performs a single TOD iteration.
 
     Input:

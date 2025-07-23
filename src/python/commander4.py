@@ -99,7 +99,7 @@ def main(params: Bunch, params_dict: dict):
         # Chain #1 do TOD processing, resulting in maps_chain1 (we start with a fake output of component separation, containing a completely empty sky).
         compsep_output_black = get_empty_compsep_output(experiment_data, params)
 
-        curr_tod_output = process_tod(band_comm, experiment_data, compsep_output_black, params)
+        curr_tod_output = process_tod(band_comm, experiment_data, compsep_output_black, params, 1, 1)
         send_tod(is_band_master, curr_tod_output, CompSep_band_masters_dict, my_band_identifier)
         curr_compsep_output = compsep_output_black
 
@@ -115,7 +115,7 @@ def main(params: Bunch, params_dict: dict):
             t0 = time.time()
             iter_num = (i + 2) // 2  # [1, 2, 2, 3, 3,...] -  Since TOD already did iteration 1 for chain 1, it is "half" an iteration ahead.
             chain_num = i % 2 + 1  # [2, 1, 2, 1,...] - TOD has already been done for chain 1 iter 1 pre-loop, so we start with TOD for chain 2.
-            curr_tod_output = process_tod(band_comm, experiment_data, curr_compsep_output, params)
+            curr_tod_output = process_tod(band_comm, experiment_data, curr_compsep_output, params, chain_num, iter_num)
             logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
             curr_compsep_output = receive_compsep(band_comm, my_band_identifier, band_comm.Get_rank()==0, CompSep_band_masters_dict)
             logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished receiving results for chain {chain_num+1}, iter {iter_num+1}. Sending TOD results")
