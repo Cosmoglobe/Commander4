@@ -40,6 +40,8 @@ beta_sync: -3.1 # check the preset
 SIGMA0: [100, 80, 30, 100, 200] # tod level white noise [uK_RJ] 
 SIGMA_SCALE: 0.1 # scale noise level
 SAMP_FREQ: 180 # sampling frequency [Hz]
+NOISE_FKNEE: 0.6
+NOISE_ALPHA: -1.2
 
 make_plots: True  # Whether to write healpix maps of various things to disk.
 write_fits: True  # Whether to write sky component data to fits files (as only the TOD is actually needed by Commander 4).
