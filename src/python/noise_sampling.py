@@ -22,7 +22,7 @@ def _inversion_sampler_1d(lnL, grid_points):
     return sample
 
 
-def sample_noise_PS_params(n_corr, sigma0, f_samp, freq_max=3.0, n_grid=300, n_burnin=5):
+def sample_noise_PS_params(n_corr, sigma0, f_samp, alpha_start, freq_max=3.0, n_grid=100, n_burnin=5):
     """ Function for drawing a sample of the fknee and alpha parameters for the correlated noise under the
         power spectrum data model PS = sigma0*(f/fknee)**alpha, where sigma0 is known.
         Note that this relates *only* to the correlated noise, without the "flat" white noise.
@@ -49,13 +49,14 @@ def sample_noise_PS_params(n_corr, sigma0, f_samp, freq_max=3.0, n_grid=300, n_b
     log_freqs_masked = np.log(binned_freqs[freq_mask])
     n_corr_power_masked = binned_n_corr_power[freq_mask]
     log_n_corr_power = np.log(n_corr_power_masked)
-    # Set up a grid of possible fknee values: from 4 times the minimum frequency to maximum frequency divided by 4.
-    fknee_grid = np.logspace(np.log10(freqs[0] * 4), np.log10(freq_max / 4), n_grid)
+    # Set up a grid of possible fknee values: from 2 times the minimum frequency to the maximum frequency.
+    fknee_grid = np.logspace(np.log10(freqs[0] * 2), np.log10(freq_max), n_grid)
     log_fknee_grid = np.log(fknee_grid)
-    alpha_grid = np.linspace(-2.0, -0.5, n_grid)
-    alpha_current = -1.25
-    log_sigma0_sq = np.log(sigma0**2)
 
+    alpha_grid = np.linspace(-2.5, -0.25, n_grid)
+    alpha_current = alpha_start
+
+    log_sigma0_sq = np.log(sigma0**2)
     # --- Main Gibbs Loop ---
     for _ in range(n_burnin + 1):
         # 1. Sample f_knee, given a fixed alpha
@@ -66,7 +67,6 @@ def sample_noise_PS_params(n_corr, sigma0, f_samp, freq_max=3.0, n_grid=300, n_b
         # log_L_fknee = -0.5 * np.sum((log_n_corr_power[:, np.newaxis] - log_N_corr_ps)**2, axis=0)
         fknee_sample = _inversion_sampler_1d(log_L_fknee, fknee_grid)
         
-        # 2. Sample alpha, given the newly sampled f_knee
         log_fknee_sample = np.log(fknee_sample)
         log_N_corr_ps = log_sigma0_sq + alpha_grid * (log_freqs_masked[:, np.newaxis] - log_fknee_sample)
         residual = log_n_corr_power[:, np.newaxis] - log_N_corr_ps

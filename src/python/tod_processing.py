@@ -7,13 +7,14 @@ import logging
 from pixell.bunch import Bunch
 from output import log
 from scipy.fft import rfft, irfft, rfftfreq
+import time
 from numpy.typing import NDArray
 
 from src.python.data_models.detector_map import DetectorMap
 from src.python.data_models.detector_TOD import DetectorTOD
 from src.python.data_models.scan_TOD import ScanTOD
 from src.python.utils.mapmaker import single_det_map_accumulator
-from src.python.noise_sampling import corr_noise_realization_with_gaps
+from src.python.noise_sampling import corr_noise_realization_with_gaps, sample_noise_PS_params
 
 nthreads=1
 
@@ -210,37 +211,40 @@ def estimate_white_noise(experiment_data: DetectorTOD, params: Bunch) -> Detecto
 def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, params: Bunch) -> DetectorTOD:
     nside = params.nside
     for scan in experiment_data.scans:
-        f_samp = 6.0 #180 # params.fsamp
+        f_samp = params.samp_freq
         scan_map, theta, phi, psi = scan.data
         ntod = scan_map.shape[0]
         freq = rfftfreq(ntod, d = 1/f_samp)
-        fknee = 0.75
-        alpha = -1.6
+        fknee = scan.fknee_est
+        alpha = scan.alpha_est
         N = freq.shape[0]
 
         if params.sample_corr_noise:
             C_1f_inv = np.zeros(N)
             C_1f_inv[1:] = 1.0 / (scan.sigma0**2*(freq[1:]/fknee)**alpha)
+            scan.n_corr_est = corr_noise_realization_with_gaps(scan.sky_subtracted_tod, scan.galactic_mask_array, scan.sigma0, C_1f_inv)
 
-            ### The old way of estimating the correlated noise, without support for gaps in the TOD. ###
-            # C_wn = scan.sigma0*np.ones(N)
-            # const = np.sqrt(ntod)  # I think this should be the correct normalization for scipy.fft (same as fftw).
-            # w1 = (np.random.normal(0, 1, N) + 1.j*np.random.normal(0, 1, N))/np.sqrt(2)
-            # w2 = (np.random.normal(0, 1, N) + 1.j*np.random.normal(0, 1, N))/np.sqrt(2)
-            # # I'm always a bit confused about when it's fine to use rfft as opposed to full fft, so might want to double check this:
-            # n_corr_est_fft_WF = rfft(scan.sky_subtracted_tod)/(1 + C_wn*C_1f_inv)
-            # n_corr_est_fft_fluct = (const*(np.sqrt(C_wn)*w1 + C_wn*np.sqrt(C_1f_inv)*w2))/(1 + C_wn*C_1f_inv)
-            # n_corr_est_fft = n_corr_est_fft_WF + n_corr_est_fft_fluct
-            # n_corr_est_fft[0] = 0.0
-            # n_corr_est_fft_WF[0] = 0.0
-            # # n_corr_est_WF = irfft(n_corr_est_fft_WF, n=scan.sky_subtracted_tod.shape[0])
-            # scan.n_corr_est = irfft(n_corr_est_fft, n=scan.sky_subtracted_tod.shape[0])
-            # scan.sky_subtracted_tod -= scan.n_corr_est
+    return experiment_data
 
-            scan.n_corr_est = corr_noise_realization_with_gaps(scan.sky_subtracted_tod, scan.galactic_mask_array, scan.sigma0, C_1f_inv, err_tol=1e-12, max_iter=30, rnd_seed=None)
-            # scan.sky_subtracted_tod -= scan.n_corr_est
-            scan._value -= scan.n_corr_est
 
+
+def sample_noise_PS(band_comm: MPI.Comm, experiment_data: DetectorTOD, params: Bunch):
+    logger = logging.getLogger(__name__)
+    alphas = []
+    fknees = []
+    for scan in experiment_data.scans:
+        fknee, alpha = sample_noise_PS_params(scan.n_corr_est, scan.sigma0, 6.0, scan.alpha_est, freq_max=2.0, n_grid=150, n_burnin=4)
+        scan.fknee_est = fknee
+        scan.alpha_est = alpha
+        alphas.append(alpha)
+        fknees.append(fknee)
+    alphas = band_comm.gather(alphas, root=0)
+    fknees = band_comm.gather(fknees, root=0)
+    if band_comm.Get_rank() == 0:
+        alphas = np.concatenate(alphas)
+        fknees = np.concatenate(fknees)
+        logger.info(f"{MPI.COMM_WORLD.Get_rank()} fknees {np.min(fknees):.4f} {np.percentile(fknees, 1):.4f} {np.mean(fknees):.4f} {np.percentile(fknees, 99):.4f} {np.max(fknees):.4f}")
+        logger.info(f"{MPI.COMM_WORLD.Get_rank()} alphas {np.min(alphas):.4f} {np.percentile(alphas, 1):.4f} {np.mean(alphas):.4f} {np.percentile(alphas, 99):.4f} {np.max(alphas):.4f}")
     return experiment_data
 
 
@@ -311,26 +315,22 @@ def process_tod(band_comm: MPI.Comm, experiment_data: DetectorTOD,
         DetectorMap instance which represents the correlated noise subtracted
             TOD data for the band belonging to the current process.
     """
-    # outfile = f"/mn/stornext/d23/cmbco/jonas/c4_testing/com4_data_dump/n512_s0.1_b97_band{MPI.COMM_WORLD.Get_rank()}_new.h5"
-    # with h5py.File(outfile, "a") as f:
-    #     for scan in experiment_data.scans:
-    #         print(outfile, f"{scan.scanID:06d}/tod")
-    #         f.create_dataset(f"{scan.scanID:06d}/tod", data=scan.data[0])
+    logger = logging.getLogger(__name__)
+    t0 = time.time()
     experiment_data = subtract_sky_model(experiment_data, compsep_output, params)
+    logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} Finished sky model subtraction in {time.time()-t0:.1f}s."); t0 = time.time()
     experiment_data = estimate_white_noise(experiment_data, params)
-    # with h5py.File(outfile, "a") as f:
-    #     for scan in experiment_data.scans:
-    #         print(outfile, f"{scan.scanID:06d}/tod_sky_subtr")
-    #         f.create_dataset(f"{scan.scanID:06d}/tod_sky_subtr", data=scan.sky_subtracted_tod)
-    #         f.create_dataset(f"{scan.scanID:06d}/galactic_mask_tod", data=scan.galactic_mask_array)
-    experiment_data = sample_noise(band_comm, experiment_data, params)
+    logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} Finished white noise estimation in {time.time()-t0:.1f}s."); t0 = time.time()
+    if iter > 1:
+        experiment_data = sample_noise(band_comm, experiment_data, params)
+        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} Finished corr noise realizations in {time.time()-t0:.1f}s."); t0 = time.time()
+        experiment_data = sample_noise_PS(band_comm, experiment_data, params)
+        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} Finished corr noise PS parameter sampling in {time.time()-t0:.1f}s."); t0 = time.time()
+    else:
+        for scan in experiment_data.scans:
+            scan.n_corr_est = np.zeros_like(scan.data[0])
+            scan.alpha_est = params.noise_alpha
+            scan.fknee_est = params.noise_fknee
     todproc_output = tod2map(band_comm, experiment_data, compsep_output, params)
-    # with h5py.File(outfile, "a") as f:
-    #     for scan in experiment_data.scans:
-    #         print(outfile, f"{scan.scanID:06d}/tod_sky_n_corr_subtr")
-    #         f.create_dataset(f"{scan.scanID:06d}/tod_sky_n_corr_subtr", data=scan.sky_subtracted_tod)
-    #         print(outfile, f"{scan.scanID:06d}/n_corr_est")
-    #         f.create_dataset(f"{scan.scanID:06d}/n_corr_est", data=scan.n_corr_est)
-    #         print(outfile, f"{scan.scanID:06d}/sigma0")
-    #         f.create_dataset(f"{scan.scanID:06d}/sigma0", data=scan.sigma0)
+    logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} Finished mapmaking in {time.time()-t0:.1f}s."); t0 = time.time()
     return todproc_output
