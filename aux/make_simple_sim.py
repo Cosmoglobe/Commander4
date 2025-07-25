@@ -1,16 +1,5 @@
 # TOD simulation script
 
-# Data = CMB + noise
-#   Nside  = 2048
-#   Lmax   = 6000
-#   FWHM   = 10 arcmin
-#   sigma0 = 30µK
-#
-# Scanning strategy = visit each pixel in order; repeat 9 times, such that final noise is 10µK/pix
-#
-# Split in chunks with 2^22 samples each (except for last one) = ~109 files, total of ~4GB
-# 
-
 import numpy as np
 import healpy as hp
 import pysm3
@@ -23,6 +12,7 @@ import sys
 import os
 from traceback import print_exc
 from pixell.bunch import Bunch
+from Planck_pointing_sim import get_Planck_pointing
 import camb
 
 module_root_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -157,35 +147,43 @@ def generate_sync(freqs, fwhm, units, nside):
 
 
 def get_pointing(npix):
-    ntod = params.NTOD
-    if params.POINTING_PATH is None:
-        pix = np.arange(ntod) % npix
-        return pix.astype('int32')
-
-    with h5py.File(params.POINTING_PATH, 'r') as file:
-        tot_file_len = file['pix'].shape[0]
-        pix = file['pix'][:ntod].astype('int32')
-
-    print(f"Reading {ntod} out of {tot_file_len} points from pointing file ({100*ntod/tot_file_len:.1f}%)")
-    indc = np.linspace(0, len(pix)-1, params.NTOD, dtype=int)
-    pix = pix[indc]
-
-    assert pix.shape[0] == ntod, f"Parameter file ntod {ntod} does not match pixel length {pix.shape[0]}, likely because desired length is longer than entire pointing file."
-
-    if params.NSIDE > 2048:
-        print("Warning: NSIDE is larger than 2048, which is the resolution of the loaded pointing files.")
-        np.random.seed(42)
-        ang = hp.pix2ang(2048, pix)
-        ang1 = ang[0] + np.random.uniform(-0.025, 0.025, ang[0].shape)
-        ang2 = ang[1] + np.random.uniform(-0.025, 0.025, ang[1].shape)
-        ang1 = np.clip(ang1, 0, np.pi)
-        ang2 = np.clip(ang2, 0, 2*np.pi)
-        pix = hp.ang2pix(params.NSIDE, ang1, ang2)
-    else:
-        theta, phi = hp.pix2ang(2048, pix)
+    theta, phi, LOS, orb_dir, dipole = get_Planck_pointing(params.NTOD, params.f_samp)
+    if rank == 0:
         pix = hp.ang2pix(params.NSIDE, theta, phi)
+        return pix, LOS, orb_dir, dipole
+    else:
+        return None, None, None, None
+    
+    ### Old code for getting pointing, which relied on reading pointing indices from a file
+    # ntod = params.NTOD
+    # if params.POINTING_PATH is None:
+    #     pix = np.arange(ntod) % npix
+    #     return pix.astype('int32')
 
-    return pix
+    # with h5py.File(params.POINTING_PATH, 'r') as file:
+    #     tot_file_len = file['pix'].shape[0]
+    #     pix = file['pix'][:ntod].astype('int32')
+
+    # print(f"Reading {ntod} out of {tot_file_len} points from pointing file ({100*ntod/tot_file_len:.1f}%)")
+    # indc = np.linspace(0, len(pix)-1, params.NTOD, dtype=int)
+    # pix = pix[indc]
+
+    # assert pix.shape[0] == ntod, f"Parameter file ntod {ntod} does not match pixel length {pix.shape[0]}, likely because desired length is longer than entire pointing file."
+
+    # if params.NSIDE > 2048:
+    #     print("Warning: NSIDE is larger than 2048, which is the resolution of the loaded pointing files.")
+    #     np.random.seed(42)
+    #     ang = hp.pix2ang(2048, pix)
+    #     ang1 = ang[0] + np.random.uniform(-0.025, 0.025, ang[0].shape)
+    #     ang2 = ang[1] + np.random.uniform(-0.025, 0.025, ang[1].shape)
+    #     ang1 = np.clip(ang1, 0, np.pi)
+    #     ang2 = np.clip(ang2, 0, 2*np.pi)
+    #     pix = hp.ang2pix(params.NSIDE, ang1, ang2)
+    # else:
+    #     theta, phi = hp.pix2ang(2048, pix)
+    #     pix = hp.ang2pix(params.NSIDE, theta, phi)
+
+    # return pix
 
 
 
@@ -332,16 +330,15 @@ def main():
     repeat = params.NTOD//npix+1
     ntod = params.NTOD
 
+    t0 = time.time()
+    pix, LOS, orb_dir, dipole = get_pointing(npix)
     if rank == 0:
-        t0 = time.time()
-        print(f"Rank 1 calculating pointing")
-        pix = get_pointing(npix)
         psi = np.repeat(np.arange(repeat)*np.pi/repeat, npix)
         psi = psi[:ntod]
         signal_tod = []
         corr_noise_tod = []
         white_noise_tod = []
-        print(f"Rank 1 finished calculating pointing in {time.time()-t0:.1f}s.")
+        print(f"Finished calculating pointing in {time.time()-t0:.1f}s.")
 
         white_noise_map = np.zeros((len(freqs), npix))
         corr_noise_map = np.zeros((len(freqs), npix))
@@ -371,7 +368,19 @@ def main():
             white_noise = np.random.normal(0, sigma0s[i].value, ntod)
     
             print(f"Finished noise simulations in {time.time()-t0:.1f}s.")
-            signal_tod.append((d + white_noise + corr_noise).astype('float32'))
+            t0 = time.time()
+
+            # Convert dipole to units specified in parameter file.
+            unit = params.unit
+            if unit == 'MJ/sr':
+                units = u.MJy/u.sr
+            elif unit == 'uK_RJ':
+                units = u.uK_RJ
+            dipole_myfreq = dipole.copy()
+            dipole_myfreq = dipole_myfreq * u.uK_CMB * 1e6
+            dipole_myfreq = dipole_myfreq.to(units, equivalencies=u.cmb_equivalencies(freqs[i]*u.GHz))
+
+            signal_tod.append((d + white_noise + corr_noise + dipole_myfreq.value).astype('float32'))
             white_noise_tod.append(white_noise.astype('float32'))
             corr_noise_tod.append(corr_noise.astype('float32'))
 
@@ -420,7 +429,7 @@ def main():
             plt.savefig(params.OUTPUT_FOLDER + f"hits_{nside}_b{fwhm[i].value:.0f}.png")
             plt.close()
 
-        save_to_h5_file(signal_tod, pix, psi, fname=f'tod_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
+        save_to_h5_file(signal_tod, pix, psi, LOS, orb_dir, fname=f'tod_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
         save_to_h5_file(white_noise_tod, pix, psi, fname=f'white_noise_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
         save_to_h5_file(corr_noise_tod, pix, psi, fname=f'corr_noise_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
         print(f"Rank 0 finished writing to file in {time.time()-t0:.1f}s.")
