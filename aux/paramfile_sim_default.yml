@@ -1,13 +1,8 @@
 OUTPUT_FOLDER: 'sim_data_cmb_dust_sync_nside64_beam20_noise0.1/'
-POINTING_PATH: '/mn/stornext/d23/cmbco/commander4_shared/aux_data/sim_pointing/planck_pointing_fullsurvey_nside2048_downx1000.h5'
-# There exists downsampled versions of above pointing file, for sparser pointing. Useful if running at lower nsides.
-# The not-downsampled pointing contains 13.6 billion pointings. Make sure NTOD*down is smaller than this,
-# but as Planck only covered the full sky about ~8 times during this, also try and make NTOD*down as close to 13.6 billion as possible.
-# It might be a good idea to simply set NTOD to the entire length of your selected downgraded file.
 
 # general map characteristics
-NSIDE: 64
-NTOD: 13676002 # Full length of downx1000 pointing file.
+NSIDE: 256
+NTOD: 700000000
 #FWHM: [32.2, 9.6, 4.8, 4.7, 4.3] # [arcmin]
 FWHM: [20.0, 20.0, 20.0, 20.0, 20.0] # [arcmin]
 FREQ: [30, 100, 353, 545, 857] # [GHz]
@@ -35,6 +30,13 @@ T_dust: 20 # [K]
 # synchrotron parameters
 nu_ref_sync: 23 # [GHz]
 beta_sync: -3.1 # check the preset
+
+
+# Pointing simulation parameters
+f_samp: 4.92131
+
+# gain paramters
+g0: 0.8151
 
 # noise parameters
 SIGMA0: [100, 80, 30, 100, 200] # tod level white noise [uK_RJ] 

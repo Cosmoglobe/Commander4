@@ -340,6 +340,7 @@ def main():
         white_noise_tod = []
         print(f"Finished calculating pointing in {time.time()-t0:.1f}s.")
 
+        observed_map = np.zeros((len(freqs), npix))
         white_noise_map = np.zeros((len(freqs), npix))
         corr_noise_map = np.zeros((len(freqs), npix))
         hit_map = np.zeros((len(freqs), npix), dtype=int)
@@ -380,10 +381,13 @@ def main():
             dipole_myfreq = dipole_myfreq * u.uK_CMB * 1e6
             dipole_myfreq = dipole_myfreq.to(units, equivalencies=u.cmb_equivalencies(freqs[i]*u.GHz))
 
-            signal_tod.append((d + white_noise + corr_noise + dipole_myfreq.value).astype('float32'))
+            # Add together signal. Sky components get a gain term added to them.
+            gain = params.g0
+            signal_tod.append((gain*(d + dipole_myfreq.value) + white_noise + corr_noise).astype('float32'))
             white_noise_tod.append(white_noise.astype('float32'))
             corr_noise_tod.append(corr_noise.astype('float32'))
 
+            observed_map[i] = np.bincount(pix, weights=signal_tod[-1], minlength=npix)
             white_noise_map[i] = np.bincount(pix, weights=white_noise, minlength=npix)
             corr_noise_map[i] = np.bincount(pix, weights=corr_noise, minlength=npix)
             hit_map[i] = np.bincount(pix, minlength=npix)
@@ -417,12 +421,16 @@ def main():
                 plt.savefig(params.OUTPUT_FOLDER + f"observed_sky_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
                 plt.close()
 
-                hp.mollview(white_noise_map[i], title=f"White noise {freqs[i]:.2f}GHz")
+                hp.mollview(white_noise_map[i], title=f"White noise {freqs[i]:.2f}GHz", cmap="RdBu_r", min=np.percentile(white_noise_map[i],2), max=np.percentile(white_noise_map[i],98))
                 plt.savefig(params.OUTPUT_FOLDER + f"noise_white_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
                 plt.close()
 
-                hp.mollview(corr_noise_map[i], title=f"Corr noise {freqs[i]:.2f}GHz")
+                hp.mollview(corr_noise_map[i], title=f"Corr noise {freqs[i]:.2f}GHz", cmap="RdBu_r", min=np.percentile(corr_noise_map[i],2), max=np.percentile(corr_noise_map[i],98))
                 plt.savefig(params.OUTPUT_FOLDER + f"noise_corr_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
+                plt.close()
+
+                hp.mollview(observed_map[i], title=f"Actual observations of the sky at {freqs[i]:.2f}GHz", cmap="RdBu_r", min=np.percentile(observed_map[i],2), max=np.percentile(observed_map[i],98))
+                plt.savefig(params.OUTPUT_FOLDER + f"actual_observations_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
                 plt.close()
 
             hp.mollview(hit_map[0], title=f"Hits", norm="log")
