@@ -41,14 +41,41 @@ def generate_cmb(freqs, fwhm, units, nside, lmax):
 
     np.random.seed(0)
     t0 = time.time()
-    alms = hp.synalm(Cls, lmax=lmax, new=True)
+    anisotropy_alms = hp.synalm(Cls, lmax=lmax, new=True)
     print(f"Finished CMB synALMs in {time.time()-t0:.1f}s."); t0 = time.time()
+
+    # --- Calculate the Solar Dipole alms ---
+    # A pure dipole only has l=1 components. We set these directly.
+    dipole_alms = np.zeros_like(anisotropy_alms)
+    
+    # [cite_start]Dipole parameters from the BEYONDPLANCK analysis [cite: 5314, 2003]
+    dipole_amplitude_uK = 3362.7
+    dipole_glon_deg = 264.11
+    dipole_glat_deg = 48.279
+
+    # Convert direction to spherical coordinates (theta, phi) in radians
+    theta = np.deg2rad(90.0 - dipole_glat_deg)
+    phi = np.deg2rad(dipole_glon_deg)
+
+    # Calculate a_1m coefficients for a dipole in direction (theta, phi)
+    # a_lm = A * Y_lm*(theta, phi) * sqrt(4pi / (2l+1)) which for l=1 is
+    amp_norm = dipole_amplitude_uK * np.sqrt(4 * np.pi / 3)
+    
+    # a_1,-1, a_1,0, a_1,1
+    # Note: healpy expects (T, E, B) alms, we only need T for the dipole.
+    dipole_alms[0, hp.Alm.getidx(lmax, 1, 0)] = amp_norm * np.cos(theta)
+    dipole_alms[0, hp.Alm.getidx(lmax, 1, 1)] = -amp_norm * np.sin(theta) * np.exp(-1j * phi) / np.sqrt(2)
+
+    t0 = time.time()
+    total_alms = anisotropy_alms + dipole_alms
+
     smooth_alms = np.zeros((len(freqs), 3, hp.Alm.getsize(lmax)), dtype=np.complex128)
     for i in range(len(freqs)):
-        smooth_alms[i] = hp.smoothalm(alms, fwhm=fwhm[i].to('rad').value)
+        smooth_alms[i] = hp.smoothalm(total_alms, fwhm=fwhm[i].to('rad').value)
     print(f"Finished CMB smoothing in {time.time()-t0:.1f}s."); t0 = time.time()
     cmb = np.zeros(12*nside**2, dtype=np.float32)
-    cmb = hp.alm2map(alms, nside, pixwin=False)
+    cmb = hp.alm2map(total_alms, nside, pixwin=False)
+
     cmb_smooth = np.zeros((len(freqs), 3, 12*nside**2), dtype=np.float32)
     for i in range(len(freqs)):
         cmb_smooth[i] = hp.alm2map(smooth_alms[i], nside, pixwin=False)
