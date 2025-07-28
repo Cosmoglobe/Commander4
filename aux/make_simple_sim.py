@@ -363,10 +363,10 @@ def main():
             print(f"All ranks starting noise simulations.")
 
         with_corr_noise = "corr_noise" in params.components
-        corr_noise = sim_noise(sigma0s[i].value, chunk_size, with_corr_noise)
+        corr_noise = sim_noise(params.g0*sigma0s[i].value, chunk_size, with_corr_noise)  # Scale sigma0 by gain, such that sigma0 is in uK_RJ.
 
         if rank == 0:
-            white_noise = np.random.normal(0, sigma0s[i].value, ntod)
+            white_noise = np.random.normal(0, params.g0*sigma0s[i].value, ntod)
     
             print(f"Finished noise simulations in {time.time()-t0:.1f}s.")
             t0 = time.time()
@@ -395,6 +395,7 @@ def main():
             if (hit_map[i] <= 10).any():
                 print(f"Warning: {np.sum(hit_map[i] <= 10)} out of {hit_map[i].shape[0]} pixels were hit 10 or fewer times by scanning strategy.")
             print(f"Lowest pixel hit count is {np.min(hit_map[i])}.")
+            observed_map[i] /= hit_map[i]
             white_noise_map[i] /= hit_map[i]
             corr_noise_map[i] /= hit_map[i]
             inv_var_map[i] = hit_map[i]/sigma0s[i].value**2
