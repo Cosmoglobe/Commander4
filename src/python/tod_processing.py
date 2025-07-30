@@ -27,25 +27,39 @@ def get_empty_compsep_output(staticData: list[DetectorTOD], params) -> NDArray[n
 
 
 def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, params: Bunch) -> DetectorMap:
-    detmap_signal, detmap_corr_noise, detmap_inv_var = single_det_map_accumulator(det_static, det_cs_map, params)
+    detmap_rawobs, detmap_signal, detmap_orbdipole, detmap_skysub, detmap_corr_noise, detmap_inv_var = single_det_map_accumulator(det_static, det_cs_map, params)
     map_signal = np.zeros_like(detmap_signal)
+    map_orbdipole = np.zeros_like(detmap_orbdipole)
+    map_rawobs = np.zeros_like(detmap_rawobs)
+    map_skysub = np.zeros_like(detmap_skysub)
     map_corr_noise = np.zeros_like(detmap_corr_noise)
     map_inv_var = np.zeros_like(detmap_inv_var)
     if band_comm.Get_rank() == 0:
         band_comm.Reduce(detmap_signal, map_signal, op=MPI.SUM, root=0)
+        band_comm.Reduce(detmap_skysub, map_skysub, op=MPI.SUM, root=0)
+        band_comm.Reduce(detmap_orbdipole, map_orbdipole, op=MPI.SUM, root=0)
+        band_comm.Reduce(detmap_rawobs, map_rawobs, op=MPI.SUM, root=0)
         band_comm.Reduce(detmap_corr_noise, map_corr_noise, op=MPI.SUM, root=0)
         band_comm.Reduce(detmap_inv_var, map_inv_var, op=MPI.SUM, root=0)
     else:
         band_comm.Reduce(detmap_signal, None, op=MPI.SUM, root=0)
+        band_comm.Reduce(detmap_skysub, None, op=MPI.SUM, root=0)
+        band_comm.Reduce(detmap_orbdipole, None, op=MPI.SUM, root=0)
+        band_comm.Reduce(detmap_rawobs, None, op=MPI.SUM, root=0)
         band_comm.Reduce(detmap_corr_noise, None, op=MPI.SUM, root=0)
         band_comm.Reduce(detmap_inv_var, None, op=MPI.SUM, root=0)
 
     if band_comm.Get_rank() == 0:
         map_signal[map_signal != 0] /= map_inv_var[map_signal != 0]
+        map_skysub[map_skysub != 0] /= map_inv_var[map_skysub != 0]
         map_corr_noise[map_corr_noise != 0] /= map_inv_var[map_corr_noise != 0]
         map_rms = np.zeros_like(map_inv_var) + np.inf
         map_rms[map_inv_var != 0] = 1.0/np.sqrt(map_inv_var[map_inv_var != 0])
         detmap = DetectorMap(map_signal, map_corr_noise, map_rms, det_static.nu, det_static.fwhm)
+        detmap.g0 = det_static.scans[0].g0_est
+        detmap.skysub_map = map_skysub
+        detmap.rawobs_map = map_rawobs
+        detmap.orbdipole_map = map_orbdipole
         return detmap
 
 
@@ -405,6 +419,16 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_data: Detect
         DetectorMap instance which represents the correlated noise subtracted
             TOD data for the band belonging to the current process.
     """
+    # Steps:
+    # 1. Find galactic mask (currently hard-coded).
+    # 2. Create scan.sky_subtracted_tod by subtracting the sky model we get from CompSep (Skipped on iter==1 because we don't have any compsep data). Note that this relies on the gain from the previous iteration.
+    # 3. Sample the gain from the sky-subtracted TOD (Skipped on iter==1 because we don't have a reliable sky-subtracted TOD).
+    # 4. Estimate White noise from the sky-subtracted TOD.
+    # 5. Sample correlated noise (skipped on iter==1).
+    # 6. Sample correlated noise PS parameters (skipped on iter==1).
+    # 7. Mapmaking on (TOD - corr_noise_TOD - orb_dipole_TOD.
+    # In other words, on iteration 1 we do just do 1. White noise estimation -> 2. Mapmaking.
+
     logger = logging.getLogger(__name__)
     if iter == 1:
         for scan in experiment_data.scans:
