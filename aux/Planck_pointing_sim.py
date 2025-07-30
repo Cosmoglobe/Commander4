@@ -2,19 +2,10 @@ import numpy as np
 import healpy as hp
 from astropy.time import Time
 import astropy.units as u
-from astropy.coordinates import get_sun, SkyCoord
-from scipy.interpolate import CubicSpline
-from tqdm import trange, tqdm
-from mpi4py import MPI
-
-import numpy as np
-import healpy as hp
-import matplotlib.pyplot as plt
-from astropy.time import Time
-import astropy.units as u
 from astropy.coordinates import get_sun, SkyCoord, GeocentricTrueEcliptic, Galactic
-from mpi4py import MPI
+from scipy.interpolate import CubicSpline
 from tqdm import tqdm
+from mpi4py import MPI
 
 def get_Planck_pointing(ntod, sample_rate = 32.5015421):
     comm = MPI.COMM_WORLD

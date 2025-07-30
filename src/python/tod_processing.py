@@ -9,7 +9,6 @@ from output import log
 from scipy.fft import rfft, irfft, rfftfreq
 import time
 from numpy.typing import NDArray
-from tqdm import tqdm
 import pysm3.units as u
 
 
