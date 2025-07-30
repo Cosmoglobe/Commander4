@@ -333,7 +333,6 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
     C = 299792458  # m/s (Speed of light)
 
     T_CMB = T_CMB * u.K_CMB
-    T_CMB_RJ = T_CMB.to("uK_RJ", equivalencies=u.cmb_equivalencies(experiment_data.nu*u.GHz))  #TODO: Better way of accessing frequency.
 
     sum_s_T_N_inv_d = 0  # Accumulators for the numerator and denominator of eqn 16.
     sum_s_T_N_inv_s = 0
@@ -342,7 +341,10 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
 
         # --- Setup ---
         dot_product = np.sum(scan.orb_dir_vec*scan.LOS_vec, axis=-1)  # How much do the LOS and orbital velocity align?
-        s_orb = T_CMB_RJ.value * dot_product / C  # The orbital dipole in units of uK_RJ.
+        s_orb = T_CMB * dot_product / C  # The orbital dipole in units of uK_CMB.
+        s_orb = s_orb.to("uK_RJ", equivalencies=u.cmb_equivalencies(experiment_data.nu*u.GHz))  # Converting to uK_RJ
+        scan.s_orb = s_orb.value 
+
         Ntod = tod.shape[0]
         Nrfft = Ntod//2+1
         sigma0 = np.std(tod[1:] - tod[:-1])/np.sqrt(2)
@@ -351,15 +353,15 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
         inv_power_spectrum[1:] = 1.0/(sigma0**2*(1 + (freqs[1:]/scan.fknee_est)**scan.alpha_est))
 
         # --- Solving Equation 16 from BP7 ---
-        s_fft = rfft(s_orb)
+        s_fft = rfft(scan.s_orb)
         d_fft = rfft(tod)
         N_inv_s_fft = s_fft * inv_power_spectrum
         N_inv_d_fft = d_fft * inv_power_spectrum
         N_inv_s = irfft(N_inv_s_fft, n=Ntod)
         N_inv_d = irfft(N_inv_d_fft, n=Ntod)
         # We now exclude the time-samples hitting the masked area. We don't want to do this before now, because it would mess up the FFT stuff.
-        s_T_N_inv_d = np.dot(s_orb[scan.galactic_mask_array], N_inv_d[scan.galactic_mask_array])
-        s_T_N_inv_s = np.dot(s_orb[scan.galactic_mask_array], N_inv_s[scan.galactic_mask_array])
+        s_T_N_inv_d = np.dot(scan.s_orb[scan.galactic_mask_array], N_inv_d[scan.galactic_mask_array])
+        s_T_N_inv_s = np.dot(scan.s_orb[scan.galactic_mask_array], N_inv_s[scan.galactic_mask_array])
         sum_s_T_N_inv_d += s_T_N_inv_d  # Add to the numerator and denominator.
         sum_s_T_N_inv_s += s_T_N_inv_s
 
@@ -380,10 +382,8 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
     for scan in experiment_data.scans:
         scan.g0_est = g_sampled
         dot_product = np.sum(scan.orb_dir_vec*scan.LOS_vec, axis=-1)  # How much do the LOS and orbital velocity align?
-        s_orb = T_CMB_RJ.value * dot_product / C  # The orbital dipole in units of uK_RJ.
-        scan.sky_subtracted_tod -= scan.g0_est*s_orb
-        scan.orbital_dipole = scan.g0_est*s_orb
-
+        scan.sky_subtracted_tod -= scan.g0_est*scan.s_orb
+        scan.orbital_dipole = scan.g0_est*scan.s_orb
 
     return experiment_data
 
