@@ -11,6 +11,13 @@ niter_gibbs: 1
 
 nside: 16
 
+samp_freq: 6.0  # At the moment sample frequency is share for all bands.
+
+# Initialization parameters, for the first iteration.
+noise_fknee: 0.75
+noise_alpha: -1.6
+initial_g0: 81.5153
+
 make_plots: True
 output_stats: True
 

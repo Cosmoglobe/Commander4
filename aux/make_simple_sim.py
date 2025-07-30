@@ -1,16 +1,5 @@
 # TOD simulation script
 
-# Data = CMB + noise
-#   Nside  = 2048
-#   Lmax   = 6000
-#   FWHM   = 10 arcmin
-#   sigma0 = 30µK
-#
-# Scanning strategy = visit each pixel in order; repeat 9 times, such that final noise is 10µK/pix
-#
-# Split in chunks with 2^22 samples each (except for last one) = ~109 files, total of ~4GB
-# 
-
 import numpy as np
 import healpy as hp
 import pysm3
@@ -23,6 +12,7 @@ import sys
 import os
 from traceback import print_exc
 from pixell.bunch import Bunch
+from Planck_pointing_sim import get_Planck_pointing
 import camb
 
 module_root_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -51,14 +41,41 @@ def generate_cmb(freqs, fwhm, units, nside, lmax):
 
     np.random.seed(0)
     t0 = time.time()
-    alms = hp.synalm(Cls, lmax=lmax, new=True)
+    anisotropy_alms = hp.synalm(Cls, lmax=lmax, new=True)
     print(f"Finished CMB synALMs in {time.time()-t0:.1f}s."); t0 = time.time()
+
+    # --- Calculate the Solar Dipole alms ---
+    # A pure dipole only has l=1 components. We set these directly.
+    dipole_alms = np.zeros_like(anisotropy_alms)
+    
+    # [cite_start]Dipole parameters from the BEYONDPLANCK analysis [cite: 5314, 2003]
+    dipole_amplitude_uK = 3362.7
+    dipole_glon_deg = 264.11
+    dipole_glat_deg = 48.279
+
+    # Convert direction to spherical coordinates (theta, phi) in radians
+    theta = np.deg2rad(90.0 - dipole_glat_deg)
+    phi = np.deg2rad(dipole_glon_deg)
+
+    # Calculate a_1m coefficients for a dipole in direction (theta, phi)
+    # a_lm = A * Y_lm*(theta, phi) * sqrt(4pi / (2l+1)) which for l=1 is
+    amp_norm = dipole_amplitude_uK * np.sqrt(4 * np.pi / 3)
+    
+    # a_1,-1, a_1,0, a_1,1
+    # Note: healpy expects (T, E, B) alms, we only need T for the dipole.
+    dipole_alms[0, hp.Alm.getidx(lmax, 1, 0)] = amp_norm * np.cos(theta)
+    dipole_alms[0, hp.Alm.getidx(lmax, 1, 1)] = -amp_norm * np.sin(theta) * np.exp(-1j * phi) / np.sqrt(2)
+
+    t0 = time.time()
+    total_alms = anisotropy_alms + dipole_alms
+
     smooth_alms = np.zeros((len(freqs), 3, hp.Alm.getsize(lmax)), dtype=np.complex128)
     for i in range(len(freqs)):
-        smooth_alms[i] = hp.smoothalm(alms, fwhm=fwhm[i].to('rad').value)
+        smooth_alms[i] = hp.smoothalm(total_alms, fwhm=fwhm[i].to('rad').value)
     print(f"Finished CMB smoothing in {time.time()-t0:.1f}s."); t0 = time.time()
     cmb = np.zeros(12*nside**2, dtype=np.float32)
-    cmb = hp.alm2map(alms, nside, pixwin=False)
+    cmb = hp.alm2map(total_alms, nside, pixwin=False)
+
     cmb_smooth = np.zeros((len(freqs), 3, 12*nside**2), dtype=np.float32)
     for i in range(len(freqs)):
         cmb_smooth[i] = hp.alm2map(smooth_alms[i], nside, pixwin=False)
@@ -157,35 +174,43 @@ def generate_sync(freqs, fwhm, units, nside):
 
 
 def get_pointing(npix):
-    ntod = params.NTOD
-    if params.POINTING_PATH is None:
-        pix = np.arange(ntod) % npix
-        return pix.astype('int32')
-
-    with h5py.File(params.POINTING_PATH, 'r') as file:
-        tot_file_len = file['pix'].shape[0]
-        pix = file['pix'][:ntod].astype('int32')
-
-    print(f"Reading {ntod} out of {tot_file_len} points from pointing file ({100*ntod/tot_file_len:.1f}%)")
-    indc = np.linspace(0, len(pix)-1, params.NTOD, dtype=int)
-    pix = pix[indc]
-
-    assert pix.shape[0] == ntod, f"Parameter file ntod {ntod} does not match pixel length {pix.shape[0]}, likely because desired length is longer than entire pointing file."
-
-    if params.NSIDE > 2048:
-        print("Warning: NSIDE is larger than 2048, which is the resolution of the loaded pointing files.")
-        np.random.seed(42)
-        ang = hp.pix2ang(2048, pix)
-        ang1 = ang[0] + np.random.uniform(-0.025, 0.025, ang[0].shape)
-        ang2 = ang[1] + np.random.uniform(-0.025, 0.025, ang[1].shape)
-        ang1 = np.clip(ang1, 0, np.pi)
-        ang2 = np.clip(ang2, 0, 2*np.pi)
-        pix = hp.ang2pix(params.NSIDE, ang1, ang2)
-    else:
-        theta, phi = hp.pix2ang(2048, pix)
+    theta, phi, LOS, orb_dir, dipole = get_Planck_pointing(params.NTOD, params.f_samp)
+    if rank == 0:
         pix = hp.ang2pix(params.NSIDE, theta, phi)
+        return pix, LOS, orb_dir, dipole
+    else:
+        return None, None, None, None
+    
+    ### Old code for getting pointing, which relied on reading pointing indices from a file
+    # ntod = params.NTOD
+    # if params.POINTING_PATH is None:
+    #     pix = np.arange(ntod) % npix
+    #     return pix.astype('int32')
 
-    return pix
+    # with h5py.File(params.POINTING_PATH, 'r') as file:
+    #     tot_file_len = file['pix'].shape[0]
+    #     pix = file['pix'][:ntod].astype('int32')
+
+    # print(f"Reading {ntod} out of {tot_file_len} points from pointing file ({100*ntod/tot_file_len:.1f}%)")
+    # indc = np.linspace(0, len(pix)-1, params.NTOD, dtype=int)
+    # pix = pix[indc]
+
+    # assert pix.shape[0] == ntod, f"Parameter file ntod {ntod} does not match pixel length {pix.shape[0]}, likely because desired length is longer than entire pointing file."
+
+    # if params.NSIDE > 2048:
+    #     print("Warning: NSIDE is larger than 2048, which is the resolution of the loaded pointing files.")
+    #     np.random.seed(42)
+    #     ang = hp.pix2ang(2048, pix)
+    #     ang1 = ang[0] + np.random.uniform(-0.025, 0.025, ang[0].shape)
+    #     ang2 = ang[1] + np.random.uniform(-0.025, 0.025, ang[1].shape)
+    #     ang1 = np.clip(ang1, 0, np.pi)
+    #     ang2 = np.clip(ang2, 0, 2*np.pi)
+    #     pix = hp.ang2pix(params.NSIDE, ang1, ang2)
+    # else:
+    #     theta, phi = hp.pix2ang(2048, pix)
+    #     pix = hp.ang2pix(params.NSIDE, theta, phi)
+
+    # return pix
 
 
 
@@ -332,17 +357,17 @@ def main():
     repeat = params.NTOD//npix+1
     ntod = params.NTOD
 
+    t0 = time.time()
+    pix, LOS, orb_dir, dipole = get_pointing(npix)
     if rank == 0:
-        t0 = time.time()
-        print(f"Rank 1 calculating pointing")
-        pix = get_pointing(npix)
         psi = np.repeat(np.arange(repeat)*np.pi/repeat, npix)
         psi = psi[:ntod]
         signal_tod = []
         corr_noise_tod = []
         white_noise_tod = []
-        print(f"Rank 1 finished calculating pointing in {time.time()-t0:.1f}s.")
+        print(f"Finished calculating pointing in {time.time()-t0:.1f}s.")
 
+        observed_map = np.zeros((len(freqs), npix))
         white_noise_map = np.zeros((len(freqs), npix))
         corr_noise_map = np.zeros((len(freqs), npix))
         hit_map = np.zeros((len(freqs), npix), dtype=int)
@@ -365,16 +390,31 @@ def main():
             print(f"All ranks starting noise simulations.")
 
         with_corr_noise = "corr_noise" in params.components
-        corr_noise = sim_noise(sigma0s[i].value, chunk_size, with_corr_noise)
+        corr_noise = sim_noise(params.g0*sigma0s[i].value, chunk_size, with_corr_noise)  # Scale sigma0 by gain, such that sigma0 is in uK_RJ.
 
         if rank == 0:
-            white_noise = np.random.normal(0, sigma0s[i].value, ntod)
+            white_noise = np.random.normal(0, params.g0*sigma0s[i].value, ntod)
     
             print(f"Finished noise simulations in {time.time()-t0:.1f}s.")
-            signal_tod.append((d + white_noise + corr_noise).astype('float32'))
+            t0 = time.time()
+
+            # Convert dipole to units specified in parameter file.
+            unit = params.unit
+            if unit == 'MJ/sr':
+                units = u.MJy/u.sr
+            elif unit == 'uK_RJ':
+                units = u.uK_RJ
+            dipole_myfreq = dipole.copy()
+            dipole_myfreq = dipole_myfreq * u.uK_CMB * 1e6
+            dipole_myfreq = dipole_myfreq.to(units, equivalencies=u.cmb_equivalencies(freqs[i]*u.GHz))
+
+            # Add together signal. Sky components get a gain term added to them.
+            gain = params.g0
+            signal_tod.append((gain*(d + dipole_myfreq.value) + white_noise + corr_noise).astype('float32'))
             white_noise_tod.append(white_noise.astype('float32'))
             corr_noise_tod.append(corr_noise.astype('float32'))
 
+            observed_map[i] = np.bincount(pix, weights=signal_tod[-1], minlength=npix)
             white_noise_map[i] = np.bincount(pix, weights=white_noise, minlength=npix)
             corr_noise_map[i] = np.bincount(pix, weights=corr_noise, minlength=npix)
             hit_map[i] = np.bincount(pix, minlength=npix)
@@ -382,6 +422,7 @@ def main():
             if (hit_map[i] <= 10).any():
                 print(f"Warning: {np.sum(hit_map[i] <= 10)} out of {hit_map[i].shape[0]} pixels were hit 10 or fewer times by scanning strategy.")
             print(f"Lowest pixel hit count is {np.min(hit_map[i])}.")
+            observed_map[i] /= hit_map[i]
             white_noise_map[i] /= hit_map[i]
             corr_noise_map[i] /= hit_map[i]
             inv_var_map[i] = hit_map[i]/sigma0s[i].value**2
@@ -408,19 +449,23 @@ def main():
                 plt.savefig(params.OUTPUT_FOLDER + f"observed_sky_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
                 plt.close()
 
-                hp.mollview(white_noise_map[i], title=f"White noise {freqs[i]:.2f}GHz")
+                hp.mollview(white_noise_map[i], title=f"White noise {freqs[i]:.2f}GHz", cmap="RdBu_r", min=np.percentile(white_noise_map[i],2), max=np.percentile(white_noise_map[i],98))
                 plt.savefig(params.OUTPUT_FOLDER + f"noise_white_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
                 plt.close()
 
-                hp.mollview(corr_noise_map[i], title=f"Corr noise {freqs[i]:.2f}GHz")
+                hp.mollview(corr_noise_map[i], title=f"Corr noise {freqs[i]:.2f}GHz", cmap="RdBu_r", min=np.percentile(corr_noise_map[i],2), max=np.percentile(corr_noise_map[i],98))
                 plt.savefig(params.OUTPUT_FOLDER + f"noise_corr_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
+                plt.close()
+
+                hp.mollview(observed_map[i], title=f"Actual observations of the sky at {freqs[i]:.2f}GHz", cmap="RdBu_r", min=np.percentile(observed_map[i],2), max=np.percentile(observed_map[i],98))
+                plt.savefig(params.OUTPUT_FOLDER + f"actual_observations_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
                 plt.close()
 
             hp.mollview(hit_map[0], title=f"Hits", norm="log")
             plt.savefig(params.OUTPUT_FOLDER + f"hits_{nside}_b{fwhm[i].value:.0f}.png")
             plt.close()
 
-        save_to_h5_file(signal_tod, pix, psi, fname=f'tod_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
+        save_to_h5_file(signal_tod, pix, psi, LOS, orb_dir, fname=f'tod_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
         save_to_h5_file(white_noise_tod, pix, psi, fname=f'white_noise_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
         save_to_h5_file(corr_noise_tod, pix, psi, fname=f'corr_noise_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
         print(f"Rank 0 finished writing to file in {time.time()-t0:.1f}s.")
