@@ -79,19 +79,17 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
         
     """
     signal_map = detector_data.map_sky
-    rms_map = detector_data.map_rms
     band_freq = detector_data.nu
-    fwhm = detector_data.fwhm
     is_CompSep_master = proc_comm.Get_rank() == 0
     if params.make_plots:
         detector_to_plot = proc_comm.Get_rank()
         logging.info(f"Rank {proc_comm.Get_rank()} plotting detector map.")
         plotting.plot_data_maps(is_CompSep_master, params, detector_to_plot, chain, iter, map_signal=signal_map,
-                                map_corr_noise=detector_data.map_corr_noise, map_rms=rms_map)
+                                map_corr_noise=detector_data.map_corr_noise, map_rms=detector_data.map_rms)
     if params.pixel_compsep_sampling:
-        comp_maps = amplitude_sampling_per_pix(signal_map, rms_map, band_freq)
+        comp_maps = amplitude_sampling_per_pix(signal_map, detector_data.map_rms, band_freq)
     else:
-        compsep_solver = CompSepSolver(comp_list, signal_map, rms_map, band_freq, fwhm, params, proc_comm)
+        compsep_solver = CompSepSolver(comp_list, signal_map, detector_data.map_rms, band_freq, detector_data.fwhm, params, proc_comm)
         comp_list = compsep_solver.solve()
         if params.make_plots and is_CompSep_master:
             plotting.plot_cg_res(params, chain, iter, compsep_solver.CG_residuals)
@@ -102,6 +100,7 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
 
     if params.make_plots:
         detector_to_plot = proc_comm.Get_rank()
+        plotting.plot_combo_maps(params, detector_to_plot, chain, iter, comp_list, detector_data)
         plotting.plot_components(params, band_freq, detector_to_plot, chain, iter, signal_map, comp_list)
 
     return detector_map  # Return the full sky realization for my band.

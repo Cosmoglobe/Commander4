@@ -6,6 +6,59 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from src.python.model.component import DiffuseComponent
+from src.python.data_models.detector_map import DetectorMap
+
+
+def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int, components_list: list[DiffuseComponent], detector_data: DetectorMap):
+    os.makedirs(params.output_paths.plots + "combo_maps/", exist_ok=True)
+    map_signal = detector_data.map_sky
+    map_corr_noise = detector_data.map_corr_noise
+    map_rms = detector_data.map_rms
+    map_skysub = detector_data.skysub_map
+    map_rawobs = detector_data.rawobs_map
+    map_orbdipole = detector_data.orbdipole_map
+    freq = detector_data.nu
+    g0 = detector_data.g0
+
+    foreground_subtracted = np.zeros_like(map_signal)
+    foreground_subtracted[:] = map_signal
+    residual = np.zeros_like(map_signal)
+    residual[:] = map_signal
+
+    fig, ax = plt.subplots(3, 4, figsize=(42, 18))
+    fig.suptitle(f"Iter {iteration:04d}. Freq: {freq:.2f} GHz (det {detector}). Chain {chain}. g0 = {g0:.4f}.", fontsize=24)
+
+    for i, component in enumerate(components_list):
+        smoothing_scale_radians = component.params.smoothing_scale*np.pi/(180*60)
+        comp_map = component.get_sky(freq, params.nside, fwhm=smoothing_scale_radians)
+        if component.shortname != "cmb":
+            foreground_subtracted -= comp_map
+        residual -= comp_map
+        plt.axes(ax[2,i])
+        hp.mollview(comp_map, hold=True, title=f"{component.longname} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(comp_map, 2), max=np.percentile(comp_map, 98))
+
+    residual -= map_corr_noise
+    plt.axes(ax[0,0])
+    hp.mollview(map_rawobs, fig=fig, hold=True, cmap="RdBu_r", title=f"Raw observed sky", min=np.percentile(map_rawobs, 2), max=np.percentile(map_rawobs, 98))
+    plt.axes(ax[0,1])
+    hp.mollview(map_signal, fig=fig, hold=True, cmap="RdBu_r", title=f"Static sky signals (d - N_corr - s_orb)", min=np.percentile(map_signal, 2), max=np.percentile(map_signal, 98))
+    plt.axes(ax[0,2])
+    hp.mollview(foreground_subtracted, fig=fig, hold=True, cmap="RdBu_r", title=f"<- + foreground subtracted", min=np.percentile(foreground_subtracted, 2), max=np.percentile(foreground_subtracted, 98))
+    plt.axes(ax[0,3])
+    hp.mollview(map_skysub, fig=fig, hold=True, cmap="RdBu_r", title=f"All sky components subtracted (incl. orb-dipole)", min=np.percentile(map_skysub, 2), max=np.percentile(map_skysub, 98))
+
+    plt.axes(ax[1,0])
+    hp.mollview(map_orbdipole, fig=fig, hold=True, cmap="RdBu_r", title=f"Orbital dipole", min=np.percentile(map_orbdipole, 2), max=np.percentile(map_orbdipole, 98))
+    plt.axes(ax[1,1])
+    hp.mollview(map_corr_noise, fig=fig, hold=True, cmap="RdBu_r", title=f"Corr noise", min=np.percentile(map_corr_noise, 2), max=np.percentile(map_corr_noise, 98))
+    plt.axes(ax[1,2])
+    hp.mollview(residual, fig=fig, hold=True, cmap="RdBu_r", title=f"Residual sky", min=np.percentile(residual, 2), max=np.percentile(residual, 98))
+    plt.axes(ax[1,3])
+    hp.mollview(map_rms, fig=fig, hold=True, norm="log", title=f"RMS")
+
+    plt.savefig(params.output_paths.plots + f"combo_maps/combo_map_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches="tight")
+    plt.close()
+
 
 
 def plot_data_maps(master, params, detector, chain, iteration, **kwargs):
