@@ -50,6 +50,8 @@ def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, p
         band_comm.Reduce(detmap_inv_var, None, op=MPI.SUM, root=0)
 
     if band_comm.Get_rank() == 0:
+        map_orbdipole[map_orbdipole != 0] /= map_inv_var[map_orbdipole != 0]
+        map_rawobs[map_rawobs != 0] /= map_inv_var[map_rawobs != 0]
         map_signal[map_signal != 0] /= map_inv_var[map_signal != 0]
         map_skysub[map_skysub != 0] /= map_inv_var[map_skysub != 0]
         map_corr_noise[map_corr_noise != 0] /= map_inv_var[map_corr_noise != 0]
