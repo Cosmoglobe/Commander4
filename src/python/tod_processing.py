@@ -437,23 +437,25 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_data: Detect
             scan.alpha_est = params.noise_alpha
             scan.fknee_est = params.noise_fknee
             scan.g0_est = params.initial_g0
+            scan.orbital_dipole = np.zeros_like(scan.data[0])
 
     experiment_data = find_galactic_mask(experiment_data, params)
 
     experiment_data = subtract_sky_model(experiment_data, compsep_output, params)
     t0 = time.time()
-    logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} Finished sky model subtraction in {time.time()-t0:.1f}s."); t0 = time.time()
-    experiment_data = sample_absolute_gain(TOD_comm, experiment_data, params)
-    logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} Finished gain estimation in {time.time()-t0:.1f}s."); t0 = time.time()
-    experiment_data = estimate_white_noise(experiment_data, params)
-    logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} Finished white noise estimation in {time.time()-t0:.1f}s."); t0 = time.time()
-
+    logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished sky model subtraction in {time.time()-t0:.1f}s."); t0 = time.time()
     if iter > 1:
+        experiment_data = sample_absolute_gain(TOD_comm, experiment_data, params)
+        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} Finished gain estimation in {time.time()-t0:.1f}s."); t0 = time.time()
+    experiment_data = estimate_white_noise(experiment_data, params)
+    logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished white noise estimation in {time.time()-t0:.1f}s."); t0 = time.time()
+
+    if iter > 6:
         experiment_data = sample_noise(band_comm, experiment_data, params)
-        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} Finished corr noise realizations in {time.time()-t0:.1f}s."); t0 = time.time()
+        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished corr noise realizations in {time.time()-t0:.1f}s."); t0 = time.time()
         experiment_data = sample_noise_PS(band_comm, experiment_data, params)
-        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} Finished corr noise PS parameter sampling in {time.time()-t0:.1f}s."); t0 = time.time()
+        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished corr noise PS parameter sampling in {time.time()-t0:.1f}s."); t0 = time.time()
     todproc_output = tod2map(band_comm, experiment_data, compsep_output, params)
-    logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} Finished mapmaking in {time.time()-t0:.1f}s."); t0 = time.time()
+    logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished mapmaking in {time.time()-t0:.1f}s."); t0 = time.time()
 
     return todproc_output
