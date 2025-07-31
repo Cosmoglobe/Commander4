@@ -36,7 +36,7 @@ beta_sync: -3.1 # check the preset
 f_samp: 4.92131
 
 # gain paramters
-g0: 0.8151
+g0: 81.5153
 
 # noise parameters
 SIGMA0: [100, 80, 30, 100, 200] # tod level white noise [uK_RJ] 

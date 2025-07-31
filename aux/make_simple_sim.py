@@ -94,11 +94,11 @@ def generate_cmb(freqs, fwhm, units, nside, lmax):
 
     if params.make_plots:
         for i in range(len(freqs)):
-            hp.mollview(cmb[i,0], title=f"True CMB at {freqs[i]:.2f}GHz")
+            hp.mollview(cmb[i,0], title=f"True CMB at {freqs[i]:.2f}GHz", min=np.percentile(cmb[i,0],2), max=np.percentile(cmb[i,0],98))
             plt.savefig(params.OUTPUT_FOLDER + f"true_CMB_{nside}_{freqs[i]}.png")
             plt.close()
         for i in range(len(freqs)):
-            hp.mollview(cmb_smooth[i,0], title=f"True smoothed CMB at {freqs[i]:.2f}GHz")
+            hp.mollview(cmb_smooth[i,0], title=f"True smoothed CMB at {freqs[i]:.2f}GHz", min=np.percentile(cmb_smooth[i,0],2), max=np.percentile(cmb_smooth[i,0],98))
             plt.savefig(params.OUTPUT_FOLDER + f"true_CMB_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
             plt.close()
     return cmb_smooth
@@ -128,11 +128,11 @@ def generate_thermal_dust(freqs, fwhm, units, nside):
 
     if params.make_plots:
         for i in range(len(freqs)):
-            hp.mollview(dust_us[i,0], title=f"True thermal dust at {freqs[i]:.2f}GHz")
+            hp.mollview(dust_us[i,0], title=f"True thermal dust at {freqs[i]:.2f}GHz", min=np.percentile(dust_us[i,0],2), max=np.percentile(dust_us[i,0],98))
             plt.savefig(params.OUTPUT_FOLDER + f"true_thermal_dust_{nside}_{freqs[i]}.png")
             plt.close()
         for i in range(len(freqs)):
-            hp.mollview(dust_s[i,0], title=f"True smoothed thermal dust at {freqs[i]:.2f}GHz")
+            hp.mollview(dust_s[i,0], title=f"True smoothed thermal dust at {freqs[i]:.2f}GHz", min=np.percentile(dust_s[i,0],2), max=np.percentile(dust_s[i,0],98))
             plt.savefig(params.OUTPUT_FOLDER + f"true_thermal_dust_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
             plt.close()
 
@@ -162,11 +162,11 @@ def generate_sync(freqs, fwhm, units, nside):
 
     if params.make_plots:
         for i in range(len(freqs)):
-            hp.mollview(sync_us[i,0], title=f"True synchrotron at {freqs[i]:.2f}GHz")
+            hp.mollview(sync_us[i,0], title=f"True synchrotron at {freqs[i]:.2f}GHz", min=np.percentile(sync_us[i,0],2), max=np.percentile(sync_us[i,0],98))
             plt.savefig(params.OUTPUT_FOLDER + f"true_synchrotron_{nside}_{freqs[i]}.png")
             plt.close()
         for i in range(len(freqs)):
-            hp.mollview(sync_s[i,0], title=f"True smoothed synchrotron at {freqs[i]:.2f}GHz")
+            hp.mollview(sync_s[i,0], title=f"True smoothed synchrotron at {freqs[i]:.2f}GHz", min=np.percentile(sync_s[i,0],2), max=np.percentile(sync_s[i,0],98))
             plt.savefig(params.OUTPUT_FOLDER + f"true_synchrotron_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
             plt.close()
 
@@ -441,11 +441,11 @@ def main():
                 hp.mollview(1.0/np.sqrt(inv_var_map[i]), title=f"Uncertainty {freqs[i]:.2f}GHz")
                 plt.savefig(params.OUTPUT_FOLDER + f"rms_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
                 plt.close()
-                hp.mollview(comps_sum_smoothed[i,0], title=f"Full 'clean' sky smoothed {freqs[i]:.2f}GHz")
+                hp.mollview(comps_sum_smoothed[i,0], title=f"Full 'clean' sky smoothed {freqs[i]:.2f}GHz", min=np.percentile(comps_sum_smoothed[i,0],2), max=np.percentile(comps_sum_smoothed[i,0],98))
                 plt.savefig(params.OUTPUT_FOLDER + f"sky_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
                 plt.close()
 
-                hp.mollview(comps_sum_smoothed[i,0]+white_noise_map[i]+corr_noise_map[i], title=f"Full observed sky smoothed {freqs[i]:.2f}GHz")
+                hp.mollview(comps_sum_smoothed[i,0]+white_noise_map[i]+corr_noise_map[i], title=f"Full observed sky smoothed {freqs[i]:.2f}GHz", min=np.percentile(comps_sum_smoothed[i,0]+white_noise_map[i]+corr_noise_map[i],2), max=np.percentile(comps_sum_smoothed[i,0]+white_noise_map[i]+corr_noise_map[i],98))
                 plt.savefig(params.OUTPUT_FOLDER + f"observed_sky_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
                 plt.close()
 
