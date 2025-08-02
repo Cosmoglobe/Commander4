@@ -17,6 +17,7 @@ from src.python.data_models.detector_TOD import DetectorTOD
 from src.python.data_models.scan_TOD import ScanTOD
 from src.python.utils.mapmaker import single_det_map_accumulator
 from src.python.noise_sampling import corr_noise_realization_with_gaps, sample_noise_PS_params
+from src.python.tod_processing_Planck import read_Planck_TOD_data
 
 nthreads=1
 
@@ -185,7 +186,7 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Co
     my_scans_stop = min(scans_per_rank * (MPIrank_band + 1), my_num_scans) # "min" in case the number of scans is not divisible by the number of ranks
 #    my_scans_start, my_scans_stop = scans_per_rank*MPIrank_band, scans_per_rank*(MPIrank_band + 1)
     logger.info(f"TOD: Rank {MPIrank_tod} assigned scans {my_scans_start} - {my_scans_stop} on band{MPIcolor_band}.")
-    experiment_data = read_TOD_data(my_experiment.data_path, my_band.freq, my_scans_start, my_scans_stop, my_experiment.nside, my_band.fwhm)
+    experiment_data = read_Planck_TOD_data(my_experiment.data_path, my_band.freq, my_scans_start, my_scans_stop, my_experiment.nside, my_band.fwhm)
 
     return is_band_master, band_comm, my_band_identifier, tod_band_masters_dict, experiment_data
 
@@ -248,7 +249,7 @@ def estimate_white_noise(experiment_data: DetectorTOD, params: Bunch) -> Detecto
 def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, params: Bunch) -> DetectorTOD:
     nside = params.nside
     for scan in experiment_data.scans:
-        f_samp = params.samp_freq
+        f_samp = scan.fsamp
         scan_map, theta, phi, psi = scan.data
         ntod = scan_map.shape[0]
         freq = rfftfreq(ntod, d = 1/f_samp)
@@ -353,9 +354,9 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
     sum_s_T_N_inv_s = 0
     for scan in experiment_data.scans:
         tod = scan.sky_subtracted_tod
-
+        _, theta, phi, _ = scan.data
         # --- Setup ---
-        dot_product = np.sum(scan.orb_dir_vec*scan.LOS_vec, axis=-1)  # How much do the LOS and orbital velocity align?
+        dot_product = np.sum(scan.orb_dir_vec*hp.ang2vec(theta, phi), axis=-1)  # How much do the LOS and orbital velocity align?
         s_orb = T_CMB * dot_product / C  # The orbital dipole in units of uK_CMB.
         s_orb = s_orb.to("uK_RJ", equivalencies=u.cmb_equivalencies(experiment_data.nu*u.GHz))  # Converting to uK_RJ
         scan.s_orb = s_orb.value 
@@ -363,7 +364,7 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
         Ntod = tod.shape[0]
         Nrfft = Ntod//2+1
         sigma0 = np.std(tod[1:] - tod[:-1])/np.sqrt(2)
-        freqs = rfftfreq(Ntod, 1.0/params.samp_freq)
+        freqs = rfftfreq(Ntod, 1.0/scan.fsamp)
         inv_power_spectrum = np.zeros(Nrfft)
         inv_power_spectrum[1:] = 1.0/(sigma0**2*(1 + (freqs[1:]/scan.fknee_est)**scan.alpha_est))
 
@@ -396,7 +397,8 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
 
     for scan in experiment_data.scans:
         scan.g0_est = g_sampled
-        dot_product = np.sum(scan.orb_dir_vec*scan.LOS_vec, axis=-1)  # How much do the LOS and orbital velocity align?
+        _, theta, phi, _ = scan.data
+        dot_product = np.sum(scan.orb_dir_vec*hp.ang2vec(theta, phi), axis=-1)  # How much do the LOS and orbital velocity align?
         scan.sky_subtracted_tod -= scan.g0_est*scan.s_orb
         scan.orbital_dipole = scan.g0_est*scan.s_orb
 
