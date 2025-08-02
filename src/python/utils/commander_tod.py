@@ -22,8 +22,8 @@
 import h5py
 #import commander_tools.tod_tools.huffman as huffman
 #import commander_tools.tod_tools.rice as rice
-import tod_tools.huffman as huffman
-import tod_tools.rice as rice
+import src.python.utils.huffman as huffman
+import src.python.utils.rice as rice
 import healpy as hp
 import numpy as np
 import multiprocessing as mp
@@ -345,7 +345,7 @@ class commander_tod:
     def read_across_files(self, fieldName):
         return
 
-    def decompress(self, field, compression=''):
+    def decompress(self, field, compression='', use_numba_decode=True):
         comps = compression.split(' ')
         ndim = 1
 
@@ -399,7 +399,7 @@ class commander_tod:
                     huffTree = self.load_field('/' + pid + '/common/hufftree' + huffNum)
                     huffSymb = self.load_field('/' + pid + '/common/huffsymb' + huffNum)
                     h = huffman.Huffman(tree=huffTree, symb=huffSymb)
-                    dataBuf = h.Decoder(np.array(dataBuf))
+                    dataBuf = h.Decoder(np.array(dataBuf), numba_decode=use_numba_decode)
 
                 elif comp == 'rice':
                     k = self.load_field(field.rsplit('/', 1)[0] + '/riceK')
