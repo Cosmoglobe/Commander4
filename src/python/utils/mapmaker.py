@@ -87,12 +87,12 @@ def single_det_map_accumulator(det_static: DetectorTOD, det_cs_map: np.array, pa
         inv_var = 1.0/scan.sigma0**2
         # detmap_signal += np.bincount(pix, weights=scan_map/sigma0**2, minlength=npix)
         # detmap_inv_var += np.bincount(pix, minlength=npix)/sigma0**2
-        maplib.map_weight_accumulator(detmap_inv_var, inv_var, pix, ntod, npix)
-        maplib.map_accumulator(detmap_rawobs, scan_map/scan.g0_est, inv_var, pix, ntod, npix)
-        maplib.map_accumulator(detmap_signal, (scan_map - scan.n_corr_est - scan.orbital_dipole)/scan.g0_est, inv_var, pix, ntod, npix)
-        maplib.map_accumulator(detmap_orbdipole, scan.orbital_dipole/scan.g0_est, inv_var, pix, ntod, npix)
-        maplib.map_accumulator(detmap_skysub, scan.sky_subtracted_tod/scan.g0_est, inv_var, pix, ntod, npix)
+        maplib.map_weight_accumulator(detmap_inv_var, (inv_var).astype(np.float64), pix, ntod, npix)
+        maplib.map_accumulator(detmap_rawobs, (scan_map/scan.g0_est).astype(np.float64), inv_var, pix, ntod, npix)
+        maplib.map_accumulator(detmap_signal, ((scan_map - scan.n_corr_est - scan.orbital_dipole)/scan.g0_est).astype(np.float64), inv_var, pix, ntod, npix)
+        maplib.map_accumulator(detmap_orbdipole, (scan.orbital_dipole/scan.g0_est).astype(np.float64), inv_var, pix, ntod, npix)
+        maplib.map_accumulator(detmap_skysub, (scan.sky_subtracted_tod/scan.g0_est).astype(np.float64), inv_var, pix, ntod, npix)
         if params.sample_corr_noise:
-            maplib.map_accumulator(detmap_corr_noise, scan.n_corr_est, inv_var, pix, ntod, npix)
+            maplib.map_accumulator(detmap_corr_noise, (scan.n_corr_est).astype(np.float64), inv_var, pix, ntod, npix)
 
     return detmap_rawobs, detmap_signal, detmap_orbdipole, detmap_skysub, detmap_corr_noise, detmap_inv_var
