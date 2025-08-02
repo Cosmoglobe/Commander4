@@ -21,6 +21,47 @@ import healpy as hp
 import numpy as np
 import heapq
 import os
+import numba
+
+@numba.jit(nopython=True, cache=True)
+def _numba_decoder(bytarr, left_nodes, right_nodes, symbols, head_node_idx, nsymb):
+    padding = bytarr[0]
+    
+    # Use a list to store the intermediate delta values
+    decoded_deltas_list = []
+    
+    current_node_idx = head_node_idx
+
+    # Decode all symbols into a list. Main loop for all bytes except the last one
+    for i in range(1, len(bytarr) - 1):
+        byte = bytarr[i]
+        for j in range(7, -1, -1):
+            bit = (byte >> j) & 1
+            current_node_idx = right_nodes[current_node_idx - nsymb - 1] if bit else left_nodes[current_node_idx - nsymb - 1]
+            
+            if current_node_idx <= nsymb:
+                decoded_deltas_list.append(symbols[current_node_idx - 1])
+                current_node_idx = head_node_idx
+
+    # Special handling for the last byte
+    if len(bytarr) > 1:
+        last_byte = bytarr[-1]
+        num_bits_in_last_byte = 8 if padding == 0 else (8 - padding)
+        for j in range(7, 7 - num_bits_in_last_byte, -1):
+            bit = (last_byte >> j) & 1
+            current_node_idx = right_nodes[current_node_idx - nsymb - 1] if bit else left_nodes[current_node_idx - nsymb - 1]
+
+            if current_node_idx <= nsymb:
+                decoded_deltas_list.append(symbols[current_node_idx - 1])
+                current_node_idx = head_node_idx
+    
+    if not decoded_deltas_list:
+        return np.empty(0, dtype=np.int64) # Handle empty case
+        
+    final_deltas = np.array(decoded_deltas_list, dtype=np.int64)
+    
+    return np.cumsum(final_deltas)
+
 
 _node_number = 0
 
@@ -191,23 +232,31 @@ class Huffman:
         else :
             return bytes(b)
 
-    def Decoder(self, bytarr, write=False):
-        bytarr = bytearray(bytarr)
-        binary_txt = ''.join(bin(i)[2:].rjust(8,'0') for i in bytarr)
-        padding = int(binary_txt[:8], 2)
-        binary_txt = binary_txt[8:-1*padding]
+    def Decoder(self, bytarr, write=False, numba_decode=True):
+        if numba_decode:  # Whether to use the much faster Numba decoder.
+            nsymb = len(self.symbols)
+            left_nodes = np.array(self.left_nodes, dtype=np.int64)
+            right_nodes = np.array(self.right_nodes, dtype=np.int64)
 
-        decoded_arr = []
-        code = ""
+            # Call Numba implementation of Huffman decompression. I think it's about ~100 times faster.
+            decoded_arr = _numba_decoder(bytearray(bytarr), left_nodes, right_nodes, self.symbols, self.node_max, nsymb)
+        else: 
+            bytarr = bytearray(bytarr)
+            binary_txt = ''.join(bin(i)[2:].rjust(8,'0') for i in bytarr)
+            padding = int(binary_txt[:8], 2)
+            binary_txt = binary_txt[8:-1*padding]
 
-        for b in binary_txt:
-            code += b
-            if code in self.decoding:
-                d = self.decoding[code]
-                decoded_arr.append(d)
-                code = ""
+            decoded_arr = []
+            code = ""
 
-        decoded_arr = np.cumsum(decoded_arr)
+            for b in binary_txt:
+                code += b
+                if code in self.decoding:
+                    d = self.decoding[code]
+                    decoded_arr.append(d)
+                    code = ""
+
+            decoded_arr = np.cumsum(decoded_arr)
 
         if write:
             fname, fext = os.path.splitext(self.infile)
