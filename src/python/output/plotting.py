@@ -26,11 +26,11 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int, co
     residual[:] = map_signal
 
     fig, ax = plt.subplots(3, 4, figsize=(42, 18))
-    fig.suptitle(f"Iter {iteration:04d}. Freq: {freq:.2f} GHz (det {detector}). Chain {chain}. g0 = {g0:.4f}.", fontsize=24)
+    fig.suptitle(f"Iter {iteration:04d}. Freq: {freq:.2f} GHz (det {detector}). Chain {chain}. g0 = {g0:.4e}.", fontsize=24)
 
     for i, component in enumerate(components_list):
         smoothing_scale_radians = component.params.smoothing_scale*np.pi/(180*60)
-        comp_map = component.get_sky(freq, params.nside, fwhm=smoothing_scale_radians)
+        comp_map = component.get_sky(freq, detector_data.nside, fwhm=smoothing_scale_radians)
         if component.shortname != "cmb":
             foreground_subtracted -= comp_map
         residual -= comp_map
@@ -119,7 +119,7 @@ def plot_cg_res(params, chain, iteration, residual):
 
 
 def plot_components(params: Bunch, freq: float, detector: int, chain: int,
-                    iteration: int, signal_map: NDArray, components_list: list[DiffuseComponent]):
+                    iteration: int, signal_map: NDArray, components_list: list[DiffuseComponent], nside):
     """
     Plots the resulting component maps produced by component separation. It will
     also plot the total sky map minus the foregrounds, as well as the total map
@@ -145,11 +145,11 @@ def plot_components(params: Bunch, freq: float, detector: int, chain: int,
     residual = np.zeros_like(signal_map)
     residual[:] = signal_map
 
-    ells = np.arange(3 * params.nside)
+    ells = np.arange(3 * nside)
     Z = ells * (ells+1) / (2 * np.pi)
     for component in components_list:
         smoothing_scale_radians = component.params.smoothing_scale*np.pi/(180*60)
-        comp_map = component.get_sky(freq, params.nside, fwhm=smoothing_scale_radians)
+        comp_map = component.get_sky(freq, nside, fwhm=smoothing_scale_radians)
         if component.shortname != "cmb":
             foreground_subtracted -= comp_map
         residual -= comp_map
