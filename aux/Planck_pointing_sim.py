@@ -61,11 +61,14 @@ def get_Planck_pointing(ntod, sample_rate = 32.5015421):
         gamma = 1.0 / np.sqrt(1.0 - beta_mag_sq)
         dot_product = np.sum(beta_vec * z_vec_ecliptic, axis=1)
         orbital_dipole_amplitude = T_CMB * ((1.0 / (gamma * (1.0 - dot_product))) - 1.0)
+
         ecl_basis = SkyCoord(x=[1,0,0], y=[0,1,0], z=[0,0,1], representation_type='cartesian', frame='geocentrictrueecliptic')
         ecl_to_gal_matrix = ecl_basis.transform_to('galactic').cartesian.xyz.value
         z_vec_galactic = z_vec_ecliptic @ ecl_to_gal_matrix.T
+        v_orbital_vec_galactic = v_orbital_vec @ ecl_to_gal_matrix.T
+
         theta, phi = hp.vec2ang(z_vec_galactic)
-        return theta, phi, z_vec_ecliptic, v_orbital_vec, orbital_dipole_amplitude
+        return theta, phi, v_orbital_vec_galactic, orbital_dipole_amplitude
     # --------------------------------------------------------------------
 
     # -- Master Logic (Rank 0) --
@@ -73,23 +76,17 @@ def get_Planck_pointing(ntod, sample_rate = 32.5015421):
         num_batches = int(np.ceil(DURATION_DAYS / BATCH_DURATION_DAYS))
         
         # Pre-allocate memory for the final arrays
-        theta_arr = np.empty(ntod, dtype=np.float64)
-        phi_arr = np.empty(ntod, dtype=np.float64)
-        dipole_arr = np.empty(ntod, dtype=np.float64)
-        LOS_arr = np.empty((ntod, 3), dtype=np.float64)
-        orb_dir_arr = np.empty((ntod, 3), dtype=np.float64)
+        theta_arr = np.empty(ntod, dtype=np.float32)
+        phi_arr = np.empty(ntod, dtype=np.float32)
+        dipole_arr = np.empty(ntod, dtype=np.float32)
+        orb_dir_arr = np.empty((ntod, 3), dtype=np.float32)
 
-        # Handle the two cases: parallel (size > 1) or serial (size == 1)
-        if size > 1:
-            # Create a list of jobs for the workers
-            all_batches = np.arange(num_batches)
-            # Split the jobs among the worker processes (size - 1 of them)
-            worker_chunks = np.array_split(all_batches, size - 1)
-            # The master (rank 0) gets an empty list of jobs
-            chunks_for_ranks = [[]] + worker_chunks
-        else: # Running on a single process
-            print("Running in serial mode on 1 process.")
-            chunks_for_ranks = [np.arange(num_batches)]
+        # Create a list of jobs for the workers
+        all_batches = np.arange(num_batches)
+        # Split the jobs among the worker processes (size - 1 of them)
+        worker_chunks = np.array_split(all_batches, size - 1)
+        # The master (rank 0) gets an empty list of jobs
+        chunks_for_ranks = [[]] + worker_chunks
         
         # Scatter the jobs
         my_batches = comm.scatter(chunks_for_ranks, root=0)
@@ -97,7 +94,7 @@ def get_Planck_pointing(ntod, sample_rate = 32.5015421):
         # Master process receives results from all workers
         print(f"Master (Rank 0) receiving results from {size - 1} workers...")
         for _ in tqdm(range(num_batches), desc="Receiving Batches"):
-            batch_idx, theta, phi, z_vec, v_orb, dipole = comm.recv(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG)
+            batch_idx, theta, phi, v_orb, dipole = comm.recv(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG)
             
             # Calculate the correct slice and place data into the full arrays
             start_idx = batch_idx * samples_per_batch
@@ -105,12 +102,11 @@ def get_Planck_pointing(ntod, sample_rate = 32.5015421):
             if end_idx > ntod:
                 end_idx = ntod
                 # Truncate data if it's from the final, partial batch
-                theta, phi, dipole, z_vec, v_orb = (arr[:end_idx-start_idx] for arr in (theta, phi, dipole, z_vec, v_orb))
+                theta, phi, dipole, v_orb = (arr[:end_idx-start_idx] for arr in (theta, phi, dipole, v_orb))
 
             theta_arr[start_idx:end_idx] = theta
             phi_arr[start_idx:end_idx] = phi
             dipole_arr[start_idx:end_idx] = dipole
-            LOS_arr[start_idx:end_idx, :] = z_vec
             orb_dir_arr[start_idx:end_idx, :] = v_orb
 
     # -- Worker Logic (Ranks > 0) --
@@ -127,6 +123,6 @@ def get_Planck_pointing(ntod, sample_rate = 32.5015421):
     comm.Barrier()
 
     if rank == 0:
-        return theta_arr, phi_arr, LOS_arr, orb_dir_arr, dipole_arr
+        return theta_arr, phi_arr, orb_dir_arr, dipole_arr
     else:
-        return None, None, None, None, None
+        return None, None, None, None

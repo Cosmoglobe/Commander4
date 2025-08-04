@@ -173,44 +173,12 @@ def generate_sync(freqs, fwhm, units, nside):
     return sync_s
 
 
-def get_pointing(npix):
-    theta, phi, LOS, orb_dir, dipole = get_Planck_pointing(params.NTOD, params.f_samp)
+def get_pointing():
+    theta, phi, orb_dir, dipole = get_Planck_pointing(params.NTOD, params.f_samp)
     if rank == 0:
-        pix = hp.ang2pix(params.NSIDE, theta, phi)
-        return pix, LOS, orb_dir, dipole
+        return theta, phi, orb_dir, dipole
     else:
         return None, None, None, None
-    
-    ### Old code for getting pointing, which relied on reading pointing indices from a file
-    # ntod = params.NTOD
-    # if params.POINTING_PATH is None:
-    #     pix = np.arange(ntod) % npix
-    #     return pix.astype('int32')
-
-    # with h5py.File(params.POINTING_PATH, 'r') as file:
-    #     tot_file_len = file['pix'].shape[0]
-    #     pix = file['pix'][:ntod].astype('int32')
-
-    # print(f"Reading {ntod} out of {tot_file_len} points from pointing file ({100*ntod/tot_file_len:.1f}%)")
-    # indc = np.linspace(0, len(pix)-1, params.NTOD, dtype=int)
-    # pix = pix[indc]
-
-    # assert pix.shape[0] == ntod, f"Parameter file ntod {ntod} does not match pixel length {pix.shape[0]}, likely because desired length is longer than entire pointing file."
-
-    # if params.NSIDE > 2048:
-    #     print("Warning: NSIDE is larger than 2048, which is the resolution of the loaded pointing files.")
-    #     np.random.seed(42)
-    #     ang = hp.pix2ang(2048, pix)
-    #     ang1 = ang[0] + np.random.uniform(-0.025, 0.025, ang[0].shape)
-    #     ang2 = ang[1] + np.random.uniform(-0.025, 0.025, ang[1].shape)
-    #     ang1 = np.clip(ang1, 0, np.pi)
-    #     ang2 = np.clip(ang2, 0, 2*np.pi)
-    #     pix = hp.ang2pix(params.NSIDE, ang1, ang2)
-    # else:
-    #     theta, phi = hp.pix2ang(2048, pix)
-    #     pix = hp.ang2pix(params.NSIDE, theta, phi)
-
-    # return pix
 
 
 
@@ -241,7 +209,7 @@ def sim_noise(sigma0, chunk_size, with_corr_noise):
         for i in range((rank-1)*perrank, rank*perrank):
             Fx = np.fft.rfft(np.random.randn(chunk_size))
             Fx *= np.sqrt(noisePS)
-            noise_segment = np.fft.irfft(Fx).astype('float32')
+            noise_segment = np.fft.irfft(Fx).astype(np.float32)
             comm.Send(noise_segment, dest=0, tag=rank)
     else:
         for irank in range(1, size):
@@ -358,8 +326,9 @@ def main():
     ntod = params.NTOD
 
     t0 = time.time()
-    pix, LOS, orb_dir, dipole = get_pointing(npix)
+    theta, phi, orb_dir, dipole = get_pointing()
     if rank == 0:
+        pix = hp.ang2pix(params.NSIDE, theta, phi)
         psi = np.repeat(np.arange(repeat)*np.pi/repeat, npix)
         psi = psi[:ntod]
         signal_tod = []
@@ -376,6 +345,7 @@ def main():
     for i in range(len(freqs)):
 
         if rank == 0:
+            print(f"### Starting frequency {i+1} out of {len(freqs)} ###")
             t0 = time.time()
             print(f"Rank 1 calculating sky signal")
             I,Q,U = comps_sum_smoothed[i]
@@ -410,13 +380,13 @@ def main():
 
             # Add together signal. Sky components get a gain term added to them.
             gain = params.g0
-            signal_tod.append((gain*(d + dipole_myfreq.value) + white_noise + corr_noise).astype('float32'))
-            white_noise_tod.append(white_noise.astype('float32'))
-            corr_noise_tod.append(corr_noise.astype('float32'))
+            signal_tod.append((gain*(d + dipole_myfreq.value) + white_noise + corr_noise).astype(np.float32))
+            white_noise_tod.append(white_noise.astype(np.float32))
+            corr_noise_tod.append(corr_noise.astype(np.float32))
 
-            observed_map[i] = np.bincount(pix, weights=signal_tod[-1], minlength=npix)
-            white_noise_map[i] = np.bincount(pix, weights=white_noise, minlength=npix)
-            corr_noise_map[i] = np.bincount(pix, weights=corr_noise, minlength=npix)
+            observed_map[i] = np.bincount(pix, weights=signal_tod[-1], minlength=npix)  # Full observed map in mV units.
+            white_noise_map[i] = np.bincount(pix, weights=white_noise, minlength=npix)/params.g0  # Noise map in uK_RJ units
+            corr_noise_map[i] = np.bincount(pix, weights=corr_noise, minlength=npix)/params.g0  # Noise map in uK_RJ units
             hit_map[i] = np.bincount(pix, minlength=npix)
             assert (hit_map[i] > 0).all(), f"{np.sum(hit_map[i] == 0)} out of {hit_map[i].shape[0]} pixels were never hit by the scanning strategy."
             if (hit_map[i] <= 10).any():
@@ -465,9 +435,9 @@ def main():
             plt.savefig(params.OUTPUT_FOLDER + f"hits_{nside}_b{fwhm[i].value:.0f}.png")
             plt.close()
 
-        save_to_h5_file(signal_tod, pix, psi, LOS, orb_dir, fname=f'tod_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
-        save_to_h5_file(white_noise_tod, pix, psi, fname=f'white_noise_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
-        save_to_h5_file(corr_noise_tod, pix, psi, fname=f'corr_noise_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
+        save_to_h5_file(signal_tod, theta, phi, psi, orb_dir=orb_dir, fname=f'tod_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
+        save_to_h5_file(white_noise_tod, theta, phi, psi, fname=f'white_noise_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
+        save_to_h5_file(corr_noise_tod, theta, phi, psi, fname=f'corr_noise_sim_{params.NSIDE}_s{params.SIGMA_SCALE}_b{params.FWHM[0]:.0f}')
         print(f"Rank 0 finished writing to file in {time.time()-t0:.1f}s.")
 
 if __name__ == "__main__":
