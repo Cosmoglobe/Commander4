@@ -62,14 +62,18 @@ class CompSepSolver:
         self.map_sky = map_sky
         self.map_rms = map_rms
         self.freqs = np.array(CompSep_comm.allgather(freq))
-        self.npix = map_rms.shape[0]
+        self.my_band_npix = map_rms.shape[0]
         self.nband = len(self.freqs)
         self.my_rank = CompSep_comm.Get_rank()
-        self.nside = np.sqrt(self.npix//12)
-        logassert(self.nside.is_integer(), f"Npix dimension of map ({self.npix}) resulting in a non-integer nside ({self.nside}).", self.logger)
-        self.nside = int(self.nside)
-        self.lmax_bands = (self.nside*5)//2  # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
-        self.alm_len_bands = ((self.lmax_bands+1)*(self.lmax_bands+2))//2
+        self.my_band_nside = np.sqrt(self.my_band_npix//12)
+        logassert(self.my_band_nside.is_integer(), f"Npix dimension of map ({self.my_band_npix}) resulting in a non-integer nside ({self.my_band_nside}).", self.logger)
+        self.my_band_nside = int(self.my_band_nside)
+        self.my_band_lmax = (self.my_band_nside*5)//2  # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
+        self.my_band_alm_len = ((self.my_band_lmax+1)*(self.my_band_lmax+2))//2
+        self.global_nside = params.nside  # This is the NSIDE at which to perform the mixing matrix calculations, which needs to happen on a common resolution.
+        self.global_npix = 12*self.global_nside**2  # See comment above.
+        self.global_lmax = (self.global_nside*5)//2  # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
+        self.global_alm_len = ((self.global_lmax+1)*(self.global_lmax+2))//2
         self.comp_list = comp_list
         self.comps_SED = np.array([comp.get_sed(self.freqs) for comp in comp_list])
         self.ncomp = len(self.comps_SED)
@@ -103,30 +107,29 @@ class CompSepSolver:
 
         logassert(a_array.dtype == np.float64, f"Provided component array is of type {a_array.dtype} and not np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
         logassert(a_array.shape[0] == self.my_comp_alm_len, f"Provided component array is of length {a_array.shape[0]}, not {self.my_comp_alm_len}.", logger)
-
         mycomp = self.CompSep_comm.Get_rank()
         mythreads = self.params.nthreads_compsep
 
         if mycomp < self.ncomp:  # this task actually holds a component
             a_array = alm_real2complex(a_array, self.my_comp_lmax) # Convert the real input alms to complex alms.
             # Y a
-            a = alm_to_map(a_array, self.nside, self.my_comp_lmax, nthreads=mythreads)
+            a = alm_to_map(a_array, self.global_nside, self.my_comp_lmax, nthreads=mythreads)
         else:
             a = None
 
         # M Y a
         a_old = a
-        a = np.zeros(self.npix)
+        a = np.zeros(self.global_npix)  # Mixing matrix calculations must happen at a common resolution.
         for icomp in range(self.ncomp):
             # successively broadcast a_old and build a from it
-            tmp = a_old if mycomp == icomp else np.empty(self.npix)
+            tmp = a_old if mycomp == icomp else np.empty(self.global_npix)
             self.CompSep_comm.Bcast(tmp, root=icomp)
             a += self.comps_SED[icomp,self.my_rank]*tmp
         del tmp
 
         # Y^-1 M Y a
         a_old = a
-        a = np.empty((self.alm_len_bands,), dtype=np.complex128)
+        a = np.empty((self.global_alm_len,), dtype=np.complex128)
         curvedsky.map2alm_healpix(a_old, a, niter=3, spin=0, nthread=mythreads)
         del a_old
 
@@ -134,20 +137,20 @@ class CompSepSolver:
         hp.smoothalm(a, self.my_band_fwhm_rad, inplace=True)
 
         # Y B Y^-1 M Y a
-        a = alm_to_map(a, self.nside, self.lmax_bands, nthreads=mythreads)
+        a = alm_to_map(a, self.my_band_nside, self.global_lmax, nthreads=mythreads)
 
         # N^-1 Y B Y^-1 M Y a
         a /= self.map_rms**2
 
         # Y^T N^-1 Y B Y^-1 M Y a
-        a = alm_to_map_adjoint(a, self.nside, self.lmax_bands, nthreads=mythreads)
+        a = alm_to_map_adjoint(a, self.my_band_nside, self.global_lmax, nthreads=mythreads)
 
         # B^T Y^T N^-1 Y B Y^-1 M Y a
         hp.smoothalm(a, self.my_band_fwhm_rad, inplace=True)
 
         # Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         a_old = a
-        a = np.empty((self.npix,))
+        a = np.empty((self.global_npix,))
         curvedsky.map2alm_healpix(a, a_old, niter=3, adjoint=True, spin=0, nthread=mythreads)
 
         # M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
@@ -163,7 +166,7 @@ class CompSepSolver:
 
         if mycomp < self.ncomp:
             # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
-            a = alm_to_map_adjoint(a, self.nside, self.my_comp_lmax, nthreads=mythreads)
+            a = alm_to_map_adjoint(a, self.global_nside, self.my_comp_lmax, nthreads=mythreads)
  
             a = alm_complex2real(a, self.my_comp_lmax) # Convert complex alm back to real before returning.
         else:
@@ -213,7 +216,7 @@ class CompSepSolver:
             if iter%checkpoint_interval == 0:
                 if mycomp < self.ncomp:
                     if master:
-                        logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-10:iter]):.3e} ({(time.time() - t0)/10.0:.1f}s/iter)")
+                        logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-checkpoint_interval:iter]):.3e} ({(time.time() - t0)/checkpoint_interval:.1f}s/iter)")
                     if x_true is not None:
                         CG_errors_true = np.linalg.norm(CG_solver.x-x_true)/np.linalg.norm(x_true)
                         CG_Anorm_error = (CG_solver.x-x_true).dot(LHS(CG_solver.x-x_true))
@@ -278,14 +281,14 @@ class CompSepSolver:
         mythreads = self.params.nthreads_compsep
 
         # Y^T N^-1 d
-        b = alm_to_map_adjoint(b, self.nside, self.lmax_bands, nthreads=mythreads)
+        b = alm_to_map_adjoint(b, self.my_band_nside, self.global_lmax, nthreads=mythreads)
 
         # B^T Y^T N^-1 d
         hp.smoothalm(b, self.my_band_fwhm_rad, inplace=True)
 
         # Y^-1^T B^T Y^T N^-1 d
         b_old = b
-        b = np.empty((self.npix,))
+        b = np.empty((self.global_npix,))  # Mixing matrix calculations must happen at a common resolution.
         curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
 
         # M^T Y^-1^T B^T Y^T N^-1 d
@@ -299,7 +302,7 @@ class CompSepSolver:
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 d
         if self.is_holding_comp:  # This task actually holds a component
-            b = alm_to_map_adjoint(b, self.nside, self.my_comp_lmax, nthreads=mythreads)
+            b = alm_to_map_adjoint(b, self.global_nside, self.my_comp_lmax, nthreads=mythreads)
             b = alm_complex2real(b, self.my_comp_lmax)
         else:
             b = np.zeros((0,), dtype=np.float64)
