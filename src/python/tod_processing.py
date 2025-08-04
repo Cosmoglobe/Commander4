@@ -9,8 +9,7 @@ from output import log
 from scipy.fft import rfft, irfft, rfftfreq
 import time
 from numpy.typing import NDArray
-import pysm3.units as u
-
+import pysm3.units as pysm3_u
 
 from src.python.data_models.detector_map import DetectorMap
 from src.python.data_models.detector_TOD import DetectorTOD
@@ -71,20 +70,19 @@ def read_TOD_sim_data(h5_filename: str, band: int, scan_idx_start: int, scan_idx
         scanlist = []
         for iscan in range(scan_idx_start, scan_idx_stop):
             try:
-                tod = f[f"{iscan+1:06}/{band_formatted}/tod"][()].astype(np.float64)
-                pix = f[f"{iscan+1:06}/{band_formatted}/pix"][()]
-                psi = f[f"{iscan+1:06}/{band_formatted}/psi"][()].astype(np.float64)
-                LOS_vec = f[f"{iscan+1:06}/{band_formatted}/LOS_vec"][()]
-                orb_dir_vec = f[f"{iscan+1:06}/{band_formatted}/orbital_dir_vec"][()]
+                tod = f[f"{iscan+1:06}/{band_formatted}/tod"][()]
+                theta = f[f"{iscan+1:06}/{band_formatted}/theta"][()]
+                phi = f[f"{iscan+1:06}/{band_formatted}/phi"][()]
+                psi = f[f"{iscan+1:06}/{band_formatted}/psi"][()]
+                Ntod = tod.size
+                # We assume the orbital velocity to be constant over the duration of a scan, so we read the half-way point.
+                # This orbital velociy is relative to the Sun, but is in **Galactic coordinates**, to be easily compatible with other quantities.
+                orb_dir_vec = f[f"{iscan+1:06}/{band_formatted}/orbital_dir_vec"][Ntod//2]
             except KeyError:
                 logger.exception(f"{iscan}\n{band_formatted}\n{list(f)}")
                 raise KeyError
-            log.logassert(np.max(pix) < 12*nside**2, f"Nside is {nside}, but found pixel index exceeding 12nside^2 ({np.max(12*nside**2)})", logger)
-            theta, phi = hp.pix2ang(nside, pix)
             scanlist.append(ScanTOD(tod, theta, phi, psi, 0., iscan))
-            scanlist[-1].LOS_vec = LOS_vec
             scanlist[-1].orb_dir_vec = orb_dir_vec
-            # scanlist[-1].LOS_vec = LOS_vec
         det = DetectorTOD(scanlist, float(band), fwhm, nside)
     return det
 
@@ -348,7 +346,7 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
     T_CMB = 2.725  # K (Cosmic Microwave Background temperature)
     C = 299792458  # m/s (Speed of light)
 
-    T_CMB = T_CMB * u.K_CMB
+    T_CMB = T_CMB * pysm3_u.K_CMB
 
     sum_s_T_N_inv_d = 0  # Accumulators for the numerator and denominator of eqn 16.
     sum_s_T_N_inv_s = 0
@@ -356,9 +354,12 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
         tod = scan.sky_subtracted_tod
 
         # --- Setup ---
-        dot_product = np.sum(scan.orb_dir_vec*scan.LOS_vec, axis=-1)  # How much do the LOS and orbital velocity align?
+        _, theta, phi, _ = scan.data
+        vec_galactic = hp.ang2vec(theta, phi)
+        dot_product = np.sum(scan.orb_dir_vec * vec_galactic, axis=-1)  # How much do the LOS and orbital velocity align?
+
         s_orb = T_CMB * dot_product / C  # The orbital dipole in units of uK_CMB.
-        s_orb = s_orb.to("uK_RJ", equivalencies=u.cmb_equivalencies(experiment_data.nu*u.GHz))  # Converting to uK_RJ
+        s_orb = s_orb.to("uK_RJ", equivalencies=pysm3_u.cmb_equivalencies(experiment_data.nu*pysm3_u.GHz))  # Converting to uK_RJ
         scan.s_orb = s_orb.value 
 
         Ntod = tod.shape[0]
@@ -397,7 +398,9 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
 
     for scan in experiment_data.scans:
         scan.g0_est = g_sampled
-        dot_product = np.sum(scan.orb_dir_vec*scan.LOS_vec, axis=-1)  # How much do the LOS and orbital velocity align?
+        _, theta, phi, _ = scan.data
+        vec_galactic = hp.ang2vec(theta, phi)
+        dot_product = np.sum(scan.orb_dir_vec * vec_galactic, axis=-1)  # How much do the LOS and orbital velocity align?
         scan.sky_subtracted_tod -= scan.g0_est*scan.s_orb
         scan.orbital_dipole = scan.g0_est*scan.s_orb
 
