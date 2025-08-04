@@ -1,12 +1,13 @@
 import numpy as np
 
 class DetectorMap:
-    def __init__(self, map_sky, map_corr_noise, map_rms, nu, fwhm):
+    def __init__(self, map_sky, map_corr_noise, map_rms, nu, fwhm, nside):
         self._map_corr_noise = map_corr_noise
         self._map_sky = map_sky
         self._map_rms = map_rms
         self._nu = nu
         self._fwhm = fwhm
+        self._nside = nside
 
     @property
     def map_sky(self):
@@ -27,6 +28,10 @@ class DetectorMap:
     @property
     def fwhm(self):
         return self._fwhm
+
+    @property
+    def nside(self):
+        return self._nside
 
     @property
     def blm(self):

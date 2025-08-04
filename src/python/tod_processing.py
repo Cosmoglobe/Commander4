@@ -20,9 +20,9 @@ from src.python.noise_sampling import corr_noise_realization_with_gaps, sample_n
 
 nthreads=1
 
-def get_empty_compsep_output(staticData: list[DetectorTOD], params) -> NDArray[np.float64]:
+def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float64]:
     "Creates a dummy compsep output for a single band"
-    return np.zeros(12*params.nside**2,dtype=np.float64)
+    return np.zeros(12*staticData.nside**2, dtype=np.float64)
 
 
 def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, params: Bunch) -> DetectorMap:
@@ -56,7 +56,7 @@ def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, p
         map_corr_noise[map_corr_noise != 0] /= map_inv_var[map_corr_noise != 0]
         map_rms = np.zeros_like(map_inv_var) + np.inf
         map_rms[map_inv_var != 0] = 1.0/np.sqrt(map_inv_var[map_inv_var != 0])
-        detmap = DetectorMap(map_signal, map_corr_noise, map_rms, det_static.nu, det_static.fwhm)
+        detmap = DetectorMap(map_signal, map_corr_noise, map_rms, det_static.nu, det_static.fwhm, det_static.nside)
         detmap.g0 = det_static.scans[0].g0_est
         detmap.skysub_map = map_skysub
         detmap.rawobs_map = map_rawobs
@@ -64,7 +64,7 @@ def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, p
         return detmap
 
 
-def read_TOD_data(h5_filename: str, band: int, scan_idx_start: int, scan_idx_stop: int, nside: int, fwhm: float) -> DetectorTOD:
+def read_TOD_sim_data(h5_filename: str, band: int, scan_idx_start: int, scan_idx_stop: int, nside: int, fwhm: float) -> DetectorTOD:
     logger = logging.getLogger(__name__)
     with h5py.File(h5_filename) as f:
         band_formatted = f"{band:04d}"
@@ -84,7 +84,8 @@ def read_TOD_data(h5_filename: str, band: int, scan_idx_start: int, scan_idx_sto
             scanlist.append(ScanTOD(tod, theta, phi, psi, 0., iscan))
             scanlist[-1].LOS_vec = LOS_vec
             scanlist[-1].orb_dir_vec = orb_dir_vec
-        det = DetectorTOD(scanlist, float(band), fwhm)
+            # scanlist[-1].LOS_vec = LOS_vec
+        det = DetectorTOD(scanlist, float(band), fwhm, nside)
     return det
 
 
@@ -185,7 +186,7 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Co
     my_scans_stop = min(scans_per_rank * (MPIrank_band + 1), my_num_scans) # "min" in case the number of scans is not divisible by the number of ranks
 #    my_scans_start, my_scans_stop = scans_per_rank*MPIrank_band, scans_per_rank*(MPIrank_band + 1)
     logger.info(f"TOD: Rank {MPIrank_tod} assigned scans {my_scans_start} - {my_scans_stop} on band{MPIcolor_band}.")
-    experiment_data = read_TOD_data(my_experiment.data_path, my_band.freq, my_scans_start, my_scans_stop, my_experiment.nside, my_band.fwhm)
+    experiment_data = read_TOD_sim_data(my_experiment.data_path, my_band.freq, my_scans_start, my_scans_stop, my_band.nside, my_band.fwhm)
 
     return is_band_master, band_comm, my_band_identifier, tod_band_masters_dict, experiment_data
 
@@ -200,7 +201,7 @@ def subtract_sky_model(experiment_data: DetectorTOD, det_compsep_map: NDArray, p
     Output:
         experiment_data (DetectorTOD): The experiment TOD with the estimated white noise level added to each scan.
     """
-    nside = params.nside
+    nside = experiment_data.nside
     for scan in experiment_data.scans:
         scan_map, theta, phi, psi = scan.data
         ntod = scan_map.shape[0]
@@ -246,7 +247,7 @@ def estimate_white_noise(experiment_data: DetectorTOD, params: Bunch) -> Detecto
 
 
 def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, params: Bunch) -> DetectorTOD:
-    nside = params.nside
+    nside = experiment_data.nside
     for scan in experiment_data.scans:
         f_samp = params.samp_freq
         scan_map, theta, phi, psi = scan.data

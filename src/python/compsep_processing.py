@@ -96,11 +96,11 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
 
     sky_model = SkyModel(comp_list)
 
-    detector_map = sky_model.get_sky_at_nu(band_freq, params.nside, fwhm=compsep_solver.my_band_fwhm_rad)
+    detector_map = sky_model.get_sky_at_nu(band_freq, detector_data.nside, fwhm=compsep_solver.my_band_fwhm_rad)
 
     if params.make_plots:
         detector_to_plot = proc_comm.Get_rank()
         plotting.plot_combo_maps(params, detector_to_plot, chain, iter, comp_list, detector_data)
-        plotting.plot_components(params, band_freq, detector_to_plot, chain, iter, signal_map, comp_list)
+        plotting.plot_components(params, band_freq, detector_to_plot, chain, iter, signal_map, comp_list, detector_data.nside)
 
     return detector_map  # Return the full sky realization for my band.

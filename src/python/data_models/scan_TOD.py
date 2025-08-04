@@ -7,7 +7,7 @@ class ScanTOD:
     def __init__ (self, value, theta, phi, psi, startTime, scanID):
         logger = logging.getLogger(__name__)
         log.logassert_np(value.ndim==1, "'value' must be a 1D array", logger)
-        log.logassert_np(value.dtype==np.float64, "'value' dtype must be np.float64", logger)
+        log.logassert_np(value.dtype in [np.float64,np.float32], "'value' dtype must be np.float64", logger)
         log.logassert_np(theta.shape==value.shape and phi.shape==value.shape and psi.shape==value.shape,
             f"shape mismatch between input arrays. Theta: {theta.shape}, phi: {phi.shape}, psi: {psi.shape}, value: {value.shape}", logger)
         self._value = value

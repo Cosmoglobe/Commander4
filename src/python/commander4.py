@@ -97,7 +97,7 @@ def main(params: Bunch, params_dict: dict):
     curr_tod_output = None
     if color == 0:
         # Chain #1 do TOD processing, resulting in maps_chain1 (we start with a fake output of component separation, containing a completely empty sky).
-        compsep_output_black = get_empty_compsep_output(experiment_data, params)
+        compsep_output_black = get_empty_compsep_output(experiment_data)
 
         curr_tod_output = process_tod(proc_comm, band_comm, experiment_data, compsep_output_black, params, 1, 1)
         send_tod(is_band_master, curr_tod_output, CompSep_band_masters_dict, my_band_identifier)
