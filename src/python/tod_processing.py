@@ -246,8 +246,8 @@ def estimate_white_noise(experiment_data: DetectorTOD, params: Bunch) -> Detecto
 
 def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, params: Bunch) -> DetectorTOD:
     nside = experiment_data.nside
+    f_samp = experiment_data.fsamp
     for scan in experiment_data.scans:
-        f_samp = scan.fsamp
         scan_map, theta, phi, psi = scan.data
         ntod = scan_map.shape[0]
         freq = rfftfreq(ntod, d = 1/f_samp)
@@ -350,6 +350,7 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
 
     sum_s_T_N_inv_d = 0  # Accumulators for the numerator and denominator of eqn 16.
     sum_s_T_N_inv_s = 0
+    fsamp = experiment_data.fsamp
     for scan in experiment_data.scans:
         tod = scan.sky_subtracted_tod
 
@@ -365,7 +366,7 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
         Ntod = tod.shape[0]
         Nrfft = Ntod//2+1
         sigma0 = np.std(tod[1:] - tod[:-1])/np.sqrt(2)
-        freqs = rfftfreq(Ntod, 1.0/scan.fsamp)
+        freqs = rfftfreq(Ntod, 1.0/fsamp)
         inv_power_spectrum = np.zeros(Nrfft)
         inv_power_spectrum[1:] = 1.0/(sigma0**2*(1 + (freqs[1:]/scan.fknee_est)**scan.alpha_est))
 
