@@ -26,8 +26,8 @@ sample_corr_noise: False  # Whether to sample and subtract correlated noise duri
 pixel_compsep_sampling: False  # Pixel-by-pixel component separation, as opposed to global (which will take beam into account).
 
 output_paths:
-  plots: "../../plots/"
-  stats: "../../stats/"
+  plots: "../commander4_plots/"
+  stats: "../commander4_stats/"
 
 logging:
   console:
