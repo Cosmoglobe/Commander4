@@ -365,7 +365,7 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
         Ntod = tod.shape[0]
         Nrfft = Ntod//2+1
         sigma0 = np.std(tod[1:] - tod[:-1])/np.sqrt(2)
-        freqs = rfftfreq(Ntod, 1.0/params.samp_freq)
+        freqs = rfftfreq(Ntod, 1.0/scan.fsamp)
         inv_power_spectrum = np.zeros(Nrfft)
         inv_power_spectrum[1:] = 1.0/(sigma0**2*(1 + (freqs[1:]/scan.fknee_est)**scan.alpha_est))
 
