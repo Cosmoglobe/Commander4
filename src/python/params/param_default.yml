@@ -11,8 +11,6 @@ niter_gibbs: 4  # number of Gibbs iterations to perform.
 
 nside: 256
 
-# samp_freq: 6.0  # At the moment sample frequency is share for all bands.
-
 # Initialization parameters, for the first iteration.
 noise_fknee: 0.75
 noise_alpha: -1.6
@@ -121,6 +119,7 @@ experiments:
         fwhm: 32 # [arcmin]
         freq: 30 # [GHz]
         nside: 256
+        fsamp: 6.0  # [Hz]
 
   PlanckHFI:
     enabled: true
@@ -134,18 +133,22 @@ experiments:
         fwhm: 9.6 # [arcmin]
         freq: 100 # [GHz]
         nside: 256
+        fsamp: 6.0  # [Hz]
       Planck353GHz:
         enabled: true
         fwhm: 4.8 # [arcmin]
         freq: 353 # [GHz]
         nside: 256
+        fsamp: 6.0  # [Hz]
       Planck545GHz:
         enabled: true
         fwhm: 4.7 # [arcmin]
         freq: 545 # [GHz]
         nside: 256
+        fsamp: 6.0  # [Hz]
       Planck857GHz:
         enabled: true
         fwhm: 4.3 # [arcmin]
         freq: 857 # [GHz]
         nside: 256
+        fsamp: 6.0  # [Hz]
