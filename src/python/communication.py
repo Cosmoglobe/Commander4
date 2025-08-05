@@ -19,7 +19,8 @@ def send_compsep(my_band_identifier: str, detector_map: NDArray[np.floating], de
         destinations (dict[str->int]): A dictionary mapping the string in 'my_band_identifier' to the world rank of the destination task (on the TOD side).
     """
     if destinations is not None:
-        MPI.COMM_WORLD.send(detector_map, dest=destinations[my_band_identifier])
+        if my_band_identifier in destinations:  # If the band our rank is holding is not in "destinations", it means it did not come from TOD-processing, and should not be sent back either.
+            MPI.COMM_WORLD.send(detector_map, dest=destinations[my_band_identifier])
 
 
 def receive_compsep(band_comm: Comm, my_band_identifier: str, band_master: bool, senders: dict[str, int]) -> NDArray[np.floating]:
