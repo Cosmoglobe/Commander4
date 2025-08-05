@@ -120,7 +120,7 @@ experiments:
         enabled: true
         fwhm: 32 # [arcmin]
         freq: 30 # [GHz]
-        nside: 128
+        nside: 256
 
   PlanckHFI:
     enabled: true
@@ -133,7 +133,7 @@ experiments:
         enabled: true
         fwhm: 9.6 # [arcmin]
         freq: 100 # [GHz]
-        nside: 128
+        nside: 256
       Planck353GHz:
         enabled: true
         fwhm: 4.8 # [arcmin]
