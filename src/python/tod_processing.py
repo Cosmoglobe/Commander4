@@ -63,10 +63,10 @@ def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, p
         return detmap
 
 
-def read_TOD_sim_data(h5_filename: str, band: int, scan_idx_start: int, scan_idx_stop: int, nside: int, fwhm: float) -> DetectorTOD:
+def read_TOD_sim_data(h5_filename: str, my_band: Bunch, scan_idx_start: int, scan_idx_stop: int) -> DetectorTOD:
     logger = logging.getLogger(__name__)
     with h5py.File(h5_filename) as f:
-        band_formatted = f"{band:04d}"
+        band_formatted = f"{my_band.freq:04d}"
         scanlist = []
         for iscan in range(scan_idx_start, scan_idx_stop):
             try:
@@ -83,7 +83,7 @@ def read_TOD_sim_data(h5_filename: str, band: int, scan_idx_start: int, scan_idx
                 raise KeyError
             scanlist.append(ScanTOD(tod, theta, phi, psi, 0., iscan))
             scanlist[-1].orb_dir_vec = orb_dir_vec
-        det = DetectorTOD(scanlist, float(band), fwhm, nside)
+        det = DetectorTOD(scanlist, float(my_band.freq), my_band.fwhm, my_band.nside, my_band.fsamp)
     return det
 
 
@@ -184,7 +184,7 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Co
     my_scans_stop = min(scans_per_rank * (MPIrank_band + 1), my_num_scans) # "min" in case the number of scans is not divisible by the number of ranks
 #    my_scans_start, my_scans_stop = scans_per_rank*MPIrank_band, scans_per_rank*(MPIrank_band + 1)
     logger.info(f"TOD: Rank {MPIrank_tod} assigned scans {my_scans_start} - {my_scans_stop} on band{MPIcolor_band}.")
-    experiment_data = read_TOD_sim_data(my_experiment.data_path, my_band.freq, my_scans_start, my_scans_stop, my_band.nside, my_band.fwhm)
+    experiment_data = read_TOD_sim_data(my_experiment.data_path, my_band, my_scans_start, my_scans_stop)
 
     return is_band_master, band_comm, my_band_identifier, tod_band_masters_dict, experiment_data
 
@@ -247,7 +247,7 @@ def estimate_white_noise(experiment_data: DetectorTOD, params: Bunch) -> Detecto
 def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, params: Bunch) -> DetectorTOD:
     nside = experiment_data.nside
     for scan in experiment_data.scans:
-        f_samp = params.samp_freq
+        f_samp = scan.fsamp
         scan_map, theta, phi, psi = scan.data
         ntod = scan_map.shape[0]
         freq = rfftfreq(ntod, d = 1/f_samp)
