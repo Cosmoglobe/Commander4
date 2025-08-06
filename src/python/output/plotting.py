@@ -89,9 +89,20 @@ def plot_data_maps(master, params, detector, chain, iteration, **kwargs):
             cmap = None
         else:
             cmap = 'RdBu_r'
-        hp.mollview(kwargs[maptype], cmap=cmap, title=f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}")
-        plt.savefig(params.output_paths.plots + f"maps_data/{maptype}_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
-        plt.close()
+        if kwargs[maptype].ndim == 1:
+            hp.mollview(kwargs[maptype], cmap=cmap, title=f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}")
+            plt.savefig(params.output_paths.plots + f"maps_data/{maptype}_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+            plt.close()
+        elif kwargs[maptype].ndim == 2:
+            if kwargs[maptype].shape[0] == 3:
+                plt.figure(figsize=(8.5*3, 5.4))
+                labs = ["I", "Q", "U"]
+                for i in range(3):
+                    hp.mollview(kwargs[maptype][i], cmap=cmap, title=labs[i],
+                            sub=(1,3,i+1))
+                plt.suptitle(f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}")
+                plt.savefig(params.output_paths.plots + f"maps_data/{maptype}_IQU_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+            plt.close()
 
 
 def plot_cg_res(params, chain, iteration, residual):
