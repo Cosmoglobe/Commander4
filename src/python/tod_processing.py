@@ -25,6 +25,7 @@ def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float64]:
 
 
 def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, params: Bunch) -> DetectorMap:
+    logger = logging.getLogger(__name__)
     detmap_rawobs, detmap_signal, detmap_orbdipole, detmap_skysub, detmap_corr_noise, detmap_inv_var = single_det_map_accumulator_IQU(det_static, det_cs_map, params)
     map_signal = np.zeros_like(detmap_signal)
     map_orbdipole = np.zeros_like(detmap_orbdipole)
@@ -61,21 +62,27 @@ def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, p
             if (map_signal.shape[0] == 3) and (map_inv_var.shape[0] == 6):
                 # Standard IQU mapmaking
                 A = np.zeros((map_inv_var.shape[1], 3, 3), dtype=map_inv_var.dtype)
+                
                 A[:,0,0] = map_inv_var[0]
-                A[:,0,1] = A[:,1,0] = map_inv_var[1]
-                A[:,0,2] = A[:,2,0] = map_inv_var[2]
+
+                A[:,0,1] = map_inv_var[1]
+                A[:,1,0] = map_inv_var[1]
+
+                A[:,0,2] = map_inv_var[2]
+                A[:,2,0] = map_inv_var[2]
+
                 A[:,1,1] = map_inv_var[3]
-                A[:,1,2] = A[:,2,1] = map_inv_var[4]
+
+                A[:,1,2] = map_inv_var[4]
+                A[:,2,1] = map_inv_var[4]
+
                 A[:,2,2] = map_inv_var[5]
 
                 for m in [map_orbdipole, map_rawobs, map_signal, map_skysub, map_corr_noise]:
                     m[:] = np.linalg.solve(A, m.T).T
-                    #m[0] /= map_inv_var[0]
-                    #m[1] /= map_inv_var[3]
-                    #m[2] /= map_inv_var[5]
 
-                A_inv = np.linalg.inv(A)
                 map_rms = np.zeros_like(map_rawobs)
+                A_inv = np.linalg.inv(A)
                 map_rms[0] = A_inv[:,0,0]**0.5
                 map_rms[1] = A_inv[:,1,1]**0.5
                 map_rms[2] = A_inv[:,2,2]**0.5
@@ -83,10 +90,10 @@ def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, p
             else:
                 # Improperly formatted IQU map, and/or right format not yet
                 # implemented.
-                print("You are about to receive a horrible crash")
+                logger.warning("You are about to receive a horrible crash")
 
 
-        print("Temporarily setting everything to intensity only")
+        logger.info(f"Temporarily setting everything to intensity only")
         detmap = DetectorMap(map_signal[0], map_corr_noise[0], map_rms[0], det_static.nu, det_static.fwhm, det_static.nside)
         detmap.g0 = det_static.scans[0].g0_est
         detmap.skysub_map = map_skysub[0]

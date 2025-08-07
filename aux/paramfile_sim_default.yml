@@ -1,12 +1,12 @@
-OUTPUT_FOLDER: 'sim_data_cmb_dust_sync_nside64_beam20_noise0.1/'
+OUTPUT_FOLDER: '/mn/stornext/d5/data/duncanwa/comm4/sim_data_cmb_dust_sync_nside64_beam20_noise0.1/'
 
 # general map characteristics
 NSIDE: 256
-NTOD: 700000000
+NTOD: 700_000_000
 #FWHM: [32.2, 9.6, 4.8, 4.7, 4.3] # [arcmin]
 FWHM: [20.0, 20.0, 20.0, 20.0, 20.0] # [arcmin]
 FREQ: [30, 100, 353, 545, 857] # [GHz]
-pol: False # include (Q,U) polarization
+pol: True # include (Q,U) polarization
 unit: 'uK_RJ' #'MJ/sr' # or 'uK_RJ'
 
 # cosmology parameters
@@ -19,8 +19,8 @@ tau: 0.06
 As: 2.e-9
 ns: 0.965
 
-# components: ["CMB", "dust", "sync", "corr_noise"]  # Remove components from this list to remove them from simulation.
-components: ["CMB", "dust", "sync"]  # Remove components from this list to remove them from simulation.
+components: ["CMB", "dust", "sync", "corr_noise", "orb_dip"]  # Remove components from this list to remove them from simulation.
+# components: ["CMB", "dust", "sync"]  # Remove components from this list to remove them from simulation.
 
 # thermal dust parameters
 nu_ref_dust: 857 # [GHz]
@@ -40,7 +40,7 @@ g0: 81.5153
 
 # noise parameters
 SIGMA0: [100, 80, 30, 100, 200] # tod level white noise [uK_RJ] 
-SIGMA_SCALE: 0.1 # scale noise level
+SIGMA_SCALE: 1 # scale noise level
 SAMP_FREQ: 180 # sampling frequency [Hz]
 NOISE_FKNEE: 0.6
 NOISE_ALPHA: -1.2

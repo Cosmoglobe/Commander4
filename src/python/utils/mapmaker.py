@@ -161,6 +161,9 @@ def single_det_map_accumulator_IQU(det_static: DetectorTOD, det_cs_map: np.array
             hits_map   += np.bincount(pix, minlength=npix)
 
     if test_polang_coverage:
-        R = np.hypot(sum_cos2psi, sum_sin2psi)/hits_map
+        R = (sum_cos2psi/hits_map)**2 + (sum_sin2psi/hits_map)**2
+        import matplotlib.pyplot as plt
+        hp.mollview(R, norm='hist', title='R')
+        plt.show()
 
     return detmap_rawobs, detmap_signal, detmap_orbdipole, detmap_skysub, detmap_corr_noise, detmap_inv_var
