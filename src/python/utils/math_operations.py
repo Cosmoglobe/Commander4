@@ -31,23 +31,40 @@ def gaussian_random_alm(lmax, mmax, spin, ncomp):
     res[lmax+1:] *= np.sqrt(2.)
     return res
 
+# Cache for geom_info objects ... pretty small, each entry has a size of O(nside)
+# This will be mainly beneficial for small SHTs with high nthreads
+hp_geominfos = {}
 
-def alm_to_map(alm: NDArray, nside: int, lmax: int, nthreads=1) -> NDArray:
-    base = ducc0.healpix.Healpix_Base(nside, "RING")
-    geom = base.sht_info()
-    return ducc0.sht.synthesis(alm=alm.reshape((1,-1)),
-                               lmax=lmax,
-                               spin=0,
-                               nthreads=nthreads, **geom).reshape((-1,))
+def _prep_input(arr_in, arr_out, nside, spin):
+    ndim_in = arr_in.ndim
+    if spin == 0 and ndim_in == 1:
+        arr_in = arr_in.reshape((1,-1))
+        if arr_out is not None:
+            arr_out = arr_out.reshape((1,-1))
+
+    if arr_in.ndim !=2 or arr_out.ndim != 2:
+        raise RuntimeError("bad array dimensionality") 
+
+    if nside not in hp_geominfos:
+        hp_geominfos[nside] = ducc0.healpix.Healpix_Base(nside, "RING").sht_info()
+
+    return arr_in, arr_out, ndim_in
 
 
-def alm_to_map_adjoint(mp: NDArray, nside: int, lmax: int, nthreads=1) -> NDArray:
-    base = ducc0.healpix.Healpix_Base(nside, "RING")
-    geom = base.sht_info()
-    return ducc0.sht.adjoint_synthesis(map=mp.reshape((1,-1)),
-                                       lmax=lmax,
-                                       spin=0,
-                                       nthreads=nthreads, **geom).reshape((-1,))
+def alm_to_map(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
+               nthreads: int=1, out=None) -> NDArray:
+    alm, out, ndim_in = _prep_input(alm, out, nside, spin)
+    out = ducc0.sht.synthesis(alm=alm, map=out, lmax=lmax, spin=spin,
+                              nthreads=nthreads, **hp_geominfos[nside])
+    return out if ndim_in == 2 else out.reshape((-1,))
+
+
+def alm_to_map_adjoint(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
+                       nthreads: int=1, out=None) -> NDArray:
+    mp, out, ndim_in = _prep_input(mp, out, nside, spin)
+    out = ducc0.sht.adjoint_synthesis(map=mp, alm=out, lmax=lmax, spin=spin,
+                                      nthreads=nthreads, **hp_geominfos[nside])
+    return out if ndim_in == 2 else out.reshape((-1,))
 
 
 def spherical_beam_to_bl(fwhm: float, lmax: int) -> NDArray:
