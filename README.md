@@ -34,3 +34,54 @@ mpirun -n 15 python -u src/python/commander4.py -p params/param_default.yml
 6. If the pull request is small and unlikely to break anything or affect others, simply merge it yourself.
 7. If you are not immediately planning to keep developing the same features on the same branch, it is best to check out to main (`git checkout main`) and delete your local branch (`git branch -d dev-compsep`) (you can always re-branch with the exact same name later). The exception is if you intend to keep working on the same features in the code, that depends on the new changes you made.
 8. If you are the reviewer of a pull request, always delete the merged branch immediately after merging. There will be a prompt for this on GitHub.
+
+### Python style guidelines
+Commander 4 does not strictly adhere to a specific style guideline, and you are encouraged to use common sense. You are generally recommended to follow PEP8 (https://peps.python.org/pep-0008/) style guidelines, with the following clarifications and exceptions:
+
+#### Line length
+Commander 4 uses a maximum line length of 100 characters.
+
+#### Line breaks
+You are generally encouraged to avoid unnecessary line breaks, unless you feel it strongly adds to the readability of the code.
+```Python
+my_sum = the_first_value + some_other_value + a_third_value  # Correct
+my_sum = the_first_value\  # Incorrect
+       + some_other_value\
+       + a_third_value
+```
+
+#### Function arguments
+You are generally encouraged to not line-break for the first function argument, and the keep multi-line arguments aligned.
+```Python
+def my_very_long_function_name(argument1, argument2, argument3,
+                               argument4, argument5):
+    return argument1 + argument2
+```
+
+#### Name capitalization
+Classes should use PascalCase capitalization, while functions should be lower-case.
+```Python
+class MyClass:
+    ...
+def my_func():
+    ...
+```
+
+#### Internal class methods
+Class methods that are only used by other class methods, and never by any external actor, should start with an underscore (_)
+```Python
+class MyClass:
+    def _calculate_something_internal(self):
+        ...
+    def solve(self):
+        self._calculate_something_internal()
+```
+
+#### Type hints
+Functions should have type hints for all their function arguments and return type. Beyond this, type hints are optional.
+```Python
+from numpy.typing import NDArray
+
+def my_pow_func(array: NDArray, pow: float) -> NDArray:
+    return array**pow
+```
