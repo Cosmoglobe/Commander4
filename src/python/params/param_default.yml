@@ -1,5 +1,5 @@
 MPI_config:  # Specifying how many MPI tasks to allocate to different workloads. Sum needs to match total number of tasks allocated to MPI.
-  ntask_tod: 11  # TOD sampling, which only relies on MPI, not OpenMP, and this can therefore be set as high as desired.
+  ntask_tod: 59  # TOD sampling, which only relies on MPI, not OpenMP, and this can therefore be set as high as desired.
   ntask_compsep: 5  # Component Separation (currently only =1 supported), where each MPI tasks should correspond to 1 node, and threads are used for efficient SHTs.
 nthreads_compsep: 32  # Threads dedicated to performing individual SHTs for each ntask_compsep. Set to total number of avaible cores on each node performing CompSep.
 betzy_mode: false  # Turn on if running on Betzy and you understand the Commander 4 oversampling implementation.
@@ -112,7 +112,7 @@ experiments:
     MPI_ranks: 1
     data_type: "TOD"
     data_path: "/mn/stornext/d5/data/duncanwa/comm4/sim_data_cmb_dust_sync_nside64_beam20_noise0.1/tod_sim_256_s1_b20.h5"
-    num_scans: 308
+    num_scans: 1081
     bands:
       Planck30GHz:
         enabled: true
@@ -126,7 +126,7 @@ experiments:
     MPI_ranks: 4
     data_type: "TOD"
     data_path: "/mn/stornext/d5/data/duncanwa/comm4/sim_data_cmb_dust_sync_nside64_beam20_noise0.1/tod_sim_256_s1_b20.h5"
-    num_scans: 308
+    num_scans: 1081
     bands:
       Planck100GHz:
         enabled: true
