@@ -109,7 +109,7 @@ def plot_data_maps(master, params, detector, chain, iteration, **kwargs):
                             sub=(1,3,i+1), min=limdown, max=limup)
                 plt.suptitle(f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}")
                 plt.savefig(params.output_paths.plots + f"maps_data/{maptype}_IQU_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
-            plt.close()
+                plt.close()
 
 
 def plot_cg_res(params, chain, iteration, residual):
