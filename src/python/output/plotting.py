@@ -89,7 +89,7 @@ def plot_data_maps(master, params, detector, chain, iteration, **kwargs):
             cmap = None
         else:
             cmap = 'RdBu_r'
-        hp.mollview(kwargs[maptype], cmap=cmap, title=f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}")
+        hp.mollview(kwargs[maptype], cmap=cmap, title=f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(kwargs[maptype], 2), max=np.percentile(kwargs[maptype], 98))
         plt.savefig(params.output_paths.plots + f"maps_data/{maptype}_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
         plt.close()
 
