@@ -88,9 +88,13 @@ def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, p
                 map_rms[2] = A_inv[:,2,2]**0.5
 
             else:
-                # Improperly formatted IQU map, and/or right format not yet
-                # implemented.
-                logger.warning("You are about to receive a horrible crash")
+                # Improperly formatted IQU map, and/or right format not yet implemented.
+                log.lograise(RuntimeError, "Maps did not have expected shape: "
+                             f"({map_signal.shape[0]} != 3 or {map_inv_var.shape[0]} != 6", logger)
+        else:
+            log.lograise(RuntimeError, "Maps did not have ndim 1 or 2 expected for total intensity"
+                         f"and polarization, respectively. (ndim = {map_signal.ndim})", logger)
+
 
 
         logger.info(f"Temporarily setting everything to intensity only")
