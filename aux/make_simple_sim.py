@@ -329,8 +329,9 @@ def main():
     theta, phi, orb_dir, dipole = get_pointing()
     if rank == 0:
         pix = hp.ang2pix(params.NSIDE, theta, phi)
-        psi = np.repeat(np.arange(repeat)*np.pi/repeat, npix)
-        psi = psi[:ntod]
+        #psi = np.repeat(np.arange(repeat)*np.pi/repeat, npix)
+        psi = np.random.uniform(low=0, high=np.pi, size=ntod)
+        #psi = psi[:ntod]
         signal_tod = []
         corr_noise_tod = []
         white_noise_tod = []

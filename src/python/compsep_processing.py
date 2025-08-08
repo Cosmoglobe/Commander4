@@ -85,7 +85,11 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
         detector_to_plot = proc_comm.Get_rank()
         logging.info(f"Rank {proc_comm.Get_rank()} plotting detector map.")
         plotting.plot_data_maps(is_CompSep_master, params, detector_to_plot, chain, iter, map_signal=signal_map,
-                                map_corr_noise=detector_data.map_corr_noise, map_rms=detector_data.map_rms)
+                                map_corr_noise=detector_data.map_corr_noise,
+                                map_rms=detector_data.map_rms,
+                                map_skysub=detector_data.skysub_map,
+                                map_orbdip=detector_data.orbdipole_map)
+
     if params.pixel_compsep_sampling:
         comp_maps = amplitude_sampling_per_pix(signal_map, detector_data.map_rms, band_freq)
     else:
