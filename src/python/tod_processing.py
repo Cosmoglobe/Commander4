@@ -84,6 +84,8 @@ def read_TOD_sim_data(h5_filename: str, band: int, scan_idx_start: int, scan_idx
                 raise KeyError
             scanlist.append(ScanTOD(tod, theta, phi, psi, 0., iscan))
             scanlist[-1].orb_dir_vec = orb_dir_vec
+            # The LOS vec could be inferred as-needed, but it's an expensive operation, so let's store it.
+            scanlist[-1].LOS_vec = hp.ang2vec(theta, phi).astype(np.float32)  # We should ideally actually store this as an uint16, since it's limited to [0,1].
         det = DetectorTOD(scanlist, float(band), fwhm, nside)
     return det
 
@@ -344,10 +346,11 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
             params (Bunch): Parameters from parameter file.
     """
     logger = logging.getLogger(__name__)
-    T_CMB = 2.725  # K (Cosmic Microwave Background temperature)
+    T_CMB = 2.725 * 1e6  # CMB temperature in uK_CMB units.
     C = 299792458  # m/s (Speed of light)
 
-    T_CMB = T_CMB * pysm3_u.K_CMB
+    # Precomputing the conversion factor from 1 uK_CMB to 1 uK_RJ (not that this conversion is only valid for temperatures close to the CMB).
+    uK_CMB_to_uK_RJ = (1*pysm3_u.uK_CMB).to(pysm3_u.uK_RJ, equivalencies=pysm3_u.cmb_equivalencies(experiment_data.nu*pysm3_u.GHz)).value
 
     sum_s_T_N_inv_d = 0  # Accumulators for the numerator and denominator of eqn 16.
     sum_s_T_N_inv_s = 0
@@ -355,13 +358,10 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
         tod = scan.sky_subtracted_tod
 
         # --- Setup ---
-        _, theta, phi, _ = scan.data
-        vec_galactic = hp.ang2vec(theta, phi)
-        dot_product = np.sum(scan.orb_dir_vec * vec_galactic, axis=-1)  # How much do the LOS and orbital velocity align?
+        dot_product = np.sum(scan.orb_dir_vec * scan.LOS_vec, axis=-1)  # How much do the LOS and orbital velocity align?
 
         s_orb = T_CMB * dot_product / C  # The orbital dipole in units of uK_CMB.
-        s_orb = s_orb.to("uK_RJ", equivalencies=pysm3_u.cmb_equivalencies(experiment_data.nu*pysm3_u.GHz))  # Converting to uK_RJ
-        scan.s_orb = s_orb.value 
+        scan.s_orb = s_orb * uK_CMB_to_uK_RJ  # Converting to uK_RJ units.
 
         Ntod = tod.shape[0]
         Nrfft = Ntod//2+1
@@ -396,12 +396,17 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
         logger.info(f"Absolute gain (g0) std: {g_std:.5e}.")
         logger.info(f"Absolute gain (g0) sample: {g_sampled:.5e}.")
     g_sampled = TOD_comm.bcast(g_sampled, root=0)
+    if experiment_data.nu == 28.4:
+        g_sampled = 78.0 * 1e-9
+    elif experiment_data.nu == 44.1:
+        g_sampled = 3.52 * 1e-9
+    elif experiment_data.nu == 70.1:
+        g_sampled = 68.0 * 1e-9
 
     for scan in experiment_data.scans:
         scan.g0_est = g_sampled
         _, theta, phi, _ = scan.data
-        vec_galactic = hp.ang2vec(theta, phi)
-        dot_product = np.sum(scan.orb_dir_vec * vec_galactic, axis=-1)  # How much do the LOS and orbital velocity align?
+        dot_product = np.sum(scan.orb_dir_vec * scan.LOS_vec, axis=-1)  # How much do the LOS and orbital velocity align?
         scan.sky_subtracted_tod -= scan.g0_est*scan.s_orb
         scan.orbital_dipole = scan.g0_est*scan.s_orb
 
