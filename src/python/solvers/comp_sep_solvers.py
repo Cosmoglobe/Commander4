@@ -9,43 +9,63 @@ from numpy.typing import NDArray
 from typing import Callable
 
 from src.python.output.log import logassert
-from src.python.model.component import CMB, ThermalDust, Synchrotron, DiffuseComponent
+from src.python.data_models.detector_map import DetectorMap
+from src.python.model.component import DiffuseComponent
 from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, alm_real2complex, alm_complex2real
 from src.python.solvers.dense_matrix_math import DenseMatrix
 import src.python.solvers.preconditioners as preconditioners
 
 
-def amplitude_sampling_per_pix(map_sky: NDArray, map_rms: NDArray, freqs: NDArray) -> NDArray:
+def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
+                               comp_list: list[DiffuseComponent], params: Bunch
+                               )-> list[DiffuseComponent]:
+    """A (quite inefficient) pixel-by-pixel solver for the component separation problem. This only
+       works if assuming there is no beam, or all maps are smoothed to the same resolution.
+    """
     logger = logging.getLogger(__name__)
-    ncomp = 3
-    nband, npix = map_sky.shape
-    comp_maps = np.zeros((ncomp, npix))
-    M = np.empty((nband, ncomp))
-    M[:,0] = CMB().get_sed(freqs)
-    M[:,1] = ThermalDust().get_sed(freqs)
-    M[:,2] = Synchrotron().get_sed(freqs)
-    from time import time
-    t0 = time()
-    rand = np.random.randn(npix,nband)
-    logger.info(f"time for random numbers: {time()-t0}s.")
-    t0 = time()
-    for i in range(npix):
-        xmap = 1/map_rms[:,i]
-        x = M.T.dot((xmap**2*map_sky[:,i]))
-        x += M.T.dot(rand[i]*xmap)
-        A = (M.T.dot(np.diag(xmap**2)).dot(M))
-        try:
-            comp_maps[:,i] = np.linalg.solve(A, x)
-        except np.linalg.LinAlgError:
-            comp_maps[:,i] = 0
-    logger.info(f"Time for Python solution: {time()-t0}s.")
-    # import cmdr4_support
-    # t0 = time()
-    # comp_maps2 = cmdr4_support.utils.amplitude_sampling_per_pix_helper(map_sky, map_rms, M, rand, nnthreads=1)
-    # logger.info(f"Time for native solution: {time()-t0}s.")
-    # import ducc0
-    # logger.info(f"L2 error between solutions: {ducc0.misc.l2error(comp_maps, comp_maps2)}.")
-    return comp_maps
+    map_sky = detector_data.map_sky
+    band_freq = detector_data.nu
+    map_rms = detector_data.map_rms
+    ncomp = len(params.components)
+    all_freq = np.array(proc_comm.gather(band_freq, root=0))
+    all_map_sky = np.array(proc_comm.gather(map_sky, root=0))
+    all_map_rms = np.array(proc_comm.gather(map_rms, root=0))
+    comp_maps = None
+    if proc_comm.Get_rank() == 0:
+        logger.info(f"Starting pixel-by-pixel component separation.")
+        t0 = time.time()
+        nband, npix = all_map_sky.shape
+        comp_maps = np.zeros((ncomp, npix))
+        M = np.empty((nband, ncomp))
+        for i in range(ncomp):
+            M[:,i] = comp_list[i].get_sed(all_freq)
+
+        rand = np.random.randn(npix,nband)
+        for i in range(npix):
+            xmap = 1/all_map_rms[:,i]
+            x = M.T.dot((xmap**2*all_map_sky[:,i]))
+            x += M.T.dot(rand[i]*xmap)
+            A = (M.T.dot(np.diag(xmap**2)).dot(M))
+            try:
+                comp_maps[:,i] = np.linalg.solve(A, x)
+            except np.linalg.LinAlgError:
+                comp_maps[:,i] = 0
+        logger.info(f"Finished pixel-by-pixel component separation in {time.time()-t0:.2f}s.")
+
+        # import cmdr4_support
+        # t0 = time()
+        # comp_maps2 = cmdr4_support.utils.amplitude_sampling_per_pix_helper(map_sky, map_rms, M, rand, nnthreads=1)
+        # logger.info(f"Time for native solution: {time()-t0}s.")
+        # import ducc0
+        # logger.info(f"L2 error between solutions: {ducc0.misc.l2error(comp_maps, comp_maps2)}.")
+
+    tmp = proc_comm.bcast(comp_maps, root=0)
+    for icomp in range(ncomp):
+        alm_len = ((comp_list[icomp].lmax+1)*(comp_list[icomp].lmax+2))//2
+        comp_alms = np.zeros(alm_len, dtype=np.complex128)
+        comp_list[icomp].component_alms = curvedsky.map2alm_healpix(tmp[icomp], comp_alms, niter=3, spin=0)
+
+    return comp_list
 
 
 

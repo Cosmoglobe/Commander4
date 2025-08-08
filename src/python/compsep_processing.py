@@ -87,7 +87,7 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
         plotting.plot_data_maps(is_CompSep_master, params, detector_to_plot, chain, iter, map_signal=signal_map,
                                 map_corr_noise=detector_data.map_corr_noise, map_rms=detector_data.map_rms)
     if params.pixel_compsep_sampling:
-        comp_maps = amplitude_sampling_per_pix(signal_map, detector_data.map_rms, band_freq)
+        comp_list = amplitude_sampling_per_pix(proc_comm, detector_data, comp_list, params)
     else:
         compsep_solver = CompSepSolver(comp_list, signal_map, detector_data.map_rms, band_freq, detector_data.fwhm, params, proc_comm)
         comp_list = compsep_solver.solve()
@@ -96,7 +96,7 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
 
     sky_model = SkyModel(comp_list)
 
-    detector_map = sky_model.get_sky_at_nu(band_freq, detector_data.nside, fwhm=compsep_solver.my_band_fwhm_rad)
+    detector_map = sky_model.get_sky_at_nu(band_freq, detector_data.nside, fwhm=detector_data.fwhm/60.0*np.pi/180.0)
 
     if params.make_plots:
         detector_to_plot = proc_comm.Get_rank()
