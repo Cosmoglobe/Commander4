@@ -43,6 +43,8 @@ class commander_tod:
 
     #initilizes a file for a single od
     def init_file(self, freq, od, mode='r'):
+        if hasattr(self, "outFile"):  # Close previous file if one was open.
+            self.outFile.close()
         self.huffDict = {}
         self.raggedDict = {}
         self.attrDict = {}
