@@ -60,14 +60,22 @@ class TemplateComponent(Component):
 
 # Third tier component classes
 class CMB(DiffuseComponent):
+    
     def __init__(self, params: Bunch):
         super().__init__(params)
         self.longname = params.longname if "longname" in params else "CMB"
         self.shortname = params.shortname if "shortname" in params else "cmb"
 
     def get_sed(self, nu):
-        # Assuming we are working in uK_CMB units
-        return (np.ones_like(nu)*pysm3u.uK_CMB).to("uK_RJ", equivalencies=pysm3u.cmb_equivalencies(nu*u.GHz)).value
+        """Calculates the spectral energy distribution (SED) for CMB emission.
+           The result is unitless, but meant to be multiplied by a RJ brightness temperature.
+        Args:
+            nu (float or np.ndarray): Frequency in GHz at which to evaluate the SED.            
+        Returns:
+            The SED scaling factor (float or np.ndarray).
+        """
+        return (np.ones_like(nu)*pysm3u.uK_CMB).to(pysm3u.uK_RJ,equivalencies=
+                                                   pysm3u.cmb_equivalencies(nu*u.GHz)).value
 
 class RadioSource(PointSourceComponent):
     pass
@@ -87,8 +95,17 @@ class ThermalDust(DiffuseComponent):
 
 
     def get_sed(self, nu):
+        """Calculates the spectral energy distribution (SED) for Thermal Dust emission.
+           The result is unitless, but meant to be multiplied by a RJ brightness temperature.
+        Args:
+            nu (float or np.ndarray): Frequency in GHz at which to evaluate the SED.            
+        Returns:
+            The SED scaling factor (float or np.ndarray).
+        """
         # Modified blackbody, in uK_CMB
-        return ((nu/self.nu0)**self.beta * blackbody(nu, self.T)/blackbody(self.nu0, self.T)*pysm3u.uK_CMB).to("uK_RJ", equivalencies=pysm3u.cmb_equivalencies(nu*u.GHz)).value
+        x = (h_over_k*nu)/(self.T)
+        x0 = (h_over_k*self.nu0)/(self.T)
+        return (nu / self.nu0)**(self.beta + 1.0) * np.expm1(x0) / np.expm1(x)
 
 
 class Synchrotron(DiffuseComponent):
@@ -102,5 +119,48 @@ class Synchrotron(DiffuseComponent):
         self.shortname = params.shortname if "shortname" in params else "sync"
 
     def get_sed(self, nu):
-        # power law with spectral index beta
-        return ((nu/self.nu0)**self.beta*pysm3u.uK_CMB).to("uK_RJ", equivalencies=pysm3u.cmb_equivalencies(nu*u.GHz)).value
+        """Calculates the spectral energy distribution (SED) for Synchrotron emission.
+           The result is unitless, but meant to be multiplied by a RJ brightness temperature.
+        Args:
+            nu (float or np.ndarray): Frequency in GHz at which to evaluate the SED.            
+        Returns:
+            The SED scaling factor (float or np.ndarray).
+        """
+        return (nu/self.nu0)**self.beta
+
+
+class FreeFree(DiffuseComponent):
+    def __init__(self, params: Bunch):
+        super().__init__(params)
+        self.T = params.T  # Electron temperature in K
+        self.nu0 = params.nu0 # Reference frequency in GHz
+        self.longname = params.longname if "longname" in params else "Free-Free"
+        self.shortname = params.shortname if "shortname" in params else "ff"
+
+    def _gaunt_factor(self, nu, T):
+        """Calculates the Gaunt factor for free-free emission, as per Eq. 18 in BP1.
+        Args:
+            nu (float or np.ndarray): Frequency in GHz.
+            T (float): Electron temperature in Kelvin.
+        Returns:
+            The Gaunt factor (float or np.ndarray)
+        """
+        T4 = T / 1e4
+        log_arg = nu * (T4**(-1.5))
+        inner_exp = 5.960 - (np.sqrt(3) / np.pi) * np.log(log_arg)
+        return np.log(np.exp(inner_exp) + np.e)
+
+    def get_sed(self, nu):
+        """Calculates the spectral energy distribution (SED) for Free-Free emission.
+           The result is unitless, but meant to be multiplied by a RJ brightness temperature.
+        Args:
+            nu (float or np.ndarray): Frequency in GHz at which to evaluate the SED.            
+        Returns:
+            The SED scaling factor (float or np.ndarray).
+        """
+        gaunt_nu = self._gaunt_factor(nu, self.T)
+        gaunt_nu0 = self._gaunt_factor(self.nu0, self.T)
+        
+        # The scaling is proportional to nu^-2 * g_ff(nu), normalized to 1 at nu0.
+        sed = (self.nu0 / nu)**2 * (gaunt_nu / gaunt_nu0)
+        return sed
