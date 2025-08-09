@@ -83,7 +83,7 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
     is_CompSep_master = proc_comm.Get_rank() == 0
     if params.make_plots:
         detector_to_plot = proc_comm.Get_rank()
-        logging.info(f"Rank {proc_comm.Get_rank()} plotting detector map.")
+        logging.info(f"Rank {proc_comm.Get_rank()} chain {chain} iter {iter} starting plotting.")
         plotting.plot_data_maps(is_CompSep_master, params, detector_to_plot, chain, iter, map_signal=signal_map,
                                 map_corr_noise=detector_data.map_corr_noise, map_rms=detector_data.map_rms)
     if params.pixel_compsep_sampling:
@@ -102,5 +102,6 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
         detector_to_plot = proc_comm.Get_rank()
         plotting.plot_combo_maps(params, detector_to_plot, chain, iter, comp_list, detector_data)
         plotting.plot_components(params, band_freq, detector_to_plot, chain, iter, signal_map, comp_list, detector_data.nside)
+        logging.info(f"Rank {proc_comm.Get_rank()} chain {chain} iter {iter} Finished all plotting.")
 
     return detector_map  # Return the full sky realization for my band.
