@@ -7,6 +7,7 @@ import logging
 import io
 import time
 import sys
+from copy import deepcopy
 from pixell.bunch import Bunch
 from traceback import print_exc
 
@@ -86,7 +87,9 @@ def main(params: Bunch, params_dict: dict):
     tod_band_masters_dict = None
     CompSep_band_masters_dict = None
     if color == 0:
-        is_band_master, band_comm, my_band_identifier, tod_band_masters_dict, experiment_data = init_tod_processing(proc_comm, params)
+        is_band_master, band_comm, my_band_identifier, tod_band_masters_dict, experiment_data, detector_samples = init_tod_processing(proc_comm, params)
+        detector_samples_chain1 = detector_samples
+        detector_samples_chain2 = deepcopy(detector_samples)
     elif color == 1:
         components, my_band_identifier, CompSep_band_masters_dict, my_band = init_compsep_processing(proc_comm, params)
     CompSep_band_masters_dict = MPI.COMM_WORLD.bcast(CompSep_band_masters_dict, root=compsep_master)  # CompSep tells the rest which compsep ranks are band masters.
@@ -99,7 +102,7 @@ def main(params: Bunch, params_dict: dict):
         # Chain #1 do TOD processing, resulting in maps_chain1 (we start with a fake output of component separation, containing a completely empty sky).
         compsep_output_black = get_empty_compsep_output(experiment_data)
 
-        curr_tod_output = process_tod(proc_comm, band_comm, experiment_data, compsep_output_black, params, 1, 1)
+        curr_tod_output, detector_samples_chain1 = process_tod(proc_comm, band_comm, experiment_data, detector_samples_chain1, compsep_output_black, params, 1, 1)
         send_tod(is_band_master, curr_tod_output, CompSep_band_masters_dict, my_band_identifier)
         curr_compsep_output = compsep_output_black
 
@@ -111,28 +114,38 @@ def main(params: Bunch, params_dict: dict):
     for i in range(1, 2 * params.niter_gibbs + 1): # 2 because we have two chains
         # execute the appropriate part of the code (MPMD)
         if color == 0:
-            logger.info(f"Worldrank {worldrank}, subrank {proc_comm.Get_rank()} starting TOD iteration.")
             t0 = time.time()
             iter_num = (i + 2) // 2  # [1, 2, 2, 3, 3,...] -  Since TOD already did iteration 1 for chain 1, it is "half" an iteration ahead.
             chain_num = i % 2 + 1  # [2, 1, 2, 1,...] - TOD has already been done for chain 1 iter 1 pre-loop, so we start with TOD for chain 2.
-            curr_tod_output = process_tod(proc_comm, band_comm, experiment_data, curr_compsep_output, params, chain_num, iter_num)
-            logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
+            if proc_comm.Get_rank() == 0:
+                logger.info(f"Worldrank {worldrank}, subrank {proc_comm.Get_rank()} starting TOD iteration {iter_num}.")
+            if chain_num == 1:
+                curr_tod_output, detector_samples_chain1 = process_tod(proc_comm, band_comm, experiment_data, detector_samples_chain1, curr_compsep_output, params, chain_num, iter_num)
+            elif chain_num == 2:
+                curr_tod_output, detector_samples_chain2 = process_tod(proc_comm, band_comm, experiment_data, detector_samples_chain2, curr_compsep_output, params, chain_num, iter_num)
+            if proc_comm.Get_rank() == 0:
+                logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
             curr_compsep_output = receive_compsep(band_comm, my_band_identifier, band_comm.Get_rank()==0, CompSep_band_masters_dict)
-            logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished receiving results for chain {chain_num+1}, iter {iter_num+1}. Sending TOD results")
+            if proc_comm.Get_rank() == 0:
+                logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished receiving results for chain {chain_num}, iter {iter_num}. Sending TOD results")
             send_tod(is_band_master, curr_tod_output, CompSep_band_masters_dict, my_band_identifier)
-            logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished sending results for chain {chain_num}, iter {iter_num}. Sending TOD results")
+            if proc_comm.Get_rank() == 0:
+                logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished sending results for chain {chain_num}, iter {iter_num}.")
 
         elif color == 1:
             iter_num = (i + 1) // 2  # [1, 1, 2, 2, 3,...] Compsep has not done iteration 1 for neither chain yet.
             chain_num = (i + 1) % 2 + 1  # [1, 2, 1, 2,...] We start as chain 1, since that's the chain that has already done a TOD step pre-loop.
-            logger.info(f"Worldrank {worldrank}, subrank {proc_comm.Get_rank()} going into compsep loop for chain {chain_num}, iter {iter_num}.")
+            if proc_comm.Get_rank() == 0:
+                logger.info(f"Worldrank {worldrank}, subrank {proc_comm.Get_rank()} going into compsep loop for chain {chain_num}, iter {iter_num}.")
             t0 = time.time()
             curr_compsep_output = process_compsep(curr_tod_output, iter_num, chain_num, params, proc_comm, components)
-            logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Sending results.")
+            if proc_comm.Get_rank() == 0:
+                logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Sending results.")
             send_compsep(my_band_identifier, curr_compsep_output, tod_band_masters_dict)
             logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished sending results for chain {chain_num}, iter {iter_num}. Receiving TOD results.")
             curr_tod_output = receive_tod(tod_band_masters_dict, proc_comm.rank, my_band, my_band_identifier, curr_tod_output)
-            logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished receiving TOD results for chain {chain_num}, iter {iter_num}.")
+            if proc_comm.Get_rank() == 0:
+                logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished receiving TOD results for chain {chain_num}, iter {iter_num}.")
     # stop compsep machinery
     if world_master:
         logger.info("TOD: sending STOP signal to compsep")

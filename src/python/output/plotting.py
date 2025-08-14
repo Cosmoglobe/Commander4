@@ -18,7 +18,7 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int, co
     map_rawobs = detector_data.rawobs_map
     map_orbdipole = detector_data.orbdipole_map
     freq = detector_data.nu
-    g0 = detector_data.g0
+    gain = detector_data.gain
 
     foreground_subtracted = np.zeros_like(map_signal)
     foreground_subtracted[:] = map_signal
@@ -26,7 +26,7 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int, co
     residual[:] = map_signal
 
     fig, ax = plt.subplots(3, 4, figsize=(42, 18))
-    fig.suptitle(f"Iter {iteration:04d}. Freq: {freq:.2f} GHz (det {detector}). Chain {chain}. g0 = {g0:.4e}.", fontsize=24)
+    fig.suptitle(f"Iter {iteration:04d}. Freq: {freq:.2f} GHz (det {detector}). Chain {chain}. gain = {gain:.4e} (g0={detector_data.g0}).", fontsize=24)
 
     for i, component in enumerate(components_list):
         smoothing_scale_radians = component.params.smoothing_scale*np.pi/(180*60)
@@ -91,7 +91,7 @@ def plot_data_maps(master, params, detector, chain, iteration, **kwargs):
         else:
             cmap = 'RdBu_r'
         if kwargs[maptype].ndim == 1:
-            hp.mollview(kwargs[maptype], cmap=cmap, title=f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}")
+            hp.mollview(kwargs[maptype], cmap=cmap, title=f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(kwargs[maptype], 2), max=np.percentile(kwargs[maptype], 98))
             plt.savefig(params.output_paths.plots + f"maps_data/{maptype}_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
             plt.close()
         elif kwargs[maptype].ndim == 2:

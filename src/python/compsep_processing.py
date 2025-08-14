@@ -83,7 +83,7 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
     is_CompSep_master = proc_comm.Get_rank() == 0
     if params.make_plots:
         detector_to_plot = proc_comm.Get_rank()
-        logging.info(f"Rank {proc_comm.Get_rank()} plotting detector map.")
+        logging.info(f"Rank {proc_comm.Get_rank()} chain {chain} iter {iter} starting plotting.")
         plotting.plot_data_maps(is_CompSep_master, params, detector_to_plot, chain, iter, map_signal=signal_map,
                                 map_corr_noise=detector_data.map_corr_noise,
                                 map_rms=detector_data.map_rms,
@@ -91,7 +91,7 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
                                 map_orbdip=detector_data.orbdipole_map)
 
     if params.pixel_compsep_sampling:
-        comp_maps = amplitude_sampling_per_pix(signal_map, detector_data.map_rms, band_freq)
+        comp_list = amplitude_sampling_per_pix(proc_comm, detector_data, comp_list, params)
     else:
         compsep_solver = CompSepSolver(comp_list, signal_map, detector_data.map_rms, band_freq, detector_data.fwhm, params, proc_comm)
         comp_list = compsep_solver.solve()
@@ -100,11 +100,12 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
 
     sky_model = SkyModel(comp_list)
 
-    detector_map = sky_model.get_sky_at_nu(band_freq, detector_data.nside, fwhm=compsep_solver.my_band_fwhm_rad)
+    detector_map = sky_model.get_sky_at_nu(band_freq, detector_data.nside, fwhm=detector_data.fwhm/60.0*np.pi/180.0)
 
     if params.make_plots:
         detector_to_plot = proc_comm.Get_rank()
         plotting.plot_combo_maps(params, detector_to_plot, chain, iter, comp_list, detector_data)
         plotting.plot_components(params, band_freq, detector_to_plot, chain, iter, signal_map, comp_list, detector_data.nside)
+        logging.info(f"Rank {proc_comm.Get_rank()} chain {chain} iter {iter} Finished all plotting.")
 
     return detector_map  # Return the full sky realization for my band.

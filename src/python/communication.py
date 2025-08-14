@@ -7,6 +7,7 @@ import healpy as hp
 from numpy.typing import NDArray
 
 from src.python.data_models.detector_map import DetectorMap
+from src.python.maps_from_file import read_sim_map_from_file, read_Planck_map_from_file
 
 
 def send_compsep(my_band_identifier: str, detector_map: NDArray[np.floating], destinations: dict[str, int]|None) -> None:
@@ -19,7 +20,8 @@ def send_compsep(my_band_identifier: str, detector_map: NDArray[np.floating], de
         destinations (dict[str->int]): A dictionary mapping the string in 'my_band_identifier' to the world rank of the destination task (on the TOD side).
     """
     if destinations is not None:
-        MPI.COMM_WORLD.send(detector_map, dest=destinations[my_band_identifier])
+        if my_band_identifier in destinations:  # If the band our rank is holding is not in "destinations", it means it did not come from TOD-processing, and should not be sent back either.
+            MPI.COMM_WORLD.send(detector_map, dest=destinations[my_band_identifier])
 
 
 def receive_compsep(band_comm: Comm, my_band_identifier: str, band_master: bool, senders: dict[str, int]) -> NDArray[np.floating]:
@@ -72,7 +74,7 @@ def receive_tod(senders: dict[str,int], my_compsep_rank: int, my_band: Bunch, ba
     if my_band.get_from == "file":
         if curr_tod_output is None:
             logger.info(f"CompSep: Rank {my_compsep_rank} reading static map data from file.")
-            curr_tod_output = read_map_from_file(my_band)
+            curr_tod_output = read_Planck_map_from_file(my_band)
         else:
             logger.info(f"CompSep: Rank {my_compsep_rank} already has static map data. Continuing.")
     else:
@@ -80,24 +82,3 @@ def receive_tod(senders: dict[str,int], my_compsep_rank: int, my_band: Bunch, ba
         curr_tod_output = MPI.COMM_WORLD.recv(source=senders[band_identifier])
 
     return curr_tod_output
-
-
-def read_map_from_file(my_band: Bunch) -> DetectorMap:
-    """To be run once before starting TOD processing.
-
-    Determines whether the process is TOD master, creates the band communicator
-    and determines whether the process is the band master. Also reads the
-    experiment data.
-
-    Input:
-        my_band (Bunch): The section of the parameter file corresponding to this CompSep band, as a "Bunch" type.
-
-    Output:
-        data (list of DetectorMaps): nbands (DetectorMap)
-    """
-
-    map_signal = hp.read_map(my_band.path_signal_map)
-    map_rms = hp.read_map(my_band.path_rms_map)
-    # map_rms = np.ones_like(map_signal)
-    detmap = DetectorMap(map_signal, None, map_rms, my_band.freq, my_band.fwhm)
-    return detmap
