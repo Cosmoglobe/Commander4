@@ -1,12 +1,11 @@
 from src.python.data_models.scan_TOD import ScanTOD
 
 class DetectorTOD:
-    def __init__(self, scanlist: list[ScanTOD], nu, fwhm, nside, fsamp):
+    def __init__(self, scanlist: list[ScanTOD], nu, fwhm, nside):
         self._scanlist = scanlist
         self._nu = nu
         self._fwhm = fwhm
         self._nside = nside
-        self._fsamp = fsamp
 
     @property
     def nu(self):
@@ -19,10 +18,6 @@ class DetectorTOD:
     @property
     def nside(self):
         return self._nside
-
-    @property
-    def fsamp(self) -> float:
-        return self._fsamp
 
     @property
     def blm(self):
