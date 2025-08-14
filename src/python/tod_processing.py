@@ -506,6 +506,184 @@ def sample_relative_gain(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_dat
 
 
 
+def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_samples, det_compsep_map: NDArray, chain: int, iter: int):
+    """
+    Samples the time-dependent relative gain variations (delta g_qi).
+    This function implements the logic from Sec. 3.5 of the BP7 paper,
+    using a Wiener filter to smooth the gain solution over time (PIDs).
+    It solves a global system for all scans of a given detector, which are
+    distributed across the ranks of the band_comm.
+
+    Args:
+        band_comm (MPI.Comm): The communicator for ranks sharing the same detector.
+        experiment_data (DetectorTOD): The object holding scan data.
+        params (Bunch): Parameters from the parameter file.
+    """
+    logger = logging.getLogger(__name__)
+    band_rank = band_comm.Get_rank()
+    band_size = band_comm.Get_size()
+
+    # Local calculations on each rank
+    A_qq_local = []
+    b_q_local = []
+
+    for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
+        # Per Eq. (26), the residual is d - (g0 + Delta_g)*s
+        s_orb = calculate_s_orb(scan, experiment_data)
+        sky_model_TOD = get_sky_model_TOD(scan, det_compsep_map)
+        s_tot = sky_model_TOD + s_orb
+        residual_tod = scan.data[0] - (detector_samples.g0_est + scan_samples.rel_gain_est)*s_tot
+
+        # FFT-based N^-1 operation setup
+        Ntod = residual_tod.shape[0]
+        Nrfft = Ntod // 2 + 1
+        freqs = rfftfreq(Ntod, 1.0 / scan.fsamp)
+        sigma0 = scan_samples.gain_est*scan_samples.sigma0
+        inv_power_spectrum = np.zeros(Nrfft)
+        inv_power_spectrum[1:] = 1.0 / (sigma0**2 * (1 + (freqs[1:] / scan_samples.fknee_est)**scan_samples.alpha_est))
+
+        # Calculate N^-1 * s_tot and N^-1 * residual_tod
+        N_inv_s = irfft(rfft(s_tot) * inv_power_spectrum, n=Ntod)
+        N_inv_r = irfft(rfft(residual_tod) * inv_power_spectrum, n=Ntod)
+
+        mask = scan.galactic_mask_array
+        
+        # Calculate elements for the linear system
+        A_qq = np.dot(s_tot[mask], N_inv_s[mask])
+        b_q = np.dot(s_tot[mask], N_inv_r[mask])
+        
+        A_qq_local.append(A_qq)
+        b_q_local.append(b_q)
+
+    A_qq_local = np.array(A_qq_local, dtype=np.float64)
+    b_q_local = np.array(b_q_local, dtype=np.float64)
+
+    # Gather all data on the root rank of the band communicator
+    scan_counts = band_comm.gather(len(A_qq_local), root=0)
+    all_A_qq = band_comm.gather(A_qq_local, root=0)
+    all_b_q = band_comm.gather(b_q_local, root=0)
+    
+    delta_g_sample = None
+    if band_rank == 0:
+        # Concatenate gathered arrays into single flat arrays
+        A_diag = np.concatenate(all_A_qq)
+        b = np.concatenate(all_b_q)
+        
+        n_scans_total = len(A_diag)
+        if n_scans_total > 1:
+            # Define Prior (Wiener Filter) based on Eq. (31)
+            alpha_gain = -2.5
+            fknee_gain = 1.0  # Hour (which equals 1 scan)
+            # sigma0_sq_gain_V2_per_K2 = 3e-4  # V^2/K^2
+            # sigma0_sq_gain = 1e12 * sigma0_sq_gain_V2_per_K2  # V^2/K^2 -> V^2/uK^2
+            sigma0_sq_gain = 1e-25  # Randomly set value since I can't figure out the one from the paper.
+
+            gain_freqs = rfftfreq(n_scans_total, d=1.0)
+            prior_ps = np.zeros_like(gain_freqs)
+            prior_ps[1:] = sigma0_sq_gain * (np.abs(gain_freqs[1:]) / fknee_gain)**alpha_gain
+            
+            prior_ps_inv = np.zeros_like(gain_freqs)
+            prior_ps_inv[prior_ps > 0] = 1.0 / prior_ps[prior_ps > 0]
+            prior_ps_inv_sqrt = np.sqrt(prior_ps_inv)
+
+            # Define Linear Operator for Conjugate Gradient Solver
+            def matvec(v):
+                g_inv_v = irfft(rfft(v) * prior_ps_inv, n=n_scans_total).real
+                diag_v = A_diag * v
+                return g_inv_v + diag_v
+
+            # Construct RHS of the sampling equation (Eq. 30)
+            eta1 = np.random.randn(n_scans_total)
+            fluctuation1 = np.sqrt(np.maximum(A_diag, 0)) * eta1
+
+            eta2 = np.random.randn(n_scans_total)
+            fluctuation2 = irfft(rfft(eta2) * prior_ps_inv_sqrt, n=n_scans_total).real
+
+            logger.info(f"DATA TERM (A_diag) MEAN: {np.mean(A_diag)}")
+            logger.info(f"PRIOR TERM (G^-1) MEAN: {np.mean(prior_ps_inv)}")
+            logger.info(f"RHS = {b} + {fluctuation1} + {fluctuation2}")
+            logger.info(f"RHS (means) = {np.nanmean(b)} + {np.nanmean(fluctuation1)} + {np.nanmean(fluctuation2)}")
+            RHS = b + fluctuation1 + fluctuation2
+
+            ### Simpler sanity check solution  ##
+            epsilon = 1e-12             
+            # The mean value is simply b / A
+            g_mean = b / (A_diag + epsilon)
+            # The standard deviation is 1 / sqrt(A)
+            g_std = 1.0 / np.sqrt(np.maximum(A_diag, 0) + epsilon)
+            logger.info(f"Sanity check solution A, b = {A_diag} {b}")
+            logger.info(f"Sanity check solution: {g_mean} {g_std}")
+            logger.info(f"Sanity check solution(means): {np.mean(g_mean)} {np.mean(g_std)}")
+
+            from pixell import utils
+            CG_solver = utils.CG(matvec, RHS, x0=g_mean)
+            for i in range(1000):
+                CG_solver.step()
+                if CG_solver.err < 1e-8:
+                    break
+            logging.info(f"CG solver for gain fluctuations (nu={experiment_data.nu})"
+                        f"finished after {i} iterations (residual = {CG_solver.err})")
+            delta_g_sample = CG_solver.x
+            logger.info(f"delta_g_sample mean = {np.mean(delta_g_sample)}")
+            delta_g_sample -= np.mean(delta_g_sample)
+            logger.info(f"delta_g: {delta_g_sample}")
+            logging.info(f"Band {experiment_data.nu}GHz time-dependent gain: min={np.min(delta_g_sample)*1e9:14.4f} mean={np.mean(delta_g_sample)*1e9:14.4f} std={np.std(delta_g_sample)*1e9:14.4f} max={np.max(delta_g_sample)*1e9:14.4f}")
+
+            if False: #debug stuff
+                def matvec_noprior(v):
+                    diag_v = A_diag * v
+                    return diag_v
+                CG_solver = utils.CG(matvec_noprior, RHS, x0=g_mean)
+                for i in range(1, 2000):
+                    CG_solver.step()
+                    if CG_solver.err < 1e-8:
+                        logging.info("Warning: CG for time-relative gain did not converge.")
+                        break
+                logging.info(f"CG solver (noprior) for gain fluctuations (nu={experiment_data.nu})"
+                            f"finished after {i} iterations (residual = {CG_solver.err})")
+
+                delta_g_sample_noprior = CG_solver.x
+                logger.info(f"delta_g_sample mean (noprior) = {np.mean(delta_g_sample_noprior)}")
+                logger.info(f"delta_g (no_prior): {delta_g_sample_noprior}")
+
+                import matplotlib.pyplot as plt
+                plt.figure(figsize=(16,9))
+                other_gain = detector_samples.g0_est + detector_samples.scans[0].rel_gain_est
+                plt.plot(1e9*(other_gain + delta_g_sample))
+                plt.ylim(0, 1.5*1e9*other_gain)
+                plt.xlabel("PID")
+                plt.ylabel("Gain [mV/K]")
+                plt.savefig(f"chain{chain}_iter{iter}_{experiment_data.nu}.png")
+                plt.close()
+        else:
+            delta_g_sample = np.zeros(n_scans_total)
+            
+    # Scatter the results back to all ranks
+    if band_size > 1:
+        displacements = None
+        if band_rank == 0:
+            scan_counts = np.array(scan_counts, dtype=int)
+            displacements = np.insert(np.cumsum(scan_counts), 0, 0)[:-1]
+        
+        delta_g_local = np.empty(len(A_qq_local), dtype=np.float64)
+        band_comm.Scatterv([delta_g_sample, scan_counts, displacements, MPI.DOUBLE], delta_g_local, root=0)
+    else:
+        delta_g_local = delta_g_sample if delta_g_sample is not None else np.array([])
+
+    # Update local scan objects
+    if delta_g_local.size == len(experiment_data.scans):
+        gain_per_PID = np.zeros_like(delta_g_local)
+        for i, scan_samples in enumerate(detector_samples.scans):
+            scan_samples.time_dep_rel_gain_est = delta_g_local[i]
+            gain_per_PID[i] = detector_samples.g0_est + scan_samples.rel_gain_est + delta_g_local[i]
+        logging.info(f"Rank {band_rank} {experiment_data.nu} time-dependent gain: min={np.min(delta_g_local)*1e9:14.4f} mean={np.mean(delta_g_local)*1e9:14.4f} std={np.std(delta_g_local)*1e9:14.4f} max={np.max(delta_g_local)*1e9:14.4f}")
+    else:
+        logger.warning(f"Rank {band_rank} received mismatched number of gain samples. Expected {len(experiment_data.scans)}, got {delta_g_local.size}.")
+
+    return detector_samples
+
+
+
 def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_samples,
                 compsep_output: NDArray, params: Bunch, chain, iter) -> DetectorMap:
     """ Performs a single TOD iteration.
@@ -550,7 +728,9 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_data: Detect
         detector_samples = sample_relative_gain(TOD_comm, band_comm, experiment_data, detector_samples, compsep_output)
         if TOD_comm.Get_rank() == 0:
             logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished relative gain estimation in {time.time()-t0:.1f}s."); t0 = time.time()
-                
+        detector_samples = sample_temporal_gain_variations(band_comm, experiment_data, detector_samples, compsep_output, chain, iter)
+        if TOD_comm.Get_rank() == 0:
+            logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished time-dependent gain estimation in {time.time()-t0:.1f}s."); t0 = time.time()            
         # Update total gain from all new components and re-subtract sky model
         for scan_samples in detector_samples.scans:
             scan_samples.gain_est = detector_samples.g0_est + scan_samples.rel_gain_est + scan_samples.time_dep_rel_gain_est
