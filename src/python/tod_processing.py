@@ -16,6 +16,7 @@ from src.python.data_models.scan_TOD import ScanTOD
 from src.python.data_models.detector_samples import DetectorSamples
 from src.python.data_models.scan_samples import ScanSamples
 from src.python.utils.mapmaker import single_det_map_accumulator
+from src.python.utils.mapmaker import single_det_map_accumulator_IQU
 from src.python.noise_sampling import corr_noise_realization_with_gaps, sample_noise_PS_params
 from src.python.tod_processing_Planck import read_Planck_TOD_data
 from src.python.utils.map_utils import get_sky_model_TOD, calculate_s_orb
@@ -30,6 +31,8 @@ def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float64]:
 
 def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, detector_samples, params: Bunch) -> DetectorMap:
     detmap_rawobs, detmap_signal, detmap_orbdipole, detmap_skysub, detmap_corr_noise, detmap_inv_var, detmap_hits = single_det_map_accumulator(det_static, det_cs_map, detector_samples, params)
+    logger = logging.getLogger(__name__)
+    # detmap_rawobs, detmap_signal, detmap_orbdipole, detmap_skysub, detmap_corr_noise, detmap_inv_var = single_det_map_accumulator_IQU(det_static, det_cs_map, params)
     map_signal = np.zeros_like(detmap_signal)
     map_orbdipole = np.zeros_like(detmap_orbdipole)
     map_rawobs = np.zeros_like(detmap_rawobs)
@@ -55,22 +58,75 @@ def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, d
         band_comm.Reduce(detmap_hits, None, op=MPI.SUM, root=0)
 
     if band_comm.Get_rank() == 0:
-        map_orbdipole[map_orbdipole != 0] /= map_hits[map_orbdipole != 0]
-        map_rawobs[map_rawobs != 0] /= map_inv_var[map_rawobs != 0]
-        map_signal[map_signal != 0] /= map_inv_var[map_signal != 0]
-        map_skysub[map_skysub != 0] /= map_inv_var[map_skysub != 0]
-        map_corr_noise[map_corr_noise != 0] /= map_hits[map_corr_noise != 0]
-        map_rms = np.zeros_like(map_inv_var) + np.inf
-        map_rms[map_inv_var != 0] = 1.0/np.sqrt(map_inv_var[map_inv_var != 0])
-        detmap = DetectorMap(map_signal, map_corr_noise, map_rms, det_static.nu, det_static.fwhm, det_static.nside)
-        detmap.g0 = detector_samples.g0_est
-        detmap.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
-        detmap.skysub_map = map_skysub
-        detmap.rawobs_map = map_rawobs
-        detmap.orbdipole_map = map_orbdipole
+        # Pre-IQU stuff:
+        #map_orbdipole[map_orbdipole != 0] /= map_hits[map_orbdipole != 0]
+        #map_rawobs[map_rawobs != 0] /= map_inv_var[map_rawobs != 0]
+        #map_signal[map_signal != 0] /= map_inv_var[map_signal != 0]
+        #map_skysub[map_skysub != 0] /= map_inv_var[map_skysub != 0]
+        #map_corr_noise[map_corr_noise != 0] /= map_hits[map_corr_noise != 0]
+        #map_rms = np.zeros_like(map_inv_var) + np.inf
+        #map_rms[map_inv_var != 0] = 1.0/np.sqrt(map_inv_var[map_inv_var != 0])
+        #detmap = DetectorMap(map_signal, map_corr_noise, map_rms, det_static.nu, det_static.fwhm, det_static.nside)
+        #detmap.g0 = detector_samples.g0_est
+        #detmap.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
+        #detmap.skysub_map = map_skysub
+        #detmap.rawobs_map = map_rawobs
+        #detmap.orbdipole_map = map_orbdipole
+        #return detmap
+
+        if map_signal.ndim == 1:
+            # Intensity mapmaking
+            map_orbdipole[map_orbdipole != 0] /= map_inv_var[map_orbdipole != 0]
+            map_rawobs[map_rawobs != 0] /= map_inv_var[map_rawobs != 0]
+            map_signal[map_signal != 0] /= map_inv_var[map_signal != 0]
+            map_skysub[map_skysub != 0] /= map_inv_var[map_skysub != 0]
+            map_corr_noise[map_corr_noise != 0] /= map_inv_var[map_corr_noise != 0]
+            map_rms = np.zeros_like(map_inv_var) + np.inf
+            map_rms[map_inv_var != 0] = 1.0/np.sqrt(map_inv_var[map_inv_var != 0])
+        elif map_signal.ndim == 2:
+            if (map_signal.shape[0] == 3) and (map_inv_var.shape[0] == 6):
+                # Standard IQU mapmaking
+                A = np.zeros((map_inv_var.shape[1], 3, 3), dtype=map_inv_var.dtype)
+                
+                A[:,0,0] = map_inv_var[0]
+
+                A[:,0,1] = map_inv_var[1]
+                A[:,1,0] = map_inv_var[1]
+
+                A[:,0,2] = map_inv_var[2]
+                A[:,2,0] = map_inv_var[2]
+
+                A[:,1,1] = map_inv_var[3]
+
+                A[:,1,2] = map_inv_var[4]
+                A[:,2,1] = map_inv_var[4]
+
+                A[:,2,2] = map_inv_var[5]
+
+                for m in [map_orbdipole, map_rawobs, map_signal, map_skysub, map_corr_noise]:
+                    m[:] = np.linalg.solve(A, m.T).T
+
+                map_rms = np.zeros_like(map_rawobs)
+                A_inv = np.linalg.inv(A)
+                map_rms[0] = A_inv[:,0,0]**0.5
+                map_rms[1] = A_inv[:,1,1]**0.5
+                map_rms[2] = A_inv[:,2,2]**0.5
+
+            else:
+                # Improperly formatted IQU map, and/or right format not yet implemented.
+                log.lograise(RuntimeError, "Maps did not have expected shape: "
+                             f"({map_signal.shape[0]} != 3 or {map_inv_var.shape[0]} != 6", logger)
+        else:
+            log.lograise(RuntimeError, "Maps did not have ndim 1 or 2 expected for total intensity"
+                         f"and polarization, respectively. (ndim = {map_signal.ndim})", logger)
+
+        logger.info(f"Temporarily setting everything to intensity only")
+        detmap = DetectorMap(map_signal[0], map_corr_noise[0], map_rms[0], det_static.nu, det_static.fwhm, det_static.nside)
+        detmap.g0 = det_static.scans[0].g0_est
+        detmap.skysub_map = map_skysub[0]
+        detmap.rawobs_map = map_rawobs[0]
+        detmap.orbdipole_map = map_orbdipole[0]
         return detmap
-
-
 
 
 def find_unique_pixels(scanlist: list[ScanTOD], params: Bunch) -> NDArray[np.float64]:
@@ -170,6 +226,7 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Co
     my_scans_stop = min(scans_per_rank * (MPIrank_band + 1), my_num_scans) # "min" in case the number of scans is not divisible by the number of ranks
 #    my_scans_start, my_scans_stop = scans_per_rank*MPIrank_band, scans_per_rank*(MPIrank_band + 1)
     logger.info(f"TOD: Rank {MPIrank_tod} assigned scans {my_scans_start} - {my_scans_stop} on band{MPIcolor_band}.")
+
     t0 = time.time()
     if my_experiment.is_sim:
         experiment_data, detector_samples = read_TOD_sim_data(my_experiment.data_path, my_band, params, my_scans_start, my_scans_stop)
@@ -322,6 +379,7 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
 
     sum_s_T_N_inv_d = 0  # Accumulators for the numerator and denominator of eqn 16.
     sum_s_T_N_inv_s = 0
+
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         # --- Setup ---
         tod, theta, phi, _ = scan.data

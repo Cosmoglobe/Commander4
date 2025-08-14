@@ -66,6 +66,8 @@ def single_det_mapmaker(det_static: DetectorTOD, det_cs_map: np.array) -> tuple[
 def single_det_map_accumulator(det_static: DetectorTOD, det_cs_map: np.array, sample_params, params: bunch) -> tuple[np.array, np.array]:
     """ From a single detector object, which contains a list of Scans, calculate a weighted (BUT UNNORMALIZED) signal map, and an inverse variance map.
         The purpose of this function is to be called multiple times, such that both the unnormalized signal map and inv-var maps can be further accumulated and normalized later.
+
+        This is where we will be writing the polarization mapmaker.
     """
     npix = det_cs_map.shape[-1]
     nside = hp.npix2nside(npix)
@@ -103,3 +105,72 @@ def single_det_map_accumulator(det_static: DetectorTOD, det_cs_map: np.array, sa
             maplib.map_accumulator(detmap_corr_noise, (scanparams.n_corr_est/gain).astype(np.float64), 1.0, pix, ntod, npix)
 
     return detmap_rawobs, detmap_signal, detmap_orbdipole, detmap_skysub, detmap_corr_noise, detmap_inv_var, detmap_hits
+
+def single_det_map_accumulator_IQU(det_static: DetectorTOD, det_cs_map: np.array, params: bunch) -> tuple[np.array, np.array]:
+    """ From a single detector object, which contains a list of Scans, calculate a weighted (BUT UNNORMALIZED) signal map, and an inverse variance map.
+        The purpose of this function is to be called multiple times, such that both the unnormalized signal map and inv-var maps can be further accumulated and normalized later.
+
+        This is where we will be writing the polarization mapmaker.
+    """
+    test_polang_coverage = False
+
+    npix = det_cs_map.shape[-1]
+    nside = hp.npix2nside(npix)
+    detmap_corr_noise = np.zeros((3,npix))  # Healpix map holding the accumulated correlated noise realizations.
+    detmap_rawobs = np.zeros((3,npix))  # Healpix map holding the accumulated sky signal map.
+    detmap_orbdipole = np.zeros((3,npix))  # Healpix map holding the accumulated sky signal map.
+    detmap_skysub = np.zeros((3,npix))  # Healpix map holding the accumulated sky signal map.
+    detmap_signal = np.zeros((3,npix))  # Healpix map holding the accumulated sky signal map.
+    detmap_inv_var = np.zeros((6,npix))  # Healpix map holding the accumulated inverse variance.
+
+    maplib = ct.cdll.LoadLibrary(os.path.join(src_dir_path, "cpp/mapmaker.so"))
+    ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
+    ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
+    ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
+    maplib.map_weight_accumulator_IQU.argtypes = [ct_f64_dim2, ct.c_double,
+            ct_i64_dim1, ct_f64_dim1, ct.c_int64, ct.c_int64]
+    maplib.map_accumulator_IQU.argtypes = [ct_f64_dim2, ct_f64_dim1,
+            ct.c_double, ct_i64_dim1, ct_f64_dim1, ct.c_int64, ct.c_int64]
+
+    if test_polang_coverage:
+        sum_cos2psi = np.zeros(npix)
+        sum_sin2psi = np.zeros(npix)
+        hits_map = np.zeros(npix)
+
+    for scan in det_static.scans:
+        scan_map, theta, phi, psi = scan.data
+        ntod = scan_map.shape[0]
+        pix = hp.ang2pix(nside, theta, phi)
+        inv_var = 1.0/scan.sigma0**2
+        maplib.map_weight_accumulator_IQU(detmap_inv_var,
+                (inv_var).astype(np.float64), pix, psi.astype(np.float64), ntod, npix)
+        maplib.map_accumulator_IQU(detmap_rawobs,
+                (scan_map/scan.g0_est).astype(np.float64), inv_var, pix,
+                psi.astype(np.float64), ntod, npix)
+        maplib.map_accumulator_IQU(detmap_signal, ((scan_map - scan.n_corr_est -
+            scan.orbital_dipole)/scan.g0_est).astype(np.float64), inv_var, pix,
+            psi.astype(np.float64), ntod, npix)
+        maplib.map_accumulator_IQU(detmap_orbdipole,
+                (scan.orbital_dipole/scan.g0_est).astype(np.float64), inv_var,
+                pix, psi.astype(np.float64), ntod, npix)
+        maplib.map_accumulator_IQU(detmap_skysub,
+                (scan.sky_subtracted_tod/scan.g0_est).astype(np.float64),
+                inv_var, pix, psi.astype(np.float64), ntod, npix)
+        if params.sample_corr_noise:
+            maplib.map_accumulator_IQU(detmap_corr_noise,
+                    (scan.n_corr_est).astype(np.float64), inv_var, pix,
+                    psi.astype(np.float64), ntod, npix)
+
+        
+        if test_polang_coverage:
+            sum_cos2psi += np.bincount(pix, weights=np.cos(2*psi), minlength=npix)
+            sum_sin2psi += np.bincount(pix, weights=np.sin(2*psi), minlength=npix)
+            hits_map   += np.bincount(pix, minlength=npix)
+
+    if test_polang_coverage:
+        R = (sum_cos2psi/hits_map)**2 + (sum_sin2psi/hits_map)**2
+        import matplotlib.pyplot as plt
+        hp.mollview(R, norm='hist', title='R')
+        plt.show()
+
+    return detmap_rawobs, detmap_signal, detmap_orbdipole, detmap_skysub, detmap_corr_noise, detmap_inv_var

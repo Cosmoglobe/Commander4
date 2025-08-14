@@ -1,11 +1,12 @@
 from src.python.data_models.scan_TOD import ScanTOD
 
 class DetectorTOD:
-    def __init__(self, scanlist: list[ScanTOD], nu, fwhm, nside):
+    def __init__(self, scanlist: list[ScanTOD], nu, fwhm, nside, fsamp):
         self._scanlist = scanlist
         self._nu = nu
         self._fwhm = fwhm
         self._nside = nside
+        self._fsamp = fsamp
 
     @property
     def nu(self):
@@ -20,15 +21,14 @@ class DetectorTOD:
         return self._nside
 
     @property
+    def fsamp(self) -> float:
+        return self._fsamp
+
+    @property
     def blm(self):
         """Returns the spherical harmonic coefficients of the beam associated
            with the detector, plus lmax and mmax. One component for
            temperature-only, three components for polarization."""
-        raise NotImplementedError()
-
-    @property
-    def fsamp(self) -> float:
-        """Returns the sampling frequency for this detector in Hz."""
         raise NotImplementedError()
 
     @property

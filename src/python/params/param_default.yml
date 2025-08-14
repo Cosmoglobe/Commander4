@@ -1,17 +1,15 @@
 MPI_config:  # Specifying how many MPI tasks to allocate to different workloads. Sum needs to match total number of tasks allocated to MPI.
-  ntask_tod: 11  # TOD sampling, which only relies on MPI, not OpenMP, and this can therefore be set as high as desired.
-  ntask_compsep: 2  # Component Separation (currently only =1 supported), where each MPI tasks should correspond to 1 node, and threads are used for efficient SHTs.
+  ntask_tod: 59  # TOD sampling, which only relies on MPI, not OpenMP, and this can therefore be set as high as desired.
+  ntask_compsep: 5  # Component Separation (currently only =1 supported), where each MPI tasks should correspond to 1 node, and threads are used for efficient SHTs.
 nthreads_compsep: 32  # Threads dedicated to performing individual SHTs for each ntask_compsep. Set to total number of avaible cores on each node performing CompSep.
 betzy_mode: false  # Turn on if running on Betzy and you understand the Commander 4 oversampling implementation.
 
-CG_max_iter: 100
-CG_err_tol: 0.00000001
+CG_max_iter: 200
+CG_err_tol: 0.000001  # CG error tolerance 1e-6, should be decreased for "proper" runs.
 
-niter_gibbs: 1
+niter_gibbs: 4  # number of Gibbs iterations to perform.
 
-nside: 16
-
-samp_freq: 6.0  # At the moment sample frequency is share for all bands.
+nside: 256
 
 # Initialization parameters, for the first iteration.
 noise_fknee: 0.75
@@ -26,15 +24,15 @@ sample_corr_noise: False  # Whether to sample and subtract correlated noise duri
 pixel_compsep_sampling: False  # Pixel-by-pixel component separation, as opposed to global (which will take beam into account).
 
 output_paths:
-  plots: "../../plots/"
-  stats: "../../stats/"
+  plots: "../commander4_plots/"
+  stats: "../commander4_stats/"
 
 logging:
   console:
     level: 'info'
   file:
     level: 'info'
-    filename: '../../logs/output.log'
+    filename: 'output.log'
 
 components:
   CMB:
@@ -44,7 +42,7 @@ components:
       longname: "CMB"  # Used for titles etc.
       shortname: "cmb"  # Used for filenames etc.
       lmax: "full"  # Maximum multipole to use for the CMB component.
-      smoothing_scale: 50  # Smoothing scale for plotting and final output (doens't affect the component separation).
+      smoothing_scale: 50  # [arcmin] Smoothing scale for plotting and final output (doens't affect the component separation).
 
   ThermalDust:
     component_class: "ThermalDust"
@@ -71,16 +69,26 @@ components:
 
 compsep:
   dense_matrix_debug_mode: false  # Solve system first with dense matrix math, for debugging CG. Very slow for nside>32.
-  preconditioner: BeamOnlyPreconditioner
+  preconditioner: JointPreconditioner #NoiseOnlyPreconditioner #FullPreconditioner #MixingMatrixPreconditioner #BeamOnlyPreconditione #NoPreconditioner
 
 
 CompSep_bands:
   Planck30GHz:
     enabled: true
-    get_from: "PlanckLFI"
+    get_from: "PlanckLFI"  # Specifies that this band should be received from the TOD processing.
   Planck100GHz:
     enabled: true
     get_from: "PlanckHFI"
+  Planck353GHz:
+    enabled: true
+    get_from: "PlanckHFI"
+  Planck545GHz:
+    enabled: true
+    get_from: "PlanckHFI"
+  Planck857GHz:
+    enabled: true
+    get_from: "PlanckHFI"
+
   # If you instead want to read maps from file, replace with something like the following:
   # Planck30GHz:
   #   enabled: true
@@ -98,26 +106,49 @@ CompSep_bands:
   #   freq: # [GHz]
 
 
-  experiments:
+experiments:
   PlanckLFI:
     enabled: true
+    MPI_ranks: 1
     data_type: "TOD"
-    data_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/com4_sim_data/sim_data_cmb_dust_sync_corrnoise_nside16_beam800_noise0.1/tod_sim_16_s0.1_b800.h5"
-    num_scans: 1799
-    nside: 16
+    data_path: "/mn/stornext/d5/data/duncanwa/comm4/sim_data_cmb_dust_sync_nside64_beam20_noise0.1/tod_sim_256_s1_b20.h5"
+    num_scans: 1081
     bands:
       Planck30GHz:
         enabled: true
-        fwhm: 800 # [arcmin]
+        fwhm: 32 # [arcmin]
         freq: 30 # [GHz]
+        nside: 256
+        fsamp: 6.0  # [Hz]
+
   PlanckHFI:
     enabled: true
+    MPI_ranks: 4
     data_type: "TOD"
-    data_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/com4_sim_data/sim_data_cmb_dust_sync_corrnoise_nside16_beam800_noise0.1/tod_sim_16_s0.1_b800.h5"
-    num_scans: 1799
-    nside: 16
+    data_path: "/mn/stornext/d5/data/duncanwa/comm4/sim_data_cmb_dust_sync_nside64_beam20_noise0.1/tod_sim_256_s1_b20.h5"
+    num_scans: 1081
     bands:
       Planck100GHz:
         enabled: true
-        fwhm: 400 # [arcmin]
+        fwhm: 9.6 # [arcmin]
         freq: 100 # [GHz]
+        nside: 256
+        fsamp: 6.0  # [Hz]
+      Planck353GHz:
+        enabled: true
+        fwhm: 4.8 # [arcmin]
+        freq: 353 # [GHz]
+        nside: 256
+        fsamp: 6.0  # [Hz]
+      Planck545GHz:
+        enabled: true
+        fwhm: 4.7 # [arcmin]
+        freq: 545 # [GHz]
+        nside: 256
+        fsamp: 6.0  # [Hz]
+      Planck857GHz:
+        enabled: true
+        fwhm: 4.3 # [arcmin]
+        freq: 857 # [GHz]
+        nside: 256
+        fsamp: 6.0  # [Hz]
