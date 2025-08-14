@@ -360,11 +360,12 @@ def main():
             t0 = time.time()
             print(f"All ranks starting noise simulations.")
 
+        gain = params.g0 + params.Delta_gs[i]
         with_corr_noise = "corr_noise" in params.components
-        corr_noise = sim_noise(params.g0*sigma0s[i].value, chunk_size, with_corr_noise)  # Scale sigma0 by gain, such that sigma0 is in uK_RJ.
+        corr_noise = sim_noise(gain*sigma0s[i].value, chunk_size, with_corr_noise)  # Scale sigma0 by gain, such that sigma0 is in uK_RJ.
 
         if rank == 0:
-            white_noise = np.random.normal(0, params.g0*sigma0s[i].value, ntod)
+            white_noise = np.random.normal(0, gain*sigma0s[i].value, ntod)
     
             print(f"Finished noise simulations in {time.time()-t0:.1f}s.")
             t0 = time.time()
@@ -380,14 +381,13 @@ def main():
             dipole_myfreq = dipole_myfreq.to(units, equivalencies=u.cmb_equivalencies(freqs[i]*u.GHz))
 
             # Add together signal. Sky components get a gain term added to them.
-            gain = params.g0
             signal_tod.append((gain*(d + dipole_myfreq.value) + white_noise + corr_noise).astype(np.float32))
             white_noise_tod.append(white_noise.astype(np.float32))
             corr_noise_tod.append(corr_noise.astype(np.float32))
 
             observed_map[i] = np.bincount(pix, weights=signal_tod[-1], minlength=npix)  # Full observed map in mV units.
-            white_noise_map[i] = np.bincount(pix, weights=white_noise, minlength=npix)/params.g0  # Noise map in uK_RJ units
-            corr_noise_map[i] = np.bincount(pix, weights=corr_noise, minlength=npix)/params.g0  # Noise map in uK_RJ units
+            white_noise_map[i] = np.bincount(pix, weights=white_noise, minlength=npix)/gain  # Noise map in uK_RJ units
+            corr_noise_map[i] = np.bincount(pix, weights=corr_noise, minlength=npix)/gain  # Noise map in uK_RJ units
             hit_map[i] = np.bincount(pix, minlength=npix)
             assert (hit_map[i] > 0).all(), f"{np.sum(hit_map[i] == 0)} out of {hit_map[i].shape[0]} pixels were never hit by the scanning strategy."
             if (hit_map[i] <= 10).any():

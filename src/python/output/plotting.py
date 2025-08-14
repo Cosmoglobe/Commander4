@@ -21,7 +21,9 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int, co
     gain = detector_data.gain
 
     foreground_subtracted = np.zeros_like(map_signal)
+    cmb_subtracted = np.zeros_like(map_signal)
     foreground_subtracted[:] = map_signal
+    cmb_subtracted[:] = map_signal
     residual = np.zeros_like(map_signal)
     residual[:] = map_signal
 
@@ -33,6 +35,8 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int, co
         comp_map = component.get_sky(freq, detector_data.nside, fwhm=smoothing_scale_radians)
         if component.shortname != "cmb":
             foreground_subtracted -= comp_map
+        else:
+            cmb_subtracted -= comp_map
         residual -= comp_map
         plt.axes(ax[2,i])
         hp.mollview(comp_map, hold=True, title=f"{component.longname} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(comp_map, 2), max=np.percentile(comp_map, 98))
@@ -43,7 +47,8 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int, co
     plt.axes(ax[0,1])
     hp.mollview(map_signal, fig=fig, hold=True, cmap="RdBu_r", title=f"Static sky signals (d - N_corr - s_orb)", min=np.percentile(map_signal, 2), max=np.percentile(map_signal, 98))
     plt.axes(ax[0,2])
-    hp.mollview(foreground_subtracted, fig=fig, hold=True, cmap="RdBu_r", title=f"<- + foreground subtracted", min=np.percentile(foreground_subtracted, 2), max=np.percentile(foreground_subtracted, 98))
+    hp.mollview(cmb_subtracted, fig=fig, hold=True, cmap="RdBu_r", title=f"<- + cmb subtracted", min=np.percentile(foreground_subtracted, 2), max=np.percentile(foreground_subtracted, 98))
+    # hp.mollview(foreground_subtracted, fig=fig, hold=True, cmap="RdBu_r", title=f"<- + foreground subtracted", min=np.percentile(foreground_subtracted, 2), max=np.percentile(foreground_subtracted, 98))
     plt.axes(ax[0,3])
     hp.mollview(map_skysub, fig=fig, hold=True, cmap="RdBu_r", title=f"All sky components subtracted (incl. orb-dipole)", min=np.percentile(map_skysub, 2), max=np.percentile(map_skysub, 98))
 

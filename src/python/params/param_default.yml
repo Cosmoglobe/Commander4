@@ -111,8 +111,8 @@ experiments:
     enabled: true
     MPI_ranks: 1
     data_type: "TOD"
-    data_path: "/mn/stornext/d5/data/duncanwa/comm4/sim_data_cmb_dust_sync_nside64_beam20_noise0.1/tod_sim_256_s1_b20.h5"
-    num_scans: 1081
+    data_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/com4_sim_data/sim_data_cmb_dust_sync_corrnoise_nside1024_beam32_noise0.3_solardipole/tod_sim_1024_s0.3_b32.h5"
+    num_scans: 20936
     bands:
       Planck30GHz:
         enabled: true
@@ -125,8 +125,8 @@ experiments:
     enabled: true
     MPI_ranks: 4
     data_type: "TOD"
-    data_path: "/mn/stornext/d5/data/duncanwa/comm4/sim_data_cmb_dust_sync_nside64_beam20_noise0.1/tod_sim_256_s1_b20.h5"
-    num_scans: 1081
+    data_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/com4_sim_data/sim_data_cmb_dust_sync_corrnoise_nside1024_beam32_noise0.3_solardipole/tod_sim_1024_s0.3_b32.h5"
+    num_scans: 20936
     bands:
       Planck100GHz:
         enabled: true

@@ -40,10 +40,13 @@ def read_Planck_TOD_data(database_filename: str, my_band: Bunch, params: Bunch, 
     else:
         myrange = range
 
+    bad_PIDs = np.load("/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy")
     previous_oid = -999999
     for i_pid in myrange(scan_idx_start, scan_idx_stop):
         pid = pids[i_pid]
         oid = oids[i_pid]
+        if pid in bad_PIDs:
+            continue
         if oid != previous_oid:  # Only open file if it's not the same file as the last PID.
             com_tod.init_file(f"{my_band.freq_identifier:03d}", oid)
         flag_M = com_tod.decompress(f"/{pid}/{detname}M/flag/", compression="huffman")

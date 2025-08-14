@@ -8,7 +8,7 @@ from output import log
 from scipy.fft import rfft, irfft, rfftfreq
 import time
 from numpy.typing import NDArray
-from scipy.sparse.linalg import cg, LinearOperator
+import fits
 
 from src.python.data_models.detector_map import DetectorMap
 from src.python.data_models.detector_TOD import DetectorTOD
@@ -283,10 +283,10 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_sam
         Ntod = raw_tod.shape[0]
         Nfft = Ntod//2 + 1
         freq = rfftfreq(Ntod, d = 1/f_samp)
-        fknee = scan.fknee_est
-        alpha = scan.alpha_est
+        fknee = scansamples.fknee_est
+        alpha = scansamples.alpha_est
         C_1f_inv = np.zeros(Nfft)
-        C_1f_inv[1:] = 1.0 / (scan.sigma0**2*(freq[1:]/fknee)**alpha)
+        C_1f_inv[1:] = 1.0 / (scansamples.sigma0**2*(freq[1:]/fknee)**alpha)
         scansamples.n_corr_est = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                                                   scan.galactic_mask_array,
                                                                   scansamples.gain_est*scansamples.sigma0,
