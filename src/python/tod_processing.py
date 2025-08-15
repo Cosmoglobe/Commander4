@@ -75,11 +75,11 @@ def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, d
 
         if map_signal.ndim == 1:
             # Intensity mapmaking
-            map_orbdipole[map_orbdipole != 0] /= map_inv_var[map_orbdipole != 0]
+            map_orbdipole[map_orbdipole != 0] /= map_hits[map_orbdipole != 0]
             map_rawobs[map_rawobs != 0] /= map_inv_var[map_rawobs != 0]
             map_signal[map_signal != 0] /= map_inv_var[map_signal != 0]
             map_skysub[map_skysub != 0] /= map_inv_var[map_skysub != 0]
-            map_corr_noise[map_corr_noise != 0] /= map_inv_var[map_corr_noise != 0]
+            map_corr_noise[map_corr_noise != 0] /= map_hits[map_corr_noise != 0]
             map_rms = np.zeros_like(map_inv_var) + np.inf
             map_rms[map_inv_var != 0] = 1.0/np.sqrt(map_inv_var[map_inv_var != 0])
         elif map_signal.ndim == 2:
@@ -127,27 +127,6 @@ def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, d
         detmap.orbdipole_map = map_orbdipole[0]
         return detmap
 
-
-def find_unique_pixels(scanlist: list[ScanTOD], params: Bunch) -> NDArray[np.float64]:
-    """Finds the unique pixels in the list of scans.
-
-    Input:
-        scanlist (list[ScanTOD]): The list of scans.
-        params (Bunch): The parameters from the input parameter file.
-
-    Output:
-        unique_pixels (np.array): The unique pixels in the scans.
-    """
-    logger = logging.getLogger(__name__)
-    nside = params.nside
-    unique_pixels = np.zeros(12*nside**2, dtype=np.float64)
-    for scan in scanlist:
-        scan_map, theta, phi, psi = scan.data
-        ntod = scan_map.shape[0]
-        pix = hp.ang2pix(nside, theta, phi)
-        unique_pixels[pix] += 1
-    unique_pixels[unique_pixels != 0] = 1
-    return unique_pixels
 
 
 def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Comm, str, dict[str,int], DetectorTOD]:
@@ -411,8 +390,10 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
         N_inv_d = irfft(N_inv_d_fft, n=Ntod)
         # We now exclude the time-samples hitting the masked area. We don't want to do this before now, because it would mess up the FFT stuff.
 
-        sum_s_T_N_inv_d += np.dot(s_orb[scan.galactic_mask_array], N_inv_d[scan.galactic_mask_array])  # Add to the numerator and denominator.
-        sum_s_T_N_inv_s += np.dot(s_orb[scan.galactic_mask_array], N_inv_s[scan.galactic_mask_array])
+        pix = hp.ang2pix(experiment_data.nside, theta, phi)
+        mask = experiment_data.processing_mask_map[pix]
+        sum_s_T_N_inv_d += np.dot(s_orb[mask], N_inv_d[mask])  # Add to the numerator and denominator.
+        sum_s_T_N_inv_s += np.dot(s_orb[mask], N_inv_s[mask])
 
     # The g0 term is fully global, so we reduce across both all scans and all bands:
     sum_s_T_N_inv_d = TOD_comm.reduce(sum_s_T_N_inv_d, op=MPI.SUM, root=0)
