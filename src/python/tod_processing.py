@@ -226,11 +226,9 @@ def estimate_white_noise(experiment_data: DetectorTOD, detector_samples: Detecto
         experiment_data (DetectorTOD): The experiment TOD with the estimated white noise level added to each scan.
     """
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-        raw_TOD = scan.data[0]
+        raw_TOD = scan.tod
         sky_subtracted_tod = raw_TOD - scan_samples.gain_est*get_sky_model_TOD(scan, det_compsep_map)  #TODO: also subtract orbital dipole?
-        _, theta, phi, _ = scan.data
-        pix = hp.ang2pix(experiment_data.nside, theta, phi)
-        mask = experiment_data.processing_mask_map[pix]
+        mask = experiment_data.processing_mask_map[scan.pix]
         if np.sum(mask) > 50:  # If we have enough data points to estimate the noise, we use the masked version.
             sigma0 = np.std(sky_subtracted_tod[mask][1:] - sky_subtracted_tod[mask][:-1])/np.sqrt(2)
         else:
@@ -246,7 +244,7 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_sam
     worst_residual = 0.0
     for scan, scansamples in zip(experiment_data.scans, detector_samples.scans):
         f_samp = scan.fsamp
-        raw_tod = scan.data[0]
+        raw_tod = scan.tod
         sky_tot = get_sky_model_TOD(scan, det_compsep_map) + calculate_s_orb(scan, experiment_data)
         sky_subtracted_TOD = raw_tod - scansamples.gain_est*sky_tot
         Ntod = raw_tod.shape[0]
@@ -258,9 +256,7 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_sam
         C_1f_inv = np.zeros(Nfft)
         C_1f_inv[1:] = 1.0 / (sigma0**2*(freq[1:]/fknee)**alpha)
         err_tol = 1e-8
-        _, theta, phi, _ = scan.data
-        pix = hp.ang2pix(experiment_data.nside, theta, phi)
-        mask = experiment_data.processing_mask_map[pix]
+        mask = experiment_data.processing_mask_map[scan.pix]
         n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                                                 mask, sigma0, C_1f_inv,
                                                                 err_tol=err_tol)
@@ -366,16 +362,14 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
 
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         # --- Setup ---
-        tod, theta, phi, _ = scan.data
-
         s_orb = calculate_s_orb(scan, experiment_data)
         sky_model_TOD = get_sky_model_TOD(scan, det_compsep_map)
 
-        tod_residual = tod - scan_samples.gain_est*(sky_model_TOD + s_orb)  # Subtracting sky signal.
+        tod_residual = scan.tod - scan_samples.gain_est*(sky_model_TOD + s_orb)  # Subtracting sky signal.
         tod_residual += detector_samples.g0_est*s_orb  # Now we can add back in the orbital dipole.
 
         sigma0 = scan_samples.gain_est*scan_samples.sigma0  # scan.sigma0 is in tempearture units.
-        Ntod = tod.shape[0]
+        Ntod = scan.tod.shape[0]
         Nrfft = Ntod//2+1
         freqs = rfftfreq(Ntod, 1.0/scan.fsamp)
         inv_power_spectrum = np.zeros(Nrfft)
@@ -390,8 +384,7 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
         N_inv_d = irfft(N_inv_d_fft, n=Ntod)
         # We now exclude the time-samples hitting the masked area. We don't want to do this before now, because it would mess up the FFT stuff.
 
-        pix = hp.ang2pix(experiment_data.nside, theta, phi)
-        mask = experiment_data.processing_mask_map[pix]
+        mask = experiment_data.processing_mask_map[scan.pix]
         sum_s_T_N_inv_d += np.dot(s_orb[mask], N_inv_d[mask])  # Add to the numerator and denominator.
         sum_s_T_N_inv_s += np.dot(s_orb[mask], N_inv_s[mask])
 
@@ -445,10 +438,9 @@ def sample_relative_gain(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_dat
         # Define the residual for this sampling step, as per Eq. (17)
         s_orb = calculate_s_orb(scan, experiment_data)
         sky_model_TOD = get_sky_model_TOD(scan, det_compsep_map)
-        raw_tod, theta, phi, psi = scan.data
         s_tot = sky_model_TOD + s_orb
 
-        residual_tod = raw_tod - (detector_samples.g0_est + scan_samples.time_dep_rel_gain_est)*s_tot
+        residual_tod = scan.tod - (detector_samples.g0_est + scan_samples.time_dep_rel_gain_est)*s_tot
 
         # Setup FFT-based calculation for N^-1 operations
         Ntod = residual_tod.shape[0]
@@ -462,8 +454,7 @@ def sample_relative_gain(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_dat
         N_inv_s_fft = s_fft * inv_power_spectrum
         N_inv_s = irfft(N_inv_s_fft, n=Ntod)
         
-        pix = hp.ang2pix(experiment_data.nside, theta, phi)
-        mask = experiment_data.processing_mask_map[pix]
+        mask = experiment_data.processing_mask_map[scan.pix]
         s_T_N_inv_s_scan = np.dot(s_tot[mask], N_inv_s[mask])
         r_T_N_inv_s_scan = np.dot(residual_tod[mask], N_inv_s[mask])
 
@@ -579,10 +570,9 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
         s_tot = sky_model_TOD + s_orb
         raw_tod, theta, phi, _ = scan.data
 
-        residual_tod = raw_tod - (detector_samples.g0_est + scan_samples.rel_gain_est)*s_tot
+        residual_tod = scan.tod - (detector_samples.g0_est + scan_samples.rel_gain_est)*s_tot
 
-        pix = hp.ang2pix(experiment_data.nside, theta, phi)
-        mask = experiment_data.processing_mask_map[pix]
+        mask = experiment_data.processing_mask_map[scan.pix]
 
         # FFT-based N^-1 operation setup
         Ntod = residual_tod.shape[0]
@@ -762,7 +752,7 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_data: Detect
     logger = logging.getLogger(__name__)
     if iter == 1:
         for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-            scan_samples.n_corr_est = np.zeros_like(scan.data[0], dtype=np.float32)
+            scan_samples.n_corr_est = np.zeros_like(scan.tod, dtype=np.float32)
             scan_samples.alpha_est = params.noise_alpha  # These should be sampled params!
             scan_samples.fknee_est = params.noise_fknee
 

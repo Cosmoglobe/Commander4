@@ -70,6 +70,7 @@ def read_Planck_TOD_data(database_filename: str, my_band: Bunch, params: Bunch, 
         pix_M = com_tod.decompress(f"/{pid}/{detname}M/pix/", compression="huffman").astype(np.uint32)
         tod_M = com_tod.decompress(f"/{pid}/{detname}M/tod/")[()].astype(np.float32)
         tod_S = com_tod.decompress(f"/{pid}/{detname}S/tod/")[()].astype(np.float32)
+        # This is the orbital velocity relative to the sun, in galactic coordinates:
         vsun = com_tod.decompress(f"/{pid}/common/vsun/")[()]
         fsamp = com_tod.decompress("/common/fsamp/")[()]
         if local_nside != my_band.nside:
@@ -78,11 +79,8 @@ def read_Planck_TOD_data(database_filename: str, my_band: Bunch, params: Bunch, 
         if mask.all():
             tod = (tod_M + tod_S)/2.0
             if np.mean(np.abs(tod)) < 0.001 and np.std(tod) < 0.001:  # Check for crazy data.
-                theta, phi = hp.pix2ang(my_band.nside, pix_M)
-                scanlist.append(ScanTOD(tod, theta.astype(np.float32), phi.astype(np.float32), np.zeros_like(theta, dtype=np.float32), 0., i_pid))
-                scanlist[-1].orb_dir_vec = vsun
-                scanlist[-1].fsamp = fsamp
-                scanlist[-1].PID = pid
+                scanlist.append(ScanTOD(tod, pix_M, np.zeros_like(tod, dtype=np.float32), 0.,
+                                        pid, my_band.nside, fsamp, vsun))
                 num_included += 1
     logger.info(f"Fraction of scans included for {my_band.freq_identifier}: "
                 f"{num_included/(scan_idx_stop-scan_idx_start)*100:.1f} %")

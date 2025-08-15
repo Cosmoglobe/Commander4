@@ -27,9 +27,8 @@ def read_TOD_sim_data(h5_filename: str, my_band: Bunch, params: Bunch, scan_idx_
             except KeyError:
                 logger.exception(f"{iscan+1:06}/{band_formatted}")
                 raise KeyError
-            scanlist.append(ScanTOD(tod, theta, phi, psi, 0., iscan))
-            scanlist[-1].orb_dir_vec = orb_dir_vec
-            scanlist[-1].fsamp = my_band.fsamp
+            pix = hp.ang2pix(my_band.nside, theta, phi)
+            scanlist.append(ScanTOD(tod, pix, psi, 0., iscan, my_band.nside, my_band.fsamp, orb_dir_vec))
 
     scansample_list = []
     for iscan in range(scan_idx_start, scan_idx_stop):
