@@ -19,7 +19,7 @@ module_root_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.append(module_root_path) # Add the parent directory of this file, which is the Commander 4 root directory, to PATH, so that we can import packages from e.g. src/.
 
 from save_sim_to_h5 import save_to_h5_file
-from src.python.model.component import ThermalDust, Synchrotron
+from src.python.sky_models.component import ThermalDust, Synchrotron
 
 
 def generate_cmb(freqs, fwhm, units, nside, lmax):

@@ -5,7 +5,7 @@ import numpy as np
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
-from src.python.model.component import DiffuseComponent
+from src.python.sky_models.component import DiffuseComponent
 from src.python.data_models.detector_map import DetectorMap
 
 

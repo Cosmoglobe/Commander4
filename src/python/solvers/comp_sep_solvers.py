@@ -10,7 +10,7 @@ from typing import Callable
 
 from src.python.output.log import logassert
 from src.python.data_models.detector_map import DetectorMap
-from src.python.model.component import DiffuseComponent
+from src.python.sky_models.component import DiffuseComponent
 from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, alm_real2complex, alm_complex2real
 from src.python.solvers.dense_matrix_math import DenseMatrix
 import src.python.solvers.preconditioners as preconditioners

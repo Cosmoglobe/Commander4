@@ -6,9 +6,9 @@ from pixell.bunch import Bunch
 from numpy.typing import NDArray
 
 from src.python.data_models.detector_map import DetectorMap
-from src.python.model.component import DiffuseComponent
-import src.python.model.component as component_lib
-from src.python.model.sky_model import SkyModel
+from src.python.sky_models.component import DiffuseComponent
+import src.python.sky_models.component as component_lib
+from src.python.sky_models.sky_model import SkyModel
 import src.python.output.plotting as plotting
 from src.python.solvers.comp_sep_solvers import CompSepSolver, amplitude_sampling_per_pix
 
