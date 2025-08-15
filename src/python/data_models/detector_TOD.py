@@ -1,11 +1,14 @@
 from src.python.data_models.scan_TOD import ScanTOD
+import numpy as np
+from numpy.typing import NDArray
 
 class DetectorTOD:
-    def __init__(self, scanlist: list[ScanTOD], nu, fwhm, nside):
+    def __init__(self, scanlist: list[ScanTOD], nu, fwhm, nside, processing_mask_map):
         self._scanlist = scanlist
         self._nu = nu
         self._fwhm = fwhm
         self._nside = nside
+        self._processing_mask_map = processing_mask_map
 
     @property
     def nu(self):
@@ -18,6 +21,10 @@ class DetectorTOD:
     @property
     def nside(self):
         return self._nside
+
+    @property
+    def processing_mask_map(self):
+        return self._processing_mask_map
 
     @property
     def blm(self):
