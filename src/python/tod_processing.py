@@ -293,10 +293,11 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_sam
         C_1f_inv = np.zeros(Nfft)
         C_1f_inv[1:] = 1.0 / (sigma0**2*(freq[1:]/fknee)**alpha)
         err_tol = 1e-8
-        scansamples.n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
-                                                                  scan.galactic_mask_array,
-                                                                  sigma0, C_1f_inv,
-                                                                  err_tol=err_tol).astype(np.float32)
+        n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
+                                                                scan.galactic_mask_array,
+                                                                sigma0, C_1f_inv,
+                                                                err_tol=err_tol)
+        scansamples.n_corr_est = n_corr_est.astype(np.float32)
         if residual > err_tol:
             num_failed_convergence += 1
             worst_residual = max(worst_residual, residual)
