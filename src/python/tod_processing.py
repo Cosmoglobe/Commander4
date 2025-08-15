@@ -8,7 +8,6 @@ from output import log
 from scipy.fft import rfft, irfft, rfftfreq
 import time
 from numpy.typing import NDArray
-import fits
 
 from src.python.data_models.detector_map import DetectorMap
 from src.python.data_models.detector_TOD import DetectorTOD
@@ -239,22 +238,6 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Co
 
 
 
-def find_galactic_mask(experiment_data: DetectorTOD, params: Bunch) -> DetectorTOD:
-    """Subtracts the sky model from the TOD data.
-    Input:
-        experiment_data (DetectorTOD): The experiment TOD object.
-        params (Bunch): The parameters from the input parameter file.
-    Output:
-        experiment_data (DetectorTOD): The experiment TOD with the estimated white noise level added to each scan.
-    """
-    if params.galactic_mask:
-        for scan in experiment_data.scans:
-            scan_map, theta, phi, psi = scan.data
-            scan.galactic_mask_array = np.abs(theta - np.pi/2.0) > 8.0*np.pi/180.0
-    return experiment_data
-
-
-
 def estimate_white_noise(experiment_data: DetectorTOD, detector_samples: DetectorSamples, det_compsep_map: NDArray, params: Bunch) -> DetectorTOD:
     """Estimate the white noise level in the TOD data, add it to the scans, and return the updated experiment data.
     Input:
@@ -266,8 +249,11 @@ def estimate_white_noise(experiment_data: DetectorTOD, detector_samples: Detecto
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         raw_TOD = scan.data[0]
         sky_subtracted_tod = raw_TOD - scan_samples.gain_est*get_sky_model_TOD(scan, det_compsep_map)  #TODO: also subtract orbital dipole?
-        if params.galactic_mask and np.sum(scan.galactic_mask_array) > 50:  # If we have enough data points to estimate the noise, we use the masked version.
-            sigma0 = np.std(sky_subtracted_tod[scan.galactic_mask_array][1:] - sky_subtracted_tod[scan.galactic_mask_array][:-1])/np.sqrt(2)
+        _, theta, phi, _ = scan.data
+        pix = hp.ang2pix(experiment_data.nside, theta, phi)
+        mask = experiment_data.processing_mask_map[pix]
+        if np.sum(mask) > 50:  # If we have enough data points to estimate the noise, we use the masked version.
+            sigma0 = np.std(sky_subtracted_tod[mask][1:] - sky_subtracted_tod[mask][:-1])/np.sqrt(2)
         else:
             sigma0 = np.std(sky_subtracted_tod[1:] - sky_subtracted_tod[:-1])/np.sqrt(2)
         scan_samples.sigma0 = sigma0/scan_samples.gain_est
@@ -293,9 +279,11 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_sam
         C_1f_inv = np.zeros(Nfft)
         C_1f_inv[1:] = 1.0 / (sigma0**2*(freq[1:]/fknee)**alpha)
         err_tol = 1e-8
+        _, theta, phi, _ = scan.data
+        pix = hp.ang2pix(experiment_data.nside, theta, phi)
+        mask = experiment_data.processing_mask_map[pix]
         n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
-                                                                scan.galactic_mask_array,
-                                                                sigma0, C_1f_inv,
+                                                                mask, sigma0, C_1f_inv,
                                                                 err_tol=err_tol)
         scansamples.n_corr_est = n_corr_est.astype(np.float32)
         if residual > err_tol:
@@ -317,7 +305,8 @@ def sample_noise_PS(band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_
     alphas = []
     fknees = []
     for scan, scansamples in zip(experiment_data.scans, detector_samples.scans):
-        fknee, alpha = sample_noise_PS_params(scansamples.n_corr_est, scansamples.sigma0, scan.fsamp, scansamples.alpha_est, freq_max=2.0, n_grid=150, n_burnin=4)
+        sigma0 = scansamples.gain_est*scansamples.sigma0
+        fknee, alpha = sample_noise_PS_params(scansamples.n_corr_est, sigma0, scan.fsamp, scansamples.alpha_est, freq_max=2.0, n_grid=150, n_burnin=4)
         scansamples.fknee_est = fknee
         scansamples.alpha_est = alpha
         alphas.append(alpha)
@@ -492,7 +481,8 @@ def sample_relative_gain(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_dat
         N_inv_s_fft = s_fft * inv_power_spectrum
         N_inv_s = irfft(N_inv_s_fft, n=Ntod)
         
-        mask = scan.galactic_mask_array
+        pix = hp.ang2pix(experiment_data.nside, theta, phi)
+        mask = experiment_data.processing_mask_map[pix]
         s_T_N_inv_s_scan = np.dot(s_tot[mask], N_inv_s[mask])
         r_T_N_inv_s_scan = np.dot(residual_tod[mask], N_inv_s[mask])
 
@@ -606,7 +596,12 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
         s_orb = calculate_s_orb(scan, experiment_data)
         sky_model_TOD = get_sky_model_TOD(scan, det_compsep_map)
         s_tot = sky_model_TOD + s_orb
-        residual_tod = scan.data[0] - (detector_samples.g0_est + scan_samples.rel_gain_est)*s_tot
+        raw_tod, theta, phi, _ = scan.data
+
+        residual_tod = raw_tod - (detector_samples.g0_est + scan_samples.rel_gain_est)*s_tot
+
+        pix = hp.ang2pix(experiment_data.nside, theta, phi)
+        mask = experiment_data.processing_mask_map[pix]
 
         # FFT-based N^-1 operation setup
         Ntod = residual_tod.shape[0]
@@ -619,8 +614,6 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
         # Calculate N^-1 * s_tot and N^-1 * residual_tod
         N_inv_s = irfft(rfft(s_tot) * inv_power_spectrum, n=Ntod)
         N_inv_r = irfft(rfft(residual_tod) * inv_power_spectrum, n=Ntod)
-
-        mask = scan.galactic_mask_array
         
         # Calculate elements for the linear system
         A_qq = np.dot(s_tot[mask], N_inv_s[mask])
@@ -791,8 +784,6 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_data: Detect
             scan_samples.n_corr_est = np.zeros_like(scan.data[0], dtype=np.float32)
             scan_samples.alpha_est = params.noise_alpha  # These should be sampled params!
             scan_samples.fknee_est = params.noise_fknee
-
-    experiment_data = find_galactic_mask(experiment_data, params)
 
     t0 = time.time()
     if iter >= params.sample_gain_from_iter_num:

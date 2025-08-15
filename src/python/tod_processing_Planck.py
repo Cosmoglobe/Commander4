@@ -7,6 +7,22 @@ from src.python.data_models.scan_TOD import ScanTOD
 from src.python.utils.commander_tod import commander_tod
 from src.python.data_models.detector_samples import DetectorSamples
 from src.python.data_models.scan_samples import ScanSamples
+from astropy.io import fits
+
+def get_processing_mask(my_band: Bunch) -> DetectorTOD:
+    """Subtracts the sky model from the TOD data.
+    Input:
+        experiment_data (DetectorTOD): The experiment TOD object.
+        params (Bunch): The parameters from the input parameter file.
+    Output:
+        experiment_data (DetectorTOD): The experiment TOD with the estimated white noise level added to each scan.
+    """
+    hdul = fits.open(my_band.processing_mask)
+    mask = hdul[1].data["TEMPERATURE"].flatten().astype(bool)
+    nside = np.sqrt(mask.size//12)
+    if nside != my_band.nside:
+        mask = hp.ud_grade(mask.astype(np.float64), 512) == 1
+    return mask
 
 
 def read_Planck_TOD_data(database_filename: str, my_band: Bunch, params: Bunch, scan_idx_start: int, scan_idx_stop: int) -> DetectorTOD:
@@ -70,7 +86,9 @@ def read_Planck_TOD_data(database_filename: str, my_band: Bunch, params: Bunch, 
                 num_included += 1
     logger.info(f"Fraction of scans included for {my_band.freq_identifier}: "
                 f"{num_included/(scan_idx_stop-scan_idx_start)*100:.1f} %")
-    det_static = DetectorTOD(scanlist, float(my_band.freq), my_band.fwhm, my_band.nside)
+
+    processing_mask_map = get_processing_mask(my_band)
+    det_static = DetectorTOD(scanlist, float(my_band.freq), my_band.fwhm, my_band.nside, processing_mask_map)
     det_static.detector_id = my_band.detector_id
 
     scansample_list = []
