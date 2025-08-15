@@ -276,21 +276,36 @@ def estimate_white_noise(experiment_data: DetectorTOD, detector_samples: Detecto
 
 
 def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_samples: DetectorSamples, det_compsep_map: NDArray) -> DetectorTOD:
+    logger = logging.getLogger(__name__)
+    num_failed_convergence = 0
+    worst_residual = 0.0
     for scan, scansamples in zip(experiment_data.scans, detector_samples.scans):
         f_samp = scan.fsamp
-        raw_tod, theta, phi, psi = scan.data
-        sky_subtracted_TOD = raw_tod - get_sky_model_TOD(scan, det_compsep_map)
+        raw_tod = scan.data[0]
+        sky_tot = get_sky_model_TOD(scan, det_compsep_map) + calculate_s_orb(scan, experiment_data)
+        sky_subtracted_TOD = raw_tod - scansamples.gain_est*sky_tot
         Ntod = raw_tod.shape[0]
         Nfft = Ntod//2 + 1
         freq = rfftfreq(Ntod, d = 1/f_samp)
         fknee = scansamples.fknee_est
         alpha = scansamples.alpha_est
+        sigma0 = scansamples.gain_est*scansamples.sigma0
         C_1f_inv = np.zeros(Nfft)
-        C_1f_inv[1:] = 1.0 / (scansamples.sigma0**2*(freq[1:]/fknee)**alpha)
-        scansamples.n_corr_est = corr_noise_realization_with_gaps(sky_subtracted_TOD,
+        C_1f_inv[1:] = 1.0 / (sigma0**2*(freq[1:]/fknee)**alpha)
+        err_tol = 1e-8
+        scansamples.n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                                                   scan.galactic_mask_array,
-                                                                  scansamples.gain_est*scansamples.sigma0,
-                                                                  C_1f_inv).astype(np.float32)
+                                                                  sigma0, C_1f_inv,
+                                                                  err_tol=err_tol).astype(np.float32)
+        if residual > err_tol:
+            num_failed_convergence += 1
+            worst_residual = max(worst_residual, residual)
+    num_failed_convergence = band_comm.reduce(num_failed_convergence, op=MPI.SUM)
+    worst_residual = band_comm.reduce(worst_residual, op=MPI.MAX)
+    if band_comm.Get_rank() == 0:
+        if num_failed_convergence > 0:
+            logger.info(f"Band {experiment_data.nu}GHz failed noise CG for {num_failed_convergence}"
+                        f"scans. Worst residual = {worst_residual:.3e}.")
 
     return detector_samples
 

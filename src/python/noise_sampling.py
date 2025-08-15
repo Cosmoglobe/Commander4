@@ -77,7 +77,7 @@ def sample_noise_PS_params(n_corr: NDArray, sigma0: float, f_samp: float, alpha_
 
 
 
-def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigma0: float, C_corr_inv: NDArray, err_tol=1e-12, max_iter=100, rnd_seed=None) -> NDArray:
+def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigma0: float, C_corr_inv: NDArray, err_tol=1e-8, max_iter=400, rnd_seed=None) -> NDArray:
     """ Draws a correlated noise realization given a TOD (with gaps/masked samples) a correlated noise power spectrum.
         Requires solving a CG, which this function solves in a very efficient way by splitting up the problem
         such that the CG only has to be performed on the missing data, not the full TOD (see arXiv:2011.06024).
@@ -127,11 +127,6 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
                 CG_solver.step()
             else:
                 break
-        if i == max_iter:
-            logger.warning(f"Corr noise CG failed to converge after {max_iter} iterations. Residual = {CG_solver.err} (err tol = {err_tol:.2e})")
-        else:
-            # logger.info(f"Corr noise CG converged after {i} iterations. Residual = {CG_solver.err} (err tol = {err_tol:.2e})")
-            pass
         x_small = CG_solver.x
     else:
         x_small = np.zeros((0,))
@@ -142,7 +137,7 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
     # Now, apply M^-1 to get the full correction term
     full_correction = apply_filter(correction_gaps_only, M_inv)
     x_final = m_inv_b + full_correction
-    return x_final
+    return x_final, CG_solver.err
 
 
 
