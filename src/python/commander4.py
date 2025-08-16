@@ -72,7 +72,7 @@ def main(params: Bunch, params_dict: dict):
     proc_comm = MPI.COMM_WORLD.Split(color, key=worldrank)
     MPI.COMM_WORLD.barrier()
     time.sleep(worldrank*1e-2)  # Small sleep to get prints in nice order.
-    logger.info(f"MPI split performed, hi from worldrank {worldrank} (on machine {MPI.Get_processor_name()}) subcomrank {proc_comm.Get_rank()} from color {color} of size {proc_comm.Get_size()}.")
+    logger.info(f"MPI split performed, hi from worldrank {worldrank} (on machine {MPI.Get_processor_name()}, PID={os.getpid()}) subcomrank {proc_comm.Get_rank()} from color {color} of size {proc_comm.Get_size()}.")
 
     # Determine the world ranks of the respective master tasks for compsep and TOD
     # We ensured that this works by the "key=worldrank" in the split command.
