@@ -27,7 +27,7 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int, co
     residual = np.zeros_like(map_signal)
     residual[:] = map_signal
 
-    fig, ax = plt.subplots(3, 4, figsize=(42, 18))
+    fig, ax = plt.subplots(3, 5, figsize=(42, 18))
     fig.suptitle(f"Iter {iteration:04d}. Freq: {freq:.2f} GHz (det {detector}). Chain {chain}. gain = {gain:.4e} (g0={detector_data.g0}).", fontsize=24)
 
     for i, component in enumerate(components_list):
