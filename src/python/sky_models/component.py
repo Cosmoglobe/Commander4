@@ -5,6 +5,8 @@ import pysm3.units as pysm3u
 import healpy as hp
 from pixell.bunch import Bunch
 import logging
+from scipy.interpolate import interp1d
+from numpy.typing import NDArray
 
 from src.python.output import log
 from src.python.utils.math_operations import alm_to_map
@@ -164,3 +166,66 @@ class FreeFree(DiffuseComponent):
         # The scaling is proportional to nu^-2 * g_ff(nu), normalized to 1 at nu0.
         sed = (self.nu0 / nu)**2 * (gaunt_nu / gaunt_nu0)
         return sed
+
+
+class SpinningDust(DiffuseComponent):
+    """
+    Spinning Dust component spectral model, based on spinning dust.
+    The SED is derived from the SpDust2 code template for the Cold Neutral Medium.
+    """
+    # SpDust2 template data for Cold Neutral Medium (CNM)
+    # This template has an intensity peak at 30 GHz.
+    # Columns: Frequency (GHz), Emissivity (proportional to Intensity)
+
+    def __init__(self, params: Bunch):
+        """
+        Args:
+            nu_peak (float): The peak frequency of the spinning dust component in GHz.
+            nu_0 (float): The reference frequency of the spinning dust template in GHz.
+                          This will not impact the shape of the SED, just the absolute scaling.
+        """
+        super().__init__(params)
+        # Read SpDust2 template data. This is a simulation of what the spectral shape of
+        # spinning dust emission should look like if it happens to peak at 30 GHz.
+        freqs, SED = np.loadtxt("/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat").T
+        self.nu_peak_ref = 30.0  # The reference peak frequency of 30 GHz.
+        self.nu_peak_eval = params.nu_peak
+        self.nu_0 = params.nu_0  # Reference frequency for the amplitude map in GHz
+
+        # Create an logarithmic interpolation function from the SpDust2 template
+        log_nu = np.log(freqs)
+        log_SED = np.log(SED)
+        self._log_j_interp = interp1d(log_nu, log_SED, kind='cubic',
+                                      bounds_error=False, fill_value=-np.inf)
+
+
+    def _get_template_emissivity(self, nu):
+        """Calculates the template emissivity at a given frequency using interpolation."""
+        return np.exp(self._log_j_interp(np.log(nu)))
+
+
+    def get_sed(self, nu: float|NDArray[np.floating]):
+        """
+        Calculates the spinning dust SED scaling factor based on the spinning dust model.
+        This factor scales an amplitude map from its reference frequency (22 GHz)
+        to the target frequency nu.
+
+        Args:
+            nu (float|array): Frequency at which to get the SED, in GHz.
+        Returns:
+            float|array: The unitless SED scaling factor.
+        """
+        # Numerator: template evaluated at the shifted frequency
+        nu_shifted_eval = nu * self.nu_peak_ref / self.nu_peak_eval
+        SED_eval = self._get_template_emissivity(nu_shifted_eval)
+
+        # Denominator: template evaluated at the shifted reference frequency for normalization
+        nu_shifted_ref = self.nu_0 * self.nu_peak_ref / self.nu_peak_eval
+        SED_ref = self._get_template_emissivity(nu_shifted_ref)
+
+        # Shifting the SED spectrum from the reference frequency to the given peak frequency.
+        SED_at_eval_freq = SED_eval / SED_ref
+
+        # Converting from intensity to brightness temperature.
+        SED_uK_RJ = (self.nu_0 / nu)**2 * SED_at_eval_freq
+        return SED_uK_RJ
