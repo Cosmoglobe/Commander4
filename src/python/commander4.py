@@ -87,7 +87,7 @@ def main(params: Bunch, params_dict: dict):
     tod_band_masters_dict = None
     CompSep_band_masters_dict = None
     if color == 0:
-        is_band_master, band_comm, my_band_identifier, tod_band_masters_dict, experiment_data, detector_samples = init_tod_processing(proc_comm, params)
+        is_band_master, band_comm, det_comm, my_band_identifier, tod_band_masters_dict, experiment_data, detector_samples = init_tod_processing(proc_comm, params)
         detector_samples_chain1 = detector_samples
         detector_samples_chain2 = deepcopy(detector_samples)
     elif color == 1:
@@ -102,7 +102,7 @@ def main(params: Bunch, params_dict: dict):
         # Chain #1 do TOD processing, resulting in maps_chain1 (we start with a fake output of component separation, containing a completely empty sky).
         compsep_output_black = get_empty_compsep_output(experiment_data)
 
-        curr_tod_output, detector_samples_chain1 = process_tod(proc_comm, band_comm, experiment_data, detector_samples_chain1, compsep_output_black, params, 1, 1)
+        curr_tod_output, detector_samples_chain1 = process_tod(proc_comm, band_comm, det_comm, experiment_data, detector_samples_chain1, compsep_output_black, params, 1, 1)
         send_tod(is_band_master, curr_tod_output, CompSep_band_masters_dict, my_band_identifier)
         curr_compsep_output = compsep_output_black
 
@@ -120,9 +120,9 @@ def main(params: Bunch, params_dict: dict):
             if proc_comm.Get_rank() == 0:
                 logger.info(f"Worldrank {worldrank}, subrank {proc_comm.Get_rank()} starting TOD iteration {iter_num}.")
             if chain_num == 1:
-                curr_tod_output, detector_samples_chain1 = process_tod(proc_comm, band_comm, experiment_data, detector_samples_chain1, curr_compsep_output, params, chain_num, iter_num)
+                curr_tod_output, detector_samples_chain1 = process_tod(proc_comm, band_comm, det_comm, experiment_data, detector_samples_chain1, curr_compsep_output, params, chain_num, iter_num)
             elif chain_num == 2:
-                curr_tod_output, detector_samples_chain2 = process_tod(proc_comm, band_comm, experiment_data, detector_samples_chain2, curr_compsep_output, params, chain_num, iter_num)
+                curr_tod_output, detector_samples_chain2 = process_tod(proc_comm, band_comm, det_comm, experiment_data, detector_samples_chain2, curr_compsep_output, params, chain_num, iter_num)
             if proc_comm.Get_rank() == 0:
                 logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
             curr_compsep_output = receive_compsep(band_comm, my_band_identifier, band_comm.Get_rank()==0, CompSep_band_masters_dict)
