@@ -257,14 +257,18 @@ def estimate_white_noise(experiment_data: DetectorTOD, detector_samples: Detecto
 
 
 
-def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_samples: DetectorSamples, det_compsep_map: NDArray) -> DetectorTOD:
+def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
+                 detector_samples: DetectorSamples, det_compsep_map: NDArray) -> DetectorTOD:
     logger = logging.getLogger(__name__)
     num_failed_convergence = 0
     worst_residual = 0.0
+    alphas = []
+    fknees = []
+
     for scan, scansamples in zip(experiment_data.scans, detector_samples.scans):
         f_samp = scan.fsamp
         raw_tod = scan.tod
-        sky_tot = get_sky_model_TOD(scan, det_compsep_map) + calculate_s_orb(scan, experiment_data)
+        sky_tot = get_observed_sky_TOD(scan,  experiment_data, det_compsep_map)
         sky_subtracted_TOD = raw_tod - scansamples.gain_est*sky_tot
         Ntod = raw_tod.shape[0]
         Nfft = Ntod//2 + 1
@@ -275,7 +279,6 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_sam
         C_1f_inv = np.zeros(Nfft)
         C_1f_inv[1:] = 1.0 / (sigma0**2*(freq[1:]/fknee)**alpha)
         err_tol = 1e-8
-        # mask = experiment_data.processing_mask_map[scan.pix]
         mask = scan.processing_mask_TOD
         n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                                                 mask, sigma0, C_1f_inv,
@@ -284,6 +287,15 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_sam
         if residual > err_tol:
             num_failed_convergence += 1
             worst_residual = max(worst_residual, residual)
+
+        sigma0 = scansamples.gain_est*scansamples.sigma0
+        fknee, alpha = sample_noise_PS_params(n_corr_est, sigma0, scan.fsamp, scansamples.alpha_est,
+                                              freq_max=2.0, n_grid=150, n_burnin=4)
+        scansamples.fknee_est = fknee
+        scansamples.alpha_est = alpha
+        alphas.append(alpha)
+        fknees.append(fknee)
+
     num_failed_convergence = band_comm.reduce(num_failed_convergence, op=MPI.SUM)
     worst_residual = band_comm.reduce(worst_residual, op=MPI.MAX)
     if band_comm.Get_rank() == 0:
@@ -291,21 +303,6 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_sam
             logger.info(f"Band {experiment_data.nu}GHz failed noise CG for {num_failed_convergence}"
                         f"scans. Worst residual = {worst_residual:.3e}.")
 
-    return detector_samples
-
-
-
-def sample_noise_PS(band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_samples: DetectorSamples, params: Bunch):
-    logger = logging.getLogger(__name__)
-    alphas = []
-    fknees = []
-    for scan, scansamples in zip(experiment_data.scans, detector_samples.scans):
-        sigma0 = scansamples.gain_est*scansamples.sigma0
-        fknee, alpha = sample_noise_PS_params(scansamples.n_corr_est, sigma0, scan.fsamp, scansamples.alpha_est, freq_max=2.0, n_grid=150, n_burnin=4)
-        scansamples.fknee_est = fknee
-        scansamples.alpha_est = alpha
-        alphas.append(alpha)
-        fknees.append(fknee)
     alphas = band_comm.gather(alphas, root=0)
     fknees = band_comm.gather(fknees, root=0)
     if band_comm.Get_rank() == 0:
@@ -313,58 +310,8 @@ def sample_noise_PS(band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_
         fknees = np.concatenate(fknees)
         logger.info(f"{MPI.COMM_WORLD.Get_rank()} fknees {np.min(fknees):.4f} {np.percentile(fknees, 1):.4f} {np.mean(fknees):.4f} {np.percentile(fknees, 99):.4f} {np.max(fknees):.4f}")
         logger.info(f"{MPI.COMM_WORLD.Get_rank()} alphas {np.min(alphas):.4f} {np.percentile(alphas, 1):.4f} {np.mean(alphas):.4f} {np.percentile(alphas, 99):.4f} {np.max(alphas):.4f}")
+
     return detector_samples
-
-
-def fill_gaps(TOD, mask, noise_sigma0, window_size=20):
-    """ In-place fills the gaps in the provided TOD array with linearly interpolated
-        values plus a white noise term.
-    Args:
-        TOD (np.ndarray): The data array with gaps. This array will changed in-place!
-        mask (np.ndarray): A boolean array of same shape as TOD where False indicates a gap to be filled.
-        noise_std (float): The standard deviation of the white noise to add.
-        window_size (int): The number of points to average on each side of a gap.
-    """
-    # Find the start and end of each gap by looking at when the masks changes value.
-    gap_starts = np.where(np.diff(mask.astype(int)) == -1)[0] + 1
-    gap_ends = np.where(np.diff(mask.astype(int)) == 1)[0] + 1
-
-    if not mask[0]:  # Special case: If first sample is masked.
-        gap_starts = np.insert(gap_starts, 0, 0)
-    if not mask[-1]:  # If last sample is masked.
-        gap_ends = np.append(gap_ends, len(mask))
-        
-    for start, end in zip(gap_starts, gap_ends):
-        gap_len = end - start
-
-        # Case 1: Gap is at the beginning of the data: Use only right anchor.
-        if start == 0:
-            right_window = TOD[end:end + window_size]
-            right_mask_window = mask[end:end + window_size]
-            anchor = np.mean(right_window[right_mask_window])
-            interp_values = np.full(gap_len, anchor)
-        
-        # Case 2: Gap is at the end of the data: Use only left anchor.
-        elif end == len(mask):
-            left_window = TOD[max(0, start - window_size):start]
-            left_mask_window = mask[max(0, start - window_size):start]
-            anchor = np.mean(left_window[left_mask_window])
-            interp_values = np.full(gap_len, anchor)
-
-        # Case 3: Gap is not at either end: Linearly interpolate between anchors.
-        else:
-            left_window = TOD[max(0, start - window_size):start]
-            left_mask_window = mask[max(0, start - window_size):start]
-            left_anchor = np.mean(left_window[left_mask_window])
-
-            right_window = TOD[end:end + window_size]
-            right_mask_window = mask[end:end + window_size]
-            right_anchor = np.mean(right_window[right_mask_window])
-            
-            interp_values = np.linspace(left_anchor, right_anchor, gap_len)
-        
-        # Add a white noise to the interpolated (or constant) values.
-        TOD[start:end] = interp_values + np.random.normal(0, noise_sigma0, gap_len)
 
 
 
@@ -808,17 +755,10 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, det_comm: MPI.Comm,
         t0 = time.time()
 
     if iter >= params.sample_corr_noise_from_iter_num:
-        #TODO: Merge the two noise sampling methods, such that we 1. don't have to store the n_corr
-        # entry, and 2. don't have to recalculate stuff like s_orb and s_sky.
         detector_samples = sample_noise(det_comm, experiment_data, detector_samples, compsep_output)
         TOD_comm.Barrier()
         if TOD_comm.Get_rank() == 0:
             logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished corr noise realizations in {time.time()-t0:.1f}s.")
-            t0 = time.time()
-        detector_samples = sample_noise_PS(det_comm, experiment_data, detector_samples, params)
-        TOD_comm.Barrier()
-        if TOD_comm.Get_rank() == 0:
-            logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished corr noise PS parameter sampling in {time.time()-t0:.1f}s.")
             t0 = time.time()
     todproc_output = tod2map(band_comm, experiment_data, compsep_output, detector_samples, params)
     TOD_comm.Barrier()
