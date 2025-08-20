@@ -271,17 +271,18 @@ template<typename T> static NpArr Py2_huffman_decode(const CNpArr &bytes_,
   vector<T> out;
   {
   py::gil_scoped_release release;
-  auto left_nodes  = subarray<1>(tree, {{1,((tree.shape(0)-1)/2)+1}});
-  auto right_nodes = subarray<1>(tree, {{((tree.shape(0)-1)/2)+1, tree.shape(0)}});
-  MR_assert(left_nodes.shape(0)==right_nodes.shape(0), "bad tree size");
+  MR_assert((tree.shape(0)&1)==1, "bad tree size");
+  size_t n_internal = (tree.shape(0)-1)/2;
+  cmav<int64_t,2> lrnodes(&tree(1), {2, n_internal},
+    {tree.stride(0)*ptrdiff_t(n_internal),tree.stride(0)});
   size_t nsymb = symb.shape(0);
-  size_t startnode = nsymb + left_nodes.shape(0);
+  size_t startnode = nsymb + n_internal;
   size_t nbits = bytes.shape(0)*8 - 8 - bytes(0);
   size_t node = startnode;
   for (size_t i=8; i<nbits+8; ++i)
     {
     size_t bit = (bytes(i/8) >> (7-(i%8))) & 1;
-    node = bit ? right_nodes(node-nsymb-1) : left_nodes(node-nsymb-1);
+    node = lrnodes(bit, node-nsymb-1);
     if (node <= nsymb)
       {
       out.push_back(symb(node-1));
