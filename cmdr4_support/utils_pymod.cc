@@ -263,12 +263,12 @@ numpy.ndarray((npix, ncomp), dtype=np.float64)
 )""";
 
 template<typename T> static NpArr Py2_huffman_decode(const CNpArr &bytes_,
-  const CNpArr &tree_, const CNpArr &symb_)
+  const CNpArr &tree_, const CNpArr &symb_, const NpArr &out_)
   {
   auto bytes = to_cmav<uint8_t,1>(bytes_);
   auto tree = to_cmav<int64_t,1>(tree_);
   auto symb = to_cmav<T,1>(symb_);
-  vector<T> out;
+  auto out = to_vmav<T,1>(out_);
   {
   py::gil_scoped_release release;
   MR_assert((tree.shape(0)&1)==1, "bad tree size");
@@ -276,31 +276,33 @@ template<typename T> static NpArr Py2_huffman_decode(const CNpArr &bytes_,
   cmav<int64_t,2> lrnodes(&tree(1), {2, n_internal},
     {tree.stride(0)*ptrdiff_t(n_internal),tree.stride(0)});
   size_t nsymb = symb.shape(0);
+  size_t nout = out.shape(0);
   size_t startnode = nsymb + n_internal;
   size_t nbits = bytes.shape(0)*8 - 8 - bytes(0);
   size_t node = startnode;
+  size_t pos=0;
   for (size_t i=8; i<nbits+8; ++i)
     {
     size_t bit = (bytes(i/8) >> (7-(i%8))) & 1;
     node = lrnodes(bit, node-nsymb-1);
     if (node <= nsymb)
       {
-      out.push_back(symb(node-1));
+      MR_assert(pos<nout, "overflow");
+      out(pos) = symb(node-1);
+      ++pos;
       node = startnode;
       }
     }
+  MR_assert(pos==nout, "out array is too large");
   }
-  auto [res_, res] = make_Pyarr_and_vmav<T,1>({out.size()});
-  for (size_t i=0; i<out.size(); ++i)
-    res(i) = out[i];
-  return res_;
+  return out_;
   }
 
 static NpArr Py_huffman_decode(const CNpArr &bytes,
-  const CNpArr &tree, const CNpArr &symb)
+  const CNpArr &tree, const CNpArr &symb, const NpArr &out)
   {
   if (isPyarr<int64_t>(symb))
-    return Py2_huffman_decode<int64_t> (bytes, tree, symb);
+    return Py2_huffman_decode<int64_t> (bytes, tree, symb, out);
   MR_fail("type matching failed: 'symb' has neither type 'i8' nor 'xxx'");
   }
 
@@ -315,11 +317,14 @@ tree: numpy.ndarray((ntree,), dtype=np.int64)
     the tree array
 symb: numpy.ndarray((nsymb,), dtype=np.int64 or TBD)
     the array of possible symbols in the stream
+out: numpy.ndarray((ndata,), dtype identical to that of symb)
+    the array into which the uncopressed data is written
+    The size of this array *must* match the number of decoded symbols!
 
 Returns
 -------
 numpy.ndarray(ndata,), dtype identical to that of symb)
-    the uncopressed data array
+    the uncopressed data array, identical to `out`
 )""";
 
 void add_utils(py::module_ &msup)
@@ -339,7 +344,7 @@ void add_utils(py::module_ &msup)
         "nthreads"_a=1);
 
   m.def("huffman_decode", Py_huffman_decode, Py_huffman_decode_DS, "bytes"_a,
-        "tree"_a, "symb"_a);
+        "tree"_a, "symb"_a, "out"_a);
   }
 
 }
