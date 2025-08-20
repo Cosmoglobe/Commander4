@@ -13,6 +13,8 @@ class ScanTOD:
         log.logassert_np(tod.dtype in [np.float64,np.float32], "TOD dtype must be floating type,"
                          f" is {tod.dtype}", logger)
         log.logassert_np(orb_dir_vec.size == 3, "orb_dir_vec must be a vector of size 3.", logger)
+        log.logassert_np(processing_mask_map.dtype == bool, "Processing mask is not boolean type",
+                         logger)
         self._tod = tod
         self._pix_encoded = pix_encoded
         self._psi_encoded = psi_encoded
@@ -25,7 +27,6 @@ class ScanTOD:
         self._huffman_tree = huffman_tree
         self._huffman_symbols = huffman_symbols
         self._npsi = npsi
-        log.logassert_np(processing_mask_map.dtype == bool, "asdf", logger)
         self._processing_mask_TOD = np.packbits(processing_mask_map[self.pix])
 
 

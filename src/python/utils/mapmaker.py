@@ -6,7 +6,7 @@ from pixell import bunch
 import pysm3.units as pysm3_u
 
 from src.python.data_models.detector_TOD import DetectorTOD
-from src.python.utils.map_utils import get_sky_model_TOD, calculate_s_orb
+from src.python.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 
 current_dir_path = os.path.dirname(os.path.realpath(__file__))
 src_dir_path = os.path.abspath(os.path.join(os.path.join(current_dir_path, os.pardir), os.pardir))
@@ -86,10 +86,10 @@ def single_det_map_accumulator(det_static: DetectorTOD, det_cs_map: np.array, sa
         raw_tod = scan.tod
         pix = scan.pix
         ntod = raw_tod.shape[0]
-        s_orb = calculate_s_orb(scan, det_static)
+        s_orb = get_s_orb_TOD(scan, det_static, pix)
         inv_var = 1.0/scanparams.sigma0**2
         gain = scanparams.gain_est
-        sky_subtracted_TOD = raw_tod - gain*get_sky_model_TOD(scan, det_cs_map)
+        sky_subtracted_TOD = raw_tod - gain*get_static_sky_TOD(det_cs_map, pix)
         # detmap_signal += np.bincount(pix, weights=scan_map/sigma0**2, minlength=npix)
         # detmap_inv_var += np.bincount(pix, minlength=npix)/sigma0**2
         maplib.map_weight_accumulator(detmap_hits, 1.0, pix.astype(np.int64), ntod, npix)
@@ -142,11 +142,11 @@ def single_det_map_accumulator_IQU(det_static: DetectorTOD, det_cs_map: np.array
         pix = scan.pix
         psi = scan.psi
         ntod = raw_tod.shape[0]
-        s_orb = calculate_s_orb(scan, det_static)
+        s_orb = get_s_orb_TOD(scan, det_static, pix)
         inv_var = 1.0/scanparams.sigma0**2
         gain = scanparams.gain_est
         n_corr = scanparams.n_corr_est
-        sky_subtracted_TOD = raw_tod - gain*get_sky_model_TOD(scan, det_cs_map)
+        sky_subtracted_TOD = raw_tod - gain*get_static_sky_TOD(det_cs_map, pix)
         maplib.map_weight_accumulator(detmap_hits, 1.0, pix.astype(np.int64), ntod, npix)
         maplib.map_weight_accumulator_IQU(detmap_inv_var, (inv_var).astype(np.float64), pix.astype(np.int64), psi.astype(np.float64), ntod, npix)
         maplib.map_accumulator_IQU(detmap_rawobs, (raw_tod/gain).astype(np.float64), inv_var, pix.astype(np.int64), psi.astype(np.float64), ntod, npix)

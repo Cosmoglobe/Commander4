@@ -18,7 +18,7 @@ from src.python.utils.mapmaker import single_det_map_accumulator
 from src.python.utils.mapmaker import single_det_map_accumulator_IQU
 from src.python.noise_sampling import corr_noise_realization_with_gaps, sample_noise_PS_params
 from src.python.tod_processing_Planck import read_Planck_TOD_data
-from src.python.utils.map_utils import get_sky_model_TOD, calculate_s_orb
+from src.python.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from src.python.tod_processing_sim import read_TOD_sim_data
 
 nthreads=1
@@ -245,8 +245,9 @@ def estimate_white_noise(experiment_data: DetectorTOD, detector_samples: Detecto
     """
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         raw_TOD = scan.tod
-        sky_subtracted_tod = raw_TOD - scan_samples.gain_est*get_sky_model_TOD(scan, det_compsep_map)  #TODO: also subtract orbital dipole?
-        # mask = experiment_data.processing_mask_map[scan.pix]
+        pix = scan.pix
+        sky_TOD = get_static_sky_TOD(det_compsep_map, pix) + get_s_orb_TOD(scan, experiment_data, pix)
+        sky_subtracted_tod = raw_TOD - scan_samples.gain_est*sky_TOD
         mask = scan.processing_mask_TOD
         if np.sum(mask) > 50:  # If we have enough data points to estimate the noise, we use the masked version.
             sigma0 = np.std(sky_subtracted_tod[mask][1:] - sky_subtracted_tod[mask][:-1])/np.sqrt(2)
@@ -268,8 +269,9 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
     for scan, scansamples in zip(experiment_data.scans, detector_samples.scans):
         f_samp = scan.fsamp
         raw_tod = scan.tod
-        sky_tot = get_observed_sky_TOD(scan,  experiment_data, det_compsep_map)
-        sky_subtracted_TOD = raw_tod - scansamples.gain_est*sky_tot
+        pix = scan.pix
+        sky_TOD = get_static_sky_TOD(det_compsep_map, pix) + get_s_orb_TOD(scan, experiment_data, pix)
+        sky_subtracted_TOD = raw_tod - scansamples.gain_est*sky_TOD
         Ntod = raw_tod.shape[0]
         Nfft = Ntod//2 + 1
         freq = rfftfreq(Ntod, d = 1/f_samp)
@@ -328,9 +330,9 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
     sum_s_T_N_inv_s = 0
 
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-        # --- Setup ---
-        s_orb = calculate_s_orb(scan, experiment_data)  #TODO: These two decompress pix two times!
-        sky_model_TOD = get_sky_model_TOD(scan, det_compsep_map)
+        pix = scan.pix  # Only decompressing pix once for efficiency.
+        s_orb = get_s_orb_TOD(scan, experiment_data, pix)
+        sky_model_TOD = get_static_sky_TOD(det_compsep_map, pix)
 
         tod_residual = scan.tod - scan_samples.gain_est*(sky_model_TOD + s_orb)  # Subtracting sky signal.
         tod_residual += detector_samples.g0_est*s_orb  # Now we can add back in the orbital dipole.
@@ -404,9 +406,8 @@ def sample_relative_gain(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_dat
 
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         # Define the residual for this sampling step, as per Eq. (17)
-        s_orb = calculate_s_orb(scan, experiment_data)
-        sky_model_TOD = get_sky_model_TOD(scan, det_compsep_map)
-        s_tot = sky_model_TOD + s_orb
+        pix = scan.pix
+        s_tot = get_static_sky_TOD(det_compsep_map, pix) + get_s_orb_TOD(scan, experiment_data, pix)
 
         residual_tod = scan.tod - (detector_samples.g0_est + scan_samples.time_dep_rel_gain_est)*s_tot
 
@@ -542,9 +543,8 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
         # ringing from the large residual in the galactic plane).
 
         # Per Eq. (26), the residual is d - (g0 + Delta_g)*s
-        s_orb = calculate_s_orb(scan, experiment_data)
-        sky_model_TOD = get_sky_model_TOD(scan, det_compsep_map)
-        s_tot = sky_model_TOD + s_orb
+        pix = scan.pix
+        s_tot = get_static_sky_TOD(det_compsep_map, pix) + get_s_orb_TOD(scan, experiment_data, pix)
 
         residual_tod = scan.tod - (detector_samples.g0_est + scan_samples.rel_gain_est)*s_tot
 
