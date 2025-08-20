@@ -171,12 +171,12 @@ void solvlu(const cmav<double,2> &a, const cmav<double,1> &b, vmav<double,1> &x,
 	   }
   }
 
-py::array Py_amplitude_sampling_per_pix_helper (
-  const py::array &map_sky_,
-  const py::array &map_rms_,
-  const py::array &M_,
-  const py::array &random_,
-  py::object &comp_maps__,
+NpArr Py_amplitude_sampling_per_pix_helper (
+  const CNpArr &map_sky_,
+  const CNpArr &map_rms_,
+  const CNpArr &M_,
+  const CNpArr &random_,
+  const OptNpArr &comp_maps__,
   size_t nthreads)
   {
   const auto map_sky = to_cmav<double,2>(map_sky_);
@@ -190,8 +190,7 @@ py::array Py_amplitude_sampling_per_pix_helper (
   const auto random = to_cmav<double,2>(random_);
   MR_assert(random.shape(0)==npix, "random numbers shape mismatch");
   MR_assert(random.shape(1)==nband, "random numbers shape mismatch");
-  auto comp_maps_ = get_optional_Pyarr<double>(comp_maps__, {ncomp, npix});
-  auto comp_maps = to_vmav<double,2>(comp_maps_);
+  auto [comp_maps_, comp_maps] = get_OptNpArr_and_vmav<double,2>(comp_maps__, {ncomp, npix}, "comp_maps");
   {
   py::gil_scoped_release release;
 
@@ -263,6 +262,65 @@ numpy.ndarray((npix, ncomp), dtype=np.float64)
     If comp_maps was provided, this array is identical to comp_maps
 )""";
 
+template<typename T> static NpArr Py2_huffman_decode(const CNpArr &bytes_,
+  const CNpArr &tree_, const CNpArr &symb_)
+  {
+  auto bytes = to_cmav<uint8_t,1>(bytes_);
+  auto tree = to_cmav<int64_t,1>(tree_);
+  auto symb = to_cmav<T,1>(symb_);
+  vector<T> out;
+  {
+  py::gil_scoped_release release;
+  auto left_nodes  = subarray<1>(tree, {{1,((tree.shape(0)-1)/2)+1}});
+  auto right_nodes = subarray<1>(tree, {{((tree.shape(0)-1)/2)+1, tree.shape(0)}});
+  MR_assert(left_nodes.shape(0)==right_nodes.shape(0), "bad tree size");
+  size_t nsymb = symb.shape(0);
+  size_t startnode = nsymb + left_nodes.shape(0);
+  size_t nbits = bytes.shape(0)*8 - 8 - bytes(0);
+  size_t node = startnode;
+  for (size_t i=8; i<nbits+8; ++i)
+    {
+    size_t bit = (bytes(i/8) >> (7-(i%8))) & 1;
+    node = bit ? right_nodes(node-nsymb-1) : left_nodes(node-nsymb-1);
+    if (node <= nsymb)
+      {
+      out.push_back(symb(node-1));
+      node = startnode;
+      }
+    }
+  }
+  auto [res_, res] = make_Pyarr_and_vmav<T,1>({out.size()});
+  for (size_t i=0; i<out.size(); ++i)
+    res(i) = out[i];
+  return res_;
+  }
+
+static NpArr Py_huffman_decode(const CNpArr &bytes,
+  const CNpArr &tree, const CNpArr &symb)
+  {
+  if (isPyarr<int64_t>(symb))
+    return Py2_huffman_decode<int64_t> (bytes, tree, symb);
+  MR_fail("type matching failed: 'symb' has neither type 'i8' nor 'xxx'");
+  }
+
+constexpr const char *Py_huffman_decode_DS = R"""(
+Decode a Commander3-style Huffman-compressed bitstream.
+
+Parameters
+----------
+bytes: numpy.ndarray((nbytes,), dtype=np.uint8)
+    the bit stream
+tree: numpy.ndarray((ntree,), dtype=np.int64)
+    the tree array
+symb: numpy.ndarray((nsymb,), dtype=np.int64 or TBD)
+    the array of possible symbols in the stream
+
+Returns
+-------
+numpy.ndarray(ndata,), dtype identical to that of symb)
+    the uncopressed data array
+)""";
+
 void add_utils(py::module_ &msup)
   {
   using namespace pybind11::literals;
@@ -278,6 +336,9 @@ void add_utils(py::module_ &msup)
         "random"_a,
         "comp_maps"_a=None,
         "nthreads"_a=1);
+
+  m.def("huffman_decode", Py_huffman_decode, Py_huffman_decode_DS, "bytes"_a,
+        "tree"_a, "symb"_a);
   }
 
 }
