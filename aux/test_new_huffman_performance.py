@@ -57,23 +57,14 @@ print(f"old version finished in {time.time()-t0:.2f}s.")
 comp0 = np.frombuffer(pix_encoded.tobytes(), dtype=np.uint8)
 t0 = time.time()
 for i in trange(1000):
-    hufftree = hufftree_list[i]
-    huffsymb = huffsymb_list[i]
-    psi_encoded = psi_encoded_list[i]
-    pix_encoded = pix_encoded_list[i]
-    huff = Huffman(tree=hufftree, symb=huffsymb)
-    symb0 = np.array(huff.symbols)
-    comp0 = np.frombuffer(pix_encoded, dtype=np.uint8)
-    ninternal = len(huff.left_nodes)
-    tree0 = np.empty(ninternal*2+1, dtype=np.int64)
-    tree0[0] = len(huff.symbols) + ninternal
-    tree0[1:ninternal+1] = huff.left_nodes
-    tree0[ninternal+1:] = huff.right_nodes
-    pix0 = np.zeros(sizes[i], dtype=np.int64)
+    symb0 = np.array(huffsymb_list[i])
+    comp0 = np.frombuffer(pix_encoded_list[i], dtype=np.uint8)
+    pix0 = np.empty(sizes[i], dtype=np.int64)
+    tree0 = np.array(hufftree_list[i])
     pix0 = cmdr4_support.utils.huffman_decode(comp0, tree0, symb0, pix0)
     pix0 = np.cumsum(pix0)
-    comp0 = np.frombuffer(psi_encoded, dtype=np.uint8)
-    psi0 = np.zeros(sizes[i], dtype=np.int64)
+    comp0 = np.frombuffer(psi_encoded_list[i], dtype=np.uint8)
+    psi0 = np.empty(sizes[i], dtype=np.int64)
     psi0 = cmdr4_support.utils.huffman_decode(comp0, tree0, symb0, psi0)
     psi0 = np.cumsum(psi0)
 print(f"cmdr4_support version finished in {time.time()-t0:.2f}s.")
