@@ -13,23 +13,23 @@ import src.python.output.plotting as plotting
 from src.python.solvers.comp_sep_solvers import CompSepSolver, amplitude_sampling_per_pix
 
 
-def init_compsep_processing(CompSep_comm: Comm, params: Bunch) -> tuple[list[DiffuseComponent], str, dict[str, int], Bunch]:
+def init_compsep_processing(mpi_info: Bunch, params: Bunch) -> tuple[list[DiffuseComponent], str, dict[str, int], Bunch]:
     """To be run once before starting component separation processing.
 
     Determines whether the process is compsep master, and the number of bands.
 
     Input:
-        CompSep_comm (MPI.Comm): Communicator for the CompSep processes.
+        mpi_info (Bunch): The data structure containing all MPI relevant data.
         params (Bunch): The parameters from the input parameter file.
 
     Output:
-        components (list[Component]): List of Component type objects as specified by the parameters.)
+        mpi_info (Bunch): The data structure containing all MPI relevant data,
+            modified to contain also the band masters dictionary.
         band_identifier (str): Unique string identifier for the experiment+band this process is responsible for.
-        CompSep_band_masters_dict (dict[str->int]): Dictionary mapping band identifiers to the global rank of the process responsible for that band.
         my_band (Bunch): The section of the parameters describing the band this rank is responsible for.
     """
     logger = logging.getLogger(__name__)
-    logger.info(f"CompSep: Hello from CompSep-rank {CompSep_comm.rank} (on machine {MPI.Get_processor_name()}), dedicated to band {CompSep_comm.rank}.")
+    logger.info(f"CompSep: Hello from CompSep-rank {mpi_info['compsep']['rank']} (on machine {mpi_info['processor_name']}), dedicated to band {mpi_info['compsep']['rank']}.")
 
     ### Creating list of all components ###
     components = []
@@ -46,7 +46,7 @@ def init_compsep_processing(CompSep_comm: Comm, params: Bunch) -> tuple[list[Dif
     current_band_idx = 0
     for band_str in params.CompSep_bands:
         if params.CompSep_bands[band_str].enabled:
-            if current_band_idx == CompSep_comm.Get_rank():  # Each rank is responsible for one band, for simplicity the band matching the index of their rank.
+            if current_band_idx == mpi_info['compsep']['rank']:  # Each rank is responsible for one band, for simplicity the band matching the index of their rank.
                 my_band = params.CompSep_bands[band_str]
                 if my_band.get_from != "file":
                     band_identifier = f"{my_band.get_from}$$${band_str}"
@@ -54,11 +54,16 @@ def init_compsep_processing(CompSep_comm: Comm, params: Bunch) -> tuple[list[Dif
                     band_identifier = band_str
             current_band_idx += 1
 
-    data = (band_identifier, MPI.COMM_WORLD.Get_rank())
-    all_data = CompSep_comm.allgather(data)
-    CompSep_band_masters_dict = {item[0]: item[1] for item in all_data if item is not None}
+    data_world = (band_identifier, mpi_info['world']['rank'])
+    data_compsep = (band_identifier, mpi_info['compsep']['rank'])
+    all_data_world = mpi_info['compsep']['comm'].allgather(data_world)
+    all_data_compsep = mpi_info['compsep']['comm'].allgather(data_compsep)
+    world_band_masters_dict = {item[0]: item[1] for item in all_data_world if item is not None}
+    compsep_band_masters_dict = {item[0]: item[1] for item in all_data_compsep if item is not None}
+    mpi_info['world']['compsep_band_masters'] = world_band_masters_dict
+    mpi_info['compsep']['compsep_band_masters'] = compsep_band_masters_dict
 
-    return components, band_identifier, CompSep_band_masters_dict, my_band
+    return mpi_info, band_identifier, my_band
 
 
 def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: Bunch,

@@ -152,7 +152,7 @@ def find_unique_pixels(scanlist: list[ScanTOD], params: Bunch) -> NDArray[np.flo
     return unique_pixels
 
 
-def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Comm, str, dict[str,int], DetectorTOD]:
+def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm, str, dict[str,int], DetectorTOD]:
     """To be run once before starting TOD processing.
 
     Determines whether the process is TOD master, creates the band communicator
@@ -160,21 +160,18 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Co
     experiment data.
 
     Input:
-        tod_comm (MPI.Comm): Communicator for the TOD processes.
+        mpi_info (Bunch): The data structure containing all MPI relevant data.
         params (Bunch): The parameters from the input parameter file.
 
     Output:
-        is_band_master (bool): Whether this process is the master of the band communicator.
-        band_comm (MPI.Comm): A new communicator for the ranks working on the same band within TOD processing.
+        mpi_info (Bunch): The data structure containing all MPI relevant data,
+            now also with a 'tod' section as well as the dictionary of band
+            master mappings.
         my_band_identifier (str): Unique string identifier for the experiment+band this process is responsible for.
-        tod_band_masters_dict (dict[str->int]): Dictionary mapping band identifiers to the global rank of the process responsible for that band.
         experiment_data (DetectorTOD): THe TOD data for the band of this process.
     """
 
     logger = logging.getLogger(__name__)
-
-    MPIsize_tod, MPIrank_tod = tod_comm.Get_size(), tod_comm.Get_rank()
-    tod_master = MPIrank_tod == 0
 
     # We now loop over all bands in all experiments, and allocate them to the first ranks of the TOD MPI communicator.
     # These ranks will then become the "band masters" for those bands, handling all communication with CompSep.
@@ -188,49 +185,40 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Co
         if params.experiments[experiment].enabled:
             for band in params.experiments[experiment].bands:
                 if params.experiments[experiment].bands[band].enabled:
-                    if tod_comm.Get_rank() == TOD_rank:
+                    if mpi_info['tod']['rank'] == TOD_rank:
                         my_experiment_name = experiment
                         my_band_name = band
                         my_experiment = params.experiments[experiment]
                         my_band = params.experiments[experiment].bands[band]
                         my_num_scans = params.experiments[experiment].num_scans
                     TOD_rank += 1
-    tot_num_bands = TOD_rank
-    if tot_num_bands > MPIsize_tod:
-        log.lograise(RuntimeError, f"Total number of experiment bands {tot_num_bands} exceed number of TOD MPI tasks {MPIsize_tod}.", logger)
 
-    if tod_master:
-        logger.info(f"TOD: {MPIsize_tod} tasks allocated to TOD processing of {tot_num_bands} bands.")
-        log.logassert(MPIsize_tod >= tot_num_bands, f"Number of MPI tasks dedicated to TOD processing ({MPIsize_tod}) must be equal to or larger than the number of bands ({tot_num_bands}).", logger)
+    band_master_rank = mpi_info['band']['master']
+    band_comm = mpi_info['band']['comm']
+    my_experiment_name = band_comm.bcast(my_experiment_name, root=band_master_rank)  # Surely there is a more elegant way of doing this, but it'll do for now.
+    my_band_name = band_comm.bcast(my_band_name, root=band_master_rank)
+    my_experiment = band_comm.bcast(my_experiment, root=band_master_rank)
+    my_band = band_comm.bcast(my_band, root=band_master_rank)
+    my_num_scans = band_comm.bcast(my_num_scans, root=band_master_rank)
 
-    MPIcolor_band = MPIrank_tod%tot_num_bands  # Spread the MPI tasks over the different bands.
-    band_comm = tod_comm.Split(MPIcolor_band, key=MPIrank_tod)  # Create communicators for each different band.
-    MPIsize_band, MPIrank_band = band_comm.Get_size(), band_comm.Get_rank()  # Get my local rank, and the total size of, the band-communicator I'm on.
-    logger.info(f"TOD: Hello from TOD-rank {MPIrank_tod} (on machine {MPI.Get_processor_name()}), dedicated to band {MPIcolor_band}, with local rank {MPIrank_band} (local communicator size: {MPIsize_band}).")
-    
-    is_band_master = MPIrank_band == 0  # Am I the master of my local band.
-    my_experiment_name = band_comm.bcast(my_experiment_name, root=0)  # Surely there is a more elegant way of doing this, but it'll do for now.
-    my_band_name = band_comm.bcast(my_band_name, root=0)
-    my_experiment = band_comm.bcast(my_experiment, root=0)
-    my_band = band_comm.bcast(my_band, root=0)
-    my_num_scans = band_comm.bcast(my_num_scans, root=0)
-
-    # Creating "tod_band_masters", an array which maps the band index to the rank of the master of that band.
+    # Creating the band master dictionaries that give easy reference to which
+    # ranks relative to both the world and TOD communicators are the band masters.
     my_band_identifier = f"{my_experiment_name}$$${my_band_name}"
-    data = (my_band_identifier, MPI.COMM_WORLD.Get_rank()) if band_comm.Get_rank() == 0 else None
-    # data = (MPIcolor_band, tod_comm.Get_rank()) if band_comm.Get_rank() == 0 else None
-    all_data = tod_comm.allgather(data)
-    tod_band_masters_dict = {item[0]: item[1] for item in all_data if item is not None}
-    # tod_band_masters = np.array([tod_band_masters_dict[i] for i in range(tot_num_bands)])
-    scans_per_rank = math.ceil(my_num_scans/MPIsize_band)
-    my_scans_start = scans_per_rank * MPIrank_band
-    my_scans_stop = min(scans_per_rank * (MPIrank_band + 1), my_num_scans) # "min" in case the number of scans is not divisible by the number of ranks
-#    my_scans_start, my_scans_stop = scans_per_rank*MPIrank_band, scans_per_rank*(MPIrank_band + 1)
-    logger.info(f"TOD: Rank {MPIrank_tod} assigned scans {my_scans_start} - {my_scans_stop} on band{MPIcolor_band}.")
+    data_world = (my_band_identifier, mpi_info['world']['rank']) if mpi_info['band']['is_master'] else None
+    data_tod = (my_band_identifier, mpi_info['tod']['rank']) if mpi_info['band']['is_master'] else None
+    all_data_world = mpi_info['tod']['comm'].allgather(data_world)
+    all_data_tod = mpi_info['tod']['comm'].allgather(data_tod)
+    world_band_masters_dict = {item[0]: item[1] for item in all_data_world if item is not None}
+    tod_band_masters_dict = {item[0]: item[1] for item in all_data_tod if item is not None}
+    mpi_info['world']['tod_band_masters'] = world_band_masters_dict
+    mpi_info['tod']['tod_band_masters'] = tod_band_masters_dict
+    scans_per_rank = math.ceil(my_num_scans/mpi_info['band']['size'])
+    my_scans_start = scans_per_rank * mpi_info['band']['rank']
+    my_scans_stop = min(scans_per_rank * (mpi_info['band']['rank'] + 1), my_num_scans) # "min" in case the number of scans is not divisible by the number of ranks
+    logger.info(f"TOD: Rank {mpi_info['tod']['rank']} assigned scans {my_scans_start} - {my_scans_stop} on band{mpi_info['tod']['band_color']}.")
     experiment_data = read_TOD_sim_data(my_experiment.data_path, my_band, my_scans_start, my_scans_stop)
 
-    return is_band_master, band_comm, my_band_identifier, tod_band_masters_dict, experiment_data
-
+    return mpi_info, my_band_identifier, experiment_data
 
 
 def subtract_sky_model(experiment_data: DetectorTOD, det_compsep_map: NDArray, params: Bunch) -> DetectorTOD:
@@ -451,13 +439,12 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, param
     return experiment_data
 
 
-def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_data: DetectorTOD,
+def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
                 compsep_output: NDArray, params: Bunch, chain, iter) -> DetectorMap:
     """ Performs a single TOD iteration.
 
     Input:
-        TOD_comm (MPI.Comm): The full TOD communicator between all TOD-processing ranks.
-        band_comm (MPI.Comm): The inter-band communicator.
+        mpi_info (Bunch): The data structure containing all MPI relevant data.
         experiment_data (DetectorTOD): The input experiment TOD for the band
             belonging to the current process.
         compsep_output (np.array): The current best estimate of the sky model
@@ -486,24 +473,27 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_data: Detect
             scan.fknee_est = params.noise_fknee
             scan.g0_est = params.initial_g0
             scan.orbital_dipole = np.zeros_like(scan.data[0])
+    TOD_comm = mpi_info['tod']['comm']
+    band_comm = mpi_info['band']['comm']
+    world_rank = mpi_info['world']['rank']
 
     experiment_data = find_galactic_mask(experiment_data, params)
 
     experiment_data = subtract_sky_model(experiment_data, compsep_output, params)
     t0 = time.time()
-    logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished sky model subtraction in {time.time()-t0:.1f}s."); t0 = time.time()
+    logger.info(f"Rank {world_rank} chain {chain} iter{iter}: Finished sky model subtraction in {time.time()-t0:.1f}s."); t0 = time.time()
     if iter > 1:
         experiment_data = sample_absolute_gain(TOD_comm, experiment_data, params)
-        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} Finished gain estimation in {time.time()-t0:.1f}s."); t0 = time.time()
+        logger.info(f"Rank {world_rank} Finished gain estimation in {time.time()-t0:.1f}s."); t0 = time.time()
     experiment_data = estimate_white_noise(experiment_data, params)
-    logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished white noise estimation in {time.time()-t0:.1f}s."); t0 = time.time()
+    logger.info(f"Rank {world_rank} chain {chain} iter{iter}: Finished white noise estimation in {time.time()-t0:.1f}s."); t0 = time.time()
 
     if iter > 6:
         experiment_data = sample_noise(band_comm, experiment_data, params)
-        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished corr noise realizations in {time.time()-t0:.1f}s."); t0 = time.time()
+        logger.info(f"Rank {world_rank} chain {chain} iter{iter}: Finished corr noise realizations in {time.time()-t0:.1f}s."); t0 = time.time()
         experiment_data = sample_noise_PS(band_comm, experiment_data, params)
-        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished corr noise PS parameter sampling in {time.time()-t0:.1f}s."); t0 = time.time()
+        logger.info(f"Rank {world_rank} chain {chain} iter{iter}: Finished corr noise PS parameter sampling in {time.time()-t0:.1f}s."); t0 = time.time()
     todproc_output = tod2map(band_comm, experiment_data, compsep_output, params)
-    logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished mapmaking in {time.time()-t0:.1f}s."); t0 = time.time()
+    logger.info(f"Rank {world_rank} chain {chain} iter{iter}: Finished mapmaking in {time.time()-t0:.1f}s."); t0 = time.time()
 
     return todproc_output
