@@ -60,13 +60,16 @@ for i in trange(1000):
     if (np.max(np.abs(psi0-psi1))) != 0:
         raise RuntimeError("psi mismatch")
 
+nsamp = 2*sum(sizes)
+
 # Benchmark Numba version
 t0 = time.time()
 for i in trange(1000):
     huff = Huffman(tree=hufftree_list[i], symb=huffsymb_list[i])
     pix1 = huff.Decoder(pix_encoded_list[i], numba_decode=True)
     psi1 = huff.Decoder(psi_encoded_list[i], numba_decode=True)
-print(f"old version finished in {time.time()-t0:.2f}s.")
+dt = time.time()-t0
+print(f"old version finished in {dt:.2f}s ({nsamp/dt:.2e} samples/s).")
 
 # benchmark C++ version
 t0 = time.time()
@@ -79,4 +82,5 @@ for i in trange(1000):
     psi0 = np.empty(sizes[i], dtype=np.int64)
     psi0 = cmdr4_support.utils.huffman_decode(psi_encoded, hufftree_list[i], huffsymb_list[i], psi0)
     psi0 = np.cumsum(psi0)
-print(f"cmdr4_support version finished in {time.time()-t0:.2f}s.")
+dt = time.time()-t0
+print(f"cmdr4_support version finished in {dt:.2f}s ({nsamp/dt:.2e} samples/s).")
