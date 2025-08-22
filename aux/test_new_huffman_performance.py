@@ -41,15 +41,34 @@ for i in trange(1000):
 
 
 sizes = []
-t0 = time.time()
+# Comparison loop
 for i in trange(1000):
     huff = Huffman(tree=hufftree_list[i], symb=huffsymb_list[i])
     pix1 = huff.Decoder(pix_encoded_list[i], numba_decode=True)
     psi1 = huff.Decoder(psi_encoded_list[i], numba_decode=True)
     sizes.append(pix1.size)
+    pix_encoded = np.frombuffer(pix_encoded_list[i], dtype=np.uint8)
+    pix0 = np.empty(sizes[i], dtype=np.int64)
+    pix0 = cmdr4_support.utils.huffman_decode(pix_encoded, hufftree_list[i], huffsymb_list[i], pix0)
+    pix0 = np.cumsum(pix0)
+    psi_encoded = np.frombuffer(psi_encoded_list[i], dtype=np.uint8)
+    psi0 = np.empty(sizes[i], dtype=np.int64)
+    psi0 = cmdr4_support.utils.huffman_decode(psi_encoded, hufftree_list[i], huffsymb_list[i], psi0)
+    psi0 = np.cumsum(psi0)
+    if (np.max(np.abs(pix0-pix1))) != 0:
+        raise RuntimeError("pix mismatch")
+    if (np.max(np.abs(psi0-psi1))) != 0:
+        raise RuntimeError("psi mismatch")
+
+# Benchmark Numba version
+t0 = time.time()
+for i in trange(1000):
+    huff = Huffman(tree=hufftree_list[i], symb=huffsymb_list[i])
+    pix1 = huff.Decoder(pix_encoded_list[i], numba_decode=True)
+    psi1 = huff.Decoder(psi_encoded_list[i], numba_decode=True)
 print(f"old version finished in {time.time()-t0:.2f}s.")
 
-# decompress using the new code
+# benchmark C++ version
 t0 = time.time()
 for i in trange(1000):
     pix_encoded = np.frombuffer(pix_encoded_list[i], dtype=np.uint8)
@@ -61,6 +80,3 @@ for i in trange(1000):
     psi0 = cmdr4_support.utils.huffman_decode(psi_encoded, hufftree_list[i], huffsymb_list[i], psi0)
     psi0 = np.cumsum(psi0)
 print(f"cmdr4_support version finished in {time.time()-t0:.2f}s.")
-
-print(np.sum(pix1-pix0))
-print(np.sum(psi1-psi0))
