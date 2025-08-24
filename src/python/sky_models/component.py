@@ -35,20 +35,23 @@ class Component:
 class DiffuseComponent(Component):
     def __init__(self, params: Bunch):
         super().__init__(params)
-        self.component_alms = None
+        self.polarized = params.polarized
+        self.component_alms_intensity = None
+        self.component_alms_polarization = None
         # self.nside_comp_map = 2048
         # self.prior_l_power_law = 0 # l^alpha as in S^-1 in comp sep
 
-    def get_component_map(self, nside:int, fwhm:int=0):
-        if self.component_alms is None:
+    def get_component_map(self, nside:int, pol:bool=False, fwhm:int=0):
+        component_alms = self.component_alms_polarization if pol else self.component_alms_intensity
+        if component_alms is None:
             raise ValueError("component_alms property not set.")
         if fwhm == 0:
-            return alm_to_map(self.component_alms, nside, self.lmax)
+            return alm_to_map(component_alms, nside, self.lmax, spin = 2 if pol else 0)
         else:
-            return alm_to_map(hp.smoothalm(self.component_alms, fwhm), nside, self.lmax)
+            return alm_to_map(hp.smoothalm(component_alms, fwhm), nside, self.lmax, spin = 2 if pol else 0)
 
-    def get_sky(self, nu, nside, fwhm=None):
-        return self.get_component_map(nside, fwhm)*self.get_sed(nu)
+    def get_sky(self, nu, nside, pol=False, fwhm=0):
+        return self.get_component_map(nside, pol, fwhm)*self.get_sed(nu)
     
     def get_sed(self, nu):
         logger = logging.getLogger(__name__)

@@ -85,11 +85,12 @@ def single_det_map_accumulator(det_static: DetectorTOD, det_cs_map: np.array, sa
     for scan, scanparams in zip(det_static.scans, sample_params.scans):
         raw_tod = scan.tod
         pix = scan.pix
+        psi = scan.psi
         ntod = raw_tod.shape[0]
         s_orb = get_s_orb_TOD(scan, det_static, pix)
         inv_var = 1.0/scanparams.sigma0**2
         gain = scanparams.gain_est
-        sky_subtracted_TOD = raw_tod - gain*get_static_sky_TOD(det_cs_map, pix)
+        sky_subtracted_TOD = raw_tod - gain*get_static_sky_TOD(det_cs_map, pix, psi)
         # detmap_signal += np.bincount(pix, weights=scan_map/sigma0**2, minlength=npix)
         # detmap_inv_var += np.bincount(pix, minlength=npix)/sigma0**2
         maplib.map_weight_accumulator(detmap_hits, 1.0, pix.astype(np.int64), ntod, npix)
@@ -146,7 +147,7 @@ def single_det_map_accumulator_IQU(det_static: DetectorTOD, det_cs_map: np.array
         inv_var = 1.0/scanparams.sigma0**2
         gain = scanparams.gain_est
         n_corr = scanparams.n_corr_est
-        sky_subtracted_TOD = raw_tod - gain*get_static_sky_TOD(det_cs_map, pix)
+        sky_subtracted_TOD = raw_tod - gain*get_static_sky_TOD(det_cs_map, pix, psi)
         maplib.map_weight_accumulator(detmap_hits, 1.0, pix.astype(np.int64), ntod, npix)
         maplib.map_weight_accumulator_IQU(detmap_inv_var, (inv_var).astype(np.float64), pix.astype(np.int64), psi.astype(np.float64), ntod, npix)
         maplib.map_accumulator_IQU(detmap_rawobs, (raw_tod/gain).astype(np.float64), inv_var, pix.astype(np.int64), psi.astype(np.float64), ntod, npix)

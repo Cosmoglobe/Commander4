@@ -25,7 +25,7 @@ nthreads=1
 
 def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float64]:
     "Creates a dummy compsep output for a single band"
-    return np.zeros(12*staticData.nside**2, dtype=np.float64)
+    return np.zeros((3, 12*staticData.nside**2) , dtype=np.float64)
 
 
 def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, detector_samples, params: Bunch) -> DetectorMap:
@@ -103,12 +103,12 @@ def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, d
                 map_rms[2] = A_inv[:,2,2]**0.5
 
                 logger.info("NB: Setting everything to intensity only")
-                detmap = DetectorMap(map_signal[0], map_corr_noise[0], map_rms[0], det_static.nu, det_static.fwhm, det_static.nside)
+                detmap = DetectorMap(map_signal, map_corr_noise, map_rms, det_static.nu, det_static.fwhm, det_static.nside)
                 detmap.g0 = detector_samples.g0_est
                 detmap.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
-                detmap.skysub_map = map_skysub[0]
-                detmap.rawobs_map = map_rawobs[0]
-                detmap.orbdipole_map = map_orbdipole[0]
+                detmap.skysub_map = map_skysub
+                detmap.rawobs_map = map_rawobs
+                detmap.orbdipole_map = map_orbdipole
             else:
                 # Improperly formatted IQU map, and/or right format not yet implemented.
                 log.lograise(RuntimeError, "Maps did not have expected shape: "
@@ -198,13 +198,17 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Co
     tot_num_bands = TOD_rank
     tod_comm.Barrier()
 
-    if tot_num_bands > MPIsize_tod:
-        log.lograise(RuntimeError, f"Total number of experiment bands {tot_num_bands} exceed number of TOD MPI tasks {MPIsize_tod}.", logger)
+    if tot_num_bands != MPIsize_tod:
+        log.lograise(RuntimeError, f"Total number of bands dedicated to the various experiments "
+                     f"({tot_num_bands}) differs from the total number of tasks dedicated to "
+                     f"TOD processing ({MPIsize_tod}).", logger)
 
     if tod_master:
         logger.info(f"TOD: {MPIsize_tod} tasks allocated to TOD processing of {tot_num_bands} bands.")
         log.logassert(MPIsize_tod >= tot_num_bands, f"Number of MPI tasks dedicated to TOD processing ({MPIsize_tod}) must be equal to or larger than the number of bands ({tot_num_bands}).", logger)
 
+    tod_comm.barrier()
+    time.sleep(tod_comm.Get_rank()*1e-3)  # Small sleep to get prints in nice order.
     # MPIcolor_band = MPIrank_tod%tot_num_bands  # Spread the MPI tasks over the different bands.
     band_comm = tod_comm.Split(my_band_id, key=MPIrank_tod)  # Create communicators for each different band.
     MPIsize_band, MPIrank_band = band_comm.Get_size(), band_comm.Get_rank()  # Get my local rank, and the total size of, the band-communicator I'm on.
@@ -246,7 +250,8 @@ def estimate_white_noise(experiment_data: DetectorTOD, detector_samples: Detecto
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         raw_TOD = scan.tod
         pix = scan.pix
-        sky_TOD = get_static_sky_TOD(det_compsep_map, pix) + get_s_orb_TOD(scan, experiment_data, pix)
+        psi = scan.psi
+        sky_TOD = get_static_sky_TOD(det_compsep_map, pix, psi) + get_s_orb_TOD(scan, experiment_data, pix)
         sky_subtracted_tod = raw_TOD - scan_samples.gain_est*sky_TOD
         mask = scan.processing_mask_TOD
         if np.sum(mask) > 50:  # If we have enough data points to estimate the noise, we use the masked version.
@@ -270,7 +275,8 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
         f_samp = scan.fsamp
         raw_tod = scan.tod
         pix = scan.pix
-        sky_TOD = get_static_sky_TOD(det_compsep_map, pix) + get_s_orb_TOD(scan, experiment_data, pix)
+        psi = scan.psi
+        sky_TOD = get_static_sky_TOD(det_compsep_map, pix, psi) + get_s_orb_TOD(scan, experiment_data, pix)
         sky_subtracted_TOD = raw_tod - scansamples.gain_est*sky_TOD
         Ntod = raw_tod.shape[0]
         Nfft = Ntod//2 + 1
@@ -331,8 +337,9 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
 
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         pix = scan.pix  # Only decompressing pix once for efficiency.
+        psi = scan.psi
         s_orb = get_s_orb_TOD(scan, experiment_data, pix)
-        sky_model_TOD = get_static_sky_TOD(det_compsep_map, pix)
+        sky_model_TOD = get_static_sky_TOD(det_compsep_map, pix, psi)
 
         tod_residual = scan.tod - scan_samples.gain_est*(sky_model_TOD + s_orb)  # Subtracting sky signal.
         tod_residual += detector_samples.g0_est*s_orb  # Now we can add back in the orbital dipole.
@@ -407,7 +414,8 @@ def sample_relative_gain(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_dat
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         # Define the residual for this sampling step, as per Eq. (17)
         pix = scan.pix
-        s_tot = get_static_sky_TOD(det_compsep_map, pix) + get_s_orb_TOD(scan, experiment_data, pix)
+        psi = scan.psi
+        s_tot = get_static_sky_TOD(det_compsep_map, pix, psi) + get_s_orb_TOD(scan, experiment_data, pix)
 
         residual_tod = scan.tod - (detector_samples.g0_est + scan_samples.time_dep_rel_gain_est)*s_tot
 
@@ -442,7 +450,6 @@ def sample_relative_gain(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_dat
     # To avoid redundant communication, only the root of each detector group (band_rank 0)
     # sends its data to the global root. Other ranks send None.
     if band_rank == 0:
-        print(experiment_data.detector_id, total_s_for_detector, total_r_for_detector, TOD_comm.Get_rank())
         data_to_send = (experiment_data.detector_id, total_s_for_detector, total_r_for_detector)
     else:
         data_to_send = None
@@ -503,7 +510,7 @@ def sample_relative_gain(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_dat
             for scan_samples in detector_samples.scans:
                 scan_samples.rel_gain_est = my_delta_g
             if band_comm.Get_rank() == 0:
-                logging.info(f"Relative gain for detector {experiment_data.nu}GHz: {detector_samples.g0_est*1e9+my_delta_g*1e9:8.3f} ({detector_samples.g0_est*1e9:8.3f} + {my_delta_g*1e9:8.3f})")
+                logging.info(f"Relative gain for detector {experiment_data.detector_name} ({experiment_data.nu}GHz): {detector_samples.g0_est*1e9+my_delta_g*1e9:8.3f} ({detector_samples.g0_est*1e9:8.3f} + {my_delta_g*1e9:8.3f})")
         except ValueError:
             logger.error(f"Rank {global_rank} with detector {my_did} not found in solved gain list.")
     else:
@@ -544,7 +551,8 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
 
         # Per Eq. (26), the residual is d - (g0 + Delta_g)*s
         pix = scan.pix
-        s_tot = get_static_sky_TOD(det_compsep_map, pix) + get_s_orb_TOD(scan, experiment_data, pix)
+        psi = scan.psi
+        s_tot = get_static_sky_TOD(det_compsep_map, pix, psi) + get_s_orb_TOD(scan, experiment_data, pix)
 
         residual_tod = scan.tod - (detector_samples.g0_est + scan_samples.rel_gain_est)*s_tot
 
