@@ -379,32 +379,36 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
         logger.info(f"New g0 mean:   {g_mean*1e9:10.5f}.")
         logger.info(f"New g0 std:    {g_std*1e9:10.5f}.")
         logger.info(f"New g0 sample: {g_sampled*1e9:10.5f}.")
+
+    t0 = time.time()
+    TOD_comm.Barrier()
+    wait_time = time.time() - t0
     g_sampled = TOD_comm.bcast(g_sampled, root=0)
 
     detector_samples.g0_est = g_sampled
 
-    return detector_samples
+    return detector_samples, wait_time
 
 
-def sample_relative_gain(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_samples, det_compsep_map: NDArray):
+def sample_relative_gain(TOD_comm: MPI.Comm, det_comm: MPI.Comm, experiment_data: DetectorTOD, detector_samples, det_compsep_map: NDArray):
     """Samples the detector-dependent relative gain (Delta g_i).
     This function implements the logic from Sec. 3.4 of the BP7.
     It uses a two-stage MPI communication:
-    1. A reduction over the `band_comm` to accumulate sums for a single detector
+    1. A reduction over the `det_comm` to accumulate sums for a single detector
        that is distributed across multiple ranks.
     2. A gather over the global `TOD_comm` to collect the final sums from each
        unique detector on the root rank for solving the global system.
 
     Args:
         TOD_comm (MPI.Comm): The global MPI communicator for all bands.
-        band_comm (MPI.Comm): The communicator for ranks sharing the same detector.
+        det_comm (MPI.Comm): The communicator for ranks sharing the same detector.
         experiment_data (DetectorTOD): The object holding scan data for a single
                                        detector on the calling rank.
         params (Bunch): Parameters from the parameter file.
     """
     logger = logging.getLogger(__name__)
     global_rank = TOD_comm.Get_rank()
-    band_rank = band_comm.Get_rank()
+    band_rank = det_comm.Get_rank()
 
     #### 1. Local Calculation (on each rank) ###
     # Each rank calculates the sum of terms for its local subset of scans.
@@ -441,10 +445,10 @@ def sample_relative_gain(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_dat
         local_r_T_N_inv_s += r_T_N_inv_s_scan
 
     ### 2. Intra-Detector Reduction ###
-    # Sum the local values across all ranks that share the same detector using band_comm.
-    # After this, every rank in the band_comm will have the total sum for their detector.
-    total_s_for_detector = band_comm.allreduce(local_s_T_N_inv_s, op=MPI.SUM)
-    total_r_for_detector = band_comm.allreduce(local_r_T_N_inv_s, op=MPI.SUM)
+    # Sum the local values across all ranks that share the same detector using det_comm.
+    # After this, every rank in the det_comm will have the total sum for their detector.
+    total_s_for_detector = det_comm.allreduce(local_s_T_N_inv_s, op=MPI.SUM)
+    total_r_for_detector = det_comm.allreduce(local_r_T_N_inv_s, op=MPI.SUM)
 
     ### 3. Gather all unique detector sums on the global Rank 0 ###
     # To avoid redundant communication, only the root of each detector group (band_rank 0)
@@ -454,6 +458,9 @@ def sample_relative_gain(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_dat
     else:
         data_to_send = None
     
+    t0 = time.time()
+    TOD_comm.Barrier()
+    wait_time = time.time() - t0
     gathered_data = TOD_comm.gather(data_to_send, root=0)
 
     ### 4. Solve Global System on Rank 0 and Broadcast Result ###
@@ -509,33 +516,33 @@ def sample_relative_gain(TOD_comm: MPI.Comm, band_comm: MPI.Comm, experiment_dat
             my_delta_g = result_to_bcast['dgs'][my_dg_index]
             for scan_samples in detector_samples.scans:
                 scan_samples.rel_gain_est = my_delta_g
-            if band_comm.Get_rank() == 0:
+            if det_comm.Get_rank() == 0:
                 logging.info(f"Relative gain for detector {experiment_data.detector_name} ({experiment_data.nu}GHz): {detector_samples.g0_est*1e9+my_delta_g*1e9:8.3f} ({detector_samples.g0_est*1e9:8.3f} + {my_delta_g*1e9:8.3f})")
         except ValueError:
             logger.error(f"Rank {global_rank} with detector {my_did} not found in solved gain list.")
     else:
         logger.warning(f"No valid relative gain solution was broadcast. Not updating gains on rank {global_rank}.")
 
-    return detector_samples
+    return detector_samples, wait_time
 
 
 
-def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetectorTOD, detector_samples, det_compsep_map: NDArray, chain: int, iter: int, params: Bunch):
+def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: DetectorTOD, detector_samples, det_compsep_map: NDArray, chain: int, iter: int, params: Bunch):
     """
     Samples the time-dependent relative gain variations (delta g_qi).
     This function implements the logic from Sec. 3.5 of the BP7 paper,
     using a Wiener filter to smooth the gain solution over time (PIDs).
     It solves a global system for all scans of a given detector, which are
-    distributed across the ranks of the band_comm.
+    distributed across the ranks of the det_comm.
 
     Args:
-        band_comm (MPI.Comm): The communicator for ranks sharing the same detector.
+        det_comm (MPI.Comm): The communicator for ranks sharing the same detector.
         experiment_data (DetectorTOD): The object holding scan data.
         params (Bunch): Parameters from the parameter file.
     """
     logger = logging.getLogger(__name__)
-    band_rank = band_comm.Get_rank()
-    band_size = band_comm.Get_size()
+    band_rank = det_comm.Get_rank()
+    band_size = det_comm.Get_size()
 
     # Local calculations on each rank
     A_qq_local = []
@@ -586,9 +593,9 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
     b_q_local = np.array(b_q_local, dtype=np.float64)
 
     # Gather all data on the root rank of the band communicator
-    scan_counts = band_comm.gather(len(A_qq_local), root=0)
-    all_A_qq = band_comm.gather(A_qq_local, root=0)
-    all_b_q = band_comm.gather(b_q_local, root=0)
+    scan_counts = det_comm.gather(len(A_qq_local), root=0)
+    all_A_qq = det_comm.gather(A_qq_local, root=0)
+    all_b_q = det_comm.gather(b_q_local, root=0)
     
     delta_g_sample = None
     if band_rank == 0:
@@ -684,7 +691,7 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
             displacements = np.insert(np.cumsum(scan_counts), 0, 0)[:-1]
         
         delta_g_local = np.empty(len(A_qq_local), dtype=np.float64)
-        band_comm.Scatterv([delta_g_sample, scan_counts, displacements, MPI.DOUBLE], delta_g_local, root=0)
+        det_comm.Scatterv([delta_g_sample, scan_counts, displacements, MPI.DOUBLE], delta_g_local, root=0)
     else:
         delta_g_local = delta_g_sample if delta_g_sample is not None else np.array([])
 
@@ -734,44 +741,94 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, det_comm: MPI.Comm,
             scan_samples.alpha_est = params.noise_alpha
             scan_samples.fknee_est = params.noise_fknee
 
-    t0 = time.time()
     if iter >= params.sample_gain_from_iter_num:
-        detector_samples = sample_absolute_gain(TOD_comm, experiment_data, detector_samples, compsep_output)
+        ### ABSOLUTE GAIN CALIBRATION ### 
+        t0 = time.time()
+        detector_samples, wait_time = sample_absolute_gain(TOD_comm, experiment_data, detector_samples, compsep_output)
         TOD_comm.Barrier()
+        tot_time = time.time() - t0
+        wait_time = det_comm.reduce(wait_time, op=MPI.SUM, root=0)
         if TOD_comm.Get_rank() == 0:
-            logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished absolute gain estimation in {time.time()-t0:.1f}s.")
-            t0 = time.time()
-        detector_samples = sample_relative_gain(TOD_comm, det_comm, experiment_data, detector_samples, compsep_output)
+            logger.info(f"Chain {chain} iter{iter}: Finished absolute gain estimation in {tot_time:.1f}s.")
+        if det_comm.Get_rank() == 0:
+            wait_time /= det_comm.Get_size()
+            logger.info(f"Absolute gain estimation MPI wait overhead for detector {experiment_data.detector_name} ({experiment_data.nu}GHz) = {wait_time:.1f}s.")
+
+        ### RELATIVE GAIN CALIBRATION ### 
+        t0 = time.time()
+        detector_samples, wait_time = sample_relative_gain(TOD_comm, det_comm, experiment_data, detector_samples, compsep_output)
         TOD_comm.Barrier()
+        tot_time = time.time() - t0
+        wait_time = det_comm.reduce(wait_time, op=MPI.SUM, root=0)
         if TOD_comm.Get_rank() == 0:
-            logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished relative gain estimation in {time.time()-t0:.1f}s.")
-            t0 = time.time()
+            logger.info(f"Chain {chain} iter{iter}: Finished relative gain estimation in {tot_time:.1f}s.")
+        if det_comm.Get_rank() == 0:
+            wait_time /= det_comm.Get_size()
+            logger.info(f"Relative gain estimation MPI wait overhead for detector {experiment_data.detector_name} ({experiment_data.nu}GHz) = {wait_time:.1f}s.")
+
+
+        ### TEMPORAL GAIN CALIBRATION ### 
+        t0 = time.time()
         detector_samples = sample_temporal_gain_variations(det_comm, experiment_data, detector_samples, compsep_output, chain, iter, params)
+        t1 = time.time()
         TOD_comm.Barrier()
+        tot_time = time.time() - t0
+        wait_time = time.time() - t1
+        wait_time = det_comm.reduce(wait_time, op=MPI.SUM, root=0)
         if TOD_comm.Get_rank() == 0:
-            logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished time-dependent gain estimation in {time.time()-t0:.1f}s.")
-            t0 = time.time()
-        # Update total gain from sum of all three gain terms.
+            logger.info(f"Chain {chain} iter{iter}: Finished temporal gain estimation in {tot_time:.1f}s.")
+        if det_comm.Get_rank() == 0:
+            wait_time /= det_comm.Get_size()
+            logger.info(f"Temporal gain estimation MPI wait overhead for detector {experiment_data.detector_name} ({experiment_data.nu}GHz) = {wait_time:.1f}s.")
+
+
+        ### Update total gain from sum of all three gain terms. ###
         for scan_samples in detector_samples.scans:
             scan_samples.gain_est = detector_samples.g0_est + scan_samples.rel_gain_est\
                                   + scan_samples.time_dep_rel_gain_est
 
+    ### WHITE NOISE ESTIMATION ###
+    t0 = time.time()
     detector_samples = estimate_white_noise(experiment_data, detector_samples, compsep_output, params)
+    t1 = time.time()
     TOD_comm.Barrier()
+    tot_time = time.time() - t0
+    wait_time = time.time() - t1
+    wait_time = det_comm.reduce(wait_time, op=MPI.SUM, root=0)
     if TOD_comm.Get_rank() == 0:
-        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished white noise estimation in {time.time()-t0:.1f}s.")
-        t0 = time.time()
+        logger.info(f"Chain {chain} iter{iter}: Finished white noise estimation in {tot_time:.1f}s.")
+    if det_comm.Get_rank() == 0:
+        wait_time /= det_comm.Get_size()
+        logger.info(f"White noise estimation MPI wait overhead for detector {experiment_data.detector_name} ({experiment_data.nu}GHz) = {wait_time:.1f}s.")
+
 
     if iter >= params.sample_corr_noise_from_iter_num:
-        detector_samples = sample_noise(det_comm, experiment_data, detector_samples, compsep_output)
-        TOD_comm.Barrier()
-        if TOD_comm.Get_rank() == 0:
-            logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished corr noise realizations in {time.time()-t0:.1f}s.")
-            t0 = time.time()
-    todproc_output = tod2map(band_comm, experiment_data, compsep_output, detector_samples, params)
-    TOD_comm.Barrier()
-    if TOD_comm.Get_rank() == 0:
-        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} chain {chain} iter{iter}: Finished mapmaking in {time.time()-t0:.1f}s.")
+        ### NOISE SAMPLING ###
         t0 = time.time()
+        detector_samples = sample_noise(det_comm, experiment_data, detector_samples, compsep_output)
+        t1 = time.time()
+        TOD_comm.Barrier()
+        tot_time = time.time() - t0
+        wait_time = time.time() - t1
+        wait_time = det_comm.reduce(wait_time, op=MPI.SUM, root=0)
+        if TOD_comm.Get_rank() == 0:
+            logger.info(f"Chain {chain} iter{iter}: Finished noise sampling in {tot_time:.1f}s.")
+        if det_comm.Get_rank() == 0:
+            wait_time /= det_comm.Get_size()
+            logger.info(f"Noise sampling MPI wait overhead for detector {experiment_data.detector_name} ({experiment_data.nu}GHz) = {wait_time:.1f}s.")
+
+    ### MAPMAKING ###
+    t0 = time.time()
+    todproc_output = tod2map(band_comm, experiment_data, compsep_output, detector_samples, params)
+    t1 = time.time()
+    TOD_comm.Barrier()
+    tot_time = time.time() - t0
+    wait_time = time.time() - t1
+    wait_time = det_comm.reduce(wait_time, op=MPI.SUM, root=0)
+    if TOD_comm.Get_rank() == 0:
+        logger.info(f"Chain {chain} iter{iter}: Finished mapmaking in {tot_time:.1f}s.")
+    if det_comm.Get_rank() == 0:
+        wait_time /= det_comm.Get_size()
+        logger.info(f"Mapmaking MPI wait overhead for detector {experiment_data.detector_name} ({experiment_data.nu}GHz) = {wait_time:.1f}s.")
 
     return todproc_output, detector_samples
