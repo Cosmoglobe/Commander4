@@ -42,7 +42,7 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int, co
                 else:
                     comp_map = np.zeros((npix,))
             else:
-                comp_map = component.get_sky(freq, detector_data.nside, pol=False, fwhm=smoothing_scale_radians)
+                comp_map = component.get_sky(freq, detector_data.nside, pol=False, fwhm=smoothing_scale_radians)[0]
             if component.shortname != "cmb":
                 foreground_subtracted -= comp_map
             else:
@@ -116,11 +116,11 @@ def plot_data_maps(master, params, detector, chain, iteration, **kwargs):
         for i in range(3):
             if kwargs[maptype][i] is not None:
                 if maptype == 'map_rms':
-                    limup   = None
-                    limdown = None
+                    limup   = np.percentile(kwargs[maptype][i], 98)
+                    limdown = np.min(kwargs[maptype][i])
                 else:
-                    limup   = 2*kwargs[maptype][i].std()
-                    limdown = -2*kwargs[maptype][i].std()
+                    limup   = np.percentile(kwargs[maptype][i], 98)
+                    limdown = np.percentile(kwargs[maptype][i], 2)
                 hp.mollview(kwargs[maptype][i], cmap=cmap, title=labs[i],
                         sub=(1,3,i+1), min=limdown, max=limup)
         plt.suptitle(f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}")
