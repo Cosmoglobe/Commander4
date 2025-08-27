@@ -154,7 +154,7 @@ def alm_complex2real(alm: NDArray[np.complex128], lmax: int) -> NDArray[np.float
     """
     ainfo = curvedsky.alm_info(lmax=lmax)
     i = int(ainfo.mstart[1]+1)
-    return np.concatenate([alm[:i].real,np.sqrt(2.)*alm[i:].view(np.float64)])
+    return np.concatenate([alm[:,:i].real,np.sqrt(2.)*alm[:,i:].view(np.float64)], axis=-1)
 
 
 def alm_real2complex(x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128]:
@@ -168,7 +168,7 @@ def alm_real2complex(x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128
     """
     ainfo = curvedsky.alm_info(lmax=lmax)
     i    = int(ainfo.mstart[1]+1)
-    oalm = np.zeros(ainfo.nelem, np.complex128)
-    oalm[:i] = x[:i]
-    oalm[i:] = x[i:].view(np.complex128)/np.sqrt(2.)
+    oalm = np.zeros((x.shape[0], ainfo.nelem), np.complex128)
+    oalm[:,:i] = x[:,:i]
+    oalm[:,i:] = x[:,i:].view(np.complex128)/np.sqrt(2.)
     return oalm

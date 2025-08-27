@@ -38,7 +38,7 @@ def read_Planck_map_from_file(my_band: Bunch) -> DetectorMap:
         # WMAP maps are in mK_CMB and need to be multiplied by 1000. Also, the uncertainty is in variance units,
         # and needs to be square-rooted.
         data_names = ["I_Stokes", "Q_Stokes", "U_Stokes"]
-        rms_names = ["II_Stokes", "QQ_Stokes", "UU_Stokes"]
+        rms_names = ["II_Stokes", "Q_Stokes", "U_Stokes"]
         for ipol in range(3):
             if my_band.polarizations[ipol]:
                 map_signal[ipol] = 1e3*fits.open(my_band.path_signal_map)[1].data[data_names[ipol]].flatten().astype(np.float32)
@@ -49,7 +49,6 @@ def read_Planck_map_from_file(my_band: Bunch) -> DetectorMap:
         rms_names = ["TEMPERATURE", "Q-POLARISATION", "Q-POLARISATION"]
         for ipol in range(3):
             if my_band.polarizations[ipol]:
-                print(my_band.path_signal_map, ipol, data_names[ipol])
                 map_signal[ipol] = fits.open(my_band.path_signal_map)[1].data[data_names[ipol]].flatten().astype(np.float32)
                 map_rms[ipol] = fits.open(my_band.path_rms_map)[1].data[rms_names[ipol]].flatten().astype(np.float32)
                 map_signal[ipol] = hp.reorder(map_signal[ipol], inp="NEST", out="RING")

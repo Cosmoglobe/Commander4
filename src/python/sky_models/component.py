@@ -36,10 +36,40 @@ class DiffuseComponent(Component):
     def __init__(self, params: Bunch):
         super().__init__(params)
         self.polarized = params.polarized
-        self.component_alms_intensity = None
-        self.component_alms_polarization = None
+        self._component_alms_intensity = None
+        self._component_alms_polarization = None
         # self.nside_comp_map = 2048
         # self.prior_l_power_law = 0 # l^alpha as in S^-1 in comp sep
+
+    @property
+    def component_alms_intensity(self):
+        if self._component_alms_intensity is not None:
+            return self._component_alms_intensity
+        else:
+            raise ValueError("Intensity alms not yet set.")
+
+    @property
+    def component_alms_polarization(self):
+        if self._component_alms_polarization is not None:
+            return self._component_alms_polarization
+        else:
+            raise ValueError("Polarization alms not yet set.")
+
+    @component_alms_intensity.setter
+    def component_alms_intensity(self, alms):
+        if alms.ndim == 2 and alms.shape[0] == 1:
+            self._component_alms_intensity = alms
+        else:
+            raise ValueError("Trying to set alms with unexpected number of dimensions"
+                             f"{alms.ndim} != 2 OR wrong first axis {alms.shape[0] != 1}")
+
+    @component_alms_polarization.setter
+    def component_alms_polarization(self, alms):
+        if alms.ndim == 2 and alms.shape[0] == 2:
+            self._component_alms_polarization = alms
+        else:
+            raise ValueError("Trying to set alms with unexpected number of dimensions"
+                             f"{alms.ndim} != 2 OR wrong first axis {alms.shape[0] != 2}")
 
     def get_component_map(self, nside:int, pol:bool=False, fwhm:int=0):
         component_alms = self.component_alms_polarization if pol else self.component_alms_intensity
@@ -56,6 +86,8 @@ class DiffuseComponent(Component):
     def get_sed(self, nu):
         logger = logging.getLogger(__name__)
         log.lograise(NotImplementedError, "", logger)
+
+
 
 class PointSourceComponent(Component):
     pass

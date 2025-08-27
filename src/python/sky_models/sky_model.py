@@ -12,13 +12,14 @@ class SkyModel:
         """
         raise NotImplementedError
 
-    def get_sky_at_nu(self, nu, nside, fwhm=None):
+    def get_sky_at_nu(self, nu, nside, fwhm=None, pol=(True, True, True)):
         """ Get sky at specific frequency.
         """
         npix = 12*nside**2
-        skymap = np.zeros((3, npix))
+        npol = np.sum(pol)
+        skymap = np.zeros((npol, npix))
         for component in self._components:
-            skymap[0] += component.get_sky(nu, nside, False, fwhm)
+            skymap[0] += component.get_sky(nu, nside, False, fwhm)[0]
             if component.polarized:
                 skymap[1:] += component.get_sky(nu, nside, True, fwhm)
         return skymap

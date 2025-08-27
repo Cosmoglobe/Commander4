@@ -92,7 +92,7 @@ def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     # comp_list_of_lists = [deepcopy(comp_list), deepcopy(comp_list), deepcopy(comp_list)]
     for icomp in range(ncomp_full):
         alm_len = ((comp_list[icomp].lmax+1)*(comp_list[icomp].lmax+2))//2
-        comp_alms = np.zeros(alm_len, dtype=np.complex128)
+        comp_alms = np.zeros((1,alm_len), dtype=np.complex128)
         comp_list[icomp].component_alms_intensity = curvedsky.map2alm_healpix(comp_maps[0][icomp], comp_alms, niter=3, spin=0)
         if comp_list[icomp].polarized:
             alm_len = ((comp_list[icomp].lmax+1)*(comp_list[icomp].lmax+2))//2
@@ -109,7 +109,7 @@ class CompSepSolver:
         After initializing the class, the solve() method should be called to perform the component separation.
         Note that the solve() method will in-place update (as well as return) the 'comp_list' argument passed to the constructor.
     """
-    def __init__(self, comp_list: list[DiffuseComponent], map_sky: NDArray, map_rms: NDArray, freq: float, fwhm: float, params: Bunch, CompSep_comm: MPI.Comm):
+    def __init__(self, comp_list: list[DiffuseComponent], map_sky: NDArray, map_rms: NDArray, freq: float, fwhm: float, params: Bunch, CompSep_comm: MPI.Comm, pol: bool):
         self.logger = logging.getLogger(__name__)
         self.CompSep_comm = CompSep_comm
         self.params = params
@@ -122,20 +122,25 @@ class CompSepSolver:
         self.my_band_nside = np.sqrt(self.my_band_npix//12)
         logassert(self.my_band_nside.is_integer(), f"Npix dimension of map ({self.my_band_npix}) resulting in a non-integer nside ({self.my_band_nside}).", self.logger)
         self.my_band_nside = int(self.my_band_nside)
-        self.my_band_lmax = (self.my_band_nside*5)//2  # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
+        self.my_band_lmax = (self.my_band_nside*6)//2  # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
         self.my_band_alm_len = ((self.my_band_lmax+1)*(self.my_band_lmax+2))//2
         self.global_nside = params.nside  # This is the NSIDE at which to perform the mixing matrix calculations, which needs to happen on a common resolution.
         self.global_npix = 12*self.global_nside**2  # See comment above.
-        self.global_lmax = (self.global_nside*5)//2  # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
+        self.global_lmax = (self.global_nside*6)//2  # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
         self.global_alm_len = ((self.global_lmax+1)*(self.global_lmax+2))//2
         self.comp_list = comp_list
-        self.comps_SED = np.array([comp.get_sed(self.freqs) for comp in comp_list])
+        if pol:
+            self.comps_SED = np.array([comp.get_sed(self.freqs) for comp in comp_list if comp.polarized])
+        else:  # We currently assume that all provided components are to be included in intensity.
+            self.comps_SED = np.array([comp.get_sed(self.freqs) for comp in comp_list])
         self.ncomp = len(self.comps_SED)
         self.is_holding_comp = self.my_rank < self.ncomp
         self.lmax_per_comp = np.array([comp.lmax for comp in comp_list])
         # self.alm_len_percomp = np.array([((lmax+1)*(lmax+2))//2 for lmax in self.lmax_per_comp])
         self.alm_len_percomp = np.array([(lmax+1)**2 for lmax in self.lmax_per_comp])
         self.my_band_fwhm_rad = fwhm/60.0*(np.pi/180.0)
+        self.npol = 2 if pol else 1
+        self.spin = 2 if pol else 0
         if self.is_holding_comp:
             self.my_comp_lmax = comp_list[self.my_rank].lmax
             self.my_comp_alm_len = self.alm_len_percomp[self.my_rank] #((self.my_comp_lmax+1)*(self.my_comp_lmax+2))//2
@@ -160,52 +165,52 @@ class CompSepSolver:
         logger = logging.getLogger(__name__)
 
         logassert(a_array.dtype == np.float64, f"Provided component array is of type {a_array.dtype} and not np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
-        logassert(a_array.shape[0] == self.my_comp_alm_len, f"Provided component array is of length {a_array.shape[0]}, not {self.my_comp_alm_len}.", logger)
+        logassert(a_array.shape[-1] == self.my_comp_alm_len, f"Provided component array is of length {a_array.shape[-1]}, not {self.my_comp_alm_len}.", logger)
         mycomp = self.CompSep_comm.Get_rank()
         mythreads = self.params.nthreads_compsep
 
         if mycomp < self.ncomp:  # this task actually holds a component
             a_array = alm_real2complex(a_array, self.my_comp_lmax) # Convert the real input alms to complex alms.
             # Y a
-            a = alm_to_map(a_array, self.global_nside, self.my_comp_lmax, nthreads=mythreads)
+            a = alm_to_map(a_array, self.global_nside, self.my_comp_lmax, spin=self.spin, nthreads=mythreads)
         else:
             a = None
 
         # M Y a
         a_old = a
-        a = np.zeros(self.global_npix)  # Mixing matrix calculations must happen at a common resolution.
+        a = np.zeros((self.npol, self.global_npix))  # Mixing matrix calculations must happen at a common resolution.
         for icomp in range(self.ncomp):
             # successively broadcast a_old and build a from it
-            tmp = a_old if mycomp == icomp else np.empty(self.global_npix)
+            tmp = a_old if mycomp == icomp else np.empty((self.npol, self.global_npix))
             self.CompSep_comm.Bcast(tmp, root=icomp)
             a += self.comps_SED[icomp,self.my_rank]*tmp
         del tmp
 
         # Y^-1 M Y a
         a_old = a
-        a = np.empty((self.global_alm_len,), dtype=np.complex128)
-        curvedsky.map2alm_healpix(a_old, a, niter=3, spin=0, nthread=mythreads)
+        a = np.empty((self.npol, self.global_alm_len), dtype=np.complex128)
+        curvedsky.map2alm_healpix(a_old, a, niter=3, spin=self.spin, nthread=mythreads)
         del a_old
 
         # B Y^-1 M Y a
         hp.smoothalm(a, self.my_band_fwhm_rad, inplace=True)
 
         # Y B Y^-1 M Y a
-        a = alm_to_map(a, self.my_band_nside, self.global_lmax, nthreads=mythreads)
+        a = alm_to_map(a, self.my_band_nside, self.global_lmax, spin=self.spin, nthreads=mythreads)
 
         # N^-1 Y B Y^-1 M Y a
         a /= self.map_rms**2
 
         # Y^T N^-1 Y B Y^-1 M Y a
-        a = alm_to_map_adjoint(a, self.my_band_nside, self.global_lmax, nthreads=mythreads)
+        a = alm_to_map_adjoint(a, self.my_band_nside, self.global_lmax, spin=self.spin, nthreads=mythreads)
 
         # B^T Y^T N^-1 Y B Y^-1 M Y a
         hp.smoothalm(a, self.my_band_fwhm_rad, inplace=True)
 
         # Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         a_old = a
-        a = np.empty((self.global_npix,))
-        curvedsky.map2alm_healpix(a, a_old, niter=3, adjoint=True, spin=0, nthread=mythreads)
+        a = np.empty((self.npol, self.global_npix))
+        curvedsky.map2alm_healpix(a, a_old, niter=3, adjoint=True, spin=self.spin, nthread=mythreads)
 
         # M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
         a_old = a
@@ -220,7 +225,7 @@ class CompSepSolver:
 
         if mycomp < self.ncomp:
             # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
-            a = alm_to_map_adjoint(a, self.global_nside, self.my_comp_lmax, nthreads=mythreads)
+            a = alm_to_map_adjoint(a, self.global_nside, self.my_comp_lmax, spin=self.spin, nthreads=mythreads)
  
             a = alm_complex2real(a, self.my_comp_lmax) # Convert complex alm back to real before returning.
         else:
@@ -307,7 +312,7 @@ class CompSepSolver:
         """
         res = 0.
         if self.is_holding_comp:
-            res = np.dot(a, b)
+            res = np.dot(a.flatten(), b.flatten())
         res = self.CompSep_comm.allreduce(res, op=MPI.SUM)
         return res
 
@@ -335,15 +340,15 @@ class CompSepSolver:
         mythreads = self.params.nthreads_compsep
 
         # Y^T N^-1 d
-        b = alm_to_map_adjoint(b, self.my_band_nside, self.global_lmax, nthreads=mythreads)
+        b = alm_to_map_adjoint(b, self.my_band_nside, self.global_lmax, spin=self.spin, nthreads=mythreads)
 
         # B^T Y^T N^-1 d
         hp.smoothalm(b, self.my_band_fwhm_rad, inplace=True)
 
         # Y^-1^T B^T Y^T N^-1 d
         b_old = b
-        b = np.empty((self.global_npix,))  # Mixing matrix calculations must happen at a common resolution.
-        curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=0, nthread=self.params.nthreads_compsep)
+        b = np.empty((self.npol, self.global_npix,))  # Mixing matrix calculations must happen at a common resolution.
+        curvedsky.map2alm_healpix(b, b_old, adjoint=True, niter=3, spin=self.spin, nthread=self.params.nthreads_compsep)
 
         # M^T Y^-1^T B^T Y^T N^-1 d
         b_old = b
@@ -356,7 +361,7 @@ class CompSepSolver:
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 d
         if self.is_holding_comp:  # This task actually holds a component
-            b = alm_to_map_adjoint(b, self.global_nside, self.my_comp_lmax, nthreads=mythreads)
+            b = alm_to_map_adjoint(b, self.global_nside, self.my_comp_lmax, spin=self.spin, nthreads=mythreads)
             b = alm_complex2real(b, self.my_comp_lmax)
         else:
             b = np.zeros((0,), dtype=np.float64)
@@ -391,6 +396,7 @@ class CompSepSolver:
         mycomp = self.CompSep_comm.Get_rank()
 
         RHS = self.calc_RHS_mean() + self.calc_RHS_fluct()
+
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners", and has a name specified by self.params.compsep.preconditioner.
         precond = getattr(preconditioners, self.params.compsep.preconditioner)(self)
 
@@ -419,12 +425,17 @@ class CompSepSolver:
         if seed is not None:
             np.random.seed(seed)
         if mycomp < self.ncomp:
-            x0 = np.zeros((self.alm_len_percomp[mycomp],))
+            x0 = np.zeros((self.npol, self.alm_len_percomp[mycomp],), dtype=np.float64)
+            # np.random.seed(42)
+            # x0[0] = np.random.normal(0, 1, (self.alm_len_percomp[mycomp],))
         else:
             x0 = np.zeros((0,), dtype=np.float64)
         sol_array = self.solve_CG(self.apply_LHS_matrix, RHS, x0, M=precond, x_true=x_true if self.params.compsep.dense_matrix_debug_mode else None)
         for icomp in range(self.ncomp):
             tmp = self.CompSep_comm.bcast(sol_array, root=icomp)
-            self.comp_list[icomp].component_alms = tmp
+            if self.spin == 0:
+                self.comp_list[icomp].component_alms_intensity = tmp
+            elif self.spin == 2:
+                self.comp_list[icomp].component_alms_polarization = tmp
 
         return self.comp_list
