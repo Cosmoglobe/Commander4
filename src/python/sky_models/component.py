@@ -78,7 +78,7 @@ class DiffuseComponent(Component):
         if fwhm == 0:
             return alm_to_map(component_alms, nside, self.lmax, spin = 2 if pol else 0)
         else:
-            return alm_to_map(hp.smoothalm(component_alms, fwhm), nside, self.lmax, spin = 2 if pol else 0)
+            return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax, spin = 2 if pol else 0)
 
     def get_sky(self, nu, nside, pol=False, fwhm=0):
         return self.get_component_map(nside, pol, fwhm)*self.get_sed(nu)
