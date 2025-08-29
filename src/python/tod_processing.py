@@ -25,7 +25,7 @@ nthreads=1
 
 def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float64]:
     "Creates a dummy compsep output for a single band"
-    return np.zeros((3, 12*staticData.nside**2) , dtype=np.float64)
+    return np.zeros((3, 12*staticData.nside**2), dtype=np.float64)
 
 
 def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, detector_samples, params: Bunch) -> DetectorMap:

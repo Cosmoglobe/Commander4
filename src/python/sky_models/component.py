@@ -61,7 +61,7 @@ class DiffuseComponent(Component):
             self._component_alms_intensity = alms
         else:
             raise ValueError("Trying to set alms with unexpected number of dimensions"
-                             f"{alms.ndim} != 2 OR wrong first axis {alms.shape[0] != 1}")
+                             f"{alms.ndim} != 2 OR wrong first axis {alms.shape[0]} != 1")
 
     @component_alms_polarization.setter
     def component_alms_polarization(self, alms):
@@ -69,7 +69,25 @@ class DiffuseComponent(Component):
             self._component_alms_polarization = alms
         else:
             raise ValueError("Trying to set alms with unexpected number of dimensions"
-                             f"{alms.ndim} != 2 OR wrong first axis {alms.shape[0] != 2}")
+                             f"{alms.ndim} != 2 OR wrong first axis {alms.shape[0]} != 2")
+
+    @property
+    def P_smoothing_prior(self):
+        fwhm_rad = np.deg2rad(self.smoothing_prior_FWHM / 60.0)
+        sigma = fwhm_rad / np.sqrt(8 * np.log(2))
+        ells = np.arange(self.lmax + 1)
+        # The prior is P_l = P_l^a * exp(-l(l+1)sigma^2/2).
+        # We assume a constant P_l^a, as its magnitude can be controlled by the 'q' parameter in the parameter file.
+        # Here we set P_l^a = 1.0 as a default.
+        prior_amplitude = self.smoothing_prior_amplitude
+        return prior_amplitude * np.exp(-0.5 * ells * (ells + 1) * sigma**2)
+
+    @property
+    def P_smoothing_prior_inv(self):
+        P = self.P_smoothing_prior
+        P_inv = np.zeros_like(P)
+        P_inv[P != 0] = 1.0/P[P != 0]
+        return P_inv
 
     def get_component_map(self, nside:int, pol:bool=False, fwhm:int=0):
         component_alms = self.component_alms_polarization if pol else self.component_alms_intensity
