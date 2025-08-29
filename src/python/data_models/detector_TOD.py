@@ -3,12 +3,13 @@ import numpy as np
 from numpy.typing import NDArray
 
 class DetectorTOD:
-    def __init__(self, scanlist: list[ScanTOD], nu, fwhm, nside, data_nside):
+    def __init__(self, scanlist: list[ScanTOD], nu, fwhm, nside, data_nside, detector_name):
         self._scanlist = scanlist
         self._nu = nu
         self._fwhm = fwhm
         self._eval_nside = nside
         self._data_nside = data_nside
+        self._detector_name = detector_name
 
     @property
     def nu(self):
@@ -25,6 +26,10 @@ class DetectorTOD:
     @property
     def data_nside(self):
         return self._data_nside
+    
+    @property
+    def detector_name(self):
+        return self._detector_name
 
     @property
     def blm(self):

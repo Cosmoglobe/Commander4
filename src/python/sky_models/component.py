@@ -35,24 +35,77 @@ class Component:
 class DiffuseComponent(Component):
     def __init__(self, params: Bunch):
         super().__init__(params)
-        self.component_alms = None
+        self.polarized = params.polarized
+        self._component_alms_intensity = None
+        self._component_alms_polarization = None
         # self.nside_comp_map = 2048
         # self.prior_l_power_law = 0 # l^alpha as in S^-1 in comp sep
 
-    def get_component_map(self, nside:int, fwhm:int=0):
-        if self.component_alms is None:
+    @property
+    def component_alms_intensity(self):
+        if self._component_alms_intensity is not None:
+            return self._component_alms_intensity
+        else:
+            raise ValueError("Intensity alms not yet set.")
+
+    @property
+    def component_alms_polarization(self):
+        if self._component_alms_polarization is not None:
+            return self._component_alms_polarization
+        else:
+            raise ValueError("Polarization alms not yet set.")
+
+    @component_alms_intensity.setter
+    def component_alms_intensity(self, alms):
+        if alms.ndim == 2 and alms.shape[0] == 1:
+            self._component_alms_intensity = alms
+        else:
+            raise ValueError("Trying to set alms with unexpected number of dimensions"
+                             f"{alms.ndim} != 2 OR wrong first axis {alms.shape[0]} != 1")
+
+    @component_alms_polarization.setter
+    def component_alms_polarization(self, alms):
+        if alms.ndim == 2 and alms.shape[0] == 2:
+            self._component_alms_polarization = alms
+        else:
+            raise ValueError("Trying to set alms with unexpected number of dimensions"
+                             f"{alms.ndim} != 2 OR wrong first axis {alms.shape[0]} != 2")
+
+    @property
+    def P_smoothing_prior(self):
+        fwhm_rad = np.deg2rad(self.smoothing_prior_FWHM / 60.0)
+        sigma = fwhm_rad / np.sqrt(8 * np.log(2))
+        ells = np.arange(self.lmax + 1)
+        # The prior is P_l = P_l^a * exp(-l(l+1)sigma^2/2).
+        # We assume a constant P_l^a, as its magnitude can be controlled by the 'q' parameter in the parameter file.
+        # Here we set P_l^a = 1.0 as a default.
+        prior_amplitude = self.smoothing_prior_amplitude
+        return prior_amplitude * np.exp(-0.5 * ells * (ells + 1) * sigma**2)
+
+    @property
+    def P_smoothing_prior_inv(self):
+        P = self.P_smoothing_prior
+        P_inv = np.zeros_like(P)
+        P_inv[P != 0] = 1.0/P[P != 0]
+        return P_inv
+
+    def get_component_map(self, nside:int, pol:bool=False, fwhm:int=0):
+        component_alms = self.component_alms_polarization if pol else self.component_alms_intensity
+        if component_alms is None:
             raise ValueError("component_alms property not set.")
         if fwhm == 0:
-            return alm_to_map(self.component_alms, nside, self.lmax)
+            return alm_to_map(component_alms, nside, self.lmax, spin = 2 if pol else 0)
         else:
-            return alm_to_map(hp.smoothalm(self.component_alms, fwhm), nside, self.lmax)
+            return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax, spin = 2 if pol else 0)
 
-    def get_sky(self, nu, nside, fwhm=None):
-        return self.get_component_map(nside, fwhm)*self.get_sed(nu)
+    def get_sky(self, nu, nside, pol=False, fwhm=0):
+        return self.get_component_map(nside, pol, fwhm)*self.get_sed(nu)
     
     def get_sed(self, nu):
         logger = logging.getLogger(__name__)
         log.lograise(NotImplementedError, "", logger)
+
+
 
 class PointSourceComponent(Component):
     pass

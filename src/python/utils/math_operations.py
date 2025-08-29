@@ -144,31 +144,34 @@ def alm_dot_product(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArray:
 
 
 def alm_complex2real(alm: NDArray[np.complex128], lmax: int) -> NDArray[np.float64]:
-    """Converts from the complex convention of storing alms when the map is real, to the real convention.
-        In the real convention, the all m modes are stored, but they are all stored as real values, not complex.
+    """ Over the last axis of the input array, converts from the complex convention of storing alms
+        to the real convention (which is only applicable when the map is real). In the real
+        convention, the all m modes are stored, but they are all stored as real values, not complex.
         Args:
-            alm (np.array): Complex alm array of length ((lmax+1)*(lmax+2))/2.
+            alm (np.array): Complex alm array where the last axis has length ((lmax+1)*(lmax+2))/2.
             lmax (int): The lmax of the alm array.
         Returns:
-            x (np.array): Real alm array of length (lmax+1)^2.
+            x (np.array): Real alm array where the last axis has length (lmax+1)^2.
     """
     ainfo = curvedsky.alm_info(lmax=lmax)
     i = int(ainfo.mstart[1]+1)
-    return np.concatenate([alm[:i].real,np.sqrt(2.)*alm[i:].view(np.float64)])
+    return np.concatenate([alm[...,:i].real,np.sqrt(2.)*alm[...,i:].view(np.float64)], axis=-1)
 
 
 def alm_real2complex(x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128]:
-    """Converts from the real convention of storing alms when the map is real, to the complex convention.
-        In the complex convention, the only m>=0 is stored, but are stored as complex numbers (m=0 still always real).
+    """ Over the last axis of the input array, converts from the real convention of storing alms
+        (which is applicable when the map is real), to the complex convention. In the complex
+        convention, the only m>=0 is stored, but are stored as complex numbers (m=0 is always real). 
         Args:
-            x (np.array): Real alm array of length (lmax+1)^2.
+            x (np.array): Real alm array where the last axis has length (lmax+1)^2.
             lmax (int): The lmax of the alm array.
         Returns:
-            oalm (np.array): Complex alm array of length ((lmax+1)*(lmax+2))/2.
+            oalm (np.array): Complex alm array where the last axis has length ((lmax+1)*(lmax+2))/2.
     """
     ainfo = curvedsky.alm_info(lmax=lmax)
     i    = int(ainfo.mstart[1]+1)
-    oalm = np.zeros(ainfo.nelem, np.complex128)
-    oalm[:i] = x[:i]
-    oalm[i:] = x[i:].view(np.complex128)/np.sqrt(2.)
+    # oalm will have the same shape as x except for the last axis.
+    oalm = np.zeros((*x.shape[:-1], ainfo.nelem), np.complex128)
+    oalm[...,:i] = x[...,:i]
+    oalm[...,i:] = x[...,i:].view(np.complex128)/np.sqrt(2.)
     return oalm

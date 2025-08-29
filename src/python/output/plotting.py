@@ -11,58 +11,68 @@ from src.python.data_models.detector_map import DetectorMap
 
 def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int, components_list: list[DiffuseComponent], detector_data: DetectorMap):
     os.makedirs(params.output_paths.plots + "combo_maps/", exist_ok=True)
-    map_signal = detector_data.map_sky
-    map_corr_noise = detector_data.map_corr_noise
-    map_rms = detector_data.map_rms
-    map_skysub = detector_data.skysub_map
-    map_rawobs = detector_data.rawobs_map
-    map_orbdipole = detector_data.orbdipole_map
-    freq = detector_data.nu
-    gain = detector_data.gain
 
-    foreground_subtracted = np.zeros_like(map_signal)
-    cmb_subtracted = np.zeros_like(map_signal)
-    foreground_subtracted[:] = map_signal
-    cmb_subtracted[:] = map_signal
-    residual = np.zeros_like(map_signal)
-    residual[:] = map_signal
+    npix = 12*params.nside**2
+    for ipol in range(3):
+        map_signal = detector_data.map_sky[ipol]
+        if map_signal is None:
+            continue
+        map_corr_noise = detector_data.map_corr_noise[ipol] if detector_data.map_corr_noise[ipol] is not None else np.zeros((npix,))
+        map_rms = detector_data.map_rms[ipol] if detector_data.map_rms[ipol] is not None else np.zeros((npix,))
+        map_skysub = detector_data.skysub_map[ipol] if detector_data.skysub_map[ipol] is not None else np.zeros((npix,))
+        map_rawobs = detector_data.rawobs_map[ipol] if detector_data.rawobs_map[ipol] is not None else np.zeros((npix,))
+        map_orbdipole = detector_data.orbdipole_map[ipol] if detector_data.orbdipole_map[ipol] is not None else np.zeros((npix,))
+        freq = detector_data.nu
+        gain = detector_data.gain
+        foreground_subtracted = np.zeros_like(map_signal)
+        cmb_subtracted = np.zeros_like(map_signal)
+        foreground_subtracted[:] = map_signal
+        cmb_subtracted[:] = map_signal
+        residual = np.zeros_like(map_signal)
+        residual[:] = map_signal
 
-    fig, ax = plt.subplots(3, 5, figsize=(42, 18))
-    fig.suptitle(f"Iter {iteration:04d}. Freq: {freq:.2f} GHz (det {detector}). Chain {chain}. gain = {gain:.4e} (g0={detector_data.g0}).", fontsize=24)
+        fig, ax = plt.subplots(3, 5, figsize=(42, 18))
+        fig.suptitle(f"Iter {iteration:04d}. Freq: {freq:.2f} GHz (det {detector}). Chain {chain}. gain = {gain:.4e} (g0={detector_data.g0}).", fontsize=24)
 
-    for i, component in enumerate(components_list):
-        smoothing_scale_radians = component.params.smoothing_scale*np.pi/(180*60)
-        comp_map = component.get_sky(freq, detector_data.nside, fwhm=smoothing_scale_radians)
-        if component.shortname != "cmb":
-            foreground_subtracted -= comp_map
-        else:
-            cmb_subtracted -= comp_map
-        residual -= comp_map
-        plt.axes(ax[2,i])
-        hp.mollview(comp_map, hold=True, title=f"{component.longname} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(comp_map, 2), max=np.percentile(comp_map, 98))
+        for i, component in enumerate(components_list):
+            smoothing_scale_radians = component.params.smoothing_scale*np.pi/(180*60)
+            if ipol > 0:
+                if component.polarized:
+                    comp_map = component.get_sky(freq, detector_data.nside, pol=True, fwhm=smoothing_scale_radians)[ipol-1]
+                else:
+                    comp_map = np.zeros((npix,))
+            else:
+                comp_map = component.get_sky(freq, detector_data.nside, pol=False, fwhm=smoothing_scale_radians)[0]
+            if component.shortname != "cmb":
+                foreground_subtracted -= comp_map
+            else:
+                cmb_subtracted -= comp_map
+            residual -= comp_map
+            plt.axes(ax[2,i])
+            hp.mollview(comp_map, hold=True, title=f"{component.longname} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(comp_map, 2), max=np.percentile(comp_map, 98))
 
-    residual -= map_corr_noise
-    plt.axes(ax[0,0])
-    hp.mollview(map_rawobs, fig=fig, hold=True, cmap="RdBu_r", title=f"Raw observed sky", min=np.percentile(map_rawobs, 2), max=np.percentile(map_rawobs, 98))
-    plt.axes(ax[0,1])
-    hp.mollview(map_signal, fig=fig, hold=True, cmap="RdBu_r", title=f"Static sky signals (d - N_corr - s_orb)", min=np.percentile(map_signal, 2), max=np.percentile(map_signal, 98))
-    plt.axes(ax[0,2])
-    hp.mollview(cmb_subtracted, fig=fig, hold=True, cmap="RdBu_r", title=f"<- + cmb subtracted", min=np.percentile(foreground_subtracted, 2), max=np.percentile(foreground_subtracted, 98))
-    # hp.mollview(foreground_subtracted, fig=fig, hold=True, cmap="RdBu_r", title=f"<- + foreground subtracted", min=np.percentile(foreground_subtracted, 2), max=np.percentile(foreground_subtracted, 98))
-    plt.axes(ax[0,3])
-    hp.mollview(map_skysub, fig=fig, hold=True, cmap="RdBu_r", title=f"All sky components subtracted (incl. orb-dipole)", min=np.percentile(map_skysub, 2), max=np.percentile(map_skysub, 98))
+        residual -= map_corr_noise
+        plt.axes(ax[0,0])
+        hp.mollview(map_rawobs, fig=fig, hold=True, cmap="RdBu_r", title=f"Raw observed sky", min=np.percentile(map_rawobs, 2), max=np.percentile(map_rawobs, 98))
+        plt.axes(ax[0,1])
+        hp.mollview(map_signal, fig=fig, hold=True, cmap="RdBu_r", title=f"Static sky signals (d - N_corr - s_orb)", min=np.percentile(map_signal, 2), max=np.percentile(map_signal, 98))
+        plt.axes(ax[0,2])
+        hp.mollview(cmb_subtracted, fig=fig, hold=True, cmap="RdBu_r", title=f"<- + cmb subtracted", min=np.percentile(foreground_subtracted, 2), max=np.percentile(foreground_subtracted, 98))
+        # hp.mollview(foreground_subtracted, fig=fig, hold=True, cmap="RdBu_r", title=f"<- + foreground subtracted", min=np.percentile(foreground_subtracted, 2), max=np.percentile(foreground_subtracted, 98))
+        plt.axes(ax[0,3])
+        hp.mollview(map_skysub, fig=fig, hold=True, cmap="RdBu_r", title=f"All sky components subtracted (incl. orb-dipole)", min=np.percentile(map_skysub, 2), max=np.percentile(map_skysub, 98))
 
-    plt.axes(ax[1,0])
-    hp.mollview(map_orbdipole, fig=fig, hold=True, cmap="RdBu_r", title=f"Orbital dipole", min=np.percentile(map_orbdipole, 2), max=np.percentile(map_orbdipole, 98))
-    plt.axes(ax[1,1])
-    hp.mollview(map_corr_noise, fig=fig, hold=True, cmap="RdBu_r", title=f"Corr noise", min=np.percentile(map_corr_noise, 2), max=np.percentile(map_corr_noise, 98))
-    plt.axes(ax[1,2])
-    hp.mollview(residual, fig=fig, hold=True, cmap="RdBu_r", title=f"Residual sky", min=np.percentile(residual, 2), max=np.percentile(residual, 98))
-    plt.axes(ax[1,3])
-    hp.mollview(map_rms, fig=fig, hold=True, norm="log", title=f"RMS")
+        plt.axes(ax[1,0])
+        hp.mollview(map_orbdipole, fig=fig, hold=True, cmap="RdBu_r", title=f"Orbital dipole", min=np.percentile(map_orbdipole, 2), max=np.percentile(map_orbdipole, 98))
+        plt.axes(ax[1,1])
+        hp.mollview(map_corr_noise, fig=fig, hold=True, cmap="RdBu_r", title=f"Corr noise", min=np.percentile(map_corr_noise, 2), max=np.percentile(map_corr_noise, 98))
+        plt.axes(ax[1,2])
+        hp.mollview(residual, fig=fig, hold=True, cmap="RdBu_r", title=f"Residual sky", min=np.percentile(residual, 2), max=np.percentile(residual, 98))
+        plt.axes(ax[1,3])
+        hp.mollview(map_rms, fig=fig, hold=True, norm="log", title=f"RMS")
 
-    plt.savefig(params.output_paths.plots + f"combo_maps/combo_map_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches="tight")
-    plt.close()
+        plt.savefig(params.output_paths.plots + f"combo_maps/{ipol}_combo_map_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches="tight")
+        plt.close()
 
 
 
@@ -95,26 +105,27 @@ def plot_data_maps(master, params, detector, chain, iteration, **kwargs):
             cmap = None
         else:
             cmap = 'RdBu_r'
-        if kwargs[maptype].ndim == 1:
-            hp.mollview(kwargs[maptype], cmap=cmap, title=f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(kwargs[maptype], 2), max=np.percentile(kwargs[maptype], 98))
-            plt.savefig(params.output_paths.plots + f"maps_data/{maptype}_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
-            plt.close()
-        elif kwargs[maptype].ndim == 2:
-            if kwargs[maptype].shape[0] == 3:
-                plt.figure(figsize=(8.5*3, 5.4))
-                labs = ["I", "Q", "U"]
-                for i in range(3):
-                    if maptype == 'map_rms':
-                        limup   = None
-                        limdown = None
-                    else:
-                        limup   = 2*kwargs[maptype][i].std()
-                        limdown = -2*kwargs[maptype][i].std()
-                    hp.mollview(kwargs[maptype][i], cmap=cmap, title=labs[i],
-                            sub=(1,3,i+1), min=limdown, max=limup)
-                plt.suptitle(f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}")
-                plt.savefig(params.output_paths.plots + f"maps_data/{maptype}_IQU_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
-                plt.close()
+        # if kwargs[maptype].ndim == 1:
+        #     hp.mollview(kwargs[maptype], cmap=cmap, title=f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(kwargs[maptype], 2), max=np.percentile(kwargs[maptype], 98))
+        #     plt.savefig(params.output_paths.plots + f"maps_data/{maptype}_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+        #     plt.close()
+        # elif kwargs[maptype].ndim == 2:
+        # if kwargs[maptype].shape[0] == 3:
+        plt.figure(figsize=(8.5*3, 5.4))
+        labs = ["I", "Q", "U"]
+        for i in range(3):
+            if kwargs[maptype][i] is not None:
+                if maptype == 'map_rms':
+                    limup   = np.percentile(kwargs[maptype][i], 98)
+                    limdown = np.min(kwargs[maptype][i])
+                else:
+                    limup   = np.percentile(kwargs[maptype][i], 98)
+                    limdown = np.percentile(kwargs[maptype][i], 2)
+                hp.mollview(kwargs[maptype][i], cmap=cmap, title=labs[i],
+                        sub=(1,3,i+1), min=limdown, max=limup)
+        plt.suptitle(f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}")
+        plt.savefig(params.output_paths.plots + f"maps_data/{maptype}_IQU_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+        plt.close()
 
 
 def plot_cg_res(params, chain, iteration, residual):

@@ -72,15 +72,15 @@ def read_Planck_TOD_data(database_filename: str, my_band: Bunch, my_det: Bunch, 
     logger.info(f"Fraction of scans included for {my_band.freq_identifier}: "
                 f"{num_included/(scan_idx_stop-scan_idx_start)*100:.1f} %")
 
-    det_static = DetectorTOD(scanlist, float(my_band.freq), my_band.fwhm, my_band.eval_nside, my_band.data_nside)
+    det_static = DetectorTOD(scanlist, float(my_band.freq), my_band.fwhm, my_band.eval_nside, my_band.data_nside, my_det.name)
     det_static.detector_id = my_detector_id
 
     scansample_list = []
     for iscan in range(num_included):
         scansample_list.append(ScanSamples())
         scansample_list[-1].time_dep_rel_gain_est = 0.0
-        scansample_list[-1].rel_gain_est = my_band.rel_gain_est
-        scansample_list[-1].gain_est = my_band.rel_gain_est + params.initial_g0
+        scansample_list[-1].rel_gain_est = my_det.rel_gain_est
+        scansample_list[-1].gain_est = my_det.rel_gain_est + params.initial_g0
     det_samples = DetectorSamples(scansample_list)
     det_samples.detector_id = my_detector_id
     det_samples.g0_est = params.initial_g0

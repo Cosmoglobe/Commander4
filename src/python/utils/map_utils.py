@@ -6,11 +6,13 @@ from src.python.data_models.detector_TOD import DetectorTOD
 from numpy.typing import NDArray
 
 
-def get_static_sky_TOD(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer]) -> DetectorTOD:
+def get_static_sky_TOD(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer], psi: NDArray[np.floating]) -> DetectorTOD:
     """ Projects the current sky-model at our band frequency (in uK_RJ, without gain) into the
         specified scan pointing. The sky model does not include the orbital dipole.
     """
-    return det_compsep_map[pix]
+    sky = det_compsep_map[0, pix] + np.cos(2*psi)*det_compsep_map[1, pix]\
+        + np.sin(2*psi)*det_compsep_map[2, pix]
+    return sky
 
 
 def get_s_orb_TOD(scan: ScanTOD, experiment: DetectorTOD, pix: NDArray[np.integer]) -> NDArray:
