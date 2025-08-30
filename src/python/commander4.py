@@ -25,7 +25,15 @@ def main(params: Bunch, params_dict: dict):
     world_master = worldrank == 0
 
     if world_master:
+        import random
         logger.info(f"### PARAMETERS ###\n {yaml.dump(params_dict, allow_unicode=True, default_flow_style=False)}")
+        logger.info(f"\033[{random.randint(91, 96)}m" + r"""
+           ______                                          __             __ __
+          / ____/___  ____ ___  ____ ___  ____ _____  ____/ /__  _____   / // /
+         / /   / __ \/ __ `__ \/ __ `__ \/ __ `/ __ \/ __  / _ \/ ___/  / // /_
+        / /___/ /_/ / / / / / / / / / / / /_/ / / / / /_/ /  __/ /     /__  __/
+        \____/\____/_/ /_/ /_/_/ /_/ /_/\__,_/_/ /_/\__,_/\___/_/        /_/""" + "\033[0m\n")
+        logger.info(f"Starting Commander 4 with {worldsize} total MPI tasks!")
         os.makedirs(params.output_paths.plots, exist_ok=True)
         os.makedirs(params.output_paths.stats, exist_ok=True)
 
