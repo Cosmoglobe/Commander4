@@ -27,7 +27,6 @@ def g(nu):
 class Component:
     def __init__(self, params: Bunch):
         self.params = params
-        self.lmax = params.lmax
         self.longname = params.longname if "longname" in params else "Unknown Component"
         self.shortname = params.shortname if "shortname" in params else "comp"
 
@@ -36,6 +35,9 @@ class DiffuseComponent(Component):
     def __init__(self, params: Bunch):
         super().__init__(params)
         self.polarized = params.polarized
+        self.lmax = params.lmax
+        self.smoothing_prior_FWHM = params.smoothing_prior_FWHM
+        self.smoothing_prior_amplitude = params.smoothing_prior_amplitude
         self._component_alms_intensity = None
         self._component_alms_polarization = None
         # self.nside_comp_map = 2048
@@ -76,11 +78,8 @@ class DiffuseComponent(Component):
         fwhm_rad = np.deg2rad(self.smoothing_prior_FWHM / 60.0)
         sigma = fwhm_rad / np.sqrt(8 * np.log(2))
         ells = np.arange(self.lmax + 1)
-        # The prior is P_l = P_l^a * exp(-l(l+1)sigma^2/2).
-        # We assume a constant P_l^a, as its magnitude can be controlled by the 'q' parameter in the parameter file.
-        # Here we set P_l^a = 1.0 as a default.
         prior_amplitude = self.smoothing_prior_amplitude
-        return prior_amplitude * np.exp(-0.5 * ells * (ells + 1) * sigma**2)
+        return prior_amplitude * np.exp(-ells * (ells + 1) * sigma**2)
 
     @property
     def P_smoothing_prior_inv(self):

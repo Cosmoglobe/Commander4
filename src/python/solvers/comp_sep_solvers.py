@@ -105,9 +105,21 @@ def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
 
 
 class CompSepSolver:
-    """ Class for performing global component separation using the conjugate gradient method.
-        After initializing the class, the solve() method should be called to perform the component separation.
-        Note that the solve() method will in-place update (as well as return) the 'comp_list' argument passed to the constructor.
+    """ Class for performing global component separation using the preconditioned conjugate gradient
+        method. After initializing the class, the solve() method should be called to perform the
+        component separation. Note that the solve() method will in-place update (as well as return)
+        the 'comp_list' argument passed to the constructor.
+
+        The component separation problem is an Ax = b equation on the form
+        (S^-1 + Y^T M^T Y^-1^T N^-1 B M Y) a
+            = Y^T M^T Y^-1^T B^T d + Y^T M^T Y^-1^T B^T N^-{1/2} \eta_1 + S^-1 mu + S^{-1/2} eta_2,
+        where B is the beam smoothing, M is the mixing matrix, N is the noise covariance matrix,
+        Y is alm->map spherical harmonic synthesis, d is the observed frequency maps (as alms),
+        a is the component maps we want to solve for (as alms), and z1 and z2 are random numbers
+        drawn from N(0,1). For better numerical stability, we actually solve the equivalent equation
+        (1 + S^{1/2} Y^T M^T Y^-1^T B^T N^-1 B Y^-1 M Y S^{1/2})[S^{-1/2} a]
+            = S^{1/2} Y^T M^T {Y^{-1}}^T B^T N^{-1} d
+            + S^{1/2}A^TN^{-1/2} eta_1 + S^{-1/2} mu + eta_2.
     """
     def __init__(self, comp_list: list[DiffuseComponent], map_sky: NDArray, map_rms: NDArray, freq: float, fwhm: float, params: Bunch, CompSep_comm: MPI.Comm, pol: bool):
         self.logger = logging.getLogger(__name__)
@@ -129,6 +141,7 @@ class CompSepSolver:
         self.global_lmax = (self.global_nside*6)//2  # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
         self.global_alm_len = ((self.global_lmax+1)*(self.global_lmax+2))//2
         self.comp_list = comp_list
+        self.pol = pol
         if pol:
             self.comps_SED = np.array([comp.get_sed(self.freqs) for comp in comp_list if comp.polarized])
         else:  # We currently assume that all provided components are to be included in intensity.
@@ -138,45 +151,60 @@ class CompSepSolver:
         self.lmax_per_comp = np.array([comp.lmax for comp in comp_list])
         # self.alm_len_percomp = np.array([((lmax+1)*(lmax+2))//2 for lmax in self.lmax_per_comp])
         self.alm_len_percomp = np.array([(lmax+1)**2 for lmax in self.lmax_per_comp])
-        self.my_band_fwhm_rad = fwhm/60.0*(np.pi/180.0)
+        self.my_band_fwhm_rad = np.deg2rad(fwhm/60.0)
         self.npol = 2 if pol else 1
         self.spin = 2 if pol else 0
         if self.is_holding_comp:
             self.my_comp_lmax = comp_list[self.my_rank].lmax
             self.my_comp_alm_len = self.alm_len_percomp[self.my_rank] #((self.my_comp_lmax+1)*(self.my_comp_lmax+2))//2
+            self.my_comp_P_smooth = comp_list[self.my_rank].P_smoothing_prior
+            self.my_comp_P_smooth_inv = comp_list[self.my_rank].P_smoothing_prior_inv
+            # self.my_comp_P_smooth_inv[self.my_comp_P_smooth_inv > 1e+6] = 1e+6
             color = 0
+            self.logger.info(f"{self.comp_list[self.my_rank].shortname:10s} prior_inv:  {self.my_comp_P_smooth_inv[10]:.2e}   {self.my_comp_P_smooth_inv[100]:.2e}   {self.my_comp_P_smooth_inv[-100]:.2e}   {self.my_comp_P_smooth_inv[-10]:.2e}")
         else:
             self.my_comp_lmax = 0
             self.my_comp_alm_len = 0
+            self.my_comp_P_smooth = 0
             color = MPI.UNDEFINED  # If we are not holding a component, we will not be part of the component communicator.
         self.CompSep_holdingcomp_comm = self.CompSep_comm.Split(color, key=self.my_rank)  # Split off a new communicator for ranks holding components.
 
 
 
-    def apply_LHS_matrix(self, a_array: NDArray) -> NDArray:
-        """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of the Ax=b system for global component separation.
-            The full A matrix can be written B^T Y^T M^T N^-1 M Y B, where B is the beam smoothing, M is the mixing matrix, and N is the noise covariance matrix.
-
+    def apply_LHS_matrix(self, a_in: NDArray) -> NDArray:
+        """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of
+            the Ax=b system for global component separation. The full A matrix is:
+            (1 + S^{1/2} Y^T M^T Y^-1^T B^T N^-1 B Y^-1 M Y S^{1/2}).
+            This function should be called by all ranks holding a frequency map, even if they do
+            not hold a compoenent, as they are still needed to compute the LHS operation.
             Args:
-                a_array: the a_lm of the component residing on this task (may be zero-sized).
+                a_in (np.array): The a_lm of the component residing on this MPI rank.
+                                 Should have shape (npol, nalm). Should be a zero-sized array
+                                 for MPI ranks not holding a component.
             Returns:
-                Aa: the result of A(a_array) of the component residing on this task (may be zero-sized).
+                Aa (np.array): The result of applying A to the input alms. Will return a zero-sized
+                               array if this MPI rank does not hold a component.                               
         """
         logger = logging.getLogger(__name__)
 
-        logassert(a_array.dtype == np.float64, f"Provided component array is of type {a_array.dtype} and not np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
-        logassert(a_array.shape[-1] == self.my_comp_alm_len, f"Provided component array is of length {a_array.shape[-1]}, not {self.my_comp_alm_len}.", logger)
+        logassert(a_in.dtype == np.float64, f"Provided component array is of type {a_in.dtype} and not np.float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
+        logassert(a_in.shape[-1] == self.my_comp_alm_len, f"Provided component array is of length {a_in.shape[-1]}, not {self.my_comp_alm_len}.", logger)
         mycomp = self.CompSep_comm.Get_rank()
         mythreads = self.params.nthreads_compsep
 
         if mycomp < self.ncomp:  # this task actually holds a component
-            a_array = alm_real2complex(a_array, self.my_comp_lmax) # Convert the real input alms to complex alms.
-            # Y a
-            a = alm_to_map(a_array, self.global_nside, self.my_comp_lmax, spin=self.spin, nthreads=mythreads)
+            a = alm_real2complex(a_in, self.my_comp_lmax) # Convert the real input alms to complex alms.
+
+            # S^{1/2} a
+            for ipol in range(a.shape[0]):
+                hp.almxfl(a[ipol], np.sqrt(self.my_comp_P_smooth), inplace=True)
+
+            # Y S^{1/2} a
+            a = alm_to_map(a, self.global_nside, self.my_comp_lmax, spin=self.spin, nthreads=mythreads)
         else:
             a = None
 
-        # M Y a
+        # M Y S^{1/2} a
         a_old = a
         a = np.zeros((self.npol, self.global_npix))  # Mixing matrix calculations must happen at a common resolution.
         for icomp in range(self.ncomp):
@@ -186,33 +214,33 @@ class CompSepSolver:
             a += self.comps_SED[icomp,self.my_rank]*tmp
         del tmp
 
-        # Y^-1 M Y a
+        # Y^-1 M Y S^{1/2} a
         a_old = a
         a = np.empty((self.npol, self.global_alm_len), dtype=np.complex128)
         curvedsky.map2alm_healpix(a_old, a, niter=3, spin=self.spin, nthread=mythreads)
         del a_old
 
-        # B Y^-1 M Y a
+        # B Y^-1 M Y S^{1/2} a
         hp.smoothalm(a, self.my_band_fwhm_rad, inplace=True)
 
-        # Y B Y^-1 M Y a
+        # Y B Y^-1 M Y S^{1/2} a
         a = alm_to_map(a, self.my_band_nside, self.global_lmax, spin=self.spin, nthreads=mythreads)
 
-        # N^-1 Y B Y^-1 M Y a
+        # N^-1 Y B Y^-1 M Y S^{1/2} a
         a /= self.map_rms**2
 
-        # Y^T N^-1 Y B Y^-1 M Y a
+        # Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         a = alm_to_map_adjoint(a, self.my_band_nside, self.global_lmax, spin=self.spin, nthreads=mythreads)
 
-        # B^T Y^T N^-1 Y B Y^-1 M Y a
+        # B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         hp.smoothalm(a, self.my_band_fwhm_rad, inplace=True)
 
-        # Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
+        # Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         a_old = a
         a = np.empty((self.npol, self.global_npix))
         curvedsky.map2alm_healpix(a, a_old, niter=3, adjoint=True, spin=self.spin, nthread=mythreads)
 
-        # M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
+        # M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         a_old = a
         for icomp in range(self.ncomp):
             tmp = a_old * self.comps_SED[icomp,self.my_rank]
@@ -224,14 +252,19 @@ class CompSepSolver:
         del a_old
 
         if mycomp < self.ncomp:
-            # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y a
+            # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
             a = alm_to_map_adjoint(a, self.global_nside, self.my_comp_lmax, spin=self.spin, nthreads=mythreads)
- 
+
+            # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
+            for ipol in range(a.shape[0]):
+                hp.almxfl(a[ipol], np.sqrt(self.my_comp_P_smooth), inplace=True)                
+
             a = alm_complex2real(a, self.my_comp_lmax) # Convert complex alm back to real before returning.
         else:
             a = np.zeros((0,), dtype=np.float64)  # zero-sized array
 
-        return a
+        # Adds input vector to output, since (1 + S^{1/2}...)a = a + (S^{1/2}...)a
+        return a_in + a
 
 
     def solve_CG(self, LHS: Callable, RHS: NDArray, x0: NDArray, M = None, x_true = None) -> NDArray:
@@ -248,6 +281,8 @@ class CompSepSolver:
                 m_bestfit (np.array): The resulting best-fit solution, in alm space, for the component held by this rank.
                                       A zero-sized array for ranks holding no component.
         """
+        max_iter = self.params.CG_max_iter_pol if self.pol else self.params.CG_max_iter
+
         logger = logging.getLogger(__name__)
         checkpoint_interval = 10
         master = self.CompSep_comm.Get_rank() == 0
@@ -258,7 +293,7 @@ class CompSepSolver:
             CG_solver = utils.CG(LHS, RHS, dot=mydot, x0=x0)
         else:
             CG_solver = utils.CG(LHS, RHS, dot=mydot, x0=x0, M=M)
-        self.CG_residuals = np.zeros((self.params.CG_max_iter))
+        self.CG_residuals = np.zeros((max_iter))
         if x_true is not None:
             # self.x_true_allcomps = self.CompSep_comm.allgather()
             self.xtrue_A_xtrue = x_true.dot(LHS(x_true))  # The normalization factor for the true error (contribution from my rank).
@@ -273,9 +308,10 @@ class CompSepSolver:
             self.CG_residuals[iter] = CG_solver.err
             iter += 1
             if iter%checkpoint_interval == 0:
+                if master:
+                    logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-checkpoint_interval:iter]):.3e} ({(time.time() - t0)/checkpoint_interval:.1f}s/iter)")
+                    t0 = time.time()
                 if mycomp < self.ncomp:
-                    if master:
-                        logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-checkpoint_interval:iter]):.3e} ({(time.time() - t0)/checkpoint_interval:.1f}s/iter)")
                     if x_true is not None:
                         CG_errors_true = np.linalg.norm(CG_solver.x-x_true)/np.linalg.norm(x_true)
                         CG_Anorm_error = (CG_solver.x-x_true).dot(LHS(CG_solver.x-x_true))
@@ -284,13 +320,12 @@ class CompSepSolver:
                         if master:
                             logger.info(f"CG iter {iter:3d} - True A-norm error: {CG_Anorm_error:.3e}")  # A-norm error is only defined for the full vector.
                         logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].longname} - True L2 error: {CG_errors_true:.3e}")  # We can print the individual component L2 errors.
-                    t0 = time.time()
                 else:
                     if x_true is not None:
                         LHS(np.zeros((0,), dtype=np.float64))  # Matching LHS call for the calculation of LHS(CG_solver.x-x_true).
-            if iter >= self.params.CG_max_iter:
+            if iter >= max_iter:
                 if master:
-                    logger.warning(f"Maximum number of iterations ({self.params.CG_max_iter}) reached in CG.")
+                    logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
                 stop_CG = True
             if CG_solver.err < self.params.CG_err_tol:
                 stop_CG = True
@@ -301,6 +336,8 @@ class CompSepSolver:
         if self.is_holding_comp:
             s_bestfit = CG_solver.x
             s_bestfit = alm_real2complex(s_bestfit, self.my_comp_lmax)  # CG search uses real-valued alms, convert to complex, which is used outside CG.
+            for ipol in range(s_bestfit.shape[0]):
+                hp.almxfl(s_bestfit[ipol], np.sqrt(self.my_comp_P_smooth), inplace=True)
         else:
             s_bestfit = np.zeros((0,), dtype=np.complex128)
         return s_bestfit
@@ -362,7 +399,7 @@ class CompSepSolver:
         # Y^T M^T Y^-1^T B^T Y^T N^-1 d
         if self.is_holding_comp:  # This task actually holds a component
             b = alm_to_map_adjoint(b, self.global_nside, self.my_comp_lmax, spin=self.spin, nthreads=mythreads)
-            b = alm_complex2real(b, self.my_comp_lmax)
+            # b = alm_complex2real(b, self.my_comp_lmax)
         else:
             b = np.zeros((0,), dtype=np.float64)
 
@@ -376,7 +413,17 @@ class CompSepSolver:
         # N^-1 b_mean
         b_mean = self.map_sky/self.map_rms**2
 
-        return self._calc_RHS_from_input_array(b_mean)
+        b = self._calc_RHS_from_input_array(b_mean)
+
+        # Y^T M^T Y^-1^T B^T Y^T N^-1 d
+        if self.is_holding_comp:  # This task actually holds a component
+            for ipol in range(b.shape[0]):
+                hp.almxfl(b[ipol], np.sqrt(self.my_comp_P_smooth), inplace=True)               
+            b = alm_complex2real(b, self.my_comp_lmax)
+        else:
+            b = np.zeros((0,), dtype=np.float64)
+        
+        return b
 
 
     def calc_RHS_fluct(self) -> NDArray:
@@ -389,13 +436,33 @@ class CompSepSolver:
         # N^-1/2 b_fluct
         b_fluct /= self.map_rms
 
-        return self._calc_RHS_from_input_array(b_fluct)
+        b = self._calc_RHS_from_input_array(b_fluct)
+
+        if self.is_holding_comp:  # This task actually holds a component
+            for ipol in range(b.shape[0]):
+               hp.almxfl(b[ipol], np.sqrt(self.my_comp_P_smooth_inv), inplace=True)
+            b = alm_complex2real(b, self.my_comp_lmax)
+        else:
+            b = np.zeros((0,), dtype=np.float64)
+        return b
+
+
+    def calc_RHS_prior_mean(self) -> NDArray:
+
+        if self.is_holding_comp:  # This task actually holds a component
+            mu = np.zeros((self.npol, self.my_comp_alm_len))
+            for ipol in range(mu.shape[0]):
+                hp.almxfl(mu[ipol], self.my_comp_P_smooth_inv, inplace=True)
+            mu = alm_complex2real(mu, self.my_comp_lmax)
+        else:
+            mu = np.zeros((0,), dtype=np.float64)
+        return mu
 
 
     def solve(self, seed=None) -> list[DiffuseComponent]:
         mycomp = self.CompSep_comm.Get_rank()
 
-        RHS = self.calc_RHS_mean() + self.calc_RHS_fluct()
+        RHS = self.calc_RHS_mean() + self.calc_RHS_fluct() + self.calc_RHS_prior_mean()
 
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners", and has a name specified by self.params.compsep.preconditioner.
         precond = getattr(preconditioners, self.params.compsep.preconditioner)(self)
