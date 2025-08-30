@@ -8,6 +8,8 @@ import healpy as hp
 import pysm3.units as u
 from pixell import curvedsky
 import ducc0
+from src.python.output.log import logassert
+import logging
 
 
 def nalm(lmax: int, mmax: int) -> int:
@@ -153,6 +155,10 @@ def alm_complex2real(alm: NDArray[np.complex128], lmax: int) -> NDArray[np.float
         Returns:
             x (np.array): Real alm array where the last axis has length (lmax+1)^2.
     """
+    logger = logging.getLogger(__name__)
+    logassert(alm.dtype == np.complex128, "Input alms are not of type complex128 (they are "
+             f"{alm.dtype}", logger)
+    
     ainfo = curvedsky.alm_info(lmax=lmax)
     i = int(ainfo.mstart[1]+1)
     return np.concatenate([alm[...,:i].real,np.sqrt(2.)*alm[...,i:].view(np.float64)], axis=-1)
@@ -168,6 +174,10 @@ def alm_real2complex(x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128
         Returns:
             oalm (np.array): Complex alm array where the last axis has length ((lmax+1)*(lmax+2))/2.
     """
+    logger = logging.getLogger(__name__)
+    logassert(x.dtype == np.float64, "Input map is not of type complex64 (it is "
+             f"{x.dtype}", logger)
+    
     ainfo = curvedsky.alm_info(lmax=lmax)
     i    = int(ainfo.mstart[1]+1)
     # oalm will have the same shape as x except for the last axis.
