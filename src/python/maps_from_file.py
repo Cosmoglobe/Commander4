@@ -61,7 +61,7 @@ def read_Planck_map_from_file(my_band: Bunch) -> DetectorMap:
             if my_band.polarizations[ipol]:
                 map_signal[ipol] = fits.open(my_band.path_signal_map)[1].data[data_names[ipol]].flatten().astype(np.float32)
                 map_rms[ipol] = fits.open(my_band.path_rms_map)[1].data[rms_names[ipol]].flatten().astype(np.float32)
-
+                map_rms[ipol] = np.sqrt(map_rms[ipol]**2 + (0.01*map_signal[ipol])**2)
     # Convert from input units (uK_CMB) to Commander processing units (uK_RJ)
     n_corr = [None, None, None]
     for ipol in range(3):
