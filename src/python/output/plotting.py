@@ -69,7 +69,7 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int, co
         plt.axes(ax[1,2])
         hp.mollview(residual, fig=fig, hold=True, cmap="RdBu_r", title=f"Residual sky", min=np.percentile(residual, 2), max=np.percentile(residual, 98))
         plt.axes(ax[1,3])
-        hp.mollview(map_rms, fig=fig, hold=True, norm="log", title=f"RMS")
+        hp.mollview(map_rms, fig=fig, hold=True, norm="log", title=f"RMS", min=np.min(map_rms), max=np.percentile(map_rms, 98))
 
         plt.savefig(params.output_paths.plots + f"combo_maps/{ipol}_combo_map_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches="tight")
         plt.close()
@@ -172,41 +172,59 @@ def plot_components(params: Bunch, freq: float, detector: int, chain: int,
     """
 
     os.makedirs(params.output_paths.plots + "maps_comps/", exist_ok=True)
-    os.makedirs(params.output_paths.plots + "spectra_comps/", exist_ok=True)
+    os.makedirs(params.output_paths.plots + "spectra_comps_Dl/", exist_ok=True)
+    os.makedirs(params.output_paths.plots + "spectra_comps_Cl/", exist_ok=True)
     
-    foreground_subtracted = np.zeros_like(signal_map)
-    foreground_subtracted[:] = signal_map
-    residual = np.zeros_like(signal_map)
-    residual[:] = signal_map
+    npix = 12*params.nside**2
+    for ipol in range(3):
+        if signal_map[ipol] is None:
+            continue
+        foreground_subtracted = np.zeros_like(signal_map[ipol])
+        foreground_subtracted[:] = signal_map[ipol]
+        residual = np.zeros_like(signal_map[ipol])
+        residual[:] = signal_map[ipol]
 
-    ells = np.arange(3 * nside)
-    Z = ells * (ells+1) / (2 * np.pi)
-    for component in components_list:
-        smoothing_scale_radians = component.params.smoothing_scale*np.pi/(180*60)
-        comp_map = component.get_sky(freq, nside, fwhm=smoothing_scale_radians)
-        if component.shortname != "cmb":
-            foreground_subtracted -= comp_map
-        residual -= comp_map
+        ells = np.arange(3 * nside)
+        Z = ells * (ells+1) / (2 * np.pi)
+        for component in components_list:
+            smoothing_scale_radians = component.params.smoothing_scale*np.pi/(180*60)
+            if ipol > 0:
+                if component.polarized:
+                    comp_map = component.get_sky(freq, nside, pol=True, fwhm=smoothing_scale_radians)[ipol-1]
+                else:
+                    comp_map = np.zeros((npix,))
+            else:
+                comp_map = component.get_sky(freq, nside, pol=False, fwhm=smoothing_scale_radians)[0]
+            if component.shortname != "cmb":
+                foreground_subtracted -= comp_map
+            residual -= comp_map
 
-        hp.mollview(comp_map, title=f"{component.longname} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(comp_map, 2), max=np.percentile(comp_map, 98))
-        plt.savefig(params.output_paths.plots + f"maps_comps/{component.shortname}_realization_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+            hp.mollview(comp_map, title=f"{component.longname} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(comp_map, 2), max=np.percentile(comp_map, 98))
+            plt.savefig(params.output_paths.plots + f"maps_comps/pol{ipol}_{component.shortname}_realization_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+            plt.close()
+            
+            Cl = hp.alm2cl(hp.map2alm(comp_map))
+            plt.figure()
+            plt.plot(ells, Z * Cl, label=component.longname)
+            plt.xscale("log")
+            plt.yscale("log")
+            plt.savefig(params.output_paths.plots + f"spectra_comps_Dl/pol{ipol}_{component.shortname}_Dl_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+            plt.close()
+
+            plt.figure()
+            plt.plot(ells, Cl, label=component.longname)
+            plt.xscale("log")
+            plt.yscale("log")
+            plt.savefig(params.output_paths.plots + f"spectra_comps_Cl/pol{ipol}_{component.shortname}_Cl_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+            plt.close()
+
+        hp.mollview(foreground_subtracted, title=f"Foreground subtracted sky at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(foreground_subtracted, 2), max=np.percentile(foreground_subtracted, 98))
+        plt.savefig(params.output_paths.plots + f"maps_comps/pol{ipol}_foreground_subtr_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches="tight")
         plt.close()
-        
-        Cl = hp.alm2cl(hp.map2alm(comp_map))
-        plt.figure()
-        plt.plot(ells, Z * Cl, label=component.longname)
-        plt.xscale("log")
-        plt.yscale("log")
-        plt.savefig(params.output_paths.plots + f"spectra_comps/{component.shortname}_Cl_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+
+        hp.mollview(residual, title=f"Residual sky at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(residual, 2), max=np.percentile(residual, 98))
+        plt.savefig(params.output_paths.plots + f"maps_comps/pol{ipol}_residual_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches="tight")
         plt.close()
-
-    hp.mollview(foreground_subtracted, title=f"Foreground subtracted sky at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(foreground_subtracted, 2), max=np.percentile(foreground_subtracted, 98))
-    plt.savefig(params.output_paths.plots + f"maps_comps/foreground_subtr_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches="tight")
-    plt.close()
-
-    hp.mollview(residual, title=f"Residual sky at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(residual, 2), max=np.percentile(residual, 98))
-    plt.savefig(params.output_paths.plots + f"maps_comps/residual_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches="tight")
-    plt.close()
 
 
 def alm_plotter(alm, filename="alm_plot.png"):
