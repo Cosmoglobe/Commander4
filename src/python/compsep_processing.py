@@ -119,7 +119,7 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
     if params.make_plots:
         detector_to_plot = proc_comm.Get_rank()
         plotting.plot_combo_maps(params, detector_to_plot, chain, iter, comp_list, detector_data)
-        plotting.plot_components(params, band_freq, detector_to_plot, chain, iter, signal_map, comp_list, detector_data.nside)
+        plotting.plot_components(params, detector_to_plot, chain, iter, comp_list, detector_data)
         logging.info(f"Rank {proc_comm.Get_rank()} chain {chain} iter {iter} Finished all plotting.")
 
     return detector_maps  # Return the full sky realization for my band.
