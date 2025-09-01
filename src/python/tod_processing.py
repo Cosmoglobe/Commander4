@@ -9,12 +9,9 @@ from numpy.typing import NDArray
 from src.python.output import log
 from src.python.data_models.detector_map import DetectorMap
 from src.python.data_models.detector_TOD import DetectorTOD
-from src.python.data_models.scan_TOD import ScanTOD
 from src.python.data_models.detector_samples import DetectorSamples
 from src.python.data_models.scan_samples import ScanSamples
-from src.python.utils.mapmaker import single_det_map_accumulator
-from src.python.utils.mapmaker import single_det_map_accumulator_IQU
-from src.python.utils.mapmaker import Mapmaker, WeightsMapmaker, MapmakerIQU, WeightsMapmakerIQU
+from src.python.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU
 from src.python.noise_sampling import corr_noise_realization_with_gaps, sample_noise_PS_params
 from src.python.tod_processing_Planck import read_Planck_TOD_data
 from src.python.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
@@ -28,8 +25,8 @@ def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float64]:
 
 
 def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: NDArray,
-            detector_samples:DetectorSamples, params: Bunch, mapmaker_corrnoise:MapmakerIQU,
-            iter:int) -> DetectorMap:
+            detector_samples:DetectorSamples, params: Bunch,
+            mapmaker_corrnoise:MapmakerIQU = None) -> DetectorMap:
     mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
     mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside)
     mapmaker_skymodel = MapmakerIQU(band_comm, experiment_data.nside)
@@ -56,7 +53,7 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
     mapmaker_skymodel.normalize_map(map_cov)
     map_orbdipole = mapmaker_orbdipole.final_map
     map_skymodel = mapmaker_skymodel.final_map
-    if iter >= params.sample_corr_noise_from_iter_num:
+    if mapmaker_corrnoise is not None:
         mapmaker_corrnoise.normalize_map(map_cov)
         map_corrnoise = mapmaker_corrnoise.final_map
     if band_comm.Get_rank() == 0:
@@ -66,7 +63,7 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         detmap.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
         detmap.map_skymodel = map_skymodel
         detmap.map_orbdipole = map_orbdipole
-        if iter >= params.sample_corr_noise_from_iter_num:
+        if mapmaker_corrnoise is not None:
             detmap.map_corrnoise = map_corrnoise
     else:
         detmap = None
@@ -769,9 +766,12 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, det_comm: MPI.Comm,
         if det_comm.Get_rank() == 0:
             wait_time /= det_comm.Get_size()
             logger.info(f"Noise sampling MPI wait overhead for detector {experiment_data.detector_name} ({experiment_data.nu}GHz) = {wait_time:.1f}s.")
+    else:
+        mapmaker_corrnoise = None
 
     ### MAPMAKING ###
     t0 = time.time()
+    # todproc_output = tod2map(band_comm, experiment_data, compsep_output, detector_samples, params)
     detmap = tod2map(band_comm, experiment_data, compsep_output, detector_samples, params,
                      mapmaker_corrnoise, iter)
     t1 = time.time()
