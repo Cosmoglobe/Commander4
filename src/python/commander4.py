@@ -81,7 +81,7 @@ def main(params: Bunch, params_dict: dict):
     # If we ran in Betzy-mode we have dummy-ranks. We now de-spawn these
     # We had to wait with this until after the split, otherwise it would hang on the split.
     if color == MPI.UNDEFINED:
-        return
+        return -1
     MPI.COMM_WORLD.barrier()
     time.sleep(worldrank*1e-3)  # Small sleep to get prints in nice order.
     logger.info(f"MPI split performed, hi from worldrank {worldrank} (on machine {MPI.Get_processor_name()}, PID={os.getpid()}) subcomrank {proc_comm.Get_rank()} from color {color} of size {proc_comm.Get_size()}.")
@@ -163,6 +163,7 @@ def main(params: Bunch, params_dict: dict):
         logger.info("TOD: sending STOP signal to compsep")
         MPI.COMM_WORLD.send(True, dest=compsep_master)
 
+    return 0
 
 if __name__ == "__main__":
     # Parse parameter file
@@ -173,16 +174,17 @@ if __name__ == "__main__":
         if params.output_stats:
             profiler = cProfile.Profile()
             profiler.enable()
-        main(params, params_dict)
+        ret = main(params, params_dict)
         logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} finished Commander 4 and is shutting down. Goodbye.")
         if params.output_stats:
             profiler.disable()
             s = io.StringIO()
             stats = pstats.Stats(profiler, stream=s).sort_stats('tottime')
-            stats.print_stats(10)
-            logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} cProfile stats: {s.getvalue()}")
+            if ret != -1:
+                stats.print_stats(10)
+                logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} cProfile stats: {s.getvalue()}")
+                stats.dump_stats(f'{params.output_paths.stats}/stats-{MPI.COMM_WORLD.Get_rank()}')
 
-            stats.dump_stats(f'{params.output_paths.stats}/stats-{MPI.COMM_WORLD.Get_rank()}')
     except Exception as error:
         print_exc()  # Print the full exception raise, including trace-back.
         logger.error(f">>>>>>>> Error encountered on rank {MPI.COMM_WORLD.Get_rank()}, calling MPI abort.")
