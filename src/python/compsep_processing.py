@@ -78,17 +78,14 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
        detector_maps (np.array): The band-integrated total sky.
         
     """
-    signal_map = detector_data.map_sky
-    band_freq = detector_data.nu
-    is_CompSep_master = proc_comm.Get_rank() == 0
     if params.make_plots:
         detector_to_plot = proc_comm.Get_rank()
         logging.info(f"Rank {proc_comm.Get_rank()} chain {chain} iter {iter} starting plotting.")
-        plotting.plot_data_maps(is_CompSep_master, params, detector_to_plot, chain, iter, map_signal=signal_map,
-                                map_corr_noise=detector_data.map_corr_noise,
-                                map_rms=detector_data.map_rms,
-                                map_skysub=detector_data.skysub_map,
-                                map_orbdip=detector_data.orbdipole_map)
+        # plotting.plot_data_maps(params, detector_to_plot, chain, iter, map_signal=signal_map,
+        #                         map_corr_noise=detector_data.map_corr_noise,
+        #                         map_rms=detector_data.map_rms,
+        #                         map_skysub=detector_data.skysub_map,
+        #                         map_orbdip=detector_data.orbdipole_map)
 
     if params.pixel_compsep_sampling:
         comp_list = amplitude_sampling_per_pix(proc_comm, detector_data, comp_list, params)
@@ -97,23 +94,23 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
         color = 0 if detector_data.map_sky[0] is not None else MPI.UNDEFINED
         comm_local = proc_comm.Split(color, key=proc_comm.Get_rank())
         if color == 0:
-            compsep_solver = CompSepSolver(comp_list, detector_data.map_sky[0].reshape((1,-1)), detector_data.map_rms[0].reshape((1,-1)), band_freq, detector_data.fwhm, params, comm_local, pol=False)
+            compsep_solver = CompSepSolver(comp_list, detector_data.map_sky[0].reshape((1,-1)), detector_data.map_rms[0].reshape((1,-1)), detector_data.nu, detector_data.fwhm, params, comm_local, pol=False)
             comp_list = compsep_solver.solve()
-            if params.make_plots and is_CompSep_master:
+            if params.make_plots and proc_comm.Get_rank():
                 plotting.plot_cg_res(params, chain, iter, compsep_solver.CG_residuals)
 
         color = 0 if detector_data.map_sky[1] is not None else MPI.UNDEFINED
         comm_local = proc_comm.Split(color, key=proc_comm.Get_rank())
         if color == 0:
-            compsep_solver = CompSepSolver(comp_list, np.array(detector_data.map_sky[1:]), np.array(detector_data.map_rms[1:]), band_freq, detector_data.fwhm, params, comm_local, pol=True)
+            compsep_solver = CompSepSolver(comp_list, np.array(detector_data.map_sky[1:]), np.array(detector_data.map_rms[1:]), detector_data.nu, detector_data.fwhm, params, comm_local, pol=True)
             comp_list = compsep_solver.solve()
-            if params.make_plots and is_CompSep_master:
+            if params.make_plots and proc_comm.Get_rank():
                 plotting.plot_cg_res(params, chain, iter, compsep_solver.CG_residuals)
 
     comp_list = proc_comm.bcast(comp_list, root=0)  #TODO: This needs to be handled differently.
     sky_model = SkyModel(comp_list)
 
-    detector_maps = sky_model.get_sky_at_nu(band_freq, detector_data.nside,
+    detector_maps = sky_model.get_sky_at_nu(detector_data.nu, detector_data.nside,
                                             fwhm=detector_data.fwhm/60.0*np.pi/180.0)
 
     if params.make_plots:

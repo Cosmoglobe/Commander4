@@ -27,7 +27,7 @@ def read_sim_map_from_file(my_band: Bunch) -> DetectorMap:
     nside = np.sqrt(map_signal.size//12)
     logassert(nside.is_integer(), f"Npix dimension of map ({map_signal.size}) resulting in a non-integer nside ({nside}).", logger)
     nside = int(nside)
-    return DetectorMap(map_signal, None, map_rms, my_band.freq, my_band.fwhm, my_band.nside)
+    return DetectorMap(map_signal, map_rms, my_band.freq, my_band.fwhm, my_band.nside)
 
 
 def read_Planck_map_from_file(my_band: Bunch) -> DetectorMap:
@@ -75,13 +75,12 @@ def read_Planck_map_from_file(my_band: Bunch) -> DetectorMap:
             logassert(nside.is_integer(), f"Npix dimension of map ({map_signal[ipol].size}) resulting in a non-integer nside ({nside}).", logger)
             nside = int(nside)
 
-            if nside != 512:
-                map_signal[ipol] = hp.ud_grade(map_signal[ipol], 512)
-                map_rms[ipol] = 1.0/np.sqrt(hp.ud_grade(1.0/map_rms[ipol]**2, 512))
-                nside = 512
+            if my_band.data_nside != my_band.eval_nside:
+                map_signal[ipol] = hp.ud_grade(map_signal[ipol], my_band.eval_nside)
+                map_rms[ipol] = 1.0/np.sqrt(hp.ud_grade(1.0/map_rms[ipol]**2, my_band.eval_nside))
             n_corr[ipol] = np.zeros_like(map_signal[ipol], dtype=np.float32)
 
-    detmap = DetectorMap(map_signal, n_corr ,map_rms, my_band.freq, my_band.fwhm, nside)
+    detmap = DetectorMap(map_signal, map_rms, my_band.freq, my_band.fwhm, my_band.eval_nside)
     detmap.g0 = 0.0
     detmap.gain = 0.0
     detmap.skysub_map = n_corr

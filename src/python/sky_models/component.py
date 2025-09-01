@@ -130,6 +130,26 @@ class CMB(DiffuseComponent):
         """
         return (np.ones_like(nu)*pysm3u.uK_CMB).to(pysm3u.uK_RJ,equivalencies=
                                                    pysm3u.cmb_equivalencies(nu*u.GHz)).value
+    
+    def get_sky_anisotropies(self, nu, nside, pol=False, fwhm=0):
+        component_alms = self.component_alms_polarization if pol else self.component_alms_intensity
+        if component_alms is None:
+            raise ValueError("component_alms property not set.")
+        component_alms = component_alms.copy()
+        # Zero out monopole (l=0)
+        component_alms[:,hp.Alm.getidx(self.lmax, 0, 0)] = 0.0 + 0.0j
+        # Zero out the dipole (l=1)
+        for m in range(2):  # m = 0, 1
+            component_alms[:,hp.Alm.getidx(self.lmax, 1, m)] = 0.0 + 0.0j
+        # Zero out the quadrupole (l=2)
+        for m in range(3):  # m = 0, 1, 2
+            component_alms[:,hp.Alm.getidx(self.lmax, 2, m)] = 0.0 + 0.0j
+        if fwhm == 0:
+            return alm_to_map(component_alms, nside, self.lmax, spin = 2 if pol else 0)*self.get_sed(nu)
+        else:
+            return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax, spin = 2 if pol else 0)*self.get_sed(nu)
+
+
 
 class RadioSource(PointSourceComponent):
     pass
