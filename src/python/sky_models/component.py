@@ -259,7 +259,7 @@ class SpinningDust(DiffuseComponent):
         super().__init__(params)
         # Read SpDust2 template data. This is a simulation of what the spectral shape of
         # spinning dust emission should look like if it happens to peak at 30 GHz.
-        freqs, SED = np.loadtxt("/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat").T
+        freqs, SED = np.loadtxt(params.template_path).T
         self.nu_peak_ref = 30.0  # The reference peak frequency of 30 GHz.
         self.nu_peak_eval = params.nu_peak
         self.nu_0 = params.nu_0  # Reference frequency for the amplitude map in GHz

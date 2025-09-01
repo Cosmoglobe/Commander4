@@ -40,17 +40,17 @@ def main(params: Bunch, params_dict: dict):
     # Split the world communicator into a communicator for compsep and one for TOD (with "color" being the keyword for the split).
     if worldrank < params.MPI_config.ntask_tod:
         color = 0  # TOD
-        os.environ["OMP_NUM_THREADS"] = "1"  # Setting threading configuration depending on tasks. Important to do before Numpy is imported, as Numpy will not respect changes to these.
-        os.environ["OPENBLAS_NUM_THREADS"] = "1"
-        os.environ["MKL_NUM_THREADS"] = "1"
-        os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-        os.environ["NUMEXPR_NUM_THREADS"] = "1"
+        os.environ["OMP_NUM_THREADS"] = f"{params.nthreads_tod}"  # Setting threading configuration depending on tasks. Important to do before Numpy is imported, as Numpy will not respect changes to these.
+        os.environ["OPENBLAS_NUM_THREADS"] = f"{params.nthreads_tod}"
+        os.environ["MKL_NUM_THREADS"] = f"{params.nthreads_tod}"
+        os.environ["VECLIB_MAXIMUM_THREADS"] = f"{params.nthreads_tod}"
+        os.environ["NUMEXPR_NUM_THREADS"] = f"{params.nthreads_tod}"
     elif worldrank < params.MPI_config.ntask_tod + params.MPI_config.ntask_compsep:
         if params.betzy_mode:  # Betzy doesn't like heterogeneous MPI setups, so we oversubscribe the compsep ranks with cores we will in practice use as threads.
             if worldrank%params.nthreads_compsep == 0:  # Every nthreads_compsep rank is a real compsep rank, and gets to stay alive.
                 color = 1  # Compsep
             else:
-                color = 99  # Dummy rank
+                color = MPI.UNDEFINED  # Dummy rank
         else:
             color = 1  # Compsep
         os.environ["OMP_NUM_THREADS"] = f"{params.nthreads_compsep}"
@@ -74,7 +74,7 @@ def main(params: Bunch, params_dict: dict):
             log.lograise(RuntimeError, f"Total number of MPI tasks ({worldsize}) must equal the sum of tasks for TOD ({params.MPI_config.ntask_tod}) + CompSep ({params.MPI_config.ntask_compsep}).", logger)
         if not params.betzy_mode and params.MPI_config.ntask_compsep != tot_num_compsep_bands:
             log.lograise(RuntimeError, f"CompSep needs exactly as many MPI tasks {params.MPI_config.ntask_compsep} as there are bands {tot_num_compsep_bands}.", logger)
-        if params.betzy_mode and params.MPI_config.ntask_compsep != params.nthreads_compsep*tot_num_experiment_bands:
+        if params.betzy_mode and params.MPI_config.ntask_compsep != params.nthreads_compsep*tot_num_compsep_bands:
             log.lograise(RuntimeError, f"For Betzy mode, CompSep currently needs exactly as many MPI tasks {params.MPI_config.ntask_compsep} as there are bands {tot_num_experiment_bands} times CompSep threads per rank ({params.nthreads_compsep}).", logger)
 
     proc_comm = MPI.COMM_WORLD.Split(color, key=worldrank)
