@@ -78,6 +78,10 @@ def main(params: Bunch, params_dict: dict):
             log.lograise(RuntimeError, f"For Betzy mode, CompSep currently needs exactly as many MPI tasks {params.MPI_config.ntask_compsep} as there are bands {tot_num_experiment_bands} times CompSep threads per rank ({params.nthreads_compsep}).", logger)
 
     proc_comm = MPI.COMM_WORLD.Split(color, key=worldrank)
+    # If we ran in Betzy-mode we have dummy-ranks. We now de-spawn these
+    # We had to wait with this until after the split, otherwise it would hang on the split.
+    if color == MPI.UNDEFINED:
+        return
     MPI.COMM_WORLD.barrier()
     time.sleep(worldrank*1e-3)  # Small sleep to get prints in nice order.
     logger.info(f"MPI split performed, hi from worldrank {worldrank} (on machine {MPI.Get_processor_name()}, PID={os.getpid()}) subcomrank {proc_comm.Get_rank()} from color {color} of size {proc_comm.Get_size()}.")
