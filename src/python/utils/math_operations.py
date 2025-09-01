@@ -157,7 +157,7 @@ def alm_complex2real(alm: NDArray[np.complex128], lmax: int) -> NDArray[np.float
     """
     logger = logging.getLogger(__name__)
     logassert(alm.dtype == np.complex128, "Input alms are not of type complex128 (they are "
-             f"{alm.dtype}", logger)
+             f"{alm.dtype})", logger)
     
     ainfo = curvedsky.alm_info(lmax=lmax)
     i = int(ainfo.mstart[1]+1)
@@ -175,8 +175,7 @@ def alm_real2complex(x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128
             oalm (np.array): Complex alm array where the last axis has length ((lmax+1)*(lmax+2))/2.
     """
     logger = logging.getLogger(__name__)
-    logassert(x.dtype == np.float64, "Input map is not of type complex64 (it is "
-             f"{x.dtype}", logger)
+    logassert(x.dtype == np.float64, f"Input map is not of type float64 (it is {x.dtype})", logger)
     
     ainfo = curvedsky.alm_info(lmax=lmax)
     i    = int(ainfo.mstart[1]+1)
