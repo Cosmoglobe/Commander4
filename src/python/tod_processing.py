@@ -1,14 +1,12 @@
 import numpy as np
 from mpi4py import MPI
-import healpy as hp
-import math
 import logging
 from pixell.bunch import Bunch
-from output import log
 from scipy.fft import rfft, irfft, rfftfreq
 import time
 from numpy.typing import NDArray
 
+from src.python.output import log
 from src.python.data_models.detector_map import DetectorMap
 from src.python.data_models.detector_TOD import DetectorTOD
 from src.python.data_models.scan_TOD import ScanTOD
@@ -16,6 +14,7 @@ from src.python.data_models.detector_samples import DetectorSamples
 from src.python.data_models.scan_samples import ScanSamples
 from src.python.utils.mapmaker import single_det_map_accumulator
 from src.python.utils.mapmaker import single_det_map_accumulator_IQU
+from src.python.utils.mapmaker import Mapmaker, WeightsMapmaker, MapmakerIQU, WeightsMapmakerIQU
 from src.python.noise_sampling import corr_noise_realization_with_gaps, sample_noise_PS_params
 from src.python.tod_processing_Planck import read_Planck_TOD_data
 from src.python.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
@@ -28,97 +27,49 @@ def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float64]:
     return np.zeros((3, 12*staticData.nside**2), dtype=np.float64)
 
 
-def tod2map(band_comm: MPI.Comm, det_static: DetectorTOD, det_cs_map: NDArray, detector_samples, params: Bunch) -> DetectorMap:
-    logger = logging.getLogger(__name__)
-    # detmap_rawobs, detmap_signal, detmap_orbdipole, detmap_skysub, detmap_corr_noise, detmap_inv_var, detmap_hits = single_det_map_accumulator(det_static, det_cs_map, detector_samples, params)
-    detmap_rawobs, detmap_signal, detmap_orbdipole, detmap_skysub, detmap_corr_noise, detmap_inv_var, detmap_hits = single_det_map_accumulator_IQU(det_static, det_cs_map, detector_samples, params)
-    map_signal = np.zeros_like(detmap_signal)
-    map_orbdipole = np.zeros_like(detmap_orbdipole)
-    map_rawobs = np.zeros_like(detmap_rawobs)
-    map_skysub = np.zeros_like(detmap_skysub)
-    map_corr_noise = np.zeros_like(detmap_corr_noise)
-    map_inv_var = np.zeros_like(detmap_inv_var)
-    map_hits = np.zeros_like(detmap_hits)
+def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: NDArray,
+            detector_samples:DetectorSamples, params: Bunch, mapmaker_corrnoise:MapmakerIQU,
+            iter:int) -> DetectorMap:
+    mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
+    mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside)
+    mapmaker_skymodel = MapmakerIQU(band_comm, experiment_data.nside)
+    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)
+    for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
+        pix = scan.pix
+        psi = scan.psi
+        mapmaker_invvar.accumulate_to_map(scan_samples.sigma0, pix, psi)
+        mapmaker.accumulate_to_map(scan.tod/scan_samples.gain_est, scan_samples.sigma0, pix, psi)
+        sky_orb_dipole = get_s_orb_TOD(scan, experiment_data, pix)
+        mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, scan_samples.sigma0, pix, psi)
+        sky_model = get_static_sky_TOD(compsep_output, pix, psi)
+        mapmaker_skymodel.accumulate_to_map(sky_model, scan_samples.sigma0, pix, psi)
+    mapmaker_invvar.gather_map()
+    mapmaker.gather_map()
+    mapmaker_orbdipole.gather_map()
+    mapmaker_skymodel.gather_map()
+    mapmaker_invvar.normalize_map()
+    map_invvar = mapmaker_invvar.final_map
+    map_cov = mapmaker_invvar.final_cov_map
+    mapmaker.normalize_map(map_cov)
+    map_signal = mapmaker.final_map
+    mapmaker_orbdipole.normalize_map(map_cov)
+    mapmaker_skymodel.normalize_map(map_cov)
+    map_orbdipole = mapmaker_orbdipole.final_map
+    map_skymodel = mapmaker_skymodel.final_map
+    if iter >= params.sample_corr_noise_from_iter_num:
+        mapmaker_corrnoise.normalize_map(map_cov)
+        map_corrnoise = mapmaker_corrnoise.final_map
     if band_comm.Get_rank() == 0:
-        band_comm.Reduce(detmap_signal, map_signal, op=MPI.SUM, root=0)
-        band_comm.Reduce(detmap_skysub, map_skysub, op=MPI.SUM, root=0)
-        band_comm.Reduce(detmap_orbdipole, map_orbdipole, op=MPI.SUM, root=0)
-        band_comm.Reduce(detmap_rawobs, map_rawobs, op=MPI.SUM, root=0)
-        band_comm.Reduce(detmap_corr_noise, map_corr_noise, op=MPI.SUM, root=0)
-        band_comm.Reduce(detmap_inv_var, map_inv_var, op=MPI.SUM, root=0)
-        band_comm.Reduce(detmap_hits, map_hits, op=MPI.SUM, root=0)
+        detmap = DetectorMap(map_signal, 1.0/map_invvar**2, experiment_data.nu,
+                             experiment_data.fwhm, experiment_data.nside)
+        detmap.g0 = detector_samples.g0_est
+        detmap.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
+        detmap.map_skymodel = map_skymodel
+        detmap.map_orbdipole = map_orbdipole
+        if iter >= params.sample_corr_noise_from_iter_num:
+            detmap.map_corrnoise = map_corrnoise
     else:
-        band_comm.Reduce(detmap_signal, None, op=MPI.SUM, root=0)
-        band_comm.Reduce(detmap_skysub, None, op=MPI.SUM, root=0)
-        band_comm.Reduce(detmap_orbdipole, None, op=MPI.SUM, root=0)
-        band_comm.Reduce(detmap_rawobs, None, op=MPI.SUM, root=0)
-        band_comm.Reduce(detmap_corr_noise, None, op=MPI.SUM, root=0)
-        band_comm.Reduce(detmap_inv_var, None, op=MPI.SUM, root=0)
-        band_comm.Reduce(detmap_hits, None, op=MPI.SUM, root=0)
-
-    if band_comm.Get_rank() == 0:
-        if map_signal.ndim == 1:
-            # Intensity mapmaking
-            map_orbdipole[map_orbdipole != 0] /= map_hits[map_orbdipole != 0]
-            map_rawobs[map_rawobs != 0] /= map_inv_var[map_rawobs != 0]
-            map_signal[map_signal != 0] /= map_inv_var[map_signal != 0]
-            map_skysub[map_skysub != 0] /= map_inv_var[map_skysub != 0]
-            map_corr_noise[map_corr_noise != 0] /= map_hits[map_corr_noise != 0]
-            map_rms = np.zeros_like(map_inv_var) + np.inf
-            map_rms[map_inv_var != 0] = 1.0/np.sqrt(map_inv_var[map_inv_var != 0])
-            detmap = DetectorMap(map_signal, map_corr_noise, map_rms, det_static.nu, det_static.fwhm, det_static.nside)
-            detmap.g0 = detector_samples.g0_est
-            detmap.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
-            detmap.skysub_map = map_skysub
-            detmap.rawobs_map = map_rawobs
-            detmap.orbdipole_map = map_orbdipole
-        elif map_signal.ndim == 2:
-            if (map_signal.shape[0] == 3) and (map_inv_var.shape[0] == 6):
-                # Standard IQU mapmaking
-                A = np.zeros((map_inv_var.shape[1], 3, 3), dtype=map_inv_var.dtype)
-                
-                A[:,0,0] = map_inv_var[0]
-
-                A[:,0,1] = map_inv_var[1]
-                A[:,1,0] = map_inv_var[1]
-
-                A[:,0,2] = map_inv_var[2]
-                A[:,2,0] = map_inv_var[2]
-
-                A[:,1,1] = map_inv_var[3]
-
-                A[:,1,2] = map_inv_var[4]
-                A[:,2,1] = map_inv_var[4]
-
-                A[:,2,2] = map_inv_var[5]
-
-                map_rms = np.zeros_like(map_rawobs)
-                for m in [map_orbdipole, map_rawobs, map_signal, map_skysub, map_corr_noise]:
-                    m[:] = np.linalg.solve(A + np.eye(3)*1e-12, m.T[..., np.newaxis]).T
-
-                # map_rms = np.zeros_like(map_rawobs)
-                A_inv = np.linalg.pinv(A + np.eye(3)*1e-12)
-                map_rms[0] = A_inv[:,0,0]**0.5
-                map_rms[1] = A_inv[:,1,1]**0.5
-                map_rms[2] = A_inv[:,2,2]**0.5
-
-                logger.info("NB: Setting everything to intensity only")
-                detmap = DetectorMap(map_signal, map_corr_noise, map_rms, det_static.nu, det_static.fwhm, det_static.nside)
-                detmap.g0 = detector_samples.g0_est
-                detmap.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
-                detmap.skysub_map = map_skysub
-                detmap.rawobs_map = map_rawobs
-                detmap.orbdipole_map = map_orbdipole
-            else:
-                # Improperly formatted IQU map, and/or right format not yet implemented.
-                log.lograise(RuntimeError, "Maps did not have expected shape: "
-                             f"({map_signal.shape[0]} != 3 or {map_inv_var.shape[0]} != 6", logger)
-        else:
-            log.lograise(RuntimeError, "Maps did not have ndim 1 or 2 expected for total intensity"
-                         f"and polarization, respectively. (ndim = {map_signal.ndim})", logger)
-
-        return detmap
-
+        detmap = None
 
 
 def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Comm, MPI.Comm, str, dict[str,int], DetectorTOD, DetectorSamples]:
@@ -270,7 +221,7 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
     worst_residual = 0.0
     alphas = []
     fknees = []
-
+    mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
     for scan, scansamples in zip(experiment_data.scans, detector_samples.scans):
         f_samp = scan.fsamp
         raw_tod = scan.tod
@@ -291,6 +242,7 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
         n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                                                 mask, sigma0, C_1f_inv,
                                                                 err_tol=err_tol)
+        mapmaker.accumulate_to_map(n_corr_est/scansamples.gain_est, scansamples.sigma0, pix, psi)
         scansamples.n_corr_est = n_corr_est.astype(np.float32)
         if residual > err_tol:
             num_failed_convergence += 1
@@ -304,6 +256,7 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
         alphas.append(alpha)
         fknees.append(fknee)
 
+    mapmaker.gather_map()
     num_failed_convergence = band_comm.reduce(num_failed_convergence, op=MPI.SUM)
     worst_residual = band_comm.reduce(worst_residual, op=MPI.MAX)
     if band_comm.Get_rank() == 0:
@@ -319,7 +272,7 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
         logger.info(f"{MPI.COMM_WORLD.Get_rank()} fknees {np.min(fknees):.4f} {np.percentile(fknees, 1):.4f} {np.mean(fknees):.4f} {np.percentile(fknees, 99):.4f} {np.max(fknees):.4f}")
         logger.info(f"{MPI.COMM_WORLD.Get_rank()} alphas {np.min(alphas):.4f} {np.percentile(alphas, 1):.4f} {np.mean(alphas):.4f} {np.percentile(alphas, 99):.4f} {np.max(alphas):.4f}")
 
-    return detector_samples
+    return detector_samples, mapmaker
 
 
 
@@ -803,9 +756,9 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, det_comm: MPI.Comm,
 
 
     if iter >= params.sample_corr_noise_from_iter_num:
-        ### NOISE SAMPLING ###
+        ### CORRELATED NOISE SAMPLING ###
         t0 = time.time()
-        detector_samples = sample_noise(det_comm, experiment_data, detector_samples, compsep_output)
+        detector_samples, mapmaker_corrnoise = sample_noise(det_comm, experiment_data, detector_samples, compsep_output)
         t1 = time.time()
         TOD_comm.Barrier()
         tot_time = time.time() - t0
@@ -819,7 +772,8 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, det_comm: MPI.Comm,
 
     ### MAPMAKING ###
     t0 = time.time()
-    todproc_output = tod2map(band_comm, experiment_data, compsep_output, detector_samples, params)
+    detmap = tod2map(band_comm, experiment_data, compsep_output, detector_samples, params,
+                     mapmaker_corrnoise, iter)
     t1 = time.time()
     TOD_comm.Barrier()
     tot_time = time.time() - t0
@@ -831,4 +785,4 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, det_comm: MPI.Comm,
         wait_time /= det_comm.Get_size()
         logger.info(f"Mapmaking MPI wait overhead for detector {experiment_data.detector_name} ({experiment_data.nu}GHz) = {wait_time:.1f}s.")
 
-    return todproc_output, detector_samples
+    return detmap, detector_samples

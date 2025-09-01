@@ -224,6 +224,8 @@ class JointPreconditioner:
             # Add the weighted contribution of this frequency band to the total
             self.A_diag += M_fc**2 * beam_op_complex * mean_weights
 
+        hp.almxfl(self.A_diag, compsep.my_comp_P_smooth, inplace=True)
+        self.A_diag += 1
         # Regularize the final operator to avoid division by zero
         min_val = 1e-30
         self.A_diag[np.abs(self.A_diag) < min_val] = min_val

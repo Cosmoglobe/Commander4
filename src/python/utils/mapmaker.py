@@ -3,170 +3,235 @@ import os
 import healpy as hp
 import ctypes as ct
 from pixell import bunch
-import pysm3.units as pysm3_u
+from mpi4py import MPI
+import logging
+from numpy.typing import NDArray
 
+from src.python.output.log import logassert
+from src.python.data_models.scan_TOD import ScanTOD
 from src.python.data_models.detector_TOD import DetectorTOD
 from src.python.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 
 current_dir_path = os.path.dirname(os.path.realpath(__file__))
 src_dir_path = os.path.abspath(os.path.join(os.path.join(current_dir_path, os.pardir), os.pardir))
 
-def single_det_mapmaker_python(det_static: DetectorTOD, det_cs_map: np.array) -> tuple[np.array, np.array]:
-    """ From a single detector object, which contains a list of Scans, calculate signal and rms map.
-    """
-    npix = det_cs_map.shape[-1]
-    detmap_signal = np.zeros(npix)
-    detmap_inv_var = np.zeros(npix)
-    for scan in det_static.scans:
-        raw_tod = scan.tod
-        pix = scan.pix
-        sky_subtracted_tod = det_cs_map[pix] - raw_tod
-        sigma0 = np.std(sky_subtracted_tod[1:] - sky_subtracted_tod[:-1])/np.sqrt(2)
-        detmap_signal += np.bincount(pix, weights=raw_tod/sigma0**2, minlength=npix)
-        detmap_inv_var += np.bincount(pix, minlength=npix)/sigma0**2
-    detmap_rms = np.zeros(npix) + np.inf
-    detmap_rms[detmap_signal != 0] = 1.0/np.sqrt(detmap_inv_var[detmap_signal != 0])
-    detmap_signal[detmap_signal != 0] /= detmap_inv_var[detmap_signal != 0]
-    return detmap_signal, detmap_rms
 
-
-def single_det_mapmaker(det_static: DetectorTOD, det_cs_map: np.array) -> tuple[np.array, np.array]:
-    """ From a single detector object, which contains a list of Scans, calculate signal and rms map.
-    """
-    npix = det_cs_map.shape[-1]
-    detmap_signal = np.zeros(npix)
-    detmap_inv_var = np.zeros(npix)
-
-    maplib = ct.cdll.LoadLibrary(os.path.join(src_dir_path, "cpp/mapmaker.so"))
-    ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
-    ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
-    maplib.map_weight_accumulator.argtypes = [ct_f64_dim1, ct.c_double, ct_i64_dim1, ct.c_int64, ct.c_int64]
-    maplib.map_accumulator.argtypes = [ct_f64_dim1, ct_f64_dim1, ct.c_double, ct_i64_dim1, ct.c_int64, ct.c_int64]
-
-    for scan in det_static.scans:
-        raw_tod = scan.tod
-        pix = scan.pix
-        ntod = raw_tod.shape[0]
-        sky_subtracted_tod = det_cs_map[pix] - raw_tod
-        sigma0 = np.std(sky_subtracted_tod[1:] - sky_subtracted_tod[:-1])/np.sqrt(2)
-        inv_var = 1.0/sigma0**2
-        # detmap_signal += np.bincount(pix, weights=scan_map/sigma0**2, minlength=npix)
-        # detmap_inv_var += np.bincount(pix, minlength=npix)/sigma0**2
-        maplib.map_weight_accumulator(detmap_inv_var, inv_var, pix.astype(np.int64), ntod, npix)
-        maplib.map_accumulator(detmap_signal, raw_tod, inv_var, pix.astype(np.int64), ntod, npix)
-
-    detmap_rms = np.zeros(npix) + np.inf
-    detmap_rms[detmap_signal != 0] = 1.0/np.sqrt(detmap_inv_var[detmap_signal != 0])
-    detmap_signal[detmap_signal != 0] /= detmap_inv_var[detmap_signal != 0]
-    return detmap_signal, detmap_rms
-
-
-def single_det_map_accumulator(det_static: DetectorTOD, det_cs_map: np.array, sample_params, params: bunch) -> tuple[np.array, np.array]:
-    """ From a single detector object, which contains a list of Scans, calculate a weighted (BUT UNNORMALIZED) signal map, and an inverse variance map.
-        The purpose of this function is to be called multiple times, such that both the unnormalized signal map and inv-var maps can be further accumulated and normalized later.
-
-        This is where we will be writing the polarization mapmaker.
-    """
-    npix = det_cs_map.shape[-1]
-    detmap_corr_noise = np.zeros(npix)  # Healpix map holding the accumulated correlated noise realizations.
-    detmap_rawobs = np.zeros(npix)  # Healpix map holding the accumulated sky signal map.
-    detmap_orbdipole = np.zeros(npix)  # Healpix map holding the accumulated sky signal map.
-    detmap_skysub = np.zeros(npix)  # Healpix map holding the accumulated sky signal map.
-    detmap_signal = np.zeros(npix)  # Healpix map holding the accumulated sky signal map.
-    detmap_inv_var = np.zeros(npix)  # Healpix map holding the accumulated inverse variance.
-    detmap_hits = np.zeros(npix)  # Healpix map holding the accumulated inverse variance.
-
-    maplib = ct.cdll.LoadLibrary(os.path.join(src_dir_path, "cpp/mapmaker.so"))
-    ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
-    ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
-    maplib.map_weight_accumulator.argtypes = [ct_f64_dim1, ct.c_double, ct_i64_dim1, ct.c_int64, ct.c_int64]
-    maplib.map_accumulator.argtypes = [ct_f64_dim1, ct_f64_dim1, ct.c_double, ct_i64_dim1, ct.c_int64, ct.c_int64]
-
-    for scan, scanparams in zip(det_static.scans, sample_params.scans):
-        raw_tod = scan.tod
-        pix = scan.pix
-        psi = scan.psi
-        ntod = raw_tod.shape[0]
-        s_orb = get_s_orb_TOD(scan, det_static, pix)
-        inv_var = 1.0/scanparams.sigma0**2
-        gain = scanparams.gain_est
-        sky_subtracted_TOD = raw_tod - gain*get_static_sky_TOD(det_cs_map, pix, psi)
-        # detmap_signal += np.bincount(pix, weights=scan_map/sigma0**2, minlength=npix)
-        # detmap_inv_var += np.bincount(pix, minlength=npix)/sigma0**2
-        maplib.map_weight_accumulator(detmap_hits, 1.0, pix.astype(np.int64), ntod, npix)
-        maplib.map_weight_accumulator(detmap_inv_var, (inv_var).astype(np.float64), pix.astype(np.int64), ntod, npix)
-        maplib.map_accumulator(detmap_rawobs, (raw_tod/gain).astype(np.float64), inv_var, pix.astype(np.int64), ntod, npix)
-        maplib.map_accumulator(detmap_signal, ((raw_tod - scanparams.n_corr_est)/gain - s_orb).astype(np.float64), inv_var, pix.astype(np.int64), ntod, npix)
-        maplib.map_accumulator(detmap_orbdipole, s_orb.astype(np.float64), 1.0, pix.astype(np.int64), ntod, npix)
-        maplib.map_accumulator(detmap_skysub, (sky_subtracted_TOD/gain).astype(np.float64), inv_var, pix.astype(np.int64), ntod, npix)
-        if params.sample_corr_noise:
-            maplib.map_accumulator(detmap_corr_noise, (scanparams.n_corr_est/gain).astype(np.float64), 1.0, pix.astype(np.int64), ntod, npix)
-
-    return detmap_rawobs, detmap_signal, detmap_orbdipole, detmap_skysub, detmap_corr_noise, detmap_inv_var, detmap_hits
-
-
-def single_det_map_accumulator_IQU(det_static: DetectorTOD, det_cs_map: np.array, sample_params, params: bunch) -> tuple[np.array, np.array]:
-    """ From a single detector object, which contains a list of Scans, calculate a weighted (BUT UNNORMALIZED) signal map, and an inverse variance map.
-        The purpose of this function is to be called multiple times, such that both the unnormalized signal map and inv-var maps can be further accumulated and normalized later.
-
-        This is where we will be writing the polarization mapmaker.
-    """
-    test_polang_coverage = False
-
-    npix = det_cs_map.shape[-1]
-    detmap_corr_noise = np.zeros((3,npix))  # Healpix map holding the accumulated correlated noise realizations.
-    detmap_rawobs = np.zeros((3,npix))  # Healpix map holding the accumulated sky signal map.
-    detmap_orbdipole = np.zeros((3,npix))  # Healpix map holding the accumulated sky signal map.
-    detmap_skysub = np.zeros((3,npix))  # Healpix map holding the accumulated sky signal map.
-    detmap_signal = np.zeros((3,npix))  # Healpix map holding the accumulated sky signal map.
-    detmap_hits = np.zeros((npix,))  # Healpix map holding the accumulated sky signal map.
-    detmap_inv_var = np.zeros((6,npix))  # Healpix map holding the accumulated inverse variance.
-
-    maplib = ct.cdll.LoadLibrary(os.path.join(src_dir_path, "cpp/mapmaker.so"))
-    ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
-    ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
-    ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
-    maplib.map_weight_accumulator.argtypes = [ct_f64_dim1, ct.c_double, ct_i64_dim1,
-                                              ct.c_int64, ct.c_int64]
-    maplib.map_weight_accumulator_IQU.argtypes = [ct_f64_dim2, ct.c_double,
-            ct_i64_dim1, ct_f64_dim1, ct.c_int64, ct.c_int64]
-    maplib.map_accumulator_IQU.argtypes = [ct_f64_dim2, ct_f64_dim1,
-            ct.c_double, ct_i64_dim1, ct_f64_dim1, ct.c_int64, ct.c_int64]
-
-    if test_polang_coverage:
-        sum_cos2psi = np.zeros(npix)
-        sum_sin2psi = np.zeros(npix)
-        hits_map = np.zeros(npix)
-
-    for scan, scanparams in zip(det_static.scans, sample_params.scans):
-        raw_tod = scan.tod
-        pix = scan.pix
-        psi = scan.psi
-        ntod = raw_tod.shape[0]
-        s_orb = get_s_orb_TOD(scan, det_static, pix)
-        inv_var = 1.0/scanparams.sigma0**2
-        gain = scanparams.gain_est
-        n_corr = scanparams.n_corr_est
-        sky_subtracted_TOD = raw_tod - gain*get_static_sky_TOD(det_cs_map, pix, psi)
-        maplib.map_weight_accumulator(detmap_hits, 1.0, pix.astype(np.int64), ntod, npix)
-        maplib.map_weight_accumulator_IQU(detmap_inv_var, (inv_var).astype(np.float64), pix.astype(np.int64), psi.astype(np.float64), ntod, npix)
-        maplib.map_accumulator_IQU(detmap_rawobs, (raw_tod/gain).astype(np.float64), inv_var, pix.astype(np.int64), psi.astype(np.float64), ntod, npix)
-        maplib.map_accumulator_IQU(detmap_signal, ((raw_tod - n_corr)/gain).astype(np.float64) - s_orb, inv_var, pix.astype(np.int64), psi.astype(np.float64), ntod, npix)
-        maplib.map_accumulator_IQU(detmap_orbdipole, (s_orb).astype(np.float64), inv_var, pix.astype(np.int64), psi.astype(np.float64), ntod, npix)
-        maplib.map_accumulator_IQU(detmap_skysub, (sky_subtracted_TOD/gain).astype(np.float64), inv_var, pix.astype(np.int64), psi.astype(np.float64), ntod, npix)
-        if params.sample_corr_noise:
-            maplib.map_accumulator_IQU(detmap_corr_noise, (n_corr/gain).astype(np.float64), inv_var, pix.astype(np.int64), psi.astype(np.float64), ntod, npix)
-
+class Mapmaker:
+    def __init__(self, map_comm:MPI.Comm, nside:int, dtype=np.float64):
+        self.logger = logging.getLogger(__name__)
+        self.map_comm = map_comm
+        self.nside = nside
+        self.npix = 12*nside**2
+        self.dtype= dtype
+        self._map_signal = np.zeros(self.npix, dtype=dtype)
+        self._gathered_map = None
+        self._finalized_map = None
         
-        if test_polang_coverage:
-            sum_cos2psi += np.bincount(pix, weights=np.cos(2*psi), minlength=npix)
-            sum_sin2psi += np.bincount(pix, weights=np.sin(2*psi), minlength=npix)
-            hits_map   += np.bincount(pix, minlength=npix)
+        # Setting up Ctypes mapmaker
+        self.maplib = ct.cdll.LoadLibrary(os.path.join(src_dir_path, "cpp/mapmaker.so"))
+        ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
+        ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
+        self.maplib.map_accumulator.argtypes = [ct_f64_dim1, ct_f64_dim1, ct.c_double, ct_i64_dim1,
+                                                ct.c_int64, ct.c_int64]
 
-    if test_polang_coverage:
-        R = (sum_cos2psi/hits_map)**2 + (sum_sin2psi/hits_map)**2
-        import matplotlib.pyplot as plt
-        hp.mollview(R, norm='hist', title='R')
-        plt.show()
+    @property
+    def final_map(self):
+        if self.map_comm.Get_rank() == 0:
+            logassert(self._finalized_map is not None, "Attempted to retrieve map before it was done.",
+                    self.logger)
+        return self._finalized_map
 
-    return detmap_rawobs, detmap_signal, detmap_orbdipole, detmap_skysub, detmap_corr_noise, detmap_inv_var, detmap_hits
+    def accumulate_to_map(self, tod:NDArray, weights:NDArray, pix:NDArray):
+        # Check that we are still in business, and haven't already called "gather_map".
+        logassert(self._map_signal is not None, "Tried accumulating to finalized map", self.logger)
+        ntod = tod.shape[0]
+        self.maplib.map_accumulator(self._map_signal, tod.astype(np.float64), weights,
+                                    pix.astype(np.int64), ntod, self.npix)
+
+    def gather_map(self):
+        if self.map_comm.Get_rank() == 0:
+            self._gathered_map = np.zeros(self.npix, dtype=self.dtype)
+        self.map_comm.Reduce(self._map_signal, self._gathered_map, op=MPI.SUM, root=0)
+        self._map_signal = None  # Free memory and indicate that accumulation is done.
+    
+    def normalize_map(self, normalization_map):
+        if self.map_comm.Get_rank() == 0:
+            mask = normalization_map != 0
+            self._finalized_map = self._gathered_map[mask] / normalization_map[mask]
+            self._finalized_map[~mask] = 0.0
+            self._gathered_map = None
+
+
+
+class WeightsMapmaker:
+    def __init__(self, map_comm:MPI.Comm, nside:int, dtype=np.float64):
+        self.logger = logging.getLogger(__name__)
+        self.map_comm = map_comm
+        self.nside = nside
+        self.npix = 12*nside**2
+        self.dtype= dtype
+        self._map_signal = np.zeros(self.npix, dtype=dtype)
+        self._gathered_map = None
+        
+        # Setting up Ctypes mapmaker
+        self.maplib = ct.cdll.LoadLibrary(os.path.join(src_dir_path, "cpp/mapmaker.so"))
+        ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
+        ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
+        self.maplib.map_weight_accumulator.argtypes = [ct_f64_dim1, ct.c_double, ct_i64_dim1,
+                                                       ct.c_int64, ct.c_int64]
+
+    @property
+    def final_map(self):
+        if self.map_comm.Get_rank() == 0:
+            logassert(self._gathered_map is not None, "Attempted to retrieve map before it was done.",
+                    self.logger)
+        return self._gathered_map
+
+    def accumulate_to_map(self, weight:NDArray, pix:NDArray):
+        # Check that we are still in business, and haven't already called "gather_map".
+        logassert(self._map_signal is not None, "Tried accumulating to finalized map", self.logger)
+        ntod = pix.shape[0]
+        self.maplib.map_weight_accumulator(self._map_signal, weight, pix.astype(np.int64), ntod,
+                                           self.npix)
+
+    def gather_map(self):
+        if self.map_comm.Get_rank() == 0:
+            self._gathered_map = np.zeros(self.npix, dtype=self.dtype)
+        self.map_comm.Reduce(self._map_signal, self._gathered_map, op=MPI.SUM, root=0)
+        self._map_signal = None  # Free memory and indicate that accumulation is done.
+
+
+
+class MapmakerIQU:
+    def __init__(self, map_comm:MPI.Comm, nside:int, dtype=np.float64):
+        self.logger = logging.getLogger(__name__)
+        self.map_comm = map_comm
+        self.nside = nside
+        self.npix = 12*nside**2
+        self.dtype= dtype
+        self._map_signal = np.zeros((3, self.npix), dtype=dtype)
+        self._gathered_map = None
+        self._finalized_map = None
+        
+        # Setting up Ctypes mapmaker
+        self.maplib = ct.cdll.LoadLibrary(os.path.join(src_dir_path, "cpp/mapmaker.so"))
+        ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
+        ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
+        ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
+        self.maplib.map_accumulator_IQU.argtypes = [ct_f64_dim2, ct_f64_dim1,
+                ct.c_double, ct_i64_dim1, ct_f64_dim1, ct.c_int64, ct.c_int64]
+
+    @property
+    def final_map(self):
+        if self.map_comm.Get_rank() == 0:
+            logassert(self._finalized_map is not None, "Attempted to retrieve map before it was done.",
+                      self.logger)
+        return self._finalized_map
+
+
+    def accumulate_to_map(self, tod:NDArray, weights:NDArray, pix:NDArray, psi:NDArray):
+        # Check that we are still in business, and haven't already called "gather_map".
+        logassert(self._map_signal is not None, "Tried accumulating to finalized map", self.logger)
+        ntod = tod.shape[0]
+        self.maplib.map_accumulator_IQU(self._map_signal, tod.astype(np.float64), weights,
+                                        pix.astype(np.int64), psi.astype(np.float64), ntod,
+                                        self.npix)
+
+    def gather_map(self):
+        if self.map_comm.Get_rank() == 0:
+            self._gathered_map = np.zeros((3, self.npix), dtype=self.dtype)
+        self.map_comm.Reduce(self._map_signal, self._gathered_map, op=MPI.SUM, root=0)
+        self._map_signal = None  # Free memory and indicate that accumulation is done.
+    
+    def normalize_map(self, normalization_map):
+        if self.map_comm.Get_rank() == 0:
+            logassert(normalization_map.ndim == 2 and normalization_map.shape[0] == 6,
+                    "Normalization map must have shape [6,NPIX] for IQU mapmaker,"
+                    f"has {normalization_map.shape}", self.logger)
+            # Set up A-matrix for IQU mapmaking
+            A = np.zeros((self.npix, 3, 3), dtype=self.dtype)
+            A[:,0,0] = normalization_map[0]
+            A[:,0,1] = normalization_map[1]
+            A[:,1,0] = normalization_map[1]
+            A[:,0,2] = normalization_map[2]
+            A[:,2,0] = normalization_map[2]
+            A[:,1,1] = normalization_map[3]
+            A[:,1,2] = normalization_map[4]
+            A[:,2,1] = normalization_map[4]
+            A[:,2,2] = normalization_map[5]
+
+            A += np.eye(3)*1e-12  # Regularization, avoid singular matrix.
+            # Solve the Ax=b mapmaking problem for IQU mapmaking, where A is a 3x3 matrix per pixel.
+            # The transposes, newaxis, and [0] is just to get the right dimensions etc.
+            self._finalized_map = np.linalg.solve(A, self._gathered_map.T[..., np.newaxis]).T[0]
+            self._gathered_map = None
+
+
+class WeightsMapmakerIQU:
+    def __init__(self, map_comm:MPI.Comm, nside:int, dtype=np.float64):
+        self.logger = logging.getLogger(__name__)
+        self.map_comm = map_comm
+        self.nside = nside
+        self.npix = 12*nside**2
+        self.dtype= dtype
+        self._map_signal = np.zeros((6, self.npix), dtype=dtype)
+        self._gathered_map = None
+        self._finalized_map = None
+        
+        # Setting up Ctypes mapmaker
+        self.maplib = ct.cdll.LoadLibrary(os.path.join(src_dir_path, "cpp/mapmaker.so"))
+        ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
+        ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
+        ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
+        self.maplib.map_weight_accumulator_IQU.argtypes = [ct_f64_dim2, ct.c_double, ct_i64_dim1,
+                                                           ct_f64_dim1, ct.c_int64, ct.c_int64]
+
+    @property
+    def final_map(self):
+        if self.map_comm.Get_rank() == 0:
+            logassert(self._finalized_map is not None, "Attempted to retrieve map before it was done.",
+                      self.logger)
+        return self._finalized_map
+    
+    @property
+    def final_cov_map(self):
+        if self.map_comm.Get_rank() == 0:
+            logassert(self._gathered_map is not None, "Attempted to retrieve map before it was done.",
+                      self.logger)
+        return self._gathered_map
+
+    def accumulate_to_map(self, weight:float, pix:NDArray, psi:NDArray):
+        # Check that we are still in business, and haven't already called "gather_map".
+        logassert(self._map_signal is not None, "Tried accumulating to finalized map", self.logger)
+        ntod = pix.shape[0]
+        self.maplib.map_weight_accumulator_IQU(self._map_signal, weight, pix.astype(np.int64),
+                                               psi.astype(np.float64), ntod, self.npix)
+
+    def gather_map(self):
+        if self.map_comm.Get_rank() == 0:
+            self._gathered_map = np.zeros((6, self.npix), dtype=self.dtype)
+        self.map_comm.Reduce(self._map_signal, self._gathered_map, op=MPI.SUM, root=0)
+        self._map_signal = None  # Free memory and indicate that accumulation is done.
+
+
+    def normalize_map(self):
+        if self.map_comm.Get_rank() == 0:
+            self._finalized_map = np.zeros((3, self.npix), dtype=self.dtype)
+            # Set up A-matrix for IQU mapmaking
+            A = np.zeros((self.npix, 3, 3), dtype=self.dtype)
+            A[:,0,0] = self._gathered_map[0]
+            A[:,0,1] = self._gathered_map[1]
+            A[:,1,0] = self._gathered_map[1]
+            A[:,0,2] = self._gathered_map[2]
+            A[:,2,0] = self._gathered_map[2]
+            A[:,1,1] = self._gathered_map[3]
+            A[:,1,2] = self._gathered_map[4]
+            A[:,2,1] = self._gathered_map[4]
+            A[:,2,2] = self._gathered_map[5]
+
+            A += np.eye(3)*1e-12  # Regularization, avoid singular matrix.
+            # The inverse-variance of the I,Q,U maps are the diagonal elemenents of the inverse of A.
+            A_inv = np.linalg.pinv(A)
+            self._finalized_map[0] = A_inv[:,0,0]
+            self._finalized_map[1] = A_inv[:,1,1]
+            self._finalized_map[2] = A_inv[:,2,2]
