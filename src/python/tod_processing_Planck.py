@@ -25,7 +25,7 @@ def get_processing_mask(my_band: Bunch) -> DetectorTOD:
     return mask
 
 
-def read_Planck_TOD_data(database_filename: str, my_band: Bunch, my_det: Bunch, params: Bunch, my_detector_id: int, scan_idx_start: int, scan_idx_stop: int) -> tuple[DetectorTOD, DetectorSamples]:
+def read_Planck_TOD_data(database_filename: str, my_band: Bunch, my_det: Bunch, params: Bunch, my_detector_id: int, scan_idx_start: int, scan_idx_stop: int, bad_PIDs_path:str=None) -> tuple[DetectorTOD, DetectorSamples]:
     logger = logging.getLogger(__name__)
     oids = []
     pids = []
@@ -43,8 +43,10 @@ def read_Planck_TOD_data(database_filename: str, my_band: Bunch, my_det: Bunch, 
     num_included = 0
     
     processing_mask_map = get_processing_mask(my_band)
-
-    bad_PIDs = np.load("/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy")
+    if bad_PIDs_path is not None:
+        bad_PIDs = np.load("/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy")
+    else:
+        bad_PIDs = np.array([])
     previous_oid = -999999
     for i_pid in range(scan_idx_start, scan_idx_stop):
         pid = pids[i_pid]

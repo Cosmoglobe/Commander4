@@ -178,7 +178,7 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Co
     if my_experiment.is_sim:
         experiment_data, detector_samples = read_TOD_sim_data(my_experiment.data_path, my_band, my_det, params, my_detector_id, my_scans_start, my_scans_stop)
     else:
-        experiment_data, detector_samples = read_Planck_TOD_data(my_experiment.data_path, my_band, my_det, params, my_detector_id, my_scans_start, my_scans_stop)
+        experiment_data, detector_samples = read_Planck_TOD_data(my_experiment.data_path, my_band, my_det, params, my_detector_id, my_scans_start, my_scans_stop, my_experiment.bad_PIDs_path)
     tod_comm.Barrier()
     if tod_comm.Get_rank() == 0:
         logger.info(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")
