@@ -67,6 +67,7 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
             detmap.map_corrnoise = map_corrnoise
     else:
         detmap = None
+    return detmap
 
 
 def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Comm, MPI.Comm, str, dict[str,int], DetectorTOD, DetectorSamples]:
