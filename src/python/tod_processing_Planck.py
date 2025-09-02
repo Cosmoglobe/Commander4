@@ -44,7 +44,7 @@ def read_Planck_TOD_data(database_filename: str, my_band: Bunch, my_det: Bunch, 
     
     processing_mask_map = get_processing_mask(my_band)
     if bad_PIDs_path is not None:
-        bad_PIDs = np.load("/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy")
+        bad_PIDs = np.load(bad_PIDs_path)
     else:
         bad_PIDs = np.array([])
     previous_oid = -999999
