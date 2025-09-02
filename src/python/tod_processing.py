@@ -773,7 +773,7 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, det_comm: MPI.Comm,
     t0 = time.time()
     # todproc_output = tod2map(band_comm, experiment_data, compsep_output, detector_samples, params)
     detmap = tod2map(band_comm, experiment_data, compsep_output, detector_samples, params,
-                     mapmaker_corrnoise, iter)
+                     mapmaker_corrnoise)
     t1 = time.time()
     TOD_comm.Barrier()
     tot_time = time.time() - t0
