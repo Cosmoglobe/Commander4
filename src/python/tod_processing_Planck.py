@@ -10,6 +10,7 @@ from src.python.data_models.scan_TOD import ScanTOD
 from src.python.data_models.detector_samples import DetectorSamples
 from src.python.data_models.scan_samples import ScanSamples
 from cmdr4_support.utils import huffman_decode
+import gc
 
 def get_processing_mask(my_band: Bunch) -> DetectorTOD:
     """Subtracts the sky model from the TOD data.
@@ -47,6 +48,12 @@ def read_Planck_TOD_data(database_filename: str, my_band: Bunch, my_det: Bunch, 
         bad_PIDs = np.load(bad_PIDs_path)
     else:
         bad_PIDs = np.array([])
+
+    # Attempting to reduce fragmentation by allocating buffers.
+    ntod_upper_bound = int(my_band.fsamp*100*3600)  # 10 hour scan.
+    flag_buffer = np.zeros(ntod_upper_bound, dtype=np.int64)
+    tod_buffer = np.zeros(ntod_upper_bound, dtype=np.float32)
+
     for i_pid in range(scan_idx_start, scan_idx_stop):
         pid = pids[i_pid]
         oid = oids[i_pid]
@@ -56,30 +63,30 @@ def read_Planck_TOD_data(database_filename: str, my_band: Bunch, my_det: Bunch, 
         filename = f"LFI_{my_band.freq_identifier:03d}_{oid.zfill(6)}.h5"
         filepath = os.path.join(database_filename, filename)
         with h5py.File(filepath, "r") as f:
-            ntod = f[f"/{pid}/common/ntod"][()]
-            npsi = f["/common/npsi/"][()]
+            tod = f[f"/{pid}/{detname}/tod/"][()]
             huffman_tree = f[f"/{pid}/common/hufftree"][()]
             huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
-            flag_encoded = f[f"/{pid}/{detname}/flag/"][()]
             pix_encoded = f[f"/{pid}/{detname}/pix/"][()]
             psi_encoded = f[f"/{pid}/{detname}/psi/"][()]
-            tod = f[f"/{pid}/{detname}/tod/"][()]
             vsun = f[f"/{pid}/common/vsun/"][()]
             fsamp = f["/common/fsamp/"][()]
-
-        flag = np.zeros(ntod, dtype=np.int64)
-        flag = huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8), huffman_tree, huffman_symbols, flag)
-        flag = np.cumsum(flag)
-        del(flag_encoded)
-        mask = (flag & 6111232) == 0
-        if mask.all():
-            if np.mean(np.abs(tod)) < 0.001 and np.std(tod) < 0.001:  # Check for crazy data.
+            npsi = f["/common/npsi/"][()]
+            flag_encoded = f[f"/{pid}/{detname}/flag/"][()]
+            ntod = f[f"/{pid}/common/ntod"][0]  # ntod is a size-1 array for some reason.
+        if ntod > ntod_upper_bound:
+            raise ValueError(f"{ntod_upper_bound} {ntod}")
+        flag_buffer[:ntod] = 0.0
+        flag_buffer[:ntod] = huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8), huffman_tree, huffman_symbols, flag_buffer[:ntod])
+        flag_buffer[:ntod] = np.cumsum(flag_buffer[:ntod])
+        flag_buffer[:ntod] &= 6111232
+        if np.sum(flag_buffer[:ntod]) == 0:
+            tod_buffer[:ntod] = np.abs(tod)
+            if np.mean(tod_buffer[:ntod]) < 0.001 and np.std(tod) < 0.001:  # Check for crazy data.
                 scanlist.append(ScanTOD(tod, pix_encoded, psi_encoded, 0., pid, my_band.eval_nside, my_band.data_nside,
                                         fsamp, vsun, huffman_tree, huffman_symbols, npsi, processing_mask_map))
                 num_included += 1
-        del(tod)
-        del(mask)
-        del(flag)
+        if i_pid % 10 == 0:
+            gc.collect()
 
     logger.info(f"Fraction of scans included for {my_band.freq_identifier} {my_det.name}: "
                 f"{num_included/(scan_idx_stop-scan_idx_start)*100:.1f} %")
