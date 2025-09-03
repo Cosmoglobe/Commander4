@@ -525,10 +525,10 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
         inv_power_spectrum = np.zeros(Nrfft)
         inv_power_spectrum[1:] = 1.0 / (sigma0**2 * (1 + (freqs[1:] / scan_samples.fknee_est)**scan_samples.alpha_est))
 
-        # s_tot[~mask] = 0.0
-        # residual_tod[~mask] = 0.0
-        s_tot[~mask] = scan_samples.n_corr_est[~mask]/scan_samples.gain_est
-        residual_tod[~mask] = scan_samples.n_corr_est[~mask]
+        s_tot[~mask] = 0.0  #TODO: Needs to be handled differently.
+        residual_tod[~mask] = 0.0
+        # s_tot[~mask] = scan_samples.n_corr_est[~mask]/scan_samples.gain_est
+        # residual_tod[~mask] = scan_samples.n_corr_est[~mask]
         # Calculate N^-1 * s_tot and N^-1 * residual_tod
         N_inv_s = irfft(rfft(s_tot) * inv_power_spectrum, n=Ntod)
         N_inv_r = irfft(rfft(residual_tod) * inv_power_spectrum, n=Ntod)
