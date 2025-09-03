@@ -3,7 +3,7 @@ import healpy as hp
 from output import log
 import logging
 from numpy.typing import NDArray
-from src.python.utils.huffman import Huffman
+from cmdr4_support.utils import huffman_decode
 
 class ScanTOD:
     def __init__ (self, tod, pix_encoded, psi_encoded, startTime, scanID, nside, data_nside, fsamp, orb_dir_vec,
@@ -15,7 +15,9 @@ class ScanTOD:
         log.logassert_np(orb_dir_vec.size == 3, "orb_dir_vec must be a vector of size 3.", logger)
         log.logassert_np(processing_mask_map.dtype == bool, "Processing mask is not boolean type",
                          logger)
-        self._tod = tod
+        self._tod = np.empty(tod.size, dtype=np.float32)
+        self._tod[:] = tod[:]
+        self.ntod = self._tod.shape[-1]
         self._pix_encoded = pix_encoded
         self._psi_encoded = psi_encoded
         self._startTime = startTime
@@ -57,14 +59,19 @@ class ScanTOD:
 
     @property
     def pix(self) -> NDArray[np.integer]:
-        pix = Huffman(tree=self._huffman_tree, symb=self._huffman_symbols).Decoder(self._pix_encoded)
+        pix = np.zeros(self.ntod, dtype=np.int64)
+        pix = huffman_decode(np.frombuffer(self._pix_encoded, dtype=np.uint8), self._huffman_tree, self._huffman_symbols, pix)
+        #TODO: I think cumsum should eventually be wrapped in somewhere, it can be easy to forget.
+        pix = np.cumsum(pix)
         if self.nside != self.data_nside:
             pix = hp.ang2pix(self.nside, *hp.pix2ang(self.data_nside, pix))
         return pix
 
     @property
     def psi(self) -> NDArray[np.floating]:
-        psi = Huffman(tree=self._huffman_tree, symb=self._huffman_symbols).Decoder(self._psi_encoded)
+        psi = np.zeros(self.ntod, dtype=np.int64)
+        psi = huffman_decode(np.frombuffer(self._psi_encoded, dtype=np.uint8), self._huffman_tree, self._huffman_symbols, psi)
+        psi = np.cumsum(psi)
         return 2*np.pi * psi.astype(np.float64)/self._npsi
         
     @property
