@@ -688,7 +688,6 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, det_comm: MPI.Comm,
     logger = logging.getLogger(__name__)
     if iter == 1:
         for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-            scan_samples.n_corr_est = np.zeros_like(scan.tod, dtype=np.float32)
             scan_samples.alpha_est = params.noise_alpha
             scan_samples.fknee_est = params.noise_fknee
 
