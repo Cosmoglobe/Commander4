@@ -19,9 +19,9 @@ from src.python.tod_processing_sim import read_TOD_sim_data
 
 nthreads=1
 
-def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float64]:
+def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float32]:
     "Creates a dummy compsep output for a single band"
-    return np.zeros((3, 12*staticData.nside**2), dtype=np.float64)
+    return np.zeros((3, 12*staticData.nside**2), dtype=np.float32)
 
 
 def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: NDArray,
@@ -36,7 +36,7 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         psi = scan.psi
         mapmaker_invvar.accumulate_to_map(scan_samples.sigma0, pix, psi)
         mapmaker.accumulate_to_map(scan.tod/scan_samples.gain_est, scan_samples.sigma0, pix, psi)
-        sky_orb_dipole = get_s_orb_TOD(scan, experiment_data, pix)
+        sky_orb_dipole = get_s_orb_TOD(scan, experiment_data, pix).astype(np.float32)
         mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, scan_samples.sigma0, pix, psi)
         sky_model = get_static_sky_TOD(compsep_output, pix, psi)
         mapmaker_skymodel.accumulate_to_map(sky_model, scan_samples.sigma0, pix, psi)

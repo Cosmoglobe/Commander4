@@ -24,7 +24,7 @@ def get_processing_mask(my_band: Bunch) -> DetectorTOD:
     mask = hdul[1].data["TEMPERATURE"].flatten().astype(bool)
     nside = np.sqrt(mask.size//12)
     if nside != my_band.eval_nside:
-        mask = hp.ud_grade(mask.astype(np.float64), 512) == 1
+        mask = hp.ud_grade(mask.astype(np.float64), my_band.eval_nside) == 1
     return mask
 
 def read_Planck_TOD_data(database_filename: str, my_band: Bunch, my_det: Bunch, params: Bunch, my_detector_id: int, scan_idx_start: int, scan_idx_stop: int, bad_PIDs_path:str=None) -> tuple[DetectorTOD, DetectorSamples]:
@@ -63,6 +63,7 @@ def read_Planck_TOD_data(database_filename: str, my_band: Bunch, my_det: Bunch, 
         filename = f"LFI_{my_band.freq_identifier:03d}_{oid.zfill(6)}.h5"
         filepath = os.path.join(database_filename, filename)
         with h5py.File(filepath, "r") as f:
+            ntod = f[f"/{pid}/common/ntod"][0]  # ntod is a size-1 array for some reason.
             tod = f[f"/{pid}/{detname}/tod/"][()]
             huffman_tree = f[f"/{pid}/common/hufftree"][()]
             huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
@@ -70,9 +71,8 @@ def read_Planck_TOD_data(database_filename: str, my_band: Bunch, my_det: Bunch, 
             psi_encoded = f[f"/{pid}/{detname}/psi/"][()]
             vsun = f[f"/{pid}/common/vsun/"][()]
             fsamp = f["/common/fsamp/"][()]
-            npsi = f["/common/npsi/"][()]
+            npsi = f["/common/npsi/"][0]
             flag_encoded = f[f"/{pid}/{detname}/flag/"][()]
-            ntod = f[f"/{pid}/common/ntod"][0]  # ntod is a size-1 array for some reason.
         if ntod > ntod_upper_bound:
             raise ValueError(f"{ntod_upper_bound} {ntod}")
         flag_buffer[:ntod] = 0.0

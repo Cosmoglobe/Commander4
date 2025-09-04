@@ -24,7 +24,7 @@ class ScanTOD:
         self._eval_nside = nside
         self._data_nside = data_nside
         self._fsamp = fsamp
-        self._orb_dir_vec = orb_dir_vec
+        self._orb_dir_vec = orb_dir_vec.astype(np.float32)
         self._huffman_tree = huffman_tree
         self._huffman_symbols = huffman_symbols
         self._npsi = npsi
@@ -73,7 +73,9 @@ class ScanTOD:
         psi = np.zeros(self.ntod, dtype=np.int64)
         psi = huffman_decode(np.frombuffer(self._psi_encoded, dtype=np.uint8), self._huffman_tree, self._huffman_symbols, psi)
         psi = np.cumsum(psi)
-        return 2*np.pi * psi.astype(np.float64)/self._npsi
+        psi = 2*np.pi * psi.astype(np.float32)/self._npsi
+        return psi
+        
         
     @property
     def scanID(self) -> int:

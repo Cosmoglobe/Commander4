@@ -22,8 +22,8 @@ def get_s_orb_TOD(scan: ScanTOD, experiment: DetectorTOD, pix: NDArray[np.intege
     uK_CMB_to_uK_RJ = (1*pysm3_u.uK_CMB).to(pysm3_u.uK_RJ, equivalencies=pysm3_u.cmb_equivalencies(experiment.nu*pysm3_u.GHz)).value
 
     theta, phi = hp.pix2ang(experiment.nside, pix)
-    LOS_vec = hp.ang2vec(theta, phi)
-    dot_product = np.sum(scan.orb_dir_vec * LOS_vec, axis=-1)  # How much do the LOS and orbital velocity align?
+    LOS_vec = hp.ang2vec(theta, phi).astype(np.float32)
+    dot_product = np.sum(scan.orb_dir_vec * LOS_vec, axis=-1, dtype=np.float32)  # How much do the LOS and orbital velocity align?
     s_orb = T_CMB * dot_product / C  # The orbital dipole in units of uK_CMB.
     s_orb = s_orb * uK_CMB_to_uK_RJ  # Converting to uK_RJ units.
     return s_orb

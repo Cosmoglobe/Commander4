@@ -17,7 +17,7 @@ class SkyModel:
         """
         npix = 12*nside**2
         npol = np.sum(pol)
-        skymap = np.zeros((npol, npix))
+        skymap = np.zeros((npol, npix), dtype=np.float32)
         for component in self._components:
             skymap[0] += component.get_sky(nu, nside, False, fwhm)[0]
             if component.polarized:
