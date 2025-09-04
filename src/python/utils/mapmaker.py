@@ -31,7 +31,7 @@ class Mapmaker:
         self.maplib = ct.cdll.LoadLibrary(os.path.join(src_dir_path, "cpp/mapmaker.so"))
         ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
         ct_f32_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=1, flags="contiguous")
-        self.maplib.map_accumulator_f32.argtypes = [ct_f32_dim1, ct_f32_dim1, ct.c_double, ct_i64_dim1,
+        self.maplib.map_accumulator_f32.argtypes = [ct_f32_dim1, ct_f32_dim1, ct.c_float, ct_i64_dim1,
                                                     ct.c_int64, ct.c_int64]
 
     @property
@@ -119,7 +119,7 @@ class MapmakerIQU:
         ct_f32_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=1, flags="contiguous")
         ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
         ct_f32_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=2, flags="contiguous")
-        self.maplib.map_accumulator_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim1, ct.c_double,
+        self.maplib.map_accumulator_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim1, ct.c_float,
                                                         ct_i64_dim1, ct_f64_dim1, ct.c_int64,
                                                         ct.c_int64]
 
