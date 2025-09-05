@@ -78,7 +78,7 @@ def read_Planck_TOD_data(my_experiment: str, my_band: Bunch, my_det: Bunch, para
         filename = f"LFI_{my_band.freq_identifier:03d}_{oid.zfill(6)}.h5"
         filepath = os.path.join(my_experiment.data_path, filename)
         with h5py.File(filepath, "r") as f:
-            ntod = f[f"/{pid}/common/ntod"][0]  # ntod is a size-1 array for some reason.
+            ntod = int(f[f"/{pid}/common/ntod"][0])  # ntod is a size-1 array for some reason.
             ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
             tod = f[f"/{pid}/{detname}/tod/"][:ntod_optimal]
             huffman_tree = f[f"/{pid}/common/hufftree"][()]
@@ -87,7 +87,7 @@ def read_Planck_TOD_data(my_experiment: str, my_band: Bunch, my_det: Bunch, para
             psi_encoded = f[f"/{pid}/{detname}/psi/"][()]
             vsun = f[f"/{pid}/common/vsun/"][()]
             fsamp = f["/common/fsamp/"][()]
-            npsi = f["/common/npsi/"][0]
+            npsi = int(f["/common/npsi/"][0])
             flag_encoded = f[f"/{pid}/{detname}/flag/"][()]
         if ntod > ntod_upper_bound:
             raise ValueError(f"{ntod_upper_bound} {ntod}")
