@@ -240,8 +240,7 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
         n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                                                 mask, sigma0, C_1f_inv,
                                                                 err_tol=err_tol)
-        mapmaker.accumulate_to_map(n_corr_est/scansamples.gain_est, scansamples.sigma0, pix, psi)
-        scansamples.n_corr_est = n_corr_est.astype(np.float32)
+        mapmaker.accumulate_to_map((n_corr_est/scansamples.gain_est).astype(np.float32), scansamples.sigma0, pix, psi)
         if residual > err_tol:
             num_failed_convergence += 1
             worst_residual = max(worst_residual, residual)
