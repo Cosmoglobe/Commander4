@@ -7,7 +7,7 @@ from cmdr4_support.utils import huffman_decode
 
 class ScanTOD:
     def __init__ (self, tod, pix_encoded, psi_encoded, startTime, scanID, nside, data_nside, fsamp, orb_dir_vec,
-                  huffman_tree, huffman_symbols, npsi, processing_mask_map):
+                  huffman_tree, huffman_symbols, npsi, processing_mask_map, ntod_original):
         logger = logging.getLogger(__name__)
         log.logassert_np(tod.ndim==1, "'value' must be a 1D array", logger)
         log.logassert_np(tod.dtype in [np.float64,np.float32], "TOD dtype must be floating type,"
@@ -27,6 +27,7 @@ class ScanTOD:
         self._orb_dir_vec = orb_dir_vec.astype(np.float32)
         self._huffman_tree = huffman_tree
         self._huffman_symbols = huffman_symbols
+        self._ntod_original = ntod_original  # Size of the original TOD before Fourier cropping.
         self._npsi = npsi
         pix = self.pix
         self._processing_mask_TOD = np.packbits(processing_mask_map[pix])
@@ -60,19 +61,23 @@ class ScanTOD:
 
     @property
     def pix(self) -> NDArray[np.integer]:
-        pix = np.zeros(self.ntod, dtype=np.int64)
+        pix = np.zeros(self._ntod_original, dtype=np.int64)
         pix = huffman_decode(np.frombuffer(self._pix_encoded, dtype=np.uint8), self._huffman_tree, self._huffman_symbols, pix)
         #TODO: I think cumsum should eventually be wrapped in somewhere, it can be easy to forget.
         pix = np.cumsum(pix)
+        # The TOD was cropped to an ideal Fourier length, but because the pix entry is compressed,
+        # we need to unpack the entire original array, and then crop it to the correct length.
+        pix = pix[:self.ntod]
         if self.nside != self.data_nside:
             pix = hp.ang2pix(self.nside, *hp.pix2ang(self.data_nside, pix))
         return pix
 
     @property
     def psi(self) -> NDArray[np.floating]:
-        psi = np.zeros(self.ntod, dtype=np.int64)
+        psi = np.zeros(self._ntod_original, dtype=np.int64)
         psi = huffman_decode(np.frombuffer(self._psi_encoded, dtype=np.uint8), self._huffman_tree, self._huffman_symbols, psi)
         psi = np.cumsum(psi)
+        psi = psi[:self.ntod]
         psi = 2*np.pi * psi.astype(np.float32)/self._npsi
         return psi
         

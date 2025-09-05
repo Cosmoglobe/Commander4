@@ -179,7 +179,7 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Co
     if my_experiment.is_sim:
         experiment_data, detector_samples = read_TOD_sim_data(my_experiment.data_path, my_band, my_det, params, my_detector_id, my_scans_start, my_scans_stop)
     else:
-        experiment_data, detector_samples = read_Planck_TOD_data(my_experiment.data_path, my_band, my_det, params, my_detector_id, my_scans_start, my_scans_stop, my_experiment.bad_PIDs_path)
+        experiment_data, detector_samples = read_Planck_TOD_data(my_experiment, my_band, my_det, params, my_detector_id, my_scans_start, my_scans_stop, my_experiment.bad_PIDs_path)
     tod_comm.Barrier()
     if tod_comm.Get_rank() == 0:
         logger.info(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")
@@ -690,6 +690,21 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, det_comm: MPI.Comm,
             scan_samples.alpha_est = params.noise_alpha
             scan_samples.fknee_est = params.noise_fknee
 
+    ### WHITE NOISE ESTIMATION ###
+    t0 = time.time()
+    detector_samples = estimate_white_noise(experiment_data, detector_samples, compsep_output, params)
+    t1 = time.time()
+    TOD_comm.Barrier()
+    tot_time = time.time() - t0
+    wait_time = time.time() - t1
+    wait_time = det_comm.reduce(wait_time, op=MPI.SUM, root=0)
+    if TOD_comm.Get_rank() == 0:
+        logger.info(f"Chain {chain} iter{iter}: Finished white noise estimation in {tot_time:.1f}s.")
+    if det_comm.Get_rank() == 0:
+        wait_time /= det_comm.Get_size()
+        logger.info(f"White noise estimation MPI wait overhead for detector {experiment_data.detector_name} ({experiment_data.nu}GHz) = {wait_time:.1f}s.")
+
+
     if iter >= params.sample_gain_from_iter_num:
         ### ABSOLUTE GAIN CALIBRATION ### 
         t0 = time.time()
@@ -736,25 +751,10 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, det_comm: MPI.Comm,
             scan_samples.gain_est = detector_samples.g0_est + scan_samples.rel_gain_est\
                                   + scan_samples.time_dep_rel_gain_est
 
-    ### WHITE NOISE ESTIMATION ###
-    t0 = time.time()
-    detector_samples = estimate_white_noise(experiment_data, detector_samples, compsep_output, params)
-    t1 = time.time()
-    TOD_comm.Barrier()
-    tot_time = time.time() - t0
-    wait_time = time.time() - t1
-    wait_time = det_comm.reduce(wait_time, op=MPI.SUM, root=0)
-    if TOD_comm.Get_rank() == 0:
-        logger.info(f"Chain {chain} iter{iter}: Finished white noise estimation in {tot_time:.1f}s.")
-    if det_comm.Get_rank() == 0:
-        wait_time /= det_comm.Get_size()
-        logger.info(f"White noise estimation MPI wait overhead for detector {experiment_data.detector_name} ({experiment_data.nu}GHz) = {wait_time:.1f}s.")
-
-
     if iter >= params.sample_corr_noise_from_iter_num:
         ### CORRELATED NOISE SAMPLING ###
         t0 = time.time()
-        detector_samples, mapmaker_corrnoise = sample_noise(det_comm, experiment_data, detector_samples, compsep_output)
+        detector_samples, mapmaker_corrnoise = sample_noise(band_comm, experiment_data, detector_samples, compsep_output)
         t1 = time.time()
         TOD_comm.Barrier()
         tot_time = time.time() - t0
