@@ -14,8 +14,15 @@ git submodule init
 git submodule update
 ```
 
-### 1.2 Compiling Ctypes libraries
-The code depends on C++ Ctypes libraries which are located in the `src/cpp/` directory. There should be a file named `src/cpp/compilation.sh` which contains the compilation procedure for all C++ files.
+### 1.2
+The code depends on C++ code interfaced with `pybind11`. This is installed as a local pip package. To perform the installation, navigate into the `cmdr4_support` directory, and run a pip install (NB: the `.` is necessary).
+```
+CC=gcc CXX=g++ pip3 install -v .
+```
+The `CC=gcc CXX=g++` tells it to use these specific compilers during installation (it might try to use another, incompatible, compiler).
+
+### 1.3 Compiling Ctypes libraries
+The code currently also depends on C++ code interfaces with Ctypes. This code is located in the `src/cpp/` directory. There should be a file named `src/cpp/compilation.sh` which contains the compilation procedure for all C++ files.
 
 ## 2. How to run
 Commander4 has to be run with MPI, and a parameter file has to be indicated using the `-p` argument. Example usage:
