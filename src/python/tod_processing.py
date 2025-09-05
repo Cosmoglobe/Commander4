@@ -207,7 +207,7 @@ def estimate_white_noise(experiment_data: DetectorTOD, detector_samples: Detecto
             sigma0 = np.std(sky_subtracted_tod[mask][1:] - sky_subtracted_tod[mask][:-1])/np.sqrt(2)
         else:
             sigma0 = np.std(sky_subtracted_tod[1:] - sky_subtracted_tod[:-1])/np.sqrt(2)
-        scan_samples.sigma0 = sigma0/scan_samples.gain_est
+        scan_samples.sigma0 = float(sigma0/scan_samples.gain_est)
     return detector_samples
 
 
@@ -335,7 +335,9 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
     wait_time = time.time() - t0
     g_sampled = TOD_comm.bcast(g_sampled, root=0)
 
-    detector_samples.g0_est = g_sampled
+    # As of Numpy 2.0 it's good practice to explicitly cast to Python scalar types, as this would
+    # otherwise have been a np.float64 type, potentially causing unexpected casting behavior later.
+    detector_samples.g0_est = float(g_sampled)
 
     return detector_samples, wait_time
 
@@ -465,7 +467,7 @@ def sample_relative_gain(TOD_comm: MPI.Comm, det_comm: MPI.Comm, experiment_data
             my_dg_index = result_to_bcast['dids'].index(my_did)
             my_delta_g = result_to_bcast['dgs'][my_dg_index]
             for scan_samples in detector_samples.scans:
-                scan_samples.rel_gain_est = my_delta_g
+                scan_samples.rel_gain_est = float(my_delta_g)
             if det_comm.Get_rank() == 0:
                 logging.info(f"Relative gain for detector {experiment_data.detector_name} ({experiment_data.nu}GHz): {detector_samples.g0_est*1e9+my_delta_g*1e9:8.3f} ({detector_samples.g0_est*1e9:8.3f} + {my_delta_g*1e9:8.3f})")
         except ValueError:
@@ -648,7 +650,7 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
     # Update local scan objects
     if delta_g_local.size == len(experiment_data.scans):
         for i, scan_samples in enumerate(detector_samples.scans):
-            scan_samples.time_dep_rel_gain_est = delta_g_local[i]
+            scan_samples.time_dep_rel_gain_est = delta_g_local[i].astype(np.float32)
     else:
         logger.warning(f"Rank {band_rank} received mismatched number of gain samples."
                        f"Expected {len(experiment_data.scans)}, got {delta_g_local.size}.")

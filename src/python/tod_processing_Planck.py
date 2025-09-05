@@ -86,7 +86,7 @@ def read_Planck_TOD_data(my_experiment: str, my_band: Bunch, my_det: Bunch, para
             pix_encoded = f[f"/{pid}/{detname}/pix/"][()]
             psi_encoded = f[f"/{pid}/{detname}/psi/"][()]
             vsun = f[f"/{pid}/common/vsun/"][()]
-            fsamp = f["/common/fsamp/"][()]
+            fsamp = float(f["/common/fsamp/"][0])
             npsi = int(f["/common/npsi/"][0])
             flag_encoded = f[f"/{pid}/{detname}/flag/"][()]
         if ntod > ntod_upper_bound:
