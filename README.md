@@ -14,7 +14,7 @@ git submodule init
 git submodule update
 ```
 
-### 1.2
+### 1.2 Compiling pybind11 libraries
 The code depends on C++ code interfaced with `pybind11`. This is installed as a local pip package. To perform the installation, navigate into the `cmdr4_support` directory, and run a pip install (NB: the `.` is necessary).
 ```
 CC=gcc CXX=g++ pip3 install -v .
