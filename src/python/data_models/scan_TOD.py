@@ -1,8 +1,9 @@
 import numpy as np
-import healpy as hp
 from output import log
 import logging
 from numpy.typing import NDArray
+import ducc0
+import os
 from cmdr4_support.utils import huffman_decode
 
 class ScanTOD:
@@ -69,7 +70,13 @@ class ScanTOD:
         # we need to unpack the entire original array, and then crop it to the correct length.
         pix = pix[:self.ntod]
         if self.nside != self.data_nside:
-            pix = hp.ang2pix(self.nside, *hp.pix2ang(self.data_nside, pix))
+            # If the data nside does not match the specified evaluation nside, we convert to it.
+            # pix = hp.ang2pix(self.nside, *hp.pix2ang(self.data_nside, pix))
+            nthreads = os.environ["OMP_NUM_THREADS"]
+            geom_from = ducc0.healpix.Healpix_Base(self.data_nside, "RING")
+            geom_to = ducc0.healpix.Healpix_Base(self.nside, "RING")
+            ang = geom_from.pix2ang(pix, nthreads=nthreads)
+            pix = geom_to.ang2pix(ang, nthreads=nthreads)
         return pix
 
     @property
