@@ -5,24 +5,29 @@
 Commander4 pulls in the ducc0 sources to make developing of C++ helper functions easier.
 
 To install this submodule directly when cloning the Commander4 repository you can do
-```
+```bash
 git clone --recurse-submodules <Commander4 repo URL>
 ```
 If you have already cloned Commander 4,  the easiest way is to go to the Commender4 directory and then do
-```
+```bash
 git submodule init
 git submodule update
 ```
 
 ### 1.2 Compiling pybind11 libraries
 The code depends on C++ code interfaced with `pybind11`. This is installed as a local pip package. To perform the installation, navigate into the `cmdr4_support` directory, and run a pip install (NB: the `.` is necessary).
-```
+```bash
+cd cmdr4_support
 CC=gcc CXX=g++ pip3 install -v .
 ```
 The `CC=gcc CXX=g++` tells it to use these specific compilers during installation (it might try to use another, incompatible, compiler).
 
 ### 1.3 Compiling Ctypes libraries
-The code currently also depends on C++ code interfaces with Ctypes. This code is located in the `src/cpp/` directory. There should be a file named `src/cpp/compilation.sh` which contains the compilation procedure for all C++ files.
+The code currently also depends on C++ code interfaces with Ctypes. This code is located in the `src/cpp/` directory. There should be a file named `src/cpp/compilation.sh` which contains the compilation procedure for all C++ files:
+```bash
+cd src/cpp
+bash compilation.sh
+```
 
 ## 2. How to run
 Commander4 has to be run with MPI, and a parameter file has to be indicated using the `-p` argument. Example usage:
