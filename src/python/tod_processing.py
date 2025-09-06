@@ -16,6 +16,7 @@ from src.python.noise_sampling import corr_noise_realization_with_gaps, sample_n
 from src.python.tod_processing_Planck import read_Planck_TOD_data
 from src.python.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from src.python.tod_processing_sim import read_TOD_sim_data
+from src.python.utils.math_operations import forward_rfft, backward_rfft
 
 nthreads=1
 
@@ -302,12 +303,13 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
         inv_power_spectrum[1:] = 1.0/(sigma0**2*(1 + (freqs[1:]/scan_samples.fknee_est)**scan_samples.alpha_est))
 
         ### Solving Equation 16 from BP7 ###
-        s_fft = rfft(s_orb)
-        d_fft = rfft(tod_residual)
+        s_fft = forward_rfft(s_orb)
+        d_fft = forward_rfft(tod_residual)
         N_inv_s_fft = s_fft * inv_power_spectrum
         N_inv_d_fft = d_fft * inv_power_spectrum
-        N_inv_s = irfft(N_inv_s_fft, n=Ntod)
-        N_inv_d = irfft(N_inv_d_fft, n=Ntod)
+        N_inv_s = backward_rfft(N_inv_s_fft, Ntod)
+        N_inv_d = backward_rfft(N_inv_d_fft, Ntod)
+        
         # We now exclude the time-samples hitting the masked area. We don't want to do this before now, because it would mess up the FFT stuff.
 
         # mask = experiment_data.processing_mask_map[scan.pix]
@@ -383,9 +385,9 @@ def sample_relative_gain(TOD_comm: MPI.Comm, det_comm: MPI.Comm, experiment_data
         inv_power_spectrum = np.zeros(Nrfft)
         inv_power_spectrum[1:] = 1.0 / (sigma0**2 * (1 + (freqs[1:] / scan_samples.fknee_est)**scan_samples.alpha_est))
 
-        s_fft = rfft(s_tot)
+        s_fft = forward_rfft(s_tot)
         N_inv_s_fft = s_fft * inv_power_spectrum
-        N_inv_s = irfft(N_inv_s_fft, n=Ntod)
+        N_inv_s = backward_rfft(N_inv_s_fft, Ntod)
         
         # mask = experiment_data.processing_mask_map[scan.pix]
         mask = scan.processing_mask_TOD
@@ -530,9 +532,10 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
         residual_tod[~mask] = 0.0
         # s_tot[~mask] = scan_samples.n_corr_est[~mask]/scan_samples.gain_est
         # residual_tod[~mask] = scan_samples.n_corr_est[~mask]
+
         # Calculate N^-1 * s_tot and N^-1 * residual_tod
-        N_inv_s = irfft(rfft(s_tot) * inv_power_spectrum, n=Ntod)
-        N_inv_r = irfft(rfft(residual_tod) * inv_power_spectrum, n=Ntod)
+        N_inv_s = backward_rfft(forward_rfft(s_tot) * inv_power_spectrum, Ntod)
+        N_inv_r = backward_rfft(forward_rfft(residual_tod) * inv_power_spectrum, Ntod)
         
         # Calculate elements for the linear system
         A_qq = np.dot(s_tot[mask], N_inv_s[mask])
@@ -580,7 +583,7 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
 
             # Define Linear Operator for Conjugate Gradient Solver
             def matvec(v):
-                g_inv_v = irfft(rfft(v) * prior_ps_inv, n=n_scans_total).real
+                g_inv_v = backward_rfft(forward_rfft(v) * prior_ps_inv, n_scans_total).real
                 diag_v = A_diag * v
                 return g_inv_v + diag_v
 
@@ -589,7 +592,7 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
             fluctuation1 = np.sqrt(np.maximum(A_diag, 0)) * eta1
 
             eta2 = np.random.randn(n_scans_total)
-            fluctuation2 = irfft(rfft(eta2) * prior_ps_inv_sqrt, n=n_scans_total).real
+            fluctuation2 = backward_rfft(forward_rfft(eta2) * prior_ps_inv_sqrt, n_scans_total).real
 
             logger.info(f"DATA TERM (A_diag) MEAN: {np.mean(A_diag)}")
             logger.info(f"PRIOR TERM (G^-1) MEAN: {np.mean(prior_ps_inv)}")
