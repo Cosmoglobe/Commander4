@@ -10,7 +10,7 @@ from pixell import curvedsky
 import ducc0
 from src.python.output.log import logassert
 import logging
-
+import os
 
 def nalm(lmax: int, mmax: int) -> int:
     """Calculates the number of a_lm elements for a spherical harmonic representation up to l<=lmax and m<=mmax.
