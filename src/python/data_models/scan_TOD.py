@@ -72,7 +72,7 @@ class ScanTOD:
         if self.nside != self.data_nside:
             # If the data nside does not match the specified evaluation nside, we convert to it.
             # pix = hp.ang2pix(self.nside, *hp.pix2ang(self.data_nside, pix))
-            nthreads = os.environ["OMP_NUM_THREADS"]
+            nthreads = int(os.environ["OMP_NUM_THREADS"])
             geom_from = ducc0.healpix.Healpix_Base(self.data_nside, "RING")
             geom_to = ducc0.healpix.Healpix_Base(self.nside, "RING")
             ang = geom_from.pix2ang(pix, nthreads=nthreads)

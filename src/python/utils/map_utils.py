@@ -19,7 +19,7 @@ def get_static_sky_TOD(det_compsep_map: NDArray[np.floating], pix: NDArray[np.in
 def get_s_orb_TOD(scan: ScanTOD, experiment: DetectorTOD, pix: NDArray[np.integer],
                   nthreads:int = None) -> NDArray:
     # If nthreads is not set, put it to how many threads OMP has.
-    nthreads = os.environ["OMP_NUM_THREADS"] if nthreads is None else nthreads
+    nthreads = int(os.environ["OMP_NUM_THREADS"]) if nthreads is None else nthreads
     T_CMB = 2.725 * 1e6  # CMB temperature in uK_CMB units.
     C = 299792458  # m/s (Speed of light)
     # Precomputing the conversion factor from 1 uK_CMB to 1 uK_RJ (note that this conversion is only valid for temperatures close to the CMB).
