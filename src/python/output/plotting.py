@@ -90,8 +90,8 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int,
         sym_lim = np.percentile(np.abs(residual), 99)
         hp.mollview(residual, fig=fig, hold=True, cmap="RdBu_r", title="Residual sky", min=-sym_lim, max=sym_lim)
         plt.axes(ax[1,3])
-        relative_residual = np.abs(residual/map_rawobs)
-        hp.mollview(relative_residual, fig=fig, hold=True, cmap="RdBu_r", title="Residual/Signal", min=0, max=np.percentile(relative_residual, 99))
+        relative_residual = np.abs(residual/map_rms)
+        hp.mollview(relative_residual, fig=fig, hold=True, cmap="RdBu_r", title="Residual/RMS", min=0, max=np.percentile(relative_residual, 99))
         plt.axes(ax[1,4])
         hp.mollview(map_rms, fig=fig, hold=True, norm="log", title="RMS", min=np.min(map_rms), max=np.percentile(map_rms, 99))
 
