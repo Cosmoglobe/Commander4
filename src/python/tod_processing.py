@@ -28,24 +28,33 @@ def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float32]:
 def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: NDArray,
             detector_samples:DetectorSamples, params: Bunch,
             mapmaker_corrnoise:MapmakerIQU = None) -> DetectorMap:
-    mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
-    mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside)
-    mapmaker_skymodel = MapmakerIQU(band_comm, experiment_data.nside)
-    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)
+    
+    # We separate the inverse-variance mapmaking from the other 3 mapmakers.
+    # This is purely to reduce the maximum concurrent memory requirement, and is slightly slower
+    # as we have to de-compress pix and psi twice.
+    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)    
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         pix = scan.pix
         psi = scan.psi
         mapmaker_invvar.accumulate_to_map(scan_samples.sigma0, pix, psi)
+    mapmaker_invvar.gather_map()
+    mapmaker_invvar.normalize_map()
+
+    mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
+    mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside)
+    mapmaker_skymodel = MapmakerIQU(band_comm, experiment_data.nside)
+    for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
+        pix = scan.pix
+        psi = scan.psi
         mapmaker.accumulate_to_map(scan.tod/scan_samples.gain_est, scan_samples.sigma0, pix, psi)
-        sky_orb_dipole = get_s_orb_TOD(scan, experiment_data, pix).astype(np.float32)
+        sky_orb_dipole = get_s_orb_TOD(scan, experiment_data, pix)
         mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, scan_samples.sigma0, pix, psi)
         sky_model = get_static_sky_TOD(compsep_output, pix, psi)
         mapmaker_skymodel.accumulate_to_map(sky_model, scan_samples.sigma0, pix, psi)
-    mapmaker_invvar.gather_map()
+
     mapmaker.gather_map()
     mapmaker_orbdipole.gather_map()
     mapmaker_skymodel.gather_map()
-    mapmaker_invvar.normalize_map()
     map_invvar = mapmaker_invvar.final_map
     map_cov = mapmaker_invvar.final_cov_map
     mapmaker.normalize_map(map_cov)
