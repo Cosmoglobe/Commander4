@@ -55,7 +55,7 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
     mapmaker.gather_map()
     mapmaker_orbdipole.gather_map()
     mapmaker_skymodel.gather_map()
-    map_invvar = mapmaker_invvar.final_map
+    map_rms = mapmaker_invvar.final_rms_map
     map_cov = mapmaker_invvar.final_cov_map
     mapmaker.normalize_map(map_cov)
     map_signal = mapmaker.final_map
@@ -67,7 +67,7 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         mapmaker_corrnoise.normalize_map(map_cov)
         map_corrnoise = mapmaker_corrnoise.final_map
     if band_comm.Get_rank() == 0:
-        detmap = DetectorMap(map_signal, 1.0/map_invvar**2, experiment_data.nu,
+        detmap = DetectorMap(map_signal, map_rms, experiment_data.nu,
                              experiment_data.fwhm, experiment_data.nside)
         detmap.g0 = detector_samples.g0_est
         detmap.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est

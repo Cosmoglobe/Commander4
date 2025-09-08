@@ -177,7 +177,7 @@ class WeightsMapmakerIQU:
         self.dtype= dtype
         self._map_signal = np.zeros((6, self.npix), dtype=dtype)
         self._gathered_map = None
-        self._finalized_map = None
+        self._finalized_rms_map = None
         
         # Setting up Ctypes mapmaker
         self.maplib = ct.cdll.LoadLibrary(os.path.join(src_dir_path, "cpp/mapmaker.so"))
@@ -188,11 +188,11 @@ class WeightsMapmakerIQU:
                                                                ct_f64_dim1, ct.c_int64, ct.c_int64]
 
     @property
-    def final_map(self):
+    def final_rms_map(self):
         if self.map_comm.Get_rank() == 0:
-            logassert(self._finalized_map is not None, "Attempted to read map before it was done.",
+            logassert(self._finalized_rms_map is not None, "Attempted to read map before it was done.",
                       self.logger)
-        return self._finalized_map
+        return self._finalized_rms_map
     
     @property
     def final_cov_map(self):
@@ -217,7 +217,7 @@ class WeightsMapmakerIQU:
 
     def normalize_map(self):
         if self.map_comm.Get_rank() == 0:
-            self._finalized_map = np.zeros((3, self.npix), dtype=self.dtype)
+            self._finalized_rms_map = np.zeros((3, self.npix), dtype=self.dtype)
             # Set up A-matrix for IQU mapmaking
             A = np.zeros((self.npix, 3, 3), dtype=self.dtype)
             A[:,0,0] = self._gathered_map[0]
@@ -233,6 +233,6 @@ class WeightsMapmakerIQU:
             A += np.eye(3)*1e-12  # Regularization, avoid singular matrix.
             # The inverse-variance of the I,Q,U maps are the diagonal elemenents of the inverse of A.
             A_inv = np.linalg.pinv(A)
-            self._finalized_map[0] = A_inv[:,0,0]
-            self._finalized_map[1] = A_inv[:,1,1]
-            self._finalized_map[2] = A_inv[:,2,2]
+            self._finalized_rms_map[0] = np.sqrt(A_inv[:,0,0])
+            self._finalized_rms_map[1] = np.sqrt(A_inv[:,1,1])
+            self._finalized_rms_map[2] = np.sqrt(A_inv[:,2,2])
