@@ -3,6 +3,7 @@ from scipy.fft import rfft, irfft, rfftfreq
 from pixell import utils
 from numpy.typing import NDArray
 import logging
+from src.python.utils.math_operations import forward_rfft, backward_rfft
 
 def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray) -> float:
     """ Performs 1D inversion sampling on a grid. This involves calculating the cumulative log-likelihood, normalizing
@@ -40,7 +41,7 @@ def sample_noise_PS_params(n_corr: NDArray, sigma0: float, f_samp: float, alpha_
     """
     Ntod = len(n_corr)
     freqs = rfftfreq(Ntod, 1.0/f_samp)[1:]  # [1:] to Exclude freq=0 mode (same on line below).
-    n_corr_power = (1.0 / Ntod) * np.abs(rfft(n_corr))[1:]**2
+    n_corr_power = (1.0 / Ntod) * np.abs(forward_rfft(n_corr))[1:]**2
     Nrfft = freqs.size
     bins = utils.expbin(Nrfft, nbin=100, nmin=1)
     binned_freqs = utils.bin_data(bins, freqs)
@@ -94,7 +95,7 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
     """
     logger = logging.getLogger(__name__)
     def apply_filter(vec, Fourier_filter):
-        return irfft(rfft(vec) * Fourier_filter, n=len(vec))
+        return backward_rfft(forward_rfft(vec) * Fourier_filter, ntod=len(vec))
 
     def apply_LHS(x_small):
         term1 = sigma0**2 * x_small
@@ -146,7 +147,7 @@ def inefficient_corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.
         This function performs the 'full' straight-forward CG search. Should only be used to test the proper function.
     """
     def apply_filter(vec, Fourier_filter):
-        return irfft(rfft(vec) * Fourier_filter, n=len(vec))
+        return backward_rfft(forward_rfft(vec) * Fourier_filter, ntod=len(vec))
 
     def apply_LHS(x_full):
         return x_full/C_wn_timedomain + apply_filter(x_full, C_corr_inv)
