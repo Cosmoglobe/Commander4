@@ -254,6 +254,9 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
         alphas.append(alpha)
         fknees.append(fknee)
 
+    t0 = time.time()
+    band_comm.Barrier()
+    wait_time = time.time() - t0
     mapmaker.gather_map()
     num_failed_convergence = band_comm.reduce(num_failed_convergence, op=MPI.SUM)
     worst_residual = band_comm.reduce(worst_residual, op=MPI.MAX)
@@ -270,7 +273,7 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
         logger.info(f"{MPI.COMM_WORLD.Get_rank()} fknees {np.min(fknees):.4f} {np.percentile(fknees, 1):.4f} {np.mean(fknees):.4f} {np.percentile(fknees, 99):.4f} {np.max(fknees):.4f}")
         logger.info(f"{MPI.COMM_WORLD.Get_rank()} alphas {np.min(alphas):.4f} {np.percentile(alphas, 1):.4f} {np.mean(alphas):.4f} {np.percentile(alphas, 99):.4f} {np.max(alphas):.4f}")
 
-    return detector_samples, mapmaker
+    return detector_samples, mapmaker, wait_time
 
 
 
@@ -759,11 +762,9 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, det_comm: MPI.Comm,
     if iter >= params.sample_corr_noise_from_iter_num:
         ### CORRELATED NOISE SAMPLING ###
         t0 = time.time()
-        detector_samples, mapmaker_corrnoise = sample_noise(band_comm, experiment_data, detector_samples, compsep_output)
-        t1 = time.time()
+        detector_samples, mapmaker_corrnoise, wait_time = sample_noise(band_comm, experiment_data, detector_samples, compsep_output)
         TOD_comm.Barrier()
         tot_time = time.time() - t0
-        wait_time = time.time() - t1
         wait_time = det_comm.reduce(wait_time, op=MPI.SUM, root=0)
         if TOD_comm.Get_rank() == 0:
             logger.info(f"Chain {chain} iter{iter}: Finished noise sampling in {tot_time:.1f}s.")
