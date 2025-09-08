@@ -10,7 +10,7 @@ from pixell import curvedsky
 import ducc0
 from src.python.output.log import logassert
 import logging
-
+import os
 
 def nalm(lmax: int, mmax: int) -> int:
     """Calculates the number of a_lm elements for a spherical harmonic representation up to l<=lmax and m<=mmax.
@@ -184,3 +184,32 @@ def alm_real2complex(x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128
     oalm[...,:i] = x[...,:i]
     oalm[...,i:] = x[...,i:].view(np.complex128)/np.sqrt(2.)
     return oalm
+
+
+def forward_rfft(data:NDArray[np.floating], nthreads:int = 1):
+    """ Forward real Fourier transform, equivalent to scipy.fft.rfft.
+        Args:
+            data (np.array): Real-valued data array to be Fourier transformed.
+            nthreads (int): Number of threads to use.
+        Returns:
+            data_fft (np.array): The Fourier transform of the input.
+                                 A complex array of length tod.size//2 + 1.
+    """
+    return ducc0.fft.r2c(data, nthreads=nthreads)
+
+def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray[np.floating]:
+    """ Backward real Fourier transform, equivalent to scipy.fft.irfft.
+        Args:
+            data_fft (np.array): Complex Fourier coefficients to be converted back to real data.
+            ntod (int): The length of the original TOD. This must be provided because a
+                           Fourier array of length e.g. 6 could correspond to ntod = 10 or 11.
+            nthreads (int): Number of threads to use.
+        Returns:
+            data (np.array): A real-valued data array of length ntod.
+    """
+    # If nthreads is not set, put it to how many threads OMP has been given.
+    nthreads = int(os.environ["OMP_NUM_THREADS"]) if nthreads is None else nthreads
+    # Forward = False makes ducc correctly order the output, as the output order is not
+    # symmetric for forward and reverse Fourier when doing rfft as supposed to regular fft.
+    # inorm = 2 tells ducc to normalize by dividing by ntod, which is the same as what scipy does.
+    return ducc0.fft.c2r(data_f, lastsize=ntod, forward=False, nthreads=nthreads, inorm=2)

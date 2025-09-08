@@ -65,14 +65,14 @@ def sample_noise_PS_params(n_corr: NDArray, sigma0: float, f_samp: float, alpha_
         log_L_fknee = np.sum(residual - np.exp(residual), axis=0)
         # A faster but slightly less statistically robust way of calculating the likelihood (~30% speedup of code):
         # log_L_fknee = -0.5 * np.sum((log_n_corr_power[:, np.newaxis] - log_N_corr_ps)**2, axis=0)
-        fknee_sample = _inversion_sampler_1d(log_L_fknee, fknee_grid)
+        fknee_sample = float(_inversion_sampler_1d(log_L_fknee, fknee_grid))
         
         log_fknee_sample = np.log(fknee_sample)
         log_N_corr_ps = log_sigma0_sq + alpha_grid * (log_freqs_masked[:, np.newaxis] - log_fknee_sample)
         residual = log_n_corr_power[:, np.newaxis] - log_N_corr_ps
         log_L_alpha = np.sum(residual - np.exp(residual), axis=0)
         # log_L_alpha = -0.5 * np.sum((log_n_corr_power[:, np.newaxis] - log_N_corr_ps)**2, axis=0)
-        alpha_current = _inversion_sampler_1d(log_L_alpha, alpha_grid)
+        alpha_current = float(_inversion_sampler_1d(log_L_alpha, alpha_grid))
     return fknee_sample, alpha_current
 
 

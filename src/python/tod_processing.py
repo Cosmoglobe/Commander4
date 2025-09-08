@@ -16,35 +16,45 @@ from src.python.noise_sampling import corr_noise_realization_with_gaps, sample_n
 from src.python.tod_processing_Planck import read_Planck_TOD_data
 from src.python.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from src.python.tod_processing_sim import read_TOD_sim_data
+from src.python.utils.math_operations import forward_rfft, backward_rfft
 
 nthreads=1
 
-def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float64]:
+def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float32]:
     "Creates a dummy compsep output for a single band"
-    return np.zeros((3, 12*staticData.nside**2), dtype=np.float64)
+    return np.zeros((3, 12*staticData.nside**2), dtype=np.float32)
 
 
 def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: NDArray,
             detector_samples:DetectorSamples, params: Bunch,
             mapmaker_corrnoise:MapmakerIQU = None) -> DetectorMap:
-    mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
-    mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside)
-    mapmaker_skymodel = MapmakerIQU(band_comm, experiment_data.nside)
-    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)
+    
+    # We separate the inverse-variance mapmaking from the other 3 mapmakers.
+    # This is purely to reduce the maximum concurrent memory requirement, and is slightly slower
+    # as we have to de-compress pix and psi twice.
+    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)    
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         pix = scan.pix
         psi = scan.psi
         mapmaker_invvar.accumulate_to_map(scan_samples.sigma0, pix, psi)
+    mapmaker_invvar.gather_map()
+    mapmaker_invvar.normalize_map()
+
+    mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
+    mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside)
+    mapmaker_skymodel = MapmakerIQU(band_comm, experiment_data.nside)
+    for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
+        pix = scan.pix
+        psi = scan.psi
         mapmaker.accumulate_to_map(scan.tod/scan_samples.gain_est, scan_samples.sigma0, pix, psi)
         sky_orb_dipole = get_s_orb_TOD(scan, experiment_data, pix)
         mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, scan_samples.sigma0, pix, psi)
         sky_model = get_static_sky_TOD(compsep_output, pix, psi)
         mapmaker_skymodel.accumulate_to_map(sky_model, scan_samples.sigma0, pix, psi)
-    mapmaker_invvar.gather_map()
+
     mapmaker.gather_map()
     mapmaker_orbdipole.gather_map()
     mapmaker_skymodel.gather_map()
-    mapmaker_invvar.normalize_map()
     map_invvar = mapmaker_invvar.final_map
     map_cov = mapmaker_invvar.final_cov_map
     mapmaker.normalize_map(map_cov)
@@ -179,7 +189,7 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Co
     if my_experiment.is_sim:
         experiment_data, detector_samples = read_TOD_sim_data(my_experiment.data_path, my_band, my_det, params, my_detector_id, my_scans_start, my_scans_stop)
     else:
-        experiment_data, detector_samples = read_Planck_TOD_data(my_experiment.data_path, my_band, my_det, params, my_detector_id, my_scans_start, my_scans_stop, my_experiment.bad_PIDs_path)
+        experiment_data, detector_samples = read_Planck_TOD_data(my_experiment, my_band, my_det, params, my_detector_id, my_scans_start, my_scans_stop, my_experiment.bad_PIDs_path)
     tod_comm.Barrier()
     if tod_comm.Get_rank() == 0:
         logger.info(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")
@@ -207,7 +217,7 @@ def estimate_white_noise(experiment_data: DetectorTOD, detector_samples: Detecto
             sigma0 = np.std(sky_subtracted_tod[mask][1:] - sky_subtracted_tod[mask][:-1])/np.sqrt(2)
         else:
             sigma0 = np.std(sky_subtracted_tod[1:] - sky_subtracted_tod[:-1])/np.sqrt(2)
-        scan_samples.sigma0 = sigma0/scan_samples.gain_est
+        scan_samples.sigma0 = float(sigma0/scan_samples.gain_est)
     return detector_samples
 
 
@@ -240,8 +250,7 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
         n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                                                 mask, sigma0, C_1f_inv,
                                                                 err_tol=err_tol)
-        mapmaker.accumulate_to_map(n_corr_est/scansamples.gain_est, scansamples.sigma0, pix, psi)
-        scansamples.n_corr_est = n_corr_est.astype(np.float32)
+        mapmaker.accumulate_to_map((n_corr_est/scansamples.gain_est).astype(np.float32), scansamples.sigma0, pix, psi)
         if residual > err_tol:
             num_failed_convergence += 1
             worst_residual = max(worst_residual, residual)
@@ -254,6 +263,9 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
         alphas.append(alpha)
         fknees.append(fknee)
 
+    t0 = time.time()
+    band_comm.Barrier()
+    wait_time = time.time() - t0
     mapmaker.gather_map()
     num_failed_convergence = band_comm.reduce(num_failed_convergence, op=MPI.SUM)
     worst_residual = band_comm.reduce(worst_residual, op=MPI.MAX)
@@ -270,7 +282,7 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
         logger.info(f"{MPI.COMM_WORLD.Get_rank()} fknees {np.min(fknees):.4f} {np.percentile(fknees, 1):.4f} {np.mean(fknees):.4f} {np.percentile(fknees, 99):.4f} {np.max(fknees):.4f}")
         logger.info(f"{MPI.COMM_WORLD.Get_rank()} alphas {np.min(alphas):.4f} {np.percentile(alphas, 1):.4f} {np.mean(alphas):.4f} {np.percentile(alphas, 99):.4f} {np.max(alphas):.4f}")
 
-    return detector_samples, mapmaker
+    return detector_samples, mapmaker, wait_time
 
 
 
@@ -303,12 +315,13 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
         inv_power_spectrum[1:] = 1.0/(sigma0**2*(1 + (freqs[1:]/scan_samples.fknee_est)**scan_samples.alpha_est))
 
         ### Solving Equation 16 from BP7 ###
-        s_fft = rfft(s_orb)
-        d_fft = rfft(tod_residual)
+        s_fft = forward_rfft(s_orb)
+        d_fft = forward_rfft(tod_residual)
         N_inv_s_fft = s_fft * inv_power_spectrum
         N_inv_d_fft = d_fft * inv_power_spectrum
-        N_inv_s = irfft(N_inv_s_fft, n=Ntod)
-        N_inv_d = irfft(N_inv_d_fft, n=Ntod)
+        N_inv_s = backward_rfft(N_inv_s_fft, Ntod)
+        N_inv_d = backward_rfft(N_inv_d_fft, Ntod)
+        
         # We now exclude the time-samples hitting the masked area. We don't want to do this before now, because it would mess up the FFT stuff.
 
         # mask = experiment_data.processing_mask_map[scan.pix]
@@ -336,7 +349,9 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
     wait_time = time.time() - t0
     g_sampled = TOD_comm.bcast(g_sampled, root=0)
 
-    detector_samples.g0_est = g_sampled
+    # As of Numpy 2.0 it's good practice to explicitly cast to Python scalar types, as this would
+    # otherwise have been a np.float64 type, potentially causing unexpected casting behavior later.
+    detector_samples.g0_est = float(g_sampled)
 
     return detector_samples, wait_time
 
@@ -382,9 +397,9 @@ def sample_relative_gain(TOD_comm: MPI.Comm, det_comm: MPI.Comm, experiment_data
         inv_power_spectrum = np.zeros(Nrfft)
         inv_power_spectrum[1:] = 1.0 / (sigma0**2 * (1 + (freqs[1:] / scan_samples.fknee_est)**scan_samples.alpha_est))
 
-        s_fft = rfft(s_tot)
+        s_fft = forward_rfft(s_tot)
         N_inv_s_fft = s_fft * inv_power_spectrum
-        N_inv_s = irfft(N_inv_s_fft, n=Ntod)
+        N_inv_s = backward_rfft(N_inv_s_fft, Ntod)
         
         # mask = experiment_data.processing_mask_map[scan.pix]
         mask = scan.processing_mask_TOD
@@ -466,7 +481,7 @@ def sample_relative_gain(TOD_comm: MPI.Comm, det_comm: MPI.Comm, experiment_data
             my_dg_index = result_to_bcast['dids'].index(my_did)
             my_delta_g = result_to_bcast['dgs'][my_dg_index]
             for scan_samples in detector_samples.scans:
-                scan_samples.rel_gain_est = my_delta_g
+                scan_samples.rel_gain_est = float(my_delta_g)
             if det_comm.Get_rank() == 0:
                 logging.info(f"Relative gain for detector {experiment_data.detector_name} ({experiment_data.nu}GHz): {detector_samples.g0_est*1e9+my_delta_g*1e9:8.3f} ({detector_samples.g0_est*1e9:8.3f} + {my_delta_g*1e9:8.3f})")
         except ValueError:
@@ -529,9 +544,10 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
         residual_tod[~mask] = 0.0
         # s_tot[~mask] = scan_samples.n_corr_est[~mask]/scan_samples.gain_est
         # residual_tod[~mask] = scan_samples.n_corr_est[~mask]
+
         # Calculate N^-1 * s_tot and N^-1 * residual_tod
-        N_inv_s = irfft(rfft(s_tot) * inv_power_spectrum, n=Ntod)
-        N_inv_r = irfft(rfft(residual_tod) * inv_power_spectrum, n=Ntod)
+        N_inv_s = backward_rfft(forward_rfft(s_tot) * inv_power_spectrum, Ntod)
+        N_inv_r = backward_rfft(forward_rfft(residual_tod) * inv_power_spectrum, Ntod)
         
         # Calculate elements for the linear system
         A_qq = np.dot(s_tot[mask], N_inv_s[mask])
@@ -579,7 +595,7 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
 
             # Define Linear Operator for Conjugate Gradient Solver
             def matvec(v):
-                g_inv_v = irfft(rfft(v) * prior_ps_inv, n=n_scans_total).real
+                g_inv_v = backward_rfft(forward_rfft(v) * prior_ps_inv, n_scans_total).real
                 diag_v = A_diag * v
                 return g_inv_v + diag_v
 
@@ -588,7 +604,7 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
             fluctuation1 = np.sqrt(np.maximum(A_diag, 0)) * eta1
 
             eta2 = np.random.randn(n_scans_total)
-            fluctuation2 = irfft(rfft(eta2) * prior_ps_inv_sqrt, n=n_scans_total).real
+            fluctuation2 = backward_rfft(forward_rfft(eta2) * prior_ps_inv_sqrt, n_scans_total).real
 
             logger.info(f"DATA TERM (A_diag) MEAN: {np.mean(A_diag)}")
             logger.info(f"PRIOR TERM (G^-1) MEAN: {np.mean(prior_ps_inv)}")
@@ -649,7 +665,7 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
     # Update local scan objects
     if delta_g_local.size == len(experiment_data.scans):
         for i, scan_samples in enumerate(detector_samples.scans):
-            scan_samples.time_dep_rel_gain_est = delta_g_local[i]
+            scan_samples.time_dep_rel_gain_est = delta_g_local[i].astype(np.float32)
     else:
         logger.warning(f"Rank {band_rank} received mismatched number of gain samples."
                        f"Expected {len(experiment_data.scans)}, got {delta_g_local.size}.")
@@ -690,6 +706,21 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, det_comm: MPI.Comm,
         for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
             scan_samples.alpha_est = params.noise_alpha
             scan_samples.fknee_est = params.noise_fknee
+
+    ### WHITE NOISE ESTIMATION ###
+    t0 = time.time()
+    detector_samples = estimate_white_noise(experiment_data, detector_samples, compsep_output, params)
+    t1 = time.time()
+    TOD_comm.Barrier()
+    tot_time = time.time() - t0
+    wait_time = time.time() - t1
+    wait_time = det_comm.reduce(wait_time, op=MPI.SUM, root=0)
+    if TOD_comm.Get_rank() == 0:
+        logger.info(f"Chain {chain} iter{iter}: Finished white noise estimation in {tot_time:.1f}s.")
+    if det_comm.Get_rank() == 0:
+        wait_time /= det_comm.Get_size()
+        logger.info(f"White noise estimation MPI wait overhead for detector {experiment_data.detector_name} ({experiment_data.nu}GHz) = {wait_time:.1f}s.")
+
 
     if iter >= params.sample_gain_from_iter_num:
         ### ABSOLUTE GAIN CALIBRATION ### 
@@ -737,29 +768,12 @@ def process_tod(TOD_comm: MPI.Comm, band_comm: MPI.Comm, det_comm: MPI.Comm,
             scan_samples.gain_est = detector_samples.g0_est + scan_samples.rel_gain_est\
                                   + scan_samples.time_dep_rel_gain_est
 
-    ### WHITE NOISE ESTIMATION ###
-    t0 = time.time()
-    detector_samples = estimate_white_noise(experiment_data, detector_samples, compsep_output, params)
-    t1 = time.time()
-    TOD_comm.Barrier()
-    tot_time = time.time() - t0
-    wait_time = time.time() - t1
-    wait_time = det_comm.reduce(wait_time, op=MPI.SUM, root=0)
-    if TOD_comm.Get_rank() == 0:
-        logger.info(f"Chain {chain} iter{iter}: Finished white noise estimation in {tot_time:.1f}s.")
-    if det_comm.Get_rank() == 0:
-        wait_time /= det_comm.Get_size()
-        logger.info(f"White noise estimation MPI wait overhead for detector {experiment_data.detector_name} ({experiment_data.nu}GHz) = {wait_time:.1f}s.")
-
-
     if iter >= params.sample_corr_noise_from_iter_num:
         ### CORRELATED NOISE SAMPLING ###
         t0 = time.time()
-        detector_samples, mapmaker_corrnoise = sample_noise(det_comm, experiment_data, detector_samples, compsep_output)
-        t1 = time.time()
+        detector_samples, mapmaker_corrnoise, wait_time = sample_noise(band_comm, experiment_data, detector_samples, compsep_output)
         TOD_comm.Barrier()
         tot_time = time.time() - t0
-        wait_time = time.time() - t1
         wait_time = det_comm.reduce(wait_time, op=MPI.SUM, root=0)
         if TOD_comm.Get_rank() == 0:
             logger.info(f"Chain {chain} iter{iter}: Finished noise sampling in {tot_time:.1f}s.")

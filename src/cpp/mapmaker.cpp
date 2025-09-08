@@ -6,8 +6,8 @@
 #include <omp.h>
 #include <vector>
 
-extern "C"
-void map_accumulator(double *map, double *tod, double weight, int64_t *pix, int64_t scan_len, int64_t num_pix){
+template<typename T_map, typename T_tod, typename T_weight>
+void _map_accumulator_T(T_map *map, T_tod *tod, T_weight weight, int64_t *pix, int64_t scan_len, int64_t num_pix){
     /** Simple serial mapmaker which accumulates the values of the TOD, weigthed by specified value, into a map, but leaves the map
      *  unnormalized (with respect to the weights), meaning it is supposed to be called multiple times on the same map, and the normalized.
      * 
@@ -25,8 +25,8 @@ void map_accumulator(double *map, double *tod, double weight, int64_t *pix, int6
     }
 }
 
-extern "C"
-void map_weight_accumulator(double *map, double weight, int64_t *pix, int64_t scan_len, int64_t num_pix){
+template<typename T_map, typename T_weight>
+void _map_weight_accumulator_T(T_map *map, T_weight weight, int64_t *pix, int64_t scan_len, int64_t num_pix){
     /** Simple serial mapmaker accumulating the weights (typically inverse-variance weights) for the above "map_accumulator".
      * 
      *  Args:
@@ -42,8 +42,8 @@ void map_weight_accumulator(double *map, double weight, int64_t *pix, int64_t sc
     }
 }
 
-extern "C"
-void map_accumulator_IQU(double *map, double *tod, double weight, int64_t *pix, double *psi, int64_t scan_len, int64_t num_pix){
+template<typename T_map, typename T_tod, typename T_weight>
+void _map_accumulator_IQU_T(T_map *map, T_tod *tod, T_weight weight, int64_t *pix, double *psi, int64_t scan_len, int64_t num_pix){
     /** Simple serial mapmaker which accumulates the values of the TOD, weigthed by specified value, into a map, but leaves the map
      *  unnormalized (with respect to the weights), meaning it is supposed to be called multiple times on the same map, and the normalized.
      * 
@@ -64,8 +64,8 @@ void map_accumulator_IQU(double *map, double *tod, double weight, int64_t *pix, 
     }
 }
 
-extern "C"
-void map_weight_accumulator_IQU(double *map, double weight, int64_t *pix, double *psi, int64_t scan_len, int64_t num_pix){
+template<typename T_map, typename T_weight>
+void _map_weight_accumulator_IQU_T(T_map *map, T_weight weight, int64_t *pix, double *psi, int64_t scan_len, int64_t num_pix){
     /** Simple serial mapmaker accumulating the weights (typically inverse-variance weights) for the above "map_accumulator".
      * 
      *  Args:
@@ -88,3 +88,29 @@ void map_weight_accumulator_IQU(double *map, double weight, int64_t *pix, double
         map[pix[itod] + 5*num_pix] += weight*sin2psi*sin2psi; // UU
     }
 }
+
+/**
+ * Below are the functions exposed to the user, meant to be used by Ctypes.
+ * They are all wrapped in 'extern C' to be usable with Ctypes (not have their names scrambled).
+ */
+
+extern "C"
+void map_accumulator_f32(float *map, float *tod, float weight, int64_t *pix, int64_t scan_len, int64_t num_pix){
+    _map_accumulator_T<float, float, float>(map, tod, weight, pix, scan_len, num_pix);
+}
+
+extern "C"
+void map_weight_accumulator_f32(float *map, float weight, int64_t *pix, int64_t scan_len, int64_t num_pix){
+    _map_weight_accumulator_T<float, float>(map, weight, pix, scan_len, num_pix);
+}
+
+extern "C"
+void map_accumulator_IQU_f32(float *map, float *tod, float weight, int64_t *pix, double *psi, int64_t scan_len, int64_t num_pix){
+    _map_accumulator_IQU_T<float, float, float>(map, tod, weight, pix, psi, scan_len, num_pix);
+}
+
+extern "C"
+void map_weight_accumulator_IQU_f32(float *map, float weight, int64_t *pix, double *psi, int64_t scan_len, int64_t num_pix){
+    _map_weight_accumulator_IQU_T<float, float>(map, weight, pix, psi, scan_len, num_pix);
+}
+
