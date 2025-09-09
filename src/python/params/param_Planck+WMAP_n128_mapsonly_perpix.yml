@@ -10,7 +10,7 @@ niter_gibbs: 3
 nside: 128
 
 make_plots: True
-output_stats: True
+output_stats: False
 
 galactic_mask: True
 sample_corr_noise: True
@@ -18,15 +18,15 @@ pixel_compsep_sampling: True
 smooth_to_common_res: True
 
 output_paths:
-  plots: "../com4_plots/Planck+WMAP_nside128_perpix_maponly/"
-  stats: "../com4_stats/nside128/"
+  plots: "com4_plots/Planck+WMAP_nside128_perpix_maponly/"
+  stats: "com4_stats/nside128/"
 
 logging:
   console:
     level: 'info'
   file:
     level: 'info'
-    filename: '../com4_logs/output.log'
+    filename: 'output.log'
 
 components:
   CMB:
