@@ -42,7 +42,7 @@ def read_Planck_map_from_file(my_band: Bunch) -> DetectorMap:
         for ipol in range(3):
             if my_band.polarizations[ipol]:
                 map_signal[ipol] = 1e3*fits.open(my_band.path_signal_map)[1].data[data_names[ipol]].flatten().astype(np.float32)
-                map_rms[ipol] = np.sqrt(1e3*fits.open(my_band.path_rms_map)[1].data[rms_names[ipol]].flatten().astype(np.float32))
+                map_rms[ipol] = 1e3*np.sqrt(fits.open(my_band.path_rms_map)[1].data[rms_names[ipol]].flatten().astype(np.float32))
     elif my_band.file_convention == "HFI":
         # I think HFI maps are in uK_CMB. They are also in nested healpix ordering, and need to be converted.
         data_names = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
