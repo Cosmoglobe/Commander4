@@ -36,7 +36,8 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         pix = scan.pix
         psi = scan.psi
-        mapmaker_invvar.accumulate_to_map(scan_samples.sigma0, pix, psi)
+        inv_var = 1.0/scan_samples.sigma0**2
+        mapmaker_invvar.accumulate_to_map(inv_var, pix, psi)
     mapmaker_invvar.gather_map()
     mapmaker_invvar.normalize_map()
 
@@ -46,11 +47,12 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         pix = scan.pix
         psi = scan.psi
-        mapmaker.accumulate_to_map(scan.tod/scan_samples.gain_est, scan_samples.sigma0, pix, psi)
+        inv_var = 1.0/scan_samples.sigma0**2
+        mapmaker.accumulate_to_map(scan.tod/scan_samples.gain_est, inv_var, pix, psi)
         sky_orb_dipole = get_s_orb_TOD(scan, experiment_data, pix)
-        mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, scan_samples.sigma0, pix, psi)
+        mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
         sky_model = get_static_sky_TOD(compsep_output, pix, psi)
-        mapmaker_skymodel.accumulate_to_map(sky_model, scan_samples.sigma0, pix, psi)
+        mapmaker_skymodel.accumulate_to_map(sky_model, inv_var, pix, psi)
 
     mapmaker.gather_map()
     mapmaker_orbdipole.gather_map()
@@ -279,8 +281,8 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
     if band_comm.Get_rank() == 0:
         alphas = np.concatenate(alphas)
         fknees = np.concatenate(fknees)
-        logger.info(f"{MPI.COMM_WORLD.Get_rank()} fknees {np.min(fknees):.4f} {np.percentile(fknees, 1):.4f} {np.mean(fknees):.4f} {np.percentile(fknees, 99):.4f} {np.max(fknees):.4f}")
-        logger.info(f"{MPI.COMM_WORLD.Get_rank()} alphas {np.min(alphas):.4f} {np.percentile(alphas, 1):.4f} {np.mean(alphas):.4f} {np.percentile(alphas, 99):.4f} {np.max(alphas):.4f}")
+        logger.info(f"{experiment_data.nu}GHz: fknees {np.min(fknees):.4f} {np.percentile(fknees, 1):.4f} {np.mean(fknees):.4f} {np.percentile(fknees, 99):.4f} {np.max(fknees):.4f}")
+        logger.info(f"{experiment_data.nu}GHz: alphas {np.min(alphas):.4f} {np.percentile(alphas, 1):.4f} {np.mean(alphas):.4f} {np.percentile(alphas, 99):.4f} {np.max(alphas):.4f}")
 
     return detector_samples, mapmaker, wait_time
 
