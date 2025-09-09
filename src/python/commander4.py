@@ -137,9 +137,10 @@ def main(params: Bunch, params_dict: dict):
                 curr_tod_output, detector_samples_chain2 = process_tod(proc_comm, band_comm, det_comm, experiment_data, detector_samples_chain2, curr_compsep_output, params, chain_num, iter_num)
             if proc_comm.Get_rank() == 0:
                 logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
+            t0 = time.time()
             curr_compsep_output = receive_compsep(band_comm, my_band_identifier, band_comm.Get_rank()==0, CompSep_band_masters_dict)
-            if proc_comm.Get_rank() == 0:
-                logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished receiving results for chain {chain_num}, iter {iter_num}. Sending TOD results")
+            if band_comm.Get_rank() == 0:
+                logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished receiving results for chain {chain_num}, iter {iter_num} (time spent waiting+receiving = {time.time()-t0:.1f}s).")
             send_tod(is_band_master, curr_tod_output, CompSep_band_masters_dict, my_band_identifier)
             if proc_comm.Get_rank() == 0:
                 logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished sending results for chain {chain_num}, iter {iter_num}.")
@@ -152,12 +153,12 @@ def main(params: Bunch, params_dict: dict):
             t0 = time.time()
             curr_compsep_output = process_compsep(curr_tod_output, iter_num, chain_num, params, proc_comm, components)
             if proc_comm.Get_rank() == 0:
-                logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Sending results.")
+                logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Sending compsep results.")
             send_compsep(my_band_identifier, curr_compsep_output, tod_band_masters_dict)
-            logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished sending results for chain {chain_num}, iter {iter_num}. Receiving TOD results.")
+            logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished sending results for chain {chain_num}, iter {iter_num}. Waiting for TOD results.")
+            t0 = time.time()
             curr_tod_output = receive_tod(tod_band_masters_dict, proc_comm.rank, my_band, my_band_identifier, curr_tod_output)
-            if proc_comm.Get_rank() == 0:
-                logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished receiving TOD results for chain {chain_num}, iter {iter_num}.")
+            logger.info(f"Compsep: Rank {proc_comm.Get_rank()} finished receiving TOD results for chain {chain_num}, iter {iter_num} (time spent waiting+receiving = {time.time()-t0:.1f}s).")
     # stop compsep machinery
     if world_master:
         logger.info("TOD: sending STOP signal to compsep")
