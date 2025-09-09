@@ -225,7 +225,9 @@ def plot_components(params: Bunch, detector: int, chain: int, iteration: int,
             if component.shortname != "cmb":
                 foreground_subtracted -= comp_map
             residual -= comp_map
-
+            if (comp_map == 0).all():
+                continue
+            
             hp.mollview(comp_map, title=f"{component.longname} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(comp_map, 1), max=np.percentile(comp_map, 99))
             plt.savefig(params.output_paths.plots + f"maps_comps/pol{ipol}_{component.shortname}_realization_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
             plt.close()
