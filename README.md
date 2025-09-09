@@ -1,12 +1,25 @@
 # Commander4
 
 ## 1. How to install
+
+### TL;DR (assumes you are on the ITA cluster)
+```bash
+module use --append /mn/stornext/u3/jonassl/.modules  # Make my modules avaiable to you. You can skip this if you are not on the ITA cluster or you have reasonable modules loaded already.
+module load Commander4  # Load the Commander4 module.
+git clone --recurse-submodules git@github.com:Cosmoglobe/Commander4.git  # Clone the repo
+cd Commander4
+python -m venv ../.com4_venv  # (recommended) Create a new python virtual enviroment.
+source ../.com4_venv/bin/activate
+make all  # Will install needed Python packages and compile some local libraries.
+mpirun -n 6 python3 -u src/python/commander4.py -p src/python/params/param_Planck+WMAP_n128_mapsonly_perpix.yml  # Example test run.
+```
+
 ### 1.1 Initializing the submodules
 Commander4 pulls in the ducc0 sources to make developing of C++ helper functions easier.
 
 To install this submodule directly when cloning the Commander4 repository you can do
 ```bash
-git clone --recurse-submodules <Commander4 repo URL>
+git clone --recurse-submodules git@github.com:Cosmoglobe/Commander4.git
 ```
 If you have already cloned Commander 4,  the easiest way is to go to the Commender4 directory and then do
 ```bash
@@ -14,20 +27,33 @@ git submodule init
 git submodule update
 ```
 
-### 1.2 Compiling pybind11 libraries
-The code depends on C++ code interfaced with `pybind11`. This is installed as a local pip package. To perform the installation, navigate into the `cmdr4_support` directory, and run a pip install (NB: the `.` is necessary).
+### 1.2 Load relevant modules (optional, for the ITA cluster)
+The easiest way of making sure you have the modules you need loaded is to load my Commander 4 module:
 ```bash
-cd cmdr4_support
-CC=gcc CXX=g++ pip3 install -v .
+module use --append /mn/stornext/u3/jonassl/.modules
+module load Commander4
 ```
-The `CC=gcc CXX=g++` tells it to use these specific compilers during installation (it might try to use another, incompatible, compiler).
 
-### 1.3 Compiling Ctypes libraries
-The code currently also depends on C++ code interfaces with Ctypes. This code is located in the `src/cpp/` directory. There should be a file named `src/cpp/compilation.sh` which contains the compilation procedure for all C++ files:
+### 1.3 Set up a Python virtual enviroment (optional, recommended)
+It's a good idea to create a virtual Python enviroment, so that you can install exactly the packages you need for Commander 4 without mixing it with other installations.
 ```bash
-cd src/cpp
-bash compilation.sh
+python -m venv ../.com4_venv
 ```
+This enviroment can then be activated with:
+```bash
+source ../.com4_venv/bin/activate
+```
+And de-activated with
+```bash
+deactivate
+```
+
+### 1.4 Run makefile
+There is a relatively simple makefile that installs necessary Python packages and compiles relevant code. Make sure you are in the `Commander4` directory, and run:
+```bash
+make all
+```
+
 
 ## 2. How to run
 Commander4 has to be run with MPI, and a parameter file has to be indicated using the `-p` argument. Example usage:
