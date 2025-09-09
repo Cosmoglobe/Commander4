@@ -24,9 +24,27 @@ def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
        works if assuming there is no beam, or all maps are smoothed to the same resolution.
     """
     logger = logging.getLogger(__name__)
-    map_sky = detector_data.map_sky
+    if proc_comm.Get_rank() == 0:
+        logger.info("Starting pixel-by-pixel component separation.")
+    map_sky = detector_data.map_sky.copy()
     band_freq = detector_data.nu
     map_rms = detector_data.map_rms
+    if params.smooth_to_common_res:
+        fwhm = detector_data.fwhm
+        all_fwhm = proc_comm.allgather(fwhm)
+        max_fwhm = np.max(all_fwhm)
+        my_smoothing_fwhm = np.sqrt(max_fwhm**2 - fwhm**2)
+        logger.info(f"{detector_data.nu} GHz map with FWHM = {fwhm:.1f} arcmin will be smoothed by "
+                    f"{my_smoothing_fwhm:.1f} arcmin to reach {max_fwhm:.1f} arcmin.")
+        if params.smooth_to_common_res:
+            if map_sky[1] is None:  # No polarization
+                map_sky[0] = hp.smoothing(map_sky[0], np.deg2rad(my_smoothing_fwhm/60.0))
+            elif map_sky[0] is None:
+                map_sky[1] = hp.smoothing(map_sky[1], np.deg2rad(my_smoothing_fwhm/60.0))
+                map_sky[2] = hp.smoothing(map_sky[2], np.deg2rad(my_smoothing_fwhm/60.0))
+            else:
+                map_sky = hp.smoothing(map_sky, np.deg2rad(my_smoothing_fwhm/60.0), pol=True)
+
     ncomp_full = len(comp_list)
     all_freq = proc_comm.gather(band_freq, root=0)
     all_map_sky = proc_comm.gather(map_sky, root=0)
@@ -35,15 +53,11 @@ def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     npix = 12*nside**2
     comp_maps = [None, None, None]
     if proc_comm.Get_rank() == 0:
-        logger.info("Starting pixel-by-pixel component separation.")
-        t0 = time.time()
-        # nband, npol, npix = all_map_sky.shape
         for ipol in range(3):
+            t0 = time.time()
             ncomp = len(comp_list)
             if ipol > 0:
                 ncomp = len([comp for comp in comp_list if comp.polarized])
-
-            # nband = np.sum([data[ipol] is not None for data in all_map_sky])
             freqs = []
             maps_sky = []
             maps_rms = []
@@ -79,7 +93,8 @@ def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
             if n_failures > 0:
                 logger.warning(f"Pixel-by-pixel component separation failed for {n_failures}"
                                f"out of {npix} pixels for polarization {ipol+1}/3.")
-            logger.info(f"Finished pixel-by-pixel component separation in {time.time()-t0:.2f}s.")
+            logger.info(f"Finished pixel-by-pixel component separation in {time.time()-t0:.2f}s "
+                        f"for polarization {ipol+1} of 3.")
 
             # import cmdr4_support
             # t0 = time()
@@ -89,8 +104,6 @@ def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
             # logger.info(f"L2 error between solutions: {ducc0.misc.l2error(comp_maps, comp_maps2)}.")
 
     comp_maps = proc_comm.bcast(comp_maps, root=0)
-    # from copy import deepcopy
-    # comp_list_of_lists = [deepcopy(comp_list), deepcopy(comp_list), deepcopy(comp_list)]
     for icomp in range(ncomp_full):
         alm_len = ((comp_list[icomp].lmax+1)*(comp_list[icomp].lmax+2))//2
         comp_alms = np.zeros((1,alm_len), dtype=np.complex128)
