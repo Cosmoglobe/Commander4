@@ -276,13 +276,13 @@ class CompSepSolver:
         mythreads = self.params.nthreads_compsep
 
         # Y a
-        a = alm_to_map(a, self.my_band_nside, self.global_lmax, spin=self.spin, nthreads=mythreads)
+        a = alm_to_map(a, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
 
         # N^-1 Y a
         a /= self.map_rms**2
 
         # Y^T N^-1 Y a
-        a = alm_to_map_adjoint(a, self.my_band_nside, self.global_lmax, spin=self.spin, nthreads=mythreads)
+        a = alm_to_map_adjoint(a, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
 
         return a
 
