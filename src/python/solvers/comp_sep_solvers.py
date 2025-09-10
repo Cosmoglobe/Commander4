@@ -107,15 +107,37 @@ def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     for icomp in range(ncomp_full):
         alm_len = ((comp_list[icomp].lmax+1)*(comp_list[icomp].lmax+2))//2
         comp_alms = np.zeros((1,alm_len), dtype=np.complex128)
-        comp_list[icomp].component_alms_intensity = curvedsky.map2alm_healpix(comp_maps[0][icomp], comp_alms, niter=3, spin=0)
+        comp_list[icomp].component_alms_intensity = curvedsky.map2alm_healpix(comp_maps[0][icomp], comp_alms, niter=1, spin=0)
         if comp_list[icomp].polarized:
             alm_len = ((comp_list[icomp].lmax+1)*(comp_list[icomp].lmax+2))//2
             comp_alms = np.zeros((2,alm_len), dtype=np.complex128)
-            pol_alms = curvedsky.map2alm_healpix(np.array([comp_maps[1][icomp], comp_maps[2][icomp]]), comp_alms, niter=3, spin=2)
+            pol_alms = curvedsky.map2alm_healpix(np.array([comp_maps[1][icomp], comp_maps[2][icomp]]), comp_alms, niter=1, spin=2)
             comp_list[icomp].component_alms_polarization = pol_alms
     return comp_list
 
 
+
+def _project_alms(alms_in, lmax_in, lmax_out):
+    """
+    Projects alms from one lmax resolution to another, handling truncation or zero-padding.
+    Importantly, this function is the adjoint of itself.
+    """
+    if lmax_in == lmax_out:
+        return alms_in.copy()
+
+    alms_out = np.zeros_like(alms_in, shape=(alms_in.shape[0], hp.Alm.getsize(lmax_out)))
+    
+    # Determine the number of modes to copy
+    l_copy = min(lmax_in, lmax_out)
+    m_copy = min(lmax_in, lmax_out)
+    
+    # Copy alm data up to the minimum lmax
+    for m in range(m_copy + 1):
+        idx_in = hp.Alm.getidx(lmax_in, np.arange(m, l_copy + 1), m)
+        idx_out = hp.Alm.getidx(lmax_out, np.arange(m, l_copy + 1), m)
+        alms_out[:, idx_out] = alms_in[:, idx_in]
+        
+    return alms_out
 
 
 class CompSepSolver:
@@ -145,14 +167,16 @@ class CompSepSolver:
         self.my_band_npix = map_rms.shape[-1]
         self.nband = len(self.freqs)
         self.my_rank = CompSep_comm.Get_rank()
-        self.my_band_nside = np.sqrt(self.my_band_npix//12)
-        logassert(self.my_band_nside.is_integer(), f"Npix dimension of map ({self.my_band_npix}) resulting in a non-integer nside ({self.my_band_nside}).", self.logger)
-        self.my_band_nside = int(self.my_band_nside)
-        self.my_band_lmax = (self.my_band_nside*6)//2  # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
+        self.my_band_nside = hp.npix2nside(self.my_band_npix)
+        self.per_band_nside = np.array(self.CompSep_comm.allgather(self.my_band_nside))
+        self.per_band_npix = 12*self.per_band_nside**2
+        self.my_band_lmax = int(2.5*self.my_band_nside)  # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
         self.my_band_alm_len = ((self.my_band_lmax+1)*(self.my_band_lmax+2))//2
+        self.per_band_lmax = np.array(self.CompSep_comm.allgather(self.my_band_lmax))
+        self.per_band_alm_len = ((self.per_band_lmax+1)*(self.per_band_lmax+2))//2
         self.global_nside = params.nside  # This is the NSIDE at which to perform the mixing matrix calculations, which needs to happen on a common resolution.
         self.global_npix = 12*self.global_nside**2  # See comment above.
-        self.global_lmax = (self.global_nside*6)//2  # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
+        self.global_lmax = int(2.5*self.global_nside)  # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
         self.global_alm_len = ((self.global_lmax+1)*(self.global_lmax+2))//2
         self.comp_list = comp_list
         self.pol = pol
@@ -212,35 +236,30 @@ class CompSepSolver:
 
 
     def apply_A(self, a_in: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
-        mycomp = self.CompSep_comm.Get_rank()
+        mycomp = self.CompSep_comm.Get_rank() if self.is_holding_comp else np.nan
         mythreads = self.params.nthreads_compsep
-        
+
         # Y a
-        if mycomp < self.ncomp:  # this task actually holds a component
-            a = alm_to_map(a_in, self.global_nside, self.my_comp_lmax, spin=self.spin, nthreads=mythreads)
-        else:
-            a = None
+        for iband in range(self.nband):
+            local_band_nside = self.per_band_nside[iband]
+            local_band_lmax = self.per_band_lmax[iband]
+            local_band_alm_len = self.per_band_alm_len[iband]
+            summed_alms_for_band = np.zeros((self.npol, local_band_alm_len), dtype=np.complex128)
+            if self.is_holding_comp:
+                alm_in_band_space = _project_alms(a_in, self.my_comp_lmax, local_band_lmax)
+                tmp_map = alm_to_map(alm_in_band_space, local_band_nside, local_band_lmax, spin=self.spin, nthreads=mythreads)
+                tmp_map *= self.comps_SED[mycomp, iband]
+                # tmp_alm = np.zeros((self.npol, local_alm_len), dtype=np.complex128)
+                curvedsky.map2alm_healpix(tmp_map, summed_alms_for_band, niter=1, spin=self.spin, nthread=mythreads)
 
-        # M Y a
-        a_old = a
-        a = np.zeros((self.npol, self.global_npix))  # Mixing matrix calculations must happen at a common resolution.
-        for icomp in range(self.ncomp):
-            # successively broadcast a_old and build a from it
-            tmp = a_old if mycomp == icomp else np.empty((self.npol, self.global_npix))
-            self.CompSep_comm.Bcast(tmp, root=icomp)
-            a += self.comps_SED[icomp,self.my_rank]*tmp
-        del tmp
+            send, recv = (MPI.IN_PLACE, summed_alms_for_band) if iband == self.my_rank else (summed_alms_for_band, None)
+            self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=iband)
+            if self.my_rank == iband:
+                a = summed_alms_for_band
 
-        # Y^-1 M Y a
-        a_old = a
-        a = np.empty((self.npol, self.global_alm_len), dtype=np.complex128)
-        curvedsky.map2alm_healpix(a_old, a, niter=3, spin=self.spin, nthread=mythreads)
-        del a_old
-
-        # B Y^-1 M Y a
         hp.smoothalm(a, self.my_band_fwhm_rad, inplace=True)
-
         return a
+
 
 
     def apply_A_adjoint(self, a_in: NDArray) -> NDArray:
@@ -249,25 +268,22 @@ class CompSepSolver:
         
         # B^T a
         hp.smoothalm(a_in, self.my_band_fwhm_rad, inplace=True)
-
-        # Y^-1^T B^T a
-        a = np.empty((self.npol, self.global_npix))
-        curvedsky.map2alm_healpix(a, a_in, niter=3, adjoint=True, spin=self.spin, nthread=mythreads)
-
-        # M^T Y^-1^T B^T a
-        a_old = a
         for icomp in range(self.ncomp):
-            tmp = a_old * self.comps_SED[icomp,self.my_rank]
-            # accumulate tmp onto the relevant task
-            send, recv = (MPI.IN_PLACE, tmp) if icomp == mycomp else (tmp, None)
+            local_comp_lmax = self.lmax_per_comp[icomp]
+            tmp_map = np.zeros((self.npol, self.my_band_npix))
+            curvedsky.map2alm_healpix(tmp_map, a_in, niter=1, adjoint=True, spin=self.spin, nthread=mythreads)
+
+            tmp_map *= self.comps_SED[icomp,self.my_rank]
+            tmp_alm = alm_to_map_adjoint(tmp_map, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
+
+            summed_alms_for_comp = _project_alms(tmp_alm, self.my_band_lmax, local_comp_lmax)
+
+            send, recv = (MPI.IN_PLACE, summed_alms_for_comp) if icomp == mycomp else (summed_alms_for_comp, None)
             self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=icomp)
             if icomp == mycomp:
-                a = tmp
-        del a_old
+                a = summed_alms_for_comp
+        return a
 
-        # Y^T M^T Y^-1^T B^T a
-        if mycomp < self.ncomp:
-            a = alm_to_map_adjoint(a, self.global_nside, self.my_comp_lmax, spin=self.spin, nthreads=mythreads)
 
         return a
 
