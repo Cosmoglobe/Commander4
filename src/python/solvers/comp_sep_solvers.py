@@ -239,6 +239,8 @@ class CompSepSolver:
         mycomp = self.CompSep_comm.Get_rank() if self.is_holding_comp else np.nan
         mythreads = self.params.nthreads_compsep
 
+
+        comp_maps_at_nsides = {}
         # Y a
         for iband in range(self.nband):
             local_band_nside = self.per_band_nside[iband]
@@ -246,9 +248,12 @@ class CompSepSolver:
             local_band_alm_len = self.per_band_alm_len[iband]
             summed_alms_for_band = np.zeros((self.npol, local_band_alm_len), dtype=np.complex128)
             if self.is_holding_comp:
-                alm_in_band_space = _project_alms(a_in, self.my_comp_lmax, local_band_lmax)
-                tmp_map = alm_to_map(alm_in_band_space, local_band_nside, local_band_lmax, spin=self.spin, nthreads=mythreads)
-                tmp_map *= self.comps_SED[mycomp, iband]
+                # tmp_map = alm_to_map(alm_in_band_space, local_band_nside, local_band_lmax, spin=self.spin, nthreads=mythreads)
+                if local_band_nside not in comp_maps_at_nsides.keys():
+                    alm_in_band_space = _project_alms(a_in, self.my_comp_lmax, local_band_lmax)
+                    comp_maps_at_nsides[local_band_nside] = alm_to_map(alm_in_band_space, local_band_nside, local_band_lmax, spin=self.spin, nthreads=mythreads)
+                # tmp_map = alm_to_map(a_in, local_band_nside, self.my_comp_lmax, spin=self.spin, nthreads=mythreads)
+                tmp_map = comp_maps_at_nsides[local_band_nside] * self.comps_SED[mycomp, iband]
                 # tmp_alm = np.zeros((self.npol, local_alm_len), dtype=np.complex128)
                 curvedsky.map2alm_healpix(tmp_map, summed_alms_for_band, niter=1, spin=self.spin, nthread=mythreads)
 
@@ -269,12 +274,12 @@ class CompSepSolver:
         # B^T a
         hp.smoothalm(a_in, self.my_band_fwhm_rad, inplace=True)
         a_final = np.zeros((0,))
+        band_map = np.zeros((self.npol, self.my_band_npix))
+        curvedsky.map2alm_healpix(band_map, a_in, niter=1, adjoint=True, spin=self.spin, nthread=mythreads)
         for icomp in range(self.ncomp):
             local_comp_lmax = self.lmax_per_comp[icomp]
-            tmp_map = np.zeros((self.npol, self.my_band_npix))
-            curvedsky.map2alm_healpix(tmp_map, a_in, niter=1, adjoint=True, spin=self.spin, nthread=mythreads)
 
-            tmp_map *= self.comps_SED[icomp,self.my_rank]
+            tmp_map = band_map*self.comps_SED[icomp,self.my_rank]
             tmp_alm = alm_to_map_adjoint(tmp_map, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
 
             summed_alms_for_comp = _project_alms(tmp_alm, self.my_band_lmax, local_comp_lmax)
