@@ -268,6 +268,7 @@ class CompSepSolver:
         
         # B^T a
         hp.smoothalm(a_in, self.my_band_fwhm_rad, inplace=True)
+        a_final = np.zeros((0,))
         for icomp in range(self.ncomp):
             local_comp_lmax = self.lmax_per_comp[icomp]
             tmp_map = np.zeros((self.npol, self.my_band_npix))
@@ -281,8 +282,10 @@ class CompSepSolver:
             send, recv = (MPI.IN_PLACE, summed_alms_for_comp) if icomp == mycomp else (summed_alms_for_comp, None)
             self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=icomp)
             if icomp == mycomp:
-                a = summed_alms_for_comp
-        return a
+                a_final = summed_alms_for_comp
+        return a_final
+
+
 
 
         return a
