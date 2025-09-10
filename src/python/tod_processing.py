@@ -252,7 +252,8 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
         n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                                                 mask, sigma0, C_1f_inv,
                                                                 err_tol=err_tol)
-        mapmaker.accumulate_to_map((n_corr_est/scansamples.gain_est).astype(np.float32), scansamples.sigma0, pix, psi)
+        inv_var = 1.0/scansamples.sigma0**2
+        mapmaker.accumulate_to_map((n_corr_est/scansamples.gain_est).astype(np.float32), inv_var, pix, psi)
         if residual > err_tol:
             num_failed_convergence += 1
             worst_residual = max(worst_residual, residual)
@@ -638,7 +639,7 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
             logger.info(f"delta_g: {delta_g_sample}")
             logger.info(f"Band {experiment_data.nu}GHz time-dependent gain: min={np.min(delta_g_sample)*1e9:14.4f} mean={np.mean(delta_g_sample)*1e9:14.4f} std={np.std(delta_g_sample)*1e9:14.4f} max={np.max(delta_g_sample)*1e9:14.4f}")
 
-            if False: #debug stuff
+            if True: #debug stuff
                 import matplotlib.pyplot as plt
                 plt.figure(figsize=(10,8))
                 other_gain = detector_samples.g0_est + detector_samples.scans[0].rel_gain_est
