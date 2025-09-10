@@ -24,8 +24,8 @@ endif
 install:
 	@echo "--- Installing Python dependencies ---"
 	$(PIP) install --upgrade pip
-	CC=gcc CXX=g++ $(PIP) install --upgrade --no-binary ducc0 ducc0
-	CC=gcc CXX=g++ $(PIP) install --upgrade --no-cache-dir --no-binary mpi4py mpi4py
+	CC=gcc CXX=g++ $(PIP) install --upgrade ducc0
+	CC=gcc CXX=g++ $(PIP) install --upgrade mpi4py
 	$(PIP) install -r requirements.txt
 	@echo "--- Installing pybind11 support package ---"
 	cd cmdr4_support && CC=gcc CXX=g++ $(PIP) install .
