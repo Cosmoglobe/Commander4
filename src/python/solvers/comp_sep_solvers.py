@@ -181,11 +181,13 @@ class CompSepSolver:
             self.lmax_per_comp = np.array([comp.lmax for comp in comp_list if comp.polarized])
             self.per_comp_P_smooth = [comp.P_smoothing_prior for comp in comp_list if comp.polarized]
             self.per_comp_P_smooth_inv = [comp.P_smoothing_prior_inv for comp in comp_list if comp.polarized]
+            self.per_comp_spatial_MM = np.array([comp.spatially_varying_MM for comp in comp_list if comp.polarized])
         else:  # We currently assume that all provided components are to be included in intensity.
             self.comps_SED = np.array([comp.get_sed(self.freqs) for comp in comp_list])
             self.lmax_per_comp = np.array([comp.lmax for comp in comp_list])
             self.per_comp_P_smooth = [comp.P_smoothing_prior for comp in comp_list]
             self.per_comp_P_smooth_inv = [comp.P_smoothing_prior_inv for comp in comp_list]
+            self.per_comp_spatial_MM = np.array([comp.spatially_varying_MM for comp in comp_list])
         self.ncomp = len(self.comps_SED)
         self.is_holding_comp = self.my_rank < self.ncomp
         self.alm_len_percomp_complex = np.array([((lmax+1)*(lmax+2))//2 for lmax in self.lmax_per_comp])
@@ -231,18 +233,25 @@ class CompSepSolver:
         mythreads = self.params.nthreads_compsep
 
         band_alms = np.zeros((self.npol, self.my_band_alm_len), dtype=np.complex128)
+        if (self.per_comp_spatial_MM).any():
+            band_map = np.zeros((self.npol, self.my_band_npix))
+            for icomp in range(self.ncomp):
+                if self.per_comp_spatial_MM[icomp]:  # If this component has a MM that is pixel-depnedent.
+                    alm_in_band_space = _project_alms(a_in[icomp], self.lmax_per_comp[icomp], self.my_band_lmax)
+                    # Y a
+                    comp_map = alm_to_map(alm_in_band_space, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
+                    # M Y a
+                    comp_map *= self.comps_SED[icomp, self.my_rank]
+                    band_map += comp_map
+            # Y^-1 M Y a
+            curvedsky.map2alm_healpix(band_map, band_alms, niter=1, spin=self.spin, nthread=mythreads)
 
-        band_map = np.zeros((self.npol, self.my_band_npix))
         for icomp in range(self.ncomp):
-            alm_in_band_space = _project_alms(a_in[icomp], self.lmax_per_comp[icomp], self.my_band_lmax)
-            # Y a
-            comp_map = alm_to_map(alm_in_band_space, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
-            # M Y a
-            comp_map *= self.comps_SED[icomp, self.my_rank]
-            band_map += comp_map
+            if not self.per_comp_spatial_MM[icomp]:
+                alm_in_band_space = _project_alms(a_in[icomp], self.lmax_per_comp[icomp], self.my_band_lmax)
+                alm_in_band_space *= self.comps_SED[icomp, self.my_rank]
+                band_alms += alm_in_band_space
 
-        # Y^-1 M Y a
-        curvedsky.map2alm_healpix(band_map, band_alms, niter=1, spin=self.spin, nthread=mythreads)
         # B Y^-1 M Y a
         hp.smoothalm(band_alms, self.my_band_fwhm_rad, inplace=True)
 
@@ -253,20 +262,28 @@ class CompSepSolver:
     def apply_A_adjoint(self, a_in: NDArray) -> NDArray:
         mythreads = self.params.nthreads_compsep
         
-        hp.smoothalm(a_in, self.my_band_fwhm_rad, inplace=True)
         # B^T a
+        hp.smoothalm(a_in, self.my_band_fwhm_rad, inplace=True)
         a_final = [np.zeros((self.npol, self.alm_len_percomp_complex[icomp]), dtype=np.complex128) for icomp in range(self.ncomp)]
-        band_map = np.zeros((self.npol, self.my_band_npix))
-        curvedsky.map2alm_healpix(band_map, a_in, niter=1, adjoint=True, spin=self.spin, nthread=mythreads)
+
+        if (self.per_comp_spatial_MM).any():
+            band_map = np.zeros((self.npol, self.my_band_npix))
+            curvedsky.map2alm_healpix(band_map, a_in, niter=1, adjoint=True, spin=self.spin, nthread=mythreads)
+            for icomp in range(self.ncomp):
+                if self.per_comp_spatial_MM[icomp]:
+                    local_comp_lmax = self.lmax_per_comp[icomp]
+
+                    tmp_map = band_map*self.comps_SED[icomp,self.my_rank]
+                    tmp_alm = alm_to_map_adjoint(tmp_map, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
+
+                    summed_alms_for_comp = _project_alms(tmp_alm, self.my_band_lmax, local_comp_lmax)
+                    a_final[icomp][:] = summed_alms_for_comp
         for icomp in range(self.ncomp):
-
-            local_comp_lmax = self.lmax_per_comp[icomp]
-
-            tmp_map = band_map*self.comps_SED[icomp,self.my_rank]
-            tmp_alm = alm_to_map_adjoint(tmp_map, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
-
-            summed_alms_for_comp = _project_alms(tmp_alm, self.my_band_lmax, local_comp_lmax)
-            a_final[icomp][:] = summed_alms_for_comp
+            if not self.per_comp_spatial_MM[icomp]:
+                local_comp_lmax = self.lmax_per_comp[icomp]
+                tmp_alm = a_in*self.comps_SED[icomp,self.my_rank]
+                summed_alms_for_comp = _project_alms(tmp_alm, self.my_band_lmax, local_comp_lmax)
+                a_final[icomp][:] = summed_alms_for_comp
 
         return a_final
 
