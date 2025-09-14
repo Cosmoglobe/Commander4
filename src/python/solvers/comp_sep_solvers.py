@@ -107,11 +107,11 @@ def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     for icomp in range(ncomp_full):
         alm_len = ((comp_list[icomp].lmax+1)*(comp_list[icomp].lmax+2))//2
         comp_alms = np.zeros((1,alm_len), dtype=np.complex128)
-        comp_list[icomp].component_alms_intensity = curvedsky.map2alm_healpix(comp_maps[0][icomp], comp_alms, niter=1, spin=0)
+        comp_list[icomp].component_alms_intensity = curvedsky.map2alm_healpix(comp_maps[0][icomp], comp_alms, niter=0, spin=0)
         if comp_list[icomp].polarized:
             alm_len = ((comp_list[icomp].lmax+1)*(comp_list[icomp].lmax+2))//2
             comp_alms = np.zeros((2,alm_len), dtype=np.complex128)
-            pol_alms = curvedsky.map2alm_healpix(np.array([comp_maps[1][icomp], comp_maps[2][icomp]]), comp_alms, niter=1, spin=2)
+            pol_alms = curvedsky.map2alm_healpix(np.array([comp_maps[1][icomp], comp_maps[2][icomp]]), comp_alms, niter=0, spin=2)
             comp_list[icomp].component_alms_polarization = pol_alms
     return comp_list
 
@@ -161,6 +161,8 @@ class CompSepSolver:
         self.logger = logging.getLogger(__name__)
         self.CompSep_comm = CompSep_comm
         self.params = params
+        self.float_dtype = np.float32
+        self.complex_dtype = np.complex64
         self.map_sky = map_sky
         self.map_rms = map_rms
         self.freqs = np.array(CompSep_comm.allgather(freq))
@@ -244,7 +246,7 @@ class CompSepSolver:
                     comp_map *= self.comps_SED[icomp, self.my_rank]
                     band_map += comp_map
             # Y^-1 M Y a
-            curvedsky.map2alm_healpix(band_map, band_alms, niter=1, spin=self.spin, nthread=mythreads)
+            curvedsky.map2alm_healpix(band_map, band_alms, niter=0, spin=self.spin, nthread=mythreads)
 
         for icomp in range(self.ncomp):
             if not self.per_comp_spatial_MM[icomp]:
@@ -268,7 +270,7 @@ class CompSepSolver:
 
         if (self.per_comp_spatial_MM).any():
             band_map = np.zeros((self.npol, self.my_band_npix))
-            curvedsky.map2alm_healpix(band_map, a_in, niter=1, adjoint=True, spin=self.spin, nthread=mythreads)
+            curvedsky.map2alm_healpix(band_map, a_in, niter=0, adjoint=True, spin=self.spin, nthread=mythreads)
             for icomp in range(self.ncomp):
                 if self.per_comp_spatial_MM[icomp]:
                     local_comp_lmax = self.lmax_per_comp[icomp]
