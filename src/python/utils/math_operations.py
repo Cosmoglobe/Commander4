@@ -11,6 +11,7 @@ import ducc0
 from src.python.output.log import logassert
 import logging
 import os
+from math import sqrt
 
 def nalm(lmax: int, mmax: int) -> int:
     """Calculates the number of a_lm elements for a spherical harmonic representation up to l<=lmax and m<=mmax.
@@ -145,7 +146,7 @@ def alm_dot_product(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArray:
     return np.sum((alm1[:lmax]*alm2[:lmax]).real) + np.sum((alm1[lmax:]*np.conj(alm2[lmax:])).real*2)
 
 
-def alm_complex2real(alm: NDArray[np.complex128], lmax: int) -> NDArray[np.float64]:
+def alm_complex2real(alm: NDArray[np.complexfloating], lmax: int) -> NDArray[np.floating]:
     """ Over the last axis of the input array, converts from the complex convention of storing alms
         to the real convention (which is only applicable when the map is real). In the real
         convention, the all m modes are stored, but they are all stored as real values, not complex.
@@ -156,15 +157,15 @@ def alm_complex2real(alm: NDArray[np.complex128], lmax: int) -> NDArray[np.float
             x (np.array): Real alm array where the last axis has length (lmax+1)^2.
     """
     logger = logging.getLogger(__name__)
-    logassert(alm.dtype == np.complex128, "Input alms are not of type complex128 (they are "
-             f"{alm.dtype})", logger)
-    
+    logassert(alm.dtype in [np.complex128, np.complex64], "Input alms are not of type np.complex128"
+             f" or np.complex64  (they are {alm.dtype})", logger)
+    float_dtype = np.float64 if alm.dtype == np.complex128 else np.float32
     ainfo = curvedsky.alm_info(lmax=lmax)
     i = int(ainfo.mstart[1]+1)
-    return np.concatenate([alm[...,:i].real,np.sqrt(2.)*alm[...,i:].view(np.float64)], axis=-1)
+    return np.concatenate([alm[...,:i].real,sqrt(2.0)*alm[...,i:].view(float_dtype)], axis=-1)
 
 
-def alm_real2complex(x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128]:
+def alm_real2complex(x: NDArray[np.floating], lmax: int) -> NDArray[np.complexfloating]:
     """ Over the last axis of the input array, converts from the real convention of storing alms
         (which is applicable when the map is real), to the complex convention. In the complex
         convention, the only m>=0 is stored, but are stored as complex numbers (m=0 is always real). 
@@ -175,14 +176,15 @@ def alm_real2complex(x: NDArray[np.float64], lmax: int) -> NDArray[np.complex128
             oalm (np.array): Complex alm array where the last axis has length ((lmax+1)*(lmax+2))/2.
     """
     logger = logging.getLogger(__name__)
-    logassert(x.dtype == np.float64, f"Input map is not of type float64 (it is {x.dtype})", logger)
-    
+    logassert(x.dtype in [np.float32, np.float64], f"Input map is not of type np.float32 or "
+              f"np.float64 (it is {x.dtype})", logger)
+    complex_dtype = np.complex128 if x.dtype == np.float64 else np.complex64
     ainfo = curvedsky.alm_info(lmax=lmax)
     i    = int(ainfo.mstart[1]+1)
     # oalm will have the same shape as x except for the last axis.
-    oalm = np.zeros((*x.shape[:-1], ainfo.nelem), np.complex128)
+    oalm = np.zeros((*x.shape[:-1], ainfo.nelem), complex_dtype)
     oalm[...,:i] = x[...,:i]
-    oalm[...,i:] = x[...,i:].view(np.complex128)/np.sqrt(2.)
+    oalm[...,i:] = x[...,i:].view(complex_dtype)/sqrt(2.0)
     return oalm
 
 
