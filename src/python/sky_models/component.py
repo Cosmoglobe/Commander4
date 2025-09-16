@@ -35,6 +35,7 @@ class DiffuseComponent(Component):
     def __init__(self, params: Bunch):
         super().__init__(params)
         self.polarized = params.polarized
+        self.spatially_varying_MM = params.spatially_varying_MM
         self.lmax = params.lmax
         self.smoothing_prior_FWHM = params.smoothing_prior_FWHM
         self.smoothing_prior_amplitude = params.smoothing_prior_amplitude
