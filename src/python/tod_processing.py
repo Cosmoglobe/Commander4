@@ -307,8 +307,8 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
         s_orb = get_s_orb_TOD(scan, experiment_data, pix)
         sky_model_TOD = get_static_sky_TOD(det_compsep_map, pix, psi)
 
-        tod_residual = scan.tod - scan_samples.gain_est*(sky_model_TOD + s_orb)  # Subtracting sky signal.
-        tod_residual += detector_samples.g0_est*s_orb  # Now we can add back in the orbital dipole.
+        residual_tod = scan.tod - scan_samples.gain_est*(sky_model_TOD + s_orb)  # Subtracting sky signal.
+        residual_tod += detector_samples.g0_est*s_orb  # Now we can add back in the orbital dipole.
 
         sigma0 = scan_samples.gain_est*scan_samples.sigma0  # scan.sigma0 is in tempearture units.
         Ntod = scan.tod.shape[0]
@@ -318,8 +318,11 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
         inv_power_spectrum[1:] = 1.0/(sigma0**2*(1 + (freqs[1:]/scan_samples.fknee_est)**scan_samples.alpha_est))
 
         ### Solving Equation 16 from BP7 ###
+        mask = scan.processing_mask_TOD
+        # In the masked regions, inpaint the orbital dipole times the absolute gain.
+        residual_tod[~mask] = detector_samples.g0_est*s_orb[~mask] + np.random.normal(0, sigma0, s_orb[~mask].shape)
         s_fft = forward_rfft(s_orb)
-        d_fft = forward_rfft(tod_residual)
+        d_fft = forward_rfft(residual_tod)
         N_inv_s_fft = s_fft * inv_power_spectrum
         N_inv_d_fft = d_fft * inv_power_spectrum
         N_inv_s = backward_rfft(N_inv_s_fft, Ntod)
@@ -328,9 +331,10 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
         # We now exclude the time-samples hitting the masked area. We don't want to do this before now, because it would mess up the FFT stuff.
 
         # mask = experiment_data.processing_mask_map[scan.pix]
-        mask = scan.processing_mask_TOD
-        sum_s_T_N_inv_d += np.dot(s_orb[mask], N_inv_d[mask])  # Add to the numerator and denominator.
-        sum_s_T_N_inv_s += np.dot(s_orb[mask], N_inv_s[mask])
+        # sum_s_T_N_inv_d += np.dot(s_orb[mask], N_inv_d[mask])  # Add to the numerator and denominator.
+        # sum_s_T_N_inv_s += np.dot(s_orb[mask], N_inv_s[mask])
+        sum_s_T_N_inv_d += np.dot(s_orb, N_inv_d)
+        sum_s_T_N_inv_s += np.dot(s_orb, N_inv_s)
 
     # The g0 term is fully global, so we reduce across both all scans and all bands:
     sum_s_T_N_inv_d = TOD_comm.reduce(sum_s_T_N_inv_d, op=MPI.SUM, root=0)
@@ -406,8 +410,12 @@ def sample_relative_gain(TOD_comm: MPI.Comm, det_comm: MPI.Comm, experiment_data
         
         # mask = experiment_data.processing_mask_map[scan.pix]
         mask = scan.processing_mask_TOD
-        s_T_N_inv_s_scan = np.dot(s_tot[mask], N_inv_s[mask])
-        r_T_N_inv_s_scan = np.dot(residual_tod[mask], N_inv_s[mask])
+        # Inpaint on the masked regions the sky signal times only the detector-residual gain.
+        residual_tod[~mask] = scan_samples.rel_gain_est*s_tot[~mask] + np.random.normal(0, sigma0, s_tot[~mask].shape)
+        s_T_N_inv_s_scan = np.dot(s_tot, N_inv_s)
+        r_T_N_inv_s_scan = np.dot(residual_tod, N_inv_s)
+        # s_T_N_inv_s_scan = np.dot(s_tot[mask], N_inv_s[mask])
+        # r_T_N_inv_s_scan = np.dot(residual_tod[mask], N_inv_s[mask])
 
         # Add the contribution from this scan to the local sum
         local_s_T_N_inv_s += s_T_N_inv_s_scan
@@ -543,18 +551,21 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
         inv_power_spectrum = np.zeros(Nrfft)
         inv_power_spectrum[1:] = 1.0 / (sigma0**2 * (1 + (freqs[1:] / scan_samples.fknee_est)**scan_samples.alpha_est))
 
-        s_tot[~mask] = 0.0  #TODO: Needs to be handled differently.
-        residual_tod[~mask] = 0.0
+        # s_tot[~mask] = 0.0  #TODO: Needs to be handled differently.
+        # residual_tod[~mask] = 0.0
         # s_tot[~mask] = scan_samples.n_corr_est[~mask]/scan_samples.gain_est
         # residual_tod[~mask] = scan_samples.n_corr_est[~mask]
+
+        # In the masked regions, inpaint the total sky model times only the temporal gain estimate.
+        residual_tod[~mask] = scan_samples.time_dep_rel_gain_est*s_tot[~mask] + np.random.normal(0, sigma0, s_tot[~mask].shape)
 
         # Calculate N^-1 * s_tot and N^-1 * residual_tod
         N_inv_s = backward_rfft(forward_rfft(s_tot) * inv_power_spectrum, Ntod)
         N_inv_r = backward_rfft(forward_rfft(residual_tod) * inv_power_spectrum, Ntod)
         
         # Calculate elements for the linear system
-        A_qq = np.dot(s_tot[mask], N_inv_s[mask])
-        b_q = np.dot(s_tot[mask], N_inv_r[mask])
+        A_qq = np.dot(s_tot, N_inv_s)
+        b_q = np.dot(s_tot, N_inv_r) # v2 = removed the masks from this step.
         
         A_qq_local.append(A_qq)
         b_q_local.append(b_q)
@@ -644,7 +655,8 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
                 plt.figure(figsize=(10,8))
                 other_gain = detector_samples.g0_est + detector_samples.scans[0].rel_gain_est
                 plt.plot(1e9*(other_gain + delta_g_sample))
-                plt.ylim(0.85*1e9*other_gain, 1.15*1e9*other_gain)
+                # plt.ylim(0.85*1e9*other_gain, 1.15*1e9*other_gain)
+                plt.ylim(0, np.max(1e9*(other_gain + delta_g_sample)))
                 plt.xlabel("PID")
                 plt.ylabel("Gain [mV/K]")
                 plt.xticks([0, 15000, 30000, 45000])
