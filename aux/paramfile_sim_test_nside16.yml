@@ -1,5 +1,5 @@
-OUTPUT_FOLDER: '/mn/stornext/d23/cmbco/commander4_shared/cron_tests/sim_test_data/'
-POINTING_PATH: '/mn/stornext/d23/cmbco/commander4_shared/aux_data/sim_pointing/planck_pointing_fullsurvey_nside2048_downx100000.h5'
+OUTPUT_FOLDER: '/home/martin/codes/Commander4/sim_data'
+POINTING_PATH: null
 # There exists downsampled versions of above pointing file, for sparser pointing. Useful if running at lower nsides.
 # The not-downsampled pointing contains 13.6 billion pointings. Make sure NTOD*down is smaller than this,
 # but as Planck only covered the full sky about ~8 times during this, also try and make NTOD*down as close to 13.6 billion as possible.

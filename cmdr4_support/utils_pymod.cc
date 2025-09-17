@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <queue>
 
 #include "ducc0/infra/mav.h"
 #include "ducc0/infra/misc_utils.h"
@@ -262,26 +263,89 @@ numpy.ndarray((npix, ncomp), dtype=np.float64)
     If comp_maps was provided, this array is identical to comp_maps
 )""";
 
+template<typename T> static py::object Py2_huffman_encode(const CNpArr &data_)
+  {
+  struct Node
+    {
+    bool leaf;
+    T symbol;
+    size_t weight;
+    size_t node_number;
+
+    Node(T symb, size_t wgt, size_t nodenum)
+      : leaf(true), symbol(symb), weight(wgt), node_number(nodenum) {}
+    Node(size_t wgt, size_t nodenum)
+      : leaf(false), weight(wgt), node_number(nodenum) {}
+
+    bool operator< (const Node &other) const
+      { return weight < other.weight; }
+    };
+
+  auto data = to_cmav<T,1>(data_);
+  {
+  py::gil_scoped_release release;
+//    symbols, weights = np.unique(array, return_counts=True)
+  map<T, size_t> symbmap;
+  for (size_t i=0; i<data.shape(0); ++i)
+    ++symbmap[data(i)];
+  priority_queue<Node> queue;
+  size_t node_number=0;
+  for (const auto &entry: symbmap)
+    queue.push(Node(entry.first, entry.second, ++node_number));
+  vector<uint64_t> lrnodes;
+  while (queue.size()>1)
+    {
+    auto left_child  = queue.top(); queue.pop();
+    auto right_child = queue.top(); queue.pop();
+    queue.push(Node(left_child.weight + right_child.weight, ++node_number));
+    lrnodes.push_back(left_child.node_number);
+    lrnodes.push_back(right_child.node_number);
+    }
+#if 0
+  map<T, vector<bool>> encoding;
+    encoding = {}
+    node = heapq.heappop(queue)
+    if node.left is None and node.right is None: #case where there was just one symbol
+        _fillEncoding(node, encoding, 1, 0)
+    else:
+        _fillEncoding(node, encoding)
+#endif
+  }
+return py::none();
+  }
+static py::object Py_huffman_encode(const CNpArr &data)
+  {
+  if (isPyarr<int64_t>(data))
+    return Py2_huffman_encode<int64_t> (data);
+  MR_fail("type matching failed: 'data' has neither type 'i8' nor 'xxx'");
+  }
+
+template<typename T,typename Tint> static NpArr decode2(const cmav<uint8_t,1> &bytes,
+  const cmav<int64_t> &tree_, const cmav<T,1> &symb, const vmav<T,1> &out)
+  {
+  }
 template<typename T> static NpArr Py2_huffman_decode(const CNpArr &bytes_,
   const CNpArr &tree_, const CNpArr &symb_, const NpArr &out_)
   {
   auto bytes = to_cmav<uint8_t,1>(bytes_);
   auto tree = to_cmav<int64_t,1>(tree_);
   auto symb = to_cmav<T,1>(symb_);
+  size_t nsymb = symb.shape(0);
   auto out = to_vmav<T,1>(out_);
+  if (nsymb+tree.shape(0)/2 + 10 <(1UL<<15)) return decode2<T,int16_t>(bytes, tree, symb, out);
+  if (nsymb+tree.shape(0)/2 + 10 <(1UL<<31)) return decode2<T,int32_t>(bytes, tree, symb, out);
   {
   py::gil_scoped_release release;
   MR_assert((tree.shape(0)&1)==1, "bad tree size");
   size_t n_internal = (tree.shape(0)-1)/2;
   cmav<int64_t,2> lrnodes(&tree(1), {2, n_internal},
     {tree.stride(0)*ptrdiff_t(n_internal),tree.stride(0)});
-  size_t nsymb = symb.shape(0);
   size_t nout = out.shape(0);
   size_t startnode = nsymb + n_internal;
   size_t nbits = bytes.shape(0)*8 - 8 - bytes(0);
   size_t node = startnode;
   size_t pos=0;
-  for (size_t i=8; i<nbits+8; ++i)
+  for (size_t i=8;i<nbits+8; ++i)
     {
     size_t bit = (bytes(i/8) >> (7-(i%8))) & 1;
     node = lrnodes(bit, node-nsymb-1);
@@ -306,6 +370,9 @@ static NpArr Py_huffman_decode(const CNpArr &bytes,
   MR_fail("type matching failed: 'symb' has neither type 'i8' nor 'xxx'");
   }
 
+constexpr const char *Py_huffman_encode_DS = R"""(
+TBW
+)""";
 constexpr const char *Py_huffman_decode_DS = R"""(
 Decode a Commander3-style Huffman-compressed bitstream.
 
@@ -343,6 +410,7 @@ void add_utils(py::module_ &msup)
         "comp_maps"_a=None,
         "nthreads"_a=1);
 
+  m.def("huffman_encode", Py_huffman_encode, Py_huffman_encode_DS, "data"_a);
   m.def("huffman_decode", Py_huffman_decode, Py_huffman_decode_DS, "bytes"_a,
         "tree"_a, "symb"_a, "out"_a);
   }

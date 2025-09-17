@@ -207,7 +207,7 @@ class Huffman:
                 decoded_arr.append(d)
                 code = ""
 
-        decoded_arr = np.cumsum(decoded_arr)
+       # decoded_arr = np.cumsum(decoded_arr)
 
         if write:
             fname, fext = os.path.splitext(self.infile)
