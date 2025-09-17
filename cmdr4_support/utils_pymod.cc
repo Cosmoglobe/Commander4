@@ -327,6 +327,59 @@ numpy.ndarray(ndata,), dtype identical to that of symb)
     the uncopressed data array, identical to `out`
 )""";
 
+template<typename T> static NpArr Py2_almxfl(const CNpArr &alm_, size_t lmax,
+  size_t mmax, const CNpArr &fl_, const OptNpArr &out__)
+  {
+  auto alm = to_cmav<complex<T>,1>(alm_, "alm");
+  auto fl = to_cmav<T,1>(fl_, "fl");
+  MR_assert(lmax>=mmax, "lmax must not be smaller than mmax");
+  size_t nalm = ((mmax+1)*(mmax+2))/2 + (mmax+1)*(lmax-mmax);
+  MR_assert(alm.shape(0)==nalm, "bad size of alm array");
+  MR_assert(fl.shape(0)==lmax+1, "bad size of fk array");
+  auto [out_, out] = get_OptNpArr_and_vmav<complex<T>,1>(out__,
+    {alm.shape(0)}, "out", 1);
+  size_t ofs = 0;
+  for (size_t m=0; m<=mmax; ++m)
+    for (size_t l=m; l<=lmax; ++l)
+      {
+      out(ofs) = alm(ofs)*fl(l);
+      ++ofs;
+      }
+  return out_;
+  }
+static NpArr Py_almxfl(const CNpArr &alm, size_t lmax, size_t mmax,
+  const CNpArr &fl, const OptNpArr &out)
+  {
+  if (isPyarr<complex<double>>(alm))
+    return Py2_almxfl<double> (alm, lmax, mmax, fl, out);
+  if (isPyarr<complex<float>>(alm))
+    return Py2_almxfl<float> (alm, lmax, mmax, fl, out);
+  MR_fail("type matching failed: 'alm' has neither type 'c128' nor 'c64'");
+  }
+constexpr const char *Py_almxfl_DS = R"""(
+Multiply a set of a_lm with an l-dependent factor.
+
+Parameters
+----------
+alm: numpy.ndarray((nalm,), dtype=numpy.complex64 or numpy.complex128)
+    the input a_lm
+lmax: int
+    the lmax for alm
+mmax: int
+    the mmax for alm
+fl: numpy.ndarray((lmax+1,), real-valued of same accuracy as alm)
+    the l-dependent factors
+out: optional numpy.ndarray of same shape and dtype as alm
+    the output array
+    May be identical to "alm"
+
+Returns
+-------
+numpy.ndarray of same shape and dtype as alm
+    the scaled alm
+    Identical to out if this ws provided
+)""";
+
 void add_utils(py::module_ &msup)
   {
   using namespace pybind11::literals;
@@ -345,6 +398,8 @@ void add_utils(py::module_ &msup)
 
   m.def("huffman_decode", Py_huffman_decode, Py_huffman_decode_DS, "bytes"_a,
         "tree"_a, "symb"_a, "out"_a);
+  m.def("almxfl", Py_almxfl, Py_almxfl_DS, "alm"_a, "lmax"_a, "mmax"_a, "fl"_a,
+        "out"_a=None);
   }
 
 }
