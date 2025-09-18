@@ -79,6 +79,8 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
        detector_maps (np.array): The band-integrated total sky.
         
     """
+    logger = logging.getLogger(__name__)
+
     # if params.make_plots:
         # detector_to_plot = proc_comm.Get_rank()
         # logging.info(f"Rank {proc_comm.Get_rank()} chain {chain} iter {iter} starting plotting.")
@@ -111,6 +113,13 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
     comp_list = proc_comm.bcast(comp_list, root=0)  #TODO: This needs to be handled differently.
     sky_model = SkyModel(comp_list)
 
+    sky_model_at_band = sky_model.get_sky_at_nu(detector_data.nu, detector_data.nside,
+                                                fwhm=np.deg2rad(detector_data.fwhm/60.0))
+    pol_names = ["I", "Q", "U"]
+    for ipol in range(3):
+        if detector_data.map_sky[ipol] is not None:
+            chi2 = np.mean(np.abs(detector_data.map_sky[ipol] - sky_model_at_band[ipol])/detector_data.map_rms[ipol])
+            logger.info(f"Reduced chi2 for pol={pol_names[ipol]} ({detector_data.nu}GHz): {chi2:.3f}")
 
     if params.make_plots:
         t0 = time.time()
