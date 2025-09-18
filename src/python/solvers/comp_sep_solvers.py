@@ -23,10 +23,6 @@ def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     """A (quite inefficient) pixel-by-pixel solver for the component separation problem. This only
        works if assuming there is no beam, or all maps are smoothed to the same resolution.
     """
-    if detector_data.dtype == np.float64:
-        complex_dtype = np.complex128
-    else:
-        complex_dtype = np.complex64
     logger = logging.getLogger(__name__)
     if proc_comm.Get_rank() == 0:
         logger.info("Starting pixel-by-pixel component separation.")
@@ -106,8 +102,11 @@ def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
             # logger.info(f"Time for native solution: {time()-t0}s.")
             # import ducc0
             # logger.info(f"L2 error between solutions: {ducc0.misc.l2error(comp_maps, comp_maps2)}.")
-
     comp_maps = proc_comm.bcast(comp_maps, root=0)
+    if comp_maps[0][0].dtype == np.float64:
+        complex_dtype = np.complex128
+    else:
+        complex_dtype = np.complex64
     for icomp in range(ncomp_full):
         alm_len = ((comp_list[icomp].lmax+1)*(comp_list[icomp].lmax+2))//2
         comp_alms = np.zeros((1,alm_len), dtype=complex_dtype)
