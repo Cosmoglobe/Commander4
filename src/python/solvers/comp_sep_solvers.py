@@ -245,7 +245,7 @@ class CompSepSolver:
                 band_alms += alm_in_band_space
 
         # B Y^-1 M Y a
-        hp.smoothalm(band_alms, self.my_band_fwhm_rad, inplace=True)
+        band_alms = hp.smoothalm(band_alms, self.my_band_fwhm_rad)
 
         return band_alms
 
@@ -256,7 +256,7 @@ class CompSepSolver:
         a_final = [np.zeros((self.npol, self.alm_len_percomp_complex[icomp]), dtype=self.complex_dtype) for icomp in range(self.ncomp)]
         
         # B^T a
-        hp.smoothalm(a_in, self.my_band_fwhm_rad, inplace=True)
+        a_in = hp.smoothalm(a_in, self.my_band_fwhm_rad)
 
         if (self.per_comp_spatial_MM).any():
             band_map = np.zeros((self.npol, self.my_band_npix), dtype=self.float_dtype)
