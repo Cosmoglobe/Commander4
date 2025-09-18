@@ -138,7 +138,7 @@ def main(params: Bunch, params_dict: dict):
             if proc_comm.Get_rank() == 0:
                 logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished chain {chain_num}, iter {iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
             t0 = time.time()
-            curr_compsep_output = receive_compsep(band_comm, my_band_identifier, band_comm.Get_rank()==0, CompSep_band_masters_dict)
+            curr_compsep_output = receive_compsep(band_comm, experiment_data, my_band_identifier, CompSep_band_masters_dict)
             if band_comm.Get_rank() == 0:
                 logger.info(f"TOD: Rank {proc_comm.Get_rank()} finished receiving results for chain {chain_num}, iter {iter_num} (time spent waiting+receiving = {time.time()-t0:.1f}s).")
             send_tod(is_band_master, curr_tod_output, CompSep_band_masters_dict, my_band_identifier)

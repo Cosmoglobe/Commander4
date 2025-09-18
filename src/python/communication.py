@@ -7,6 +7,7 @@ import healpy as hp
 from numpy.typing import NDArray
 
 from src.python.data_models.detector_map import DetectorMap
+from src.python.data_models.detector_TOD import DetectorTOD
 from src.python.maps_from_file import read_sim_map_from_file, read_Planck_map_from_file
 
 
@@ -24,7 +25,7 @@ def send_compsep(my_band_identifier: str, detector_map: NDArray[np.floating], de
             MPI.COMM_WORLD.send(detector_map, dest=destinations[my_band_identifier])
 
 
-def receive_compsep(band_comm: Comm, my_band_identifier: str, band_master: bool, senders: dict[str, int]) -> NDArray[np.floating]:
+def receive_compsep(band_comm: Comm, experiment_data: DetectorTOD, my_band_identifier: str, senders: dict[str, int]) -> NDArray[np.floating]:
     """ MPI-receive the results from compsep (used in conjunction with send_compsep).
 
     Input:
@@ -35,11 +36,14 @@ def receive_compsep(band_comm: Comm, my_band_identifier: str, band_master: bool,
     Returns:
         detector_map (np.array): The detector map of a single band, distributed to all processes belonging to the band communicator.
     """
-    if band_master:
-        detector_map = MPI.COMM_WORLD.recv(source=senders[my_band_identifier])
+    is_band_master = band_comm.Get_rank() == 0
+    if is_band_master:
+        sky_model = MPI.COMM_WORLD.recv(source=senders[my_band_identifier])
     else:
-        detector_map = None
-    detector_map = band_comm.bcast(detector_map, root=0)  # Currently all TOD MPI ranks need a copy of the relevant detector map, which is a little wasteful - a reason for doing OpenMP for mapmaking.
+        sky_model = None
+    sky_model = band_comm.bcast(sky_model, root=0)  # Currently all TOD MPI ranks need a copy of the relevant detector map, which is a little wasteful - a reason for doing OpenMP for mapmaking.
+    detector_map = sky_model.get_sky_at_nu(experiment_data.nu, experiment_data.nside,
+                                            fwhm=np.deg2rad(experiment_data.fwhm/60.0))
     return detector_map
 
 

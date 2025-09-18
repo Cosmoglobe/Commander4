@@ -192,14 +192,26 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Co
 
     t0 = time.time()
     if my_experiment.is_sim:
-        experiment_data, detector_samples = read_TOD_sim_data(my_experiment.data_path, my_band, my_det, params, my_detector_id, my_scans_start, my_scans_stop)
+        experiment_data = read_TOD_sim_data(my_experiment.data_path, my_band, my_det, params, my_detector_id, my_scans_start, my_scans_stop)
     else:
-        experiment_data, detector_samples = read_Planck_TOD_data(my_experiment, my_band, my_det, params, my_detector_id, my_scans_start, my_scans_stop, my_experiment.bad_PIDs_path)
+        experiment_data = read_Planck_TOD_data(my_experiment, my_band, my_det, params, my_detector_id, my_scans_start, my_scans_stop, my_experiment.bad_PIDs_path)
     tod_comm.Barrier()
     if tod_comm.Get_rank() == 0:
         logger.info(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")
 
-    return is_band_master, band_comm, det_comm, my_band_identifier, tod_band_masters_dict, experiment_data, detector_samples
+    num_scans = len(experiment_data.scans)
+    scansample_list = []
+    for iscan in range(num_scans):
+        scansample_list.append(ScanSamples())
+        scansample_list[-1].time_dep_rel_gain_est = 0.0
+        scansample_list[-1].rel_gain_est = my_det.rel_gain_est - params.initial_g0
+        scansample_list[-1].gain_est = my_det.rel_gain_est
+    det_samples = DetectorSamples(scansample_list)
+    det_samples.detector_id = my_detector_id
+    det_samples.g0_est = params.initial_g0
+    det_samples.detname = my_det.name
+
+    return is_band_master, band_comm, det_comm, my_band, my_band_identifier, tod_band_masters_dict, experiment_data, det_samples
 
 
 

@@ -11,7 +11,7 @@ from pixell.bunch import Bunch
 from src.python.data_models.detector_TOD import DetectorTOD
 from src.python.data_models.scan_TOD import ScanTOD
 from src.python.data_models.detector_samples import DetectorSamples
-from src.python.data_models.scan_samples import ScanSamples
+
 
 def get_processing_mask(my_band: Bunch) -> DetectorTOD:
     """Subtracts the sky model from the TOD data.
@@ -111,18 +111,8 @@ def read_Planck_TOD_data(my_experiment: str, my_band: Bunch, my_det: Bunch, para
     logger.info(f"Avg scan size remaining after Fourier cut {my_band.freq_identifier} {my_det.name}: "
                 f"{ntod_sum_final/ntod_sum_original*100:.1f} %")
 
-    det_static = DetectorTOD(scanlist, float(my_band.freq), my_band.fwhm, my_band.eval_nside, my_band.data_nside, my_det.name)
+    det_static = DetectorTOD(scanlist, float(my_band.freq)+float(my_det.bandpass_shift),
+                             my_band.fwhm, my_band.eval_nside, my_band.data_nside, my_det.name)
     det_static.detector_id = my_detector_id
 
-    scansample_list = []
-    for iscan in range(num_included):
-        scansample_list.append(ScanSamples())
-        scansample_list[-1].time_dep_rel_gain_est = 0.0
-        scansample_list[-1].rel_gain_est = my_det.rel_gain_est
-        scansample_list[-1].gain_est = my_det.rel_gain_est + params.initial_g0
-    det_samples = DetectorSamples(scansample_list)
-    det_samples.detector_id = my_detector_id
-    det_samples.g0_est = params.initial_g0
-    det_samples.detname = detname
-
-    return det_static, det_samples
+    return det_static

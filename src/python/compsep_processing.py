@@ -119,4 +119,4 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
         plotting.plot_components(params, detector_to_plot, chain, iter, comp_list, detector_data)
         logging.info(f"Rank {proc_comm.Get_rank()} chain {chain} iter {iter} Finished all plotting.")
 
-    return detector_maps  # Return the full sky realization for my band.
+    return sky_model  # Return the full sky realization for my band.
