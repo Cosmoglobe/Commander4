@@ -2,6 +2,7 @@ import numpy as np
 from mpi4py import MPI
 from mpi4py.MPI import Comm
 import logging
+import time
 from pixell.bunch import Bunch
 from numpy.typing import NDArray
 
@@ -78,9 +79,9 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
        detector_maps (np.array): The band-integrated total sky.
         
     """
-    if params.make_plots:
-        detector_to_plot = proc_comm.Get_rank()
-        logging.info(f"Rank {proc_comm.Get_rank()} chain {chain} iter {iter} starting plotting.")
+    # if params.make_plots:
+        # detector_to_plot = proc_comm.Get_rank()
+        # logging.info(f"Rank {proc_comm.Get_rank()} chain {chain} iter {iter} starting plotting.")
         # plotting.plot_data_maps(params, detector_to_plot, chain, iter, map_signal=signal_map,
         #                         map_corr_noise=detector_data.map_corr_noise,
         #                         map_rms=detector_data.map_rms,
@@ -110,13 +111,12 @@ def process_compsep(detector_data: DetectorMap, iter: int, chain: int, params: B
     comp_list = proc_comm.bcast(comp_list, root=0)  #TODO: This needs to be handled differently.
     sky_model = SkyModel(comp_list)
 
-    detector_maps = sky_model.get_sky_at_nu(detector_data.nu, detector_data.nside,
-                                            fwhm=detector_data.fwhm/60.0*np.pi/180.0)
 
     if params.make_plots:
+        t0 = time.time()
         detector_to_plot = proc_comm.Get_rank()
         plotting.plot_combo_maps(params, detector_to_plot, chain, iter, comp_list, detector_data)
         plotting.plot_components(params, detector_to_plot, chain, iter, comp_list, detector_data)
-        logging.info(f"Rank {proc_comm.Get_rank()} chain {chain} iter {iter} Finished all plotting.")
+        logging.info(f"Rank {proc_comm.Get_rank()} chain {chain} iter {iter} Finished all plotting in {time.time()-t0:.1f}s.")
 
     return sky_model  # Return the full sky realization for my band.
