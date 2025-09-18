@@ -12,6 +12,7 @@ from src.python.output.log import logassert
 import logging
 import os
 from math import sqrt
+from numba import njit
 
 def nalm(lmax: int, mmax: int) -> int:
     """Calculates the number of a_lm elements for a spherical harmonic representation up to l<=lmax and m<=mmax.
@@ -33,6 +34,51 @@ def gaussian_random_alm(lmax, mmax, spin, ncomp):
         ofs += lmax+1-s
     res[lmax+1:] *= np.sqrt(2.)
     return res
+
+
+@njit(cache=True, fastmath=True)
+def _almxfl_numba(res, lmax, mmax, fl):
+    ofs = 0
+    for m in range(mmax+1):
+        next = ofs + lmax + 1 - m
+        res[ofs:next] *= fl[m:lmax+1]
+        ofs = next
+
+def almxfl(alm, fl, lmax=None, mmax=None, inplace=False):
+    res = alm if inplace else alm.copy()
+    lmax = hp.Alm.getlmax(alm.shape[-1]) if lmax is None else lmax
+    mmax = lmax if mmax is None else mmax
+    _almxfl_numba(res, lmax, mmax, fl)
+    return res
+
+
+@njit(cache=True, fastmath=True)
+def _project_alms_numba(alms_in, lmax_in, lmax_out, nalm_out):
+    """ Numba helper function to compute _project_alms (see function below)
+    """
+    alms_out = np.zeros((*alms_in.shape[:-1], nalm_out), dtype=alms_in.dtype)
+    # Determine the number of modes to copy
+    l_copy = min(lmax_in, lmax_out)
+    m_copy = min(lmax_in, lmax_out)
+    # Copy alm data up to the minimum lmax
+    ofs_in, ofs_out = 0, 0
+    for m in range(m_copy + 1):
+        alms_out[:, ofs_out:ofs_out+l_copy+1-m] = alms_in[:, ofs_in:ofs_in+l_copy+1-m]
+        ofs_in += lmax_in+1-m
+        ofs_out += lmax_out+1-m
+    return alms_out
+
+def project_alms(alms_in, lmax_out):
+    """ Projects alms from one lmax resolution to another, handling truncation or zero-padding.
+        Importantly, this function is the adjoint of itself. Takes complex alms as input.
+    """
+    lmax_in = hp.Alm.getlmax(alms_in.shape[-1])
+    if lmax_in == lmax_out:
+        return alms_in
+    nalm_out = hp.Alm.getsize(lmax_out)
+    alms_out = _project_alms_numba(alms_in, lmax_in, lmax_out, nalm_out)
+    return alms_out
+
 
 # Cache for geom_info objects ... pretty small, each entry has a size of O(nside)
 # This will be mainly beneficial for small SHTs with high nthreads

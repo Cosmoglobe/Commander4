@@ -12,7 +12,7 @@ from src.python.output.log import logassert
 from src.python.data_models.detector_map import DetectorMap
 from src.python.sky_models.component import DiffuseComponent
 from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, alm_real2complex,\
-    alm_complex2real, gaussian_random_alm
+    alm_complex2real, gaussian_random_alm, project_alms, almxfl
 from src.python.solvers.dense_matrix_math import DenseMatrix
 import src.python.solvers.preconditioners as preconditioners
 
@@ -120,28 +120,6 @@ def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
 
 
 
-def _project_alms(alms_in, lmax_in, lmax_out):
-    """
-    Projects alms from one lmax resolution to another, handling truncation or zero-padding.
-    Importantly, this function is the adjoint of itself.
-    TODO: This function would probably be faster if moved to C++.
-    """
-    if lmax_in == lmax_out:
-        return alms_in.copy()
-
-    alms_out = np.zeros_like(alms_in, shape=(alms_in.shape[0], hp.Alm.getsize(lmax_out)))
-    
-    # Determine the number of modes to copy
-    l_copy = min(lmax_in, lmax_out)
-    m_copy = min(lmax_in, lmax_out)
-    
-    # Copy alm data up to the minimum lmax
-    for m in range(m_copy + 1):
-        idx_in = hp.Alm.getidx(lmax_in, np.arange(m, l_copy + 1), m)
-        idx_out = hp.Alm.getidx(lmax_out, np.arange(m, l_copy + 1), m)
-        alms_out[:, idx_out] = alms_in[:, idx_in]
-        
-    return alms_out
 
 
 class CompSepSolver:
@@ -229,7 +207,7 @@ class CompSepSolver:
             band_map = np.zeros((self.npol, self.my_band_npix), dtype=self.float_dtype)
             for icomp in range(self.ncomp):
                 if self.per_comp_spatial_MM[icomp]:  # If this component has a MM that is pixel-depnedent.
-                    alm_in_band_space = _project_alms(a_in[icomp], self.lmax_per_comp[icomp], self.my_band_lmax)
+                    alm_in_band_space = project_alms(a_in[icomp], self.my_band_lmax)
                     # Y a
                     comp_map = alm_to_map(alm_in_band_space, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
                     # M Y a
@@ -240,7 +218,7 @@ class CompSepSolver:
 
         for icomp in range(self.ncomp):
             if not self.per_comp_spatial_MM[icomp]:
-                alm_in_band_space = _project_alms(a_in[icomp], self.lmax_per_comp[icomp], self.my_band_lmax)
+                alm_in_band_space = project_alms(a_in[icomp], self.my_band_lmax)
                 alm_in_band_space *= self.comps_SED[icomp, self.my_rank]
                 band_alms += alm_in_band_space
 
@@ -272,7 +250,7 @@ class CompSepSolver:
                     tmp_alm = alm_to_map_adjoint(tmp_map, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
 
                     # Project alm from band to component lmax.
-                    summed_alms_for_comp = _project_alms(tmp_alm, self.my_band_lmax, local_comp_lmax)
+                    summed_alms_for_comp = project_alms(tmp_alm, local_comp_lmax)
                     a_final[icomp][:] = summed_alms_for_comp
 
         # For the components that don't have spatially dependent mixing matrix, we do it all in alm-space:
@@ -280,7 +258,7 @@ class CompSepSolver:
             if not self.per_comp_spatial_MM[icomp]:
                 local_comp_lmax = self.lmax_per_comp[icomp]
                 tmp_alm = a_in*self.comps_SED[icomp,self.my_rank]
-                summed_alms_for_comp = _project_alms(tmp_alm, self.my_band_lmax, local_comp_lmax)
+                summed_alms_for_comp = project_alms(tmp_alm, local_comp_lmax)
                 a_final[icomp][:] = summed_alms_for_comp
 
         return a_final
@@ -335,7 +313,7 @@ class CompSepSolver:
                     #TODO: We should really replace hp.almxfl with something soon. It's very slow,
                     # and the inplace=True option silently fails for certain data types.
                     # S^{1/2} a
-                    a[icomp][ipol] = hp.almxfl(a[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp])
+                    almxfl(a[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
 
 
         # Spread initial a to all ranks from master.
@@ -359,7 +337,7 @@ class CompSepSolver:
             # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
             if myrank == 0:
                 for ipol in range(self.npol):
-                    a[icomp][ipol] = hp.almxfl(a[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp])
+                    almxfl(a[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
 
 
         if myrank == 0:
@@ -398,7 +376,7 @@ class CompSepSolver:
             if myrank == 0:
                 for ipol in range(self.npol):
                     # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 d
-                    b[icomp][ipol] = hp.almxfl(b[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp])                
+                    almxfl(b[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
 
         if myrank == 0:
             for icomp in range(self.ncomp):
@@ -439,7 +417,7 @@ class CompSepSolver:
             if myrank == 0:
                 for ipol in range(self.npol):
                     # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 eta_1
-                    b[icomp][ipol] = hp.almxfl(b[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp])                
+                    almxfl(b[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
         
         if myrank == 0:
             for icomp in range(self.ncomp):
@@ -461,7 +439,7 @@ class CompSepSolver:
             mu = [np.zeros((self.npol, self.alm_len_percomp_complex[icomp]), dtype=self.complex_dtype) for icomp in range(self.ncomp)]
             for icomp in range(self.ncomp):
                 for ipol in range(self.npol):
-                    mu[icomp][ipol] = hp.almxfl(mu[icomp][ipol], self.per_comp_P_smooth_inv[icomp])
+                    almxfl(mu[icomp][ipol], self.per_comp_P_smooth_inv[icomp], inplace=True)
                 mu[icomp] = alm_complex2real(mu[icomp], self.lmax_per_comp[icomp])
                 self.logger.info(f"RHS3 comp-{icomp}: {np.mean(np.abs(mu[icomp])):.2e}")
             # We store the component alms as one long 1D array, so the array must be collapsed:
@@ -478,7 +456,7 @@ class CompSepSolver:
             for icomp in range(self.ncomp):
                 for ipol in range(self.npol):
                     eta2[icomp][ipol] = gaussian_random_alm(self.lmax_per_comp[icomp], self.lmax_per_comp[icomp], self.spin, 1)
-                    eta2[icomp][ipol] = hp.almxfl(eta2[icomp][ipol], self.per_comp_P_smooth_inv_sqrt[icomp])
+                    eta2[icomp][ipol] = almxfl(eta2[icomp][ipol], self.per_comp_P_smooth_inv_sqrt[icomp], inplace=True)
                 eta2[icomp] = alm_complex2real(eta2[icomp], self.lmax_per_comp[icomp])
                 self.logger.info(f"RHS4 comp-{icomp}: {np.mean(np.abs(eta2[icomp])):.2e}")
             # We store the component alms as one long 1D array, so the array must be collapsed:
@@ -535,7 +513,7 @@ class CompSepSolver:
             iter += 1
             if iter%checkpoint_interval == 0:
                 if master:
-                    logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-checkpoint_interval:iter]):.3e} ({(time.time() - t0)/checkpoint_interval:.1f}s/iter)")
+                    logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-checkpoint_interval:iter]):.3e} ({(time.time() - t0)/checkpoint_interval:.2f}s/iter)")
                     t0 = time.time()
                 if mycomp < self.ncomp:
                     if x_true is not None:
@@ -565,7 +543,7 @@ class CompSepSolver:
                 local_comp = s_bestfit_compact[:,self.alm_start_idx_per_comp[icomp]:self.alm_start_idx_per_comp[icomp+1]]
                 local_comp = alm_real2complex(local_comp, self.lmax_per_comp[icomp])  # CG search uses real-valued alms, convert to complex, which is used outside CG.
                 for ipol in range(self.npol):
-                    local_comp[ipol] = hp.almxfl(local_comp[ipol], self.per_comp_P_smooth_sqrt[icomp])
+                    almxfl(local_comp[ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
                 s_bestfit_list.append(local_comp)
         else:
             s_bestfit_list = [] # np.zeros((0,), dtype=np.complex128)
