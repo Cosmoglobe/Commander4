@@ -27,7 +27,7 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int,
         gain = detector_data.gain
         
         map_rawobs = map_signal + map_corrnoise + map_orbdipole
-        map_skysub = map_signal - map_skymodel
+        map_skysub = map_signal + map_corrnoise - map_skymodel
 
         foreground_subtracted = np.zeros_like(map_signal)
         cmb_subtracted = np.zeros_like(map_signal)
@@ -62,8 +62,6 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int,
                     cmb_map_anisotropies = component.get_sky_anisotropies(freq, nside, pol=True, fwhm=smoothing_scale_radians)[ipol-1]
                 else:
                     cmb_map_anisotropies = component.get_sky_anisotropies(freq, nside, pol=False, fwhm=smoothing_scale_radians)[0]
-
-        residual -= map_corrnoise
 
         plt.axes(ax[0,0])
         sym_lim = np.percentile(np.abs(map_rawobs), 99)
