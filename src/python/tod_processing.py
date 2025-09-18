@@ -69,6 +69,7 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         mapmaker_corrnoise.normalize_map(map_cov)
         map_corrnoise = mapmaker_corrnoise.final_map
     if band_comm.Get_rank() == 0:
+        map_signal -= map_orbdipole
         if mapmaker_corrnoise is not None:
             map_signal -= map_corrnoise
         detmap = DetectorMap(map_signal, map_rms, experiment_data.nu,
