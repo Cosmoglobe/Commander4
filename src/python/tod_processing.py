@@ -211,7 +211,7 @@ def init_tod_processing(tod_comm: MPI.Comm, params: Bunch) -> tuple[bool, MPI.Co
     det_samples.g0_est = params.initial_g0
     det_samples.detname = my_det.name
 
-    return is_band_master, band_comm, det_comm, my_band, my_band_identifier, tod_band_masters_dict, experiment_data, det_samples
+    return is_band_master, band_comm, det_comm, my_band_identifier, tod_band_masters_dict, experiment_data, det_samples
 
 
 
