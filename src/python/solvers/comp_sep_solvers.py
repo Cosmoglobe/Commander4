@@ -219,7 +219,7 @@ class CompSepSolver:
                     comp_map = alm_to_map(alm_in_band_space, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
                     # M Y a
                     for ipol in range(self.npol):
-                        _inplace_prod_add(band_map[ipol], comp_map[ipol], self.comps_SED[icomp, self.my_rank], comp_map.shape[-1])
+                        _inplace_prod_add(band_map[ipol], comp_map[ipol], self.comps_SED[icomp, self.my_rank])
             # Y^-1 M Y a
             curvedsky.map2alm_healpix(band_map, band_alms, niter=0, spin=self.spin, nthread=mythreads)
 
@@ -227,7 +227,7 @@ class CompSepSolver:
             if not self.per_comp_spatial_MM[icomp]:
                 alm_in_band_space = project_alms(a_in[icomp], self.my_band_lmax)
                 for ipol in range(self.npol):
-                    _inplace_prod_add(band_alms[ipol], alm_in_band_space[ipol], self.comps_SED[icomp, self.my_rank], band_alms.shape[-1])
+                    _inplace_prod_add(band_alms[ipol], alm_in_band_space[ipol], self.comps_SED[icomp, self.my_rank])
         # B Y^-1 M Y a
         for ipol in range(self.npol):
             almxfl(band_alms[ipol], self.my_band_beam_Cl, inplace=True)
@@ -255,7 +255,7 @@ class CompSepSolver:
                     # M^T Y^-1 B^T a
                     tmp_map = band_map.copy()
                     for ipol in range(self.npol):
-                        _inplace_prod_scalar(tmp_map[ipol], self.comps_SED[icomp,self.my_rank], tmp_map.shape[-1])
+                        _inplace_prod_scalar(tmp_map[ipol], self.comps_SED[icomp,self.my_rank])
 
                     # Y^T M^T Y^-1^T B^T a
                     tmp_alm = alm_to_map_adjoint(tmp_map, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
@@ -270,7 +270,7 @@ class CompSepSolver:
                 local_comp_lmax = self.lmax_per_comp[icomp]
                 tmp_alm = a_in.copy()
                 for ipol in range(self.npol):
-                    _inplace_prod_scalar(tmp_alm[ipol], self.comps_SED[icomp,self.my_rank], tmp_alm[ipol].shape[-1])
+                    _inplace_prod_scalar(tmp_alm[ipol], self.comps_SED[icomp,self.my_rank])
                 a_final[icomp][:] = project_alms(tmp_alm, local_comp_lmax)
 
         return a_final
@@ -285,7 +285,7 @@ class CompSepSolver:
 
         # N^-1 Y a
         for ipol in range(self.npol):
-            _inplace_prod(a[ipol], self.map_inv_var[ipol], self.my_band_npix)
+            _inplace_prod(a[ipol], self.map_inv_var[ipol])
 
         # Y^T N^-1 Y a
         a = alm_to_map_adjoint(a, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)

@@ -18,17 +18,25 @@ from numba import njit, prange
 ###### GENERAL MATH STUFF ###########
 
 @njit(cache=True, fastmath=True, parallel=True)
-def _inplace_prod_add(arr_main, arr_add, float_mult, len):
+def _inplace_prod_add(arr_main, arr_add, float_mult):
+    len = arr_main.size
+    assert(arr_main.ndim == 1)
+    assert(arr_main.shape==arr_add.shape)
     for i in prange(len):
         arr_main[i] += arr_add[i]*float_mult
 
 @njit(cache=True, fastmath=True, parallel=True)
-def _inplace_prod(arr_main, arr_prod, len):
+def _inplace_prod(arr_main, arr_prod):
+    len = arr_main.size
+    assert(arr_main.ndim == 1)
+    assert(arr_main.shape==arr_prod.shape)
     for i in prange(len):
         arr_main[i] *= arr_prod[i]
 
 @njit(cache=True, fastmath=True, parallel=True)
-def _inplace_prod_scalar(arr_main, scalar_prod, len):
+def _inplace_prod_scalar(arr_main, scalar_prod):
+    len = arr_main.size
+    assert(arr_main.ndim == 1)
     for i in prange(len):
         arr_main[i] *= scalar_prod
 
@@ -39,15 +47,15 @@ def forward_rfft(data:NDArray[np.floating], nthreads:int = 1):
             data (np.array): Real-valued data array to be Fourier transformed.
             nthreads (int): Number of threads to use.
         Returns:
-            data_fft (np.array): The Fourier transform of the input.
-                                 A complex array of length tod.size//2 + 1.
+            data_f (np.array): The Fourier transform of the input.
+                               A complex array of length tod.size//2 + 1.
     """
     return ducc0.fft.r2c(data, nthreads=nthreads)
 
 def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray[np.floating]:
     """ Backward real Fourier transform, equivalent to scipy.fft.irfft.
         Args:
-            data_fft (np.array): Complex Fourier coefficients to be converted back to real data.
+            data_f (np.array): Complex Fourier coefficients to be converted back to real data.
             ntod (int): The length of the original TOD. This must be provided because a
                            Fourier array of length e.g. 6 could correspond to ntod = 10 or 11.
             nthreads (int): Number of threads to use.
