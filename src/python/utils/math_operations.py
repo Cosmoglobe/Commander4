@@ -12,7 +12,66 @@ from src.python.output.log import logassert
 import logging
 import os
 from math import sqrt
-from numba import njit
+from numba import njit, prange
+
+
+###### GENERAL MATH STUFF ###########
+
+@njit(cache=True, fastmath=True, parallel=True)
+def _inplace_prod_add(arr_main, arr_add, float_mult):
+    len = arr_main.size
+    assert(arr_main.ndim == 1)
+    assert(arr_main.shape==arr_add.shape)
+    for i in prange(len):
+        arr_main[i] += arr_add[i]*float_mult
+
+@njit(cache=True, fastmath=True, parallel=True)
+def _inplace_prod(arr_main, arr_prod):
+    len = arr_main.size
+    assert(arr_main.ndim == 1)
+    assert(arr_main.shape==arr_prod.shape)
+    for i in prange(len):
+        arr_main[i] *= arr_prod[i]
+
+@njit(cache=True, fastmath=True, parallel=True)
+def _inplace_prod_scalar(arr_main, scalar_prod):
+    len = arr_main.size
+    assert(arr_main.ndim == 1)
+    for i in prange(len):
+        arr_main[i] *= scalar_prod
+
+
+def forward_rfft(data:NDArray[np.floating], nthreads:int = 1):
+    """ Forward real Fourier transform, equivalent to scipy.fft.rfft.
+        Args:
+            data (np.array): Real-valued data array to be Fourier transformed.
+            nthreads (int): Number of threads to use.
+        Returns:
+            data_f (np.array): The Fourier transform of the input.
+                               A complex array of length tod.size//2 + 1.
+    """
+    return ducc0.fft.r2c(data, nthreads=nthreads)
+
+def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray[np.floating]:
+    """ Backward real Fourier transform, equivalent to scipy.fft.irfft.
+        Args:
+            data_f (np.array): Complex Fourier coefficients to be converted back to real data.
+            ntod (int): The length of the original TOD. This must be provided because a
+                           Fourier array of length e.g. 6 could correspond to ntod = 10 or 11.
+            nthreads (int): Number of threads to use.
+        Returns:
+            data (np.array): A real-valued data array of length ntod.
+    """
+    # If nthreads is not set, put it to how many threads OMP has been given.
+    nthreads = int(os.environ["OMP_NUM_THREADS"]) if nthreads is None else nthreads
+    # Forward = False makes ducc correctly order the output, as the output order is not
+    # symmetric for forward and reverse Fourier when doing rfft as supposed to regular fft.
+    # inorm = 2 tells ducc to normalize by dividing by ntod, which is the same as what scipy does.
+    return ducc0.fft.c2r(data_f, lastsize=ntod, forward=False, nthreads=nthreads, inorm=2)
+
+
+
+##### GENERAL ALM STUFF ############
 
 def nalm(lmax: int, mmax: int) -> int:
     """Calculates the number of a_lm elements for a spherical harmonic representation up to l<=lmax and m<=mmax.
@@ -51,6 +110,33 @@ def almxfl(alm, fl, lmax=None, mmax=None, inplace=False):
     _almxfl_numba(res, lmax, mmax, fl)
     return res
 
+# Parallel implementation of almxfl. Feel free to optimize.
+
+# @njit(parallel=True, cache=True, fastmath=True)
+# def _almxfl_numba_schedule(alm, lmax, mmax, m_offsets,  fl,  num_threads, inplace=False):
+#     res = alm if inplace else alm.copy()
+
+#     for thread_idx in prange(num_threads):
+#         for m in range(thread_idx, mmax + 1, num_threads):
+#             start = m_offsets[m]
+#             end = m_offsets[m+1]
+#             num_l = lmax + 1 - m
+#             res[start:end] *= fl[m : m + num_l]
+#     return res
+
+
+# def almxfl(alm, fl, lmax=None, mmax=None, inplace=False):
+#     res = alm if inplace else alm.copy()
+#     lmax = hp.Alm.getlmax(alm.shape[-1]) if lmax is None else lmax
+#     mmax = lmax if mmax is None else mmax
+#     m_offsets = np.zeros(mmax + 2, dtype=np.int64)
+#     for m in range(mmax + 1):
+#         m_offsets[m+1] = m_offsets[m] + (lmax - m + 1)
+#     n_threads = numba.get_num_threads()
+    
+#     _almxfl_numba_schedule(alm, lmax, mmax, m_offsets, fl, n_threads, inplace=True)
+#     return res
+
 
 @njit(cache=True, fastmath=True)
 def _project_alms_numba(alms_in, lmax_in, lmax_out, nalm_out):
@@ -79,6 +165,57 @@ def project_alms(alms_in, lmax_out):
     alms_out = _project_alms_numba(alms_in, lmax_in, lmax_out, nalm_out)
     return alms_out
 
+
+def alm_dot_product(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArray:
+    """ Function calculating the dot product of two alms, given that they follow the Healpy standard,
+        where alms are represented as complex numbers, but with the conjugate 'negative' ms missing.
+    """
+    return np.sum((alm1[:lmax]*alm2[:lmax]).real) + np.sum((alm1[lmax:]*np.conj(alm2[lmax:])).real*2)
+
+
+def alm_complex2real(alm: NDArray[np.complexfloating], lmax: int) -> NDArray[np.floating]:
+    """ Over the last axis of the input array, converts from the complex convention of storing alms
+        to the real convention (which is only applicable when the map is real). In the real
+        convention, the all m modes are stored, but they are all stored as real values, not complex.
+        Args:
+            alm (np.array): Complex alm array where the last axis has length ((lmax+1)*(lmax+2))/2.
+            lmax (int): The lmax of the alm array.
+        Returns:
+            x (np.array): Real alm array where the last axis has length (lmax+1)^2.
+    """
+    logger = logging.getLogger(__name__)
+    logassert(alm.dtype in [np.complex128, np.complex64], "Input alms are not of type np.complex128"
+             f" or np.complex64  (they are {alm.dtype})", logger)
+    float_dtype = np.float64 if alm.dtype == np.complex128 else np.float32
+    ainfo = curvedsky.alm_info(lmax=lmax)
+    i = int(ainfo.mstart[1]+1)
+    return np.concatenate([alm[...,:i].real,sqrt(2.0)*alm[...,i:].view(float_dtype)], axis=-1)
+
+
+def alm_real2complex(x: NDArray[np.floating], lmax: int) -> NDArray[np.complexfloating]:
+    """ Over the last axis of the input array, converts from the real convention of storing alms
+        (which is applicable when the map is real), to the complex convention. In the complex
+        convention, the only m>=0 is stored, but are stored as complex numbers (m=0 is always real). 
+        Args:
+            x (np.array): Real alm array where the last axis has length (lmax+1)^2.
+            lmax (int): The lmax of the alm array.
+        Returns:
+            oalm (np.array): Complex alm array where the last axis has length ((lmax+1)*(lmax+2))/2.
+    """
+    logger = logging.getLogger(__name__)
+    logassert(x.dtype in [np.float32, np.float64], f"Input map is not of type np.float32 or "
+              f"np.float64 (it is {x.dtype})", logger)
+    complex_dtype = np.complex128 if x.dtype == np.float64 else np.complex64
+    ainfo = curvedsky.alm_info(lmax=lmax)
+    i    = int(ainfo.mstart[1]+1)
+    # oalm will have the same shape as x except for the last axis.
+    oalm = np.zeros((*x.shape[:-1], ainfo.nelem), complex_dtype)
+    oalm[...,:i] = x[...,:i]
+    oalm[...,i:] = x[...,i:].view(complex_dtype)/sqrt(2.0)
+    return oalm
+
+
+############ SHT STUFF ##############
 
 # Cache for geom_info objects ... pretty small, each entry has a size of O(nside)
 # This will be mainly beneficial for small SHTs with high nthreads
@@ -171,93 +308,3 @@ def pseudo_alm_to_map_inverse(map: NDArray, nside: int, lmax: int, *, spin: int=
                                     epsilon=epsilon, maxiter=maxiter)
     out = res[0] if ndim_in == 2 else res[0].reshape((-1,))
     return (out, res[1], res[2], res[3], res[4])
-
-
-def spherical_beam_to_bl(fwhm: float, lmax: int) -> NDArray:
-    # expects FWHM in units of arcmin
-    fwhm = (fwhm*u.arcmin).to('rad').value
-    return hp.gauss_beam(fwhm, lmax)
-
-
-def spherical_beam_applied_to_alm(alm: NDArray, fwhm: float) -> NDArray:
-    # expects FWHM in units of arcmin
-    fwhm = (fwhm*u.arcmin).to('rad').value
-    return hp.smoothalm(alm, fwhm)
-
-
-def alm_dot_product(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArray:
-    """ Function calculating the dot product of two alms, given that they follow the Healpy standard,
-        where alms are represented as complex numbers, but with the conjugate 'negative' ms missing.
-    """
-    return np.sum((alm1[:lmax]*alm2[:lmax]).real) + np.sum((alm1[lmax:]*np.conj(alm2[lmax:])).real*2)
-
-
-def alm_complex2real(alm: NDArray[np.complexfloating], lmax: int) -> NDArray[np.floating]:
-    """ Over the last axis of the input array, converts from the complex convention of storing alms
-        to the real convention (which is only applicable when the map is real). In the real
-        convention, the all m modes are stored, but they are all stored as real values, not complex.
-        Args:
-            alm (np.array): Complex alm array where the last axis has length ((lmax+1)*(lmax+2))/2.
-            lmax (int): The lmax of the alm array.
-        Returns:
-            x (np.array): Real alm array where the last axis has length (lmax+1)^2.
-    """
-    logger = logging.getLogger(__name__)
-    logassert(alm.dtype in [np.complex128, np.complex64], "Input alms are not of type np.complex128"
-             f" or np.complex64  (they are {alm.dtype})", logger)
-    float_dtype = np.float64 if alm.dtype == np.complex128 else np.float32
-    ainfo = curvedsky.alm_info(lmax=lmax)
-    i = int(ainfo.mstart[1]+1)
-    return np.concatenate([alm[...,:i].real,sqrt(2.0)*alm[...,i:].view(float_dtype)], axis=-1)
-
-
-def alm_real2complex(x: NDArray[np.floating], lmax: int) -> NDArray[np.complexfloating]:
-    """ Over the last axis of the input array, converts from the real convention of storing alms
-        (which is applicable when the map is real), to the complex convention. In the complex
-        convention, the only m>=0 is stored, but are stored as complex numbers (m=0 is always real). 
-        Args:
-            x (np.array): Real alm array where the last axis has length (lmax+1)^2.
-            lmax (int): The lmax of the alm array.
-        Returns:
-            oalm (np.array): Complex alm array where the last axis has length ((lmax+1)*(lmax+2))/2.
-    """
-    logger = logging.getLogger(__name__)
-    logassert(x.dtype in [np.float32, np.float64], f"Input map is not of type np.float32 or "
-              f"np.float64 (it is {x.dtype})", logger)
-    complex_dtype = np.complex128 if x.dtype == np.float64 else np.complex64
-    ainfo = curvedsky.alm_info(lmax=lmax)
-    i    = int(ainfo.mstart[1]+1)
-    # oalm will have the same shape as x except for the last axis.
-    oalm = np.zeros((*x.shape[:-1], ainfo.nelem), complex_dtype)
-    oalm[...,:i] = x[...,:i]
-    oalm[...,i:] = x[...,i:].view(complex_dtype)/sqrt(2.0)
-    return oalm
-
-
-def forward_rfft(data:NDArray[np.floating], nthreads:int = 1):
-    """ Forward real Fourier transform, equivalent to scipy.fft.rfft.
-        Args:
-            data (np.array): Real-valued data array to be Fourier transformed.
-            nthreads (int): Number of threads to use.
-        Returns:
-            data_fft (np.array): The Fourier transform of the input.
-                                 A complex array of length tod.size//2 + 1.
-    """
-    return ducc0.fft.r2c(data, nthreads=nthreads)
-
-def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray[np.floating]:
-    """ Backward real Fourier transform, equivalent to scipy.fft.irfft.
-        Args:
-            data_fft (np.array): Complex Fourier coefficients to be converted back to real data.
-            ntod (int): The length of the original TOD. This must be provided because a
-                           Fourier array of length e.g. 6 could correspond to ntod = 10 or 11.
-            nthreads (int): Number of threads to use.
-        Returns:
-            data (np.array): A real-valued data array of length ntod.
-    """
-    # If nthreads is not set, put it to how many threads OMP has been given.
-    nthreads = int(os.environ["OMP_NUM_THREADS"]) if nthreads is None else nthreads
-    # Forward = False makes ducc correctly order the output, as the output order is not
-    # symmetric for forward and reverse Fourier when doing rfft as supposed to regular fft.
-    # inorm = 2 tells ducc to normalize by dividing by ntod, which is the same as what scipy does.
-    return ducc0.fft.c2r(data_f, lastsize=ntod, forward=False, nthreads=nthreads, inorm=2)
