@@ -80,7 +80,13 @@ class DiffuseComponent(Component):
         sigma = fwhm_rad / np.sqrt(8 * np.log(2))
         ells = np.arange(self.lmax + 1)
         prior_amplitude = self.smoothing_prior_amplitude
-        return prior_amplitude * np.exp(-ells * (ells + 1) * sigma**2)
+        prior_exponential = -ells * (ells + 1) * sigma**2
+        if np.abs(prior_exponential[-1]) > 50:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Exponent in smoothing prior goes up to {prior_exponential[-1]:.4e} "
+                           f"for {self.longname} with lmax {self.lmax} and smoothing prior FWHM = "
+                           f"{self.smoothing_prior_FWHM}rad. CG will likely be unstable.")
+        return prior_amplitude * np.exp(prior_exponential)
 
     @property
     def P_smoothing_prior_inv(self):
