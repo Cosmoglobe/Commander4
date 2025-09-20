@@ -12,7 +12,26 @@ from src.python.output.log import logassert
 import logging
 import os
 from math import sqrt
-from numba import njit
+from numba import njit, prange
+
+
+
+@njit(cache=True, fastmath=True, parallel=True)
+def _inplace_prod_add(arr_main, arr_add, float_mult, len):
+    for i in prange(len):
+        arr_main[i] += arr_add[i]*float_mult
+
+@njit(cache=True, fastmath=True, parallel=True)
+def _inplace_prod(arr_main, arr_prod, len):
+    for i in prange(len):
+        arr_main[i] *= arr_prod[i]
+
+@njit(cache=True, fastmath=True, parallel=True)
+def _inplace_prod_scalar(arr_main, scalar_prod, len):
+    for i in prange(len):
+        arr_main[i] *= scalar_prod
+
+
 
 def nalm(lmax: int, mmax: int) -> int:
     """Calculates the number of a_lm elements for a spherical harmonic representation up to l<=lmax and m<=mmax.
@@ -51,6 +70,33 @@ def almxfl(alm, fl, lmax=None, mmax=None, inplace=False):
     _almxfl_numba(res, lmax, mmax, fl)
     return res
 
+# Parallel implementation of almxfl. Feel free to optimize.
+
+# @njit(parallel=True, cache=True, fastmath=True)
+# def _almxfl_numba_schedule(alm, lmax, mmax, m_offsets,  fl,  num_threads, inplace=False):
+#     res = alm if inplace else alm.copy()
+
+#     for thread_idx in prange(num_threads):
+#         for m in range(thread_idx, mmax + 1, num_threads):
+#             start = m_offsets[m]
+#             end = m_offsets[m+1]
+#             num_l = lmax + 1 - m
+#             res[start:end] *= fl[m : m + num_l]
+#     return res
+
+
+# def almxfl(alm, fl, lmax=None, mmax=None, inplace=False):
+#     res = alm if inplace else alm.copy()
+#     lmax = hp.Alm.getlmax(alm.shape[-1]) if lmax is None else lmax
+#     mmax = lmax if mmax is None else mmax
+#     m_offsets = np.zeros(mmax + 2, dtype=np.int64)
+#     for m in range(mmax + 1):
+#         m_offsets[m+1] = m_offsets[m] + (lmax - m + 1)
+#     n_threads = numba.get_num_threads()
+    
+#     _almxfl_numba_schedule(alm, lmax, mmax, m_offsets, fl, n_threads, inplace=True)
+#     return res
+
 
 @njit(cache=True, fastmath=True)
 def _project_alms_numba(alms_in, lmax_in, lmax_out, nalm_out):
@@ -78,6 +124,7 @@ def project_alms(alms_in, lmax_out):
     nalm_out = hp.Alm.getsize(lmax_out)
     alms_out = _project_alms_numba(alms_in, lmax_in, lmax_out, nalm_out)
     return alms_out
+
 
 
 # Cache for geom_info objects ... pretty small, each entry has a size of O(nside)
@@ -172,17 +219,6 @@ def pseudo_alm_to_map_inverse(map: NDArray, nside: int, lmax: int, *, spin: int=
     out = res[0] if ndim_in == 2 else res[0].reshape((-1,))
     return (out, res[1], res[2], res[3], res[4])
 
-
-def spherical_beam_to_bl(fwhm: float, lmax: int) -> NDArray:
-    # expects FWHM in units of arcmin
-    fwhm = (fwhm*u.arcmin).to('rad').value
-    return hp.gauss_beam(fwhm, lmax)
-
-
-def spherical_beam_applied_to_alm(alm: NDArray, fwhm: float) -> NDArray:
-    # expects FWHM in units of arcmin
-    fwhm = (fwhm*u.arcmin).to('rad').value
-    return hp.smoothalm(alm, fwhm)
 
 
 def alm_dot_product(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArray:

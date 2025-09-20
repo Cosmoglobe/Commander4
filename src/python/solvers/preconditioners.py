@@ -86,7 +86,7 @@ class NoiseOnlyPreconditioner:
 
         # Since the noise-map has no component-dependence (while the A-matrix does), we simply
         # have the same weights per component, and use the average of the band-weights.
-        w = 1.0/compsep.map_rms**2
+        w = compsep.map_inv_var
         w_alm = None
         for icomp in range(compsep.ncomp): # The different components have different lmax, so we loop over each.
             lmax = compsep.lmax_per_comp[icomp]
@@ -196,7 +196,7 @@ class JointPreconditioner:
         # Gather all necessary per-band information from all ranks (all ranks hold a band).
         # NB, this solution is not ideal, as all ranks now hold all rms maps, substantially increasing memory footprint.
         all_fwhm_rad = compsep.CompSep_comm.allgather(compsep.my_band_fwhm_rad)
-        all_map_rms = compsep.CompSep_comm.allgather(compsep.map_rms)
+        all_map_inv_var = compsep.CompSep_comm.allgather(compsep.map_inv_var)
         nband = len(all_fwhm_rad)
 
         # We can now get rid of the ranks that do not hold components.
@@ -221,7 +221,7 @@ class JointPreconditioner:
                 beam_window_squared = hp.gauss_beam(all_fwhm_rad[iband], lmax=compsep.lmax_per_comp[icomp])**2
                 beam_op_complex = hp.almxfl(np.ones(compsep.alm_len_percomp_complex[icomp], dtype=np.complex128), beam_window_squared)
 
-                mean_weights = np.mean(1.0/all_map_rms[iband]**2)
+                mean_weights = np.mean(all_map_inv_var[iband])
 
                 # Add the weighted contribution of this frequency band to the total
                 A_diag += M_fc**2 * beam_op_complex * mean_weights
