@@ -309,7 +309,7 @@ class CompSepSolver:
         """
         logger = logging.getLogger(__name__)
         myrank = self.CompSep_comm.Get_rank()
-        logassert(a_in.dtype in [np.float64, np.float32], f"Provided component array is of type {a_in.dtype} and not np.float64 or float64. This operator takes and returns real alms (and converts to and from complex interally).", logger)
+        logassert(a_in.dtype in [np.float64, np.float32], f"Provided component array is of type {a_in.dtype} and not np.float64 or float32. This operator takes and returns real alms (and converts to and from complex internally).", logger)
         if myrank == 0:
             logassert(a_in.shape[-1] == np.sum(self.alm_len_percomp_real), f"Provided component array is of length {a_in.shape[-1]}, not {np.sum(self.alm_len_percomp_real)}.", logger)
         else:
