@@ -10,6 +10,8 @@
 #include "ducc0/infra/mav.h"
 #include "ducc0/infra/misc_utils.h"
 #include "ducc0/math/constants.h"
+#include "ducc0/healpix/healpix_base.h"
+#include "ducc0/sht/sht.h"
 #include "ducc0/bindings/pybind_utils.h"
 
 namespace cmdr4 {
@@ -327,6 +329,162 @@ numpy.ndarray(ndata,), dtype identical to that of symb)
     the uncopressed data array, identical to `out`
 )""";
 
+class STS_hpring
+  {
+  private:
+    size_t lmax, nside;
+    cmav<size_t,1> nphi, mstart;
+    vmav<size_t,1> ringstart;
+    vmav<double,1> theta;
+    cmav<double,1> phi0, ringfactor;
+
+  public:
+    using vectype = vmav<double,1>;
+    STS_hpring (size_t lmax_, size_t nside_)
+      : lmax(lmax_), nside(nside_),
+        nphi(cmav<size_t,1>::build_uniform({2*nside},1)),
+        mstart(cmav<size_t,1>::build_uniform({1},0)),
+        ringstart({2*nside}), theta({2*nside}),
+        phi0(cmav<double,1>::build_uniform({2*nside},0.)),
+        ringfactor(cmav<double,1>::build_uniform({2*nside},1.))
+      {
+      MR_assert((lmax&1)==0,"lmax must be even");
+      Healpix_Base base(nside, RING, SET_NSIDE);
+      for (size_t i=0; i<2*nside; ++i)
+        {
+        ringstart(i)=i;
+        int idum1,idum2;
+        bool bdum;
+        base.get_ring_info2 (i+1, idum1, idum2, theta(i), bdum);
+        }
+      }
+    vmav<double,1> S(const vmav<double,1> &alm) const
+      {
+      MR_assert(alm.shape(0)==lmax/2+1,"bad input size");
+      vmav<double,1> res({2*nside});
+      vmav<complex<double>,2> alm2({1,2*alm.shape(0)-1});
+      vmav<double,2> map(res.data(), {1,2*nside}, {0, res.stride(0)});
+      for (size_t i=0; i<alm.shape(0); ++i)
+        alm2(0,2*i)=alm(i);
+      synthesis(alm2, map, 0, lmax, mstart, 1, theta, nphi, phi0, ringstart, ringfactor, 1, 1, STANDARD, false);
+//template<typename T> void synthesis(
+  //const cmav<complex<T>,2> &alm, // (ncomp, *)
+  //const vmav<T,2> &map, // (ncomp, *)
+  //size_t spin,
+  //size_t lmax,
+  //const cmav<size_t,1> &mstart, // (mmax+1)
+  //ptrdiff_t lstride,
+  //const cmav<double,1> &theta, // (nrings)
+  //const cmav<size_t,1> &nphi, // (nrings)
+  //const cmav<double,1> &phi0, // (nrings)
+  //const cmav<size_t,1> &ringstart, // (nrings)
+  //const cmav<double,1> &ringfactor, // (nrings)
+  //ptrdiff_t pixstride,
+  //size_t nthreads,
+  //SHT_mode mode,
+  //bool theta_interpol=false);
+      return res;
+      }
+    vmav<double,1> ST(const vmav<double,1> &map) const
+      {
+      MR_assert(map.shape(0)==2*nside,"bad input size");
+      vmav<double,2> map2(map.data(), {1,2*nside}, {0, map.stride(0)});
+      vmav<complex<double>,2> alm2({1,lmax+1});
+      adjoint_synthesis(alm2, map2, 0, lmax, mstart, 1, theta, nphi, phi0, ringstart, ringfactor, 1, 1, STANDARD, false);
+      vmav<double,1> res({lmax/2+1});
+      for (size_t i=0; i<res.shape(0); ++i)
+        res(i)=real(alm2(0,2*i));
+      return res;
+      }
+    vmav<double,1> apply (const vmav<double,1> &x) const
+      { return ST(S(x)); }
+  };
+
+// inner product of two vectors
+double dprod(const cmav<double,1> &a, const cmav<double,1> &b)
+  {
+  double res=0;
+  for (size_t i=0; i<a.shape(0); ++i) res += a(i)*b(i);
+  return res;
+  }
+vmav<double,1> muladd (double fct, const vmav<double,1> &a,
+  const vmav<double,1> &b)
+  {
+  MR_assert(a.size()==b.size(),"types not conformable");
+  vmav<double,1> res({a.shape(0)});
+  for (size_t i=0; i<a.shape(0); ++i)
+    res(i) = fct*a(i) + b(i);
+  return res;
+  }
+
+// canned algorithm B2 from Shewchuk
+template<typename M> double cg_solve (const M &A, typename M::vectype &x,
+  const typename M::vectype &b, double epsilon, int itmax)
+  {
+  typename M::vectype r=muladd(-1.,A.apply(x),b), d(r);
+  double delta0=dprod(r,r), deltanew=delta0;
+  cout << "res0: " << sqrt(delta0) << endl;
+  for (int iter=0; iter<itmax; ++iter)
+    {
+    auto q=A.apply(d);
+    double alpha = deltanew/dprod(d,q);
+    x.assign(muladd(alpha,d,x));
+    if (iter%300==0) // get accurate residual
+      r.assign(muladd(-1.,A.apply(x),b));
+    else
+      r.assign(muladd(-alpha,q,r));
+    double deltaold=deltanew;
+    deltanew=dprod(r,r);
+    cout << "\rIteration " << iter
+         << ": residual=" << sqrt(deltanew/delta0)
+         << "                    " << flush;
+    if (deltanew<epsilon*epsilon*delta0) { cout << endl; break; } // convergence
+    double beta=deltanew/deltaold;
+    d.assign(muladd(beta,d,r));
+    }
+  return sqrt(deltanew/delta0);
+  }
+
+NpArr Py_healpix_ringweights(size_t nside, size_t lmax, double epsilon,
+  size_t itmax)
+  {
+  MR_assert((lmax&1)==0,"lmax must be even");
+  STS_hpring mat(lmax,nside);
+  auto [res_, res] = make_Pyarr_and_vmav<double,1>({4*nside-1});
+
+  vmav<double,1> nir({2*nside}), x({lmax/2+1});
+  for (size_t ith=0; ith<nir.shape(0); ++ith)
+    nir(ith)=8*min<int>(ith+1,nside);
+  nir(2*nside-1)/=2;
+  auto b=mat.ST(nir);
+  for (size_t i=0; i<b.shape(0); ++i)
+    b(i)=-b(i);
+  b(0)+=12*nside*nside/sqrt(4*pi);
+  double epsilon_out=cg_solve(mat, x, b, epsilon, itmax);
+  auto mtmp=mat.S(x);
+  for (size_t i=0; i<mtmp.shape(0); ++i)
+    res(i) = res(4*nside-2-i) = mtmp(i)/nir(i);
+  return res_;
+  }
+constexpr const char *Py_healpix_ringweights_DS = R"""(
+Coputes Healpix ring weights.
+
+Parameters
+----------
+nside: int
+    nside parameter to use.
+lmax: int
+    lmax to use. Must be even.
+epsilon: float
+itmax:int
+    maximum number of iterations for the conjugate gradient solver
+
+Returns
+-------
+numpy.ndarray(4*nside-1,), dtype=numpy.float64)
+    the ring weights
+)""";
+
 void add_utils(py::module_ &msup)
   {
   using namespace pybind11::literals;
@@ -345,6 +503,9 @@ void add_utils(py::module_ &msup)
 
   m.def("huffman_decode", Py_huffman_decode, Py_huffman_decode_DS, "bytes"_a,
         "tree"_a, "symb"_a, "out"_a);
+
+  m.def("healpix_ringweights", Py_healpix_ringweights, Py_healpix_ringweights_DS, "nside"_a,
+        "lmax"_a, "epsilon"_a, "itmax"_a);
   }
 
 }

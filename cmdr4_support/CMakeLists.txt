@@ -16,6 +16,14 @@ set(CXX_SOURCES
     cmdr4_support.cc
     ../external/ducc0/src/ducc0/infra/string_utils.cc
     ../external/ducc0/src/ducc0/infra/threading.cc
+    ../external/ducc0/src/ducc0/infra/mav.cc
+    ../external/ducc0/src/ducc0/math/gl_integrator.cc
+    ../external/ducc0/src/ducc0/math/gridding_kernel.cc
+    ../external/ducc0/src/ducc0/fft/fft_inst1.cc
+    ../external/ducc0/src/ducc0/fft/fft_inst2.cc
+    ../external/ducc0/src/ducc0/healpix/healpix_tables.cc
+    ../external/ducc0/src/ducc0/healpix/healpix_base.cc
+    ../external/ducc0/src/ducc0/sht/sht.cc
 )
 
 if (DEFINED ENV{CMDR4_USE_NANOBIND})
