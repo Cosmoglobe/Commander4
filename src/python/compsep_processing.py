@@ -2,6 +2,7 @@ import numpy as np
 from mpi4py import MPI
 from mpi4py.MPI import Comm
 import logging
+import time
 from pixell.bunch import Bunch
 from numpy.typing import NDArray
 
@@ -54,7 +55,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch) -> tuple[list[Diffus
                     band_identifier = band_str
             current_band_idx += 1
 
-    data_world = (band_identifier, mpi_info.world.rank
+    data_world = (band_identifier, mpi_info.world.rank)
     data_compsep = (band_identifier, mpi_info.compsep.rank)
     all_data_world = mpi_info.compsep.comm.allgather(data_world)
     all_data_compsep = mpi_info.compsep.comm.allgather(data_compsep)
@@ -82,11 +83,13 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
        detector_maps (np.array): The band-integrated total sky.
         
     """
+    logger = logging.getLogger(__name__)
+
     compsep_comm = mpi_info.compsep.comm
     compsep_rank = mpi_info.compsep.rank
-    if params.make_plots:
-        detector_to_plot = compsep_rank
-        logging.info(f"Rank {compsep_rank} chain {chain} iter {iter} starting plotting.")
+    # if params.make_plots:
+        # detector_to_plot = proc_comm.Get_rank()
+        # logging.info(f"Rank {proc_comm.Get_rank()} chain {chain} iter {iter} starting plotting.")
         # plotting.plot_data_maps(params, detector_to_plot, chain, iter, map_signal=signal_map,
         #                         map_corr_noise=detector_data.map_corr_noise,
         #                         map_rms=detector_data.map_rms,
@@ -121,13 +124,19 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
     comp_list = compsep_comm.bcast(comp_list, root=0)  #TODO: This needs to be handled differently.
     sky_model = SkyModel(comp_list)
 
-    detector_maps = sky_model.get_sky_at_nu(detector_data.nu, detector_data.nside,
-                                            fwhm=detector_data.fwhm/60.0*np.pi/180.0)
+    sky_model_at_band = sky_model.get_sky_at_nu(detector_data.nu, detector_data.nside,
+                                                fwhm=np.deg2rad(detector_data.fwhm/60.0))
+    pol_names = ["I", "Q", "U"]
+    for ipol in range(3):
+        if detector_data.map_sky[ipol] is not None:
+            chi2 = np.mean(np.abs(detector_data.map_sky[ipol] - sky_model_at_band[ipol])/detector_data.map_rms[ipol])
+            logger.info(f"Reduced chi2 for pol={pol_names[ipol]} ({detector_data.nu}GHz): {chi2:.3f}")
 
     if params.make_plots:
+        t0 = time.time()
         detector_to_plot = compsep_rank
         plotting.plot_combo_maps(params, detector_to_plot, chain, iter, comp_list, detector_data)
         plotting.plot_components(params, detector_to_plot, chain, iter, comp_list, detector_data)
-        logging.info(f"Rank {compsep_rank} chain {chain} iter {iter} Finished all plotting.")
+        logging.info(f"Rank {compsep_rank} chain {chain} iter {iter} Finished all plotting in {time.time()-t0:.1f}s.")
 
-    return detector_maps  # Return the full sky realization for my band.
+    return sky_model  # Return the full sky realization for my band.

@@ -7,6 +7,7 @@ import healpy as hp
 from numpy.typing import NDArray
 
 from src.python.data_models.detector_map import DetectorMap
+from src.python.data_models.detector_TOD import DetectorTOD
 from src.python.maps_from_file import read_sim_map_from_file, read_Planck_map_from_file
 
 
@@ -31,7 +32,8 @@ def send_compsep(mpi_info: Bunch, my_band_identifier: str, detector_map: NDArray
             mpi_info.world.comm.send(detector_map, dest=destinations[my_band_identifier])
 
 
-def receive_compsep(mpi_info: Bunch, my_band_identifier: str, senders: dict[str, int]) -> NDArray[np.floating]:
+def receive_compsep(mpi_info: Bunch, experiment_data: DetectorTOD, my_band_identifier: str,
+                    senders: dict[str, int]) -> NDArray[np.floating]:
     """ MPI-receive the results from compsep (used in conjunction with send_compsep).
 
     Input:
@@ -45,16 +47,17 @@ def receive_compsep(mpi_info: Bunch, my_band_identifier: str, senders: dict[str,
         detector_map (np.array): The detector map of a single band, distributed to all processes
                                  belonging to the band communicator.
     """
-
     world_comm = mpi_info.world.comm
     band_comm = mpi_info.band.comm
     is_band_master = mpi_info.band.is_master
     band_master = mpi_info.band.master
     if is_band_master:
-        detector_map = world_comm.recv(source=senders[my_band_identifier])
+        sky_model = world_comm.recv(source=senders[my_band_identifier])
     else:
-        detector_map = None
-    detector_map = band_comm.bcast(detector_map, root=band_master)  # Currently all TOD MPI ranks need a copy of the relevant detector map, which is a little wasteful - a reason for doing OpenMP for mapmaking.
+        sky_model = None
+    sky_model = band_comm.bcast(sky_model, root=0)  # Currently all TOD MPI ranks need a copy of the relevant detector map, which is a little wasteful - a reason for doing OpenMP for mapmaking.
+    detector_map = sky_model.get_sky_at_nu(experiment_data.nu, experiment_data.nside,
+                                           fwhm=np.deg2rad(experiment_data.fwhm/60.0))
     return detector_map
 
 

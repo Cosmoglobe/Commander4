@@ -109,20 +109,23 @@ def main(params: Bunch, params_dict: dict):
                                                                        detector_samples_chain2,
                                                                        curr_compsep_output, params,
                                                                        chain_num, iter_num)
-            if mpi_info.tod.rank == 0:
+            if mpi_info.tod.is_master:
                 logger.info(f"TOD: Rank {mpi_info.tod.rank} finished chain {chain_num}, iter "
                             f"{iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
             t0 = time.time()
-            curr_compsep_output = receive_compsep(mpi_info, my_band_identifier,
+            curr_compsep_output = receive_compsep(mpi_info, experiment_data,
+                                                  my_band_identifier,
                                                   mpi_info.world.compsep_band_masters)
-            if mpi_info.band.rank == 0:
-                logger.info(f"TOD: Rank {mpi_info.band.rank} finished receiving results for chain "
-                            f"{chain_num}, iter {iter_num} (time spent waiting+receiving = "
-                            f"{time.time()-t0:.1f}s.)")
-            send_tod(mpi_info, curr_tod_output, my_band_identifier, mpi_info.world.compsep_band_masters)
-            if mpi_info.tod.rank == 0:
-                logger.info(f"TOD: Rank {mpi_info.tod.rank} finished sending results for chain "
-                            f"{chain_num}, iter {iter_num}.")
+            if mpi_info.band.is_master:
+                logger.info(f"TOD: Rank {mpi_info.tod.rank} finished receiving "
+                            f"results for chain {chain_num}, iter {iter_num} "
+                            f"(time spent waiting+receiving = "
+                            f"{time.time()-t0:.1f}s).")
+            send_tod(mpi_info, curr_tod_output, my_band_identifier,
+                     mpi_info.world.compsep_band_masters)
+            if mpi_info.tod.is_master:
+                logger.info(f"TOD: Rank {mpi_info.tod.rank} finished sending "
+                            f"results for chain {chain_num}, iter {iter_num}.")
 
         elif mpi_info.world.color == 1:
             iter_num = (i + 1) // 2  # [1, 1, 2, 2, 3,...] Compsep has not done iteration 1 for neither chain yet.

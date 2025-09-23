@@ -86,7 +86,7 @@ class NoiseOnlyPreconditioner:
 
         # Since the noise-map has no component-dependence (while the A-matrix does), we simply
         # have the same weights per component, and use the average of the band-weights.
-        w = 1.0/compsep.map_rms**2
+        w = compsep.map_inv_var
         w_alm = None
         for icomp in range(compsep.ncomp): # The different components have different lmax, so we loop over each.
             lmax = compsep.lmax_per_comp[icomp]
@@ -185,63 +185,72 @@ class JointPreconditioner:
     """
     def __init__(self, compsep: CompSepSolver):
         self.compsep = compsep
-        self.my_comp = compsep.CompSep_comm.Get_rank()
-        self.is_holding_comp = self.my_comp < compsep.ncomp
+        # self.my_comp = compsep.CompSep_comm.Get_rank()
+        self.is_master = compsep.CompSep_comm.Get_rank() == 0
+        # self.is_holding_comp = self.my_comp < compsep.ncomp
 
-        lmax = compsep.my_comp_lmax
-        self.my_comp_lmax = lmax
-        my_alm_len_complex = hp.Alm.getsize(lmax)
+        # lmax = compsep.my_comp_lmax
+        # self.my_comp_lmax = lmax
+        # my_alm_len_complex = hp.Alm.getsize(lmax)
         
         # Gather all necessary per-band information from all ranks (all ranks hold a band).
         # NB, this solution is not ideal, as all ranks now hold all rms maps, substantially increasing memory footprint.
         all_fwhm_rad = compsep.CompSep_comm.allgather(compsep.my_band_fwhm_rad)
-        all_map_rms = compsep.CompSep_comm.allgather(compsep.map_rms)
+        all_map_inv_var = compsep.CompSep_comm.allgather(compsep.map_inv_var)
         nband = len(all_fwhm_rad)
 
         # We can now get rid of the ranks that do not hold components.
-        if not self.is_holding_comp:
+        if not self.is_master:
             return
 
-        # Construct the full mixing matrix M on all ranks
-        M = np.empty((nband, compsep.ncomp), dtype=np.float64)
+        self.A_diag_list = []
         for icomp in range(compsep.ncomp):
-            comp = compsep.comp_list[icomp]
-            M[:, icomp] = comp.get_sed(compsep.freqs)
+            # Construct the full mixing matrix M on all ranks
+            M = np.empty((nband, compsep.ncomp), dtype=np.float64)
+            for jcomp in range(compsep.ncomp):
+                comp = compsep.comp_list[jcomp]
+                M[:, jcomp] = comp.get_sed(compsep.freqs)
 
-        # This is our estimate of the inverse of A, which serves as a preconditioner for A.
-        self.A_diag = np.zeros(my_alm_len_complex, dtype=np.complex128)
+            # This is our estimate of the inverse of A, which serves as a preconditioner for A.
+            A_diag = np.zeros(compsep.alm_len_percomp_complex[icomp], dtype=np.complex128)
+            # Loop over all frequency bands to build the diagonal term
+            for iband in range(nband):
+                M_fc = M[iband, icomp]
 
-        # Loop over all frequency bands to build the diagonal term
-        for iband in range(nband):
-            M_fc = M[iband, self.my_comp]
+                # Calculate beam operator for this frequency band
+                beam_window_squared = hp.gauss_beam(all_fwhm_rad[iband], lmax=compsep.lmax_per_comp[icomp])**2
+                beam_op_complex = hp.almxfl(np.ones(compsep.alm_len_percomp_complex[icomp], dtype=np.complex128), beam_window_squared)
 
-            # Calculate beam operator for this frequency band
-            beam_window_squared = hp.gauss_beam(all_fwhm_rad[iband], lmax=lmax)**2
-            beam_op_complex = hp.almxfl(np.ones(my_alm_len_complex, dtype=np.complex128), beam_window_squared)
+                mean_weights = np.mean(all_map_inv_var[iband])
 
-            mean_weights = np.mean(1.0/all_map_rms[iband]**2)
+                # Add the weighted contribution of this frequency band to the total
+                A_diag += M_fc**2 * beam_op_complex * mean_weights
 
-            # Add the weighted contribution of this frequency band to the total
-            self.A_diag += M_fc**2 * beam_op_complex * mean_weights
-
-        hp.almxfl(self.A_diag, compsep.my_comp_P_smooth, inplace=True)
-        self.A_diag += 1
-        # Regularize the final operator to avoid division by zero
-        min_val = 1e-30
-        self.A_diag[np.abs(self.A_diag) < min_val] = min_val
-
+            hp.almxfl(A_diag, compsep.per_comp_P_smooth[icomp], inplace=True)
+            # +1 because of the re-writing of the LHS equation with a S^{1/2} scaling.
+            A_diag += 1
+            # Regularize the final operator to avoid division by zero
+            min_val = 1e-30
+            A_diag[np.abs(A_diag) < min_val] = min_val
+            self.A_diag_list.append(A_diag)
 
     def __call__(self, a_array: NDArray) -> NDArray:
-        if not self.is_holding_comp:
+        if not self.is_master:
             return a_array
 
-        # Convert input real alm array to complex
-        a_alm_complex = alm_real2complex(a_array, self.my_comp_lmax)
+        a_array_out = a_array.copy()
+        for icomp in range(self.compsep.ncomp):
+            idx_start = self.compsep.alm_start_idx_per_comp[icomp]
+            idx_stop = self.compsep.alm_start_idx_per_comp[icomp+1]
+            comp_lmax = self.compsep.lmax_per_comp[icomp]
 
-        # Apply the preconditioner (divide by the pre-calculated diagonal of A)
-        a_alm_complex /= self.A_diag
-        
-        # Convert back to real alm array and return
-        a_array_out = alm_complex2real(a_alm_complex, self.my_comp_lmax)
+            # Convert input real alm array to complex
+            a_alm_complex = alm_real2complex(a_array[:,idx_start:idx_stop], comp_lmax)
+
+            # Apply the preconditioner (divide by the pre-calculated diagonal of A)
+            a_alm_complex /= self.A_diag_list[icomp]
+            
+            # Convert back to real alm array and return
+            a_array_out[:,idx_start:idx_stop] = alm_complex2real(a_alm_complex, comp_lmax)
         
         return a_array_out
