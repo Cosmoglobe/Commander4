@@ -467,7 +467,6 @@ class CompSepSolver:
             for icomp in range(self.ncomp):
                 for ipol in range(self.npol):
                     eta2[icomp][ipol] = gaussian_random_alm(self.lmax_per_comp[icomp], self.lmax_per_comp[icomp], self.spin, 1)
-                    eta2[icomp][ipol] = almxfl(eta2[icomp][ipol], self.per_comp_P_smooth_inv_sqrt[icomp], inplace=True)
                 eta2[icomp] = alm_complex2real(eta2[icomp], self.lmax_per_comp[icomp])
                 self.logger.info(f"RHS4 comp-{icomp}: {np.mean(np.abs(eta2[icomp])):.2e}")
             # We store the component alms as one long 1D array, so the array must be collapsed:
