@@ -111,11 +111,11 @@ def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     for icomp in range(ncomp_full):
         alm_len = ((comp_list[icomp].lmax+1)*(comp_list[icomp].lmax+2))//2
         comp_alms = np.zeros((1,alm_len), dtype=complex_dtype)
-        comp_list[icomp].component_alms_intensity = curvedsky.map2alm_healpix(comp_maps[0][icomp], comp_alms, niter=0, spin=0)
+        comp_list[icomp].component_alms_intensity = curvedsky.map2alm_healpix(comp_maps[0][icomp], comp_alms, niter=3, spin=0)
         if comp_list[icomp].polarized:
             alm_len = ((comp_list[icomp].lmax+1)*(comp_list[icomp].lmax+2))//2
             comp_alms = np.zeros((2,alm_len), dtype=complex_dtype)
-            pol_alms = curvedsky.map2alm_healpix(np.array([comp_maps[1][icomp], comp_maps[2][icomp]]), comp_alms, niter=0, spin=2)
+            pol_alms = curvedsky.map2alm_healpix(np.array([comp_maps[1][icomp], comp_maps[2][icomp]]), comp_alms, niter=3, spin=2)
             comp_list[icomp].component_alms_polarization = pol_alms
     return comp_list
 
