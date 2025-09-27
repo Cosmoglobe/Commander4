@@ -46,8 +46,9 @@ def init_mpi(params):
     # being the keyword for the split).
     if worldrank < params.MPI_config.ntask_tod:
         color = 0
-        # Setting threading configuration depending on tasks. Important to do before Numpy is
-        # imported, as Numpy will not respect changes to these.
+        # Note that Numpy will not respect these values, because Numpy has already been loaded
+        # as a mpi4py dependency. Numpy does not respect changes to these values after it has been
+        # imported. Ideally these variables should therefore be set before calling Python at all.
         os.environ["OMP_NUM_THREADS"] = f"{params.nthreads_tod}"
         os.environ["OPENBLAS_NUM_THREADS"] = f"{params.nthreads_tod}" 
         os.environ["MKL_NUM_THREADS"] = f"{params.nthreads_tod}"
@@ -60,14 +61,22 @@ def init_mpi(params):
                                                         # compsep rank, and gets to stay alive.
                 color = 1  # Compsep
             else:
-                color = 99  # Dummy rank
+                color = MPI.UNDEFINED  # Dummy ranks which will be de-spawned.
         else:
             color = 1  # Compsep
-        os.environ["OMP_NUM_THREADS"] = f"{params.nthreads_compsep}"
-        os.environ["OPENBLAS_NUM_THREADS"] = f"{params.nthreads_compsep}"
-        os.environ["MKL_NUM_THREADS"] = f"{params.nthreads_compsep}"
-        os.environ["VECLIB_MAXIMUM_THREADS"] = f"{params.nthreads_compsep}"
-        os.environ["NUMEXPR_NUM_THREADS"] = f"{params.nthreads_compsep}"
+
+        # nthreads_compsep is either an int, or a list specifying nthreads for each rank.
+        if isinstance(params.nthreads_compsep, int):  # If int, all ranks have same nthreads.
+            nthreads_compsep = params.nthreads_compsep
+        else:
+            nthreads_compsep = params.nthreads_compsep[worldrank - params.MPI_config.ntask_tod]
+        os.environ["OMP_NUM_THREADS"] = f"{nthreads_compsep}"
+        os.environ["OPENBLAS_NUM_THREADS"] = f"{nthreads_compsep}"
+        os.environ["MKL_NUM_THREADS"] = f"{nthreads_compsep}"
+        os.environ["VECLIB_MAXIMUM_THREADS"] = f"{nthreads_compsep}"
+        os.environ["NUMEXPR_NUM_THREADS"] = f"{nthreads_compsep}"
+        import numba
+        numba.set_num_threads(nthreads_compsep)
 
     tot_num_experiment_bands = sum([len(params.experiments[experiment].bands) for experiment in
                                     params.experiments if params.experiments[experiment].enabled])
