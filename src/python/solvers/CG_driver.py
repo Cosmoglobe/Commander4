@@ -3,7 +3,7 @@ import numpy as np
 def default_M(x):     return np.copy(x)
 def default_dot(a,b): return a.dot(np.conj(b))
 
-class CG:
+class distributed_CG:
 	"""Preconditioner borrowed from pixell.utils, and modified to accomodate both the distributed
     computations of Commander4 component separation, and overriding of certain Numpy operations.
 	"""

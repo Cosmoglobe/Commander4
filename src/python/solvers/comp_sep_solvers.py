@@ -15,6 +15,7 @@ from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, alm
     alm_complex2real, gaussian_random_alm, project_alms, almxfl, _inplace_prod_add,\
     _inplace_prod, _inplace_prod_scalar
 from src.python.solvers.dense_matrix_math import DenseMatrix
+from src.python.solvers.CG_driver import distributed_CG
 import src.python.solvers.preconditioners as preconditioners
 
 
@@ -501,9 +502,9 @@ class CompSepSolver:
         # Define dot-product for residual which returns 1.0 for non-master ranks (avoids warnings).
         mydot = lambda a,b: np.dot(a.flatten(),b.flatten()) if a.size > 0 else 1.0
         if M is None:
-            CG_solver = utils.CG(LHS, RHS, dot=mydot, x0=x0)
+            CG_solver = distributed_CG(LHS, RHS, dot=mydot, x0=x0)
         else:
-            CG_solver = utils.CG(LHS, RHS, dot=mydot, x0=x0, M=M)
+            CG_solver = distributed_CG(LHS, RHS, dot=mydot, x0=x0, M=M)
         self.CG_residuals = np.zeros((max_iter))
         if x_true is not None:
             # self.x_true_allcomps = self.CompSep_comm.allgather()
