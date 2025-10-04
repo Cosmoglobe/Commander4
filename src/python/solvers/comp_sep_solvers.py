@@ -511,9 +511,9 @@ class CompSepSolver:
         # Define dot-product for residual which returns 1.0 for non-master ranks (avoids warnings).
         mydot = lambda a,b: np.dot(a.flatten(),b.flatten()) if a.size > 0 else 1.0
         if M is None:
-            CG_solver = distributed_CG(LHS, RHS, dot=mydot, x0=x0)
+            CG_solver = distributed_CG(LHS, RHS, master, dot=mydot, x0=x0)
         else:
-            CG_solver = distributed_CG(LHS, RHS, dot=mydot, x0=x0, M=M)
+            CG_solver = distributed_CG(LHS, RHS, master, dot=mydot, x0=x0, M=M)
         self.CG_residuals = np.zeros((max_iter))
         if x_true is not None:
             # self.x_true_allcomps = self.CompSep_comm.allgather()
