@@ -329,8 +329,11 @@ class CompSepSolver:
                     almxfl(a[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
 
         # Spread initial a to all ranks from master.
+        requests = []
         for icomp in range(self.ncomp):
-            self.CompSep_comm.Bcast(a[icomp], root=0)
+            req = self.CompSep_comm.Ibcast(a[icomp], root=0)
+            requests.append(req)
+        MPI.Request.Waitall(requests)
 
         # B Y^-1 M Y S^{1/2} a
         a = self.apply_A(a)
@@ -340,17 +343,23 @@ class CompSepSolver:
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         a = self.apply_A_adjoint(a)
 
-        # if mycomp < self.ncomp:
+        requests = []
         for icomp in range(self.ncomp):
             # Accumulate solution on master
             send, recv = (MPI.IN_PLACE, a[icomp]) if myrank == 0 else (a[icomp], None)
-            self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=0)
+            req = self.CompSep_comm.Ireduce(send, recv, op=MPI.SUM, root=0)
+            requests.append(req)
 
-            # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
-            if myrank == 0:
+        if myrank == 0:
+            for icomp in range(self.ncomp):
+                # Since we used non-blocking reduce, master rank can start working on components
+                # as they are received instead of waiting for all to be received.
+                requests[icomp].Wait()  # Wait until all data for component icomp has been received.
                 for ipol in range(self.npol):
+                    # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
                     almxfl(a[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
-
+        else: # Worker ranks just wait for all their sends to complete.
+            MPI.Request.Waitall(requests)
 
         if myrank == 0:
             for icomp in range(self.ncomp):
