@@ -13,7 +13,7 @@ from src.python.data_models.detector_map import DetectorMap
 from src.python.sky_models.component import DiffuseComponent
 from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, alm_real2complex,\
     alm_complex2real, gaussian_random_alm, project_alms, almxfl, _inplace_prod_add,\
-    _inplace_prod, _inplace_prod_scalar, alm_dot_product
+    _inplace_prod, _inplace_prod_scalar, alm_dot_product, almlist_dot_complex, almlist_dot_real
 from src.python.solvers.dense_matrix_math import DenseMatrix
 from src.python.solvers.CG_driver import distributed_CG
 import src.python.solvers.preconditioners as preconditioners
@@ -517,19 +517,7 @@ class CompSepSolver:
         master = self.CompSep_comm.Get_rank() == 0
         mycomp = self.CompSep_comm.Get_rank()
 
-        # Define dot-product for residual which returns 1.0 for non-master ranks (avoids warnings).
-        # mydot = lambda a,b: np.dot(a.flatten(),b.flatten()) if a.size > 0 else 1.0
-        def mydot_complex_alm_lists(a,b):
-            res = 0.0
-            for icomp in range(self.ncomp):
-                for ipol in range(self.npol):
-                    res += alm_dot_product(a[icomp][ipol], b[icomp][ipol], self.lmax_per_comp[icomp])
-            return res
-        def mydot_real_alm_lists(a,b):
-            return np.sum([np.dot(x.flatten(), y.flatten()) for x,y in zip(a,b)])
-
-        # The dot product we use will depend on whether we are using real or complex alms.
-        mydot = mydot_real_alm_lists if self.params.CG_real_alm_mode else mydot_complex_alm_lists
+        mydot = almlist_dot_real if self.params.CG_real_alm_mode else almlist_dot_complex
         
         if M is None:
             CG_solver = distributed_CG(LHS, RHS, master, dot=mydot, x0=x0, destroy_b=True)
@@ -579,10 +567,12 @@ class CompSepSolver:
             logger.info(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.params.CG_err_tol})")
         if master:
             s_bestfit_list = CG_solver.x
-            if self.params.CG_real_alm_mode:
-                for icomp in range(self.ncomp):
+            for icomp in range(self.ncomp):
+                if self.params.CG_real_alm_mode:
                     s_bestfit_list[icomp] = alm_real2complex(s_bestfit_list[icomp],
                                                              self.lmax_per_comp[icomp])
+                for ipol in range(self.npol):
+                    almxfl(s_bestfit_list[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
         else:
             s_bestfit_list = [np.zeros((self.npol, self.alm_len_percomp_complex[icomp]),
                                        dtype=self.alm_dtype) for icomp in range(self.ncomp)]
@@ -628,7 +618,6 @@ class CompSepSolver:
 
 
         sol_list = self.solve_CG(self.apply_LHS_matrix, RHS, M=precond, x_true=x_true if self.params.compsep.dense_matrix_debug_mode else None)
-        sol_list = self.CompSep_comm.bcast(sol_list, root=0)
         for icomp in range(self.ncomp):
             if self.spin == 0:
                 self.comp_list[icomp].component_alms_intensity = sol_list[icomp]
