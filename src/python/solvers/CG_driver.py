@@ -1,5 +1,6 @@
 import numpy as np
 import logging
+from src.python.utils.math_operations import inplace_almlist_add_scaled_array, inplace_almlist_scale_and_add
 
 def default_M(x):     return np.copy(x)
 def default_dot(a,b): return a.dot(np.conj(b))
@@ -26,7 +27,7 @@ class distributed_CG:
         self.err = np.inf
         self.i   = 0
         if x0 is None:
-            self.x = b.copy()
+            self.x = [np.zeros_like(_b) for _b in b]
             self.r = b.copy() if not destroy_b else b
         else:
             self.x  = x0.copy()
@@ -49,13 +50,20 @@ class distributed_CG:
         Ap = self.A(self.p)
         if self.is_master:  # The rest of the CG iteration is done by the master alone.
             alpha = self.rz/self.dot(self.p, Ap)
-            self.x = [_x + alpha*_p for _x, _p in zip(self.x, self.p)]
-            self.r = [_r - alpha*_Ap for _r, _Ap in zip(self.r, Ap)]
+
+            # Line below equivalent to: self.x = [_x + alpha*_p for _x, _p in zip(self.x, self.p)]
+            inplace_almlist_add_scaled_array(self.x, self.p, alpha)
+
+            # Line below equivalent to: self.r = [_r - alpha*_Ap for _r, _Ap in zip(self.r, Ap)]
+            inplace_almlist_add_scaled_array(self.r, Ap, -alpha)
+
             del Ap
             z       = self.M(self.r)
             next_rz = self.dot(self.r, z)
             self.err = next_rz/self.rz0
             beta = next_rz/self.rz
             self.rz = next_rz
-            self.p = [_p*beta + _z for _p, _z in zip(self.p, z)]
+
+            # Line below equivalent to: self.p = [_p*beta + _z for _p, _z in zip(self.p, z)]
+            inplace_almlist_scale_and_add(self.p, z, beta)
         self.i += 1
