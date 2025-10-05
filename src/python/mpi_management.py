@@ -54,6 +54,8 @@ def init_mpi(params):
         os.environ["MKL_NUM_THREADS"] = f"{params.nthreads_tod}"
         os.environ["VECLIB_MAXIMUM_THREADS"] = f"{params.nthreads_tod}"
         os.environ["NUMEXPR_NUM_THREADS"] = f"{params.nthreads_tod}"
+        import numba
+        numba.set_num_threads(1)
     elif worldrank < params.MPI_config.ntask_tod + params.MPI_config.ntask_compsep:
         if params.betzy_mode:  # Betzy doesn't like heterogeneous MPI setups, so we oversubscribe
                                # the compsep ranks with cores we will in practice use as threads.
@@ -76,7 +78,9 @@ def init_mpi(params):
         os.environ["VECLIB_MAXIMUM_THREADS"] = f"{nthreads_compsep}"
         os.environ["NUMEXPR_NUM_THREADS"] = f"{nthreads_compsep}"
         import numba
-        numba.set_num_threads(nthreads_compsep)
+        # Testing revealed 24 to be a good number (regardless of nside), but I tested this on the
+        # new 384-core nodes, the optimal number is probably slightly lower on the older owls.
+        numba.set_num_threads(min(24,nthreads_compsep))
 
     tot_num_experiment_bands = sum([len(params.experiments[experiment].bands) for experiment in
                                     params.experiments if params.experiments[experiment].enabled])
