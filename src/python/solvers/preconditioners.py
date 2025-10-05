@@ -240,17 +240,15 @@ class JointPreconditioner:
 
         a_array_out = a_array.copy()
         for icomp in range(self.compsep.ncomp):
-            idx_start = self.compsep.alm_start_idx_per_comp[icomp]
-            idx_stop = self.compsep.alm_start_idx_per_comp[icomp+1]
             comp_lmax = self.compsep.lmax_per_comp[icomp]
 
-            # Convert input real alm array to complex
-            a_alm_complex = alm_real2complex(a_array[:,idx_start:idx_stop], comp_lmax)
-
-            # Apply the preconditioner (divide by the pre-calculated diagonal of A)
-            a_alm_complex /= self.A_diag_list[icomp]
+            if self.compsep.params.CG_real_alm_mode:
+                a_array_out[icomp] = alm_real2complex(a_array_out[icomp], comp_lmax)
             
-            # Convert back to real alm array and return
-            a_array_out[:,idx_start:idx_stop] = alm_complex2real(a_alm_complex, comp_lmax)
+            # Apply the already calculated diagonal preconditioner.
+            a_array_out[icomp] /= self.A_diag_list[icomp]
+
+            if self.compsep.params.CG_real_alm_mode:
+                a_array_out[icomp] = alm_complex2real(a_array_out[icomp], comp_lmax)
         
         return a_array_out
