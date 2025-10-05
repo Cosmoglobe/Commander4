@@ -18,6 +18,7 @@ from src.python.solvers.dense_matrix_math import DenseMatrix
 from src.python.solvers.CG_driver import distributed_CG
 import src.python.solvers.preconditioners as preconditioners
 
+MPI_LIMIT_32BIT = 2**31 - 1
 
 def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
                                comp_list: list[DiffuseComponent], params: Bunch
@@ -339,11 +340,18 @@ class CompSepSolver:
                     almxfl(a[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
 
         # Spread initial a to all ranks from master.
+        # NB: For some stupid reason the non-blocking mpi4py calls do not have 64-bit length support
+        # and are therefore limited to <2GB arrays... We have to fallback to blocking communication
+        # for >2GB arrays. In the future we should probably implement chunking instead.
         requests = []
         for icomp in range(self.ncomp):
-            req = self.CompSep_comm.Ibcast(a[icomp], root=0)
-            requests.append(req)
-        MPI.Request.Waitall(requests)
+            if a[icomp].nbytes > MPI_LIMIT_32BIT:
+                req = self.CompSep_comm.Bcast(a[icomp], root=0)
+            else:
+                req = self.CompSep_comm.Ibcast(a[icomp], root=0)
+                requests.append(req)
+        for request in requests:
+            MPI.Request.Wait(request)
 
         # B Y^-1 M Y S^{1/2} a
         a = self.apply_A(a)
@@ -354,35 +362,42 @@ class CompSepSolver:
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         a = self.apply_A_adjoint(a)
 
-        requests = []
-        for icomp in range(self.ncomp):
-            # Accumulate solution on master
-            send, recv = (MPI.IN_PLACE, a[icomp]) if myrank == 0 else (a[icomp], None)
-            req = self.CompSep_comm.Ireduce(send, recv, op=MPI.SUM, root=0)
-            requests.append(req)
+        # Accumulate solution on master
+        biggest_size_bytes = np.max([_array.nbytes for _array in a])
+        use_blocking = biggest_size_bytes > MPI_LIMIT_32BIT
+        if use_blocking:
+            for icomp in range(self.ncomp):
+                send, recv = (MPI.IN_PLACE, a[icomp]) if myrank == 0 else (a[icomp], None)
+                self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=0)
+        else:
+            requests = []
+            for icomp in range(self.ncomp):
+                send, recv = (MPI.IN_PLACE, a[icomp]) if myrank == 0 else (a[icomp], None)
+                req = self.CompSep_comm.Ireduce(send, recv, op=MPI.SUM, root=0)
+                requests.append(req)
 
         if myrank == 0:
             for icomp in range(self.ncomp):
                 # Since we used non-blocking reduce, master rank can start working on components
                 # as they are received instead of waiting for all to be received.
-                requests[icomp].Wait()  # Wait until all data for component icomp has been received.
+                if not use_blocking:
+                    requests[icomp].Wait()  # Wait until all data for component icomp has been received.
                 for ipol in range(self.npol):
                     # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
                     almxfl(a[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
         else: # Worker ranks just wait for all their sends to complete.
-            MPI.Request.Waitall(requests)
+            if not use_blocking:
+                for icomp in range(self.ncomp):
+                    MPI.Request.Wait(requests[icomp])
 
         if myrank == 0:
             for icomp in range(self.ncomp):
                 if self.params.CG_real_alm_mode:
                     a[icomp] = alm_complex2real(a[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
-                # a[icomp] = alm_complex2real(a[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
                 # Adds input vector to output, since (1 + S^{1/2}...)a = a + (S^{1/2}...)a
-                # a[icomp] += a_in[:,self.alm_start_idx_per_comp[icomp]:self.alm_start_idx_per_comp[icomp+1]]
                 a[icomp] += a_in[icomp]
         else:
             a = []
-
         return a
 
 
