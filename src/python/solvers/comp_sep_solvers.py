@@ -13,7 +13,7 @@ from src.python.data_models.detector_map import DetectorMap
 from src.python.sky_models.component import DiffuseComponent
 from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, alm_real2complex,\
     alm_complex2real, gaussian_random_alm, project_alms, almxfl, _inplace_prod_add,\
-    _inplace_prod, _inplace_prod_scalar
+    _inplace_prod, _inplace_prod_scalar, alm_dot_product
 from src.python.solvers.dense_matrix_math import DenseMatrix
 from src.python.solvers.CG_driver import distributed_CG
 import src.python.solvers.preconditioners as preconditioners
@@ -206,6 +206,14 @@ class CompSepSolver:
         else:
             self.nthreads = self.params.nthreads_compsep[self.CompSep_comm.Get_rank()]
 
+        # Defining some convenience parameters, so we can e.g. check the lengths for the alm arrays
+        # without having to if-test what type they are depending on what mode we are in.
+        if params.CG_real_alm_mode:
+            self.alm_dtype = self.float_dtype
+            self.alm_len_percomp = self.alm_len_percomp_real
+        else:
+            self.alm_dtype = self.complex_dtype
+            self.alm_len_percomp = self.alm_len_percomp_complex
 
 
     def apply_A(self, a_in: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
@@ -310,20 +318,22 @@ class CompSepSolver:
         """
         logger = logging.getLogger(__name__)
         myrank = self.CompSep_comm.Get_rank()
-        logassert(a_in.dtype in [np.float64, np.float32], f"Provided component array is of type {a_in.dtype} and not np.float64 or float32. This operator takes and returns real alms (and converts to and from complex internally).", logger)
         if myrank == 0:
-            logassert(a_in.shape[-1] == np.sum(self.alm_len_percomp_real), f"Provided component array is of length {a_in.shape[-1]}, not {np.sum(self.alm_len_percomp_real)}.", logger)
-        else:
-            logassert(a_in.size == 0, f"Expected 0-size array on non-master rank, got {a_in.size}", logger)
+            logassert(len(a_in) == self.ncomp, "a_in doesn't match ncomp", logger)
+            for icomp in range(self.ncomp):
+                logassert(a_in[icomp].dtype == self.alm_dtype, f"a_in is type {a_in[icomp].dtype}, "
+                          f"not the expected {self.alm_dtype}.", logger)
+                logassert(a_in[icomp].shape == (self.npol, self.alm_len_percomp[icomp]),
+                          f"a_in comp nr {icomp} has unexpected shape {a_in[icomp].shape}", logger)
 
         # Create empty a array for all ranks.
         a = [np.zeros((self.npol, self.alm_len_percomp_complex[icomp]), dtype=self.complex_dtype) for icomp in range(self.ncomp)]
         if myrank == 0:  # this task actually holds a component
             for icomp in range(self.ncomp):
-                start_idx = self.alm_start_idx_per_comp[icomp]
-                stop_idx = self.alm_start_idx_per_comp[icomp+1]
-                a_local_comp = a_in[:,start_idx:stop_idx]
-                a[icomp] = alm_real2complex(a_local_comp, self.lmax_per_comp[icomp]) # Convert the real input alms to complex alms.
+                if self.params.CG_real_alm_mode:
+                    a[icomp] = alm_real2complex(a_in[icomp], self.lmax_per_comp[icomp]) # Convert the real input alms to complex alms.
+                else:
+                    a[icomp][:] = a_in[icomp][:]
                 for ipol in range(self.npol):
                     # S^{1/2} a
                     almxfl(a[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
@@ -337,6 +347,7 @@ class CompSepSolver:
 
         # B Y^-1 M Y S^{1/2} a
         a = self.apply_A(a)
+
         # Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         a = self.apply_N_inv(a)
 
@@ -363,12 +374,14 @@ class CompSepSolver:
 
         if myrank == 0:
             for icomp in range(self.ncomp):
-                a[icomp] = alm_complex2real(a[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
+                if self.params.CG_real_alm_mode:
+                    a[icomp] = alm_complex2real(a[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
+                # a[icomp] = alm_complex2real(a[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
                 # Adds input vector to output, since (1 + S^{1/2}...)a = a + (S^{1/2}...)a
-                a[icomp] += a_in[:,self.alm_start_idx_per_comp[icomp]:self.alm_start_idx_per_comp[icomp+1]]
-            a = np.concatenate(a, axis=-1)
+                # a[icomp] += a_in[:,self.alm_start_idx_per_comp[icomp]:self.alm_start_idx_per_comp[icomp+1]]
+                a[icomp] += a_in[icomp]
         else:
-            a = np.zeros((0,), dtype=self.float_dtype)  # zero-sized array
+            a = []
 
         return a
 
@@ -401,12 +414,11 @@ class CompSepSolver:
 
         if myrank == 0:
             for icomp in range(self.ncomp):
-                b[icomp] = alm_complex2real(b[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
+                if self.params.CG_real_alm_mode:
+                    b[icomp] = alm_complex2real(b[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
                 self.logger.info(f"RHS1 comp-{icomp}: {np.mean(np.abs(b[icomp])):.2e}")
-            # We store the component alms as one long 1D array, so the array must be collapsed:
-            b = np.concatenate(b, axis=-1)
         else:
-            b = np.zeros((0,), dtype=self.float_dtype)  # zero-sized array
+            b = []
 
         return b
 
@@ -442,10 +454,9 @@ class CompSepSolver:
         
         if myrank == 0:
             for icomp in range(self.ncomp):
-                b[icomp] = alm_complex2real(b[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
+                if self.params.CG_real_alm_mode:
+                    b[icomp] = alm_complex2real(b[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
                 self.logger.info(f"RHS2 comp-{icomp}: {np.mean(np.abs(b[icomp])):.2e}")
-            # We store the component alms as one long 1D array, so the array must be collapsed:
-            b = np.concatenate(b, axis=-1)
         else:
             b = np.zeros((0,), dtype=self.float_dtype)  # zero-sized array
 
@@ -461,10 +472,9 @@ class CompSepSolver:
             for icomp in range(self.ncomp):
                 for ipol in range(self.npol):
                     almxfl(mu[icomp][ipol], self.per_comp_P_smooth_inv[icomp], inplace=True)
-                mu[icomp] = alm_complex2real(mu[icomp], self.lmax_per_comp[icomp])
+                if self.params.CG_real_alm_mode:
+                    mu[icomp] = alm_complex2real(mu[icomp], self.lmax_per_comp[icomp])
                 self.logger.info(f"RHS3 comp-{icomp}: {np.mean(np.abs(mu[icomp])):.2e}")
-            # We store the component alms as one long 1D array, so the array must be collapsed:
-            mu = np.concatenate(mu, axis=-1)
         else:
             mu = np.zeros((0,), dtype=self.float_dtype)
         return mu
@@ -477,10 +487,9 @@ class CompSepSolver:
             for icomp in range(self.ncomp):
                 for ipol in range(self.npol):
                     eta2[icomp][ipol] = gaussian_random_alm(self.lmax_per_comp[icomp], self.lmax_per_comp[icomp], self.spin, 1)
-                eta2[icomp] = alm_complex2real(eta2[icomp], self.lmax_per_comp[icomp])
+                if self.params.CG_real_alm_mode:
+                    eta2[icomp] = alm_complex2real(eta2[icomp], self.lmax_per_comp[icomp])
                 self.logger.info(f"RHS4 comp-{icomp}: {np.mean(np.abs(eta2[icomp])):.2e}")
-            # We store the component alms as one long 1D array, so the array must be collapsed:
-            eta2 = np.concatenate(eta2, axis=-1)
         else:
             eta2 = np.zeros((0,), dtype=self.float_dtype)
         return eta2
@@ -504,12 +513,24 @@ class CompSepSolver:
         max_iter = self.params.CG_max_iter_pol if self.pol else self.params.CG_max_iter
 
         logger = logging.getLogger(__name__)
-        checkpoint_interval = 5
+        checkpoint_interval = 1
         master = self.CompSep_comm.Get_rank() == 0
         mycomp = self.CompSep_comm.Get_rank()
 
         # Define dot-product for residual which returns 1.0 for non-master ranks (avoids warnings).
-        mydot = lambda a,b: np.dot(a.flatten(),b.flatten()) if a.size > 0 else 1.0
+        # mydot = lambda a,b: np.dot(a.flatten(),b.flatten()) if a.size > 0 else 1.0
+        def mydot_complex_alm_lists(a,b):
+            res = 0.0
+            for icomp in range(self.ncomp):
+                for ipol in range(self.npol):
+                    res += alm_dot_product(a[icomp][ipol], b[icomp][ipol], self.lmax_per_comp[icomp])
+            return res
+        def mydot_real_alm_lists(a,b):
+            return np.sum([np.dot(x.flatten(), y.flatten()) for x,y in zip(a,b)])
+
+        # The dot product we use will depend on whether we are using real or complex alms.
+        mydot = mydot_real_alm_lists if self.params.CG_real_alm_mode else mydot_complex_alm_lists
+        
         if M is None:
             CG_solver = distributed_CG(LHS, RHS, master, dot=mydot, x0=x0)
         else:
@@ -556,16 +577,28 @@ class CompSepSolver:
         self.CG_residuals = self.CG_residuals[:iter]
         if master:
             logger.info(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.params.CG_err_tol})")
-            s_bestfit_compact = CG_solver.x
-            s_bestfit_list = []
-            for icomp in range(self.ncomp):
-                local_comp = s_bestfit_compact[:,self.alm_start_idx_per_comp[icomp]:self.alm_start_idx_per_comp[icomp+1]]
-                local_comp = alm_real2complex(local_comp, self.lmax_per_comp[icomp])  # CG search uses real-valued alms, convert to complex, which is used outside CG.
-                for ipol in range(self.npol):
-                    almxfl(local_comp[ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
-                s_bestfit_list.append(local_comp)
+        #     s_bestfit_compact = CG_solver.x
+        #     s_bestfit_list = []
+        #     for icomp in range(self.ncomp):
+        #         local_comp = s_bestfit_compact[:,self.alm_start_idx_per_comp[icomp]:self.alm_start_idx_per_comp[icomp+1]]
+        #         local_comp = alm_real2complex(local_comp, self.lmax_per_comp[icomp])  # CG search uses real-valued alms, convert to complex, which is used outside CG.
+        #         for ipol in range(self.npol):
+        #             almxfl(local_comp[ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
+        #         s_bestfit_list.append(local_comp)
+        # else:
+        #     s_bestfit_list = [] # np.zeros((0,), dtype=np.complex128)
+        if master:
+            s_bestfit_list = CG_solver.x
+            if self.params.CG_real_alm_mode:
+                for icomp in range(self.ncomp):
+                    s_bestfit_list[icomp] = alm_real2complex(s_bestfit_list[icomp],
+                                                             self.lmax_per_comp[icomp])
         else:
-            s_bestfit_list = [] # np.zeros((0,), dtype=np.complex128)
+            s_bestfit_list = [np.zeros((self.npol, self.alm_len_percomp_complex[icomp]),
+                                       dtype=self.alm_dtype) for icomp in range(self.ncomp)]
+        for icomp in range(self.ncomp):
+            self.CompSep_comm.Bcast(s_bestfit_list[icomp], root=0)
+        
         return s_bestfit_list
 
 
@@ -575,8 +608,7 @@ class CompSepSolver:
         RHS2 = self.calc_RHS_fluct()
         RHS3 = self.calc_RHS_prior_mean()
         RHS4 = self.calc_RHS_prior_fluct()
-        RHS = RHS1 + RHS2 + RHS3 + RHS4
-        # self.logger.info(f"Mean amplitude of each RHS component: {np.mean(np.abs(RHS1)):.2e} {np.mean(np.abs(RHS2)):.2e} {np.mean(np.abs(RHS3)):.2e} {np.mean(np.abs(RHS4)):.2e}")
+        RHS = [_R1 + _R2 + _R3 + _R4 for _R1, _R2, _R3, _R4 in zip(RHS1, RHS2, RHS3, RHS4)]
 
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners", and has a name specified by self.params.compsep.preconditioner.
         precond = getattr(preconditioners, self.params.compsep.preconditioner)(self)
@@ -606,10 +638,9 @@ class CompSepSolver:
         if seed is not None:
             np.random.seed(seed)
         if self.my_rank == 0:
-            tot_alm_len = np.sum(self.alm_len_percomp_real)
-            x0 = np.zeros((self.npol, tot_alm_len), dtype=self.float_dtype)
+            x0 = [np.zeros((self.npol, self.alm_len_percomp[icomp]), dtype=self.alm_dtype) for icomp in range(self.ncomp)]
         else:
-            x0 = np.zeros((0,), dtype=self.float_dtype)
+            x0 = []
         sol_list = self.solve_CG(self.apply_LHS_matrix, RHS, x0, M=precond, x_true=x_true if self.params.compsep.dense_matrix_debug_mode else None)
         sol_list = self.CompSep_comm.bcast(sol_list, root=0)
         for icomp in range(self.ncomp):
