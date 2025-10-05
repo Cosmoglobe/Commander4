@@ -5,6 +5,7 @@ from mpi4py import MPI
 import typing
 from numpy.typing import NDArray
 from pixell import curvedsky
+from copy import deepcopy
 from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, alm_real2complex, alm_complex2real
 
 if typing.TYPE_CHECKING:  # Only import when performing type checking, avoiding circular import during normal runtime.
@@ -24,7 +25,7 @@ class NoPreconditioner:
 
 
     def __call__(self, a_array: NDArray):
-        return a_array
+        return deepcopy(a_array)
 
 
 
@@ -203,7 +204,7 @@ class JointPreconditioner:
         if not self.is_master:
             return
 
-        self.A_diag_list = []
+        self.A_diag_inv_list = []
         for icomp in range(compsep.ncomp):
             # Construct the full mixing matrix M on all ranks
             M = np.empty((nband, compsep.ncomp), dtype=np.float64)
@@ -232,13 +233,14 @@ class JointPreconditioner:
             # Regularize the final operator to avoid division by zero
             min_val = 1e-30
             A_diag[np.abs(A_diag) < min_val] = min_val
-            self.A_diag_list.append(A_diag)
+            self.A_diag_inv_list.append(1.0/A_diag)
 
-    def __call__(self, a_array: NDArray) -> NDArray:
+    def __call__(self, a_array: list[NDArray]) -> list[NDArray]:
         if not self.is_master:
             return a_array
 
-        a_array_out = a_array.copy()
+        # Need to parse the list to make copy, as the list.copy() is a shallow copy.
+        a_array_out = [a.copy() for a in a_array]
         for icomp in range(self.compsep.ncomp):
             comp_lmax = self.compsep.lmax_per_comp[icomp]
 
@@ -246,7 +248,7 @@ class JointPreconditioner:
                 a_array_out[icomp] = alm_real2complex(a_array_out[icomp], comp_lmax)
             
             # Apply the already calculated diagonal preconditioner.
-            a_array_out[icomp] /= self.A_diag_list[icomp]
+            a_array_out[icomp] *= self.A_diag_inv_list[icomp]
 
             if self.compsep.params.CG_real_alm_mode:
                 a_array_out[icomp] = alm_complex2real(a_array_out[icomp], comp_lmax)
