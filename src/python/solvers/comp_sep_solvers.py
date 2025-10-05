@@ -496,19 +496,19 @@ class CompSepSolver:
 
 
 
-    def solve_CG(self, LHS: Callable, RHS: NDArray, x0: NDArray, M = None, x_true = None) -> NDArray:
+    def solve_CG(self, LHS: Callable, RHS: NDArray, x0 = None, M = None, x_true = None) -> NDArray:
         """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG from the pixell package.
             Assumes that both x and b are in alm space.
 
             Args:
                 LHS (callable): A function/callable taking x as argument and returning Ax.
-                RHS (np.array): A Numpy array representing b, in alm space.
-                x0 (np.array): Initial guess for x.
-                M (callable): Preconditioner for the CG solver. A function/callable which approximates A^-1 (optional).
-                x_true (np.array): True solution for x, in order to print the true error (optional, used for testing).
+                RHS (list): A list of alm-vectors representing the right-hand-side of the equation.
+                x0 (list): Initial guess for x, as list of alm-vectors for each component (optional).
+                M (callable): Preconditioner for the CG solver. A callable which approximates A^-1 (optional).
+                x_true (np.array): True solution for x, in order to print the true error (optional).
             Returns:
-                m_bestfit (np.array): The resulting best-fit solution, in alm space, for the component held by this rank.
-                                      A zero-sized array for ranks holding no component.
+                m_bestfit (list): The resulting best-fit solution, for the component held by this
+                                  rank, as a list of alm-vectors for each component.
         """
         max_iter = self.params.CG_max_iter_pol if self.pol else self.params.CG_max_iter
 
@@ -532,9 +532,9 @@ class CompSepSolver:
         mydot = mydot_real_alm_lists if self.params.CG_real_alm_mode else mydot_complex_alm_lists
         
         if M is None:
-            CG_solver = distributed_CG(LHS, RHS, master, dot=mydot, x0=x0)
+            CG_solver = distributed_CG(LHS, RHS, master, dot=mydot, x0=x0, destroy_b=True)
         else:
-            CG_solver = distributed_CG(LHS, RHS, master, dot=mydot, x0=x0, M=M)
+            CG_solver = distributed_CG(LHS, RHS, master, dot=mydot, x0=x0, M=M, destroy_b=True)
         self.CG_residuals = np.zeros((max_iter))
         if x_true is not None:
             # self.x_true_allcomps = self.CompSep_comm.allgather()
@@ -577,16 +577,6 @@ class CompSepSolver:
         self.CG_residuals = self.CG_residuals[:iter]
         if master:
             logger.info(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.params.CG_err_tol})")
-        #     s_bestfit_compact = CG_solver.x
-        #     s_bestfit_list = []
-        #     for icomp in range(self.ncomp):
-        #         local_comp = s_bestfit_compact[:,self.alm_start_idx_per_comp[icomp]:self.alm_start_idx_per_comp[icomp+1]]
-        #         local_comp = alm_real2complex(local_comp, self.lmax_per_comp[icomp])  # CG search uses real-valued alms, convert to complex, which is used outside CG.
-        #         for ipol in range(self.npol):
-        #             almxfl(local_comp[ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
-        #         s_bestfit_list.append(local_comp)
-        # else:
-        #     s_bestfit_list = [] # np.zeros((0,), dtype=np.complex128)
         if master:
             s_bestfit_list = CG_solver.x
             if self.params.CG_real_alm_mode:
@@ -604,6 +594,8 @@ class CompSepSolver:
 
 
     def solve(self, seed=None) -> list[DiffuseComponent]:
+        if seed is not None:
+            np.random.seed(seed)
         RHS1 = self.calc_RHS_mean()
         RHS2 = self.calc_RHS_fluct()
         RHS3 = self.calc_RHS_prior_mean()
@@ -635,13 +627,7 @@ class CompSepSolver:
             dense_matrix.print_matrix_diag()
 
 
-        if seed is not None:
-            np.random.seed(seed)
-        if self.my_rank == 0:
-            x0 = [np.zeros((self.npol, self.alm_len_percomp[icomp]), dtype=self.alm_dtype) for icomp in range(self.ncomp)]
-        else:
-            x0 = []
-        sol_list = self.solve_CG(self.apply_LHS_matrix, RHS, x0, M=precond, x_true=x_true if self.params.compsep.dense_matrix_debug_mode else None)
+        sol_list = self.solve_CG(self.apply_LHS_matrix, RHS, M=precond, x_true=x_true if self.params.compsep.dense_matrix_debug_mode else None)
         sol_list = self.CompSep_comm.bcast(sol_list, root=0)
         for icomp in range(self.ncomp):
             if self.spin == 0:
