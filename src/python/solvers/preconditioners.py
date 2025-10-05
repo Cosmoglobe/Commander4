@@ -6,7 +6,8 @@ import typing
 from numpy.typing import NDArray
 from pixell import curvedsky
 from copy import deepcopy
-from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, alm_real2complex, alm_complex2real
+from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, alm_real2complex,\
+    alm_complex2real, _inplace_prod
 
 if typing.TYPE_CHECKING:  # Only import when performing type checking, avoiding circular import during normal runtime.
     from src.python.solvers.comp_sep_solvers import CompSepSolver
@@ -248,7 +249,7 @@ class JointPreconditioner:
                 a_array_out[icomp] = alm_real2complex(a_array_out[icomp], comp_lmax)
             
             # Apply the already calculated diagonal preconditioner.
-            a_array_out[icomp] *= self.A_diag_inv_list[icomp]
+            _inplace_prod(a_array_out[icomp], self.A_diag_inv_list[icomp])
 
             if self.compsep.params.CG_real_alm_mode:
                 a_array_out[icomp] = alm_complex2real(a_array_out[icomp], comp_lmax)
