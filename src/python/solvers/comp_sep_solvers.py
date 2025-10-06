@@ -385,19 +385,17 @@ class CompSepSolver:
                 for ipol in range(self.npol):
                     # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
                     almxfl(a[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
+                if self.params.CG_real_alm_mode:
+                    # If in real-alm mode, convert complex alm back to real before returning.
+                    a[icomp] = alm_complex2real(a[icomp], self.lmax_per_comp[icomp])
+                # Adds input vector to output, since (1 + S^{1/2}...)a = a + (S^{1/2}...)a
+                a[icomp] += a_in[icomp]
         else: # Worker ranks just wait for all their sends to complete.
             if not use_blocking:
                 for icomp in range(self.ncomp):
                     MPI.Request.Wait(requests[icomp])
-
-        if myrank == 0:
-            for icomp in range(self.ncomp):
-                if self.params.CG_real_alm_mode:
-                    a[icomp] = alm_complex2real(a[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
-                # Adds input vector to output, since (1 + S^{1/2}...)a = a + (S^{1/2}...)a
-                a[icomp] += a_in[icomp]
-        else:
             a = []
+
         return a
 
 
