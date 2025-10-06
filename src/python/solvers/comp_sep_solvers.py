@@ -348,7 +348,8 @@ class CompSepSolver:
                 logassert(a_in[icomp].dtype == self.alm_dtype, f"a_in is type {a_in[icomp].dtype}, "
                           f"not the expected {self.alm_dtype}.", logger)
                 logassert(a_in[icomp].shape == (self.npol, self.alm_len_percomp[icomp]),
-                          f"a_in comp nr {icomp} has unexpected shape {a_in[icomp].shape}", logger)
+                          f"a_in comp nr {icomp} has unexpected shape {a_in[icomp].shape} and not"
+                          f"{(self.npol, self.alm_len_percomp[icomp])}", logger)
 
         # Create empty a array for all ranks.
         a = [np.zeros((self.npol, self.alm_len_percomp_complex[icomp]), dtype=self.complex_dtype) for icomp in range(self.ncomp)]
@@ -639,7 +640,7 @@ class CompSepSolver:
             M_A_matrix = lambda a : self.apply_LHS_matrix(precond(a))
 
             # Testing the initial LHS (A) matrix
-            dense_matrix = DenseMatrix(self.CompSep_comm, self.apply_LHS_matrix, self.alm_len_percomp_real, matrix_name="A")
+            dense_matrix = DenseMatrix(self, self.apply_LHS_matrix, "A")
             x_true = dense_matrix.solve_by_inversion(RHS)
             dense_matrix.test_matrix_hermitian()
             dense_matrix.print_sing_vals()
@@ -647,12 +648,12 @@ class CompSepSolver:
             dense_matrix.print_matrix_diag()
 
             # Testing the preconditioning matrix (M) alone
-            dense_matrix = DenseMatrix(self.CompSep_comm, precond, self.alm_len_percomp_real, matrix_name="M")
+            dense_matrix = DenseMatrix(self, precond, "M")
             dense_matrix.test_matrix_hermitian()  # Preconditioner matrix needs to be Hermitian.
             dense_matrix.test_matrix_eigenvalues()  # and to have positive and real eigenvalues
 
             # Testing the combined preconditioned system (MA)  (this combined matrix will generally not be Hermitian positive-definite).
-            dense_matrix = DenseMatrix(self.CompSep_comm, M_A_matrix, self.alm_len_percomp_real, matrix_name="MA")
+            dense_matrix = DenseMatrix(self, M_A_matrix, "MA")
             dense_matrix.print_sing_vals()  # Check how much singular values (condition number) of preconditioned system improved.
             dense_matrix.print_matrix_diag()
 
