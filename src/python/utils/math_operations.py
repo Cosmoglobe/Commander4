@@ -18,8 +18,8 @@ from scipy.linalg import blas as blas_wrapper
 
 ###### NUMPY REPLACEMENTS ######
 # Collection of Numba functions and BLAS wrappers for simply array manipulation.
-# These exist because 1. Numpy is in threaded, which is a problem on the comp-sep module which
-# has a lot of cores availabe, and 2. Certain Numpy operations create copies, these functions do not.
+# These exist because 1. Numpy is not threaded, which is a problem on the comp-sep module which has
+# a lot of cores available, and 2. Certain Numpy operations create copies, these functions do not.
 
 AXPY_ROUTINES = {
     np.dtype('float32'): blas_wrapper.saxpy,
@@ -30,21 +30,19 @@ AXPY_ROUTINES = {
 def inplace_axpy(inplace_array, add_array, multiply_value):
     """`inplace_array += add_array*multiply_value`. Performs in-place scaled vector addition using
     BLAS AXPY routines. Support f32, 64, c64, and c128 data types, but all arguments must match.
+    NB: Seems to fail for arrays larger than 2**32, which is a bit of an issue...
     """
     if inplace_array.size == 0: return
     assert(inplace_array.shape == add_array.shape)
     assert(inplace_array.dtype == add_array.dtype)
     assert(inplace_array.ndim == add_array.ndim)
-    # assert(inplace_array.ndim == 1)
     # Select the Correct BLAS Routine
     axpy_func = AXPY_ROUTINES[inplace_array.dtype]
-    # axpy_func(add_array, inplace_array, a=multiply_value)
     axpy_func(x=add_array, y=inplace_array, n=inplace_array.size, a=multiply_value)
 
 
 @njit(fastmath=True, parallel=True)
-def _inplace_scale_add(arr_main, arr_add, float_mult):
-    # assert(arr_main.ndim == 1)
+def inplace_scale_add(arr_main, arr_add, float_mult):
     assert(arr_main.shape==arr_add.shape)
     flat1 = arr_main.ravel()
     flat2 = arr_add.ravel()
@@ -52,8 +50,7 @@ def _inplace_scale_add(arr_main, arr_add, float_mult):
         flat1[i] = flat1[i]*float_mult + flat2[i]
 
 @njit(fastmath=True)
-def _inplace_prod_add_serial(arr_main, arr_add, float_mult):
-    # assert(arr_main.ndim == 1)
+def inplace_add_scaled_vec_serial(arr_main, arr_add, float_mult):
     assert(arr_main.shape==arr_add.shape)
     flat1 = arr_main.ravel()
     flat2 = arr_add.ravel()
@@ -61,8 +58,7 @@ def _inplace_prod_add_serial(arr_main, arr_add, float_mult):
         flat1[i] += flat2[i]*float_mult
 
 @njit(fastmath=True, parallel=True)
-def _inplace_prod_add(arr_main, arr_add, float_mult):
-    # assert(arr_main.ndim == 1)
+def inplace_add_scaled_vec(arr_main, arr_add, float_mult):
     assert(arr_main.shape==arr_add.shape)
     flat1 = arr_main.ravel()
     flat2 = arr_add.ravel()
@@ -70,7 +66,7 @@ def _inplace_prod_add(arr_main, arr_add, float_mult):
         flat1[i] += flat2[i]*float_mult
 
 @njit(fastmath=True, parallel=True)
-def _inplace_prod(arr_main, arr_prod):
+def inplace_arr_prod(arr_main, arr_prod):
     len = arr_main.size
     assert(arr_main.shape==arr_prod.shape)
     flat1 = arr_main.ravel()
@@ -79,14 +75,14 @@ def _inplace_prod(arr_main, arr_prod):
         flat1[i] *= flat2[i]
 
 @njit(fastmath=True, parallel=True)
-def _inplace_prod_scalar(arr_main, scalar_prod):
+def inplace_scale(arr_main, scalar_prod):
     len = arr_main.size
     flat1 = arr_main.ravel()
     for i in prange(len):
         flat1[i] *= scalar_prod
 
 @njit(fastmath=True, parallel=True)
-def _dot(arr1, arr2):
+def dot(arr1, arr2):
     len = arr1.size
     res = 0.0
     flat1 = arr1.ravel()
@@ -112,13 +108,13 @@ def inplace_almlist_add_scaled_array(list_inplace, list_other, value):
     """ `list_inplace += value*list_other`
     """
     for i in range(len(list_inplace)):
-        _inplace_prod_add(list_inplace[i], list_other[i], value)
+        inplace_add_scaled_vec(list_inplace[i], list_other[i], value)
 
 def inplace_almlist_scale_and_add(list_inplace, list_other, value):
     """ `list_inplace = value*list_inplace + list_other`
     """
     for i in range(len(list_inplace)):
-        _inplace_scale_add(list_inplace[i], list_other[i], value)
+        inplace_scale_add(list_inplace[i], list_other[i], value)
 
 def almlist_dot_complex(alm_list1, alm_list2):
     """ `dot(alm_list1, alm_list2)`. Calculates the correct dot product between two alm lists where
@@ -139,7 +135,7 @@ def almlist_dot_real(alm_list1, alm_list2):
     for i in range(len(alm_list1)):
         npol, nalm = alm_list1[i].shape
         for ipol in range(npol):
-            res += _dot(alm_list1[i][ipol], alm_list2[i][ipol])
+            res += dot(alm_list1[i][ipol], alm_list2[i][ipol])
     return res
 
 

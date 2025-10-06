@@ -6,8 +6,7 @@ import typing
 from numpy.typing import NDArray
 from pixell import curvedsky
 from copy import deepcopy
-from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, alm_real2complex,\
-    alm_complex2real, _inplace_prod
+from src.python.utils.math_operations import alm_real2complex, alm_complex2real
 
 if typing.TYPE_CHECKING:  # Only import when performing type checking, avoiding circular import during normal runtime.
     from src.python.solvers.comp_sep_solvers import CompSepSolver
