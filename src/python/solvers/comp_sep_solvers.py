@@ -12,8 +12,8 @@ from src.python.output.log import logassert
 from src.python.data_models.detector_map import DetectorMap
 from src.python.sky_models.component import DiffuseComponent
 from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, alm_real2complex,\
-    alm_complex2real, gaussian_random_alm, project_alms, almxfl, _inplace_prod_add,\
-    _inplace_prod, _inplace_prod_scalar, alm_dot_product, almlist_dot_complex, almlist_dot_real
+    alm_complex2real, gaussian_random_alm, project_alms, almxfl, inplace_add_scaled_vec,\
+    inplace_arr_prod, inplace_scale, almlist_dot_complex, almlist_dot_real
 from src.python.solvers.dense_matrix_math import DenseMatrix
 from src.python.solvers.CG_driver import distributed_CG
 import src.python.solvers.preconditioners as preconditioners
@@ -229,7 +229,7 @@ class CompSepSolver:
                     comp_map = alm_to_map(alm_in_band_space, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
                     # M Y a
                     for ipol in range(self.npol):
-                        _inplace_prod_add(band_map[ipol], comp_map[ipol], self.comps_SED[icomp, self.my_rank])
+                        inplace_add_scaled_vec(band_map[ipol], comp_map[ipol], self.comps_SED[icomp, self.my_rank])
             # Y^-1 M Y a
             curvedsky.map2alm_healpix(band_map, band_alms, niter=0, spin=self.spin, nthread=mythreads)
 
@@ -237,7 +237,7 @@ class CompSepSolver:
             if not self.per_comp_spatial_MM[icomp]:
                 alm_in_band_space = project_alms(a_in[icomp], self.my_band_lmax)
                 for ipol in range(self.npol):
-                    _inplace_prod_add(band_alms[ipol], alm_in_band_space[ipol], self.comps_SED[icomp, self.my_rank])
+                    inplace_add_scaled_vec(band_alms[ipol], alm_in_band_space[ipol], self.comps_SED[icomp, self.my_rank])
         # B Y^-1 M Y a
         for ipol in range(self.npol):
             almxfl(band_alms[ipol], self.my_band_beam_Cl, inplace=True)
@@ -265,7 +265,7 @@ class CompSepSolver:
                     # M^T Y^-1 B^T a
                     tmp_map = band_map.copy()
                     for ipol in range(self.npol):
-                        _inplace_prod_scalar(tmp_map[ipol], self.comps_SED[icomp,self.my_rank])
+                        inplace_scale(tmp_map[ipol], self.comps_SED[icomp,self.my_rank])
 
                     # Y^T M^T Y^-1^T B^T a
                     tmp_alm = alm_to_map_adjoint(tmp_map, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
@@ -280,7 +280,7 @@ class CompSepSolver:
                 local_comp_lmax = self.lmax_per_comp[icomp]
                 tmp_alm = a_in.copy()
                 for ipol in range(self.npol):
-                    _inplace_prod_scalar(tmp_alm[ipol], self.comps_SED[icomp,self.my_rank])
+                    inplace_scale(tmp_alm[ipol], self.comps_SED[icomp,self.my_rank])
                 a_final[icomp][:] = project_alms(tmp_alm, local_comp_lmax)
 
         return a_final
@@ -295,7 +295,7 @@ class CompSepSolver:
 
         # N^-1 Y a
         for ipol in range(self.npol):
-            _inplace_prod(a[ipol], self.map_inv_var[ipol])
+            inplace_arr_prod(a[ipol], self.map_inv_var[ipol])
 
         # Y^T N^-1 Y a
         a = alm_to_map_adjoint(a, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
@@ -346,6 +346,7 @@ class CompSepSolver:
         requests = []
         for icomp in range(self.ncomp):
             if a[icomp].nbytes > MPI_LIMIT_32BIT:
+                print(f"Fallback to blocking comm (array size = {a[icomp].nbytes:.2e}B)")
                 req = self.CompSep_comm.Bcast(a[icomp], root=0)
             else:
                 req = self.CompSep_comm.Ibcast(a[icomp], root=0)
@@ -366,6 +367,7 @@ class CompSepSolver:
         biggest_size_bytes = np.max([_array.nbytes for _array in a])
         use_blocking = biggest_size_bytes > MPI_LIMIT_32BIT
         if use_blocking:
+            print(f"Fallback to blocking comm (array size = {biggest_size_bytes:.2e}B)")
             for icomp in range(self.ncomp):
                 send, recv = (MPI.IN_PLACE, a[icomp]) if myrank == 0 else (a[icomp], None)
                 self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=0)
@@ -552,7 +554,7 @@ class CompSepSolver:
             iter += 1
             if iter%checkpoint_interval == 0:
                 if master:
-                    logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-checkpoint_interval:iter]):.3e} ({(time.time() - t0)/checkpoint_interval:.2f}s/iter)")
+                    logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-checkpoint_interval:iter]):.6e} ({(time.time() - t0)/checkpoint_interval:.2f}s/iter)")
                     t0 = time.time()
                 if mycomp < self.ncomp:
                     if x_true is not None:
