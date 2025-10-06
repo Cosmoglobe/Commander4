@@ -186,24 +186,19 @@ class JointPreconditioner:
     """
     def __init__(self, compsep: CompSepSolver):
         self.compsep = compsep
-        # self.my_comp = compsep.CompSep_comm.Get_rank()
         self.is_master = compsep.CompSep_comm.Get_rank() == 0
-        # self.is_holding_comp = self.my_comp < compsep.ncomp
 
-        # lmax = compsep.my_comp_lmax
-        # self.my_comp_lmax = lmax
-        # my_alm_len_complex = hp.Alm.getsize(lmax)
-        
         # Gather all necessary per-band information from all ranks (all ranks hold a band).
-        # NB, this solution is not ideal, as all ranks now hold all rms maps, substantially increasing memory footprint.
-        all_fwhm_rad = compsep.CompSep_comm.allgather(compsep.my_band_fwhm_rad)
-        all_map_inv_var = compsep.CompSep_comm.allgather(compsep.map_inv_var)
-        nband = len(all_fwhm_rad)
+        # TODO: Currently the master rank temporarily has to hold ALL inverse-variance bands.
+        # It would be easy to re-write this so they send them one-and-one as we make the diagonal.
+        all_fwhm_rad = compsep.CompSep_comm.gather(compsep.my_band_fwhm_rad, root=0)
+        all_map_inv_var = compsep.CompSep_comm.gather(compsep.map_inv_var, root=0)
 
         # We can now get rid of the ranks that do not hold components.
         if not self.is_master:
             return
 
+        nband = len(all_fwhm_rad)
         self.A_diag_inv_list = []
         for icomp in range(compsep.ncomp):
             # Construct the full mixing matrix M on all ranks
@@ -223,6 +218,8 @@ class JointPreconditioner:
                 beam_op_complex = hp.almxfl(np.ones(compsep.alm_len_percomp_complex[icomp], dtype=np.complex128), beam_window_squared)
 
                 mean_weights = np.mean(all_map_inv_var[iband])
+                npix = all_map_inv_var[iband].shape[-1]
+                mean_weights *= npix/(4*np.pi)
 
                 # Add the weighted contribution of this frequency band to the total
                 A_diag += M_fc**2 * beam_op_complex * mean_weights
@@ -231,8 +228,6 @@ class JointPreconditioner:
             # +1 because of the re-writing of the LHS equation with a S^{1/2} scaling.
             A_diag += 1
             # Regularize the final operator to avoid division by zero
-            min_val = 1e-30
-            A_diag[np.abs(A_diag) < min_val] = min_val
             self.A_diag_inv_list.append(1.0/A_diag)
 
     def __call__(self, a_array: list[NDArray]) -> list[NDArray]:
