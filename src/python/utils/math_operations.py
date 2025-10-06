@@ -72,17 +72,18 @@ def _inplace_prod_add(arr_main, arr_add, float_mult):
 @njit(fastmath=True, parallel=True)
 def _inplace_prod(arr_main, arr_prod):
     len = arr_main.size
-    assert(arr_main.ndim == 1)
     assert(arr_main.shape==arr_prod.shape)
+    flat1 = arr_main.ravel()
+    flat2 = arr_prod.ravel()
     for i in prange(len):
-        arr_main[i] *= arr_prod[i]
+        flat1[i] *= flat2[i]
 
 @njit(fastmath=True, parallel=True)
 def _inplace_prod_scalar(arr_main, scalar_prod):
     len = arr_main.size
-    assert(arr_main.ndim == 1)
+    flat1 = arr_main.ravel()
     for i in prange(len):
-        arr_main[i] *= scalar_prod
+        flat1[i] *= scalar_prod
 
 @njit(fastmath=True, parallel=True)
 def _dot(arr1, arr2):

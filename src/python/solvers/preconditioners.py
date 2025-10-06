@@ -249,7 +249,7 @@ class JointPreconditioner:
                 a_array_out[icomp] = alm_real2complex(a_array_out[icomp], comp_lmax)
             
             # Apply the already calculated diagonal preconditioner.
-            _inplace_prod(a_array_out[icomp], self.A_diag_inv_list[icomp])
+            a_array_out[icomp] *= self.A_diag_inv_list[icomp]
 
             if self.compsep.params.CG_real_alm_mode:
                 a_array_out[icomp] = alm_complex2real(a_array_out[icomp], comp_lmax)
