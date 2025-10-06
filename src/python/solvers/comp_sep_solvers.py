@@ -123,6 +123,29 @@ def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
 
 
 
+import numbers
+# TODO: I am considering re-writing the internal logic of this class such that it operates with one
+# continous 1D array instead of a list of arrays. This would make some operations, like adding,
+# dot products etc simpler and potentially faster. But it wouldn't be a big benefit for
+# communication, since we want per-component communication to utilize non-blocking communication.
+class ComponentAlmList():
+    def __init__(self, initial_data=None, lengths=None, dtype=None):
+        if initial_data is not None:
+            self.alms = initial_data
+        elif lengths is not None:
+            assert dtype is not None, "dtype must be specified if lengths is specified."
+            self.ncomps = len(lengths)
+            self.lengths = lengths
+            self.alms = [np.zeros(length, dtype=dtype) for length in lengths]
+    
+    def __add__(self, other):
+        if isinstance(other, ComponentAlmList):
+            out_list = [x + y for x, y in zip(self.alms, other.alms)]
+            return ComponentAlmList(initial_data = out_list)
+        elif isinstance(other, numbers.Number):
+            other_float = float(other)  # Convert to avoid e.g. weird casting rules from Numpy.
+            out_list = [other_float*x for x in self.alms]
+
 
 
 class CompSepSolver:
@@ -528,7 +551,7 @@ class CompSepSolver:
         max_iter = self.params.CG_max_iter_pol if self.pol else self.params.CG_max_iter
 
         logger = logging.getLogger(__name__)
-        checkpoint_interval = 1
+        checkpoint_interval = 5
         master = self.CompSep_comm.Get_rank() == 0
         mycomp = self.CompSep_comm.Get_rank()
 
@@ -602,10 +625,12 @@ class CompSepSolver:
         if seed is not None:
             np.random.seed(seed)
         RHS1 = self.calc_RHS_mean()
-        RHS2 = self.calc_RHS_fluct()
-        RHS3 = self.calc_RHS_prior_mean()
-        RHS4 = self.calc_RHS_prior_fluct()
-        RHS = [_R1 + _R2 + _R3 + _R4 for _R1, _R2, _R3, _R4 in zip(RHS1, RHS2, RHS3, RHS4)]
+        # RHS2 = self.calc_RHS_fluct()
+        # RHS3 = self.calc_RHS_prior_mean()
+        # RHS4 = self.calc_RHS_prior_fluct()
+        # RHS = [_R1 + _R2 + _R3 + _R4 for _R1, _R2, _R3, _R4 in zip(RHS1, RHS2, RHS3, RHS4)]
+        RHS = RHS1
+        del(self.map_sky)
 
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners", and has a name specified by self.params.compsep.preconditioner.
         precond = getattr(preconditioners, self.params.compsep.preconditioner)(self)
