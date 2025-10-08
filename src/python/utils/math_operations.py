@@ -13,33 +13,176 @@ import logging
 import os
 from math import sqrt
 from numba import njit, prange
+from scipy.linalg import blas as blas_wrapper
 
 
-###### GENERAL MATH STUFF ###########
+###### NUMPY REPLACEMENTS ######
+# Collection of Numba functions and BLAS wrappers for simply array manipulation.
+# These exist because 1. Numpy is not threaded, which is a problem on the comp-sep module which has
+# a lot of cores available, and 2. Certain Numpy operations create copies, these functions do not.
 
-@njit(cache=True, fastmath=True, parallel=True)
-def _inplace_prod_add(arr_main, arr_add, float_mult):
-    len = arr_main.size
-    assert(arr_main.ndim == 1)
+AXPY_ROUTINES = {
+    np.dtype('float32'): blas_wrapper.saxpy,
+    np.dtype('float64'): blas_wrapper.daxpy,
+    np.dtype('complex64'): blas_wrapper.caxpy,
+    np.dtype('complex128'): blas_wrapper.zaxpy,
+}
+def inplace_axpy(inplace_array, add_array, multiply_value):
+    """`inplace_array += add_array*multiply_value`. Performs in-place scaled vector addition using
+    BLAS AXPY routines. Support f32, 64, c64, and c128 data types, but all arguments must match.
+    NB: Seems to fail for arrays larger than 2**32, which is a bit of an issue...
+    """
+    if inplace_array.size == 0: return
+    assert(inplace_array.shape == add_array.shape)
+    assert(inplace_array.dtype == add_array.dtype)
+    assert(inplace_array.ndim == add_array.ndim)
+    # Select the Correct BLAS Routine
+    axpy_func = AXPY_ROUTINES[inplace_array.dtype]
+    axpy_func(x=add_array, y=inplace_array, n=inplace_array.size, a=multiply_value)
+
+
+@njit(fastmath=True, parallel=True)
+def inplace_scale_add(arr_main, arr_add, float_mult):
     assert(arr_main.shape==arr_add.shape)
-    for i in prange(len):
-        arr_main[i] += arr_add[i]*float_mult
+    flat1 = arr_main.ravel()
+    flat2 = arr_add.ravel()
+    for i in prange(arr_main.size):
+        flat1[i] = flat1[i]*float_mult + flat2[i]
 
-@njit(cache=True, fastmath=True, parallel=True)
-def _inplace_prod(arr_main, arr_prod):
+@njit(fastmath=True)
+def inplace_add_scaled_vec_serial(arr_main, arr_add, float_mult):
+    assert(arr_main.shape==arr_add.shape)
+    flat1 = arr_main.ravel()
+    flat2 = arr_add.ravel()
+    for i in range(arr_main.size):
+        flat1[i] += flat2[i]*float_mult
+
+@njit(fastmath=True, parallel=True)
+def inplace_add_scaled_vec(arr_main, arr_add, float_mult):
+    assert(arr_main.shape==arr_add.shape)
+    flat1 = arr_main.ravel()
+    flat2 = arr_add.ravel()
+    for i in prange(arr_main.size):
+        flat1[i] += flat2[i]*float_mult
+
+@njit(fastmath=True, parallel=True)
+def inplace_arr_prod(arr_main, arr_prod):
     len = arr_main.size
-    assert(arr_main.ndim == 1)
     assert(arr_main.shape==arr_prod.shape)
+    flat1 = arr_main.ravel()
+    flat2 = arr_prod.ravel()
     for i in prange(len):
-        arr_main[i] *= arr_prod[i]
+        flat1[i] *= flat2[i]
 
-@njit(cache=True, fastmath=True, parallel=True)
-def _inplace_prod_scalar(arr_main, scalar_prod):
+@njit(fastmath=True, parallel=True)
+def inplace_scale(arr_main, scalar_prod):
     len = arr_main.size
-    assert(arr_main.ndim == 1)
+    flat1 = arr_main.ravel()
     for i in prange(len):
-        arr_main[i] *= scalar_prod
+        flat1[i] *= scalar_prod
 
+@njit(fastmath=True, parallel=True)
+def dot(arr1, arr2):
+    len = arr1.size
+    res = 0.0
+    flat1 = arr1.ravel()
+    flat2 = arr2.ravel()
+    for i in prange(len):
+        res += flat1[i]*flat2[i]
+    return res
+
+
+@njit(fastmath=True)
+def calculate_sigma0(tod: NDArray, mask: NDArray[np.bool_]) -> float:
+    """
+    Calcualtes the white noise level of the "tod" array, using only elements where the boolean
+    array "mask" is True. Uses the std(tod[1:] - tod[:-1])/sqrt(2) trick to get sigma0.
+    Args:
+        tod: The input time-ordered data array.
+        mask: A boolean mask array of the same size as tod.
+    Returns:
+        The calculated sigma value, or np.inf if fewer than two valid data points exist.
+    """
+    assert tod.shape == mask.shape, "Input shapes don't match"
+    # Variables in "Welford's online algorithm" for variance calculation
+    count = 0
+    mean = 0.0
+    m2 = 0.0  # Sum of squares of differences from the current mean
+    last_valid_val = 0.0
+    has_first_val = False  # Track whether we have hit first non-masked value.
+    for i in range(tod.size):
+        if mask[i]:
+            current_val = tod[i]
+            if not has_first_val:
+                # First valid value found.
+                last_valid_val = current_val
+                has_first_val = True
+            else:
+                diff = current_val - last_valid_val
+                count += 1
+                delta = diff - mean
+                mean += delta / count
+                delta2 = diff - mean
+                m2 += delta * delta2
+                # The current value becomes the last valid value for the next pair.
+                last_valid_val = current_val
+    if count == 0:
+        return np.inf
+    var = m2 / count
+    std_dev = sqrt(var)
+    return float(std_dev/sqrt(2.0))
+
+
+@njit(fastmath=True, parallel=True)
+def _dot_complex_alm_1D_arrays(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArray:
+    """ Function calculating the dot product of two alms, given that they follow the Healpy standard,
+        where alms are represented as complex numbers, but with the conjugate 'negative' ms missing.
+    """
+    return np.sum((alm1[:lmax]*alm2[:lmax]).real) + np.sum((alm1[lmax:]*np.conj(alm2[lmax:])).real*2)
+
+
+###### ALM-LIST FUNCTIONS ######
+# These functions are common array operations, but made to work on the alm-lists, which are
+# lists of arrays, with each array being the alms of a certain component.
+
+def inplace_almlist_add_scaled_array(list_inplace, list_other, value):
+    """ `list_inplace += value*list_other`
+    """
+    for i in range(len(list_inplace)):
+        inplace_add_scaled_vec(list_inplace[i], list_other[i], value)
+
+def inplace_almlist_scale_and_add(list_inplace, list_other, value):
+    """ `list_inplace = value*list_inplace + list_other`
+    """
+    for i in range(len(list_inplace)):
+        inplace_scale_add(list_inplace[i], list_other[i], value)
+
+def almlist_dot_complex(alm_list1, alm_list2):
+    """ `dot(alm_list1, alm_list2)`. Calculates the correct dot product between two alm lists where
+        the alms follow the Healpy convention of not storing negative ms.
+    """
+    res = 0.0
+    for i in range(len(alm_list1)):
+        npol, nalm = alm_list1[i].shape
+        lmax = hp.Alm.getlmax(nalm)
+        for ipol in range(npol):
+            res += _dot_complex_alm_1D_arrays(alm_list1[i][ipol], alm_list2[i][ipol], lmax)
+    return res
+
+def almlist_dot_real(alm_list1, alm_list2):
+    """ `list_inplace = value*list_inplace + list_other`
+    """
+    res = 0.0
+    for i in range(len(alm_list1)):
+        npol, nalm = alm_list1[i].shape
+        for ipol in range(npol):
+            res += dot(alm_list1[i][ipol], alm_list2[i][ipol])
+    return res
+
+
+
+
+###### GENERAL MATH STUFF ######
 
 def forward_rfft(data:NDArray[np.floating], nthreads:int = 1):
     """ Forward real Fourier transform, equivalent to scipy.fft.rfft.

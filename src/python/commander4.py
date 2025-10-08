@@ -175,7 +175,16 @@ if __name__ == "__main__":
                 logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} cProfile stats: {s.getvalue()}")
                 stats.dump_stats(f'{params.output_paths.stats}/stats-{MPI.COMM_WORLD.Get_rank()}')
 
-    except Exception as error:
+    # First check for MPI-specific exceptions.
+    except MPI.Exception as e:
+        print_exc()
+        error_code = e.Get_error_code()
+        error_string = MPI.Get_error_string(error_code)
+        logger.error(f">>>>>>>> MPI Error on rank {MPI.COMM_WORLD.Get_rank()}! Code: [{error_code}] - {error_string}")
+        MPI.COMM_WORLD.Abort(error_code)
+
+    # Then general exceptions.
+    except Exception:
         print_exc()  # Print the full exception raise, including trace-back.
-        logger.error(f">>>>>>>> Error encountered on rank {MPI.COMM_WORLD.Get_rank()}, calling MPI abort.")
+        logger.error(f">>>>>>>> Error on rank {MPI.COMM_WORLD.Get_rank()}, calling MPI abort.")
         MPI.COMM_WORLD.Abort()

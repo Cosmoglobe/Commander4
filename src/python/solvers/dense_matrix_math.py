@@ -9,12 +9,15 @@ from tqdm import trange
 from pixell import utils
 from mpi4py import MPI
 from mpi4py.MPI import Comm
+from copy import deepcopy
 import scipy
 from collections.abc import Callable
 
 
 class DenseMatrix:
-    def __init__(self, CompSep_comm: Comm, A_operator: Callable, alm_len_percomp: int, matrix_name: str = ""):
+    def __init__(self, CompSep, A_operator, matrix_name):
+                #  CompSep_comm: Comm, A_operator: Callable, alm_len_percomp: int,
+                #  float_dtype, matrix_name: str = ""):
         """ Class for performing dense matrix math, specifically designed to work with the CompSep class (regarding MPI setup).
         Args:
             CompSep_comm (MPI.Comm): MPI communicator for the component separation processes, which should contain one rank per band.
@@ -25,22 +28,15 @@ class DenseMatrix:
         """
         self.logger = logging.getLogger(__name__)
         self.matrix_name = matrix_name
-        self.CompSep_comm = CompSep_comm
+        self.CompSep_comm = CompSep.CompSep_comm
         self.A_operator = A_operator
-        self.alm_len_percomp = alm_len_percomp
+        self.alm_len_percomp = CompSep.alm_len_percomp
         self.is_master = self.CompSep_comm.Get_rank() == 0
         self.my_comp = self.CompSep_comm.Get_rank()
         self.ncomps = self.alm_len_percomp.shape[0]
         self.is_holding_comp = self.my_comp < self.ncomps
-        self.full_size = np.sum(alm_len_percomp)
-        if self.is_holding_comp:
-            self.my_size = self.alm_len_percomp[self.my_comp]
-            self.my_start_idx = np.sum(self.alm_len_percomp[:self.my_comp])
-            self.my_stop_idx = self.my_start_idx + self.my_size
-        else:
-            self.my_size = 0
-            self.my_start_idx = -1
-            self.my_stop_idx = -1
+        self.full_size = np.sum(self.alm_len_percomp)
+        self.float_dtype = CompSep.float_dtype
         self.construct_dense_matrix()
 
 
@@ -49,21 +45,24 @@ class DenseMatrix:
             The matrix is stored on all ranks.
         """
         if self.is_master:
-            range_func = trange
             self.logger.info(f"Starting construction of dense matrix {self.matrix_name}")
+            self.A_matrix = np.zeros((self.full_size, self.full_size))
+            a_in_zeros = [np.zeros((1,nalm), dtype=self.float_dtype) for nalm in self.alm_len_percomp]
+            i = 0
+            for icomp in trange(self.ncomps):
+                nalm = self.alm_len_percomp[icomp]
+                for ialm in range(nalm):
+                    a_in = deepcopy(a_in_zeros)
+                    a_in[icomp][0,ialm] = 1.0
+                    a_out = self.A_operator(a_in)
+                    a_out = np.concatenate(a_out, axis=-1)
+                    self.A_matrix[i,:] = a_out
+                    i += 1
         else:
-            range_func = range
-        my_rank = self.CompSep_comm.Get_rank()
-        self.A_matrix = np.zeros((self.full_size, self.full_size))
-        for i in range_func(self.full_size):
-            if i >= self.my_start_idx and i < self.my_stop_idx:
-                unit_vec = utils.uvec(self.my_size, i-self.my_start_idx)
-            else:
-                unit_vec = np.zeros(self.my_size)
-            out_vec = self.A_operator(unit_vec)
-            if my_rank < self.ncomps:
-                self.A_matrix[i,self.my_start_idx:self.my_stop_idx] = out_vec
-        self.CompSep_comm.Allreduce(MPI.IN_PLACE, self.A_matrix, op=MPI.SUM)
+            for icomp in range(self.ncomps):
+                nalm = self.alm_len_percomp[icomp]
+                for ialm in range(nalm):
+                    self.A_operator([])
 
 
     def solve_by_inversion(self, RHS):
@@ -78,18 +77,12 @@ class DenseMatrix:
         if self.CompSep_comm.Get_rank() == 0:
             self.logger.info("Solving LHS matrix by direct inversion.")
 
-        RHS = self.CompSep_comm.gather(RHS, root=0)
         if self.is_master:
-            RHS = np.concatenate(RHS)
-            x_bestfit = scipy.linalg.solve(self.A_matrix, RHS)
+            RHS = np.concatenate(RHS, axis=-1)
+            x_bestfit = scipy.linalg.solve(self.A_matrix, RHS[0])
+            return x_bestfit
         else:
-            x_bestfit = None
-        x_bestfit = self.CompSep_comm.bcast(x_bestfit, root=0)
-        if self.is_holding_comp:
-            x_bestfit = x_bestfit[self.my_start_idx:self.my_stop_idx]
-        else:
-            x_bestfit = np.zeros((0,))
-        return x_bestfit
+            return []
 
 
     def print_sing_vals(self):
