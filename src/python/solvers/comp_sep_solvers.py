@@ -122,32 +122,6 @@ def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     return comp_list
 
 
-
-import numbers
-# TODO: I am considering re-writing the internal logic of this class such that it operates with one
-# continous 1D array instead of a list of arrays. This would make some operations, like adding,
-# dot products etc simpler and potentially faster. But it wouldn't be a big benefit for
-# communication, since we want per-component communication to utilize non-blocking communication.
-class ComponentAlmList():
-    def __init__(self, initial_data=None, lengths=None, dtype=None):
-        if initial_data is not None:
-            self.alms = initial_data
-        elif lengths is not None:
-            assert dtype is not None, "dtype must be specified if lengths is specified."
-            self.ncomps = len(lengths)
-            self.lengths = lengths
-            self.alms = [np.zeros(length, dtype=dtype) for length in lengths]
-    
-    def __add__(self, other):
-        if isinstance(other, ComponentAlmList):
-            out_list = [x + y for x, y in zip(self.alms, other.alms)]
-            return ComponentAlmList(initial_data = out_list)
-        elif isinstance(other, numbers.Number):
-            other_float = float(other)  # Convert to avoid e.g. weird casting rules from Numpy.
-            out_list = [other_float*x for x in self.alms]
-
-
-
 class CompSepSolver:
     """ Class for performing global component separation using the preconditioned conjugate gradient
         method. After initializing the class, the solve() method should be called to perform the
@@ -165,7 +139,8 @@ class CompSepSolver:
             = S^{1/2} Y^T M^T {Y^{-1}}^T B^T N^{-1} d
             + S^{1/2}A^TN^{-1/2} eta_1 + S^{-1/2} mu + eta_2.
     """
-    def __init__(self, comp_list: list[DiffuseComponent], map_sky: NDArray, map_rms: NDArray, freq: float, fwhm: float, params: Bunch, CompSep_comm: MPI.Comm, pol: bool):
+    def __init__(self, comp_list: list[DiffuseComponent], map_sky: NDArray, map_rms: NDArray,
+                 freq: float, fwhm: float, params: Bunch, CompSep_comm: MPI.Comm, pol: bool):
         self.logger = logging.getLogger(__name__)
         self.CompSep_comm = CompSep_comm
         self.params = params
@@ -240,7 +215,7 @@ class CompSepSolver:
             self.alm_len_percomp = self.alm_len_percomp_complex
 
 
-    def apply_A(self, a_in: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
+    def apply_A(self, a_in: list[NDArray[np.complexfloating]]) -> NDArray[np.complexfloating]:
         mythreads = self.nthreads
         band_alms = np.zeros((self.npol, self.my_band_alm_len_real), dtype=self.complex_dtype)
         if (self.per_comp_spatial_MM).any():
@@ -269,7 +244,7 @@ class CompSepSolver:
 
 
 
-    def apply_A_adjoint(self, a_in: NDArray) -> NDArray:
+    def apply_A_adjoint(self, a_in: NDArray[np.complexfloating]) -> list[NDArray[np.complexfloating]]:
         mythreads = self.nthreads
         a_final = [np.zeros((self.npol, self.alm_len_percomp_complex[icomp]), dtype=self.complex_dtype) for icomp in range(self.ncomp)]
 
@@ -326,7 +301,7 @@ class CompSepSolver:
         return a
 
 
-    def apply_LHS_matrix(self, a_in: NDArray) -> NDArray:
+    def apply_LHS_matrix(self, a_in: list[NDArray[np.complexfloating]]) -> list[NDArray[np.complexfloating]]:
         """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of
             the Ax=b system for global component separation. The full A matrix is:
             (1 + S^{1/2} Y^T M^T Y^-1^T B^T N^-1 B Y^-1 M Y S^{1/2}).
@@ -343,7 +318,8 @@ class CompSepSolver:
         logger = logging.getLogger(__name__)
         myrank = self.CompSep_comm.Get_rank()
         if myrank == 0:
-            logassert(len(a_in) == self.ncomp, "a_in doesn't match ncomp", logger)
+            logassert(len(a_in) == self.ncomp, "Length of a_in list doesn't match ncomp: "
+                      f"{len(a_in)} vs {self.ncomp}", logger)
             for icomp in range(self.ncomp):
                 logassert(a_in[icomp].dtype == self.alm_dtype, f"a_in is type {a_in[icomp].dtype}, "
                           f"not the expected {self.alm_dtype}.", logger)
@@ -425,7 +401,7 @@ class CompSepSolver:
         return a
 
 
-    def calc_RHS_mean(self) -> NDArray:
+    def calc_RHS_mean(self) -> list[NDArray[np.complexfloating]]:
         """ Caculates the right-hand-side b-vector of the Ax=b CompSep equation for the Wiener filtered (or mean-field) solution.
             If used alone on the right-hand-side, gives the deterministic maximum likelihood map-space solution, but a biased PS solution.
         """
@@ -462,7 +438,7 @@ class CompSepSolver:
         return b
 
 
-    def calc_RHS_fluct(self) -> NDArray:
+    def calc_RHS_fluct(self) -> list[NDArray[np.complexfloating]]:
         """ Calculates the right-hand-side fluctuation vector. Provides unbiased realizations (of foregrounds or the CMB) if added
             together with the right-hand-side of the Wiener filtered solution : Ax = b_mean + b_fluct.
         """
@@ -502,7 +478,7 @@ class CompSepSolver:
         return b
 
 
-    def calc_RHS_prior_mean(self) -> NDArray:
+    def calc_RHS_prior_mean(self) -> list[NDArray[np.complexfloating]]:
         myrank = self.CompSep_comm.Get_rank()
         if myrank == 0:
             # Currently this will always return 0, since we have not yet implemented support for a spatial prior,
@@ -519,7 +495,7 @@ class CompSepSolver:
         return mu
 
 
-    def calc_RHS_prior_fluct(self) -> NDArray:
+    def calc_RHS_prior_fluct(self) -> list[NDArray[np.complexfloating]]:
         myrank = self.CompSep_comm.Get_rank()
         if myrank == 0:
             eta2 = [np.zeros((self.npol, self.alm_len_percomp_complex[icomp]), dtype=self.complex_dtype) for icomp in range(self.ncomp)]
@@ -535,7 +511,8 @@ class CompSepSolver:
 
 
 
-    def solve_CG(self, LHS: Callable, RHS: NDArray, x0 = None, M = None, x_true = None) -> NDArray:
+    def solve_CG(self, LHS: Callable, RHS: list[NDArray[np.complexfloating]], x0 = None, M = None,
+                 x_true = None) -> list[NDArray[np.complexfloating]]:
         """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG from the pixell package.
             Assumes that both x and b are in alm space.
 
@@ -564,9 +541,11 @@ class CompSepSolver:
             CG_solver = distributed_CG(LHS, RHS, master, dot=mydot, x0=x0, M=M, destroy_b=True)
         self.CG_residuals = np.zeros((max_iter))
         if x_true is not None:
-            # self.x_true_allcomps = self.CompSep_comm.allgather()
-            self.xtrue_A_xtrue = x_true.dot(LHS(x_true))  # The normalization factor for the true error (contribution from my rank).
-            self.xtrue_A_xtrue = self.CompSep_comm.allreduce(self.xtrue_A_xtrue, MPI.SUM)  # Dot product is linear, so we can just sum the contributions.
+            if master:
+                x_true_list = [x_true[i:j].reshape((1,-1)) for i,j in zip(self.alm_start_idx_per_comp[:-1], self.alm_start_idx_per_comp[1:])]
+                self.xtrue_A_xtrue = x_true.dot(np.concatenate(LHS(x_true_list), axis=-1).flatten())
+            else:
+                LHS([])
         if master:
             logger.info("CG starting up!")
         iter = 0
@@ -580,20 +559,17 @@ class CompSepSolver:
                 if master:
                     logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-checkpoint_interval:iter]):.6e} ({(time.time() - t0)/checkpoint_interval:.2f}s/iter)")
                     t0 = time.time()
-                if mycomp < self.ncomp:
                     if x_true is not None:
-                        # TODO: This is now wrong, and doesn't need to accumulate to master,
-                        # since we have now changed to the entire x-array being on master.
-                        CG_errors_true = np.linalg.norm(CG_solver.x-x_true)/np.linalg.norm(x_true)
-                        CG_Anorm_error = (CG_solver.x-x_true).dot(LHS(CG_solver.x-x_true))
-                        CG_Anorm_error = self.CompSep_holdingcomp_comm.allreduce(CG_Anorm_error, MPI.SUM)/self.xtrue_A_xtrue  # Collect error contributions from all ranks.
-                        time.sleep(0.01*mycomp)  # Getting the prints in the same order every time.
-                        if master:
-                            logger.info(f"CG iter {iter:3d} - True A-norm error: {CG_Anorm_error:.3e}")  # A-norm error is only defined for the full vector.
+                        x_vec = np.concatenate(CG_solver.x, axis=-1)
+                        CG_errors_true = np.linalg.norm(x_vec - x_true)/np.linalg.norm(x_true)
+                        A_residual = LHS([x - y for x,y in zip(CG_solver.x, x_true_list)])
+                        A_residual = np.concatenate(A_residual, axis=-1)
+                        CG_Anorm_error = ((x_vec - x_true).flatten()).dot(A_residual.flatten())
+                        logger.info(f"CG iter {iter:3d} - True A-norm error: {CG_Anorm_error:.3e}")  # A-norm error is only defined for the full vector.
                         logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].longname} - True L2 error: {CG_errors_true:.3e}")  # We can print the individual component L2 errors.
                 else:
                     if x_true is not None:
-                        LHS(np.zeros((0,), dtype=self.float_dtype))  # Matching LHS call for the calculation of LHS(CG_solver.x-x_true).
+                        LHS([])  # Matching LHS call for the calculation of LHS(CG_solver.x-x_true).
             if iter >= max_iter:
                 if master:
                     logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
@@ -641,7 +617,6 @@ class CompSepSolver:
 
             # Testing the initial LHS (A) matrix
             dense_matrix = DenseMatrix(self, self.apply_LHS_matrix, "A")
-            x_true = dense_matrix.solve_by_inversion(RHS)
             dense_matrix.test_matrix_hermitian()
             dense_matrix.print_sing_vals()
             dense_matrix.test_matrix_eigenvalues()
@@ -654,6 +629,7 @@ class CompSepSolver:
 
             # Testing the combined preconditioned system (MA)  (this combined matrix will generally not be Hermitian positive-definite).
             dense_matrix = DenseMatrix(self, M_A_matrix, "MA")
+            x_true = dense_matrix.solve_by_inversion(precond(RHS))
             dense_matrix.print_sing_vals()  # Check how much singular values (condition number) of preconditioned system improved.
             dense_matrix.print_matrix_diag()
 

@@ -81,6 +81,8 @@ class DenseMatrix:
             RHS = np.concatenate(RHS, axis=-1)
             x_bestfit = scipy.linalg.solve(self.A_matrix, RHS[0])
             return x_bestfit
+        else:
+            return []
 
 
     def print_sing_vals(self):
