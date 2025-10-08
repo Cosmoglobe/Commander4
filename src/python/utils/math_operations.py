@@ -92,6 +92,47 @@ def dot(arr1, arr2):
     return res
 
 
+@njit(fastmath=True)
+def calculate_sigma0(tod: NDArray, mask: NDArray[np.bool_]) -> float:
+    """
+    Calcualtes the white noise level of the "tod" array, using only elements where the boolean
+    array "mask" is True. Uses the std(tod[1:] - tod[:-1])/sqrt(2) trick to get sigma0.
+    Args:
+        tod: The input time-ordered data array.
+        mask: A boolean mask array of the same size as tod.
+    Returns:
+        The calculated sigma value, or np.inf if fewer than two valid data points exist.
+    """
+    assert tod.shape == mask.shape, "Input shapes don't match"
+    # Variables in "Welford's online algorithm" for variance calculation
+    count = 0
+    mean = 0.0
+    m2 = 0.0  # Sum of squares of differences from the current mean
+    last_valid_val = 0.0
+    has_first_val = False  # Track whether we have hit first non-masked value.
+    for i in range(tod.size):
+        if mask[i]:
+            current_val = tod[i]
+            if not has_first_val:
+                # First valid value found.
+                last_valid_val = current_val
+                has_first_val = True
+            else:
+                diff = current_val - last_valid_val
+                count += 1
+                delta = diff - mean
+                mean += delta / count
+                delta2 = diff - mean
+                m2 += delta * delta2
+                # The current value becomes the last valid value for the next pair.
+                last_valid_val = current_val
+    if count == 0:
+        return np.inf
+    var = m2 / count
+    std_dev = sqrt(var)
+    return float(std_dev/sqrt(2.0))
+
+
 @njit(fastmath=True, parallel=True)
 def _dot_complex_alm_1D_arrays(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArray:
     """ Function calculating the dot product of two alms, given that they follow the Healpy standard,
