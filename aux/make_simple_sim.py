@@ -173,6 +173,40 @@ def generate_sync(freqs, fwhm, units, nside):
     return sync_s
 
 
+def generate_spdust(freqs, fwhm, units, nside):
+    nu_sync = params.nu_ref_sync
+    beta_s = params.beta_sync
+
+    sync = pysm3.Sky(nside=min(1024,nside), preset_strings=["s5"], output_unit=units) # s5 = const beta -3.1
+    sync_ref = sync.get_emission(nu_sync*u.GHz)#.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_sync*u.GHz))
+    sync_ref_smoothed = []
+    for iband in range(len(freqs)):
+        sync_ref_smoothed.append(hp.smoothing(sync_ref, fwhm=fwhm[iband].to('rad').value)*sync_ref.unit)
+    if params.write_fits:
+        hp.write_map(params.OUTPUT_FOLDER + f"true_sky_spdust_smoothed_{nside}_b{fwhm[iband].value:.0f}.fits", sync_ref_smoothed[-1], overwrite=True)
+        for iband in range(len(freqs)):
+            hp.write_map(params.OUTPUT_FOLDER + f"true_sky_spdust_{nside}.fits", sync_ref, overwrite=True)
+
+    sync_params = Bunch({"beta": beta_s, "nu0": nu_sync, "lmax": "full"})
+    sync = Synchrotron(sync_params)
+    sync_us = [sync_ref*sync.get_sed(f) for f in freqs]
+    sync_us = np.array([hp.ud_grade(d.value, nside)*d.unit for d in sync_us], dtype=np.float32)
+    sync_s = [sync_ref_smoothed[i]*sync.get_sed(freqs[i]) for i in range(len(freqs))]
+    sync_s = np.array([hp.ud_grade(d.value, nside)*d.unit for d in sync_s], dtype=np.float32)
+
+    if params.make_plots:
+        for i in range(len(freqs)):
+            hp.mollview(sync_us[i,0], title=f"True spinnding dust at {freqs[i]:.2f}GHz", min=np.percentile(sync_us[i,0],2), max=np.percentile(sync_us[i,0],98))
+            plt.savefig(params.OUTPUT_FOLDER + f"true_spdust_{nside}_{freqs[i]}.png")
+            plt.close()
+        for i in range(len(freqs)):
+            hp.mollview(sync_s[i,0], title=f"True smoothed spinnding dust at {freqs[i]:.2f}GHz", min=np.percentile(sync_s[i,0],2), max=np.percentile(sync_s[i,0],98))
+            plt.savefig(params.OUTPUT_FOLDER + f"true_spdust_smoothed_{nside}_{freqs[i]}_b{fwhm[i].value:.0f}.png")
+            plt.close()
+
+    return sync_s
+
+
 def get_pointing():
     theta, phi, orb_dir, dipole = get_Planck_pointing(params.NTOD, params.f_samp)
     if rank == 0:
@@ -283,7 +317,12 @@ def main():
         print(f"Rank 1 generating synchrotron")
         comp_smoothed = generate_sync(freqs, fwhm, units, nside)
         print(f"Rank 1 finished synchrotron in {time.time()-t0:.1f}s.")
-    elif rank == 2 and "CMB" in params.components:
+    elif rank == 2 and "spdust" in params.components:
+        t0 = time.time()
+        print(f"Rank 2 generating spinning dust")
+        comp_smoothed = generate_spdust(freqs, fwhm, units, nside, lmax)
+        print(f"Rank 2 finished spdust in {time.time()-t0:.1f}s.")
+    elif rank == 3 and "spdust" in params.components:
         t0 = time.time()
         print(f"Rank 2 generating CMB")
         comp_smoothed = generate_cmb(freqs, fwhm, units, nside, lmax)

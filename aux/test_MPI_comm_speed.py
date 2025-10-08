@@ -3,6 +3,7 @@ t0 = time.time()
 # Lots of imports to test startup time:
 from mpi4py import MPI
 import numpy as np
+import os
 # import matplotlib.pyplot as plt
 # import healpy as hp
 # import ducc0
@@ -19,6 +20,7 @@ comm.Barrier()
 if rank == 0:
     print(f"World size: {size}. Startup time: {time.time() - t0:.3f}s")
 t0 = time.time()
+print(f"{os.sched_getaffinity(0)}")
 
 # N = int(1e9//8)  # 1GB per task.
 # 100 MB, 1GB, 10 GB

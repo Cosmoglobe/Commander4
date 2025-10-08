@@ -17,7 +17,7 @@ from src.python.noise_sampling import corr_noise_realization_with_gaps, sample_n
 from src.python.tod_processing_Planck import read_Planck_TOD_data
 from src.python.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from src.python.tod_processing_sim import read_TOD_sim_data
-from src.python.utils.math_operations import forward_rfft, backward_rfft
+from src.python.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0
 
 nthreads=1
 
@@ -218,7 +218,6 @@ def estimate_white_noise(experiment_data: DetectorTOD, detector_samples: Detecto
         experiment_data (DetectorTOD): The experiment TOD with the estimated white noise level added to each scan.
     """
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-        # raw_TOD = scan.tod
         pix = scan.pix
         psi = scan.psi
         # Should maybe n_corr be subtracted here as well?
@@ -226,10 +225,7 @@ def estimate_white_noise(experiment_data: DetectorTOD, detector_samples: Detecto
         sky_subtracted_tod -= scan_samples.gain_est*get_static_sky_TOD(det_compsep_map, pix, psi)
         sky_subtracted_tod -= scan_samples.gain_est*get_s_orb_TOD(scan, experiment_data, pix)
         mask = scan.processing_mask_TOD
-        if np.sum(mask) > 50:  # If we have enough data points to estimate the noise, we use the masked version.
-            sigma0 = np.std(sky_subtracted_tod[mask][1:] - sky_subtracted_tod[mask][:-1])/np.sqrt(2)
-        else:
-            sigma0 = np.std(sky_subtracted_tod[1:] - sky_subtracted_tod[:-1])/np.sqrt(2)
+        sigma0 = calculate_sigma0(sky_subtracted_tod, mask)
         scan_samples.sigma0 = float(sigma0/scan_samples.gain_est)
     return detector_samples
 
@@ -260,12 +256,11 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
         freq = rfftfreq(Ntod, d = 1/f_samp)
         fknee = scansamples.fknee_est
         alpha = scansamples.alpha_est
-        # sigma0 = scansamples.gain_est*scansamples.sigma0
-        sigma0 = np.std(sky_subtracted_TOD[1:] - sky_subtracted_TOD[:-1])/math.sqrt(2)
+        mask = scan.processing_mask_TOD
+        sigma0 = calculate_sigma0(sky_subtracted_TOD, mask)
         C_1f_inv = np.zeros(Nfft)
         C_1f_inv[1:] = 1.0 / (sigma0**2*(freq[1:]/fknee)**alpha)
         err_tol = 1e-8
-        mask = scan.processing_mask_TOD
         n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                                                 mask, sigma0, C_1f_inv,
                                                                 err_tol=err_tol)
@@ -339,7 +334,8 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
         residual_tod = np.mean(residual_tod, axis=-1)
         residual_tod -= scan_samples.gain_est*sky_model_TOD  # Subtracting sky signals.
         residual_tod -= scan_samples.gain_est*s_orb 
-        sigma0 = np.std(residual_tod[1:] - residual_tod[:-1])/math.sqrt(2)
+        mask = scan.processing_mask_TOD[indices_centers]
+        sigma0 = calculate_sigma0(residual_tod, mask)
         residual_tod += detector_samples.g0_est*s_orb  # Now we can add back in the orbital dipole.
 
         Ntod = residual_tod.shape[0]
@@ -443,7 +439,8 @@ def sample_relative_gain(TOD_comm: MPI.Comm, det_comm: MPI.Comm, experiment_data
         residual_tod = scan.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
         residual_tod = np.mean(residual_tod, axis=-1)
         residual_tod -= gain*s_tot
-        sigma0 = np.std(residual_tod[1:] - residual_tod[:-1])/math.sqrt(2)
+        mask = scan.processing_mask_TOD[indices_centers]
+        sigma0 = calculate_sigma0(residual_tod, mask)
 
         # Setup FFT-based calculation for N^-1 operations
         Ntod = residual_tod.shape[0]
@@ -459,7 +456,6 @@ def sample_relative_gain(TOD_comm: MPI.Comm, det_comm: MPI.Comm, experiment_data
         N_inv_s = backward_rfft(N_inv_s_fft, Ntod)
         
         # mask = experiment_data.processing_mask_map[scan.pix]
-        mask = scan.processing_mask_TOD[indices_centers]
         # Inpaint on the masked regions the sky signal times only the detector-residual gain.
         residual_tod[~mask] = scan_samples.rel_gain_est*s_tot[~mask] + np.random.normal(0, sigma0, s_tot[~mask].shape)
         s_T_N_inv_s_scan = np.dot(s_tot, N_inv_s)
@@ -603,10 +599,9 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
         residual_tod = np.mean(residual_tod, axis=-1)
         gain = detector_samples.g0_est + scan_samples.rel_gain_est
         residual_tod -= gain*s_tot
-        sigma0 = np.std(residual_tod[1:] - residual_tod[:-1])/math.sqrt(2)
 
-        # mask = experiment_data.processing_mask_map[scan.pix]
         mask = scan.processing_mask_TOD[indices_centers]
+        sigma0 = calculate_sigma0(residual_tod, mask)
 
         # FFT-based N^-1 operation setup
         Ntod = residual_tod.shape[0]
