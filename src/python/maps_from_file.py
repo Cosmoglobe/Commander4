@@ -34,6 +34,7 @@ def read_Planck_map_from_file(my_band: Bunch) -> DetectorMap:
     logger = logging.getLogger(__name__)
     map_signal = [None, None, None]
     map_rms = [None, None, None]
+    map_cov = None
     if my_band.file_convention == "WMAP":
         # WMAP maps are in mK_CMB and need to be multiplied by 1000. Also, the uncertainty is in variance units,
         # and needs to be square-rooted.
@@ -43,6 +44,24 @@ def read_Planck_map_from_file(my_band: Bunch) -> DetectorMap:
             if my_band.polarizations[ipol]:
                 map_signal[ipol] = 1e3*fits.open(my_band.path_signal_map)[1].data[data_names[ipol]].flatten().astype(np.float32)
                 map_rms[ipol] = 1e3*np.sqrt(fits.open(my_band.path_rms_map)[1].data[rms_names[ipol]].flatten().astype(np.float32))
+    elif my_band.file_convention == "WMAP_pol":
+        # WMAP maps are in mK_CMB and need to be multiplied by 1000. Also, the uncertainty is in variance units,
+        # and needs to be square-rooted.
+        nside = 16
+        indices_ring = np.arange(0, 12*nside**2, dtype=int)
+        indices_nest = hp.ring2nest(nside, indices_ring)
+        data_names = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+        rms_names = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+        for ipol in range(1, 3):
+                map_signal[ipol] = 1e3*fits.open(my_band.path_signal_map)[1].data[data_names[ipol]].flatten().astype(np.float32)
+                map_signal[ipol] = hp.reorder(map_signal[ipol], inp="NEST", out="RING")
+        _map_cov = 1e6*fits.open(my_band.path_cov_map)[0].data.astype(np.float32)
+        map_cov = np.zeros_like(_map_cov)
+        map_cov[indices_ring,:] = _map_cov[indices_nest,:]
+        map_cov[12*nside**2+indices_ring,:] = _map_cov[12*nside**2+indices_nest,:]
+        map_cov[:,12*nside**2+indices_ring] = _map_cov[:,12*nside**2+indices_nest]
+        map_cov[:,indices_ring] = _map_cov[:,indices_nest]
+        
     elif my_band.file_convention == "HFI":
         # I think HFI maps are in uK_CMB. They are also in nested healpix ordering, and need to be converted.
         data_names = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
