@@ -382,34 +382,42 @@ def _prep_input(arr_in, arr_out, nside, spin):
 
 def alm_to_map(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
                nthreads: int=1, out=None) -> NDArray:
+    use_theta_interpol = nside >= 2048
     alm, out, ndim_in = _prep_input(alm, out, nside, spin)
     out = ducc0.sht.synthesis(alm=alm, map=out, lmax=lmax, spin=spin,
-                              nthreads=nthreads, **hp_geominfos[nside])
+                              nthreads=nthreads, **hp_geominfos[nside],
+                              theta_interpol=use_theta_interpol)
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
 def alm_to_map_adjoint(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
                        nthreads: int=1, out=None) -> NDArray:
+    use_theta_interpol = nside >= 2048
     mp, out, ndim_in = _prep_input(mp, out, nside, spin)
     out = ducc0.sht.adjoint_synthesis(map=mp, alm=out, lmax=lmax, spin=spin,
-                                      nthreads=nthreads, **hp_geominfos[nside])
+                                      nthreads=nthreads, **hp_geominfos[nside],
+                                      theta_interpol=use_theta_interpol)
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
 def map_to_alm(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
                        nthreads: int=1, out=None) -> NDArray:
+    use_theta_interpol = nside >= 2048
     mp, out, ndim_in = _prep_input(mp, out, nside, spin)
     out = ducc0.sht.adjoint_synthesis(map=mp, alm=out, lmax=lmax, spin=spin,
-                                      nthreads=nthreads, **hp_geominfos[nside])
+                                      nthreads=nthreads, **hp_geominfos[nside],
+                                      theta_interpol=use_theta_interpol)
     out *= 4*np.pi/(12*nside**2)
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
 def map_to_alm_adjoint(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
                nthreads: int=1, out=None) -> NDArray:
+    use_theta_interpol = nside >= 2048
     alm, out, ndim_in = _prep_input(alm, out, nside, spin)
     out = ducc0.sht.synthesis(alm=alm, map=out, lmax=lmax, spin=spin,
-                              nthreads=nthreads, **hp_geominfos[nside])
+                              nthreads=nthreads, **hp_geominfos[nside],
+                              theta_interpol=use_theta_interpol)
     out *= 4*np.pi/(12*nside**2)
     return out if ndim_in == 2 else out.reshape((-1,))
 
