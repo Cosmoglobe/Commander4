@@ -13,7 +13,7 @@ from src.python.data_models.detector_map import DetectorMap
 from src.python.sky_models.component import DiffuseComponent
 from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, alm_real2complex,\
     alm_complex2real, gaussian_random_alm, project_alms, almxfl, inplace_add_scaled_vec,\
-    inplace_arr_prod, inplace_scale, almlist_dot_complex, almlist_dot_real
+    inplace_arr_prod, inplace_scale, almlist_dot_complex, almlist_dot_real, map_to_alm, map_to_alm_adjoint
 from src.python.solvers.dense_matrix_math import DenseMatrix
 from src.python.solvers.CG_driver import distributed_CG
 import src.python.solvers.preconditioners as preconditioners
@@ -229,7 +229,8 @@ class CompSepSolver:
                     for ipol in range(self.npol):
                         inplace_add_scaled_vec(band_map[ipol], comp_map[ipol], self.comps_SED[icomp, self.my_rank])
             # Y^-1 M Y a
-            curvedsky.map2alm_healpix(band_map, band_alms, niter=0, spin=self.spin, nthread=mythreads)
+            # curvedsky.map2alm_healpix(band_map, band_alms, niter=0, spin=self.spin, nthread=mythreads)
+            band_alms = map_to_alm(band_map, self.my_band_nside, self.my_band_lmax, spin=self.spin, out=band_alms, nthreads=mythreads)
 
         for icomp in range(self.ncomp):
             if not self.per_comp_spatial_MM[icomp]:
@@ -255,7 +256,8 @@ class CompSepSolver:
         if (self.per_comp_spatial_MM).any():
             band_map = np.zeros((self.npol, self.my_band_npix), dtype=self.float_dtype)
             # Y^-1^T B^T a
-            curvedsky.map2alm_healpix(band_map, a_in, niter=0, adjoint=True, spin=self.spin, nthread=mythreads)
+            # curvedsky.map2alm_healpix(band_map, a_in, niter=0, adjoint=True, spin=self.spin, nthread=mythreads)
+            band_map = map_to_alm_adjoint(a_in, self.my_band_nside, self.my_band_lmax, spin=self.spin, out=band_map, nthreads=mythreads)
             for icomp in range(self.ncomp):
                 if self.per_comp_spatial_MM[icomp]:
                     local_comp_lmax = self.lmax_per_comp[icomp]

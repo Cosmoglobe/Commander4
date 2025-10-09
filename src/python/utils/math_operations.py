@@ -396,6 +396,24 @@ def alm_to_map_adjoint(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
+def map_to_alm(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
+                       nthreads: int=1, out=None) -> NDArray:
+    mp, out, ndim_in = _prep_input(mp, out, nside, spin)
+    out = ducc0.sht.adjoint_synthesis(map=mp, alm=out, lmax=lmax, spin=spin,
+                                      nthreads=nthreads, **hp_geominfos[nside])
+    out *= 4*np.pi/(12*nside**2)
+    return out if ndim_in == 2 else out.reshape((-1,))
+
+
+def map_to_alm_adjoint(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
+               nthreads: int=1, out=None) -> NDArray:
+    alm, out, ndim_in = _prep_input(alm, out, nside, spin)
+    out = ducc0.sht.synthesis(alm=alm, map=out, lmax=lmax, spin=spin,
+                              nthreads=nthreads, **hp_geominfos[nside])
+    out *= 4*np.pi/(12*nside**2)
+    return out if ndim_in == 2 else out.reshape((-1,))
+
+
 def pseudo_alm_to_map_inverse(map: NDArray, nside: int, lmax: int, *, spin: int=0,
                nthreads: int=1, out=None, epsilon: float, maxiter: int) -> NDArray:
     """Tries to extract spherical harmonic coefficients from (sets of) one or two maps
