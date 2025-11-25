@@ -26,8 +26,8 @@ sample_corr_noise: True
 pixel_compsep_sampling: true
 
 output_paths:
-  plots: "../commander4_plots/"
-  stats: "../commander4_stats/"
+  plots: "../../commander4_plots/"
+  stats: "../../commander4_stats/"
 
 logging:
   console:
@@ -57,7 +57,7 @@ components:
       T: 20
       nu0: 545
       lmax: "full"
-      smoothing_scale: 0
+      smoothing_scale: 0  #for plotting
 
   Synchrotron:
     enabled: true

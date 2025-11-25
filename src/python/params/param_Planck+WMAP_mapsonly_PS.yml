@@ -1,0 +1,212 @@
+MPI_config:
+  ntask_tod: 0  # Map-only processing: No TOD tasks.
+  ntask_compsep: 6
+nthreads_tod: 0
+nthreads_compsep: 32
+betzy_mode: false
+
+CG_max_iter: 5
+CG_max_iter_pol: 3
+CG_err_tol: 1.0e-12
+CG_float_precision: "double"
+
+niter_gibbs: 1
+
+nside: 128
+
+noise_fknee: 0.1
+noise_alpha: -0.9
+initial_g0: 33.02625e-9  # V/uK_RJ
+
+sample_corr_noise_from_iter_num: 2
+sample_gain_from_iter_num: 2
+
+make_plots: True
+output_stats: False
+
+galactic_mask: True
+sample_corr_noise: True
+pixel_compsep_sampling: False
+
+output_paths:
+  plots: "../../com4_plots/Planck+WMAP_mapsonly_CG/"
+  stats: "../../com4_stats/nside512/"
+
+logging:
+  console:
+    level: 'info'
+  file:
+    level: 'info'
+    filename: '../com4_logs/output_n512.log'
+
+
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarized: True
+      longname: "CMB"
+      shortname: "cmb"
+      smoothing_prior_FWHM: 0.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+10 #1.0  # uK_RJ^2
+      lmax: "full" # 1024 
+      smoothing_scale: 0
+      spatially_varying_MM: False
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarized: False
+      longname: "Thermal Dust"
+      shortname: "dust"
+      smoothing_prior_FWHM: 0.0 #5.0 # 10.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+7  # uK_RJ^2
+      beta: 1.56
+      T: 20
+      nu0: 545
+      lmax: "full" # 1024 
+      smoothing_scale: 0 # 5.0
+      spatially_varying_MM: False
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarized: False
+      longname: "Synchrotron"
+      shortname: "sync"
+      smoothing_prior_FWHM: 0.0 # 60.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+4  # uK_RJ^2
+      beta: -3.1
+      nu0: 30
+      lmax: 512 
+      smoothing_scale: 0.0 # 60.0
+      spatially_varying_MM: False
+
+  FreeFree:
+    enabled: true
+    component_class: "FreeFree"
+    params:
+      polarized: False
+      longname: "Free-Free"
+      shortname: "ff"
+      smoothing_prior_FWHM: 0.0 #30.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+10  # uK_RJ^2
+      T: 7000
+      nu0: 0.408 #40
+      lmax: "full" # 1024
+      smoothing_scale: 0 # 30.0
+      spatially_varying_MM: True
+  
+  SpinningDust:
+    enabled: False
+    component_class: "SpinningDust"
+    params:
+      polarized: False
+      longname: "SpinningDust"
+      shortname: "sdust"
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
+      smoothing_prior_FWHM: 0.0 #30.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+10  # uK_RJ^2
+      nu_peak: 25.3  # Ghz
+      nu_0: 22.0  # Ghz
+      lmax: "full" # 1024 
+      smoothing_scale: 0 # 30.0
+      spatially_varying_MM: False
+
+  RadioSources:
+    enabled: False
+    component_class: "RadioSources"
+    params:
+      polarized: False
+      longname: "RadioSources"
+      shortname: "radsources"
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
+      nu_0: 30.0  # Ghz
+      sample_alphas: False
+
+
+compsep:
+  dense_matrix_debug_mode: false  # Solve system first with dense matrix math, for debugging CG. Very slow for nside>32.
+  preconditioner: JointPreconditioner #NoiseOnlyPreconditioner #FullPreconditioner #MixingMatrixPreconditioner #BeamOnlyPreconditioner #
+
+
+CompSep_bands:
+  ### TOTAL INTENSITY MAPS ###
+  Haslam408MHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    file_convention: "Haslam"
+    path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
+    path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
+    fwhm: 0 #60.0  # [arcmin]
+    freq: 0.408 # [GHz]
+    polarizations: [True, True, True]
+
+  WMAPKa:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    file_convention: "WMAP"
+    path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_map_v4.fits"
+    path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_N_v4.fits"
+    fwhm: 0 #39.6 # [arcmin]
+    freq: 33.0 # [GHz]
+    polarizations: [True, True, True]
+
+  WMAPQ1:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    file_convention: "WMAP"
+    path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_map_v4.fits"
+    path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_N_v4.fits"
+    fwhm: 0 #30.6 # [arcmin]
+    freq: 40.6 # [GHz]
+    polarizations: [True, True, True]
+
+  WMAPV1:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    file_convention: "WMAP"
+    path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_map_v4.fits"
+    path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_N_v4.fits"
+    fwhm: 0 #21.0 # [arcmin]
+    freq: 60.8 # [GHz]
+    polarizations: [True, True, True]
+
+  Planck857GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 1024
+    data_nside: 1024
+    file_convention: "HFI"
+    path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_map_n1024_10arcmin_QUADCOR_ZODICOR_uK.fits"
+    path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_rms_n1024_10arcmin_uK_hrscaled_true.fits"
+    fwhm: 0 #10 # [arcmin]
+    freq: 857.0 # [GHz]
+    polarizations: [True, False, False]
+
+  ### POLARIZATION MAPS ###
+  Planck353GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 1024
+    data_nside: 1024
+    file_convention: "HFI"
+    path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_map_n1024_uK_udgrade.fits"
+    path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_rms_n1024_hrscaled_uK_udgrade.fits"
+    fwhm: 0 #4.86 # [arcmin]
+    freq: 353.0 # [GHz]
+    polarizations: [False, True, True]
+
+experiments:
+  []

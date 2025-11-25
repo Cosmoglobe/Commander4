@@ -163,9 +163,11 @@ class RadioSources(PointSourcesComponent):
     def __init__(self, params: Bunch):
         super().__init__(params)
         self.nu0 = params.nu0                   #reference frequency
+        # ALL THIS MUST GO IN DetectorMap
         self.band_nside = params.band_nside     #nside of the band on the current MPI rank
         self.band_nu = params.band_nu           #frequency of the band on the current MPI rank
         self.band_fwhm_r = params.band_fwhm_r   #fwhm in rads of the band on the current MPI rank
+        #############################
         self.alpha_s = params.alpha_s           #per-source spectral indexes
         self.amp_s = params.amp_s               #per-source amplitudes, initially broadcasted by the main mpi rank
         
