@@ -10,6 +10,7 @@ from numpy.typing import NDArray
 
 from src.python.output import log
 from src.python.utils.math_operations import alm_to_map
+from src.python.utils.map_utils import fwhm2sigma, gauss_beam, get_gauss_beam_radius
 
 
 A = (2*c.h*u.GHz**3/c.c**2).to('MJy').value
@@ -151,10 +152,56 @@ class CMB(DiffuseComponent):
         else:
             return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax, spin = 2 if pol else 0)*self.get_sed(nu)
 
+class PointSourcesComponent(Component):
+    
+    def __init__(self, params: Bunch):
+        self.params = params
+        self.longname = params.longname if "longname" in params else "Unknown PointSourceComp"
+        self.shortname = params.shortname if "shortname" in params else "pscomp"
 
+class RadioSources(PointSourcesComponent):
+    def __init__(self, params: Bunch):
+        super().__init__(params)
+        self.nu0 = params.nu0                   #reference frequency
+        self.band_nside = params.band_nside     #nside of the band on the current MPI rank
+        self.band_nu = params.band_nu           #frequency of the band on the current MPI rank
+        self.band_fwhm_r = params.band_fwhm_r   #fwhm in rads of the band on the current MPI rank
+        self.alpha_s = params.alpha_s           #per-source spectral indexes
+        self.amp_s = params.amp_s               #per-source amplitudes, initially broadcasted by the main mpi rank
+        
+        self.pix_discs_i_s = []                 #per-source list of indexes of the pixel forming the disc
+        self.beam_discs_val_s = []              #per-source list of beam values, for each pix_i_s 
+        for i in range(params.lonlat_s.shape[0]):      #compute and load the beams
+            disc_pix_i_s = hp.query_disc(self.band_nside, hp.ang2vec(params.lonlat_s[i,0], params.lonlat_s[i,1], lonlat=True), get_gauss_beam_radius(self.band_fwhm_r))
+            self.pix_discs_i_s.append(disc_pix_i_s)
+            beam_disc = gauss_beam(hp.rotator.angdist(params.lonlat_s[i,:], hp.pix2ang(self.band_nside, disc_pix_i_s, lonlat=True), lonlat=True), self.band_fwhm_r)
+            self.beam_discs_val_s.append(beam_disc)
+        self.longname = params.longname if "longname" in params else "RadioPointSources"
+        self.shortname = params.shortname if "shortname" in params else "radsources"
+        self.mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(self.band_nu*pysm3u.GHz))
+        self.uKRJ_to_mJysr = (pysm3u.uK_RJ).to(pysm3u.mJy / pysm3u.steradian, equivalencies=pysm3u.cmb_equivalencies(self.band_nu*pysm3u.GHz))
 
-class RadioSource(PointSourceComponent):
-    pass
+    def get_sed(self):
+        """
+        Returns a list of sed's, one per `alpha_s`, evaluated at `nu`, with ref frequency `nu0`. 
+        Freq. are in GHz.
+        """
+        return (self.nu/self.nu0)**(self.alpha_s - 2)
+    
+    def project_to_band_map(self, map):
+        """
+        Computes the point source contribution in uK_RJ for band's frequency and beam, and sums it to `map`.
+        """
+        for src_i in range(len(self.pix_discs_i_s)):
+            map[self.disc_pix_i_s[src_i]] += self.mJysr_to_uKRJ * self.beam_discs_val_s[src_i] * self.amp_s[src_i] * self.sed()
+    
+    def project_to_band_map_adj(self, map):
+        """
+        Computes the amplitude contribution from the local band to each point source, given `map`.
+        All the contributions will be summed to the total proper amplitudes by the master node 
+        """
+        for src_i in range(len(self.pix_discs_i_s)):
+            self.amp_s[src_i] = self.mJysr_to_uKRJ * np.sum(map[self.disc_pix_i_s[src_i]] * self.beam_discs_val_s[src_i]) * self.sed()
 
 class CMBRelQuad(TemplateComponent):
     pass
