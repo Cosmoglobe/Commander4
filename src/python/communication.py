@@ -94,14 +94,14 @@ def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, band_id
     """
     logger = logging.getLogger(__name__)
     my_compsep_rank = mpi_info.compsep.rank
-    if my_band.get_from == "file":
-        if curr_tod_output is None:
+    if my_band.get_from == "file":  #if we are supposed tp read it from file
+        if curr_tod_output is None:  #we check if we already have it or not
             logger.info(f"CompSep: Rank {my_compsep_rank} reading static map data from file.")
             curr_tod_output = read_Planck_map_from_file(my_band)
         else:
             logger.info(f"CompSep: Rank {my_compsep_rank} already has static map data. Continuing.")
     else:
         logger.info(f"CompSep: Rank {my_compsep_rank} receiving TOD data ({band_identifier}) from TOD process with global rank {senders[band_identifier]}")
-        curr_tod_output = mpi_info.world.comm.recv(source=senders[band_identifier])
+        curr_tod_output = mpi_info.world.comm.recv(source=senders[band_identifier])  #if we are not supposed to read it from file we receive it from the TOD processing
 
     return curr_tod_output
