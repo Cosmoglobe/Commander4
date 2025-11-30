@@ -1,3 +1,11 @@
+### COMMANDER4 SPECIFIC GITIGNORE ###
+stats/
+logs/
+plots/
+.vscode/
+
+
+### DEFAULT PYTHON GITIGNORE ###
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
