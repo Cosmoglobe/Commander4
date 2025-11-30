@@ -1,0 +1,34 @@
+# This file contains specifications for how pip will install Commander4 as a Python package.
+
+# Build system and its dependencies.
+[build-system]
+build-backend = "mesonpy"
+requires = [
+    "meson-python",
+    "ninja",
+    "pybind11",
+    "nanobind",
+    "mpi4py",
+    "numpy"
+    ]
+
+# Package description and depenencies
+[project]
+name = "commander4"
+version = "0.1.0"
+description = "Commander4: A Gibbs sampling framework for cosmological data analysis"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pyyaml",
+    "mpi4py",
+    "ducc0"
+    ]
+
+# Adds the `commander4` command to PATH, executing `bin/commander4`
+[project.scripts]
+commander4 = "commander4.cli:main"
+
+[tool.meson-python.args]
+install = ["--tags=python-runtime"]
