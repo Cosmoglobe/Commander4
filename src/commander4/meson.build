@@ -33,6 +33,18 @@ else
   python_sources = py_files_raw.split('\n')
 endif
 
+# --- Submodule Check ---
+# ducc0 is included as a git submodule. Check for a known file inside the submodule to see if
+# it is present. If not, throw an error, as Meson cannot pull the submodule itself.
+ducc0_check = run_command(py, '-c', 
+  'import os; print(os.path.exists("../../external/ducc0/src/ducc0/infra/mav.cc"))', 
+  check: true
+).stdout().strip()
+
+if ducc0_check != 'True'
+  error('The "ducc0" submodule is missing! Please run: git submodule update --init --recursive')
+endif
+
 # Install every Python file found
 # preserve_path: true ensures that e.g. 'utils/math.py' is installed as 'utils/math.py'
 py.install_sources(

@@ -13,9 +13,9 @@ CC := gcc
 # -O3: Max optimization
 # -march=native: Optimize for the specific CPU (AVX, etc.) on this machine
 # -ffast-math: Aggressive floating point math
-# -fPIC: Position Independent Code (required for shared libraries)
 # -shared: Create a shared library (.so)
-CXXFLAGS := -O3 -Wall -fPIC -std=c++17 -shared -ffast-math -march=native
+# -fPIC: Position Independent Code (required for shared libraries)
+CXXFLAGS := -O3 -march=native -ffast-math -shared -fPIC -Wall -std=c++17
 
 # Preprocessor definitions required by cmdr4_support.cc
 # PKGNAME: The Python module name (used in PYBIND11_MODULE)
@@ -56,15 +56,22 @@ SOURCES_MAPMAKER := $(SRC_CPP_DIR)/mapmaker.cpp
 
 # --- Rules ---
 
-.PHONY: all clean
-
 # Define behavior of the `all` command
-all: $(TARGET_SUPPORT) $(TARGET_MAPMAKER) stubs
+.PHONY: all
+all: check-submodules $(TARGET_SUPPORT) $(TARGET_MAPMAKER) stubs
 	@echo "-------------------------------------------------------"
 	@echo "Build complete."
 	@echo "Binaries placed in: $(DEST_DIR)"
 	@echo "You can now run:    python bin/commander4 -p params/..."
 	@echo "-------------------------------------------------------"
+
+# ducc0 is included as a git submodule. Check if ducc0 dir contains files. If not, try to init it.
+.PHONY: check-submodules
+check-submodules:
+	@if [ -z "$$(ls -A external/ducc0)" ]; then \
+		echo "Submodule 'ducc0' is empty. Initializing..."; \
+		git submodule update --init --recursive || { echo "Git submodule init failed! Please run 'git submodule update --init --recursive' manually."; exit 1; }; \
+	fi
 
 # Build the Main Extension
 $(TARGET_SUPPORT): $(SOURCES_SUPPORT)
@@ -76,12 +83,14 @@ $(TARGET_MAPMAKER): $(SOURCES_MAPMAKER)
 	@echo "Compiling $(TARGET_MAPMAKER)..."
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@
 
+.PHONY: stubs
 stubs: $(TARGET_LIB)
 	@echo "Generating Python stubs..."
 	# We set PYTHONPATH so it finds the just-compiled library in src/
 	PYTHONPATH=src python3 -m pybind11_stubgen commander4.cmdr4_support --output-dir src --root-suffix=""
 	@echo "Stubs generated: src/commander4/cmdr4_support.pyi"
 
+.PHONY: clean
 clean:
 	@echo "Cleaning compiled binaries..."
 	rm -f $(DEST_DIR)/*.so
