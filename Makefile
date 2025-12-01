@@ -107,5 +107,7 @@ stubs: $(TARGET_BIN)
 
 .PHONY: clean
 clean:
-	@echo "Cleaning compiled binaries..."
+	@echo "Cleaning compiled binaries, generated .pyi files, and __pycache__ dirs..."
 	rm -rf src/commander4/backends
+	rm -f $(SUPPORT_DIR)/*.pyi
+	find . -type d -name "__pycache__" -exec rm -rf {} +

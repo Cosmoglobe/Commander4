@@ -7,7 +7,7 @@ import gc
 from numpy.typing import NDArray
 from astropy.io import fits
 from pixell.bunch import Bunch
-from commander4.cmdr4_support.utils import huffman_decode
+from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_samples import DetectorSamples
@@ -92,7 +92,7 @@ def read_Planck_TOD_data(my_experiment: str, my_band: Bunch, my_det: Bunch, para
         if ntod > ntod_upper_bound:
             raise ValueError(f"{ntod_upper_bound} {ntod}")
         flag_buffer[:ntod] = 0.0
-        flag_buffer[:ntod] = huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8), huffman_tree, huffman_symbols, flag_buffer[:ntod])
+        flag_buffer[:ntod] = cpp_utils.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8), huffman_tree, huffman_symbols, flag_buffer[:ntod])
         flag_buffer[:ntod_optimal] = np.cumsum(flag_buffer[:ntod_optimal])
         flag_buffer[:ntod_optimal] &= 6111232
         if np.sum(flag_buffer[:ntod_optimal]) == 0:

@@ -4,7 +4,7 @@ from numpy.typing import NDArray
 import ducc0
 import os
 
-from commander4.cmdr4_support.utils import huffman_decode
+from commander4.cmdr4_support import utils as cpp_utils
 from commander4.output import log
 
 class ScanTOD:
@@ -64,7 +64,7 @@ class ScanTOD:
     @property
     def pix(self) -> NDArray[np.integer]:
         pix = np.zeros(self._ntod_original, dtype=np.int64)
-        pix = huffman_decode(np.frombuffer(self._pix_encoded, dtype=np.uint8), self._huffman_tree, self._huffman_symbols, pix)
+        pix = cpp_utils.huffman_decode(np.frombuffer(self._pix_encoded, dtype=np.uint8), self._huffman_tree, self._huffman_symbols, pix)
         #TODO: I think cumsum should eventually be wrapped in somewhere, it can be easy to forget.
         pix = np.cumsum(pix)
         # The TOD was cropped to an ideal Fourier length, but because the pix entry is compressed,
@@ -83,7 +83,7 @@ class ScanTOD:
     @property
     def psi(self) -> NDArray[np.floating]:
         psi = np.zeros(self._ntod_original, dtype=np.int64)
-        psi = huffman_decode(np.frombuffer(self._psi_encoded, dtype=np.uint8), self._huffman_tree, self._huffman_symbols, psi)
+        psi = cpp_utils.huffman_decode(np.frombuffer(self._psi_encoded, dtype=np.uint8), self._huffman_tree, self._huffman_symbols, psi)
         psi = np.cumsum(psi)
         psi = psi[:self.ntod]
         psi = 2*np.pi * psi.astype(np.float32)/self._npsi
