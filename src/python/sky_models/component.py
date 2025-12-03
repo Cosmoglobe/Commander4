@@ -163,10 +163,10 @@ class RadioSources(PointSourcesComponent):
     def __init__(self, params: Bunch):
         super().__init__(params)
         self.nu0 = params.nu0                   #reference frequency
-        # ALL THIS MUST GO IN DetectorMap
-        self.band_nside = params.band_nside     #nside of the band on the current MPI rank
-        self.band_nu = params.band_nu           #frequency of the band on the current MPI rank
-        self.band_fwhm_r = params.band_fwhm_r   #fwhm in rads of the band on the current MPI rank
+        # ALL THIS MUST COME FROM DetectorMap
+        #self.band_nside = params.band_nside     #nside of the band on the current MPI rank
+        #self.band_nu = params.band_nu           #frequency of the band on the current MPI rank
+        #self.band_fwhm_r = params.band_fwhm_r   #fwhm in rads of the band on the current MPI rank
         #############################
         self.alpha_s = params.alpha_s           #per-source spectral indexes
         self.amp_s = params.amp_s               #per-source amplitudes, initially broadcasted by the main mpi rank
@@ -183,12 +183,12 @@ class RadioSources(PointSourcesComponent):
         self.mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(self.band_nu*pysm3u.GHz))
         self.uKRJ_to_mJysr = (pysm3u.uK_RJ).to(pysm3u.mJy / pysm3u.steradian, equivalencies=pysm3u.cmb_equivalencies(self.band_nu*pysm3u.GHz))
 
-    def get_sed(self):
+    def get_sed(self, nu):
         """
         Returns a list of sed's, one per `alpha_s`, evaluated at `nu`, with ref frequency `nu0`. 
         Freq. are in GHz.
         """
-        return (self.nu/self.nu0)**(self.alpha_s - 2)
+        return (nu/self.nu0)**(self.alpha_s - 2)
     
     def project_to_band_map(self, map):
         """
@@ -197,7 +197,7 @@ class RadioSources(PointSourcesComponent):
         for src_i in range(len(self.pix_discs_i_s)):
             map[self.disc_pix_i_s[src_i]] += self.mJysr_to_uKRJ * self.beam_discs_val_s[src_i] * self.amp_s[src_i] * self.sed()
     
-    def project_to_band_map_adj(self, map):
+    def eval_from_band_map(self, map):
         """
         Computes the amplitude contribution from the local band to each point source, given `map`.
         All the contributions will be summed to the total proper amplitudes by the master node 
@@ -216,8 +216,7 @@ class ThermalDust(DiffuseComponent):
         self.nu0 = params.nu0
         self.prior_l_power_law = 2.5
         self.longname = params.longname if "longname" in params else "Thermal Dust"
-        self.shortname = params.shortname if "shortname" in params else "dust"
-
+        self.shortname = params.shortname if "shortname" in params else "dust",
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for Thermal Dust emission.

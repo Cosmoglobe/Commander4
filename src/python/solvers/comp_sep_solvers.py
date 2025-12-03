@@ -304,6 +304,7 @@ class CompSepSolver:
 
 
     def apply_LHS_matrix(self, a_in: list[NDArray[np.complexfloating]]) -> list[NDArray[np.complexfloating]]:
+        #This a_in should become a list of Component objects instead. 
         """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of
             the Ax=b system for global component separation. The full A matrix is:
             (1 + S^{1/2} Y^T M^T Y^-1^T B^T N^-1 B Y^-1 M Y S^{1/2}).
