@@ -1,60 +1,115 @@
-import numpy as np
-import healpy as hp
-from astropy.time import Time
 import astropy.units as u
-from astropy.coordinates import get_sun, SkyCoord, GeocentricTrueEcliptic, Galactic
-from scipy.interpolate import CubicSpline
-from tqdm import tqdm
+import healpy as hp
+import matplotlib.pyplot as plt
+import numpy as np
+from astropy.coordinates import SkyCoord, get_sun
+from astropy.time import Time
 from mpi4py import MPI
+from tqdm import tqdm
 
-def get_Planck_pointing(ntod, sample_rate = 32.5015421):
+
+def get_Planck_pointing(ntod, sample_rate = 32.5015421,
+                        los_angle=85.0, spin_angle_tilt=7.5,
+                        spin_rate=1.00165345964511,
+                        batch_duration=1):
+    """
+    Generate Planck-like pointing and orbital dipole data using MPI for parallel processing.
+    
+    Parameters
+    ----------
+    ntod : int
+        Total number of time-ordered data samples to simulate.
+    sample_rate : float, optional
+        Sampling rate in Hz. Default is 32.5015421 Hz.
+    los_angle : float, optional
+        Line-of-sight angle in degrees. Default is 85.0 degrees.
+    spin_angle_tilt : float, optional
+        Spin axis tilt angle in degrees. Default is 7.5 degrees.
+    spin_rate : float, optional
+        Spin rate in revolutions per minute (RPM). Default is 1.00165345964511 RPM.
+    batch_duration : float, optional
+        Duration of each batch in days for processing. Default is 1 day.
+
+    Returns
+    -------
+    theta_arr : np.ndarray
+        Array of theta angles in radians for each sample.
+    phi_arr : np.ndarray
+        Array of phi angles in radians for each sample.
+    orb_dir_arr : np.ndarray
+        Array of shape (ntod, 3) containing the orbital direction vectors.
+    dipole_arr : np.ndarray
+        Array of orbital dipole amplitudes in Kelvin for each sample.
+    """
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
 
-    # -- 1. Define Simulation Parameters
-    SAMPLE_RATE_HZ = sample_rate
-    DURATION_DAYS = ntod / (sample_rate * 3600 * 24)
-    LOS_ANGLE_DEG = 85.0
-    SPIN_AXIS_TILT_DEG = 7.5
-    SPIN_RATE_RPM = 1.00165345964511
-    BATCH_DURATION_DAYS = 1
+    # constants
     T_CMB = 2.72548
     C_LIGHT = 299792458.0
     V_ORBITAL_SPEED = 30000.0
-    samples_per_batch = int(BATCH_DURATION_DAYS * 24 * 3600 * SAMPLE_RATE_HZ)
+    # computational variables
+    COARSE_STEP_SEC = 600
+
+    # determine simulation parameters from given inputs
+    duration = ntod / (sample_rate * 3600 * 24)
+    samples_per_batch = int(batch_duration * 24 * 3600 * sample_rate)
 
     # ---------------- HELPER FUNCTION FOR A SINGLE BATCH ----------------
     def calculate_batch(batch_idx):
-        """Performs all calculations for a single batch index."""
-        start_day = batch_idx * BATCH_DURATION_DAYS
+        """
+        Performs all calculations for a single batch index (corresponding to batch_duration).
+        """
+        # calculate start time of batch
+        start_day = batch_idx * batch_duration
         start_time_offset = start_day * 24 * 3600 * u.s
         batch_start_time = Time('2009-08-13T00:00:00') + start_time_offset
-        batch_duration_sec = BATCH_DURATION_DAYS * 24 * 3600
-        num_samples = int(batch_duration_sec * SAMPLE_RATE_HZ)
-        t_seconds = np.linspace(0, batch_duration_sec, num_samples, endpoint=False)
-        COARSE_STEP_SEC = 600
+
+        # generate time array for the batch
+        batch_duration_sec = batch_duration * 24 * 3600 # seconds
+        n_samples = int(batch_duration_sec * sample_rate)
+        t_seconds = np.linspace(0, batch_duration_sec, n_samples, endpoint=False)
         t_coarse = np.arange(0, batch_duration_sec + COARSE_STEP_SEC, COARSE_STEP_SEC)
+
+        # generate (anti-)sun positions at coarse time intervals
         obs_times_coarse = batch_start_time + t_coarse * u.s
         sun_coords_coarse = get_sun(obs_times_coarse).transform_to('geocentrictrueecliptic')
         anti_sun_lon_coarse = sun_coords_coarse.lon.rad + np.pi
+
+        # interpolate (anti-)sun positions to fine time intervals
         cos_interp = np.interp(t_seconds, t_coarse, np.cos(anti_sun_lon_coarse))
         sin_interp = np.interp(t_seconds, t_coarse, np.sin(anti_sun_lon_coarse))
         norm = np.sqrt(cos_interp**2 + sin_interp**2)
-        anti_sun_lon_rad = np.arctan2(sin_interp / norm, cos_interp / norm)
-        spin_phase_rad = (2 * np.pi * SPIN_RATE_RPM / 60.0) * (start_day * 24 * 3600 + t_seconds)
-        six_months_sec = 182.625 * 24 * 3600
-        precession_phase_rad = 2 * np.pi * (start_day * 24 * 3600 + t_seconds) / six_months_sec
-        los_angle_rad = np.deg2rad(LOS_ANGLE_DEG)
-        tilt_angle_rad = np.deg2rad(SPIN_AXIS_TILT_DEG)
-        a_vec = np.vstack([np.cos(anti_sun_lon_rad), np.sin(anti_sun_lon_rad), np.zeros_like(anti_sun_lon_rad)]).T
-        b_vec = np.vstack([-np.sin(anti_sun_lon_rad), np.cos(anti_sun_lon_rad), np.zeros_like(anti_sun_lon_rad)]).T
+        anti_sun_lon = np.arctan2(sin_interp / norm, cos_interp / norm)
+        
+        # generate basis for anti-sun coordinate system
+        anti_sun_cos = np.cos(anti_sun_lon)
+        anti_sun_sin = np.sin(anti_sun_lon)
+        a_vec = np.vstack([anti_sun_cos, anti_sun_sin, np.zeros_like(anti_sun_lon)]).T
+        b_vec = np.vstack([-anti_sun_sin, anti_sun_cos, np.zeros_like(anti_sun_lon)]).T
         c_vec = np.array([0., 0., 1.])
-        s_vec = (np.cos(tilt_angle_rad) * a_vec + np.sin(tilt_angle_rad) * (np.cos(precession_phase_rad)[:, np.newaxis] * b_vec + np.sin(precession_phase_rad)[:, np.newaxis] * c_vec))
+
+        # generate basis spin
+        tilt_angle = np.deg2rad(spin_angle_tilt) # radians
+        six_months = 182.625 * 24 * 3600 # seconds
+        precession_phase = 2 * np.pi * (start_day * 24 * 3600 + t_seconds) / six_months # radians
+        s_vec = (np.cos(tilt_angle) * a_vec +
+                 np.sin(tilt_angle) * (np.cos(precession_phase)[:, np.newaxis] * b_vec +
+                                       np.sin(precession_phase)[:, np.newaxis] * c_vec))
         u_vec = np.cross(s_vec, c_vec)
-        u_vec /= np.linalg.norm(u_vec, axis=1)[:, np.newaxis]
         v_vec = np.cross(s_vec, u_vec)
-        z_vec_ecliptic = (np.cos(los_angle_rad) * s_vec + np.sin(los_angle_rad) * (np.cos(spin_phase_rad)[:, np.newaxis] * u_vec + np.sin(spin_phase_rad)[:, np.newaxis] * v_vec))
+
+        # calculate line-of-sight vector in ecliptic coordinates
+        spin_phase = (2 * np.pi * spin_rate / 60.0) * (start_day * 24 * 3600 + t_seconds) # radians
+        los_angle_rad = np.deg2rad(los_angle) # radians
+        los_cos = np.cos(los_angle_rad)
+        los_sin = np.sin(los_angle_rad)
+        spin_cos = np.cos(spin_phase)[:, np.newaxis]
+        spin_sin = np.sin(spin_phase)[:, np.newaxis]
+        z_vec_ecliptic = (los_cos * s_vec + los_sin * (spin_cos * u_vec + spin_sin * v_vec))
+
+        # calculate orbital dipole parameters
         v_orbital_vec = V_ORBITAL_SPEED * b_vec
         beta_vec = v_orbital_vec / C_LIGHT
         beta_mag_sq = (V_ORBITAL_SPEED / C_LIGHT)**2
@@ -62,18 +117,21 @@ def get_Planck_pointing(ntod, sample_rate = 32.5015421):
         dot_product = np.sum(beta_vec * z_vec_ecliptic, axis=1)
         orbital_dipole_amplitude = T_CMB * ((1.0 / (gamma * (1.0 - dot_product))) - 1.0)
 
-        ecl_basis = SkyCoord(x=[1,0,0], y=[0,1,0], z=[0,0,1], representation_type='cartesian', frame='geocentrictrueecliptic')
+        # transform pointing and velocity vectors to galactic coordinates
+        ecl_basis = SkyCoord(x=[1,0,0], y=[0,1,0], z=[0,0,1],
+                             representation_type='cartesian', frame='geocentrictrueecliptic')
         ecl_to_gal_matrix = ecl_basis.transform_to('galactic').cartesian.xyz.value
         z_vec_galactic = z_vec_ecliptic @ ecl_to_gal_matrix.T
         v_orbital_vec_galactic = v_orbital_vec @ ecl_to_gal_matrix.T
 
+        # convert pointing vectors to spherical coordinates
         theta, phi = hp.vec2ang(z_vec_galactic)
         return theta, phi, v_orbital_vec_galactic, orbital_dipole_amplitude
     # --------------------------------------------------------------------
 
     # -- Master Logic (Rank 0) --
     if rank == 0:
-        num_batches = int(np.ceil(DURATION_DAYS / BATCH_DURATION_DAYS))
+        num_batches = int(np.ceil(duration / batch_duration))
         
         # Pre-allocate memory for the final arrays
         theta_arr = np.empty(ntod, dtype=np.float32)
@@ -126,3 +184,13 @@ def get_Planck_pointing(ntod, sample_rate = 32.5015421):
         return theta_arr, phi_arr, orb_dir_arr, dipole_arr
     else:
         return None, None, None, None
+    
+if __name__ == "__main__":
+    # Example usage
+    ntod = 100000  # Total number of samples
+    theta, phi, orb_dir, dipole = get_Planck_pointing(ntod)
+    if MPI.COMM_WORLD.Get_rank() == 0:
+        pix = hp.ang2pix(2048, theta, phi)
+        hit_map = np.bincount(pix, minlength=hp.nside2npix(2048))
+        hp.mollview(hit_map, title="Hit Map", unit="Hits")
+        plt.savefig("hit_map.png")
