@@ -66,6 +66,14 @@ def inplace_add_scaled_vec(arr_main, arr_add, float_mult):
         flat1[i] += flat2[i]*float_mult
 
 @njit(fastmath=True, parallel=True)
+def inplace_arr_add(arr_main, arr_add):
+    assert(arr_main.shape==arr_add.shape)
+    flat1 = arr_main.ravel()
+    flat2 = arr_add.ravel()
+    for i in prange(arr_main.size):
+        flat1[i] += flat2[i]
+
+@njit(fastmath=True, parallel=True)
 def inplace_arr_prod(arr_main, arr_prod):
     len = arr_main.size
     assert(arr_main.shape==arr_prod.shape)
@@ -381,44 +389,60 @@ def _prep_input(arr_in, arr_out, nside, spin):
 
 
 def alm_to_map(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
-               nthreads: int=1, out=None) -> NDArray:
+               nthreads: int=1, out=None, acc: bool=False) -> NDArray:
     use_theta_interpol = nside >= 2048
     alm, out, ndim_in = _prep_input(alm, out, nside, spin)
+    if acc:
+        tmp_out = np.copy(out)
     out = ducc0.sht.synthesis(alm=alm, map=out, lmax=lmax, spin=spin,
                               nthreads=nthreads, **hp_geominfos[nside],
                               theta_interpol=use_theta_interpol)
+    if acc:
+        inplace_arr_add(out, tmp_out)
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
 def alm_to_map_adjoint(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
-                       nthreads: int=1, out=None) -> NDArray:
+                       nthreads: int=1, out=None, acc: bool=False) -> NDArray:
     use_theta_interpol = nside >= 2048
     mp, out, ndim_in = _prep_input(mp, out, nside, spin)
+    if acc:
+        tmp_out = np.copy(out)
     out = ducc0.sht.adjoint_synthesis(map=mp, alm=out, lmax=lmax, spin=spin,
                                       nthreads=nthreads, **hp_geominfos[nside],
                                       theta_interpol=use_theta_interpol)
+    if acc:
+        inplace_arr_add(out, tmp_out)
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
 def map_to_alm(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
-                       nthreads: int=1, out=None) -> NDArray:
+                       nthreads: int=1, out=None, acc: bool=False) -> NDArray:
     use_theta_interpol = nside >= 2048
     mp, out, ndim_in = _prep_input(mp, out, nside, spin)
+    if acc:
+        tmp_out = np.copy(out)
     out = ducc0.sht.adjoint_synthesis(map=mp, alm=out, lmax=lmax, spin=spin,
                                       nthreads=nthreads, **hp_geominfos[nside],
                                       theta_interpol=use_theta_interpol)
     out *= 4*np.pi/(12*nside**2)
+    if acc:
+        inplace_arr_add(out, tmp_out)
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
 def map_to_alm_adjoint(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
-               nthreads: int=1, out=None) -> NDArray:
+               nthreads: int=1, out=None, acc: bool=False) -> NDArray:
     use_theta_interpol = nside >= 2048
     alm, out, ndim_in = _prep_input(alm, out, nside, spin)
+    if acc:
+        tmp_out = np.copy(out)
     out = ducc0.sht.synthesis(alm=alm, map=out, lmax=lmax, spin=spin,
                               nthreads=nthreads, **hp_geominfos[nside],
                               theta_interpol=use_theta_interpol)
     out *= 4*np.pi/(12*nside**2)
+    if acc:
+        inplace_arr_add(out, tmp_out)
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
