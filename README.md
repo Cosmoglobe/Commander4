@@ -32,7 +32,7 @@ git submodule update
 ## Installation for developers
 If you intend to edit Commander4, you must first have the build tools installed:
 ```bash
-python -m pip install meson-python meson ninja
+python -m pip install meson-python meson ninja pybind11 pybind11_stubgen
 ```
 Then, clone the repo (and submodules), and perform a so-called *editable* PIP install:
 ```bash
