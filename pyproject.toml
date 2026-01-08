@@ -2,14 +2,11 @@
 
 # Build system and its dependencies.
 [build-system]
-build-backend = "mesonpy"
+build-backend = "scikit_build_core.build"
 requires = [
-    "meson-python",
-    "ninja",
+    "scikit-build-core>=0.10",
     "pybind11",
     "pybind11-stubgen",
-    "nanobind",
-    "mpi4py",
     "numpy"
     ]
 
@@ -27,9 +24,38 @@ dependencies = [
     "ducc0"
     ]
 
+[project.optional-dependencies]
+# Optional, for building with nanobind:
+#   CMDR4_USE_NANOBIND=1 pip install -e . --no-build-isolation
+nanobind = ["nanobind"]
+
 # Adds the `commander4` command to PATH, executing `bin/commander4`
 [project.scripts]
 commander4 = "commander4.cli:main"
+commander4-generate-stubs = "commander4.devtools.generate_stubs:main"
 
-[tool.meson-python.args]
-install = ["--tags=python-runtime"]
+[tool.scikit-build]
+# Keep it simple: CMake builds the extension, scikit-build-core packages the Python
+# sources from the src-layout.
+wheel.packages = ["src/commander4"]
+
+# Prefer Release unless user overrides via env/CMake args.
+cmake.build-type = "Release"
+
+# Explicitly force "redirect" mode (static path mapping)
+editable.mode = "redirect"
+# Explicitly disable auto-rebuilds on import to prevent MPI crashes
+editable.rebuild = false
+
+[tool.scikit-build.sdist]
+# Ensure the C++ sources + ducc0 submodule files make it into sdists.
+include = [
+    "CMakeLists.txt",
+    "src/lib_cpp/**",
+    "external/ducc0/src/**",
+    "external/ducc0/LICENSE",
+    "external/ducc0/ChangeLog",
+    "README.md",
+    "LICENSE",
+    "src/commander4/**",
+]

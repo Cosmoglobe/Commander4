@@ -11,6 +11,7 @@ from commander4.output.log import logassert
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
+from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
 
 # current_dir_path = os.path.dirname(os.path.realpath(__file__))
 # src_dir_path = os.path.abspath(os.path.join(os.path.join(current_dir_path, os.pardir), os.pardir))
@@ -28,7 +29,7 @@ class Mapmaker:
         self._finalized_map = None
         
         # Setting up Ctypes mapmaker
-        self.maplib = ct.cdll.LoadLibrary("mapmaker.so")
+        self.maplib = load_cmdr4_ctypes_lib()
         ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
         ct_f32_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=1, flags="contiguous")
         self.maplib.map_accumulator_f32.argtypes = [ct_f32_dim1, ct_f32_dim1, ct.c_float, ct_i64_dim1,
@@ -74,7 +75,7 @@ class WeightsMapmaker:
         self._gathered_map = None
         
         # Setting up Ctypes mapmaker
-        self.maplib = ct.cdll.LoadLibrary("mapmaker.so")
+        self.maplib = load_cmdr4_ctypes_lib()
         ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
         ct_f32_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=1, flags="contiguous")
         self.maplib.map_weight_accumulator_f32.argtypes = [ct_f32_dim1, ct.c_float, ct_i64_dim1,
@@ -114,7 +115,7 @@ class MapmakerIQU:
         self._finalized_map = None
         
         # Setting up Ctypes mapmaker
-        self.maplib = ct.cdll.LoadLibrary("mapmaker.so")
+        self.maplib = load_cmdr4_ctypes_lib()
         ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
         ct_f32_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=1, flags="contiguous")
         ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
@@ -180,7 +181,7 @@ class WeightsMapmakerIQU:
         self._finalized_rms_map = None
         
         # Setting up Ctypes mapmaker
-        self.maplib = ct.cdll.LoadLibrary("mapmaker.so")
+        self.maplib = load_cmdr4_ctypes_lib()
         ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
         ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
         ct_f32_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=2, flags="contiguous")

@@ -29,20 +29,47 @@ git submodule init
 git submodule update
 ```
 
+Note: Commander4 depends on the `ducc0` Python package from pip by default.
+
+If you are developing and need unreleased upstream changes or want maximum performance, install `ducc0` from source yourself, e.g.:
+```bash
+python -m pip install --no-binary ducc0 ducc0
+```
+or install from a checkout (e.g. from the `external/ducc0` submodule).
+
 ## Installation for developers
 If you intend to edit Commander4, you must first have the build tools installed:
 ```bash
-python -m pip install meson-python meson ninja pybind11 pybind11_stubgen
+python -m pip install scikit-build-core pybind11 pybind11-stubgen numpy
 ```
 Then, clone the repo (and submodules), and perform a so-called *editable* PIP install:
 ```bash
 git clone --recurse-submodules git@github.com:Cosmoglobe/Commander4.git
 cd Commander4
-python -m pip -e install . --no-build-isolation
+python -m pip install -e . --no-build-isolation
 ```
-The editable install (`-e`) will tell PIP and Meson that the installation should point back to the source location, meaning that **you can edit Python files and run Commander4 without re-installing**. The `--no-build-isolation` helps with certain conflicts with install locations when using editable installs.
+The editable install (`-e`) will tell PIP and scikit-build-core/CMake that the installation should point back to the source location, meaning that **you can edit Python files and run Commander4 without re-installing**. The `--no-build-isolation` helps ensure the build uses your environment (useful on HPC systems), which is why you have to manually pip install build dependencies first.
 
 Note that if you edit non-Python files (C/C++) you must re-install for changes to take effect.
+
+Native (ctypes) helper code is built into a single shared library installed as `commander4/_libs/cmdr4_ctypes.so`.
+To add new ctypes-exposed C/C++ code, add a new `.cpp` file under `src/lib_cpp/ctypes/` and re-install.
+
+### Optional: nanobind backend
+If you want to build the extension with nanobind instead of pybind11:
+```bash
+python -m pip install -e ".[nanobind]" --no-build-isolation
+CMDR4_USE_NANOBIND=1 python -m pip install -e . --no-build-isolation
+```
+
+### Optional: regenerate type stubs
+The repository includes checked-in `.pyi` files for the compiled extension. If you change the C++ API and want to regenerate stubs:
+Stub files are generated automatically during the build (mirroring the previous Meson setup).
+
+If you want to regenerate stubs manually:
+```bash
+commander4-generate-stubs
+```
 
 ## Running Commander4
 Commander4 has to be run with MPI, and a parameter file has to be indicated using the `-p` argument. Example usage:
