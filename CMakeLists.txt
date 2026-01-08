@@ -11,6 +11,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Commander4 is only supported on Linux HPC systems.
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  message(FATAL_ERROR "Commander4 build only supports Linux (got: ${CMAKE_SYSTEM_NAME}).")
+endif()
+
 if(DEFINED ENV{CMDR4_OPTIMIZATION})
   set(OPTFLAGS "$ENV{CMDR4_OPTIMIZATION}")
 else()
@@ -79,16 +84,8 @@ target_include_directories(cmdr4_ctypes PRIVATE
 
 target_compile_definitions(${PKGNAME} PRIVATE PKGNAME=${PKGNAME} PKGVERSION=${PKGVERSION})
 
-### Architecture flags ###
-if(NOT MSVC)
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc|ppc64|powerpc|powerpc64")
-    set(CMDR4_ARCH_FLAGS "-mtune=native" CACHE STRING "Compiler flags for specifying target architecture.")
-  elseif(CMAKE_SYSTEM_NAME MATCHES "Emscripten")
-    set(CMDR4_ARCH_FLAGS "" CACHE STRING "Compiler flags for specifying target architecture.")
-  else()
-    set(CMDR4_ARCH_FLAGS "-march=native" CACHE STRING "Compiler flags for specifying target architecture.")
-  endif()
-endif()
+### Architecture flags (Linux-only) ###
+set(CMDR4_ARCH_FLAGS "-march=native" CACHE STRING "Compiler flags for specifying target architecture.")
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   set(CMDR4_WARN_FLAGS
@@ -135,9 +132,7 @@ if(OpenMP_CXX_FOUND)
   target_link_libraries(cmdr4_ctypes PRIVATE OpenMP::OpenMP_CXX)
 endif()
 
-if(UNIX AND NOT APPLE)
-  target_link_libraries(cmdr4_ctypes PRIVATE m)
-endif()
+target_link_libraries(cmdr4_ctypes PRIVATE m)
 
 if(DEFINED ENV{CMDR4_CFLAGS})
   separate_arguments(CFLAGS_TMP NATIVE_COMMAND "$ENV{CMDR4_CFLAGS}")
