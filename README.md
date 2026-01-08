@@ -14,6 +14,12 @@ If not using the Mamba environment, you should set up a Python virtual environme
 python -m venv ../.com4_venv
 source ../.com4_venv/bin/activate
 ```
+
+**Optional:** Commander4 heavily utilizes `ducc0`, which will be installed auomatically, but if you want maximum performance from `ducc0` install `ducc0` from source yourself, e.g.:
+```bash
+python -m pip install --no-binary ducc0 ducc0
+```
+
 ## Installation for users
 If you are not intending to edit Commander4, you can install it by cloning the repository, and doing a pip install.
 ```bash
@@ -28,14 +34,6 @@ If you have already cloned the repo and forgot to add the `--recursive-submodule
 git submodule init
 git submodule update
 ```
-
-Note: Commander4 depends on the `ducc0` Python package from pip by default.
-
-If you are developing and need unreleased upstream changes or want maximum performance, install `ducc0` from source yourself, e.g.:
-```bash
-python -m pip install --no-binary ducc0 ducc0
-```
-or install from a checkout (e.g. from the `external/ducc0` submodule).
 
 ## Installation for developers
 If you intend to edit Commander4, you must first have the build tools installed:

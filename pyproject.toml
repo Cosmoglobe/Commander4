@@ -10,7 +10,7 @@ requires = [
     "numpy"
     ]
 
-# Package description and depenencies
+# Package description and runtime depenencies
 [project]
 name = "commander4"
 version = "0.1.0"
@@ -21,8 +21,10 @@ dependencies = [
     "scipy",
     "pyyaml",
     "mpi4py",
-    "ducc0"
-    ]
+    "ducc0",
+    "pixell",
+    "healpy",
+    ]  # Add new Python runtime dependencies here.
 
 [project.optional-dependencies]
 # Optional, for building with nanobind:
