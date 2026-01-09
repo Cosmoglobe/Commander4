@@ -15,6 +15,12 @@ python -m venv ../.com4_venv
 source ../.com4_venv/bin/activate
 ```
 
+**Temporary fix:** `pysm3` does not yet officially support Numpy 2.0, and you must hackily install it without triggering a downgrade to Numpy 1.x, as following:
+```
+pip install toml pysm3 --no-deps
+```
+This will be resolved in the next `pysm3` release.
+
 **Optional:** Commander4 heavily utilizes `ducc0`, which will be installed auomatically, but if you want maximum performance from `ducc0` install `ducc0` from source yourself, e.g.:
 ```bash
 python -m pip install --no-binary ducc0 ducc0
