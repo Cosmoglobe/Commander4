@@ -1,0 +1,65 @@
+# This file contains specifications for how pip will install Commander4 as a Python package.
+
+# Build system and its dependencies.
+[build-system]
+build-backend = "scikit_build_core.build"
+requires = [
+    "scikit-build-core>=0.10",
+    "pybind11",
+    "pybind11-stubgen",
+    "numpy"
+    ]
+
+# Package description and runtime depenencies
+[project]
+name = "commander4"
+version = "0.1.0"
+description = "Commander4: A Gibbs sampling framework for cosmological data analysis"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "scipy",
+    "h5py",
+    "pyyaml",
+    "mpi4py",
+    "ducc0",
+    "pixell",
+    "healpy",
+    "tqdm",
+    ]  # Add new Python runtime dependencies here.
+
+[project.optional-dependencies]
+# Optional, for building with nanobind:
+#   CMDR4_USE_NANOBIND=1 pip install -e . --no-build-isolation
+nanobind = ["nanobind"]
+
+# Adds the `commander4` command to PATH, executing `bin/commander4`
+[project.scripts]
+commander4 = "commander4.cli:main"
+commander4-generate-stubs = "commander4.devtools.generate_stubs:main"
+
+[tool.scikit-build]
+# Keep it simple: CMake builds the extension, scikit-build-core packages the Python
+# sources from the src-layout.
+wheel.packages = ["src/commander4"]
+
+# Prefer Release unless user overrides via env/CMake args.
+cmake.build-type = "Release"
+
+# Explicitly force "redirect" mode (static path mapping)
+editable.mode = "redirect"
+# Explicitly disable auto-rebuilds on import to prevent MPI crashes
+editable.rebuild = false
+
+[tool.scikit-build.sdist]
+# Ensure the C++ sources + ducc0 submodule files make it into sdists.
+include = [
+    "CMakeLists.txt",
+    "src/lib_cpp/**",
+    "external/ducc0/src/**",
+    "external/ducc0/LICENSE",
+    "external/ducc0/ChangeLog",
+    "README.md",
+    "LICENSE",
+    "src/commander4/**",
+]

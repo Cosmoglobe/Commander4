@@ -16,9 +16,10 @@ numpy==2.3.5
 packaging==25.0
 pillow==12.0.0
 pixell==0.31.4
+pybind11==3.0.1
+pybind11-stubgen==2.5.5
 pyerfa==2.0.1.5
 pyparsing==3.2.5
-pysm3==3.4.3
 python-dateutil==2.9.0.post0
 PyYAML==6.0.3
 scipy==1.16.3

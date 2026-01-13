@@ -1,1 +1,0 @@
-g++ -shared -O3 -fPIC mapmaker.cpp -o mapmaker.so
