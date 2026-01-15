@@ -7,14 +7,14 @@ from pixell.bunch import Bunch
 from numpy.typing import NDArray
 
 from src.python.data_models.detector_map import DetectorMap
-from src.python.sky_models.component import DiffuseComponent
+from src.python.sky_models.component import Component, DiffuseComponent
 import src.python.sky_models.component as component_lib
 from src.python.sky_models.sky_model import SkyModel
 import src.python.output.plotting as plotting
 from src.python.solvers.comp_sep_solvers import CompSepSolver, amplitude_sampling_per_pix
 
 
-def init_compsep_processing(mpi_info: Bunch, params: Bunch) -> tuple[list[DiffuseComponent], str, dict[str, int], Bunch]:
+def init_compsep_processing(mpi_info: Bunch, params: Bunch) -> tuple[list[Component], str, dict[str, int], Bunch]:
     """To be run once before starting component separation processing.
 
     Determines whether the process is compsep master, and the number of bands.
@@ -68,7 +68,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch) -> tuple[list[Diffus
 
 
 def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chain: int,
-                    params: Bunch, comp_list: list[DiffuseComponent]) -> NDArray[np.float64]:
+                    params: Bunch, comp_list: list[Component]) -> NDArray[np.float64]:
     """ Performs a single component separation iteration.
         Called by each compsep process, which are each responsible for a single band.
     
@@ -103,20 +103,19 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
         color = 0 if detector_data.map_sky[0] is not None else MPI.UNDEFINED
         comm_local = compsep_comm.Split(color, key=compsep_rank)
         if color == 0:
-            compsep_solver = CompSepSolver(comp_list, detector_data.map_sky[0].reshape((1,-1)),
-                                           detector_data.map_rms[0].reshape((1,-1)),
-                                           detector_data.nu, detector_data.fwhm, params, comm_local,
-                                           pol=False)
-            comp_list = compsep_solver.solve()
+            compsep_solver = CompSepSolver(detector_data,
+                                           params, comm_local, pol=False)
+            comp_list = compsep_solver.solve(comp_list)
             if params.make_plots and compsep_rank:
                 plotting.plot_cg_res(params, chain, iter, compsep_solver.CG_residuals)
 
         color = 0 if detector_data.map_sky[1] is not None else MPI.UNDEFINED
         comm_local = compsep_comm.Split(color, key=compsep_rank)
+
+        #TODO: the polarized and non polarized should be called on different ranks.
         if color == 0:
-            compsep_solver = CompSepSolver(comp_list, np.array(detector_data.map_sky[1:]),
-                                           np.array(detector_data.map_rms[1:]), detector_data.nu,
-                                           detector_data.fwhm, params, comm_local, pol=True)
+            compsep_solver = CompSepSolver(comp_list, detector_data,
+                                           params, comm_local, pol=True)
             comp_list = compsep_solver.solve()
             if params.make_plots and compsep_rank:
                 plotting.plot_cg_res(params, chain, iter, compsep_solver.CG_residuals)

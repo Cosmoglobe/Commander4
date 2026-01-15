@@ -7,16 +7,18 @@ import logging
 from mpi4py import MPI
 from numpy.typing import NDArray
 from typing import Callable
+from copy import deepcopy
 
 from src.python.output.log import logassert
 from src.python.data_models.detector_map import DetectorMap
-from src.python.sky_models.component import DiffuseComponent
+from src.python.sky_models.component import Component, DiffuseComponent
 from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, alm_real2complex,\
     alm_complex2real, gaussian_random_alm, project_alms, almxfl, inplace_add_scaled_vec,\
     inplace_arr_prod, inplace_scale, almlist_dot_complex, almlist_dot_real, map_to_alm, map_to_alm_adjoint
 from src.python.solvers.dense_matrix_math import DenseMatrix
 from src.python.solvers.CG_driver import distributed_CG
 import src.python.solvers.preconditioners as preconditioners
+from src.python.data_models.band import Band
 
 MPI_LIMIT_32BIT = 2**31 - 1
 
@@ -139,171 +141,196 @@ class CompSepSolver:
             = S^{1/2} Y^T M^T {Y^{-1}}^T B^T N^{-1} d
             + S^{1/2}A^TN^{-1/2} eta_1 + S^{-1/2} mu + eta_2.
     """
-    def __init__(self, comp_list: list[DiffuseComponent], map_sky: NDArray, map_rms: NDArray,
-                 freq: float, fwhm: float, params: Bunch, CompSep_comm: MPI.Comm, pol: bool):
+    def __init__(self, det_map: DetectorMap,
+                 params: Bunch, CompSep_comm: MPI.Comm):
+        
         self.logger = logging.getLogger(__name__)
         self.CompSep_comm = CompSep_comm
+        self.my_rank = CompSep_comm.Get_rank()
+        self.det_map = det_map
         self.params = params
+        #self.comp_list = comp_list
+        #self.ncomp = len(comp_list)
+        self.my_band = Band.init_from_detector(det_map = det_map, double_precision = params.CG_float_precision == "double")
+
         if params.CG_float_precision == "single":
             self.float_dtype = np.float32
             self.complex_dtype = np.complex64
         else:
             self.float_dtype = np.float64
             self.complex_dtype = np.complex128
-        self.map_sky = map_sky.astype(self.float_dtype)  # The sky map that my band holds.
-        self.map_inv_var = (1.0/map_rms**2).astype(self.float_dtype)  # The rms map of my band (TODO: this should eventually be abstracted away to a general N^-1 procedure).
-        self.freqs = np.array(CompSep_comm.allgather(freq))
-        self.my_band_npix = map_rms.shape[-1]
-        self.nband = len(self.freqs)
-        self.my_rank = CompSep_comm.Get_rank()
-        self.my_band_nside = hp.npix2nside(self.my_band_npix)
-        self.per_band_nside = np.array(self.CompSep_comm.allgather(self.my_band_nside))
-        self.per_band_npix = 12*self.per_band_nside**2
-        self.my_band_lmax = int(2.5*self.my_band_nside)  # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
-        self.my_band_alm_len_real = ((self.my_band_lmax+1)*(self.my_band_lmax+2))//2
-        self.per_band_lmax = np.array(self.CompSep_comm.allgather(self.my_band_lmax))
-        self.comp_list = comp_list
-        self.pol = pol
-        if pol:  #TODO: Polarized vs non-polarized should be handled more elegantly.
-            self.comps_SED = np.array([comp.get_sed(self.freqs) for comp in comp_list if comp.polarized]).astype(self.float_dtype)
-            self.lmax_per_comp = np.array([comp.lmax for comp in comp_list if comp.polarized])
-            self.per_comp_P_smooth = [comp.P_smoothing_prior.astype(self.float_dtype) for comp in comp_list if comp.polarized]
-            self.per_comp_P_smooth_sqrt = [np.sqrt(comp.P_smoothing_prior.astype(self.float_dtype)) for comp in comp_list if comp.polarized]
-            self.per_comp_P_smooth_inv = [comp.P_smoothing_prior_inv.astype(self.float_dtype) for comp in comp_list if comp.polarized]
-            self.per_comp_P_smooth_inv_sqrt = [np.sqrt(comp.P_smoothing_prior_inv).astype(self.float_dtype) for comp in comp_list if comp.polarized]
-            self.per_comp_spatial_MM = np.array([comp.spatially_varying_MM for comp in comp_list if comp.polarized])
-        else:  # We currently assume that all provided components are to be included in intensity.
-            self.comps_SED = np.array([comp.get_sed(self.freqs) for comp in comp_list]).astype(self.float_dtype)
-            self.lmax_per_comp = np.array([comp.lmax for comp in comp_list])
-            self.per_comp_P_smooth = [comp.P_smoothing_prior.astype(self.float_dtype) for comp in comp_list]
-            self.per_comp_P_smooth_sqrt = [np.sqrt(comp.P_smoothing_prior.astype(self.float_dtype)) for comp in comp_list]
-            self.per_comp_P_smooth_inv = [comp.P_smoothing_prior_inv.astype(self.float_dtype) for comp in comp_list]
-            self.per_comp_P_smooth_inv_sqrt = [np.sqrt(comp.P_smoothing_prior_inv).astype(self.float_dtype) for comp in comp_list]
-            self.per_comp_spatial_MM = np.array([comp.spatially_varying_MM for comp in comp_list])
-        self.ncomp = len(self.comps_SED)
+
+        ### This info should stay within DetectorMap
+        # self.map_sky = map_sky.astype(self.float_dtype)  # The sky map that my band holds.
+        # self.map_inv_var = (1.0/map_rms**2).astype(self.float_dtype)  # The rms map of my band (TODO: this should eventually be abstracted away to a general N^-1 procedure).
+        # self.my_band_npix = map_rms.shape[-1]
+        # self.my_band_nside = hp.npix2nside(self.my_band_npix)
+
+        #This is probably not used (?)
+        # self.per_band_lmax = np.array(self.CompSep_comm.allgather(self.det_map.lmax))
+        # self.per_band_nside = np.array(self.CompSep_comm.allgather(self.my_band_nside))
+        # self.per_band_npix = 12*self.per_band_nside**2
+        # self.nband = len(self.freqs)
+
+        #THIS INFO SHOULD STAY IN THE ComponentClass
+        #self.freqs = np.array(CompSep_comm.allgather(freq))
+        
+        # if pol:  #TODO: Polarized vs non-polarized should be handled more elegantly.
+        #     #self.comps_SED = np.array([comp.get_sed(self.freqs) for comp in comp_list if comp.polarized]).astype(self.float_dtype)
+        #     #self.lmax_per_comp = np.array([comp.lmax for comp in comp_list if comp.polarized])
+        #     # self.per_comp_P_smooth = [comp.P_smoothing_prior.astype(self.float_dtype) for comp in comp_list if comp.polarized]
+        #     # self.per_comp_P_smooth_sqrt = [np.sqrt(comp.P_smoothing_prior.astype(self.float_dtype)) for comp in comp_list if comp.polarized]
+        #     #  self.per_comp_P_smooth_inv = [comp.P_smoothing_prior_inv.astype(self.float_dtype) for comp in comp_list if comp.polarized]
+        #     # self.per_comp_P_smooth_inv_sqrt = [np.sqrt(comp.P_smoothing_prior_inv).astype(self.float_dtype) for comp in comp_list if comp.polarized]
+        #     #  self.per_comp_spatial_MM = np.array([comp.spatially_varying_MM for comp in comp_list if comp.polarized])
+        # else:  # We currently assume that all provided components are to be included in intensity.
+        #     #self.comps_SED = np.array([comp.get_sed(self.freqs) for comp in comp_list]).astype(self.float_dtype)
+        #     #self.lmax_per_comp = np.array([comp.lmax for comp in comp_list])
+        #     # self.per_comp_P_smooth = [comp.P_smoothing_prior.astype(self.float_dtype) for comp in comp_list]
+        #     # self.per_comp_P_smooth_sqrt = [np.sqrt(comp.P_smoothing_prior.astype(self.float_dtype)) for comp in comp_list]
+        #     #  self.per_comp_P_smooth_inv = [comp.P_smoothing_prior_inv.astype(self.float_dtype) for comp in comp_list]
+        #     # self.per_comp_P_smooth_inv_sqrt = [np.sqrt(comp.P_smoothing_prior_inv).astype(self.float_dtype) for comp in comp_list]
+        #     # self.per_comp_spatial_MM = np.array([comp.spatially_varying_MM for comp in comp_list])
+        
         # Real and complex alm representations have different length, so we keep track of both:
         self.alm_len_percomp_complex = np.array([((lmax+1)*(lmax+2))//2 for lmax in self.lmax_per_comp])
         self.alm_len_percomp_real = np.array([(lmax+1)**2 for lmax in self.lmax_per_comp])
-        self.my_band_fwhm_rad = np.deg2rad(fwhm/60.0)
-        # The beam smoothing C(ell) for my band.
-        self.my_band_beam_Cl = hp.gauss_beam(self.my_band_fwhm_rad, self.my_band_lmax)
-        # For simplicity all array will have shapes (1, ...) for non-polarization (and then (2, ...) for polarization).
-        self.npol = 2 if pol else 1
-        self.spin = 2 if pol else 0
 
-        # We will make the component alms a "compact" 1D array when passing it in and out of the LHS matrix.
-        # The following lists tell us where each component starts in this long 1D array.
-        self.alm_start_idx_per_comp = [0]
-        for icomp in range(self.ncomp):
-            self.alm_start_idx_per_comp.append(self.alm_start_idx_per_comp[-1] + self.alm_len_percomp_real[icomp])
-        self.alm_start_idx_per_comp_complex = [0]
-        for icomp in range(self.ncomp):
-            self.alm_start_idx_per_comp_complex.append(self.alm_start_idx_per_comp_complex[-1] + self.alm_len_percomp_complex[icomp])
+        # Defining some convenience parameters, so we can e.g. check the lengths for the alm arrays
+        # without having to if-test what type they are depending on what mode we are in.
+        # if params.CG_real_alm_mode:
+        #     self.alm_dtype = self.float_dtype
+        # else:
+        self.alm_dtype = self.complex_dtype
+
+        # For simplicity all array will have shapes (1, ...) for non-polarization (and then (2, ...) for polarization).
+        self.npol = det_map.npol
+        self.spin = 2 if self.npol else 0
+
         # num-threads is either an int, or a list of one value per thread.
         if isinstance(self.params.nthreads_compsep, int):
             self.nthreads = self.params.nthreads_compsep
         else:
             self.nthreads = self.params.nthreads_compsep[self.CompSep_comm.Get_rank()]
 
-        # Defining some convenience parameters, so we can e.g. check the lengths for the alm arrays
-        # without having to if-test what type they are depending on what mode we are in.
-        if params.CG_real_alm_mode:
-            self.alm_dtype = self.float_dtype
-            self.alm_len_percomp = self.alm_len_percomp_real
-        else:
-            self.alm_dtype = self.complex_dtype
-            self.alm_len_percomp = self.alm_len_percomp_complex
 
+    # def apply_A_old(self, a_in: list[NDArray[np.complexfloating]]) -> NDArray[np.complexfloating]:
+    #     #a_in: alms of the different components
+    #     mythreads = self.nthreads
+    #     alm_len_real = ((self.det_map.lmax+1)*(self.det_map.lmax+2))//2
+    #     band_alms = np.zeros((self.npol, alm_len_real), dtype=self.complex_dtype)
+    #     if (self.per_comp_spatial_MM).any():
+    #         band_map = np.zeros((self.npol, self.my_band_npix), dtype=self.float_dtype)
+    #         for icomp in range(self.ncomp):
+    #             if self.per_comp_spatial_MM[icomp]:  # If this component has a MM that is pixel-depnedent.
+    #                 alm_in_band_space = project_alms(a_in[icomp], self.det_map.lmax)
+    #                 # Y a
+    #                 comp_map = alm_to_map(alm_in_band_space, self.my_band_nside, self.det_map.lmax, spin=self.spin, nthreads=mythreads)
+    #                 # M Y a
+    #                 for ipol in range(self.npol):
+    #                     inplace_add_scaled_vec(band_map[ipol], comp_map[ipol], self.comps_SED[icomp, self.my_rank])
+    #         # Y^-1 M Y a
+    #         # curvedsky.map2alm_healpix(band_map, band_alms, niter=0, spin=self.spin, nthread=mythreads)
+    #         band_alms = map_to_alm(band_map, self.my_band_nside, self.det_map.lmax, spin=self.spin, out=band_alms, nthreads=mythreads)
 
-    def apply_A(self, a_in: list[NDArray[np.complexfloating]]) -> NDArray[np.complexfloating]:
-        mythreads = self.nthreads
-        band_alms = np.zeros((self.npol, self.my_band_alm_len_real), dtype=self.complex_dtype)
-        if (self.per_comp_spatial_MM).any():
-            band_map = np.zeros((self.npol, self.my_band_npix), dtype=self.float_dtype)
-            for icomp in range(self.ncomp):
-                if self.per_comp_spatial_MM[icomp]:  # If this component has a MM that is pixel-depnedent.
-                    alm_in_band_space = project_alms(a_in[icomp], self.my_band_lmax)
-                    # Y a
-                    comp_map = alm_to_map(alm_in_band_space, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
-                    # M Y a
-                    for ipol in range(self.npol):
-                        inplace_add_scaled_vec(band_map[ipol], comp_map[ipol], self.comps_SED[icomp, self.my_rank])
-            # Y^-1 M Y a
-            # curvedsky.map2alm_healpix(band_map, band_alms, niter=0, spin=self.spin, nthread=mythreads)
-            band_alms = map_to_alm(band_map, self.my_band_nside, self.my_band_lmax, spin=self.spin, out=band_alms, nthreads=mythreads)
+    #     for icomp in range(self.ncomp):
+    #         if not self.per_comp_spatial_MM[icomp]:
+    #             alm_in_band_space = project_alms(a_in[icomp], self.det_map.lmax)
+    #             for ipol in range(self.npol):
+    #                 inplace_add_scaled_vec(band_alms[ipol], alm_in_band_space[ipol], self.comps_SED[icomp, self.my_rank])
+    #     # B Y^-1 M Y a
+    #     self.det_map.apply_B(band_alms)
 
-        for icomp in range(self.ncomp):
-            if not self.per_comp_spatial_MM[icomp]:
-                alm_in_band_space = project_alms(a_in[icomp], self.my_band_lmax)
-                for ipol in range(self.npol):
-                    inplace_add_scaled_vec(band_alms[ipol], alm_in_band_space[ipol], self.comps_SED[icomp, self.my_rank])
+    #     return band_alms
+    
+
+    def project_all_comps_to_band(self, comp_list_in: list[Component], band_out:Band, inplace=True) -> NDArray[np.complexfloating]:
+        """
+        Projects all the components in comp_list_in to the band_out object, and updates it in-place.
+
+        In Commander4 notation, applies A matrix, from comp list to band alms.
+        """
+
+        for comp in comp_list_in:
+            comp.project_comp_to_band(band_out, nthreads=self.nthreads)
         # B Y^-1 M Y a
-        for ipol in range(self.npol):
-            almxfl(band_alms[ipol], self.my_band_beam_Cl, inplace=True)
-
-        return band_alms
+        alm_out = self.det_map.apply_B(band_out.alms)
+        return alm_out
 
 
+    def eval_all_comps_from_band(self, band_in:Band, comp_list_out:list[Component], inplace=True) -> list[Component]:
+        """
+        Evaluates the band_in's contribution to all the comp_list_out objects, and stores them in-place by default.
 
-    def apply_A_adjoint(self, a_in: NDArray[np.complexfloating]) -> list[NDArray[np.complexfloating]]:
-        mythreads = self.nthreads
-        a_final = [np.zeros((self.npol, self.alm_len_percomp_complex[icomp]), dtype=self.complex_dtype) for icomp in range(self.ncomp)]
+        In Commander4 notation, applies A_adj matrix, from band alms to comp list.
+        """
 
         # B^T a
-        for ipol in range(self.npol):
-            almxfl(a_in[ipol], self.my_band_beam_Cl, inplace=True)
+        self.det_map.apply_B(band_in.alms) #TODO: make band an argument, rather than inplicitly taking the one from self.
+        
+        # Y^T M^T Y^-1^T B^T a
+        for comp in comp_list_out:
+            comp.eval_comp_from_band(band_in, nthreads=self.nthreads)
+        return comp_list_out
 
-        if (self.per_comp_spatial_MM).any():
-            band_map = np.zeros((self.npol, self.my_band_npix), dtype=self.float_dtype)
-            # Y^-1^T B^T a
-            # curvedsky.map2alm_healpix(band_map, a_in, niter=0, adjoint=True, spin=self.spin, nthread=mythreads)
-            band_map = map_to_alm_adjoint(a_in, self.my_band_nside, self.my_band_lmax, spin=self.spin, out=band_map, nthreads=mythreads)
-            for icomp in range(self.ncomp):
-                if self.per_comp_spatial_MM[icomp]:
-                    local_comp_lmax = self.lmax_per_comp[icomp]
+    # def apply_A_adjoint_old(self, a_in: NDArray[np.complexfloating]) -> list[NDArray[np.complexfloating]]:
+    #     mythreads = self.nthreads
+    #     a_final = [np.zeros((self.npol, self.alm_len_percomp_complex[icomp]), dtype=self.complex_dtype) for icomp in range(self.ncomp)]
 
-                    # M^T Y^-1 B^T a
-                    tmp_map = band_map.copy()
-                    for ipol in range(self.npol):
-                        inplace_scale(tmp_map[ipol], self.comps_SED[icomp,self.my_rank])
+    #     # B^T a
+    #     self.det_map.apply_B(a_in)
 
-                    # Y^T M^T Y^-1^T B^T a
-                    tmp_alm = alm_to_map_adjoint(tmp_map, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
+    #     if (self.per_comp_spatial_MM).any():
+    #         band_map = np.zeros((self.npol, self.my_band_npix), dtype=self.float_dtype)
+    #         # Y^-1^T B^T a
+    #         # curvedsky.map2alm_healpix(band_map, a_in, niter=0, adjoint=True, spin=self.spin, nthread=mythreads)
+    #         band_map = map_to_alm_adjoint(a_in, self.my_band_nside, self.det_map.lmax, spin=self.spin, out=band_map, nthreads=mythreads)
+    #         for icomp in range(self.ncomp):
+    #             if self.per_comp_spatial_MM[icomp]:
+    #                 local_comp_lmax = self.lmax_per_comp[icomp]
 
-                    # Project alm from band to component lmax.
-                    summed_alms_for_comp = project_alms(tmp_alm, local_comp_lmax)
-                    a_final[icomp][:] = summed_alms_for_comp
+    #                 # M^T Y^-1 B^T a
+    #                 tmp_map = band_map.copy()
+    #                 for ipol in range(self.npol):
+    #                     inplace_scale(tmp_map[ipol], self.comps_SED[icomp,self.my_rank])
 
-        # For the components that don't have spatially dependent mixing matrix, we do it all in alm-space:
-        for icomp in range(self.ncomp):
-            if not self.per_comp_spatial_MM[icomp]:
-                local_comp_lmax = self.lmax_per_comp[icomp]
-                tmp_alm = a_in.copy()
-                for ipol in range(self.npol):
-                    inplace_scale(tmp_alm[ipol], self.comps_SED[icomp,self.my_rank])
-                a_final[icomp][:] = project_alms(tmp_alm, local_comp_lmax)
+    #                 # Y^T M^T Y^-1^T B^T a
+    #                 tmp_alm = alm_to_map_adjoint(tmp_map, self.my_band_nside, self.det_map.lmax, spin=self.spin, nthreads=mythreads)
 
-        return a_final
+    #                 # Project alm from band to component lmax.
+    #                 summed_alms_for_comp = project_alms(tmp_alm, local_comp_lmax)
+    #                 a_final[icomp][:] = summed_alms_for_comp
 
+    #     # For the components that don't have spatially dependent mixing matrix, we do it all in alm-space:
+    #     for icomp in range(self.ncomp):
+    #         if not self.per_comp_spatial_MM[icomp]:
+    #             local_comp_lmax = self.lmax_per_comp[icomp]
+    #             tmp_alm = a_in.copy()
+    #             for ipol in range(self.npol):
+    #                 inplace_scale(tmp_alm[ipol], self.comps_SED[icomp,self.my_rank])
+    #             a_final[icomp][:] = project_alms(tmp_alm, local_comp_lmax)
 
-
-    def apply_N_inv(self, a):
-        mythreads = self.nthreads
-
-        # Y a
-        a = alm_to_map(a, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
-
-        # N^-1 Y a
-        for ipol in range(self.npol):
-            inplace_arr_prod(a[ipol], self.map_inv_var[ipol])
-
-        # Y^T N^-1 Y a
-        a = alm_to_map_adjoint(a, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
-
-        return a
+    #     return a_final
 
 
-    def apply_LHS_matrix(self, a_in: list[NDArray[np.complexfloating]]) -> list[NDArray[np.complexfloating]]:
+
+    # def apply_N_inv(self, a):
+    #     mythreads = self.nthreads
+
+    #     # Y a
+    #     a = alm_to_map(a, self.my_band_nside, self.det_map.lmax, spin=self.spin, nthreads=mythreads)
+
+    #     # N^-1 Y a
+    #     for ipol in range(self.npol):
+    #         inplace_arr_prod(a[ipol], self.map_inv_var[ipol])
+
+    #     # Y^T N^-1 Y a
+    #     a = alm_to_map_adjoint(a, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
+
+    #     return a
+
+
+    def apply_LHS_matrix(self, comp_list_in: list[Component]) -> list[Component]:
         #This a_in should become a list of Component objects instead. 
         """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of
             the Ax=b system for global component separation. The full A matrix is:
@@ -311,100 +338,82 @@ class CompSepSolver:
             This function should be called by all ranks holding a frequency map, even if they do
             not hold a compoenent, as they are still needed to compute the LHS operation.
             Args:
-                a_in (np.array): The a_lm of the component residing on this MPI rank.
-                                 Should have shape (npol, nalm). Should be a zero-sized array
-                                 for MPI ranks not holding a component.)
+                a_in (list[Component]): List of Components contributing to the local band
             Returns:
                 Aa (np.array): The result of applying A to the input alms. Will return a zero-sized
                                array if this MPI rank does not hold a component.                               
         """
         logger = logging.getLogger(__name__)
         myrank = self.CompSep_comm.Get_rank()
-        if myrank == 0:
-            logassert(len(a_in) == self.ncomp, "Length of a_in list doesn't match ncomp: "
-                      f"{len(a_in)} vs {self.ncomp}", logger)
-            for icomp in range(self.ncomp):
-                logassert(a_in[icomp].dtype == self.alm_dtype, f"a_in is type {a_in[icomp].dtype}, "
-                          f"not the expected {self.alm_dtype}.", logger)
-                logassert(a_in[icomp].shape == (self.npol, self.alm_len_percomp[icomp]),
-                          f"a_in comp nr {icomp} has unexpected shape {a_in[icomp].shape} and not"
-                          f"{(self.npol, self.alm_len_percomp[icomp])}", logger)
 
-        # Create empty a array for all ranks.
-        a = [np.zeros((self.npol, self.alm_len_percomp_complex[icomp]), dtype=self.complex_dtype) for icomp in range(self.ncomp)]
         if myrank == 0:  # this task actually holds a component
-            for icomp in range(self.ncomp):
-                if self.params.CG_real_alm_mode:
-                    a[icomp] = alm_real2complex(a_in[icomp], self.lmax_per_comp[icomp]) # Convert the real input alms to complex alms.
-                else:
-                    a[icomp][:] = a_in[icomp][:]
-                for ipol in range(self.npol):
-                    # S^{1/2} a
-                    almxfl(a[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
+            comp_list = deepcopy(comp_list_in)
+            for comp in comp_list:
+                # S^{1/2} a
+                comp.apply_smoothing_prior_sqrt()
 
         # Spread initial a to all ranks from master.
         # NB: For some stupid reason the non-blocking mpi4py calls do not have 64-bit length support
         # and are therefore limited to <2GB arrays... We have to fallback to blocking communication
         # for >2GB arrays. In the future we should probably implement chunking instead.
-        requests = []
-        for icomp in range(self.ncomp):
-            if a[icomp].nbytes > MPI_LIMIT_32BIT:
-                print(f"Fallback to blocking comm (array size = {a[icomp].nbytes:.2e}B)")
-                req = self.CompSep_comm.Bcast(a[icomp], root=0)
-            else:
-                req = self.CompSep_comm.Ibcast(a[icomp], root=0)
-                requests.append(req)
-        for request in requests:
-            MPI.Request.Wait(request)
+
+            # here I think the non blocking is useless.
+        for comp in comp_list:
+            comp.bcast_data_blocking(self.CompSep_comm)
+        # requests = []
+        # for comp in comp_list:
+        #     if comp_list[icomp].nbytes > MPI_LIMIT_32BIT:
+        #         print(f"Fallback to blocking comm (array size = {comp.nbytes:.2e}B)")
+        #         comp.bcast_data_blocking(self.CompSep_comm)
+        #     else:
+        #         req = comp.bcast_data_non_blocking(self.CompSep_comm)
+        #         requests.append(req)
+        # for request in requests:
+        #     MPI.Request.Wait(request)
 
         # B Y^-1 M Y S^{1/2} a
-        a = self.apply_A(a)
+        self.project_all_comps_to_band(comp_list, self.my_band)
 
         # Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
-        a = self.apply_N_inv(a)
+        self.det_map.apply_inv_N_alm(self.my_band.alms, nthreads=self.nthreads)
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
-        a = self.apply_A_adjoint(a)
+        self.eval_all_comps_from_band(self.my_band, comp_list)
 
         # Accumulate solution on master
-        biggest_size_bytes = np.max([_array.nbytes for _array in a])
+        biggest_size_bytes = np.max([_array.nbytes for _array in comp_list._data])
         use_blocking = biggest_size_bytes > MPI_LIMIT_32BIT
         if use_blocking:
             print(f"Fallback to blocking comm (array size = {biggest_size_bytes:.2e}B)")
-            for icomp in range(self.ncomp):
-                send, recv = (MPI.IN_PLACE, a[icomp]) if myrank == 0 else (a[icomp], None)
-                self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=0)
+            for comp in comp_list:
+                comp.accum_data_blocking(self.CompSep_comm)
+
         else:
             requests = []
-            for icomp in range(self.ncomp):
-                send, recv = (MPI.IN_PLACE, a[icomp]) if myrank == 0 else (a[icomp], None)
-                req = self.CompSep_comm.Ireduce(send, recv, op=MPI.SUM, root=0)
+            for comp in comp_list:
+                req = comp.accum_data_non_blocking(self.CompSep_comm)
                 requests.append(req)
 
         if myrank == 0:
-            for icomp in range(self.ncomp):
+            for icomp in range(len(comp_list)):
                 # Since we used non-blocking reduce, master rank can start working on components
                 # as they are received instead of waiting for all to be received.
                 if not use_blocking:
-                    requests[icomp].Wait()  # Wait until all data for component icomp has been received.
-                for ipol in range(self.npol):
-                    # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
-                    almxfl(a[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
-                if self.params.CG_real_alm_mode:
-                    # If in real-alm mode, convert complex alm back to real before returning.
-                    a[icomp] = alm_complex2real(a[icomp], self.lmax_per_comp[icomp])
+                    MPI.Request.Wait(requests[icomp])  # Wait until all data for component icomp has been received.
+                # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
+                comp_list[icomp].apply_smoothing_prior_sqrt()
                 # Adds input vector to output, since (1 + S^{1/2}...)a = a + (S^{1/2}...)a
-                a[icomp] += a_in[icomp]
+                comp_list[icomp] += comp_list_in[icomp]
         else: # Worker ranks just wait for all their sends to complete.
             if not use_blocking:
                 for icomp in range(self.ncomp):
                     MPI.Request.Wait(requests[icomp])
-            a = []
+            comp_list = []
 
-        return a
+        return comp_list
 
 
-    def calc_RHS_mean(self) -> list[NDArray[np.complexfloating]]:
+    def calc_RHS_mean(self, comp_list: list[Component]) -> list[Component]:
         """ Caculates the right-hand-side b-vector of the Ax=b CompSep equation for the Wiener filtered (or mean-field) solution.
             If used alone on the right-hand-side, gives the deterministic maximum likelihood map-space solution, but a biased PS solution.
         """
@@ -412,15 +421,18 @@ class CompSepSolver:
         mythreads = self.nthreads
 
         # N^-1 d
-        b = self.map_sky * self.map_inv_var
+        b_map = self.det_map.apply_inv_N_map(self.det_map.map_sky)
 
         # # Y^T N^-1 d
-        b = alm_to_map_adjoint(b, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
+        b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin, nthreads=mythreads)
+
+        b_band = Band.init_from_detector(det_map = self.det_map, double_precision = self.params.CG_float_precision == "double")
+        b_band.alms = b_alm
 
         # (Y^T M^T Y^-1^T B^T) Y^T N^-1 d
-        b = self.apply_A_adjoint(b)
+        b = self.eval_all_comps_from_band(b_band, comp_list)
 
-        for icomp in range(self.ncomp):
+        for icomp in range(len(comp_list)):
             # Accumulate solution on master
             send, recv = (MPI.IN_PLACE, b[icomp]) if myrank == 0 else (b[icomp], None)
             self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=0)
@@ -432,8 +444,8 @@ class CompSepSolver:
 
         if myrank == 0:
             for icomp in range(self.ncomp):
-                if self.params.CG_real_alm_mode:
-                    b[icomp] = alm_complex2real(b[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
+                # if self.params.CG_real_alm_mode:
+                #     b[icomp] = alm_complex2real(b[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
                 self.logger.info(f"RHS1 comp-{icomp}: {np.mean(np.abs(b[icomp])):.2e}")
         else:
             b = []
@@ -441,7 +453,7 @@ class CompSepSolver:
         return b
 
 
-    def calc_RHS_fluct(self) -> list[NDArray[np.complexfloating]]:
+    def calc_RHS_fluct(self, comp_list: list[Component]) -> list[Component]:
         """ Calculates the right-hand-side fluctuation vector. Provides unbiased realizations (of foregrounds or the CMB) if added
             together with the right-hand-side of the Wiener filtered solution : Ax = b_mean + b_fluct.
         """
@@ -449,13 +461,13 @@ class CompSepSolver:
         myrank = self.CompSep_comm.Get_rank()
 
         # eta_1
-        b = np.random.normal(0.0, 1.0, self.map_inv_var.shape)
+        b = np.random.normal(0.0, 1.0, self.det_map.inv_var_map.shape)
 
         # N^-1/2 eta_1
-        b *= np.sqrt(self.map_inv_var)
+        b *= np.sqrt(self.det_map.inv_var_map)
 
         # Y^T N^-1 eta_1
-        b = alm_to_map_adjoint(b, self.my_band_nside, self.my_band_lmax, spin=self.spin, nthreads=mythreads)
+        b = alm_to_map_adjoint(b, self.my_band.nside, self.my_band.lmax, spin=self.spin, nthreads=mythreads)
 
         # (Y^T M^T Y^-1^T B^T) Y^T N^-1 eta_1
         b = self.apply_A_adjoint(b)
@@ -472,8 +484,8 @@ class CompSepSolver:
         
         if myrank == 0:
             for icomp in range(self.ncomp):
-                if self.params.CG_real_alm_mode:
-                    b[icomp] = alm_complex2real(b[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
+                # if self.params.CG_real_alm_mode:
+                #     b[icomp] = alm_complex2real(b[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
                 self.logger.info(f"RHS2 comp-{icomp}: {np.mean(np.abs(b[icomp])):.2e}")
         else:
             b = np.zeros((0,), dtype=self.float_dtype)  # zero-sized array
@@ -481,41 +493,46 @@ class CompSepSolver:
         return b
 
 
-    def calc_RHS_prior_mean(self) -> list[NDArray[np.complexfloating]]:
+    def calc_RHS_prior_mean(self, comp_list: list[Component]) -> list[NDArray[np.complexfloating]]:
         myrank = self.CompSep_comm.Get_rank()
         if myrank == 0:
             # Currently this will always return 0, since we have not yet implemented support for a spatial prior,
             # but when we do it will go here.
-            mu = [np.zeros((self.npol, self.alm_len_percomp_complex[icomp]), dtype=self.complex_dtype) for icomp in range(self.ncomp)]
-            for icomp in range(self.ncomp):
+            mu_s = []
+            for comp in comp_list:
+                mu = np.zeros((self.npol, comp.alm_len_complex), dtype=self.complex_dtype)
                 for ipol in range(self.npol):
-                    almxfl(mu[icomp][ipol], self.per_comp_P_smooth_inv[icomp], inplace=True)
-                if self.params.CG_real_alm_mode:
-                    mu[icomp] = alm_complex2real(mu[icomp], self.lmax_per_comp[icomp])
-                self.logger.info(f"RHS3 comp-{icomp}: {np.mean(np.abs(mu[icomp])):.2e}")
+                    almxfl(mu[ipol], comp.P_smoothing_prior.astype(self.float_dtype), inplace=True)
+                # if self.params.CG_real_alm_mode:
+                #     mu = alm_complex2real(mu, comp.lmax)
+                self.logger.info(f"RHS3 comp-{comp.longname}: {np.mean(np.abs(mu)):.2e}")
+                mu_s.append(mu)
         else:
-            mu = np.zeros((0,), dtype=self.float_dtype)
-        return mu
+            mu_s = np.zeros((0,), dtype=self.float_dtype)
+        return mu_s
 
 
-    def calc_RHS_prior_fluct(self) -> list[NDArray[np.complexfloating]]:
+    def calc_RHS_prior_fluct(self, comp_list: list[Component]) -> list[NDArray[np.complexfloating]]:
         myrank = self.CompSep_comm.Get_rank()
         if myrank == 0:
-            eta2 = [np.zeros((self.npol, self.alm_len_percomp_complex[icomp]), dtype=self.complex_dtype) for icomp in range(self.ncomp)]
-            for icomp in range(self.ncomp):
+            eta2_s = []
+            for comp in comp_list:
+                eta2 = np.zeros((self.npol, comp.alm_len_complex), dtype=self.complex_dtype)
                 for ipol in range(self.npol):
-                    eta2[icomp][ipol] = gaussian_random_alm(self.lmax_per_comp[icomp], self.lmax_per_comp[icomp], self.spin, 1)
-                if self.params.CG_real_alm_mode:
-                    eta2[icomp] = alm_complex2real(eta2[icomp], self.lmax_per_comp[icomp])
-                self.logger.info(f"RHS4 comp-{icomp}: {np.mean(np.abs(eta2[icomp])):.2e}")
+                    eta2[ipol] = gaussian_random_alm(comp.lmax, comp.lmax, self.spin, 1)
+                # if self.params.CG_real_alm_mode:
+                #     eta2 = alm_complex2real(eta2, comp.lmax)
+                self.logger.info(f"RHS4 comp-{comp.longname}: {np.mean(np.abs(eta2)):.2e}")
+                eta2_s.append(eta2)
         else:
-            eta2 = np.zeros((0,), dtype=self.float_dtype)
-        return eta2
+            eta2_s = np.zeros((0,), dtype=self.float_dtype)
+        return eta2_s
 
 
+#TODO: all the lists of alms vectors are replaced by lists of components. This will allow to have custom overload of math functions such as dot products specifically tailored for some components such as point sources
 
-    def solve_CG(self, LHS: Callable, RHS: list[NDArray[np.complexfloating]], x0 = None, M = None,
-                 x_true = None) -> list[NDArray[np.complexfloating]]:
+    def solve_CG(self, LHS: Callable, RHS: list[Component], x0 = None, M = None,
+                 x_true = None) -> list[Component]:
         """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG from the pixell package.
             Assumes that both x and b are in alm space.
 
@@ -529,14 +546,14 @@ class CompSepSolver:
                 m_bestfit (list): The resulting best-fit solution, for the component held by this
                                   rank, as a list of alm-vectors for each component.
         """
-        max_iter = self.params.CG_max_iter_pol if self.pol else self.params.CG_max_iter
+        max_iter = self.params.CG_max_iter_pol if self.det_map.pol else self.params.CG_max_iter
 
         logger = logging.getLogger(__name__)
         checkpoint_interval = 5
         master = self.CompSep_comm.Get_rank() == 0
         mycomp = self.CompSep_comm.Get_rank()
 
-        mydot = almlist_dot_real if self.params.CG_real_alm_mode else almlist_dot_complex
+        mydot = almlist_dot_complex # almlist_dot_real if self.params.CG_real_alm_mode else almlist_dot_complex
         
         if M is None:
             CG_solver = distributed_CG(LHS, RHS, master, dot=mydot, x0=x0, destroy_b=True)
@@ -586,9 +603,9 @@ class CompSepSolver:
         if master:
             s_bestfit_list = CG_solver.x
             for icomp in range(self.ncomp):
-                if self.params.CG_real_alm_mode:
-                    s_bestfit_list[icomp] = alm_real2complex(s_bestfit_list[icomp],
-                                                             self.lmax_per_comp[icomp])
+                # if self.params.CG_real_alm_mode:
+                #     s_bestfit_list[icomp] = alm_real2complex(s_bestfit_list[icomp],
+                #                                              self.lmax_per_comp[icomp])
                 for ipol in range(self.npol):
                     almxfl(s_bestfit_list[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
         else:
