@@ -15,6 +15,11 @@ from math import sqrt
 from numba import njit, prange
 from scipy.linalg import blas as blas_wrapper
 
+import typing
+if typing.TYPE_CHECKING:  # Only import when performing type checking, avoiding circular import during normal runtime.
+    from src.python.solvers.comp_sep_solvers import CompSepSolver
+    from src.python.sky_models.component import Component
+
 
 ###### NUMPY REPLACEMENTS ######
 # Collection of Numba functions and BLAS wrappers for simply array manipulation.
@@ -74,6 +79,14 @@ def inplace_arr_add(arr_main, arr_add):
         flat1[i] += flat2[i]
 
 @njit(fastmath=True, parallel=True)
+def inplace_arr_sub(arr_main, arr_add):
+    assert(arr_main.shape==arr_add.shape)
+    flat1 = arr_main.ravel()
+    flat2 = arr_add.ravel()
+    for i in prange(arr_main.size):
+        flat1[i] -= flat2[i]
+
+@njit(fastmath=True, parallel=True)
 def inplace_arr_prod(arr_main, arr_prod):
     len = arr_main.size
     assert(arr_main.shape==arr_prod.shape)
@@ -81,6 +94,15 @@ def inplace_arr_prod(arr_main, arr_prod):
     flat2 = arr_prod.ravel()
     for i in prange(len):
         flat1[i] *= flat2[i]
+
+@njit(fastmath=True, parallel=True)
+def inplace_arr_truediv(arr_main, arr_prod):
+    len = arr_main.size
+    assert(arr_main.shape==arr_prod.shape)
+    flat1 = arr_main.ravel()
+    flat2 = arr_prod.ravel()
+    for i in prange(len):
+        flat1[i] /= flat2[i]
 
 @njit(fastmath=True, parallel=True)
 def inplace_scale(arr_main, scalar_prod):
@@ -188,6 +210,40 @@ def almlist_dot_real(alm_list1, alm_list2):
     return res
 
 
+###### COMP-LIST FUNCTIONS ######
+# These functions are common array operations, but made to work on the comp-lists, which are
+# lists of Component objects, each containing component-specifically formatted data.
+
+def inplace_complist_add_scaled_array(list_inplace:list[Component], list_other:list[Component], scalar):
+    """ `list_inplace += scalar*list_other`
+    """
+    if len(list_inplace) != len(list_other):
+        raise ValueError("Component lists must match in length.")
+    
+    for ci, co in zip(list_inplace, list_other):
+        inplace_add_scaled_vec(ci._data, co._data, scalar)
+
+def inplace_complist_scale_and_add(list_inplace:list[Component], list_other:list[Component], scalar):
+    """ `list_inplace = scalar*list_inplace + list_other`
+    """
+    if len(list_inplace) != len(list_other):
+        raise ValueError("Component lists must match in length.")
+
+    for ci, co in zip(list_inplace, list_other):
+        inplace_scale_add(ci._data, co._data, scalar)
+
+def complist_dot(comp_list1:list[Component], comp_list2:list[Component]) -> float:
+    """ `dot(comp_list1, comp_list2)`. Calculates the correct dot product between two lists of Component 
+        where the alms follow the Healpy complex storing convention, for components with alms.
+        For othe kind of components it will automatically handle the correct dot product definition.
+    """
+    if len(comp_list1) != len(comp_list2):
+        raise ValueError("Component lists must match in length.")
+    
+    res = 0.0
+    for c1, c2 in zip(comp_list1, comp_list2):
+        res += c1 @ c2
+    return res
 
 
 ###### GENERAL MATH STUFF ######
@@ -219,7 +275,6 @@ def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray[np.f
     # symmetric for forward and reverse Fourier when doing rfft as supposed to regular fft.
     # inorm = 2 tells ducc to normalize by dividing by ntod, which is the same as what scipy does.
     return ducc0.fft.c2r(data_f, lastsize=ntod, forward=False, nthreads=nthreads, inorm=2)
-
 
 
 ##### GENERAL ALM STUFF ############

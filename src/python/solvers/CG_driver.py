@@ -1,9 +1,9 @@
 import numpy as np
 import logging
-from src.python.utils.math_operations import inplace_almlist_add_scaled_array, inplace_almlist_scale_and_add
+from src.python.utils.math_operations import inplace_complist_add_scaled_array, inplace_complist_scale_and_add, complist_dot
 
 def default_M(x):     return np.copy(x)
-def default_dot(a,b): return a.dot(np.conj(b))
+default_dot = complist_dot
 
 class distributed_CG:
     """Preconditioner borrowed from pixell.utils, and modified to accomodate both the distributed
@@ -40,6 +40,7 @@ class distributed_CG:
             self.p   = z
         else:
             self.p = []
+            
     def step(self):
         """Take a single step in the iteration. Results in .x, .i
         and .err being updated. To solve the system, call step() in
@@ -52,10 +53,10 @@ class distributed_CG:
             alpha = self.rz/self.dot(self.p, Ap)
 
             # Line below equivalent to: self.x = [_x + alpha*_p for _x, _p in zip(self.x, self.p)]
-            inplace_almlist_add_scaled_array(self.x, self.p, alpha)
+            inplace_complist_add_scaled_array(self.x, self.p, alpha)
 
             # Line below equivalent to: self.r = [_r - alpha*_Ap for _r, _Ap in zip(self.r, Ap)]
-            inplace_almlist_add_scaled_array(self.r, Ap, -alpha)
+            inplace_complist_add_scaled_array(self.r, Ap, -alpha)
 
             del Ap
             z       = self.M(self.r)
@@ -65,5 +66,5 @@ class distributed_CG:
             self.rz = next_rz
 
             # Line below equivalent to: self.p = [_p*beta + _z for _p, _z in zip(self.p, z)]
-            inplace_almlist_scale_and_add(self.p, z, beta)
+            inplace_complist_scale_and_add(self.p, z, beta)
         self.i += 1

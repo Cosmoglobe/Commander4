@@ -12,8 +12,9 @@ from typing import Callable
 from mpi4py import MPI
 
 from src.python.output import log
-from src.python.utils.math_operations import alm_to_map, map_to_alm, project_alms, inplace_scale, inplace_arr_add,\
-        inplace_add_scaled_vec, map_to_alm_adjoint, alm_to_map_adjoint, almxfl
+from src.python.utils.math_operations import alm_to_map, map_to_alm, project_alms, inplace_scale,\
+        inplace_add_scaled_vec, map_to_alm_adjoint, alm_to_map_adjoint, almxfl,\
+        inplace_arr_add, inplace_arr_sub, inplace_arr_prod, inplace_arr_truediv, dot, _dot_complex_alm_1D_arrays
 from src.python.utils.map_utils import fwhm2sigma, gauss_beam, get_gauss_beam_radius
 from src.python.data_models.band import Band
 
@@ -39,13 +40,29 @@ class Component:
         self.shortname = comp_params.shortname if "shortname" in comp_params else "comp"
         self._data = None
 
+    @property
+    def pol(self):
+        if self._data is not None:
+            return False if self._data.shape[0] == 1 else True
+        else:
+            return False
+        
+    @property
+    def npol(self):
+        if self._data is not None:
+            return self._data.shape[0]
+        else:
+            return 0
+    
     def __add__(self, other):
         if type(self) is not type(other):
             raise TypeError("Both operands must be of the same Component type.")
         if self._data is None or other._data is None:
             raise ValueError("Cannot add Components with no data.")
+        if self._data.shape != other._data.shape:
+            raise ValueError("Data arrays of the two Components must match in size.")
         out = deepcopy(self)
-        out._data = self._data + other._data
+        inplace_arr_add(out._data, other._data)
         return out
     
     def __iadd__(self, other):
@@ -53,7 +70,9 @@ class Component:
             raise TypeError("Both operands must be of the same Component type.")
         if self._data is None or other._data is None:
             raise ValueError("Cannot add Components with no data.")
-        self._data += other._data
+        if self._data.shape != other._data.shape:
+            raise ValueError("Data arrays of the two Components must match in size.")
+        inplace_arr_add(self._data, other._data)
         return self
     
     def __sub__(self, other):
@@ -61,8 +80,10 @@ class Component:
             raise TypeError("Both operands must be of the same Component type.")
         if self._data is None or other._data is None:
             raise ValueError("Cannot add Components with no data.")
+        if self._data.shape != other._data.shape:
+            raise ValueError("Data arrays of the two Components must match in size.")
         out = deepcopy(self)
-        out._data = self._data - other._data
+        inplace_arr_sub(out._data, other._data)
         return out
     
     def __isub__(self, other):
@@ -70,7 +91,9 @@ class Component:
             raise TypeError("Both operands must be of the same Component type.")
         if self._data is None or other._data is None:
             raise ValueError("Cannot add Components with no data.")
-        self._data -= other._data
+        if self._data.shape != other._data.shape:
+            raise ValueError("Data arrays of the two Components must match in size.")
+        inplace_arr_add(self._data, other._data)
         return self
     
     def __mul__(self, other):
@@ -78,8 +101,10 @@ class Component:
             raise TypeError("Both operands must be of the same Component type.")
         if self._data is None or other._data is None:
             raise ValueError("Cannot add Components with no data.")
+        if self._data.shape != other._data.shape:
+            raise ValueError("Data arrays of the two Components must match in size.")
         out = deepcopy(self)
-        out._data = self._data * other._data
+        inplace_arr_prod(out._data, other._data)
         return out
     
     def __imul__(self, other):
@@ -87,7 +112,9 @@ class Component:
             raise TypeError("Both operands must be of the same Component type.")
         if self._data is None or other._data is None:
             raise ValueError("Cannot add Components with no data.")
-        self._data *= other._data
+        if self._data.shape != other._data.shape:
+            raise ValueError("Data arrays of the two Components must match in size.")
+        inplace_arr_prod(self._data, other._data)
         return self
     
     def __truediv__(self, other):
@@ -95,8 +122,10 @@ class Component:
             raise TypeError("Both operands must be of the same Component type.")
         if self._data is None or other._data is None:
             raise ValueError("Cannot add Components with no data.")
+        if self._data.shape != other._data.shape:
+            raise ValueError("Data arrays of the two Components must match in size.")
         out = deepcopy(self)
-        out._data = self._data / other._data
+        inplace_arr_truediv(out._data, other._data)
         return out
     
     def __itruediv__(self, other):
@@ -104,8 +133,19 @@ class Component:
             raise TypeError("Both operands must be of the same Component type.")
         if self._data is None or other._data is None:
             raise ValueError("Cannot add Components with no data.")
-        self._data /= other._data
+        if self._data.shape != other._data.shape:
+            raise ValueError("Data arrays of the two Components must match in size.")
+        inplace_arr_add(self._data, other._data)
         return self
+    
+    def __matmul__(self, other):
+        if type(self) is not type(other):
+            raise TypeError("Both operands must be of the same Component type.")
+        if self._data is None or other._data is None:
+            raise ValueError("Cannot add Components with no data.")
+        if self._data.shape != other._data.shape:
+            raise ValueError("Data arrays of the two Components must match in size.")
+        return dot(self._data, other._data)
 
     def bcast_data_blocking(self, comm:MPI.Comm, root=0):
         """
@@ -114,7 +154,6 @@ class Component:
         logger = logging.getLogger(__name__)
         log.logassert(isinstance(self._data, np.ndarray), "the data object must be an array", logger)
         comm.Bcast(self._data, root=root)
-
 
     def bcast_data_non_blocking(self, comm:MPI.Comm, root=0):
         """
@@ -135,7 +174,6 @@ class Component:
         send, recv = (MPI.IN_PLACE, self._data) if myrank == root else (self._data, None)
         comm.Reduce(send, recv, op=MPI.SUM, root=root)
 
-
     def accum_data_non_blocking(self, comm:MPI.Comm, root=0):
         """
         Accumulates on the root rank the data object of the component through and MPI reduce with a sum, it only returns the request.
@@ -147,6 +185,28 @@ class Component:
         req = comm.Ireduce(send, recv, op=MPI.SUM, root=root)
         return req
 
+    def __array_function__(self, func, types, args, kwargs):
+        #for numpy func overloads
+        if not all(issubclass(t, Component) for t in types):
+            return NotImplemented
+
+        if func is np.zeros_like:
+            return self._zeros_like(*args, **kwargs)
+
+        return NotImplemented
+
+    def _zeros_like(self, other, dtype=None, order='K', subok=True, shape=None):
+        zeros = np.zeros_like(
+            other._data,
+            dtype=dtype,
+            order=order,
+            subok=subok,
+            shape=shape,
+        )
+        out = deepcopy(other)
+        out._data = zeros
+        return out
+
 # Second tier component classes
 class DiffuseComponent(Component):
     def __init__(self, params: Bunch):
@@ -155,7 +215,7 @@ class DiffuseComponent(Component):
         self.lmax = params.lmax
         self.smoothing_prior_FWHM = params.smoothing_prior_FWHM
         self.smoothing_prior_amplitude = params.smoothing_prior_amplitude
-        self._data = np.empty((2 if params.polarized else 1, self.alm_len_complex(self.lmax)))  ##THIS will not be None but an empty np array that will serve as a buffer for the MPI send!!!
+        self._data = np.empty((2 if params.polarized else 1, self.alm_len_complex(self.lmax)))
 
     @property
     def alms(self):
@@ -177,13 +237,6 @@ class DiffuseComponent(Component):
         return self._data.dtype
 
     @property
-    def pol(self):
-        if self._data is not None:
-            return False if self._data.shape[0] == 1 else True
-        else:
-            return False
-
-    @property
     def alm_len_complex(self):
         return ((self.lmax+1)*(self.lmax+2))//2
 
@@ -203,6 +256,9 @@ class DiffuseComponent(Component):
         P_inv[P != 0] = 1.0/P[P != 0]
         return P_inv
     
+    def __repr__(self):
+        return f"Diffuse Component {self.shortname} \n lmax = {self.lmax} \n alms: {self.alms}"
+
     def apply_smoothing_prior_sqrt(self):
         """
         Applies in-place the square root of the smoothing prior to the alms in-place, which are also returned.
@@ -228,6 +284,19 @@ class DiffuseComponent(Component):
     def get_sed(self, nu):
         logger = logging.getLogger(__name__)
         log.lograise(NotImplementedError, "", logger)
+
+    #overwrite of the dot product, as the diffuse component will have alm _data with complex encoding.
+    def __matmul__(self, other):
+        if type(self) is not type(other):
+            raise TypeError("Both operands must be of the same Component type.")
+        if self._data is None or other._data is None:
+            raise ValueError("Cannot add Components with no data.")
+        if self._data.shape != other._data.shape:
+            raise ValueError("Data arrays of the two Components must match in size.")
+
+        for ipol in range(self.npol):
+            res += _dot_complex_alm_1D_arrays(self._data[ipol], other._data[ipol], self.lmax)
+        return dot(self._data, other._data)
 
     def project_comp_to_band(self, band:Band, nthreads: int = 1):
         """
@@ -295,13 +364,6 @@ class DiffuseComponent(Component):
             contrib_to_comp_alm = project_alms(tmp_alm, self.lmax)
         return contrib_to_comp_alm
     
-    def accumulate(self, comm:MPI.Comm, mpi_root:int = 0):
-        """
-        Sums up all the contributions to the component being held on the different ranks of comm
-        reducing them on the rank mpi_root.
-        """
-        return
-
 
 class PointSourceComponent(Component):
     pass
@@ -497,11 +559,18 @@ class SpinningDust(DiffuseComponent):
 # NON DIFFUSE COMPONENTS
 
 class PointSourcesComponent(Component):
-    
     def __init__(self, params: Bunch):
         self.params = params
         self.longname = params.longname if "longname" in params else "Unknown PointSourceComp"
         self.shortname = params.shortname if "shortname" in params else "pscomp"
+
+    @property
+    def pol(self) -> bool:
+        return False
+    
+    @property
+    def npol(self) -> int:
+        return 1
 
 class RadioSources(PointSourcesComponent):
     def __init__(self, params: Bunch):
@@ -599,3 +668,6 @@ class RadioSources(PointSourcesComponent):
         In the case of point sources this is just a dummy, the data object is simply returned.
         """
         return self._data
+
+    def __repr__(self):
+        return f"Radio Source \n amps: {self._data}"

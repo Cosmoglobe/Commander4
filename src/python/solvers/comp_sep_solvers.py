@@ -14,7 +14,8 @@ from src.python.data_models.detector_map import DetectorMap
 from src.python.sky_models.component import Component, DiffuseComponent
 from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, alm_real2complex,\
     alm_complex2real, gaussian_random_alm, project_alms, almxfl, inplace_add_scaled_vec,\
-    inplace_arr_prod, inplace_scale, almlist_dot_complex, almlist_dot_real, map_to_alm, map_to_alm_adjoint
+    inplace_arr_prod, inplace_scale, almlist_dot_complex, almlist_dot_real, map_to_alm,\
+    map_to_alm_adjoint, complist_dot
 from src.python.solvers.dense_matrix_math import DenseMatrix
 from src.python.solvers.CG_driver import distributed_CG
 import src.python.solvers.preconditioners as preconditioners
@@ -425,28 +426,22 @@ class CompSepSolver:
 
         # # Y^T N^-1 d
         b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin, nthreads=mythreads)
-
         b_band = Band.init_from_detector(det_map = self.det_map, double_precision = self.params.CG_float_precision == "double")
         b_band.alms = b_alm
 
         # (Y^T M^T Y^-1^T B^T) Y^T N^-1 d
-        b = self.eval_all_comps_from_band(b_band, comp_list)
+        self.eval_all_comps_from_band(b_band, comp_list)
 
-        for icomp in range(len(comp_list)):
-            # Accumulate solution on master
-            send, recv = (MPI.IN_PLACE, b[icomp]) if myrank == 0 else (b[icomp], None)
-            self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=0)
-
+        # Accumulate solution on master
+        for comp in comp_list:
+            comp.accum_data_blocking(self.CompSep_comm)
             if myrank == 0:
-                for ipol in range(self.npol):
-                    # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 d
-                    almxfl(b[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
+                # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 d
+                comp.apply_smoothing_prior_sqrt()
 
         if myrank == 0:
-            for icomp in range(self.ncomp):
-                # if self.params.CG_real_alm_mode:
-                #     b[icomp] = alm_complex2real(b[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
-                self.logger.info(f"RHS1 comp-{icomp}: {np.mean(np.abs(b[icomp])):.2e}")
+            for comp in comp_list:
+                self.logger.info(f"RHS1 comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
         else:
             b = []
 
@@ -457,43 +452,43 @@ class CompSepSolver:
         """ Calculates the right-hand-side fluctuation vector. Provides unbiased realizations (of foregrounds or the CMB) if added
             together with the right-hand-side of the Wiener filtered solution : Ax = b_mean + b_fluct.
         """
-        mythreads = self.nthreads
         myrank = self.CompSep_comm.Get_rank()
+        mythreads = self.nthreads
 
         # eta_1
-        b = np.random.normal(0.0, 1.0, self.det_map.inv_var_map.shape)
+        b_map = np.random.normal(0.0, 1.0, self.det_map.inv_var_map.shape)
 
         # N^-1/2 eta_1
-        b *= np.sqrt(self.det_map.inv_var_map)
+        b_map *= np.sqrt(self.det_map.inv_var_map)
 
         # Y^T N^-1 eta_1
-        b = alm_to_map_adjoint(b, self.my_band.nside, self.my_band.lmax, spin=self.spin, nthreads=mythreads)
+        b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin, nthreads=mythreads)
+        b_band = Band.init_from_detector(det_map = self.det_map, double_precision = self.params.CG_float_precision == "double")
+        b_band.alms = b_alm
 
         # (Y^T M^T Y^-1^T B^T) Y^T N^-1 eta_1
-        b = self.apply_A_adjoint(b)
+        self.eval_all_comps_from_band(b_band, comp_list)
 
-        for icomp in range(self.ncomp):
-            # Accumulate solution on master
-            send, recv = (MPI.IN_PLACE, b[icomp]) if myrank == 0 else (b[icomp], None)
-            self.CompSep_comm.Reduce(send, recv, op=MPI.SUM, root=0)
-
+        # Accumulate solution on master
+        for comp in comp_list:
+            comp.accum_data_blocking(self.CompSep_comm)
             if myrank == 0:
-                for ipol in range(self.npol):
-                    # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 eta_1
-                    almxfl(b[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
+                # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 eta_1
+                comp.apply_smoothing_prior_sqrt()
         
         if myrank == 0:
-            for icomp in range(self.ncomp):
-                # if self.params.CG_real_alm_mode:
-                #     b[icomp] = alm_complex2real(b[icomp], self.lmax_per_comp[icomp]) # Convert complex alm back to real before returning.
-                self.logger.info(f"RHS2 comp-{icomp}: {np.mean(np.abs(b[icomp])):.2e}")
+            for comp in comp_list:
+                self.logger.info(f"RHS1 comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
         else:
-            b = np.zeros((0,), dtype=self.float_dtype)  # zero-sized array
+            b = []
 
         return b
 
 
-    def calc_RHS_prior_mean(self, comp_list: list[Component]) -> list[NDArray[np.complexfloating]]:
+    def calc_RHS_prior_mean(self, comp_list: list[Component]) -> list[Component]:
+        
+        #FIXME: how will this be for point sources?
+        
         myrank = self.CompSep_comm.Get_rank()
         if myrank == 0:
             # Currently this will always return 0, since we have not yet implemented support for a spatial prior,
@@ -503,16 +498,17 @@ class CompSepSolver:
                 mu = np.zeros((self.npol, comp.alm_len_complex), dtype=self.complex_dtype)
                 for ipol in range(self.npol):
                     almxfl(mu[ipol], comp.P_smoothing_prior.astype(self.float_dtype), inplace=True)
-                # if self.params.CG_real_alm_mode:
-                #     mu = alm_complex2real(mu, comp.lmax)
                 self.logger.info(f"RHS3 comp-{comp.longname}: {np.mean(np.abs(mu)):.2e}")
                 mu_s.append(mu)
         else:
-            mu_s = np.zeros((0,), dtype=self.float_dtype)
+            mu_s = []
         return mu_s
 
 
-    def calc_RHS_prior_fluct(self, comp_list: list[Component]) -> list[NDArray[np.complexfloating]]:
+    def calc_RHS_prior_fluct(self, comp_list: list[Component]) -> list[Component]:
+        
+        #FIXME: how will this be for point sources?
+
         myrank = self.CompSep_comm.Get_rank()
         if myrank == 0:
             eta2_s = []
@@ -520,16 +516,14 @@ class CompSepSolver:
                 eta2 = np.zeros((self.npol, comp.alm_len_complex), dtype=self.complex_dtype)
                 for ipol in range(self.npol):
                     eta2[ipol] = gaussian_random_alm(comp.lmax, comp.lmax, self.spin, 1)
-                # if self.params.CG_real_alm_mode:
-                #     eta2 = alm_complex2real(eta2, comp.lmax)
                 self.logger.info(f"RHS4 comp-{comp.longname}: {np.mean(np.abs(eta2)):.2e}")
                 eta2_s.append(eta2)
         else:
-            eta2_s = np.zeros((0,), dtype=self.float_dtype)
+            eta2_s = []
         return eta2_s
 
 
-#TODO: all the lists of alms vectors are replaced by lists of components. This will allow to have custom overload of math functions such as dot products specifically tailored for some components such as point sources
+#TODO: overload of math functions such as dot products specifically tailored for some components such as point sources
 
     def solve_CG(self, LHS: Callable, RHS: list[Component], x0 = None, M = None,
                  x_true = None) -> list[Component]:
@@ -553,7 +547,7 @@ class CompSepSolver:
         master = self.CompSep_comm.Get_rank() == 0
         mycomp = self.CompSep_comm.Get_rank()
 
-        mydot = almlist_dot_complex # almlist_dot_real if self.params.CG_real_alm_mode else almlist_dot_complex
+        mydot = complist_dot
         
         if M is None:
             CG_solver = distributed_CG(LHS, RHS, master, dot=mydot, x0=x0, destroy_b=True)

@@ -2,14 +2,15 @@ from __future__ import annotations  # Solves NameError arising if performing ear
 import numpy as np
 import healpy as hp
 from mpi4py import MPI
-import typing
 from numpy.typing import NDArray
 from pixell import curvedsky
 from copy import deepcopy
 from src.python.utils.math_operations import alm_real2complex, alm_complex2real
 
+import typing
 if typing.TYPE_CHECKING:  # Only import when performing type checking, avoiding circular import during normal runtime.
     from src.python.solvers.comp_sep_solvers import CompSepSolver
+    from src.python.sky_models.component import Component
 
 
 class NoPreconditioner:
@@ -24,7 +25,7 @@ class NoPreconditioner:
         self.compsep = compsep
 
 
-    def __call__(self, a_array: NDArray):
+    def __call__(self, a_array: NDArray | list[Component]):
         return deepcopy(a_array)
 
 
