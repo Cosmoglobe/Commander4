@@ -209,13 +209,14 @@ class Component:
 
 # Second tier component classes
 class DiffuseComponent(Component):
-    def __init__(self, params: Bunch):
-        super().__init__(params)
-        self.spatially_varying_MM = params.spatially_varying_MM
-        self.lmax = params.lmax
-        self.smoothing_prior_FWHM = params.smoothing_prior_FWHM
-        self.smoothing_prior_amplitude = params.smoothing_prior_amplitude
-        self._data = np.empty((2 if params.polarized else 1, self.alm_len_complex(self.lmax)))
+    def __init__(self, comp_params: Bunch, global_params: Bunch):
+        super().__init__(comp_params, global_params)
+        self.spatially_varying_MM = comp_params.spatially_varying_MM
+        self.lmax = comp_params.lmax
+        self.smoothing_prior_FWHM = comp_params.smoothing_prior_FWHM
+        self.smoothing_prior_amplitude = comp_params.smoothing_prior_amplitude
+        self.double_prec = False if global_params.CG_float_precision == "single" else True
+        self._data = np.empty((2 if comp_params.polarized else 1, self.alm_len_complex(self.lmax)), )
 
     @property
     def alms(self):
@@ -257,7 +258,7 @@ class DiffuseComponent(Component):
         return P_inv
     
     def __repr__(self):
-        return f"Diffuse Component {self.shortname} \n lmax = {self.lmax} \n alms: {self.alms}"
+        return f"Diffuse Component {self.shortname} {"Polarization" if self.pol else "Intensity"} \n   lmax = {self.lmax} \n   alms: {self.alms}"
 
     def apply_smoothing_prior_sqrt(self):
         """
@@ -374,10 +375,10 @@ class TemplateComponent(Component):
 # Third tier component classes
 class CMB(DiffuseComponent):
     
-    def __init__(self, params: Bunch):
-        super().__init__(params)
-        self.longname = params.longname if "longname" in params else "CMB"
-        self.shortname = params.shortname if "shortname" in params else "cmb"
+    def __init__(self, comp_params: Bunch, global_params: Bunch):
+        super().__init__(comp_params, global_params)
+        self.longname = comp_params.longname if "longname" in comp_params else "CMB"
+        self.shortname = comp_params.shortname if "shortname" in comp_params else "cmb"
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for CMB emission.
@@ -412,14 +413,14 @@ class CMBRelQuad(TemplateComponent):
     pass
 
 class ThermalDust(DiffuseComponent):
-    def __init__(self, params: Bunch):
-        super().__init__(params)
-        self.beta = params.beta
-        self.T = params.T
-        self.nu0 = params.nu0
+    def __init__(self, comp_params: Bunch, global_params: Bunch):
+        super().__init__(comp_params, global_params)
+        self.beta = comp_params.beta
+        self.T = comp_params.T
+        self.nu0 = comp_params.nu0
         self.prior_l_power_law = 2.5
-        self.longname = params.longname if "longname" in params else "Thermal Dust"
-        self.shortname = params.shortname if "shortname" in params else "dust",
+        self.longname = comp_params.longname if "longname" in comp_params else "Thermal Dust"
+        self.shortname = comp_params.shortname if "shortname" in comp_params else "dust",
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for Thermal Dust emission.
@@ -436,14 +437,14 @@ class ThermalDust(DiffuseComponent):
 
 
 class Synchrotron(DiffuseComponent):
-    def __init__(self, params: Bunch):
-        super().__init__(params)
-        self.beta = params.beta
-        self.nu0 = params.nu0
+    def __init__(self, comp_params: Bunch, global_params: Bunch):
+        super().__init__(comp_params, global_params)
+        self.beta = comp_params.beta
+        self.nu0 = comp_params.nu0
         self.nside_comp_map = 512
         self.prior_l_power_law = -3
-        self.longname = params.longname if "longname" in params else "Synchrotron"
-        self.shortname = params.shortname if "shortname" in params else "sync"
+        self.longname = comp_params.longname if "longname" in comp_params else "Synchrotron"
+        self.shortname = comp_params.shortname if "shortname" in comp_params else "sync"
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for Synchrotron emission.
@@ -457,12 +458,12 @@ class Synchrotron(DiffuseComponent):
 
 
 class FreeFree(DiffuseComponent):
-    def __init__(self, params: Bunch):
-        super().__init__(params)
-        self.T = params.T  # Electron temperature in K
-        self.nu0 = params.nu0 # Reference frequency in GHz
-        self.longname = params.longname if "longname" in params else "Free-Free"
-        self.shortname = params.shortname if "shortname" in params else "ff"
+    def __init__(self, comp_params: Bunch, global_params: Bunch):
+        super().__init__(comp_params, global_params)
+        self.T = comp_params.T  # Electron temperature in K
+        self.nu0 = comp_params.nu0 # Reference frequency in GHz
+        self.longname = comp_params.longname if "longname" in comp_params else "Free-Free"
+        self.shortname = comp_params.shortname if "shortname" in comp_params else "ff"
 
     def _gaunt_factor(self, nu, T):
         """Calculates the Gaunt factor for free-free emission, as per Eq. 18 in BP1.
@@ -502,20 +503,20 @@ class SpinningDust(DiffuseComponent):
     # This template has an intensity peak at 30 GHz.
     # Columns: Frequency (GHz), Emissivity (proportional to Intensity)
 
-    def __init__(self, params: Bunch):
+    def __init__(self, comp_params: Bunch, global_params: Bunch):
         """
         Args:
             nu_peak (float): The peak frequency of the spinning dust component in GHz.
             nu_0 (float): The reference frequency of the spinning dust template in GHz.
                           This will not impact the shape of the SED, just the absolute scaling.
         """
-        super().__init__(params)
+        super().__init__(comp_params, global_params)
         # Read SpDust2 template data. This is a simulation of what the spectral shape of
         # spinning dust emission should look like if it happens to peak at 30 GHz.
-        freqs, SED = np.loadtxt(params.template_path).T
+        freqs, SED = np.loadtxt(comp_params.template_path).T
         self.nu_peak_ref = 30.0  # The reference peak frequency of 30 GHz.
-        self.nu_peak_eval = params.nu_peak
-        self.nu_0 = params.nu_0  # Reference frequency for the amplitude map in GHz
+        self.nu_peak_eval = comp_params.nu_peak
+        self.nu_0 = comp_params.nu_0  # Reference frequency for the amplitude map in GHz
 
         # Create an logarithmic interpolation function from the SpDust2 template
         log_nu = np.log(freqs)
@@ -559,10 +560,10 @@ class SpinningDust(DiffuseComponent):
 # NON DIFFUSE COMPONENTS
 
 class PointSourcesComponent(Component):
-    def __init__(self, params: Bunch):
-        self.params = params
-        self.longname = params.longname if "longname" in params else "Unknown PointSourceComp"
-        self.shortname = params.shortname if "shortname" in params else "pscomp"
+    def __init__(self, comp_params: Bunch, global_params: Bunch):
+        super().__init__(comp_params, global_params)
+        self.longname = comp_params.longname if "longname" in comp_params else "Unknown PointSourceComp"
+        self.shortname = comp_params.shortname if "shortname" in comp_params else "pscomp"
 
     @property
     def pol(self) -> bool:
@@ -573,19 +574,19 @@ class PointSourcesComponent(Component):
         return 1
 
 class RadioSources(PointSourcesComponent):
-    def __init__(self, params: Bunch):
-        super().__init__(params)
-        self._data = params.amp_s               #per-source amplitudes
-        self.nu0 = params.nu0                   #reference frequency
-        self.alpha_s = params.alpha_s           #per-source spectral indexes
+    def __init__(self, comp_params: Bunch, global_params: Bunch):
+        super().__init__(comp_params, global_params)
+        self._data = comp_params.amp_s               #per-source amplitudes
+        self.nu0 = comp_params.nu0                   #reference frequency
+        self.alpha_s = comp_params.alpha_s           #per-source spectral indexes
         self.pol = False                        #can point sources be polarized?
         self.fwhm_r = None                      #fwhm used for the computation of pix and beam discs
-        self.lonlat_s = params.lonlat_s         #per-source list of coordinates
+        self.lonlat_s = comp_params.lonlat_s         #per-source list of coordinates
         self.pix_discs_i_s = None               #per-source list of indexes of the pixel forming the disc
         self.beam_discs_val_s = None            #per-source list of beam values, for each pix_i_s 
 
-        self.longname = params.longname if "longname" in params else "RadioPointSources"
-        self.shortname = params.shortname if "shortname" in params else "radsources"
+        self.longname = comp_params.longname if "longname" in comp_params else "RadioPointSources"
+        self.shortname = comp_params.shortname if "shortname" in comp_params else "radsources"
         self.mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(self.band_nu*pysm3u.GHz))
         self.uKRJ_to_mJysr = (pysm3u.uK_RJ).to(pysm3u.mJy / pysm3u.steradian, equivalencies=pysm3u.cmb_equivalencies(self.band_nu*pysm3u.GHz))
 

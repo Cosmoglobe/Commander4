@@ -33,7 +33,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch) -> tuple[list[Compon
     logger.info(f"CompSep: Hello from CompSep-rank {mpi_info.compsep.rank} (on machine {mpi_info.processor_name}), dedicated to band {mpi_info.compsep.rank}.")
 
     ### Creating list of all components ###
-    components = []
+    comp_list = []
     for component_str in params.components:
         component = params.components[component_str]
         if component.enabled:
@@ -41,7 +41,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch) -> tuple[list[Compon
             # This class is then instantiated with the "params" specified, and appended to the components list.
             if component.params.lmax == "full":
                 component.params.lmax = (params.nside*5)//2
-            components.append(getattr(component_lib, component.component_class)(component.params))
+            comp_list.append(getattr(component_lib, component.component_class)(component.params)) #TODO: careful here, intensity component and polarization of the same component should be different elements in the list.
 
     ### Setting up info for each band, including where to get the data from (map from file, or receive from TOD processing) ###
     current_band_idx = 0
@@ -64,7 +64,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch) -> tuple[list[Compon
     mpi_info.world.compsep_band_masters = world_band_masters_dict
     mpi_info.compsep.compsep_band_masters = compsep_band_masters_dict
 
-    return components, mpi_info, band_identifier, my_band
+    return comp_list, mpi_info, band_identifier, my_band
 
 
 def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chain: int,
@@ -99,26 +99,26 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
     if params.pixel_compsep_sampling:
         comp_list = amplitude_sampling_per_pix(compsep_comm, detector_data, comp_list, params)
     else:
-        ### TOTAL INTENSITY CALCULATIONS ###
+        ### TOTAL INTENSITY CALCULATIONS AND POLARIZATION SHOULD NOW BE NATURALLY SPLIT ###
         color = 0 if detector_data.map_sky[0] is not None else MPI.UNDEFINED
         comm_local = compsep_comm.Split(color, key=compsep_rank)
         if color == 0:
             compsep_solver = CompSepSolver(detector_data,
-                                           params, comm_local, pol=False)
+                                           params, comm_local)
             comp_list = compsep_solver.solve(comp_list)
             if params.make_plots and compsep_rank:
                 plotting.plot_cg_res(params, chain, iter, compsep_solver.CG_residuals)
 
-        color = 0 if detector_data.map_sky[1] is not None else MPI.UNDEFINED
-        comm_local = compsep_comm.Split(color, key=compsep_rank)
+        # color = 0 if detector_data.map_sky[1] is not None else MPI.UNDEFINED
+        # comm_local = compsep_comm.Split(color, key=compsep_rank)
 
-        #TODO: the polarized and non polarized should be called on different ranks.
-        if color == 0:
-            compsep_solver = CompSepSolver(comp_list, detector_data,
-                                           params, comm_local, pol=True)
-            comp_list = compsep_solver.solve()
-            if params.make_plots and compsep_rank:
-                plotting.plot_cg_res(params, chain, iter, compsep_solver.CG_residuals)
+        # #TODO: the polarized and non polarized should be called on different ranks.
+        # if color == 0:
+        #     compsep_solver = CompSepSolver(comp_list, detector_data,
+        #                                    params, comm_local)
+        #     comp_list = compsep_solver.solve()
+        #     if params.make_plots and compsep_rank:
+        #         plotting.plot_cg_res(params, chain, iter, compsep_solver.CG_residuals)
 
     comp_list = compsep_comm.bcast(comp_list, root=0)  #TODO: This needs to be handled differently.
     sky_model = SkyModel(comp_list)
