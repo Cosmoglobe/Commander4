@@ -212,7 +212,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
         scansample_list.append(ScanSamples())
         scansample_list[-1].time_dep_rel_gain_est = 0.0
         scansample_list[-1].rel_gain_est = my_det.rel_gain_est - params.initial_g0
-        scansample_list[-1].gain_est = my_det.rel_gain_est
+        scansample_list[-1].gain_est = params.initial_g0 + my_det.rel_gain_est
     det_samples = DetectorSamples(scansample_list)
     det_samples.detector_id = my_detector_id
     det_samples.g0_est = params.initial_g0
@@ -883,8 +883,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     if mpi_info.tod.is_master:
         logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished white noise estimation in {timing_dict['wn-est-1']:.1f}s.")
 
-    if iter >= params.sample_gain_from_iter_num:
-        ### ABSOLUTE GAIN CALIBRATION ### 
+    ### ABSOLUTE GAIN CALIBRATION ### 
+    if params.sample_abs_gain and iter >= params.sample_abs_gain_from_iter_num:
         t0 = time.time()
         detector_samples, wait_time = sample_absolute_gain(TOD_comm, experiment_data, detector_samples, compsep_output)
         timing_dict["abs-gain"] = time.time() - t0
@@ -892,7 +892,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
         if mpi_info.band.is_master:
             logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished absolute gain estimation in {timing_dict['abs-gain']:.1f}s.")
 
-        ### RELATIVE GAIN CALIBRATION ### 
+    ### RELATIVE GAIN CALIBRATION ### 
+    if params.sample_rel_gain and iter >= params.sample_rel_gain_from_iter_num:
         t0 = time.time()
         detector_samples, wait_time = sample_relative_gain(TOD_comm, det_comm, experiment_data, detector_samples, compsep_output)
         timing_dict["rel-gain"] = time.time() - t0
@@ -901,7 +902,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
             logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished relative gain estimation in {timing_dict['rel-gain']:.1f}s.")
 
 
-        ### TEMPORAL GAIN CALIBRATION ### 
+    ### TEMPORAL GAIN CALIBRATION ### 
+    if params.sample_temporal_gain and iter >= params.sample_temporal_gain_from_iter_num:
         t0 = time.time()
         detector_samples = sample_temporal_gain_variations(det_comm, experiment_data, detector_samples, compsep_output, chain, iter, params)
         timing_dict["temp-gain"] = time.time() - t0
