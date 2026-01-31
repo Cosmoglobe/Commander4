@@ -14,10 +14,9 @@ from commander4.data_models.detector_samples import DetectorSamples
 from commander4.data_models.scan_samples import ScanSamples
 from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU
 from commander4.noise_sampling import corr_noise_realization_with_gaps, sample_noise_PS_params
-from commander4.tod_processing_Planck import read_Planck_TOD_data
 from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
-from commander4.tod_processing_sim import read_TOD_sim_data
 from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0
+from commander4.tod_reader import read_tods_from_file
 
 nthreads=1
 
@@ -199,13 +198,10 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
     mpi_info['world']['tod_band_masters'] = world_band_masters_dict
     mpi_info['tod']['tod_band_masters'] = tod_band_masters_dict
     t0 = time.time()
-    if my_experiment.is_sim:
-        experiment_data = read_TOD_sim_data(my_experiment.data_path, my_band, my_det, params,
-                                            my_detector_id, my_scans_start, my_scans_stop)
-    else:
-        experiment_data = read_Planck_TOD_data(my_experiment, my_band, my_det, params,
-                                               my_detector_id, my_scans_start, my_scans_stop,
-                                               my_experiment.bad_PIDs_path)
+
+    experiment_data = read_tods_from_file(my_experiment, my_band, my_det, params,
+                                               my_detector_id, my_scans_start, my_scans_stop)
+
     mpi_info.tod.comm.Barrier()
     if mpi_info.tod.is_master:
         logger.info(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")
