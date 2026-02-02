@@ -1,17 +1,17 @@
 from pixell.bunch import Bunch
 
 from commander4.experiments.litebird.tod_reader_litebird import tod_reader as tod_reader_litebird
-from commander4.experiments.litebird.tod_reader_litebird_sims import tod_reader as tod_reader_litebird_sims
+from commander4.experiments.litebird.tod_reader_litebird_sim import tod_reader as tod_reader_litebird_sim
 from commander4.experiments.planck.tod_reader_planck import tod_reader as tod_reader_planck
-from commander4.experiments.planck.tod_reader_planck_sims import tod_reader as tod_reader_planck_sims
+from commander4.experiments.planck.tod_reader_planck_sim import tod_reader as tod_reader_planck_sim
 
 # Dictionary containing known experiments and the location of their TOD reading scripts.
 # The `experiment_id`` field in the parameter file decides what TOD reader is used in this dict.
 experiment_tod_readers = {
     "planck" : tod_reader_planck,
-    "planck_sims" : tod_reader_planck_sims,
+    "planck_sim" : tod_reader_planck_sim,
     "litebird" : tod_reader_litebird,
-    "litebird_sim" : tod_reader_litebird_sims,
+    "litebird_sim" : tod_reader_litebird_sim,
 }
 
 def read_tods_from_file(my_experiment: Bunch, my_band: Bunch, my_det: Bunch, params: Bunch,
