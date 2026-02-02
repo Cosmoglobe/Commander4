@@ -30,6 +30,7 @@ def run_commander4(params: Bunch, params_dict: dict):
         / /___/ /_/ / / / / / / / / / / / /_/ / / / / /_/ /  __/ /     /__  __/
         \____/\____/_/ /_/ /_/_/ /_/ /_/\__,_/_/ /_/\__,_/\___/_/        /_/""" + "\033[0m\n")
         logger.info(f"Starting Commander 4 with {mpi_info.world.size} total MPI tasks!")
+        os.makedirs(params.output_paths.chains, exist_ok=True)
         os.makedirs(params.output_paths.plots, exist_ok=True)
         os.makedirs(params.output_paths.stats, exist_ok=True)
 
