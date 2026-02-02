@@ -44,7 +44,7 @@ def tod_reader(my_experiment: str, my_band: Bunch, my_det: Bunch, params: Bunch,
     oids = []
     pids = []
     filenames = []
-    detname = my_det.name
+    detname = str(my_det)
     # with open(my_experiment.data_path + f"filelist_{my_band.freq_identifier:02d}.txt") as infile:
     with open(my_band.filelist) as infile:
         infile.readline()
@@ -109,13 +109,13 @@ def tod_reader(my_experiment: str, my_band: Bunch, my_det: Bunch, params: Bunch,
         if i_pid % 10 == 0:
             gc.collect()
 
-    logger.info(f"Fraction of scans included for {my_band.freq_identifier} {my_det.name}: "
+    logger.info(f"Fraction of scans included for {my_band.freq_identifier} {detname}: "
                 f"{num_included/(scan_idx_stop-scan_idx_start)*100:.1f} %")
-    logger.info(f"Avg scan size remaining after Fourier cut {my_band.freq_identifier} {my_det.name}: "
+    logger.info(f"Avg scan size remaining after Fourier cut {my_band.freq_identifier} {detname}: "
                 f"{ntod_sum_final/ntod_sum_original*100:.1f} %")
 
     det_static = DetectorTOD(scanlist, float(my_band.freq)+float(my_det.bandpass_shift),
-                             my_band.fwhm, my_band.eval_nside, my_band.data_nside, my_det.name)
+                             my_band.fwhm, my_band.eval_nside, my_band.data_nside, detname)
     det_static.detector_id = my_det_id
 
     return det_static

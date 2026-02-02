@@ -6,6 +6,7 @@ from scipy.fft import rfft, irfft, rfftfreq
 import time
 from numpy.typing import NDArray
 import math
+import os
 
 from commander4.output import log
 from commander4.data_models.detector_map import DetectorMap
@@ -17,6 +18,7 @@ from commander4.noise_sampling import corr_noise_realization_with_gaps, sample_n
 from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0
 from commander4.tod_reader import read_tods_from_file
+from commander4.utils.params import Params
 
 nthreads=1
 
@@ -199,8 +201,8 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
     mpi_info['tod']['tod_band_masters'] = tod_band_masters_dict
     t0 = time.time()
 
-    experiment_data = read_tods_from_file(my_experiment, my_band, my_det, params,
-                                               my_detector_id, my_scans_start, my_scans_stop)
+    experiment_data = read_tods_from_file(my_experiment, my_band, my_det, params, my_detector_id,
+                                          my_scans_start, my_scans_stop)
 
     mpi_info.tod.comm.Barrier()
     if mpi_info.tod.is_master:
@@ -210,13 +212,15 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
     scansample_list = []
     for iscan in range(num_scans):
         scansample_list.append(ScanSamples())
+        scansample_list[-1].scanID = experiment_data.scans[iscan].scanID
         scansample_list[-1].time_dep_rel_gain_est = 0.0
         scansample_list[-1].rel_gain_est = my_det.rel_gain_est - params.initial_g0
         scansample_list[-1].gain_est = params.initial_g0 + my_det.rel_gain_est
     det_samples = DetectorSamples(scansample_list)
     det_samples.detector_id = my_detector_id
     det_samples.g0_est = params.initial_g0
-    det_samples.detname = my_det.name
+    det_samples.detector_name = str(my_det)
+    det_samples.experiment_name = str(my_experiment)
 
     return mpi_info, my_band_identifier, experiment_data, det_samples
 
@@ -839,6 +843,23 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
 
 
 
+def write_tod_samples_to_file(TOD_comm: MPI.Comm, detector_samples: DetectorSamples, params: Params,
+                              chain: int, iter: int):
+    import h5py
+    detector_samples_batches = TOD_comm.gather(detector_samples, root=0)
+    chain_outpath = os.path.join(params.output_paths.chains, f"chain{chain:02d}_iter{iter:04d}.h5")
+    if TOD_comm.Get_rank() == 0:
+        with h5py.File(chain_outpath, "w") as file:
+            for detector_samples_batch in detector_samples_batches:
+                expname = detector_samples_batch.experiment_name
+                detname = detector_samples_batch.detector_name
+                for scan_samples in detector_samples_batch.scans:
+                    scanID = scan_samples.scanID
+                    for name, value in vars(scan_samples).items():
+                        file[f"{expname}/{detname}/{scanID}/{name}"] = value
+
+
+
 def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
                 detector_samples, compsep_output: NDArray,
                 params: Bunch, chain, iter) -> DetectorMap:
@@ -940,6 +961,9 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     timing_dict["mapmaker"] = time.time() - t0
     if band_comm.Get_rank() == 0:
         logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished mapmaking in {timing_dict['mapmaker']:.1f}s.")
+
+    ### WRITE CHAIN TO FILE ###
+    write_tod_samples_to_file(TOD_comm, detector_samples, params, chain, iter)
 
     t0 = time.time()
     TOD_comm.Barrier()
