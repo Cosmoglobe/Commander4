@@ -24,13 +24,13 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
 
 
 def tod_reader(my_experiment: Bunch, my_band: Bunch, my_det: Bunch, params: Bunch, my_det_id: int,
-               scan_idx_start: int, scan_idx_stop: int) -> tuple[DetectorTOD, DetectorSamples]:
+               scan_idx_start: int, scan_idx_stop: int) -> DetectorTOD:
     logger = logging.getLogger(__name__)
     oids = []
     pids = []
     filenames = []
-    detname = my_det.name
-    # with open(my_experiment.data_path + f"filelist_{my_band.freq_identifier:02d}.txt") as infile:
+    detname = str(my_det)
+    expname = str(my_experiment)
     with open(my_band.filelist) as infile:
         infile.readline()
         for line in infile:
@@ -97,13 +97,13 @@ def tod_reader(my_experiment: Bunch, my_band: Bunch, my_det: Bunch, params: Bunc
         if i_pid % 10 == 0:
             gc.collect()
 
-    logger.info(f"Fraction of scans included for {my_band.freq_identifier} {my_det.name}: "
+    logger.info(f"Fraction of scans included for {my_band.freq_identifier} {detname}: "
                 f"{num_included/(scan_idx_stop-scan_idx_start)*100:.1f} %")
-    logger.info(f"Avg scan size remaining after Fourier cut {my_band.freq_identifier} {my_det.name}: "
+    logger.info(f"Avg scan size remaining after Fourier cut {my_band.freq_identifier} {detname}: "
                 f"{ntod_sum_final/ntod_sum_original*100:.1f} %")
 
     det_static = DetectorTOD(scanlist, float(my_band.freq)+float(my_det.bandpass_shift),
-                             my_band.fwhm, my_band.eval_nside, my_band.data_nside, my_det.name)
+                             my_band.fwhm, my_band.eval_nside, my_band.data_nside, detname, expname)
     det_static.detector_id = my_det_id
 
     return det_static
