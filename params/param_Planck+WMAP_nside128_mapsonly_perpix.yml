@@ -1,8 +1,8 @@
 MPI_config:
   ntask_tod: 0
-  ntask_compsep: 6
+  ntask_compsep: 8
 nthreads_tod: 0
-nthreads_compsep: 1
+nthreads_compsep: 16
 betzy_mode: false
 
 niter_gibbs: 3
@@ -18,15 +18,16 @@ pixel_compsep_sampling: True
 smooth_to_common_res: True
 
 output_paths:
-  plots: "com4_plots/Planck+WMAP_nside128_perpix_maponly/"
-  stats: "com4_stats/nside128/"
+  plots: "../cmdr4_plots/Planck+WMAP_nside128_mapsonly_perpix/"
+  stats: "../cmdr4_stats/Planck+WMAP_nside128_mapsonly_perpix/"
 
 logging:
   console:
     level: 'info'
   file:
     level: 'info'
-    filename: 'output.log'
+    filename: '../cmdr4_logs/output_Planck+WMAP_nside128_mapsonly_perpix.log'
+
 
 components:
   CMB:
@@ -36,10 +37,11 @@ components:
       polarized: True
       longname: "CMB"
       shortname: "cmb"
-      smoothing_prior_FWHM: 0.0 # arcmin
-      smoothing_prior_amplitude: 1.0e+10 #1.0  # uK_RJ^2
-      lmax: "full"
-      smoothing_scale: 0
+      smoothing_prior_FWHM: .NAN  # arcmin
+      smoothing_prior_amplitude: .NAN  # uK_RJ^2
+      lmax: 64
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
 
   ThermalDust:
     enabled: true
@@ -48,13 +50,14 @@ components:
       polarized: True
       longname: "Thermal Dust"
       shortname: "dust"
-      smoothing_prior_FWHM: 0.0 # arcmin
-      smoothing_prior_amplitude: 1.0e+10 #1.0  # uK_RJ^2
+      smoothing_prior_FWHM: .NAN  # arcmin
+      smoothing_prior_amplitude: .NAN  # uK_RJ^2
       beta: 1.56
       T: 20
       nu0: 545
-      lmax: "full"
-      smoothing_scale: 0
+      lmax: 128
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
 
   Synchrotron:
     enabled: true
@@ -63,12 +66,13 @@ components:
       polarized: True
       longname: "Synchrotron"
       shortname: "sync"
-      smoothing_prior_FWHM: 0.0 # arcmin
-      smoothing_prior_amplitude: 1.0e+10 #1.0  # uK_RJ^2
+      smoothing_prior_FWHM: .NAN # arcmin
+      smoothing_prior_amplitude: .NAN  # uK_RJ^2
       beta: -3.1
       nu0: 30
-      lmax: "full"
-      smoothing_scale: 0
+      lmax: 64
+      smoothing_scale: 0.0
+      spatially_varying_MM: True
 
   FreeFree:
     enabled: true
@@ -77,30 +81,32 @@ components:
       polarized: False
       longname: "Free-Free"
       shortname: "ff"
-      smoothing_prior_FWHM: 0.0 # arcmin
-      smoothing_prior_amplitude: 1.0e+10 #1.0  # uK_RJ^2
+      smoothing_prior_FWHM: .NAN # arcmin
+      smoothing_prior_amplitude: .NAN  # uK_RJ^2
       T: 7000
-      nu0: 40
-      lmax: "full"
-      smoothing_scale: 0
-  
-  SpinningDust:
-    enabled: true
-    component_class: "SpinningDust"
-    params:
-      polarized: False
-      longname: "SpinningDust"
-      shortname: "sdust"
-      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
-      smoothing_prior_FWHM: 0.0 # arcmin
-      smoothing_prior_amplitude: 1.0e+10 #1.0  # uK_RJ^2
-      nu_peak: 25.3  # Ghz
-      nu_0: 22.0  # Ghz
-      lmax: "full"
-      smoothing_scale: 0
+      nu0: 0.408
+      lmax: 64
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
+
+  # SpinningDust:
+  #   enabled: False
+  #   component_class: "SpinningDust"
+  #   params:
+  #     polarized: False
+  #     longname: "SpinningDust"
+  #     shortname: "sdust"
+  #     template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
+  #     smoothing_prior_FWHM: 0.0 # arcmin
+  #     smoothing_prior_amplitude: 1.0e+10  # uK_RJ^2
+  #     nu_peak: 25.3  # Ghz
+  #     nu_0: 22.0  # Ghz
+  #     lmax: 1000
+  #     smoothing_scale: 0 # 30.0
+  #     spatially_varying_MM: False
+
 
 CompSep_bands:
-
   ### TOTAL INTENSITY MAPS ###
   Haslam408MHz:
     enabled: true
@@ -110,7 +116,7 @@ CompSep_bands:
     file_convention: "Haslam"
     path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
     path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
-    fwhm: 60 # [arcmin]
+    fwhm: 60.0  # [arcmin]
     freq: 0.408 # [GHz]
     polarizations: [True, True, True]
 
@@ -122,7 +128,7 @@ CompSep_bands:
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_map_v4.fits"
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_N_v4.fits"
-    fwhm: 40 # [arcmin]
+    fwhm: 39.6 # [arcmin]
     freq: 33.0 # [GHz]
     polarizations: [True, True, True]
 
@@ -134,7 +140,19 @@ CompSep_bands:
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_map_v4.fits"
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_N_v4.fits"
-    fwhm: 8.3 # [arcmin]
+    fwhm: 30.6 # [arcmin]
+    freq: 40.6 # [GHz]
+    polarizations: [True, True, True]
+
+  WMAPQ2:
+    enabled: true
+    get_from: "file"
+    eval_nside: 128
+    data_nside: 512
+    file_convention: "WMAP"
+    path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_map_v4.fits"
+    path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_N_v4.fits"
+    fwhm: 30.6 # [arcmin]
     freq: 40.6 # [GHz]
     polarizations: [True, True, True]
 
@@ -146,7 +164,19 @@ CompSep_bands:
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_map_v4.fits"
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_N_v4.fits"
-    fwhm: 14.0 # [arcmin]
+    fwhm: 21.0 # [arcmin]
+    freq: 60.8 # [GHz]
+    polarizations: [True, True, True]
+
+  WMAPV2:
+    enabled: true
+    get_from: "file"
+    eval_nside: 128
+    data_nside: 512
+    file_convention: "WMAP"
+    path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_map_v4.fits"
+    path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_N_v4.fits"
+    fwhm: 21.0 # [arcmin]
     freq: 60.8 # [GHz]
     polarizations: [True, True, True]
 
@@ -174,6 +204,7 @@ CompSep_bands:
     fwhm: 4.86 # [arcmin]
     freq: 353.0 # [GHz]
     polarizations: [False, True, True]
+
 
 experiments:
   []  # Empty list

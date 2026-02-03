@@ -5,15 +5,15 @@ nthreads_tod: 1
 nthreads_compsep: 16
 betzy_mode: false
 
-CG_max_iter: 200
-CG_max_iter_pol: 200
-CG_err_tol: 1.0e-10
-CG_float_precision: "double"
+CG_max_iter: 1000
+CG_max_iter_pol: 1000
+CG_err_tol: 1.0e-100
+CG_float_precision: "single"
 CG_real_alm_mode: False
 
 niter_gibbs: 1
 
-nside: 1024
+nside: 256
 
 noise_fknee: 0.1
 noise_alpha: -0.9
@@ -30,15 +30,15 @@ sample_corr_noise: True
 pixel_compsep_sampling: False
 
 output_paths:
-  plots: "../cmdr4_plots/Planck+WMAP_mapsonly_CG/"
-  stats: "../cmdr4_stats/Planck+WMAP_mapsonly_CG/"
+  plots: "../cmdr4_plots/Planck+WMAP_mapsonly_CG_Leoconfig/"
+  stats: "../cmdr4_stats/Planck+WMAP_mapsonly_CG_Leoconfig/"
 
 logging:
   console:
     level: 'info'
   file:
     level: 'info'
-    filename: '../cmdr4_logs/output_Planck+WMAP_mapsonly_CG.log'
+    filename: '../cmdr4_logs/output_Planck+WMAP_mapsonly_CG_Leoconfig.log'
 
 
 components:
