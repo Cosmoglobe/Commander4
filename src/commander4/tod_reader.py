@@ -1,6 +1,6 @@
 from pixell.bunch import Bunch
 
-from commander4.experiments.litebird.tod_reader_litebird import tod_reader as tod_reader_litebird
+# from commander4.experiments.litebird.tod_reader_litebird import tod_reader as tod_reader_litebird
 from commander4.experiments.litebird.tod_reader_litebird_sim import tod_reader as tod_reader_litebird_sim
 from commander4.experiments.planck.tod_reader_planck import tod_reader as tod_reader_planck
 from commander4.experiments.planck.tod_reader_planck_sim import tod_reader as tod_reader_planck_sim
@@ -10,7 +10,7 @@ from commander4.experiments.planck.tod_reader_planck_sim import tod_reader as to
 experiment_tod_readers = {
     "planck" : tod_reader_planck,
     "planck_sim" : tod_reader_planck_sim,
-    "litebird" : tod_reader_litebird,
+    # "litebird" : tod_reader_litebird,
     "litebird_sim" : tod_reader_litebird_sim,
 }
 
