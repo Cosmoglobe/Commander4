@@ -47,6 +47,9 @@ cmake.build-type = "Release"
 
 # Explicitly force "redirect" mode (static path mapping)
 editable.mode = "redirect"
+# TODO: Maybe we want to switch to editable.mode = "inplace", which would place the compiled `.so`
+# files directly into the source tree. Makes source tree more cluttered, but helps e.g. IDEs a bit.
+
 # Explicitly disable auto-rebuilds on import to prevent MPI crashes
 editable.rebuild = false
 
@@ -56,9 +59,7 @@ packages = ["src/commander4"]
 exclude = [
     "**/__pycache__",
     "**/*.pyc",
-    "**/*.so",
     "**/.ipynb_checkpoints",
-    "test_data",
     ".git",
     ".venv*"
 ]
@@ -81,7 +82,6 @@ exclude = [
     "**/*.pyc",
     "**/*.so",
     "**/.ipynb_checkpoints",
-    "test_data",
     ".git",
     ".venv*"
 ]
