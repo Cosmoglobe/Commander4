@@ -1,7 +1,6 @@
 import os
 import time
 import logging
-import numpy as np
 import mpi4py
 from mpi4py import MPI
 from pixell.bunch import Bunch
@@ -169,6 +168,7 @@ def init_mpi_tod(mpi_info, params):
         mpi_info (Bunch): The data structure containing all MPI relevant data, now including info
             for the 'tod' context.
     """
+    import numpy as np  # Can't be loaded at top-level because it must be loaded after init_mpi().
 
     logger = logging.getLogger(__name__)
     MPIsize_tod, MPIrank_tod = mpi_info.tod.size, mpi_info.tod.rank
