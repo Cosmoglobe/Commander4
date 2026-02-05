@@ -22,7 +22,7 @@ from src.python import mpi_management
 def main(params: Bunch, params_dict: dict):
     logger = logging.getLogger(__name__)
         
-
+    global_params = params.general
     mpi_info = mpi_management.init_mpi(params)
     if mpi_info['world']['is_master']:
         import random
@@ -34,8 +34,8 @@ def main(params: Bunch, params_dict: dict):
         / /___/ /_/ / / / / / / / / / / / /_/ / / / / /_/ /  __/ /     /__  __/
         \____/\____/_/ /_/ /_/_/ /_/ /_/\__,_/_/ /_/\__,_/\___/_/        /_/""" + "\033[0m\n")
         logger.info(f"Starting Commander 4 with {mpi_info.world.size} total MPI tasks!")
-        os.makedirs(params.output_paths.plots, exist_ok=True)
-        os.makedirs(params.output_paths.stats, exist_ok=True)
+        os.makedirs(global_params.output_paths.plots, exist_ok=True)
+        os.makedirs(global_params.output_paths.stats, exist_ok=True)
 
     import numpy as np  # Import Numpy after specifying threading, such that it respects our settings.
     import src.python.output.log as log
@@ -85,10 +85,9 @@ def main(params: Bunch, params_dict: dict):
     elif mpi_info.world.color == 1:
         curr_tod_output = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
                                       my_band_identifier, curr_tod_output)
-
     ###### Main loop ######
     # Iteration numbers are 1-indexed, and chain 1 iter 1 TOD step is already done pre-loop.
-    for i in range(1, 2 * params.niter_gibbs): # x2 because we have two chains
+    for i in range(1, 2 * global_params.niter_gibbs): # x2 because we have two chains
         # execute the appropriate part of the code (MPMD)
         if mpi_info.world.color == 0:
             t0 = time.time()
@@ -158,22 +157,22 @@ def main(params: Bunch, params_dict: dict):
 if __name__ == "__main__":
     # Parse parameter file
     from src.python.parse_params import params, params_dict
-    log.init_loggers(params.logging)
+    log.init_loggers(params.general.logging)
     logger = logging.getLogger(__name__)
     try:
-        if params.output_stats:
+        if params.general.output_stats:
             profiler = cProfile.Profile()
             profiler.enable()
         ret = main(params, params_dict)
         logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} finished Commander 4 and is shutting down. Goodbye.")
-        if params.output_stats:
+        if params.general.output_stats:
             profiler.disable()
             s = io.StringIO()
             stats = pstats.Stats(profiler, stream=s).sort_stats('tottime')
             if ret != -1:
                 stats.print_stats(10)
                 logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} cProfile stats: {s.getvalue()}")
-                stats.dump_stats(f'{params.output_paths.stats}/stats-{MPI.COMM_WORLD.Get_rank()}')
+                stats.dump_stats(f'{params.general.output_paths.stats}/stats-{MPI.COMM_WORLD.Get_rank()}')
 
     # First check for MPI-specific exceptions.
     except MPI.Exception as e:

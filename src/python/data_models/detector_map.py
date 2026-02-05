@@ -1,24 +1,39 @@
 import numpy as np
 import healpy as hp
+from copy import deepcopy
 from numpy.typing import NDArray
 from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, inplace_arr_prod, almxfl
 
 
 class DetectorMap:
-    def __init__(self, map_sky, map_rms, nu, fwhm, nside, pol:bool, double_precision:bool=False, lmax:int|None = None):
+    def __init__(self, map_sky:NDArray, map_rms:NDArray, nu:float, fwhm:float, nside:int, double_precision:bool=False, lmax:int|None = None):
+        # if map_rms.shape != map_sky.shape:
+        #     raise ValueError(f"Sky and RMS maps should have matching dimensions.")
+        # if map_sky.ndim != 2:
+        #     raise ValueError(f"Trying to set sky map with unexpected number of dimensions {map_sky.ndim} != 2")
+        # if map_sky.shape[0] not in [1,2]:
+        #     raise ValueError(f"Trying to set sky map with wrong first axis length {map_sky.shape[0]} != 1 or 2")
+                   
         self._map_sky = map_sky
         self._nu = nu
         self._fwhm = fwhm
         self._nside = nside
         self._lmax = int(2.5*nside) if lmax is None else lmax      # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
         self._beam_Cl = hp.gauss_beam(np.deg2rad(fwhm/60.0), self._lmax)
-        self._pol = pol #polarization: True->Q/U, False->I
         self._double_precision = double_precision
-        self.inv_n_map = (1./map_rms**2).astype(np.float64 if double_precision else np.float64)
+        self._inv_n_map = (1./map_rms**2).astype(np.float64 if double_precision else np.float32)
 
     @property
     def map_sky(self):
         return self._map_sky
+    
+    @property
+    def inv_n_map(self):
+        return self._inv_n_map
+    
+    @property
+    def map_rms(self):
+        return 1./np.sqrt(self._inv_n_map)
 
     @property
     def nu(self):
@@ -46,42 +61,54 @@ class DetectorMap:
     
     @property
     def pol(self):
-        return self._pol
+        #polarization: True->Q/U, False->I
+        return False if len(self._map_sky) == 1 else True
     
+    @property
+    def spin(self):
+        return 2 if self.pol else 0
+
+    @property
     def npol(self):
-        return 2 if self.pol else 1
+        return len(self._map_sky) # 2 if self.pol else 1
     
-    def apply_inv_N_map(self, map: NDArray):
+    def apply_inv_N_map(self, map: NDArray, inplace = True):
         """
         Applies in-place the inverse noise variance matrix to a `map`.
 
         """
+        map_out = map if inplace else deepcopy(map)
         for ipol in range(self.npol):
-            inplace_arr_prod(map[ipol], self.inv_n_map[ipol])
+            inplace_arr_prod(map_out[ipol,:], self._inv_n_map[ipol,:])
 
-        return map
+        return map_out
 
-    def apply_inv_N_alm(self, a: NDArray, nthreads:int = 1):
+    def apply_inv_N_alm(self, a: NDArray, nthreads:int = 1, inplace = True):
         """
-        Applies in-place the inverse noise variance matrix to a set of alm `a`.
+        Applies the inverse noise variance matrix to a set of alm `a` and returns the result.
 
         """
+        if a.shape[0] != self.npol:
+            raise ValueError("Can not apply inv_N to alms with different polarization")
+
+        a_out = a if inplace else deepcopy(a)
+
         # Y a
-        a = alm_to_map(a, self.nside, self.my_band_lmax, spin=self.spin, nthreads=nthreads)
+        a_out = alm_to_map(a_out, self.nside, self.lmax, spin=self.spin, nthreads=nthreads)
 
         # N^-1 Y a
-        self.inv_N_map(a)
+        self.apply_inv_N_map(a_out)
 
         # Y^T N^-1 Y a
-        a = alm_to_map_adjoint(a, self.nside, self.my_band_lmax, spin=self.spin, nthreads=nthreads)
+        a_out = alm_to_map_adjoint(a_out, self.nside, self.lmax, spin=self.spin, nthreads=nthreads)
 
-        return a
+        return a_out
 
     def apply_B(self, a: NDArray):
         """
         Applies in-place the beam operator in harmonic space to a set of alm `a`, which are also returned.
         """
-        for ipol in range(self._npol):
+        for ipol in range(self.npol):
             almxfl(a[ipol], self._beam_Cl, inplace=True)
         return a
 

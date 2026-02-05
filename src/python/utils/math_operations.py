@@ -214,7 +214,7 @@ def almlist_dot_real(alm_list1, alm_list2):
 # These functions are common array operations, but made to work on the comp-lists, which are
 # lists of Component objects, each containing component-specifically formatted data.
 
-def inplace_complist_add_scaled_array(list_inplace:list[Component], list_other:list[Component], scalar):
+def inplace_complist_add_scaled_array(list_inplace:list["Component"], list_other:list["Component"], scalar):
     """ `list_inplace += scalar*list_other`
     """
     if len(list_inplace) != len(list_other):
@@ -223,7 +223,7 @@ def inplace_complist_add_scaled_array(list_inplace:list[Component], list_other:l
     for ci, co in zip(list_inplace, list_other):
         inplace_add_scaled_vec(ci._data, co._data, scalar)
 
-def inplace_complist_scale_and_add(list_inplace:list[Component], list_other:list[Component], scalar):
+def inplace_complist_scale_and_add(list_inplace:list["Component"], list_other:list["Component"], scalar):
     """ `list_inplace = scalar*list_inplace + list_other`
     """
     if len(list_inplace) != len(list_other):
@@ -232,20 +232,21 @@ def inplace_complist_scale_and_add(list_inplace:list[Component], list_other:list
     for ci, co in zip(list_inplace, list_other):
         inplace_scale_add(ci._data, co._data, scalar)
 
-def complist_dot(comp_list1:list[Component], comp_list2:list[Component]) -> float:
+def complist_dot(comp_list1:list["Component"], comp_list2:list["Component"]) -> float:
     """ `dot(comp_list1, comp_list2)`. Calculates the correct dot product between two lists of Component objects 
         where the alms follow the Healpy complex storing convention, for components with alms.
         It will automatically handle the correct dot product definition for each type of Component.
     """
     if len(comp_list1) != len(comp_list2):
         raise ValueError("Component lists must match in length.")
-    
+    if len(comp_list1) == 0:
+        print("WARNING dot prod between empty comp list")
     res = 0.0
     for c1, c2 in zip(comp_list1, comp_list2):
         res += float(c1 @ c2)
     return res
 
-def complist_norm(comp_list:list[Component]) -> float:
+def complist_norm(comp_list:list["Component"]) -> float:
     """ `norm(comp_list1, comp_list2)`. Calculates the Euclidean norm of a lists of Component objects,
         handling it as it was a single vectors of values.
     """

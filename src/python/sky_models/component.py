@@ -34,8 +34,8 @@ def g(nu):
 # First tier component classes
 class Component:
     def __init__(self, comp_params: Bunch, global_params: Bunch):
-        self._comp_params = comp_params
-        self._global_params = global_params
+        self.comp_params = comp_params
+        self.global_params = global_params
         self.longname = comp_params.longname if "longname" in comp_params else "Unknown Component"
         self.shortname = comp_params.shortname if "shortname" in comp_params else "comp"
         self._data = None
@@ -45,14 +45,14 @@ class Component:
         if self._data is not None:
             return False if self._data.shape[0] == 1 else True
         else:
-            return False
+            raise ValueError("Component {self.longname} has with no data.")
         
     @property
     def npol(self):
         if self._data is not None:
             return self._data.shape[0]
         else:
-            return 0
+            raise ValueError("Component {self.longname} has with no data.")
     
     def __add__(self, other):
         if type(self) is not type(other):
@@ -93,7 +93,7 @@ class Component:
             raise ValueError("Cannot add Components with no data.")
         if self._data.shape != other._data.shape:
             raise ValueError("Data arrays of the two Components must match in size.")
-        inplace_arr_add(self._data, other._data)
+        inplace_arr_sub(self._data, other._data)
         return self
     
     def __mul__(self, other):
@@ -216,7 +216,7 @@ class DiffuseComponent(Component):
         self.smoothing_prior_FWHM = comp_params.smoothing_prior_FWHM
         self.smoothing_prior_amplitude = comp_params.smoothing_prior_amplitude
         self.double_prec = False if global_params.CG_float_precision == "single" else True
-        self._data = np.empty((2 if comp_params.polarized else 1, self.alm_len_complex(self.lmax)), )
+        self._data = np.empty((2 if comp_params.polarized else 1, self.alm_len_complex), dtype = (np.complex128 if self.double_prec else np.complex64))
 
     @property
     def alms(self):
@@ -230,8 +230,7 @@ class DiffuseComponent(Component):
             else:
                 raise ValueError(f"Trying to set alms with wrong first axis length {alms.shape[0]} != 1 or 2")
         else:
-            raise ValueError("Trying to set alms with unexpected number of dimensions"
-                                f"{alms.ndim} != 2")
+            raise ValueError(f"Trying to set alms with unexpected number of dimensions: {alms.ndim} != 2")
             
     @property
     def dtype(self):
@@ -258,29 +257,29 @@ class DiffuseComponent(Component):
         return P_inv
     
     def __repr__(self):
-        return f"Diffuse Component {self.shortname} {"Polarization" if self.pol else "Intensity"} \n   lmax = {self.lmax} \n   alms: {self.alms}"
+        return f"Diffuse Component {self.shortname} {'Polarization' if self.pol else 'Intensity'} \n   lmax = {self.lmax} \n   alms: {self.alms}"
 
     def apply_smoothing_prior_sqrt(self):
         """
         Applies in-place the square root of the smoothing prior to the alms in-place, which are also returned.
         """
         smooth_p_sqrt = np.sqrt(self.P_smoothing_prior)
-        for ipol in range(self.alms.shape[0]):
+        for ipol in range(self.npol):
             # S^{1/2} a
             almxfl(self._data[ipol], smooth_p_sqrt, inplace=True)
         return self._data
 
-    def get_component_map(self, nside:int, pol:bool=False, fwhm:int=0):
-        component_alms = self.component_alms_polarization if pol else self.component_alms_intensity
+    def get_component_map(self, nside:int, fwhm:int=0):
+        component_alms = self.alms
         if component_alms is None:
             raise ValueError("component_alms property not set.")
         if fwhm == 0:
-            return alm_to_map(component_alms, nside, self.lmax, spin = 2 if pol else 0)
+            return alm_to_map(component_alms, nside, self.lmax, spin = 2 if self.pol else 0)
         else:
-            return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax, spin = 2 if pol else 0)
+            return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax, spin = 2 if self.pol else 0)
 
-    def get_sky(self, nu, nside, pol=False, fwhm=0):
-        return self.get_component_map(nside, pol, fwhm)*self.get_sed(nu)
+    def get_sky(self, nu, nside, fwhm=0):
+        return self.get_component_map(nside, fwhm)*self.get_sed(nu)
     
     def get_sed(self, nu):
         logger = logging.getLogger(__name__)
@@ -294,10 +293,10 @@ class DiffuseComponent(Component):
             raise ValueError("Cannot add Components with no data.")
         if self._data.shape != other._data.shape:
             raise ValueError("Data arrays of the two Components must match in size.")
-
+        res = 0.0
         for ipol in range(self.npol):
             res += _dot_complex_alm_1D_arrays(self._data[ipol], other._data[ipol], self.lmax)
-        return dot(self._data, other._data)
+        return res
 
     def project_comp_to_band(self, band:Band, nthreads: int = 1):
         """
@@ -314,23 +313,23 @@ class DiffuseComponent(Component):
             npol = 1
             spin = 0
 
+        alm_in_band_space = project_alms(self.alms, band.lmax)
         if self.spatially_varying_MM:  # If this component has a MM that is pixel-depnedent.
-            alm_in_band_space = project_alms(self._alms, band.lmax)
             # Y a
             comp_map = alm_to_map(alm_in_band_space, band.nside, band.lmax, spin=spin, nthreads=nthreads)
             # M Y a
             for ipol in range(npol):
                 inplace_scale(comp_map[ipol], self.get_sed(band.nu)) 
             # Y^-1 M Y a
-            map_to_alm(comp_map, band.nside, band.lmax, spin=spin, out=band.alms, acc=True, nthreads=nthreads)
+            band.alms = map_to_alm(comp_map, band.nside, band.lmax, spin=spin, acc=True, nthreads=nthreads)
         else:
             for ipol in range(npol):
                 inplace_add_scaled_vec(band.alms[ipol], alm_in_band_space[ipol], self.get_sed(band.nu))
         return band.alms
 
-    def eval_comp_from_band(self, band:Band, nthreads: int = 1):
+    def eval_comp_from_band(self, band:Band, nthreads: int = 1, inplace=True):
         """
-        Evaluate the band's alm contribution to the component and retruns it.
+        Evaluate the band's alm contribution to the component, stores it in-place by default and retruns it.
 
         All the contributions will be summed to the total proper amplitudes by the master node.
 
@@ -341,7 +340,7 @@ class DiffuseComponent(Component):
             npol = 2
             spin = 2
         else:
-            assert band.pol, "Intensity component can only be evaluated from intensity band alms"
+            assert not band.pol, "Intensity component can only be evaluated from intensity band alms"
             npol = 1
             spin = 0
 
@@ -356,13 +355,17 @@ class DiffuseComponent(Component):
             # Y^T M^T Y^-1^T B^T a
             tmp_alm = alm_to_map_adjoint(band_map, band.nside, band.lmax, spin=spin, out=None, nthreads=nthreads)
 
-            # Project alm from band to component lmax.
-            contrib_to_comp_alm = project_alms(tmp_alm, self.lmax)
         else:
-            tmp_alm = band.alm.copy()
+            tmp_alm = band.alms.copy()
             for ipol in range(npol):
                 inplace_scale(tmp_alm[ipol], self.get_sed(band.nu))
-            contrib_to_comp_alm = project_alms(tmp_alm, self.lmax)
+            
+        # Project alm from band to component lmax.
+        contrib_to_comp_alm = project_alms(tmp_alm, self.lmax)
+        
+        if inplace:
+            self.alms = contrib_to_comp_alm
+
         return contrib_to_comp_alm
     
 
@@ -374,7 +377,6 @@ class TemplateComponent(Component):
 
 # Third tier component classes
 class CMB(DiffuseComponent):
-    
     def __init__(self, comp_params: Bunch, global_params: Bunch):
         super().__init__(comp_params, global_params)
         self.longname = comp_params.longname if "longname" in comp_params else "CMB"
@@ -391,11 +393,10 @@ class CMB(DiffuseComponent):
         return (np.ones_like(nu)*pysm3u.uK_CMB).to(pysm3u.uK_RJ,equivalencies=
                                                    pysm3u.cmb_equivalencies(nu*u.GHz)).value
     
-    def get_sky_anisotropies(self, nu, nside, pol=False, fwhm=0):
-        component_alms = self.component_alms_polarization if pol else self.component_alms_intensity
-        if component_alms is None:
+    def get_sky_anisotropies(self, nu, nside, fwhm=0):
+        if self.alms is None:
             raise ValueError("component_alms property not set.")
-        component_alms = component_alms.copy()
+        component_alms = self.alms.copy()
         # Zero out monopole (l=0)
         component_alms[:,hp.Alm.getidx(self.lmax, 0, 0)] = 0.0 + 0.0j
         # Zero out the dipole (l=1)
@@ -405,9 +406,9 @@ class CMB(DiffuseComponent):
         for m in range(3):  # m = 0, 1, 2
             component_alms[:,hp.Alm.getidx(self.lmax, 2, m)] = 0.0 + 0.0j
         if fwhm == 0:
-            return alm_to_map(component_alms, nside, self.lmax, spin = 2 if pol else 0)*self.get_sed(nu)
+            return alm_to_map(component_alms, nside, self.lmax, spin = 2 if self.pol else 0)*self.get_sed(nu)
         else:
-            return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax, spin = 2 if pol else 0)*self.get_sed(nu)
+            return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax, spin = 2 if self.pol else 0)*self.get_sed(nu)
 
 class CMBRelQuad(TemplateComponent):
     pass
@@ -579,9 +580,9 @@ class RadioSources(PointSourcesComponent):
         self._data = comp_params.amp_s               #per-source amplitudes
         self.nu0 = comp_params.nu0                   #reference frequency
         self.alpha_s = comp_params.alpha_s           #per-source spectral indexes
+        self.lonlat_s = comp_params.lonlat_s         #per-source list of coordinates
         self.pol = False                        #can point sources be polarized?
         self.fwhm_r = None                      #fwhm used for the computation of pix and beam discs
-        self.lonlat_s = comp_params.lonlat_s         #per-source list of coordinates
         self.pix_discs_i_s = None               #per-source list of indexes of the pixel forming the disc
         self.beam_discs_val_s = None            #per-source list of beam values, for each pix_i_s 
 
@@ -610,6 +611,9 @@ class RadioSources(PointSourcesComponent):
         Freq. are in GHz.
         """
         return (nu/self.nu0)**(self.alpha_s - 2)
+    
+    def get_sky(self, nu, nside, pol=False, fwhm=0):
+        raise NotImplementedError
     
     def _project_to_band_map(self, map, nu):
         """
@@ -672,3 +676,23 @@ class RadioSources(PointSourcesComponent):
 
     def __repr__(self):
         return f"Radio Source \n amps: {self._data}"
+    
+
+#FIXME: this will go within ComponentList object when implemented
+def split_complist(comp_list: list[Component], color:int, IvsQU_colors:tuple = (0,1)) -> list[Component]:
+    """
+    Extracts from `comp_list` only the components containing the correct Stokes parameter based
+    on the passed `color` of the local MPI rank. By default, color=0 will treat Intensity and
+    color=1 polarization. A list with the relevant components is returned.
+    """
+    out_comp_list = []
+    IvsQU_colors = IvsQU_colors[:2] #cut off eventual elements in excess
+    if color not in IvsQU_colors:
+        logging.warning(f"Color {color} not in colors assigned to I or QU ({IvsQU_colors})!")
+    else:
+        for comp in comp_list:
+            if comp.pol == (color == IvsQU_colors[1]):
+                # print("Comp", comp.shortname, comp.pol)
+                out_comp_list.append(comp)
+
+    return out_comp_list

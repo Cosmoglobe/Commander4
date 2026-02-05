@@ -8,10 +8,10 @@ from numpy.typing import NDArray
 
 from src.python.data_models.detector_map import DetectorMap
 from src.python.data_models.detector_TOD import DetectorTOD
-from src.python.maps_from_file import read_sim_map_from_file, read_Planck_map_from_file
+from src.python.maps_from_file import read_sim_map_from_file, read_data_map_from_file
 
 
-def send_compsep(mpi_info: Bunch, my_band_identifier: str, detector_map: NDArray[np.floating], destinations: dict[str, int]|None) -> None:
+def send_compsep(mpi_info: Bunch, my_band_identifier: str, band_sky_map: NDArray[np.floating], destinations: dict[str, int]|None) -> None:
     """ MPI-send the results from compsep to a destinations on the TOD processing side (used in conjunction with receive_compsep).
     Assumes the COMM_WORLD communicator.
 
@@ -19,7 +19,7 @@ def send_compsep(mpi_info: Bunch, my_band_identifier: str, detector_map: NDArray
         mpi_info (Bunch): The data structure containing all MPI relevant data.
         my_band_identifier (str): The string uniquely indentifying the experiment+band of this rank
                                   (example: 'PlanckLFI$$$30GHz').
-        detector_map (np.array[float]): A sky realization at a given band frequency.
+        band_sky_map (np.array[float]): A sky realization at a given band frequency.
         destinations (dict[str->int]): A dictionary mapping the string in 'my_band_identifier' to
                                        the world rank of the destination task (on the TOD side)
                                        (This is the same as is found in mpi_info)
@@ -29,8 +29,9 @@ def send_compsep(mpi_info: Bunch, my_band_identifier: str, detector_map: NDArray
                                                 # "destinations", it means it did not come from
                                                 # TOD-processing, and should not be sent
                                                 #back either.
-            mpi_info.world.comm.send(detector_map, dest=destinations[my_band_identifier])
-
+            if my_band_identifier.endswith('_I'): #Currently the polarization ranks send over to the Intensity ones which then in turn broadcast and evaluate the sky.
+                mpi_info.world.comm.send(band_sky_map, dest=destinations[my_band_identifier])
+ 
 
 def receive_compsep(mpi_info: Bunch, experiment_data: DetectorTOD, my_band_identifier: str,
                     senders: dict[str, int]) -> NDArray[np.floating]:
@@ -94,14 +95,29 @@ def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, band_id
     """
     logger = logging.getLogger(__name__)
     my_compsep_rank = mpi_info.compsep.rank
-    if my_band.get_from == "file":  #if we are supposed tp read it from file
-        if curr_tod_output is None:  #we check if we already have it or not
+    if my_band.get_from == "file":
+        if curr_tod_output is None:
             logger.info(f"CompSep: Rank {my_compsep_rank} reading static map data from file.")
-            curr_tod_output = read_Planck_map_from_file(my_band)
+            curr_tod_output = read_data_map_from_file(my_band)
+
+            ###
+            mpi_info.world.comm.Barrier()
         else:
             logger.info(f"CompSep: Rank {my_compsep_rank} already has static map data. Continuing.")
     else:
         logger.info(f"CompSep: Rank {my_compsep_rank} receiving TOD data ({band_identifier}) from TOD process with global rank {senders[band_identifier]}")
-        curr_tod_output = mpi_info.world.comm.recv(source=senders[band_identifier])  #if we are not supposed to read it from file we receive it from the TOD processing
+        curr_tod_output = mpi_info.world.comm.recv(source=senders[band_identifier])
 
+    #We split the detector map depending on the polarization of the mpi rank's band.
+    # FIXME: this is a bit wasteful, it should be handled more elegantly with the correct pol being sent to the right tasks.
+    if curr_tod_output.npol>2: #The detector map holds both I and QU
+        if my_band.identifier.endswith("_I"):
+            curr_tod_output._map_sky = curr_tod_output._map_sky[0,:].reshape((1,-1))
+            curr_tod_output._inv_n_map = curr_tod_output._inv_n_map[0,:].reshape((1,-1))
+        elif my_band.identifier.endswith("_QU"):
+            curr_tod_output._map_sky = curr_tod_output._map_sky[1:,:]
+            curr_tod_output._inv_n_map = curr_tod_output._inv_n_map[1:,:]
+        else:
+            raise ValueError(f"Polarization undefined in band {my_band.identifier}!")
+    
     return curr_tod_output

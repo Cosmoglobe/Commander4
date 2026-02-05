@@ -42,6 +42,8 @@ def init_mpi(params):
     world_comm = MPI.COMM_WORLD
     worldsize, worldrank = world_comm.Get_size(), world_comm.Get_rank()
     is_world_master = worldrank == 0
+    global_params = params.general
+    tot_num_CompSep_ranks = global_params.MPI_config.ntask_compsep_I + global_params.MPI_config.ntask_compsep_QU
     if is_world_master:
         mpi4py_version = tuple(map(int, mpi4py.__version__.split('.')))
         MPI_version = MPI.Get_version()
@@ -51,41 +53,42 @@ def init_mpi(params):
         if mpi4py_version < (4,0):
             logger.warning(f"mpi4py version ({mpi4py_version}) is below (4,0)!")
 
-
     if is_world_master:  # Every rank doesn't need to throw an error.
-        tot_num_compsep_bands = len([band for band in params.CompSep_bands if
-                                    params.CompSep_bands[band].enabled])
-        if worldsize != (params.MPI_config.ntask_tod + params.MPI_config.ntask_compsep):
+        tot_num_Compsep_bands = len([band for band in params.CompSep_bands if   #I
+                                    params.CompSep_bands[band].enabled and params.CompSep_bands[band].polarizations[0]]) +\
+                                len([band for band in params.CompSep_bands if   #QU
+                                    params.CompSep_bands[band].enabled and params.CompSep_bands[band].polarizations[1] and params.CompSep_bands[band].polarizations[2]])
+        if worldsize != (global_params.MPI_config.ntask_tod + tot_num_CompSep_ranks):
             log.lograise(RuntimeError, f"Total number of MPI tasks ({worldsize}) must equal the sum "
-                                       f"of tasks for TOD ({params.MPI_config.ntask_tod}) + CompSep "
-                                       f"({params.MPI_config.ntask_compsep}).", logger)
-        if params.MPI_config.ntask_compsep != tot_num_compsep_bands:
+                                       f"of tasks for TOD ({global_params.MPI_config.ntask_tod}) + CompSep I + QU"
+                                       f"({global_params.MPI_config.ntask_compsep_I} + {global_params.MPI_config.ntask_compsep_QU}).", logger)
+        if tot_num_CompSep_ranks != tot_num_Compsep_bands:
             log.lograise(RuntimeError, f"CompSep needs exactly as many MPI tasks "
-                                       f"{params.MPI_config.ntask_compsep} as there are bands "
-                                       f"{tot_num_compsep_bands}.", logger)
+                                       f"{tot_num_CompSep_ranks} as there are bands "
+                                       f"{tot_num_Compsep_bands}.", logger)
 
     # Split the world communicator into a communicator for compsep and one for TOD (with "color"
     # being the keyword for the split).
-    if worldrank < params.MPI_config.ntask_tod:
-        color = 0
+    if worldrank < global_params.MPI_config.ntask_tod:
+        color = 0 #TOD
         # Note that Numpy will not respect these values, because Numpy has already been loaded
         # as a mpi4py dependency. Numpy does not respect changes to these values after it has been
         # imported. Ideally these variables should therefore be set before calling Python at all.
-        os.environ["OMP_NUM_THREADS"] = f"{params.nthreads_tod}"
-        os.environ["OPENBLAS_NUM_THREADS"] = f"{params.nthreads_tod}" 
-        os.environ["MKL_NUM_THREADS"] = f"{params.nthreads_tod}"
-        os.environ["VECLIB_MAXIMUM_THREADS"] = f"{params.nthreads_tod}"
-        os.environ["NUMEXPR_NUM_THREADS"] = f"{params.nthreads_tod}"
+        os.environ["OMP_NUM_THREADS"] = f"{global_params.nthreads_tod}"
+        os.environ["OPENBLAS_NUM_THREADS"] = f"{global_params.nthreads_tod}" 
+        os.environ["MKL_NUM_THREADS"] = f"{global_params.nthreads_tod}"
+        os.environ["VECLIB_MAXIMUM_THREADS"] = f"{global_params.nthreads_tod}"
+        os.environ["NUMEXPR_NUM_THREADS"] = f"{global_params.nthreads_tod}"
         import numba
         numba.set_num_threads(1)
-    elif worldrank < params.MPI_config.ntask_tod + params.MPI_config.ntask_compsep:
+    elif worldrank < global_params.MPI_config.ntask_tod + tot_num_CompSep_ranks:
         color = 1  # Compsep
 
         # nthreads_compsep is either an int, or a list specifying nthreads for each rank.
-        if isinstance(params.nthreads_compsep, int):  # If int, all ranks have same nthreads.
-            nthreads_compsep = params.nthreads_compsep
+        if isinstance(global_params.nthreads_compsep, int):  # If int, all ranks have same nthreads.
+            nthreads_compsep = global_params.nthreads_compsep
         else:
-            nthreads_compsep = params.nthreads_compsep[worldrank - params.MPI_config.ntask_tod]
+            nthreads_compsep = global_params.nthreads_compsep[worldrank - global_params.MPI_config.ntask_tod]
         os.environ["OMP_NUM_THREADS"] = f"{nthreads_compsep}"
         os.environ["OPENBLAS_NUM_THREADS"] = f"{nthreads_compsep}"
         os.environ["MKL_NUM_THREADS"] = f"{nthreads_compsep}"
@@ -98,8 +101,8 @@ def init_mpi(params):
 
     else:
         raise ValueError("My rank ({worldrank}) exceeds the combined number of allocated tasks to"
-                         f"both TOD ({params.MPI_config.ntask_tod}) and compsep" \
-                         f"{params.MPI_config.ntask_compsep}")
+                         f"both TOD ({global_params.MPI_config.ntask_tod}) and compsep" \
+                         f"{tot_num_CompSep_ranks}")
   
     proc_comm = world_comm.Split(color, key=worldrank)
     if color == MPI.UNDEFINED:
@@ -112,8 +115,8 @@ def init_mpi(params):
 
     # Determine the world ranks of the respective master tasks for compsep and TOD
     # We ensured that this works by the "key=worldrank" in the split command.
-    tod_master = 0 if params.MPI_config.ntask_tod > 0 else None
-    compsep_master = params.MPI_config.ntask_tod
+    tod_master = 0 if global_params.MPI_config.ntask_tod > 0 else None
+    compsep_master = global_params.MPI_config.ntask_tod
 
     world_comm.barrier()
     time.sleep(worldrank*1e-2)  # Small sleep to get prints in nice order.
@@ -138,16 +141,28 @@ def init_mpi(params):
         mpi_info['tod']['size'] = proc_comm.Get_size()
         mpi_info['tod']['rank'] = proc_comm.Get_rank()
         mpi_info['tod']['is_master'] = mpi_info.tod.rank == mpi_info.tod.master
-
         mpi_info = init_mpi_tod(mpi_info, params)
+
     elif color == 1:
+        proc_rank = proc_comm.Get_rank()
         mpi_info['compsep'] = Bunch()
         mpi_info['compsep']['comm'] = proc_comm
         mpi_info['compsep']['master'] = 0
         mpi_info['compsep']['size'] = proc_comm.Get_size()
-        mpi_info['compsep']['rank'] = proc_comm.Get_rank()
+        mpi_info['compsep']['rank'] = proc_rank
         mpi_info['compsep']['is_master'] = mpi_info.compsep.rank == mpi_info.compsep.master
-
+        
+        #Split between I and QU
+        subcolor = 0 if proc_rank < global_params.MPI_config.ntask_compsep_I else 1
+        sub_comm = proc_comm.Split(subcolor, key=proc_rank)
+        mpi_info['compsep']['subcomm'] = sub_comm
+        mpi_info['compsep']['subcolor'] = subcolor
+        mpi_info['compsep']['subsize'] = sub_comm.Get_size()
+        mpi_info['compsep']['subrank'] = sub_comm.Get_rank()
+        mpi_info['compsep']['I_master'] = 0                                                             #in compsep_comm numbering
+        mpi_info['compsep']['QU_master'] = mpi_info.compsep.size - global_params.MPI_config.ntask_compsep_QU   #in compsep_comm numbering
+        mpi_info['compsep']['is_I_master'] = subcolor == 0 and mpi_info.compsep.subrank == 0
+        mpi_info['compsep']['is_QU_master'] = subcolor == 1 and mpi_info.compsep.subrank == 0
         mpi_info = init_mpi_compsep(mpi_info, params)
     return mpi_info
     
@@ -220,7 +235,7 @@ def init_mpi_tod(mpi_info, params):
                                                     f"({tot_num_bands}).", logger) 
 
     band_comm = mpi_info.tod.comm.Split(my_band_id, key=MPIrank_tod)  # Create communicators for each different band.
-    # Get my local rank, and the total size of, the band-communicator I'm on.
+    # Get my local rank, and the total size of, the band-communicator IvsQU'm on.
     MPIsize_band, MPIrank_band = band_comm.Get_size(), band_comm.Get_rank()  
     det_comm = band_comm.Split(my_det_id, key=MPIrank_band)  # Create communicators for each,
                                                                  # using the local IDs

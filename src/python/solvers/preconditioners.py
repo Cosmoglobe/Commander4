@@ -239,14 +239,8 @@ class JointPreconditioner:
         a_array_out = [a.copy() for a in a_array]
         for icomp in range(self.compsep.ncomp):
             comp_lmax = self.compsep.lmax_per_comp[icomp]
-
-            if self.compsep.params.CG_real_alm_mode:
-                a_array_out[icomp] = alm_real2complex(a_array_out[icomp], comp_lmax)
             
             # Apply the already calculated diagonal preconditioner.
             a_array_out[icomp] *= self.A_diag_inv_list[icomp]
-
-            if self.compsep.params.CG_real_alm_mode:
-                a_array_out[icomp] = alm_complex2real(a_array_out[icomp], comp_lmax)
-        
+ 
         return a_array_out

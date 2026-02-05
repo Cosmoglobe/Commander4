@@ -1,5 +1,5 @@
 import numpy as np
-from output import log
+from src.python.output import log
 import logging
 from numpy.typing import NDArray
 import ducc0

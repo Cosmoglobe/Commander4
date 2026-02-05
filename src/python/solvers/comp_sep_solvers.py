@@ -148,38 +148,36 @@ class CompSepSolver:
         self.my_rank = CompSep_comm.Get_rank()
         self.det_map = det_map
         self.params = params
-        self.my_band = Band.init_from_detector(det_map = det_map, double_precision = params.CG_float_precision == "double")
+        self.my_band = Band.init_from_detector(det_map = det_map, double_precision = params.general.CG_float_precision == "double")
 
-        if params.CG_float_precision == "single":
+        if params.general.CG_float_precision == "single":
             self.float_dtype = np.float32
             self.complex_dtype = np.complex64
         else:
             self.float_dtype = np.float64
             self.complex_dtype = np.complex128
 
-        self.alm_len_percomp_complex = np.array([((lmax+1)*(lmax+2))//2 for lmax in self.lmax_per_comp])
-        self.alm_len_percomp_real = np.array([(lmax+1)**2 for lmax in self.lmax_per_comp])
-
         self.alm_dtype = self.complex_dtype
 
         # For simplicity all array will have shapes (1, ...) for non-polarization (and then (2, ...) for polarization).
         self.npol = det_map.npol
-        self.spin = 2 if self.npol else 0
+        self.pol = det_map.pol
+        self.spin = 2 if self.pol else 0
 
-        # num-threads is either an int, or a list of one value per thread.
-        if isinstance(self.params.nthreads_compsep, int):
-            self.nthreads = self.params.nthreads_compsep
+        # num-threads is either an int, or a list of one value rank.
+        if isinstance(self.params.general.nthreads_compsep, int):
+            self.nthreads = self.params.general.nthreads_compsep
         else:
-            self.nthreads = self.params.nthreads_compsep[self.CompSep_comm.Get_rank()]
+            self.nthreads = self.params.general.nthreads_compsep[self.CompSep_comm.Get_rank()]
     
 
-    def project_all_comps_to_band(self, comp_list_in: list[Component], band_out:Band, inplace=True) -> NDArray[np.complexfloating]:
+    def project_all_comps_to_band(self, comp_list_in: list[Component], band_out:Band) -> NDArray[np.complexfloating]:
         """
-        Projects all the components in comp_list_in to the band_out object, and updates it in-place.
+        Projects all the components in `comp_list_in`, overwriting the `band_out` object's alms. 
 
         In Commander4 notation, applies A matrix, from comp list to band alms.
         """
-
+        band_out.alms = np.zeros_like(band_out.alms)
         for comp in comp_list_in:
             comp.project_comp_to_band(band_out, nthreads=self.nthreads)
         # B Y^-1 M Y a
@@ -187,19 +185,21 @@ class CompSepSolver:
         return alm_out
 
 
-    def eval_all_comps_from_band(self, band_in:Band, comp_list_out:list[Component], inplace=True) -> list[Component]:
+    def eval_all_comps_from_band(self, band_in:Band, comp_list_out:list[Component]) -> list[Component]:
         """
-        Evaluates the band_in's contribution to all the comp_list_out objects, and stores them in-place by default.
+        Evaluates the band_in's contribution to all the comp_list_out objects, and stores them in-place.
 
         In Commander4 notation, applies A_adj matrix, from band alms to comp list.
         """
 
         # B^T a
-        self.det_map.apply_B(band_in.alms) #TODO: make band an argument, rather than inplicitly taking the one from self.
+        self.det_map.apply_B(band_in.alms)
         
         # Y^T M^T Y^-1^T B^T a
         for comp in comp_list_out:
             comp.eval_comp_from_band(band_in, nthreads=self.nthreads)
+            #print("comps in RHS", np.min(comp.alms), np.max(comp.alms), np.average(comp.alms))
+        #print("comps in RHS", np.min(band_in.alms), np.max(band_in.alms), np.average(band_in.alms)) #[[np.min(comp.alms), np.max(comp.alms), np.average(comp.alms)] for comp in comp_list])
         return comp_list_out
 
 
@@ -218,9 +218,9 @@ class CompSepSolver:
         """
         logger = logging.getLogger(__name__)
         myrank = self.CompSep_comm.Get_rank()
-
+        
+        comp_list = deepcopy(comp_list_in)
         if myrank == 0:  # this task actually holds a component
-            comp_list = deepcopy(comp_list_in)
             for comp in comp_list:
                 # S^{1/2} a
                 comp.apply_smoothing_prior_sqrt()
@@ -230,7 +230,6 @@ class CompSepSolver:
         # and are therefore limited to <2GB arrays... We have to fallback to blocking communication
         # for >2GB arrays. In the future we should probably implement chunking instead.
 
-            # here I think the non blocking is useless.
         for comp in comp_list:
             comp.bcast_data_blocking(self.CompSep_comm)
 
@@ -238,13 +237,13 @@ class CompSepSolver:
         self.project_all_comps_to_band(comp_list, self.my_band)
 
         # Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
-        self.det_map.apply_inv_N_alm(self.my_band.alms, nthreads=self.nthreads)
+        self.my_band.alms = self.det_map.apply_inv_N_alm(self.my_band.alms, nthreads=self.nthreads)
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         self.eval_all_comps_from_band(self.my_band, comp_list)
 
         # Accumulate solution on master
-        biggest_size_bytes = np.max([_array.nbytes for _array in comp_list._data])
+        biggest_size_bytes = np.max([comp._data.nbytes for comp in comp_list])
         use_blocking = biggest_size_bytes > MPI_LIMIT_32BIT
         if use_blocking:
             print(f"Fallback to blocking comm (array size = {biggest_size_bytes:.2e}B)")
@@ -269,7 +268,7 @@ class CompSepSolver:
                 comp_list[icomp] += comp_list_in[icomp]
         else: # Worker ranks just wait for all their sends to complete.
             if not use_blocking:
-                for icomp in range(self.ncomp):
+                for icomp in range(len(comp_list)):
                     MPI.Request.Wait(requests[icomp])
             comp_list = []
 
@@ -282,15 +281,15 @@ class CompSepSolver:
         """
         myrank = self.CompSep_comm.Get_rank()
         mythreads = self.nthreads
-
+        
         # N^-1 d
-        b_map = self.det_map.apply_inv_N_map(self.det_map.map_sky)
-
+        b_map = self.det_map.apply_inv_N_map(self.det_map.map_sky, inplace=False)
+        
         # # Y^T N^-1 d
+        b_band = Band.init_from_detector(det_map = self.det_map, double_precision = self.params.general.CG_float_precision == "double")
         b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin, nthreads=mythreads)
-        b_band = Band.init_from_detector(det_map = self.det_map, double_precision = self.params.CG_float_precision == "double")
-        b_band.alms = b_alm
-
+        b_band.alms = b_alm.astype(b_band.alms.dtype)
+  
         # (Y^T M^T Y^-1^T B^T) Y^T N^-1 d
         self.eval_all_comps_from_band(b_band, comp_list)
 
@@ -300,14 +299,16 @@ class CompSepSolver:
             if myrank == 0:
                 # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 d
                 comp.apply_smoothing_prior_sqrt()
-
+                #print("contrib in eval", [[np.min(comp.alms), np.max(comp.alms), np.average(comp.alms)]]) # np.min(contrib_to_comp_alm), np.max(contrib_to_comp_alm), np.average(contrib_to_comp_alm)) #
+        
         if myrank == 0:
             for comp in comp_list:
                 self.logger.info(f"RHS1 comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
-        else:
-            b = []
+        #     b = comp_list
+        # else:
+        #     b = []
 
-        return b
+        return comp_list
 
 
     def calc_RHS_fluct(self, comp_list: list[Component]) -> list[Component]:
@@ -325,7 +326,7 @@ class CompSepSolver:
 
         # Y^T N^-1 eta_1
         b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin, nthreads=mythreads)
-        b_band = Band.init_from_detector(det_map = self.det_map, double_precision = self.params.CG_float_precision == "double")
+        b_band = Band.init_from_detector(det_map = self.det_map, double_precision = self.params.general.CG_float_precision == "double")
         b_band.alms = b_alm
 
         # (Y^T M^T Y^-1^T B^T) Y^T N^-1 eta_1
@@ -400,10 +401,10 @@ class CompSepSolver:
                 m_bestfit (list): The resulting best-fit solution, for the component held by this
                                   rank, as a list of alm-vectors for each component.
         """
-        max_iter = self.params.CG_max_iter_pol if self.det_map.pol else self.params.CG_max_iter
+        max_iter = self.params.general.CG_max_iter_pol if self.det_map.pol else self.params.general.CG_max_iter
 
         logger = logging.getLogger(__name__)
-        checkpoint_interval = 5
+        checkpoint_interval = 10
         master = self.CompSep_comm.Get_rank() == 0
         mycomp = self.CompSep_comm.Get_rank()
 
@@ -416,12 +417,12 @@ class CompSepSolver:
         self.CG_residuals = np.zeros((max_iter))
         if x_true is not None:
             if master:
-                x_true_list = [x_true[i:j].reshape((1,-1)) for i,j in zip(self.alm_start_idx_per_comp[:-1], self.alm_start_idx_per_comp[1:])]
-                self.xtrue_A_xtrue = x_true.dot(np.concatenate(LHS(x_true_list), axis=-1).flatten())
+                #x_true_list = [x_true[i:j].reshape((1,-1)) for i,j in zip(self.alm_start_idx_per_comp[:-1], self.alm_start_idx_per_comp[1:])]
+                self.xtrue_A_xtrue = complist_dot(x_true, LHS(x_true))
             else:
                 LHS([])
         if master:
-            logger.info("CG starting up!")
+            logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG starting up!")
         iter = 0
         t0 = time.time()
         stop_CG = False
@@ -431,13 +432,13 @@ class CompSepSolver:
             iter += 1
             if iter%checkpoint_interval == 0:
                 if master:
-                    logger.info(f"CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-checkpoint_interval:iter]):.6e} ({(time.time() - t0)/checkpoint_interval:.2f}s/iter)")
+                    logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-checkpoint_interval:iter]):.6e} ({(time.time() - t0)/checkpoint_interval:.2f}s/iter)")
                     t0 = time.time()
                     if x_true is not None:
                         CG_errors_true = complist_norm(CG_solver.x - x_true)/complist_norm(x_true)
-                        A_residual = LHS([x - y for x,y in zip(CG_solver.x, x_true_list)])
-                        A_residual = np.concatenate(A_residual, axis=-1)
-                        CG_Anorm_error = ((CG_solver.x - x_true).flatten()).dot(A_residual.flatten())
+                        A_residual = LHS([x - y for x,y in zip(CG_solver.x, x_true)])
+                        #A_residual = np.concatenate(A_residual, axis=-1)
+                        CG_Anorm_error = complist_dot([x - y for x,y in zip(CG_solver.x, x_true)], A_residual)
                         logger.info(f"CG iter {iter:3d} - True A-norm error: {CG_Anorm_error:.3e}")  # A-norm error is only defined for the full vector.
                         logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].longname} - True L2 error: {CG_errors_true:.3e}")  # We can print the individual component L2 errors.
                 else:
@@ -447,37 +448,34 @@ class CompSepSolver:
                 if master:
                     logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
                 stop_CG = True
-            if CG_solver.err < self.params.CG_err_tol:
+            if CG_solver.err < self.params.general.CG_err_tol:
                 stop_CG = True
             stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
         self.CG_residuals = self.CG_residuals[:iter]
         if master:
-            logger.info(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.params.CG_err_tol})")
-        if master:
-            s_bestfit_list = CG_solver.x
-            for icomp in range(self.ncomp):
-                for ipol in range(self.npol):
-                    almxfl(s_bestfit_list[icomp][ipol], self.per_comp_P_smooth_sqrt[icomp], inplace=True)
-        else:
-            s_bestfit_list = [np.zeros((self.npol, self.alm_len_percomp_complex[icomp]),
-                                       dtype=self.alm_dtype) for icomp in range(self.ncomp)]
-        for icomp in range(self.ncomp):
-            self.CompSep_comm.Bcast(s_bestfit_list[icomp], root=0)
-        
-        return s_bestfit_list
+            logger.info(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.params.general.CG_err_tol})")
+
+        complist_sol = CG_solver.x
+        for comp in complist_sol:
+            if master:
+                comp.apply_smoothing_prior_sqrt()
+            comp.bcast_data_blocking(self.CompSep_comm)
+
+        return complist_sol
 
 
-
-    def solve(self, seed=None) -> list[DiffuseComponent]:
+    def solve(self, comp_list:list[Component], seed=None) -> list[Component]:
         if seed is not None:
             np.random.seed(seed)
-        RHS1 = self.calc_RHS_mean()
+
+        # print(f"SOLVE: Hello rank {self.CompSep_comm.Get_rank()}, subcolor:, complist: {[c.shortname for c in comp_list]} ")
+        RHS1 = self.calc_RHS_mean(comp_list)
         # RHS2 = self.calc_RHS_fluct()
         # RHS3 = self.calc_RHS_prior_mean()
         # RHS4 = self.calc_RHS_prior_fluct()
         # RHS = [_R1 + _R2 + _R3 + _R4 for _R1, _R2, _R3, _R4 in zip(RHS1, RHS2, RHS3, RHS4)]
         RHS = RHS1
-        del(self.map_sky)
+        #del(self.map_sky)
 
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners", and has a name specified by self.params.compsep.preconditioner.
         precond = getattr(preconditioners, self.params.compsep.preconditioner)(self)
@@ -503,12 +501,11 @@ class CompSepSolver:
             dense_matrix.print_sing_vals()  # Check how much singular values (condition number) of preconditioned system improved.
             dense_matrix.print_matrix_diag()
 
-
         sol_list = self.solve_CG(self.apply_LHS_matrix, RHS, M=precond, x_true=x_true if self.params.compsep.dense_matrix_debug_mode else None)
-        for icomp in range(self.ncomp):
-            if self.spin == 0:
-                self.comp_list[icomp].component_alms_intensity = sol_list[icomp]
-            elif self.spin == 2:
-                self.comp_list[icomp].component_alms_polarization = sol_list[icomp]
+        # for icomp in range(self.ncomp):
+        #     if self.spin == 0:
+        #         self.comp_list[icomp].component_alms_intensity = sol_list[icomp]
+        #     elif self.spin == 2:
+        #         self.comp_list[icomp].component_alms_polarization = sol_list[icomp]
 
-        return self.comp_list
+        return sol_list
