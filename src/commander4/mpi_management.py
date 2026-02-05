@@ -76,8 +76,8 @@ def init_mpi(params):
         os.environ["MKL_NUM_THREADS"] = f"{params.nthreads_tod}"
         os.environ["VECLIB_MAXIMUM_THREADS"] = f"{params.nthreads_tod}"
         os.environ["NUMEXPR_NUM_THREADS"] = f"{params.nthreads_tod}"
+        os.environ["NUMBA_NUM_THREADS"] = f"{params.nthreads_tod}"
         import numba
-        numba.set_num_threads(1)
     elif worldrank < params.MPI_config.ntask_tod + params.MPI_config.ntask_compsep:
         color = 1  # Compsep
 
@@ -91,10 +91,14 @@ def init_mpi(params):
         os.environ["MKL_NUM_THREADS"] = f"{nthreads_compsep}"
         os.environ["VECLIB_MAXIMUM_THREADS"] = f"{nthreads_compsep}"
         os.environ["NUMEXPR_NUM_THREADS"] = f"{nthreads_compsep}"
-        import numba
+
         # Testing revealed 24 to be a good number (regardless of nside), but I tested this on the
         # new 384-core nodes, the optimal number is probably slightly lower on the older owls.
-        numba.set_num_threads(min(24,nthreads_compsep))
+        # Warning: I tried using numba.set_num_threads(x) here instead (or as well) but that
+        # resulted in some weirdeties, like many duplicate open file handles even when x=1.
+        os.environ["NUMBA_NUM_THREADS"] = f"{min(24,nthreads_compsep)}"
+        import numba
+
 
     else:
         raise ValueError("My rank ({worldrank}) exceeds the combined number of allocated tasks to"
