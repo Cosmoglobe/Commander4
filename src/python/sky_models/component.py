@@ -421,7 +421,7 @@ class ThermalDust(DiffuseComponent):
         self.nu0 = comp_params.nu0
         self.prior_l_power_law = 2.5
         self.longname = comp_params.longname if "longname" in comp_params else "Thermal Dust"
-        self.shortname = comp_params.shortname if "shortname" in comp_params else "dust",
+        self.shortname = comp_params.shortname if "shortname" in comp_params else "term-dust"
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for Thermal Dust emission.
@@ -494,7 +494,6 @@ class FreeFree(DiffuseComponent):
         sed = (self.nu0 / nu)**2 * (gaunt_nu / gaunt_nu0)
         return sed
 
-
 class SpinningDust(DiffuseComponent):
     """
     Spinning Dust component spectral model, based on spinning dust.
@@ -518,6 +517,8 @@ class SpinningDust(DiffuseComponent):
         self.nu_peak_ref = 30.0  # The reference peak frequency of 30 GHz.
         self.nu_peak_eval = comp_params.nu_peak
         self.nu_0 = comp_params.nu_0  # Reference frequency for the amplitude map in GHz
+        self.longname = comp_params.longname if "longname" in comp_params else "Spinning Dust"
+        self.shortname = comp_params.shortname if "shortname" in comp_params else "spin-dust"
 
         # Create an logarithmic interpolation function from the SpDust2 template
         log_nu = np.log(freqs)
