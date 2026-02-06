@@ -321,7 +321,7 @@ class DiffuseComponent(Component):
             for ipol in range(npol):
                 inplace_scale(comp_map[ipol], self.get_sed(band.nu)) 
             # Y^-1 M Y a
-            band.alms = map_to_alm(comp_map, band.nside, band.lmax, spin=spin, acc=True, nthreads=nthreads)
+            band.alms = map_to_alm(comp_map, band.nside, band.lmax, spin=spin, out=band.alms, acc=True, nthreads=nthreads)
         else:
             for ipol in range(npol):
                 inplace_add_scaled_vec(band.alms[ipol], alm_in_band_space[ipol], self.get_sed(band.nu))
@@ -346,7 +346,7 @@ class DiffuseComponent(Component):
 
         if self.spatially_varying_MM:  # If this component has a MM that is pixel-depnedent.
             # Y^-1^T B^T a
-            band_map = map_to_alm_adjoint(band.alm, band.nside, band.lmax, spin=spin, out=None, nthreads=nthreads)
+            band_map = map_to_alm_adjoint(band.alms, band.nside, band.lmax, spin=spin, out=None, nthreads=nthreads)
 
             # M^T Y^-1 B^T a
             for ipol in range(npol):
@@ -644,9 +644,9 @@ class RadioSources(PointSourcesComponent):
         self._project_to_band_map(ps_map, band.nu)
 
         # Y^-1 M Y a
-        map_to_alm(ps_map, band.nside, band.lmax, spin=0, out=band.alm, acc=True, nthreads=nthreads)
+        map_to_alm(ps_map, band.nside, band.lmax, spin=0, out=band.alms, acc=True, nthreads=nthreads)
         
-        return band.alm
+        return band.alms
 
     def eval_comp_from_band(self, band:Band, nthreads: int = 1):
         """
@@ -660,7 +660,7 @@ class RadioSources(PointSourcesComponent):
 
         assert not band.pol, "Point sources component can only be evaluated from intensity band alms"
         # Y^-1^T B^T a
-        band_map = map_to_alm_adjoint(band.alm, band.nside, band.lmax, spin=0, out=None, nthreads=nthreads)
+        band_map = map_to_alm_adjoint(band.alms, band.nside, band.lmax, spin=0, out=None, nthreads=nthreads)
 
         # M^T Y^-1 B^T a
         self._eval_from_band_map(band_map, band.nu) #updates amp_s in-place
