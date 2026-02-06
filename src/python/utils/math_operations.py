@@ -455,6 +455,8 @@ def alm_to_map(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
     use_theta_interpol = nside >= 2048
     alm, out, ndim_in = _prep_input(alm, out, nside, spin)
     if acc:
+        if out is None:
+            raise RuntimeError("Can not accumulate to None output")
         tmp_out = np.copy(out)
     out = ducc0.sht.synthesis(alm=alm, map=out, lmax=lmax, spin=spin,
                               nthreads=nthreads, **hp_geominfos[nside],
@@ -469,6 +471,8 @@ def alm_to_map_adjoint(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
     use_theta_interpol = nside >= 2048
     mp, out, ndim_in = _prep_input(mp, out, nside, spin)
     if acc:
+        if out is None:
+            raise RuntimeError("Can not accumulate to None output")
         tmp_out = np.copy(out)
     out = ducc0.sht.adjoint_synthesis(map=mp, alm=out, lmax=lmax, spin=spin,
                                       nthreads=nthreads, **hp_geominfos[nside],
@@ -483,6 +487,8 @@ def map_to_alm(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
     use_theta_interpol = nside >= 2048
     mp, out, ndim_in = _prep_input(mp, out, nside, spin)
     if acc:
+        if out is None:
+            raise RuntimeError("Can not accumulate to None output")
         tmp_out = np.copy(out)
     out = ducc0.sht.adjoint_synthesis(map=mp, alm=out, lmax=lmax, spin=spin,
                                       nthreads=nthreads, **hp_geominfos[nside],
@@ -498,6 +504,8 @@ def map_to_alm_adjoint(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
     use_theta_interpol = nside >= 2048
     alm, out, ndim_in = _prep_input(alm, out, nside, spin)
     if acc:
+        if out is None:
+            raise RuntimeError("Can not accumulate to None output")
         tmp_out = np.copy(out)
     out = ducc0.sht.synthesis(alm=alm, map=out, lmax=lmax, spin=spin,
                               nthreads=nthreads, **hp_geominfos[nside],
