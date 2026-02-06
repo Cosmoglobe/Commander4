@@ -578,40 +578,64 @@ class PointSourcesComponent(Component):
 class RadioSources(PointSourcesComponent):
     def __init__(self, comp_params: Bunch, global_params: Bunch):
         super().__init__(comp_params, global_params)
-        self._data = comp_params.amp_s               #per-source amplitudes
         self.nu0 = comp_params.nu0                   #reference frequency
-        self.alpha_s = comp_params.alpha_s           #per-source spectral indexes
-        self.lonlat_s = comp_params.lonlat_s         #per-source list of coordinates
-        self.pol = False                        #can point sources be polarized?
-        self.fwhm_r = None                      #fwhm used for the computation of pix and beam discs
-        self.pix_discs_i_s = None               #per-source list of indexes of the pixel forming the disc
-        self.beam_discs_val_s = None            #per-source list of beam values, for each pix_i_s 
+        self.pol = False                             #can point sources be polarized?
+    
+        #tabulated data
+        ps_bunch = self.read_dat_to_bunch(comp_params.file_path)
+        self._data = np.array(ps_bunch['I(mJy)'], dtype=np.float32).reshape((1,-1))  #per-source amplitudes
+        self.alpha_arr = np.array(ps_bunch['alpha_I'], dtype=np.float32)             #per-source spectral indexes
+        self.lonlat_list = list(zip(np.array(ps_bunch['Glon(deg)'], dtype=np.float32), np.array(ps_bunch['Glat(deg)'], dtype=np.float32))) #per-source list of coordinates
+        del ps_bunch
+
+        self.pix_disc_idx_list = None   #per-source list of indexes of the pixel forming the disc
+        self.beam_discs_val_s = None    #per-source list of beam values, for each pix_i_s
+        self.band_eval_nside = None     #nside and fwhm used for the computation of pix and beam discs
+        self.band_fwhm_r = None         #they depend on the band
 
         self.longname = comp_params.longname if "longname" in comp_params else "RadioPointSources"
         self.shortname = comp_params.shortname if "shortname" in comp_params else "radsources"
         self.mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(self.band_nu*pysm3u.GHz))
         self.uKRJ_to_mJysr = (pysm3u.uK_RJ).to(pysm3u.mJy / pysm3u.steradian, equivalencies=pysm3u.cmb_equivalencies(self.band_nu*pysm3u.GHz))
 
-    def compute_pix_beams(self, fwhm_r):
+    def read_dat_to_bunch(file_path):
         """
-        Computes the beams values, based on fwhm_r, in map space around all the point sources and updates in-place
-        in self.pix_discs_i_s, beam_discs_val_s and fwhm_r self.members
+        Reads a .dat point source raw table and stores it in a Bunch object which is returned.
         """
-        self.pix_discs_i_s = []
+        rows = []
+        head = []
+        with open(file_path, 'r') as file:
+            # i=0
+            for line in file:
+                if line.split()[0].startswith("#"):
+                    head.append(line.split()[1:])
+                else:
+                    rows.append(line.split())
+        head = head[-1]
+        rows = np.array(rows)       
+        return Bunch(zip(head,[rows[:,1] for i in range(rows.shape[1])]))
+
+    def compute_pix_beams(self, band_fwhm_r, band_nside):
+        """
+        Computes the beams values, based on nside and fwhm of the band, in map space around all the point sources and updates in-place
+        self.pix_disc_idx_list, beam_discs_val_s and fwhm_r self.members
+        """
+        self.pix_disc_idx_list = []
         self.beam_discs_val_s = []
-        self.fwhm_r = fwhm_r
-        for i in range(self.lonlat_s.shape[0]):      #compute and load the beams, these will reamain untouched. The FWHM depends on the band.
-            disc_pix_i_s = hp.query_disc(self.band_nside, hp.ang2vec(self.lonlat_s[i,0], self.lonlat_s[i,1], lonlat=True), get_gauss_beam_radius(self.fwhm_r))
-            self.pix_discs_i_s.append(disc_pix_i_s)
-            beam_disc = gauss_beam(hp.rotator.angdist(self.lonlat_s[i,:], hp.pix2ang(self.band_nside, disc_pix_i_s, lonlat=True), lonlat=True), self.fwhm_r)
+        self.band_fwhm_r = band_fwhm_r
+        self.band_eval_nside = band_nside
+        for i in range(self.lonlat_list.shape[0]):      #compute and load the beams, these will reamain untouched. The FWHM depends on the band.
+            disc_pix_i_s = hp.query_disc(self.band_eval_nside, hp.ang2vec(self.lonlat_list[i,0], self.lonlat_list[i,1], lonlat=True), get_gauss_beam_radius(self.band_fwhm_r))
+            self.pix_disc_idx_list.append(disc_pix_i_s)
+            beam_disc = gauss_beam(hp.rotator.angdist(self.lonlat_list[i,:], hp.pix2ang(self.band_eval_nside, disc_pix_i_s, lonlat=True), lonlat=True), self.band_fwhm_r)
             self.beam_discs_val_s.append(beam_disc)
 
     def get_sed(self, nu):
         """
-        Returns a list of sed's, one per `alpha_s`, evaluated at `nu`, with ref frequency `nu0`. 
+        Returns a list of sed's, one per `alpha_list`, evaluated at `nu`, with ref frequency `nu0`. 
         Freq. are in GHz.
         """
-        return (nu/self.nu0)**(self.alpha_s - 2)
+        return (nu/self.nu0)**(self.alpha_arr - 2)
     
     def get_sky(self, nu, nside, pol=False, fwhm=0):
         raise NotImplementedError
@@ -620,8 +644,8 @@ class RadioSources(PointSourcesComponent):
         """
         Computes the point source contribution in uK_RJ for band's frequency and beam, and sums it to `map`.
         """
-        for src_i in range(len(self.pix_discs_i_s)):
-            map[self.disc_pix_i_s[src_i]] += self.mJysr_to_uKRJ * self.beam_discs_val_s[src_i] * self._data[src_i] * self.sed(nu)
+        for src_i in range(len(self.pix_disc_idx_list)):
+            map[self.pix_disc_idx_list[src_i]] += self.mJysr_to_uKRJ * self.beam_discs_val_s[src_i] * self._data[src_i] * self.get_sed(nu)
     
     def _eval_from_band_map(self, map, nu):
         """
@@ -629,8 +653,8 @@ class RadioSources(PointSourcesComponent):
 
         All the contributions will be summed to the total proper amplitudes by the master node.
         """
-        for src_i in range(len(self.pix_discs_i_s)):
-            self._data[src_i] = self.mJysr_to_uKRJ * np.sum(map[self.disc_pix_i_s[src_i]] * self.beam_discs_val_s[src_i]) * self.sed(nu)
+        for src_i in range(len(self.pix_disc_idx_list)):
+            self._data[src_i] = self.mJysr_to_uKRJ * np.sum(map[self.pix_disc_idx_list[src_i]] * self.beam_discs_val_s[src_i]) * self.get_sed(nu)
 
     def project_comp_to_band(self, band:Band, nthreads: int = 1):
         """
@@ -638,14 +662,22 @@ class RadioSources(PointSourcesComponent):
 
         NB: this function does not include the beam smoothing.
         """
-
         assert not band.pol, "Point sources component can only be projected to intensity band alms"
+        band_fwhm_r, band_nside = np.deg2rad(band.fwhm/60.0), band.nside
+
+        #if not initializedm or if band's characteristics changed, recompute the arrays.
+        if band_fwhm_r != self.band_fwhm_r \
+            or band_nside != self.band_eval_nside \
+            or self.pix_disc_idx_list is None \
+            or self.beam_discs_val_s is None:
+            self.compute_pix_beams(band_fwhm_r, band_nside)
+
         # the point-source correspondent of: M Y a
-        ps_map = np.zeros(hp.nside2npix(band.nside)) #empty band map
+        ps_map = np.zeros(hp.nside2npix(band_nside)) #empty band map
         self._project_to_band_map(ps_map, band.nu)
 
         # Y^-1 M Y a
-        map_to_alm(ps_map, band.nside, band.lmax, spin=0, out=band.alms, acc=True, nthreads=nthreads)
+        map_to_alm(ps_map, band_nside, band.lmax, spin=0, out=band.alms, acc=True, nthreads=nthreads)
         
         return band.alms
 
