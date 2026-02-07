@@ -10,7 +10,6 @@ from pixell.bunch import Bunch
 from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
-from commander4.data_models.detector_samples import DetectorSamples
 
 
 def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
@@ -62,8 +61,11 @@ def tod_reader(my_experiment: Bunch, my_band: Bunch, my_det: Bunch, params: Bunc
         if pid in bad_PIDs:
             continue
 
-        filename = f"LB_{my_band.freq_identifier:03d}_M2_{oid.zfill(6)}.h5"
-        filepath = os.path.join(my_experiment.data_path, filename)
+        filename = f"LB_{my_band.freq_identifier:03d}_{my_band.lb_det_identifier}_{oid.zfill(6)}.h5"
+        if "data_path" in my_band:
+            filepath = os.path.join(my_band.data_path, filename)
+        else:
+            filepath = os.path.join(my_experiment.data_path, filename)
         with h5py.File(filepath, "r") as f:
             ntod = int(f[f"/{pid}/common/ntod"][()])
             ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
@@ -76,14 +78,24 @@ def tod_reader(my_experiment: Bunch, my_band: Bunch, my_det: Bunch, params: Bunc
             fsamp = float(f["/common/fsamp/"][()])
             npsi = int(f["/common/npsi/"][()])
             flag_encoded = f[f"/{pid}/{detname}/flag/"][()]
+
+        # I noticed that some simulations have a (1,N) shape for its pixels, while others do not,
+        # so we look for this first dimension and remove it if it exists:
+        if pix_encoded.ndim == 2 and pix_encoded.shape[0] == 1:
+            pix_encoded = pix_encoded[0]
+        if psi_encoded.ndim == 2 and psi_encoded.shape[0] == 1:
+            psi_encoded = psi_encoded[0]
+
         if ntod > ntod_upper_bound:
             raise ValueError(f"{ntod_upper_bound} {ntod}")
+
         flag_buffer[:ntod] = 0.0
         flag_buffer[:ntod] = cpp_utils.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8),
                                                       huffman_tree, huffman_symbols,
                                                       flag_buffer[:ntod])
         flag_buffer[:ntod_optimal] = np.cumsum(flag_buffer[:ntod_optimal])
         flag_buffer[:ntod_optimal] &= 6111232
+
         if np.sum(flag_buffer[:ntod_optimal]) == 0:
             tod_buffer[:ntod_optimal] = np.abs(tod)
             scanlist.append(ScanTOD(tod, pix_encoded, psi_encoded, 0., pid, my_band.eval_nside,
