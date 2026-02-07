@@ -214,7 +214,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
         scansample_list.append(ScanSamples())
         scansample_list[-1].scanID = experiment_data.scans[iscan].scanID
         scansample_list[-1].time_dep_rel_gain_est = 0.0
-        scansample_list[-1].rel_gain_est = my_det.rel_gain_est - params.initial_g0
+        scansample_list[-1].rel_gain_est = my_det.rel_gain_est
         scansample_list[-1].gain_est = params.initial_g0 + my_det.rel_gain_est
     det_samples = DetectorSamples(scansample_list)
     det_samples.detector_id = my_detector_id
@@ -931,10 +931,10 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
         if mpi_info.band.is_master:
             logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished temporal gain estimation in {timing_dict['temp-gain']:.1f}s.")
 
-        ### Update total gain from sum of all three gain terms. ###
-        for scan_samples in detector_samples.scans:
-            scan_samples.gain_est = detector_samples.g0_est + scan_samples.rel_gain_est\
-                                  + scan_samples.time_dep_rel_gain_est
+    ### Update total gain from sum of all three gain terms. ###
+    for scan_samples in detector_samples.scans:
+        scan_samples.gain_est = detector_samples.g0_est + scan_samples.rel_gain_est\
+                                + scan_samples.time_dep_rel_gain_est
 
     ### WHITE NOISE ESTIMATION ###
     t0 = time.time()
