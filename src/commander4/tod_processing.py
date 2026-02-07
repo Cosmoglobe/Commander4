@@ -784,20 +784,16 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
             logger.info(f"delta_g: {delta_g_sample}")
             logger.info(f"Band {experiment_data.nu}GHz time-dependent gain: min={np.min(delta_g_sample)*1e9:14.4f} mean={np.mean(delta_g_sample)*1e9:14.4f} std={np.std(delta_g_sample)*1e9:14.4f} max={np.max(delta_g_sample)*1e9:14.4f}")
 
-            if True: #debug stuff
+            if False: #debug stuff
                 import matplotlib.pyplot as plt
                 plt.figure(figsize=(10,8))
                 other_gain = detector_samples.g0_est + detector_samples.scans[0].rel_gain_est
                 plt.plot(1e9*(other_gain + delta_g_sample))
-                # plt.ylim(0.85*1e9*other_gain, 1.15*1e9*other_gain)
                 plt.ylim(0, np.max(1e9*(other_gain + delta_g_sample)))
                 plt.xlabel("PID")
                 plt.ylabel("Gain [mV/K]")
-                plt.xticks([0, 15000, 30000, 45000])
-                plt.savefig(f"{params.output_paths.plots}chain{chain}_iter{iter}_{detector_samples.detname}.png")
+                plt.savefig(f"{params.output_paths.plots}chain{chain}_iter{iter}_{detector_samples.detector_name}.png")
                 plt.close()
-                if chain == 1:
-                    np.save(f"gain_temp_iter{iter}_{detector_samples.detname}.npy", 1e9*(other_gain + delta_g_sample))
         else:
             delta_g_sample = np.zeros(n_scans_total)
 
