@@ -12,26 +12,25 @@ class Params(Bunch):
        functionality that does not exist neither in Python dictionaries or pixell.bunch.Bunch.
 
     Args:
-        data (dict): The dictionary to convert (can be recursive/nested).
+        *args: Dictionaries or iterables (passed to Bunch).
         name (str): The name/ID of this specific node (e.g., 'Planck30GHz').
+        **kwargs: Arbitrary key-value pairs (passed to Bunch).
     """
-    def __init__(self, data=None, name=None):
+    def __init__(self, *args, name=None, **kwargs):
         # 1. Store the name using object.__setattr__ to bypass Bunch's 
         #    custom __setattr__ (which would otherwise add it as a dict key).
         object.__setattr__(self, "_name", name)
         
         # 2. Initialize the parent Bunch (behaves like a dict)
-        super().__init__()
-
+        super().__init__(*args, **kwargs)
+        
         # 3. Recursively populate the data
-        if data:
-            for key, val in data.items():
-                if isinstance(val, dict):
-                    # RECURSION: Pass the child dict AND the key as the name
-                    self[key] = Params(val, name=key)
-                else:
-                    # LEAF: Just assign the value
-                    self[key] = val
+        for key, val in list(self.items()):
+            if isinstance(val, dict):
+                # RECURSION: Pass the child dict AND the key as the name
+                self[key] = Params(val, name=key)
+        # We don't need to handle the non-recursive "leaf" nodes explicitly, as this is
+        # handled by pixell.Bunch, which we have already called the constructor of.
 
     @property
     def name(self):
