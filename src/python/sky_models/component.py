@@ -10,11 +10,13 @@ from scipy.interpolate import interp1d
 from numpy.typing import NDArray
 from typing import Callable
 from mpi4py import MPI
+from numba import njit, prange
 
 from src.python.output import log
 from src.python.utils.math_operations import alm_to_map, map_to_alm, project_alms, inplace_scale,\
         inplace_add_scaled_vec, map_to_alm_adjoint, alm_to_map_adjoint, almxfl,\
-        inplace_arr_add, inplace_arr_sub, inplace_arr_prod, inplace_arr_truediv, dot, _dot_complex_alm_1D_arrays
+        inplace_arr_add, inplace_arr_sub, inplace_arr_prod, inplace_arr_truediv, dot, \
+        _dot_complex_alm_1D_arrays, _numba_proj2map, _numba_eval_from_map 
 from src.python.utils.map_utils import fwhm2sigma, gauss_beam, get_gauss_beam_radius
 from src.python.data_models.band import Band
 
@@ -587,13 +589,14 @@ class RadioSources(PointSourcesComponent):
         self._data = np.array(ps_bunch['I(mJy)'], dtype=np.float32).reshape((1,-1))  #per-source amplitudes
         self.alpha_arr = np.array(ps_bunch['alpha_I'], dtype=np.float32)             #per-source spectral indexes
         self.lonlat_arr = np.array((ps_bunch['Glon(deg)'], ps_bunch['Glat(deg)']), dtype=np.float32).T #per-source list of coordinates
-        print("PS data shape", self._data.shape)
         del ps_bunch
+        if self.alpha_arr.shape[0] != self.lonlat_arr.shape[0] or self.alpha_arr.shape[0] != self._data.shape[1]:
+            raise RuntimeError("Point Source tabulated data must be uniform in length.")
 
         self.pix_disc_idx_list = None   #per-source list of indexes of the pixel forming the disc
         self.beam_disc_val_list = None    #per-source list of beam values, for each pix_i_s
         self.band_eval_nside = None     #nside and fwhm used for the computation of pix and beam discs
-        self.band_fwhm_r = None         #they depend on the band
+        self.band_fwhm_r = None         #they depend on the bands
 
     def read_dat_to_bunch(self, file_path):
         """
@@ -610,7 +613,7 @@ class RadioSources(PointSourcesComponent):
                     rows.append(line.split())
         head = head[-1]
         rows = np.array(rows)       
-        return Bunch(zip(head,[rows[:,1] for i in range(rows.shape[1])]))
+        return Bunch(zip(head,[rows[:,i] for i in range(rows.shape[1])]))
 
     def compute_pix_beams(self, band_fwhm_r, band_nside, recompute=False):
         """
@@ -655,10 +658,13 @@ class RadioSources(PointSourcesComponent):
         the `map` array should have shape [1,npix].
         """
         mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
-        #uKRJ_to_mJysr = (pysm3u.uK_RJ).to(pysm3u.mJy / pysm3u.steradian, equivalencies=pysm3u.cmb_equivalencies(self.band_nu*pysm3u.GHz))
+        #uKRJ_to_mJysr = (pysm3u.uK_RJ).to(pysm3u.mJy / pysm3u.steradian, equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
         sed_s = self.get_sed(nu)
-        for src_i in range(len(self.pix_disc_idx_list)):
-            map[0,self.pix_disc_idx_list[src_i]] += mJysr_to_uKRJ * self.beam_disc_val_list[src_i] * self._data[0,src_i] * sed_s[src_i]
+
+        _numba_proj2map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list, self._data[0,:], sed_s)
+        # for src_i in prange(len(self.pix_disc_idx_list)):
+        #     map[0,self.pix_disc_idx_list[src_i]] += mJysr_to_uKRJ * self.beam_disc_val_list[src_i] * self._data[0,src_i] * sed_s[src_i]
+        map*=mJysr_to_uKRJ
     
     def _eval_from_band_map(self, map, nu):
         """
@@ -669,9 +675,12 @@ class RadioSources(PointSourcesComponent):
         the `map` array should have shape [1,npix].
         """
         mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
+        uKRJ_to_mJysr = (pysm3u.uK_RJ).to(pysm3u.mJy / pysm3u.steradian, equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
         sed_s = self.get_sed(nu)
-        for src_i in range(len(self.pix_disc_idx_list)):
-            self._data[0,src_i] = mJysr_to_uKRJ * np.sum(map[0,self.pix_disc_idx_list[src_i]] * self.beam_disc_val_list[src_i]) * sed_s[src_i]
+        _numba_eval_from_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list, self._data[0,:], sed_s)
+        # for src_i in range(len(self.pix_disc_idx_list)):
+        #     self._data[0,src_i] = mJysr_to_uKRJ * np.sum(map[0,self.pix_disc_idx_list[src_i]] * self.beam_disc_val_list[src_i]) * sed_s[src_i]
+        self._data *= mJysr_to_uKRJ
 
     def project_comp_to_band(self, band:Band, nthreads: int = 1):
         """

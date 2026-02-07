@@ -16,7 +16,7 @@ class DetectorMap:
                    
         self._map_sky = map_sky
         self._nu = nu
-        self._fwhm = fwhm
+        self._fwhm = fwhm #stored in arcmin
         self._nside = nside
         self._lmax = int(2.5*nside) if lmax is None else lmax      # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
         self._beam_Cl = hp.gauss_beam(np.deg2rad(fwhm/60.0), self._lmax)

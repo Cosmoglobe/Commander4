@@ -170,6 +170,18 @@ def _dot_complex_alm_1D_arrays(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArr
     """
     return np.sum((alm1[:lmax]*alm2[:lmax]).real) + np.sum((alm1[lmax:]*np.conj(alm2[lmax:])).real*2)
 
+#Specific function for point sources:
+@njit(fastmath=True, parallel=True)
+def _numba_proj2map(map, pix_disc_idx_list, beam_disc_val_list, amps, sed_s):
+    for src_i in prange(len(pix_disc_idx_list)):
+        map[pix_disc_idx_list[src_i]] += beam_disc_val_list[src_i] * amps[src_i] * sed_s[src_i]
+    return map
+
+@njit(fastmath=True, parallel=True)
+def _numba_eval_from_map(map, pix_disc_idx_list, beam_disc_val_list, amps, sed_s):
+    for src_i in range(len(pix_disc_idx_list)):
+            amps[src_i] = np.sum(map[pix_disc_idx_list[src_i]] * beam_disc_val_list[src_i]) * sed_s[src_i]
+    return amps
 
 ###### ALM-LIST FUNCTIONS ######
 # These functions are common array operations, but made to work on the alm-lists, which are

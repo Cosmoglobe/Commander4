@@ -7,7 +7,7 @@ class Band:
     def __init__(self, alms, nu, fwhm, nside:int):
         self._alms = alms
         self._nu = nu
-        self._fwhm = fwhm
+        self._fwhm = fwhm #stored in arcmin
         self._nside = nside
 
     @classmethod

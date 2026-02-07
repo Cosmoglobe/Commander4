@@ -139,7 +139,6 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
     if params.general.pixel_compsep_sampling:
         comp_list = amplitude_sampling_per_pix(compsep_comm, detector_data, comp_list, params)
     else:
-
         subcolor = mpi_info.compsep.subcolor #Subcolor splits the compsep ranks into: Pol -> 1, Int -> 0
         compsep_subcomm = mpi_info.compsep.subcomm
         compsep_solver = CompSepSolver(detector_data,
@@ -178,9 +177,9 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
         for comp in comp_list:
             comp.bcast_data_blocking(compsep_comm, root=mpi_info.compsep.master)
     
-    if mpi_info.compsep.is_master:
-        for comp in comp_list:
-            print("NEW", comp.shortname, np.mean(comp.alms))
+    # if mpi_info.compsep.is_master:
+    #     for comp in comp_list:
+    #         print("NEW", comp.shortname, np.mean(comp.alms))
     
     #FIXME: How will we deal with this once we give the chance to the user to define different parameters for polarized and non-pol detectors?
     sky_model = SkyModel(comp_list)
