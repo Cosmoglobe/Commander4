@@ -7,6 +7,7 @@ import time
 from numpy.typing import NDArray
 import math
 import os
+import h5py
 
 from commander4.output import log
 from commander4.data_models.detector_map import DetectorMap
@@ -159,7 +160,6 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
                 my_experiment_name = exp_name
                 my_experiment = experiment
                 my_det = detector
-                my_detector_name = det_name
                 # Setting our unique detector id. Note that this is a global, not per band.
                 my_detector_id = current_detector_id
                 tot_num_scans = experiment.num_scans
@@ -171,18 +171,18 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
     mpi_info.tod.comm.Barrier()
 
 
-    logger.info(f"TOD-rank {mpi_info.tod.rank:4} (on machine {mpi_info.processor_name}), dedicated to "
+    logger.debug(f"TOD-rank {mpi_info.tod.rank:4} (on machine {mpi_info.processor_name}), dedicated to "
                 f"detector {my_detector_id:4}, with local rank {mpi_info.det.rank:4} (local communicator "
                 f"size: {mpi_info.det.size:4}).")
     time.sleep(mpi_info.tod.rank*1e-3)  # Small sleep to get prints in nice order.
     # MPIcolor_band = MPIrank_tod%tot_num_bands  # Spread the MPI tasks over the different bands.
     band_comm = mpi_info.band.comm
     MPIsize_band, MPIrank_band = band_comm.Get_size(), band_comm.Get_rank()  # Get my local rank, and the total size of, the band-communicator I'm on.
-    logger.info(f"TOD-rank {mpi_info.tod.rank:4} (on machine {mpi_info.processor_name}), dedicated to band {my_band_id:4}, with local rank {mpi_info.band.rank:4} (local communicator size: {mpi_info.band.size:4}).")
+    logger.debug(f"TOD-rank {mpi_info.tod.rank:4} (on machine {mpi_info.processor_name}), dedicated to band {my_band_id:4}, with local rank {mpi_info.band.rank:4} (local communicator size: {mpi_info.band.size:4}).")
     
     det_comm = band_comm.Split(my_detector_id, key=mpi_info.tod.rank)  # Create communicators for each different band.
     MPIsize_det, MPIrank_det = det_comm.Get_size(), band_comm.Get_rank()  # Get my local rank, and the total size of, the band-communicator I'm on.
-    logger.info(f"TOD-rank {mpi_info.tod.rank:4} (on machine {mpi_info.processor_name}), dedicated to detector {my_detector_id:4}, with local rank {mpi_info.det.rank:4} (local communicator size: {mpi_info.det.size:4}).")
+    logger.debug(f"TOD-rank {mpi_info.tod.rank:4} (on machine {mpi_info.processor_name}), dedicated to detector {my_detector_id:4}, with local rank {mpi_info.det.rank:4} (local communicator size: {mpi_info.det.size:4}).")
 
     # Creating "tod_band_masters", an array which maps the band index to the rank of the master of that band.
     my_band_identifier = f"{my_experiment_name}$$${my_band_name}"
@@ -192,9 +192,9 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
     all_data_tod = mpi_info.tod.comm.allgather(data_tod)
     world_band_masters_dict = {item[0]: item[1] for item in all_data_world if item is not None}
     tod_band_masters_dict = {item[0]: item[1] for item in all_data_tod if item is not None}
-    logger.info(f"world_band_masters_dict: {world_band_masters_dict}")
-    logger.info(f"tod_band_masters_dict: {tod_band_masters_dict}")
-    logger.info(f"TOD: Rank {mpi_info.tod.rank:4} assigned scans {my_scans_start:6} - {my_scans_stop:6} on "
+    logger.debug(f"world_band_masters_dict: {world_band_masters_dict}")
+    logger.debug(f"tod_band_masters_dict: {tod_band_masters_dict}")
+    logger.debug(f"TOD: Rank {mpi_info.tod.rank:4} assigned scans {my_scans_start:6} - {my_scans_stop:6} on "
                 f"band {my_band_id:4}, det{my_detector_id:4}.")
     
     mpi_info['world']['tod_band_masters'] = world_band_masters_dict
@@ -839,21 +839,35 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
 
 
 
-def write_tod_samples_to_file(TOD_comm: MPI.Comm, detector_samples: DetectorSamples, params: Params,
+def write_tod_samples_to_file(TOD_comm: MPI.Comm, det_comm: MPI.Comm, detector_samples: DetectorSamples, params: Params,
                               chain: int, iter: int):
-    import h5py
-    detector_samples_batches = TOD_comm.gather(detector_samples, root=0)
-    chain_outpath = os.path.join(params.output_paths.chains, f"chain{chain:02d}_iter{iter:04d}.h5")
-    if TOD_comm.Get_rank() == 0:
-        with h5py.File(chain_outpath, "w") as file:
-            for detector_samples_batch in detector_samples_batches:
-                expname = detector_samples_batch.experiment_name
-                detname = detector_samples_batch.detector_name
-                for scan_samples in detector_samples_batch.scans:
-                    scanID = scan_samples.scanID
-                    for name, value in vars(scan_samples).items():
-                        file[f"{expname}/{detname}/{scanID}/{name}"] = value
+    # TODO: Make DetectorSamples arrays. Currently this gather takes minutes.
+    detector_samples_batches = det_comm.gather(detector_samples, root=0)
 
+    expname = detector_samples.experiment_name
+    detname = detector_samples.detector_name
+    chain_outpath = os.path.join(params.output_paths.chains, f"{expname}_{detname}_chain{chain:02d}_iter{iter:04d}.h5")
+
+    if det_comm.Get_rank() == 0:
+        scanIDs = []
+        for detector_samples_batch in detector_samples_batches:
+            for scan_samples in detector_samples_batch.scans:
+                scanIDs.append(scan_samples.scanID)
+        scanIDs = np.array(scanIDs, dtype=int)
+        scans_sort_indices = np.argsort(scanIDs)
+
+        write_dict = {}
+        for key, value in vars(scan_samples).items():
+            write_dict[key] = []
+
+        for detector_samples_batch in detector_samples_batches:
+            for scan_samples in detector_samples_batch.scans:
+                for key, value in vars(scan_samples).items():
+                    write_dict[key].append(value)
+        with h5py.File(chain_outpath, "w") as file:
+            for key in write_dict.keys():
+                arr = np.array(write_dict[key])[scans_sort_indices]
+                file[key] = arr
 
 
 def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
