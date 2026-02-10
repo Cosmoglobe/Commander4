@@ -64,22 +64,24 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch) -> tuple[list[Compon
     current_band_idx_QU = mpi_info.compsep.QU_master
     band_identifier = None
     for band_str in params.CompSep_bands:   #Intensity
-        if params.CompSep_bands[band_str].enabled:
-            is_I = params.CompSep_bands[band_str].polarizations[0]
-            is_QU = params.CompSep_bands[band_str].polarizations[1] and params.CompSep_bands[band_str].polarizations[2]
+        band = params.CompSep_bands[band_str]
+        if band.enabled:
+            logassert(len(band.polarizations), f'{len(band.polarizations)} stokes parameter definitions found in band section in param file, 3 expected. E.g. [True, False, False]', logger)
+            is_I = band.polarizations[0]
+            is_QU = band.polarizations[1] and band.polarizations[2]
             if is_I:
                 if current_band_idx_I == mpi_info.compsep.rank:  # Each rank is responsible for one band, for simplicity the band matching the index of their rank.
-                    my_band = params.CompSep_bands[band_str]
+                    my_band = band
                     if my_band.get_from != "file":
                         band_identifier = f"{my_band.get_from}$$${band_str}_I"
                     else:
                         band_identifier = band_str+"_I"
-                    logger.info(f"Rank {mpi_info.compsep.rank} matched band {band_str} I")
+                    logger.info(f"Rank {mpi_info.compsep.rank} just matched band {band_identifier}")
                     my_band.identifier = band_identifier
                 current_band_idx_I += 1
             if is_QU:
                 if current_band_idx_QU == mpi_info.compsep.rank:  # Each rank is responsible for one band, for simplicity the band matching the index of their rank.
-                    my_band = params.CompSep_bands[band_str]
+                    my_band = band
                     if my_band.get_from != "file":
                         band_identifier = f"{my_band.get_from}$$${band_str}_QU"
                     else:
@@ -87,8 +89,8 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch) -> tuple[list[Compon
                     logger.info(f"Rank {mpi_info.compsep.rank} matched band {band_str} QU")
                     my_band.identifier = band_identifier
                 current_band_idx_QU += 1
-        if not (is_I or is_QU):
-            raise ValueError(f"Polarizations of band {band_str} misconfigured in parameter file.")
+            if not (is_I or is_QU):
+                raise ValueError(f"Polarizations of band {band_str} misconfigured in parameter file.")
     
     #sanity check:
     logassert(current_band_idx_I == mpi_info.compsep.QU_master, "Number of acquired Intensity bands ({current_band_idx_I}) do not match number of MPI tasks assigned to Intensity ({mpi_info.compsep.QU_master})", logger)
@@ -107,7 +109,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch) -> tuple[list[Compon
 
 
 def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chain: int,
-                    params: Bunch, comp_list: list[Component]) -> NDArray[np.float64]:
+                    params: Bunch, comp_list: list[Component]) -> SkyModel:
     """ Performs a single component separation iteration.
         Called by each compsep process, which are each responsible for a single band.
     

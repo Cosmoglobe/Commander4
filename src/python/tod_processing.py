@@ -72,17 +72,26 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         map_signal -= map_orbdipole
         if mapmaker_corrnoise is not None:
             map_signal -= map_corrnoise
-        detmap = DetectorMap(map_signal, map_rms, experiment_data.nu,
+
+        #Here we split here between I and QU
+        detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
                              experiment_data.fwhm, experiment_data.nside)
-        detmap.g0 = detector_samples.g0_est
-        detmap.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
-        detmap.map_skymodel = map_skymodel
-        detmap.map_orbdipole = map_orbdipole
-        if mapmaker_corrnoise is not None:
-            detmap.map_corrnoise = map_corrnoise
+        detmap_QU = DetectorMap(map_signal[1:3,:], map_rms[1:3,:], experiment_data.nu,
+                             experiment_data.fwhm, experiment_data.nside)
+        detmap_I.g0 = detector_samples.g0_est
+        detmap_I.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
+        detmap_QU.g0 = detector_samples.g0_est
+        detmap_QU.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
+
+        # TODO: This was for plotting, fix through chain files
+        # detmap_I.map_skymodel = map_skymodel
+        # detmap_I.map_orbdipole = map_orbdipole
+        
+        # if mapmaker_corrnoise is not None:
+        #     detmap.map_corrnoise = map_corrnoise
+        return [detmap_I, detmap_QU]
     else:
-        detmap = None
-    return detmap
+        return []
 
 
 def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm, MPI.Comm, str,
@@ -102,7 +111,8 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
         mpi_info (Bunch): The data structure containing all MPI relevant data,
             now also with a 'tod' section as well as the dictionary of band
             master mappings.
-        my_band_identifier (str): Unique string identifier for the experiment+band this process is responsible for.
+        todproc_my_band_id (str): Unique string identifier for the experiment+band this process is
+          responsible for, regardless of polarization.
         experiment_data (DetectorTOD): THe TOD data for the band of this process.
     """
 
@@ -167,21 +177,6 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
     MPIsize_det, MPIrank_det = det_comm.Get_size(), band_comm.Get_rank()  # Get my local rank, and the total size of, the band-communicator I'm on.
     logger.info(f"TOD-rank {mpi_info.tod.rank:4} (on machine {mpi_info.processor_name}), dedicated to detector {my_detector_id:4}, with local rank {mpi_info.det.rank:4} (local communicator size: {mpi_info.det.size:4}).")
 
-    # Creating "tod_band_masters", an array which maps the band index to the rank of the master of that band.
-    my_band_identifier = f"{my_experiment_name}$$${my_band_name}"
-    data_world = (my_band_identifier, mpi_info.world.rank) if mpi_info.band.is_master else None
-    data_tod = (my_band_identifier, mpi_info.tod.rank) if mpi_info.band.is_master else None
-    all_data_world = mpi_info.tod.comm.allgather(data_world)
-    all_data_tod = mpi_info.tod.comm.allgather(data_tod)
-    world_band_masters_dict = {item[0]: item[1] for item in all_data_world if item is not None}
-    tod_band_masters_dict = {item[0]: item[1] for item in all_data_tod if item is not None}
-    logger.info(f"world_band_masters_dict: {world_band_masters_dict}")
-    logger.info(f"tod_band_masters_dict: {tod_band_masters_dict}")
-    logger.info(f"TOD: Rank {mpi_info.tod.rank:4} assigned scans {my_scans_start:6} - {my_scans_stop:6} on "
-                f"band {my_band_id:4}, det{my_detector_id:4}.")
-    
-    mpi_info['world']['tod_band_masters'] = world_band_masters_dict
-    mpi_info['tod']['tod_band_masters'] = tod_band_masters_dict
     t0 = time.time()
     if my_experiment.is_sim:
         experiment_data = read_TOD_sim_data(my_experiment.data_path, my_band, my_det, params,
@@ -199,14 +194,33 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
     for iscan in range(num_scans):
         scansample_list.append(ScanSamples())
         scansample_list[-1].time_dep_rel_gain_est = 0.0
-        scansample_list[-1].rel_gain_est = my_det.rel_gain_est - params.initial_g0
+        scansample_list[-1].rel_gain_est = my_det.rel_gain_est - params.general.initial_g0
         scansample_list[-1].gain_est = my_det.rel_gain_est
     det_samples = DetectorSamples(scansample_list)
     det_samples.detector_id = my_detector_id
-    det_samples.g0_est = params.initial_g0
+    det_samples.g0_est = params.general.initial_g0
     det_samples.detname = my_det.name
 
-    return mpi_info, my_band_identifier, experiment_data, det_samples
+    # Creating "tod_band_masters", an array which maps the band index to the rank of the master of that band.
+    # FIXME: for now we assume that every TOD generates all 3 stokes parameteres, in the future might make sense to parametrize that
+    todproc_my_band_id = f"{my_experiment_name}$$${my_band_name}"
+    data_world = (todproc_my_band_id, mpi_info.world.rank) if mpi_info.band.is_master else None
+    data_tod = (todproc_my_band_id, mpi_info.tod.rank) if mpi_info.band.is_master else None
+    all_data_world = mpi_info.tod.comm.allgather(data_world)
+    all_data_tod = mpi_info.tod.comm.allgather(data_tod)
+    #we first add the intensity identifiers for the compsep side
+    world_band_masters_dict = {item[0]+"_I": item[1] for item in all_data_world if item is not None}
+    #and then the QU ones, the rank which they refer to is the same, i.e. that tod band master
+    world_band_masters_dict.update({item[0]+"_QU": item[1] for item in all_data_world if item is not None})
+    tod_band_masters_dict = {item[0]: item[1] for item in all_data_tod if item is not None}
+    logger.info(f"world_band_masters_dict: {world_band_masters_dict}")
+    logger.info(f"tod_band_masters_dict: {tod_band_masters_dict}")
+    logger.info(f"TOD: Rank {mpi_info.tod.rank:4} assigned scans {my_scans_start:6} - {my_scans_stop:6} on "
+                f"band {my_band_id:4}, det{my_detector_id:4}.")
+    mpi_info['world']['tod_band_masters'] = world_band_masters_dict
+    mpi_info['tod']['tod_band_masters'] = tod_band_masters_dict
+
+    return mpi_info, todproc_my_band_id, experiment_data, det_samples
 
 
 def estimate_white_noise(experiment_data: DetectorTOD, detector_samples: DetectorSamples, det_compsep_map: NDArray, params: Bunch) -> DetectorTOD:
@@ -752,7 +766,7 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
 
 def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
                 detector_samples, compsep_output: NDArray,
-                params: Bunch, chain, iter) -> DetectorMap:
+                params: Bunch, chain, iter) -> list[DetectorMap]:
     """ Performs a single TOD iteration.
 
     Input:
@@ -764,8 +778,9 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
         params (Bunch): The parameters from the input parameter file.
 
     Output:
-        DetectorMap instance which represents the correlated noise subtracted
-            TOD data for the band belonging to the current process.
+        list[DetectorMap] list of instance which represents the correlated noise subtracted
+            TOD data in map space for the band belonging to the current process, 
+            [I, QU] respectively.
     """
     # Steps:
     # 1. Initialize n_corr_est and alpha/fknee values.
@@ -778,8 +793,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     logger = logging.getLogger(__name__)
     if iter == 1:
         for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-            scan_samples.alpha_est = params.noise_alpha
-            scan_samples.fknee_est = params.noise_fknee
+            scan_samples.alpha_est = params.general.noise_alpha
+            scan_samples.fknee_est = params.general.noise_fknee
     
     timing_dict = {}
     waittime_dict = {}
@@ -794,7 +809,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     if mpi_info.tod.is_master:
         logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished white noise estimation in {timing_dict['wn-est-1']:.1f}s.")
 
-    if iter >= params.sample_gain_from_iter_num:
+    if iter >= params.general.sample_gain_from_iter_num:
         ### ABSOLUTE GAIN CALIBRATION ### 
         t0 = time.time()
         detector_samples, wait_time = sample_absolute_gain(TOD_comm, experiment_data, detector_samples, compsep_output)
@@ -831,7 +846,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     if band_comm.Get_rank() == 0:
         logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished white noise estimation in {timing_dict['wn-est-2']:.1f}s.")
 
-    if iter >= params.sample_corr_noise_from_iter_num:
+    if iter >= params.general.sample_corr_noise_from_iter_num:
         ### CORRELATED NOISE SAMPLING ###
         t0 = time.time()
         detector_samples, mapmaker_corrnoise, wait_time = sample_noise(band_comm, experiment_data, detector_samples, compsep_output)

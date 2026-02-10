@@ -64,8 +64,8 @@ def init_mpi(params):
                                        f"({global_params.MPI_config.ntask_compsep_I} + {global_params.MPI_config.ntask_compsep_QU}).", logger)
         if tot_num_CompSep_ranks != tot_num_Compsep_bands:
             log.lograise(RuntimeError, f"CompSep needs exactly as many MPI tasks "
-                                       f"{tot_num_CompSep_ranks} as there are bands "
-                                       f"{tot_num_Compsep_bands}.", logger)
+                                       f"({tot_num_CompSep_ranks}) as there are bands "
+                                       f"({tot_num_Compsep_bands}).", logger)
 
     # Split the world communicator into a communicator for compsep and one for TOD (with "color"
     # being the keyword for the split).
@@ -194,8 +194,6 @@ def init_mpi_tod(mpi_info, params):
         experiment = params.experiments[exp_name]
         if not experiment.enabled:
             continue
-
-
         for iband, band_name in enumerate(experiment.bands):
             band = experiment.bands[band_name]
             if not band.enabled:
