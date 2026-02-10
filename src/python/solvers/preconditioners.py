@@ -17,7 +17,7 @@ class NoPreconditioner:
     """ Preconditioner for the case where no preconditioner is used.
         Returns the input array unchanged.
     """
-    def __init__(self, compsep: CompSepSolver):
+    def __init__(self, compsep: CompSepSolver, complist: list[Component]):
         """
         Arguments:
             compsep (CompSepSolver): The CompSepSolver object from which this class is initialized.
@@ -25,8 +25,8 @@ class NoPreconditioner:
         self.compsep = compsep
 
 
-    def __call__(self, a_array: NDArray | list[Component]):
-        return deepcopy(a_array)
+    def __call__(self, a_complist: list[Component]):
+        return [deepcopy(a) for a in a_complist]
 
 
 
@@ -185,38 +185,44 @@ class JointPreconditioner:
         constant rms across the map (but not across components).
         #TODO: 1. Get Wigner 3j stuff to work to get full N-diagonal. 2. Get the full mixing matrix stuff implemented.
     """
-    def __init__(self, compsep: CompSepSolver):
+    def __init__(self, compsep: CompSepSolver, comp_list: list[Component]):
         self.compsep = compsep
         self.is_master = compsep.CompSep_comm.Get_rank() == 0
 
         # Gather all necessary per-band information from all ranks (all ranks hold a band).
         # TODO: Currently the master rank temporarily has to hold ALL inverse-variance bands.
         # It would be easy to re-write this so they send them one-and-one as we make the diagonal.
-        all_fwhm_rad = compsep.CompSep_comm.gather(compsep.my_band_fwhm_rad, root=0)
-        all_map_inv_var = compsep.CompSep_comm.gather(compsep.map_inv_var, root=0)
+        all_fwhm_rad = compsep.CompSep_comm.gather(np.deg2rad(compsep.my_band.fwhm/60), root=0)
+        all_map_inv_var = compsep.CompSep_comm.gather(compsep.det_map.inv_n_map, root=0)
+        all_freqs = compsep.CompSep_comm.gather(compsep.my_band.nu, root=0)
 
         # We can now get rid of the ranks that do not hold components.
         if not self.is_master:
             return
 
         nband = len(all_fwhm_rad)
+        ncomp = len(comp_list)
         self.A_diag_inv_list = []
-        for icomp in range(compsep.ncomp):
+        for icomp in range(ncomp):
+            if not hasattr(comp_list[icomp], "alms"): #FIXME: for now workaround to exclude point sources
+                continue
             # Construct the full mixing matrix M on all ranks
-            M = np.empty((nband, compsep.ncomp), dtype=np.float64)
-            for jcomp in range(compsep.ncomp):
-                comp = compsep.comp_list[jcomp]
-                M[:, jcomp] = comp.get_sed(compsep.freqs)
+            M = np.empty((nband, ncomp), dtype=np.float64)
+            for jcomp in range(ncomp):
+                comp = comp_list[jcomp]
+                if not hasattr(comp, "alms"): #FIXME: for now workaround to exclude point sources
+                    continue
+                M[:, jcomp] = comp.get_sed(np.array(all_freqs, dtype=np.float64))
 
             # This is our estimate of the inverse of A, which serves as a preconditioner for A.
-            A_diag = np.zeros(compsep.alm_len_percomp_complex[icomp], dtype=np.complex128)
+            A_diag = np.zeros(comp_list[icomp].alm_len_complex, dtype=np.complex128)
             # Loop over all frequency bands to build the diagonal term
             for iband in range(nband):
                 M_fc = M[iband, icomp]
 
                 # Calculate beam operator for this frequency band
-                beam_window_squared = hp.gauss_beam(all_fwhm_rad[iband], lmax=compsep.lmax_per_comp[icomp])**2
-                beam_op_complex = hp.almxfl(np.ones(compsep.alm_len_percomp_complex[icomp], dtype=np.complex128), beam_window_squared)
+                beam_window_squared = hp.gauss_beam(all_fwhm_rad[iband], lmax=comp_list[icomp].lmax)**2
+                beam_op_complex = hp.almxfl(np.ones(comp_list[icomp].alm_len_complex, dtype=np.complex128), beam_window_squared)
 
                 mean_weights = np.mean(all_map_inv_var[iband])
                 npix = all_map_inv_var[iband].shape[-1]
@@ -225,22 +231,24 @@ class JointPreconditioner:
                 # Add the weighted contribution of this frequency band to the total
                 A_diag += M_fc**2 * beam_op_complex * mean_weights
 
-            hp.almxfl(A_diag, compsep.per_comp_P_smooth[icomp], inplace=True)
+            hp.almxfl(A_diag, comp_list[icomp].P_smoothing_prior, inplace=True)
             # +1 because of the re-writing of the LHS equation with a S^{1/2} scaling.
             A_diag += 1
             # Regularize the final operator to avoid division by zero
             self.A_diag_inv_list.append(1.0/A_diag)
 
-    def __call__(self, a_array: list[NDArray]) -> list[NDArray]:
+    def __call__(self, a_complist: list[Component]) -> list[Component]:
         if not self.is_master:
-            return a_array
+            return a_complist
 
         # Need to parse the list to make copy, as the list.copy() is a shallow copy.
-        a_array_out = [a.copy() for a in a_array]
-        for icomp in range(self.compsep.ncomp):
-            comp_lmax = self.compsep.lmax_per_comp[icomp]
-            
-            # Apply the already calculated diagonal preconditioner.
-            a_array_out[icomp] *= self.A_diag_inv_list[icomp]
+        a_complist_out = [deepcopy(a) for a in a_complist]
+        for icomp in range(len(a_complist)):
+            #comp_lmax = self.compsep.lmax_per_comp[icomp]
+            if hasattr(a_complist[icomp], "alms"):
+                # Apply the already calculated diagonal preconditioner.
+                a_complist_out[icomp].alms *= self.A_diag_inv_list[icomp]
+            else:
+                pass
  
-        return a_array_out
+        return a_complist_out
