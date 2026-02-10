@@ -478,7 +478,7 @@ class CompSepSolver:
         #del(self.map_sky)
 
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners", and has a name specified by self.params.compsep.preconditioner.
-        precond = getattr(preconditioners, self.params.compsep.preconditioner)(self)
+        precond = getattr(preconditioners, self.params.compsep.preconditioner)(self, comp_list)
 
         if self.params.compsep.dense_matrix_debug_mode:  # For testing preconditioner with a true solution as reference, first solving for exact solution with dense matrix math.
             M_A_matrix = lambda a : self.apply_LHS_matrix(precond(a))

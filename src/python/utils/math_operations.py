@@ -172,15 +172,15 @@ def _dot_complex_alm_1D_arrays(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArr
 
 #Specific function for point sources:
 @njit(fastmath=True, parallel=True)
-def _numba_proj2map(map, pix_disc_idx_list, beam_disc_val_list, amps, sed_s):
+def _numba_proj2map(map, pix_disc_idx_list, beam_disc_val_list, amps, sed_s=None):
     for src_i in prange(len(pix_disc_idx_list)):
-        map[pix_disc_idx_list[src_i]] += beam_disc_val_list[src_i] * amps[src_i] * sed_s[src_i]
+        map[pix_disc_idx_list[src_i]] += beam_disc_val_list[src_i] * amps[src_i] * (sed_s[src_i] if sed_s is not None else 1)
     return map
 
 @njit(fastmath=True, parallel=True)
-def _numba_eval_from_map(map, pix_disc_idx_list, beam_disc_val_list, amps, sed_s):
+def _numba_eval_from_map(map, pix_disc_idx_list, beam_disc_val_list, amps, sed_s=None):
     for src_i in range(len(pix_disc_idx_list)):
-            amps[src_i] = np.sum(map[pix_disc_idx_list[src_i]] * beam_disc_val_list[src_i]) * sed_s[src_i]
+            amps[src_i] = np.sum(map[pix_disc_idx_list[src_i]] * beam_disc_val_list[src_i]) * (sed_s[src_i] if sed_s is not None else 1)
     return amps
 
 ###### ALM-LIST FUNCTIONS ######

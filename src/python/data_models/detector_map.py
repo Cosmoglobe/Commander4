@@ -7,13 +7,15 @@ from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, inp
 
 class DetectorMap:
     def __init__(self, map_sky:NDArray, map_rms:NDArray, nu:float, fwhm:float, nside:int, double_precision:bool=False, lmax:int|None = None):
-        # if map_rms.shape != map_sky.shape:
-        #     raise ValueError(f"Sky and RMS maps should have matching dimensions.")
-        # if map_sky.ndim != 2:
-        #     raise ValueError(f"Trying to set sky map with unexpected number of dimensions {map_sky.ndim} != 2")
-        # if map_sky.shape[0] not in [1,2]:
-        #     raise ValueError(f"Trying to set sky map with wrong first axis length {map_sky.shape[0]} != 1 or 2")
-                   
+        #cast dimensions correctly to allow constructer with 1-d array for intensity maps.
+        map_sky = map_sky.reshape((1,-1)) if map_sky.ndim == 1 else map_sky
+        map_rms = map_rms.reshape((1,-1)) if map_rms.ndim == 1 else map_rms
+        
+        if map_rms.shape != map_sky.shape:
+            raise ValueError(f"Sky and RMS maps should have matching dimensions.")
+        if map_sky.shape[0] not in [1,2]:
+            raise ValueError(f"Trying to set sky map with wrong first axis length {map_sky.shape[0]} != 1 or 2")
+
         self._map_sky = map_sky
         self._nu = nu
         self._fwhm = fwhm #stored in arcmin

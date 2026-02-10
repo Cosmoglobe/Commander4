@@ -20,6 +20,15 @@ from src.python import mpi_management
 
 
 def main(params: Bunch, params_dict: dict):
+    """
+    Main loop function for Commander 4 Gibbs Sampling.
+
+    Notes:
+     - `my_band_compsep_id`: unique identifier on CompSep side of band+experiment+Stokes, example: 'PlanckLFI$$$30GHz_I',
+            as on compsep side we are parallelizing between I and QU.
+     - `my_band_tod_id`: unique identifier on Tod processing side of band+experiment, example: 'PlanckLFI$$$30GHz',
+            as on tod processing side I and QU will be computed simultaneously, and solutions will end up on the same bandmaster.
+    """
     logger = logging.getLogger(__name__)
         
     global_params = params.general
@@ -54,11 +63,11 @@ def main(params: Bunch, params_dict: dict):
     world_compsep_band_masters_dict = None
     world_tod_band_masters_dict = None
     if mpi_info.world.color == 0:
-        mpi_info, my_band_identifier, experiment_data, detector_samples = init_tod_processing(mpi_info, params)
+        mpi_info, my_band_tod_id, experiment_data, detector_samples = init_tod_processing(mpi_info, params)
         detector_samples_chain1 = detector_samples
         detector_samples_chain2 = deepcopy(detector_samples)
     elif mpi_info.world.color == 1:
-        components, mpi_info, my_band_identifier, my_band = init_compsep_processing(mpi_info, params)
+        components, mpi_info, my_band_compsep_id, my_band = init_compsep_processing(mpi_info, params)
 
     if mpi_info.world.tod_master is not None:
         # All processes, both compsep and tod, need the world-specific band master dict
@@ -79,12 +88,12 @@ def main(params: Bunch, params_dict: dict):
         curr_tod_output, detector_samples = process_tod(mpi_info, experiment_data,
                                                         detector_samples_chain1,
                                                         compsep_output_black, params, 1, 1)
-        send_tod(mpi_info, curr_tod_output, my_band_identifier, mpi_info.world.compsep_band_masters)
+        send_tod(mpi_info, curr_tod_output, my_band_tod_id, mpi_info.world.compsep_band_masters)
         curr_compsep_output = compsep_output_black
 
     elif mpi_info.world.color == 1:
         curr_tod_output = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
-                                      my_band_identifier, curr_tod_output)
+                                      my_band_compsep_id, curr_tod_output)
     ###### Main loop ######
     # Iteration numbers are 1-indexed, and chain 1 iter 1 TOD step is already done pre-loop.
     for i in range(1, 2 * global_params.niter_gibbs): # x2 because we have two chains
@@ -113,14 +122,14 @@ def main(params: Bunch, params_dict: dict):
                             f"{iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
             t0 = time.time()
             curr_compsep_output = receive_compsep(mpi_info, experiment_data,
-                                                  my_band_identifier,
+                                                  my_band_tod_id,
                                                   mpi_info.world.compsep_band_masters)
             if mpi_info.band.is_master:
                 logger.info(f"TOD: Rank {mpi_info.tod.rank} finished receiving "
                             f"results for chain {chain_num}, iter {iter_num} "
                             f"(time spent waiting+receiving = "
                             f"{time.time()-t0:.1f}s).")
-            send_tod(mpi_info, curr_tod_output, my_band_identifier,
+            send_tod(mpi_info, curr_tod_output, my_band_tod_id,
                      mpi_info.world.compsep_band_masters)
             if mpi_info.tod.is_master:
                 logger.info(f"TOD: Rank {mpi_info.tod.rank} finished sending "
@@ -138,12 +147,12 @@ def main(params: Bunch, params_dict: dict):
             if mpi_info.compsep.rank == 0:
                 logger.info(f"Compsep: Rank {mpi_info.compsep.rank} finished chain {chain_num}, "
                             f"{iter_num} in {time.time()-t0:.2f}s. Sending compsep results.")
-            send_compsep(mpi_info, my_band_identifier, curr_compsep_output, mpi_info.world.tod_band_masters)
+            send_compsep(mpi_info, my_band_compsep_id, curr_compsep_output, mpi_info.world.tod_band_masters)
             logger.info(f"Compsep: Rank {mpi_info.compsep.rank} finished sending results for chain "
                         f"{chain_num}, iter {iter_num}. Waiting for TOD results.")
             t0 = time.time()
             curr_tod_output = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
-                                          my_band_identifier, curr_tod_output)
+                                          my_band_compsep_id, curr_tod_output)
             logger.info(f"Compsep: Rank {mpi_info.compsep.rank} finished receiving TOD results for "
                         f"chain {chain_num}, iter {iter_num} (time spent waiting+receiving = "
                         f"{time.time()-t0:.1f}s).")

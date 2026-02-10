@@ -18,8 +18,7 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int,
     nside = detector_data.nside
     npix = 12*nside**2
     pol = detector_data.pol
-
-    print("Plotting combo maps with pol ", pol)
+    pol_names = ["Q", "U"] if pol else ["I"]
     for ipol in range(detector_data.npol):
         map_signal = detector_data.map_sky[ipol]
         if map_signal is None:
@@ -65,7 +64,7 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int,
                 cmb_subtracted -= comp_map
             residual -= comp_map
             plt.axes(ax[2,i])
-            hp.mollview(comp_map, hold=True, title=f"{component.longname} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(comp_map, 1), max=np.percentile(comp_map, 99))
+            hp.mollview(comp_map, hold=True, title=f"{component.longname} {pol_names[ipol]} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(comp_map, 1), max=np.percentile(comp_map, 99))
 
         for component in comp_sublist:
             if "cmb" in component.shortname:
@@ -104,7 +103,7 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int,
         plt.axes(ax[1,4])
         hp.mollview(map_rms, fig=fig, hold=True, norm="log", title="RMS", min=np.min(map_rms), max=np.percentile(map_rms, 99))
 
-        plt.savefig(os.path.join(out_folder, f"{ipol}_combo_map_det{detector}_chain{chain}_iter{iteration}.png"), bbox_inches="tight")
+        plt.savefig(os.path.join(out_folder, f"{pol_names[ipol]}_combo_map_det{detector}_chain{chain}_iter{iteration}.png"), bbox_inches="tight")
         plt.close()
 
 
