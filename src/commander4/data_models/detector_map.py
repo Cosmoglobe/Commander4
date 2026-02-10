@@ -2,7 +2,7 @@ import numpy as np
 import healpy as hp
 from copy import deepcopy
 from numpy.typing import NDArray
-from src.python.utils.math_operations import alm_to_map, alm_to_map_adjoint, inplace_arr_prod, almxfl
+from commander4.utils.math_operations import alm_to_map, alm_to_map_adjoint, inplace_arr_prod, almxfl
 
 
 class DetectorMap:

@@ -1,12 +1,10 @@
 import numpy as np
-from output import log
 import logging
 from numpy.typing import NDArray
 import ducc0
 import os
-
 from commander4.cmdr4_support import utils as cpp_utils
-from commander4.output import log
+import commander4.output.log as log
 
 class ScanTOD:
     def __init__ (self, tod, pix_encoded, psi_encoded, startTime, scanID, nside, data_nside, fsamp, orb_dir_vec,

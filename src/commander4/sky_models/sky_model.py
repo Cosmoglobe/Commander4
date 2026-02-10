@@ -1,5 +1,5 @@
 import numpy as np
-from src.python.sky_models.component import Component
+from commander4.sky_models.component import Component
 
 
 class SkyModel:
@@ -24,7 +24,7 @@ class SkyModel:
             else:
                 skymap[0] += component.get_sky(nu, nside, fwhm)[0]
         return skymap
-    
+
 # class SkyModel:
 #     def __init__(self, components_I, components_Q=None, components_U=None):
 #         # components = list of Component objects

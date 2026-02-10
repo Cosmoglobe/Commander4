@@ -17,8 +17,8 @@ from scipy.linalg import blas as blas_wrapper
 
 import typing
 if typing.TYPE_CHECKING:  # Only import when performing type checking, avoiding circular import during normal runtime.
-    from src.python.solvers.comp_sep_solvers import CompSepSolver
-    from src.python.sky_models.component import Component
+    from commander4.solvers.comp_sep_solvers import CompSepSolver
+    from commander4.sky_models.component import Component
 
 
 ###### NUMPY REPLACEMENTS ######

@@ -4,7 +4,7 @@ general:
     ntask_compsep_I: 8
     ntask_compsep_QU: 8
   nthreads_tod: 1
-  nthreads_compsep: 1
+  nthreads_compsep: 2
   betzy_mode: false
 
   CG_max_iter: 100

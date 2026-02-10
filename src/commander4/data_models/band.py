@@ -1,6 +1,6 @@
 import numpy as np
 from numpy.typing import NDArray
-from src.python.data_models.detector_map import DetectorMap
+from commander4.data_models.detector_map import DetectorMap
 
 
 class Band:
