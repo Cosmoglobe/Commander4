@@ -1,69 +1,92 @@
 # Commander4
 
-## 1. How to install
-
-### TL;DR (assumes you are on the ITA cluster)
+## Setup before use (at the ITA clusters)
+If you are at the ITA clusters, before installing or running Commander4, load the following modules
 ```bash
-module use --append /mn/stornext/u3/jonassl/.modules  # Make my modules avaiable to you. You can skip this if you are not on the ITA cluster or you have reasonable modules loaded already.
-module load Commander4  # Load the Commander4 module.
-git clone --recurse-submodules git@github.com:Cosmoglobe/Commander4.git  # Clone the repo
-cd Commander4
-python -m venv ../.com4_venv  # (recommended) Create a new python virtual enviroment.
+module load intel/oneapi
+module load mpi/latest
+module load compiler/latest  # Only necessary for developers.
+```
+Then, make sure you have a sensible Python setup. At ITA, I recommend using the interpreter located at `/astro/local/mamba/envs/py313/bin/python`. You can hijack the interpreter without tying yourself to the Mamba ecosystem by simply calling it directly (e.g. put `alias python313="/astro/local/mamba/envs/py313/bin/python"` in your `~/.profile`).
+
+If not using the Mamba environment, you should set up a Python virtual environment. This can be done as
+```bash
+python -m venv ../.com4_venv
 source ../.com4_venv/bin/activate
-make all  # Will install needed Python packages and compile some local libraries.
-mpirun -n 6 python3 -u src/python/commander4.py -p src/python/params/param_Planck+WMAP_n128_mapsonly_perpix.yml  # Example test run.
 ```
 
-### 1.1 Initializing the submodules
-Commander4 pulls in the ducc0 sources to make developing of C++ helper functions easier.
+**Temporary fix:** `pysm3` does not yet officially support Numpy 2.0, and you must hackily install it without triggering a downgrade to Numpy 1.x, as following:
+```
+pip install toml pysm3 --no-deps
+```
+This will be resolved in the next `pysm3` release.
 
-To install this submodule directly when cloning the Commander4 repository you can do
+**Optional:** Commander4 heavily utilizes `ducc0`, which will be installed auomatically, but if you want maximum performance from `ducc0` install `ducc0` from source yourself, e.g.:
+```bash
+python -m pip install --no-binary ducc0 ducc0
+```
+
+## Installation for users
+If you are not intending to edit Commander4, you can install it by cloning the repository, and doing a pip install.
 ```bash
 git clone --recurse-submodules git@github.com:Cosmoglobe/Commander4.git
+cd Commander4
+python -m pip install .
 ```
-If you have already cloned Commander 4,  the easiest way is to go to the Commender4 directory and then do
+You are now ready to run Commander4 (see further down).
+
+If you have already cloned the repo and forgot to add the `--recursive-submodules`, you can run
 ```bash
 git submodule init
 git submodule update
 ```
 
-### 1.2 Load relevant modules (optional, for the ITA cluster)
-The easiest way of making sure you have the modules you need loaded is to load my Commander 4 module:
+## Installation for developers
+If you intend to edit Commander4, you must first have the build tools installed:
 ```bash
-module use --append /mn/stornext/u3/jonassl/.modules
-module load Commander4
+python -m pip install scikit-build-core pybind11 pybind11-stubgen numpy
+```
+Then, clone the repo (and submodules), and perform a so-called *editable* PIP install:
+```bash
+git clone --recurse-submodules git@github.com:Cosmoglobe/Commander4.git
+cd Commander4
+python -m pip install -e . --no-build-isolation
+```
+The editable install (`-e`) will tell PIP and scikit-build-core/CMake that the installation should point back to the source location, meaning that **you can edit Python files and run Commander4 without re-installing**. The `--no-build-isolation` helps ensure the build uses your environment (useful on HPC systems), which is why you have to manually pip install build dependencies first.
+
+Note that if you edit non-Python files (C/C++) you must re-install for changes to take effect.
+
+Native (ctypes) helper code is built into a single shared library installed as `commander4/_libs/cmdr4_ctypes.so`.
+To add new ctypes-exposed C/C++ code, add a new `.cpp` file under `src/lib_cpp/ctypes/` and re-install.
+
+### Optional: nanobind backend
+If you want to build the extension with nanobind instead of pybind11:
+```bash
+python -m pip install -e ".[nanobind]" --no-build-isolation
+CMDR4_USE_NANOBIND=1 python -m pip install -e . --no-build-isolation
 ```
 
-### 1.3 Set up a Python virtual enviroment (optional, recommended)
-It's a good idea to create a virtual Python enviroment, so that you can install exactly the packages you need for Commander 4 without mixing it with other installations.
+### Optional: regenerate type stubs
+The repository includes checked-in `.pyi` files for the compiled extension. If you change the C++ API and want to regenerate stubs:
+Stub files are generated automatically during the build (mirroring the previous Meson setup).
+
+If you want to regenerate stubs manually:
 ```bash
-python -m venv ../.com4_venv
-```
-This enviroment can then be activated with:
-```bash
-source ../.com4_venv/bin/activate
-```
-And de-activated with
-```bash
-deactivate
+commander4-generate-stubs
 ```
 
-### 1.4 Run makefile
-There is a relatively simple makefile that installs necessary Python packages and compiles relevant code. Make sure you are in the `Commander4` directory, and run:
-```bash
-make all
-```
-
-
-## 2. How to run
+## Running Commander4
 Commander4 has to be run with MPI, and a parameter file has to be indicated using the `-p` argument. Example usage:
 ```
-mpirun -n 15 python -u src/python/commander4.py -p params/param_default.yml
+mpirun -n 15 commander4 -p params/param_default.yml
 ```
 (The `-u` makes stdout unbuffered, which I have found to be necessary in order to make MPI programs print properly to the terminal).
 
-## 3. Development / Contributing
-### 3.1 Git workflow
+Note that Commander4 cannot be run as a standalone script (e.g. python src/commander4/cli.py). It must be installed, and is then run as a binary. Note also that the binary should be called directly, and running `python commander4` will not work.
+
+
+## Development / Contributing
+### Git workflow
 1. Make sure you are on main (`git checkout main`) and up to date (`git pull`).
 2. Create a new local branch (`git checkout -b dev-compsep`).
 3. Make commits from small self-contained changes to the code. The individual commits should not break the code, but should otherwise be as limited in scope as possible.
@@ -73,7 +96,7 @@ mpirun -n 15 python -u src/python/commander4.py -p params/param_default.yml
 7. If you are not immediately planning to keep developing the same features on the same branch, it is best to check out to main (`git checkout main`) and delete your local branch (`git branch -d dev-compsep`) (you can always re-branch with the exact same name later). The exception is if you intend to keep working on the same features in the code, that depends on the new changes you made.
 8. If you are the reviewer of a pull request, always delete the merged branch immediately after merging. There will be a prompt for this on GitHub.
 
-### 3.2 Python style guidelines
+### Python style guidelines
 Commander 4 does not strictly adhere to a specific style guideline, and you are encouraged to use common sense. You are generally recommended to follow PEP8 (https://peps.python.org/pep-0008/) style guidelines, with the following clarifications and exceptions:
 
 #### Line length

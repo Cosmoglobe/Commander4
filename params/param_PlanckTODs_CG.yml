@@ -1,0 +1,369 @@
+MPI_config:
+  ntask_tod: 128
+  ntask_compsep: 11
+nthreads_tod: 1
+nthreads_compsep: 8
+betzy_mode: false
+
+CG_max_iter: 1
+CG_max_iter_pol: 100
+CG_err_tol: 1.0e-100
+CG_float_precision: "single"
+CG_real_alm_mode: False
+
+niter_gibbs: 1
+
+nside: 256
+
+noise_fknee: 0.1
+noise_alpha: -0.9
+initial_g0: 33.02625e-9  # V/uK_RJ
+
+sample_corr_noise_from_iter_num: 2
+sample_gain_from_iter_num: 2
+
+make_plots: True
+output_stats: False
+
+galactic_mask: True
+sample_corr_noise: True
+pixel_compsep_sampling: False
+
+output_paths:
+  plots: "../cmdr4_plots/PlanckTODs_CG/"
+  stats: "../cmdr4_stats/PlanckTODs_CG/"
+
+logging:
+  console:
+    level: 'info'
+  file:
+    level: 'info'
+    filename: '../cmdr4_logs/output_PlanckTODs_CG.log'
+
+
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarized: True
+      longname: "CMB"
+      shortname: "cmb"
+      smoothing_prior_FWHM: 30.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+7 # uK_RJ^2
+      lmax: 1024
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarized: True
+      longname: "Thermal Dust"
+      shortname: "dust"
+      smoothing_prior_FWHM: 5.0 # 10.0 # arcmin
+      smoothing_prior_amplitude: 2.0e-3  # uK_RJ^2
+      beta: 1.56
+      T: 20
+      nu0: 545
+      lmax: 2048
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarized: False
+      longname: "Synchrotron"
+      shortname: "sync"
+      smoothing_prior_FWHM: 60.0 # arcmin
+      smoothing_prior_amplitude: 2.0e-2  # uK_RJ^2
+      beta: -3.1
+      nu0: 30
+      lmax: 1024
+      smoothing_scale: 0.0
+      spatially_varying_MM: True
+
+  FreeFree:
+    enabled: true
+    component_class: "FreeFree"
+    params:
+      polarized: False
+      longname: "Free-Free"
+      shortname: "ff"
+      smoothing_prior_FWHM: 30.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+9  # uK_RJ^2
+      T: 7000
+      nu0: 0.408 #40
+      lmax: 1024
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
+  
+  # SpinningDust:
+  #   enabled: False
+  #   component_class: "SpinningDust"
+  #   params:
+  #     polarized: False
+  #     longname: "SpinningDust"
+  #     shortname: "sdust"
+  #     template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
+  #     smoothing_prior_FWHM: 0.0 # arcmin
+  #     smoothing_prior_amplitude: 1.0e+10  # uK_RJ^2
+  #     nu_peak: 25.3  # Ghz
+  #     nu_0: 22.0  # Ghz
+  #     lmax: 1000
+  #     smoothing_scale: 0 # 30.0
+  #     spatially_varying_MM: False
+
+
+compsep:
+  dense_matrix_debug_mode: false  # Solve system first with dense matrix math, for debugging CG. Very slow for nside>32.
+  preconditioner: JointPreconditioner #NoiseOnlyPreconditioner #FullPreconditioner #MixingMatrixPreconditioner #BeamOnlyPreconditioner #
+
+
+CompSep_bands:
+  ### TOD BANDS ###
+  Planck30GHz:
+    get_from: PlanckLFI
+    enabled: true
+  Planck44GHz:
+    get_from: PlanckLFI
+    enabled: true
+  Planck70GHz:
+    get_from: PlanckLFI
+    enabled: true
+
+  ### TOTAL INTENSITY MAPS ###
+  Haslam408MHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    file_convention: "Haslam"
+    path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
+    path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
+    fwhm: 60.0  # [arcmin]
+    freq: 0.408 # [GHz]
+    polarizations: [True, True, True]
+
+  WMAPKa:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    file_convention: "WMAP"
+    path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_map_v4.fits"
+    path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_N_v4.fits"
+    fwhm: 39.6 # [arcmin]
+    freq: 33.0 # [GHz]
+    polarizations: [True, True, True]
+
+  WMAPQ1:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    file_convention: "WMAP"
+    path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_map_v4.fits"
+    path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_N_v4.fits"
+    fwhm: 30.6 # [arcmin]
+    freq: 40.6 # [GHz]
+    polarizations: [True, True, True]
+
+  WMAPQ2:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    file_convention: "WMAP"
+    path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_map_v4.fits"
+    path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_N_v4.fits"
+    fwhm: 30.6 # [arcmin]
+    freq: 40.6 # [GHz]
+    polarizations: [True, True, True]
+
+  WMAPV1:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    file_convention: "WMAP"
+    path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_map_v4.fits"
+    path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_N_v4.fits"
+    fwhm: 21.0 # [arcmin]
+    freq: 60.8 # [GHz]
+    polarizations: [True, True, True]
+
+  WMAPV2:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    file_convention: "WMAP"
+    path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_map_v4.fits"
+    path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_N_v4.fits"
+    fwhm: 21.0 # [arcmin]
+    freq: 60.8 # [GHz]
+    polarizations: [True, True, True]
+
+  Planck857GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 1024
+    data_nside: 1024
+    file_convention: "HFI"
+    path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_map_n1024_10arcmin_QUADCOR_ZODICOR_uK.fits"
+    path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_rms_n1024_10arcmin_uK_hrscaled_true.fits"
+    fwhm: 10 # [arcmin]
+    freq: 857.0 # [GHz]
+    polarizations: [True, False, False]
+
+  ### POLARIZATION MAPS ###
+  Planck353GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 1024
+    data_nside: 1024
+    file_convention: "HFI"
+    path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_map_n1024_uK_udgrade.fits"
+    path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_rms_n1024_hrscaled_uK_udgrade.fits"
+    fwhm: 4.86 # [arcmin]
+    freq: 353.0 # [GHz]
+    polarizations: [False, True, True]
+
+
+experiments:
+  PlanckLFI:
+    enabled: true
+    is_sim: false
+    data_type: "TOD"
+    data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
+    bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
+    Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
+    num_scans: 45860
+    bands:
+      Planck30GHz:
+        enabled: true
+        num_MPI_tasks: 24
+        detector_id: 0
+        freq_identifier: 30
+        eval_nside: 512
+        data_nside: 512
+        fwhm: 32.4 # [arcmin]
+        freq: 28.4 # [GHz]
+        fsamp: 32.5079365079365 # [Hz]
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        detectors:
+          27M:
+            name: "27M"
+            rel_gain_est: 78.0e-9
+            bandpass_shift: 0.28  # Ghz
+          # 27S:
+          #   name: "27S"
+          #   rel_gain_est: 65.5e-9
+          #   bandpass_shift: 0.47
+          # 28M:
+          #   name: "28M"
+          #   rel_gain_est: 63.0e-9
+          #   bandpass_shift: 0.08
+          28S:
+            name: "28S"
+            rel_gain_est: 52.0e-9
+            bandpass_shift: 0.13
+      Planck44GHz:
+        enabled: true
+        num_MPI_tasks: 40
+        freq_identifier: 44
+        eval_nside: 512
+        data_nside: 512
+        fwhm: 27.1 # [arcmin]
+        freq: 44.1 # [GHz]
+        fsamp: 46.5454545454545
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
+        detectors:
+          24M:
+            name: "24M"
+            rel_gain_est: 3.52e-9
+            bandpass_shift: -0.55  # Ghz
+          # 24S:
+          #   name: "24S"
+          #   rel_gain_est: 5.60e-9
+          #   bandpass_shift: 0.16
+          # 25M:
+          #   name: "25M"
+          #   rel_gain_est: 8.00e-9
+          #   bandpass_shift: 0.28
+          25S:
+            name: "25S"
+            rel_gain_est: 7.95e-9
+            bandpass_shift: 0.07
+          # 26M:
+          #   name: "26M"
+          #   rel_gain_est: 5.95e-9
+          #   bandpass_shift: 0.09
+          # 26S:
+          #   name: "26S"
+          #   rel_gain_est: 6.90e-9
+          #   bandpass_shift: -0.05
+      Planck70GHz:
+        enabled: true
+        num_MPI_tasks: 64
+        freq_identifier: 70
+        eval_nside: 512
+        data_nside: 1024
+        fwhm: 13.3 # [arcmin]
+        freq: 70.1 # [GHz]
+        fsamp: 78.7692307692308
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
+        detectors:
+        detectors:
+          # 18M:
+          #   name: "18M"
+          #   rel_gain_est: 68.0e-9
+          #   bandpass_shift: -0.87
+          # 18S:
+          #   name: "18S"
+          #   rel_gain_est: 45.0e-9
+          #   bandpass_shift: 0.14
+          # 19M:
+          #   name: "19M"
+          #   rel_gain_est: 37.0e-9
+          #   bandpass_shift: 0.73
+          # 19S:
+          #   name: "19S"
+          #   rel_gain_est: 24.0e-9
+          #   bandpass_shift: 0.59
+          20M:
+            name: "20M"
+            rel_gain_est: 39.3e-9
+            bandpass_shift: -0.27
+          20S:
+            name: "20S"
+            rel_gain_est: 33.2e-9
+            bandpass_shift: 0.20
+          # 21M:
+          #   name: "21M"
+          #   rel_gain_est: 23.5e-9
+          #   bandpass_shift: 0.06
+          # 21S:
+          #   name: "21S"
+          #   rel_gain_est: 24.0e-9
+          #   bandpass_shift: -0.71
+          # 22M:
+          #   name: "22M"
+          #   rel_gain_est: 15.8e-9
+          #   bandpass_shift: 0.36
+          # 22S:
+          #   name: "22S"
+          #   rel_gain_est: 16.2e-9
+          #   bandpass_shift: -0.32
+          23M:
+            name: "23M"
+            rel_gain_est: 28.0e-9
+            bandpass_shift: 0.13
+          23S:
+            name: "23S"
+            rel_gain_est: 19.0e-9
+            bandpass_shift: -0.05
