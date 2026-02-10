@@ -32,7 +32,10 @@ def read_sim_map_from_file(my_band: Bunch) -> DetectorMap:
 
 def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
     logger = logging.getLogger(__name__)
-    npol = np.count_nonzero(my_band.polarizations) #Polarizations to be stored in myband
+    #polarizations relevant for the current compsep band (either I or QU).
+    logassert(my_band.identifier.endswith("_I") or my_band.identifier.endswith("_QU"), f'band identifier {my_band.identifier} has wrong or missing polarization ending, _I or _QU expected.', logger)
+    pols_to_read = [True, False, False] if my_band.identifier.endswith("_I") else [False, True, True]
+    npol = np.count_nonzero(pols_to_read) #Polarizations to be stored in myband
     map_signal = []
     map_rms = []
     map_cov = None
@@ -42,13 +45,13 @@ def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
         data_names = ["I_Stokes", "Q_Stokes", "U_Stokes"]
         rms_names = ["II_Stokes", "Q_Stokes", "U_Stokes"]
         for ipol in range(3):
-            if my_band.polarizations[ipol]:
+            if pols_to_read[ipol]:
                 map_signal.append(1e3*fits.open(my_band.path_signal_map)[1].data[data_names[ipol]].flatten().astype(np.float32))
                 map_rms.append(1e3*np.sqrt(fits.open(my_band.path_rms_map)[1].data[rms_names[ipol]].flatten().astype(np.float32)))
     elif my_band.file_convention == "WMAP_pol":
         # WMAP maps are in mK_CMB and need to be multiplied by 1000. Also, the uncertainty is in variance units,
         # and needs to be square-rooted.
-        logassert(my_band.polarizations == [False, True, True], 'File convention "WMAP_pol can not be used for Intensity maps', logger)
+        logassert(pols_to_read == [False, True, True], 'File convention "WMAP_pol can not be used for Intensity maps', logger)
         nside = 16
         indices_ring = np.arange(0, 12*nside**2, dtype=int)
         indices_nest = hp.ring2nest(nside, indices_ring)
@@ -69,7 +72,7 @@ def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
         data_names = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
         rms_names = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
         for ipol in range(3):
-            if my_band.polarizations[ipol]:
+            if pols_to_read[ipol]:
                 aux_map = fits.open(my_band.path_signal_map)[1].data[data_names[ipol]].flatten().astype(np.float32)
                 map_signal.append(hp.reorder(aux_map, inp="NEST", out="RING"))
                 aux_map = fits.open(my_band.path_rms_map)[1].data[rms_names[ipol]].flatten().astype(np.float32)
@@ -78,11 +81,13 @@ def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
         # I think Haslam maps are in uK_CMB.
         data_names = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
         rms_names = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+        append_idx = 0
         for ipol in range(3):
-            if my_band.polarizations[ipol]:
+            if pols_to_read[ipol]:
                 map_signal.append(fits.open(my_band.path_signal_map)[1].data[data_names[ipol]].flatten().astype(np.float32))
                 aux_map = fits.open(my_band.path_rms_map)[1].data[rms_names[ipol]].flatten().astype(np.float32)
-                map_rms.append(np.sqrt(aux_map**2 + (0.01*map_signal[ipol])**2))
+                map_rms.append(np.sqrt(aux_map**2 + (0.01*map_signal[append_idx])**2))
+                append_idx += 1
 
     logassert(len(map_signal) == npol, f"Shape of loaded signal map {my_band.path_signal_map} does not match polarization count.", logger)
     logassert(len(map_rms) == len(map_signal), f"Shape of loaded rms map {my_band.path_rms_map} does not match signal map's one.", logger)
@@ -108,8 +113,10 @@ def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
     detmap = DetectorMap(np.array(map_signal), np.array(map_rms), my_band.freq, my_band.fwhm, my_band.eval_nside)
     detmap.g0 = 0.0
     detmap.gain = 0.0
-    detmap.skysub_map = n_corr
-    detmap.rawobs_map = n_corr
-    detmap.orbdipole_map = n_corr
+
+    # TODO: no plots support for now, will be readded through chain files afterwards.
+    # detmap.skysub_map = n_corr
+    # detmap.rawobs_map = n_corr
+    # detmap.orbdipole_map = n_corr
 
     return detmap
