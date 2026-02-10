@@ -40,6 +40,7 @@ class Component:
         self.global_params = global_params
         self.longname = comp_params.longname if "longname" in comp_params else "Unknown Component"
         self.shortname = comp_params.shortname if "shortname" in comp_params else "comp"
+        self.double_prec = False if global_params.CG_float_precision == "single" else True
         self._data = None
 
     @property
@@ -217,7 +218,6 @@ class DiffuseComponent(Component):
         self.lmax = comp_params.lmax
         self.smoothing_prior_FWHM = comp_params.smoothing_prior_FWHM
         self.smoothing_prior_amplitude = comp_params.smoothing_prior_amplitude
-        self.double_prec = False if global_params.CG_float_precision == "single" else True
         self._data = np.empty((2 if comp_params.polarized else 1, self.alm_len_complex), dtype = (np.complex128 if self.double_prec else np.complex64))
 
     @property
@@ -370,9 +370,6 @@ class DiffuseComponent(Component):
 
         return contrib_to_comp_alm
     
-
-class PointSourceComponent(Component):
-    pass
 
 class TemplateComponent(Component):
     pass
@@ -641,17 +638,45 @@ class RadioSources(PointSourcesComponent):
         else:
             return False
 
-    def get_sed(self, nu):
+    def get_sed(self, nu:float):
         """
         Returns a list of sed's, one per `alpha_list`, evaluated at `nu`, with ref frequency `nu0`. 
         Freq. are in GHz.
         """
         return (nu/self.nu0)**(self.alpha_arr - 2)
     
-    def get_sky(self, nu, nside, pol=False, fwhm=0):
-        raise NotImplementedError
+    def get_sky(self, nu:float, nside:int, fwhm:float=0.0):
+        """
+        Returns the sky component given by the point sources at a certain `nu` with a certain `nside` and `fwhm` smoothing.
+        """
+        self.compute_pix_beams(np.deg2rad(fwhm/60), nside)
+        map = np.zeros((1, hp.nside2npix(nside)), dtype=np.float64 if self.double_prec else np.float32)
+        mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
+        sed_s = self.get_sed(nu)
+        _numba_proj2map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list, self._data[0,:],sed_s)
+        map*=mJysr_to_uKRJ
+        if fwhm == 0.0:
+            pass
+        else:
+            map[0,:] = hp.smoothing(map[0,:], np.deg2rad(fwhm/60))
+        return map
+
+    def get_component_map(self, nside:int, fwhm:float=0.0):
+        """
+        Returns the map of the point sources component with a certain `nside` and `fwhm` smoothing.
+        """
+        self.compute_pix_beams(np.deg2rad(fwhm/60), nside)
+        map = np.zeros((1, hp.nside2npix(nside)), dtype=np.float64 if self.double_prec else np.float32)
+        mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(self.nu*pysm3u.GHz))
+        _numba_proj2map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list, self._data[0,:])
+        map*=mJysr_to_uKRJ
+        if fwhm == 0.0:
+            pass
+        else:
+            map[0,:] = hp.smoothing(map[0,:], np.deg2rad(fwhm/60))
+        return map
     
-    def _project_to_band_map(self, map, nu):
+    def _project_to_band_map(self, map:NDArray, nu:float):
         """
         Computes the point source contribution in uK_RJ for band's frequency and beam, and sums it to `map`.
 
@@ -661,7 +686,7 @@ class RadioSources(PointSourcesComponent):
         #uKRJ_to_mJysr = (pysm3u.uK_RJ).to(pysm3u.mJy / pysm3u.steradian, equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
         sed_s = self.get_sed(nu)
 
-        _numba_proj2map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list, self._data[0,:], sed_s)
+        _numba_proj2map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list, self._data[0,:], sed_s = sed_s)
         # for src_i in prange(len(self.pix_disc_idx_list)):
         #     map[0,self.pix_disc_idx_list[src_i]] += mJysr_to_uKRJ * self.beam_disc_val_list[src_i] * self._data[0,src_i] * sed_s[src_i]
         map*=mJysr_to_uKRJ
@@ -677,7 +702,7 @@ class RadioSources(PointSourcesComponent):
         mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
         uKRJ_to_mJysr = (pysm3u.uK_RJ).to(pysm3u.mJy / pysm3u.steradian, equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
         sed_s = self.get_sed(nu)
-        _numba_eval_from_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list, self._data[0,:], sed_s)
+        _numba_eval_from_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list, self._data[0,:], sed_s = sed_s)
         # for src_i in range(len(self.pix_disc_idx_list)):
         #     self._data[0,src_i] = mJysr_to_uKRJ * np.sum(map[0,self.pix_disc_idx_list[src_i]] * self.beam_disc_val_list[src_i]) * sed_s[src_i]
         self._data *= mJysr_to_uKRJ
