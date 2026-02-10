@@ -295,11 +295,6 @@ def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
         alphas.append(alpha)
         fknees.append(fknee)
 
-        if band_comm.Get_rank() == 91 and chain == 1:
-            if int(scan.scanID)%21 == 0:
-                np.save(f"/mn/stornext/d23/cmbco/jonas/c4_testing/misc_data_output2/n_corr_{scan.scanID}_iter{iteration}.npy", n_corr_est)
-                np.save(f"/mn/stornext/d23/cmbco/jonas/c4_testing/misc_data_output2/mask_{scan.scanID}_iter{iteration}.npy", mask)
-                np.save(f"/mn/stornext/d23/cmbco/jonas/c4_testing/misc_data_output2/n_corr_params_{scan.scanID}_iter{iteration}.npy", np.array([fknee, alpha]))
 
     t0 = time.time()
     band_comm.Barrier()
@@ -953,7 +948,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     if band_comm.Get_rank() == 0:
         logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished white noise estimation in {timing_dict['wn-est-2']:.1f}s.")
 
-    if iter >= params.sample_corr_noise_from_iter_num:
+    if params.sample_corr_noise and iter >= params.sample_corr_noise_from_iter_num:
         ### CORRELATED NOISE SAMPLING ###
         t0 = time.time()
         detector_samples, mapmaker_corrnoise, wait_time = sample_noise(band_comm, experiment_data, detector_samples, compsep_output, chain, iter)
@@ -973,7 +968,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
         logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished mapmaking in {timing_dict['mapmaker']:.1f}s.")
 
     ### WRITE CHAIN TO FILE ###
-    write_tod_samples_to_file(TOD_comm, detector_samples, params, chain, iter)
+    write_tod_samples_to_file(TOD_comm, det_comm, detector_samples, params, chain, iter)
 
     t0 = time.time()
     TOD_comm.Barrier()
