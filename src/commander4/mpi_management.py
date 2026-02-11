@@ -1,7 +1,6 @@
 import os
 import time
 import logging
-import numpy as np
 import mpi4py
 from mpi4py import MPI
 from pixell.bunch import Bunch
@@ -70,40 +69,49 @@ def init_mpi(params):
     # Split the world communicator into a communicator for compsep and one for TOD (with "color"
     # being the keyword for the split).
     if worldrank < global_params.MPI_config.ntask_tod:
-        color = 0 #TOD
-        # Note that Numpy will not respect these values, because Numpy has already been loaded
-        # as a mpi4py dependency. Numpy does not respect changes to these values after it has been
-        # imported. Ideally these variables should therefore be set before calling Python at all.
-        os.environ["OMP_NUM_THREADS"] = f"{global_params.nthreads_tod}"
-        os.environ["OPENBLAS_NUM_THREADS"] = f"{global_params.nthreads_tod}" 
-        os.environ["MKL_NUM_THREADS"] = f"{global_params.nthreads_tod}"
-        os.environ["VECLIB_MAXIMUM_THREADS"] = f"{global_params.nthreads_tod}"
-        os.environ["NUMEXPR_NUM_THREADS"] = f"{global_params.nthreads_tod}"
-        import numba
-        numba.set_num_threads(1)
-    elif worldrank < global_params.MPI_config.ntask_tod + tot_num_CompSep_ranks:
-        color = 1  # Compsep
+        color = 0
+        my_num_threads = global_params.nthreads_tod
+        my_num_threads_numba = global_params.nthreads_tod
 
+    elif worldrank < global_params.MPI_config.ntask_tod + global_params.MPI_config.ntask_compsep:
+        color = 1  # Compsep
         # nthreads_compsep is either an int, or a list specifying nthreads for each rank.
         if isinstance(global_params.nthreads_compsep, int):  # If int, all ranks have same nthreads.
-            nthreads_compsep = global_params.nthreads_compsep
+            my_num_threads = global_params.nthreads_compsep
         else:
-            nthreads_compsep = global_params.nthreads_compsep[worldrank - global_params.MPI_config.ntask_tod]
-        os.environ["OMP_NUM_THREADS"] = f"{nthreads_compsep}"
-        os.environ["OPENBLAS_NUM_THREADS"] = f"{nthreads_compsep}"
-        os.environ["MKL_NUM_THREADS"] = f"{nthreads_compsep}"
-        os.environ["VECLIB_MAXIMUM_THREADS"] = f"{nthreads_compsep}"
-        os.environ["NUMEXPR_NUM_THREADS"] = f"{nthreads_compsep}"
-        import numba
+            my_num_threads = global_params.nthreads_compsep[worldrank - global_params.MPI_config.ntask_tod]
         # Testing revealed 24 to be a good number (regardless of nside), but I tested this on the
         # new 384-core nodes, the optimal number is probably slightly lower on the older owls.
-        numba.set_num_threads(min(24,nthreads_compsep))
-
+        my_num_threads_numba = min(24,my_num_threads)
     else:
         raise ValueError("My rank ({worldrank}) exceeds the combined number of allocated tasks to"
                          f"both TOD ({global_params.MPI_config.ntask_tod}) and compsep" \
                          f"{tot_num_CompSep_ranks}")
-  
+
+    # It's important to set these environment variables before importing any package that might
+    # use them, such as Numpy or Scipy, as they will not apply retroactively!
+    os.environ["OMP_NUM_THREADS"] = f"{my_num_threads}"
+    os.environ["OPENBLAS_NUM_THREADS"] = f"{my_num_threads}" 
+    os.environ["MKL_NUM_THREADS"] = f"{my_num_threads}"
+    os.environ["VECLIB_MAXIMUM_THREADS"] = f"{my_num_threads}"
+    os.environ["NUMEXPR_NUM_THREADS"] = f"{my_num_threads}"
+    os.environ["NUMBA_NUM_THREADS"] = f"{my_num_threads_numba}"
+    # I tried using numba.set_num_threads(x) here instead (or as well) but that
+    # resulted in some weirdeties, like many duplicate open file handles even when x=1.
+
+    if False: # This code should enter production, but threadpoolctl is not yet a dependency.
+        import numpy
+        import numba
+        from threadpoolctl import threadpool_info
+
+        pool_info = threadpool_info()
+        for pool in pool_info:
+            assert pool["num_threads"] == my_num_threads, f"Loaded library {pool} has was not spawned "\
+                f"with {my_num_threads} threads, but instead {pool['num_threads']}."
+        assert numba.get_num_threads() == my_num_threads_numba, f"Numba spawned with "\
+            f"{numba.get_num_threads()}, and no the specified {my_num_threads_numba} threads."
+
+
     proc_comm = world_comm.Split(color, key=worldrank)
     if color == MPI.UNDEFINED:
         return -1
@@ -180,6 +188,7 @@ def init_mpi_tod(mpi_info, params):
         mpi_info (Bunch): The data structure containing all MPI relevant data, now including info
             for the 'tod' context.
     """
+    import numpy as np  # Can't be loaded at top-level because it must be loaded after init_mpi().
 
     logger = logging.getLogger(__name__)
     MPIsize_tod, MPIrank_tod = mpi_info.tod.size, mpi_info.tod.rank

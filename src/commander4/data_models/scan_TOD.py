@@ -7,8 +7,9 @@ from commander4.cmdr4_support import utils as cpp_utils
 import commander4.output.log as log
 
 class ScanTOD:
-    def __init__ (self, tod, pix_encoded, psi_encoded, startTime, scanID, nside, data_nside, fsamp, orb_dir_vec,
-                  huffman_tree, huffman_symbols, npsi, processing_mask_map, ntod_original):
+    def __init__ (self, tod, pix_encoded, psi_encoded, startTime, scanID, nside, data_nside, fsamp,
+                  orb_dir_vec, huffman_tree, huffman_symbols, npsi, processing_mask_map,
+                  ntod_original, pix_is_compressed=True, psi_is_compressed=True):
         logger = logging.getLogger(__name__)
         log.logassert_np(tod.ndim==1, "'value' must be a 1D array", logger)
         log.logassert_np(tod.dtype in [np.float64,np.float32], "TOD dtype must be floating type,"
@@ -30,9 +31,9 @@ class ScanTOD:
         self._huffman_symbols = huffman_symbols
         self._ntod_original = ntod_original  # Size of the original TOD before Fourier cropping.
         self._npsi = npsi
-        pix = self.pix
-        self._processing_mask_TOD = np.packbits(processing_mask_map[pix])
-        del(pix)
+        self._pix_is_compressed = pix_is_compressed
+        self._psi_is_compressed = psi_is_compressed
+        self._processing_mask_TOD = np.packbits(processing_mask_map[self.pix])
 
 
     @property
@@ -62,13 +63,18 @@ class ScanTOD:
 
     @property
     def pix(self) -> NDArray[np.integer]:
-        pix = np.zeros(self._ntod_original, dtype=np.int64)
-        pix = cpp_utils.huffman_decode(np.frombuffer(self._pix_encoded, dtype=np.uint8), self._huffman_tree, self._huffman_symbols, pix)
-        #TODO: I think cumsum should eventually be wrapped in somewhere, it can be easy to forget.
-        pix = np.cumsum(pix)
+        if self._pix_is_compressed:
+            pix = np.zeros(self._ntod_original, dtype=np.int64)
+            pix = cpp_utils.huffman_decode(np.frombuffer(self._pix_encoded, dtype=np.uint8),
+                                           self._huffman_tree, self._huffman_symbols, pix)
+            #TODO: I think cumsum should eventually be wrapped in somewhere, it can be easy to forget.
+            pix = np.cumsum(pix)
+        else:
+            pix = self._pix_encoded
         # The TOD was cropped to an ideal Fourier length, but because the pix entry is compressed,
         # we need to unpack the entire original array, and then crop it to the correct length.
         pix = pix[:self.ntod]
+        
         if self.nside != self.data_nside:
             # If the data nside does not match the specified evaluation nside, we convert to it.
             # pix = hp.ang2pix(self.nside, *hp.pix2ang(self.data_nside, pix))
@@ -81,12 +87,16 @@ class ScanTOD:
 
     @property
     def psi(self) -> NDArray[np.floating]:
-        psi = np.zeros(self._ntod_original, dtype=np.int64)
-        psi = cpp_utils.huffman_decode(np.frombuffer(self._psi_encoded, dtype=np.uint8), self._huffman_tree, self._huffman_symbols, psi)
-        psi = np.cumsum(psi)
-        psi = psi[:self.ntod]
-        psi = 2*np.pi * psi.astype(np.float32)/self._npsi
-        return psi
+        if self._psi_is_compressed:
+            psi = np.zeros(self._ntod_original, dtype=np.int64)
+            psi = cpp_utils.huffman_decode(np.frombuffer(self._psi_encoded, dtype=np.uint8),
+                                        self._huffman_tree, self._huffman_symbols, psi)
+            psi = np.cumsum(psi)
+            psi = psi[:self.ntod]
+            psi = 2*np.pi * psi.astype(np.float32)/self._npsi
+        else:
+            psi = self._psi_encoded
+        return psi[:self.ntod]  # Crop to actual size (might be cut to fast FFT length)
         
         
     @property

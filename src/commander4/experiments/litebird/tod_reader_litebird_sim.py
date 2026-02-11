@@ -10,23 +10,7 @@ from pixell.bunch import Bunch
 from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
-from commander4.data_models.detector_samples import DetectorSamples
 
-
-def get_processing_mask(my_band: Bunch) -> DetectorTOD:
-    """Subtracts the sky model from the TOD data.
-    Input:
-        experiment_data (DetectorTOD): The experiment TOD object.
-        params (Bunch): The parameters from the input parameter file.
-    Output:
-        experiment_data (DetectorTOD): The experiment TOD with the estimated white noise level added to each scan.
-    """
-    hdul = fits.open(my_band.processing_mask)
-    mask = hdul[1].data["TEMPERATURE"].flatten().astype(bool)
-    nside = np.sqrt(mask.size//12)
-    if nside != my_band.eval_nside:
-        mask = hp.ud_grade(mask.astype(np.float64), my_band.eval_nside) == 1
-    return mask
 
 def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     if ntod <= 10_000 or ntod >= 400_000:
@@ -38,13 +22,15 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     return best_ntod
 
 
-def read_Planck_TOD_data(my_experiment: str, my_band: Bunch, my_det: Bunch, params: Bunch, my_detector_id: int, scan_idx_start: int, scan_idx_stop: int, bad_PIDs_path:str=None) -> tuple[DetectorTOD, DetectorSamples]:
+def tod_reader(my_experiment: Bunch, my_band: Bunch, my_det: Bunch, params: Bunch, my_det_id: int,
+               scan_idx_start: int, scan_idx_stop: int) -> DetectorTOD:
     logger = logging.getLogger(__name__)
     oids = []
     pids = []
     filenames = []
-    detname = my_det.name
-    with open(my_experiment.data_path + f"filelist_{my_band.freq_identifier:02d}.txt") as infile:
+    detname = str(my_det)
+    expname = str(my_experiment)
+    with open(my_band.filelist) as infile:
         infile.readline()
         for line in infile:
             pid, filename, _, _, _ = line.split()
@@ -54,9 +40,9 @@ def read_Planck_TOD_data(my_experiment: str, my_band: Bunch, my_det: Bunch, para
     scanlist = []
     num_included = 0
     
-    processing_mask_map = get_processing_mask(my_band)
-    if bad_PIDs_path is not None:
-        bad_PIDs = np.load(bad_PIDs_path)
+    processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
+    if "bad_PIDs_path" in my_experiment:
+        bad_PIDs = np.load(my_experiment.bad_PIDs_path)
     else:
         bad_PIDs = np.array([])
 
@@ -75,44 +61,61 @@ def read_Planck_TOD_data(my_experiment: str, my_band: Bunch, my_det: Bunch, para
         if pid in bad_PIDs:
             continue
 
-        filename = f"LFI_{my_band.freq_identifier:03d}_{oid.zfill(6)}.h5"
-        filepath = os.path.join(my_experiment.data_path, filename)
+        filename = f"LB_{my_band.freq_identifier:03d}_{my_band.lb_det_identifier}_{oid.zfill(6)}.h5"
+        if "data_path" in my_band:
+            filepath = os.path.join(my_band.data_path, filename)
+        else:
+            filepath = os.path.join(my_experiment.data_path, filename)
         with h5py.File(filepath, "r") as f:
-            ntod = int(f[f"/{pid}/common/ntod"][0])  # ntod is a size-1 array for some reason.
+            ntod = int(f[f"/{pid}/common/ntod"][()])
             ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
-            tod = f[f"/{pid}/{detname}/tod/"][:ntod_optimal]
+            tod = f[f"/{pid}/{detname}/tod/"][:ntod_optimal].astype(np.float32)
             huffman_tree = f[f"/{pid}/common/hufftree"][()]
             huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
             pix_encoded = f[f"/{pid}/{detname}/pix/"][()]
             psi_encoded = f[f"/{pid}/{detname}/psi/"][()]
             vsun = f[f"/{pid}/common/vsun/"][()]
-            fsamp = float(f["/common/fsamp/"][0])
-            npsi = int(f["/common/npsi/"][0])
+            fsamp = float(f["/common/fsamp/"][()])
+            npsi = int(f["/common/npsi/"][()])
             flag_encoded = f[f"/{pid}/{detname}/flag/"][()]
+
+        # I noticed that some simulations have a (1,N) shape for its pixels, while others do not,
+        # so we look for this first dimension and remove it if it exists:
+        if pix_encoded.ndim == 2 and pix_encoded.shape[0] == 1:
+            pix_encoded = pix_encoded[0]
+        if psi_encoded.ndim == 2 and psi_encoded.shape[0] == 1:
+            psi_encoded = psi_encoded[0]
+
         if ntod > ntod_upper_bound:
             raise ValueError(f"{ntod_upper_bound} {ntod}")
+
         flag_buffer[:ntod] = 0.0
-        flag_buffer[:ntod] = cpp_utils.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8), huffman_tree, huffman_symbols, flag_buffer[:ntod])
+        flag_buffer[:ntod] = cpp_utils.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8),
+                                                      huffman_tree, huffman_symbols,
+                                                      flag_buffer[:ntod])
         flag_buffer[:ntod_optimal] = np.cumsum(flag_buffer[:ntod_optimal])
         flag_buffer[:ntod_optimal] &= 6111232
+
         if np.sum(flag_buffer[:ntod_optimal]) == 0:
             tod_buffer[:ntod_optimal] = np.abs(tod)
-            if np.mean(tod_buffer[:ntod_optimal]) < 0.001 and np.std(tod) < 0.001:  # Check for crazy data.
-                scanlist.append(ScanTOD(tod, pix_encoded, psi_encoded, 0., pid, my_band.eval_nside, my_band.data_nside,
-                                        fsamp, vsun, huffman_tree, huffman_symbols, npsi, processing_mask_map, ntod))
-                num_included += 1
+            scanlist.append(ScanTOD(tod, pix_encoded, psi_encoded, 0., pid, my_band.eval_nside,
+                                    my_band.data_nside, fsamp, vsun, huffman_tree, huffman_symbols,
+                                    npsi,processing_mask_map, ntod,
+                                    pix_is_compressed=my_experiment.pix_is_compressed,
+                                    psi_is_compressed=my_experiment.psi_is_compressed))
+            num_included += 1
             ntod_sum_original += ntod
             ntod_sum_final += ntod_optimal
         if i_pid % 10 == 0:
             gc.collect()
 
-    logger.info(f"Fraction of scans included for {my_band.freq_identifier} {my_det.name}: "
+    logger.info(f"Fraction of scans included for {my_band.freq_identifier} {detname}: "
                 f"{num_included/(scan_idx_stop-scan_idx_start)*100:.1f} %")
-    logger.info(f"Avg scan size remaining after Fourier cut {my_band.freq_identifier} {my_det.name}: "
+    logger.info(f"Avg scan size remaining after Fourier cut {my_band.freq_identifier} {detname}: "
                 f"{ntod_sum_final/ntod_sum_original*100:.1f} %")
 
     det_static = DetectorTOD(scanlist, float(my_band.freq)+float(my_det.bandpass_shift),
-                             my_band.fwhm, my_band.eval_nside, my_band.data_nside, my_det.name)
-    det_static.detector_id = my_detector_id
+                             my_band.fwhm, my_band.eval_nside, my_band.data_nside, detname, expname)
+    det_static.detector_id = my_det_id
 
     return det_static

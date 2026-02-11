@@ -41,15 +41,28 @@ commander4-generate-stubs = "commander4.devtools.generate_stubs:main"
 [tool.scikit-build]
 # Keep it simple: CMake builds the extension, scikit-build-core packages the Python
 # sources from the src-layout.
-wheel.packages = ["src/commander4"]
 
 # Prefer Release unless user overrides via env/CMake args.
 cmake.build-type = "Release"
 
 # Explicitly force "redirect" mode (static path mapping)
 editable.mode = "redirect"
+# TODO: Maybe we want to switch to editable.mode = "inplace", which would place the compiled `.so`
+# files directly into the source tree. Makes source tree more cluttered, but helps e.g. IDEs a bit.
+
 # Explicitly disable auto-rebuilds on import to prevent MPI crashes
 editable.rebuild = false
+
+[tool.scikit-build.wheel]
+packages = ["src/commander4"]
+
+exclude = [
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/.ipynb_checkpoints",
+    ".git",
+    ".venv*"
+]
 
 [tool.scikit-build.sdist]
 # Ensure the C++ sources + ducc0 submodule files make it into sdists.
@@ -62,4 +75,13 @@ include = [
     "README.md",
     "LICENSE",
     "src/commander4/**",
+]
+
+exclude = [
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/*.so",
+    "**/.ipynb_checkpoints",
+    ".git",
+    ".venv*"
 ]

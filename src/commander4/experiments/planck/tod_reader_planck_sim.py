@@ -9,7 +9,7 @@ from commander4.data_models.detector_samples import DetectorSamples
 from commander4.data_models.scan_TOD import ScanTOD
 
 
-def read_TOD_sim_data(h5_filename: str, my_band: Bunch, params: Bunch, scan_idx_start: int, scan_idx_stop: int) -> DetectorTOD:
+def tod_reader(h5_filename: str, my_band: Bunch, params: Bunch, scan_idx_start: int, scan_idx_stop: int) -> DetectorTOD:
     logger = logging.getLogger(__name__)
     scanlist = []
     band_formatted = f"{my_band.freq:04d}"
