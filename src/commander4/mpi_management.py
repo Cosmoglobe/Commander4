@@ -114,7 +114,7 @@ def init_mpi(params):
         return -1
     world_comm.barrier()
     time.sleep(worldrank*1e-3)  # Small sleep to get prints in nice order.
-    logger.info(f"MPI split performed, hi from worldrank {worldrank} (on machine "
+    logger.debug(f"MPI split performed, hi from worldrank {worldrank} (on machine "
                 f"{MPI.Get_processor_name()}) subcomrank {proc_comm.Get_rank()} from color {color} of "
                 f" size {proc_comm.Get_size()}.")
 
@@ -200,6 +200,7 @@ def init_mpi_tod(mpi_info, params):
                 TOD_ranks_per_detector = np.array_split(this_band_TOD_ranks, len(band.detectors))
                 my_band_name = band_name
                 my_band_id = iband
+                my_experiment_name = exp_name
                 for idet, det_name in enumerate(band.detectors):
                     num_ranks_this_detector = len(TOD_ranks_per_detector[idet])
                     detector = band.detectors[det_name]
@@ -240,11 +241,13 @@ def init_mpi_tod(mpi_info, params):
     tod_comm.Barrier()
     time.sleep(MPIrank_tod*1e-3)  # Small sleep to get prints in nice order.
     
-    logger.info(f"TOD: Hello from TOD-rank {MPIrank_tod} (on machine {MPI.Get_processor_name()}), "
+    logger.debug(f"TOD: Hello from TOD-rank {MPIrank_tod} (on machine {MPI.Get_processor_name()}), "
                 f"dedicated to band {my_band_id}, with local rank {MPIrank_band} (local "
                 f"communicator size: {MPIsize_band}), and detector "
                 f"{my_det_id} with local rank {MPIrank_det} and size {MPIsize_det}")
 
+    mpi_info['experiment'] = Bunch()
+    mpi_info['experiment']['name'] = my_experiment_name
     mpi_info['tod']['band_id'] = my_band_id
     mpi_info['band'] = Bunch()
     mpi_info['band']['master'] = 0
