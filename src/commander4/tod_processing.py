@@ -200,7 +200,8 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
     data_tod = (my_band_identifier, mpi_info.tod.rank) if mpi_info.band.is_master else None
     all_data_world = mpi_info.tod.comm.allgather(data_world)
     all_data_tod = mpi_info.tod.comm.allgather(data_tod)
-    world_band_masters_dict = {item[0]: item[1] for item in all_data_world if item is not None}
+    world_band_masters_dict = {item[0]+'_I': item[1] for item in all_data_world if item is not None} #first I
+    world_band_masters_dict.update({item[0]+'_QU': item[1] for item in all_data_world if item is not None}) #then QU
     tod_band_masters_dict = {item[0]: item[1] for item in all_data_tod if item is not None}
     logger.debug(f"world_band_masters_dict: {world_band_masters_dict}")
     logger.debug(f"tod_band_masters_dict: {tod_band_masters_dict}")

@@ -73,7 +73,7 @@ def init_mpi(params):
         my_num_threads = global_params.nthreads_tod
         my_num_threads_numba = global_params.nthreads_tod
 
-    elif worldrank < global_params.MPI_config.ntask_tod + global_params.MPI_config.ntask_compsep:
+    elif worldrank < global_params.MPI_config.ntask_tod + tot_num_CompSep_ranks:
         color = 1  # Compsep
         # nthreads_compsep is either an int, or a list specifying nthreads for each rank.
         if isinstance(global_params.nthreads_compsep, int):  # If int, all ranks have same nthreads.

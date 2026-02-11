@@ -34,6 +34,7 @@ general:
   output_paths:
     plots: "/mn/stornext/u3/leoab/com4_plots/Planck_WMAP_TOD_CG_new"
     stats: "/mn/stornext/u3/leoab/com4_stats"
+    chains: "/mn/stornext/u3/leoab/com4_chains"
 
   logging:
     console:
@@ -268,9 +269,10 @@ CompSep_bands:
 experiments:
   PlanckLFI:
     enabled: true
+    experiment_id: "planck"
     is_sim: false
     data_type: "TOD"
-    data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
+    filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/"
     bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
     num_scans: 45860

@@ -34,6 +34,7 @@ general:
   output_paths:
     plots: "/mn/stornext/u3/leoab/com4_plots/Planck_WMAP_mapsonly_CG_new"
     stats: "/mn/stornext/u3/leoab/com4_stats"
+    chains: "/mn/stornext/u3/leoab/com4_chains"
 
   logging:
     console:
