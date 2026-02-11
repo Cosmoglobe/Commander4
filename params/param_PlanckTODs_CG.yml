@@ -1,35 +1,40 @@
+# Specifying how many MPI tasks to allocate to different workloads. Sum needs to match total number of tasks allocated to MPI.
 MPI_config:
-  ntask_tod: 128
-  ntask_compsep: 11
+  ntask_tod: 128  # TOD sampling, which only relies on MPI, not OpenMP, and this can therefore be set as high as desired.
+  ntask_compsep: 11  # Component Separation, where each MPI tasks should correspond to 1 band, and threads are used for efficient SHTs.
 nthreads_tod: 1
-nthreads_compsep: 8
-betzy_mode: false
+nthreads_compsep: 8  # Threads dedicated to performing individual SHTs for each ntask_compsep. Set to total number of avaible cores on each node performing CompSep.
 
-CG_max_iter: 1
+CG_max_iter: 100
 CG_max_iter_pol: 100
 CG_err_tol: 1.0e-100
-CG_float_precision: "single"
+CG_float_precision: "double"
 CG_real_alm_mode: False
 
-niter_gibbs: 1
+niter_gibbs: 10
 
-nside: 256
+nside: 1024
 
 noise_fknee: 0.1
 noise_alpha: -0.9
-initial_g0: 33.02625e-9  # V/uK_RJ
 
-sample_corr_noise_from_iter_num: 2
-sample_gain_from_iter_num: 2
+sample_corr_noise: True
+sample_corr_noise_from_iter_num: 8
+sample_abs_gain: True
+sample_abs_gain_from_iter_num: 2
+sample_rel_gain: True
+sample_rel_gain_from_iter_num: 4
+sample_temporal_gain: True
+sample_temporal_gain_from_iter_num: 4
 
 make_plots: True
 output_stats: False
 
 galactic_mask: True
-sample_corr_noise: True
 pixel_compsep_sampling: False
 
 output_paths:
+  chains: "../cmdr4_chains/PlanckTODs_CG/"
   plots: "../cmdr4_plots/PlanckTODs_CG/"
   stats: "../cmdr4_stats/PlanckTODs_CG/"
 
@@ -238,14 +243,17 @@ experiments:
   PlanckLFI:
     enabled: true
     is_sim: false
+    pix_is_compressed: true
+    psi_is_compressed: true
     data_type: "TOD"
-    data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
+    experiment_id: "planck"  # Decides expected data format, what TOD reader is used, etc.
     bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
     num_scans: 45860
     bands:
       Planck30GHz:
         enabled: true
+        tod_files_prefix: "LFI_030_"
         num_MPI_tasks: 24
         detector_id: 0
         freq_identifier: 30
@@ -254,26 +262,29 @@ experiments:
         fwhm: 32.4 # [arcmin]
         freq: 28.4 # [GHz]
         fsamp: 32.5079365079365 # [Hz]
+        data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
         detectors:
           27M:
             name: "27M"
-            rel_gain_est: 78.0e-9
+            gain_est: 78.0e-9
             bandpass_shift: 0.28  # Ghz
           # 27S:
           #   name: "27S"
-          #   rel_gain_est: 65.5e-9
+          #   gain_est: 65.5e-9
           #   bandpass_shift: 0.47
-          # 28M:
-          #   name: "28M"
-          #   rel_gain_est: 63.0e-9
-          #   bandpass_shift: 0.08
-          28S:
-            name: "28S"
-            rel_gain_est: 52.0e-9
-            bandpass_shift: 0.13
+          28M:
+            name: "28M"
+            gain_est: 63.0e-9
+            bandpass_shift: 0.08
+          # 28S:
+          #   name: "28S"
+          #   gain_est: 52.0e-9
+          #   bandpass_shift: 0.13
       Planck44GHz:
         enabled: true
+        tod_files_prefix: "LFI_044_"
         num_MPI_tasks: 40
         freq_identifier: 44
         eval_nside: 512
@@ -281,34 +292,37 @@ experiments:
         fwhm: 27.1 # [arcmin]
         freq: 44.1 # [GHz]
         fsamp: 46.5454545454545
+        data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
         detectors:
           24M:
             name: "24M"
-            rel_gain_est: 3.52e-9
+            gain_est: 3.52e-9
             bandpass_shift: -0.55  # Ghz
           # 24S:
           #   name: "24S"
-          #   rel_gain_est: 5.60e-9
+          #   gain_est: 5.60e-9
           #   bandpass_shift: 0.16
-          # 25M:
-          #   name: "25M"
-          #   rel_gain_est: 8.00e-9
-          #   bandpass_shift: 0.28
-          25S:
-            name: "25S"
-            rel_gain_est: 7.95e-9
-            bandpass_shift: 0.07
+          25M:
+            name: "25M"
+            gain_est: 8.00e-9
+            bandpass_shift: 0.28
+          # 25S:
+          #   name: "25S"
+          #   gain_est: 7.95e-9
+          #   bandpass_shift: 0.07
           # 26M:
           #   name: "26M"
-          #   rel_gain_est: 5.95e-9
+          #   gain_est: 5.95e-9
           #   bandpass_shift: 0.09
           # 26S:
           #   name: "26S"
-          #   rel_gain_est: 6.90e-9
+          #   gain_est: 6.90e-9
           #   bandpass_shift: -0.05
       Planck70GHz:
         enabled: true
+        tod_files_prefix: "LFI_070_"
         num_MPI_tasks: 64
         freq_identifier: 70
         eval_nside: 512
@@ -316,54 +330,56 @@ experiments:
         fwhm: 13.3 # [arcmin]
         freq: 70.1 # [GHz]
         fsamp: 78.7692307692308
+        data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_70.txt"
         detectors:
         detectors:
-          # 18M:
-          #   name: "18M"
-          #   rel_gain_est: 68.0e-9
-          #   bandpass_shift: -0.87
+          18M:
+            name: "18M"
+            gain_est: 68.0e-9
+            bandpass_shift: -0.87
           # 18S:
           #   name: "18S"
-          #   rel_gain_est: 45.0e-9
+          #   gain_est: 45.0e-9
           #   bandpass_shift: 0.14
           # 19M:
           #   name: "19M"
-          #   rel_gain_est: 37.0e-9
+          #   gain_est: 37.0e-9
           #   bandpass_shift: 0.73
           # 19S:
           #   name: "19S"
-          #   rel_gain_est: 24.0e-9
+          #   gain_est: 24.0e-9
           #   bandpass_shift: 0.59
-          20M:
-            name: "20M"
-            rel_gain_est: 39.3e-9
-            bandpass_shift: -0.27
-          20S:
-            name: "20S"
-            rel_gain_est: 33.2e-9
-            bandpass_shift: 0.20
+          # 20M:
+          #   name: "20M"
+          #   gain_est: 39.3e-9
+          #   bandpass_shift: -0.27
+          # 20S:
+          #   name: "20S"
+          #   gain_est: 33.2e-9
+          #   bandpass_shift: 0.20
           # 21M:
           #   name: "21M"
-          #   rel_gain_est: 23.5e-9
+          #   gain_est: 23.5e-9
           #   bandpass_shift: 0.06
           # 21S:
           #   name: "21S"
-          #   rel_gain_est: 24.0e-9
+          #   gain_est: 24.0e-9
           #   bandpass_shift: -0.71
           # 22M:
           #   name: "22M"
-          #   rel_gain_est: 15.8e-9
+          #   gain_est: 15.8e-9
           #   bandpass_shift: 0.36
           # 22S:
           #   name: "22S"
-          #   rel_gain_est: 16.2e-9
+          #   gain_est: 16.2e-9
           #   bandpass_shift: -0.32
           23M:
             name: "23M"
-            rel_gain_est: 28.0e-9
+            gain_est: 28.0e-9
             bandpass_shift: 0.13
-          23S:
-            name: "23S"
-            rel_gain_est: 19.0e-9
-            bandpass_shift: -0.05
+          # 23S:
+          #   name: "23S"
+          #   gain_est: 19.0e-9
+          #   bandpass_shift: -0.05
