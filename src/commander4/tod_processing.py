@@ -699,7 +699,7 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
         residual_tod -= gain*s_tot
 
         mask = scan.processing_mask_TOD[indices_centers]
-        sigma0 = calculate_sigma0(residual_tod, mask)
+        sigma0 = calculate_sigma0(residual_tod, mask) #FIXME: isn't this call useless now?
 
         # FFT-based N^-1 operation setup
         Ntod = residual_tod.shape[0]
@@ -935,7 +935,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     TOD_comm = mpi_info.tod.comm
     ### WHITE NOISE ESTIMATION ###
     t0 = time.time()
-    detector_samples = estimate_white_noise(experiment_data, detector_samples, compsep_output, params)
+    #updates sigma0 in detector_samples
+    detector_samples = estimate_white_noise(experiment_data, detector_samples, compsep_output, params) 
     timing_dict["wn-est-1"] = time.time() - t0
     if mpi_info.tod.is_master:
         logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished white noise estimation in {timing_dict['wn-est-1']:.1f}s.")
@@ -943,7 +944,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     ### ABSOLUTE GAIN CALIBRATION ### 
     if params.general.sample_abs_gain and iter >= params.general.sample_abs_gain_from_iter_num:
         t0 = time.time()
-        detector_samples, wait_time = sample_absolute_gain(TOD_comm, experiment_data, detector_samples, compsep_output)
+        #updates g0_est in detector_samples
+        detector_samples, wait_time = sample_absolute_gain(TOD_comm, experiment_data, detector_samples, compsep_output) 
         timing_dict["abs-gain"] = time.time() - t0
         waittime_dict["abs-gain"] = wait_time
         if mpi_info.band.is_master:
@@ -952,7 +954,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     ### RELATIVE GAIN CALIBRATION ### 
     if params.sample_rel_gain and iter >= params.sample_rel_gain_from_iter_num:
         t0 = time.time()
-        detector_samples, wait_time = sample_relative_gain(TOD_comm, det_comm, experiment_data, detector_samples, compsep_output)
+        #updates rel_gain_est in the scans_samples contained into detecor_samples
+        detector_samples, wait_time = sample_relative_gain(TOD_comm, det_comm, experiment_data, detector_samples, compsep_output) 
         timing_dict["rel-gain"] = time.time() - t0
         waittime_dict["rel-gain"] = wait_time
         if mpi_info.band.is_master:
@@ -962,6 +965,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     ### TEMPORAL GAIN CALIBRATION ### 
     if params.sample_temporal_gain and iter >= params.sample_temporal_gain_from_iter_num:
         t0 = time.time()
+        #updates time_dep_rel_gain_est in the scan_samples in detector_samples
         detector_samples = sample_temporal_gain_variations(det_comm, experiment_data, detector_samples, compsep_output, chain, iter, params)
         timing_dict["temp-gain"] = time.time() - t0
         if mpi_info.band.is_master:
@@ -982,6 +986,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     if params.general.sample_corr_noise and iter >= params.general.sample_corr_noise_from_iter_num:
         ### CORRELATED NOISE SAMPLING ###
         t0 = time.time()
+        #updates fknee_est and alpha_est in the scans in detector_samples and returns a mapmaker object for correlated noise.
         detector_samples, mapmaker_corrnoise, wait_time = sample_noise(band_comm, experiment_data, detector_samples, compsep_output, chain, iter)
         timing_dict["corr-noise"] = time.time() - t0
         waittime_dict["corr-noise"] = wait_time
