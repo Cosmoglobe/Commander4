@@ -1,32 +1,46 @@
+# This parameter file contains a reduced set of Planck LFI detectors: 6 (2 per band) out of 22 total.
+# It does per-pixel component separation.
+
 MPI_config:
-  ntask_tod: 0
-  ntask_compsep: 8
-nthreads_tod: 0
-nthreads_compsep: 16
-betzy_mode: false
+  ntask_tod: 128
+  ntask_compsep: 11
+nthreads_tod: 1
+nthreads_compsep: 8
 
-niter_gibbs: 3
+niter_gibbs: 10
 
-nside: 128
+nside: 512
+
+noise_fknee: 0.1
+noise_alpha: -0.9
+
+sample_corr_noise: True
+sample_corr_noise_from_iter_num: 8
+sample_abs_gain: True
+sample_abs_gain_from_iter_num: 2
+sample_rel_gain: True
+sample_rel_gain_from_iter_num: 4
+sample_temporal_gain: True
+sample_temporal_gain_from_iter_num: 4
 
 make_plots: True
 output_stats: False
 
 galactic_mask: True
-sample_corr_noise: True
 pixel_compsep_sampling: True
 smooth_to_common_res: True
 
 output_paths:
-  plots: "../cmdr4_plots/Planck+WMAP_nside128_mapsonly_perpix/"
-  stats: "../cmdr4_stats/Planck+WMAP_nside128_mapsonly_perpix/"
+  chains: "../cmdr4_chains/PlanckTODs_perpix/"
+  plots: "../cmdr4_plots/PlanckTODs_perpix/"
+  stats: "../cmdr4_stats/PlanckTODs_perpix/"
 
 logging:
   console:
     level: 'info'
   file:
     level: 'info'
-    filename: '../cmdr4_logs/output_Planck+WMAP_nside128_mapsonly_perpix.log'
+    filename: '../cmdr4_logs/output_PlanckTODs_perpix.log'
 
 
 components:
@@ -37,9 +51,9 @@ components:
       polarized: True
       longname: "CMB"
       shortname: "cmb"
-      smoothing_prior_FWHM: .NAN  # arcmin
-      smoothing_prior_amplitude: .NAN  # uK_RJ^2
-      lmax: 64
+      smoothing_prior_FWHM: 30.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+7 # uK_RJ^2
+      lmax: 1024
       smoothing_scale: 0.0
       spatially_varying_MM: False
 
@@ -50,12 +64,12 @@ components:
       polarized: True
       longname: "Thermal Dust"
       shortname: "dust"
-      smoothing_prior_FWHM: .NAN  # arcmin
-      smoothing_prior_amplitude: .NAN  # uK_RJ^2
+      smoothing_prior_FWHM: 5.0 # 10.0 # arcmin
+      smoothing_prior_amplitude: 2.0e-3  # uK_RJ^2
       beta: 1.56
       T: 20
       nu0: 545
-      lmax: 128
+      lmax: 2048
       smoothing_scale: 0.0
       spatially_varying_MM: False
 
@@ -63,14 +77,14 @@ components:
     enabled: true
     component_class: "Synchrotron"
     params:
-      polarized: True
+      polarized: False
       longname: "Synchrotron"
       shortname: "sync"
-      smoothing_prior_FWHM: .NAN # arcmin
-      smoothing_prior_amplitude: .NAN  # uK_RJ^2
+      smoothing_prior_FWHM: 60.0 # arcmin
+      smoothing_prior_amplitude: 2.0e-2  # uK_RJ^2
       beta: -3.1
       nu0: 30
-      lmax: 64
+      lmax: 1024
       smoothing_scale: 0.0
       spatially_varying_MM: True
 
@@ -81,14 +95,14 @@ components:
       polarized: False
       longname: "Free-Free"
       shortname: "ff"
-      smoothing_prior_FWHM: .NAN # arcmin
-      smoothing_prior_amplitude: .NAN  # uK_RJ^2
+      smoothing_prior_FWHM: 30.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+9  # uK_RJ^2
       T: 7000
-      nu0: 0.408
-      lmax: 64
+      nu0: 0.408 #40
+      lmax: 1024
       smoothing_scale: 0.0
       spatially_varying_MM: False
-
+  
   # SpinningDust:
   #   enabled: False
   #   component_class: "SpinningDust"
@@ -107,11 +121,22 @@ components:
 
 
 CompSep_bands:
+  ### TOD BANDS ###
+  Planck30GHz:
+    get_from: PlanckLFI
+    enabled: true
+  Planck44GHz:
+    get_from: PlanckLFI
+    enabled: true
+  Planck70GHz:
+    get_from: PlanckLFI
+    enabled: true
+
   ### TOTAL INTENSITY MAPS ###
   Haslam408MHz:
     enabled: true
     get_from: "file"
-    eval_nside: 128
+    eval_nside: 512
     data_nside: 512
     file_convention: "Haslam"
     path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
@@ -123,7 +148,7 @@ CompSep_bands:
   WMAPKa:
     enabled: true
     get_from: "file"
-    eval_nside: 128
+    eval_nside: 512
     data_nside: 512
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_map_v4.fits"
@@ -135,7 +160,7 @@ CompSep_bands:
   WMAPQ1:
     enabled: true
     get_from: "file"
-    eval_nside: 128
+    eval_nside: 512
     data_nside: 512
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_map_v4.fits"
@@ -147,7 +172,7 @@ CompSep_bands:
   WMAPQ2:
     enabled: true
     get_from: "file"
-    eval_nside: 128
+    eval_nside: 512
     data_nside: 512
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_map_v4.fits"
@@ -159,7 +184,7 @@ CompSep_bands:
   WMAPV1:
     enabled: true
     get_from: "file"
-    eval_nside: 128
+    eval_nside: 512
     data_nside: 512
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_map_v4.fits"
@@ -171,7 +196,7 @@ CompSep_bands:
   WMAPV2:
     enabled: true
     get_from: "file"
-    eval_nside: 128
+    eval_nside: 512
     data_nside: 512
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_map_v4.fits"
@@ -183,7 +208,7 @@ CompSep_bands:
   Planck857GHz:
     enabled: true
     get_from: "file"
-    eval_nside: 128
+    eval_nside: 512
     data_nside: 1024
     file_convention: "HFI"
     path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_map_n1024_10arcmin_QUADCOR_ZODICOR_uK.fits"
@@ -196,7 +221,7 @@ CompSep_bands:
   Planck353GHz:
     enabled: true
     get_from: "file"
-    eval_nside: 128
+    eval_nside: 512
     data_nside: 1024
     file_convention: "HFI"
     path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_map_n1024_uK_udgrade.fits"
@@ -207,4 +232,82 @@ CompSep_bands:
 
 
 experiments:
-  []  # Empty list
+  PlanckLFI:
+    enabled: true
+    is_sim: false
+    pix_is_compressed: true
+    psi_is_compressed: true
+    data_type: "TOD"
+    experiment_id: "planck"  # Decides expected data format, what TOD reader is used, etc.
+    bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
+    Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
+    num_scans: 45860
+    bands:
+      Planck30GHz:
+        enabled: true
+        tod_files_prefix: "LFI_030_"
+        num_MPI_tasks: 24
+        detector_id: 0
+        freq_identifier: 30
+        eval_nside: 512
+        data_nside: 512
+        fwhm: 32.4 # [arcmin]
+        freq: 28.4 # [GHz]
+        fsamp: 32.5079365079365 # [Hz]
+        data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
+        detectors:
+          27M:
+            name: "27M"
+            gain_est: 78.0e-9
+            bandpass_shift: 0.28  # Ghz
+          28M:
+            name: "28M"
+            gain_est: 63.0e-9
+            bandpass_shift: 0.08
+      Planck44GHz:
+        enabled: true
+        tod_files_prefix: "LFI_044_"
+        num_MPI_tasks: 40
+        freq_identifier: 44
+        eval_nside: 512
+        data_nside: 512
+        fwhm: 27.1 # [arcmin]
+        freq: 44.1 # [GHz]
+        fsamp: 46.5454545454545
+        data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
+        detectors:
+          24M:
+            name: "24M"
+            gain_est: 3.52e-9
+            bandpass_shift: -0.55  # Ghz
+          25M:
+            name: "25M"
+            gain_est: 8.00e-9
+            bandpass_shift: 0.28
+      Planck70GHz:
+        enabled: true
+        tod_files_prefix: "LFI_070_"
+        num_MPI_tasks: 64
+        freq_identifier: 70
+        eval_nside: 512
+        data_nside: 1024
+        fwhm: 13.3 # [arcmin]
+        freq: 70.1 # [GHz]
+        fsamp: 78.7692307692308
+        data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_70.txt"
+        detectors:
+        detectors:
+          18M:
+            name: "18M"
+            gain_est: 68.0e-9
+            bandpass_shift: -0.87
+          23M:
+            name: "23M"
+            gain_est: 28.0e-9
+            bandpass_shift: 0.13

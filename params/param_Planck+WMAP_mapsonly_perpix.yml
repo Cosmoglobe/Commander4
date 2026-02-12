@@ -1,83 +1,63 @@
-general:
-  MPI_config:
-    ntask_tod: 0  # Map-only processing: No TOD tasks.
-    ntask_compsep_I: 7
-    ntask_compsep_QU: 7
-  nthreads_tod: 1
-  nthreads_compsep: 8  # 20
-  betzy_mode: false
+MPI_config:
+  ntask_tod: 0  # Map-only processing: No TOD tasks.
+  ntask_compsep: 8
+nthreads_tod: 1
+nthreads_compsep: 1
 
-  CG_max_iter: 100
-  CG_max_iter_pol: 100
-  CG_err_tol: 1.0e-100
-  CG_float_precision: "single"
-  CG_real_alm_mode: False
+niter_gibbs: 2
 
-  niter_gibbs: 1
-  nside: 256
+nside: 1024
 
-  noise_fknee: 0.1
-  noise_alpha: -0.9
+noise_fknee: 0.1
+noise_alpha: -0.9
 
-  make_plots: True
-  output_stats: False
+make_plots: True
+output_stats: False
 
-  galactic_mask: True
-  pixel_compsep_sampling: False
+galactic_mask: True
+pixel_compsep_sampling: True
+smooth_to_common_res: True
 
-  output_paths:
-    plots: "/mn/stornext/u3/leoab/com4_plots/Planck_WMAP_mapsonly_CG_new"
-    stats: "/mn/stornext/u3/leoab/com4_stats"
-    chains: "/mn/stornext/u3/leoab/com4_chains"
+output_paths:
+  chains: "../cmdr4_chains/Planck+WMAP_mapsonly_perpix/"
+  plots: "../cmdr4_plots/Planck+WMAP_mapsonly_perpix/"
+  stats: "../cmdr4_stats/Planck+WMAP_mapsonly_perpix/"
 
-  logging:
-    console:
-      level: 'info'
-    file:
-      level: 'info'
-      # filename: '../com4_logs/output_Planck+WMAP_mapsonly_CG.log'
-      filename: 'output_Planck+WMAP_mapsonly_CG.log'
+logging:
+  console:
+    level: 'info'
+  file:
+    level: 'info'
+    filename: '../cmdr4_logs/output_Planck+WMAP_mapsonly_perpix.log'
+
 
 components:
   CMB:
     enabled: true
     component_class: "CMB"
     params:
-      polarizations: [True, False, False] #I Q U 
+      polarized: True
       longname: "CMB"
       shortname: "cmb"
       smoothing_prior_FWHM: 30.0 # arcmin
-      smoothing_prior_amplitude: 1.0e+7 #1.0  # uK_RJ^2
+      smoothing_prior_amplitude: 1.0e+7 # uK_RJ^2
       lmax: 1024
-      smoothing_scale: 0
-      spatially_varying_MM: False
-
-  CMB_pol:
-    enabled: true
-    component_class: "CMB"
-    params:
-      polarizations: [False, True, True] #I Q U 
-      longname: "CMB"
-      shortname: "cmb"
-      smoothing_prior_FWHM: 30.0 # arcmin
-      smoothing_prior_amplitude: 1.0e+7 #1.0  # uK_RJ^2
-      lmax: 1024
-      smoothing_scale: 0
+      smoothing_scale: 0.0
       spatially_varying_MM: False
 
   ThermalDust:
     enabled: true
     component_class: "ThermalDust"
     params:
-      polarizations: [True, True, True] #[True, True, True]
-      longname: "Thermal-Dust"
+      polarized: True
+      longname: "Thermal Dust"
       shortname: "dust"
       smoothing_prior_FWHM: 5.0 # 10.0 # arcmin
       smoothing_prior_amplitude: 2.0e-3  # uK_RJ^2
       beta: 1.56
       T: 20
       nu0: 545
-      lmax: 2024
+      lmax: 2048
       smoothing_scale: 0.0
       spatially_varying_MM: False
 
@@ -85,7 +65,7 @@ components:
     enabled: true
     component_class: "Synchrotron"
     params:
-      polarizations: [True, False, False]
+      polarized: True
       longname: "Synchrotron"
       shortname: "sync"
       smoothing_prior_FWHM: 60.0 # arcmin
@@ -100,45 +80,32 @@ components:
     enabled: true
     component_class: "FreeFree"
     params:
-      polarizations: [True, False, False]
+      polarized: False
       longname: "Free-Free"
       shortname: "ff"
       smoothing_prior_FWHM: 30.0 # arcmin
       smoothing_prior_amplitude: 1.0e+9  # uK_RJ^2
       T: 7000
       nu0: 0.408 #40
-      lmax: 512
+      lmax: 1024
       smoothing_scale: 0.0
       spatially_varying_MM: False
   
-  RadioSources:
-    enabled: True
-    component_class: "RadioSources"
-    params:
-      polarizations: [True, False, False]
-      longname: "RadioSources"
-      shortname: "radsources"
-      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
-      nu_0: 30.0  # Ghz
-      lmax: "full" #just a placeholder
-      smoothing_scale: 0 # placeholder? Do we ever want a smoothing of point sources?
-      sample_alphas: False
-      
-  SpinningDust:
-    enabled: False
-    component_class: "SpinningDust"
-    params:
-      polarizations: [True, False, False]
-      longname: "SpinningDust"
-      shortname: "sdust"
-      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
-      smoothing_prior_FWHM: 0.0 # arcmin
-      smoothing_prior_amplitude: 1.0e+10  # uK_RJ^2
-      nu_peak: 25.3  # Ghz
-      nu_0: 22.0  # Ghz
-      lmax: 1000
-      smoothing_scale: 0 # 30.0
-      spatially_varying_MM: False
+  # SpinningDust:
+  #   enabled: False
+  #   component_class: "SpinningDust"
+  #   params:
+  #     polarized: False
+  #     longname: "SpinningDust"
+  #     shortname: "sdust"
+  #     template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
+  #     smoothing_prior_FWHM: 0.0 # arcmin
+  #     smoothing_prior_amplitude: 1.0e+10  # uK_RJ^2
+  #     nu_peak: 25.3  # Ghz
+  #     nu_0: 22.0  # Ghz
+  #     lmax: 1000
+  #     smoothing_scale: 0 # 30.0
+  #     spatially_varying_MM: False
 
 
 compsep:
@@ -151,7 +118,7 @@ CompSep_bands:
   Haslam408MHz:
     enabled: true
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 512
     data_nside: 512
     file_convention: "Haslam"
     path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
@@ -163,7 +130,7 @@ CompSep_bands:
   WMAPKa:
     enabled: true
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 512
     data_nside: 512
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_map_v4.fits"
@@ -175,7 +142,7 @@ CompSep_bands:
   WMAPQ1:
     enabled: true
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 512
     data_nside: 512
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_map_v4.fits"
@@ -187,7 +154,7 @@ CompSep_bands:
   WMAPQ2:
     enabled: true
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 512
     data_nside: 512
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_map_v4.fits"
@@ -199,7 +166,7 @@ CompSep_bands:
   WMAPV1:
     enabled: true
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 512
     data_nside: 512
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_map_v4.fits"
@@ -211,7 +178,7 @@ CompSep_bands:
   WMAPV2:
     enabled: true
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 512
     data_nside: 512
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_map_v4.fits"
@@ -223,7 +190,7 @@ CompSep_bands:
   Planck857GHz:
     enabled: true
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 512
     data_nside: 1024
     file_convention: "HFI"
     path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_map_n1024_10arcmin_QUADCOR_ZODICOR_uK.fits"
@@ -236,7 +203,7 @@ CompSep_bands:
   Planck353GHz:
     enabled: true
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 512
     data_nside: 1024
     file_convention: "HFI"
     path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_map_n1024_uK_udgrade.fits"
@@ -245,7 +212,7 @@ CompSep_bands:
     freq: 353.0 # [GHz]
     polarizations: [False, True, True]
 
-  # WMAPV_pol:  # TODO: allow for dense covariance matrices so we can add maps like these.
+  # WMAPV_pol:
   #   enabled: true
   #   get_from: "file"
   #   eval_nside: 16

@@ -1,3 +1,5 @@
+# WARNING: This script is currently unmaintained and should be considered depricated.
+# It will not run.
 import h5py
 import logging 
 import numpy as np

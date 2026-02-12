@@ -146,6 +146,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
     my_detector_id = None
     my_scans_start = None
     my_scans_stop = None
+    all_det_gains = []
     current_detector_id = 0  # A unique number identifying every detector of every band.
     for exp_name in params.experiments:
         experiment = params.experiments[exp_name]
@@ -155,29 +156,30 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
             band = experiment.bands[band_name]
             if not band.enabled:
                 continue
-            if mpi_info.band.name != band_name:
-                current_detector_id += len(band.detectors)
-                continue
-            my_band_name = band_name
-            my_band = band
-            my_band_id = iband
             for idet, det_name in enumerate(band.detectors):
-                if mpi_info.det.name != det_name:
-                    current_detector_id += 1  # Update detector counter.
-                    continue
                 detector = band.detectors[det_name]
-                # What is my rank number among the ranks processing this detector?
-                my_experiment_name = exp_name
-                my_experiment = experiment
-                my_det = detector
-                # Setting our unique detector id. Note that this is a global, not per band.
-                my_detector_id = current_detector_id
-                tot_num_scans = experiment.num_scans
-                scans = np.arange(tot_num_scans)
-                my_scans = np.array_split(scans, mpi_info.det.size)[mpi_info.det.rank]
-                my_scans_start = my_scans[0]
-                my_scans_stop = my_scans[-1]
-                current_detector_id += 1  # Update detector counter.
+                # Checking if our rank is allocated to this experiment + band + detector.
+                if mpi_info.experiment.name == exp_name and mpi_info.band.name == band_name\
+                and mpi_info.det.name == det_name:
+                    my_band_name = band_name
+                    my_band = band
+                    my_band_id = iband
+                    # What is my rank number among the ranks processing this detector?
+                    my_experiment_name = exp_name
+                    my_experiment = experiment
+                    my_det = detector
+                    # Setting our unique detector id. Note that this is a global, not per band.
+                    my_detector_id = current_detector_id
+                    tot_num_scans = experiment.num_scans
+                    scans = np.arange(tot_num_scans)
+                    my_scans = np.array_split(scans, mpi_info.det.size)[mpi_info.det.rank]
+                    my_scans_start = my_scans[0]
+                    my_scans_stop = my_scans[-1]
+                # Update unique detector counter either way.
+                current_detector_id += 1
+                # Collect all gain values from detectors on the same experiment as us.
+                if mpi_info.experiment.name == exp_name:
+                    all_det_gains.append(detector.gain_est)
     mpi_info.tod.comm.Barrier()
 
 
@@ -192,6 +194,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
     
     det_comm = band_comm.Split(my_detector_id, key=mpi_info.tod.rank)  # Create communicators for each different band.
     MPIsize_det, MPIrank_det = det_comm.Get_size(), band_comm.Get_rank()  # Get my local rank, and the total size of, the band-communicator I'm on.
+    logger.debug(f"TOD-rank {mpi_info.tod.rank:4} (on machine {mpi_info.processor_name}), dedicated to detector {my_detector_id:4}, with local rank {mpi_info.det.rank:4} (local communicator size: {mpi_info.det.size:4}).")
     logger.debug(f"TOD-rank {mpi_info.tod.rank:4} (on machine {mpi_info.processor_name}), dedicated to detector {my_detector_id:4}, with local rank {mpi_info.det.rank:4} (local communicator size: {mpi_info.det.size:4}).")
 
     # Creating "tod_band_masters", an array which maps the band index to the rank of the master of that band.
@@ -212,26 +215,33 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
     mpi_info['tod']['tod_band_masters'] = tod_band_masters_dict
     t0 = time.time()
 
-    experiment_data = read_tods_from_file(my_experiment, my_band, my_det, params, my_detector_id,
-                                          my_scans_start, my_scans_stop)
+    experiment_data = read_tods_from_file(det_comm, my_experiment, my_band, my_det, params,
+                                          my_detector_id, my_scans_start, my_scans_stop)
 
     mpi_info.tod.comm.Barrier()
     if mpi_info.tod.is_master:
         logger.info(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")
 
+    # Find the detector-averaged gain for our experiment, which serves as the initial g0 estimate.
+    initial_g0_est = np.mean(all_det_gains)
+    # Then calculate our detectors relative gain.
+    my_det_rel_gain_est = my_det.gain_est - initial_g0_est
     num_scans = len(experiment_data.scans)
     scansample_list = []
     for iscan in range(num_scans):
         scansample_list.append(ScanSamples())
         scansample_list[-1].scanID = experiment_data.scans[iscan].scanID
         scansample_list[-1].time_dep_rel_gain_est = 0.0
-        scansample_list[-1].rel_gain_est = my_det.rel_gain_est
-        scansample_list[-1].gain_est = params.general.initial_g0 + my_det.rel_gain_est
+        scansample_list[-1].gain_est = my_det.gain_est
+        scansample_list[-1].rel_gain_est = my_det_rel_gain_est
     det_samples = DetectorSamples(scansample_list)
     det_samples.detector_id = my_detector_id
-    det_samples.g0_est = params.general.initial_g0
+    det_samples.g0_est = initial_g0_est
     det_samples.detector_name = str(my_det)
     det_samples.experiment_name = str(my_experiment)
+
+    if mpi_info.tod.is_master:
+        logger.info(f"Initial absolute gain estimate for {exp_name}: {initial_g0_est:.2e}.")
 
     # Creating "tod_band_masters", an array which maps the band index to the rank of the master of that band.
     # FIXME: for now we assume that every TOD generates all 3 stokes parameteres, in the future might make sense to parametrize that
@@ -817,7 +827,7 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
                 plt.ylim(0, np.max(1e9*(other_gain + delta_g_sample)))
                 plt.xlabel("PID")
                 plt.ylabel("Gain [mV/K]")
-                plt.savefig(f"{params.output_paths.plots}chain{chain}_iter{iter}_{detector_samples.detector_name}.png")
+                plt.savefig(f"{params.general.output_paths.plots}chain{chain}_iter{iter}_{detector_samples.detector_name}.png")
                 plt.close()
         else:
             delta_g_sample = np.zeros(n_scans_total)
@@ -871,7 +881,7 @@ def write_tod_samples_to_file(TOD_comm: MPI.Comm, det_comm: MPI.Comm, detector_s
 
     expname = detector_samples.experiment_name
     detname = detector_samples.detector_name
-    chain_outpath = os.path.join(params.output_paths.chains, f"{expname}_{detname}_chain{chain:02d}_iter{iter:04d}.h5")
+    chain_outpath = os.path.join(params.general.output_paths.chains, f"{expname}_{detname}_chain{chain:02d}_iter{iter:04d}.h5")
 
     if det_comm.Get_rank() == 0:
         scanIDs = []
@@ -952,7 +962,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
             logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished absolute gain estimation in {timing_dict['abs-gain']:.1f}s.")
 
     ### RELATIVE GAIN CALIBRATION ### 
-    if params.sample_rel_gain and iter >= params.sample_rel_gain_from_iter_num:
+    if params.general.sample_rel_gain and iter >= params.general.sample_rel_gain_from_iter_num:
         t0 = time.time()
         #updates rel_gain_est in the scans_samples contained into detecor_samples
         detector_samples, wait_time = sample_relative_gain(TOD_comm, det_comm, experiment_data, detector_samples, compsep_output) 
@@ -963,7 +973,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
 
 
     ### TEMPORAL GAIN CALIBRATION ### 
-    if params.sample_temporal_gain and iter >= params.sample_temporal_gain_from_iter_num:
+    if params.general.sample_temporal_gain and iter >= params.general.sample_temporal_gain_from_iter_num:
         t0 = time.time()
         #updates time_dep_rel_gain_est in the scan_samples in detector_samples
         detector_samples = sample_temporal_gain_variations(det_comm, experiment_data, detector_samples, compsep_output, chain, iter, params)
