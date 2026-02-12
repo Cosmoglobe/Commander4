@@ -272,7 +272,7 @@ experiments:
     experiment_id: "planck"
     is_sim: false
     data_type: "TOD"
-    filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/"
+    data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
     bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
     num_scans: 45860

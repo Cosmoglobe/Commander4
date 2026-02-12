@@ -45,8 +45,8 @@ def tod_reader(my_experiment: str, my_band: Bunch, my_det: Bunch, params: Bunch,
     pids = []
     filenames = []
     detname = str(my_det)
-    # with open(my_experiment.data_path + f"filelist_{my_band.freq_identifier:02d}.txt") as infile:
-    with open(my_band.filelist) as infile:
+    with open(my_experiment.data_path + f"filelist_{my_band.freq_identifier:02d}.txt") as infile:
+    #with open(my_band.filelist) as infile:
         infile.readline()
         for line in infile:
             pid, filename, _, _, _ = line.split()
