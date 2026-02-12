@@ -453,7 +453,7 @@ class CompSepSolver:
             stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
         self.CG_residuals = self.CG_residuals[:iter]
         if master:
-            logger.info(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.params.general.CG_err_tol})")
+            logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.params.general.CG_err_tol})")
 
         complist_sol = CG_solver.x
         for comp in complist_sol:

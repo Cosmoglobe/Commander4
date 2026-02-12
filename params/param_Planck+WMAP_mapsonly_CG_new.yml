@@ -14,17 +14,16 @@ general:
   CG_real_alm_mode: False
 
   niter_gibbs: 1
-
   nside: 256
 
-noise_fknee: 0.1
-noise_alpha: -0.9
+  noise_fknee: 0.1
+  noise_alpha: -0.9
 
   make_plots: True
   output_stats: False
 
-galactic_mask: True
-pixel_compsep_sampling: False
+  galactic_mask: True
+  pixel_compsep_sampling: False
 
   output_paths:
     plots: "/mn/stornext/u3/leoab/com4_plots/Planck_WMAP_mapsonly_CG_new"
@@ -38,7 +37,6 @@ pixel_compsep_sampling: False
       level: 'info'
       # filename: '../com4_logs/output_Planck+WMAP_mapsonly_CG.log'
       filename: 'output_Planck+WMAP_mapsonly_CG.log'
-
 
 components:
   CMB:

@@ -827,7 +827,7 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
                 plt.ylim(0, np.max(1e9*(other_gain + delta_g_sample)))
                 plt.xlabel("PID")
                 plt.ylabel("Gain [mV/K]")
-                plt.savefig(f"{params.output_paths.plots}chain{chain}_iter{iter}_{detector_samples.detector_name}.png")
+                plt.savefig(f"{params.general.output_paths.plots}chain{chain}_iter{iter}_{detector_samples.detector_name}.png")
                 plt.close()
         else:
             delta_g_sample = np.zeros(n_scans_total)
@@ -881,7 +881,7 @@ def write_tod_samples_to_file(TOD_comm: MPI.Comm, det_comm: MPI.Comm, detector_s
 
     expname = detector_samples.experiment_name
     detname = detector_samples.detector_name
-    chain_outpath = os.path.join(params.output_paths.chains, f"{expname}_{detname}_chain{chain:02d}_iter{iter:04d}.h5")
+    chain_outpath = os.path.join(params.general.output_paths.chains, f"{expname}_{detname}_chain{chain:02d}_iter{iter:04d}.h5")
 
     if det_comm.Get_rank() == 0:
         scanIDs = []
@@ -960,7 +960,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
             logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished absolute gain estimation in {timing_dict['abs-gain']:.1f}s.")
 
     ### RELATIVE GAIN CALIBRATION ### 
-    if params.sample_rel_gain and iter >= params.sample_rel_gain_from_iter_num:
+    if params.general.sample_rel_gain and iter >= params.general.sample_rel_gain_from_iter_num:
         t0 = time.time()
         detector_samples, wait_time = sample_relative_gain(TOD_comm, det_comm, experiment_data, detector_samples, compsep_output)
         timing_dict["rel-gain"] = time.time() - t0
@@ -970,7 +970,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
 
 
     ### TEMPORAL GAIN CALIBRATION ### 
-    if params.sample_temporal_gain and iter >= params.sample_temporal_gain_from_iter_num:
+    if params.general.sample_temporal_gain and iter >= params.general.sample_temporal_gain_from_iter_num:
         t0 = time.time()
         detector_samples = sample_temporal_gain_variations(det_comm, experiment_data, detector_samples, compsep_output, chain, iter, params)
         timing_dict["temp-gain"] = time.time() - t0

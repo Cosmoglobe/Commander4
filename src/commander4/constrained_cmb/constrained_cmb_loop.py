@@ -6,7 +6,7 @@ from pixell import utils
 from mpi4py import MPI
 import matplotlib.pyplot as plt
 import os
-from output import plotting
+from commander4.output import plotting
 
 nthreads = 32  # Number of threads to use for ducc S
 VERBOSE = False
@@ -124,6 +124,7 @@ class ConstrainedCMB:
             Returns:
                 m_bestfit: The resulting best-fit solution, in alm space.
         """
+        logger = logging.getLogger(__name__)
         CG_solver = utils.CG(LHS, RHS, dot=self.dot_alm)
         err_tol = 1e-6
         if self.iter == 0:
@@ -182,7 +183,7 @@ def constrained_cmb_loop(comm, compsep_master: int, params: dict):
             CMB_fluct_Cl = hp.alm2cl(CMB_fluct_alms)
             CMB_fluct_map = alm2map(CMB_fluct_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax)
 
-            if params.make_plots:
+            if params.general.make_plots:
                 plotting.plot_constrained_cmb_results(
                     master, params, detector, chain, iter,
                     constrained_cmb_solver.ell, CMB_mean_field_map,

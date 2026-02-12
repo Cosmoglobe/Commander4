@@ -1,6 +1,6 @@
 general:
   MPI_config:
-    ntask_tod: 64
+    ntask_tod: 128
     ntask_compsep_I: 8
     ntask_compsep_QU: 8
   nthreads_tod: 1
@@ -20,14 +20,14 @@ general:
   noise_fknee: 0.1
   noise_alpha: -0.9
   
-sample_corr_noise: True
+  sample_corr_noise: True
   sample_corr_noise_from_iter_num: 8
-sample_abs_gain: True
+  sample_abs_gain: True
   sample_abs_gain_from_iter_num: 2
-sample_rel_gain: True
-sample_rel_gain_from_iter_num: 4
-sample_temporal_gain: True
-sample_temporal_gain_from_iter_num: 4
+  sample_rel_gain: True
+  sample_rel_gain_from_iter_num: 4
+  sample_temporal_gain: True
+  sample_temporal_gain_from_iter_num: 4
 
   make_plots: True
   output_stats: False
@@ -46,7 +46,6 @@ sample_temporal_gain_from_iter_num: 4
     file:
       level: 'info'
       filename: '/mn/stornext/u3/leoab/com4_logs/output_Planck+WMAP_mapsonly_CG.log'
-
 
 components:
   CMB:
@@ -286,7 +285,7 @@ experiments:
       Planck30GHz:
         enabled: true
         tod_files_prefix: "LFI_030_"
-        num_MPI_tasks: 64 #128 #24
+        num_MPI_tasks: 128 #24
         detector_id: 0
         freq_identifier: 30
         eval_nside: 256

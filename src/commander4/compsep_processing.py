@@ -126,7 +126,7 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
     """
     logger = logging.getLogger(__name__)
 
-    # if params.make_plots:
+    # if params.general.make_plots:
         # detector_to_plot = proc_comm.Get_rank()
         # logging.info(f"Rank {proc_comm.Get_rank()} chain {chain} iter {iter} starting plotting.")
         # plotting.plot_data_maps(params, detector_to_plot, chain, iter, map_signal=signal_map,

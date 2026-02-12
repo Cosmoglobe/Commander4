@@ -4,8 +4,8 @@ import logging
 import healpy as hp
 from pixell import utils
 from mpi4py import MPI
-from utils.math_operations import alm_to_map, alm_to_map_adjoint
-from output import plotting
+from commander4.utils.math_operations import alm_to_map, alm_to_map_adjoint
+from commander4.output import plotting
 
 nthreads = 32  # Number of threads to use for ducc SHTs.
 VERBOSE = False
@@ -203,7 +203,7 @@ def constrained_cmb_loop_MPI(comm, compsep_master: int, params: dict):
             while not comm.recv(source=0):  # Looking for "stop" signal.
                 constrained_cmb_solver.worker_LHS_func()  # If not asked to stop, compute LHS.
 
-        if master and params.make_plots:
+        if master and params.general.make_plots:
             plotting.plot_constrained_cmb_results(
                 master, params, detector, chain, iter,
                 constrained_cmb_solver.ell, CMB_mean_field_map, CMB_fluct_map,
