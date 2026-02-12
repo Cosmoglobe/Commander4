@@ -211,7 +211,7 @@ class CompSepSolver:
             This function should be called by all ranks holding a frequency map, even if they do
             not hold a compoenent, as they are still needed to compute the LHS operation.
             Args:
-                a_in (list[Component]): List of Components contributing to the local band
+                comp_list_in (list[Component]): List of Components contributing to the local band
             Returns:
                 Aa (np.array): The result of applying A to the input alms. Will return a zero-sized
                                array if this MPI rank does not hold a component.                               

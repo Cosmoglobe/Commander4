@@ -44,7 +44,7 @@ void _map_weight_accumulator_T(T *map, const T weight, int64_t *pix, int64_t sca
 
 
 /** Simple serial mapmaker which accumulates the values of the TOD, weigthed by specified value, into a map, but leaves the map
- *  unnormalized (with respect to the weights), meaning it is supposed to be called multiple times on the same map, and the normalized.
+ *  unnormalized (with respect to the weights), meaning it is supposed to be called multiple times on the same map, and then normalized.
  * 
  *  Args:
  *      map (OUTPUT) -- 1D array of length 'num_pix', representing the signal map, which will be populated by this function.
@@ -66,6 +66,30 @@ void _map_accumulator_IQU_T(T *map, const T *tod, const T weight, int64_t *pix, 
     }
 }
 
+/** Simple serial transpose of the mapmaker operator, which accumulates the values on the TOD, given a certain pointing on a map and angle psi.
+ * 
+ *  Notes: 
+ *      - the mapmaking operator is not unitary, i.e. P^T != P^-1. Meaning that applying thi function on the output of _map_accumulator_IQU_T will
+ *          not give the original TODs.
+ *      - no weights are considered here.
+ * 
+ *  Args:
+ *      map (OUTPUT) -- 1D array of length 'num_pix', representing the signal map, which will be populated by this function.
+ *      tod -- 1D array, containing the TOD of length 'scan_len'.
+ *      pix -- 1D array, containing the pixel pointing index of each element in tod.
+ *      scan_len -- Length of the scan as an int.
+ *      num_pix -- Number of pixels in map.
+ */
+template<typename T>
+void _map2tod_IQU_T(T *tod, const T *map, int64_t *pix, const double *psi, int64_t scan_len, int64_t num_pix){
+    for(int64_t itod=0; itod<scan_len; itod++){
+        const T cos2psi = static_cast<T>(std::cos(2.0 * psi[itod]));
+        const T sin2psi = static_cast<T>(std::sin(2.0 * psi[itod]));
+        tod[itod] = map[pix[itod]]                      //I
+            + map[pix[itod] +   num_pix] * cos2psi      //Q
+            + map[pix[itod] + 2*num_pix] * sin2psi;     //U
+    }
+}
 
 /** Simple serial mapmaker accumulating the weights (typically inverse-variance weights) for the above "map_accumulator".
  * 
@@ -252,6 +276,16 @@ void map_accumulator_IQU_f32(float *map, float *tod, float weight, int64_t *pix,
 extern "C"
 void map_accumulator_IQU_f64(double *map, double *tod, double weight, int64_t *pix, double *psi, int64_t scan_len, int64_t num_pix){
     _map_accumulator_IQU_T<double>(map, tod, weight, pix, psi, scan_len, num_pix);
+}
+
+extern "C"
+void map2tod_IQU_f64(double *tod, double *map, int64_t *pix, double *psi, int64_t scan_len, int64_t num_pix){
+    _map2tod_IQU_T<double>(tod, map, pix, psi, scan_len, num_pix);
+}
+
+extern "C"
+void map2tod_IQU_f32(float *tod, float *map, int64_t *pix, double *psi, int64_t scan_len, int64_t num_pix){
+    _map2tod_IQU_T<float>(tod, map, pix, psi, scan_len, num_pix);
 }
 
 extern "C"
