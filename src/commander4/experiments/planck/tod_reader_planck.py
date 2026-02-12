@@ -6,20 +6,15 @@ import h5py
 import gc
 from numpy.typing import NDArray
 from astropy.io import fits
-from pixell.bunch import Bunch
+from mpi4py import MPI
+from commander4.utils.params import Params
 from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
-from commander4.data_models.detector_samples import DetectorSamples
 
 
-def get_processing_mask(my_band: Bunch) -> DetectorTOD:
-    """Subtracts the sky model from the TOD data.
-    Input:
-        experiment_data (DetectorTOD): The experiment TOD object.
-        params (Bunch): The parameters from the input parameter file.
-    Output:
-        experiment_data (DetectorTOD): The experiment TOD with the estimated white noise level added to each scan.
+def get_processing_mask(my_band: Params) -> DetectorTOD:
+    """ Finds and returns the processing mask for the relevant band.
     """
     hdul = fits.open(my_band.processing_mask)
     mask = hdul[1].data["TEMPERATURE"].flatten().astype(bool)
@@ -38,24 +33,25 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     return best_ntod
 
 
-def tod_reader(my_experiment: str, my_band: Bunch, my_det: Bunch, params: Bunch, my_det_id: int,
-               scan_idx_start: int, scan_idx_stop: int) -> tuple[DetectorTOD, DetectorSamples]:
+def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: Params,
+               params: Params, my_det_id: int, scan_idx_start: int,
+               scan_idx_stop: int) -> DetectorTOD:
     logger = logging.getLogger(__name__)
     oids = []
     pids = []
     filenames = []
     detname = str(my_det)
-    with open(my_experiment.data_path + f"filelist_{my_band.freq_identifier:02d}.txt") as infile:
-    #with open(my_band.filelist) as infile:
+    bandname = str(my_band)
+    expname = str(my_experiment)
+
+    with open(my_band.filelist) as infile:
         infile.readline()
         for line in infile:
             pid, filename, _, _, _ = line.split()
             pids.append(f"{int(pid):06d}")
             filenames.append(filename[1:-1])
             oids.append(filename.split(".")[0].split("_")[-1])
-    scanlist = []
-    num_included = 0
-    
+
     processing_mask_map = get_processing_mask(my_band)
     if "bad_PIDs_path" in my_experiment:
         bad_PIDs = np.load(my_experiment.bad_PIDs_path)
@@ -68,7 +64,9 @@ def tod_reader(my_experiment: str, my_band: Bunch, my_det: Bunch, params: Bunch,
     ntod_upper_bound = int(my_band.fsamp*100*3600)  # 10 hour scan.
     flag_buffer = np.zeros(ntod_upper_bound, dtype=np.int64)
     tod_buffer = np.zeros(ntod_upper_bound, dtype=np.float32)
-    
+
+    scanlist = []
+    num_included = 0
     ntod_sum_original = 0
     ntod_sum_final = 0
     for i_pid in range(scan_idx_start, scan_idx_stop):
@@ -77,9 +75,8 @@ def tod_reader(my_experiment: str, my_band: Bunch, my_det: Bunch, params: Bunch,
         if pid in bad_PIDs:
             continue
 
-        # filename = f"LFI_{my_band.freq_identifier:03d}_{oid.zfill(6)}.h5"
-        filename = f"LB_{my_band.freq_identifier:03d}_L1_{oid.zfill(6)}.h5"
-        filepath = os.path.join(my_experiment.data_path, filename)
+        filename = f"{my_band.tod_files_prefix}{oid.zfill(6)}.h5"
+        filepath = os.path.join(my_band.data_path, filename)
         with h5py.File(filepath, "r") as f:
             ntod = int(f[f"/{pid}/common/ntod"][()])
             ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
@@ -100,22 +97,44 @@ def tod_reader(my_experiment: str, my_band: Bunch, my_det: Bunch, params: Bunch,
         flag_buffer[:ntod_optimal] &= 6111232
         if np.sum(flag_buffer[:ntod_optimal]) == 0:
             tod_buffer[:ntod_optimal] = np.abs(tod)
-            # if np.mean(tod_buffer[:ntod_optimal]) < 0.001 and np.std(tod) < 0.001:  # Check for crazy data.
-            scanlist.append(ScanTOD(tod, pix_encoded, psi_encoded, 0., pid, my_band.eval_nside, my_band.data_nside,
-                                    fsamp, vsun, huffman_tree, huffman_symbols, npsi, processing_mask_map, ntod))
+            # Check for crazy data.
+            if np.mean(tod_buffer[:ntod_optimal]) > 0.001 or np.std(tod) > 0.001:
+                continue
+            scanID = int(pid)
+            scanlist.append(ScanTOD(tod, pix_encoded, psi_encoded, 0., scanID, my_band.eval_nside,
+                                    my_band.data_nside, fsamp, vsun, huffman_tree, huffman_symbols,
+                                    npsi, processing_mask_map, ntod,
+                                    pix_is_compressed=my_experiment.pix_is_compressed,
+                                    psi_is_compressed=my_experiment.psi_is_compressed))
             num_included += 1
             ntod_sum_original += ntod
             ntod_sum_final += ntod_optimal
         if i_pid % 10 == 0:
             gc.collect()
 
-    logger.info(f"Fraction of scans included for {my_band.freq_identifier} {detname}: "
-                f"{num_included/(scan_idx_stop-scan_idx_start)*100:.1f} %")
-    logger.info(f"Avg scan size remaining after Fourier cut {my_band.freq_identifier} {detname}: "
-                f"{ntod_sum_final/ntod_sum_original*100:.1f} %")
-
     det_static = DetectorTOD(scanlist, float(my_band.freq)+float(my_det.bandpass_shift),
-                             my_band.fwhm, my_band.eval_nside, my_band.data_nside, detname)
+                             my_band.fwhm, my_band.eval_nside, my_band.data_nside, detname, expname)
     det_static.detector_id = my_det_id
+
+    ### Collect some info on master rank of each detector and print it ###
+    local_tot_scans = scan_idx_stop - scan_idx_start
+    local_stats = np.array([num_included, local_tot_scans, ntod_sum_final, ntod_sum_original])
+    global_stats = np.zeros_like(local_stats)
+    req = det_comm.Ireduce(local_stats, global_stats, op=MPI.SUM, root=0)
+    if det_comm.Get_rank() == 0:
+        req.Wait()
+        total_included, total_scans, total_ntod_final, total_ntod_original = global_stats
+        frac_included = 0.0
+        if total_scans > 0:
+            frac_included = total_included / total_scans * 100.0
+        avg_scan_remaining = 0.0
+        if total_ntod_original > 0:
+            avg_scan_remaining = total_ntod_final / total_ntod_original * 100.0
+        logger.info(f"Detector {detname} (band {bandname}) finished reading TODs from file.")
+        logger.info(f"Fraction of scans included for {detname}: {frac_included:.1f} %")
+        logger.info(f"Fraction of TODs left after Fourier cut for {detname}: "
+                    f"{avg_scan_remaining:.1f} %")
+    else:
+        req.Free()
 
     return det_static

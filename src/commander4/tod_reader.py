@@ -1,4 +1,5 @@
 from pixell.bunch import Bunch
+from mpi4py import MPI
 
 # from commander4.experiments.litebird.tod_reader_litebird import tod_reader as tod_reader_litebird
 from commander4.experiments.litebird.tod_reader_litebird_sim import tod_reader as tod_reader_litebird_sim
@@ -14,8 +15,8 @@ experiment_tod_readers = {
     "litebird_sim" : tod_reader_litebird_sim,
 }
 
-def read_tods_from_file(my_experiment: Bunch, my_band: Bunch, my_det: Bunch, params: Bunch,
-                        my_detector_id: int, my_scans_start: int, my_scans_stop: int):
+def read_tods_from_file(det_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, my_det: Bunch,
+                        params: Bunch, my_detector_id: int, my_scans_start: int, my_scans_stop: int):
     
     # Confirm that the specified experiment type (e.g. "planck") is in dictionary.
     if my_experiment.experiment_id not in experiment_tod_readers.keys():
@@ -26,6 +27,6 @@ def read_tods_from_file(my_experiment: Bunch, my_band: Bunch, my_det: Bunch, par
 
     # Load and execute TOD loader script for this specific experiment.
     my_tod_reader = experiment_tod_readers[my_experiment.experiment_id]
-    experiment_data = my_tod_reader(my_experiment, my_band, my_det, params, my_detector_id,
-                                    my_scans_start, my_scans_stop)
+    experiment_data = my_tod_reader(det_comm, my_experiment, my_band, my_det, params,
+                                    my_detector_id, my_scans_start, my_scans_stop)
     return experiment_data
