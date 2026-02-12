@@ -5,17 +5,21 @@ import numpy as np
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
-from commander4.sky_models.component import DiffuseComponent
+from commander4.sky_models.component import Component, split_complist
 from commander4.data_models.detector_map import DetectorMap
 
 
 def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int,
-                    components_list: list[DiffuseComponent], detector_data: DetectorMap):
-    os.makedirs(params.output_paths.plots + "combo_maps/", exist_ok=True)
+                    comp_list: list[Component], detector_data: DetectorMap):
+
+    out_folder = os.path.join(params.output_paths.plots, "combo_maps")
+    os.makedirs(out_folder, exist_ok=True)
 
     nside = detector_data.nside
     npix = 12*nside**2
-    for ipol in range(3):
+    pol = detector_data.pol
+    pol_names = ["Q", "U"] if pol else ["I"]
+    for ipol in range(detector_data.npol):
         map_signal = detector_data.map_sky[ipol]
         if map_signal is None:
             continue
@@ -36,32 +40,38 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int,
         residual = np.zeros_like(map_signal)
         residual[:] = map_signal
 
+        # print("Comps", [comp.pol for comp in comp_list])
+
+        comp_sublist = split_complist(comp_list, 1 if pol else 0) #pick only the relevant stokes
+
+        # print("Len",len(comp_sublist), len(comp_list))
+
         fig, ax = plt.subplots(3, 5, figsize=(42, 18))
         fig.suptitle(f"Iter {iteration:04d}. Freq: {freq:.2f} GHz (det {detector}). Chain {chain}. Detector gain = {gain:.4e} (Global gain = {detector_data.g0:.4e}).", fontsize=24)
 
-        for i, component in enumerate(components_list):
-            smoothing_scale_radians = component.params.smoothing_scale*np.pi/(180*60)
-            if ipol > 0:
-                if component.polarized:
-                    comp_map = component.get_sky(freq, nside, pol=True, fwhm=smoothing_scale_radians)[ipol-1]
+        for i, component in enumerate(comp_sublist):
+            smoothing_scale_radians = component.comp_params.smoothing_scale*np.pi/(180*60)
+            if pol:
+                if component.pol:
+                    comp_map = component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[ipol]
                 else:
                     comp_map = np.zeros((npix,))
             else:
-                comp_map = component.get_sky(freq, nside, pol=False, fwhm=smoothing_scale_radians)[0]
-            if component.shortname != "cmb":
+                comp_map = component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[0]
+            if "cmb" not in component.shortname:
                 foreground_subtracted -= comp_map
             else:
                 cmb_subtracted -= comp_map
             residual -= comp_map
             plt.axes(ax[2,i])
-            hp.mollview(comp_map, hold=True, title=f"{component.longname} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(comp_map, 1), max=np.percentile(comp_map, 99))
+            hp.mollview(comp_map, hold=True, title=f"{component.longname} {pol_names[ipol]} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(comp_map, 1), max=np.percentile(comp_map, 99))
 
-        for component in components_list:
-            if component.shortname == "cmb":
+        for component in comp_sublist:
+            if "cmb" in component.shortname:
                 if ipol > 0:
-                    cmb_map_anisotropies = component.get_sky_anisotropies(freq, nside, pol=True, fwhm=smoothing_scale_radians)[ipol-1]
+                    cmb_map_anisotropies = component.get_sky_anisotropies(freq, nside, fwhm=smoothing_scale_radians)[ipol]
                 else:
-                    cmb_map_anisotropies = component.get_sky_anisotropies(freq, nside, pol=False, fwhm=smoothing_scale_radians)[0]
+                    cmb_map_anisotropies = component.get_sky_anisotropies(freq, nside, fwhm=smoothing_scale_radians)[0]
 
         plt.axes(ax[0,0])
         sym_lim = np.percentile(np.abs(map_rawobs), 99)
@@ -93,7 +103,7 @@ def plot_combo_maps(params: Bunch, detector: int, chain: int, iteration: int,
         plt.axes(ax[1,4])
         hp.mollview(map_rms, fig=fig, hold=True, norm="log", title="RMS", min=np.min(map_rms), max=np.percentile(map_rms, 99))
 
-        plt.savefig(params.output_paths.plots + f"combo_maps/{ipol}_combo_map_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches="tight")
+        plt.savefig(os.path.join(out_folder, f"{pol_names[ipol]}_combo_map_det{detector}_chain{chain}_iter{iteration}.png"), bbox_inches="tight")
         plt.close()
 
 
@@ -117,7 +127,8 @@ def plot_data_maps(params, detector, chain, iteration, **kwargs):
         map_corr_noise (np.array): The correlated noise map for the detector in question.
         map_rms (np_array): The RMS map for the detector in question.
     """
-    os.makedirs(params.output_paths.plots + "maps_data/", exist_ok=True)
+    out_folder = os.path.join(params.output_paths.plots, "maps_data")
+    os.makedirs(out_folder, exist_ok=True)
     for maptype, mapdesc in zip(['map_signal', 'map_corr_noise', 'map_rms', 'map_skysub', 'map_orbdip'],
                                 ['Signal map', 'Corr noise map', 'RMS map', 'skysub',     'ordip']):
 
@@ -146,7 +157,7 @@ def plot_data_maps(params, detector, chain, iteration, **kwargs):
                 hp.mollview(kwargs[maptype][i], cmap=cmap, title=labs[i],
                         sub=(1,3,i+1), min=limdown, max=limup)
         plt.suptitle(f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}")
-        plt.savefig(params.output_paths.plots + f"maps_data/{maptype}_IQU_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+        plt.savefig(os.path.join(out_folder, f"{maptype}_IQU_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight'))
         plt.close()
 
 
@@ -165,17 +176,17 @@ def plot_cg_res(params, chain, iteration, residual):
             iteration, respectively.
         residual (np.array): The CG residual.
     """
-
-    os.makedirs(params.output_paths.plots + "CG_res/", exist_ok=True)
+    out_folder = os.path.join(params.output_paths.plots, "CG_res")
+    os.makedirs(out_folder, exist_ok=True)
     plt.figure()
     plt.loglog(np.arange(residual.shape[0]), residual)
     plt.axhline(params.CG_err_tol, ls="--", c="k")
-    plt.savefig(params.output_paths.plots + f"CG_res/CG_res_chain{chain}_iter{iteration}.png")
+    plt.savefig(os.path.join(out_folder, f"CG_res_chain{chain}_iter{iteration}.png"))
     plt.close()
 
 
 def plot_components(params: Bunch, detector: int, chain: int, iteration: int,
-                    components_list: list[DiffuseComponent], detector_data: DetectorMap):
+                    components_list: list[Component], detector_data: DetectorMap):
     """
     Plots the resulting component maps produced by component separation. It will
     also plot the total sky map minus the foregrounds, as well as the total map
@@ -193,15 +204,19 @@ def plot_components(params: Bunch, detector: int, chain: int, iteration: int,
         components_list (list[Component]): The list of components to plot.
     """
 
-    os.makedirs(params.output_paths.plots + "maps_comps/", exist_ok=True)
-    os.makedirs(params.output_paths.plots + "spectra_comps_Dl/", exist_ok=True)
-    os.makedirs(params.output_paths.plots + "spectra_comps_Cl/", exist_ok=True)
+    map_comp_out = os.path.join(params.output_paths.plots, "maps_comps/")
+    dl_out = os.path.join(params.output_paths.plots, "spectra_comps_Dl/")
+    cl_out = os.path.join(params.output_paths.plots, "spectra_comps_Cl/")
+    os.makedirs(map_comp_out, exist_ok=True)
+    os.makedirs(dl_out, exist_ok=True)
+    os.makedirs(cl_out, exist_ok=True)
     
     nside = detector_data.nside
     signal_map = detector_data.map_sky
     freq = detector_data.nu
     npix = 12*nside**2
-    for ipol in range(3):
+    pol = detector_data.pol
+    for ipol in range(detector_data.npol):
         if signal_map[ipol] is None:
             continue
         foreground_subtracted = np.zeros_like(signal_map[ipol])
@@ -212,14 +227,14 @@ def plot_components(params: Bunch, detector: int, chain: int, iteration: int,
         ells = np.arange(3 * nside)
         Z = ells * (ells+1) / (2 * np.pi)
         for component in components_list:
-            smoothing_scale_radians = component.params.smoothing_scale*np.pi/(180*60)
-            if ipol > 0:
-                if component.polarized:
-                    comp_map = component.get_sky(freq, nside, pol=True, fwhm=smoothing_scale_radians)[ipol-1]
+            smoothing_scale_radians = component.comp_params.smoothing_scale*np.pi/(180*60)
+            if pol:
+                if component.pol:
+                    comp_map = component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[ipol-1]
                 else:
                     comp_map = np.zeros((npix,))
             else:
-                comp_map = component.get_sky(freq, nside, pol=False, fwhm=smoothing_scale_radians)[0]
+                comp_map = component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[0]
             if component.shortname != "cmb":
                 foreground_subtracted -= comp_map
             residual -= comp_map
@@ -227,7 +242,7 @@ def plot_components(params: Bunch, detector: int, chain: int, iteration: int,
                 continue
             
             hp.mollview(comp_map, title=f"{component.longname} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(comp_map, 1), max=np.percentile(comp_map, 99))
-            plt.savefig(params.output_paths.plots + f"maps_comps/pol{ipol}_{component.shortname}_realization_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+            plt.savefig(os.path.join(map_comp_out, f"pol{ipol}_{component.shortname}_realization_det{detector}_chain{chain}_iter{iteration}.png"), bbox_inches='tight')
             plt.close()
             
             Cl = hp.alm2cl(hp.map2alm(comp_map))
@@ -235,22 +250,22 @@ def plot_components(params: Bunch, detector: int, chain: int, iteration: int,
             plt.plot(ells, Z * Cl, label=component.longname)
             plt.xscale("log")
             plt.yscale("log")
-            plt.savefig(params.output_paths.plots + f"spectra_comps_Dl/pol{ipol}_{component.shortname}_Dl_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+            plt.savefig(os.path.join(dl_out,f"pol{ipol}_{component.shortname}_Dl_det{detector}_chain{chain}_iter{iteration}.png"), bbox_inches='tight')
             plt.close()
 
             plt.figure()
             plt.plot(ells, Cl, label=component.longname)
             plt.xscale("log")
             plt.yscale("log")
-            plt.savefig(params.output_paths.plots + f"spectra_comps_Cl/pol{ipol}_{component.shortname}_Cl_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
+            plt.savefig(os.path.join(cl_out, f"pol{ipol}_{component.shortname}_Cl_det{detector}_chain{chain}_iter{iteration}.png"), bbox_inches='tight')
             plt.close()
 
         hp.mollview(foreground_subtracted, title=f"Foreground subtracted sky at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(foreground_subtracted, 1), max=np.percentile(foreground_subtracted, 99))
-        plt.savefig(params.output_paths.plots + f"maps_comps/pol{ipol}_foreground_subtr_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches="tight")
+        plt.savefig(os.path.join(map_comp_out, f"pol{ipol}_foreground_subtr_det{detector}_chain{chain}_iter{iteration}.png"), bbox_inches="tight")
         plt.close()
 
         hp.mollview(residual, title=f"Residual sky at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(residual, 1), max=np.percentile(residual, 99))
-        plt.savefig(params.output_paths.plots + f"maps_comps/pol{ipol}_residual_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches="tight")
+        plt.savefig(os.path.join(map_comp_out, f"pol{ipol}_residual_det{detector}_chain{chain}_iter{iteration}.png"), bbox_inches="tight")
         plt.close()
 
 

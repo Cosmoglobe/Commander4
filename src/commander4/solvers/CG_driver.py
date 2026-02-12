@@ -1,9 +1,10 @@
 import numpy as np
 import logging
-from commander4.utils.math_operations import inplace_almlist_add_scaled_array, inplace_almlist_scale_and_add
+from copy import deepcopy
+from commander4.utils.math_operations import inplace_complist_add_scaled_array, inplace_complist_scale_and_add, complist_dot
 
 def default_M(x):     return np.copy(x)
-def default_dot(a,b): return a.dot(np.conj(b))
+default_dot = complist_dot
 
 class distributed_CG:
     """Preconditioner borrowed from pixell.utils, and modified to accomodate both the distributed
@@ -28,9 +29,9 @@ class distributed_CG:
         self.i   = 0
         if x0 is None:
             self.x = [np.zeros_like(_b) for _b in b]
-            self.r = b.copy() if not destroy_b else b
+            self.r = deepcopy(b) if not destroy_b else b  #with CompList object it will be like: b.copy() if not destroy_b else b 
         else:
-            self.x  = x0.copy()
+            self.x  = deepcopy(x0)
             self.r  = [_b - _Ax for _b,_Ax in zip(b,self.A(self.x))]
         if is_master:  # Only the master needs these.
             # Internal work variables
@@ -39,7 +40,8 @@ class distributed_CG:
             self.rz0 = float(self.rz)
             self.p   = z
         else:
-            self.p = []
+            self.p = [np.zeros_like(_b) for _b in b]
+            
     def step(self):
         """Take a single step in the iteration. Results in .x, .i
         and .err being updated. To solve the system, call step() in
@@ -47,23 +49,32 @@ class distributed_CG:
         can then be read off from .x."""
         # Full vectors: p, Ap, x, r, z. Ap and z not in memory at the
         # same time. Total memory cost: 4 vectors + 1 temporary = 5 vectors
+        # if self.is_master:
+            # print("CG step 1: ", np.mean(self.p[0].alms))
         Ap = self.A(self.p)
         if self.is_master:  # The rest of the CG iteration is done by the master alone.
+            # print("CG step 2: ", np.mean(Ap[0].alms))
+
             alpha = self.rz/self.dot(self.p, Ap)
+            # print("CG step 3: ", self.dot(self.p, Ap), self.rz)
 
             # Line below equivalent to: self.x = [_x + alpha*_p for _x, _p in zip(self.x, self.p)]
-            inplace_almlist_add_scaled_array(self.x, self.p, alpha)
+            inplace_complist_add_scaled_array(self.x, self.p, alpha)
 
             # Line below equivalent to: self.r = [_r - alpha*_Ap for _r, _Ap in zip(self.r, Ap)]
-            inplace_almlist_add_scaled_array(self.r, Ap, -alpha)
+            inplace_complist_add_scaled_array(self.r, Ap, -alpha)
 
             del Ap
             z       = self.M(self.r)
             next_rz = self.dot(self.r, z)
+            # print("CG step 4: ", next_rz)
             self.err = next_rz/self.rz0
             beta = next_rz/self.rz
+            # print("CG step 5: ", beta)
             self.rz = next_rz
 
             # Line below equivalent to: self.p = [_p*beta + _z for _p, _z in zip(self.p, z)]
-            inplace_almlist_scale_and_add(self.p, z, beta)
+            inplace_complist_scale_and_add(self.p, z, beta)
+            # print("CG step 6: ", np.mean(self.p[0].alms))
+
         self.i += 1

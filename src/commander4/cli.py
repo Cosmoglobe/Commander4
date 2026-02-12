@@ -16,9 +16,18 @@ from commander4 import mpi_management
 
 
 def run_commander4(params: Bunch, params_dict: dict):
+    """
+    Main loop function for Commander 4 Gibbs Sampling.
+
+    Notes:
+     - `my_band_compsep_id`: unique identifier on CompSep side of band+experiment+Stokes, example: 'PlanckLFI$$$30GHz_I',
+            as on compsep side we are parallelizing between I and QU.
+     - `my_band_tod_id`: unique identifier on Tod processing side of band+experiment, example: 'PlanckLFI$$$30GHz',
+            as on tod processing side I and QU will be computed simultaneously, and solutions will end up on the same bandmaster.
+    """
     logger = logging.getLogger(__name__)
         
-
+    global_params = params.general
     mpi_info = mpi_management.init_mpi(params)
     if mpi_info['world']['is_master']:
         import random
@@ -30,8 +39,9 @@ def run_commander4(params: Bunch, params_dict: dict):
         / /___/ /_/ / / / / / / / / / / / /_/ / / / / /_/ /  __/ /     /__  __/
         \____/\____/_/ /_/ /_/_/ /_/ /_/\__,_/_/ /_/\__,_/\___/_/        /_/""" + "\033[0m\n")
         logger.info(f"Starting Commander 4 with {mpi_info.world.size} total MPI tasks!")
-        os.makedirs(params.output_paths.plots, exist_ok=True)
-        os.makedirs(params.output_paths.stats, exist_ok=True)
+        os.makedirs(global_params.output_paths.chains, exist_ok=True)
+        os.makedirs(global_params.output_paths.plots, exist_ok=True)
+        os.makedirs(global_params.output_paths.stats, exist_ok=True)
 
     import numpy as np  # Import Numpy after specifying threading, such that it respects our settings.
     import commander4.output.log as log
@@ -50,11 +60,11 @@ def run_commander4(params: Bunch, params_dict: dict):
     world_compsep_band_masters_dict = None
     world_tod_band_masters_dict = None
     if mpi_info.world.color == 0:
-        mpi_info, my_band_identifier, experiment_data, detector_samples = init_tod_processing(mpi_info, params)
+        mpi_info, my_band_tod_id, experiment_data, detector_samples = init_tod_processing(mpi_info, params)
         detector_samples_chain1 = detector_samples
         detector_samples_chain2 = deepcopy(detector_samples)
     elif mpi_info.world.color == 1:
-        components, mpi_info, my_band_identifier, my_band = init_compsep_processing(mpi_info, params)
+        components, mpi_info, my_band_compsep_id, my_band = init_compsep_processing(mpi_info, params)
 
     if mpi_info.world.tod_master is not None:
         # All processes, both compsep and tod, need the world-specific band master dict
@@ -75,16 +85,15 @@ def run_commander4(params: Bunch, params_dict: dict):
         curr_tod_output, detector_samples = process_tod(mpi_info, experiment_data,
                                                         detector_samples_chain1,
                                                         compsep_output_black, params, 1, 1)
-        send_tod(mpi_info, curr_tod_output, my_band_identifier, mpi_info.world.compsep_band_masters)
+        send_tod(mpi_info, curr_tod_output, my_band_tod_id, mpi_info.world.compsep_band_masters)
         curr_compsep_output = compsep_output_black
 
     elif mpi_info.world.color == 1:
         curr_tod_output = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
-                                      my_band_identifier, curr_tod_output)
-
+                                      my_band_compsep_id, curr_tod_output)
     ###### Main loop ######
     # Iteration numbers are 1-indexed, and chain 1 iter 1 TOD step is already done pre-loop.
-    for i in range(1, 2 * params.niter_gibbs): # x2 because we have two chains
+    for i in range(1, 2 * global_params.niter_gibbs): # x2 because we have two chains
         # execute the appropriate part of the code (MPMD)
         if mpi_info.world.color == 0:
             t0 = time.time()
@@ -110,14 +119,14 @@ def run_commander4(params: Bunch, params_dict: dict):
                             f"{iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
             t0 = time.time()
             curr_compsep_output = receive_compsep(mpi_info, experiment_data,
-                                                  my_band_identifier,
+                                                  my_band_tod_id,
                                                   mpi_info.world.compsep_band_masters)
             if mpi_info.band.is_master:
                 logger.info(f"TOD: Rank {mpi_info.tod.rank} finished receiving "
                             f"results for chain {chain_num}, iter {iter_num} "
                             f"(time spent waiting+receiving = "
                             f"{time.time()-t0:.1f}s).")
-            send_tod(mpi_info, curr_tod_output, my_band_identifier,
+            send_tod(mpi_info, curr_tod_output, my_band_tod_id,
                      mpi_info.world.compsep_band_masters)
             if mpi_info.tod.is_master:
                 logger.info(f"TOD: Rank {mpi_info.tod.rank} finished sending "
@@ -135,12 +144,12 @@ def run_commander4(params: Bunch, params_dict: dict):
             if mpi_info.compsep.rank == 0:
                 logger.info(f"Compsep: Rank {mpi_info.compsep.rank} finished chain {chain_num}, "
                             f"{iter_num} in {time.time()-t0:.2f}s. Sending compsep results.")
-            send_compsep(mpi_info, my_band_identifier, curr_compsep_output, mpi_info.world.tod_band_masters)
+            send_compsep(mpi_info, my_band_compsep_id, curr_compsep_output, mpi_info.world.tod_band_masters)
             logger.info(f"Compsep: Rank {mpi_info.compsep.rank} finished sending results for chain "
                         f"{chain_num}, iter {iter_num}. Waiting for TOD results.")
             t0 = time.time()
             curr_tod_output = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
-                                          my_band_identifier, curr_tod_output)
+                                          my_band_compsep_id, curr_tod_output)
             logger.info(f"Compsep: Rank {mpi_info.compsep.rank} finished receiving TOD results for "
                         f"chain {chain_num}, iter {iter_num} (time spent waiting+receiving = "
                         f"{time.time()-t0:.1f}s).")
@@ -154,22 +163,22 @@ def run_commander4(params: Bunch, params_dict: dict):
 def main():
     # Parse parameter file
     from commander4.parse_params import params, params_dict
-    log.init_loggers(params.logging)
+    log.init_loggers(params.general.logging)
     logger = logging.getLogger(__name__)
     try:
-        if params.output_stats:
+        if params.general.output_stats:
             profiler = cProfile.Profile()
             profiler.enable()
         ret = run_commander4(params, params_dict)
         logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} finished Commander 4 and is shutting down. Goodbye.")
-        if params.output_stats:
+        if params.general.output_stats:
             profiler.disable()
             s = io.StringIO()
             stats = pstats.Stats(profiler, stream=s).sort_stats('tottime')
             if ret != -1:
                 stats.print_stats(10)
                 logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} cProfile stats: {s.getvalue()}")
-                stats.dump_stats(f'{params.output_paths.stats}/stats-{MPI.COMM_WORLD.Get_rank()}')
+                stats.dump_stats(f'{params.general.output_paths.stats}/stats-{MPI.COMM_WORLD.Get_rank()}')
 
     # First check for MPI-specific exceptions.
     except MPI.Exception as e:

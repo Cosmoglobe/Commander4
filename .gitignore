@@ -172,3 +172,5 @@ cython_debug/
 
 #Other ouput files
 stats-*
+
+src/commander4/_cmdr4_backend

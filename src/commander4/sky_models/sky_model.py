@@ -1,9 +1,9 @@
 import numpy as np
-from .component import CMB
+from commander4.sky_models.component import Component
 
 
 class SkyModel:
-    def __init__(self, components):
+    def __init__(self, components:list[Component]):
         # components = list of Component objects
         self._components = components
 
@@ -19,11 +19,12 @@ class SkyModel:
         npol = np.sum(pol)
         skymap = np.zeros((npol, npix), dtype=np.float32)
         for component in self._components:
-            skymap[0] += component.get_sky(nu, nside, False, fwhm)[0]
-            if component.polarized:
-                skymap[1:] += component.get_sky(nu, nside, True, fwhm)
+            if component.pol:
+                skymap[1:] += component.get_sky(nu, nside, fwhm)
+            else:
+                skymap[0] += component.get_sky(nu, nside, fwhm)[0]
         return skymap
-    
+
 # class SkyModel:
 #     def __init__(self, components_I, components_Q=None, components_U=None):
 #         # components = list of Component objects

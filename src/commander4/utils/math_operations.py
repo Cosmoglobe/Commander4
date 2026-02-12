@@ -15,6 +15,11 @@ from math import sqrt
 from numba import njit, prange
 from scipy.linalg import blas as blas_wrapper
 
+import typing
+if typing.TYPE_CHECKING:  # Only import when performing type checking, avoiding circular import during normal runtime.
+    from commander4.solvers.comp_sep_solvers import CompSepSolver
+    from commander4.sky_models.component import Component
+
 
 ###### NUMPY REPLACEMENTS ######
 # Collection of Numba functions and BLAS wrappers for simply array manipulation.
@@ -66,6 +71,22 @@ def inplace_add_scaled_vec(arr_main, arr_add, float_mult):
         flat1[i] += flat2[i]*float_mult
 
 @njit(fastmath=True, parallel=True)
+def inplace_arr_add(arr_main, arr_add):
+    assert(arr_main.shape==arr_add.shape)
+    flat1 = arr_main.ravel()
+    flat2 = arr_add.ravel()
+    for i in prange(arr_main.size):
+        flat1[i] += flat2[i]
+
+@njit(fastmath=True, parallel=True)
+def inplace_arr_sub(arr_main, arr_add):
+    assert(arr_main.shape==arr_add.shape)
+    flat1 = arr_main.ravel()
+    flat2 = arr_add.ravel()
+    for i in prange(arr_main.size):
+        flat1[i] -= flat2[i]
+
+@njit(fastmath=True, parallel=True)
 def inplace_arr_prod(arr_main, arr_prod):
     len = arr_main.size
     assert(arr_main.shape==arr_prod.shape)
@@ -73,6 +94,15 @@ def inplace_arr_prod(arr_main, arr_prod):
     flat2 = arr_prod.ravel()
     for i in prange(len):
         flat1[i] *= flat2[i]
+
+@njit(fastmath=True, parallel=True)
+def inplace_arr_truediv(arr_main, arr_prod):
+    len = arr_main.size
+    assert(arr_main.shape==arr_prod.shape)
+    flat1 = arr_main.ravel()
+    flat2 = arr_prod.ravel()
+    for i in prange(len):
+        flat1[i] /= flat2[i]
 
 @njit(fastmath=True, parallel=True)
 def inplace_scale(arr_main, scalar_prod):
@@ -140,6 +170,18 @@ def _dot_complex_alm_1D_arrays(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArr
     """
     return np.sum((alm1[:lmax]*alm2[:lmax]).real) + np.sum((alm1[lmax:]*np.conj(alm2[lmax:])).real*2)
 
+#Specific function for point sources:
+@njit(fastmath=True, parallel=True)
+def _numba_proj2map(map, pix_disc_idx_list, beam_disc_val_list, amps, sed_s=None):
+    for src_i in prange(len(pix_disc_idx_list)):
+        map[pix_disc_idx_list[src_i]] += beam_disc_val_list[src_i] * amps[src_i] * (sed_s[src_i] if sed_s is not None else 1)
+    return map
+
+@njit(fastmath=True, parallel=True)
+def _numba_eval_from_map(map, pix_disc_idx_list, beam_disc_val_list, amps, sed_s=None):
+    for src_i in range(len(pix_disc_idx_list)):
+            amps[src_i] = np.sum(map[pix_disc_idx_list[src_i]] * beam_disc_val_list[src_i]) * (sed_s[src_i] if sed_s is not None else 1)
+    return amps
 
 ###### ALM-LIST FUNCTIONS ######
 # These functions are common array operations, but made to work on the alm-lists, which are
@@ -180,6 +222,47 @@ def almlist_dot_real(alm_list1, alm_list2):
     return res
 
 
+###### COMP-LIST FUNCTIONS ######
+# These functions are common array operations, but made to work on the comp-lists, which are
+# lists of Component objects, each containing component-specifically formatted data.
+
+def inplace_complist_add_scaled_array(list_inplace:list["Component"], list_other:list["Component"], scalar):
+    """ `list_inplace += scalar*list_other`
+    """
+    if len(list_inplace) != len(list_other):
+        raise ValueError("Component lists must match in length.")
+    
+    for ci, co in zip(list_inplace, list_other):
+        inplace_add_scaled_vec(ci._data, co._data, scalar)
+
+def inplace_complist_scale_and_add(list_inplace:list["Component"], list_other:list["Component"], scalar):
+    """ `list_inplace = scalar*list_inplace + list_other`
+    """
+    if len(list_inplace) != len(list_other):
+        raise ValueError("Component lists must match in length.")
+
+    for ci, co in zip(list_inplace, list_other):
+        inplace_scale_add(ci._data, co._data, scalar)
+
+def complist_dot(comp_list1:list["Component"], comp_list2:list["Component"]) -> float:
+    """ `dot(comp_list1, comp_list2)`. Calculates the correct dot product between two lists of Component objects 
+        where the alms follow the Healpy complex storing convention, for components with alms.
+        It will automatically handle the correct dot product definition for each type of Component.
+    """
+    if len(comp_list1) != len(comp_list2):
+        raise ValueError("Component lists must match in length.")
+    if len(comp_list1) == 0:
+        print("WARNING dot prod between empty comp list")
+    res = 0.0
+    for c1, c2 in zip(comp_list1, comp_list2):
+        res += float(c1 @ c2)
+    return res
+
+def complist_norm(comp_list:list["Component"]) -> float:
+    """ `norm(comp_list1, comp_list2)`. Calculates the Euclidean norm of a lists of Component objects,
+        handling it as it was a single vectors of values.
+    """
+    return complist_dot(comp_list, comp_list)
 
 
 ###### GENERAL MATH STUFF ######
@@ -211,7 +294,6 @@ def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray[np.f
     # symmetric for forward and reverse Fourier when doing rfft as supposed to regular fft.
     # inorm = 2 tells ducc to normalize by dividing by ntod, which is the same as what scipy does.
     return ducc0.fft.c2r(data_f, lastsize=ntod, forward=False, nthreads=nthreads, inorm=2)
-
 
 
 ##### GENERAL ALM STUFF ############
@@ -381,44 +463,68 @@ def _prep_input(arr_in, arr_out, nside, spin):
 
 
 def alm_to_map(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
-               nthreads: int=1, out=None) -> NDArray:
+               nthreads: int=1, out=None, acc: bool=False) -> NDArray:
     use_theta_interpol = nside >= 2048
     alm, out, ndim_in = _prep_input(alm, out, nside, spin)
+    if acc:
+        if out is None:
+            raise RuntimeError("Can not accumulate to None output")
+        tmp_out = np.copy(out)
     out = ducc0.sht.synthesis(alm=alm, map=out, lmax=lmax, spin=spin,
                               nthreads=nthreads, **hp_geominfos[nside],
                               theta_interpol=use_theta_interpol)
+    if acc:
+        inplace_arr_add(out, tmp_out)
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
 def alm_to_map_adjoint(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
-                       nthreads: int=1, out=None) -> NDArray:
+                       nthreads: int=1, out=None, acc: bool=False) -> NDArray:
     use_theta_interpol = nside >= 2048
     mp, out, ndim_in = _prep_input(mp, out, nside, spin)
+    if acc:
+        if out is None:
+            raise RuntimeError("Can not accumulate to None output")
+        tmp_out = np.copy(out)
     out = ducc0.sht.adjoint_synthesis(map=mp, alm=out, lmax=lmax, spin=spin,
                                       nthreads=nthreads, **hp_geominfos[nside],
                                       theta_interpol=use_theta_interpol)
+    if acc:
+        inplace_arr_add(out, tmp_out)
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
 def map_to_alm(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
-                       nthreads: int=1, out=None) -> NDArray:
+                       nthreads: int=1, out=None, acc: bool=False) -> NDArray:
     use_theta_interpol = nside >= 2048
     mp, out, ndim_in = _prep_input(mp, out, nside, spin)
+    if acc:
+        if out is None:
+            raise RuntimeError("Can not accumulate to None output")
+        tmp_out = np.copy(out)
     out = ducc0.sht.adjoint_synthesis(map=mp, alm=out, lmax=lmax, spin=spin,
                                       nthreads=nthreads, **hp_geominfos[nside],
                                       theta_interpol=use_theta_interpol)
     out *= 4*np.pi/(12*nside**2)
+    if acc:
+        inplace_arr_add(out, tmp_out)
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
 def map_to_alm_adjoint(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
-               nthreads: int=1, out=None) -> NDArray:
+               nthreads: int=1, out=None, acc: bool=False) -> NDArray:
     use_theta_interpol = nside >= 2048
     alm, out, ndim_in = _prep_input(alm, out, nside, spin)
+    if acc:
+        if out is None:
+            raise RuntimeError("Can not accumulate to None output")
+        tmp_out = np.copy(out)
     out = ducc0.sht.synthesis(alm=alm, map=out, lmax=lmax, spin=spin,
                               nthreads=nthreads, **hp_geominfos[nside],
                               theta_interpol=use_theta_interpol)
     out *= 4*np.pi/(12*nside**2)
+    if acc:
+        inplace_arr_add(out, tmp_out)
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
