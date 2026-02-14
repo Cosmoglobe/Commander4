@@ -86,8 +86,8 @@ def init_mpi(params):
         my_num_threads_numba = min(24,my_num_threads)
     else:
         raise ValueError("My rank ({worldrank}) exceeds the combined number of allocated tasks to"
-                         f"both TOD ({global_params.MPI_config.ntask_tod}) and compsep" \
-                         f"{tot_num_CompSep_ranks}")
+                         f"both TOD ({global_params.MPI_config.ntask_tod}) and compsep " \
+                         f"({tot_num_CompSep_ranks})")
 
     # It's important to set these environment variables before importing any package that might
     # use them, such as Numpy or Scipy, as they will not apply retroactively!
