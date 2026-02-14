@@ -10,7 +10,7 @@ from mpi4py import MPI
 from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
-# from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
+from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 
 def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     if ntod <= 10_000 or ntod >= 400_000:
@@ -117,8 +117,8 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
                              my_band.fwhm, my_band.eval_nside, my_band.data_nside, detname, expname)
     det_static.detector_id = my_det_id
 
-    # if my_experiment.replace_tod_with_sim:
-    #     replace_tod_with_sim(det_static, params)
+    if my_experiment.replace_tod_with_sim:
+        replace_tod_with_sim(det_static, params)
 
     ### Collect some info on master rank of each detector and print it ###
     local_tot_scans = scan_idx_stop - scan_idx_start
