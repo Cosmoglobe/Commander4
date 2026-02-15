@@ -5,11 +5,7 @@ from pixell.bunch import Bunch
 from scipy.fft import rfft, irfft, rfftfreq
 import time
 from numpy.typing import NDArray
-import math
-import os
-import h5py
 
-from commander4.output import log
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.detector_samples import DetectorSamples
@@ -19,7 +15,8 @@ from commander4.noise_sampling import corr_noise_realization_with_gaps, sample_n
 from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0
 from commander4.tod_reader import read_tods_from_file
-from commander4.utils.params import Params
+from commander4.output.write_chains_files import write_tod_chain_to_file
+# from commander4.logging.performance_logger import benchmark, summarize, start_bench, stop_bench
 
 nthreads=1
 
@@ -873,38 +870,6 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
     return detector_samples
 
 
-
-def write_tod_samples_to_file(TOD_comm: MPI.Comm, det_comm: MPI.Comm, detector_samples: DetectorSamples, params: Params,
-                              chain: int, iter: int):
-    # TODO: Make DetectorSamples arrays. Currently this gather takes minutes.
-    detector_samples_batches = det_comm.gather(detector_samples, root=0)
-
-    expname = detector_samples.experiment_name
-    detname = detector_samples.detector_name
-    chain_outpath = os.path.join(params.general.output_paths.chains, f"{expname}_{detname}_chain{chain:02d}_iter{iter:04d}.h5")
-
-    if det_comm.Get_rank() == 0:
-        scanIDs = []
-        for detector_samples_batch in detector_samples_batches:
-            for scan_samples in detector_samples_batch.scans:
-                scanIDs.append(scan_samples.scanID)
-        scanIDs = np.array(scanIDs, dtype=int)
-        scans_sort_indices = np.argsort(scanIDs)
-
-        write_dict = {}
-        for key, value in vars(scan_samples).items():
-            write_dict[key] = []
-
-        for detector_samples_batch in detector_samples_batches:
-            for scan_samples in detector_samples_batch.scans:
-                for key, value in vars(scan_samples).items():
-                    write_dict[key].append(value)
-        with h5py.File(chain_outpath, "w") as file:
-            for key in write_dict.keys():
-                arr = np.array(write_dict[key])[scans_sort_indices]
-                file[key] = arr
-
-
 def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
                 detector_samples, compsep_output: NDArray,
                 params: Bunch, chain, iter) -> list[DetectorMap]:
@@ -1009,7 +974,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
         logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished mapmaking in {timing_dict['mapmaker']:.1f}s.")
 
     ### WRITE CHAIN TO FILE ###
-    write_tod_samples_to_file(TOD_comm, det_comm, detector_samples, params, chain, iter)
+    write_tod_chain_to_file(det_comm, detector_samples, params, chain, iter)
 
     t0 = time.time()
     TOD_comm.Barrier()
