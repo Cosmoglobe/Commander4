@@ -194,7 +194,7 @@ CompSep_bands:
     enabled: true
     get_from: "file"
     eval_nside: 512
-    data_nside: 512
+    data_nside: 1024
     file_convention: "HFI"
     path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_map_n1024_10arcmin_QUADCOR_ZODICOR_uK.fits"
     path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_rms_n1024_10arcmin_uK_hrscaled_true.fits"
@@ -207,7 +207,7 @@ CompSep_bands:
     enabled: true
     get_from: "file"
     eval_nside: 512
-    data_nside: 512
+    data_nside: 1024
     file_convention: "HFI"
     path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_map_n1024_uK_udgrade.fits"
     path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_rms_n1024_hrscaled_uK_udgrade.fits"
