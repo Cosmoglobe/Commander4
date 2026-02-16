@@ -14,6 +14,7 @@ import os
 from math import sqrt
 from numba import njit, prange
 from scipy.linalg import blas as blas_wrapper
+from mpi4py import MPI
 
 import typing
 if typing.TYPE_CHECKING:  # Only import when performing type checking, avoiding circular import during normal runtime.
@@ -121,6 +122,13 @@ def dot(arr1, arr2):
         res += flat1[i]*flat2[i]
     return res
 
+def MPI_dot(arr1, arr2, comm:MPI.Comm):
+    """
+    Computes the dot product locally and accumulates it on all the ranks involved in `comm`.
+    """
+    local_res = dot(arr1, arr2)
+    comm.Allreduce(MPI.IN_PLACE, local_res, op=MPI.SUM)
+    return local_res
 
 @njit(fastmath=True)
 def calculate_sigma0(tod: NDArray, mask: NDArray[np.bool_]) -> float:

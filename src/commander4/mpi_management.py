@@ -244,8 +244,8 @@ def init_mpi_tod(mpi_info, params):
                                                     f"({tot_num_bands}).", logger) 
 
     band_comm = mpi_info.tod.comm.Split(my_band_id, key=MPIrank_tod)  # Create communicators for each different band.
-    # Get my local rank, and the total size of, the band-communicator IvsQU'm on.
-    MPIsize_band, MPIrank_band = band_comm.Get_size(), band_comm.Get_rank()  
+    # Get my local rank, and the total size of, the band-communicator I'm on.
+    MPIsize_band, MPIrank_band = band_comm.Get_size(), band_comm.Get_rank()
     det_comm = band_comm.Split(my_det_id, key=MPIrank_band)  # Create communicators for each,
                                                                  # using the local IDs
     MPIsize_det, MPIrank_det = det_comm.Get_size(), det_comm.Get_rank()  
