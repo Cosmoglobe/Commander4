@@ -1,7 +1,6 @@
 import os
 import h5py
 import numpy as np
-import yaml
 
 from mpi4py import MPI
 
@@ -9,14 +8,25 @@ from commander4.data_models.detector_samples import DetectorSamples
 from commander4.utils.params import Params
 from commander4.sky_models.component import Component
 
+
+def write_map_chain_to_file(params: Params, chain: int, iter: int, exp_name:str,
+                            band_name: str, maps_to_file: dict) -> None:
+    chain_outpath = os.path.join(params.general.output_paths.chains,
+                                 f"maps_{exp_name}_{band_name}_chain{chain:02d}_iter{iter:04d}.h5")
+    with h5py.File(chain_outpath, "w") as f:
+        for key, value, in maps_to_file.items():
+            f[key] = value
+
+
 def write_tod_chain_to_file(det_comm: MPI.Comm, detector_samples: DetectorSamples,
                             params: Params, chain: int, iter: int) -> None:
     # TODO: Make DetectorSamples arrays. Currently this gather takes minutes.
     detector_samples_batches = det_comm.gather(detector_samples, root=0)
 
-    expname = detector_samples.experiment_name
-    detname = detector_samples.detector_name
-    chain_outpath = os.path.join(params.general.output_paths.chains, f"{expname}_{detname}_chain{chain:02d}_iter{iter:04d}.h5")
+    exp_name = detector_samples.experiment_name
+    det_name = detector_samples.detector_name
+    chain_outpath = os.path.join(params.general.output_paths.chains,
+                                 f"samples_{exp_name}_{det_name}_chain{chain:02d}_iter{iter:04d}.h5")
 
     if det_comm.Get_rank() == 0:
         scanIDs = []
@@ -41,9 +51,8 @@ def write_tod_chain_to_file(det_comm: MPI.Comm, detector_samples: DetectorSample
 
 
 def write_compsep_chain_to_file(comp_list: list[Component], params: Params, chain: int, iter: int):
-    print(params.parameter_file_as_string, flush=True)
-    print("asdf:", params.parameter_file_binary_yaml, flush=True)
-    chain_outpath = os.path.join(params.general.output_paths.chains, f"compsep_chain{chain:02d}_iter{iter:04d}.h5")
+    chain_outpath = os.path.join(params.general.output_paths.chains,
+                                 f"compsep_chain{chain:02d}_iter{iter:04d}.h5")
     with h5py.File(chain_outpath, "w") as f:
         f["metadata/parameter_file_as_string"] = params.parameter_file_as_string
         f["metadata/parameter_file_as_binary_yaml"] = params.parameter_file_binary_yaml

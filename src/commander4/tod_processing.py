@@ -15,7 +15,7 @@ from commander4.noise_sampling import corr_noise_realization_with_gaps, sample_n
 from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0
 from commander4.tod_reader import read_tods_from_file
-from commander4.output.write_chains_files import write_tod_chain_to_file
+from commander4.output.write_chains_files import write_tod_chain_to_file, write_map_chain_to_file
 # from commander4.logging.performance_logger import benchmark, summarize, start_bench, stop_bench
 
 nthreads=1
@@ -26,7 +26,7 @@ def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float32]:
 
 
 def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: NDArray,
-            detector_samples:DetectorSamples, params: Bunch,
+            detector_samples:DetectorSamples, params: Bunch, chain: int, iter: int,
             mapmaker_corrnoise:MapmakerIQU = None) -> DetectorMap:
     # We separate the inverse-variance mapmaking from the other 3 mapmakers.
     # This is purely to reduce the maximum concurrent memory requirement, and is slightly slower
@@ -42,28 +42,22 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
 
     mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
     mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside)
-    mapmaker_skymodel = MapmakerIQU(band_comm, experiment_data.nside)
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         pix = scan.pix
         psi = scan.psi
         sky_orb_dipole = get_s_orb_TOD(scan, experiment_data, pix)
-        sky_model = get_static_sky_TOD(compsep_output, pix, psi)
         inv_var = 1.0/scan_samples.sigma0**2
         mapmaker.accumulate_to_map(scan.tod/scan_samples.gain_est, inv_var, pix, psi)
         mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
-        mapmaker_skymodel.accumulate_to_map(sky_model, inv_var, pix, psi)
 
     mapmaker.gather_map()
     mapmaker_orbdipole.gather_map()
-    mapmaker_skymodel.gather_map()
     map_rms = mapmaker_invvar.final_rms_map
     map_cov = mapmaker_invvar.final_cov_map
     mapmaker.normalize_map(map_cov)
     map_signal = mapmaker.final_map
     mapmaker_orbdipole.normalize_map(map_cov)
-    mapmaker_skymodel.normalize_map(map_cov)
     map_orbdipole = mapmaker_orbdipole.final_map
-    map_skymodel = mapmaker_skymodel.final_map
     if mapmaker_corrnoise is not None:
         mapmaker_corrnoise.normalize_map(map_cov)
         map_corrnoise = mapmaker_corrnoise.final_map
@@ -81,13 +75,20 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         detmap_I.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
         detmap_QU.g0 = detector_samples.g0_est
         detmap_QU.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
-
-        # TODO: This was for plotting, fix through chain files
-        # detmap_I.map_skymodel = map_skymodel
-        # detmap_I.map_orbdipole = map_orbdipole
         
-        # if mapmaker_corrnoise is not None:
-        #     detmap.map_corrnoise = map_corrnoise
+        maps_to_file = {}
+        maps_to_file["map_observed_sky"] = map_signal
+        maps_to_file["map_rms"] = map_rms
+        if params.general.write_orb_dipole_maps_to_chain:
+            maps_to_file["map_orbdipole"] = map_orbdipole
+        if params.general.write_corr_noise_maps_to_chain:
+            maps_to_file["map_corrnoise"] = map_orbdipole
+        if params.general.write_sky_model_maps_to_chain:
+            maps_to_file["map_skymodel"] = compsep_output
+
+        write_map_chain_to_file(params, chain, iter, experiment_data.experiment_name,
+                                experiment_data.band_name, maps_to_file)
+
         return [detmap_I, detmap_QU]
     else:
         
@@ -967,8 +968,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
 
     ### MAPMAKING ###
     t0 = time.time()
-    detmap = tod2map(band_comm, experiment_data, compsep_output, detector_samples, params,
-                     mapmaker_corrnoise)
+    detmap = tod2map(band_comm, experiment_data, compsep_output, detector_samples, params, chain,
+                     iter, mapmaker_corrnoise)
     timing_dict["mapmaker"] = time.time() - t0
     if band_comm.Get_rank() == 0:
         logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished mapmaking in {timing_dict['mapmaker']:.1f}s.")
