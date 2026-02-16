@@ -14,6 +14,7 @@ from commander4.sky_models.sky_model import SkyModel
 import commander4.output.plotting as plotting
 from commander4.solvers.CG_compsep_solver import CompSepSolver
 from commander4.solvers.perpix_compsep_solver import solve_compsep_perpix
+from commander4.output.write_chains_files import write_compsep_chain_to_file
 
 
 def init_compsep_processing(mpi_info: Bunch, params: Bunch) -> tuple[list[Component], str, dict[str, int], Bunch]:
@@ -191,6 +192,9 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
         logger.info(f"Reduced chi2 on rank {compsep_rank} for pol={pol_names[ipol]} ({detector_data.nu}GHz): {chi2:.3f}")
 
     compsep_comm.Barrier()
+
+    if compsep_comm.Get_rank() == 0:
+        write_compsep_chain_to_file(comp_list, params, chain, iter)
 
     if params.general.make_plots:
         t0 = time.time()
