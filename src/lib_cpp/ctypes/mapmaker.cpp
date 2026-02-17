@@ -74,14 +74,14 @@ void _map_accumulator_IQU_T(T *map, const T *tod, const T weight, int64_t *pix, 
  *      - no weights are considered here.
  * 
  *  Args:
- *      map (OUTPUT) -- 1D array of length 'num_pix', representing the signal map, which will be populated by this function.
- *      tod -- 1D array, containing the TOD of length 'scan_len'.
+ *      map -- 1D array of length 'num_pix', representing the signal map, which will be populated by this function.
+ *      tod (OUTPUT) -- 1D array, containing the TOD of length 'scan_len'.
  *      pix -- 1D array, containing the pixel pointing index of each element in tod.
  *      scan_len -- Length of the scan as an int.
  *      num_pix -- Number of pixels in map.
  */
 template<typename T>
-void _map2tod_IQU_T(T *tod, const T *map, int64_t *pix, const double *psi, int64_t scan_len, int64_t num_pix){
+void _map2tod_IQU_T(const T *map, T *tod, int64_t *pix, const double *psi, int64_t scan_len, int64_t num_pix){
     for(int64_t itod=0; itod<scan_len; itod++){
         const T cos2psi = static_cast<T>(std::cos(2.0 * psi[itod]));
         const T sin2psi = static_cast<T>(std::sin(2.0 * psi[itod]));
@@ -279,13 +279,13 @@ void map_accumulator_IQU_f64(double *map, double *tod, double weight, int64_t *p
 }
 
 extern "C"
-void map2tod_IQU_f64(double *tod, double *map, int64_t *pix, double *psi, int64_t scan_len, int64_t num_pix){
-    _map2tod_IQU_T<double>(tod, map, pix, psi, scan_len, num_pix);
+void map2tod_IQU_f64(double *map, double *tod, int64_t *pix, double *psi, int64_t scan_len, int64_t num_pix){
+    _map2tod_IQU_T<double>(map, tod, pix, psi, scan_len, num_pix);
 }
 
 extern "C"
-void map2tod_IQU_f32(float *tod, float *map, int64_t *pix, double *psi, int64_t scan_len, int64_t num_pix){
-    _map2tod_IQU_T<float>(tod, map, pix, psi, scan_len, num_pix);
+void map2tod_IQU_f32(float *map, float *tod, int64_t *pix, double *psi, int64_t scan_len, int64_t num_pix){
+    _map2tod_IQU_T<float>(map, tod, pix, psi, scan_len, num_pix);
 }
 
 extern "C"

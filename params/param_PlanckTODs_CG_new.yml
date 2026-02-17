@@ -1,8 +1,8 @@
 general:
   MPI_config:
     ntask_tod: 128
-    ntask_compsep_I: 8
-    ntask_compsep_QU: 8
+    ntask_compsep_I: 1 #8
+    ntask_compsep_QU: 1 #8
   nthreads_tod: 1
   nthreads_compsep: 2
   betzy_mode: false
@@ -14,7 +14,7 @@ general:
   CG_real_alm_mode: False
 
   CG_mapmaker:
-    maxiter: 10
+    maxiter: 2
     err_tol: 1.0e-20
 
   niter_gibbs: 10
@@ -176,7 +176,7 @@ CompSep_bands:
 
   ### TOTAL INTENSITY MAPS ###
   Haslam408MHz:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 256
     data_nside: 512
@@ -188,7 +188,7 @@ CompSep_bands:
     polarizations: [True, True, True]
 
   WMAPKa:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 256
     data_nside: 512
@@ -200,7 +200,7 @@ CompSep_bands:
     polarizations: [True, True, True]
 
   WMAPQ1:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 256
     data_nside: 512
@@ -212,7 +212,7 @@ CompSep_bands:
     polarizations: [True, True, True]
 
   WMAPQ2:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 256
     data_nside: 512
@@ -224,7 +224,7 @@ CompSep_bands:
     polarizations: [True, True, True]
 
   WMAPV1:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 256
     data_nside: 512
@@ -236,7 +236,7 @@ CompSep_bands:
     polarizations: [True, True, True]
 
   WMAPV2:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 256
     data_nside: 512
@@ -248,7 +248,7 @@ CompSep_bands:
     polarizations: [True, True, True]
 
   Planck857GHz:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 256
     data_nside: 1024
@@ -261,7 +261,7 @@ CompSep_bands:
 
   ### POLARIZATION MAPS ###
   Planck353GHz:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 256
     data_nside: 1024
@@ -308,10 +308,10 @@ experiments:
           #   name: "27S"
           #   gain_est: 65.5e-9
           #   bandpass_shift: 0.47
-          28M:
-            name: "28M"
-            gain_est: 63.0e-9
-            bandpass_shift: 0.08
+          # 28M:
+          #   name: "28M"
+          #   gain_est: 63.0e-9
+          #   bandpass_shift: 0.08
           # 28S:
           #   name: "28S"
           #   gain_est: 52.0e-9

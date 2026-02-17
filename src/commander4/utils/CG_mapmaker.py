@@ -37,7 +37,9 @@ class CG_Mapmaker:
         self.detector_tod = detector_tod
         self.detector_samples = detector_samples
         self.double_perc = double_prec
-        self._map_signal = None #output map to be solved for
+        #output map to be solved for, serves as buffer for the last mpi.Reduce call 
+        self._map_signal = np.zeros((3,hp.nside2npix(detector_tod._eval_nside)), 
+            dtype=np.float64 if double_prec else np.float32) if map_comm.Get_rank() == 0 else None
         self.nthreads = nthreads
         self.T_omega = T_omega
         self.map_comm = map_comm
@@ -51,7 +53,7 @@ class CG_Mapmaker:
         self.maplib.map_accumulator_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim1, ct.c_double,
                                 ct_i64_dim1, ct_f64_dim1, ct.c_int64,
                                 ct.c_int64]
-        self.maplib.map2tod_IQU_f64.argtypes = [ct_f64_dim1, ct_f64_dim2, 
+        self.maplib.map2tod_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim1,
                                             ct_i64_dim1, ct_f64_dim1, 
                                             ct.c_int64, ct.c_int64]
 
@@ -92,10 +94,10 @@ class CG_Mapmaker:
         ntod = out_scan.tod.shape[0]
         tod_f64 = np.ascontiguousarray(scan_tod_arr, dtype=np.float64) #FIXME: check if this is actually updating tods in place
         psi_f64 = np.ascontiguousarray(psi, dtype=np.float64)
-        self.maplib.map_accumulator_IQU_f64(in_map, tod_f64, 1, 
+        self.maplib.map2tod_IQU_f64(in_map, tod_f64,  
                                             pix.astype(np.int64), 
                                             psi_f64, ntod, npix_out)
-        return scan_tod_arr
+        return tod_f64.astype(dtype=np.float32)
 
     def apply_P_adjoint(self, in_scan: ScanTOD, out_map:NDArray, scan_tod_arr=None):
         """
@@ -113,7 +115,7 @@ class CG_Mapmaker:
         ntod = in_scan.tod.shape[0]
         tod_f64 = np.ascontiguousarray(scan_tod_arr, dtype=np.float64)
         psi_f64 = np.ascontiguousarray(psi, dtype=np.float64)
-        self.maplib.map2tod_IQU_f64(tod_f64, out_map.astype(np.float64), 
+        self.maplib.map_accumulator_IQU_f64(out_map, tod_f64, 1, 
                                             pix.astype(np.int64), 
                                             psi_f64, ntod, npix_out)
         return out_map
@@ -180,24 +182,24 @@ class CG_Mapmaker:
         for scan, sample in zip(self.detector_tod.scans, self.detector_samples.scans):
             scan_tod_arr_aux = np.copy(scan._tod) #aux array to not modify scan._tod
             #N^-1 d
-            self.apply_inv_N(scan, sample.sigma0, scan_tod_arr=scan_tod_arr_aux)
+            scan_tod_arr_aux = self.apply_inv_N(scan, sample.sigma0, scan_tod_arr=scan_tod_arr_aux)
             
             logger = logging.getLogger(__name__)
 
-            if self.map_comm.Get_rank() == 0:
-                logger.info(f"##RHS 1 mean: {np.mean(scan_tod_arr_aux)}")
+            # if self.map_comm.Get_rank() == 0:
+            #     logger.info(f"##RHS 1 mean: {np.mean(scan_tod_arr_aux)}")
                 
             #T^T N^-1 d
-            self.apply_T_adjoint(scan, scan_tod_arr=scan_tod_arr_aux)
+            scan_tod_arr_aux = self.apply_T_adjoint(scan, scan_tod_arr=scan_tod_arr_aux)
 
-            if self.map_comm.Get_rank() == 0:
-                logger.info(f"##RHS 1 mean: {np.mean(scan_tod_arr_aux)}")
+            # if self.map_comm.Get_rank() == 0:
+            #     logger.info(f"##RHS 1 mean: {np.mean(scan_tod_arr_aux)}")
 
             #P^T T^T N^-1 d
-            self.apply_P_adjoint(scan, out_map, scan_tod_arr=scan_tod_arr_aux)
+            out_map = self.apply_P_adjoint(scan, out_map, scan_tod_arr=scan_tod_arr_aux)
 
-            if self.map_comm.Get_rank() == 0:
-                logger.info(f"##RHS 3 mean: {np.mean(out_map)}")
+            # if self.map_comm.Get_rank() == 0:
+            #     logger.info(f"##RHS 3 mean: {np.mean(out_map)}")
         return out_map
 
     def apply_LHS(self, m_map: NDArray, out_map=None):
@@ -205,19 +207,32 @@ class CG_Mapmaker:
         Applies the LHS of the mapmaking problem P^T T^T N^-1 T P m to an input map, without modifying it,
         and updates the result in the out_tods object.
         """
+        logger = logging.getLogger(__name__)
         out_map = np.zeros_like(m_map) if out_map is None else out_map
         for scan, sample in zip(self.detector_tod.scans, self.detector_samples.scans):
             scan_tod_arr_aux = np.zeros_like(scan._tod) #aux array to not modify scan._tod
+            # if self.map_comm.Get_rank() == 0:
+            #     logger.info(f"##LHS 1 mean: {np.mean(scan_tod_arr_aux)}")
             #P m
-            self.apply_P(m_map, scan, scan_tod_arr=scan_tod_arr_aux)
+            scan_tod_arr_aux = self.apply_P(m_map, scan, scan_tod_arr=scan_tod_arr_aux)
+            # if self.map_comm.Get_rank() == 0:
+            #     logger.info(f"##LHS 2 mean: {np.mean(scan_tod_arr_aux)}")
             #T P m
-            self.apply_T(scan, scan_tod_arr=scan_tod_arr_aux)
+            scan_tod_arr_aux = self.apply_T(scan, scan_tod_arr=scan_tod_arr_aux)
+            # if self.map_comm.Get_rank() == 0:
+            #     logger.info(f"##LHS 3 mean: {np.mean(scan_tod_arr_aux)}")
             #N^-1 T P m
-            self.apply_inv_N(scan, sample.sigma0, scan_tod_arr=scan_tod_arr_aux)
+            scan_tod_arr_aux = self.apply_inv_N(scan, sample.sigma0, scan_tod_arr=scan_tod_arr_aux)
+            # if self.map_comm.Get_rank() == 0:
+            #     logger.info(f"##LHS 4 mean: {np.mean(scan_tod_arr_aux)}")
             #T^T N^-1 T P m
-            self.apply_T_adjoint(scan, scan_tod_arr=scan_tod_arr_aux)
+            scan_tod_arr_aux = self.apply_T_adjoint(scan, scan_tod_arr=scan_tod_arr_aux)
+            # if self.map_comm.Get_rank() == 0:
+            #     logger.info(f"##LHS 5 mean: {np.mean(scan_tod_arr_aux)}")
             #P^T T^T N^-1 T P
-            self.apply_P_adjoint(scan, out_map, scan_tod_arr=scan_tod_arr_aux)
+            out_map = self.apply_P_adjoint(scan, out_map, scan_tod_arr=scan_tod_arr_aux)
+            # if self.map_comm.Get_rank() == 0:
+            #     logger.info(f"##LHS 6 mean: {np.mean(scan_tod_arr_aux)}")
         return out_map
 
     def solve(self):
@@ -226,16 +241,17 @@ class CG_Mapmaker:
         """
         logger = logging.getLogger(__name__)
         RHS_map = self.calc_RHS()
-
+        ismaster = self.map_comm.Get_rank() == 0
         # logger.info(f"##RHS map mean: {np.mean(RHS_map)}")
 
         my_dot = lambda arr1, arr2: MPI_dot(arr1, arr2, self.map_comm, double_prec=self.double_perc)
         CG_solver = utils.CG(self.apply_LHS, RHS_map, dot = my_dot)
-        logger.info(f"Mapmaker CG starting!")
+        if ismaster:
+            logger.info(f"Mapmaker CG starting up!")
         for i in range(self.CG_maxiter):
             CG_solver.step()
             if i%self.CG_check_interval == 0:
-                if self.map_comm.Get_rank() == 0:
+                if ismaster:
                     logger.info(f"Mapmaker CG iter {i:3d} - Residual {CG_solver.err:.6e}")
             if CG_solver.err < self.CG_tol:
                 break
