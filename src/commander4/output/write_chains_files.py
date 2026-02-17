@@ -1,6 +1,7 @@
 import os
 import h5py
 import numpy as np
+import datetime
 
 from mpi4py import MPI
 
@@ -13,9 +14,10 @@ def write_map_chain_to_file(params: Params, chain: int, iter: int, exp_name:str,
                             band_name: str, maps_to_file: dict) -> None:
     chain_outpath = os.path.join(params.general.output_paths.chains,
                                  f"maps_{exp_name}_{band_name}_chain{chain:02d}_iter{iter:04d}.h5")
-    with h5py.File(chain_outpath, "w") as f:
+    with h5py.File(chain_outpath, "w") as file:
+        file["metadata/datetime"] = datetime.datetime.now().isoformat()
         for key, value, in maps_to_file.items():
-            f[key] = value
+            file[key] = value
 
 
 def write_tod_chain_to_file(det_comm: MPI.Comm, detector_samples: DetectorSamples,
@@ -45,6 +47,7 @@ def write_tod_chain_to_file(det_comm: MPI.Comm, detector_samples: DetectorSample
                 for key, value in vars(scan_samples).items():
                     write_dict[key].append(value)
         with h5py.File(chain_outpath, "w") as file:
+            file["metadata/datetime"] = datetime.datetime.now().isoformat()
             for key in write_dict.keys():
                 arr = np.array(write_dict[key])[scans_sort_indices]
                 file[key] = arr
@@ -53,10 +56,11 @@ def write_tod_chain_to_file(det_comm: MPI.Comm, detector_samples: DetectorSample
 def write_compsep_chain_to_file(comp_list: list[Component], params: Params, chain: int, iter: int):
     chain_outpath = os.path.join(params.general.output_paths.chains,
                                  f"compsep_chain{chain:02d}_iter{iter:04d}.h5")
-    with h5py.File(chain_outpath, "w") as f:
-        f["metadata/parameter_file_as_string"] = params.parameter_file_as_string
-        f["metadata/parameter_file_as_binary_yaml"] = params.parameter_file_binary_yaml
+    with h5py.File(chain_outpath, "w") as file:
+        file["metadata/datetime"] = datetime.datetime.now().isoformat()
+        file["metadata/parameter_file_as_string"] = params.parameter_file_as_string
+        file["metadata/parameter_file_as_binary_yaml"] = params.parameter_file_binary_yaml
         for comp in comp_list:
-            f[f"{comp.shortname}/alms"] = comp.alms
-            f[f"{comp.shortname}/longname"] = comp.longname
-            f[f"{comp.shortname}/shortname"] = comp.shortname
+            file[f"{comp.shortname}/alms"] = comp.alms
+            file[f"{comp.shortname}/longname"] = comp.longname
+            file[f"{comp.shortname}/shortname"] = comp.shortname

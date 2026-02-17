@@ -6,55 +6,88 @@ from commander4.utils.params import Params
 
 # TODO: Below is code for finding either the Commander4 PIP version number, or the git hash in case
 # of an editable install. I don't want to introduce this code yet because I'm unsure about having
-# the git package as a dependency just for this. Can alternatively be avoided by manually probing
-# the .git folder to get the has.
+# tons of MPI tasks thrashing the file system just to get a git hash. Ideally this should be done
+# only by the master rank.
 
-# import sys
-# import git
 # from importlib.metadata import version, PackageNotFoundError
-# def get_version_identifier():
+# def get_version_info(package_name, script_location):
 #     """
 #     Retrieves a unique identifier for the current version of the package.
+    
 #     Priority:
 #     1. Current Git Commit Hash (if running from a git repo/editable install).
 #     2. Installed Package Version (if standard pip install).
+#     3. "unknown"
 #     """
     
-#     # 1. Identify the absolute path of the package source code
-#     # __file__ points to the __init__.py of the package
-#     try:
-#         # Replace 'my_package' with your actual package name imported above
-#         package_path = os.path.dirname(sys.modules['my_package'].__file__)
-#     except (KeyError, AttributeError):
-#         # Fallback if the module isn't loaded or is a namespace package
-#         return "unknown"
+#     # Helper function (without git dependency) which manually parses the `.git` folder to find the
+#     # current git hash of Commander4.
+#     def _get_git_hash(start_path):
+#         # 1. Find the .git directory
+#         root_path = os.path.abspath(start_path)
+#         git_dir = None
 
-#     # 2. Attempt to retrieve Git Hash (Editable / Dev Install)
-#     try:
-#         # Search parent directories for .git because source might be in src/my_package
-#         repo = git.Repo(package_path, search_parent_directories=True)
-        
-#         sha = repo.head.object.hexsha
-        
-#         # Critical: Check if the code has uncommitted changes
-#         if repo.is_dirty():
-#             sha += "-dirty"
+#         while True:
+#             possible_git = os.path.join(root_path, ".git")
+#             if os.path.isdir(possible_git):
+#                 git_dir = possible_git
+#                 break
+#             parent = os.path.dirname(root_path)
+#             if parent == root_path: 
+#                 return None
+#             root_path = parent
+
+#         # 2. Read HEAD
+#         head_path = os.path.join(git_dir, "HEAD")
+#         if not os.path.exists(head_path):
+#             return None
             
-#         return f"git-{sha}"
+#         with open(head_path, "r") as f:
+#             head_content = f.read().strip()
+
+#         # 3. Handle Detached HEAD (It's already a hash)
+#         if not head_content.startswith("ref:"):
+#             return head_content
+
+#         # 4. Handle Branch Ref (Follow the path)
+#         target_ref = head_content.split(" ", 1)[1] # e.g. "refs/heads/main"
         
-#     except (git.InvalidGitRepositoryError, git.NoSuchPathError):
-#         # This happens when installed in site-packages with no .git folder
+#         # Check loose file
+#         loose_ref_path = os.path.join(git_dir, target_ref)
+#         if os.path.exists(loose_ref_path):
+#             with open(loose_ref_path, "r") as f:
+#                 return f.read().strip()
+
+#         # Check packed-refs
+#         packed_refs_path = os.path.join(git_dir, "packed-refs")
+#         if os.path.exists(packed_refs_path):
+#             with open(packed_refs_path, "r") as f:
+#                 for line in f:
+#                     if line.startswith("#") or not line.strip(): continue
+#                     parts = line.split()
+#                     if len(parts) >= 2 and parts[1] == target_ref:
+#                         return parts[0]
+                        
+#         return None
+
+#     # 1. Try to get the Git Hash (Editable / Dev Install)
+#     git_hash = _get_git_hash(script_location)
+#     if git_hash:
+#         return f"git-{git_hash}"
+
+#     # 2. Fallback to Pip Version (Standard Install)
+#     try:
+#         # Note: 'package_name' must match the name in pyproject.toml
+#         return f"v{version(package_name)}"
+#     except PackageNotFoundError:
 #         pass
 
-#     # 3. Fallback to Pip Version (Standard Install)
-#     try:
-#         return f"v{version('my_package')}"
-#     except PackageNotFoundError:
-#         return "unknown-version"
+#     return "unknown"
 
 
-
-
+# ------------------------------------------------------------------------
+# Parse parameter file
+# ------------------------------------------------------------------------
 parser = ArgumentParser()
 parser.add_argument("-p",
                     "--parameter_file",
@@ -78,4 +111,4 @@ params.parameter_file_as_string = yaml.dump(params_dict)
 params.parameter_file_binary_yaml = binary_yaml_data
 
 # Storing Commander4 version number or git commit.
-# params.metadata.version_number = get_version_identifier
+# params.metadata.version_number = # print(get_version_info("commander4", __file__))
