@@ -28,7 +28,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
     logger = logging.getLogger(__name__)
     oids = []
     pids = []
-    filenames = []
+    filepaths = []
     detname = str(my_det)
     bandname = str(my_band)
     expname = str(my_experiment)
@@ -36,10 +36,10 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
     with open(my_band.filelist) as infile:
         infile.readline()
         for line in infile:
-            pid, filename, _, _, _ = line.split()
+            pid, filepath, _, _, _ = line.split()
             pids.append(f"{int(pid):06d}")
-            filenames.append(filename[1:-1])
-            oids.append(filename.split(".")[0].split("_")[-1])
+            filepaths.append(filepath[1:-1])
+            oids.append(filepath.split(".")[0].split("_")[-1])
 
     processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
     if "bad_PIDs_path" in my_experiment:
@@ -60,15 +60,9 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
     num_included = 0
     for i_pid in range(scan_idx_start, scan_idx_stop):
         pid = pids[i_pid]
-        oid = oids[i_pid]
+        filepath = filepaths[i_pid]
         if pid in bad_PIDs:
             continue
-
-        filename = f"LB_{my_band.freq_identifier:03d}_{my_band.lb_det_identifier}_{oid.zfill(6)}.h5"
-        if "data_path" in my_band:
-            filepath = os.path.join(my_band.data_path, filename)
-        else:
-            filepath = os.path.join(my_experiment.data_path, filename)
         with h5py.File(filepath, "r") as f:
             ntod = int(f[f"/{pid}/common/ntod"][()])
             ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
