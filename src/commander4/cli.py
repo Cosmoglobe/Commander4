@@ -42,6 +42,9 @@ def run_commander4(params: Bunch, params_dict: dict):
         os.makedirs(global_params.output_paths.chains, exist_ok=True)
         os.makedirs(global_params.output_paths.plots, exist_ok=True)
         os.makedirs(global_params.output_paths.stats, exist_ok=True)
+        os.makedirs(os.path.join(params.general.output_paths.chains, "datamaps"), exist_ok=True)
+        os.makedirs(os.path.join(params.general.output_paths.chains, "tod"), exist_ok=True)
+        os.makedirs(os.path.join(params.general.output_paths.chains, "compsep"), exist_ok=True)
 
     import numpy as np  # Import Numpy after specifying threading, such that it respects our settings.
     import commander4.output.log as log

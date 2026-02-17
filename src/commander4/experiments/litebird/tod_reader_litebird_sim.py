@@ -106,10 +106,11 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
             ntod_sum_final += ntod_optimal
         if i_pid % 10 == 0:
             gc.collect()
-
-    det_static = DetectorTOD(scanlist, float(my_band.freq)+float(my_det.bandpass_shift),
-                             my_band.fwhm, my_band.eval_nside, my_band.data_nside,
-                             expname, bandname, detname)
+    my_det_central_freq = my_band.freq
+    if "bandpass_shift" in my_det:
+        my_det_central_freq += my_det.bandpass_shift
+    det_static = DetectorTOD(scanlist, my_det_central_freq, my_band.fwhm, my_band.eval_nside,
+                             my_band.data_nside, expname, bandname, detname)
     det_static.detector_id = my_det_id
 
     if my_experiment.replace_tod_with_sim:

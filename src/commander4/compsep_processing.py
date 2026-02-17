@@ -2,7 +2,6 @@ import numpy as np
 from mpi4py import MPI
 from mpi4py.MPI import Comm
 import logging
-import time
 from pixell.bunch import Bunch
 from numpy.typing import NDArray
 
@@ -11,7 +10,6 @@ from commander4.data_models.detector_map import DetectorMap
 from commander4.sky_models.component import Component, split_complist
 import commander4.sky_models.component as component_lib
 from commander4.sky_models.sky_model import SkyModel
-import commander4.output.plotting as plotting
 from commander4.solvers.CG_compsep_solver import CompSepSolver
 from commander4.solvers.perpix_compsep_solver import solve_compsep_perpix
 from commander4.output.write_chains_files import write_compsep_chain_to_file
@@ -152,8 +150,6 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
     
         # print(f"Hello rank {mpi_info.compsep.rank}, subcolor: {mpi_info.compsep.subcolor},  complist: {[c.shortname for c in comp_sublist]}")
         comp_sublist = compsep_solver.solve(comp_sublist)
-        if params.general.make_plots and (mpi_info.compsep.is_I_master or mpi_info.compsep.is_QU_master):
-            plotting.plot_cg_res(params.general, chain, iter, compsep_solver.CG_residuals)
 
     ### 3. CLEANUP: Gather I+QU alm solutions and make plots. ###
     # Pol master sends the portion of list to the Intensity master rank, and then it will broadcast through the compsep_comm
@@ -196,12 +192,6 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
     if compsep_comm.Get_rank() == 0:
         write_compsep_chain_to_file(comp_list, params, chain, iter)
 
-    if params.general.make_plots:
-        t0 = time.time()
-        detector_to_plot = compsep_rank
-        plotting.plot_combo_maps(params.general, detector_to_plot, chain, iter, comp_list, detector_data)
-        plotting.plot_components(params.general, detector_to_plot, chain, iter, comp_list, detector_data)
-        logging.info(f"Rank {compsep_rank} chain {chain} iter {iter} Finished all plotting in {time.time()-t0:.1f}s.")
 
     return sky_model  # Return the full sky realization for my band.
 
