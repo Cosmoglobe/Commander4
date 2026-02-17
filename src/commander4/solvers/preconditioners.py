@@ -11,6 +11,7 @@ import typing
 if typing.TYPE_CHECKING:  # Only import when performing type checking, avoiding circular import during normal runtime.
     from commander4.solvers.comp_sep_solvers import CompSepSolver
     from commander4.sky_models.component import Component
+    from commander4.utils.CG_mapmaker import CG_Mapmaker
 
 
 class NoPreconditioner:
@@ -252,3 +253,21 @@ class JointPreconditioner:
                 pass
  
         return a_complist_out
+
+
+
+class DiagonalPreconditioner:
+    """ Standard diagonal preconditioner for CG mapmaker. It builds an estimate of the diagonal of the A matrix
+        by estimating the RMS of the i-th pixel as sigma_0/n_hit_i.
+    """
+
+    def __init__(self, mapmaker: CG_Mapmaker):
+        """
+        Initialize preconditioner starting from the mapmaker object it will be used in.
+        It precomputes the hitmap
+        """
+        return NotImplementedError
+
+    def __call__(self, a_map: NDArray) -> NDArray:
+        
+        return NotImplementedError

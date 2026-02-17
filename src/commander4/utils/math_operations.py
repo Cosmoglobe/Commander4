@@ -122,13 +122,13 @@ def dot(arr1, arr2):
         res += flat1[i]*flat2[i]
     return res
 
-def MPI_dot(arr1, arr2, comm:MPI.Comm):
+def MPI_dot(arr1, arr2, comm:MPI.Comm, double_prec:bool = False):
     """
     Computes the dot product locally and accumulates it on all the ranks involved in `comm`.
     """
-    local_res = dot(arr1, arr2)
-    comm.Allreduce(MPI.IN_PLACE, local_res, op=MPI.SUM)
-    return local_res
+    local_res = np.array(dot(arr1, arr2), dtype=np.float64 if double_prec else np.float32) #single-value array so mpi Allreduce does not complain.
+    res = comm.allreduce(local_res, op=MPI.SUM) #comm.Allreduce(MPI.IN_PLACE, local_res, op=MPI.SUM)
+    return res #np.float64(local_res) if double_prec else np.float32(local_res) #unpack it
 
 @njit(fastmath=True)
 def calculate_sigma0(tod: NDArray, mask: NDArray[np.bool_]) -> float:

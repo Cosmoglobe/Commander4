@@ -15,6 +15,7 @@ from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.detector_samples import DetectorSamples
 from commander4.data_models.scan_samples import ScanSamples
 from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU
+from commander4.utils.CG_mapmaker import CG_Mapmaker
 from commander4.noise_sampling import corr_noise_realization_with_gaps, sample_noise_PS_params
 from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0
@@ -34,46 +35,59 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
     # We separate the inverse-variance mapmaking from the other 3 mapmakers.
     # This is purely to reduce the maximum concurrent memory requirement, and is slightly slower
     # as we have to de-compress pix and psi twice.
+
     mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)    
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         pix = scan.pix
         psi = scan.psi
         inv_var = 1.0/scan_samples.sigma0**2
+        ##TODO: no need to use the weight mapmaker anymore, just build 1/N as HK said.
         mapmaker_invvar.accumulate_to_map(inv_var, pix, psi)
     mapmaker_invvar.gather_map()
     mapmaker_invvar.normalize_map()
-
-    mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
-    mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside)
-    mapmaker_skymodel = MapmakerIQU(band_comm, experiment_data.nside)
-    for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-        pix = scan.pix
-        psi = scan.psi
-        sky_orb_dipole = get_s_orb_TOD(scan, experiment_data, pix)
-        sky_model = get_static_sky_TOD(compsep_output, pix, psi)
-        inv_var = 1.0/scan_samples.sigma0**2
-        mapmaker.accumulate_to_map(scan.tod/scan_samples.gain_est, inv_var, pix, psi)
-        mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
-        mapmaker_skymodel.accumulate_to_map(sky_model, inv_var, pix, psi)
-
-    mapmaker.gather_map()
-    mapmaker_orbdipole.gather_map()
-    mapmaker_skymodel.gather_map()
     map_rms = mapmaker_invvar.final_rms_map
-    map_cov = mapmaker_invvar.final_cov_map
-    mapmaker.normalize_map(map_cov)
-    map_signal = mapmaker.final_map
-    mapmaker_orbdipole.normalize_map(map_cov)
-    mapmaker_skymodel.normalize_map(map_cov)
-    map_orbdipole = mapmaker_orbdipole.final_map
-    map_skymodel = mapmaker_skymodel.final_map
-    if mapmaker_corrnoise is not None:
+
+    # mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
+    # mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside)
+    # mapmaker_skymodel = MapmakerIQU(band_comm, experiment_data.nside)
+    # for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
+    #     pix = scan.pix
+    #     psi = scan.psi
+    #     sky_orb_dipole = get_s_orb_TOD(scan, experiment_data, pix)
+    #     sky_model = get_static_sky_TOD(compsep_output, pix, psi)
+    #     inv_var = 1.0/scan_samples.sigma0**2
+    #     mapmaker.accumulate_to_map(scan.tod/scan_samples.gain_est, inv_var, pix, psi)
+    #     mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
+    #     mapmaker_skymodel.accumulate_to_map(sky_model, inv_var, pix, psi)
+
+    # mapmaker.gather_map()
+    # mapmaker_orbdipole.gather_map()
+    # mapmaker_skymodel.gather_map()
+    # map_rms = mapmaker_invvar.final_rms_map
+    # map_cov = mapmaker_invvar.final_cov_map
+    # mapmaker.normalize_map(map_cov)
+    # map_signal = mapmaker.final_map
+    # mapmaker_orbdipole.normalize_map(map_cov)
+    # mapmaker_skymodel.normalize_map(map_cov)
+    # map_orbdipole = mapmaker_orbdipole.final_map
+    # map_skymodel = mapmaker_skymodel.final_map
+
+
+    ##############
+
+    mapmaker = CG_Mapmaker(experiment_data, detector_samples, band_comm,
+                           CG_maxiter=params.general.CG_mapmaker.maxiter,
+                           CG_tol=1e-20)
+    mapmaker.solve()
+    map_signal = mapmaker.solved_map
+    
+    if False: #mapmaker_corrnoise is not None:
         mapmaker_corrnoise.normalize_map(map_cov)
         map_corrnoise = mapmaker_corrnoise.final_map
     if band_comm.Get_rank() == 0:
-        map_signal -= map_orbdipole
-        if mapmaker_corrnoise is not None:
-            map_signal -= map_corrnoise
+        # map_signal -= map_orbdipole
+        # if mapmaker_corrnoise is not None:
+        #     map_signal -= map_corrnoise
 
         #Here we split here between I and QU
         detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
@@ -948,7 +962,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     detector_samples = estimate_white_noise(experiment_data, detector_samples, compsep_output, params) 
     timing_dict["wn-est-1"] = time.time() - t0
     if mpi_info.tod.is_master:
-        logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished white noise estimation in {timing_dict['wn-est-1']:.1f}s.")
+        logger.info(f"Chain {chain} iter {iter} {experiment_data.nu}GHz: Finished white noise estimation in {timing_dict['wn-est-1']:.1f}s.")
 
     ### ABSOLUTE GAIN CALIBRATION ### 
     if params.general.sample_abs_gain and iter >= params.general.sample_abs_gain_from_iter_num:

@@ -33,7 +33,8 @@ def get_s_orb_TOD(scan: ScanTOD, experiment: DetectorTOD, pix: NDArray[np.intege
                         equivalencies=pysm3_u.cmb_equivalencies(experiment.nu*pysm3_u.GHz)).value
     geom = ducc0.healpix.Healpix_Base(experiment.nside, "RING")
     LOS_vec = geom.pix2vec(pix, nthreads=nthreads)
-    LOS_vec *= scan.orb_dir_vec
+    if scan.orb_dir_vec is not None:
+        LOS_vec *= scan.orb_dir_vec
     s_orb = np.sum(LOS_vec, axis=-1, dtype=np.float32)  # How much do the LOS and orbital velocity align?
     s_orb *= T_CMB_div_C
     s_orb *= uK_CMB_to_uK_RJ_dict[experiment.nu]  # Converting to uK_RJ units.

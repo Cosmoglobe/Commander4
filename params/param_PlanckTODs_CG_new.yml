@@ -13,6 +13,10 @@ general:
   CG_float_precision: "single"
   CG_real_alm_mode: False
 
+  CG_mapmaker:
+    maxiter: 10
+    err_tol: 1.0e-20
+
   niter_gibbs: 10
 
   nside: 256
@@ -272,7 +276,6 @@ CompSep_bands:
 experiments:
   PlanckLFI:
     enabled: true
-    experiment_id: "planck"
     is_sim: false
     pix_is_compressed: true
     psi_is_compressed: true

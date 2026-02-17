@@ -6,6 +6,8 @@ from numpy.typing import NDArray
 import ducc0
 import healpy as hp
 from pixell import utils
+from typing import Callable
+import time
 
 from commander4.output.log import logassert
 from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
@@ -28,11 +30,12 @@ class CG_Mapmaker:
     """
     CG mapmaker for solving the general P^T T^T N^-1 T P m = P^T T^T N^-1 d problem
     """
-    def __init__(self, detector_tod:DetectorTOD, detector_samples:DetectorSamples, nside:int, map_comm:MPI.Comm, T_omega:function = np.ones_like, nthreads=1, double_prec = True, CG_maxiter = 200, CG_tol = 1e-10):
+    def __init__(self, 
+                detector_tod:DetectorTOD, detector_samples:DetectorSamples, 
+                map_comm:MPI.Comm, T_omega:Callable = np.ones_like, 
+                nthreads:int=1, double_prec:bool = True, CG_maxiter:int=200, CG_tol:float=1e-10, CG_check_interval:int = 1):
         self.detector_tod = detector_tod
         self.detector_samples = detector_samples
-        self.nside = nside
-        self.npix = hp.nside2npix(nside)
         self.double_perc = double_prec
         self._map_signal = None #output map to be solved for
         self.nthreads = nthreads
@@ -40,6 +43,7 @@ class CG_Mapmaker:
         self.map_comm = map_comm
         self.CG_maxiter = CG_maxiter
         self.CG_tol = CG_tol
+        self.CG_check_interval = CG_check_interval
         self.maplib = load_cmdr4_ctypes_lib()
         ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
         ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
@@ -66,6 +70,10 @@ class CG_Mapmaker:
         """
         scan_tod_arr = scan._tod if scan_tod_arr is None else scan_tod_arr
         inplace_scale(scan_tod_arr, 1/sigma0**2)
+        # logger = logging.getLogger(__name__)
+
+        # if self.map_comm.Get_rank() == 0:
+        #     logger.info(f"## Inv N sigma0 {sigma0} mean: {np.mean(scan_tod_arr)}")
         return scan_tod_arr
 
     def apply_P(self, in_map: NDArray, out_scan:ScanTOD, scan_tod_arr=None):
@@ -123,7 +131,7 @@ class CG_Mapmaker:
             freqs = np.flip(freqs)
         d = d * self.T_omega(freqs)
         #F^-1 T F
-        scan_tod_arr = ducc0.fft.r2c(d, forward=False, inorm=1)
+        scan_tod_arr = ducc0.fft.c2r(d, forward=False, inorm=1)
         return scan_tod_arr
 
     def apply_T(self, scan: ScanTOD, scan_tod_arr=None):
@@ -170,13 +178,26 @@ class CG_Mapmaker:
         """
         out_map = np.zeros((3,hp.nside2npix(self.detector_tod.nside)), dtype=np.float64 if self.double_perc else np.float32) if out_map is None else out_map
         for scan, sample in zip(self.detector_tod.scans, self.detector_samples.scans):
-            scan_tod_arr_aux = np.zeros_like(scan._tod) #aux array to not modify scan._tod
+            scan_tod_arr_aux = np.copy(scan._tod) #aux array to not modify scan._tod
             #N^-1 d
             self.apply_inv_N(scan, sample.sigma0, scan_tod_arr=scan_tod_arr_aux)
+            
+            logger = logging.getLogger(__name__)
+
+            if self.map_comm.Get_rank() == 0:
+                logger.info(f"##RHS 1 mean: {np.mean(scan_tod_arr_aux)}")
+                
             #T^T N^-1 d
             self.apply_T_adjoint(scan, scan_tod_arr=scan_tod_arr_aux)
+
+            if self.map_comm.Get_rank() == 0:
+                logger.info(f"##RHS 1 mean: {np.mean(scan_tod_arr_aux)}")
+
             #P^T T^T N^-1 d
             self.apply_P_adjoint(scan, out_map, scan_tod_arr=scan_tod_arr_aux)
+
+            if self.map_comm.Get_rank() == 0:
+                logger.info(f"##RHS 3 mean: {np.mean(out_map)}")
         return out_map
 
     def apply_LHS(self, m_map: NDArray, out_map=None):
@@ -199,15 +220,23 @@ class CG_Mapmaker:
             self.apply_P_adjoint(scan, out_map, scan_tod_arr=scan_tod_arr_aux)
         return out_map
 
-    def solve_map(self):
+    def solve(self):
         """
         Solves the CG to compute the target sky map.
         """
+        logger = logging.getLogger(__name__)
         RHS_map = self.calc_RHS()
-        my_dot = lambda arr1, arr2: MPI_dot(arr1, arr2, self.map_comm)
+
+        # logger.info(f"##RHS map mean: {np.mean(RHS_map)}")
+
+        my_dot = lambda arr1, arr2: MPI_dot(arr1, arr2, self.map_comm, double_prec=self.double_perc)
         CG_solver = utils.CG(self.apply_LHS, RHS_map, dot = my_dot)
+        logger.info(f"Mapmaker CG starting!")
         for i in range(self.CG_maxiter):
             CG_solver.step()
+            if i%self.CG_check_interval == 0:
+                if self.map_comm.Get_rank() == 0:
+                    logger.info(f"Mapmaker CG iter {i:3d} - Residual {CG_solver.err:.6e}")
             if CG_solver.err < self.CG_tol:
                 break
         local_map = CG_solver.x
