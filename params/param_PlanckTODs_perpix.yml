@@ -34,6 +34,10 @@ general:
   pixel_compsep_sampling: True
   smooth_to_common_res: True
 
+  write_orb_dipole_maps_to_chain: True
+  write_corr_noise_maps_to_chain: True
+  write_sky_model_maps_to_chain: True
+
   output_paths:
     chains: "../cmdr4_chains/PlanckTODs_perpix/"
     plots: "../cmdr4_plots/PlanckTODs_perpix/"
@@ -261,7 +265,6 @@ experiments:
         fwhm: 32.4 # [arcmin]
         freq: 28.4 # [GHz]
         fsamp: 32.5079365079365 # [Hz]
-        data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
         detectors:
@@ -283,7 +286,6 @@ experiments:
         fwhm: 27.1 # [arcmin]
         freq: 44.1 # [GHz]
         fsamp: 46.5454545454545
-        data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
         detectors:
@@ -305,7 +307,6 @@ experiments:
         fwhm: 13.3 # [arcmin]
         freq: 70.1 # [GHz]
         fsamp: 78.7692307692308
-        data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_70.txt"
         detectors:
