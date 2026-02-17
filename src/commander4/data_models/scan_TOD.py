@@ -14,7 +14,11 @@ class ScanTOD:
         log.logassert_np(tod.ndim==1, "'value' must be a 1D array", logger)
         log.logassert_np(tod.dtype in [np.float64,np.float32], "TOD dtype must be floating type,"
                          f" is {tod.dtype}", logger)
-        log.logassert_np(orb_dir_vec.size == 3, "orb_dir_vec must be a vector of size 3.", logger)
+        if orb_dir_vec is not None:
+            log.logassert_np(orb_dir_vec.size == 3, "orb_dir_vec must be a vector of size 3.", logger)
+            self._orb_dir_vec = orb_dir_vec.astype(np.float32)
+        else:
+            self._orb_dir_vec = None
         log.logassert_np(processing_mask_map.dtype == bool, "Processing mask is not boolean type",
                          logger)
         self._tod = tod
@@ -26,7 +30,6 @@ class ScanTOD:
         self._eval_nside = nside
         self._data_nside = data_nside
         self._fsamp = fsamp
-        self._orb_dir_vec = orb_dir_vec.astype(np.float32)
         self._huffman_tree = huffman_tree
         self._huffman_symbols = huffman_symbols
         self._ntod_original = ntod_original  # Size of the original TOD before Fourier cropping.
@@ -117,5 +120,5 @@ class ScanTOD:
         return self._fsamp
     
     @property
-    def orb_dir_vec(self) -> NDArray[np.floating]:
+    def orb_dir_vec(self):
         return self._orb_dir_vec
