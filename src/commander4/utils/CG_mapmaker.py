@@ -32,8 +32,9 @@ class CG_Mapmaker:
     """
     def __init__(self, 
                 detector_tod:DetectorTOD, detector_samples:DetectorSamples, 
-                map_comm:MPI.Comm, T_omega:Callable = np.ones_like, 
+                map_comm:MPI.Comm, T_omega:Callable = np.ones_like, preconditioner:Callable = np.copy,
                 nthreads:int=1, double_prec:bool = True, CG_maxiter:int=200, CG_tol:float=1e-10, CG_check_interval:int = 1):
+        self.logger = logging.getLogger(__name__)
         self.detector_tod = detector_tod
         self.detector_samples = detector_samples
         self.double_perc = double_prec
@@ -46,6 +47,7 @@ class CG_Mapmaker:
         self.CG_maxiter = CG_maxiter
         self.CG_tol = CG_tol
         self.CG_check_interval = CG_check_interval
+        self.M = preconditioner
         self.maplib = load_cmdr4_ctypes_lib()
         ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
         ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
@@ -110,7 +112,7 @@ class CG_Mapmaker:
         scan_tod_arr = in_scan._tod if scan_tod_arr is None else scan_tod_arr
         npix_out = out_map.shape[1]
         assert npix_out == hp.nside2npix(in_scan._eval_nside)
-        pix = in_scan.pix
+        pix = in_scan.pix  #FIXME: maybe move this in LHS so we uncompress pix and psi only once.
         psi = in_scan.psi
         ntod = in_scan.tod.shape[0]
         tod_f64 = np.ascontiguousarray(scan_tod_arr, dtype=np.float64)
@@ -245,7 +247,7 @@ class CG_Mapmaker:
         # logger.info(f"##RHS map mean: {np.mean(RHS_map)}")
 
         my_dot = lambda arr1, arr2: MPI_dot(arr1, arr2, self.map_comm, double_prec=self.double_perc)
-        CG_solver = utils.CG(self.apply_LHS, RHS_map, dot = my_dot)
+        CG_solver = utils.CG(self.apply_LHS, RHS_map, M = self.M, dot = my_dot)
         if ismaster:
             logger.info(f"Mapmaker CG starting up!")
         for i in range(self.CG_maxiter):

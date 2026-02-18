@@ -313,13 +313,25 @@ class WeightsMapmakerIQU:
         np.add.at(self._map_signal[4], pix_idx, weight_f64 * s2 * c2)
         np.add.at(self._map_signal[5], pix_idx, weight_f64 * s2 * s2)
 
+    @property
+    def inv_N_diag(self):
+        """
+        Gives the diagonal of the accumulated inverse covariance matrix, per each pixel.
+
+        It is useful as a preconditioner for the CG mapmaker.
+
+        Note: call it before `gather_map` wipes the inverse covariance matrix away. 
+        """
+        logassert(self._map_signal is not None, "Attempted to access inv cov map after finalization.",
+                      self.logger)
+        return self._map_signal[(0,3,5), :]
+
     def gather_map(self):
         """Reduce the local IQU weight buffers across MPI ranks into the root map."""
         if self.map_comm.Get_rank() == 0:
             self._gathered_map = np.zeros((6, self.npix), dtype=np.float64)
         self.map_comm.Reduce(self._map_signal, self._gathered_map, op=MPI.SUM, root=0)
         self._map_signal = None  # Free memory and indicate that accumulation is done.
-
 
     def normalize_map(self):
         """Compute RMS maps from the per-pixel inverse covariance diagonals."""

@@ -41,11 +41,11 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         pix = scan.pix
         psi = scan.psi
         inv_var = 1.0/scan_samples.sigma0**2
-        ##TODO: no need to use the weight mapmaker anymore, just build 1/N as HK said.
         mapmaker_invvar.accumulate_to_map(inv_var, pix, psi)
+    inv_cov_diag = mapmaker_invvar.inv_N_diag
     mapmaker_invvar.gather_map()
     mapmaker_invvar.normalize_map()
-    map_rms = mapmaker_invvar.final_rms_map
+    map_rms = mapmaker_invvar.final_rms_map 
 
     # mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
     # mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside)
@@ -75,7 +75,9 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
 
     ##############
 
-    mapmaker = CG_Mapmaker(experiment_data, detector_samples, band_comm,
+    precond = lambda arr : inv_cov_diag*arr
+
+    mapmaker = CG_Mapmaker(experiment_data, detector_samples, band_comm, preconditioner=precond,
                            CG_maxiter=params.general.CG_mapmaker.maxiter,
                            CG_tol=1e-20)
     mapmaker.solve()

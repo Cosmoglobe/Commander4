@@ -14,7 +14,7 @@ general:
   CG_real_alm_mode: False
 
   CG_mapmaker:
-    maxiter: 2
+    maxiter: 10
     err_tol: 1.0e-20
 
   niter_gibbs: 10

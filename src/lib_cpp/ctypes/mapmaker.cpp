@@ -203,6 +203,32 @@ void _map_solve_IQU_T(T *map_out, const T *map_rhs, const T *norm_map, int64_t n
     }
 }
 
+/** Multiply an IQU map by the inv_N 3x3 matrix stored as only 6 unique elements per pixel.
+ *
+ * Args:
+ *   map_out (OUTPUT) -- 2D array [3, num_pix] for I,Q,U solution.
+ *   norm_map -- 2D array [6, num_pix] with unique A elements (II, IQ, IU, QQ, QU, UU).
+ *   num_pix -- Number of pixels.
+ *
+ * Singular or ill-conditioned pixels are zeroed.
+ */
+template<typename T>
+void _apply_invN_to_map_IQU_T(T *map_out, const T *inv_N_map, int64_t num_pix){
+    for (int64_t ipix = 0; ipix < num_pix; ipix++) {
+        // Find the array elements that form the 3x3 A matrix to be inverted.
+        const T a00 = inv_N_map[ipix];
+        const T a01 = inv_N_map[num_pix + ipix];
+        const T a02 = inv_N_map[2 * num_pix + ipix];
+        const T a11 = inv_N_map[3 * num_pix + ipix];
+        const T a12 = inv_N_map[4 * num_pix + ipix];
+        const T a22 = inv_N_map[5 * num_pix + ipix];
+
+        map_out[ipix] = map_out[ipix] * a00 + map_out[num_pix + ipix] * a01 + map_out[2 * num_pix + ipix] * a02;
+        map_out[num_pix + ipix] = map_out[ipix] * a01 + map_out[num_pix + ipix] * a11 + map_out[2 * num_pix + ipix] * a12;
+        map_out[2 * num_pix + ipix] = map_out[ipix] * a02 + map_out[num_pix + ipix] * a12 + map_out[2 * num_pix + ipix] * a22;
+    }
+}
+
 /** Compute RMS maps from inverse diagonal of per-pixel 3x3 covariances.
  *
  * Args:
@@ -241,6 +267,8 @@ void _map_invdiag_IQU_T(T *rms_out, const T *norm_map, int64_t num_pix){
         rms_out[2 * num_pix + ipix] = inv22 > static_cast<T>(0) ? std::sqrt(inv22) : static_cast<T>(0);
     }
 }
+
+
 
 /**
  * Below are the functions exposed to the user, meant to be used by Ctypes.
