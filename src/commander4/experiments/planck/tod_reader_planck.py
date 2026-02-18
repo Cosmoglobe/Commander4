@@ -39,7 +39,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
     logger = logging.getLogger(__name__)
     oids = []
     pids = []
-    filenames = []
+    filepaths = []
     detname = str(my_det)
     bandname = str(my_band)
     expname = str(my_experiment)
@@ -49,7 +49,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
         for line in infile:
             pid, filename, _, _, _ = line.split()
             pids.append(f"{int(pid):06d}")
-            filenames.append(filename[1:-1])
+            filepaths.append(filename[1:-1])
             oids.append(filename.split(".")[0].split("_")[-1])
 
     processing_mask_map = get_processing_mask(my_band)
@@ -71,12 +71,9 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
     ntod_sum_final = 0
     for i_pid in range(scan_idx_start, scan_idx_stop):
         pid = pids[i_pid]
-        oid = oids[i_pid]
+        filepath = filepaths[i_pid]
         if pid in bad_PIDs:
             continue
-
-        filename = f"{my_band.tod_files_prefix}{oid.zfill(6)}.h5"
-        filepath = os.path.join(my_band.data_path, filename)
         with h5py.File(filepath, "r") as f:
             ntod = int(f[f"/{pid}/common/ntod"][()])
             ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
@@ -112,14 +109,18 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
         if i_pid % 10 == 0:
             gc.collect()
 
-    det_static = DetectorTOD(scanlist, float(my_band.freq)+float(my_det.bandpass_shift),
-                             my_band.fwhm, my_band.eval_nside, my_band.data_nside, detname, expname)
+    my_det_central_freq = my_band.freq
+    if "bandpass_shift" in my_det:
+        my_det_central_freq += my_det.bandpass_shift
+    det_static = DetectorTOD(scanlist, my_det_central_freq, my_band.fwhm, my_band.eval_nside,
+                             my_band.data_nside, expname, bandname, detname)
     det_static.detector_id = my_det_id
 
     ### Collect some info on master rank of each detector and print it ###
     local_tot_scans = scan_idx_stop - scan_idx_start
     local_stats = np.array([num_included, local_tot_scans, ntod_sum_final, ntod_sum_original])
     global_stats = np.zeros_like(local_stats)
+    # Non-blocking reduce so that non-master ranks can continue with the main program.
     req = det_comm.Ireduce(local_stats, global_stats, op=MPI.SUM, root=0)
     if det_comm.Get_rank() == 0:
         req.Wait()

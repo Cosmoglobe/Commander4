@@ -1,7 +1,5 @@
 import numpy as np
-import healpy as hp
 import time
-from pixell import utils, curvedsky
 from pixell.bunch import Bunch
 import logging
 from mpi4py import MPI
@@ -9,7 +7,6 @@ from numpy.typing import NDArray
 from typing import Callable
 from copy import deepcopy
 
-from commander4.output.log import logassert
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky_models.component import Component, DiffuseComponent
 from commander4.utils.math_operations import alm_to_map_adjoint, gaussian_random_alm, almxfl,\
@@ -20,107 +17,6 @@ import commander4.solvers.preconditioners as preconditioners
 from commander4.data_models.band import Band
 
 MPI_LIMIT_32BIT = 2**31 - 1
-
-def amplitude_sampling_per_pix(proc_comm: MPI.Comm, detector_data: DetectorMap,
-                               comp_list: list[DiffuseComponent], params: Bunch
-                               )-> list[DiffuseComponent]:
-    """A (quite inefficient) pixel-by-pixel solver for the component separation problem. This only
-       works if assuming there is no beam, or all maps are smoothed to the same resolution.
-    """
-    logger = logging.getLogger(__name__)
-    if proc_comm.Get_rank() == 0:
-        logger.info("Starting pixel-by-pixel component separation.")
-    map_sky = detector_data.map_sky.copy()
-    band_freq = detector_data.nu
-    map_rms = detector_data.map_rms
-    if params.smooth_to_common_res:
-        fwhm = detector_data.fwhm
-        all_fwhm = proc_comm.allgather(fwhm)
-        max_fwhm = np.max(all_fwhm)
-        my_smoothing_fwhm = np.sqrt(max_fwhm**2 - fwhm**2)
-        logger.info(f"{detector_data.nu} GHz map with FWHM = {fwhm:.1f} arcmin will be smoothed by "
-                    f"{my_smoothing_fwhm:.1f} arcmin to reach {max_fwhm:.1f} arcmin.")
-        if params.smooth_to_common_res:
-            if map_sky[1] is None:  # No polarization
-                map_sky[0] = hp.smoothing(map_sky[0], np.deg2rad(my_smoothing_fwhm/60.0))
-            elif map_sky[0] is None:
-                map_sky[1] = hp.smoothing(map_sky[1], np.deg2rad(my_smoothing_fwhm/60.0))
-                map_sky[2] = hp.smoothing(map_sky[2], np.deg2rad(my_smoothing_fwhm/60.0))
-            else:
-                map_sky = hp.smoothing(map_sky, np.deg2rad(my_smoothing_fwhm/60.0), pol=True)
-
-    ncomp_full = len(comp_list)
-    all_freq = proc_comm.gather(band_freq, root=0)
-    all_map_sky = proc_comm.gather(map_sky, root=0)
-    all_map_rms = proc_comm.gather(map_rms, root=0)
-    nside = detector_data.nside
-    npix = 12*nside**2
-    comp_maps = [None, None, None]
-    if proc_comm.Get_rank() == 0:
-        for ipol in range(3):
-            t0 = time.time()
-            ncomp = len(comp_list)
-            if ipol > 0:
-                ncomp = len([comp for comp in comp_list if comp.polarized])
-            freqs = []
-            maps_sky = []
-            maps_rms = []
-            for iband in range(len(all_freq)):
-                if all_map_sky[iband][ipol] is not None:
-                    freqs.append(all_freq[iband])
-                    maps_sky.append(all_map_sky[iband][ipol])
-                    maps_rms.append(all_map_rms[iband][ipol])
-            freqs = np.array(freqs)
-            maps_sky = np.array(maps_sky)
-            maps_rms = np.array(maps_rms)
-            nband = len(freqs)
-            comp_maps[ipol] = np.zeros((ncomp, npix))
-            M = np.empty((nband, ncomp))
-            idx = 0
-            for i in range(ncomp):
-                if ipol == 0 or comp_list[i].polarized:
-                    M[:,idx] = comp_list[i].get_sed(freqs)
-                    idx += 1
-
-            rand = np.random.randn(npix,nband)
-            for i in range(npix):
-                xmap = 1/maps_rms[:,i]
-                x = M.T.dot((xmap**2*maps_sky[:,i]))
-                x += M.T.dot(rand[i]*xmap)
-                A = (M.T.dot(np.diag(xmap**2)).dot(M))
-                n_failures = 0
-                try:
-                    comp_maps[ipol][:,i] = np.linalg.solve(A, x)
-                except np.linalg.LinAlgError:
-                    comp_maps[ipol][:,i] = 0
-                    n_failures += 1
-            if n_failures > 0:
-                logger.warning(f"Pixel-by-pixel component separation failed for {n_failures}"
-                               f"out of {npix} pixels for polarization {ipol+1}/3.")
-            logger.info(f"Finished pixel-by-pixel component separation in {time.time()-t0:.2f}s "
-                        f"for polarization {ipol+1} of 3.")
-
-            # import cmdr4_support
-            # t0 = time()
-            # comp_maps2 = cmdr4_support.utils.amplitude_sampling_per_pix_helper(map_sky, map_rms, M, rand, nnthreads=1)
-            # logger.info(f"Time for native solution: {time()-t0}s.")
-            # import ducc0
-            # logger.info(f"L2 error between solutions: {ducc0.misc.l2error(comp_maps, comp_maps2)}.")
-    comp_maps = proc_comm.bcast(comp_maps, root=0)
-    if comp_maps[0][0].dtype == np.float64:
-        complex_dtype = np.complex128
-    else:
-        complex_dtype = np.complex64
-    for icomp in range(ncomp_full):
-        alm_len = ((comp_list[icomp].lmax+1)*(comp_list[icomp].lmax+2))//2
-        comp_alms = np.zeros((1,alm_len), dtype=complex_dtype)
-        comp_list[icomp].component_alms_intensity = curvedsky.map2alm_healpix(comp_maps[0][icomp], comp_alms, niter=3, spin=0)
-        if comp_list[icomp].polarized:
-            alm_len = ((comp_list[icomp].lmax+1)*(comp_list[icomp].lmax+2))//2
-            comp_alms = np.zeros((2,alm_len), dtype=complex_dtype)
-            pol_alms = curvedsky.map2alm_healpix(np.array([comp_maps[1][icomp], comp_maps[2][icomp]]), comp_alms, niter=3, spin=2)
-            comp_list[icomp].component_alms_polarization = pol_alms
-    return comp_list
 
 
 class CompSepSolver:

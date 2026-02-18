@@ -1,34 +1,42 @@
-MPI_config:
-  ntask_tod: 0  # Map-only processing: No TOD tasks.
-  ntask_compsep: 8
-nthreads_tod: 1
-nthreads_compsep: 1
+# Parameter file for doing Planck LFI TOD processing, but with per-pixel component separation
+# Note that this means all maps have to be common resolution (chosen to be nside=512).
+# Useful if you are primarily working on the TOD processing and don't want the CG overhead.
 
-niter_gibbs: 2
+general:
+  MPI_config:
+    ntask_tod: 0  # Map-only processing: No TOD tasks.
+    ntask_compsep_I: 7
+    ntask_compsep_QU: 7
+  nthreads_tod: 1
+  nthreads_compsep: 1
 
-nside: 1024
+  niter_gibbs: 2
 
-noise_fknee: 0.1
-noise_alpha: -0.9
+  nside: 1024
 
-make_plots: True
-output_stats: False
+  noise_fknee: 0.1
+  noise_alpha: -0.9
 
-galactic_mask: True
-pixel_compsep_sampling: True
-smooth_to_common_res: True
+  make_plots: True
+  output_stats: False
 
-output_paths:
-  chains: "../cmdr4_chains/Planck+WMAP_mapsonly_perpix/"
-  plots: "../cmdr4_plots/Planck+WMAP_mapsonly_perpix/"
-  stats: "../cmdr4_stats/Planck+WMAP_mapsonly_perpix/"
+  CG_float_precision: "single"
 
-logging:
-  console:
-    level: 'info'
-  file:
-    level: 'info'
-    filename: '../cmdr4_logs/output_Planck+WMAP_mapsonly_perpix.log'
+  galactic_mask: True
+  pixel_compsep_sampling: True
+  smooth_to_common_res: True
+
+  output_paths:
+    chains: "../cmdr4_chains/Planck+WMAP_mapsonly_perpix/"
+    plots: "../cmdr4_plots/Planck+WMAP_mapsonly_perpix/"
+    stats: "../cmdr4_stats/Planck+WMAP_mapsonly_perpix/"
+
+  logging:
+    console:
+      level: 'info'
+    file:
+      level: 'info'
+      filename: '../cmdr4_logs/Planck+WMAP_mapsonly_perpix.log'
 
 
 components:
@@ -36,7 +44,7 @@ components:
     enabled: true
     component_class: "CMB"
     params:
-      polarized: True
+      polarizations: [True, True, True] #I Q U 
       longname: "CMB"
       shortname: "cmb"
       smoothing_prior_FWHM: 30.0 # arcmin
@@ -49,7 +57,7 @@ components:
     enabled: true
     component_class: "ThermalDust"
     params:
-      polarized: True
+      polarizations: [True, True, True] #I Q U 
       longname: "Thermal Dust"
       shortname: "dust"
       smoothing_prior_FWHM: 5.0 # 10.0 # arcmin
@@ -65,7 +73,7 @@ components:
     enabled: true
     component_class: "Synchrotron"
     params:
-      polarized: True
+      polarizations: [True, True, True] #I Q U 
       longname: "Synchrotron"
       shortname: "sync"
       smoothing_prior_FWHM: 60.0 # arcmin
@@ -74,13 +82,13 @@ components:
       nu0: 30
       lmax: 1024
       smoothing_scale: 0.0
-      spatially_varying_MM: True
+      spatially_varying_MM: False
 
   FreeFree:
     enabled: true
     component_class: "FreeFree"
     params:
-      polarized: False
+      polarizations: [True, False, False] #I Q U 
       longname: "Free-Free"
       shortname: "ff"
       smoothing_prior_FWHM: 30.0 # arcmin
@@ -106,11 +114,6 @@ components:
   #     lmax: 1000
   #     smoothing_scale: 0 # 30.0
   #     spatially_varying_MM: False
-
-
-compsep:
-  dense_matrix_debug_mode: false  # Solve system first with dense matrix math, for debugging CG. Very slow for nside>32.
-  preconditioner: JointPreconditioner #NoiseOnlyPreconditioner #FullPreconditioner #MixingMatrixPreconditioner #BeamOnlyPreconditioner #
 
 
 CompSep_bands:

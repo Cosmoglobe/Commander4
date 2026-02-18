@@ -10,7 +10,7 @@ from mpi4py import MPI
 from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
-# from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
+from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 
 def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     if ntod <= 10_000 or ntod >= 400_000:
@@ -28,7 +28,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
     logger = logging.getLogger(__name__)
     oids = []
     pids = []
-    filenames = []
+    filepaths = []
     detname = str(my_det)
     bandname = str(my_band)
     expname = str(my_experiment)
@@ -36,10 +36,10 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
     with open(my_band.filelist) as infile:
         infile.readline()
         for line in infile:
-            pid, filename, _, _, _ = line.split()
+            pid, filepath, _, _, _ = line.split()
             pids.append(f"{int(pid):06d}")
-            filenames.append(filename[1:-1])
-            oids.append(filename.split(".")[0].split("_")[-1])
+            filepaths.append(filepath[1:-1])
+            oids.append(filepath.split(".")[0].split("_")[-1])
 
     processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
     if "bad_PIDs_path" in my_experiment:
@@ -60,15 +60,9 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
     num_included = 0
     for i_pid in range(scan_idx_start, scan_idx_stop):
         pid = pids[i_pid]
-        oid = oids[i_pid]
+        filepath = filepaths[i_pid]
         if pid in bad_PIDs:
             continue
-
-        filename = f"LB_{my_band.freq_identifier:03d}_{my_band.lb_det_identifier}_{oid.zfill(6)}.h5"
-        if "data_path" in my_band:
-            filepath = os.path.join(my_band.data_path, filename)
-        else:
-            filepath = os.path.join(my_experiment.data_path, filename)
         with h5py.File(filepath, "r") as f:
             ntod = int(f[f"/{pid}/common/ntod"][()])
             ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
@@ -112,13 +106,15 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
             ntod_sum_final += ntod_optimal
         if i_pid % 10 == 0:
             gc.collect()
-
-    det_static = DetectorTOD(scanlist, float(my_band.freq)+float(my_det.bandpass_shift),
-                             my_band.fwhm, my_band.eval_nside, my_band.data_nside, detname, expname)
+    my_det_central_freq = my_band.freq
+    if "bandpass_shift" in my_det:
+        my_det_central_freq += my_det.bandpass_shift
+    det_static = DetectorTOD(scanlist, my_det_central_freq, my_band.fwhm, my_band.eval_nside,
+                             my_band.data_nside, expname, bandname, detname)
     det_static.detector_id = my_det_id
 
-    # if my_experiment.replace_tod_with_sim:
-    #     replace_tod_with_sim(det_static, params)
+    if my_experiment.replace_tod_with_sim:
+        replace_tod_with_sim(det_static, params)
 
     ### Collect some info on master rank of each detector and print it ###
     local_tot_scans = scan_idx_stop - scan_idx_start

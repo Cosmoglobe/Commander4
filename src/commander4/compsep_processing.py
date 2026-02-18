@@ -2,7 +2,6 @@ import numpy as np
 from mpi4py import MPI
 from mpi4py.MPI import Comm
 import logging
-import time
 from pixell.bunch import Bunch
 from numpy.typing import NDArray
 
@@ -11,8 +10,9 @@ from commander4.data_models.detector_map import DetectorMap
 from commander4.sky_models.component import Component, split_complist
 import commander4.sky_models.component as component_lib
 from commander4.sky_models.sky_model import SkyModel
-import commander4.output.plotting as plotting
-from commander4.solvers.comp_sep_solvers import CompSepSolver, amplitude_sampling_per_pix
+from commander4.solvers.CG_compsep_solver import CompSepSolver
+from commander4.solvers.perpix_compsep_solver import solve_compsep_perpix
+from commander4.output.write_chains_files import write_compsep_chain_to_file
 
 
 def init_compsep_processing(mpi_info: Bunch, params: Bunch) -> tuple[list[Component], str, dict[str, int], Bunch]:
@@ -135,54 +135,48 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
         #                         map_skysub=detector_data.skysub_map,
         #                         map_orbdip=detector_data.orbdipole_map)
 
+    ### 1. MPI SETUP: Split into I and QU ###
     compsep_comm = mpi_info.compsep.comm
     compsep_rank = mpi_info.compsep.rank
+    subcolor = mpi_info.compsep.subcolor #Subcolor splits the compsep ranks into: Pol -> 1, Int -> 0
+    compsep_subcomm = mpi_info.compsep.subcomm
+    comp_sublist = split_complist(comp_list, subcolor)
 
+    ### 2. SOLVE COMPSEP: band maps -> component alms (either by per-pixel or CG solver) ###
     if params.general.pixel_compsep_sampling:
-        comp_list = amplitude_sampling_per_pix(compsep_comm, detector_data, comp_list, params)
+        comp_sublist = solve_compsep_perpix(compsep_subcomm, detector_data, comp_sublist, params)
     else:
-        subcolor = mpi_info.compsep.subcolor #Subcolor splits the compsep ranks into: Pol -> 1, Int -> 0
-        compsep_subcomm = mpi_info.compsep.subcomm
-        compsep_solver = CompSepSolver(detector_data,
-                                        params, compsep_subcomm)
+        compsep_solver = CompSepSolver(detector_data, params, compsep_subcomm)
     
-        comp_sublist = split_complist(comp_list, subcolor)
-        subcolor = mpi_info.compsep.subcolor #Pol -> 1, Int -> 0
-
         # print(f"Hello rank {mpi_info.compsep.rank}, subcolor: {mpi_info.compsep.subcolor},  complist: {[c.shortname for c in comp_sublist]}")
         comp_sublist = compsep_solver.solve(comp_sublist)
 
-        if params.general.make_plots and (mpi_info.compsep.is_I_master or mpi_info.compsep.is_QU_master):
-            plotting.plot_cg_res(params.general, chain, iter, compsep_solver.CG_residuals)
-        # Pol master sends the portion of list to the Intensity master rank, and then it will broadcast through the compsep_comm
-        if mpi_info.compsep.is_QU_master:
-            t=0
-            for comp in comp_sublist:
-                logger.debug(f"[MPI Comm] Sending {comp.shortname} from QU", comp._data.shape, comp._data.dtype, t, "to", mpi_info.compsep.I_master)
-                compsep_comm.Send(comp._data, dest=mpi_info.compsep.I_master, tag=t)
-                t+=1
-        
-        if mpi_info.compsep.is_I_master:
-            t_pol=0
-            t_int=0
-            for comp in comp_list:
-                if comp.pol == True: #if it is a pol component receive it from the QU_master
-                    print(f"[MPI Comm] Receiving {comp.shortname} from QU", comp._data.shape, comp._data.dtype, t_pol, "from", mpi_info.compsep.QU_master)
-                    compsep_comm.Recv(comp._data, source=mpi_info.compsep.QU_master, tag=t_pol)
-                    t_pol+=1
-                else:           #otherwise it copy it over from the local intensity sublist held on I_master
-                    print(f"[MPI Comm] Copying {comp.shortname} from I", comp._data.shape, comp._data.dtype, t_int, "from local I")
-                    comp._data = comp_sublist[t_int]._data
-                    t_int+=1
-        
-        #in any case the component, received from QU or computed and accumulated on I, is bcasted
+    ### 3. CLEANUP: Gather I+QU alm solutions and make plots. ###
+    # Pol master sends the portion of list to the Intensity master rank, and then it will broadcast through the compsep_comm
+    if mpi_info.compsep.is_QU_master:
+        t=0
+        for comp in comp_sublist:
+            logger.debug(f"[MPI Comm] Sending {comp.shortname} from QU", comp._data.shape, comp._data.dtype, t, "to", mpi_info.compsep.I_master)
+            compsep_comm.Send(comp._data, dest=mpi_info.compsep.I_master, tag=t)
+            t+=1
+    
+    if mpi_info.compsep.is_I_master:
+        t_pol=0
+        t_int=0
         for comp in comp_list:
-            comp.bcast_data_blocking(compsep_comm, root=mpi_info.compsep.master)
+            if comp.pol: #if it is a pol component receive it from the QU_master
+                print(f"[MPI Comm] Receiving {comp.shortname} from QU", comp._data.shape, comp._data.dtype, t_pol, "from", mpi_info.compsep.QU_master)
+                compsep_comm.Recv(comp._data, source=mpi_info.compsep.QU_master, tag=t_pol)
+                t_pol+=1
+            else:  # Otherwise it copy it over from the local intensity sublist held on I_master
+                print(f"[MPI Comm] Copying {comp.shortname} from I", comp._data.shape, comp._data.dtype, t_int, "from local I")
+                comp._data = comp_sublist[t_int]._data
+                t_int+=1
     
-    # if mpi_info.compsep.is_master:
-    #     for comp in comp_list:
-    #         print("NEW", comp.shortname, np.mean(comp.alms))
-    
+    # In any case the component, received from QU or computed and accumulated on I, is bcasted
+    for comp in comp_list:
+        comp.bcast_data_blocking(compsep_comm, root=mpi_info.compsep.master)
+
     #FIXME: How will we deal with this once we give the chance to the user to define different parameters for polarized and non-pol detectors?
     sky_model = SkyModel(comp_list)
     sky_model_at_band = sky_model.get_sky_at_nu(detector_data.nu, detector_data.nside,
@@ -195,12 +189,9 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
 
     compsep_comm.Barrier()
 
-    if params.general.make_plots:
-        t0 = time.time()
-        detector_to_plot = compsep_rank
-        plotting.plot_combo_maps(params.general, detector_to_plot, chain, iter, comp_list, detector_data)
-        plotting.plot_components(params.general, detector_to_plot, chain, iter, comp_list, detector_data)
-        logging.info(f"Rank {compsep_rank} chain {chain} iter {iter} Finished all plotting in {time.time()-t0:.1f}s.")
+    if compsep_comm.Get_rank() == 0:
+        write_compsep_chain_to_file(comp_list, params, chain, iter)
+
 
     return sky_model  # Return the full sky realization for my band.
 

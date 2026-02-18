@@ -3,14 +3,16 @@ import numpy as np
 from numpy.typing import NDArray
 
 class DetectorTOD:
-    def __init__(self, scanlist: list[ScanTOD], nu, fwhm, nside, data_nside, detector_name, experiment_name):
+    def __init__(self, scanlist: list[ScanTOD], nu, fwhm, nside, data_nside,
+                 experiment_name, band_name, detector_name):
         self._scanlist = scanlist
         self._nu = nu
         self._fwhm = fwhm
         self._eval_nside = nside
         self._data_nside = data_nside
-        self._detector_name = detector_name
         self._experiment_name = experiment_name
+        self._band_name = band_name
+        self._detector_name = detector_name
 
     @property
     def nu(self):
@@ -29,12 +31,16 @@ class DetectorTOD:
         return self._data_nside
     
     @property
-    def detector_name(self):
-        return self._detector_name
+    def experiment_name(self):
+        return self._experiment_name
 
     @property
-    def experiment_name(self):
-        return self.experiment_name
+    def band_name(self):
+        return self._band_name
+    
+    @property
+    def detector_name(self):
+        return self._detector_name
 
     @property
     def blm(self):
