@@ -27,7 +27,6 @@ general:
 
   CG_float_precision: "single"
 
-  make_plots: True
   output_stats: False
 
   galactic_mask: True
@@ -40,7 +39,6 @@ general:
 
   output_paths:
     chains: "../cmdr4_chains/PlanckTODs_perpix/"
-    plots: "../cmdr4_plots/PlanckTODs_perpix/"
     stats: "../cmdr4_stats/PlanckTODs_perpix/"
 
   logging:

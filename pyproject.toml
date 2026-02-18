@@ -36,7 +36,8 @@ nanobind = ["nanobind"]
 # Adds the `commander4` command to PATH, executing `bin/commander4`
 [project.scripts]
 commander4 = "commander4.cli:main"
-commander4-generate-stubs = "commander4.devtools.generate_stubs:main"
+c4-generate-stubs = "commander4.devtools.generate_stubs:main"
+c4-plot-chain = "commander4.output.plot_chain:main"
 
 [tool.scikit-build]
 # Keep it simple: CMake builds the extension, scikit-build-core packages the Python

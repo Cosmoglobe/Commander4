@@ -33,7 +33,6 @@ general:
   sample_temporal_gain: True
   sample_temporal_gain_from_iter_num: 4
 
-  make_plots: True
   output_stats: False
 
   galactic_mask: True
@@ -44,9 +43,8 @@ general:
   write_sky_model_maps_to_chain: True
 
   output_paths:
-    plots: "../cmdr4_plots/PlanckTODs_CG/"
     stats: "../cmdr4_stats/PlanckTODs_CG/"
-    chains: "../cmdr4_chains/PlanckTODs_CG"
+    chains: "../cmdr4_chains/PlanckTODs_CG/"
 
   logging:
     console:

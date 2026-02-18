@@ -19,14 +19,12 @@ general:
   noise_fknee: 0.1
   noise_alpha: -0.9
 
-  make_plots: True
   output_stats: False
 
   galactic_mask: True
   pixel_compsep_sampling: False
 
   output_paths:
-    plots: "../cmdr4_plots/Planck_WMAP_mapsonly_CG/"
     stats: "../cmdr4_stats/Planck_WMAP_mapsonly_CG/"
     chains: "../cmdr4_chains/Planck_WMAP_mapsonly_CG/"
 

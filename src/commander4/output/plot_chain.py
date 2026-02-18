@@ -1,3 +1,5 @@
+# This program can be run as `c4-plot-chain <path-to-chain>`, as long as Commander4 installed.
+
 import argparse
 import glob
 import logging
