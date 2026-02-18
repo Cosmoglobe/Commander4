@@ -1,7 +1,6 @@
 import logging
 import numpy as np
 import healpy as hp
-import os
 import h5py
 import gc
 from numpy.typing import NDArray
@@ -75,6 +74,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
         if pid in bad_PIDs:
             continue
         with h5py.File(filepath, "r") as f:
+            data_nside = int(f["common/nside"][()])
             ntod = int(f[f"/{pid}/common/ntod"][()])
             ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
             tod = f[f"/{pid}/{detname}/tod/"][:ntod_optimal].astype(np.float32)
@@ -99,8 +99,8 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
                 continue
             scanID = int(pid)
             scanlist.append(ScanTOD(tod, pix_encoded, psi_encoded, 0., scanID, my_band.eval_nside,
-                                    my_band.data_nside, fsamp, vsun, huffman_tree, huffman_symbols,
-                                    npsi, processing_mask_map, ntod,
+                                    data_nside, fsamp, vsun, huffman_tree, huffman_symbols, npsi,
+                                    processing_mask_map, ntod,
                                     pix_is_compressed=my_experiment.pix_is_compressed,
                                     psi_is_compressed=my_experiment.psi_is_compressed))
             num_included += 1
@@ -113,7 +113,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
     if "bandpass_shift" in my_det:
         my_det_central_freq += my_det.bandpass_shift
     det_static = DetectorTOD(scanlist, my_det_central_freq, my_band.fwhm, my_band.eval_nside,
-                             my_band.data_nside, expname, bandname, detname)
+                             data_nside, expname, bandname, detname)
     det_static.detector_id = my_det_id
 
     ### Collect some info on master rank of each detector and print it ###
