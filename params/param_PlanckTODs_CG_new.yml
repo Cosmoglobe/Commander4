@@ -1,9 +1,9 @@
 general:
   MPI_config:
-    ntask_tod: 128
+    ntask_tod: 64
     ntask_compsep_I: 1 #8
     ntask_compsep_QU: 1 #8
-  nthreads_tod: 1
+  nthreads_tod: 12
   nthreads_compsep: 2
   betzy_mode: false
 
@@ -14,7 +14,7 @@ general:
   CG_real_alm_mode: False
 
   CG_mapmaker:
-    maxiter: 10
+    maxiter: 100
     err_tol: 1.0e-20
 
   niter_gibbs: 10
@@ -288,7 +288,7 @@ experiments:
       Planck30GHz:
         enabled: true
         tod_files_prefix: "LFI_030_"
-        num_MPI_tasks: 128 #24
+        num_MPI_tasks: 64
         detector_id: 0
         freq_identifier: 30
         eval_nside: 256

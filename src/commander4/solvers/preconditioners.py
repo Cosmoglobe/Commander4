@@ -1,17 +1,19 @@
 from __future__ import annotations  # Solves NameError arising if performing early evaluation of type hints. Needed together with below if-test, since we have a cirular import.
 import numpy as np
+import ctypes as ct
 import healpy as hp
 from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell import curvedsky
 from copy import deepcopy
 from commander4.utils.math_operations import alm_real2complex, alm_complex2real
+from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
 
 import typing
 if typing.TYPE_CHECKING:  # Only import when performing type checking, avoiding circular import during normal runtime.
     from commander4.solvers.comp_sep_solvers import CompSepSolver
     from commander4.sky_models.component import Component
-    from commander4.utils.CG_mapmaker import CG_Mapmaker
+    from commander4.utils.mapmaker import WeightsMapmakerIQU
 
 
 class NoPreconditioner:
@@ -255,19 +257,33 @@ class JointPreconditioner:
         return a_complist_out
 
 
-
-class DiagonalPreconditioner:
+class InvNPreconditioner:
     """ Standard diagonal preconditioner for CG mapmaker. It builds an estimate of the diagonal of the A matrix
         by estimating the RMS of the i-th pixel as sigma_0/n_hit_i.
     """
 
-    def __init__(self, mapmaker: CG_Mapmaker):
+    def __init__(self, inv_N_IQU:NDArray, double_prec=True):
         """
         Initialize preconditioner starting from the mapmaker object it will be used in.
         It precomputes the hitmap
         """
-        return NotImplementedError
+        assert inv_N_IQU.ndim == 2, "InvN_IQU must be 2-dimensional array."
+        assert inv_N_IQU.shape[0] == 6, "InvN_IQU must be must have shape (6,npix)."
+        self.npix = inv_N_IQU.shape[1]
+        self.maplib = load_cmdr4_ctypes_lib()
+        if double_prec:
+            ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
+            self.maplib.apply_invN_to_map_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim2, ct_f64_dim2, ct.c_int64]
+            self.apply_invN_to_map_IQU = self.maplib.apply_invN_to_map_IQU_f64
+            self.inv_N_IQU = inv_N_IQU.astype(np.float64)
+        else:
+            ct_f32_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=2, flags="contiguous")
+            self.maplib.apply_invN_to_map_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim2, ct_f32_dim2, ct.c_int64]
+            self.apply_invN_to_map_IQU = self.maplib.apply_invN_to_map_IQU_f32
+            self.inv_N_IQU = inv_N_IQU.astype(np.float32)
 
-    def __call__(self, a_map: NDArray) -> NDArray:
-        
-        return NotImplementedError
+    def __call__(self, map: NDArray) -> NDArray:
+        assert map.shape[1] == self.npix
+        map_out = np.copy(map)
+        self.apply_invN_to_map_IQU(map, map_out, self.inv_N_IQU, self.npix)
+        return map_out

@@ -13,8 +13,9 @@ from commander4.output.log import logassert
 from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
+from commander4.solvers.CG_driver import distributed_CG_arr
 from commander4.data_models.detector_samples import DetectorSamples
-from commander4.utils.math_operations import inplace_scale, MPI_dot
+from commander4.utils.math_operations import inplace_scale, dot
 
 # I need to CG-solve P^T T^T N^−1 T P m = P^T T^T N^-1 d
 # Where:
@@ -39,8 +40,9 @@ class CG_Mapmaker:
         self.detector_samples = detector_samples
         self.double_perc = double_prec
         #output map to be solved for, serves as buffer for the last mpi.Reduce call 
+        self.f_dtype = np.float64 if double_prec else np.float32
         self._map_signal = np.zeros((3,hp.nside2npix(detector_tod._eval_nside)), 
-            dtype=np.float64 if double_prec else np.float32) if map_comm.Get_rank() == 0 else None
+            dtype=self.f_dtype) if map_comm.Get_rank() == 0 else None
         self.nthreads = nthreads
         self.T_omega = T_omega
         self.map_comm = map_comm
@@ -50,14 +52,33 @@ class CG_Mapmaker:
         self.M = preconditioner
         self.maplib = load_cmdr4_ctypes_lib()
         ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
-        ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
-        ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
-        self.maplib.map_accumulator_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim1, ct.c_double,
-                                ct_i64_dim1, ct_f64_dim1, ct.c_int64,
-                                ct.c_int64]
-        self.maplib.map2tod_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim1,
-                                            ct_i64_dim1, ct_f64_dim1, 
-                                            ct.c_int64, ct.c_int64]
+        if double_prec:
+            ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
+            ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
+            self.maplib.map_accumulator_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim1, ct.c_double,
+                                    ct_i64_dim1, ct_f64_dim1, ct.c_int64,
+                                    ct.c_int64]
+            self.maplib.map2tod_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim1,
+                                                ct_i64_dim1, ct_f64_dim1, 
+                                                ct.c_int64, ct.c_int64]
+            self.maplib.apply_invN_to_map_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim2, ct.c_int64]
+            self.map_accumulator_IQU = self.maplib.map_accumulator_IQU_f64
+            self.map2tod_IQU = self.maplib.map2tod_IQU_f64
+            self.apply_invN_to_map_IQU = self.maplib.apply_invN_to_map_IQU_f64
+        else:
+            ct_f32_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=1, flags="contiguous")
+            ct_f32_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=2, flags="contiguous")
+            self.maplib.map_accumulator_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim1, ct.c_double,
+                                    ct_i64_dim1, ct_f64_dim1, ct.c_int64,
+                                    ct.c_int64]
+            self.maplib.map2tod_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim1,
+                                                ct_i64_dim1, ct_f64_dim1, 
+                                                ct.c_int64, ct.c_int64]
+            self.maplib.apply_invN_to_map_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim2, ct.c_int64]
+            self.map_accumulator_IQU = self.maplib.map_accumulator_IQU_f32
+            self.map2tod_IQU = self.maplib.map2tod_IQU_f32
+            self.apply_invN_to_map_IQU = self.maplib.apply_invN_to_map_IQU_f32
+        
 
     @property
     def solved_map(self):
@@ -94,12 +115,10 @@ class CG_Mapmaker:
         pix = out_scan.pix
         psi = out_scan.psi
         ntod = out_scan.tod.shape[0]
-        tod_f64 = np.ascontiguousarray(scan_tod_arr, dtype=np.float64) #FIXME: check if this is actually updating tods in place
-        psi_f64 = np.ascontiguousarray(psi, dtype=np.float64)
-        self.maplib.map2tod_IQU_f64(in_map, tod_f64,  
-                                            pix.astype(np.int64), 
-                                            psi_f64, ntod, npix_out)
-        return tod_f64.astype(dtype=np.float32)
+        _tod = np.ascontiguousarray(scan_tod_arr, dtype=self.f_dtype)
+        _psi = np.ascontiguousarray(psi, dtype=self.f_dtype)
+        self.map2tod_IQU(in_map, _tod, pix.astype(np.int64), _psi, ntod, npix_out)
+        return _tod
 
     def apply_P_adjoint(self, in_scan: ScanTOD, out_map:NDArray, scan_tod_arr=None):
         """
@@ -115,11 +134,9 @@ class CG_Mapmaker:
         pix = in_scan.pix  #FIXME: maybe move this in LHS so we uncompress pix and psi only once.
         psi = in_scan.psi
         ntod = in_scan.tod.shape[0]
-        tod_f64 = np.ascontiguousarray(scan_tod_arr, dtype=np.float64)
-        psi_f64 = np.ascontiguousarray(psi, dtype=np.float64)
-        self.maplib.map_accumulator_IQU_f64(out_map, tod_f64, 1, 
-                                            pix.astype(np.int64), 
-                                            psi_f64, ntod, npix_out)
+        _tod = np.ascontiguousarray(scan_tod_arr, dtype=self.f_dtype)
+        _psi = np.ascontiguousarray(psi, dtype=self.f_dtype)
+        self.map_accumulator_IQU(out_map, _tod, 1, pix.astype(np.int64), _psi, ntod, npix_out)
         return out_map
 
     def _apply_T(self, scan: ScanTOD, adjoint=False, scan_tod_arr=None):
@@ -174,90 +191,101 @@ class CG_Mapmaker:
         """
         return self._apply_T(scan, adjoint=True, scan_tod_arr=scan_tod_arr)
     
-    def calc_RHS(self, out_map=None):
+    def calc_RHS(self):
         """
         Computes the RHS of the mapmaking problem: P^T T^T N^-1 d.
-
-        if no `out_map` is given, a new array is allocated.
         """
-        out_map = np.zeros((3,hp.nside2npix(self.detector_tod.nside)), dtype=np.float64 if self.double_perc else np.float32) if out_map is None else out_map
+        ismaster = self.map_comm.Get_rank() == 0
+        out_map = np.zeros((3,hp.nside2npix(self.detector_tod.nside)), dtype=self.f_dtype)
         for scan, sample in zip(self.detector_tod.scans, self.detector_samples.scans):
             scan_tod_arr_aux = np.copy(scan._tod) #aux array to not modify scan._tod
             #N^-1 d
+            # if ismaster:
+            #     self.logger.info(f"RHS_1: {scan_tod_arr_aux}")
             scan_tod_arr_aux = self.apply_inv_N(scan, sample.sigma0, scan_tod_arr=scan_tod_arr_aux)
-            
-            logger = logging.getLogger(__name__)
-
-            # if self.map_comm.Get_rank() == 0:
-            #     logger.info(f"##RHS 1 mean: {np.mean(scan_tod_arr_aux)}")
-                
             #T^T N^-1 d
+            # if ismaster:
+            #     self.logger.info(f"RHS_2: {scan_tod_arr_aux}")
             scan_tod_arr_aux = self.apply_T_adjoint(scan, scan_tod_arr=scan_tod_arr_aux)
-
-            # if self.map_comm.Get_rank() == 0:
-            #     logger.info(f"##RHS 1 mean: {np.mean(scan_tod_arr_aux)}")
-
+            # if ismaster:
+            #     self.logger.info(f"RHS_3: {scan_tod_arr_aux}")
             #P^T T^T N^-1 d
             out_map = self.apply_P_adjoint(scan, out_map, scan_tod_arr=scan_tod_arr_aux)
+        send, recv = (MPI.IN_PLACE, out_map) if self.map_comm.Get_rank() == 0 else (out_map, np.empty(()))
+        self.map_comm.Reduce(send, recv, op=MPI.SUM, root=0)
+        self.map_comm.Barrier()
+        if not ismaster:
+            out_map = None
+        return recv
 
-            # if self.map_comm.Get_rank() == 0:
-            #     logger.info(f"##RHS 3 mean: {np.mean(out_map)}")
-        return out_map
-
-    def apply_LHS(self, m_map: NDArray, out_map=None):
+    def apply_LHS(self, in_map: NDArray):
         """
         Applies the LHS of the mapmaking problem P^T T^T N^-1 T P m to an input map, without modifying it,
         and updates the result in the out_tods object.
         """
-        logger = logging.getLogger(__name__)
-        out_map = np.zeros_like(m_map) if out_map is None else out_map
+        ismaster = self.map_comm.Get_rank() == 0
+        if in_map.shape==():
+            if ismaster:
+                raise ValueError("input map can not be empty on master rank.")
+            else:
+                in_map = np.zeros((3,hp.nside2npix(self.detector_tod.nside)), dtype=self.f_dtype)
+        self.map_comm.Bcast(in_map, root=0)
+        out_map = np.zeros_like(in_map)
+        pri = True
         for scan, sample in zip(self.detector_tod.scans, self.detector_samples.scans):
             scan_tod_arr_aux = np.zeros_like(scan._tod) #aux array to not modify scan._tod
-            # if self.map_comm.Get_rank() == 0:
-            #     logger.info(f"##LHS 1 mean: {np.mean(scan_tod_arr_aux)}")
+            if self.map_comm.Get_rank() == 0 and pri:
+                self.logger.info(f"##LHS 1 mean: {np.mean(in_map)}")
             #P m
-            scan_tod_arr_aux = self.apply_P(m_map, scan, scan_tod_arr=scan_tod_arr_aux)
-            # if self.map_comm.Get_rank() == 0:
-            #     logger.info(f"##LHS 2 mean: {np.mean(scan_tod_arr_aux)}")
+            scan_tod_arr_aux = self.apply_P(in_map, scan, scan_tod_arr=scan_tod_arr_aux)
+            if self.map_comm.Get_rank() == 0 and pri:
+                self.logger.info(f"##LHS 2 mean: {np.mean(scan_tod_arr_aux)}")
             #T P m
             scan_tod_arr_aux = self.apply_T(scan, scan_tod_arr=scan_tod_arr_aux)
-            # if self.map_comm.Get_rank() == 0:
-            #     logger.info(f"##LHS 3 mean: {np.mean(scan_tod_arr_aux)}")
+            if self.map_comm.Get_rank() == 0 and pri:
+                self.logger.info(f"##LHS 3 mean: {np.mean(scan_tod_arr_aux)}")
             #N^-1 T P m
             scan_tod_arr_aux = self.apply_inv_N(scan, sample.sigma0, scan_tod_arr=scan_tod_arr_aux)
-            # if self.map_comm.Get_rank() == 0:
-            #     logger.info(f"##LHS 4 mean: {np.mean(scan_tod_arr_aux)}")
+            if self.map_comm.Get_rank() == 0 and pri:
+                self.logger.info(f"##LHS 4 mean: {np.mean(scan_tod_arr_aux)}")
             #T^T N^-1 T P m
             scan_tod_arr_aux = self.apply_T_adjoint(scan, scan_tod_arr=scan_tod_arr_aux)
-            # if self.map_comm.Get_rank() == 0:
-            #     logger.info(f"##LHS 5 mean: {np.mean(scan_tod_arr_aux)}")
+            if self.map_comm.Get_rank() == 0 and pri:
+                self.logger.info(f"##LHS 5 mean: {np.mean(scan_tod_arr_aux)}")
             #P^T T^T N^-1 T P
             out_map = self.apply_P_adjoint(scan, out_map, scan_tod_arr=scan_tod_arr_aux)
-            # if self.map_comm.Get_rank() == 0:
-            #     logger.info(f"##LHS 6 mean: {np.mean(scan_tod_arr_aux)}")
-        return out_map
+            if self.map_comm.Get_rank() == 0 and pri:
+                self.logger.info(f"##LHS 6 mean: {np.mean(out_map)}")
+            pri=False
+        send, recv = (MPI.IN_PLACE, out_map) if self.map_comm.Get_rank() == 0 else (out_map, None)
+        self.map_comm.Reduce(send, recv, op=MPI.SUM, root=0)
+        if not ismaster:
+                in_map = np.empty(())
+                out_map = None
+        return recv
 
     def solve(self):
         """
         Solves the CG to compute the target sky map.
         """
-        logger = logging.getLogger(__name__)
         RHS_map = self.calc_RHS()
         ismaster = self.map_comm.Get_rank() == 0
-        # logger.info(f"##RHS map mean: {np.mean(RHS_map)}")
-
-        my_dot = lambda arr1, arr2: MPI_dot(arr1, arr2, self.map_comm, double_prec=self.double_perc)
-        CG_solver = utils.CG(self.apply_LHS, RHS_map, M = self.M, dot = my_dot)
+        my_dot = dot # lambda arr1, arr2: MPI_dot(arr1, arr2, self.map_comm, double_prec=self.double_perc)
+        CG_solver = distributed_CG_arr(self.apply_LHS, 
+                                       RHS_map, 
+                                       ismaster,
+                                       M = self.M, 
+                                       dot = my_dot,
+                                       destroy_b=True)
+        
         if ismaster:
-            logger.info(f"Mapmaker CG starting up!")
+            self.logger.info(f"Mapmaker CG starting up!")
         for i in range(self.CG_maxiter):
             CG_solver.step()
             if i%self.CG_check_interval == 0:
                 if ismaster:
-                    logger.info(f"Mapmaker CG iter {i:3d} - Residual {CG_solver.err:.6e}")
+                    self.logger.info(f"Mapmaker CG iter {i:3d} - Residual {CG_solver.err:.6e}")
             if CG_solver.err < self.CG_tol:
                 break
-        local_map = CG_solver.x
-        self.map_comm.Reduce(local_map, self._map_signal, op=MPI.SUM, root=0)
-        local_map = None #free memory.
+        self._map_signal = CG_solver.x
 

@@ -16,6 +16,7 @@ from commander4.data_models.detector_samples import DetectorSamples
 from commander4.data_models.scan_samples import ScanSamples
 from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU
 from commander4.utils.CG_mapmaker import CG_Mapmaker
+from commander4.solvers.preconditioners import InvNPreconditioner
 from commander4.noise_sampling import corr_noise_realization_with_gaps, sample_noise_PS_params
 from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0
@@ -28,6 +29,10 @@ def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float32]:
     "Creates a dummy compsep output for a single band"
     return np.zeros((3, 12*staticData.nside**2), dtype=np.float32)
 
+def called_on_non_master(arr):
+    logger = logging.getLogger(__name__)
+    logger.info("I have been called!!")
+    return np.copy(arr)
 
 def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: NDArray,
             detector_samples:DetectorSamples, params: Bunch,
@@ -35,17 +40,25 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
     # We separate the inverse-variance mapmaking from the other 3 mapmakers.
     # This is purely to reduce the maximum concurrent memory requirement, and is slightly slower
     # as we have to de-compress pix and psi twice.
-
+    logger = logging.getLogger(__name__)
+    double_p = True ## FIXME: put it in param file
+    ismaster = band_comm.Get_rank() == 0
+    if ismaster:
+        logger.info(f"Len scans on band master: {len(detector_samples.scans)}")
     mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)    
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         pix = scan.pix
         psi = scan.psi
         inv_var = 1.0/scan_samples.sigma0**2
         mapmaker_invvar.accumulate_to_map(inv_var, pix, psi)
-    inv_cov_diag = mapmaker_invvar.inv_N_diag
     mapmaker_invvar.gather_map()
+    if ismaster:
+        precond = InvNPreconditioner(mapmaker_invvar._gathered_map, double_prec=double_p) #must be initialized here before the noramlization wipes the gathered map away.
+    else:
+        precond = called_on_non_master #lambda arr: arr #dummy on non-master, will never be called.
+    # precond = np.copy
     mapmaker_invvar.normalize_map()
-    map_rms = mapmaker_invvar.final_rms_map 
+    map_rms = mapmaker_invvar.final_rms_map
 
     # mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
     # mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside)
@@ -75,18 +88,18 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
 
     ##############
 
-    precond = lambda arr : inv_cov_diag*arr
-
     mapmaker = CG_Mapmaker(experiment_data, detector_samples, band_comm, preconditioner=precond,
                            CG_maxiter=params.general.CG_mapmaker.maxiter,
-                           CG_tol=1e-20)
+                           CG_tol=1e-20, double_prec=double_p)
     mapmaker.solve()
     map_signal = mapmaker.solved_map
+    if ismaster:
+        logger.info(f"Sol map mean: {np.mean(map_signal)}")
     
     if False: #mapmaker_corrnoise is not None:
         mapmaker_corrnoise.normalize_map(map_cov)
         map_corrnoise = mapmaker_corrnoise.final_map
-    if band_comm.Get_rank() == 0:
+    if ismaster:
         # map_signal -= map_orbdipole
         # if mapmaker_corrnoise is not None:
         #     map_signal -= map_corrnoise
@@ -97,6 +110,7 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         detmap_QU = DetectorMap(map_signal[1:3,:], map_rms[1:3,:], experiment_data.nu,
                              experiment_data.fwhm, experiment_data.nside)
         detmap_I.g0 = detector_samples.g0_est
+        logger.info(f"Len scans: {len(detector_samples.scans)}")
         detmap_I.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
         detmap_QU.g0 = detector_samples.g0_est
         detmap_QU.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est

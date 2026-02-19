@@ -51,6 +51,7 @@ void _map_weight_accumulator_T(T *map, const T weight, int64_t *pix, int64_t sca
  *      tod -- 1D array, containing the TOD of length 'scan_len'.
  *      weight -- scalar, representing the weights to apply to the TOD.
  *      pix -- 1D array, containing the pixel pointing index of each element in tod.
+ *      psi -- 1D array, containing psi polarization angles.
  *      scan_len -- Length of the scan as an int.
  *      num_pix -- Number of pixels in map and map_rms.
  *      Note: this is RHS of Eqn. (77) in BP01
@@ -60,7 +61,7 @@ void _map_accumulator_IQU_T(T *map, const T *tod, const T weight, int64_t *pix, 
     for(int64_t itod=0; itod<scan_len; itod++){
         const T cos2psi = static_cast<T>(std::cos(2.0 * psi[itod]));
         const T sin2psi = static_cast<T>(std::sin(2.0 * psi[itod]));
-        map[pix[itod]]             += tod[itod] * weight;                // I
+        map[pix[itod]]             += tod[itod] * weight;                 // I
         map[pix[itod] +   num_pix] += tod[itod] * cos2psi * weight;       // Q
         map[pix[itod] + 2*num_pix] += tod[itod] * sin2psi * weight;       // U
     }
@@ -77,6 +78,7 @@ void _map_accumulator_IQU_T(T *map, const T *tod, const T weight, int64_t *pix, 
  *      map -- 1D array of length 'num_pix', representing the signal map, which will be populated by this function.
  *      tod (OUTPUT) -- 1D array, containing the TOD of length 'scan_len'.
  *      pix -- 1D array, containing the pixel pointing index of each element in tod.
+ *      psi -- 1D array, containing psi polarization angles.
  *      scan_len -- Length of the scan as an int.
  *      num_pix -- Number of pixels in map.
  */
@@ -206,14 +208,15 @@ void _map_solve_IQU_T(T *map_out, const T *map_rhs, const T *norm_map, int64_t n
 /** Multiply an IQU map by the inv_N 3x3 matrix stored as only 6 unique elements per pixel.
  *
  * Args:
- *   map_out (OUTPUT) -- 2D array [3, num_pix] for I,Q,U solution.
- *   norm_map -- 2D array [6, num_pix] with unique A elements (II, IQ, IU, QQ, QU, UU).
+ *   map_in -- 2D array [3, num_pix] for I,Q,U of the input map.
+ *   map_out (OUTPUT) -- 2D array [3, num_pix] for I,Q,U of the output map
+ *   inv_N_map -- 2D array [6, num_pix] with unique A elements (II, IQ, IU, QQ, QU, UU).
  *   num_pix -- Number of pixels.
  *
- * Singular or ill-conditioned pixels are zeroed.
+ * It is useful for the CG mapmaker preconditioner.
  */
 template<typename T>
-void _apply_invN_to_map_IQU_T(T *map_out, const T *inv_N_map, int64_t num_pix){
+void _apply_invN_to_map_IQU_T(const T *map_in, T *map_out, const T *inv_N_map, int64_t num_pix){
     for (int64_t ipix = 0; ipix < num_pix; ipix++) {
         // Find the array elements that form the 3x3 A matrix to be inverted.
         const T a00 = inv_N_map[ipix];
@@ -223,9 +226,9 @@ void _apply_invN_to_map_IQU_T(T *map_out, const T *inv_N_map, int64_t num_pix){
         const T a12 = inv_N_map[4 * num_pix + ipix];
         const T a22 = inv_N_map[5 * num_pix + ipix];
 
-        map_out[ipix] = map_out[ipix] * a00 + map_out[num_pix + ipix] * a01 + map_out[2 * num_pix + ipix] * a02;
-        map_out[num_pix + ipix] = map_out[ipix] * a01 + map_out[num_pix + ipix] * a11 + map_out[2 * num_pix + ipix] * a12;
-        map_out[2 * num_pix + ipix] = map_out[ipix] * a02 + map_out[num_pix + ipix] * a12 + map_out[2 * num_pix + ipix] * a22;
+        map_out[ipix] = map_in[ipix] * a00 + map_in[num_pix + ipix] * a01 + map_in[2 * num_pix + ipix] * a02;
+        map_out[num_pix + ipix] = map_in[ipix] * a01 + map_in[num_pix + ipix] * a11 + map_in[2 * num_pix + ipix] * a12;
+        map_out[2 * num_pix + ipix] = map_in[ipix] * a02 + map_in[num_pix + ipix] * a12 + map_in[2 * num_pix + ipix] * a22;
     }
 }
 
@@ -346,3 +349,12 @@ void map_invdiag_IQU_f64(double *rms_out, double *norm_map, int64_t num_pix){
     _map_invdiag_IQU_T<double>(rms_out, norm_map, num_pix);
 }
 
+extern "C"
+void apply_invN_to_map_IQU_f32(float *map_in, float *map_out, float *inv_N_map, int64_t num_pix){
+    _apply_invN_to_map_IQU_T<float>(map_in, map_out, inv_N_map, num_pix);
+}
+
+extern "C"
+void apply_invN_to_map_IQU_f64(double *map_in, double *map_out, double *inv_N_map, int64_t num_pix){
+    _apply_invN_to_map_IQU_T<double>(map_in, map_out, inv_N_map, num_pix);
+}

@@ -4,6 +4,7 @@ import healpy as hp
 import os
 import h5py
 import gc
+import time
 from numpy.typing import NDArray
 from astropy.io import fits
 from mpi4py import MPI
