@@ -331,7 +331,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 18.5
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_040_L1.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_040_L1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           000_003_005_QB_040_B:
             gain_est: 1.0
@@ -351,7 +351,7 @@ experiments:
         freq: 50.0 # [GHz]
         fsamp: 19.0 # [Hz]
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_050_L2.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_050_L2_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           000_000_000_QA_050_B:
             gain_est: 1.0
@@ -371,7 +371,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 10.54
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_060_L1.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_060_L1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           000_000_003_QA_060_B:
             gain_est: 1.0
@@ -391,7 +391,7 @@ experiments:
         freq: 68.0 # [GHz]
         fsamp: 19.0 # [Hz]
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_068_L2.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_068_L2_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           000_003_002_QB_068_B:
             gain_est: 1.0
@@ -411,7 +411,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 16.87
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_068_L3.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_068_L3_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           000_002_028_QA_068_B:
             gain_est: 1.0
@@ -431,7 +431,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 12.07
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_078_L1.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_078_L1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           000_003_005_QB_078_B:
             gain_est: 1.0
@@ -451,7 +451,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 12.07
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_078_L4.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_078_L4_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           000_001_003_UB_078_B:
             gain_est: 1.0
@@ -471,7 +471,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 11.30
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_089_L2.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_089_L2_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           000_000_000_QA_089_B:
             gain_est: 1.0
@@ -491,7 +491,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 11.30
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_089_L3.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_089_L3_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           000_002_025_QB_089_B:
             gain_est: 1.0
@@ -511,7 +511,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 6.56
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_100_L4.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_100_L4_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           000_001_002_UA_100_B:
             gain_est: 1.0
@@ -531,7 +531,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 6.56
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_100_M1.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_100_M1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           001_002_002_60A_100_B:
             gain_est: 1.0
@@ -551,7 +551,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 4.58
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_119_L3.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_119_L3_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           000_001_021_QB_119_B:
             gain_est: 1.0
@@ -571,7 +571,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 4.58
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_119_M2.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_119_M2_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           001_001_031_15B_119_B:
             gain_est: 1.0
@@ -591,7 +591,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 4.79
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_140_M1.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_140_M1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           001_002_031_15B_140_B:
             gain_est: 1.0
@@ -613,7 +613,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 4.79
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_140_L4.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_140_L4_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           000_001_003_UB_140_B:
             gain_est: 1.0
@@ -633,7 +633,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 5.57
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_166_M2.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_166_M2_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           001_000_002_60A_166_B:
             gain_est: 1.0
@@ -653,7 +653,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 5.85
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_195_M1.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_195_M1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           001_002_002_60A_195_B:
             gain_est: 1.0
@@ -673,7 +673,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 5.85
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_195_H1.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_195_H1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           002_000_000_Q_195_B:
             gain_est: 1.0
@@ -693,7 +693,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 10.79
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_235_H2.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_235_H2_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           002_001_000_Q_235_B:
             gain_est: 1.0
@@ -713,7 +713,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 13.80
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_280_H1.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_280_H1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           002_000_050_U_280_B:
             gain_est: 1.0
@@ -733,7 +733,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 21.95
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_337_H2.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_337_H2_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           002_001_050_U_337_B:
             gain_est: 1.0
@@ -753,7 +753,7 @@ experiments:
         fsamp: 19.0 # [Hz]
         sigma0_rts: 47.45
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_402_H3.txt"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_402_H3_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
           002_002_000_Q_402_B:
             gain_est: 1.0
