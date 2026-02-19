@@ -82,7 +82,7 @@ def plot_combo_maps(params: Bunch, detector: int | str, chain: int, iteration: i
             residual -= comp_map
             if i < ax.shape[1]:
                 plt.axes(ax[2,i])
-                hp.mollview(comp_map, hold=True, title=f"{component.longname} {pol_names[ipol]} at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(comp_map, 1), max=np.percentile(comp_map, 99))
+                hp.mollview(comp_map, hold=True, title=f"{component.longname}", min=np.nanpercentile(comp_map, 1), max=np.nanpercentile(comp_map, 99))
 
         for component in comp_sublist:
             if "cmb" in component.shortname:
@@ -279,7 +279,7 @@ def plot_components(params: Bunch, detector: int | str, chain: int, iteration: i
             if (comp_map == 0).all():
                 continue
             map_fig.clf()
-            hp.mollview(comp_map, fig=map_fig.number, hold=True, title=f"{component.longname}", min=np.percentile(comp_map, 1), max=np.percentile(comp_map, 99))
+            hp.mollview(comp_map, fig=map_fig.number, hold=True, title=f"{component.longname}", min=np.nanpercentile(comp_map, 1), max=np.nanpercentile(comp_map, 99))
             plt.savefig(os.path.join(map_comp_out, f"{pol_names[ipol]}_{component.shortname}_realization_det{detector}_chain{chain}_iter{iteration}.png"), bbox_inches='tight')
             
             Cl = hp.alm2cl(hp.map2alm(comp_map))
@@ -304,7 +304,7 @@ def plot_components(params: Bunch, detector: int | str, chain: int, iteration: i
             plt.close()
 
         map_fig.clf()
-        hp.mollview(foreground_subtracted, fig=map_fig.number, hold=True, title=f"Foreground subtracted sky at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.percentile(foreground_subtracted, 1), max=np.percentile(foreground_subtracted, 99))
+        hp.mollview(foreground_subtracted, fig=map_fig.number, hold=True, title=f"Foreground subtracted sky at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.nanpercentile(foreground_subtracted, 1), max=np.nanpercentile(foreground_subtracted, 99))
         plt.savefig(os.path.join(map_comp_out, f"{pol_names[ipol]}_foreground_subtr_det{detector}_chain{chain}_iter{iteration}.png"), bbox_inches="tight")
 
         map_fig.clf()

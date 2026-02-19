@@ -17,7 +17,6 @@ general:
   noise_fknee: 0.1
   noise_alpha: -0.9
 
-  make_plots: True
   output_stats: False
 
   CG_float_precision: "single"
@@ -28,7 +27,6 @@ general:
 
   output_paths:
     chains: "../cmdr4_chains/Planck+WMAP_mapsonly_perpix/"
-    plots: "../cmdr4_plots/Planck+WMAP_mapsonly_perpix/"
     stats: "../cmdr4_stats/Planck+WMAP_mapsonly_perpix/"
 
   logging:

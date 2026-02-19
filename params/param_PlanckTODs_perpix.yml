@@ -27,7 +27,6 @@ general:
 
   CG_float_precision: "single"
 
-  make_plots: True
   output_stats: False
 
   galactic_mask: True
@@ -40,7 +39,6 @@ general:
 
   output_paths:
     chains: "../cmdr4_chains/PlanckTODs_perpix/"
-    plots: "../cmdr4_plots/PlanckTODs_perpix/"
     stats: "../cmdr4_stats/PlanckTODs_perpix/"
 
   logging:
@@ -258,8 +256,6 @@ experiments:
         enabled: true
         tod_files_prefix: "LFI_030_"
         num_MPI_tasks: 24
-        detector_id: 0
-        freq_identifier: 30
         eval_nside: 512
         data_nside: 512
         fwhm: 32.4 # [arcmin]
@@ -280,7 +276,6 @@ experiments:
         enabled: true
         tod_files_prefix: "LFI_044_"
         num_MPI_tasks: 40
-        freq_identifier: 44
         eval_nside: 512
         data_nside: 512
         fwhm: 27.1 # [arcmin]
@@ -301,7 +296,6 @@ experiments:
         enabled: true
         tod_files_prefix: "LFI_070_"
         num_MPI_tasks: 64
-        freq_identifier: 70
         eval_nside: 512
         data_nside: 1024
         fwhm: 13.3 # [arcmin]

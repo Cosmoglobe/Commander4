@@ -1,9 +1,9 @@
 CG_float_precision: "single"
 general:
   MPI_config:
-    ntask_tod: 192
-    ntask_compsep_I: 11
-    ntask_compsep_QU: 11
+    ntask_tod: 352
+    ntask_compsep_I: 27
+    ntask_compsep_QU: 27
   nthreads_tod: 2
   nthreads_compsep: 8
 
@@ -29,25 +29,26 @@ general:
   sample_temporal_gain: True
   sample_temporal_gain_from_iter_num: 12
 
-  make_plots: True
   output_stats: False
 
   galactic_mask: False
-  sample_corr_noise: True
   pixel_compsep_sampling: True
   smooth_to_common_res: True
 
+  write_orb_dipole_maps_to_chain: True
+  write_corr_noise_maps_to_chain: True
+  write_sky_model_maps_to_chain: True
+
   output_paths:
-    chains: "/mn/stornext/d23/cmbco/jonas/c4_testing/cmdr4_chains/litebird/inplacesim/"
-    plots: "/mn/stornext/d23/cmbco/jonas/c4_testing/cmdr4_plots/litebird/inplacesim/"
-    stats: "/mn/stornext/d23/cmbco/jonas/c4_testing/cmdr4_stats/litebird/inplacesim/"
+    chains: "../cmdr4_chains/litebird/inplacesim/"
+    stats: "../cmdr4_stats/litebird/inplacesim/"
 
   logging:
     console:
       level: 'info'
     file:
       level: 'info'
-      filename: '/mn/stornext/d23/cmbco/jonas/c4_testing/cmdr4_logs/litebird/inplacesim.log'
+      filename: '../cmdr4_logs/litebird/inplacesim.log'
 
 
 components:
@@ -130,27 +131,91 @@ compsep:
 
 CompSep_bands:
   ### TOD DATA ###
-  LiteBIRD40GHz:
+  LiteBIRD40GHz_L1:
     enabled: true
     get_from: "LiteBIRD"
     polarizations: [True, True, True]
-  LiteBIRD50GHz:
+  LiteBIRD50GHz_L2:
     enabled: true
     get_from: "LiteBIRD"
     polarizations: [True, True, True]
-  LiteBIRD100GHzM:
+  LiteBIRD60GHz_L1:
     enabled: true
     get_from: "LiteBIRD"
     polarizations: [True, True, True]
-  LiteBIRD140GHzM:
+  LiteBIRD68GHz_L2:
     enabled: true
     get_from: "LiteBIRD"
     polarizations: [True, True, True]
-  LiteBIRD195GHzH:
+  LiteBIRD68GHz_L3:
     enabled: true
     get_from: "LiteBIRD"
     polarizations: [True, True, True]
-  LiteBIRD337GHz:
+  LiteBIRD78GHz_L1:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD78GHz_L4:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD89GHz_L2:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD89GHz_L3:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD100GHz_L4:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD100GHz_M1:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD119GHz_L3:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD119GHz_M2:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD140GHz_L4:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD140GHz_M1:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD166GHz_M2:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD195GHz_M1:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD195GHz_H1:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD235GHz_H2:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD280GHz_H1:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD337GHz_H2:
+    enabled: true
+    get_from: "LiteBIRD"
+    polarizations: [True, True, True]
+  LiteBIRD402GHz_H3:
     enabled: true
     get_from: "LiteBIRD"
     polarizations: [True, True, True]
@@ -244,167 +309,457 @@ experiments:
     num_scans: 9142
 
     replace_tod_with_sim: true
+    sim_params:
+      include_CMB: True
+      include_ThermalDust: True
+      include_Synchrotron: True
+      include_FreeFree: True
+      include_SpinningDust: True
+      include_OrbitalDipole: True
+      noise_sigma0: 1.0
+      include_corr_noise: True
+      corr_noise_fknee: 1.0
+      corr_noise_alpha: -1.0
 
     bands:
-      LiteBIRD40GHz:
+      LiteBIRD40GHz_L1:
         enabled: true
-        num_MPI_tasks: 32
-        detector_id: 0
-        freq_identifier: 40
+        num_MPI_tasks: 16
         eval_nside: 512
-        data_nside: 512
         fwhm: 70.5 # [arcmin]
         freq: 40.0 # [GHz]
-        fsamp: 50.0 # [Hz]
-        data_path: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/TODS_eirik_cmb_fg_wn_ncorr30_dipol_v5/LB_040_L1/"
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 18.5
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_040_L1.txt"
-        lb_det_identifier: "L1"
         detectors:
           000_003_005_QB_040_B:
             gain_est: 1.0
-            bandpass_shift: 0.0  # Ghz
           000_003_005_QB_040_T:
             gain_est: 1.0
-            bandpass_shift: 0.0
           000_004_003_UA_040_B:
             gain_est: 1.0
-            bandpass_shift: 0.0
           000_004_003_UA_040_T:
             gain_est: 1.0
-            bandpass_shift: 0.0
-      LiteBIRD50GHz:
+
+      LiteBIRD50GHz_L2:
         enabled: true
-        num_MPI_tasks: 32
-        detector_id: 0
-        freq_identifier: 50
+        num_MPI_tasks: 16
         eval_nside: 512
-        data_nside: 512
+        sigma0_rts: 16.54
         fwhm: 58.5 # [arcmin]
         freq: 50.0 # [GHz]
-        fsamp: 50.0 # [Hz]
-        data_path: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/TODS_eirik_cmb_fg_wn_ncorr30_dipol_v5/LB_050_L2/"
+        fsamp: 19.0 # [Hz]
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_050_L2.txt"
-        lb_det_identifier: "L2"
         detectors:
           000_000_000_QA_050_B:
             gain_est: 1.0
-            bandpass_shift: 0.0  # Ghz
           000_000_000_QA_050_T:
             gain_est: 1.0
-            bandpass_shift: 0.0
           000_007_008_UB_050_B:
             gain_est: 1.0
-            bandpass_shift: 0.0
           000_007_008_UB_050_T:
             gain_est: 1.0
-            bandpass_shift: 0.0
-      LiteBIRD100GHzM:
+
+      LiteBIRD60GHz_L1:
         enabled: true
-        num_MPI_tasks: 32
-        detector_id: 0
-        freq_identifier: 100
+        num_MPI_tasks: 16
         eval_nside: 512
-        data_nside: 512
+        fwhm: 51.1 # [arcmin]
+        freq: 60.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 10.54
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_060_L1.txt"
+        detectors:
+          000_000_003_QA_060_B:
+            gain_est: 1.0
+          000_000_003_QA_060_T:
+            gain_est: 1.0
+          000_007_005_UB_060_B:
+            gain_est: 1.0
+          000_007_005_UB_060_T:
+            gain_est: 1.0
+
+      LiteBIRD68GHz_L2:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
+        sigma0_rts: 16.87
+        fwhm: 41.6 # [arcmin]
+        freq: 68.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_068_L2.txt"
+        detectors:
+          000_003_002_QB_068_B:
+            gain_est: 1.0
+          000_003_002_QB_068_T:
+            gain_est: 1.0
+          000_004_006_UA_068_B:
+            gain_est: 1.0
+          000_004_006_UA_068_T:
+            gain_est: 1.0
+
+      LiteBIRD68GHz_L3:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
+        fwhm: 47.1 # [arcmin]
+        freq: 68.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 16.87
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_068_L3.txt"
+        detectors:
+          000_002_028_QA_068_B:
+            gain_est: 1.0
+          000_002_028_QA_068_T:
+            gain_est: 1.0
+          000_005_000_UB_068_B:
+            gain_est: 1.0
+          000_005_000_UB_068_T:
+            gain_est: 1.0
+
+      LiteBIRD78GHz_L1:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
+        fwhm: 36.9 # [arcmin]
+        freq: 78.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 12.07
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_078_L1.txt"
+        detectors:
+          000_003_005_QB_078_B:
+            gain_est: 1.0
+          000_003_005_QB_078_T:
+            gain_est: 1.0
+          000_004_003_UA_078_B:
+            gain_est: 1.0
+          000_004_003_UA_078_T:
+            gain_est: 1.0
+
+      LiteBIRD78GHz_L4:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
+        fwhm: 43.8 # [arcmin]
+        freq: 78.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 12.07
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_078_L4.txt"
+        detectors:
+          000_001_003_UB_078_B:
+            gain_est: 1.0
+          000_001_003_UB_078_T:
+            gain_est: 1.0
+          000_006_023_QA_078_B:
+            gain_est: 1.0
+          000_006_023_QA_078_T:
+            gain_est: 1.0
+
+      LiteBIRD89GHz_L2:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
+        fwhm: 33.8 # [arcmin]
+        freq: 89.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 11.30
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_089_L2.txt"
+        detectors:
+          000_000_000_QA_089_B:
+            gain_est: 1.0
+          000_000_000_QA_089_T:
+            gain_est: 1.0
+          000_007_008_UB_089_B:
+            gain_est: 1.0
+          000_007_008_UB_089_T:
+            gain_est: 1.0
+
+      LiteBIRD89GHz_L3:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
+        fwhm: 41.5 # [arcmin]
+        freq: 89.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 11.30
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_089_L3.txt"
+        detectors:
+          000_002_025_QB_089_B:
+            gain_est: 1.0
+          000_002_025_QB_089_T:
+            gain_est: 1.0
+          000_005_005_UA_089_B:
+            gain_est: 1.0
+          000_005_005_UA_089_T:
+            gain_est: 1.0
+
+      LiteBIRD100GHz_L4:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
+        fwhm: 30.2 # [arcmin]
+        freq: 100.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 6.56
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_100_L4.txt"
+        detectors:
+          000_001_002_UA_100_B:
+            gain_est: 1.0
+          000_001_002_UA_100_T:
+            gain_est: 1.0
+          000_006_018_QB_100_B:
+            gain_est: 1.0
+          000_006_018_QB_100_T:
+            gain_est: 1.0
+
+      LiteBIRD100GHz_M1:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
         fwhm: 37.8 # [arcmin]
         freq: 100.0 # [GHz]
-        fsamp: 50.0 # [Hz]
-        data_path: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/TODS_eirik_cmb_fg_wn_ncorr30_dipol_v5/LB_100_M1/"
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 6.56
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_100_M1.txt"
-        lb_det_identifier: "M1"
         detectors:
           001_002_002_60A_100_B:
             gain_est: 1.0
-            bandpass_shift: 0.0  # Ghz
           001_002_002_60A_100_T:
             gain_est: 1.0
-            bandpass_shift: 0.0
           001_004_031_15B_100_B:
             gain_est: 1.0
-            bandpass_shift: 0.0
           001_004_031_15B_100_T:
             gain_est: 1.0
-            bandpass_shift: 0.0
-      LiteBIRD140GHzM:
+
+      LiteBIRD119GHz_L3:
         enabled: true
-        num_MPI_tasks: 32
-        detector_id: 0
-        freq_identifier: 140
+        num_MPI_tasks: 16
         eval_nside: 512
-        data_nside: 512
+        fwhm: 26.3 # [arcmin]
+        freq: 119.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 4.58
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_119_L3.txt"
+        detectors:
+          000_001_021_QB_119_B:
+            gain_est: 1.0
+          000_001_021_QB_119_T:
+            gain_est: 1.0
+          000_006_005_UA_119_B:
+            gain_est: 1.0
+          000_006_005_UA_119_T:
+            gain_est: 1.0
+
+      LiteBIRD119GHz_M2:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
+        fwhm: 33.6 # [arcmin]
+        freq: 119.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 4.58
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_119_M2.txt"
+        detectors:
+          001_001_031_15B_119_B:
+            gain_est: 1.0
+          001_001_031_15B_119_T:
+            gain_est: 1.0
+          001_005_043_30A_119_B:
+            gain_est: 1.0
+          001_005_043_30A_119_T:
+            gain_est: 1.0
+
+      LiteBIRD140GHz_M1:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
         fwhm: 30.8 # [arcmin]
         freq: 140.0 # [GHz]
-        fsamp: 5.0 # [Hz]
-        data_path: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/TODS_eirik_cmb_fg_wn_ncorr30_dipol_v5/LB_140_M1/"
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 4.79
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_140_M1.txt"
-        lb_det_identifier: "M1"
         detectors:
           001_002_031_15B_140_B:
             gain_est: 1.0
-            bandpass_shift: 0.0  # Ghz
           001_002_031_15B_140_T:
             gain_est: 1.0
-            bandpass_shift: 0.0
           001_004_047_45A_140_B:
             gain_est: 1.0
-            bandpass_shift: 0.0
           001_004_047_45A_140_T:
             gain_est: 1.0
-            bandpass_shift: 0.0
-      LiteBIRD195GHzH:
+      
+      # --- NOTE: Bands below are native nside 1024, above is 512 ---
+
+      LiteBIRD140GHz_L4:
         enabled: true
-        num_MPI_tasks: 32
-        detector_id: 0
-        freq_identifier: 195
+        num_MPI_tasks: 16
         eval_nside: 512
-        data_nside: 1024
+        fwhm: 23.7 # [arcmin]
+        freq: 140.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 4.79
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_140_L4.txt"
+        detectors:
+          000_001_003_UB_140_B:
+            gain_est: 1.0
+          000_001_003_UB_140_T:
+            gain_est: 1.0
+          000_006_023_QA_140_B:
+            gain_est: 1.0
+          000_006_023_QA_140_T:
+            gain_est: 1.0
+
+      LiteBIRD166GHz_M2:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
+        fwhm: 28.9 # [arcmin]
+        freq: 166.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 5.57
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_166_M2.txt"
+        detectors:
+          001_000_002_60A_166_B:
+            gain_est: 1.0
+          001_000_002_60A_166_T:
+            gain_est: 1.0
+          001_006_031_15B_166_B:
+            gain_est: 1.0
+          001_006_031_15B_166_T:
+            gain_est: 1.0
+
+      LiteBIRD195GHz_M1:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
+        fwhm: 28.0 # [arcmin]
+        freq: 195.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 5.85
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_195_M1.txt"
+        detectors:
+          001_002_002_60A_195_B:
+            gain_est: 1.0
+          001_002_002_60A_195_T:
+            gain_est: 1.0
+          001_004_031_15B_195_B:
+            gain_est: 1.0
+          001_004_031_15B_195_T:
+            gain_est: 1.0
+
+      LiteBIRD195GHz_H1:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
         fwhm: 28.6 # [arcmin]
         freq: 195.0 # [GHz]
-        fsamp: 50.0 # [Hz]
-        data_path: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/TODS_eirik_cmb_fg_wn_ncorr30_dipol_v5/LB_195_H1/"
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 5.85
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_195_H1.txt"
-        lb_det_identifier: "H1"
         detectors:
           002_000_000_Q_195_B:
             gain_est: 1.0
-            bandpass_shift: 0.0  # Ghz
           002_000_000_Q_195_T:
             gain_est: 1.0
-            bandpass_shift: 0.0
           002_000_076_U_195_B:
             gain_est: 1.0
-            bandpass_shift: 0.0
           002_000_076_U_195_T:
             gain_est: 1.0
-            bandpass_shift: 0.0
-      LiteBIRD337GHz:
+
+      LiteBIRD235GHz_H2:
         enabled: true
-        num_MPI_tasks: 32
-        detector_id: 0
-        freq_identifier: 337
+        num_MPI_tasks: 16
         eval_nside: 512
-        data_nside: 1024
+        fwhm: 24.7 # [arcmin]
+        freq: 235.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 10.79
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_235_H2.txt"
+        detectors:
+          002_001_000_Q_235_B:
+            gain_est: 1.0
+          002_001_000_Q_235_T:
+            gain_est: 1.0
+          002_001_076_U_235_B:
+            gain_est: 1.0
+          002_001_076_U_235_T:
+            gain_est: 1.0
+
+      LiteBIRD280GHz_H1:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
+        fwhm: 22.5 # [arcmin]
+        freq: 280.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 13.80
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_280_H1.txt"
+        detectors:
+          002_000_050_U_280_B:
+            gain_est: 1.0
+          002_000_050_U_280_T:
+            gain_est: 1.0
+          002_000_126_Q_280_B:
+            gain_est: 1.0
+          002_000_126_Q_280_T:
+            gain_est: 1.0
+
+      LiteBIRD337GHz_H2:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
         fwhm: 20.9 # [arcmin]
         freq: 337.0 # [GHz]
-        fsamp: 50.0 # [Hz]
-        data_path: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/TODS_eirik_cmb_fg_wn_ncorr30_dipol_v5/LB_337_H2/"
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 21.95
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_337_H2.txt"
-        lb_det_identifier: "H2"
         detectors:
           002_001_050_U_337_B:
             gain_est: 1.0
-            bandpass_shift: 0.0  # Ghz
           002_001_050_U_337_T:
             gain_est: 1.0
-            bandpass_shift: 0.0
           002_001_126_Q_337_B:
             gain_est: 1.0
-            bandpass_shift: 0.0
           002_001_126_Q_337_T:
             gain_est: 1.0
-            bandpass_shift: 0.0
+
+      LiteBIRD402GHz_H3:
+        enabled: true
+        num_MPI_tasks: 16
+        eval_nside: 512
+        fwhm: 17.9 # [arcmin]
+        freq: 402.0 # [GHz]
+        fsamp: 19.0 # [Hz]
+        sigma0_rts: 47.45
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_402_H3.txt"
+        detectors:
+          002_002_000_Q_402_B:
+            gain_est: 1.0
+          002_002_000_Q_402_T:
+            gain_est: 1.0
+          002_002_163_U_402_B:
+            gain_est: 1.0
+          002_002_163_U_402_T:
+            gain_est: 1.0
