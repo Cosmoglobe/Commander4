@@ -81,8 +81,8 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         maps_to_file["map_rms"] = map_rms
         if params.general.write_orb_dipole_maps_to_chain:
             maps_to_file["map_orbdipole"] = map_orbdipole
-        if params.general.write_corr_noise_maps_to_chain:
-            maps_to_file["map_corrnoise"] = map_orbdipole
+        if params.general.write_corr_noise_maps_to_chain and mapmaker_corrnoise is not None:
+            maps_to_file["map_corrnoise"] = map_corrnoise
         if params.general.write_sky_model_maps_to_chain:
             maps_to_file["map_skymodel"] = compsep_output
 
