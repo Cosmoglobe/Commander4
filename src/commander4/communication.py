@@ -49,7 +49,7 @@ def send_tod(mpi_info: Bunch, tod_map_list: list[DetectorMap], todproc_my_band_i
 
     Input:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
-        tod_map (DetectorMap): The output map from process_tod for the band belonging to this process.
+        tod_map_list (list[DetectorMap]): The output maps ([I, QU]) from process_tod for the band belonging to this process.
         todproc_my_band_id (str): The string uniquely indentifying the experiment+band of this rank, regardless of polarization (example: 'PlanckLFI$$$30GHz').
         receivers (Bunch): Maps a band identifier to the band master on the compsep side.
     """
@@ -58,9 +58,17 @@ def send_tod(mpi_info: Bunch, tod_map_list: list[DetectorMap], todproc_my_band_i
         logger.info(f"Compsep band masters: {mpi_info.world.compsep_band_masters}")
     if mpi_info.band.is_master:
         #I
-        mpi_info.world.comm.send(tod_map_list[0], dest=receivers[todproc_my_band_id+'_I'])
+        target_band = todproc_my_band_id+'_I'
+        if target_band in receivers.keys(): #myband has an I component
+            mpi_info.world.comm.send(tod_map_list[0], dest=receivers[target_band])
+        else:
+            logger.warning("Attempted to send Intensity TOD processing result to band only containing polarization.")
         #QU
-        mpi_info.world.comm.send(tod_map_list[1], dest=receivers[todproc_my_band_id+'_QU'])
+        target_band = todproc_my_band_id+'_QU'
+        if target_band in receivers.keys(): #myband has a QU component
+            mpi_info.world.comm.send(tod_map_list[1], dest=receivers[target_band])
+        else:
+            logger.warning("Attempted to send QU TOD processing result to band only containing Intensity.")
 
 
 ### ON COMPSEP SIDE
@@ -89,18 +97,6 @@ def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep
     else:
         logger.info(f"CompSep: Rank {my_compsep_rank} receiving TOD data ({compsep_band_id}) from TOD process with global rank {senders[compsep_band_id]}")
         curr_tod_output = mpi_info.world.comm.recv(source=senders[compsep_band_id])
-
-    #We split the detector map depending on the polarization of the mpi rank's band.
-    # FIXME: this is a bit wasteful, it should be handled more elegantly with the correct pol being sent to the right tasks.
-    # if curr_tod_output.npol>2: #The detector map holds both I and QU
-    #     if my_band.identifier.endswith("_I"):
-    #         curr_tod_output._map_sky = curr_tod_output._map_sky[0,:].reshape((1,-1))
-    #         curr_tod_output._inv_n_map = curr_tod_output._inv_n_map[0,:].reshape((1,-1))
-    #     elif my_band.identifier.endswith("_QU"):
-    #         curr_tod_output._map_sky = curr_tod_output._map_sky[1:,:]
-    #         curr_tod_output._inv_n_map = curr_tod_output._inv_n_map[1:,:]
-    #     else:
-    #         raise ValueError(f"Polarization undefined in band {my_band.identifier}!")
     
     return curr_tod_output
 
