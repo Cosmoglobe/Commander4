@@ -86,7 +86,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch) -> tuple[list[Compon
                         band_identifier = f"{my_band.get_from}$$${band_str}_QU"
                     else:
                         band_identifier = band_str+"_QU"
-                    logger.info(f"Rank {mpi_info.compsep.rank} matched band {band_str} QU")
+                    logger.info(f"Rank {mpi_info.compsep.rank} matched band {band_identifier}")
                     my_band.identifier = band_identifier
                 current_band_idx_QU += 1
             if not (is_I or is_QU):
