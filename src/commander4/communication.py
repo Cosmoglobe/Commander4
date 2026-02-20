@@ -62,13 +62,13 @@ def send_tod(mpi_info: Bunch, tod_map_list: list[DetectorMap], todproc_my_band_i
         if target_band in receivers.keys(): #myband has an I component
             mpi_info.world.comm.send(tod_map_list[0], dest=receivers[target_band])
         else:
-            logger.warning("Attempted to send Intensity TOD processing result to band only containing polarization.")
+            logger.info(f"Intensity TOD-processing result discarded, as band {todproc_my_band_id} is only defined for QU.")
         #QU
         target_band = todproc_my_band_id+'_QU'
         if target_band in receivers.keys(): #myband has a QU component
             mpi_info.world.comm.send(tod_map_list[1], dest=receivers[target_band])
         else:
-            logger.warning("Attempted to send QU TOD processing result to band only containing Intensity.")
+            logger.info(f"QU TOD-processing result discarded, as band {todproc_my_band_id} is only defined for Intensity.")
 
 
 ### ON COMPSEP SIDE
