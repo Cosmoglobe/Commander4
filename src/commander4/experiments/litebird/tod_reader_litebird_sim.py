@@ -87,7 +87,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
             psi_encoded = f[f"/{pid}/{detname}/psi/"][()]
             vsun = f[f"/{pid}/common/vsun/"][()]
             fsamp = float(f["/common/fsamp/"][()])
-            npsi = int(f["/common/npsi/"][()])
+            npsi = int(f["/common/npsi/"][()].item())
             flag_encoded = f[f"/{pid}/{detname}/flag/"][()]
 
         processing_mask_nside = hp.npix2nside(processing_mask_map.size)
@@ -140,9 +140,8 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
     local_tot_scans = scan_idx_stop - scan_idx_start
     local_stats = np.array([num_included, local_tot_scans, ntod_sum_final, ntod_sum_original])
     global_stats = np.zeros_like(local_stats)
-    req = det_comm.Ireduce(local_stats, global_stats, op=MPI.SUM, root=0)
+    det_comm.Reduce(local_stats, global_stats, op=MPI.SUM, root=0)
     if det_comm.Get_rank() == 0:
-        req.Wait()
         total_included, total_scans, total_ntod_final, total_ntod_original = global_stats
         frac_included = 0.0
         if total_scans > 0:
@@ -154,8 +153,5 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
         logger.info(f"Fraction of scans included for {detname}: {frac_included:.1f} %")
         logger.info(f"Fraction of TODs left after Fourier cut for {detname}: "
                     f"{avg_scan_remaining:.1f} %")
-    else:
-        req.Free()
-
 
     return det_static
