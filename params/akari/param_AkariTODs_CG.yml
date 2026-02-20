@@ -295,19 +295,19 @@ experiments:
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
         detectors:
           27M:
-            name: "27M"
+            detname: "27M"
             gain_est: 78.0e-9
             bandpass_shift: 0.28  # Ghz
           # 27S:
-          #   name: "27S"
+          #   detname: "27S"
           #   gain_est: 65.5e-9
           #   bandpass_shift: 0.47
           28M:
-            name: "28M"
+            detname: "28M"
             gain_est: 63.0e-9
             bandpass_shift: 0.08
           # 28S:
-          #   name: "28S"
+          #   detname: "28S"
           #   gain_est: 52.0e-9
           #   bandpass_shift: 0.13
   Akari:
@@ -337,6 +337,6 @@ experiments:
         filelist: "/mn/stornext/d23/cmbco/globe/akari/tod/n065/filelist_akari_n65.txt"
         detectors:
           N60:
-            name: "AKARI_N60_01"
+            detname: "AKARI_N60_01"
             gain_est: 0.05
             bandpass_shift: 0  # Ghz

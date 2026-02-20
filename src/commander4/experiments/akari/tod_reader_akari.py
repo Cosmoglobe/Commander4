@@ -40,7 +40,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
     oids = []
     pids = []
     filenames = []
-    detname = str(my_det.name)
+    detname = str(my_det.detname)
     bandname = str(my_band)
     expname = str(my_experiment)
 

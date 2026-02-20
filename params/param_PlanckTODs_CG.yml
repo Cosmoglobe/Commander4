@@ -289,19 +289,19 @@ experiments:
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
         detectors:
           27M:
-            name: "27M"
+            detname: "27M"
             gain_est: 78.0e-9
             bandpass_shift: 0.28  # Ghz
           # 27S:
-          #   name: "27S"
+          #   detname: "27S"
           #   gain_est: 65.5e-9
           #   bandpass_shift: 0.47
           28M:
-            name: "28M"
+            detname: "28M"
             gain_est: 63.0e-9
             bandpass_shift: 0.08
           # 28S:
-          #   name: "28S"
+          #   detname: "28S"
           #   gain_est: 52.0e-9
           #   bandpass_shift: 0.13
       Planck44GHz:
@@ -317,27 +317,27 @@ experiments:
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
         detectors:
           24M:
-            name: "24M"
+            detname: "24M"
             gain_est: 3.52e-9
             bandpass_shift: -0.55  # Ghz
           # 24S:
-          #   name: "24S"
+          #   detname: "24S"
           #   gain_est: 5.60e-9
           #   bandpass_shift: 0.16
           25M:
-            name: "25M"
+            detname: "25M"
             gain_est: 8.00e-9
             bandpass_shift: 0.28
           # 25S:
-          #   name: "25S"
+          #   detname: "25S"
           #   gain_est: 7.95e-9
           #   bandpass_shift: 0.07
           # 26M:
-          #   name: "26M"
+          #   detname: "26M"
           #   gain_est: 5.95e-9
           #   bandpass_shift: 0.09
           # 26S:
-          #   name: "26S"
+          #   detname: "26S"
           #   gain_est: 6.90e-9
           #   bandpass_shift: -0.05
       Planck70GHz:
@@ -354,50 +354,50 @@ experiments:
         detectors:
         detectors:
           18M:
-            name: "18M"
+            detname: "18M"
             gain_est: 68.0e-9
             bandpass_shift: -0.87
           # 18S:
-          #   name: "18S"
+          #   detname: "18S"
           #   gain_est: 45.0e-9
           #   bandpass_shift: 0.14
           # 19M:
-          #   name: "19M"
+          #   detname: "19M"
           #   gain_est: 37.0e-9
           #   bandpass_shift: 0.73
           # 19S:
-          #   name: "19S"
+          #   detname: "19S"
           #   gain_est: 24.0e-9
           #   bandpass_shift: 0.59
           # 20M:
-          #   name: "20M"
+          #   detname: "20M"
           #   gain_est: 39.3e-9
           #   bandpass_shift: -0.27
           # 20S:
-          #   name: "20S"
+          #   detname: "20S"
           #   gain_est: 33.2e-9
           #   bandpass_shift: 0.20
           # 21M:
-          #   name: "21M"
+          #   detname: "21M"
           #   gain_est: 23.5e-9
           #   bandpass_shift: 0.06
           # 21S:
-          #   name: "21S"
+          #   detname: "21S"
           #   gain_est: 24.0e-9
           #   bandpass_shift: -0.71
           # 22M:
-          #   name: "22M"
+          #   detname: "22M"
           #   gain_est: 15.8e-9
           #   bandpass_shift: 0.36
           # 22S:
-          #   name: "22S"
+          #   detname: "22S"
           #   gain_est: 16.2e-9
           #   bandpass_shift: -0.32
           23M:
-            name: "23M"
+            detname: "23M"
             gain_est: 28.0e-9
             bandpass_shift: 0.13
           # 23S:
-          #   name: "23S"
+          #   detname: "23S"
           #   gain_est: 19.0e-9
           #   bandpass_shift: -0.05
