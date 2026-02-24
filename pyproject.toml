@@ -26,6 +26,7 @@ dependencies = [
     "pixell",
     "healpy",
     "tqdm",
+    "camb",
     ]  # Add new Python runtime dependencies here.
 
 [project.optional-dependencies]
