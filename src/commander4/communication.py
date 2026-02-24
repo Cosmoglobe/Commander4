@@ -1,12 +1,11 @@
-from mpi4py import MPI
 import numpy as np
 import logging
-from utils.params import Params
 from numpy.typing import NDArray
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.maps_from_file import read_data_map_from_file
+from commander4.utils.params import Params
 
 
 ### ON TOD SIDE

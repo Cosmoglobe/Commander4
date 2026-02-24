@@ -10,12 +10,13 @@ from numpy.typing import NDArray
 import healpy as hp
 from pixell import curvedsky
 import ducc0
-from commander4.output.log import logassert
 import logging
 import os
 from math import sqrt
 from numba import njit, prange
 from scipy.linalg import blas as blas_wrapper
+
+from commander4.output.log import logassert
 
 import typing
 # Only import when performing type checking, avoiding circular import during normal runtime.

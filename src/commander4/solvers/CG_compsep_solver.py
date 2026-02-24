@@ -1,6 +1,5 @@
 import numpy as np
 import time
-from utils.params import Params
 import logging
 from mpi4py import MPI
 from numpy.typing import NDArray
@@ -15,6 +14,7 @@ from commander4.solvers.dense_matrix_math import DenseMatrix
 from commander4.solvers.CG_driver import distributed_CG
 import commander4.solvers.preconditioners as preconditioners
 from commander4.data_models.band import Band
+from commander4.utils.params import Params
 
 MPI_LIMIT_32BIT = 2**31 - 1
 

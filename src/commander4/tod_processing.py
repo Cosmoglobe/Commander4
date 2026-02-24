@@ -2,7 +2,6 @@ import numpy as np
 import pixell
 from mpi4py import MPI
 import logging
-from utils.params import Params
 from scipy.fft import rfft, irfft, rfftfreq
 import time
 from numpy.typing import NDArray
@@ -17,6 +16,7 @@ from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0
 from commander4.tod_reader import read_tods_from_file
 from commander4.output.write_chains_files import write_tod_chain_to_file, write_map_chain_to_file
+from commander4.utils.params import Params
 # from commander4.logging.performance_logger import benchmark, summarize, start_bench, stop_bench
 
 nthreads=1

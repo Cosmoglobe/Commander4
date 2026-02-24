@@ -1,12 +1,12 @@
 import numpy as np
 import healpy as hp
-from utils.params import Params
-from commander4.data_models.detector_map import DetectorMap
 from astropy.io import fits
 import logging
-from commander4.output.log import logassert
 import pysm3.units as pysm3_u
 
+from commander4.output.log import logassert
+from commander4.data_models.detector_map import DetectorMap
+from commander4.utils.params import Params
 
 def read_sim_map_from_file(my_band: Params) -> DetectorMap:
     """ Currently deprecated """

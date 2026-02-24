@@ -3,7 +3,6 @@ import astropy.constants as c
 import numpy as np
 import pysm3.units as pysm3u
 import healpy as hp
-from pixell.bunch import Bunch
 import logging
 from copy import deepcopy
 from scipy.interpolate import interp1d
@@ -17,6 +16,7 @@ from commander4.utils.math_operations import alm_to_map, map_to_alm, project_alm
         _dot_complex_alm_1D_arrays, _numba_proj2map, _numba_eval_from_map 
 from commander4.utils.map_utils import fwhm2sigma, gauss_beam, get_gauss_beam_radius
 from commander4.data_models.band import Band
+from commander4.utils.params import Params
 
 MPI_LIMIT_32BIT = 2**31 - 1
 
@@ -33,7 +33,7 @@ def g(nu):
 
 # First tier component classes
 class Component:
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
+    def __init__(self, comp_params: Params, global_params: Params):
         self.comp_params = comp_params
         self.global_params = global_params
         self.longname = comp_params.longname if "longname" in comp_params else "Unknown Component"
@@ -213,7 +213,7 @@ class Component:
 
 # Second tier component classes
 class DiffuseComponent(Component):
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
+    def __init__(self, comp_params: Params, global_params: Params):
         super().__init__(comp_params, global_params)
         self.spatially_varying_MM = comp_params.spatially_varying_MM
         self.lmax = comp_params.lmax
@@ -390,7 +390,7 @@ class TemplateComponent(Component):
 
 # Third tier component classes
 class CMB(DiffuseComponent):
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
+    def __init__(self, comp_params: Params, global_params: Params):
         super().__init__(comp_params, global_params)
         self.longname = comp_params.longname if "longname" in comp_params else "CMB"
         self.shortname = comp_params.shortname if "shortname" in comp_params else "cmb"
@@ -429,7 +429,7 @@ class CMBRelQuad(TemplateComponent):
     pass
 
 class ThermalDust(DiffuseComponent):
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
+    def __init__(self, comp_params: Params, global_params: Params):
         super().__init__(comp_params, global_params)
         self.beta = comp_params.beta
         self.T = comp_params.T
@@ -453,7 +453,7 @@ class ThermalDust(DiffuseComponent):
 
 
 class Synchrotron(DiffuseComponent):
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
+    def __init__(self, comp_params: Params, global_params: Params):
         super().__init__(comp_params, global_params)
         self.beta = comp_params.beta
         self.nu0 = comp_params.nu0
@@ -474,7 +474,7 @@ class Synchrotron(DiffuseComponent):
 
 
 class FreeFree(DiffuseComponent):
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
+    def __init__(self, comp_params: Params, global_params: Params):
         super().__init__(comp_params, global_params)
         self.T = comp_params.T  # Electron temperature in K
         self.nu0 = comp_params.nu0 # Reference frequency in GHz
@@ -518,7 +518,7 @@ class SpinningDust(DiffuseComponent):
     # This template has an intensity peak at 30 GHz.
     # Columns: Frequency (GHz), Emissivity (proportional to Intensity)
 
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
+    def __init__(self, comp_params: Params, global_params: Params):
         """
         Args:
             nu_peak (float): The peak frequency of the spinning dust component in GHz.
@@ -577,7 +577,7 @@ class SpinningDust(DiffuseComponent):
 # NON DIFFUSE COMPONENTS
 
 class PointSourcesComponent(Component):
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
+    def __init__(self, comp_params: Params, global_params: Params):
         super().__init__(comp_params, global_params)
         self.longname = comp_params.longname if "longname" in comp_params\
             else "Unknown PointSourceComp"
@@ -592,7 +592,7 @@ class PointSourcesComponent(Component):
         return 1
 
 class RadioSources(PointSourcesComponent):
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
+    def __init__(self, comp_params: Params, global_params: Params):
         super().__init__(comp_params, global_params)
         self.longname = comp_params.longname if "longname" in comp_params else "RadioPointSources"
         self.shortname = comp_params.shortname if "shortname" in comp_params else "radsources"
@@ -618,7 +618,7 @@ class RadioSources(PointSourcesComponent):
 
     def read_dat_to_bunch(self, file_path):
         """
-        Reads a .dat point source raw table and stores it in a Bunch object which is returned.
+        Reads a .dat point source raw table and stores it in a Params object which is returned.
         """
         rows = []
         head = []
@@ -631,7 +631,7 @@ class RadioSources(PointSourcesComponent):
                     rows.append(line.split())
         head = head[-1]
         rows = np.array(rows)       
-        return Bunch(zip(head,[rows[:,i] for i in range(rows.shape[1])]))
+        return Params(zip(head,[rows[:,i] for i in range(rows.shape[1])]))
 
     def compute_pix_beams(self, band_fwhm_r, band_nside, recompute=False):
         """

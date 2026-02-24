@@ -3,8 +3,9 @@ import time
 import logging
 import mpi4py
 from mpi4py import MPI
-from utils.params import Params
+
 from commander4.output import log
+from commander4.utils.params import Params
 
 def init_mpi(params):
     """ To be run before anything else to set up the MPI environment.

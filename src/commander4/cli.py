@@ -10,13 +10,12 @@ import pstats
 import logging
 import io
 import time
-import sys
 from copy import deepcopy
-from utils.params import Params
 from traceback import print_exc
 
 from commander4.output import log
 from commander4 import mpi_management
+from commander4.utils.params import Params
 
 
 def run_commander4(params: Params, params_dict: dict):
