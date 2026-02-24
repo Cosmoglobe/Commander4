@@ -39,8 +39,7 @@ def run_commander4(params: Params, params_dict: dict):
     if mpi_info['world']['is_master']:
         import random
         # Print the entire parameter file to log.
-        logger.info(f"### PARAMETERS ###\n {yaml.dump(params_dict, allow_unicode=True,
-                                                      default_flow_style=False)}")
+        logger.info(f"### PARAMETERS ###\n {yaml.dump(params_dict, allow_unicode=True, default_flow_style=False)}")
         # Print a randomly colored Commander4 text.
         logger.info(f"\033[{random.randint(91, 96)}m" + r"""
            ______                                          __             __ __
