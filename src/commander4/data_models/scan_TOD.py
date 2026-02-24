@@ -67,7 +67,7 @@ class ScanTOD:
             pix = np.zeros(self._ntod_original, dtype=np.int64)
             pix = cpp_utils.huffman_decode(np.frombuffer(self._pix_encoded, dtype=np.uint8),
                                            self._huffman_tree, self._huffman_symbols, pix)
-            #TODO: I think cumsum should eventually be wrapped in somewhere, it can be easy to forget.
+            #TODO: Include cumsum in the C++ decode, so it can't be forgotten?
             pix = np.cumsum(pix)
         else:
             pix = self._pix_encoded

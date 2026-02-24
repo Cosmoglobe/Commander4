@@ -1,6 +1,6 @@
 import numpy as np
 import time
-from pixell.bunch import Bunch
+from utils.params import Params
 import logging
 from mpi4py import MPI
 from numpy.typing import NDArray
@@ -8,7 +8,7 @@ from typing import Callable
 from copy import deepcopy
 
 from commander4.data_models.detector_map import DetectorMap
-from commander4.sky_models.component import Component, DiffuseComponent
+from commander4.sky_models.component import Component
 from commander4.utils.math_operations import alm_to_map_adjoint, gaussian_random_alm, almxfl,\
     complist_dot, complist_norm
 from commander4.solvers.dense_matrix_math import DenseMatrix
@@ -37,14 +37,15 @@ class CompSepSolver:
             + S^{1/2}A^TN^{-1/2} eta_1 + S^{-1/2} mu + eta_2.
     """
     def __init__(self, det_map: DetectorMap,
-                 params: Bunch, CompSep_comm: MPI.Comm):
+                 params: Params, CompSep_comm: MPI.Comm):
         
         self.logger = logging.getLogger(__name__)
         self.CompSep_comm = CompSep_comm
         self.my_rank = CompSep_comm.Get_rank()
         self.det_map = det_map
         self.params = params
-        self.my_band = Band.init_from_detector(det_map = det_map, double_precision = params.general.CG_float_precision == "double")
+        self.my_band = Band.init_from_detector(det_map = det_map,
+                                   double_precision = params.general.CG_float_precision == "double")
 
         if params.general.CG_float_precision == "single":
             self.float_dtype = np.float32
@@ -55,7 +56,8 @@ class CompSepSolver:
 
         self.alm_dtype = self.complex_dtype
 
-        # For simplicity all array will have shapes (1, ...) for non-polarization (and then (2, ...) for polarization).
+        # For simplicity all array will have shapes (1, ...) for non-polarization
+        # (and then (2, ...) for polarization).
         self.npol = det_map.npol
         self.pol = det_map.pol
         self.spin = 2 if self.pol else 0
@@ -67,7 +69,8 @@ class CompSepSolver:
             self.nthreads = self.params.general.nthreads_compsep[self.CompSep_comm.Get_rank()]
     
 
-    def project_all_comps_to_band(self, comp_list_in: list[Component], band_out:Band) -> NDArray[np.complexfloating]:
+    def project_all_comps_to_band(self, comp_list_in: list[Component],
+                                  band_out:Band) -> NDArray[np.complexfloating]:
         """
         Projects all the components in `comp_list_in`, overwriting the `band_out` object's alms. 
 
@@ -81,11 +84,10 @@ class CompSepSolver:
         return alm_out
 
 
-    def eval_all_comps_from_band(self, band_in:Band, comp_list_out:list[Component]) -> list[Component]:
-        """
-        Evaluates the band_in's contribution to all the comp_list_out objects, and stores them in-place.
-
-        In Commander4 notation, applies A_adj matrix, from band alms to comp list.
+    def eval_all_comps_from_band(self, band_in:Band,
+                                 comp_list_out:list[Component]) -> list[Component]:
+        """ Evaluates the band_in's contribution to all the comp_list_out objects, and stores them
+            in-place. In Commander4 notation, applies A_adj matrix, from band alms to comp list.
         """
 
         # B^T a
@@ -94,8 +96,6 @@ class CompSepSolver:
         # Y^T M^T Y^-1^T B^T a
         for comp in comp_list_out:
             comp.eval_comp_from_band(band_in, nthreads=self.nthreads)
-            #print("comps in RHS", np.min(comp.alms), np.max(comp.alms), np.average(comp.alms))
-        #print("comps in RHS", np.min(band_in.alms), np.max(band_in.alms), np.average(band_in.alms)) #[[np.min(comp.alms), np.max(comp.alms), np.average(comp.alms)] for comp in comp_list])
         return comp_list_out
 
 
@@ -157,7 +157,8 @@ class CompSepSolver:
                 # Since we used non-blocking reduce, master rank can start working on components
                 # as they are received instead of waiting for all to be received.
                 if not use_blocking:
-                    MPI.Request.Wait(requests[icomp])  # Wait until all data for component icomp has been received.
+                    # Wait until all data for component icomp has been received.
+                    MPI.Request.Wait(requests[icomp])
                 # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
                 comp_list[icomp].apply_smoothing_prior_sqrt()
                 # Adds input vector to output, since (1 + S^{1/2}...)a = a + (S^{1/2}...)a
@@ -172,8 +173,9 @@ class CompSepSolver:
 
 
     def calc_RHS_mean(self, comp_list: list[Component]) -> list[Component]:
-        """ Caculates the right-hand-side b-vector of the Ax=b CompSep equation for the Wiener filtered (or mean-field) solution.
-            If used alone on the right-hand-side, gives the deterministic maximum likelihood map-space solution, but a biased PS solution.
+        """ Caculates the right-hand-side b-vector of the Ax=b CompSep equation for the
+            Wiener filtered (or mean-field) solution. If used alone on the right-hand-side,
+            gives the deterministic maximum likelihood map-space solution, but a biased PS solution.
         """
         myrank = self.CompSep_comm.Get_rank()
         mythreads = self.nthreads
@@ -182,8 +184,10 @@ class CompSepSolver:
         b_map = self.det_map.apply_inv_N_map(self.det_map.map_sky, inplace=False)
         
         # # Y^T N^-1 d
-        b_band = Band.init_from_detector(det_map = self.det_map, double_precision = self.params.general.CG_float_precision == "double")
-        b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin, nthreads=mythreads)
+        b_band = Band.init_from_detector(det_map = self.det_map,
+                              double_precision = self.params.general.CG_float_precision == "double")
+        b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin,
+                                   nthreads=mythreads)
         b_band.alms = b_alm.astype(b_band.alms.dtype)
   
         # (Y^T M^T Y^-1^T B^T) Y^T N^-1 d
@@ -195,7 +199,6 @@ class CompSepSolver:
             if myrank == 0:
                 # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 d
                 comp.apply_smoothing_prior_sqrt()
-                #print("contrib in eval", [[np.min(comp.alms), np.max(comp.alms), np.average(comp.alms)]]) # np.min(contrib_to_comp_alm), np.max(contrib_to_comp_alm), np.average(contrib_to_comp_alm)) #
         
         if myrank == 0:
             for comp in comp_list:
@@ -208,8 +211,9 @@ class CompSepSolver:
 
 
     def calc_RHS_fluct(self, comp_list: list[Component]) -> list[Component]:
-        """ Calculates the right-hand-side fluctuation vector. Provides unbiased realizations (of foregrounds or the CMB) if added
-            together with the right-hand-side of the Wiener filtered solution : Ax = b_mean + b_fluct.
+        """ Calculates the right-hand-side fluctuation vector. Provides unbiased realizations
+            (of foregrounds or the CMB) if added together with the right-hand-side of the 
+            Wiener filtered solution : Ax = b_mean + b_fluct.
         """
         myrank = self.CompSep_comm.Get_rank()
         mythreads = self.nthreads
@@ -221,8 +225,10 @@ class CompSepSolver:
         b_map *= np.sqrt(self.det_map.inv_var_map)
 
         # Y^T N^-1 eta_1
-        b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin, nthreads=mythreads)
-        b_band = Band.init_from_detector(det_map = self.det_map, double_precision = self.params.general.CG_float_precision == "double")
+        b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax,
+                                   spin=self.spin, nthreads=mythreads)
+        b_band = Band.init_from_detector(det_map = self.det_map,
+                              double_precision = self.params.general.CG_float_precision == "double")
         b_band.alms = b_alm
 
         # (Y^T M^T Y^-1^T B^T) Y^T N^-1 eta_1
@@ -250,8 +256,8 @@ class CompSepSolver:
         
         myrank = self.CompSep_comm.Get_rank()
         if myrank == 0:
-            # Currently this will always return 0, since we have not yet implemented support for a spatial prior,
-            # but when we do it will go here.
+            # Currently this will always return 0, since we have not yet implemented support for
+            # a spatial prior, but when we do it will go here.
             mu_s = []
             for comp in comp_list:
                 mu = np.zeros((self.npol, comp.alm_len_complex), dtype=self.complex_dtype)
@@ -284,23 +290,26 @@ class CompSepSolver:
 
     def solve_CG(self, LHS: Callable, RHS: list[Component], x0 = None, M = None,
                  x_true = None) -> list[Component]:
-        """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG from the pixell package.
+        """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG.
             Assumes that both x and b are in alm space.
 
             Args:
                 LHS (callable): A function/callable taking x as argument and returning Ax.
                 RHS (list): A list of alm-vectors representing the right-hand-side of the equation.
-                x0 (list): Initial guess for x, as list of alm-vectors for each component (optional).
-                M (callable): Preconditioner for the CG solver. A callable which approximates A^-1 (optional).
+                x0 (list): Initial guess for x as list of alm-vectors for each component (optional).
+                M (callable): Preconditioner: A callable which approximates A^-1 (optional).
                 x_true (np.array): True solution for x, in order to print the true error (optional).
             Returns:
                 m_bestfit (list): The resulting best-fit solution, for the component held by this
                                   rank, as a list of alm-vectors for each component.
         """
-        max_iter = self.params.general.CG_max_iter_pol if self.det_map.pol else self.params.general.CG_max_iter
+        if self.det_map.pol:
+            max_iter = self.params.general.CG_max_iter_pol
+        else:
+            max_iter = self.params.general.CG_max_iter
 
         logger = logging.getLogger(__name__)
-        checkpoint_interval = 10
+        checkpt_int = 10
         master = self.CompSep_comm.Get_rank() == 0
         mycomp = self.CompSep_comm.Get_rank()
 
@@ -313,7 +322,6 @@ class CompSepSolver:
         self.CG_residuals = np.zeros((max_iter))
         if x_true is not None:
             if master:
-                #x_true_list = [x_true[i:j].reshape((1,-1)) for i,j in zip(self.alm_start_idx_per_comp[:-1], self.alm_start_idx_per_comp[1:])]
                 self.xtrue_A_xtrue = complist_dot(x_true, LHS(x_true))
             else:
                 LHS([])
@@ -326,17 +334,23 @@ class CompSepSolver:
             CG_solver.step()
             self.CG_residuals[iter] = CG_solver.err
             iter += 1
-            if iter%checkpoint_interval == 0:
+            if iter%checkpt_int == 0:
                 if master:
-                    logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG iter {iter:3d} - Residual {np.mean(self.CG_residuals[iter-checkpoint_interval:iter]):.6e} ({(time.time() - t0)/checkpoint_interval:.2f}s/iter)")
+                    logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG iter {iter:3d} - "
+                                f"Residual {np.mean(self.CG_residuals[iter-checkpt_int:iter]):.6e} "
+                                f"({(time.time() - t0)/checkpt_int:.2f}s/iter)")
                     t0 = time.time()
                     if x_true is not None:
                         CG_errors_true = complist_norm(CG_solver.x - x_true)/complist_norm(x_true)
                         A_residual = LHS([x - y for x,y in zip(CG_solver.x, x_true)])
                         #A_residual = np.concatenate(A_residual, axis=-1)
-                        CG_Anorm_error = complist_dot([x - y for x,y in zip(CG_solver.x, x_true)], A_residual)
-                        logger.info(f"CG iter {iter:3d} - True A-norm error: {CG_Anorm_error:.3e}")  # A-norm error is only defined for the full vector.
-                        logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].longname} - True L2 error: {CG_errors_true:.3e}")  # We can print the individual component L2 errors.
+                        CG_Anorm_error = complist_dot([x - y for x,y in zip(CG_solver.x, x_true)],
+                                                      A_residual)
+                        # A-norm error is only defined for the full vector.
+                        logger.info(f"CG iter {iter:3d} - True A-norm error: {CG_Anorm_error:.3e}")
+                        # We can print the individual component L2 errors.
+                        logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].longname} - "
+                                    f"True L2 error: {CG_errors_true:.3e}")
                 else:
                     if x_true is not None:
                         LHS([])  # Matching LHS call for the calculation of LHS(CG_solver.x-x_true).
@@ -349,7 +363,9 @@ class CompSepSolver:
             stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
         self.CG_residuals = self.CG_residuals[:iter]
         if master:
-            logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {self.params.general.CG_err_tol})")
+            logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG finished after {iter} "
+                        f"iterations with a residual of {CG_solver.err:.3e} "
+                        f"(err tol = {self.params.general.CG_err_tol})")
 
         complist_sol = CG_solver.x
         for comp in complist_sol:
@@ -364,8 +380,9 @@ class CompSepSolver:
         if seed is not None:
             np.random.seed(seed)
 
-        # print(f"SOLVE: Hello rank {self.CompSep_comm.Get_rank()}, subcolor:, complist: {[c.shortname for c in comp_list]} ")
         RHS1 = self.calc_RHS_mean(comp_list)
+        # FIXME: These were only commented out during debugging, they need to be re-introduced,
+        # do they currently work?
         # RHS2 = self.calc_RHS_fluct()
         # RHS3 = self.calc_RHS_prior_mean()
         # RHS4 = self.calc_RHS_prior_fluct()
@@ -373,10 +390,13 @@ class CompSepSolver:
         RHS = RHS1
         #del(self.map_sky)
 
-        # Initialize the precondidioner class, which is in the module "solvers.preconditioners", and has a name specified by self.params.compsep.preconditioner.
+        # Initialize the precondidioner class, which is in the module "solvers.preconditioners",
+        # and has a name specified by self.params.compsep.preconditioner.
         precond = getattr(preconditioners, self.params.compsep.preconditioner)(self, comp_list)
 
-        if self.params.compsep.dense_matrix_debug_mode:  # For testing preconditioner with a true solution as reference, first solving for exact solution with dense matrix math.
+        # For testing preconditioner with a true solution as reference,
+        # first solving for exact solution with dense matrix math.
+        if self.params.compsep.dense_matrix_debug_mode:
             M_A_matrix = lambda a : self.apply_LHS_matrix(precond(a))
 
             # Testing the initial LHS (A) matrix
@@ -391,17 +411,15 @@ class CompSepSolver:
             dense_matrix.test_matrix_hermitian()  # Preconditioner matrix needs to be Hermitian.
             dense_matrix.test_matrix_eigenvalues()  # and to have positive and real eigenvalues
 
-            # Testing the combined preconditioned system (MA)  (this combined matrix will generally not be Hermitian positive-definite).
+            # Testing the combined preconditioned system (MA)
+            # (this combined matrix will generally not be Hermitian positive-definite).
             dense_matrix = DenseMatrix(self, M_A_matrix, "MA")
             x_true = dense_matrix.solve_by_inversion(precond(RHS))
-            dense_matrix.print_sing_vals()  # Check how much singular values (condition number) of preconditioned system improved.
+            # Check how much singular values (condition number) of preconditioned system improved.
+            dense_matrix.print_sing_vals()
             dense_matrix.print_matrix_diag()
 
-        sol_list = self.solve_CG(self.apply_LHS_matrix, RHS, M=precond, x_true=x_true if self.params.compsep.dense_matrix_debug_mode else None)
-        # for icomp in range(self.ncomp):
-        #     if self.spin == 0:
-        #         self.comp_list[icomp].component_alms_intensity = sol_list[icomp]
-        #     elif self.spin == 2:
-        #         self.comp_list[icomp].component_alms_polarization = sol_list[icomp]
+        sol_list = self.solve_CG(self.apply_LHS_matrix, RHS, M=precond,
+                             x_true=x_true if self.params.compsep.dense_matrix_debug_mode else None)
 
         return sol_list

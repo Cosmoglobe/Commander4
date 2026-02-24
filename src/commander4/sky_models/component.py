@@ -8,9 +8,7 @@ import logging
 from copy import deepcopy
 from scipy.interpolate import interp1d
 from numpy.typing import NDArray
-from typing import Callable
 from mpi4py import MPI
-from numba import njit, prange
 
 from commander4.output import log
 from commander4.utils.math_operations import alm_to_map, map_to_alm, project_alms, inplace_scale,\
@@ -155,34 +153,37 @@ class Component:
         Broadcasts the data object of the component stored on the root MPI rank.
         """
         logger = logging.getLogger(__name__)
-        log.logassert(isinstance(self._data, np.ndarray), "the data object must be an array", logger)
+        log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
         comm.Bcast(self._data, root=root)
 
     def bcast_data_non_blocking(self, comm:MPI.Comm, root=0):
         """
-        Broadcasts the data object of the component stored on the root MPI rank, it only returns the request.
+        Broadcasts the data object of the component stored on the root MPI rank,
+        it only returns the request.
         """
         logger = logging.getLogger(__name__)
-        log.logassert(isinstance(self._data, np.ndarray), "the data object must be an array", logger)
+        log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
         req = comm.Ibcast(self._data, root=root)
         return req
 
     def accum_data_blocking(self, comm:MPI.Comm, root=0):
         """
-        Accumulates on the root rank the data object of the component through and MPI reduce with a sum.
+        Accumulates on the root rank the data object of the component through and
+        MPI reduce with a sum.
         """
         logger = logging.getLogger(__name__)
-        log.logassert(isinstance(self._data, np.ndarray), "the data object must be an array", logger)
+        log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
         myrank=comm.Get_rank()
         send, recv = (MPI.IN_PLACE, self._data) if myrank == root else (self._data, None)
         comm.Reduce(send, recv, op=MPI.SUM, root=root)
 
     def accum_data_non_blocking(self, comm:MPI.Comm, root=0):
         """
-        Accumulates on the root rank the data object of the component through and MPI reduce with a sum, it only returns the request.
+        Accumulates on the root rank the data object of the component through and MPI reduce with
+        a sum, it only returns the request.
         """
         logger = logging.getLogger(__name__)
-        log.logassert(isinstance(self._data, np.ndarray), "the data object must be an array", logger)
+        log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
         myrank=comm.Get_rank()
         send, recv = (MPI.IN_PLACE, self._data) if myrank == root else (self._data, None)
         req = comm.Ireduce(send, recv, op=MPI.SUM, root=root)
@@ -218,7 +219,8 @@ class DiffuseComponent(Component):
         self.lmax = comp_params.lmax
         self.smoothing_prior_FWHM = comp_params.smoothing_prior_FWHM
         self.smoothing_prior_amplitude = comp_params.smoothing_prior_amplitude
-        self._data = np.empty((2 if comp_params.polarized else 1, self.alm_len_complex), dtype = (np.complex128 if self.double_prec else np.complex64))
+        self._data = np.empty((2 if comp_params.polarized else 1, self.alm_len_complex),
+                              dtype = (np.complex128 if self.double_prec else np.complex64))
 
     @property
     def alms(self):
@@ -230,9 +232,11 @@ class DiffuseComponent(Component):
             if alms.shape[0] in [1,2]:
                 self._data = alms
             else:
-                raise ValueError(f"Trying to set alms with wrong first axis length {alms.shape[0]} != 1 or 2")
+                raise ValueError("Trying to set alms with wrong first axis length "
+                                 f"{alms.shape[0]} != 1 or 2")
         else:
-            raise ValueError(f"Trying to set alms with unexpected number of dimensions: {alms.ndim} != 2")
+            raise ValueError("Trying to set alms with unexpected number of dimensions: "
+                             f"{alms.ndim} != 2")
             
     @property
     def dtype(self):
@@ -259,11 +263,13 @@ class DiffuseComponent(Component):
         return P_inv
     
     def __repr__(self):
-        return f"Diffuse Component {self.shortname} {'Polarization' if self.pol else 'Intensity'} \n   lmax = {self.lmax} \n   alms: {self.alms}"
+        return f"Diffuse Component {self.shortname} {'Polarization' if self.pol else 'Intensity'} "\
+               f"\n   lmax = {self.lmax} \n   alms: {self.alms}"
 
     def apply_smoothing_prior_sqrt(self):
         """
-        Applies in-place the square root of the smoothing prior to the alms in-place, which are also returned.
+        Applies in-place the square root of the smoothing prior to the alms in-place,
+        which are also returned.
         """
         smooth_p_sqrt = np.sqrt(self.P_smoothing_prior)
         for ipol in range(self.npol):
@@ -278,7 +284,8 @@ class DiffuseComponent(Component):
         if fwhm == 0:
             return alm_to_map(component_alms, nside, self.lmax, spin = 2 if self.pol else 0)
         else:
-            return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax, spin = 2 if self.pol else 0)
+            return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax,
+                              spin = 2 if self.pol else 0)
 
     def get_sky(self, nu, nside, fwhm=0):
         return self.get_component_map(nside, fwhm)*self.get_sed(nu)
@@ -287,7 +294,7 @@ class DiffuseComponent(Component):
         logger = logging.getLogger(__name__)
         log.lograise(NotImplementedError, "", logger)
 
-    #overwrite of the dot product, as the diffuse component will have alm _data with complex encoding.
+    #overwrite of the dot product as the diffuse component will have alm _data with complex encoding
     def __matmul__(self, other):
         if type(self) is not type(other):
             raise TypeError("Both operands must be of the same Component type.")
@@ -302,7 +309,8 @@ class DiffuseComponent(Component):
 
     def project_comp_to_band(self, band:Band, nthreads: int = 1):
         """
-        Project the component to the given band in-place, summing its contribution to the alms array of the passed band object.
+        Project the component to the given band in-place, summing its contribution to the alms
+        array of the passed band object.
 
         NB: this function does not include the beam smoothing.
         """
@@ -318,20 +326,24 @@ class DiffuseComponent(Component):
         alm_in_band_space = project_alms(self.alms, band.lmax)
         if self.spatially_varying_MM:  # If this component has a MM that is pixel-depnedent.
             # Y a
-            comp_map = alm_to_map(alm_in_band_space, band.nside, band.lmax, spin=spin, nthreads=nthreads)
+            comp_map = alm_to_map(alm_in_band_space, band.nside, band.lmax, spin=spin,
+                                  nthreads=nthreads)
             # M Y a
             for ipol in range(npol):
                 inplace_scale(comp_map[ipol], self.get_sed(band.nu)) 
             # Y^-1 M Y a
-            band.alms = map_to_alm(comp_map, band.nside, band.lmax, spin=spin, out=band.alms, acc=True, nthreads=nthreads)
+            band.alms = map_to_alm(comp_map, band.nside, band.lmax, spin=spin, out=band.alms,
+                                   acc=True, nthreads=nthreads)
         else:
             for ipol in range(npol):
-                inplace_add_scaled_vec(band.alms[ipol], alm_in_band_space[ipol], self.get_sed(band.nu))
+                inplace_add_scaled_vec(band.alms[ipol], alm_in_band_space[ipol],
+                                       self.get_sed(band.nu))
         return band.alms
 
     def eval_comp_from_band(self, band:Band, nthreads: int = 1, inplace=True):
         """
-        Evaluate the band's alm contribution to the component, stores it in-place by default and retruns it.
+        Evaluate the band's alm contribution to the component, stores it in-place by default and
+        retruns it.
 
         All the contributions will be summed to the total proper amplitudes by the master node.
 
@@ -342,20 +354,22 @@ class DiffuseComponent(Component):
             npol = 2
             spin = 2
         else:
-            assert not band.pol, "Intensity component can only be evaluated from intensity band alms"
+            assert not band.pol, "Intensity comp can only be evaluated from intensity band alms"
             npol = 1
             spin = 0
 
         if self.spatially_varying_MM:  # If this component has a MM that is pixel-depnedent.
             # Y^-1^T B^T a
-            band_map = map_to_alm_adjoint(band.alms, band.nside, band.lmax, spin=spin, out=None, nthreads=nthreads)
+            band_map = map_to_alm_adjoint(band.alms, band.nside, band.lmax, spin=spin, out=None,
+                                          nthreads=nthreads)
 
             # M^T Y^-1 B^T a
             for ipol in range(npol):
                 inplace_scale(band_map[ipol], self.get_sed(band.nu))
 
             # Y^T M^T Y^-1^T B^T a
-            tmp_alm = alm_to_map_adjoint(band_map, band.nside, band.lmax, spin=spin, out=None, nthreads=nthreads)
+            tmp_alm = alm_to_map_adjoint(band_map, band.nside, band.lmax, spin=spin, out=None,
+                                         nthreads=nthreads)
 
         else:
             tmp_alm = band.alms.copy()
@@ -405,9 +419,11 @@ class CMB(DiffuseComponent):
         for m in range(3):  # m = 0, 1, 2
             component_alms[:,hp.Alm.getidx(self.lmax, 2, m)] = 0.0 + 0.0j
         if fwhm == 0:
-            return alm_to_map(component_alms, nside, self.lmax, spin = 2 if self.pol else 0)*self.get_sed(nu)
+            return alm_to_map(component_alms, nside, self.lmax,
+                              spin = 2 if self.pol else 0)*self.get_sed(nu)
         else:
-            return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax, spin = 2 if self.pol else 0)*self.get_sed(nu)
+            return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax,
+                              spin = 2 if self.pol else 0)*self.get_sed(nu)
 
 class CMBRelQuad(TemplateComponent):
     pass
@@ -563,7 +579,8 @@ class SpinningDust(DiffuseComponent):
 class PointSourcesComponent(Component):
     def __init__(self, comp_params: Bunch, global_params: Bunch):
         super().__init__(comp_params, global_params)
-        self.longname = comp_params.longname if "longname" in comp_params else "Unknown PointSourceComp"
+        self.longname = comp_params.longname if "longname" in comp_params\
+            else "Unknown PointSourceComp"
         self.shortname = comp_params.shortname if "shortname" in comp_params else "pscomp"
 
     @property
@@ -583,16 +600,20 @@ class RadioSources(PointSourcesComponent):
 
         #tabulated data
         ps_bunch = self.read_dat_to_bunch(comp_params.template_path)
-        self._data = np.array(ps_bunch['I(mJy)'], dtype=np.float32).reshape((1,-1))  #per-source amplitudes
-        self.alpha_arr = np.array(ps_bunch['alpha_I'], dtype=np.float32)             #per-source spectral indexes
-        self.lonlat_arr = np.array((ps_bunch['Glon(deg)'], ps_bunch['Glat(deg)']), dtype=np.float32).T #per-source list of coordinates
+        #per-source amplitudes
+        self._data = np.array(ps_bunch['I(mJy)'], dtype=np.float32).reshape((1,-1))
+        #per-source spectral indexes
+        self.alpha_arr = np.array(ps_bunch['alpha_I'], dtype=np.float32)
+        self.lonlat_arr = np.array((ps_bunch['Glon(deg)'], ps_bunch['Glat(deg)']),
+                                   dtype=np.float32).T #per-source list of coordinates
         del ps_bunch
-        if self.alpha_arr.shape[0] != self.lonlat_arr.shape[0] or self.alpha_arr.shape[0] != self._data.shape[1]:
+        if self.alpha_arr.shape[0] != self.lonlat_arr.shape[0]\
+        or self.alpha_arr.shape[0] != self._data.shape[1]:
             raise RuntimeError("Point Source tabulated data must be uniform in length.")
 
         self.pix_disc_idx_list = None   #per-source list of indexes of the pixel forming the disc
         self.beam_disc_val_list = None    #per-source list of beam values, for each pix_i_s
-        self.band_eval_nside = None     #nside and fwhm used for the computation of pix and beam discs
+        self.band_eval_nside = None     #nside used for the computation of pix and beam discs
         self.band_fwhm_r = None         #they depend on the bands
 
     def read_dat_to_bunch(self, file_path):
@@ -614,11 +635,11 @@ class RadioSources(PointSourcesComponent):
 
     def compute_pix_beams(self, band_fwhm_r, band_nside, recompute=False):
         """
-        Computes the beams values, based on nside and fwhm of the band, in map space around all the point 
-        sources and updates in-place pix_disc_idx_list, beam_disc_val_list and fwhm_r self members.
+        Computes the beams values, based on nside and fwhm of the band, in map space around all the
+        point sources and updates in-place pix_disc_idx_list, beam_disc_val_list and fwhm_r members.
 
-        If recompute is True will always perform the computation otherwise it does so only if the beam lists
-        are not initialized or if the band specs have changed.
+        If recompute is True will always perform the computation otherwise it does so only if the
+        beam lists are not initialized or if the band specs have changed.
         """
         if band_fwhm_r != self.band_fwhm_r \
         or band_nside != self.band_eval_nside \
@@ -629,10 +650,14 @@ class RadioSources(PointSourcesComponent):
             self.beam_disc_val_list = []
             self.band_fwhm_r = band_fwhm_r
             self.band_eval_nside = band_nside
-            for i in range(self.lonlat_arr.shape[0]):      #compute and load the beams, these will reamain untouched. The FWHM depends on the band.
-                disc_pix_i_s = hp.query_disc(self.band_eval_nside, hp.ang2vec(self.lonlat_arr[i,0], self.lonlat_arr[i,1], lonlat=True), get_gauss_beam_radius(self.band_fwhm_r))
+            #compute and load the beams, these will reamain untouched. The FWHM depends on the band.
+            for i in range(self.lonlat_arr.shape[0]):
+                disc_pix_i_s = hp.query_disc(self.band_eval_nside, hp.ang2vec(self.lonlat_arr[i,0],
+                        self.lonlat_arr[i,1], lonlat=True), get_gauss_beam_radius(self.band_fwhm_r))
                 self.pix_disc_idx_list.append(disc_pix_i_s)
-                beam_disc = gauss_beam(hp.rotator.angdist(self.lonlat_arr[i,:], hp.pix2ang(self.band_eval_nside, disc_pix_i_s, lonlat=True), lonlat=True), self.band_fwhm_r)
+                beam_disc = gauss_beam(hp.rotator.angdist(self.lonlat_arr[i,:],
+                            hp.pix2ang(self.band_eval_nside, disc_pix_i_s, lonlat=True),
+                            lonlat=True), self.band_fwhm_r)
                 self.beam_disc_val_list.append(beam_disc)
             return True
         else:
@@ -647,13 +672,17 @@ class RadioSources(PointSourcesComponent):
     
     def get_sky(self, nu:float, nside:int, fwhm:float=0.0):
         """
-        Returns the sky component given by the point sources at a certain `nu` with a certain `nside` and `fwhm` smoothing.
+        Returns the sky component given by the point sources at a certain `nu` with a certain
+        `nside` and `fwhm` smoothing.
         """
         self.compute_pix_beams(np.deg2rad(fwhm/60), nside)
-        map = np.zeros((1, hp.nside2npix(nside)), dtype=np.float64 if self.double_prec else np.float32)
-        mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
+        map = np.zeros((1, hp.nside2npix(nside)),
+                       dtype=np.float64 if self.double_prec else np.float32)
+        mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ,
+                                            equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
         sed_s = self.get_sed(nu)
-        _numba_proj2map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list, self._data[0,:],sed_s)
+        _numba_proj2map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
+                        self._data[0,:],sed_s)
         map*=mJysr_to_uKRJ
         if fwhm == 0.0:
             pass
@@ -666,8 +695,10 @@ class RadioSources(PointSourcesComponent):
         Returns the map of the point sources component with a certain `nside` and `fwhm` smoothing.
         """
         self.compute_pix_beams(np.deg2rad(fwhm/60), nside)
-        map = np.zeros((1, hp.nside2npix(nside)), dtype=np.float64 if self.double_prec else np.float32)
-        mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(self.nu*pysm3u.GHz))
+        map = np.zeros((1, hp.nside2npix(nside)),
+                       dtype=np.float64 if self.double_prec else np.float32)
+        mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ,
+                                        equivalencies=pysm3u.cmb_equivalencies(self.nu*pysm3u.GHz))
         _numba_proj2map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list, self._data[0,:])
         map*=mJysr_to_uKRJ
         if fwhm == 0.0:
@@ -678,17 +709,17 @@ class RadioSources(PointSourcesComponent):
     
     def _project_to_band_map(self, map:NDArray, nu:float):
         """
-        Computes the point source contribution in uK_RJ for band's frequency and beam, and sums it to `map`.
+        Computes the point source contribution in uK_RJ for band's frequency and beam,
+        and sums it to `map`.
 
         the `map` array should have shape [1,npix].
         """
-        mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
-        #uKRJ_to_mJysr = (pysm3u.uK_RJ).to(pysm3u.mJy / pysm3u.steradian, equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
+        mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ,
+                                            equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
         sed_s = self.get_sed(nu)
 
-        _numba_proj2map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list, self._data[0,:], sed_s = sed_s)
-        # for src_i in prange(len(self.pix_disc_idx_list)):
-        #     map[0,self.pix_disc_idx_list[src_i]] += mJysr_to_uKRJ * self.beam_disc_val_list[src_i] * self._data[0,src_i] * sed_s[src_i]
+        _numba_proj2map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
+                        self._data[0,:], sed_s = sed_s)
         map*=mJysr_to_uKRJ
     
     def _eval_from_band_map(self, map, nu):
@@ -699,17 +730,19 @@ class RadioSources(PointSourcesComponent):
 
         the `map` array should have shape [1,npix].
         """
-        mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
-        uKRJ_to_mJysr = (pysm3u.uK_RJ).to(pysm3u.mJy / pysm3u.steradian, equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
+        mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ,
+                                            equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
+        uKRJ_to_mJysr = (pysm3u.uK_RJ).to(pysm3u.mJy / pysm3u.steradian,
+                                          equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
         sed_s = self.get_sed(nu)
-        _numba_eval_from_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list, self._data[0,:], sed_s = sed_s)
-        # for src_i in range(len(self.pix_disc_idx_list)):
-        #     self._data[0,src_i] = mJysr_to_uKRJ * np.sum(map[0,self.pix_disc_idx_list[src_i]] * self.beam_disc_val_list[src_i]) * sed_s[src_i]
+        _numba_eval_from_map(map[0,:], self.pix_disc_idx_list,
+                             self.beam_disc_val_list, self._data[0,:], sed_s = sed_s)
         self._data *= mJysr_to_uKRJ
 
     def project_comp_to_band(self, band:Band, nthreads: int = 1):
         """
-        Project the point sources contribution to the given band in-place, summing its contribution to the alm array of the band object.
+        Project the point sources contribution to the given band in-place,
+        summing its contribution to the alm array of the band object.
 
         NB: this function does not include the beam smoothing.
         """
@@ -719,31 +752,35 @@ class RadioSources(PointSourcesComponent):
         self.compute_pix_beams(band_fwhm_r, band_nside)
 
         # the point-source correspondent of: M Y a
-        ps_map = np.zeros((1,hp.nside2npix(band_nside)), dtype=(np.float32 if self.global_params.CG_float_precision == "single" else np.float64))  #empty band map
+        ps_map = np.zeros((1,hp.nside2npix(band_nside)),   #empty band map
+            dtype=(np.float32 if self.global_params.CG_float_precision == "single" else np.float64))
         self._project_to_band_map(ps_map, band.nu)
 
         # Y^-1 M Y a
-        map_to_alm(ps_map, band_nside, band.lmax, spin=0, out=band.alms, acc=True, nthreads=nthreads)
+        map_to_alm(ps_map, band_nside, band.lmax, spin=0, out=band.alms, acc=True,
+                   nthreads=nthreads)
         
         return band.alms
 
     def eval_comp_from_band(self, band:Band, nthreads: int = 1):
         """
-        Evaluate the band's alm contribution to the point sources' amplitudes and stores it in the amp_s member, 
-        as well as returning it.
+        Evaluate the band's alm contribution to the point sources' amplitudes and stores it in the
+        amp_s member, as well as returning it.
 
-        All the contributions will be summed to the total proper amplitudes when reducing on the master node.
+        All the contributions will be summed to the total proper amplitudes when reducing on the
+        master node.
 
         NB: this function does not include the beam smoothing.
         """
 
-        assert not band.pol, "Point sources component can only be evaluated from intensity band alms"
+        assert not band.pol, "Point sources comps can only be evaluated from intensity band alms"
         band_fwhm_r, band_nside = np.deg2rad(band.fwhm/60.0), band.nside
         #if not initialized or if band's characteristics changed, recompute the arrays.
         self.compute_pix_beams(band_fwhm_r, band_nside)
 
         # Y^-1^T B^T a
-        band_map = map_to_alm_adjoint(band.alms, band.nside, band.lmax, spin=0, out=None, nthreads=nthreads)
+        band_map = map_to_alm_adjoint(band.alms, band.nside, band.lmax, spin=0, out=None,
+                                      nthreads=nthreads)
 
         # M^T Y^-1 B^T a
         self._eval_from_band_map(band_map, band.nu) #updates amp_s in-place
@@ -762,7 +799,8 @@ class RadioSources(PointSourcesComponent):
     
 
 #FIXME: this will go within ComponentList object when implemented
-def split_complist(comp_list: list[Component], color:int, IvsQU_colors:tuple = (0,1)) -> list[Component]:
+def split_complist(comp_list: list[Component], color:int,
+                   IvsQU_colors:tuple = (0,1)) -> list[Component]:
     """
     Extracts from `comp_list` only the components containing the correct Stokes parameter based
     on the passed `color` of the local MPI rank. By default, color=0 will treat Intensity and

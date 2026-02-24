@@ -32,13 +32,13 @@ class Mapmaker:
         self.maplib = load_cmdr4_ctypes_lib()
         ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
         ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
-        self.maplib.map_accumulator_f64.argtypes = [ct_f64_dim1, ct_f64_dim1, ct.c_double, ct_i64_dim1,
-                                ct.c_int64]
+        self.maplib.map_accumulator_f64.argtypes = [ct_f64_dim1, ct_f64_dim1, ct.c_double,
+                                                    ct_i64_dim1, ct.c_int64]
 
     @property
     def final_map(self):
         if self.map_comm.Get_rank() == 0:
-            logassert(self._finalized_map is not None, "Attempted to retrieve map before it was done.",
+            logassert(self._finalized_map is not None, "Attempted to retrieve unfinished map.",
                     self.logger)
         return self._finalized_map
 
@@ -97,7 +97,7 @@ class WeightsMapmaker:
     @property
     def final_map(self):
         if self.map_comm.Get_rank() == 0:
-            logassert(self._gathered_map is not None, "Attempted to retrieve map before it was done.",
+            logassert(self._gathered_map is not None, "Attempted to retrieve unfinished map",
                     self.logger)
         return self._gathered_map.astype(self.dtype, copy=False)
 
@@ -107,8 +107,8 @@ class WeightsMapmaker:
         logassert(self._map_signal is not None, "Tried accumulating to finalized map", self.logger)
         ntod = pix.shape[0]
         weight_f64 = float(weight)
-        self.maplib.map_weight_accumulator_f64(self._map_signal, weight_f64, pix.astype(np.int64), ntod,
-                                               self.npix)
+        self.maplib.map_weight_accumulator_f64(self._map_signal, weight_f64, pix.astype(np.int64),
+                                               ntod, self.npix)
 
     def gather_map(self):
         """Reduce the local weights buffers across MPI ranks into the root map."""
@@ -170,8 +170,8 @@ class MapmakerIQU:
         tod_f64 = np.ascontiguousarray(tod, dtype=np.float64)
         weight_f64 = float(weights)
         psi_f64 = np.ascontiguousarray(psi, dtype=np.float64)
-        self.maplib.map_accumulator_IQU_f64(self._map_signal, tod_f64, weight_f64, pix.astype(np.int64),
-                                            psi_f64, ntod, self.npix)
+        self.maplib.map_accumulator_IQU_f64(self._map_signal, tod_f64, weight_f64,
+                                            pix.astype(np.int64), psi_f64, ntod, self.npix)
 
     def accumulate_to_map_Python(self, tod:NDArray, weights:NDArray, pix:NDArray, psi:NDArray):
         """Reference accumulator matching the ctypes IQU implementation."""
@@ -269,21 +269,22 @@ class WeightsMapmakerIQU:
         ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
         ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
         ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
-        self.maplib.map_weight_accumulator_IQU_f64.argtypes = [ct_f64_dim2, ct.c_double, ct_i64_dim1,
-                                       ct_f64_dim1, ct.c_int64, ct.c_int64]
+        self.maplib.map_weight_accumulator_IQU_f64.argtypes = [ct_f64_dim2, ct.c_double,
+                                                               ct_i64_dim1, ct_f64_dim1, ct.c_int64,
+                                                               ct.c_int64]
         self.maplib.map_invdiag_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim2, ct.c_int64]
 
     @property
     def final_rms_map(self):
         if self.map_comm.Get_rank() == 0:
-            logassert(self._finalized_rms_map is not None, "Attempted to read map before it was done.",
+            logassert(self._finalized_rms_map is not None, "Attempted to read unfinished map.",
                       self.logger)
         return self._finalized_rms_map
     
     @property
     def final_cov_map(self):
         if self.map_comm.Get_rank() == 0:
-            logassert(self._gathered_map is not None, "Attempted to read map before it was done.",
+            logassert(self._gathered_map is not None, "Attempted to read unfinished map.",
                       self.logger)
         return self._gathered_map
 
@@ -294,8 +295,8 @@ class WeightsMapmakerIQU:
         ntod = pix.shape[0]
         weight_f64 = float(weight)
         psi_f64 = np.ascontiguousarray(psi, dtype=np.float64)
-        self.maplib.map_weight_accumulator_IQU_f64(self._map_signal, weight_f64, pix.astype(np.int64),
-                                                   psi_f64, ntod, self.npix)
+        self.maplib.map_weight_accumulator_IQU_f64(self._map_signal, weight_f64,
+                                                   pix.astype(np.int64), psi_f64, ntod, self.npix)
 
     def accumulate_to_map_Python(self, weight:float, pix:NDArray, psi:NDArray):
         """Reference accumulator matching the ctypes IQU weights implementation."""

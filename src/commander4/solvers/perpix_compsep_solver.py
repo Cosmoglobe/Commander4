@@ -5,23 +5,24 @@ import logging
 import numpy as np
 from mpi4py import MPI
 from pixell import curvedsky
-from pixell.bunch import Bunch
+from utils.params import Params
 from commander4.output.log import logassert
-from commander4.sky_models.component import Component, DiffuseComponent
+from commander4.sky_models.component import Component
 from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
 from commander4.data_models.detector_map import DetectorMap
 
 
 def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
-                         comp_list: list[DiffuseComponent], params: Bunch)-> list[DiffuseComponent]:
+                         comp_list: list[Component], params: Params) -> list[Component]:
     """ A pixel-by-pixel solver for the component separation problem. Requires uniform nside, unlike
         the CG solver. Also requires common beam smoothing, but handles this by smoothing all maps
         to the lowest resolution map.
     """
+    # TODO: Add support for non-Diffuse components (point sources, templates).
     logger = logging.getLogger(__name__)
     if proc_comm.Get_rank() == 0:
         logger.info("Starting pixel-by-pixel component separation.")
-    if params.general.CG_float_precision == "double":  # TODO: bad parameter name.
+    if params.general.CG_float_precision == "double":  # FIXME: bad parameter name.
         complex_dtype = np.complex128
         real_dtype = np.float64
     else:
@@ -106,7 +107,8 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
             input_map = np.array([comp_maps[0][icomp], comp_maps[1][icomp]], dtype=real_dtype)
         else:
             input_map = np.array([comp_maps[0][icomp]], dtype=real_dtype)
-        comp_alms = curvedsky.map2alm_healpix(input_map, niter=3, spin=spin, lmax=comp_list[icomp].lmax)
+        comp_alms = curvedsky.map2alm_healpix(input_map, niter=3, spin=spin,
+                                              lmax=comp_list[icomp].lmax)
         comp_list[icomp].alms = comp_alms.astype(complex_dtype)
 
     return comp_list
