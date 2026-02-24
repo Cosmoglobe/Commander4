@@ -18,7 +18,8 @@ class Band:
         alm_len_complex = ((det_map.lmax+1)*(det_map.lmax+2))//2
         npol = 2 if det_map.pol else 1
         dtype = np.complex128 if double_precision else np.complex64
-        return cls(np.zeros((npol, alm_len_complex), dtype=dtype), det_map.nu, det_map.fwhm, det_map.nside)
+        return cls(np.zeros((npol, alm_len_complex), dtype=dtype), det_map.nu, det_map.fwhm,
+                   det_map.nside)
 
     @property
     def alms(self):
@@ -42,7 +43,8 @@ class Band:
             if alms.shape[0] in [1,2]:
                 self._alms = alms
             else:
-                raise ValueError(f"Trying to set alms with wrong first axis length {alms.shape[0]} != 1 or 2")
+                raise ValueError("Trying to set alms with wrong first axis length "
+                                 f"{alms.shape[0]} != 1 or 2")
         else:
             raise ValueError("Trying to set alms with unexpected number of dimensions"
                                 f"{alms.ndim} != 2")

@@ -89,7 +89,8 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
         if ntod > ntod_upper_bound:
             raise ValueError(f"{ntod_upper_bound} {ntod}")
         flag_buffer[:ntod] = 0.0
-        flag_buffer[:ntod] = cpp_utils.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8), huffman_tree, huffman_symbols, flag_buffer[:ntod])
+        flag_buffer[:ntod] = cpp_utils.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8),
+                                                  huffman_tree, huffman_symbols, flag_buffer[:ntod])
         flag_buffer[:ntod_optimal] = np.cumsum(flag_buffer[:ntod_optimal])
         flag_buffer[:ntod_optimal] &= 6111232
         if np.sum(flag_buffer[:ntod_optimal]) == 0:

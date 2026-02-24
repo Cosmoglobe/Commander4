@@ -6,21 +6,24 @@ from commander4.utils.math_operations import alm_to_map, alm_to_map_adjoint, inp
 
 
 class DetectorMap:
-    def __init__(self, map_sky:NDArray, map_rms:NDArray, nu:float, fwhm:float, nside:int, double_precision:bool=False, lmax:int|None = None):
+    def __init__(self, map_sky:NDArray, map_rms:NDArray, nu:float, fwhm:float, nside:int,
+                 double_precision:bool=False, lmax:int|None = None):
         #cast dimensions correctly to allow constructer with 1-d array for intensity maps.
         map_sky = map_sky.reshape((1,-1)) if map_sky.ndim == 1 else map_sky
         map_rms = map_rms.reshape((1,-1)) if map_rms.ndim == 1 else map_rms
         
         if map_rms.shape != map_sky.shape:
-            raise ValueError(f"Sky and RMS maps should have matching dimensions.")
+            raise ValueError("Sky and RMS maps should have matching dimensions.")
         if map_sky.shape[0] not in [1,2]:
-            raise ValueError(f"Trying to set sky map with wrong first axis length {map_sky.shape[0]} != 1 or 2")
+            raise ValueError("Trying to set sky map with wrong first axis length "
+                             f"{map_sky.shape[0]} != 1 or 2")
 
         self._map_sky = map_sky
         self._nu = nu
         self._fwhm = fwhm #stored in arcmin
         self._nside = nside
-        self._lmax = int(2.5*nside) if lmax is None else lmax      # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
+        # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
+        self._lmax = int(2.5*nside) if lmax is None else lmax
         self._beam_Cl = hp.gauss_beam(np.deg2rad(fwhm/60.0), self._lmax)
         self._double_precision = double_precision
         self._inv_n_map = (1./map_rms**2).astype(np.float64 if double_precision else np.float32)
@@ -107,8 +110,8 @@ class DetectorMap:
         return a_out
 
     def apply_B(self, a: NDArray):
-        """
-        Applies in-place the beam operator in harmonic space to a set of alm `a`, which are also returned.
+        """ Applies in-place the beam operator in harmonic space to a set of alm `a`,
+            which are also returned.
         """
         for ipol in range(self.npol):
             almxfl(a[ipol], self._beam_Cl, inplace=True)

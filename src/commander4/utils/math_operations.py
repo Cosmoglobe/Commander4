@@ -2,22 +2,25 @@
 # in this file. For now they are pretty simple calls to outside functions
 # but they could be improved and streamlined later for specific implementations.
 
+# Needed for files with `if typing.TYPE_CHECKING` checks, to avoid NameError during import.
+from __future__ import annotations
+
 import numpy as np
 from numpy.typing import NDArray
 import healpy as hp
-import pysm3.units as u
 from pixell import curvedsky
 import ducc0
-from commander4.output.log import logassert
 import logging
 import os
 from math import sqrt
 from numba import njit, prange
 from scipy.linalg import blas as blas_wrapper
 
+from commander4.output.log import logassert
+
 import typing
-if typing.TYPE_CHECKING:  # Only import when performing type checking, avoiding circular import during normal runtime.
-    from commander4.solvers.comp_sep_solvers import CompSepSolver
+# Only import when performing type checking, avoiding circular import during normal runtime.
+if typing.TYPE_CHECKING:
     from commander4.sky_models.component import Component
 
 
@@ -165,22 +168,25 @@ def calculate_sigma0(tod: NDArray, mask: NDArray[np.bool_]) -> float:
 
 @njit(fastmath=True, parallel=True)
 def _dot_complex_alm_1D_arrays(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArray:
-    """ Function calculating the dot product of two alms, given that they follow the Healpy standard,
+    """ Function calculating the dot product of two alms, given that they follow the Healpy standard
         where alms are represented as complex numbers, but with the conjugate 'negative' ms missing.
     """
-    return np.sum((alm1[:lmax]*alm2[:lmax]).real) + np.sum((alm1[lmax:]*np.conj(alm2[lmax:])).real*2)
+    return np.sum((alm1[:lmax]*alm2[:lmax]).real)\
+           + np.sum((alm1[lmax:]*np.conj(alm2[lmax:])).real*2)
 
 #Specific function for point sources:
 @njit(fastmath=True, parallel=True)
 def _numba_proj2map(map, pix_disc_idx_list, beam_disc_val_list, amps, sed_s=None):
     for src_i in prange(len(pix_disc_idx_list)):
-        map[pix_disc_idx_list[src_i]] += beam_disc_val_list[src_i] * amps[src_i] * (sed_s[src_i] if sed_s is not None else 1)
+        map[pix_disc_idx_list[src_i]] += beam_disc_val_list[src_i] * amps[src_i]\
+            * (sed_s[src_i] if sed_s is not None else 1)
     return map
 
 @njit(fastmath=True, parallel=True)
 def _numba_eval_from_map(map, pix_disc_idx_list, beam_disc_val_list, amps, sed_s=None):
     for src_i in range(len(pix_disc_idx_list)):
-            amps[src_i] = np.sum(map[pix_disc_idx_list[src_i]] * beam_disc_val_list[src_i]) * (sed_s[src_i] if sed_s is not None else 1)
+            amps[src_i] = np.sum(map[pix_disc_idx_list[src_i]] * beam_disc_val_list[src_i])\
+                * (sed_s[src_i] if sed_s is not None else 1)
     return amps
 
 ###### ALM-LIST FUNCTIONS ######
@@ -226,7 +232,8 @@ def almlist_dot_real(alm_list1, alm_list2):
 # These functions are common array operations, but made to work on the comp-lists, which are
 # lists of Component objects, each containing component-specifically formatted data.
 
-def inplace_complist_add_scaled_array(list_inplace:list["Component"], list_other:list["Component"], scalar):
+def inplace_complist_add_scaled_array(list_inplace:list[Component], list_other:list[Component],
+                                      scalar):
     """ `list_inplace += scalar*list_other`
     """
     if len(list_inplace) != len(list_other):
@@ -235,7 +242,7 @@ def inplace_complist_add_scaled_array(list_inplace:list["Component"], list_other
     for ci, co in zip(list_inplace, list_other):
         inplace_add_scaled_vec(ci._data, co._data, scalar)
 
-def inplace_complist_scale_and_add(list_inplace:list["Component"], list_other:list["Component"], scalar):
+def inplace_complist_scale_and_add(list_inplace:list[Component], list_other:list[Component], scalar):
     """ `list_inplace = scalar*list_inplace + list_other`
     """
     if len(list_inplace) != len(list_other):
@@ -244,10 +251,11 @@ def inplace_complist_scale_and_add(list_inplace:list["Component"], list_other:li
     for ci, co in zip(list_inplace, list_other):
         inplace_scale_add(ci._data, co._data, scalar)
 
-def complist_dot(comp_list1:list["Component"], comp_list2:list["Component"]) -> float:
-    """ `dot(comp_list1, comp_list2)`. Calculates the correct dot product between two lists of Component objects 
-        where the alms follow the Healpy complex storing convention, for components with alms.
-        It will automatically handle the correct dot product definition for each type of Component.
+def complist_dot(comp_list1:list[Component], comp_list2:list[Component]) -> float:
+    """ `dot(comp_list1, comp_list2)`. Calculates the correct dot product between two lists of
+        Component objects where the alms follow the Healpy complex storing convention, for
+        components with alms. It will automatically handle the correct dot product definition for
+        each type of Component.
     """
     if len(comp_list1) != len(comp_list2):
         raise ValueError("Component lists must match in length.")
@@ -258,9 +266,9 @@ def complist_dot(comp_list1:list["Component"], comp_list2:list["Component"]) -> 
         res += float(c1 @ c2)
     return res
 
-def complist_norm(comp_list:list["Component"]) -> float:
-    """ `norm(comp_list1, comp_list2)`. Calculates the Euclidean norm of a lists of Component objects,
-        handling it as it was a single vectors of values.
+def complist_norm(comp_list:list[Component]) -> float:
+    """ `norm(comp_list1, comp_list2)`. Calculates the Euclidean norm of a lists of Component
+        objects, handling it as it was a single vectors of values.
     """
     return complist_dot(comp_list, comp_list)
 
@@ -299,14 +307,16 @@ def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray[np.f
 ##### GENERAL ALM STUFF ############
 
 def nalm(lmax: int, mmax: int) -> int:
-    """Calculates the number of a_lm elements for a spherical harmonic representation up to l<=lmax and m<=mmax.
+    """ Calculates the number of a_lm elements for a spherical harmonic representation up to
+        l<=lmax and m<=mmax.
     """
     return ((mmax+1)*(mmax+2))//2 + (mmax+1)*(lmax-mmax)
 
 
 # MR FIXME: I'm not absolutely sure that this is fully correct. Please double-check!
 def gaussian_random_alm(lmax, mmax, spin, ncomp):
-    """Calculates Gaussianly distributed alms for the complex alm convension (not storing m<0 because map is real.)
+    """ Calculates Gaussianly distributed alms for the complex alm convension
+        (not storing m<0 because map is real.)
     """
     res = np.random.normal(0., 1., (ncomp, nalm(lmax, mmax))) \
      + 1j*np.random.normal(0., 1., (ncomp, nalm(lmax, mmax)))
@@ -392,10 +402,11 @@ def project_alms(alms_in, lmax_out):
 
 
 def alm_dot_product(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArray:
-    """ Function calculating the dot product of two alms, given that they follow the Healpy standard,
+    """ Function calculating the dot product of two alms, given that they follow the Healpy standard
         where alms are represented as complex numbers, but with the conjugate 'negative' ms missing.
     """
-    return np.sum((alm1[:lmax]*alm2[:lmax]).real) + np.sum((alm1[lmax:]*np.conj(alm2[lmax:])).real*2)
+    return np.sum((alm1[:lmax]*alm2[:lmax]).real)\
+        + np.sum((alm1[lmax:]*np.conj(alm2[lmax:])).real*2)
 
 
 def alm_complex2real(alm: NDArray[np.complexfloating], lmax: int) -> NDArray[np.floating]:

@@ -61,8 +61,8 @@ def generate_cmb(freq, fwhm, units, nside, lmax, params):
     
     # a_1,-1, a_1,0, a_1,1
     # Note: healpy expects (T, E, B) alms, we only need T for the dipole.
-    dipole_alms[0, hp.Alm.getidx(lmax, 1, 0)] = amp_norm * np.cos(theta)
-    dipole_alms[0, hp.Alm.getidx(lmax, 1, 1)] = -amp_norm * np.sin(theta) * np.exp(-1j * phi) / np.sqrt(2)
+    dipole_alms[0, hp.Alm.getidx(lmax, 1, 0)] = amp_norm*np.cos(theta)
+    dipole_alms[0, hp.Alm.getidx(lmax, 1, 1)] = -amp_norm*np.sin(theta)*np.exp(-1j*phi)/np.sqrt(2)
 
     total_alms = anisotropy_alms + dipole_alms
 
@@ -84,8 +84,9 @@ def generate_cmb(freq, fwhm, units, nside, lmax, params):
 def generate_thermal_dust(freq, fwhm, units, nside, params):
     nu_dust = params.components.ThermalDust.params.nu0
 
-    dust = pysm3.Sky(nside=min(1024,nside), preset_strings=["d0"], output_unit=units) #d0 = constant beta 1.54 and T = 20
-    dust_ref = dust.get_emission(nu_dust*u.GHz)#.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_dust*u.GHz))
+    #d0 = constant beta 1.54 and T = 20
+    dust = pysm3.Sky(nside=min(1024,nside), preset_strings=["d0"], output_unit=units)
+    dust_ref = dust.get_emission(nu_dust*u.GHz)
     dust_ref_smoothed = hp.smoothing(dust_ref, fwhm=fwhm)*dust_ref.unit
 
     dust_params = deepcopy(params.components.ThermalDust.params)
@@ -101,8 +102,9 @@ def generate_thermal_dust(freq, fwhm, units, nside, params):
 def generate_sync(freq, fwhm, units, nside, params):
     nu_sync = params.components.Synchrotron.params.nu0
 
-    sync = pysm3.Sky(nside=min(1024,nside), preset_strings=["s5"], output_unit=units) # s5 = const beta -3.1
-    sync_ref = sync.get_emission(nu_sync*u.GHz)#.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_sync*u.GHz))
+    # s5 = const beta -3.1
+    sync = pysm3.Sky(nside=min(1024,nside), preset_strings=["s5"], output_unit=units)
+    sync_ref = sync.get_emission(nu_sync*u.GHz)
     sync_ref_smoothed = hp.smoothing(sync_ref, fwhm=fwhm)*sync_ref.unit
 
     sync_params = deepcopy(params.components.Synchrotron.params)
@@ -119,7 +121,7 @@ def generate_ff(freq, fwhm, units, nside, params):
     nu_ff = params.components.FreeFree.params.nu0
 
     ff = pysm3.Sky(nside=min(1024,nside), preset_strings=["f1"], output_unit=units)
-    ff_ref = ff.get_emission(nu_ff*u.GHz)#.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_sync*u.GHz))
+    ff_ref = ff.get_emission(nu_ff*u.GHz)
     ff_ref_smoothed = hp.smoothing(ff_ref, fwhm=fwhm)*ff_ref.unit
 
     ff_params = deepcopy(params.components.FreeFree.params)
@@ -136,7 +138,7 @@ def generate_spdust(freq, fwhm, units, nside, params):
     nu_spdust = params.nu_ref_sync
 
     spdust = pysm3.Sky(nside=min(1024,nside), preset_strings=["a1"], output_unit=units)
-    spdust_ref = spdust.get_emission(nu_spdust*u.GHz)#.to(u.MJy/u.sr, equivalencies=u.cmb_equivalencies(nu_sync*u.GHz))
+    spdust_ref = spdust.get_emission(nu_spdust*u.GHz)
     spdust_ref_smoothed = hp.smoothing(spdust_ref, fwhm=fwhm)
 
     spdust_params = deepcopy(params.components.SpinningDust.params)

@@ -92,7 +92,7 @@ parser = ArgumentParser()
 parser.add_argument("-p",
                     "--parameter_file",
                     required=True,
-                    help="Path to YAML-formatted parameter file. A default can be found in 'params/param_default.yml'.")
+                    help="Path to YAML-formatted parameter file. See the 'params/' directory.")
 
 commandline_params = parser.parse_args()
 

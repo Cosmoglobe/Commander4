@@ -1,6 +1,4 @@
 from commander4.data_models.scan_TOD import ScanTOD
-import numpy as np
-from numpy.typing import NDArray
 
 class DetectorTOD:
     def __init__(self, scanlist: list[ScanTOD], nu, fwhm, nside, data_nside,

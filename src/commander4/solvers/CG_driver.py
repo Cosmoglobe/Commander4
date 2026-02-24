@@ -1,7 +1,8 @@
 import numpy as np
 import logging
 from copy import deepcopy
-from commander4.utils.math_operations import inplace_complist_add_scaled_array, inplace_complist_scale_and_add, complist_dot
+from commander4.utils.math_operations import inplace_complist_add_scaled_array,\
+    inplace_complist_scale_and_add, complist_dot
 
 def default_M(x):     return np.copy(x)
 default_dot = complist_dot
@@ -29,7 +30,7 @@ class distributed_CG:
         self.i   = 0
         if x0 is None:
             self.x = [np.zeros_like(_b) for _b in b]
-            self.r = deepcopy(b) if not destroy_b else b  #with CompList object it will be like: b.copy() if not destroy_b else b 
+            self.r = deepcopy(b) if not destroy_b else b
         else:
             self.x  = deepcopy(x0)
             self.r  = [_b - _Ax for _b,_Ax in zip(b,self.A(self.x))]

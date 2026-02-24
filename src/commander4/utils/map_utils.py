@@ -15,7 +15,8 @@ uK_CMB_to_uK_RJ_dict = {}
 
 
 @njit(fastmath=True)
-def get_static_sky_TOD(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer], psi: NDArray[np.floating]) -> DetectorTOD:
+def get_static_sky_TOD(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
+                       psi: NDArray[np.floating]) -> DetectorTOD:
     """ Projects the current sky-model at our band frequency (in uK_RJ, without gain) into the
         specified scan pointing. The sky model does not include the orbital dipole.
     """
@@ -34,7 +35,8 @@ def get_s_orb_TOD(scan: ScanTOD, experiment: DetectorTOD, pix: NDArray[np.intege
     geom = ducc0.healpix.Healpix_Base(experiment.nside, "RING")
     LOS_vec = geom.pix2vec(pix, nthreads=nthreads)
     LOS_vec *= scan.orb_dir_vec
-    s_orb = np.sum(LOS_vec, axis=-1, dtype=np.float32)  # How much do the LOS and orbital velocity align?
+    # How much do the LOS and orbital velocity align?
+    s_orb = np.sum(LOS_vec, axis=-1, dtype=np.float32)
     s_orb *= T_CMB_div_C
     s_orb *= uK_CMB_to_uK_RJ_dict[experiment.nu]  # Converting to uK_RJ units.
     return s_orb.astype(np.float32)
@@ -52,7 +54,8 @@ def gauss_beam(x, fwhm):
 
 def get_gauss_beam_radius(fwhm, frac=1e-4):
     """
-    Finds the distance from the center of a gaussian beam corresponding to a fraction 'frac' of the peak intensity.
+    Finds the distance from the center of a gaussian beam corresponding to a fraction 'frac'
+    of the peak intensity.
     """
     sigma = fwhm2sigma(fwhm)
     return sigma * np.sqrt( - 2* np.log(frac))
