@@ -40,16 +40,16 @@ general:
   pixel_compsep_sampling: False
 
   output_paths:
-    plots: "/mn/stornext/u3/leoab/com4_plots/Planck_WMAP_TOD_CG_new"
-    stats: "/mn/stornext/u3/leoab/com4_stats"
-    chains: "/mn/stornext/u3/leoab/com4_chains"
+    plots: "../cmdr4_plots/Planck_WMAP_TOD_CG_new"
+    stats: "../cmdr4_stats"
+    chains: "../cmdr4_chains"
 
   logging:
     console:
       level: 'info'
     file:
       level: 'info'
-      filename: '/mn/stornext/u3/leoab/com4_logs/output_Planck+WMAP_mapsonly_CG.log'
+      filename: '/mn/stornext/u3/leoab/cmdr4_logs/output_Planck+WMAP_mapsonly_CG.log'
 
 components:
   CMB:
