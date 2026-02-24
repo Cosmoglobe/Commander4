@@ -2,7 +2,7 @@ import numpy as np
 import pixell
 from mpi4py import MPI
 import logging
-from scipy.fft import rfft, irfft, rfftfreq
+from scipy.fft import rfftfreq
 import time
 from numpy.typing import NDArray
 
@@ -19,7 +19,6 @@ from commander4.output.write_chains_files import write_tod_chain_to_file, write_
 from commander4.utils.params import Params
 # from commander4.logging.performance_logger import benchmark, summarize, start_bench, stop_bench
 
-nthreads=1
 
 def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float32]:
     "Creates a dummy compsep output for a single band"
@@ -27,8 +26,23 @@ def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float32]:
 
 
 def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: NDArray,
-            detector_samples:DetectorSamples, params: Params, chain: int, iter: int,
-            mapmaker_corrnoise:MapmakerIQU = None) -> DetectorMap:
+            detector_samples: DetectorSamples, params: Params, chain: int, iter: int,
+            mapmaker_corrnoise: MapmakerIQU = None) -> DetectorMap:
+    """ Commander4 mapmaking. All ranks on the provided MPI communicator collaborates on creating
+        the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
+    Args:
+        band_comm (Comm): The communicator consisting of all MPI ranks which holds TOD data that
+                          should go into the same map.
+        experiment_data (DetectorTOD): TOD data class to be made into maps.
+        compsep_output (np.array): The sky model at our band. Not used, but written to chain file.
+        detector_samples (DetectorSamples): Sampled TOD parameters, such as gain.
+        params (Params): Parameter file as 'Param' object.
+        chain (int): Current chain number.
+        iter (int): Current Gibbs iteration.
+        mapmaker_corrnoise (MapmakerIQU): Correlated noise maps are created during TOD sampling to
+                                          avoid TOD copy. Can be passed as argument here.
+
+    """
     # We separate the inverse-variance mapmaking from the other 3 mapmakers.
     # This is purely to reduce the maximum concurrent memory requirement, and is slightly slower
     # as we have to de-compress pix and psi twice.
@@ -454,23 +468,6 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
     # As of Numpy 2.0 it's good practice to explicitly cast to Python scalar types, as this would
     # otherwise have been a np.float64 type, potentially causing unexpected casting behavior later.
     detector_samples.g0_est = float(g_sampled)
-    # t_finalization += time.perf_counter() - t0
-    # t_huffman = TOD_comm.reduce(t_huffman, op=MPI.SUM, root=0)
-    # t_orb = TOD_comm.reduce(t_orb, op=MPI.SUM, root=0)
-    # t_sky = TOD_comm.reduce(t_sky, op=MPI.SUM, root=0)
-    # t_res = TOD_comm.reduce(t_res, op=MPI.SUM, root=0)
-    # t_inpaint = TOD_comm.reduce(t_inpaint, op=MPI.SUM, root=0)
-    # t_ffts = TOD_comm.reduce(t_ffts, op=MPI.SUM, root=0)
-    # t_dot = TOD_comm.reduce(t_dot, op=MPI.SUM, root=0)
-    # if TOD_comm.Get_rank() == 0:
-    #     logger.info(f"### Absgain : t_huffman : {t_huffman/TOD_comm.Get_size():.4f} s.")
-    #     logger.info(f"### Absgain : t_orb : {t_orb/TOD_comm.Get_size():.4f} s.")
-    #     logger.info(f"### Absgain : t_sky : {t_sky/TOD_comm.Get_size():.4f} s.")
-    #     logger.info(f"### Absgain : t_res : {t_res/TOD_comm.Get_size():.4f} s.")
-    #     logger.info(f"### Absgain : t_inpaint : {t_inpaint/TOD_comm.Get_size():.4f} s.")
-    #     logger.info(f"### Absgain : t_ffts : {t_ffts/TOD_comm.Get_size():.4f} s.")
-    #     logger.info(f"### Absgain : t_dot : {t_dot/TOD_comm.Get_size():.4f} s.")
-    #     logger.info(f"### Absgain : t_finalization : {t_finalization:.4f} s.")
 
     return detector_samples, wait_time
 
@@ -643,12 +640,10 @@ def sample_relative_gain(TOD_comm: MPI.Comm, det_comm: MPI.Comm, experiment_data
 def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: DetectorTOD,
                                     detector_samples: DetectorSamples, det_compsep_map: NDArray,
                                     chain: int, iter: int, params: Params):
-    """
-    Samples the time-dependent relative gain variations (delta g_qi).
-    This function implements the logic from Sec. 3.5 of the BP7 paper,
-    using a Wiener filter to smooth the gain solution over time (PIDs).
-    It solves a global system for all scans of a given detector, which are
-    distributed across the ranks of the det_comm.
+    """ Samples the time-dependent relative gain variations (delta g_qi). This function implements
+        the logic from Sec. 3.5 of the BP7 paper, using a Wiener filter to smooth the gain solution
+        over time (PIDs). It solves a global system for all scans of a given detector, which are
+        distributed across the ranks of the det_comm.
 
     Args:
         det_comm (MPI.Comm): The communicator for ranks sharing the same detector.
