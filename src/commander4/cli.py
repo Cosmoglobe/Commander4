@@ -52,6 +52,7 @@ def run_commander4(params: Params, params_dict: dict):
         # Create output directories if they do not already exist.
         os.makedirs(global_params.output_paths.chains, exist_ok=True)
         os.makedirs(global_params.output_paths.stats, exist_ok=True)
+        os.makedirs(os.path.dirname(global_params.logging.file.filename), exist_ok=True)
         os.makedirs(os.path.join(params.general.output_paths.chains, "datamaps"), exist_ok=True)
         os.makedirs(os.path.join(params.general.output_paths.chains, "tod"), exist_ok=True)
         os.makedirs(os.path.join(params.general.output_paths.chains, "compsep"), exist_ok=True)
@@ -197,7 +198,7 @@ def main():
             profiler = cProfile.Profile()
             profiler.enable()
         ret = run_commander4(params, params_dict)
-        logger.quiet(f"Rank {MPI.COMM_WORLD.Get_rank()} finished Commander 4 and is shutting down."
+        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} finished Commander 4 and is shutting down."
                     "Goodbye!")
         if params.general.output_stats:
             profiler.disable()
@@ -205,7 +206,7 @@ def main():
             stats = pstats.Stats(profiler, stream=s).sort_stats('tottime')
             if ret != -1:
                 stats.print_stats(10)
-                logger.quiet(f"Rank {MPI.COMM_WORLD.Get_rank()} cProfile stats: {s.getvalue()}")
+                logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} cProfile stats: {s.getvalue()}")
                 stats.dump_stats(f"{params.general.output_paths.stats}/"
                                  f"stats-{MPI.COMM_WORLD.Get_rank()}")
 

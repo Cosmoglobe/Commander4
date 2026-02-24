@@ -1,6 +1,5 @@
 import numpy as np
 import logging
-from utils.params import Params
 
 from commander4.output.log import logassert
 from commander4.data_models.detector_map import DetectorMap
@@ -10,6 +9,7 @@ from commander4.sky_models.sky_model import SkyModel
 from commander4.solvers.CG_compsep_solver import CompSepSolver
 from commander4.solvers.perpix_compsep_solver import solve_compsep_perpix
 from commander4.output.write_chains_files import write_compsep_chain_to_file
+from commander4.utils.params import Params
 
 
 def init_compsep_processing(mpi_info: Params, params: Params)\
