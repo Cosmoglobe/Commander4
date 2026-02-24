@@ -1,6 +1,6 @@
 general:
   MPI_config:
-    ntask_tod: 128
+    ntask_tod: 30 #128
     ntask_compsep_I: 1
     ntask_compsep_QU: 1
   nthreads_tod: 1
@@ -317,14 +317,14 @@ experiments:
     pix_is_compressed: true
     psi_is_compressed: true
     data_type: "TOD"
-    bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
+    #bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
     num_scans: 11395
     bands:
       AkariN60:
         enabled: true
         tod_files_prefix: "AKARI_N60_v1_"
-        num_MPI_tasks: 128 #24
+        num_MPI_tasks: 30 #128 #24
         detector_id: 0
         freq_identifier: 30
         eval_nside: 1024

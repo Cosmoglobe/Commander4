@@ -213,6 +213,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
     mpi_info['tod']['tod_band_masters'] = tod_band_masters_dict
     t0 = time.time()
 
+    # logger.info(f"##LOAD SCANS: {my_experiment} | {my_band} | {my_det} | {my_scans_start} | {my_scans_stop}")
     experiment_data = read_tods_from_file(det_comm, my_experiment, my_band, my_det, params,
                                           my_detector_id, my_scans_start, my_scans_stop)
 

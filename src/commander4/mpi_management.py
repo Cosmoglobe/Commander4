@@ -216,8 +216,6 @@ def init_mpi_tod(mpi_info, params):
                 my_band_id = iband
                 my_experiment_name = exp_name
                 for idet, det_name in enumerate(band.detectors):
-                    num_ranks_this_detector = len(TOD_ranks_per_detector[idet])
-                    detector = band.detectors[det_name]
                     # Check if our rank belongs to this detector
                     if MPIrank_tod in TOD_ranks_per_detector[idet]:
                         # What is my rank number among the ranks processing this detector?
