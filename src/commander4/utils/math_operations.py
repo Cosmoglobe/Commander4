@@ -251,9 +251,10 @@ def inplace_complist_scale_and_add(list_inplace:list[Component], list_other:list
         inplace_scale_add(ci._data, co._data, scalar)
 
 def complist_dot(comp_list1:list[Component], comp_list2:list[Component]) -> float:
-    """ `dot(comp_list1, comp_list2)`. Calculates the correct dot product between two lists of Component objects 
-        where the alms follow the Healpy complex storing convention, for components with alms.
-        It will automatically handle the correct dot product definition for each type of Component.
+    """ `dot(comp_list1, comp_list2)`. Calculates the correct dot product between two lists of
+        Component objects where the alms follow the Healpy complex storing convention, for
+        components with alms. It will automatically handle the correct dot product definition for
+        each type of Component.
     """
     if len(comp_list1) != len(comp_list2):
         raise ValueError("Component lists must match in length.")
@@ -265,8 +266,8 @@ def complist_dot(comp_list1:list[Component], comp_list2:list[Component]) -> floa
     return res
 
 def complist_norm(comp_list:list[Component]) -> float:
-    """ `norm(comp_list1, comp_list2)`. Calculates the Euclidean norm of a lists of Component objects,
-        handling it as it was a single vectors of values.
+    """ `norm(comp_list1, comp_list2)`. Calculates the Euclidean norm of a lists of Component
+        objects, handling it as it was a single vectors of values.
     """
     return complist_dot(comp_list, comp_list)
 
@@ -305,14 +306,16 @@ def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray[np.f
 ##### GENERAL ALM STUFF ############
 
 def nalm(lmax: int, mmax: int) -> int:
-    """Calculates the number of a_lm elements for a spherical harmonic representation up to l<=lmax and m<=mmax.
+    """ Calculates the number of a_lm elements for a spherical harmonic representation up to
+        l<=lmax and m<=mmax.
     """
     return ((mmax+1)*(mmax+2))//2 + (mmax+1)*(lmax-mmax)
 
 
 # MR FIXME: I'm not absolutely sure that this is fully correct. Please double-check!
 def gaussian_random_alm(lmax, mmax, spin, ncomp):
-    """Calculates Gaussianly distributed alms for the complex alm convension (not storing m<0 because map is real.)
+    """ Calculates Gaussianly distributed alms for the complex alm convension
+        (not storing m<0 because map is real.)
     """
     res = np.random.normal(0., 1., (ncomp, nalm(lmax, mmax))) \
      + 1j*np.random.normal(0., 1., (ncomp, nalm(lmax, mmax)))
@@ -398,10 +401,11 @@ def project_alms(alms_in, lmax_out):
 
 
 def alm_dot_product(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArray:
-    """ Function calculating the dot product of two alms, given that they follow the Healpy standard,
+    """ Function calculating the dot product of two alms, given that they follow the Healpy standard
         where alms are represented as complex numbers, but with the conjugate 'negative' ms missing.
     """
-    return np.sum((alm1[:lmax]*alm2[:lmax]).real) + np.sum((alm1[lmax:]*np.conj(alm2[lmax:])).real*2)
+    return np.sum((alm1[:lmax]*alm2[:lmax]).real)\
+        + np.sum((alm1[lmax:]*np.conj(alm2[lmax:])).real*2)
 
 
 def alm_complex2real(alm: NDArray[np.complexfloating], lmax: int) -> NDArray[np.floating]:
