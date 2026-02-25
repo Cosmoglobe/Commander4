@@ -11,7 +11,7 @@ Then, make sure you have a sensible Python setup. At ITA, I recommend using the 
 
 If not using the Mamba environment, you should set up a Python virtual environment. This can be done as
 ```bash
-python -m venv ../.com4_venv
+python313 -m venv ../.com4_venv  # or just `python`, depending on your setup.
 source ../.com4_venv/bin/activate
 ```
 
@@ -23,7 +23,7 @@ This will be resolved in the next `pysm3` release.
 
 **Optional:** Commander4 heavily utilizes `ducc0`, which will be installed auomatically, but if you want maximum performance from `ducc0` install `ducc0` from source yourself, e.g.:
 ```bash
-python -m pip install --no-binary ducc0 ducc0
+pip install --no-binary ducc0 ducc0
 ```
 
 ## Installation for users
@@ -31,7 +31,7 @@ If you are not intending to edit Commander4, you can install it by cloning the r
 ```bash
 git clone --recurse-submodules git@github.com:Cosmoglobe/Commander4.git
 cd Commander4
-python -m pip install .
+pip install .
 ```
 You are now ready to run Commander4 (see further down).
 
@@ -44,13 +44,13 @@ git submodule update
 ## Installation for developers
 If you intend to edit Commander4, you must first have the build tools installed:
 ```bash
-python -m pip install scikit-build-core pybind11 pybind11-stubgen numpy
+pip install scikit-build-core pybind11 pybind11-stubgen numpy
 ```
 Then, clone the repo (and submodules), and perform a so-called *editable* PIP install:
 ```bash
 git clone --recurse-submodules git@github.com:Cosmoglobe/Commander4.git
 cd Commander4
-python -m pip install -e . --no-build-isolation
+pip install -e . --no-build-isolation
 ```
 The editable install (`-e`) will tell PIP and scikit-build-core/CMake that the installation should point back to the source location, meaning that **you can edit Python files and run Commander4 without re-installing**. The `--no-build-isolation` helps ensure the build uses your environment (useful on HPC systems), which is why you have to manually pip install build dependencies first.
 
@@ -62,8 +62,8 @@ To add new ctypes-exposed C/C++ code, add a new `.cpp` file under `src/lib_cpp/c
 ### Optional: nanobind backend
 If you want to build the extension with nanobind instead of pybind11:
 ```bash
-python -m pip install -e ".[nanobind]" --no-build-isolation
-CMDR4_USE_NANOBIND=1 python -m pip install -e . --no-build-isolation
+pip install -e ".[nanobind]" --no-build-isolation
+CMDR4_USE_NANOBIND=1 pip install -e . --no-build-isolation
 ```
 
 ### Optional: regenerate type stubs
@@ -80,7 +80,6 @@ Commander4 has to be run with MPI, and a parameter file has to be indicated usin
 ```
 mpirun -n 15 commander4 -p params/param_default.yml
 ```
-(The `-u` makes stdout unbuffered, which I have found to be necessary in order to make MPI programs print properly to the terminal).
 
 Note that Commander4 cannot be run as a standalone script (e.g. python src/commander4/cli.py). It must be installed, and is then run as a binary. Note also that the binary should be called directly, and running `python commander4` will not work.
 
