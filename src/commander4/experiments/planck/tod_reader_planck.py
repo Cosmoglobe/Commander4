@@ -74,8 +74,8 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
         if pid in bad_PIDs:
             continue
         with h5py.File(filepath, "r") as f:
-            data_nside = int(f["common/nside"][()])
-            ntod = int(f[f"/{pid}/common/ntod"][()])
+            data_nside = int(f["common/nside"][()].item())
+            ntod = int(f[f"/{pid}/common/ntod"][()].item())
             ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
             tod = f[f"/{pid}/{detname}/tod/"][:ntod_optimal].astype(np.float32)
             huffman_tree = f[f"/{pid}/common/hufftree"][()]
@@ -83,8 +83,8 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
             pix_encoded = f[f"/{pid}/{detname}/pix/"][()]
             psi_encoded = f[f"/{pid}/{detname}/psi/"][()]
             vsun = f[f"/{pid}/common/vsun/"][()]
-            fsamp = float(f["/common/fsamp/"][()])
-            npsi = int(f["/common/npsi/"][()])
+            fsamp = float(f["/common/fsamp/"][()].item())
+            npsi = int(f["/common/npsi/"][()].item())
             flag_encoded = f[f"/{pid}/{detname}/flag/"][()]
         if ntod > ntod_upper_bound:
             raise ValueError(f"{ntod_upper_bound} {ntod}")
