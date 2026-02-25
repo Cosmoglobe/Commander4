@@ -14,7 +14,7 @@ general:
   CG_real_alm_mode: False
 
   CG_mapmaker:
-    maxiter: 100
+    maxiter: 5
     err_tol: 1.0e-20
 
   niter_gibbs: 10
@@ -275,7 +275,7 @@ CompSep_bands:
 
 experiments:
   PlanckLFI:
-    enabled: true
+    enabled: false
     is_sim: false
     pix_is_compressed: true
     psi_is_compressed: true
@@ -417,3 +417,33 @@ experiments:
           #   name: "23S"
           #   gain_est: 19.0e-9
           #   bandpass_shift: -0.05
+  Akari:
+    enabled: true
+    experiment_id: "akari"
+    is_sim: false
+    pix_is_compressed: true
+    psi_is_compressed: true
+    data_type: "TOD"
+    #bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
+    Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
+    num_scans: 11395
+    bands:
+      AkariN60:
+        enabled: true
+        tod_files_prefix: "AKARI_N60_v1_"
+        num_MPI_tasks: 64 #128 #24
+        detector_id: 0
+        freq_identifier: 30
+        eval_nside: 1024
+        data_nside: 2048
+        fwhm: 0.6166 # [arcmin]
+        freq: 4996 # [GHz]
+        fsamp: 25.28 # [Hz]
+        data_path: "/mn/stornext/d23/cmbco/akari/tamakim/h5_test/"
+        processing_mask: "/mn/stornext/d23/cmbco/globe/akari/mask/mask_proc_akari_n60_v1.fits"
+        filelist: "/mn/stornext/d23/cmbco/globe/akari/tod/n065/filelist_akari_n65.txt"
+        detectors:
+          AKARI_N60_01:
+            detname: "AKARI_N60_01"
+            gain_est: 0.05
+            bandpass_shift: 0  # Ghz

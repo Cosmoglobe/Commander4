@@ -9,6 +9,9 @@ import math
 import os
 import h5py
 
+import healpy as hp
+import matplotlib.pyplot as plt
+
 from commander4.output import log
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_TOD import DetectorTOD
@@ -53,7 +56,7 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         mapmaker_invvar.accumulate_to_map(inv_var, pix, psi)
     mapmaker_invvar.gather_map()
     if ismaster:
-        precond = InvNPreconditioner(mapmaker_invvar._gathered_map, double_prec=double_p) #must be initialized here before the noramlization wipes the gathered map away.
+        precond = called_on_non_master #InvNPreconditioner(mapmaker_invvar._gathered_map, double_prec=double_p) #must be initialized here before the noramlization wipes the gathered map away.
     else:
         precond = called_on_non_master #lambda arr: arr #dummy on non-master, will never be called.
     # precond = np.copy
@@ -86,6 +89,15 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
     # map_skymodel = mapmaker_skymodel.final_map
 
 
+
+# 2026-02-24 08:17:32,038 - commander4.utils.CG_mapmaker - INFO - ##LHS 1 mean: 4.1671411941162555e-10
+# 2026-02-24 08:17:32,049 - commander4.utils.CG_mapmaker - INFO - ##LHS 2 mean: 1.8204402761690854e-09
+# 2026-02-24 08:17:32,055 - commander4.utils.CG_mapmaker - INFO - ##LHS 3 mean: 1.8204285224071693e-09
+# 2026-02-24 08:17:32,055 - commander4.utils.CG_mapmaker - INFO - ##LHS 4 mean: 6.957094240448546e-16
+# 2026-02-24 08:17:32,061 - commander4.utils.CG_mapmaker - INFO - ##LHS 5 mean: 6.957094240448549e-16
+# 2026-02-24 08:17:32,076 - commander4.utils.CG_mapmaker - INFO - ##LHS 6 mean: -3.0582648936363964e-16
+
+
     ##############
 
     mapmaker = CG_Mapmaker(experiment_data, detector_samples, band_comm, preconditioner=precond,
@@ -93,6 +105,19 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
                            CG_tol=1e-20, double_prec=double_p)
     mapmaker.solve()
     map_signal = mapmaker.solved_map
+
+    if ismaster:
+        plt.figure(figsize=(8.5*3, 5.4))
+        labs = ["I", "Q", "U"]
+        for i in range(3):
+            limup   = np.percentile(map_signal, 99)
+            limdown = np.percentile(map_signal, 1)
+            hp.mollview(map_signal[i], cmap = 'RdBu_r', title=labs[i],
+                    sub=(1,3,i+1), min=limdown, max=limup)
+        plt.suptitle(f"CG map test")
+        plt.savefig("/mn/stornext/u3/leoab/cmdr4_plots/test_CG_mapmkr_Planck.png")
+        plt.close()
+
     if ismaster:
         logger.info(f"Sol map mean: {np.mean(map_signal)}")
     
