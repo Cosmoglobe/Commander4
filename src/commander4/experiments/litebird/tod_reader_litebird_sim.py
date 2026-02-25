@@ -5,15 +5,16 @@ from astropy.io import fits
 import h5py
 import gc
 from numpy.typing import NDArray
-from commander4.utils.params import Params
+from pixell.bunch import Bunch
 from mpi4py import MPI
+
 from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.output.log import logassert
 
-def get_processing_mask(my_band: Params) -> DetectorTOD:
+def get_processing_mask(my_band: Bunch) -> DetectorTOD:
     """ Finds and returns the processing mask for the relevant band.
     """
     hdul = fits.open(my_band.processing_mask)
@@ -33,16 +34,16 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     return best_ntod
 
 
-def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: Params,
-               params: Params, my_det_id: int, scan_idx_start: int,
+def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: Bunch,
+               params: Bunch, my_det_id: int, scan_idx_start: int,
                scan_idx_stop: int) -> DetectorTOD:
     logger = logging.getLogger(__name__)
     oids = []
     pids = []
     filepaths = []
-    detname = str(my_det)
-    bandname = str(my_band)
-    expname = str(my_experiment)
+    detname = my_det._name
+    bandname = my_band._name
+    expname = my_experiment._name
 
     with open(my_band.filelist) as infile:
         infile.readline()

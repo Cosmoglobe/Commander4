@@ -20,7 +20,6 @@ import commander4.sky_models.component as component_lib
 from commander4.data_models.detector_map import DetectorMap
 from commander4.output import plotting
 from commander4.sky_models.component import Component
-from commander4.utils.params import Params
 
 
 CHAIN_ITER_RE = re.compile(r"chain(?P<chain>\d+)_iter(?P<iter>\d+)\.h5$")
@@ -36,7 +35,7 @@ def _decode_h5_value(value):
 	return value
 
 
-def _load_params_from_chain(chain_dir: str) -> Params | None:
+def _load_params_from_chain(chain_dir: str) -> Bunch | None:
 	patterns = [
 		os.path.join(chain_dir, "datamaps", "*.h5"),
 		os.path.join(chain_dir, "compsep", "*.h5"),
@@ -59,7 +58,7 @@ def _load_params_from_chain(chain_dir: str) -> Params | None:
 			if not raw_yaml:
 				continue
 			params_dict = yaml.safe_load(raw_yaml)
-			params = Params(params_dict)
+			params = Bunch(params_dict)
 			params.parameter_file_as_string = yaml.dump(params_dict)
 			params.parameter_file_binary_yaml = raw_yaml
 			return params
@@ -73,7 +72,7 @@ def _extract_chain_iter(filename: str) -> tuple[int | None, int | None]:
 	return int(match.group("chain")), int(match.group("iter"))
 
 
-def _build_component_list(params: Params) -> list[Component]:
+def _build_component_list(params: Bunch) -> list[Component]:
 	comp_list: list[Component] = []
 	for component_str in params.components:
 		component = params.components[component_str]
@@ -101,7 +100,7 @@ def _build_component_list(params: Params) -> list[Component]:
 	return comp_list
 
 
-def _load_compsep_components(params: Params, compsep_path: str) -> list[Component]:
+def _load_compsep_components(params: Bunch, compsep_path: str) -> list[Component]:
 	comp_list = _build_component_list(params)
 	if not comp_list:
 		return []
@@ -170,7 +169,7 @@ def _build_detector_data(map_sky: np.ndarray,
 	return detmap
 
 
-def _match_band_info(filename: str, params: Params | None) -> tuple[str | None, str | None, Bunch | None]:
+def _match_band_info(filename: str, params: Bunch | None) -> tuple[str | None, str | None, Bunch | None]:
 	if params is None or "experiments" not in params:
 		return None, None, None
 	for exp_name in params.experiments:

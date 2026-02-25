@@ -5,6 +5,7 @@ import logging
 from scipy.fft import rfftfreq
 import time
 from numpy.typing import NDArray
+from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_TOD import DetectorTOD
@@ -16,7 +17,6 @@ from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0
 from commander4.tod_reader import read_tods_from_file
 from commander4.output.write_chains_files import write_tod_chain_to_file, write_map_chain_to_file
-from commander4.utils.params import Params
 # from commander4.logging.performance_logger import benchmark, summarize, start_bench, stop_bench
 
 
@@ -26,7 +26,7 @@ def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float32]:
 
 
 def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: NDArray,
-            detector_samples: DetectorSamples, params: Params, chain: int, iter: int,
+            detector_samples: DetectorSamples, params: Bunch, chain: int, iter: int,
             mapmaker_corrnoise: MapmakerIQU = None) -> DetectorMap:
     """ Commander4 mapmaking. All ranks on the provided MPI communicator collaborates on creating
         the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
@@ -36,7 +36,7 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         experiment_data (DetectorTOD): TOD data class to be made into maps.
         compsep_output (np.array): The sky model at our band. Not used, but written to chain file.
         detector_samples (DetectorSamples): Sampled TOD parameters, such as gain.
-        params (Params): Parameter file as 'Param' object.
+        params (Bunch): Parameter file as 'Param' object.
         chain (int): Current chain number.
         iter (int): Current Gibbs iteration.
         mapmaker_corrnoise (MapmakerIQU): Correlated noise maps are created during TOD sampling to
@@ -109,7 +109,7 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         return []
 
 
-def init_tod_processing(mpi_info: Params, params: Params) -> tuple[bool, MPI.Comm, MPI.Comm, str,
+def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm, MPI.Comm, str,
                                                                  dict[str,int], DetectorTOD,
                                                                  DetectorSamples]:
     """To be run once before starting TOD processing.
@@ -119,11 +119,11 @@ def init_tod_processing(mpi_info: Params, params: Params) -> tuple[bool, MPI.Com
     experiment data.
 
     Input:
-        mpi_info (Params): The data structure containing all MPI relevant data.
-        params (Params): The parameters from the input parameter file.
+        mpi_info (Bunch): The data structure containing all MPI relevant data.
+        params (Bunch): The parameters from the input parameter file.
 
     Output:
-        mpi_info (Params): The data structure containing all MPI relevant data,
+        mpi_info (Bunch): The data structure containing all MPI relevant data,
             now also with a 'tod' section as well as the dictionary of band
             master mappings.
         todproc_my_band_id (str): Unique string identifier for the experiment+band this process is
@@ -240,8 +240,8 @@ def init_tod_processing(mpi_info: Params, params: Params) -> tuple[bool, MPI.Com
     det_samples = DetectorSamples(scansample_list)
     det_samples.detector_id = my_detector_id
     det_samples.g0_est = initial_g0_est
-    det_samples.detector_name = str(my_det)
-    det_samples.experiment_name = str(my_experiment)
+    det_samples.detector_name = my_det._name
+    det_samples.experiment_name = my_experiment._name
 
     if mpi_info.tod.is_master:
         logger.info(f"Initial absolute gain estimate for {exp_name}: {initial_g0_est:.2e}.")
@@ -272,12 +272,12 @@ def init_tod_processing(mpi_info: Params, params: Params) -> tuple[bool, MPI.Com
 
 
 def estimate_white_noise(experiment_data: DetectorTOD, detector_samples: DetectorSamples,
-                         det_compsep_map: NDArray, params: Params) -> DetectorTOD:
+                         det_compsep_map: NDArray, params: Bunch) -> DetectorTOD:
     """ Estimate the white noise level in the TOD data, add it to the scans, and return the updated
         experiment data.
     Input:
         experiment_data (DetectorTOD): The experiment TOD object.
-        params (Params): The parameters from the input parameter file.
+        params (Bunch): The parameters from the input parameter file.
     Output:
         experiment_data (DetectorTOD): The experiment TOD with the estimated white noise level
         added to each scan.
@@ -381,7 +381,7 @@ def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detec
         Args:
             TOD_comm (MPI.Comm): The full TOD communicator, since we will calculate a single g0
             value across all bands. experiment_data (DetectorTOD): The object holding all the scan
-            data. Will be changed in-place to update g0. params (Params): Parameters from param file
+            data. Will be changed in-place to update g0. params (Bunch): Parameters from param file
     """
     logger = logging.getLogger(__name__)
 
@@ -485,7 +485,7 @@ def sample_relative_gain(TOD_comm: MPI.Comm, det_comm: MPI.Comm, experiment_data
         det_comm (MPI.Comm): The communicator for ranks sharing the same detector.
         experiment_data (DetectorTOD): The object holding scan data for a single
                                        detector on the calling rank.
-        params (Params): Parameters from the parameter file.
+        params (Bunch): Parameters from the parameter file.
     Returns:
         detector_samples (DetectorSamples): In-place edited input samples.
     """
@@ -639,7 +639,7 @@ def sample_relative_gain(TOD_comm: MPI.Comm, det_comm: MPI.Comm, experiment_data
 
 def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: DetectorTOD,
                                     detector_samples: DetectorSamples, det_compsep_map: NDArray,
-                                    chain: int, iter: int, params: Params):
+                                    chain: int, iter: int, params: Bunch):
     """ Samples the time-dependent relative gain variations (delta g_qi). This function implements
         the logic from Sec. 3.5 of the BP7 paper, using a Wiener filter to smooth the gain solution
         over time (PIDs). It solves a global system for all scans of a given detector, which are
@@ -648,7 +648,7 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
     Args:
         det_comm (MPI.Comm): The communicator for ranks sharing the same detector.
         experiment_data (DetectorTOD): The object holding scan data.
-        params (Params): Parameters from the parameter file.
+        params (Bunch): Parameters from the parameter file.
     """
     logger = logging.getLogger(__name__)
     band_rank = det_comm.Get_rank()
@@ -836,18 +836,18 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
     return detector_samples
 
 
-def process_tod(mpi_info: Params, experiment_data: DetectorTOD,
+def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
                 detector_samples, compsep_output: NDArray,
-                params: Params, chain, iter) -> list[DetectorMap]:
+                params: Bunch, chain, iter) -> list[DetectorMap]:
     """ Performs a single TOD iteration.
 
     Input:
-        mpi_info (Params): The data structure containing all MPI relevant data.
+        mpi_info (Bunch): The data structure containing all MPI relevant data.
         experiment_data (DetectorTOD): The input experiment TOD for the band
             belonging to the current process.
         compsep_output (np.array): The current best estimate of the sky model
             as seen by the band belonging to the current process.
-        params (Params): The parameters from the input parameter file.
+        params (Bunch): The parameters from the input parameter file.
 
     Output:
         list[DetectorMap] list of instance which represents the correlated noise subtracted

@@ -6,13 +6,13 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from pixell.bunch import Bunch
 
 from commander4.sky_models.component import Component, split_complist
 from commander4.data_models.detector_map import DetectorMap
-from commander4.utils.params import Params
 
 
-def plot_combo_maps(params: Params, detector: int | str, chain: int, iteration: int,
+def plot_combo_maps(params: Bunch, detector: int | str, chain: int, iteration: int,
                     comp_list: list[Component], detector_data: DetectorMap):
 
     logger = logging.getLogger(__name__)
@@ -218,7 +218,7 @@ def plot_cg_res(params, chain, iteration, residual):
     plt.close()
 
 
-def plot_components(params: Params, detector: int | str, chain: int, iteration: int,
+def plot_components(params: Bunch, detector: int | str, chain: int, iteration: int,
                     components_list: list[Component], detector_data: DetectorMap):
     """
     Plots the resulting component maps produced by component separation. It will

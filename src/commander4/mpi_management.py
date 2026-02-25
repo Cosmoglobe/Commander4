@@ -3,14 +3,14 @@ import time
 import logging
 import mpi4py
 from mpi4py import MPI
+from pixell.bunch import Bunch
 
 from commander4.output import log
-from commander4.utils.params import Params
 
 def init_mpi(params):
     """ To be run before anything else to set up the MPI environment.
 
-    Creates a Params data structure, mpi_info, which contains all data relevant to the MPI layout of
+    Creates a Bunch data structure, mpi_info, which contains all data relevant to the MPI layout of
     the program.  Structured as a hierarchy where the top level are the names of the MPI contexts
     that we operate in (for now, 'world', 'tod', 'compsep', and 'band'). The only exception to this
     is the 'processor_name' entry, which is independent of context and thus does not belong under
@@ -33,12 +33,12 @@ def init_mpi(params):
     respectively (needed for passing data between TOD and compsep processes).
 
     Input:
-        params (Params): The parameters from the input parameter file.
+        params (Bunch): The parameters from the input parameter file.
     Output:
-        mpi_info (Params): The data structure containing all MPI relevant data, as explained above.
+        mpi_info (Bunch): The data structure containing all MPI relevant data, as explained above.
     """
     logger = logging.getLogger(__name__)
-    mpi_info = Params()
+    mpi_info = Bunch()
     world_comm = MPI.COMM_WORLD
     worldsize, worldrank = world_comm.Get_size(), world_comm.Get_rank()
     is_world_master = worldrank == 0
@@ -132,7 +132,7 @@ def init_mpi(params):
     world_comm.barrier()
     time.sleep(worldrank*1e-2)  # Small sleep to get prints in nice order.
 
-    mpi_info['world'] = Params()
+    mpi_info['world'] = Bunch()
     mpi_info['world']['comm'] = world_comm
     mpi_info['world']['master'] = 0
     mpi_info['world']['size'] = worldsize
@@ -141,12 +141,12 @@ def init_mpi(params):
     mpi_info['world']['tod_master'] = tod_master
     mpi_info['world']['compsep_master'] = compsep_master
     mpi_info['world']['is_master'] = is_world_master
-    mpi_info['world']['tod_band_masters'] = Params()
-    mpi_info['world']['compsep_band_masters'] = Params()
+    mpi_info['world']['tod_band_masters'] = Bunch()
+    mpi_info['world']['compsep_band_masters'] = Bunch()
     mpi_info['processor_name'] = MPI.Get_processor_name()
 
     if color == 0:
-        mpi_info['tod'] = Params()
+        mpi_info['tod'] = Bunch()
         mpi_info['tod']['comm'] = proc_comm
         mpi_info['tod']['master'] = 0
         mpi_info['tod']['size'] = proc_comm.Get_size()
@@ -156,7 +156,7 @@ def init_mpi(params):
 
     elif color == 1:
         proc_rank = proc_comm.Get_rank()
-        mpi_info['compsep'] = Params()
+        mpi_info['compsep'] = Bunch()
         mpi_info['compsep']['comm'] = proc_comm
         mpi_info['compsep']['master'] = 0
         mpi_info['compsep']['size'] = proc_comm.Get_size()
@@ -185,11 +185,11 @@ def init_mpi_tod(mpi_info, params):
     This function is called by init_mpi.
 
     Input:
-        mpi_info (Params): The data structure containing all MPI relevant data.
-        params (Params): The parameters from the input parameter file.
+        mpi_info (Bunch): The data structure containing all MPI relevant data.
+        params (Bunch): The parameters from the input parameter file.
 
     Output:
-        mpi_info (Params): The data structure containing all MPI relevant data, now including info
+        mpi_info (Bunch): The data structure containing all MPI relevant data, now including info
             for the 'tod' context.
     """
     import numpy as np  # Can't be loaded at top-level because it must be loaded after init_mpi().
@@ -264,10 +264,10 @@ def init_mpi_tod(mpi_info, params):
                  f"communicator size: {MPIsize_band}), and detector "
                  f"{my_det_id} with local rank {MPIrank_det} and size {MPIsize_det}")
 
-    mpi_info['experiment'] = Params()
+    mpi_info['experiment'] = Bunch()
     mpi_info['experiment']['name'] = my_experiment_name
     mpi_info['tod']['band_id'] = my_band_id
-    mpi_info['band'] = Params()
+    mpi_info['band'] = Bunch()
     mpi_info['band']['master'] = 0
     mpi_info['band']['comm'] = band_comm
     mpi_info['band']['size'] = MPIsize_band
@@ -275,7 +275,7 @@ def init_mpi_tod(mpi_info, params):
     mpi_info['band']['is_master'] = is_band_master
     mpi_info['band']['name'] = my_band_name
     mpi_info['band']['det_id'] = my_det_id
-    mpi_info['det'] = Params()
+    mpi_info['det'] = Bunch()
     mpi_info['det']['master'] = 0
     mpi_info['det']['comm'] = det_comm
     mpi_info['det']['size'] = MPIsize_det
@@ -294,11 +294,11 @@ def init_mpi_compsep(mpi_info, params):
     called by init_mpi.
 
     Input:
-        mpi_info (Params): The data structure containing all MPI relevant data.
-        params (Params): The parameters from the input parameter file.
+        mpi_info (Bunch): The data structure containing all MPI relevant data.
+        params (Bunch): The parameters from the input parameter file.
 
     Output:
-        mpi_info (Params): The data structure containing all MPI relevant data, now including info
+        mpi_info (Bunch): The data structure containing all MPI relevant data, now including info
             for the 'compsep' context.
     """
 
@@ -312,7 +312,7 @@ def init_mpi_compsep(mpi_info, params):
         if params.CompSep_bands[band_str].enabled:
             current_band_idx += 1
     tot_num_bands = current_band_idx
-    mpi_info['band'] = Params()
+    mpi_info['band'] = Bunch()
     mpi_info['band']['size'] = 1
     mpi_info['band']['is_master'] = True
 

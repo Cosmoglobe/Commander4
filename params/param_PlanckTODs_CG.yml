@@ -4,7 +4,7 @@
 
 general:
   MPI_config:
-    ntask_tod: 128
+    ntask_tod: 112
     ntask_compsep_I: 8
     ntask_compsep_QU: 8
   nthreads_tod: 1
@@ -279,7 +279,7 @@ experiments:
       Planck30GHz:
         enabled: true
         tod_files_prefix: "LFI_030_"
-        num_MPI_tasks: 128 #24
+        num_MPI_tasks: 112 #24
         eval_nside: 512
         data_nside: 512
         fwhm: 32.4 # [arcmin]
@@ -343,7 +343,7 @@ experiments:
       Planck70GHz:
         enabled: false
         tod_files_prefix: "LFI_070_"
-        num_MPI_tasks: 64
+        num_MPI_tasks: 48
         eval_nside: 1024
         data_nside: 1024
         fwhm: 13.3 # [arcmin]

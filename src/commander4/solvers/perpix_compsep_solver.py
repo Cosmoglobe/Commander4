@@ -5,16 +5,16 @@ import logging
 import numpy as np
 from mpi4py import MPI
 from pixell import curvedsky
+from pixell.bunch import Bunch
 
 from commander4.output.log import logassert
 from commander4.sky_models.component import Component
 from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
 from commander4.data_models.detector_map import DetectorMap
-from commander4.utils.params import Params
 
 
 def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
-                         comp_list: list[Component], params: Params) -> list[Component]:
+                         comp_list: list[Component], params: Bunch) -> list[Component]:
     """ A pixel-by-pixel solver for the component separation problem. Requires uniform nside, unlike
         the CG solver. Also requires common beam smoothing, but handles this by smoothing all maps
         to the lowest resolution map.

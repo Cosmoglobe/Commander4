@@ -1,18 +1,16 @@
 import numpy as np
 from copy import deepcopy
-import logging
 import camb
 import healpy as hp
 import pysm3
 import pysm3.units as u
 import ducc0
 from numpy.typing import NDArray
+from pixell.bunch import Bunch
+
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
-from commander4.utils.params import Params
-
 from commander4.sky_models.component import ThermalDust, Synchrotron, FreeFree
-from commander4.utils.params import Params
 
 
 def generate_cmb(freq, fwhm, units, nside, lmax, params):
@@ -175,7 +173,7 @@ def get_orbital_dipole(scan: ScanTOD, pix: NDArray[np.integer], freq: float, uni
 
 
 
-def replace_tod_with_sim(detector_data: DetectorTOD, params: Params):
+def replace_tod_with_sim(detector_data: DetectorTOD, params: Bunch):
     nside = detector_data.nside
     npix = 12*nside**2
     fwhm = np.deg2rad(detector_data.fwhm/60.0)

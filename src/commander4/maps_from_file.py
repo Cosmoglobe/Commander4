@@ -3,12 +3,12 @@ import healpy as hp
 from astropy.io import fits
 import logging
 import pysm3.units as pysm3_u
+from pixell.bunch import Bunch
 
 from commander4.output.log import logassert
 from commander4.data_models.detector_map import DetectorMap
-from commander4.utils.params import Params
 
-def read_sim_map_from_file(my_band: Params) -> DetectorMap:
+def read_sim_map_from_file(my_band: Bunch) -> DetectorMap:
     """ Currently deprecated """
     logger = logging.getLogger(__name__)
     map_signal = hp.read_map(my_band.path_signal_map)
@@ -20,11 +20,11 @@ def read_sim_map_from_file(my_band: Params) -> DetectorMap:
     return DetectorMap(map_signal, map_rms, my_band.freq, my_band.fwhm, my_band.nside)
 
 
-def read_data_map_from_file(my_band: Params) -> DetectorMap:
+def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
     """ Reads the map data for a given band from disk. Used for bands that do not have a TOD
         processing component.
     Args:
-        my_band (Params): A parameter file subset for the band to read from file.
+        my_band (Bunch): A parameter file subset for the band to read from file.
     Returns:
         detector_map (DetectorMap): Object holding signal map and other relevant data (rms, nu...)
     """
