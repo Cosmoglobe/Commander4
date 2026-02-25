@@ -1,11 +1,12 @@
-from pixell.bunch import Bunch
 from mpi4py import MPI
 import logging
 # from commander4.experiments.litebird.tod_reader_litebird import tod_reader as tod_reader_litebird
-from commander4.experiments.litebird.tod_reader_litebird_sim import tod_reader as tod_reader_litebird_sim
+from commander4.experiments.litebird.tod_reader_litebird_sim import tod_reader\
+    as tod_reader_litebird_sim
 from commander4.experiments.planck.tod_reader_planck import tod_reader as tod_reader_planck
 from commander4.experiments.planck.tod_reader_planck_sim import tod_reader as tod_reader_planck_sim
 from commander4.experiments.akari.tod_reader_akari import tod_reader as tod_reader_akari
+from commander4.utils.params import Params
 
 # Dictionary containing known experiments and the location of their TOD reading scripts.
 # The `experiment_id`` field in the parameter file decides what TOD reader is used in this dict.
@@ -17,8 +18,9 @@ experiment_tod_readers = {
     "akari" : tod_reader_akari
 }
 
-def read_tods_from_file(det_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, my_det: Bunch,
-                        params: Bunch, my_detector_id: int, my_scans_start: int, my_scans_stop: int):
+def read_tods_from_file(det_comm: MPI.Comm, my_experiment: Params, my_band: Params, my_det: Params,
+                        params: Params, my_detector_id: int, my_scans_start: int,
+                        my_scans_stop: int):
     logger = logging.getLogger(__name__)
     # Confirm that the specified experiment type (e.g. "planck") is in dictionary.
     if my_experiment.experiment_id not in experiment_tod_readers.keys():

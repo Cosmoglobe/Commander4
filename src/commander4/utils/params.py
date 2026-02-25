@@ -26,7 +26,7 @@ class Params(Bunch):
         
         # 3. Recursively populate the data
         for key, val in list(self.items()):
-            if isinstance(val, dict):
+            if isinstance(val, (dict, Bunch)):
                 # RECURSION: Pass the child dict AND the key as the name
                 self[key] = Params(val, name=key)
         # We don't need to handle the non-recursive "leaf" nodes explicitly, as this is

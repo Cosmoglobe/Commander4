@@ -48,7 +48,8 @@ class PerfLogger:
                 merged[tag]['times'].append(stats['total_ns'])
 
         printstring += f"[{label}] Hierarchy Report (Ranks: {size})\n"
-        printstring += f"{'Tag':<25} | {'Calls':<6} | {'Avg (s)':<8} | {'Min (s)':<8} | {'Max (s)':<8} | {'Imbal %':<8}\n"
+        printstring += f"{'Tag':<25} | {'Calls':<6} | {'Avg (s)':<8} | {'Min (s)':<8} | "\
+                       f"{'Max (s)':<8} | {'Imbal %':<8}\n"
         printstring += "-" * 78 + "\n"
 
         for tag, data in sorted(merged.items()):
@@ -62,7 +63,8 @@ class PerfLogger:
             if max_time > 0:
                 imbalance = ((max_time - min_time) / max_time) * 100
 
-            printstring += f"{tag:<25} | {avg_calls:<6.1f} | {avg_time:<8.2f} | {min_time:<8.2f} | {max_time:<8.2f} | {imbalance:<8.1f}\n"
+            printstring += f"{tag:<25} | {avg_calls:<6.1f} | {avg_time:<8.2f} | {min_time:<8.2f} "\
+                           f"| {max_time:<8.2f} | {imbalance:<8.1f}\n"
         printstring += "-" * 78 + "\n"
         self.logger.info(printstring)
 

@@ -1,7 +1,7 @@
 import logging
 import numpy as np
 import healpy as hp
-import os
+from astropy.io import fits
 import h5py
 import gc
 from numpy.typing import NDArray
@@ -10,7 +10,18 @@ from mpi4py import MPI
 from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
-# from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
+from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
+from commander4.output.log import logassert
+
+def get_processing_mask(my_band: Params) -> DetectorTOD:
+    """ Finds and returns the processing mask for the relevant band.
+    """
+    hdul = fits.open(my_band.processing_mask)
+    mask = hdul[1].data["TEMPERATURE"].flatten().astype(bool)
+    nside = np.sqrt(mask.size//12)
+    if nside != my_band.eval_nside:
+        mask = hp.ud_grade(mask.astype(np.float64), my_band.eval_nside) == 1
+    return mask
 
 def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     if ntod <= 10_000 or ntod >= 400_000:
@@ -28,7 +39,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
     logger = logging.getLogger(__name__)
     oids = []
     pids = []
-    filenames = []
+    filepaths = []
     detname = str(my_det)
     bandname = str(my_band)
     expname = str(my_experiment)
@@ -36,12 +47,14 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
     with open(my_band.filelist) as infile:
         infile.readline()
         for line in infile:
-            pid, filename, _, _, _ = line.split()
+            pid, filepath, _, _, _ = line.split()
             pids.append(f"{int(pid):06d}")
-            filenames.append(filename[1:-1])
-            oids.append(filename.split(".")[0].split("_")[-1])
+            filepaths.append(filepath[1:-1])
+            oids.append(filepath.split(".")[0].split("_")[-1])
 
-    processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
+    # processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
+    processing_mask_map = get_processing_mask(my_band)
+
     if "bad_PIDs_path" in my_experiment:
         bad_PIDs = np.load(my_experiment.bad_PIDs_path)
     else:
@@ -60,16 +73,11 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
     num_included = 0
     for i_pid in range(scan_idx_start, scan_idx_stop):
         pid = pids[i_pid]
-        oid = oids[i_pid]
+        filepath = filepaths[i_pid]
         if pid in bad_PIDs:
             continue
-
-        filename = f"LB_{my_band.freq_identifier:03d}_{my_band.lb_det_identifier}_{oid.zfill(6)}.h5"
-        if "data_path" in my_band:
-            filepath = os.path.join(my_band.data_path, filename)
-        else:
-            filepath = os.path.join(my_experiment.data_path, filename)
         with h5py.File(filepath, "r") as f:
+            data_nside = int(f["common/nside"][()])
             ntod = int(f[f"/{pid}/common/ntod"][()])
             ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
             tod = f[f"/{pid}/{detname}/tod/"][:ntod_optimal].astype(np.float32)
@@ -79,8 +87,13 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
             psi_encoded = f[f"/{pid}/{detname}/psi/"][()]
             vsun = f[f"/{pid}/common/vsun/"][()]
             fsamp = float(f["/common/fsamp/"][()])
-            npsi = int(f["/common/npsi/"][()])
+            npsi = int(f["/common/npsi/"][()].item())
             flag_encoded = f[f"/{pid}/{detname}/flag/"][()]
+
+        processing_mask_nside = hp.npix2nside(processing_mask_map.size)
+        logassert(my_band.eval_nside == processing_mask_nside, f"Processing mask (band {bandname}) "
+                  f"has nside {processing_mask_nside} while eval_nside = {my_band.eval_nside} "
+                  "(NB: eval_nside can be set different from native data nside)", logger)
 
         # I noticed that some simulations have a (1,N) shape for its pixels, while others do not,
         # so we look for this first dimension and remove it if it exists:
@@ -103,30 +116,32 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
             tod_buffer[:ntod_optimal] = np.abs(tod)
             scanID = int(pid)
             scanlist.append(ScanTOD(tod, pix_encoded, psi_encoded, 0., scanID, my_band.eval_nside,
-                                    my_band.data_nside, fsamp, vsun, huffman_tree, huffman_symbols,
-                                    npsi,processing_mask_map, ntod,
+                                    data_nside, fsamp, vsun, huffman_tree, huffman_symbols, npsi,
+                                    processing_mask_map, ntod,
                                     pix_is_compressed=my_experiment.pix_is_compressed,
                                     psi_is_compressed=my_experiment.psi_is_compressed))
+
             num_included += 1
             ntod_sum_original += ntod
             ntod_sum_final += ntod_optimal
         if i_pid % 10 == 0:
             gc.collect()
-
-    det_static = DetectorTOD(scanlist, float(my_band.freq)+float(my_det.bandpass_shift),
-                             my_band.fwhm, my_band.eval_nside, my_band.data_nside, detname, expname)
+    my_det_central_freq = my_band.freq
+    if "bandpass_shift" in my_det:
+        my_det_central_freq += my_det.bandpass_shift
+    det_static = DetectorTOD(scanlist, my_det_central_freq, my_band.fwhm, my_band.eval_nside,
+                             data_nside, expname, bandname, detname)
     det_static.detector_id = my_det_id
 
-    # if my_experiment.replace_tod_with_sim:
-    #     replace_tod_with_sim(det_static, params)
+    if my_experiment.replace_tod_with_sim:
+        replace_tod_with_sim(det_static, params)
 
     ### Collect some info on master rank of each detector and print it ###
     local_tot_scans = scan_idx_stop - scan_idx_start
     local_stats = np.array([num_included, local_tot_scans, ntod_sum_final, ntod_sum_original])
     global_stats = np.zeros_like(local_stats)
-    req = det_comm.Ireduce(local_stats, global_stats, op=MPI.SUM, root=0)
+    det_comm.Reduce(local_stats, global_stats, op=MPI.SUM, root=0)
     if det_comm.Get_rank() == 0:
-        req.Wait()
         total_included, total_scans, total_ntod_final, total_ntod_original = global_stats
         frac_included = 0.0
         if total_scans > 0:
@@ -138,8 +153,5 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
         logger.info(f"Fraction of scans included for {detname}: {frac_included:.1f} %")
         logger.info(f"Fraction of TODs left after Fourier cut for {detname}: "
                     f"{avg_scan_remaining:.1f} %")
-    else:
-        req.Free()
-
 
     return det_static

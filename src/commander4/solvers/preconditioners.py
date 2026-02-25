@@ -1,4 +1,7 @@
-from __future__ import annotations  # Solves NameError arising if performing early evaluation of type hints. Needed together with below if-test, since we have a cirular import.
+# Solves NameError arising if performing early evaluation of type hints.
+# Needed together with below if-test, since we have a cirular import.
+from __future__ import annotations
+
 import numpy as np
 import ctypes as ct
 import healpy as hp
@@ -10,8 +13,9 @@ from commander4.utils.math_operations import alm_real2complex, alm_complex2real
 from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
 
 import typing
-if typing.TYPE_CHECKING:  # Only import when performing type checking, avoiding circular import during normal runtime.
-    from commander4.solvers.comp_sep_solvers import CompSepSolver
+# Only import when performing type checking, avoiding circular import during normal runtime.
+if typing.TYPE_CHECKING:
+    from commander4.solvers.CG_compsep_solver import CompSepSolver
     from commander4.sky_models.component import Component
     from commander4.utils.mapmaker import WeightsMapmakerIQU
 
@@ -39,9 +43,10 @@ class BeamOnlyPreconditioner:
     """
     def __init__(self, compsep: CompSepSolver, single_fwhm_value=None):
         """
-        Arguments:
+        Args:
             compsep (CompSepSolver): The CompSepSolver object from which this class is initialized.
-            single_fwhm_value (float): If provided, use this fwhm instead of the "correct" sum of all beams.
+            single_fwhm_value (float): If provided, use this fwhm instead of the "correct"
+            sum of all beams.
         """
         self.compsep = compsep
         compsep = self.compsep
@@ -76,9 +81,10 @@ class BeamOnlyPreconditioner:
 
 
 class NoiseOnlyPreconditioner:
-    """ Preconditioner accounting only for the diagonal of the noise covariance matrix: A = Y^T N^-1 Y.
-        Calculates the A^-1 operator for this case, which is only the l- m-diagonal of A.
-        NB: I don't think this preconditioner is correct, I'm unable to get it to reproduce the diagonal when testing.
+    """ Preconditioner accounting only for the diagonal of the noise covariance
+        matrix: A = Y^T N^-1 Y. Calculates the A^-1 operator for this case, which is only the
+        l- m-diagonal of A. NB: I don't think this preconditioner is correct, I'm unable to get it
+        to reproduce the diagonal when testing.
     """
     def __init__(self, compsep: CompSepSolver):
         """
@@ -93,20 +99,25 @@ class NoiseOnlyPreconditioner:
         # have the same weights per component, and use the average of the band-weights.
         w = compsep.map_inv_var
         w_alm = None
-        for icomp in range(compsep.ncomp): # The different components have different lmax, so we loop over each.
+        # The different components have different lmax, so we loop over each.
+        for icomp in range(compsep.ncomp):
             lmax = compsep.lmax_per_comp[icomp]
-            temp_w_alm = hp.map2alm(w, lmax=lmax)  # Create alms at the specific lmax used by this component.
+            # Create alms at the specific lmax used by this component.
+            temp_w_alm = hp.map2alm(w, lmax=lmax)
             if mycomp == icomp:
-                w_alm = compsep.CompSep_comm.reduce(temp_w_alm, op=MPI.SUM, root=icomp)  # Reduce to the rank holding this component.
+                # Reduce to the rank holding this component.
+                w_alm = compsep.CompSep_comm.reduce(temp_w_alm, op=MPI.SUM, root=icomp)
                 w_alm /= compsep.CompSep_comm.Get_size()
             else:
-                compsep.CompSep_comm.reduce(temp_w_alm, op=MPI.SUM, root=icomp)  # Reduce to the rank holding this component.
+                # Reduce to the rank holding this component.
+                compsep.CompSep_comm.reduce(temp_w_alm, op=MPI.SUM, root=icomp)
 
         if mycomp >= compsep.ncomp:
             return
 
         self.my_comp_lmax = compsep.my_comp_lmax
-        my_alm_len_complex = ((self.my_comp_lmax+1)*(self.my_comp_lmax+2))//2  # Not the same as the real-valued alms.
+        # Not the same as the real-valued alms.
+        my_alm_len_complex = ((self.my_comp_lmax+1)*(self.my_comp_lmax+2))//2
         self.YTNY = np.zeros(my_alm_len_complex, dtype=np.complex128)
         w_alm_only_m0 = np.zeros(self.my_comp_lmax + 1, dtype=np.complex128)
         for l in range(self.my_comp_lmax + 1):
@@ -144,8 +155,9 @@ class NoiseOnlyPreconditioner:
 
 class MixingMatrixPreconditioner:
     """ Preconditioner accounting only for the mixing matrix.
-        Calculates the A^-1 operator for this case, which, since it's both pixel-independent and l-m-independent,
-        is only a small matrix depending on frequency and components. This small matrix can be inverted directly.
+        Calculates the A^-1 operator for this case, which, since it's both pixel-independent and
+        l-m-independent, is only a small matrix depending on frequency and components.
+        This small matrix can be inverted directly.
     """
     def __init__(self, compsep: CompSepSolver):
         self.compsep = compsep
@@ -171,12 +183,14 @@ class MixingMatrixPreconditioner:
         if self.is_holding_comp:
             a_array = alm_real2complex(a_array, self.compsep.my_comp_lmax)
             a_map = np.empty((self.compsep.npix,), dtype=np.float64)
-            curvedsky.alm2map_healpix(a_array, a_map, spin=0, nthread=self.compsep.params.nthreads_compsep)
+            curvedsky.alm2map_healpix(a_array, a_map, spin=0,
+                                      nthread=self.compsep.params.nthreads_compsep)
             a_map_all = self.CompSep_subcomm.allgather(a_map)
             a_map_all = np.array(a_map_all)
             a_map_all = np.matmul(self.MT_M_inv, a_map_all)
             a_map_me = a_map_all[self.my_comp]
-            curvedsky.map2alm_healpix(a_map_me, a_array, niter=3, spin=0, nthread=self.compsep.params.nthreads_compsep)
+            curvedsky.map2alm_healpix(a_map_me, a_array, niter=3, spin=0,
+                                      nthread=self.compsep.params.nthreads_compsep)
             a_array = alm_complex2real(a_array, self.compsep.my_comp_lmax)
         return a_array
 
@@ -186,7 +200,8 @@ class JointPreconditioner:
     """ Preconditioner taking beam, noise, and mixing matrices into account, but all only partially.
         only the component-l-m-diagonal of A is calculated, and for the noise covariance we assume
         constant rms across the map (but not across components).
-        #TODO: 1. Get Wigner 3j stuff to work to get full N-diagonal. 2. Get the full mixing matrix stuff implemented.
+        #TODO: 1. Get Wigner 3j stuff to work to get full N-diagonal. 2. Get the full mixing matrix
+        # stuff implemented.
     """
     def __init__(self, compsep: CompSepSolver, comp_list: list[Component]):
         self.compsep = compsep
@@ -224,8 +239,10 @@ class JointPreconditioner:
                 M_fc = M[iband, icomp]
 
                 # Calculate beam operator for this frequency band
-                beam_window_squared = hp.gauss_beam(all_fwhm_rad[iband], lmax=comp_list[icomp].lmax)**2
-                beam_op_complex = hp.almxfl(np.ones(comp_list[icomp].alm_len_complex, dtype=np.complex128), beam_window_squared)
+                beam_window_squared = hp.gauss_beam(all_fwhm_rad[iband],
+                                                    lmax=comp_list[icomp].lmax)**2
+                beam_op_complex = hp.almxfl(np.ones(comp_list[icomp].alm_len_complex,
+                                                    dtype=np.complex128), beam_window_squared)
 
                 mean_weights = np.mean(all_map_inv_var[iband])
                 npix = all_map_inv_var[iband].shape[-1]

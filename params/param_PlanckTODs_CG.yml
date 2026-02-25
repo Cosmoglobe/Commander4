@@ -1,3 +1,7 @@
+# Parameter file for performing a full TOD processing + CG compsep on the Planck LFI TOD data with
+# auxiliary maps (Haslam + WMAP + HFI). Analysis performed at native resolutions.
+# By default not all detectors are included, but they are just commented out.
+
 general:
   MPI_config:
     ntask_tod: 64
@@ -7,8 +11,8 @@ general:
   nthreads_compsep: 2
   betzy_mode: false
 
-  CG_max_iter: 100
-  CG_max_iter_pol: 100
+  CG_max_iter: 200
+  CG_max_iter_pol: 200
   CG_err_tol: 1.0e-100
   CG_float_precision: "single"
   CG_real_alm_mode: False
@@ -19,7 +23,7 @@ general:
 
   niter_gibbs: 10
 
-  nside: 256
+  nside: 1024
 
   noise_fknee: 0.1
   noise_alpha: -0.9
@@ -33,30 +37,32 @@ general:
   sample_temporal_gain: True
   sample_temporal_gain_from_iter_num: 4
 
-  make_plots: True
   output_stats: False
 
   galactic_mask: True
   pixel_compsep_sampling: False
 
+  write_orb_dipole_maps_to_chain: True
+  write_corr_noise_maps_to_chain: True
+  write_sky_model_maps_to_chain: True
+
   output_paths:
-    plots: "../cmdr4_plots/Planck_WMAP_TOD_CG_new"
-    stats: "../cmdr4_stats"
-    chains: "../cmdr4_chains"
+    stats: "../cmdr4_stats/PlanckTODs_CG/"
+    chains: "../cmdr4_chains/PlanckTODs_CG/"
 
   logging:
     console:
       level: 'info'
     file:
       level: 'info'
-      filename: '/mn/stornext/u3/leoab/cmdr4_logs/output_Planck+WMAP_mapsonly_CG.log'
+      filename: '../PlanckTODs_CG.log'
 
 components:
   CMB:
     enabled: true
     component_class: "CMB"
     params:
-      polarizations: [True, False, False] #I Q U 
+      polarizations: [True, True, True] #I Q U 
       longname: "CMB"
       shortname: "cmb"
       smoothing_prior_FWHM: 30.0 # arcmin
@@ -65,18 +71,6 @@ components:
       smoothing_scale: 0
       spatially_varying_MM: False
 
-  CMB_pol:
-    enabled: true
-    component_class: "CMB"
-    params:
-      polarizations: [False, True, True] #I Q U 
-      longname: "CMB"
-      shortname: "cmb"
-      smoothing_prior_FWHM: 30.0 # arcmin
-      smoothing_prior_amplitude: 1.0e+7 # uK_RJ^2
-      lmax: 512
-      smoothing_scale: 0.0
-      spatially_varying_MM: False
 
   ThermalDust:
     enabled: true
@@ -107,7 +101,7 @@ components:
       nu0: 30
       lmax: 512
       smoothing_scale: 0.0
-      spatially_varying_MM: True
+      spatially_varying_MM: False
 
   FreeFree:
     enabled: true
@@ -178,7 +172,7 @@ CompSep_bands:
   Haslam408MHz:
     enabled: false
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 512
     data_nside: 512
     file_convention: "Haslam"
     path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
@@ -190,7 +184,7 @@ CompSep_bands:
   WMAPKa:
     enabled: false
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 512
     data_nside: 512
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_map_v4.fits"
@@ -202,7 +196,7 @@ CompSep_bands:
   WMAPQ1:
     enabled: false
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 512
     data_nside: 512
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_map_v4.fits"
@@ -214,7 +208,7 @@ CompSep_bands:
   WMAPQ2:
     enabled: false
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 512
     data_nside: 512
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_map_v4.fits"
@@ -226,7 +220,7 @@ CompSep_bands:
   WMAPV1:
     enabled: false
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 512
     data_nside: 512
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_map_v4.fits"
@@ -238,7 +232,7 @@ CompSep_bands:
   WMAPV2:
     enabled: false
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 512
     data_nside: 512
     file_convention: "WMAP"
     path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_map_v4.fits"
@@ -250,7 +244,7 @@ CompSep_bands:
   Planck857GHz:
     enabled: false
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 1024
     data_nside: 1024
     file_convention: "HFI"
     path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_map_n1024_10arcmin_QUADCOR_ZODICOR_uK.fits"
@@ -263,7 +257,7 @@ CompSep_bands:
   Planck353GHz:
     enabled: false
     get_from: "file"
-    eval_nside: 256
+    eval_nside: 1024
     data_nside: 1024
     file_convention: "HFI"
     path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_map_n1024_uK_udgrade.fits"
@@ -288,15 +282,12 @@ experiments:
       Planck30GHz:
         enabled: true
         tod_files_prefix: "LFI_030_"
-        num_MPI_tasks: 64
-        detector_id: 0
-        freq_identifier: 30
-        eval_nside: 256
+        num_MPI_tasks: 128 #24
+        eval_nside: 512
         data_nside: 512
         fwhm: 32.4 # [arcmin]
         freq: 28.4 # [GHz]
         fsamp: 32.5079365079365 # [Hz]
-        data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
         detectors:
@@ -320,13 +311,11 @@ experiments:
         enabled: false
         tod_files_prefix: "LFI_044_"
         num_MPI_tasks: 40
-        freq_identifier: 44
-        eval_nside: 256
+        eval_nside: 512
         data_nside: 512
         fwhm: 27.1 # [arcmin]
         freq: 44.1 # [GHz]
         fsamp: 46.5454545454545
-        data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
         detectors:
@@ -358,13 +347,11 @@ experiments:
         enabled: false
         tod_files_prefix: "LFI_070_"
         num_MPI_tasks: 64
-        freq_identifier: 70
-        eval_nside: 512
+        eval_nside: 1024
         data_nside: 1024
         fwhm: 13.3 # [arcmin]
         freq: 70.1 # [GHz]
         fsamp: 78.7692307692308
-        data_path: "/mn/stornext/d16/cmbco/bp/mathew/test/"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_70.txt"
         detectors:
