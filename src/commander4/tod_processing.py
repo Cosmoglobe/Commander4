@@ -119,12 +119,13 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
 
     ### PRINT NOISE SAMPLING STATS ###
     if do_ncorr_sampling:
-        num_failed_convergence = band_comm.reduce(num_failed_convergences_ncorr, op=MPI.SUM)
-        worst_residual = band_comm.reduce(worst_residual_ncorr, op=MPI.MAX)
+        num_failed_convergences_ncorr = band_comm.reduce(num_failed_convergences_ncorr, op=MPI.SUM)
+        worst_residual_ncorr = band_comm.reduce(worst_residual_ncorr, op=MPI.MAX)
         if band_comm.Get_rank() == 0:
-            if num_failed_convergence > 0:
+            if num_failed_convergences_ncorr > 0:
                 logger.info(f"Band {experiment_data.nu}GHz failed noise CG for "\
-                   f"{num_failed_convergences_ncorr} scans. Worst residual = {worst_residual:.3e}.")
+                            f"{num_failed_convergences_ncorr} scans. "\
+                            f"Worst residual = {worst_residual_ncorr:.3e}.")
 
         alphas = band_comm.gather(alphas, root=0)
         fknees = band_comm.gather(fknees, root=0)
@@ -605,8 +606,8 @@ def sample_relative_gain(TOD_comm: MPI.Comm, det_comm: MPI.Comm, experiment_data
                 logger.error("Failed to solve global linear system for relative gain: Not updating")
                 result_to_bcast = None
         else:
-             logger.error(f"Relative gain sampling requires > 1 detector, but only {n_detectors} "\
-                            "found across all ranks. Skipping.")
+            logger.error(f"Relative gain sampling requires > 1 detector, but only {n_detectors} "\
+                         "found across all ranks. Skipping.")
 
     # Broadcast the result to all ranks in the global communicator
     result_to_bcast = TOD_comm.bcast(result_to_bcast, root=0)

@@ -107,7 +107,7 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
 
     def apply_LHS(x_small):
         term1 = sigma0**2 * x_small
-        u_x = np.zeros(Ntod)
+        u_x = np.zeros(Ntod, dtype=x_small.dtype)
         u_x[~mask] = x_small
         m_inv_u_x = apply_filter(u_x, M_inv)
         u_t_m_inv_u_x = m_inv_u_x[~mask]
@@ -119,10 +119,10 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
     M_inv = 1.0 / ( (1/sigma0**2) + C_corr_inv)  # The stationary LHS operator.
     if rnd_seed is not None:
         np.random.seed(rnd_seed)
-    omega_2 = np.random.randn(Ntod)
-    omega_3 = np.random.randn(Ntod)
+    omega_2 = np.random.randn(Ntod).astype(dtype)
+    omega_3 = np.random.randn(Ntod).astype(dtype)
 
-    C_wn_timedomain = np.ones(Ntod)*sigma0**2
+    C_wn_timedomain = np.ones(Ntod, dtype=dtype)*sigma0**2
     C_wn_timedomain[~mask] = np.inf
     b_full = TOD/C_wn_timedomain + omega_2/np.sqrt(C_wn_timedomain)\
            + apply_filter(omega_3, np.sqrt(C_corr_inv))
@@ -142,7 +142,7 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
         x_small = CG_solver.x
         CG_err = CG_solver.err
     else:
-        x_small = np.zeros((0,))
+        x_small = np.zeros((0,), dtype=dtype)
         CG_err = 0
 
     correction_gaps_only = np.zeros(Ntod, dtype=dtype)
