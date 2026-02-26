@@ -158,8 +158,8 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
     if mpi_info.compsep.is_QU_master:
         t=0
         for comp in comp_sublist:
-            logger.debug(f"[MPI Comm] Sending {comp.shortname} from QU", comp._data.shape,
-                         comp._data.dtype, t, "to", mpi_info.compsep.I_master)
+            logger.debug(f"[MPI Comm] Sending {comp.shortname} from QU {comp._data.shape} "\
+                         f"comp._data.dtype {t} to {mpi_info.compsep.I_master}")
             compsep_comm.Send(comp._data, dest=mpi_info.compsep.I_master, tag=t)
             t+=1
     
@@ -168,12 +168,12 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
         t_int=0
         for comp in comp_list:
             if comp.pol: #if it is a pol component receive it from the QU_master
-                logger.info(f"[MPI Comm] Receiving {comp.shortname} from QU", comp._data.shape,
-                      comp._data.dtype, t_pol, "from", mpi_info.compsep.QU_master)
+                logger.debug(f"[MPI Comm] Receiving {comp.shortname} from QU {comp._data.shape} "\
+                             f"{comp._data.dtype} {t_pol} from {mpi_info.compsep.QU_master}")
                 compsep_comm.Recv(comp._data, source=mpi_info.compsep.QU_master, tag=t_pol)
                 t_pol+=1
             else:  # Otherwise it copy it over from the local intensity sublist held on I_master
-                logger.info(f"[MPI Comm] Copying {comp.shortname} from I", comp._data.shape,
+                logger.debug(f"[MPI Comm] Copying {comp.shortname} from I", comp._data.shape,
                       comp._data.dtype, t_int, "from local I")
                 comp._data = comp_sublist[t_int]._data
                 t_int+=1
