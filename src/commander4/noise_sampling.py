@@ -23,8 +23,8 @@ def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray) -> float:
     return sample
 
 
-def sample_noise_PS_params(n_corr: NDArray, sigma0: float, f_samp: float, alpha_start: float,
-                           freq_max=3.0, n_grid=100, n_burnin=5) -> tuple[float,float]:
+def sample_noise_PS_params(n_corr: NDArray, sigma0: float, f_samp: float, alpha_start = -1.0,
+                           freq_max = 3.0, n_grid = 100, n_burnin = 5) -> tuple[float, float]:
     """ Function for drawing a sample of the fknee and alpha parameters for the correlated noise
         under the power spectrum data model PS = sigma0*(f/fknee)**alpha, where sigma0 is known.
         Note that this relates *only* to the correlated noise, without the "flat" white noise.
@@ -33,6 +33,7 @@ def sample_noise_PS_params(n_corr: NDArray, sigma0: float, f_samp: float, alpha_
             sigma0 (float): White noise level of full data. Since this data model does not have a
                 white noise floor, this essentially just scales the resulting fnee value.
             f_samp (float): The sampling rate of the data (n_corr), in Hertz.
+            alpha_start (float): Starting guess for alpha in Gibbs sampler.
             freq_max (float): Maximum frequency to consider for the PS (all 1/f information is
                               contained at low freqs).
             n_grid (int): Number of grid points used for the inverse sampling.
@@ -83,7 +84,7 @@ def sample_noise_PS_params(n_corr: NDArray, sigma0: float, f_samp: float, alpha_
     return fknee_sample, alpha_current
 
 
-
+# TODO: return dtype (for n_corr) should match input TOD dtype.
 def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigma0: float,
                                      C_corr_inv: NDArray, err_tol=1e-8, max_iter=400,
                                      rnd_seed=None) -> NDArray:
