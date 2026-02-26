@@ -12,13 +12,13 @@ import io
 import time
 from copy import deepcopy
 from traceback import print_exc
+from pixell.bunch import Bunch
 
 from commander4.output import log
 from commander4 import mpi_management
-from commander4.utils.params import Params
 
 
-def run_commander4(params: Params, params_dict: dict):
+def run_commander4(params: Bunch, params_dict: dict):
     """
     Main loop function for Commander 4 Gibbs Sampling. Commander4 splits the Gibbs chain in two;
     TOD processing steps, and component separation, with dedicated hardware and separate MPI
@@ -26,7 +26,7 @@ def run_commander4(params: Params, params_dict: dict):
     such that each of the two tasks are always working on one of the two chains.
 
     Args:
-        params: The Commander4 parameter file, as a 'Params' object.
+        params: The Commander4 parameter file, as a 'Bunch' object.
         params_dict: The exact same parameter file, but as a dictionary.
     """
     logger = logging.getLogger(__name__)  # Access logger, used instead of print() in Commander4.

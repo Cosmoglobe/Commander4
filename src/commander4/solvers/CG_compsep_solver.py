@@ -5,6 +5,7 @@ from mpi4py import MPI
 from numpy.typing import NDArray
 from typing import Callable
 from copy import deepcopy
+from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky_models.component import Component
@@ -14,7 +15,6 @@ from commander4.solvers.dense_matrix_math import DenseMatrix
 from commander4.solvers.CG_driver import distributed_CG
 import commander4.solvers.preconditioners as preconditioners
 from commander4.data_models.band import Band
-from commander4.utils.params import Params
 
 MPI_LIMIT_32BIT = 2**31 - 1
 
@@ -37,7 +37,7 @@ class CompSepSolver:
             + S^{1/2}A^TN^{-1/2} eta_1 + S^{-1/2} mu + eta_2.
     """
     def __init__(self, det_map: DetectorMap,
-                 params: Params, CompSep_comm: MPI.Comm):
+                 params: Bunch, CompSep_comm: MPI.Comm):
         
         self.logger = logging.getLogger(__name__)
         self.CompSep_comm = CompSep_comm

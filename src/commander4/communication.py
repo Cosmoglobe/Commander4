@@ -1,23 +1,23 @@
 import numpy as np
 import logging
 from numpy.typing import NDArray
+from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.maps_from_file import read_data_map_from_file
-from commander4.utils.params import Params
 
 
 ### ON TOD SIDE
 
 # TODO: Communication in this script should be switched from picked (lowercase) to buffered
 # (uppercase) whereever possible (e.g. where arrays are communicated).
-def receive_compsep(mpi_info: Params, experiment_data: DetectorTOD, todproc_my_band_id: str,
+def receive_compsep(mpi_info: Bunch, experiment_data: DetectorTOD, todproc_my_band_id: str,
                     senders: dict[str, int]) -> NDArray[np.floating]:
     """ MPI-receive the results from compsep (used in conjunction with send_compsep).
 
     Input:
-        mpi_info (Params): The data structure containing all MPI relevant data.
+        mpi_info (Bunch): The data structure containing all MPI relevant data.
         todproc_my_band_id (str): The string uniquely indentifying the experiment+band of this rank
                                   (example: 'PlanckLFI$$$30GHz').
         senders (dict[str->int]): A dictionary mapping the string in 'todproc_my_band_id' to the
@@ -43,16 +43,16 @@ def receive_compsep(mpi_info: Params, experiment_data: DetectorTOD, todproc_my_b
     return detector_map_arr
 
 
-def send_tod(mpi_info: Params, tod_map_list: list[DetectorMap], todproc_my_band_id: str, receivers: Params) -> None:
+def send_tod(mpi_info: Bunch, tod_map_list: list[DetectorMap], todproc_my_band_id: str, receivers: Bunch) -> None:
     """ MPI-send the results from a single band TOD processing to a task on the CompSep side (used in conjunction with receive_tod).
 
     Assumes the COMM_WORLD communicator.
 
     Input:
-        mpi_info (Params): The data structure containing all MPI relevant data.
+        mpi_info (Bunch): The data structure containing all MPI relevant data.
         tod_map_list (list[DetectorMap]): The output maps ([I, QU]) from process_tod for the band belonging to this process.
         todproc_my_band_id (str): The string uniquely indentifying the experiment+band of this rank, regardless of polarization (example: 'PlanckLFI$$$30GHz').
-        receivers (Params): Maps a band identifier to the band master on the compsep side.
+        receivers (Bunch): Maps a band identifier to the band master on the compsep side.
     """
     logger = logging.getLogger(__name__)
     if mpi_info.tod.is_master:
@@ -74,15 +74,15 @@ def send_tod(mpi_info: Params, tod_map_list: list[DetectorMap], todproc_my_band_
 
 ### ON COMPSEP SIDE
 
-def receive_tod(mpi_info: Params, senders: dict[str,int], my_band: Params, compsep_band_id: str, curr_tod_output: DetectorMap|None) -> DetectorMap:
+def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep_band_id: str, curr_tod_output: DetectorMap|None) -> DetectorMap:
     """ MPI-receive the results from the TOD processing (used in conjunction with send_tod).
 
     Input:
-        mpi_info (Params): The data structure containing all MPI relevant data.
+        mpi_info (Bunch): The data structure containing all MPI relevant data.
         senders: (dict[str->int]): A dictionary mapping a string uniquely identifying each
                  experiment+band to the world rank of the sender task (on the CompSep side).
-        my_band (Params): The section of the parameter file corresponding to this CompSep band,
-                 as a "Params" type, it also has an 'identifier' field. 
+        my_band (Bunch): The section of the parameter file corresponding to this CompSep band,
+                 as a "Bunch" type, it also has an 'identifier' field. 
         compsep_band_id (str): The string uniquely indentifying the experiment+band+pol of this
                  rank (example: 'PlanckLFI$$$30GHz_I').
         curr_tod_output (DetectorMap): The current map output from the TOD process.
@@ -106,13 +106,13 @@ def receive_tod(mpi_info: Params, senders: dict[str,int], my_band: Params, comps
     
     return curr_tod_output
 
-def send_compsep(mpi_info: Params, compsep_my_band_id: str, band_sky_map: NDArray[np.floating],
+def send_compsep(mpi_info: Bunch, compsep_my_band_id: str, band_sky_map: NDArray[np.floating],
                  destinations: dict[str, int]|None) -> None:
     """ MPI-send the results from compsep to a destinations on the TOD processing side
         (used in conjunction with receive_compsep). Assumes the COMM_WORLD communicator.
 
     Args:
-        mpi_info (Params): The data structure containing all MPI relevant data.
+        mpi_info (Bunch): The data structure containing all MPI relevant data.
         compsep_my_band_id (str): The string uniquely indentifying the experiment+band+pol of this
                                   rank (example: 'PlanckLFI$$$30GHz_I').
         band_sky_map (np.array[float]): A sky realization at a given band frequency.

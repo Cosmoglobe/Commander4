@@ -7,13 +7,13 @@ import time
 from numpy.typing import NDArray
 from astropy.io import fits
 from mpi4py import MPI
-from commander4.utils.params import Params
+from pixell.bunch import Bunch
 from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
 
 
-def get_processing_mask(my_band: Params) -> DetectorTOD:
+def get_processing_mask(my_band: Bunch) -> DetectorTOD:
     """ Finds and returns the processing mask for the relevant band.
     """
     hdul = fits.open(my_band.processing_mask)
@@ -33,16 +33,16 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     return best_ntod
 
 
-def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: Params,
-               params: Params, my_det_id: int, scan_idx_start: int,
+def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: Bunch,
+               params: Bunch, my_det_id: int, scan_idx_start: int,
                scan_idx_stop: int) -> DetectorTOD:
     logger = logging.getLogger(__name__)
     oids = []
     pids = []
     filepaths = []
-    detname = str(my_det)
-    bandname = str(my_band)
-    expname = str(my_experiment)
+    detname = my_det._name
+    bandname = my_band._name
+    expname = my_experiment._name
 
     with open(my_band.filelist) as infile:
         infile.readline()
@@ -75,7 +75,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
         if pid in bad_PIDs:
             continue
         with h5py.File(filepath, "r") as f:
-            data_nside = int(f["common/nside"][()])
+            data_nside = int(f["common/nside"][()].item())
             ntod = int(f[f"/{pid}/common/ntod"][()].item())
             ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
             tod = f[f"/{pid}/{detname}/tod/"][:ntod_optimal].astype(np.float32)

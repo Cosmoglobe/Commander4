@@ -1,5 +1,6 @@
 import numpy as np
 import logging
+from pixell.bunch import Bunch
 
 from commander4.output.log import logassert
 from commander4.data_models.detector_map import DetectorMap
@@ -9,23 +10,22 @@ from commander4.sky_models.sky_model import SkyModel
 from commander4.solvers.CG_compsep_solver import CompSepSolver
 from commander4.solvers.perpix_compsep_solver import solve_compsep_perpix
 from commander4.output.write_chains_files import write_compsep_chain_to_file
-from commander4.utils.params import Params
 
 
-def init_compsep_processing(mpi_info: Params, params: Params)\
-    -> tuple[list[Component], str, dict[str, int], Params]:
+def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
+    -> tuple[list[Component], str, dict[str, int], Bunch]:
     """ To be run once before starting component separation processing.
         Determines whether the process is compsep master, and the number of bands.
 
     Args:
-        mpi_info (Params): The data structure containing all MPI relevant data.
-        params (Params): The parameters from the input parameter file.
+        mpi_info (Bunch): The data structure containing all MPI relevant data.
+        params (Bunch): The parameters from the input parameter file.
 
     Returns:
-        mpi_info (Params): The data structure containing all MPI relevant data,
+        mpi_info (Bunch): The data structure containing all MPI relevant data,
             modified to contain also the band masters dictionary.
         band_identifier (str): Unique string for the experiment+band this rank is working on.
-        my_band (Params): A subset of the full parameter file for the band this rank is working on.
+        my_band (Bunch): A subset of the full parameter file for the band this rank is working on.
     """
     logger = logging.getLogger(__name__)
     logger.info(f"CompSep: Hello from CompSep-rank {mpi_info.compsep.rank} (on machine "
@@ -118,18 +118,18 @@ def init_compsep_processing(mpi_info: Params, params: Params)\
     return comp_list, mpi_info, band_identifier, my_band
 
 
-def process_compsep(mpi_info: Params, detector_data: DetectorMap, iter: int, chain: int,
-                    params: Params, comp_list: list[Component]) -> SkyModel:
+def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chain: int,
+                    params: Bunch, comp_list: list[Component]) -> SkyModel:
     """ Performs a single component separation iteration.
         Called by each compsep process, which are each responsible for a single band.
     
     Args:
-        mpi_info (Params): The data structure containing all MPI relevant data.
+        mpi_info (Bunch): The data structure containing all MPI relevant data.
         detector_data (DetectorMap): The detector map for this MPI rank's band, cleaned of all
                                      "TOD" components (correlated noise and orbital dipole).
         iter (int): The current Gibbs iteration (used only for printing and seeding).
         chain (int): The current chain (used only for printing and seeding).
-        params (Params): The parameters from the input parameter file.
+        params (Bunch): The parameters from the input parameter file.
 
     Returns:
        detector_maps (np.array): The band-integrated total sky. 

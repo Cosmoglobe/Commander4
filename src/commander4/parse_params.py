@@ -1,7 +1,7 @@
 import yaml
 import os
 from argparse import ArgumentParser
-from commander4.utils.params import Params
+from pixell.bunch import Bunch
 
 
 # TODO: Below is code for finding either the Commander4 PIP version number, or the git hash in case
@@ -85,6 +85,23 @@ from commander4.utils.params import Params
 #     return "unknown"
 
 
+def as_bunch_recursive(dict_of_dicts, name=None):
+    res = Bunch()
+    
+    # 1. Inject the name into the instance, bypassing Bunch's data _dict
+    if name is not None:
+         object.__setattr__(res, "_name", name)
+         
+    # 2. Recursively populate the bunch
+    for key, val in dict_of_dicts.items():
+        if isinstance(val, dict):
+            # Pass the key down as the name for the child Bunch
+            res[key] = as_bunch_recursive(val, name=key)
+        else:
+            res[key] = val
+
+    return res
+
 # ------------------------------------------------------------------------
 # Parse parameter file
 # ------------------------------------------------------------------------
@@ -103,7 +120,7 @@ with open(commandline_params.parameter_file, "r") as f:
     binary_yaml_data = f.read()
 params_dict = yaml.safe_load(binary_yaml_data)
 
-params = Params(params_dict)
+params = as_bunch_recursive(params_dict)
 
 # For reproducability, create custom entries in the parameter object which holds the entire
 # parameter file, both as a single string, and as a binary YAML file.

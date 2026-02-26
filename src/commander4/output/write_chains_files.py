@@ -2,15 +2,14 @@ import os
 import h5py
 import numpy as np
 import datetime
-
 from mpi4py import MPI
+from pixell.bunch import Bunch
 
 from commander4.data_models.detector_samples import DetectorSamples
-from commander4.utils.params import Params
 from commander4.sky_models.component import Component
 
 
-def write_map_chain_to_file(params: Params, chain: int, iter: int, exp_name:str,
+def write_map_chain_to_file(params: Bunch, chain: int, iter: int, exp_name:str,
                             band_name: str, maps_to_file: dict) -> None:
     chain_dir = os.path.join(params.general.output_paths.chains, "datamaps")
     filename = f"{exp_name}_{band_name}_chain{chain:02d}_iter{iter:04d}.h5"
@@ -25,7 +24,7 @@ def write_map_chain_to_file(params: Params, chain: int, iter: int, exp_name:str,
 
 
 def write_tod_chain_to_file(det_comm: MPI.Comm, detector_samples: DetectorSamples,
-                            params: Params, chain: int, iter: int) -> None:
+                            params: Bunch, chain: int, iter: int) -> None:
     detector_samples_batches = det_comm.gather(detector_samples, root=0)
     if det_comm.Get_rank() == 0:
         # TODO: Make DetectorSamples arrays. Currently this gather takes minutes.
@@ -60,7 +59,7 @@ def write_tod_chain_to_file(det_comm: MPI.Comm, detector_samples: DetectorSample
                 file[key] = arr
 
 
-def write_compsep_chain_to_file(comp_list: list[Component], params: Params, chain: int, iter: int):
+def write_compsep_chain_to_file(comp_list: list[Component], params: Bunch, chain: int, iter: int):
     chain_dir = os.path.join(params.general.output_paths.chains, "compsep")
     chain_file = os.path.join(chain_dir, f"chain{chain:02d}_iter{iter:04d}.h5")
     with h5py.File(chain_file, "w") as file:

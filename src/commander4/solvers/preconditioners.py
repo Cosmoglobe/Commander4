@@ -300,7 +300,11 @@ class InvNPreconditioner:
             self.inv_N_IQU = inv_N_IQU.astype(np.float32)
 
     def __call__(self, map: NDArray) -> NDArray:
-        assert map.shape[1] == self.npix
-        map_out = np.copy(map)
+        #assert map.shape[1] == self.npix
+        #map_out = np.copy(map)
+        map_out=np.zeros((3,self.npix))
+        map_out[0,:] = map[:self.npix]
+        map_out[1,:] = map[self.npix:2*self.npix]
+        map_out[2,:] = map[2*self.npix:3*self.npix]
         self.apply_invN_to_map_IQU(map, map_out, self.inv_N_IQU, self.npix)
-        return map_out
+        return map_out.flatten()

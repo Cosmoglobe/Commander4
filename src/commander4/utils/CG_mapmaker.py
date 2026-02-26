@@ -199,6 +199,7 @@ class CG_Mapmaker:
         out_map = np.zeros((3,hp.nside2npix(self.detector_tod.nside)), dtype=self.f_dtype)
         for scan, sample in zip(self.detector_tod.scans, self.detector_samples.scans):
             scan_tod_arr_aux = np.copy(scan._tod) #aux array to not modify scan._tod
+            #FIXME: subtract ncorr and orb dipole from the scan_tod_arr_aux. 
             #N^-1 d
             # if ismaster:
             #     self.logger.info(f"RHS_1: {scan_tod_arr_aux}")
