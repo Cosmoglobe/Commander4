@@ -39,7 +39,8 @@ def run_commander4(params: Bunch, params_dict: dict):
     if mpi_info['world']['is_master']:
         import random
         # Print the entire parameter file to log.
-        logger.info(f"### PARAMETERS ###\n {yaml.dump(params_dict, allow_unicode=True, default_flow_style=False)}")
+        logger.info(f"### PARAMETERS ###\n {yaml.dump(params_dict, allow_unicode=True,
+                                                      default_flow_style=False)}")
         # Print a randomly colored Commander4 text.
         logger.info(f"\033[{random.randint(91, 96)}m" + r"""
            ______                                          __             __ __
@@ -124,7 +125,7 @@ def run_commander4(params: Bunch, params_dict: dict):
             chain_num = i % 2 + 1  # [2, 1, 2, 1,...] - TOD has already been done for chain 1 iter 1
                                    # pre-loop, so we start with TOD for chain 2.
             if mpi_info.tod.rank == 0:
-                logger.info(f"Worldrank {mpi_info.world.rank}, subrank"
+                logger.info(f"Worldrank {mpi_info.world.rank}, subrank"\
                             f"{mpi_info.tod.rank} starting TOD iteration {iter_num}.")
             # TODO: I think this ugly branching logic could be removed if we just renamed
             # detector_samples_chain1 and 2 to "current" and "other" instead of 1 and 2.
@@ -139,21 +140,21 @@ def run_commander4(params: Bunch, params_dict: dict):
                                                                        curr_compsep_output, params,
                                                                        chain_num, iter_num)
             if mpi_info.tod.is_master:
-                logger.info(f"TOD: Rank {mpi_info.tod.rank} finished chain {chain_num}, iter "
+                logger.info(f"TOD: Rank {mpi_info.tod.rank} finished chain {chain_num}, iter "\
                             f"{iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
             t0 = time.time()
             curr_compsep_output = receive_compsep(mpi_info, experiment_data,
                                                   my_band_tod_id,
                                                   mpi_info.world.compsep_band_masters)
             if mpi_info.band.is_master:
-                logger.info(f"TOD: Rank {mpi_info.tod.rank} finished receiving "
-                            f"results for chain {chain_num}, iter {iter_num} "
-                            f"(time spent waiting+receiving = "
+                logger.info(f"TOD: Rank {mpi_info.tod.rank} finished receiving "\
+                            f"results for chain {chain_num}, iter {iter_num} "\
+                            f"(time spent waiting+receiving = "\
                             f"{time.time()-t0:.1f}s).")
             send_tod(mpi_info, curr_tod_output, my_band_tod_id,
                      mpi_info.world.compsep_band_masters)
             if mpi_info.tod.is_master:
-                logger.info(f"TOD: Rank {mpi_info.tod.rank} finished sending "
+                logger.info(f"TOD: Rank {mpi_info.tod.rank} finished sending "\
                             f"results for chain {chain_num}, iter {iter_num}.")
 
         elif mpi_info.world.color == 1:
@@ -162,23 +163,23 @@ def run_commander4(params: Bunch, params_dict: dict):
             chain_num = (i + 1) % 2 + 1  # [1, 2, 1, 2,...] - We start at chain 1, since that's the
                                          # chain that has already done a TOD step pre-loop.
             if mpi_info.compsep.rank == 0:
-                logger.info(f"Worldrank {mpi_info.world.rank}, subrank {mpi_info.compsep.rank} "
+                logger.info(f"Worldrank {mpi_info.world.rank}, subrank {mpi_info.compsep.rank} "\
                             f"going into compsep loop for chain {chain_num}, iter {iter_num}.")
             t0 = time.time()
             curr_compsep_output = process_compsep(mpi_info, curr_tod_output, iter_num, chain_num,
                                                   params, components)
             if mpi_info.compsep.rank == 0:
-                logger.info(f"Compsep: Rank {mpi_info.compsep.rank} finished chain {chain_num}, "
+                logger.info(f"Compsep: Rank {mpi_info.compsep.rank} finished chain {chain_num}, "\
                             f"{iter_num} in {time.time()-t0:.2f}s. Sending compsep results.")
             send_compsep(mpi_info, my_band_compsep_id, curr_compsep_output,
                          mpi_info.world.tod_band_masters)
-            logger.info(f"Compsep: Rank {mpi_info.compsep.rank} finished sending results for chain "
-                        f"{chain_num}, iter {iter_num}. Waiting for TOD results.")
+            logger.info(f"Compsep: Rank {mpi_info.compsep.rank} finished sending results for chain"\
+                        f" {chain_num}, iter {iter_num}. Waiting for TOD results.")
             t0 = time.time()
             curr_tod_output = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
                                           my_band_compsep_id, curr_tod_output)
-            logger.info(f"Compsep: Rank {mpi_info.compsep.rank} finished receiving TOD results for "
-                        f"chain {chain_num}, iter {iter_num} (time spent waiting+receiving = "
+            logger.info(f"Compsep: Rank {mpi_info.compsep.rank} finished receiving TOD results for"\
+                        f" chain {chain_num}, iter {iter_num} (time spent waiting+receiving = "\
                         f"{time.time()-t0:.1f}s).")
     # stop compsep machinery
     if mpi_info.world.is_master:
@@ -197,7 +198,7 @@ def main():
             profiler = cProfile.Profile()
             profiler.enable()
         ret = run_commander4(params, params_dict)
-        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} finished Commander 4 and is shutting down."
+        logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} finished Commander 4 and is shutting down. "\
                     "Goodbye!")
         if params.general.output_stats:
             profiler.disable()
@@ -206,7 +207,7 @@ def main():
             if ret != -1:
                 stats.print_stats(10)
                 logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} cProfile stats: {s.getvalue()}")
-                stats.dump_stats(f"{params.general.output_paths.stats}/"
+                stats.dump_stats(f"{params.general.output_paths.stats}/"\
                                  f"stats-{MPI.COMM_WORLD.Get_rank()}")
 
     # First check for MPI-specific exceptions.
@@ -214,7 +215,7 @@ def main():
         print_exc()
         error_code = e.Get_error_code()
         error_string = MPI.Get_error_string(error_code)
-        logger.error(f">>>>>>>> MPI Error on rank {MPI.COMM_WORLD.Get_rank()}!"
+        logger.error(f">>>>>>>> MPI Error on rank {MPI.COMM_WORLD.Get_rank()}!"\
                      f"Code: [{error_code}] - {error_string}")
         MPI.COMM_WORLD.Abort(error_code)
 

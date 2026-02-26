@@ -43,15 +43,17 @@ def receive_compsep(mpi_info: Bunch, experiment_data: DetectorTOD, todproc_my_ba
     return detector_map_arr
 
 
-def send_tod(mpi_info: Bunch, tod_map_list: list[DetectorMap], todproc_my_band_id: str, receivers: Bunch) -> None:
-    """ MPI-send the results from a single band TOD processing to a task on the CompSep side (used in conjunction with receive_tod).
-
-    Assumes the COMM_WORLD communicator.
+def send_tod(mpi_info: Bunch, tod_map_list: list[DetectorMap], todproc_my_band_id: str,
+             receivers: Bunch) -> None:
+    """ MPI-send the results from a single band TOD processing to a task on the CompSep side
+        (used in conjunction with receive_tod).
 
     Input:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
-        tod_map_list (list[DetectorMap]): The output maps ([I, QU]) from process_tod for the band belonging to this process.
-        todproc_my_band_id (str): The string uniquely indentifying the experiment+band of this rank, regardless of polarization (example: 'PlanckLFI$$$30GHz').
+        tod_map_list (list[DetectorMap]): The output maps ([I, QU]) from process_tod for the band
+                                          belonging to this process.
+        todproc_my_band_id (str): The string uniquely indentifying the experiment+band of this rank,
+                                  regardless of polarization (example: 'PlanckLFI$$$30GHz').
         receivers (Bunch): Maps a band identifier to the band master on the compsep side.
     """
     logger = logging.getLogger(__name__)
@@ -63,18 +65,21 @@ def send_tod(mpi_info: Bunch, tod_map_list: list[DetectorMap], todproc_my_band_i
         if target_band in receivers.keys(): #myband has an I component
             mpi_info.world.comm.send(tod_map_list[0], dest=receivers[target_band])
         else:
-            logger.info(f"Intensity TOD-processing result discarded, as band {todproc_my_band_id} is only defined for QU.")
+            logger.info(f"Intensity TOD-processing result discarded, as band {todproc_my_band_id} "\
+                        "is only defined for QU.")
         #QU
         target_band = todproc_my_band_id+'_QU'
         if target_band in receivers.keys(): #myband has a QU component
             mpi_info.world.comm.send(tod_map_list[1], dest=receivers[target_band])
         else:
-            logger.info(f"QU TOD-processing result discarded, as band {todproc_my_band_id} is only defined for Intensity.")
+            logger.info(f"QU TOD-processing result discarded, as band {todproc_my_band_id} is "\
+                        "only defined for Intensity.")
 
 
 ### ON COMPSEP SIDE
 
-def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep_band_id: str, curr_tod_output: DetectorMap|None) -> DetectorMap:
+def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep_band_id: str,
+                curr_tod_output: DetectorMap|None) -> DetectorMap:
     """ MPI-receive the results from the TOD processing (used in conjunction with send_tod).
 
     Input:
@@ -100,7 +105,7 @@ def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep
         else:
             logger.info(f"CompSep: Rank {my_compsep_rank} already has static map data. Continuing.")
     else:
-        logger.info(f"CompSep: Rank {my_compsep_rank} receiving TOD data ({compsep_band_id}) from "
+        logger.info(f"CompSep: Rank {my_compsep_rank} receiving TOD data ({compsep_band_id}) from "\
                     f"TOD process with global rank {senders[compsep_band_id]}")
         curr_tod_output = mpi_info.world.comm.recv(source=senders[compsep_band_id])
     

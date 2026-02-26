@@ -336,9 +336,9 @@ class CompSepSolver:
             iter += 1
             if iter%checkpt_int == 0:
                 if master:
-                    logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG iter {iter:3d} - "
-                                f"Residual {np.mean(self.CG_residuals[iter-checkpt_int:iter]):.6e} "
-                                f"({(time.time() - t0)/checkpt_int:.2f}s/iter)")
+                    logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG iter {iter:3d} - "\
+                                f"Residual {np.mean(self.CG_residuals[iter-checkpt_int:iter]):.6e}"\
+                                f" ({(time.time() - t0)/checkpt_int:.2f}s/iter)")
                     t0 = time.time()
                     if x_true is not None:
                         CG_errors_true = complist_norm(CG_solver.x - x_true)/complist_norm(x_true)
@@ -349,7 +349,7 @@ class CompSepSolver:
                         # A-norm error is only defined for the full vector.
                         logger.info(f"CG iter {iter:3d} - True A-norm error: {CG_Anorm_error:.3e}")
                         # We can print the individual component L2 errors.
-                        logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].longname} - "
+                        logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].longname} - "\
                                     f"True L2 error: {CG_errors_true:.3e}")
                 else:
                     if x_true is not None:
@@ -363,8 +363,8 @@ class CompSepSolver:
             stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
         self.CG_residuals = self.CG_residuals[:iter]
         if master:
-            logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG finished after {iter} "
-                        f"iterations with a residual of {CG_solver.err:.3e} "
+            logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG finished after {iter} "\
+                        f"iterations with a residual of {CG_solver.err:.3e} "\
                         f"(err tol = {self.params.general.CG_err_tol})")
 
         complist_sol = CG_solver.x
