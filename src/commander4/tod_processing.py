@@ -43,6 +43,7 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
                                           avoid TOD copy. Can be passed as argument here.
 
     """
+    logger = logging.getLogger(__name__)
     ### INVERSE VARIANCE MAPMAKER ###
     # We separate the inverse-variance mapmaking from the other 3 mapmakers.
     # This is purely to reduce the maximum concurrent memory requirement, and is slightly slower
@@ -115,6 +116,29 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
 
         mapmaker.accumulate_to_map(d_sky/scan_samples.gain_est, inv_var, pix, psi)
         mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
+
+    ### PRINT NOISE SAMPLING STATS ###
+    if do_ncorr_sampling:
+        num_failed_convergence = band_comm.reduce(num_failed_convergences_ncorr, op=MPI.SUM)
+        worst_residual = band_comm.reduce(worst_residual_ncorr, op=MPI.MAX)
+        if band_comm.Get_rank() == 0:
+            if num_failed_convergence > 0:
+                logger.info(f"Band {experiment_data.nu}GHz failed noise CG for "\
+                   f"{num_failed_convergences_ncorr} scans. Worst residual = {worst_residual:.3e}.")
+
+        alphas = band_comm.gather(alphas, root=0)
+        fknees = band_comm.gather(fknees, root=0)
+        if band_comm.Get_rank() == 0:
+            alphas = np.concatenate(alphas)
+            fknees = np.concatenate(fknees)
+            logger.info(f"{experiment_data.nu}GHz: fknees {np.min(fknees):.4f} "\
+            f"{np.percentile(fknees, 1):.4f} {np.mean(fknees):.4f} {np.percentile(fknees, 99):.4f}"\
+            f" {np.max(fknees):.4f}")
+            logger.info(f"{experiment_data.nu}GHz: alphas {np.min(alphas):.4f} "\
+            f"{np.percentile(alphas, 1):.4f} {np.mean(alphas):.4f} {np.percentile(alphas, 99):.4f}"\
+            f" {np.max(alphas):.4f}")
+
+
     ### GATHER AND NORMALIZE MAPS ###
     mapmaker.gather_map()
     mapmaker_orbdipole.gather_map()
@@ -343,84 +367,6 @@ def estimate_white_noise(experiment_data: DetectorTOD, detector_samples: Detecto
         sigma0 = calculate_sigma0(sky_subtracted_tod, mask)
         scan_samples.sigma0 = float(sigma0/scan_samples.gain_est)
     return detector_samples
-
-
-
-def sample_noise(band_comm: MPI.Comm, experiment_data: DetectorTOD,
-                 detector_samples: DetectorSamples, det_compsep_map: NDArray, chain,
-                 iteration) -> DetectorTOD:
-    logger = logging.getLogger(__name__)
-    num_failed_convergence = 0
-    worst_residual = 0.0
-    alphas = []
-    fknees = []
-    mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
-    for scan, scansamples in zip(experiment_data.scans, detector_samples.scans):
-        f_samp = scan.fsamp
-        # raw_tod = scan.tod
-        pix = scan.pix
-        psi = scan.psi
-
-        s_tot = get_s_orb_TOD(scan, experiment_data, pix)
-
-        s_tot += get_static_sky_TOD(det_compsep_map, pix, psi)
-
-        sky_subtracted_TOD = scan.tod.copy()
-        sky_subtracted_TOD -= scansamples.gain_est*s_tot
-        Ntod = sky_subtracted_TOD.shape[0]
-        Nfft = Ntod//2 + 1
-        freq = rfftfreq(Ntod, d = 1/f_samp)
-        fknee = scansamples.fknee_est
-        alpha = scansamples.alpha_est
-        mask = scan.processing_mask_TOD
-        sigma0 = calculate_sigma0(sky_subtracted_TOD, mask)
-        C_1f_inv = np.zeros(Nfft)
-        C_1f_inv[1:] = 1.0 / (sigma0**2*(freq[1:]/fknee)**alpha)
-        # C_1f_inv[0] = C_1f_inv[-1]  # Test: try and constrain DC mode somewhat.
-        err_tol = 1e-8
-        n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
-                                                                mask, sigma0, C_1f_inv,
-                                                                err_tol=err_tol)
-        inv_var = 1.0/scansamples.sigma0**2
-        mapmaker.accumulate_to_map((n_corr_est/scansamples.gain_est).astype(np.float32), inv_var,
-                                   pix, psi)
-        if residual > err_tol:
-            num_failed_convergence += 1
-            worst_residual = max(worst_residual, residual)
-
-        sigma0 = scansamples.gain_est*scansamples.sigma0
-        fknee, alpha = sample_noise_PS_params(n_corr_est, sigma0, scan.fsamp, scansamples.alpha_est,
-                                              freq_max=2.0, n_grid=150, n_burnin=4)
-        scansamples.fknee_est = fknee
-        scansamples.alpha_est = alpha
-        alphas.append(alpha)
-        fknees.append(fknee)
-
-
-    t0 = time.time()
-    band_comm.Barrier()
-    wait_time = time.time() - t0
-    mapmaker.gather_map()
-    num_failed_convergence = band_comm.reduce(num_failed_convergence, op=MPI.SUM)
-    worst_residual = band_comm.reduce(worst_residual, op=MPI.MAX)
-    if band_comm.Get_rank() == 0:
-        if num_failed_convergence > 0:
-            logger.info(f"Band {experiment_data.nu}GHz failed noise CG for "\
-                        f"{num_failed_convergence} scans. Worst residual = {worst_residual:.3e}.")
-
-    alphas = band_comm.gather(alphas, root=0)
-    fknees = band_comm.gather(fknees, root=0)
-    if band_comm.Get_rank() == 0:
-        alphas = np.concatenate(alphas)
-        fknees = np.concatenate(fknees)
-        logger.info(f"{experiment_data.nu}GHz: fknees {np.min(fknees):.4f} "\
-        f"{np.percentile(fknees, 1):.4f} {np.mean(fknees):.4f} {np.percentile(fknees, 99):.4f} "\
-        f"{np.max(fknees):.4f}")
-        logger.info(f"{experiment_data.nu}GHz: alphas {np.min(alphas):.4f} "\
-        f"{np.percentile(alphas, 1):.4f} {np.mean(alphas):.4f} {np.percentile(alphas, 99):.4f} "\
-        f"{np.max(alphas):.4f}")
-
-    return detector_samples, mapmaker, wait_time
 
 
 

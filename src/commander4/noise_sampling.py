@@ -84,7 +84,6 @@ def sample_noise_PS_params(n_corr: NDArray, sigma0: float, f_samp: float, alpha_
     return fknee_sample, alpha_current
 
 
-# TODO: return dtype (for n_corr) should match input TOD dtype.
 def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigma0: float,
                                      C_corr_inv: NDArray, err_tol=1e-8, max_iter=400,
                                      rnd_seed=None) -> NDArray:
@@ -128,6 +127,7 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
     b_full = TOD/C_wn_timedomain + omega_2/np.sqrt(C_wn_timedomain)\
            + apply_filter(omega_3, np.sqrt(C_corr_inv))
     b_full = b_full.astype(dtype)
+    M_inv = M_inv.astype(dtype)
     m_inv_b = apply_filter(b_full, M_inv)
     # Then, apply U^T to extract the values at the flagged locations.
     b_small = m_inv_b[~mask]

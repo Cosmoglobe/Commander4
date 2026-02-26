@@ -159,7 +159,7 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
         t=0
         for comp in comp_sublist:
             logger.debug(f"[MPI Comm] Sending {comp.shortname} from QU {comp._data.shape} "\
-                         f"comp._data.dtype {t} to {mpi_info.compsep.I_master}")
+                         f"{comp._data.dtype} {t} to {mpi_info.compsep.I_master}")
             compsep_comm.Send(comp._data, dest=mpi_info.compsep.I_master, tag=t)
             t+=1
     
