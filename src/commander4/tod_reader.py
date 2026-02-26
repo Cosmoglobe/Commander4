@@ -1,5 +1,6 @@
 from mpi4py import MPI
-import loggingfrom pixell.bunch import Bunch
+import logging
+from pixell.bunch import Bunch
 
 # from commander4.experiments.litebird.tod_reader_litebird import tod_reader as tod_reader_litebird
 from commander4.experiments.litebird.tod_reader_litebird_sim import tod_reader\

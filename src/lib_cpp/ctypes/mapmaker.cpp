@@ -67,10 +67,30 @@ void _map_accumulator_IQU_T(T *map, const T *tod, const T weight, int64_t *pix, 
     }
 }
 
+/** Simple serial transpose of the mapmaker operator for only I, which accumulates the values on the TOD, given a certain pointing on a map.
+ * 
+ *  Notes: 
+ *      - the mapmaking operator is not unitary, i.e. P^T != P^-1. Meaning that applying this function on the output of _map_accumulator_IQU_T will
+ *          not give the original TODs.
+ *      - no weights are considered here.
+ * 
+ *  Args:
+ *      map -- 1D array of length 'num_pix', representing the signal map, which will be populated by this function.
+ *      tod (OUTPUT) -- 1D array, containing the TOD of length 'scan_len'.
+ *      pix -- 1D array, containing the pixel pointing index of each element in tod.
+ *      scan_len -- Length of the scan as an int.
+ */
+template<typename T>
+void _map2tod_T(const T *map, T *tod, int64_t *pix, int64_t scan_len){
+    for(int64_t itod=0; itod<scan_len; itod++){
+        tod[itod] = map[pix[itod]];
+    }
+}
+
 /** Simple serial transpose of the mapmaker operator, which accumulates the values on the TOD, given a certain pointing on a map and angle psi.
  * 
  *  Notes: 
- *      - the mapmaking operator is not unitary, i.e. P^T != P^-1. Meaning that applying thi function on the output of _map_accumulator_IQU_T will
+ *      - the mapmaking operator is not unitary, i.e. P^T != P^-1. Meaning that applying this function on the output of _map_accumulator_IQU_T will
  *          not give the original TODs.
  *      - no weights are considered here.
  * 
@@ -307,6 +327,16 @@ void map_accumulator_IQU_f32(float *map, float *tod, float weight, int64_t *pix,
 extern "C"
 void map_accumulator_IQU_f64(double *map, double *tod, double weight, int64_t *pix, double *psi, int64_t scan_len, int64_t num_pix){
     _map_accumulator_IQU_T<double>(map, tod, weight, pix, psi, scan_len, num_pix);
+}
+
+extern "C"
+void map2tod_f64(double *map, double *tod, int64_t *pix, int64_t scan_len){
+    _map2tod_T<double>(map, tod, pix, scan_len);
+}
+
+extern "C"
+void map2tod_f32(float *map, float *tod, int64_t *pix, int64_t scan_len){
+    _map2tod_T<float>(map, tod, pix, scan_len);
 }
 
 extern "C"

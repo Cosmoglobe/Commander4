@@ -20,9 +20,9 @@ from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.detector_samples import DetectorSamples
 from commander4.data_models.scan_samples import ScanSamples
-from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU
+from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU, WeightsMapmaker
 from commander4.utils.CG_mapmaker import CG_Mapmaker
-from commander4.solvers.preconditioners import InvNPreconditioner
+from commander4.solvers.preconditioners import InvNPreconditionerI
 from commander4.noise_sampling import corr_noise_realization_with_gaps, sample_noise_PS_params
 from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0
@@ -66,31 +66,31 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
     ismaster = band_comm.Get_rank() == 0
     if ismaster:
         logger.info(f"Len scans on band master: {len(detector_samples.scans)}")
-    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)    
+    mapmaker_invvar = WeightsMapmaker(band_comm, experiment_data.nside)    
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         pix = scan.pix
-        psi = scan.psi
+        #psi = scan.psi
         inv_var = 1.0/scan_samples.sigma0**2
-        mapmaker_invvar.accumulate_to_map(inv_var, pix, psi)
+        mapmaker_invvar.accumulate_to_map(inv_var, pix)
     mapmaker_invvar.gather_map()
     if ismaster:
-        precond = InvNPreconditioner(mapmaker_invvar._gathered_map, double_prec=double_p) #must be initialized here before the noramlization wipes the gathered map away.
+        precond = InvNPreconditionerI(mapmaker_invvar._gathered_map) #must be initialized here before the noramlization wipes the gathered map away.
         
         #debug precond:
-        op = LinearOperator(
-            shape=(mapmaker_invvar._gathered_map.shape[-1]*3, mapmaker_invvar._gathered_map.shape[-1]*3),
-            matvec=precond,
-            dtype=np.float64
-        )
-        eigenvalues, eigenvectors = eigs(op, k=6)
+        # op = LinearOperator(
+        #     shape=(mapmaker_invvar._gathered_map.shape[-1]*3, mapmaker_invvar._gathered_map.shape[-1]*3),
+        #     matvec=precond,
+        #     dtype=np.float64
+        # )
+        # eigenvalues, eigenvectors = eigs(op, k=6)
 
-        logger.info(f"### Eigenvalues: {eigenvalues}")
+        # logger.info(f"### Eigenvalues: {eigenvalues}")
 
     else:
         precond = called_on_non_master #lambda arr: arr #dummy on non-master, will never be called.
     # precond = np.copy
-    mapmaker_invvar.normalize_map()
-    map_rms = mapmaker_invvar.final_rms_map
+    # mapmaker_invvar.normalize_map()
+    # map_rms = mapmaker_invvar.final_rms_map
 
     # mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
     # mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside)
@@ -129,7 +129,7 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
 
     ##############
 
-    mapmaker = CG_Mapmaker(experiment_data, detector_samples, band_comm, preconditioner=precond,
+    mapmaker = CG_Mapmaker(experiment_data, detector_samples, band_comm, False, preconditioner=precond,
                            CG_maxiter=params.general.CG_mapmaker.maxiter,
                            CG_tol=1e-20, double_prec=double_p)
     mapmaker.solve()
@@ -137,12 +137,12 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
 
     if ismaster:
         plt.figure(figsize=(8.5*3, 5.4))
-        labs = ["I", "Q", "U"]
-        for i in range(3):
+        labs = ["I"] #, "Q", "U"]
+        for i in range(len(labs)):
             limup   = np.percentile(map_signal, 99)
             limdown = np.percentile(map_signal, 1)
             hp.mollview(map_signal[i], cmap = 'RdBu_r', title=labs[i],
-                    sub=(1,3,i+1), min=limdown, max=limup)
+                    sub=(1,len(labs),i+1), min=limdown, max=limup)
         plt.suptitle(f"CG map test")
         plt.savefig("/mn/stornext/u3/leoab/cmdr4_plots/test_CG_mapmkr_Planck.png")
         plt.close()
@@ -236,7 +236,6 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
             for idet, det_name in enumerate(band.detectors):
                 detector = band.detectors[det_name]
                 # Checking if our rank is allocated to this experiment + band + detector.
-                logger.info(f"#### {mpi_info.experiment.name} == {exp_name}, {mpi_info.band.name} == {band_name}, {mpi_info.det.name} == {det_name}")
                 if mpi_info.experiment.name == exp_name and mpi_info.band.name == band_name\
                 and mpi_info.det.name == det_name:
                     my_band_name = band_name

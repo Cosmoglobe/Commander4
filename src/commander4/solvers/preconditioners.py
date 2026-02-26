@@ -9,7 +9,7 @@ from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell import curvedsky
 from copy import deepcopy
-from commander4.utils.math_operations import alm_real2complex, alm_complex2real
+from commander4.utils.math_operations import alm_real2complex, alm_complex2real, inplace_arr_prod
 from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
 
 import typing
@@ -274,7 +274,7 @@ class JointPreconditioner:
         return a_complist_out
 
 
-class InvNPreconditioner:
+class InvNPreconditionerIQU:
     """ Standard diagonal preconditioner for CG mapmaker. It builds an estimate of the diagonal of the A matrix
         by estimating the RMS of the i-th pixel as sigma_0/n_hit_i.
     """
@@ -291,20 +291,62 @@ class InvNPreconditioner:
         if double_prec:
             ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
             self.maplib.apply_invN_to_map_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim2, ct_f64_dim2, ct.c_int64]
-            self.apply_invN_to_map_IQU = self.maplib.apply_invN_to_map_IQU_f64
+            self.apply_invN_to_map = self.maplib.apply_invN_to_map_IQU_f64
             self.inv_N_IQU = inv_N_IQU.astype(np.float64)
         else:
             ct_f32_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=2, flags="contiguous")
             self.maplib.apply_invN_to_map_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim2, ct_f32_dim2, ct.c_int64]
-            self.apply_invN_to_map_IQU = self.maplib.apply_invN_to_map_IQU_f32
+            self.apply_invN_to_map = self.maplib.apply_invN_to_map_IQU_f32
             self.inv_N_IQU = inv_N_IQU.astype(np.float32)
 
     def __call__(self, map: NDArray) -> NDArray:
-        #assert map.shape[1] == self.npix
-        #map_out = np.copy(map)
-        map_out=np.zeros((3,self.npix))
-        map_out[0,:] = map[:self.npix]
-        map_out[1,:] = map[self.npix:2*self.npix]
-        map_out[2,:] = map[2*self.npix:3*self.npix]
-        self.apply_invN_to_map_IQU(map, map_out, self.inv_N_IQU, self.npix)
-        return map_out.flatten()
+        assert map.shape[1] == self.npix
+        map_out = np.copy(map)
+        # map_out=np.zeros((3,self.npix))
+        # map_out[0,:] = map[:self.npix]
+        # map_out[1,:] = map[self.npix:2*self.npix]
+        # map_out[2,:] = map[2*self.npix:3*self.npix]
+        self.apply_invN_to_map(map, map_out, self.inv_N_IQU, self.npix)  #map.reshape((3,self.npix))
+        return map_out #.flatten()
+
+
+class InvNPreconditionerI:
+    """ Standard diagonal preconditioner for temperature-only CG mapmaker. It builds an estimate of 
+    the diagonal of the A matrix by estimating the RMS of the i-th pixel as sigma_0/n_hit_i.
+    """
+
+    def __init__(self, inv_N_map:NDArray):
+        """
+        Initialize preconditioner starting from the mapmaker object it will be used in.
+        It precomputes the hitmap
+        """
+        self.inv_N_map = inv_N_map.reshape((1,-1)) if inv_N_map.ndim == 1 else inv_N_map
+        self.npix = self.inv_N_map.shape[1]
+        # self.maplib = load_cmdr4_ctypes_lib()
+        # if double_prec:
+        #     ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
+        #     self.maplib.apply_invN_to_map_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim2, ct_f64_dim2, ct.c_int64]
+        #     self.apply_invN_to_map = self.maplib.apply_invN_to_map_IQU_f64
+        #     self.inv_N_map = inv_N_map.astype(np.float64)
+        # else:
+        #     ct_f32_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=2, flags="contiguous")
+        #     self.maplib.apply_invN_to_map_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim2, ct_f32_dim2, ct.c_int64]
+        #     self.apply_invN_to_map = self.maplib.apply_invN_to_map_IQU_f32
+        #     self.inv_N_IQU = inv_N_map.astype(np.float32)
+
+    def __call__(self, map: NDArray) -> NDArray:
+        assert map.shape[1] == self.npix
+        map_out = np.copy(map)
+        inplace_arr_prod(map_out, self.inv_N_map)
+        return map_out
+
+
+
+
+
+
+
+
+
+
+

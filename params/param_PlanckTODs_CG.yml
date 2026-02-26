@@ -19,11 +19,11 @@ general:
 
   CG_mapmaker:
     maxiter: 5
-    err_tol: 1.0e-20
+    err_tol: 1.0e-10
 
   niter_gibbs: 10
 
-  nside: 1024
+  nside: 256
 
   noise_fknee: 0.1
   noise_alpha: -0.9
@@ -269,7 +269,7 @@ CompSep_bands:
 
 experiments:
   PlanckLFI:
-    enabled: false
+    enabled: true
     is_sim: false
     pix_is_compressed: true
     psi_is_compressed: true
@@ -282,7 +282,7 @@ experiments:
       Planck30GHz:
         enabled: true
         tod_files_prefix: "LFI_030_"
-        num_MPI_tasks: 128 #24
+        num_MPI_tasks: 64 #24
         eval_nside: 512
         data_nside: 512
         fwhm: 32.4 # [arcmin]
@@ -405,7 +405,7 @@ experiments:
           #   gain_est: 19.0e-9
           #   bandpass_shift: -0.05
   Akari:
-    enabled: true
+    enabled: false
     experiment_id: "akari"
     is_sim: false
     pix_is_compressed: true
@@ -421,7 +421,7 @@ experiments:
         num_MPI_tasks: 64 #128 #24
         detector_id: 0
         freq_identifier: 30
-        eval_nside: 1024
+        eval_nside: 256
         data_nside: 2048
         fwhm: 0.6166 # [arcmin]
         freq: 4996 # [GHz]

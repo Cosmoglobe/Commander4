@@ -4,16 +4,16 @@ import healpy as hp
 import os
 import h5py
 import gc
+from pixell.bunch import Bunch
 from numpy.typing import NDArray
 from astropy.io import fits
 from mpi4py import MPI
-from commander4.utils.params import Params
 from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
 
 
-def get_processing_mask(my_band: Params) -> DetectorTOD:
+def get_processing_mask(my_band: Bunch) -> DetectorTOD:
     """ Finds and returns the processing mask for the relevant band.
     """
     hdul = fits.open(my_band.processing_mask)
@@ -33,8 +33,8 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     return best_ntod
 
 
-def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: Params,
-               params: Params, my_det_id: int, scan_idx_start: int,
+def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: Bunch,
+               Bunch: Bunch, my_det_id: int, scan_idx_start: int,
                scan_idx_stop: int) -> DetectorTOD:
     logger = logging.getLogger(__name__)
     oids = []
@@ -102,8 +102,8 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Params, my_det: 
         logger.info(f"P2 {pid}")
         
         # Check for crazy data.
-        if np.mean(tod_buffer[:ntod_optimal]) > 0.001 or np.std(tod) > 0.001:
-            continue
+        # if np.mean(tod_buffer[:ntod_optimal]) > 0.001 or np.std(tod) > 0.001:
+        #     continue
 
         logger.info(f"P3 {pid}")
         scanID = int(pid)

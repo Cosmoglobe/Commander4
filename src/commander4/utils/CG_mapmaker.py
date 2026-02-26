@@ -32,20 +32,32 @@ class CG_Mapmaker:
     CG mapmaker for solving the general P^T T^T N^-1 T P m = P^T T^T N^-1 d problem
     """
     def __init__(self, 
-                detector_tod:DetectorTOD, detector_samples:DetectorSamples, 
-                map_comm:MPI.Comm, T_omega:Callable = np.ones_like, preconditioner:Callable = np.copy,
-                nthreads:int=1, double_prec:bool = True, CG_maxiter:int=200, CG_tol:float=1e-10, CG_check_interval:int = 1):
+                detector_tod:DetectorTOD, 
+                detector_samples:DetectorSamples, 
+                map_comm:MPI.Comm,
+                is_IQU:bool, #else only I is assumed
+                #optionals:
+                T_omega:Callable = np.ones_like, 
+                preconditioner:Callable = np.copy,
+                nthreads:int=1, 
+                double_prec:bool = True, 
+                CG_maxiter:int=200, 
+                CG_tol:float=1e-10, 
+                CG_check_interval:int = 1):
         self.logger = logging.getLogger(__name__)
         self.detector_tod = detector_tod
         self.detector_samples = detector_samples
         self.double_perc = double_prec
+        self.is_IQU = is_IQU
+        self.map_comm = map_comm
+        self.ismaster = self.map_comm.Get_rank() == 0
         #output map to be solved for, serves as buffer for the last mpi.Reduce call 
         self.f_dtype = np.float64 if double_prec else np.float32
-        self._map_signal = np.zeros((3,hp.nside2npix(detector_tod._eval_nside)), 
-            dtype=self.f_dtype) if map_comm.Get_rank() == 0 else None
+        self._map_signal = np.zeros(
+            (3 if is_IQU else 1,hp.nside2npix(detector_tod._eval_nside)), 
+            dtype=self.f_dtype) if self.ismaster else None
         self.nthreads = nthreads
         self.T_omega = T_omega
-        self.map_comm = map_comm
         self.CG_maxiter = CG_maxiter
         self.CG_tol = CG_tol
         self.CG_check_interval = CG_check_interval
@@ -55,31 +67,42 @@ class CG_Mapmaker:
         if double_prec:
             ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
             ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
-            self.maplib.map_accumulator_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim1, ct.c_double,
-                                    ct_i64_dim1, ct_f64_dim1, ct.c_int64,
-                                    ct.c_int64]
-            self.maplib.map2tod_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim1,
-                                                ct_i64_dim1, ct_f64_dim1, 
-                                                ct.c_int64, ct.c_int64]
-            self.maplib.apply_invN_to_map_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim2, ct.c_int64]
-            self.map_accumulator_IQU = self.maplib.map_accumulator_IQU_f64
-            self.map2tod_IQU = self.maplib.map2tod_IQU_f64
-            self.apply_invN_to_map_IQU = self.maplib.apply_invN_to_map_IQU_f64
+            if is_IQU:
+                self.maplib.map_accumulator_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim1, ct.c_double,
+                                        ct_i64_dim1, ct_f64_dim1, ct.c_int64,
+                                        ct.c_int64]
+                self.maplib.map2tod_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim1,
+                                                    ct_i64_dim1, ct_f64_dim1, 
+                                                    ct.c_int64, ct.c_int64]
+                self.map_accumulator = self.maplib.map_accumulator_IQU_f64
+                self.map2tod = self.maplib.map2tod_IQU_f64
+            else:
+                self.maplib.map_accumulator_f64.argtypes = [ct_f64_dim2, ct_f64_dim1, ct.c_double,
+                                        ct_i64_dim1, ct.c_int64]
+                self.maplib.map2tod_f64.argtypes = [ct_f64_dim2, ct_f64_dim1,
+                                                    ct_i64_dim1, ct.c_int64]
+                self.map_accumulator = self.maplib.map_accumulator_f64
+                self.map2tod = self.maplib.map2tod_f64
         else:
             ct_f32_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=1, flags="contiguous")
             ct_f32_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=2, flags="contiguous")
-            self.maplib.map_accumulator_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim1, ct.c_double,
-                                    ct_i64_dim1, ct_f64_dim1, ct.c_int64,
-                                    ct.c_int64]
-            self.maplib.map2tod_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim1,
-                                                ct_i64_dim1, ct_f64_dim1, 
-                                                ct.c_int64, ct.c_int64]
-            self.maplib.apply_invN_to_map_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim2, ct.c_int64]
-            self.map_accumulator_IQU = self.maplib.map_accumulator_IQU_f32
-            self.map2tod_IQU = self.maplib.map2tod_IQU_f32
-            self.apply_invN_to_map_IQU = self.maplib.apply_invN_to_map_IQU_f32
-        
-
+            if is_IQU:
+                self.maplib.map_accumulator_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim1, ct.c_double,
+                                        ct_i64_dim1, ct_f64_dim1, ct.c_int64,
+                                        ct.c_int64]
+                self.maplib.map2tod_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim1,
+                                                    ct_i64_dim1, ct_f64_dim1, 
+                                                    ct.c_int64, ct.c_int64]
+                self.map_accumulator = self.maplib.map_accumulator_IQU_f32
+                self.map2tod = self.maplib.map2tod_IQU_f32
+            else:
+                self.maplib.map_accumulator_f32.argtypes = [ct_f32_dim2, ct_f32_dim1, ct.c_double,
+                                        ct_f64_dim1, ct.c_int64]
+                self.maplib.map2tod_f32.argtypes = [ct_f32_dim2, ct_f32_dim1,
+                                                    ct_i64_dim1, ct.c_int64]
+                self.map_accumulator = self.maplib.map_accumulator_f32
+                self.map2tod = self.maplib.map2tod_f32
+       
     @property
     def solved_map(self):
         if self.map_comm.Get_rank() == 0:
@@ -94,11 +117,7 @@ class CG_Mapmaker:
         if a `scan_tod_arr` is passed, it will be used to overwrite the result instead of using `scan.tod`.
         """
         scan_tod_arr = scan._tod if scan_tod_arr is None else scan_tod_arr
-        inplace_scale(scan_tod_arr, 1/sigma0**2)
-        # logger = logging.getLogger(__name__)
-
-        # if self.map_comm.Get_rank() == 0:
-        #     logger.info(f"## Inv N sigma0 {sigma0} mean: {np.mean(scan_tod_arr)}")
+        inplace_scale(scan_tod_arr, 1.0/sigma0**2)
         return scan_tod_arr
 
     def apply_P(self, in_map: NDArray, out_scan:ScanTOD, scan_tod_arr=None):
@@ -117,7 +136,7 @@ class CG_Mapmaker:
         ntod = out_scan.tod.shape[0]
         _tod = np.ascontiguousarray(scan_tod_arr, dtype=self.f_dtype)
         _psi = np.ascontiguousarray(psi, dtype=self.f_dtype)
-        self.map2tod_IQU(in_map, _tod, pix.astype(np.int64), _psi, ntod, npix_out)
+        self.map2tod(in_map, _tod, pix.astype(np.int64), ntod)
         return _tod
 
     def apply_P_adjoint(self, in_scan: ScanTOD, out_map:NDArray, scan_tod_arr=None):
@@ -136,7 +155,7 @@ class CG_Mapmaker:
         ntod = in_scan.tod.shape[0]
         _tod = np.ascontiguousarray(scan_tod_arr, dtype=self.f_dtype)
         _psi = np.ascontiguousarray(psi, dtype=self.f_dtype)
-        self.map_accumulator_IQU(out_map, _tod, 1, pix.astype(np.int64), _psi, ntod, npix_out)
+        self.map_accumulator(out_map, _tod, 1, pix.astype(np.int64), ntod)
         return out_map
 
     def _apply_T(self, scan: ScanTOD, adjoint=False, scan_tod_arr=None):
@@ -195,8 +214,11 @@ class CG_Mapmaker:
         """
         Computes the RHS of the mapmaking problem: P^T T^T N^-1 d.
         """
-        ismaster = self.map_comm.Get_rank() == 0
-        out_map = np.zeros((3,hp.nside2npix(self.detector_tod.nside)), dtype=self.f_dtype)
+        if self.map_comm.Get_rank():
+            self.logger.info(f"##RHS called!")
+        out_map = np.zeros(
+            (3 if self.is_IQU else 1,hp.nside2npix(self.detector_tod._eval_nside)), 
+            dtype=self.f_dtype)
         for scan, sample in zip(self.detector_tod.scans, self.detector_samples.scans):
             scan_tod_arr_aux = np.copy(scan._tod) #aux array to not modify scan._tod
             #FIXME: subtract ncorr and orb dipole from the scan_tod_arr_aux. 
@@ -215,7 +237,7 @@ class CG_Mapmaker:
         send, recv = (MPI.IN_PLACE, out_map) if self.map_comm.Get_rank() == 0 else (out_map, np.empty(()))
         self.map_comm.Reduce(send, recv, op=MPI.SUM, root=0)
         self.map_comm.Barrier()
-        if not ismaster:
+        if not self.ismaster:
             out_map = None
         return recv
 
@@ -229,7 +251,9 @@ class CG_Mapmaker:
             if ismaster:
                 raise ValueError("input map can not be empty on master rank.")
             else:
-                in_map = np.zeros((3,hp.nside2npix(self.detector_tod.nside)), dtype=self.f_dtype)
+                in_map = np.zeros_like(self._map_signal, dtype=self.f_dtype)
+
+        #FIXME: something gets stuck here!!!
         self.map_comm.Bcast(in_map, root=0)
         out_map = np.zeros_like(in_map)
         pri = True
