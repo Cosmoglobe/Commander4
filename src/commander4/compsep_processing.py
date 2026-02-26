@@ -173,8 +173,8 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
                 compsep_comm.Recv(comp._data, source=mpi_info.compsep.QU_master, tag=t_pol)
                 t_pol+=1
             else:  # Otherwise it copy it over from the local intensity sublist held on I_master
-                logger.debug(f"[MPI Comm] Copying {comp.shortname} from I", comp._data.shape,
-                      comp._data.dtype, t_int, "from local I")
+                logger.debug(f"[MPI Comm] Copying {comp.shortname} from I {comp._data.shape} "\
+                             f"{comp._data.dtype} {t_int} from local I")
                 comp._data = comp_sublist[t_int]._data
                 t_int+=1
     

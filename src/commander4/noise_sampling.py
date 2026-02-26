@@ -23,8 +23,8 @@ def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray) -> float:
     return sample
 
 
-def sample_noise_PS_params(n_corr: NDArray, sigma0: float, f_samp: float, alpha_start = -1.0,
-                           freq_max = 3.0, n_grid = 100, n_burnin = 5) -> tuple[float, float]:
+def sample_noise_PS_params(n_corr: NDArray, sigma0: float, f_samp: float, alpha_start=-1.0,
+                           freq_max=3.0, n_grid=100, n_burnin=5) -> tuple[float, float]:
     """ Function for drawing a sample of the fknee and alpha parameters for the correlated noise
         under the power spectrum data model PS = sigma0*(f/fknee)**alpha, where sigma0 is known.
         Note that this relates *only* to the correlated noise, without the "flat" white noise.
@@ -115,6 +115,7 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
         term2 = u_t_m_inv_u_x
         return term1 - term2
 
+    dtype = TOD.dtype
     Ntod = TOD.shape[0]
     M_inv = 1.0 / ( (1/sigma0**2) + C_corr_inv)  # The stationary LHS operator.
     if rnd_seed is not None:
@@ -126,7 +127,7 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
     C_wn_timedomain[~mask] = np.inf
     b_full = TOD/C_wn_timedomain + omega_2/np.sqrt(C_wn_timedomain)\
            + apply_filter(omega_3, np.sqrt(C_corr_inv))
-
+    b_full = b_full.astype(dtype)
     m_inv_b = apply_filter(b_full, M_inv)
     # Then, apply U^T to extract the values at the flagged locations.
     b_small = m_inv_b[~mask]
@@ -144,7 +145,7 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
         x_small = np.zeros((0,))
         CG_err = 0
 
-    correction_gaps_only = np.zeros(Ntod)
+    correction_gaps_only = np.zeros(Ntod, dtype=dtype)
     correction_gaps_only[~mask] = x_small
     
     # Now, apply M^-1 to get the full correction term
