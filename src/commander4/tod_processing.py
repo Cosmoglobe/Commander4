@@ -115,11 +115,6 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
 
         mapmaker.accumulate_to_map(d_sky/scan_samples.gain_est, inv_var, pix, psi)
         mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
-    if band_comm.Get_rank() == 0:
-        try:
-            print(np.mean(np.abs(sky_orb_dipole)), np.mean(np.abs(n_corr_est)), np.mean(np.abs(scan.tod)), flush=True)
-        except:
-            print(np.mean(np.abs(sky_orb_dipole)), np.mean(np.abs(scan.tod)), flush=True)
     ### GATHER AND NORMALIZE MAPS ###
     mapmaker.gather_map()
     mapmaker_orbdipole.gather_map()

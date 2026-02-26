@@ -186,11 +186,5 @@ def inefficient_corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.
             CG_solver.step()
         else:
             break
-    if i == max_iter:
-        print(f"Corr noise CG failed to converge after {max_iter} iterations. "
-              f"Residual = {CG_solver.err} (err tol = {err_tol:.2e})")
-    else:
-        print(f"Corr noise CG converged after {i} iterations. "
-              f"Residual = {CG_solver.err} (err tol = {err_tol:.2e})")
     x_full = CG_solver.x
     return x_full
