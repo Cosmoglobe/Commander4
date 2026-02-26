@@ -28,7 +28,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
         my_band (Bunch): A subset of the full parameter file for the band this rank is working on.
     """
     logger = logging.getLogger(__name__)
-    logger.info(f"CompSep: Hello from CompSep-rank {mpi_info.compsep.rank} (on machine "
+    logger.info(f"CompSep: Hello from CompSep-rank {mpi_info.compsep.rank} (on machine "\
                 f"{mpi_info.processor_name}), dedicated to band {mpi_info.compsep.rank}.")
 
     ### Creating list of all components ###
@@ -68,8 +68,8 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     for band_str in params.CompSep_bands:   # Intensity
         band = params.CompSep_bands[band_str]
         if band.enabled:
-            logassert(len(band.polarizations), f"{len(band.polarizations)} stokes parameter "
-                      "definitions found in band section in param file, "
+            logassert(len(band.polarizations), f"{len(band.polarizations)} stokes parameter "\
+                      "definitions found in band section in param file, "\
                       "3 expected. E.g. [True, False, False]", logger)
             is_I = band.polarizations[0]
             is_QU = band.polarizations[1] and band.polarizations[2]
@@ -99,11 +99,11 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
                 raise ValueError(f"Pol of band {band_str} misconfigured in parameter file.")
     
     #sanity check:
-    logassert(current_band_idx_I == mpi_info.compsep.QU_master, "Number of acquired Intensity "
-              f"bands ({current_band_idx_I}) do not match number of MPI tasks assigned to Intensity"
-              f"({mpi_info.compsep.QU_master})", logger)
-    logassert(current_band_idx_QU == mpi_info.compsep.size, "Number of acquired QU bands "
-              f"({current_band_idx_QU}) do not match number of MPI tasks assigned to QU "
+    logassert(current_band_idx_I == mpi_info.compsep.QU_master, "Number of acquired Intensity "\
+              f"bands ({current_band_idx_I}) do not match number of MPI tasks assigned to "\
+              f"Intensity ({mpi_info.compsep.QU_master})", logger)
+    logassert(current_band_idx_QU == mpi_info.compsep.size, "Number of acquired QU bands "\
+              f"({current_band_idx_QU}) do not match number of MPI tasks assigned to QU "\
               f"({mpi_info.compsep.QU_master})", logger)
     
     data_world = (band_identifier, mpi_info.world.rank)
@@ -158,8 +158,8 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
     if mpi_info.compsep.is_QU_master:
         t=0
         for comp in comp_sublist:
-            logger.debug(f"[MPI Comm] Sending {comp.shortname} from QU", comp._data.shape,
-                         comp._data.dtype, t, "to", mpi_info.compsep.I_master)
+            logger.debug(f"[MPI Comm] Sending {comp.shortname} from QU {comp._data.shape} "\
+                         f"{comp._data.dtype} {t} to {mpi_info.compsep.I_master}")
             compsep_comm.Send(comp._data, dest=mpi_info.compsep.I_master, tag=t)
             t+=1
     
@@ -168,13 +168,13 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
         t_int=0
         for comp in comp_list:
             if comp.pol: #if it is a pol component receive it from the QU_master
-                logger.info(f"[MPI Comm] Receiving {comp.shortname} from QU", comp._data.shape,
-                      comp._data.dtype, t_pol, "from", mpi_info.compsep.QU_master)
+                logger.debug(f"[MPI Comm] Receiving {comp.shortname} from QU {comp._data.shape} "\
+                             f"{comp._data.dtype} {t_pol} from {mpi_info.compsep.QU_master}")
                 compsep_comm.Recv(comp._data, source=mpi_info.compsep.QU_master, tag=t_pol)
                 t_pol+=1
             else:  # Otherwise it copy it over from the local intensity sublist held on I_master
-                logger.info(f"[MPI Comm] Copying {comp.shortname} from I", comp._data.shape,
-                      comp._data.dtype, t_int, "from local I")
+                logger.debug(f"[MPI Comm] Copying {comp.shortname} from I {comp._data.shape} "\
+                             f"{comp._data.dtype} {t_int} from local I")
                 comp._data = comp_sublist[t_int]._data
                 t_int+=1
     
@@ -192,7 +192,7 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
     for ipol in range(detector_data.npol):
         chi2 = np.mean(np.abs(detector_data.map_sky[ipol] -
                               sky_model_at_band[ipol])/detector_data.map_rms[ipol])
-        logger.info(f"Reduced chi2 on rank {compsep_rank} for pol={pol_names[ipol]} "
+        logger.info(f"Reduced chi2 on rank {compsep_rank} for pol={pol_names[ipol]} "\
                     f"({detector_data.nu}GHz): {chi2:.3f}")
 
     compsep_comm.Barrier()
