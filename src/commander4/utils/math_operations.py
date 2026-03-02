@@ -125,6 +125,9 @@ def dot(arr1, arr2):
         res += flat1[i]*flat2[i]
     return res
 
+def norm(arr):
+    return dot(arr, arr)
+
 def MPI_dot(arr1, arr2, comm:MPI.Comm, double_prec:bool = False):
     """
     Computes the dot product locally and accumulates it on all the ranks involved in `comm`.

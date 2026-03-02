@@ -15,7 +15,8 @@ from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.solvers.CG_driver import distributed_CG_arr
 from commander4.data_models.detector_samples import DetectorSamples
-from commander4.utils.math_operations import inplace_scale, dot
+from commander4.data_models.scan_samples import ScanSamples
+from commander4.utils.math_operations import inplace_scale, dot, norm
 
 # I need to CG-solve P^T T^T N^−1 T P m = P^T T^T N^-1 d
 # Where:
@@ -51,9 +52,15 @@ class CG_Mapmaker:
         self.is_IQU = is_IQU
         self.map_comm = map_comm
         self.ismaster = self.map_comm.Get_rank() == 0
-        #output map to be solved for, serves as buffer for the last mpi.Reduce call 
         self.f_dtype = np.float64 if double_prec else np.float32
+        #output map to be solved for
         self._map_signal = np.zeros(
+            (3 if is_IQU else 1,hp.nside2npix(detector_tod._eval_nside)), 
+            dtype=self.f_dtype) if self.ismaster else None
+        #local RHS map
+        self._rhs_loca_map = None
+        #RHS map to be accumulated on master rank
+        self._rhs_finalized_map = np.zeros(
             (3 if is_IQU else 1,hp.nside2npix(detector_tod._eval_nside)), 
             dtype=self.f_dtype) if self.ismaster else None
         self.nthreads = nthreads
@@ -106,63 +113,67 @@ class CG_Mapmaker:
     @property
     def solved_map(self):
         if self.map_comm.Get_rank() == 0:
-            logassert(self._map_signal is not None, "Attempted to read map on master rank before it was solved.",
+            logassert(self._map_signal is not None, "Attempted to read solution map on master rank before it was solved.",
                       self.logger)
         return self._map_signal
+    
+    @property
+    def RHS_map(self):
+        if self.map_comm.Get_rank() == 0:
+            logassert(self._rhs_finalized_map is not None, "Attempted to read RHS map on master rank before it was finalized.",
+                      self.logger)
+            return self._rhs_finalized_map
+        else:
+            return np.empty(())
 
-    def apply_inv_N(self, scan:ScanTOD, sigma0:float, scan_tod_arr=None):
+    def apply_inv_N(self, scan_tod_arr:NDArray, sigma0:float):
         """
         Applies inplace the N^-1 operator to one scan, given the corresponding noise variance sigma0.
 
-        if a `scan_tod_arr` is passed, it will be used to overwrite the result instead of using `scan.tod`.
+        Args:
+        - `scan_tod_arr`: array of TODs corresponding to the scan.
+        - `sigma0`: noise variance for that scan.
         """
-        scan_tod_arr = scan._tod if scan_tod_arr is None else scan_tod_arr
         inplace_scale(scan_tod_arr, 1.0/sigma0**2)
         return scan_tod_arr
 
-    def apply_P(self, in_map: NDArray, out_scan:ScanTOD, scan_tod_arr=None):
+    def apply_P(self, in_map: NDArray, out_scan:ScanTOD, pix=None, scan_tod_arr=None):
         """
         Applies the pointing matrix operator to one scan.
         
-        It takes an array of pixels in input and projects them over a time ordered data scan.
-
-        if a `scan_tod_arr` is passed, it will be used to overwrite the result instead of using `scan.tod`.
+        It takes in input a time ordered data scan and accumulates them over a map in output. if a 
+        `pix` is passed, it will be used to compute the result instead of decompressing a new one 
+        from `out_scan`. If a `scan_tod_arr` is passed it is used instead of overwriting `out_scan`
         """
-        scan_tod_arr = out_scan._tod if scan_tod_arr is None else scan_tod_arr
+        #scan_tod_arr = out_scan._tod if scan_tod_arr is None else scan_tod_arr
         npix_out = hp.nside2npix(out_scan._eval_nside)
         assert npix_out == in_map.shape[1] 
-        pix = out_scan.pix
-        psi = out_scan.psi
+        pix = out_scan.pix if pix is None else pix
         ntod = out_scan.tod.shape[0]
-        _tod = np.ascontiguousarray(scan_tod_arr, dtype=self.f_dtype)
-        _psi = np.ascontiguousarray(psi, dtype=self.f_dtype)
-        self.map2tod(in_map, _tod, pix.astype(np.int64), ntod)
-        return _tod
+        self.map2tod(in_map, scan_tod_arr, pix.astype(np.int64), ntod)
+        return scan_tod_arr
 
-    def apply_P_adjoint(self, in_scan: ScanTOD, out_map:NDArray, scan_tod_arr=None):
+    def apply_P_adjoint(self, in_scan: ScanTOD, out_map:NDArray, pix=None, scan_tod_arr=None):
         """
-        Applies the adjoint, or transpose in matrix-notation, of the pointing matrix operator to one scan, updating out_map inplace.
+        Applies the adjoint, or transpose in matrix-notation, of the pointing matrix operator to one
+        scan, updating out_map inplace.
 
-        It takes in input a time ordered data scan and accumulates them over a map in output.
-
-        if a `scan_tod_arr` is passed, it will be used to compute the result instead of using `scan.tod`.
+        It takes in input a time ordered data scan and accumulates them over a map in output. if a 
+        `pix` is passed, it will be used to compute the result instead of decompressing a new one 
+        from `in_scan`. If a `scan_tod_arr` is passed it is used instead of overwriting `in_scan`
         """
-        scan_tod_arr = in_scan._tod if scan_tod_arr is None else scan_tod_arr
+        #scan_tod_arr = in_scan._tod if scan_tod_arr is None else scan_tod_arr
         npix_out = out_map.shape[1]
         assert npix_out == hp.nside2npix(in_scan._eval_nside)
-        pix = in_scan.pix  #FIXME: maybe move this in LHS so we uncompress pix and psi only once.
-        psi = in_scan.psi
+        pix = in_scan.pix if pix is None else pix
         ntod = in_scan.tod.shape[0]
-        _tod = np.ascontiguousarray(scan_tod_arr, dtype=self.f_dtype)
-        _psi = np.ascontiguousarray(psi, dtype=self.f_dtype)
-        self.map_accumulator(out_map, _tod, 1, pix.astype(np.int64), ntod)
+        self.map_accumulator(out_map, scan_tod_arr, 1, pix.astype(np.int64), ntod)
         return out_map
 
-    def _apply_T(self, scan: ScanTOD, adjoint=False, scan_tod_arr=None):
+    def _apply_T(self, scan_tod_arr, adjoint=False):
         """
         General function for T and T^T, inplace.
         """
-        scan_tod_arr = scan._tod if scan_tod_arr is None else scan_tod_arr
         #F d
         d = ducc0.fft.r2c(scan_tod_arr, forward=True, inorm=1)
         #T F d
@@ -174,7 +185,7 @@ class CG_Mapmaker:
         scan_tod_arr = ducc0.fft.c2r(d, forward=False, inorm=1)
         return scan_tod_arr
 
-    def apply_T(self, scan: ScanTOD, scan_tod_arr=None):
+    def apply_T(self, scan_tod_arr):
         """
         Applies INPLACE the T operator defined as T := F^-1 T(omega) F, to one scan.
 
@@ -191,9 +202,9 @@ class CG_Mapmaker:
 
         - The "ortho" normalization of the FFT corresponds to option 1 in ducc0.
         """
-        return self._apply_T(scan, adjoint=False, scan_tod_arr=scan_tod_arr)
+        return self._apply_T(scan_tod_arr, adjoint=False)
 
-    def apply_T_adjoint(self, scan: ScanTOD, scan_tod_arr=None):
+    def apply_T_adjoint(self, scan_tod_arr):
         """
         Applies INPLACE the adjoint, or transpose in matrix-notation, of the T operator to one scan. 
         It is defined as T^T := (F^-1 T(omega) F)^T = F^T T*(omega) (F^-1)^T = F^-1 T(-omega) F.
@@ -208,37 +219,60 @@ class CG_Mapmaker:
         - Numerically the procedure is identical to apply_T, with the difference that the complex array
         given by T(omega) is flipped, as we are evaluating T(-omega).
         """
-        return self._apply_T(scan, adjoint=True, scan_tod_arr=scan_tod_arr)
+        return self._apply_T(scan_tod_arr, adjoint=True)
     
-    def calc_RHS(self):
+    def accum_to_RHS(self, scan_tod: ScanTOD, scan_samp: ScanSamples, 
+                     pix = None, scan_tod_arr = None):
         """
-        Computes the RHS of the mapmaking problem: P^T T^T N^-1 d.
+        Computes the contribution to RHS of the mapmaking problem: P^T T^T N^-1 d for one scan. 
+        Both scan TOD and samples must be given. This allows to compute the RHS contirbutions in an
+        external loop together with the correlated noise sampling, pix can be passed already
+        uncompressed from an external loop to avoid double uncompression.
         """
-        if self.map_comm.Get_rank():
-            self.logger.info(f"##RHS called!")
-        out_map = np.zeros(
-            (3 if self.is_IQU else 1,hp.nside2npix(self.detector_tod._eval_nside)), 
-            dtype=self.f_dtype)
-        for scan, sample in zip(self.detector_tod.scans, self.detector_samples.scans):
-            scan_tod_arr_aux = np.copy(scan._tod) #aux array to not modify scan._tod
-            #FIXME: subtract ncorr and orb dipole from the scan_tod_arr_aux. 
-            #N^-1 d
-            # if ismaster:
-            #     self.logger.info(f"RHS_1: {scan_tod_arr_aux}")
-            scan_tod_arr_aux = self.apply_inv_N(scan, sample.sigma0, scan_tod_arr=scan_tod_arr_aux)
-            #T^T N^-1 d
-            # if ismaster:
-            #     self.logger.info(f"RHS_2: {scan_tod_arr_aux}")
-            scan_tod_arr_aux = self.apply_T_adjoint(scan, scan_tod_arr=scan_tod_arr_aux)
-            # if ismaster:
-            #     self.logger.info(f"RHS_3: {scan_tod_arr_aux}")
-            #P^T T^T N^-1 d
-            out_map = self.apply_P_adjoint(scan, out_map, scan_tod_arr=scan_tod_arr_aux)
-        send, recv = (MPI.IN_PLACE, out_map) if self.map_comm.Get_rank() == 0 else (out_map, np.empty(()))
-        self.map_comm.Reduce(send, recv, op=MPI.SUM, root=0)
+        # if self.map_comm.Get_rank():
+        #     self.logger.info(f"##RHS called!")
+        # out_map = np.zeros(
+        #     (3 if self.is_IQU else 1,hp.nside2npix(self.detector_tod._eval_nside)), 
+        #     dtype=self.f_dtype)
+        # for scan, sample in zip(self.detector_tod.scans, self.detector_samples.scans):
+
+        if self._rhs_loca_map is None:
+            #if not done already, allocate memory for local maps
+            self._rhs_loca_map = np.zeros(
+                (3 if self.is_IQU else 1,hp.nside2npix(self.detector_tod._eval_nside)), 
+                dtype=self.f_dtype)
+
+        if scan_tod_arr is None:
+            scan_tod_arr = np.copy(scan_tod._tod) #aux array to not modify scan._tod
+        #N^-1 d
+        # if ismaster:
+        #     self.logger.info(f"RHS_1: {scan_tod_arr_aux}")
+        scan_tod_arr = self.apply_inv_N(scan_tod_arr, scan_samp.sigma0)
+        #T^T N^-1 d
+        # if ismaster:
+        #     self.logger.info(f"RHS_2: {scan_tod_arr_aux}")
+        scan_tod_arr = self.apply_T_adjoint(scan_tod_arr)
+        # if ismaster:
+        #     self.logger.info(f"RHS_3: {scan_tod_arr_aux}")
+        #P^T T^T N^-1 d
+        self._rhs_loca_map = self.apply_P_adjoint(scan_tod, self._rhs_loca_map, pix=pix, scan_tod_arr=scan_tod_arr)
+
+    def finalize_RHS(self, root=0):
+        """
+        Reduces RHS map on main rank, summing up all the contributions.
+        """
+        logassert(self._rhs_loca_map is not None, 
+                "Attempted to reduce RHS map on master rank before its contributions have been computed.",
+                self.logger)
+        if self.map_comm.Get_rank() == 0:
+            send, recv = (self._rhs_loca_map, self._rhs_finalized_map)  
+        else: 
+            send, recv = (self._rhs_loca_map, np.empty(()))
+        self.map_comm.Reduce(send, recv, op=MPI.SUM, root=root)
         self.map_comm.Barrier()
-        if not self.ismaster:
-            out_map = None
+
+        #free memory
+        self._rhs_loca_map = None
         return recv
 
     def apply_LHS(self, in_map: NDArray):
@@ -266,7 +300,7 @@ class CG_Mapmaker:
         out_map = np.zeros_like(in_map)
         pri = True
         for scan, sample in zip(self.detector_tod.scans, self.detector_samples.scans):
-            scan_tod_arr_aux = np.zeros_like(scan._tod) #aux array to not modify scan._tod
+            scan_tod_arr_aux = np.zeros_like(scan._tod, dtype=self.f_dtype) #aux array to not modify scan._tod
             if self.map_comm.Get_rank() == 0 and pri:
                 self.logger.info(f"##LHS 1 mean: {np.mean(in_map)}")
             #P m
@@ -274,15 +308,15 @@ class CG_Mapmaker:
             if self.map_comm.Get_rank() == 0 and pri:
                 self.logger.info(f"##LHS 2 mean: {np.mean(scan_tod_arr_aux)}")
             #T P m
-            scan_tod_arr_aux = self.apply_T(scan, scan_tod_arr=scan_tod_arr_aux)
+            scan_tod_arr_aux = self.apply_T(scan_tod_arr_aux)
             if self.map_comm.Get_rank() == 0 and pri:
                 self.logger.info(f"##LHS 3 mean: {np.mean(scan_tod_arr_aux)}")
             #N^-1 T P m
-            scan_tod_arr_aux = self.apply_inv_N(scan, sample.sigma0, scan_tod_arr=scan_tod_arr_aux)
+            scan_tod_arr_aux = self.apply_inv_N(scan_tod_arr_aux, sample.sigma0)
             if self.map_comm.Get_rank() == 0 and pri:
                 self.logger.info(f"##LHS 4 mean: {np.mean(scan_tod_arr_aux)}")
             #T^T N^-1 T P m
-            scan_tod_arr_aux = self.apply_T_adjoint(scan, scan_tod_arr=scan_tod_arr_aux)
+            scan_tod_arr_aux = self.apply_T_adjoint(scan_tod_arr_aux)
             if self.map_comm.Get_rank() == 0 and pri:
                 self.logger.info(f"##LHS 5 mean: {np.mean(scan_tod_arr_aux)}")
             #P^T T^T N^-1 T P
@@ -297,11 +331,11 @@ class CG_Mapmaker:
                 out_map = None
         return recv
 
-    def solve(self):
+    def solve(self, x_true=None):
         """
         Solves the CG to compute the target sky map.
         """
-        RHS_map = self.calc_RHS()
+        RHS_map = self.RHS_map
         ismaster = self.map_comm.Get_rank() == 0
         my_dot = dot # lambda arr1, arr2: MPI_dot(arr1, arr2, self.map_comm, double_prec=self.double_perc)
         CG_solver = distributed_CG_arr(self.apply_LHS, 
@@ -318,6 +352,19 @@ class CG_Mapmaker:
             if i%self.CG_check_interval == 0:
                 if ismaster:
                     self.logger.info(f"Mapmaker CG iter {i:3d} - Residual {CG_solver.err:.6e}")
+                    if x_true is not None:
+                        CG_errors_true = norm(CG_solver.x - x_true)/norm(x_true)
+                        A_residual = self.apply_LHS(CG_solver.x - x_true)
+                        #A_residual = np.concatenate(A_residual, axis=-1)
+                        CG_Anorm_error = dot(CG_solver.x - x_true, A_residual)
+                        # A-norm error is only defined for the full vector.
+                        self.logger.info(f"CG iter {i:3d} - Mean X: {norm(CG_solver.x)}")
+
+                        self.logger.info(f"CG iter {i:3d} - Mean X true: {norm(x_true)}")
+
+                        self.logger.info(f"CG iter {i:3d} - True A-norm error: {CG_Anorm_error:.3e}")
+                        # We can print the individual component L2 errors.
+                        self.logger.info(f"CG iter {i:3d} - True L2 error: {CG_errors_true:.3e}")
             if CG_solver.err < self.CG_tol:
                 break
         self._map_signal = CG_solver.x
