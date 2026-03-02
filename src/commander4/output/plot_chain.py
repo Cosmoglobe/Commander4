@@ -25,6 +25,26 @@ from commander4.sky_models.component import Component
 CHAIN_ITER_RE = re.compile(r"chain(?P<chain>\d+)_iter(?P<iter>\d+)\.h5$")
 
 
+# TODO: Figure out a way of not duplicating this. We can't import it, because that triggers the
+# reading of the parameter file, requiring it to be provided as a command-line argument.
+def as_bunch_recursive(dict_of_dicts, name=None):
+    res = Bunch()
+    
+    # 1. Inject the name into the instance, bypassing Bunch's data _dict
+    if name is not None:
+         object.__setattr__(res, "_name", name)
+         
+    # 2. Recursively populate the bunch
+    for key, val in dict_of_dicts.items():
+        if isinstance(val, dict):
+            # Pass the key down as the name for the child Bunch
+            res[key] = as_bunch_recursive(val, name=key)
+        else:
+            res[key] = val
+
+    return res
+
+
 def _decode_h5_value(value):
 	if isinstance(value, bytes):
 		return value.decode("utf-8")
@@ -58,7 +78,7 @@ def _load_params_from_chain(chain_dir: str) -> Bunch | None:
 			if not raw_yaml:
 				continue
 			params_dict = yaml.safe_load(raw_yaml)
-			params = Bunch(params_dict)
+			params = as_bunch_recursive(params_dict)
 			params.parameter_file_as_string = yaml.dump(params_dict)
 			params.parameter_file_binary_yaml = raw_yaml
 			return params
