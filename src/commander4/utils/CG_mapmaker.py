@@ -251,10 +251,18 @@ class CG_Mapmaker:
             if ismaster:
                 raise ValueError("input map can not be empty on master rank.")
             else:
-                in_map = np.zeros_like(self._map_signal, dtype=self.f_dtype)
+                in_map = np.zeros(
+                    (3 if self.is_IQU else 1, hp.nside2npix(self.detector_tod._eval_nside)), 
+                    dtype=self.f_dtype)
 
         #FIXME: something gets stuck here!!!
+        if ismaster:
+            self.logger.info("## LHS Bcasting!!")
+
+        # self.logger.info(f"## on rank {self.map_comm.Get_rank()} in_map is {in_map.shape} {in_map.dtype}")
         self.map_comm.Bcast(in_map, root=0)
+        if ismaster:
+            self.logger.info("## LHS Bcasting Done")
         out_map = np.zeros_like(in_map)
         pri = True
         for scan, sample in zip(self.detector_tod.scans, self.detector_samples.scans):

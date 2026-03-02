@@ -74,7 +74,7 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         mapmaker_invvar.accumulate_to_map(inv_var, pix)
     mapmaker_invvar.gather_map()
     if ismaster:
-        precond = InvNPreconditionerI(mapmaker_invvar._gathered_map) #must be initialized here before the noramlization wipes the gathered map away.
+        precond = called_on_non_master #InvNPreconditionerI(mapmaker_invvar._gathered_map) #must be initialized here before the noramlization wipes the gathered map away.
         
         #debug precond:
         # op = LinearOperator(
