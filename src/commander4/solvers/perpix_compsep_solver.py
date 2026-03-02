@@ -51,8 +51,8 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
         all_fwhm = proc_comm.allgather(fwhm)
         max_fwhm = np.max(all_fwhm)
         my_smoothing_fwhm = np.sqrt(max_fwhm**2 - fwhm**2)
-        logger.info(f"{detector_data.nu} GHz map with FWHM = {fwhm:.1f} arcmin will be smoothed by "
-                    f"{my_smoothing_fwhm:.1f} arcmin to reach {max_fwhm:.1f} arcmin.")
+        logger.info(f"{detector_data.nu} GHz map with FWHM = {fwhm:.1f} arcmin will be smoothed by"\
+                    f" {my_smoothing_fwhm:.1f} arcmin to reach {max_fwhm:.1f} arcmin.")
         if params.general.smooth_to_common_res:
             if pol:  # Polarization, Q,U
                 map_sky[0] = hp.smoothing(map_sky[0], np.deg2rad(my_smoothing_fwhm/60.0))
@@ -99,7 +99,7 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
             # solution with the scaling factor used.
             ctypes_lib.solve_compsep(npix, nband, ncomp, maps_sky.astype(np.float64),
                                      maps_rms.astype(np.float64), M, rand, comp_maps[ipol])
-            logger.info(f"Finished pixel-by-pixel component separation in {time.time()-t0:.2f}s "
+            logger.info(f"Finished pixel-by-pixel component separation in {time.time()-t0:.2f}s "\
                         f"for polarization {ipol+1} of 3.")
 
     comp_maps = proc_comm.bcast(comp_maps, root=0)

@@ -135,7 +135,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: B
             avg_scan_remaining = total_ntod_final / total_ntod_original * 100.0
         logger.info(f"Detector {detname} (band {bandname}) finished reading TODs from file.")
         logger.info(f"Fraction of scans included for {detname}: {frac_included:.1f} %")
-        logger.info(f"Fraction of TODs left after Fourier cut for {detname}: "
+        logger.info(f"Fraction of TODs left after Fourier cut for {detname}: "\
                     f"{avg_scan_remaining:.1f} %")
     else:
         req.Free()

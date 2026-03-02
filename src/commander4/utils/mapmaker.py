@@ -142,6 +142,7 @@ class MapmakerIQU:
         self._map_signal = np.zeros((3, self.npix), dtype=np.float64)
         self._gathered_map = None
         self._finalized_map = None
+        self._has_gathered = False
         
         # Setting up Ctypes mapmaker
         self.maplib = load_cmdr4_ctypes_lib()
@@ -192,6 +193,7 @@ class MapmakerIQU:
             self._gathered_map = np.zeros((3, self.npix), dtype=np.float64)
         self.map_comm.Reduce(self._map_signal, self._gathered_map, op=MPI.SUM, root=0)
         self._map_signal = None  # Free memory and indicate that accumulation is done.
+        self._has_gathered = True
     
     def normalize_map(self, normalization_map):
         """Solve the per-pixel 3x3 system using the provided A matrix."""
@@ -199,6 +201,7 @@ class MapmakerIQU:
             logassert(normalization_map.ndim == 2 and normalization_map.shape[0] == 6,
                     "Normalization map must have shape [6,NPIX] for IQU mapmaker,"
                     f"has {normalization_map.shape}", self.logger)
+            logassert(self._has_gathered, "Tried normalizing non-gathered map", self.logger)
             norm_map = np.ascontiguousarray(normalization_map, dtype=np.float64)
             rhs_map = np.ascontiguousarray(self._gathered_map, dtype=np.float64)
             solved = np.zeros((3, self.npix), dtype=np.float64)
@@ -212,6 +215,7 @@ class MapmakerIQU:
             logassert(normalization_map.ndim == 2 and normalization_map.shape[0] == 6,
                     "Normalization map must have shape [6,NPIX] for IQU mapmaker,"
                     f"has {normalization_map.shape}", self.logger)
+            logassert(self._has_gathered, "Tried normalizing non-gathered map", self.logger)
             self._finalized_map = np.zeros((3, self.npix), dtype=self.dtype)
             A = np.zeros((self.npix, 3, 3), dtype=np.float64)
             A[:, 0, 0] = normalization_map[0]
@@ -263,6 +267,7 @@ class WeightsMapmakerIQU:
         self._map_signal = np.zeros((6, self.npix), dtype=np.float64)
         self._gathered_map = None
         self._finalized_rms_map = None
+        self._has_gathered = False
         
         # Setting up Ctypes mapmaker
         self.maplib = load_cmdr4_ctypes_lib()
@@ -333,10 +338,12 @@ class WeightsMapmakerIQU:
             self._gathered_map = np.zeros((6, self.npix), dtype=np.float64)
         self.map_comm.Reduce(self._map_signal, self._gathered_map, op=MPI.SUM, root=0)
         self._map_signal = None  # Free memory and indicate that accumulation is done.
+        self._has_gathered = True
 
     def normalize_map(self):
         """Compute RMS maps from the per-pixel inverse covariance diagonals."""
         if self.map_comm.Get_rank() == 0:
+            logassert(self._has_gathered, "Tried normalizing non-gathered map", self.logger)
             norm_map = np.ascontiguousarray(self._gathered_map, dtype=np.float64)
             rms = np.zeros((3, self.npix), dtype=np.float64)
             self.maplib.map_invdiag_IQU_f64(rms, norm_map, self.npix)
@@ -345,6 +352,7 @@ class WeightsMapmakerIQU:
     def normalize_map_Python(self):
         """Reference RMS computation using NumPy inversion."""
         if self.map_comm.Get_rank() == 0:
+            logassert(self._has_gathered, "Tried normalizing non-gathered map", self.logger)
             self._finalized_rms_map = np.zeros((3, self.npix), dtype=self.dtype)
  
             # `A` matrix is float64 no matter what, to get very accurate inversion.

@@ -120,9 +120,9 @@ def init_mpi(params):
         return -1
     world_comm.barrier()
     time.sleep(worldrank*1e-3)  # Small sleep to get prints in nice order.
-    logger.debug(f"MPI split performed, hi from worldrank {worldrank} (on machine "
-                f"{MPI.Get_processor_name()}) subcomrank {proc_comm.Get_rank()} from color {color} "
-                f"of size {proc_comm.Get_size()}.")
+    logger.debug(f"MPI split performed, hi from worldrank {worldrank} (on machine "\
+                f"{MPI.Get_processor_name()}) subcomrank {proc_comm.Get_rank()} from color "\
+                f"{color} of size {proc_comm.Get_size()}.")
 
     # Determine the world ranks of the respective master tasks for compsep and TOD
     # We ensured that this works by the "key=worldrank" in the split command.
@@ -241,9 +241,9 @@ def init_mpi_tod(mpi_info, params):
                      f"TOD processing ({MPIsize_tod}).", logger)
 
     if is_tod_master:
-        logger.info(f"TOD: {MPIsize_tod} tasks allocated to TOD processing of {tot_num_bands} bands.")
-        log.logassert(MPIsize_tod >= tot_num_bands, "Number of MPI tasks dedicated to TOD "
-                      f"processing ({MPIsize_tod}) must be equal to or larger than the number of "
+        logger.info(f"TOD: {MPIsize_tod} tasks allocated to TOD proc of {tot_num_bands} bands.")
+        log.logassert(MPIsize_tod >= tot_num_bands, "Number of MPI tasks dedicated to TOD "\
+                      f"processing ({MPIsize_tod}) must be equal to or larger than the number of "\
                       f"bands ({tot_num_bands}).", logger) 
 
     # Create communicators for each different band.
@@ -259,9 +259,9 @@ def init_mpi_tod(mpi_info, params):
     tod_comm.Barrier()
     time.sleep(MPIrank_tod*1e-3)  # Small sleep to get prints in nice order.
     
-    logger.debug(f"TOD: Hello from TOD-rank {MPIrank_tod} (on machine {MPI.Get_processor_name()}), "
-                 f"dedicated to band {my_band_id}, with local rank {MPIrank_band} (local "
-                 f"communicator size: {MPIsize_band}), and detector "
+    logger.debug(f"TOD: Hello from TOD-rank {MPIrank_tod} (on machine {MPI.Get_processor_name()}) "\
+                 f"dedicated to band {my_band_id}, with local rank {MPIrank_band} (local "\
+                 f"communicator size: {MPIsize_band}), and detector "\
                  f"{my_det_id} with local rank {MPIrank_det} and size {MPIsize_det}")
 
     mpi_info['experiment'] = Bunch()
@@ -317,6 +317,7 @@ def init_mpi_compsep(mpi_info, params):
     mpi_info['band']['is_master'] = True
 
     if tot_num_bands > MPIsize_compsep:
-        log.lograise(RuntimeError, f"Total number of experiment bands {tot_num_bands} exceeds the number of Compsep MPI tasks {MPIsize_compsep}.", logger)
+        log.lograise(RuntimeError, f"Total number of experiment bands {tot_num_bands} exceeds the "\
+                     f"number of Compsep MPI tasks {MPIsize_compsep}.", logger)
 
     return mpi_info

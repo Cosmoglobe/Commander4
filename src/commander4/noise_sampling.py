@@ -23,8 +23,8 @@ def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray) -> float:
     return sample
 
 
-def sample_noise_PS_params(n_corr: NDArray, sigma0: float, f_samp: float, alpha_start: float,
-                           freq_max=3.0, n_grid=100, n_burnin=5) -> tuple[float,float]:
+def sample_noise_PS_params(n_corr: NDArray, sigma0: float, f_samp: float, alpha_start=-1.0,
+                           freq_max=3.0, n_grid=100, n_burnin=5) -> tuple[float, float]:
     """ Function for drawing a sample of the fknee and alpha parameters for the correlated noise
         under the power spectrum data model PS = sigma0*(f/fknee)**alpha, where sigma0 is known.
         Note that this relates *only* to the correlated noise, without the "flat" white noise.
@@ -33,6 +33,7 @@ def sample_noise_PS_params(n_corr: NDArray, sigma0: float, f_samp: float, alpha_
             sigma0 (float): White noise level of full data. Since this data model does not have a
                 white noise floor, this essentially just scales the resulting fnee value.
             f_samp (float): The sampling rate of the data (n_corr), in Hertz.
+            alpha_start (float): Starting guess for alpha in Gibbs sampler.
             freq_max (float): Maximum frequency to consider for the PS (all 1/f information is
                               contained at low freqs).
             n_grid (int): Number of grid points used for the inverse sampling.
@@ -83,7 +84,6 @@ def sample_noise_PS_params(n_corr: NDArray, sigma0: float, f_samp: float, alpha_
     return fknee_sample, alpha_current
 
 
-
 def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigma0: float,
                                      C_corr_inv: NDArray, err_tol=1e-8, max_iter=400,
                                      rnd_seed=None) -> NDArray:
@@ -107,25 +107,27 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
 
     def apply_LHS(x_small):
         term1 = sigma0**2 * x_small
-        u_x = np.zeros(Ntod)
+        u_x = np.zeros(Ntod, dtype=x_small.dtype)
         u_x[~mask] = x_small
         m_inv_u_x = apply_filter(u_x, M_inv)
         u_t_m_inv_u_x = m_inv_u_x[~mask]
         term2 = u_t_m_inv_u_x
         return term1 - term2
 
+    dtype = TOD.dtype
     Ntod = TOD.shape[0]
     M_inv = 1.0 / ( (1/sigma0**2) + C_corr_inv)  # The stationary LHS operator.
     if rnd_seed is not None:
         np.random.seed(rnd_seed)
-    omega_2 = np.random.randn(Ntod)
-    omega_3 = np.random.randn(Ntod)
+    omega_2 = np.random.randn(Ntod).astype(dtype)
+    omega_3 = np.random.randn(Ntod).astype(dtype)
 
-    C_wn_timedomain = np.ones(Ntod)*sigma0**2
+    C_wn_timedomain = np.ones(Ntod, dtype=dtype)*sigma0**2
     C_wn_timedomain[~mask] = np.inf
     b_full = TOD/C_wn_timedomain + omega_2/np.sqrt(C_wn_timedomain)\
            + apply_filter(omega_3, np.sqrt(C_corr_inv))
-
+    b_full = b_full.astype(dtype)
+    M_inv = M_inv.astype(dtype)
     m_inv_b = apply_filter(b_full, M_inv)
     # Then, apply U^T to extract the values at the flagged locations.
     b_small = m_inv_b[~mask]
@@ -140,10 +142,10 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
         x_small = CG_solver.x
         CG_err = CG_solver.err
     else:
-        x_small = np.zeros((0,))
+        x_small = np.zeros((0,), dtype=dtype)
         CG_err = 0
 
-    correction_gaps_only = np.zeros(Ntod)
+    correction_gaps_only = np.zeros(Ntod, dtype=dtype)
     correction_gaps_only[~mask] = x_small
     
     # Now, apply M^-1 to get the full correction term
@@ -184,11 +186,5 @@ def inefficient_corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.
             CG_solver.step()
         else:
             break
-    if i == max_iter:
-        print(f"Corr noise CG failed to converge after {max_iter} iterations. "
-              f"Residual = {CG_solver.err} (err tol = {err_tol:.2e})")
-    else:
-        print(f"Corr noise CG converged after {i} iterations. "
-              f"Residual = {CG_solver.err} (err tol = {err_tol:.2e})")
     x_full = CG_solver.x
     return x_full
