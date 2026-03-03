@@ -25,7 +25,7 @@ from commander4.utils.math_operations import inplace_scale, dot, norm
 # - T is the bolometer trnasfer function operator (check Artem's code)
 # - N^-1 is the inverse noise covariance matrix (inv_var in tod_processing.tod2map) which is diagonal in tod space [ntod]
 # - d is the calibrated TODs [ntod].
-# Notes: T is non-local so each rank must hold all the scans, but only for one detector.
+# Notes: T is non-local so each rank must hold the whole scan, but only for one detector.
 
 
 class CG_Mapmaker:
@@ -245,15 +245,15 @@ class CG_Mapmaker:
         if scan_tod_arr is None:
             scan_tod_arr = np.copy(scan_tod._tod) #aux array to not modify scan._tod
         #N^-1 d
-        # if ismaster:
-        #     self.logger.info(f"RHS_1: {scan_tod_arr_aux}")
+        # if self.ismaster:
+        #     self.logger.info(f"RHS_1: {scan_tod_arr}")
         scan_tod_arr = self.apply_inv_N(scan_tod_arr, scan_samp.sigma0)
         #T^T N^-1 d
-        # if ismaster:
-        #     self.logger.info(f"RHS_2: {scan_tod_arr_aux}")
+        # if self.ismaster:
+        #     self.logger.info(f"RHS_2: {scan_tod_arr}")
         scan_tod_arr = self.apply_T_adjoint(scan_tod_arr)
-        # if ismaster:
-        #     self.logger.info(f"RHS_3: {scan_tod_arr_aux}")
+        # if self.ismaster:
+        #     self.logger.info(f"RHS_3: {scan_tod_arr}")
         #P^T T^T N^-1 d
         self._rhs_loca_map = self.apply_P_adjoint(scan_tod, self._rhs_loca_map, pix=pix, scan_tod_arr=scan_tod_arr)
 
@@ -289,46 +289,45 @@ class CG_Mapmaker:
                     (3 if self.is_IQU else 1, hp.nside2npix(self.detector_tod._eval_nside)), 
                     dtype=self.f_dtype)
 
-        #FIXME: something gets stuck here!!!
-        if ismaster:
-            self.logger.info("## LHS Bcasting!!")
+        # if ismaster:
+        #     self.logger.info("## LHS Bcasting!!")
 
         # self.logger.info(f"## on rank {self.map_comm.Get_rank()} in_map is {in_map.shape} {in_map.dtype}")
         self.map_comm.Bcast(in_map, root=0)
-        if ismaster:
-            self.logger.info("## LHS Bcasting Done")
+        # if ismaster:
+        #     self.logger.info("## LHS Bcasting Done")
         out_map = np.zeros_like(in_map)
         pri = True
         for scan, sample in zip(self.detector_tod.scans, self.detector_samples.scans):
             scan_tod_arr_aux = np.zeros_like(scan._tod, dtype=self.f_dtype) #aux array to not modify scan._tod
-            if self.map_comm.Get_rank() == 0 and pri:
-                self.logger.info(f"##LHS 1 mean: {np.mean(in_map)}")
+            # if self.map_comm.Get_rank() == 0 and pri:
+            #     self.logger.info(f"##LHS 1 mean: {np.mean(in_map)}")
             #P m
             scan_tod_arr_aux = self.apply_P(in_map, scan, scan_tod_arr=scan_tod_arr_aux)
-            if self.map_comm.Get_rank() == 0 and pri:
-                self.logger.info(f"##LHS 2 mean: {np.mean(scan_tod_arr_aux)}")
+            # if self.map_comm.Get_rank() == 0 and pri:
+            #     self.logger.info(f"##LHS 2 mean: {np.mean(scan_tod_arr_aux)}")
             #T P m
             scan_tod_arr_aux = self.apply_T(scan_tod_arr_aux)
-            if self.map_comm.Get_rank() == 0 and pri:
-                self.logger.info(f"##LHS 3 mean: {np.mean(scan_tod_arr_aux)}")
+            # if self.map_comm.Get_rank() == 0 and pri:
+            #     self.logger.info(f"##LHS 3 mean: {np.mean(scan_tod_arr_aux)}")
             #N^-1 T P m
             scan_tod_arr_aux = self.apply_inv_N(scan_tod_arr_aux, sample.sigma0)
-            if self.map_comm.Get_rank() == 0 and pri:
-                self.logger.info(f"##LHS 4 mean: {np.mean(scan_tod_arr_aux)}")
+            # if self.map_comm.Get_rank() == 0 and pri:
+            #     self.logger.info(f"##LHS 4 mean: {np.mean(scan_tod_arr_aux)}")
             #T^T N^-1 T P m
             scan_tod_arr_aux = self.apply_T_adjoint(scan_tod_arr_aux)
-            if self.map_comm.Get_rank() == 0 and pri:
-                self.logger.info(f"##LHS 5 mean: {np.mean(scan_tod_arr_aux)}")
+            # if self.map_comm.Get_rank() == 0 and pri:
+            #     self.logger.info(f"##LHS 5 mean: {np.mean(scan_tod_arr_aux)}")
             #P^T T^T N^-1 T P
             out_map = self.apply_P_adjoint(scan, out_map, scan_tod_arr=scan_tod_arr_aux)
-            if self.map_comm.Get_rank() == 0 and pri:
-                self.logger.info(f"##LHS 6 mean: {np.mean(out_map)}")
+            # if self.map_comm.Get_rank() == 0 and pri:
+            #     self.logger.info(f"##LHS 6 mean: {np.mean(out_map)}")
             pri=False
         send, recv = (MPI.IN_PLACE, out_map) if self.map_comm.Get_rank() == 0 else (out_map, None)
         self.map_comm.Reduce(send, recv, op=MPI.SUM, root=0)
         if not ismaster:
-                in_map = np.empty(())
-                out_map = None
+            in_map = np.empty(())
+            out_map = None
         return recv
 
     def solve(self, x_true=None):
@@ -337,7 +336,16 @@ class CG_Mapmaker:
         """
         RHS_map = self.RHS_map
         ismaster = self.map_comm.Get_rank() == 0
-        my_dot = dot # lambda arr1, arr2: MPI_dot(arr1, arr2, self.map_comm, double_prec=self.double_perc)
+        if ismaster:
+            import matplotlib.pyplot as plt
+            plt.figure()
+            hp.mollview(RHS_map[0,:], min=-1, max=1)
+            plt.savefig("/mn/stornext/u3/leoab/cmdr4_plots/test_RHS.png")
+            plt.close()
+
+        def mydot(a, b):
+            return np.dot(a.flatten(), b.flatten())
+        my_dot = mydot # lambda arr1, arr2: MPI_dot(arr1, arr2, self.map_comm, double_prec=self.double_perc)
         CG_solver = distributed_CG_arr(self.apply_LHS, 
                                        RHS_map, 
                                        ismaster,
@@ -365,7 +373,19 @@ class CG_Mapmaker:
                         self.logger.info(f"CG iter {i:3d} - True A-norm error: {CG_Anorm_error:.3e}")
                         # We can print the individual component L2 errors.
                         self.logger.info(f"CG iter {i:3d} - True L2 error: {CG_errors_true:.3e}")
+
+                        #check if LHS works:
+                        #rhs_comp = self.apply_LHS(x_true.astype(np.float64))
+                        #self.logger.info(f"CG iter {i:3d} - Check of rhs - rhs_comp {np.allclose(self.RHS_map, rhs_comp, rtol=1e-5, atol=1e-8)} max diff {np.max(self.RHS_map - rhs_comp)}")
+
+                        import matplotlib.pyplot as plt
+
+                        plt.figure()
+                        hp.mollview(CG_solver.x[0,:], min=-1e4, max=1e4)
+                        plt.savefig("/mn/stornext/u3/leoab/cmdr4_plots/x_sol.png")
+                        plt.close()
+                        
+
             if CG_solver.err < self.CG_tol:
                 break
         self._map_signal = CG_solver.x
-

@@ -99,7 +99,7 @@ class WeightsMapmaker:
         if self.map_comm.Get_rank() == 0:
             logassert(self._gathered_map is not None, "Attempted to retrieve unfinished map",
                     self.logger)
-        return self._gathered_map.astype(self.dtype, copy=False)
+        return self._gathered_map #.astype(self.dtype, copy=False)
 
     def accumulate_to_map(self, weight:NDArray, pix:NDArray):
         """Accumulate per-sample weights into the local map buffer."""

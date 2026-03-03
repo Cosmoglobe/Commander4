@@ -9,6 +9,7 @@ from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell import curvedsky
 from copy import deepcopy
+import logging
 from commander4.utils.math_operations import alm_real2complex, alm_complex2real, inplace_arr_prod
 from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
 
@@ -322,6 +323,7 @@ class InvNPreconditionerI:
         """
         self.inv_N_map = inv_N_map.reshape((1,-1)) if inv_N_map.ndim == 1 else inv_N_map
         self.npix = self.inv_N_map.shape[1]
+        self.logger = logging.getLogger(__name__)
         # self.maplib = load_cmdr4_ctypes_lib()
         # if double_prec:
         #     ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
@@ -338,12 +340,8 @@ class InvNPreconditionerI:
         assert map.shape[1] == self.npix
         map_out = np.copy(map)
         inplace_arr_prod(map_out, self.inv_N_map)
+        self.logger.info("## Preconditioner called.")
         return map_out
-
-
-
-# 5958011918201.565
-# 5958017133529.309
 
 
 

@@ -2,8 +2,7 @@ import numpy as np
 import logging
 from copy import deepcopy, copy
 from commander4.utils.math_operations import inplace_complist_add_scaled_array,\
-    inplace_complist_scale_and_add, \
-            complist_dot, inplace_add_scaled_vec, inplace_scale_add
+    inplace_complist_scale_and_add, complist_dot, inplace_add_scaled_vec, inplace_scale_add, dot
 
 def default_M(x):     return np.copy(x)
 
@@ -79,7 +78,7 @@ class distributed_CG_arr:
     """Preconditioner borrowed from pixell.utils, and modified to accomodate both the distributed
     computations of Commander4 component separation, and overriding of certain Numpy operations.
     """
-    def __init__(self, A, b, is_master, x0=None, M=default_M, dot=complist_dot, destroy_b=False):
+    def __init__(self, A, b, is_master, x0=None, M=default_M, dot=dot, destroy_b=False):
         """Initialize a solver for the system Ax=b, with a starting guess of x0 (0
         if not provided). Vectors b and x0 must provide addition and multiplication,
         as well as the .copy() method, such as provided by numpy arrays. The

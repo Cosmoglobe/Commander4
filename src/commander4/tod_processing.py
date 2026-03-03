@@ -1,5 +1,6 @@
 import numpy as np
 import pixell
+from pixell import utils
 from mpi4py import MPI
 import logging
 from scipy.fft import rfftfreq
@@ -20,12 +21,12 @@ from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.detector_samples import DetectorSamples
 from commander4.data_models.scan_samples import ScanSamples
-from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU, WeightsMapmaker
+from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU, WeightsMapmaker, Mapmaker
 from commander4.utils.CG_mapmaker import CG_Mapmaker
 from commander4.solvers.preconditioners import InvNPreconditionerI
 from commander4.noise_sampling import corr_noise_realization_with_gaps, sample_noise_PS_params
 from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
-from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0
+from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0, norm
 from commander4.tod_reader import read_tods_from_file
 from commander4.output.write_chains_files import write_tod_chain_to_file, write_map_chain_to_file
 # from commander4.logging.performance_logger import benchmark, summarize, start_bench, stop_bench
@@ -198,20 +199,29 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
     # We separate the inverse-variance mapmaking from the other 3 mapmakers.
     # This is purely to reduce the maximum concurrent memory requirement, and is slightly slower
     # as we have to de-compress pix and psi twice.
-    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)    
+    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)
+    weights_mapmaker_Ionly = WeightsMapmaker(band_comm, experiment_data.nside) 
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
         pix = scan.pix
         psi = scan.psi
         inv_var = 1.0/scan_samples.sigma0**2
         mapmaker_invvar.accumulate_to_map(inv_var, pix, psi)
+        weights_mapmaker_Ionly.accumulate_to_map(inv_var, pix)
     mapmaker_invvar.gather_map()
     mapmaker_invvar.normalize_map()
+    weights_mapmaker_Ionly.gather_map()
 
     mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
+    mapmaker_Ionly = Mapmaker(band_comm, experiment_data.nside)
     mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside)
     ismaster = band_comm.Get_rank() == 0
     if ismaster:
-        precond = InvNPreconditionerI(mapmaker_invvar._gathered_map[0,:]) #must be initialized here before the noramlization wipes the gathered map away.
+        import matplotlib.pyplot as plt
+        plt.figure()
+        hp.mollview(weights_mapmaker_Ionly.final_map)
+        plt.savefig("/mn/stornext/u3/leoab/cmdr4_plots/inv_n_map_I.png")
+        precond = InvNPreconditionerI(utils.without_nan(1./weights_mapmaker_Ionly.final_map**2))
+        plt.close()
         
         #debug precond:
         # op = LinearOperator(
@@ -285,7 +295,11 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
             d_sky -= n_corr_est
 
         mapmaker.accumulate_to_map(d_sky/scan_samples.gain_est, inv_var, pix, psi)
+        mapmaker_Ionly.accumulate_to_map(d_sky/scan_samples.gain_est, inv_var, pix)
         cg_mapmaker.accum_to_RHS(scan, scan_samples, pix=pix, scan_tod_arr=d_sky/scan_samples.gain_est)
+
+        # if ismaster:
+        #     logger.info(f"## Local RHS: {norm(cg_mapmaker._rhs_loca_map)}")
         mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
 
     ### PRINT NOISE SAMPLING STATS ###
@@ -322,9 +336,21 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
     mapmaker_orbdipole.normalize_map(map_cov)
     map_orbdipole = mapmaker_orbdipole.final_map
 
+    mapmaker_Ionly.gather_map()
+    mapmaker_Ionly.normalize_map(weights_mapmaker_Ionly.final_map)
+    x_true_I = mapmaker_Ionly.final_map.reshape((1,-1)) if ismaster else None
+
+    if ismaster:
+        plt.figure()
+        hp.mollview(x_true_I[0,:], min=-1e4, max=1e4)
+        plt.savefig("/mn/stornext/u3/leoab/cmdr4_plots/xtrue.png")
+        plt.close()
+
     cg_mapmaker.finalize_RHS()
-    xtrue = map_signal[0,:].reshape((1,-1)) if ismaster else None
-    cg_mapmaker.solve(x_true=xtrue)
+    # if ismaster:
+    #     logger.info(f"## Final RHS: {norm(cg_mapmaker._rhs_finalized_map)}")
+    # xtrue = map_signal[0,:].reshape((1,-1)) if ismaster else None
+    cg_mapmaker.solve(x_true=x_true_I)
     map_signal_cg = cg_mapmaker.solved_map
 
     if ismaster:
@@ -364,6 +390,17 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         return [detmap_I, detmap_QU]
     else:
         return []
+
+
+### DEBUGGING STATUS:
+
+# input d is the same in bin mapmaker and cg.
+# the rhs seems to accumulate correctly
+# inv_N matrix multiplication in the preconditioner seems correct.
+
+# Mean X true: 1.874203861811962e+19
+# Mean X: 95369274175.01712
+
 
 
 def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm, MPI.Comm, str,
