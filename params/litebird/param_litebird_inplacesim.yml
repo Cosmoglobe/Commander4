@@ -35,9 +35,12 @@ general:
   pixel_compsep_sampling: True
   smooth_to_common_res: True
 
+  chains_to_write: [1,]
   write_orb_dipole_maps_to_chain: True
   write_corr_noise_maps_to_chain: True
   write_sky_model_maps_to_chain: True
+  chain_maps_nside: 256
+  chain_maps_interval: 5
 
   output_paths:
     chains: "../cmdr4_chains/litebird/inplacesim/"

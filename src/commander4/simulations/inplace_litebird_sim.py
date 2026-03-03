@@ -149,8 +149,8 @@ def generate_spdust(freq, fwhm, units, nside, params):
     return spdust_s.value
 
 
-T_CMB = 2.72548
-C_LIGHT = 299792458.0
+T_CMB = 2.72548  # K_CMB
+C_LIGHT = 299792458.0  # m/s
 def get_orbital_dipole(scan: ScanTOD, pix: NDArray[np.integer], freq: float, units) -> NDArray:
     orb_vel_vec = scan.orb_dir_vec  # Satellite velocity vector relative to sun.
     # pointing_vec = hp.pix2vec(scan.nside, scan.pix)
