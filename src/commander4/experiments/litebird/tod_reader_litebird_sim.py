@@ -135,7 +135,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: B
     det_static.detector_id = my_det_id
 
     if my_experiment.replace_tod_with_sim:
-        replace_tod_with_sim(det_static, params)
+        replace_tod_with_sim(det_static, my_band, params)
 
     ### Collect some info on master rank of each detector and print it ###
     local_tot_scans = scan_idx_stop - scan_idx_start

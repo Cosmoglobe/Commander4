@@ -7,6 +7,7 @@ import pysm3.units as u
 import ducc0
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
+from scipy.fft import rfftfreq, rfft, irfft
 
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
@@ -167,18 +168,26 @@ def get_orbital_dipole(scan: ScanTOD, pix: NDArray[np.integer], freq: float, uni
 
     # We have calculated the orbital dipole in units of CMB Kelvin.
     # Find the conversion factor from K_CMB to the units expected by the code (typically uK_RJ).
-    unit_conv = (1.0 * u.K_CMB).to(units, equivalencies=u.cmb_equivalencies(freq * u.GHz)).value
+    KCMB_to_uKRJ = (1.0 * u.K_CMB).to(units, equivalencies=u.cmb_equivalencies(freq * u.GHz)).value
 
-    return orbital_dipole_amplitude * unit_conv
+    return orbital_dipole_amplitude * KCMB_to_uKRJ
 
 
 
-def replace_tod_with_sim(detector_data: DetectorTOD, params: Bunch):
+def replace_tod_with_sim(detector_data: DetectorTOD, band_params: Bunch, params: Bunch):
     nside = detector_data.nside
     npix = 12*nside**2
     fwhm = np.deg2rad(detector_data.fwhm/60.0)
     freq = detector_data.nu
     units = u.uK_RJ
+
+    # Hard-coded noise parameters
+    alpha_ncorr = -1.0
+    fknee_ncorr = 0.1
+
+    KCMB_to_KRJ = (1.0 * u.K_CMB).to(u.K_RJ, equivalencies=u.cmb_equivalencies(freq * u.GHz)).value
+    # Convert per-root-second RMS to per-sample RMS.
+    sigma0_persamp = KCMB_to_KRJ*band_params.sigma0_rts*np.sqrt(band_params.fsamp)
 
     comps_sum_smoothed = np.zeros((3, npix), dtype=np.float32)
     comps_sum_smoothed += generate_thermal_dust(freq, fwhm, units, nside, params)
@@ -197,7 +206,15 @@ def replace_tod_with_sim(detector_data: DetectorTOD, params: Bunch):
         scan._tod[:] = I[pix] + Q[pix]*np.cos(2*psi) + U[pix]*np.sin(2*psi)
         scan._tod[:] += get_orbital_dipole(scan, pix, freq, units)
 
-        # Adding some arbitrary white noise for now.
-        scan._tod[:] += np.random.normal(0, 100.0, ntod)
+        # Create some white noise.
+        noise = np.random.normal(0, sigma0_persamp, ntod)
+        # 1/f power spectrum, without sigma0**2 factor (which is already in the data).
+        PS_freqs = rfftfreq(ntod, 1.0/band_params.fsamp)
+        PS_freqs[0] = 0.5*PS_freqs[1]  # Add some DC power while avoiding divide by 0.
+        PS = 1.0 + (PS_freqs/fknee_ncorr)**alpha_ncorr
+        # Morph the shape of the noise power spectrum to be 1/f + white noise.
+        noise = irfft(rfft(noise)*PS)
+
+        scan._tod[:] += noise
 
     return detector_data
