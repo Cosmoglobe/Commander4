@@ -1,4 +1,3 @@
-import logging
 import os
 
 import healpy as hp
@@ -9,336 +8,586 @@ import numpy as np
 from pixell.bunch import Bunch
 
 from commander4.sky_models.component import Component, split_complist
-from commander4.data_models.detector_map import DetectorMap
+
+def _ensure_2d_map(map_data: np.ndarray | None) -> np.ndarray | None:
+    if map_data is None:
+        return None
+    map_array = np.asarray(map_data)
+    if map_array.ndim == 1:
+        return map_array.reshape(1, -1)
+    return map_array
 
 
-def plot_combo_maps(params: Bunch, detector: int | str, chain: int, iteration: int,
-                    comp_list: list[Component], detector_data: DetectorMap):
+def _force_iqu_rows(map_data: np.ndarray | None) -> np.ndarray | None:
+    map_array = _ensure_2d_map(map_data)
+    if map_array is None:
+        return None
+    npix = map_array.shape[-1]
+    out = np.zeros((3, npix), dtype=map_array.dtype)
+    if map_array.shape[0] == 1:
+        out[0] = map_array[0]
+    elif map_array.shape[0] == 2:
+        out[1:3] = map_array[:2]
+    else:
+        out[:3] = map_array[:3]
+    return out
 
-    logger = logging.getLogger(__name__)
 
+def _safe_percentile(values: np.ndarray, q: float, fallback: float = 0.0) -> float:
+    arr = np.asarray(values)
+    finite = np.isfinite(arr)
+    if not np.any(finite):
+        return fallback
+    return float(np.nanpercentile(arr[finite], q))
+
+
+def _sym_limits(values: np.ndarray, percentile: float = 99.0) -> tuple[float, float]:
+    lim = _safe_percentile(np.abs(values), percentile, fallback=1.0)
+    lim = max(lim, 1e-12)
+    return -lim, lim
+
+
+def _stokes_labels(npol: int) -> list[str]:
+    if npol == 1:
+        return ["I"]
+    if npol == 2:
+        return ["Q", "U"]
+    if npol >= 3:
+        return ["I", "Q", "U"][:npol]
+    return [f"P{i}" for i in range(npol)]
+
+
+def _get_component_map(
+    component: Component,
+    freq: float,
+    nside: int,
+    npol: int,
+    ipol: int,
+    smoothing_scale_radians: float,
+) -> np.ndarray:
+    npix = 12 * nside**2
+    if npol == 1:
+        if component.pol:
+            return np.zeros((npix,))
+        return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[0]
+
+    if component.pol:
+        return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[ipol]
+    return np.zeros((npix,))
+
+
+def plot_tod_series(
+    out_folder: str,
+    detector: str,
+    chain: int,
+    key: str,
+    x_vals: list[int],
+    y_vals: list[float],
+) -> None:
+    plt.figure()
+    plt.plot(x_vals, y_vals, marker="o")
+    plt.title(f"{detector} chain {chain}: {key}")
+    plt.xlabel("iteration")
+    plt.ylabel(key)
+    filename = os.path.join(out_folder, f"{detector}_chain{chain:02d}_{key}.png")
+    plt.savefig(filename, bbox_inches="tight")
+    plt.close()
+
+
+def plot_tod_combined(
+    out_folder: str,
+    chain: int,
+    key: str,
+    series_by_detector: dict[str, tuple[list[int], list[float]]],
+) -> None:
+    plt.figure()
+    any_line = False
+    for detector, (x_vals, y_vals) in sorted(series_by_detector.items()):
+        if not x_vals:
+            continue
+        any_line = True
+        plt.plot(x_vals, y_vals, marker="o", label=detector)
+    if not any_line:
+        plt.close()
+        return
+    plt.title(f"Chain {chain}: {key} (sample 0)")
+    plt.xlabel("iteration")
+    plt.ylabel(key)
+    plt.legend(loc="best")
+    filename = os.path.join(out_folder, f"chain{chain:02d}_{key}_combined.png")
+    plt.savefig(filename, bbox_inches="tight")
+    plt.close()
+
+
+def plot_combo_maps(
+    params: Bunch,
+    detector: str,
+    chain: int,
+    iteration: int,
+    comp_list: list[Component],
+    *,
+    map_signal: np.ndarray,
+    nu: float,
+    nside: int,
+    map_rms: np.ndarray | None = None,
+    map_corrnoise: np.ndarray | None = None,
+    map_orbdipole: np.ndarray | None = None,
+    map_skymodel: np.ndarray | None = None,
+    gain: float | None = None,
+    g0: float | None = None,
+) -> None:
     out_folder = os.path.join(params.output_paths.plots, "combo_maps")
     os.makedirs(out_folder, exist_ok=True)
 
-    nside = detector_data.nside
-    npix = 12*nside**2
-    pol = detector_data.pol
-    pol_names = ["Q", "U"] if pol else ["I"]
-    for ipol in range(detector_data.npol):
-        map_signal = detector_data.map_sky[ipol]
-        if map_signal is None:
-            continue
-        map_corrnoise_full = getattr(detector_data, "map_corrnoise", None)
-        map_rms_full = getattr(detector_data, "map_rms", None)
-        map_skymodel_full = getattr(detector_data, "map_skymodel", None)
-        map_orbdipole_full = getattr(detector_data, "map_orbdipole", None)
-        map_corrnoise = map_corrnoise_full[ipol] if map_corrnoise_full is not None else np.zeros((npix,))
-        map_rms = map_rms_full[ipol] if map_rms_full is not None else np.ones((npix,))
-        map_skymodel = map_skymodel_full[ipol] if map_skymodel_full is not None else np.zeros((npix,))
-        map_orbdipole = map_orbdipole_full[ipol] if map_orbdipole_full is not None else np.zeros((npix,))
-        freq = detector_data.nu
-        gain = getattr(detector_data, "gain", None)
-        g0 = getattr(detector_data, "g0", None)
-        
-        map_rawobs = map_signal + map_corrnoise + map_orbdipole
-        map_skysub = map_signal + map_corrnoise - map_skymodel
+    map_signal = _ensure_2d_map(map_signal)
+    if map_signal is None:
+        return
+    npol = map_signal.shape[0]
+    npix = 12 * nside**2
+    pol_names = _stokes_labels(npol)
 
-        foreground_subtracted = np.zeros_like(map_signal)
-        cmb_subtracted = np.zeros_like(map_signal)
-        foreground_subtracted[:] = map_signal
-        cmb_subtracted[:] = map_signal
-        residual = np.zeros_like(map_signal)
-        residual[:] = map_signal
+    comp_sublist = split_complist(comp_list, 1 if npol > 1 else 0)
 
-        # print("Comps", [comp.pol for comp in comp_list])
+    for ipol in range(npol):
+        signal = map_signal[ipol]
+        if map_corrnoise is not None and ipol < map_corrnoise.shape[0]:
+            corrnoise = map_corrnoise[ipol]
+        else:
+            corrnoise = np.zeros((npix,))
+        rms = map_rms[ipol] if map_rms is not None and ipol < map_rms.shape[0] else None
+        if map_orbdipole is not None and ipol < map_orbdipole.shape[0]:
+            orbdipole = map_orbdipole[ipol]
+        else:
+            orbdipole = np.zeros((npix,))
+        if map_skymodel is not None and ipol < map_skymodel.shape[0]:
+            skymodel = map_skymodel[ipol]
+        else:
+            skymodel = np.zeros((npix,))
 
-        comp_sublist = split_complist(comp_list, 1 if pol else 0) #pick only the relevant stokes
+        map_rawobs = signal + corrnoise + orbdipole
+        map_skysub = signal + corrnoise - skymodel
 
-        # print("Len",len(comp_sublist), len(comp_list))
+        foreground_subtracted = signal.copy()
+        cmb_subtracted = signal.copy()
+        residual = signal.copy()
+        cmb_map_anisotropies = np.zeros_like(signal)
 
         fig, ax = plt.subplots(3, 5, figsize=(42, 18))
         if gain is not None and g0 is not None:
-            title = (f"Iter {iteration:04d}. Freq: {freq:.2f} GHz (det {detector}). Chain {chain}. "
-                     f"Detector gain = {gain:.4e} (Global gain = {g0:.4e}).")
+            title = (
+                f"Iter {iteration:04d}. Freq: {nu:.2f} GHz (det {detector}). Chain {chain}. "
+                f"Detector gain = {gain:.4e} (Global gain = {g0:.4e})."
+            )
         else:
-            title = f"Iter {iteration:04d}. Freq: {freq:.2f} GHz (det {detector}). Chain {chain}."
+            title = f"Iter {iteration:04d}. Freq: {nu:.2f} GHz (det {detector}). Chain {chain}."
         fig.suptitle(title, fontsize=24)
 
-        cmb_map_anisotropies = None
-        for i, component in enumerate(comp_sublist):
-            smoothing_scale_radians = component.comp_params.smoothing_scale*np.pi/(180*60)
-            if pol:
-                if component.pol:
-                    comp_map = component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[ipol]
-                else:
-                    comp_map = np.zeros((npix,))
-            else:
-                comp_map = component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[0]
+        max_component_panels = min(len(comp_sublist), 5)
+        for i, component in enumerate(comp_sublist[:max_component_panels]):
+            smoothing_scale_radians = component.comp_params.smoothing_scale * np.pi / (180 * 60)
+            comp_map = _get_component_map(component, nu, nside, npol, ipol, smoothing_scale_radians)
             if "cmb" not in component.shortname:
                 foreground_subtracted -= comp_map
             else:
                 cmb_subtracted -= comp_map
+                cmb_maps = component.get_sky_anisotropies(
+                    nu,
+                    nside,
+                    fwhm=smoothing_scale_radians,
+                )
+                cmb_map_anisotropies = cmb_maps[ipol if npol > 1 else 0]
             residual -= comp_map
-            if i < ax.shape[1]:
-                plt.axes(ax[2,i])
-                hp.mollview(comp_map, hold=True, title=f"{component.longname}", min=np.nanpercentile(comp_map, 1), max=np.nanpercentile(comp_map, 99))
+            plt.axes(ax[2, i])
+            limdown, limup = _sym_limits(comp_map)
+            hp.mollview(
+                comp_map,
+                hold=True,
+                cmap="RdBu_r",
+                title=f"{component.longname} {pol_names[ipol]} at {nu:.2f} GHz",
+                min=limdown,
+                max=limup,
+            )
 
-        for component in comp_sublist:
-            if "cmb" in component.shortname:
-                smoothing_scale_radians = component.comp_params.smoothing_scale*np.pi/(180*60)
-                if ipol > 0:
-                    cmb_map_anisotropies = component.get_sky_anisotropies(freq, nside, fwhm=smoothing_scale_radians)[ipol]
-                else:
-                    cmb_map_anisotropies = component.get_sky_anisotropies(freq, nside, fwhm=smoothing_scale_radians)[0]
+        plt.axes(ax[0, 0])
+        limdown, limup = _sym_limits(map_rawobs)
+        hp.mollview(
+            map_rawobs,
+            fig=fig,
+            hold=True,
+            cmap="RdBu_r",
+            title="Raw observed sky",
+            min=limdown,
+            max=limup,
+        )
+        plt.axes(ax[0, 1])
+        limdown, limup = _sym_limits(cmb_subtracted)
+        hp.mollview(
+            cmb_subtracted,
+            fig=fig,
+            hold=True,
+            cmap="RdBu_r",
+            title="CMB subtracted sky",
+            min=limdown,
+            max=limup,
+        )
+        plt.axes(ax[0, 2])
+        limdown, limup = _sym_limits(foreground_subtracted)
+        hp.mollview(
+            foreground_subtracted,
+            fig=fig,
+            hold=True,
+            cmap="RdBu_r",
+            title="Foreground subtracted sky",
+            min=limdown,
+            max=limup,
+        )
+        plt.axes(ax[0, 3])
+        limdown, limup = _sym_limits(map_skysub)
+        hp.mollview(
+            map_skysub,
+            fig=fig,
+            hold=True,
+            cmap="RdBu_r",
+            title="All sky signals subtracted",
+            min=limdown,
+            max=limup,
+        )
+        plt.axes(ax[0, 4])
+        limdown, limup = _sym_limits(cmb_map_anisotropies)
+        hp.mollview(
+            cmb_map_anisotropies,
+            fig=fig,
+            hold=True,
+            cmap="RdBu_r",
+            title="CMB anisotropies",
+            min=limdown,
+            max=limup,
+        )
 
-        plt.axes(ax[0,0])
-        sym_lim = np.nanpercentile(np.abs(map_rawobs), 99)
-        hp.mollview(map_rawobs, fig=fig, hold=True, cmap="RdBu_r", title="Raw observed sky", min=-sym_lim, max=sym_lim)
-        plt.axes(ax[0,1])
-        hp.mollview(cmb_subtracted, fig=fig, hold=True, cmap="RdBu_r", title="CMB subtracted sky", min=np.nanpercentile(foreground_subtracted, 1), max=np.nanpercentile(foreground_subtracted, 99))
-        plt.axes(ax[0,2])
-        sym_lim = np.nanpercentile(np.abs(foreground_subtracted), 99)
-        hp.mollview(foreground_subtracted, fig=fig, hold=True, cmap="RdBu_r", title="Foreground subtracted sky", min=-sym_lim, max=sym_lim)
-        plt.axes(ax[0,3])
-        sym_lim = np.nanpercentile(np.abs(map_skysub), 99)
-        hp.mollview(map_skysub, fig=fig, hold=True, cmap="RdBu_r", title="All sky signals subtracted", min=-sym_lim, max=sym_lim)
-        plt.axes(ax[0,4])
-        if cmb_map_anisotropies is None:
-            cmb_map_anisotropies = np.zeros((npix,))
-        sym_lim = np.nanpercentile(np.abs(cmb_map_anisotropies), 99)
-        hp.mollview(cmb_map_anisotropies, fig=fig, hold=True, cmap="RdBu_r", title="CMB anisotropies", min=-sym_lim, max=sym_lim)
+        plt.axes(ax[1, 0])
+        limdown, limup = _sym_limits(orbdipole)
+        hp.mollview(
+            orbdipole,
+            fig=fig,
+            hold=True,
+            cmap="RdBu_r",
+            title="Orbital dipole",
+            min=limdown,
+            max=limup,
+        )
+        plt.axes(ax[1, 1])
+        limdown, limup = _sym_limits(corrnoise)
+        hp.mollview(
+            corrnoise,
+            fig=fig,
+            hold=True,
+            cmap="RdBu_r",
+            title="Corr noise",
+            min=limdown,
+            max=limup,
+        )
+        plt.axes(ax[1, 2])
+        limdown, limup = _sym_limits(residual)
+        hp.mollview(
+            residual,
+            fig=fig,
+            hold=True,
+            cmap="RdBu_r",
+            title="Residual sky",
+            min=limdown,
+            max=limup,
+        )
 
-        plt.axes(ax[1,0])
-        sym_lim = np.nanpercentile(np.abs(map_orbdipole), 99)
-        hp.mollview(map_orbdipole, fig=fig, hold=True, cmap="RdBu_r", title="Orbital dipole", min=-sym_lim, max=sym_lim)
-        plt.axes(ax[1,1])
-        sym_lim = np.nanpercentile(np.abs(map_corrnoise), 99)
-        hp.mollview(map_corrnoise, fig=fig, hold=True, cmap="RdBu_r", title="Corr noise", min=-sym_lim, max=sym_lim)
-        plt.axes(ax[1,2])
-        sym_lim = np.nanpercentile(np.abs(residual), 99)
-        hp.mollview(residual, fig=fig, hold=True, cmap="RdBu_r", title="Residual sky", min=-sym_lim, max=sym_lim)
-        plt.axes(ax[1,3])
-        relative_residual = np.divide(residual, map_rms, out=np.zeros_like(residual), where=map_rms != 0)
-        sym_lim = np.nanpercentile(np.abs(relative_residual), 99)
-        hp.mollview(relative_residual, fig=fig, hold=True, cmap="RdBu_r", title="Residual/RMS", min=-sym_lim, max=sym_lim)
-        plt.axes(ax[1,4])
-        positive_rms = map_rms[map_rms > 0]
-        min_rms = np.min(positive_rms) if positive_rms.size else 1.0
-        hp.mollview(map_rms, fig=fig, hold=True, norm="log", title="RMS", min=min_rms, max=np.nanpercentile(map_rms, 99))
+        plt.axes(ax[1, 3])
+        if rms is not None:
+            rel = np.abs(np.divide(residual, rms, out=np.zeros_like(residual), where=rms > 0))
+            hp.mollview(
+                rel,
+                fig=fig,
+                hold=True,
+                cmap="RdBu_r",
+                title="Residual/RMS",
+                min=0,
+                max=_safe_percentile(rel, 99, 1.0),
+            )
+        else:
+            hp.mollview(
+                np.zeros_like(residual),
+                fig=fig,
+                hold=True,
+                cmap="RdBu_r",
+                title="Residual/RMS (missing RMS)",
+            )
 
-        filename = os.path.join(out_folder, f"{pol_names[ipol]}_combo_map_{detector_data.nu:.1f}GHz_chain{chain}_iter{iteration}.png")
+        plt.axes(ax[1, 4])
+        if rms is not None:
+            hp.mollview(
+                rms,
+                fig=fig,
+                hold=True,
+                norm="log",
+                title="RMS",
+                min=max(float(np.min(rms)), 1e-12),
+                max=_safe_percentile(rms, 99, 1.0),
+            )
+        else:
+            hp.mollview(
+                np.zeros_like(residual),
+                fig=fig,
+                hold=True,
+                cmap="RdBu_r",
+                title="RMS (missing)",
+            )
+
+        filename = os.path.join(
+            out_folder,
+            f"{detector}_chain{chain:02d}_iter{iteration:04d}_{pol_names[ipol]}_combo.png",
+        )
         plt.savefig(filename, bbox_inches="tight")
         plt.close()
 
-    logger.info("combo: saved maps for %s chain %s iter %s", detector, chain, iteration)
 
-
-
-def plot_data_maps(params, detector, chain, iteration, **kwargs):
-    """
-    Plots the input maps used for component separation.
-
-    Can plot the signal map, the correlated noise map, and the rms map.
-    
-    The plots are placed in the [params.output_paths.plots]/maps_data/ folder,
-    which will be created if it does not exist.
-
-    Arguments:
-        master (bool): Whether this is the master process
-        params (bunch): The parameter bundle, at root level.
-        detector, chain, iteration (integers): The indices representing the
-            detector, chain and iteration, respectively.
-    Optional named arguments:
-        map_signal (np.array): The signal map for the detector in question.
-        map_corr_noise (np.array): The correlated noise map for the detector in question.
-        map_rms (np_array): The RMS map for the detector in question.
-    """
-    logger = logging.getLogger(__name__)
-    
+def plot_data_maps(
+    params: Bunch,
+    detector: str,
+    chain: int,
+    iteration: int,
+    *,
+    map_signal: np.ndarray,
+    map_rms: np.ndarray | None = None,
+    map_corrnoise: np.ndarray | None = None,
+    map_skysub: np.ndarray | None = None,
+    map_orbdipole: np.ndarray | None = None,
+) -> None:
     out_folder = os.path.join(params.output_paths.plots, "maps_data")
     os.makedirs(out_folder, exist_ok=True)
-    if "map_corr_noise" in kwargs and "map_corrnoise" not in kwargs:
-        kwargs["map_corrnoise"] = kwargs["map_corr_noise"]
-    for maptype, mapdesc in zip(['map_signal', 'map_corrnoise', 'map_rms', 'map_skysub', 'map_orbdipole'],
-                                ['Signal map', 'Corr noise map', 'RMS map', 'skysub',     'ordip']):
 
-        if maptype not in kwargs:
+    maps = {
+        "map_signal": map_signal,
+        "map_corrnoise": map_corrnoise,
+        "map_rms": map_rms,
+        "map_skysub": map_skysub,
+        "map_orbdipole": map_orbdipole,
+    }
+    desc = {
+        "map_signal": "Signal map",
+        "map_corrnoise": "Corr noise map",
+        "map_rms": "RMS map",
+        "map_skysub": "Sky-subtracted map",
+        "map_orbdipole": "Orbital dipole map",
+    }
+
+    labels = ["I", "Q", "U"]
+    for map_type, map_data in maps.items():
+        map_iqu = _force_iqu_rows(map_data)
+        if map_iqu is None:
             continue
-        if maptype == 'map_rms':
-            cmap = None
-        else:
-            cmap = 'RdBu_r'
-        # if kwargs[maptype].ndim == 1:
-        #     hp.mollview(kwargs[maptype], cmap=cmap, title=f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}", min=np.nanpercentile(kwargs[maptype], 1), max=np.nanpercentile(kwargs[maptype], 99))
-        #     plt.savefig(params.output_paths.plots + f"maps_data/{maptype}_det{detector}_chain{chain}_iter{iteration}.png", bbox_inches='tight')
-        #     plt.close()
-        # elif kwargs[maptype].ndim == 2:
-        # if kwargs[maptype].shape[0] == 3:
-        plt.figure(figsize=(8.5*3, 5.4))
-        labs = ["I", "Q", "U"]
+
+        residual_types = {"map_skysub", "map_corrnoise"}
+        cmap = None if map_type == "map_rms" else "RdBu_r"
+        plt.figure(figsize=(25.5, 5.4))
         for i in range(3):
-            if kwargs[maptype][i] is not None:
-                if maptype == 'map_rms':
-                    limup   = np.nanpercentile(kwargs[maptype][i], 99)
-                    limdown = np.min(kwargs[maptype][i])
-                else:
-                    limup   = np.nanpercentile(kwargs[maptype][i], 99)
-                    limdown = np.nanpercentile(kwargs[maptype][i], 1)
-                hp.mollview(kwargs[maptype][i], cmap=cmap, title=labs[i],
-                        sub=(1,3,i+1), min=limdown, max=limup)
-        plt.suptitle(f"{mapdesc}, det {detector}, chain {chain}, iter {iteration}")
-        filename = os.path.join(out_folder, f"{maptype}_IQU_det{detector}_chain{chain}_iter{iteration}.png")
-        plt.savefig(filename, bbox_inches='tight')
+            arr = map_iqu[i]
+            if map_type == "map_rms":
+                limup = _safe_percentile(arr, 99, 1.0)
+                limdown = max(float(np.nanmin(arr)), 0.0)
+            elif map_type in residual_types:
+                limdown, limup = _sym_limits(arr)
+            else:
+                limdown = _safe_percentile(arr, 1, -1.0)
+                limup = _safe_percentile(arr, 99, 1.0)
+                if limup <= limdown:
+                    limdown, limup = _sym_limits(arr)
+            hp.mollview(arr, cmap=cmap, title=labels[i], sub=(1, 3, i + 1), min=limdown, max=limup)
+        plt.suptitle(f"{desc[map_type]}, det {detector}, chain {chain}, iter {iteration}")
+        filename = os.path.join(
+            out_folder,
+            f"{detector}_chain{chain:02d}_iter{iteration:04d}_{map_type}.png",
+        )
+        plt.savefig(filename, bbox_inches="tight")
         plt.close()
 
-    logger.info("data: saved maps for %s chain %s iter %s", detector, chain, iteration)
 
-
-def plot_cg_res(params, chain, iteration, residual):
-    """
-    Plots the CG residuals on a loglog scale, with the tolerance plotted along
-    with it.
-
-    The plots are placed in the [params.output_paths.plots]/CG_res/ folder,
-    which will be created if it does not exist.
-
-    Arguments:
-        master (bool): Whether this is the master process
-        params (bunch): The parameter bundle, at root level.
-        chain, iteration (integers): The indices representing the, chain and
-            iteration, respectively.
-        residual (np.array): The CG residual.
-    """
+def plot_cg_res(params: Bunch, chain: int, iteration: int, residual: np.ndarray) -> None:
     out_folder = os.path.join(params.output_paths.plots, "CG_res")
     os.makedirs(out_folder, exist_ok=True)
     plt.figure()
     plt.loglog(np.arange(residual.shape[0]), residual)
     plt.axhline(params.CG_err_tol, ls="--", c="k")
-    plt.savefig(os.path.join(out_folder, f"CG_res_chain{chain}_iter{iteration}.png"))
+    filename = os.path.join(out_folder, f"CG_res_chain{chain}_iter{iteration}.png")
+    plt.savefig(filename, bbox_inches="tight")
     plt.close()
 
 
-def plot_components(params: Bunch, detector: int | str, chain: int, iteration: int,
-                    components_list: list[Component], detector_data: DetectorMap):
-    """
-    Plots the resulting component maps produced by component separation. It will
-    also plot the total sky map minus the foregrounds, as well as the total map
-    minus the foregrounds and the CMB.
-    
-    The plots are placed in the [params.output_paths.plots]/maps_comps/ folder,
-    which will be created if it does not exist.
-
-    Arguments:
-        params (bunch): The parameter bundle, at root level.
-        freq (float): The frequency of the detector.
-        detector, chain, iteration (integers): The indices representing the
-            detector, chain and iteration, respectively.
-        signal_map (np.array): The corr-noise subtracted sky signal map for the detector in question.
-        components_list (list[Component]): The list of components to plot.
-    """
-
-    logger = logging.getLogger(__name__)
-    
-    map_comp_out = os.path.join(params.output_paths.plots, "maps_comps/")
-    dl_out = os.path.join(params.output_paths.plots, "spectra_comps_Dl/")
-    cl_out = os.path.join(params.output_paths.plots, "spectra_comps_Cl/")
+def plot_components(
+    params: Bunch,
+    detector: str,
+    chain: int,
+    iteration: int,
+    components_list: list[Component],
+    *,
+    map_signal: np.ndarray,
+    nu: float,
+    nside: int,
+) -> None:
+    map_comp_out = os.path.join(params.output_paths.plots, "maps_comps")
+    dl_out = os.path.join(params.output_paths.plots, "spectra_comps_Dl")
+    cl_out = os.path.join(params.output_paths.plots, "spectra_comps_Cl")
     os.makedirs(map_comp_out, exist_ok=True)
     os.makedirs(dl_out, exist_ok=True)
     os.makedirs(cl_out, exist_ok=True)
-    
-    nside = detector_data.nside
-    signal_map = detector_data.map_sky
-    freq = detector_data.nu
-    npix = 12*nside**2
-    pol = detector_data.pol
-    pol_names = ["Q", "U"] if pol else ["I"]
-    map_fig = plt.figure(figsize=(10, 6))
-    for ipol in range(detector_data.npol):
-        if signal_map[ipol] is None:
-            continue
-        foreground_subtracted = np.zeros_like(signal_map[ipol])
-        foreground_subtracted[:] = signal_map[ipol]
-        residual = np.zeros_like(signal_map[ipol])
-        residual[:] = signal_map[ipol]
 
-        ells = np.arange(3 * nside)
-        Z = ells * (ells+1) / (2 * np.pi)
-        for component in components_list:
-            smoothing_scale_radians = component.comp_params.smoothing_scale*np.pi/(180*60)
-            if pol:
-                if component.pol:
-                    comp_map = component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[ipol]
-                else:
-                    comp_map = np.zeros((npix,))
-            else:
-                comp_map = component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[0]
-            if "cmb" not in component.shortname:
+    if map_signal is None:
+        return
+
+    npol = map_signal.shape[0]
+    pol_names = _stokes_labels(npol)
+    comp_sublist = split_complist(components_list, 1 if npol > 1 else 0)
+
+    ells = np.arange(3 * nside)
+    Z = ells * (ells + 1) / (2 * np.pi)
+
+    for ipol in range(npol):
+        signal = map_signal[ipol]
+        foreground_subtracted = signal.copy()
+        residual = signal.copy()
+
+        for component in comp_sublist:
+            smoothing_scale_radians = component.comp_params.smoothing_scale * np.pi / (180 * 60)
+            comp_map = _get_component_map(component, nu, nside, npol, ipol, smoothing_scale_radians)
+            if component.shortname != "cmb":
                 foreground_subtracted -= comp_map
             residual -= comp_map
-            if (comp_map == 0).all():
+            if np.all(comp_map == 0):
                 continue
-            map_fig.clf()
-            hp.mollview(comp_map, fig=map_fig.number, hold=True, title=f"{component.longname}", min=np.nanpercentile(comp_map, 1), max=np.nanpercentile(comp_map, 99))
-            plt.savefig(os.path.join(map_comp_out, f"{pol_names[ipol]}_{component.shortname}_realization_det{detector}_chain{chain}_iter{iteration}.png"), bbox_inches='tight')
-            
+
+            limdown, limup = _sym_limits(comp_map)
+            hp.mollview(
+                comp_map,
+                cmap="RdBu_r",
+                title=(
+                    f"{component.longname} {pol_names[ipol]} at {nu:.2f} GHz, "
+                    f"det {detector}, chain {chain}, iter {iteration}"
+                ),
+                min=limdown,
+                max=limup,
+            )
+            plt.savefig(
+                os.path.join(
+                    map_comp_out,
+                    (
+                        f"{detector}_chain{chain:02d}_iter{iteration:04d}_"
+                        f"{pol_names[ipol]}_{component.shortname}.png"
+                    ),
+                ),
+                bbox_inches="tight",
+            )
+            plt.close()
+
             Cl = hp.alm2cl(hp.map2alm(comp_map))
             plt.figure()
             plt.plot(ells, Z * Cl, label=component.longname)
-            plt.title(f"Dl: {component.longname} {pol_names[ipol]} at {freq:.2f} GHz")
-            plt.xlabel("ell")
-            plt.ylabel("Dl")
             plt.xscale("log")
             plt.yscale("log")
-            plt.savefig(os.path.join(dl_out,f"{pol_names[ipol]}_{component.shortname}_Dl_det{detector}_chain{chain}_iter{iteration}.png"), bbox_inches='tight')
+            plt.savefig(
+                os.path.join(
+                    dl_out,
+                    (
+                        f"{detector}_chain{chain:02d}_iter{iteration:04d}_"
+                        f"{pol_names[ipol]}_{component.shortname}_Dl.png"
+                    ),
+                ),
+                bbox_inches="tight",
+            )
             plt.close()
 
             plt.figure()
             plt.plot(ells, Cl, label=component.longname)
-            plt.title(f"Cl: {component.longname} {pol_names[ipol]} at {freq:.2f} GHz")
-            plt.xlabel("ell")
-            plt.ylabel("Cl")
             plt.xscale("log")
             plt.yscale("log")
-            plt.savefig(os.path.join(cl_out, f"{pol_names[ipol]}_{component.shortname}_Cl_det{detector}_chain{chain}_iter{iteration}.png"), bbox_inches='tight')
+            plt.savefig(
+                os.path.join(
+                    cl_out,
+                    (
+                        f"{detector}_chain{chain:02d}_iter{iteration:04d}_"
+                        f"{pol_names[ipol]}_{component.shortname}_Cl.png"
+                    ),
+                ),
+                bbox_inches="tight",
+            )
             plt.close()
 
-        map_fig.clf()
-        hp.mollview(foreground_subtracted, fig=map_fig.number, hold=True, title=f"Foreground subtracted sky at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=np.nanpercentile(foreground_subtracted, 1), max=np.nanpercentile(foreground_subtracted, 99))
-        plt.savefig(os.path.join(map_comp_out, f"{pol_names[ipol]}_foreground_subtr_det{detector}_chain{chain}_iter{iteration}.png"), bbox_inches="tight")
+        limdown, limup = _sym_limits(foreground_subtracted)
+        hp.mollview(
+            foreground_subtracted,
+            cmap="RdBu_r",
+            title=(
+                f"Foreground subtracted sky {pol_names[ipol]} at {nu:.2f} GHz, "
+                f"det {detector}, chain {chain}, iter {iteration}"
+            ),
+            min=limdown,
+            max=limup,
+        )
+        plt.savefig(
+            os.path.join(
+                map_comp_out,
+                (
+                    f"{detector}_chain{chain:02d}_iter{iteration:04d}_"
+                    f"{pol_names[ipol]}_foreground_subtracted.png"
+                ),
+            ),
+            bbox_inches="tight",
+        )
+        plt.close()
 
-        map_fig.clf()
-        sym_lim = np.nanpercentile(np.abs(residual), 99)
-        hp.mollview(residual, fig=map_fig.number, hold=True, cmap="RdBu_r", title=f"Residual sky at {freq:.2f} GHz, det {detector}, chain {chain}, iter {iteration}", min=-sym_lim, max=sym_lim)
-        plt.savefig(os.path.join(map_comp_out, f"{pol_names[ipol]}_residual_det{detector}_chain{chain}_iter{iteration}.png"), bbox_inches="tight")
-
-    plt.close(map_fig)
-    logger.info("components: saved maps for %s chain %s iter %s", detector, chain, iteration)
+        limdown, limup = _sym_limits(residual)
+        hp.mollview(
+            residual,
+            cmap="RdBu_r",
+            title=(
+                f"Residual sky {pol_names[ipol]} at {nu:.2f} GHz, det {detector}, "
+                f"chain {chain}, iter {iteration}"
+            ),
+            min=limdown,
+            max=limup,
+        )
+        plt.savefig(
+            os.path.join(
+                map_comp_out,
+                (
+                    f"{detector}_chain{chain:02d}_iter{iteration:04d}_"
+                    f"{pol_names[ipol]}_residual.png"
+                ),
+            ),
+            bbox_inches="tight",
+        )
+        plt.close()
 
 
 def alm_plotter(alm, filename="alm_plot.png"):
     alm_len = alm.shape[-1]
-    lmax = int(np.sqrt(2*alm_len + 0.25) - 1.5)
-    mesh_real = np.zeros((lmax+1, lmax+1))
-    mesh_imag = np.zeros((lmax+1, lmax+1))
-    for l in range(lmax + 1):
-        for m in range(0, l + 1):
-            idx = hp.Alm.getidx(lmax, l, m)
-            mesh_real[l, m] = alm[idx].real
-            mesh_imag[l, m] = alm[idx].imag
-    for l in range(lmax + 1):
-        for m in range(l + 1, lmax + 1):
-            idx = hp.Alm.getidx(lmax, l, -m)
-            mesh_real[l, m] = np.nan
-            mesh_imag[l, m] = np.nan
+    lmax = int(np.sqrt(2 * alm_len + 0.25) - 1.5)
+    mesh_real = np.zeros((lmax + 1, lmax + 1))
+    mesh_imag = np.zeros((lmax + 1, lmax + 1))
+    for ell in range(lmax + 1):
+        for m in range(0, ell + 1):
+            idx = hp.Alm.getidx(lmax, ell, m)
+            mesh_real[ell, m] = alm[idx].real
+            mesh_imag[ell, m] = alm[idx].imag
+    for ell in range(lmax + 1):
+        for m in range(ell + 1, lmax + 1):
+            idx = hp.Alm.getidx(lmax, ell, -m)
+            mesh_real[ell, m] = np.nan
+            mesh_imag[ell, m] = np.nan
     vmax = max(np.nanmax(np.abs(mesh_real.flatten()[1:])), np.nanmax(np.abs(mesh_imag)))
     vmin = -vmax
     fig, ax = plt.subplots(1, 2, figsize=(12, 6))
-    img = ax[0].imshow(mesh_real, cmap='magma', interpolation='nearest', vmin=vmin, vmax=vmax)
+    img = ax[0].imshow(mesh_real, cmap="magma", interpolation="nearest", vmin=vmin, vmax=vmax)
     plt.colorbar(img, ax=ax[0])
     ax[0].set_title("Real Part")
     ax[0].set_xlabel("m")
     ax[0].set_ylabel("l")
-    img = ax[1].imshow(mesh_imag, cmap='magma', interpolation='nearest', vmin=vmin, vmax=vmax)
+    img = ax[1].imshow(mesh_imag, cmap="magma", interpolation="nearest", vmin=vmin, vmax=vmax)
     plt.colorbar(img, ax=ax[1])
     ax[1].set_title("Imaginary Part")
     ax[1].set_xlabel("m")

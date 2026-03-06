@@ -49,14 +49,16 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
                 component.params.longname = comp_longname + "_Intensity"
                 component.params.shortname = comp_shortname + "_I"
                 component.params.polarized = False
+                # Use getattr to get and initialize current component from component_lib file.
+                # Pre-allocate alm arrays so that we can seamlessly receive data from MPI comm.
                 comp_list.append(getattr(component_lib, component.component_class)(component.params,
-                                                                                   params.general))
+                                                        params.general, allocate_empty_alms=True))
             if component.params.polarizations[1] and component.params.polarizations[2]: #->QU
                 component.params.longname = comp_longname + "_Polarization"
                 component.params.shortname = comp_shortname + "_QU"
                 component.params.polarized = True
                 comp_list.append(getattr(component_lib, component.component_class)(component.params,
-                                                                                   params.general))
+                                                        params.general, allocate_empty_alms=True))
             
 
     ### Setting up info for each band, including where to get the data from ###
