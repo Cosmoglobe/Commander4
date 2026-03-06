@@ -25,7 +25,7 @@ def write_map_chain_to_file(params: Bunch, chain: int, iter: int, exp_name:str,
         file["metadata/parameter_file_as_string"] = params.parameter_file_as_string
         file["metadata/parameter_file_as_binary_yaml"] = params.parameter_file_binary_yaml
         for key, value, in maps_to_file.items():
-            if hp.npix2nside(value.shape[-1]) != nside_out:
+            if nside_out != "native" and hp.npix2nside(value.shape[-1]) != nside_out:
                 value = hp.ud_grade(value, nside_out, dtype=np.float32)
             file[key] = value
 
