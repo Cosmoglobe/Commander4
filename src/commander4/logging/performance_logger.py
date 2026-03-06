@@ -54,7 +54,6 @@ class PerfLogger:
         self.active_timers = {}
         
         # Configure logging to ensure output is visible
-        logging.basicConfig(level=logging.INFO, format='%(message)s')
         self.logger = logging.getLogger(__name__)
 
     def benchmark(self, tag):
