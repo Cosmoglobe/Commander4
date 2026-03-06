@@ -39,6 +39,7 @@ nanobind = ["nanobind"]
 commander4 = "commander4.cli:main"
 c4-generate-stubs = "commander4.devtools.generate_stubs:main"
 c4-plot-chain = "commander4.output.plot_chain:main"
+c4-cmb-realizations = "commander4.standalone_tools.constrained_cmb_realizations:main"
 
 [tool.scikit-build]
 # Keep it simple: CMake builds the extension, scikit-build-core packages the Python
