@@ -74,8 +74,6 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: B
         oid = oids[i_pid]
         if pid in bad_PIDs:
             continue
-        
-        logger.info(f"P1 {pid}")
 
         filepath = filenames[i_pid]
         #filepath = os.path.join(my_band.data_path, filename)
@@ -92,27 +90,41 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: B
             flag_encoded = f[f"/{pid}/{detname}/flag/"][()]
         if ntod > ntod_upper_bound:
             raise ValueError(f"{ntod_upper_bound} {ntod}")
-        flag_buffer[:ntod] = 0.0
-        flag_buffer[:ntod] = cpp_utils.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8), huffman_tree, huffman_symbols, flag_buffer[:ntod])
-        flag_buffer[:ntod_optimal] = np.cumsum(flag_buffer[:ntod_optimal])
-        #flag_buffer[:ntod_optimal] &= 6111232  #FIXME: fix this flags for Akari!!
-        #logger.info(f"## {pid} ntod:{ntod}. {flag_buffer}")
-        # if np.sum(flag_buffer[:ntod_optimal]) == 0:
-        tod_buffer[:ntod_optimal] = np.abs(tod)
-        logger.info(f"P2 {pid}")
+        # flag_buffer[:ntod] = 0.0
+        # flag_buffer[:ntod] = cpp_utils.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8), 
+        #                                         huffman_tree, huffman_symbols, flag_buffer[:ntod])
+        # flag_buffer[:ntod_optimal] = np.cumsum(flag_buffer[:ntod_optimal])
+        # flag_buffer[:ntod_optimal] &= 2147483645
+        # logger.info(f"## {pid} ntod:{ntod}. Non zero: {len(flag_buffer[:ntod_optimal]) - np.count_nonzero(flag_buffer[:ntod_optimal])}")
+
+        # tod_buffer[:ntod_optimal] = np.abs(tod)
+        # logger.info(f"P2 {pid}")
         
         # Check for crazy data.
         # if np.mean(tod_buffer[:ntod_optimal]) > 0.001 or np.std(tod) > 0.001:
         #     continue
 
-        logger.info(f"P3 {pid}")
+        # logger.info(f"P3 {pid}")
         scanID = int(pid)
         vsun = np.ones(3) #dummy, we don't have that in Akari.
-        scanlist.append(ScanTOD(tod, pix_encoded, psi_encoded, 0., scanID, my_band.eval_nside,
-                                my_band.data_nside, fsamp, vsun, huffman_tree, huffman_symbols,
-                                npsi, processing_mask_map, ntod,
-                                pix_is_compressed=my_experiment.pix_is_compressed,
-                                psi_is_compressed=my_experiment.psi_is_compressed))
+        scanlist.append(ScanTOD(
+            tod = tod, 
+            pix_encoded = pix_encoded, 
+            psi_encoded = psi_encoded, 
+            start_time = 0., 
+            scanID = scanID, 
+            nside = my_band.eval_nside, 
+            data_nside = my_band.data_nside, 
+            fsamp = fsamp, 
+            orb_dir_vec = vsun, 
+            huffman_tree = huffman_tree, 
+            huffman_symbols = huffman_symbols, 
+            npsi = npsi, 
+            processing_mask_map = processing_mask_map, 
+            ntod_original = ntod,
+            flag_encoded = flag_encoded,
+            pix_is_compressed=my_experiment.pix_is_compressed,
+            psi_is_compressed=my_experiment.psi_is_compressed))
         num_included += 1
         ntod_sum_original += ntod
         ntod_sum_final += ntod_optimal

@@ -6,7 +6,7 @@ general:
   MPI_config:
     ntask_tod: 64
     ntask_compsep_I: 1 #8
-    ntask_compsep_QU: 1 #8
+    ntask_compsep_QU: 0 #8
   nthreads_tod: 12
   nthreads_compsep: 2
   betzy_mode: false
@@ -155,10 +155,10 @@ compsep:
 
 CompSep_bands:
   ### TOD BANDS ###
-  Planck30GHz:
-    get_from: PlanckLFI
+  AkariN60:
+    get_from: Akari
     enabled: true
-    polarizations: [True, True, True]
+    polarizations: [True, False, False]
   Planck44GHz:
     get_from: PlanckLFI
     enabled: false
@@ -269,7 +269,7 @@ CompSep_bands:
 
 experiments:
   PlanckLFI:
-    enabled: true
+    enabled: false
     is_sim: false
     pix_is_compressed: true
     psi_is_compressed: true
@@ -405,11 +405,12 @@ experiments:
           #   gain_est: 19.0e-9
           #   bandpass_shift: -0.05
   Akari:
-    enabled: false
+    enabled: true
     experiment_id: "akari"
     is_sim: false
     pix_is_compressed: true
     psi_is_compressed: true
+    polarizations: "I"
     data_type: "TOD"
     #bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
@@ -421,7 +422,7 @@ experiments:
         num_MPI_tasks: 64 #128 #24
         detector_id: 0
         freq_identifier: 30
-        eval_nside: 256
+        eval_nside: 512
         data_nside: 2048
         fwhm: 0.6166 # [arcmin]
         freq: 4996 # [GHz]

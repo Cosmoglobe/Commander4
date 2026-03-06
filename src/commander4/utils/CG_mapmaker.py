@@ -8,6 +8,7 @@ import healpy as hp
 from pixell import utils
 from typing import Callable
 import time
+import matplotlib.pyplot as plt
 
 from commander4.output.log import logassert
 from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
@@ -289,13 +290,13 @@ class CG_Mapmaker:
                     (3 if self.is_IQU else 1, hp.nside2npix(self.detector_tod._eval_nside)), 
                     dtype=self.f_dtype)
 
-        # if ismaster:
-        #     self.logger.info("## LHS Bcasting!!")
+        if ismaster:
+            self.logger.info("## LHS Bcasting!!")
 
         # self.logger.info(f"## on rank {self.map_comm.Get_rank()} in_map is {in_map.shape} {in_map.dtype}")
         self.map_comm.Bcast(in_map, root=0)
-        # if ismaster:
-        #     self.logger.info("## LHS Bcasting Done")
+        if ismaster:
+            self.logger.info("## LHS Bcasting Done")
         out_map = np.zeros_like(in_map)
         pri = True
         for scan, sample in zip(self.detector_tod.scans, self.detector_samples.scans):
@@ -336,12 +337,7 @@ class CG_Mapmaker:
         """
         RHS_map = self.RHS_map
         ismaster = self.map_comm.Get_rank() == 0
-        if ismaster:
-            import matplotlib.pyplot as plt
-            plt.figure()
-            hp.mollview(RHS_map[0,:], min=-1, max=1)
-            plt.savefig("/mn/stornext/u3/leoab/cmdr4_plots/test_RHS.png")
-            plt.close()
+
 
         def mydot(a, b):
             return np.dot(a.flatten(), b.flatten())
@@ -378,13 +374,29 @@ class CG_Mapmaker:
                         #rhs_comp = self.apply_LHS(x_true.astype(np.float64))
                         #self.logger.info(f"CG iter {i:3d} - Check of rhs - rhs_comp {np.allclose(self.RHS_map, rhs_comp, rtol=1e-5, atol=1e-8)} max diff {np.max(self.RHS_map - rhs_comp)}")
 
-                        import matplotlib.pyplot as plt
-
-                        plt.figure()
-                        hp.mollview(CG_solver.x[0,:], min=-1e4, max=1e4)
-                        plt.savefig("/mn/stornext/u3/leoab/cmdr4_plots/x_sol.png")
+                    # for s in ["I", "Q", "U"]:
+                    #     plt.figure()
+                    #     hp.mollview(CG_solver.x[0,:], min=-1e4, max=1e4, cmap = 'RdBu_r')
+                    #     plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/x_sol_iter{i}_pol{s}.png")
+                    #     plt.close()
+                    if self.is_IQU:
+                        plt.figure(figsize=(8.5*3, 5.4))
+                        npol = 3 if self.is_IQU else 1
+                        for i in range(npol):
+                            limup   = np.nanpercentile(CG_solver.x[i,:], 99)
+                            limdown = np.nanpercentile(CG_solver.x[i,:], 1)
+                            hp.mollview(CG_solver.x[i,:], cmap='RdBu_r', title='CG sol',
+                                        sub=(1,npol,i+1), min=limdown, max=limup)
+                        plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/x_sol_IQU_iter{i}.png")
                         plt.close()
-                        
+                    else:
+                        plt.figure()
+                        limup   = np.nanpercentile(CG_solver.x[0,:], 99)
+                        limdown = np.nanpercentile(CG_solver.x[0,:], 1)
+                        hp.mollview(CG_solver.x[0,:], cmap='RdBu_r', title='CG sol',
+                                        min=limdown, max=limup)
+                        plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/x_sol_iter{i}_Akari.png")
+                        plt.close()
 
             if CG_solver.err < self.CG_tol:
                 break

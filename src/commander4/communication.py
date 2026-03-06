@@ -60,6 +60,7 @@ def send_tod(mpi_info: Bunch, tod_map_list: list[DetectorMap], todproc_my_band_i
     if mpi_info.tod.is_master:
         logger.info(f"Compsep band masters: {mpi_info.world.compsep_band_masters}")
     if mpi_info.band.is_master:
+        # FIXME: here we must allow also QU-only bands! maybe use a dictionary
         #I
         target_band = todproc_my_band_id+'_I'
         if target_band in receivers.keys(): #myband has an I component

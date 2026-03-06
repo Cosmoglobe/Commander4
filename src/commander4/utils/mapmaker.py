@@ -42,7 +42,7 @@ class Mapmaker:
                     self.logger)
         return self._finalized_map
 
-    def accumulate_to_map(self, tod:NDArray, weights:NDArray, pix:NDArray):
+    def accumulate_to_map(self, tod:NDArray, weights:NDArray, pix:NDArray, psi=None):
         """Accumulate weighted TOD samples into the local map buffer."""
         # Check that we are still in business, and haven't already called "gather_map".
         logassert(self._map_signal is not None, "Tried accumulating to finalized map", self.logger)
@@ -101,7 +101,7 @@ class WeightsMapmaker:
                     self.logger)
         return self._gathered_map #.astype(self.dtype, copy=False)
 
-    def accumulate_to_map(self, weight:NDArray, pix:NDArray):
+    def accumulate_to_map(self, weight:NDArray, pix:NDArray, psi=None):
         """Accumulate per-sample weights into the local map buffer."""
         # Check that we are still in business, and haven't already called "gather_map".
         logassert(self._map_signal is not None, "Tried accumulating to finalized map", self.logger)

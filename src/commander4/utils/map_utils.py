@@ -13,17 +13,35 @@ T_CMB_div_C = T_CMB / C
 # Precomputing the conversion factor from 1 uK_CMB to 1 uK_RJ
 uK_CMB_to_uK_RJ_dict = {}
 
-
-@njit(fastmath=True)
 def get_static_sky_TOD(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
-                       psi: NDArray[np.floating]) -> DetectorTOD:
+                       psi: NDArray[np.floating]|None = None) -> NDArray[np.floating]:
     """ Projects the current sky-model at our band frequency (in uK_RJ, without gain) into the
         specified scan pointing. The sky model does not include the orbital dipole.
     """
-    sky = det_compsep_map[0, pix] + np.cos(2*psi)*det_compsep_map[1, pix]\
-        + np.sin(2*psi)*det_compsep_map[2, pix]
+    if psi is None:
+        return _get_static_sky_TOD_I(det_compsep_map, pix)
+    else:
+        assert det_compsep_map.shape[0] == 3, "Polarization requires a polarized map."
+        return _get_static_sky_TOD_IQU(det_compsep_map, pix, psi)
+
+@njit(fastmath=True)
+def _get_static_sky_TOD_IQU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
+                       psi: NDArray[np.floating]) -> NDArray[np.floating]:
+    """ Projects the current sky-model at our band frequency (in uK_RJ, without gain) into the
+        specified scan pointing. The sky model does not include the orbital dipole.
+    """
+    sky = det_compsep_map[0, pix] + np.cos(2*psi)*det_compsep_map[1, pix] \
+    + np.sin(2*psi)*det_compsep_map[2, pix]
     return sky.astype(np.float32)
 
+@njit(fastmath=True)
+def _get_static_sky_TOD_I(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer]
+                          ) -> NDArray[np.floating]:
+    """ Projects the current sky-model at our band frequency (in uK_RJ, without gain) into the
+        specified scan pointing. The sky model does not include the orbital dipole.
+    """
+    sky = det_compsep_map[0, pix]
+    return sky.astype(np.float32)
 
 def get_s_orb_TOD(scan: ScanTOD, experiment: DetectorTOD, pix: NDArray[np.integer],
                   nthreads:int = None) -> NDArray:

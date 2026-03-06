@@ -7,9 +7,9 @@ from commander4.cmdr4_support import utils as cpp_utils
 import commander4.output.log as log
 
 class ScanTOD:
-    def __init__ (self, tod, pix_encoded, psi_encoded, startTime, scanID, nside, data_nside, fsamp,
+    def __init__ (self, tod, pix_encoded, psi_encoded, start_time, scanID, nside, data_nside, fsamp,
                   orb_dir_vec, huffman_tree, huffman_symbols, npsi, processing_mask_map,
-                  ntod_original, pix_is_compressed=True, psi_is_compressed=True):
+                  ntod_original, flag_encoded, pix_is_compressed=True, psi_is_compressed=True):
         logger = logging.getLogger(__name__)
         log.logassert_np(tod.ndim==1, "'value' must be a 1D array", logger)
         log.logassert_np(tod.dtype in [np.float64,np.float32], "TOD dtype must be floating type,"
@@ -25,7 +25,8 @@ class ScanTOD:
         self.ntod = self._tod.shape[-1]
         self._pix_encoded = pix_encoded
         self._psi_encoded = psi_encoded
-        self._startTime = startTime
+        self._flag_encoded = flag_encoded
+        self._start_time = start_time
         self._scanID = scanID
         self._eval_nside = nside
         self._data_nside = data_nside
@@ -44,8 +45,8 @@ class ScanTOD:
         return self._tod.shape[0]
 
     @property
-    def startTime(self) -> float:
-        return self.startTime
+    def start_time(self) -> float:
+        return self.start_time
 
     @property
     def tod(self) -> NDArray[np.floating]:
@@ -101,7 +102,15 @@ class ScanTOD:
             psi = self._psi_encoded
         return psi[:self.ntod]  # Crop to actual size (might be cut to fast FFT length)
         
-        
+    @property
+    def flags(self) -> NDArray[np.floating]:
+        flags = np.zeros(self._ntod_original, dtype=np.int64)
+        flags = cpp_utils.huffman_decode(np.frombuffer(self._flag_encoded, dtype=np.uint8), 
+                                        self._huffman_tree, self._huffman_symbols, flags)
+        flags = np.cumsum(flags)
+        flags = flags[:self.ntod]
+        return flags
+
     @property
     def scanID(self) -> int:
         return self._scanID

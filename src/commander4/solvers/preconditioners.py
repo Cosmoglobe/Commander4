@@ -282,23 +282,23 @@ class InvNPreconditionerIQU:
 
     def __init__(self, inv_N_IQU:NDArray, double_prec=True):
         """
-        Initialize preconditioner starting from the mapmaker object it will be used in.
-        It precomputes the hitmap
+        Initialize preconditioner starting from the RMS.
         """
         assert inv_N_IQU.ndim == 2, "InvN_IQU must be 2-dimensional array."
-        assert inv_N_IQU.shape[0] == 6, "InvN_IQU must be must have shape (6,npix)."
+        assert inv_N_IQU.shape[0] == 3, "InvN_IQU must be must have shape (3,npix)."
         self.npix = inv_N_IQU.shape[1]
-        self.maplib = load_cmdr4_ctypes_lib()
-        if double_prec:
-            ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
-            self.maplib.apply_invN_to_map_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim2, ct_f64_dim2, ct.c_int64]
-            self.apply_invN_to_map = self.maplib.apply_invN_to_map_IQU_f64
-            self.inv_N_IQU = inv_N_IQU.astype(np.float64)
-        else:
-            ct_f32_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=2, flags="contiguous")
-            self.maplib.apply_invN_to_map_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim2, ct_f32_dim2, ct.c_int64]
-            self.apply_invN_to_map = self.maplib.apply_invN_to_map_IQU_f32
-            self.inv_N_IQU = inv_N_IQU.astype(np.float32)
+        self.inv_N_IQU = inv_N_IQU
+        # self.maplib = load_cmdr4_ctypes_lib()
+        # if double_prec:
+        #     ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
+        #     self.maplib.apply_invN_to_map_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim2, ct_f64_dim2, ct.c_int64]
+        #     self.apply_invN_to_map = self.maplib.apply_invN_to_map_IQU_f64
+        #     self.inv_N_IQU = inv_N_IQU.astype(np.float64)
+        # else:
+        #     ct_f32_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=2, flags="contiguous")
+        #     self.maplib.apply_invN_to_map_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim2, ct_f32_dim2, ct.c_int64]
+        #     self.apply_invN_to_map = self.maplib.apply_invN_to_map_IQU_f32
+        #     self.inv_N_IQU = inv_N_IQU.astype(np.float32)
 
     def __call__(self, map: NDArray) -> NDArray:
         assert map.shape[1] == self.npix
@@ -307,7 +307,8 @@ class InvNPreconditionerIQU:
         # map_out[0,:] = map[:self.npix]
         # map_out[1,:] = map[self.npix:2*self.npix]
         # map_out[2,:] = map[2*self.npix:3*self.npix]
-        self.apply_invN_to_map(map, map_out, self.inv_N_IQU, self.npix)  #map.reshape((3,self.npix))
+        # self.apply_invN_to_map(map, map_out, self.inv_N_IQU, self.npix)  #map.reshape((3,self.npix))
+        inplace_arr_prod(map_out, self.inv_N_IQU)
         return map_out #.flatten()
 
 
@@ -339,8 +340,14 @@ class InvNPreconditionerI:
     def __call__(self, map: NDArray) -> NDArray:
         assert map.shape[1] == self.npix
         map_out = np.copy(map)
-        inplace_arr_prod(map_out, self.inv_N_map)
-        self.logger.info("## Preconditioner called.")
+        self.logger.debug(f"## Preconditioner called. map shape: {map.shape}, inv N shape: {self.inv_N_map.shape}")
+        # this allows it to be applied to IQU maps as well
+        map_out = map_out.reshape((1,-1)) if map_out.ndim == 1 else map_out
+        if map_out.shape[0] == 1:
+            inplace_arr_prod(map_out, self.inv_N_map)
+        else:
+            for i in range(map_out.shape[0]):
+                inplace_arr_prod(map_out[i,:], self.inv_N_map)
         return map_out
 
 

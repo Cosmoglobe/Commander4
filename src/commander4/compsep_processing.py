@@ -155,6 +155,7 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
     ### 3. CLEANUP: Gather I+QU alm solutions and make plots. ###
     # Pol master sends the portion of list to the Intensity master rank,
     # and then it will broadcast through the compsep_comm
+    # FIXME: this has to change: a component can be only QU!!!  check if I master exists
     if mpi_info.compsep.is_QU_master:
         t=0
         for comp in comp_sublist:
