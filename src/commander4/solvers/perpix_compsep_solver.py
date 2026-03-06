@@ -6,11 +6,59 @@ import numpy as np
 from mpi4py import MPI
 from pixell import curvedsky
 from pixell.bunch import Bunch
+from numpy.typing import NDArray
 
 from commander4.output.log import logassert
 from commander4.sky_models.component import Component
 from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
 from commander4.data_models.detector_map import DetectorMap
+
+
+def smooth_signal_map_noiseweighted(map_signal: NDArray, map_rms: NDArray, fwhm_rad: float):
+    """ Smooths a signal map with noise weighting.
+    """
+    # Weight map is 1 / variance
+    map_inv_var = 1.0 / (map_rms**2) 
+    
+    # Normalize the weight:
+    smoothed_weight = hp.smoothing(map_inv_var, fwhm=fwhm_rad)
+    
+    # Multiply signal by weight, smooth, and divide by smoothed weight
+    unnormalized_smooth_signal = hp.smoothing(map_signal * map_inv_var, fwhm=fwhm_rad)
+    
+    return unnormalized_smooth_signal / smoothed_weight
+
+
+def smooth_rms_map_noiseweighted(rms_map: NDArray, fwhm_rad: float):
+    """ Calculates what the per-pixel RMS is for any signal map that has beem smoothed by a
+        Gaussian beam using inverse-variance noise weighted smoothing. I.e. produces the correct RMS
+        for the function `smooth_signal_map_noiseweighted`.
+    """
+    npix = rms_map.shape[0]
+    nside = hp.npix2nside(npix)
+    smoothed_inv_var = hp.smoothing(1.0/rms_map**2, fwhm=fwhm_rad)
+
+    lmax = 3 * nside - 1
+    ell = np.arange(lmax + 1)
+
+    # Retrieve the beam and pixel window harmonic coefficients
+    b_ell = hp.gauss_beam(fwhm_rad, lmax=lmax)
+    p_ell = hp.pixwin(nside, lmax=lmax)
+
+    # 2. Calculate the solid angle of a single pixel (C_ell for unit white noise)
+    omega_pix = hp.nside2resol(nside)**2 
+
+    # 3. Compute the exact harmonic variance of the band-limited, windowed noise
+    true_empirical_norm = np.sum((2 * ell + 1) / (4 * np.pi) * omega_pix * (p_ell**2) * (b_ell**2))
+
+    # Scale FWHM for the squared Gaussian kernel
+    fwhm_rad_sq = fwhm_rad / np.sqrt(2.0)
+
+    # Noise-Weighted Analytical: smooth weight map with squared beam, divide by (smoothed_weight)^2
+    numerator = hp.smoothing(1.0/rms_map**2, fwhm=fwhm_rad_sq) * true_empirical_norm
+    analytical_variance = numerator / (smoothed_inv_var**2)
+
+    return np.sqrt(analytical_variance)
 
 
 def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
@@ -33,9 +81,9 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     npol = detector_data.npol
     pol = detector_data.pol
     spin = 2 if pol else 0
-    map_sky = detector_data.map_sky
+    map_sky = detector_data.map_sky.copy()  # Make copy so we don't overwrite if we are smoothing.
     band_freq = detector_data.nu
-    map_rms = detector_data.map_rms
+    map_rms = detector_data.map_rms.copy() 
     ctypes_lib = load_cmdr4_ctypes_lib()
     ctypes_lib.solve_compsep.argtypes = [
         ctypes.c_int, ctypes.c_int, ctypes.c_int,
@@ -54,11 +102,11 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
         logger.info(f"{detector_data.nu} GHz map with FWHM = {fwhm:.1f} arcmin will be smoothed by"\
                     f" {my_smoothing_fwhm:.1f} arcmin to reach {max_fwhm:.1f} arcmin.")
         if params.general.smooth_to_common_res:
-            if pol:  # Polarization, Q,U
-                map_sky[0] = hp.smoothing(map_sky[0], np.deg2rad(my_smoothing_fwhm/60.0))
-                map_sky[1] = hp.smoothing(map_sky[1], np.deg2rad(my_smoothing_fwhm/60.0))
-            else:
-                map_sky[0] = hp.smoothing(map_sky[0], np.deg2rad(my_smoothing_fwhm/60.0))
+            fwhm_rad = np.deg2rad(my_smoothing_fwhm/60.0)
+            for ipol in range(map_sky.shape[0]):  # Loop over 1 or 2 polarizations.
+                map_sky[ipol] = smooth_signal_map_noiseweighted(map_sky[ipol], map_rms[ipol],
+                                                                fwhm_rad)
+                map_rms[ipol] = smooth_rms_map_noiseweighted(map_rms[ipol], fwhm_rad)
 
     ncomp = len(comp_list)
     all_freq = proc_comm.gather(band_freq, root=0)
@@ -70,8 +118,8 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     comp_maps = [None, None] if pol else [None]
     if proc_comm.Get_rank() == 0:  # Unfortunately, only master rank does the work.
         map_shapes = np.array([_map.shape for _map in all_map_sky])
-        logassert(np.all(map_shapes == map_shapes[0]), "Per-pixel solver requires all maps to have "
-                f"the same nside, but received nsides: {map_shapes}", logger)
+        logassert(np.all(map_shapes == map_shapes[0]), "Per-pixel solver requires all maps to have"\
+                  f" the same nside, but received nsides: {map_shapes}", logger)
         for ipol in range(npol):
             t0 = time.time()
             freqs = []
