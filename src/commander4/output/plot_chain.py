@@ -41,6 +41,26 @@ def as_bunch_recursive(dict_of_dicts, name=None):
     return res
 
 
+# TODO: Figure out a way of not duplicating this. We can't import it, because that triggers the
+# reading of the parameter file, requiring it to be provided as a command-line argument.
+def as_bunch_recursive(dict_of_dicts, name=None):
+    res = Bunch()
+    
+    # 1. Inject the name into the instance, bypassing Bunch's data _dict
+    if name is not None:
+         object.__setattr__(res, "_name", name)
+         
+    # 2. Recursively populate the bunch
+    for key, val in dict_of_dicts.items():
+        if isinstance(val, dict):
+            # Pass the key down as the name for the child Bunch
+            res[key] = as_bunch_recursive(val, name=key)
+        else:
+            res[key] = val
+
+    return res
+
+
 def _decode_h5_value(value):
     if isinstance(value, bytes):
         return value.decode("utf-8")
