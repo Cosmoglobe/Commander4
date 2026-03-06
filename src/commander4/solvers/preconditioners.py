@@ -288,28 +288,13 @@ class InvNPreconditionerIQU:
         assert inv_N_IQU.shape[0] == 3, "InvN_IQU must be must have shape (3,npix)."
         self.npix = inv_N_IQU.shape[1]
         self.inv_N_IQU = inv_N_IQU
-        # self.maplib = load_cmdr4_ctypes_lib()
-        # if double_prec:
-        #     ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
-        #     self.maplib.apply_invN_to_map_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim2, ct_f64_dim2, ct.c_int64]
-        #     self.apply_invN_to_map = self.maplib.apply_invN_to_map_IQU_f64
-        #     self.inv_N_IQU = inv_N_IQU.astype(np.float64)
-        # else:
-        #     ct_f32_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=2, flags="contiguous")
-        #     self.maplib.apply_invN_to_map_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim2, ct_f32_dim2, ct.c_int64]
-        #     self.apply_invN_to_map = self.maplib.apply_invN_to_map_IQU_f32
-        #     self.inv_N_IQU = inv_N_IQU.astype(np.float32)
 
     def __call__(self, map: NDArray) -> NDArray:
-        assert map.shape[1] == self.npix
+        assert map.shape[1] == self.npix, "map should have same npix as the preconditioner"
+        assert map.shape[0] == 3, "map should have 3 polarization components: I, Q and U."
         map_out = np.copy(map)
-        # map_out=np.zeros((3,self.npix))
-        # map_out[0,:] = map[:self.npix]
-        # map_out[1,:] = map[self.npix:2*self.npix]
-        # map_out[2,:] = map[2*self.npix:3*self.npix]
-        # self.apply_invN_to_map(map, map_out, self.inv_N_IQU, self.npix)  #map.reshape((3,self.npix))
         inplace_arr_prod(map_out, self.inv_N_IQU)
-        return map_out #.flatten()
+        return map_out
 
 
 class InvNPreconditionerI:
@@ -325,17 +310,6 @@ class InvNPreconditionerI:
         self.inv_N_map = inv_N_map.reshape((1,-1)) if inv_N_map.ndim == 1 else inv_N_map
         self.npix = self.inv_N_map.shape[1]
         self.logger = logging.getLogger(__name__)
-        # self.maplib = load_cmdr4_ctypes_lib()
-        # if double_prec:
-        #     ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
-        #     self.maplib.apply_invN_to_map_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim2, ct_f64_dim2, ct.c_int64]
-        #     self.apply_invN_to_map = self.maplib.apply_invN_to_map_IQU_f64
-        #     self.inv_N_map = inv_N_map.astype(np.float64)
-        # else:
-        #     ct_f32_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=2, flags="contiguous")
-        #     self.maplib.apply_invN_to_map_IQU_f32.argtypes = [ct_f32_dim2, ct_f32_dim2, ct_f32_dim2, ct.c_int64]
-        #     self.apply_invN_to_map = self.maplib.apply_invN_to_map_IQU_f32
-        #     self.inv_N_IQU = inv_N_map.astype(np.float32)
 
     def __call__(self, map: NDArray) -> NDArray:
         assert map.shape[1] == self.npix

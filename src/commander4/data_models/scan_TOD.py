@@ -9,7 +9,8 @@ import commander4.output.log as log
 class ScanTOD:
     def __init__ (self, tod, pix_encoded, psi_encoded, start_time, scanID, nside, data_nside, fsamp,
                   orb_dir_vec, huffman_tree, huffman_symbols, npsi, processing_mask_map,
-                  ntod_original, flag_encoded, pix_is_compressed=True, psi_is_compressed=True):
+                  ntod_original, flag_encoded, flag_bitmask, pix_is_compressed=True, 
+                  psi_is_compressed=True):
         logger = logging.getLogger(__name__)
         log.logassert_np(tod.ndim==1, "'value' must be a 1D array", logger)
         log.logassert_np(tod.dtype in [np.float64,np.float32], "TOD dtype must be floating type,"
@@ -26,6 +27,7 @@ class ScanTOD:
         self._pix_encoded = pix_encoded
         self._psi_encoded = psi_encoded
         self._flag_encoded = flag_encoded
+        self._flag_bitmask = flag_bitmask
         self._start_time = start_time
         self._scanID = scanID
         self._eval_nside = nside
@@ -104,6 +106,9 @@ class ScanTOD:
         
     @property
     def flags(self) -> NDArray[np.floating]:
+        """
+        Returns the uncompressed flag array.
+        """
         flags = np.zeros(self._ntod_original, dtype=np.int64)
         flags = cpp_utils.huffman_decode(np.frombuffer(self._flag_encoded, dtype=np.uint8), 
                                         self._huffman_tree, self._huffman_symbols, flags)
@@ -111,6 +116,13 @@ class ScanTOD:
         flags = flags[:self.ntod]
         return flags
 
+    @property
+    def excluded_tod_mask(self) -> NDArray[np.bool]:
+        """
+        Returns a mask given by the intersection between the flag array and the flag bitmask.
+        """
+        return (self.flags & self._flag_bitmask).astype(np.bool)
+    
     @property
     def scanID(self) -> int:
         return self._scanID

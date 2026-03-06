@@ -412,6 +412,7 @@ experiments:
     psi_is_compressed: true
     polarizations: "I"
     data_type: "TOD"
+    flag_bitmask: 0b1111111111111111111111111111101
     #bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
     num_scans: 11395
