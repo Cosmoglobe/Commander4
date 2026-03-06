@@ -213,7 +213,7 @@ def replace_tod_with_sim(detector_data: DetectorTOD, band_params: Bunch, params:
         PS_freqs[0] = 0.5*PS_freqs[1]  # Add some DC power while avoiding divide by 0.
         PS = 1.0 + (PS_freqs/fknee_ncorr)**alpha_ncorr
         # Morph the shape of the noise power spectrum to be 1/f + white noise.
-        noise = irfft(rfft(noise)*PS)
+        noise = irfft(rfft(noise)*np.sqrt(PS))
 
         scan._tod[:] += noise
 
