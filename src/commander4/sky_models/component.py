@@ -41,20 +41,6 @@ class Component:
         self.double_prec = False if global_params.CG_float_precision == "single" else True
         self._data = None
 
-    @property
-    def pol(self):
-        if self._data is not None:
-            return False if self._data.shape[0] == 1 else True
-        else:
-            raise ValueError("Component {self.longname} has with no data.")
-        
-    @property
-    def npol(self):
-        if self._data is not None:
-            return self._data.shape[0]
-        else:
-            raise ValueError("Component {self.longname} has with no data.")
-    
     def __add__(self, other):
         if type(self) is not type(other):
             raise TypeError("Both operands must be of the same Component type.")
@@ -213,23 +199,29 @@ class Component:
 
 # Second tier component classes
 class DiffuseComponent(Component):
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False):
         super().__init__(comp_params, global_params)
         self.spatially_varying_MM = comp_params.spatially_varying_MM
         self.lmax = comp_params.lmax
         self.smoothing_prior_FWHM = comp_params.smoothing_prior_FWHM
         self.smoothing_prior_amplitude = comp_params.smoothing_prior_amplitude
-        self._data = np.empty((2 if comp_params.polarized else 1, self.alm_len_complex),
-                              dtype = (np.complex128 if self.double_prec else np.complex64))
+        self.pol = comp_params.polarized
+        self.npol = 2 if comp_params.polarized else 1
+        self._data = None  # Alm data is not allocated by default.
+        if allocate_empty_alms:
+            self.allocate_empty_alms()
+
 
     @property
     def alms(self):
+        if self._data is None:
+            raise ValueError("Trying to access un-initialized diffuse component alms.")
         return self._data
 
     @alms.setter
     def alms(self, alms):
         if alms.ndim == 2:
-            if alms.shape[0] in [1,2]:
+            if alms.shape[0] == self.npol:
                 self._data = alms
             else:
                 raise ValueError("Trying to set alms with wrong first axis length "
@@ -237,6 +229,12 @@ class DiffuseComponent(Component):
         else:
             raise ValueError("Trying to set alms with unexpected number of dimensions: "
                              f"{alms.ndim} != 2")
+    
+    def allocate_empty_alms(self):
+        """ Allocates empty alm array of correct shape. Usefull for e.g. MPI receiving.
+        """
+        self._data = np.zeros((self.npol, self.alm_len_complex),
+                               dtype = (np.complex128 if self.double_prec else np.complex64))
             
     @property
     def dtype(self):
@@ -390,8 +388,8 @@ class TemplateComponent(Component):
 
 # Third tier component classes
 class CMB(DiffuseComponent):
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
-        super().__init__(comp_params, global_params)
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False):
+        super().__init__(comp_params, global_params, allocate_empty_alms)
         self.longname = comp_params.longname if "longname" in comp_params else "CMB"
         self.shortname = comp_params.shortname if "shortname" in comp_params else "cmb"
 
@@ -429,8 +427,8 @@ class CMBRelQuad(TemplateComponent):
     pass
 
 class ThermalDust(DiffuseComponent):
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
-        super().__init__(comp_params, global_params)
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False):
+        super().__init__(comp_params, global_params, allocate_empty_alms)
         self.beta = comp_params.beta
         self.T = comp_params.T
         self.nu0 = comp_params.nu0
@@ -453,8 +451,8 @@ class ThermalDust(DiffuseComponent):
 
 
 class Synchrotron(DiffuseComponent):
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
-        super().__init__(comp_params, global_params)
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False):
+        super().__init__(comp_params, global_params, allocate_empty_alms)
         self.beta = comp_params.beta
         self.nu0 = comp_params.nu0
         self.nside_comp_map = 512
@@ -474,8 +472,8 @@ class Synchrotron(DiffuseComponent):
 
 
 class FreeFree(DiffuseComponent):
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
-        super().__init__(comp_params, global_params)
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False):
+        super().__init__(comp_params, global_params, allocate_empty_alms)
         self.T = comp_params.T  # Electron temperature in K
         self.nu0 = comp_params.nu0 # Reference frequency in GHz
         self.longname = comp_params.longname if "longname" in comp_params else "Free-Free"
@@ -518,14 +516,14 @@ class SpinningDust(DiffuseComponent):
     # This template has an intensity peak at 30 GHz.
     # Columns: Frequency (GHz), Emissivity (proportional to Intensity)
 
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False):
         """
         Args:
             nu_peak (float): The peak frequency of the spinning dust component in GHz.
             nu_0 (float): The reference frequency of the spinning dust template in GHz.
                           This will not impact the shape of the SED, just the absolute scaling.
         """
-        super().__init__(comp_params, global_params)
+        super().__init__(comp_params, global_params, allocate_empty_alms)
         # Read SpDust2 template data. This is a simulation of what the spectral shape of
         # spinning dust emission should look like if it happens to peak at 30 GHz.
         freqs, SED = np.loadtxt(comp_params.template_path).T

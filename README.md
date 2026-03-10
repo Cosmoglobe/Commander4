@@ -50,9 +50,9 @@ Then, clone the repo (and submodules), and perform a so-called *editable* PIP in
 ```bash
 git clone --recurse-submodules git@github.com:Cosmoglobe/Commander4.git
 cd Commander4
-pip install -e . --no-build-isolation
+pip install -v -e . --no-build-isolation
 ```
-The editable install (`-e`) will tell PIP and scikit-build-core/CMake that the installation should point back to the source location, meaning that **you can edit Python files and run Commander4 without re-installing**. The `--no-build-isolation` helps ensure the build uses your environment (useful on HPC systems), which is why you have to manually pip install build dependencies first.
+The editable install (`-e`) will tell PIP and scikit-build-core/CMake that the installation should point back to the source location, meaning that **you can edit Python files and run Commander4 without re-installing**. The `--no-build-isolation` helps ensure the build uses your environment (useful on HPC systems), which is why you have to manually pip install build dependencies first. The verbose install (`-v`) will show the more specific build steps, as well as compilation warnings, which would otherwise be hidden.
 
 Note that if you edit non-Python files (C/C++) you must re-install for changes to take effect.
 
