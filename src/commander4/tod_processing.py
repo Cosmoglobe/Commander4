@@ -22,7 +22,7 @@ from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.detector_samples import DetectorSamples
 from commander4.data_models.scan_samples import ScanSamples
 from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU, WeightsMapmaker, Mapmaker
-from commander4.utils.CG_mapmaker import CG_Mapmaker
+from commander4.utils.CG_mapmaker import CGMapmakerI, CGMapmakerIQU
 from commander4.solvers.preconditioners import InvNPreconditionerI, InvNPreconditionerIQU
 from commander4.noise_sampling import corr_noise_realization_with_gaps, sample_noise_PS_params
 from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
@@ -41,10 +41,10 @@ def called_on_non_master(arr):
     logger.debug("Dummy precond has been called")
     return np.copy(arr)
 
-def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: NDArray,
+def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: NDArray,
             detector_samples: DetectorSamples, params: Bunch, chain: int, iter: int,
             do_ncorr_sampling: bool, pols:str = "IQU") -> list[DetectorMap]:
-    """ Commander4 mapmaking. All ranks on the provided MPI communicator collaborates on creating
+    """ Commander4 CG mapmaking. All ranks on the provided MPI communicator collaborates on creating
         the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
     Args:
         band_comm (Comm): The communicator consisting of all MPI ranks which holds TOD data that
@@ -81,6 +81,9 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
             precond = InvNPreconditionerIQU(mapmaker_invvar.final_rms_map**2)
         else:
             precond = called_on_non_master
+        cg_mapmaker = CGMapmakerIQU(experiment_data, detector_samples, band_comm,
+                    preconditioner=precond, nthreads=params.general.nthreads_tod, 
+                    CG_maxiter=params.general.CG_mapmaker.maxiter)
     elif pols == "I":
         mapmaker_invvar = WeightsMapmaker(band_comm, experiment_data.nside)
         for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
@@ -92,6 +95,9 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
             precond = InvNPreconditionerI(utils.without_nan(1./mapmaker_invvar.final_map))
         else:
             precond = called_on_non_master
+        cg_mapmaker = CGMapmakerI(experiment_data, detector_samples, band_comm,
+                    preconditioner=precond, nthreads=params.general.nthreads_tod, 
+                    CG_maxiter=params.general.CG_mapmaker.maxiter)
     else:
         raise ValueError(f"specified polarizations {pols} is not allowed.")
 
@@ -105,10 +111,6 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         alphas = []
         num_failed_convergences_ncorr = 0
         worst_residual_ncorr = 0
-
-    cg_mapmaker = CG_Mapmaker(experiment_data, detector_samples, band_comm, pols=="IQU",
-                              preconditioner=precond, nthreads=params.general.nthreads_tod, 
-                              CG_maxiter=params.general.CG_mapmaker.maxiter)
     
     ### MAIN SCAN LOOP ###
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
@@ -161,7 +163,8 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         cg_mapmaker.accum_to_RHS(
                     scan_tod=scan, 
                     scan_samp=scan_samples, 
-                    pix=pix, 
+                    pix=pix,
+                    psi=psi,
                     scan_tod_arr=d_sky/scan_samples.gain_est
                     )
 
@@ -195,6 +198,7 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
         map_cov = mapmaker_invvar.final_cov_map
     else:
         map_cov = mapmaker_invvar.final_map
+        map_rms = 1./np.sqrt(map_cov)
 
     mapmaker_orbdipole.gather_map()
     mapmaker_orbdipole.normalize_map(map_cov)
@@ -280,6 +284,167 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: N
 
     return detmap_list_out #empty on non-master ranks
 
+
+def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: NDArray,
+            detector_samples: DetectorSamples, params: Bunch, chain: int, iter: int,
+            do_ncorr_sampling: bool) -> list[DetectorMap]:
+    """ Commander4 bin mapmaking. All ranks on the provided MPI communicator collaborates on creating
+        the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
+    Args:
+        band_comm (Comm): The communicator consisting of all MPI ranks which holds TOD data that
+                          should go into the same map.
+        experiment_data (DetectorTOD): TOD data class to be made into maps.
+        compsep_output (np.array): The sky model at our band. Not used, but written to chain file.
+        detector_samples (DetectorSamples): Sampled TOD parameters, such as gain.
+        params (Bunch): Parameter file as 'Param' object.
+        chain (int): Current chain number.
+        iter (int): Current Gibbs iteration.
+        do_ncorr_sampling (bool): Perform correlated noise sampling or not.
+    Optional:
+        pols (str): IQU by default, if I only solves for a temperature map.
+    Output:
+        list[DetectorMap]: list containing the solved detector maps, [I, QU] or [I].
+
+    """
+    logger = logging.getLogger(__name__)
+    ### INVERSE VARIANCE MAPMAKER ###
+    # We separate the inverse-variance mapmaking from the other 3 mapmakers.
+    # This is purely to reduce the maximum concurrent memory requirement, and is slightly slower
+    # as we have to de-compress pix and psi twice.
+    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)    
+    for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
+        pix = scan.pix
+        psi = scan.psi
+        inv_var = 1.0/scan_samples.sigma0**2
+        mapmaker_invvar.accumulate_to_map(inv_var, pix, psi)
+    mapmaker_invvar.gather_map()
+    mapmaker_invvar.normalize_map()
+
+    mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
+    mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside)
+    
+    if do_ncorr_sampling:
+        mapmaker_ncorr = MapmakerIQU(band_comm, experiment_data.nside)
+        fknees = []
+        alphas = []
+        num_failed_convergences_ncorr = 0
+        worst_residual_ncorr = 0
+
+    ### MAIN SCAN LOOP ###
+    for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
+        d_sky = scan.tod.copy()
+        pix = scan.pix
+        psi = scan.psi
+        inv_var = 1.0/scan_samples.sigma0**2
+
+        ### ORBITAL DIPOLE ###
+        sky_orb_dipole = get_s_orb_TOD(scan, experiment_data, pix)
+        d_sky -= scan_samples.gain_est*sky_orb_dipole
+
+        ### CORRELATED NOISE SAMPLING ###
+        if do_ncorr_sampling:
+            s_tot = get_static_sky_TOD(compsep_output, pix, psi)
+            s_tot += sky_orb_dipole
+            sky_subtracted_TOD = scan.tod.copy()
+            sky_subtracted_TOD -= scan_samples.gain_est*s_tot
+            Ntod = sky_subtracted_TOD.shape[0]
+            Nfft = Ntod//2 + 1
+            freq = rfftfreq(Ntod, d = 1/scan.fsamp)
+            fknee = scan_samples.fknee_est
+            alpha = scan_samples.alpha_est
+            mask = scan.processing_mask_TOD
+            sigma0_ncorr = calculate_sigma0(sky_subtracted_TOD, mask)
+            C_1f_inv = np.zeros(Nfft)
+            C_1f_inv[1:] = 1.0 / (sigma0_ncorr**2*(freq[1:]/fknee)**alpha)
+            # C_1f_inv[0] = C_1f_inv[-1]  # Test: try and constrain DC mode somewhat.
+            err_tol = 1e-8
+            n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
+                                                                    mask, sigma0_ncorr, C_1f_inv,
+                                                                    err_tol=err_tol)
+            mapmaker_ncorr.accumulate_to_map((n_corr_est/scan_samples.gain_est).astype(np.float32),
+                                             inv_var, pix, psi)
+            if residual > err_tol:
+                num_failed_convergences_ncorr += 1
+                worst_residual_ncorr = max(worst_residual_ncorr, residual)
+
+            ### CORRELATED NOISE POWER SPECTRUM PARAMETERS SAMPLING ###
+            fknee, alpha = sample_noise_PS_params(n_corr_est, sigma0_ncorr, scan.fsamp, alpha,
+                                                  freq_max=2.0, n_grid=150, n_burnin=4)
+            scan_samples.fknee_est = fknee
+            scan_samples.alpha_est = alpha
+            alphas.append(alpha)
+            fknees.append(fknee)
+
+            d_sky -= n_corr_est
+
+        mapmaker.accumulate_to_map(d_sky/scan_samples.gain_est, inv_var, pix, psi)
+        mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
+
+    ### PRINT NOISE SAMPLING STATS ###
+    if do_ncorr_sampling:
+        num_failed_convergences_ncorr = band_comm.reduce(num_failed_convergences_ncorr, op=MPI.SUM)
+        worst_residual_ncorr = band_comm.reduce(worst_residual_ncorr, op=MPI.MAX)
+        if band_comm.Get_rank() == 0:
+            if num_failed_convergences_ncorr > 0:
+                logger.info(f"Band {experiment_data.nu}GHz failed noise CG for "\
+                            f"{num_failed_convergences_ncorr} scans. "\
+                            f"Worst residual = {worst_residual_ncorr:.3e}.")
+
+        alphas = band_comm.gather(alphas, root=0)
+        fknees = band_comm.gather(fknees, root=0)
+        if band_comm.Get_rank() == 0:
+            alphas = np.concatenate(alphas)
+            fknees = np.concatenate(fknees)
+            logger.info(f"{experiment_data.nu}GHz: fknees {np.min(fknees):.4f} "\
+            f"{np.percentile(fknees, 1):.4f} {np.mean(fknees):.4f} {np.percentile(fknees, 99):.4f}"\
+            f" {np.max(fknees):.4f}")
+            logger.info(f"{experiment_data.nu}GHz: alphas {np.min(alphas):.4f} "\
+            f"{np.percentile(alphas, 1):.4f} {np.mean(alphas):.4f} {np.percentile(alphas, 99):.4f}"\
+            f" {np.max(alphas):.4f}")
+
+
+    ### GATHER AND NORMALIZE MAPS ###
+    mapmaker.gather_map()
+    mapmaker_orbdipole.gather_map()
+    map_rms = mapmaker_invvar.final_rms_map
+    map_cov = mapmaker_invvar.final_cov_map
+    mapmaker.normalize_map(map_cov)
+    map_signal = mapmaker.final_map
+    mapmaker_orbdipole.normalize_map(map_cov)
+    map_orbdipole = mapmaker_orbdipole.final_map
+    if do_ncorr_sampling:
+        mapmaker_ncorr.gather_map()
+        mapmaker_ncorr.normalize_map(map_cov)
+        map_corrnoise = mapmaker_ncorr.final_map
+
+    ### FINAL CLEANUP ON MASTER RANK ###
+    if band_comm.Get_rank() == 0:
+        #Here we split here between I and QU
+        detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
+                             experiment_data.fwhm, experiment_data.nside)
+        detmap_QU = DetectorMap(map_signal[1:3,:], map_rms[1:3,:], experiment_data.nu,
+                             experiment_data.fwhm, experiment_data.nside)
+        detmap_I.g0 = detector_samples.g0_est
+        detmap_I.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
+        detmap_QU.g0 = detector_samples.g0_est
+        detmap_QU.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
+        
+        maps_to_file = {}
+        maps_to_file["map_observed_sky"] = map_signal
+        maps_to_file["map_rms"] = map_rms
+        if params.general.write_orb_dipole_maps_to_chain:
+            maps_to_file["map_orbdipole"] = map_orbdipole
+        if params.general.write_corr_noise_maps_to_chain and do_ncorr_sampling:
+            maps_to_file["map_corrnoise"] = map_corrnoise
+        if params.general.write_sky_model_maps_to_chain:
+            maps_to_file["map_skymodel"] = compsep_output
+
+        write_map_chain_to_file(params, chain, iter, experiment_data.experiment_name,
+                                experiment_data.band_name, maps_to_file)
+
+        return [detmap_I, detmap_QU]
+    else:
+        return []
 
 
 def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm, MPI.Comm, str,
@@ -594,7 +759,7 @@ def sample_relative_gain(TOD_comm: MPI.Comm, det_comm: MPI.Comm, experiment_data
     local_r_T_N_inv_s = 0.0
 
     for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-        f_samp = scan.fsamp
+        f_samp = scan.fsampwait_time
         down_factor = int(f_samp)
         indices_edges = np.arange(0, scan.ntod, down_factor)
         indices_centers = (indices_edges[1:] + indices_edges[:-1])//2
@@ -1032,8 +1197,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     do_ncorr_sampling = params.general.sample_corr_noise and iter >=\
                         params.general.sample_corr_noise_from_iter_num
     t0 = time.time()
-    detmap = tod2map(band_comm, experiment_data, compsep_output, detector_samples, params, chain,
-                     iter, do_ncorr_sampling, pols = "I")
+    detmap = tod2map_CG(band_comm, experiment_data, compsep_output, detector_samples, params, chain,
+                     iter, do_ncorr_sampling, pols = "IQU")
     timing_dict["mapmaker"] = time.time() - t0
     if band_comm.Get_rank() == 0:
         logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished mapmaking in "\

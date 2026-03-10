@@ -295,6 +295,7 @@ def forward_rfft(data:NDArray[np.floating], nthreads:int = 1):
             data_f (np.array): The Fourier transform of the input.
                                A complex array of length tod.size//2 + 1.
     """
+    nthreads = int(os.environ["OMP_NUM_THREADS"]) if nthreads is None else nthreads
     return ducc0.fft.r2c(data, nthreads=nthreads)
 
 def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray[np.floating]:

@@ -9,7 +9,7 @@ import commander4.output.log as log
 class ScanTOD:
     def __init__ (self, tod, pix_encoded, psi_encoded, start_time, scanID, nside, data_nside, fsamp,
                   orb_dir_vec, huffman_tree, huffman_symbols, npsi, processing_mask_map,
-                  ntod_original, flag_encoded, flag_bitmask, pix_is_compressed=True, 
+                  ntod_original, flag_encoded=None, flag_bitmask=None, pix_is_compressed=True, 
                   psi_is_compressed=True):
         logger = logging.getLogger(__name__)
         log.logassert_np(tod.ndim==1, "'value' must be a 1D array", logger)

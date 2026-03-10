@@ -37,6 +37,30 @@ general:
   sample_temporal_gain: True
   sample_temporal_gain_from_iter_num: 4
 
+  tod_processing_steps:
+    Akari:
+      - estimate_white_noise:
+        from_iter: 0
+      - sample_absolute_gain:
+        from_iter: 2
+      - sample_relative_gain:
+        from_iter: 4
+      - sample_temporal_gain_variations:
+        from_iter: 4
+      - estimate_white_noise:
+        from_iter: 0
+    PlanckLFI:
+      - estimate_white_noise:
+        from_iter: 0
+      - sample_absolute_gain:
+        from_iter: 2
+      - sample_relative_gain:
+        from_iter: 4
+      - sample_temporal_gain_variations:
+        from_iter: 4
+      - estimate_white_noise:
+        from_iter: 0
+
   output_stats: False
 
   galactic_mask: True
@@ -155,6 +179,10 @@ compsep:
 
 CompSep_bands:
   ### TOD BANDS ###
+  Planck30GHz:
+    get_from: PlanckLFI
+    enabled: false
+    polarizations: [True, False, False]
   AkariN60:
     get_from: Akari
     enabled: true
@@ -269,7 +297,7 @@ CompSep_bands:
 
 experiments:
   PlanckLFI:
-    enabled: false
+    enabled: true
     is_sim: false
     pix_is_compressed: true
     psi_is_compressed: true
@@ -405,7 +433,7 @@ experiments:
           #   gain_est: 19.0e-9
           #   bandpass_shift: -0.05
   Akari:
-    enabled: true
+    enabled: false
     experiment_id: "akari"
     is_sim: false
     pix_is_compressed: true
