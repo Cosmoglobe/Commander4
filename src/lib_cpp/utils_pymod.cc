@@ -303,7 +303,9 @@ static NpArr Py_huffman_decode(const CNpArr &bytes,
   {
   if (isPyarr<int64_t>(symb))
     return Py2_huffman_decode<int64_t> (bytes, tree, symb, out);
-  MR_fail("type matching failed: 'symb' has neither type 'i8' nor 'xxx'");
+  if (isPyarr<int32_t>(symb))
+    return Py2_huffman_decode<int32_t> (bytes, tree, symb, out);
+  MR_fail("type matching failed: 'symb' has neither type 'i8' nor 'i4'");
   }
 
 constexpr const char *Py_huffman_decode_DS = R"""(
@@ -315,7 +317,7 @@ bytes: numpy.ndarray((nbytes,), dtype=np.uint8)
     the bit stream
 tree: numpy.ndarray((ntree,), dtype=np.int64)
     the tree array
-symb: numpy.ndarray((nsymb,), dtype=np.int64 or TBD)
+symb: numpy.ndarray((nsymb,), dtype=np.int64 or np.int32)
     the array of possible symbols in the stream
 out: numpy.ndarray((ndata,), dtype identical to that of symb)
     the array into which the uncopressed data is written
