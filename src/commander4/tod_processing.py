@@ -6,6 +6,9 @@ from scipy.fft import rfftfreq
 import time
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
+from astropy.io import fits
+import pysm3.units as pysm3_u
+import healpy as hp
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_TOD import DetectorTOD
@@ -21,9 +24,25 @@ from commander4.output.write_chains_files import write_tod_chain_to_file, write_
 # from commander4.logging.performance_logger import benchmark, summarize, start_bench, stop_bench
 
 
-def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float32]:
-    "Creates a dummy compsep output for a single band"
-    return np.zeros((3, 12*staticData.nside**2), dtype=np.float32)
+def get_initial_sky(experiment_data: DetGroupTOD) -> NDArray[np.float32]:
+    """ Returns a sky realization from a set of components. The set of components are listed in
+        the provided DetGroupTOD object, originally specified in the parameter file. 
+    """
+    initial_sky = np.zeros((3, 12*experiment_data.nside**2), dtype=np.float32)
+    for skyfile in experiment_data.sky_init_files:
+        with fits.open(skyfile) as hdul:
+            fields = ["TEMPERATURE", "Q_POLARISATION", "U_POLARISATION"]
+            for i, field in enumerate(fields):
+                data = hdul[1].data[field].flatten()
+                nside = hp.npix2nside(data.size)
+                if nside != experiment_data.nside:
+                    data = hp.ud_grade(data, nside)
+                initial_sky[i] += data
+
+    # Convert from uK_CMB to uK_RJ
+    initial_sky *= (1*pysm3_u.uK_CMB).to(pysm3_u.uK_RJ,
+                    equivalencies=pysm3_u.cmb_equivalencies(experiment_data.nu*pysm3_u.GHz)).value
+    return initial_sky
 
 
 def tod2map(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output: NDArray,
@@ -298,6 +317,11 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm,
 
     experiment_data = read_tods_from_file(band_comm, my_experiment, my_band, det_names, params,
                                           my_scans_start, my_scans_stop)
+    #FIXME: Make this not a hacky fix.
+    if "init_sky_from" in my_band:
+        experiment_data.sky_init_files = my_band.init_sky_from
+    else:
+        experiment_data.sky_init_files = []
 
     mpi_info.tod.comm.Barrier()
     if mpi_info.tod.is_master:

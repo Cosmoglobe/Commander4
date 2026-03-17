@@ -61,7 +61,7 @@ def run_commander4(params: Bunch, params_dict: dict):
     # as Numpy will not respect a change in thread count after it has been loaded.
     import numpy as np
     import commander4.output.log as log
-    from commander4.tod_processing import process_tod, init_tod_processing, get_empty_compsep_output
+    from commander4.tod_processing import process_tod, init_tod_processing, get_initial_sky
     from commander4.compsep_processing import process_compsep, init_compsep_processing
     from commander4.communication import receive_tod, send_tod, receive_compsep, send_compsep
 
@@ -102,7 +102,7 @@ def run_commander4(params: Bunch, params_dict: dict):
     if mpi_info.world.color == 0:
         # Chain #1 do TOD processing, resulting in maps_chain1 (we start with a fake output of
         # component separation, containing a completely empty sky).
-        compsep_output_black = get_empty_compsep_output(experiment_data)
+        compsep_output_black = get_initial_sky(experiment_data)
 
         curr_tod_output, detector_samples = process_tod(mpi_info, experiment_data,
                                                         detector_samples_chain1,
