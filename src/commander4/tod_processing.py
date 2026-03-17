@@ -116,6 +116,8 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output: N
                 sigma0_ncorr = calculate_sigma0(sky_subtracted_TOD, mask)
                 C_1f_inv = np.zeros(Nfft)
                 C_1f_inv[1:] = 1.0 / (sigma0_ncorr**2*(freq[1:]/fknee)**alpha)
+                # C_1f_inv[0] = C_1f_inv[1]
+                C_1f_inv[0] = 1e6*C_1f_inv[1]
                 # C_1f_inv[0] = C_1f_inv[-1]  # Test: try and constrain DC mode somewhat.
                 err_tol = 1e-8
                 n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
@@ -145,10 +147,12 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output: N
         num_failed_convergences_ncorr = band_comm.reduce(num_failed_convergences_ncorr, op=MPI.SUM)
         worst_residual_ncorr = band_comm.reduce(worst_residual_ncorr, op=MPI.MAX)
         if band_comm.Get_rank() == 0:
+            logger.debug(f"Worst corr-noise sampling residual (band {experiment_data.nu}GHz) = "\
+                         f"{worst_residual_ncorr:.2e}.")
             if num_failed_convergences_ncorr > 0:
-                logger.info(f"Band {experiment_data.nu}GHz failed noise CG for "\
-                            f"{num_failed_convergences_ncorr} scans. "\
-                            f"Worst residual = {worst_residual_ncorr:.3e}.")
+                logger.warning(f"Band {experiment_data.nu}GHz failed noise CG for "\
+                               f"{num_failed_convergences_ncorr} scans. "\
+                               f"Worst residual = {worst_residual_ncorr:.3e}.")
 
         alphas = band_comm.gather(alphas, root=0)
         fknees = band_comm.gather(fknees, root=0)

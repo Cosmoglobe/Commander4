@@ -107,7 +107,8 @@ def run_commander4(params: Bunch, params_dict: dict):
         curr_tod_output, detector_samples = process_tod(mpi_info, experiment_data,
                                                         detector_samples_chain1,
                                                         compsep_output_black, params, 1, 1)
-        send_tod(mpi_info, curr_tod_output, my_band_tod_id, mpi_info.world.compsep_band_masters)
+        if params.general.perform_compsep:
+            send_tod(mpi_info, curr_tod_output, my_band_tod_id, mpi_info.world.compsep_band_masters)
         curr_compsep_output = compsep_output_black
 
     elif mpi_info.world.color == 1:
@@ -143,16 +144,18 @@ def run_commander4(params: Bunch, params_dict: dict):
                 logger.info(f"TOD: Rank {mpi_info.tod.rank} finished chain {chain_num}, iter "\
                             f"{iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
             t0 = time.time()
-            curr_compsep_output = receive_compsep(mpi_info, experiment_data,
-                                                  my_band_tod_id,
-                                                  mpi_info.world.compsep_band_masters)
+            if params.general.perform_compsep:
+                curr_compsep_output = receive_compsep(mpi_info, experiment_data,
+                                                    my_band_tod_id,
+                                                    mpi_info.world.compsep_band_masters)
             if mpi_info.band.is_master:
                 logger.info(f"TOD: Rank {mpi_info.tod.rank} finished receiving "\
                             f"results for chain {chain_num}, iter {iter_num} "\
                             f"(time spent waiting+receiving = "\
                             f"{time.time()-t0:.1f}s).")
-            send_tod(mpi_info, curr_tod_output, my_band_tod_id,
-                     mpi_info.world.compsep_band_masters)
+            if params.general.perform_compsep:
+                send_tod(mpi_info, curr_tod_output, my_band_tod_id,
+                        mpi_info.world.compsep_band_masters)
             if mpi_info.tod.is_master:
                 logger.info(f"TOD: Rank {mpi_info.tod.rank} finished sending "\
                             f"results for chain {chain_num}, iter {iter_num}.")
