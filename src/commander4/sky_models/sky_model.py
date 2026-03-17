@@ -12,17 +12,30 @@ class SkyModel:
         """
         raise NotImplementedError
 
-    def get_sky_at_nu(self, nu, nside, fwhm=None, pol=(True, True, True)):
+    def get_sky_at_nu(self, nu, nside, pols, fwhm=None):
         """ Get sky at specific frequency.
         """
         npix = 12*nside**2
-        npol = np.sum(pol)
-        skymap = np.zeros((npol, npix), dtype=np.float32)
-        for component in self._components:
-            if component.pol:
-                skymap[1:] += component.get_sky(nu, nside, fwhm)
-            else:
-                skymap[0] += component.get_sky(nu, nside, fwhm)[0]
+        
+        if pols == "I":
+            skymap = np.zeros((1, npix), dtype=np.float32)
+            for component in self._components:
+                if not component.pol:
+                    skymap[0] += component.get_sky(nu, nside, fwhm)[0]
+        elif pols == "QU":
+            skymap = np.zeros((2, npix), dtype=np.float32)
+            for component in self._components:
+                if component.pol:
+                    skymap[0:] += component.get_sky(nu, nside, fwhm)
+        elif pols == "IQU":
+            skymap = np.zeros((3, npix), dtype=np.float32)
+            for component in self._components:
+                if component.pol:
+                    skymap[1:] += component.get_sky(nu, nside, fwhm)
+                else:
+                    skymap[0] += component.get_sky(nu, nside, fwhm)[0]
+        else:
+            raise ValueError("Unrecognized polarization string")
         return skymap
 
 # class SkyModel:

@@ -332,7 +332,7 @@ def main() -> int:
 
             components = [dust,ff,sync]
             sky = SkyModel(components)
-            foreground_map = sky.get_sky_at_nu(band_freq, map_nside, fwhm=0)[0]
+            foreground_map = sky.get_sky_at_nu(band_freq, map_nside, "IQU", fwhm=0)[0]
 
             lmax = hp.Alm.getlmax(cmb_alm.shape[0])
             for idx in [hp.Alm.getidx(lmax, 0, 0),

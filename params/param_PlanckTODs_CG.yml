@@ -5,8 +5,8 @@
 general:
   MPI_config:
     ntask_tod: 64
-    ntask_compsep_I: 1 #8
-    ntask_compsep_QU: 1 #8
+    ntask_compsep_I: 8
+    ntask_compsep_QU: 8
   nthreads_tod: 12
   nthreads_compsep: 2
   betzy_mode: false
@@ -65,7 +65,7 @@ components:
     enabled: true
     component_class: "CMB"
     params:
-      polarizations: [True, True, True] #I Q U 
+      polarization: "IQU" 
       longname: "CMB"
       shortname: "cmb"
       smoothing_prior_FWHM: 30.0 # arcmin
@@ -79,7 +79,7 @@ components:
     enabled: true
     component_class: "ThermalDust"
     params:
-      polarizations: [True, True, True] #[True, True, True]
+      polarization: "IQU"
       longname: "Thermal-Dust"
       shortname: "dust"
       smoothing_prior_FWHM: 5.0 # 10.0 # arcmin
@@ -95,7 +95,7 @@ components:
     enabled: true
     component_class: "Synchrotron"
     params:
-      polarizations: [True, False, False]
+      polarization: "I" 
       longname: "Synchrotron"
       shortname: "sync"
       smoothing_prior_FWHM: 60.0 # arcmin
@@ -110,7 +110,7 @@ components:
     enabled: true
     component_class: "FreeFree"
     params:
-      polarizations: [True, False, False]
+      polarization: "I" 
       longname: "Free-Free"
       shortname: "ff"
       smoothing_prior_FWHM: 30.0 # arcmin
@@ -125,7 +125,7 @@ components:
     enabled: False
     component_class: "RadioSources"
     params:
-      polarizations: [True, False, False]
+      polarization: "I" 
       longname: "RadioSources"
       shortname: "radsources"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
@@ -138,7 +138,7 @@ components:
     enabled: False
     component_class: "SpinningDust"
     params:
-      polarizations: [True, False, False]
+      polarization: "I"
       longname: "SpinningDust"
       shortname: "sdust"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
@@ -161,19 +161,19 @@ CompSep_bands:
   Planck30GHz:
     get_from: PlanckLFI
     enabled: true
-    polarizations: [True, True, True]
+    polarization: "IQU"
   Planck44GHz:
     get_from: PlanckLFI
     enabled: false
-    polarizations: [True, True, True]
+    polarization: "IQU"
   Planck70GHz:
     get_from: PlanckLFI
     enabled: false
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   ### TOTAL INTENSITY MAPS ###
   Haslam408MHz:
-    enabled: false
+    enabled: true
     get_from: "file"
     eval_nside: 512
     data_nside: 512
@@ -182,10 +182,10 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
     fwhm: 60.0  # [arcmin]
     freq: 0.408 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPKa:
-    enabled: false
+    enabled: true
     get_from: "file"
     eval_nside: 512
     data_nside: 512
@@ -194,10 +194,10 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_N_v4.fits"
     fwhm: 39.6 # [arcmin]
     freq: 33.0 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPQ1:
-    enabled: false
+    enabled: true
     get_from: "file"
     eval_nside: 512
     data_nside: 512
@@ -206,10 +206,10 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_N_v4.fits"
     fwhm: 30.6 # [arcmin]
     freq: 40.6 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPQ2:
-    enabled: false
+    enabled: true
     get_from: "file"
     eval_nside: 512
     data_nside: 512
@@ -218,10 +218,10 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_N_v4.fits"
     fwhm: 30.6 # [arcmin]
     freq: 40.6 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPV1:
-    enabled: false
+    enabled: true
     get_from: "file"
     eval_nside: 512
     data_nside: 512
@@ -230,10 +230,10 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_N_v4.fits"
     fwhm: 21.0 # [arcmin]
     freq: 60.8 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPV2:
-    enabled: false
+    enabled: true
     get_from: "file"
     eval_nside: 512
     data_nside: 512
@@ -242,10 +242,10 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_N_v4.fits"
     fwhm: 21.0 # [arcmin]
     freq: 60.8 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   Planck857GHz:
-    enabled: false
+    enabled: true
     get_from: "file"
     eval_nside: 1024
     data_nside: 1024
@@ -254,11 +254,11 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_rms_n1024_10arcmin_uK_hrscaled_true.fits"
     fwhm: 10 # [arcmin]
     freq: 857.0 # [GHz]
-    polarizations: [True, False, False]
+    polarization: "I"
 
   ### POLARIZATION MAPS ###
   Planck353GHz:
-    enabled: false
+    enabled: true
     get_from: "file"
     eval_nside: 1024
     data_nside: 1024
@@ -267,7 +267,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_rms_n1024_hrscaled_uK_udgrade.fits"
     fwhm: 4.86 # [arcmin]
     freq: 353.0 # [GHz]
-    polarizations: [False, True, True]
+    polarization: "QU"
 
 
 experiments:
@@ -280,7 +280,7 @@ experiments:
     experiment_id: "planck"  # Decides expected data format, what TOD reader is used, etc.
     bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
-    num_scans: 8000 #45860
+    num_scans: 45860
     bands:
       Planck30GHz:
         enabled: true
@@ -291,6 +291,7 @@ experiments:
         fwhm: 32.4 # [arcmin]
         freq: 28.4 # [GHz]
         fsamp: 32.5079365079365 # [Hz]
+        polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
         detectors:
@@ -319,6 +320,7 @@ experiments:
         fwhm: 27.1 # [arcmin]
         freq: 44.1 # [GHz]
         fsamp: 46.5454545454545
+        polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
         detectors:
@@ -355,6 +357,7 @@ experiments:
         fwhm: 13.3 # [arcmin]
         freq: 70.1 # [GHz]
         fsamp: 78.7692307692308
+        polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_70.txt"
         detectors:

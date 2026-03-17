@@ -82,7 +82,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: B
             huffman_tree = f[f"/{pid}/common/hufftree"][()]
             huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
             pix_encoded = f[f"/{pid}/{detname}/pix/"][()]
-            psi_encoded = f[f"/{pid}/{detname}/psi/"][()]
+            psi_encoded = f[f"/{pid}/{detname}/psi/"][()] if "QU" in my_band.polarization else []
             vsun = f[f"/{pid}/common/vsun/"][()]
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
@@ -104,7 +104,8 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: B
                                     data_nside, fsamp, vsun, huffman_tree, huffman_symbols, npsi,
                                     processing_mask_map, ntod,
                                     pix_is_compressed=my_experiment.pix_is_compressed,
-                                    psi_is_compressed=my_experiment.psi_is_compressed))
+                                    psi_is_compressed=my_experiment.psi_is_compressed \
+                                        if "QU" in my_band.polarization else False))
             num_included += 1
             ntod_sum_original += ntod
             ntod_sum_final += ntod_optimal
@@ -115,7 +116,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: B
     if "bandpass_shift" in my_det:
         my_det_central_freq += my_det.bandpass_shift
     det_static = DetectorTOD(scanlist, my_det_central_freq, my_band.fwhm, my_band.eval_nside,
-                             data_nside, expname, bandname, detname)
+                             data_nside, expname, bandname, detname, my_band.polarization)
     det_static.detector_id = my_det_id
 
     ### Collect some info on master rank of each detector and print it ###

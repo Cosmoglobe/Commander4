@@ -84,7 +84,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: B
             huffman_tree = f[f"/{pid}/common/hufftree"][()]
             huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
             pix_encoded = f[f"/{pid}/{detname}/pix/"][()]
-            psi_encoded = f[f"/{pid}/{detname}/psi/"][()]
+            # psi_encoded = f[f"/{pid}/{detname}/psi/"][()]
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
             flag_encoded = f[f"/{pid}/{detname}/flag/"][()]
@@ -96,7 +96,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: B
         scanlist.append(ScanTOD(
             tod = tod, 
             pix_encoded = pix_encoded, 
-            psi_encoded = psi_encoded,
+            psi_encoded = [],
             start_time = 0., 
             scanID = scanID, 
             nside = my_band.eval_nside, 
@@ -111,7 +111,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: B
             flag_encoded = flag_encoded,
             flag_bitmask = my_experiment.flag_bitmaks,
             pix_is_compressed=my_experiment.pix_is_compressed,
-            psi_is_compressed=my_experiment.psi_is_compressed))
+            psi_is_compressed=False))
         num_included += 1
         ntod_sum_original += ntod
         ntod_sum_final += ntod_optimal
@@ -122,7 +122,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: B
 
     det_static = DetectorTOD(scanlist, float(my_band.freq)+float(my_det.bandpass_shift),
                              my_band.fwhm, my_band.eval_nside, my_band.data_nside, expname, 
-                             bandname, detname)
+                             bandname, detname, my_band.polarizations)
     det_static.detector_id = my_det_id
 
     ### Collect some info on master rank of each detector and print it ###

@@ -88,10 +88,13 @@ def run_commander4(params: Bunch, params_dict: dict):
         components, mpi_info, my_band_compsep_id, my_band = init_compsep_processing(mpi_info, params)
 
     if mpi_info.world.tod_master is not None:
-        # All processes, both compsep and tod, need the world-specific band master dict
+        # All processes, both compsep and tod, need the world-specific band master and pol dict
         world_tod_band_masters_dict = mpi_info.world.comm.bcast(mpi_info.world.tod_band_masters,
                                                                 root=mpi_info.world.tod_master)
+        # world_tod_band_pol_dict = mpi_info.world.comm.bcast(mpi_info.world.tod_band_pols,
+        #                                                         root=mpi_info.world.tod_master)
         mpi_info['world']['tod_band_masters'] = world_tod_band_masters_dict
+        # mpi_info['world']['tod_band_pols'] = world_tod_band_pol_dict
     if mpi_info.world.compsep_master is not None:
         world_compsep_band_masters_dict = mpi_info.world.comm.bcast(
             mpi_info.world.compsep_band_masters, root=mpi_info.world.compsep_master)

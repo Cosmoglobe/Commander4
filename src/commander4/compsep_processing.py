@@ -36,30 +36,40 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     for component_str in params.components:
         component = params.components[component_str]
         if component.enabled:
-            comp_shortname = component.params.shortname
-            comp_longname = component.params.longname
             if component.params.lmax == "full":
                 component.params.lmax = (params.general.nside*5)//2
-            if component.params.polarizations[0]: #->I
+            if component.params.polarization == "I": #I-only
                 # 'getattr' loads the class specified by "component_class" from model.component.
                 # This class is then instantiated with the "params" specified, and appended to
                 # the components list.
                 # TODO: I don't love that we are editing these previously defined parameters,
                 # maybe there is a more elegant way of doing this.
-                component.params.longname = comp_longname + "_Intensity"
-                component.params.shortname = comp_shortname + "_I"
-                component.params.polarized = False
                 # Use getattr to get and initialize current component from component_lib file.
                 # Pre-allocate alm arrays so that we can seamlessly receive data from MPI comm.
                 comp_list.append(getattr(component_lib, component.component_class)(component.params,
                                                         params.general, allocate_empty_alms=True))
-            if component.params.polarizations[1] and component.params.polarizations[2]: #->QU
-                component.params.longname = comp_longname + "_Polarization"
-                component.params.shortname = comp_shortname + "_QU"
-                component.params.polarized = True
+            elif component.params.polarization == "QU": #QU-only
                 comp_list.append(getattr(component_lib, component.component_class)(component.params,
                                                         params.general, allocate_empty_alms=True))
-            
+            elif component.params.polarization == "IQU":
+                #I
+                comp_list.append(getattr(component_lib, component.component_class)(
+                                        component.params,
+                                        params.general, 
+                                        allocate_empty_alms=True,
+                                        longname = component.params.longname+"_Instensity",
+                                        shortname = component.params.longname+"_I",
+                                        eval_pol="I"))
+                #QU
+                comp_list.append(getattr(component_lib, component.component_class)(
+                                        component.params,
+                                        params.general,
+                                        allocate_empty_alms=True,
+                                        longname = component.params.longname+"_Polarization",
+                                        shortname = component.params.longname+"_QU",
+                                        eval_pol="QU"))
+            else:
+                raise ValueError(f"Unrecognized polarization in parameter file for component {component_str}")
 
     ### Setting up info for each band, including where to get the data from ###
     ### (map from file, or receive from TOD processing) ###
@@ -70,13 +80,36 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     for band_str in params.CompSep_bands:   # Intensity
         band = params.CompSep_bands[band_str]
         if band.enabled:
-            logassert(len(band.polarizations), f"{len(band.polarizations)} stokes parameter "\
-                      "definitions found in band section in param file, "\
-                      "3 expected. E.g. [True, False, False]", logger)
-            is_I = band.polarizations[0]
-            is_QU = band.polarizations[1] and band.polarizations[2]
-            if is_I:
-                # Each rank is responsible for one band (the one matching the index of their rank).
+            # logassert(len(band.polarizations), f"{len(band.polarizations)} stokes parameter "\
+            #           "definitions found in band section in param file, "\
+            #           "3 expected. E.g. [True, False, False]", logger)
+            # is_I = s[0]
+            # is_QU = band.polarizations[1] and band.polarizations[2]
+            if band.polarization == "I":
+                if current_band_idx_I == mpi_info.compsep.rank:
+                    my_band = band
+                    if my_band.get_from != "file":
+                        band_identifier = f"{my_band.get_from}$$${band_str}"
+                    else:
+                        band_identifier = band_str
+                    logger.info(f"Rank {mpi_info.compsep.rank} just matched band {band_identifier}")
+                    my_band.identifier = band_identifier
+                current_band_idx_I += 1
+
+            elif band.polarization == "QU":
+                if current_band_idx_QU == mpi_info.compsep.rank:
+                    my_band = band
+                    if my_band.get_from != "file":
+                        band_identifier = f"{my_band.get_from}$$${band_str}"
+                    else:
+                        band_identifier = band_str
+                    logger.info(f"Rank {mpi_info.compsep.rank} matched band {band_identifier}")
+                    my_band.identifier = band_identifier
+                current_band_idx_QU += 1
+
+            elif band.polarization == "IQU":
+                #if the band is defined as IQU we split it in two.
+                #I
                 if current_band_idx_I == mpi_info.compsep.rank:
                     my_band = band
                     if my_band.get_from != "file":
@@ -85,9 +118,9 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
                         band_identifier = band_str+"_I"
                     logger.info(f"Rank {mpi_info.compsep.rank} just matched band {band_identifier}")
                     my_band.identifier = band_identifier
+                    my_band.polarization = "I"
                 current_band_idx_I += 1
-            if is_QU:
-                # Each rank is responsible for one band (the one matching the index of their rank).
+                #QU
                 if current_band_idx_QU == mpi_info.compsep.rank:
                     my_band = band
                     if my_band.get_from != "file":
@@ -96,9 +129,34 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
                         band_identifier = band_str+"_QU"
                     logger.info(f"Rank {mpi_info.compsep.rank} matched band {band_identifier}")
                     my_band.identifier = band_identifier
+                    my_band.polarization = "QU"
                 current_band_idx_QU += 1
-            if not (is_I or is_QU):
-                raise ValueError(f"Pol of band {band_str} misconfigured in parameter file.")
+            else:
+                raise ValueError(f"Unrecognized polarization in parameter file for band {band_str}")
+                # Each rank is responsible for one band (the one matching the index of their rank).
+            # if is_I:
+            #     if current_band_idx_I == mpi_info.compsep.rank:
+            #         my_band = band
+            #         if my_band.get_from != "file":
+            #             band_identifier = f"{my_band.get_from}$$${band_str}_I"
+            #         else:
+            #             band_identifier = band_str+"_I"
+            #         logger.info(f"Rank {mpi_info.compsep.rank} just matched band {band_identifier}")
+            #         my_band.identifier = band_identifier
+            #     current_band_idx_I += 1
+            # if is_QU:
+            #     # Each rank is responsible for one band (the one matching the index of their rank).
+            #     if current_band_idx_QU == mpi_info.compsep.rank:
+            #         my_band = band
+            #         if my_band.get_from != "file":
+            #             band_identifier = f"{my_band.get_from}$$${band_str}_QU"
+            #         else:
+            #             band_identifier = band_str+"_QU"
+            #         logger.info(f"Rank {mpi_info.compsep.rank} matched band {band_identifier}")
+            #         my_band.identifier = band_identifier
+            #     current_band_idx_QU += 1
+            # if not (is_I or is_QU):
+            #     raise ValueError(f"Pol of band {band_str} misconfigured in parameter file.")
     
     #sanity check:
     logassert(current_band_idx_I == mpi_info.compsep.QU_master, "Number of acquired Intensity "\
@@ -157,7 +215,6 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
     ### 3. CLEANUP: Gather I+QU alm solutions and make plots. ###
     # Pol master sends the portion of list to the Intensity master rank,
     # and then it will broadcast through the compsep_comm
-    # FIXME: this has to change: a component can be only QU!!!  check if I master exists
     if mpi_info.compsep.is_QU_master:
         t=0
         for comp in comp_sublist:
@@ -185,10 +242,8 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
     for comp in comp_list:
         comp.bcast_data_blocking(compsep_comm, root=mpi_info.compsep.master)
 
-    #FIXME: How will we deal with this once we give the chance to the user to define different
-    # parameters for polarized and non-pol detectors?
     sky_model = SkyModel(comp_list)
-    sky_model_at_band = sky_model.get_sky_at_nu(detector_data.nu, detector_data.nside,
+    sky_model_at_band = sky_model.get_sky_at_nu(detector_data.nu, detector_data.nside, "IQU",
                                                 fwhm=np.deg2rad(detector_data.fwhm/60.0))
 
     pol_names = ["Q", "U"] if detector_data.pol else ["I"]

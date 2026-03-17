@@ -348,10 +348,10 @@ class CGMapmakerI(CGMapmaker):
                          nthreads, double_prec, CG_maxiter, CG_tol, CG_check_interval)
         
         #output map to be solved for
-        self._map_signal = np.zeros((1,hp.nside2npix(detector_tod._eval_nside)), 
+        self._map_signal = np.zeros((1,hp.nside2npix(detector_tod.eval_nside)), 
             dtype=self.f_dtype) if self.ismaster else None
         #RHS map to be accumulated on master rank
-        self._rhs_finalized_map = np.zeros((1,hp.nside2npix(detector_tod._eval_nside)), 
+        self._rhs_finalized_map = np.zeros((1,hp.nside2npix(detector_tod.eval_nside)), 
             dtype=self.f_dtype) if self.ismaster else None
         
         #RHS map to be accumulate
@@ -422,7 +422,7 @@ class CGMapmakerI(CGMapmaker):
         """
         Internal function to allocate an empty map.
         """
-        return np.zeros((1, hp.nside2npix(self.detector_tod._eval_nside)), dtype=self.f_dtype)
+        return np.zeros((1, hp.nside2npix(self.detector_tod.eval_nside)), dtype=self.f_dtype)
 
 class CGMapmakerIQU(CGMapmaker):
 
@@ -442,12 +442,12 @@ class CGMapmakerIQU(CGMapmaker):
                          nthreads, double_prec, CG_maxiter, CG_tol, CG_check_interval)
         
         #output map to be solved for
-        self._map_signal = np.zeros((3,hp.nside2npix(detector_tod._eval_nside)), 
+        self._map_signal = np.zeros((3,hp.nside2npix(detector_tod.eval_nside)), 
             dtype=self.f_dtype) if self.ismaster else None
         #local RHS map
         self._rhs_loca_map = None
         #RHS map to be accumulated on master rank
-        self._rhs_finalized_map = np.zeros((3,hp.nside2npix(detector_tod._eval_nside)), 
+        self._rhs_finalized_map = np.zeros((3,hp.nside2npix(detector_tod.eval_nside)), 
             dtype=self.f_dtype) if self.ismaster else None
         
         if double_prec:
@@ -535,4 +535,4 @@ class CGMapmakerIQU(CGMapmaker):
         """
         Internal function to allocate an empty map.
         """
-        return np.zeros((3, hp.nside2npix(self.detector_tod._eval_nside)), dtype=self.f_dtype)
+        return np.zeros((3, hp.nside2npix(self.detector_tod.eval_nside)), dtype=self.f_dtype)

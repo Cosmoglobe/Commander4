@@ -2,11 +2,14 @@ import numpy as np
 import pysm3.units as pysm3_u
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_TOD import DetectorTOD
+from commander4.output import log
 from numpy.typing import NDArray
 import ducc0
+import logging
 import os
 from numba import njit
 
+POLS_DICT = {"I":1, "QU":2, "IQU":3} #more allowed in the future.
 T_CMB = 2.725 * 1e6  # CMB temperature in uK_CMB units.
 C = 299792458  # m/s (Speed of light)
 T_CMB_div_C = T_CMB / C
@@ -20,9 +23,12 @@ def get_static_sky_TOD(det_compsep_map: NDArray[np.floating], pix: NDArray[np.in
     """
     if psi is None:
         return _get_static_sky_TOD_I(det_compsep_map, pix)
-    else:
-        assert det_compsep_map.shape[0] == 3, "Polarization requires a polarized map."
+    elif det_compsep_map.shape[0] == 2:
+        return _get_static_sky_TOD_QU(det_compsep_map, pix, psi)
+    elif det_compsep_map.shape[0] == 3:
         return _get_static_sky_TOD_IQU(det_compsep_map, pix, psi)
+    else:
+        raise ValueError("Input compsep map has mismatching dimensions.")
 
 @njit(fastmath=True)
 def _get_static_sky_TOD_IQU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
@@ -32,6 +38,16 @@ def _get_static_sky_TOD_IQU(det_compsep_map: NDArray[np.floating], pix: NDArray[
     """
     sky = det_compsep_map[0, pix] + np.cos(2*psi)*det_compsep_map[1, pix] \
     + np.sin(2*psi)*det_compsep_map[2, pix]
+    return sky.astype(np.float32)
+
+@njit(fastmath=True)
+def _get_static_sky_TOD_QU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
+                       psi: NDArray[np.floating]) -> NDArray[np.floating]:
+    """ Projects the current sky-model at our band frequency (in uK_RJ, without gain) into the
+        specified scan pointing. The sky model does not include the orbital dipole.
+    """
+    sky = np.cos(2*psi)*det_compsep_map[0, pix] \
+    + np.sin(2*psi)*det_compsep_map[1, pix]
     return sky.astype(np.float32)
 
 @njit(fastmath=True)
@@ -78,3 +94,28 @@ def get_gauss_beam_radius(fwhm, frac=1e-4):
     """
     sigma = fwhm2sigma(fwhm)
     return sigma * np.sqrt( - 2* np.log(frac))
+
+def get_npol(pols:str):
+    """
+    Return the number of map polarizaiton components given the polarization string `pols`.
+    """
+    logger = logging.getLogger(__name__)
+    log.logassert(pols in POLS_DICT, "Unrecognised polarization string", logger)
+    return POLS_DICT[pols]
+    
+def is_pol_supported(pols:str):
+    """
+    Checks if the given polarization string `pols` is matching one of the supported pol configs.
+    """
+    if pols in POLS_DICT.keys():
+        return True
+    else:
+        return False
+
+def assert_pol_supported(pols:str):
+    """
+    Asserts if the given polarization string `pols` is matching one of the supported pol configs.
+    """
+    log.logassert(is_pol_supported(pols), 
+                  f"Unsupported polarization string {pols}", 
+                  logging.getLogger(__name__))

@@ -437,8 +437,6 @@ experiments:
     experiment_id: "akari"
     is_sim: false
     pix_is_compressed: true
-    psi_is_compressed: true
-    polarizations: "I"
     data_type: "TOD"
     flag_bitmask: 0b1111111111111111111111111111101
     #bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
@@ -448,6 +446,7 @@ experiments:
       AkariN60:
         enabled: true
         tod_files_prefix: "AKARI_N60_v1_"
+        polarization: "I"
         num_MPI_tasks: 64 #128 #24
         detector_id: 0
         freq_identifier: 30
