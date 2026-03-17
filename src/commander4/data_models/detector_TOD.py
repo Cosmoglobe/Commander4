@@ -2,43 +2,20 @@ from commander4.data_models.scan_TOD import ScanTOD
 
 class DetectorTOD:
     def __init__(self, scanlist: list[ScanTOD], nu, fwhm, nside, data_nside,
-                 experiment_name, band_name, detector_name):
-        self._scanlist = scanlist
-        self._nu = nu
-        self._fwhm = fwhm
-        self._eval_nside = nside
-        self._data_nside = data_nside
-        self._experiment_name = experiment_name
-        self._band_name = band_name
-        self._detector_name = detector_name
-
-    @property
-    def nu(self):
-        return self._nu
-
-    @property
-    def fwhm(self):
-        return self._fwhm
+                 experiment_name, band_name, detector_name, pols):
+        self.scans = scanlist
+        self.nu = nu
+        self.fwhm = fwhm
+        self.eval_nside = nside
+        self.data_nside = data_nside
+        self.experiment_name = experiment_name
+        self.band_name = band_name
+        self.detector_name = detector_name
+        self.pols = pols
 
     @property
     def nside(self):
-        return self._eval_nside
-
-    @property
-    def data_nside(self):
-        return self._data_nside
-    
-    @property
-    def experiment_name(self):
-        return self._experiment_name
-
-    @property
-    def band_name(self):
-        return self._band_name
-    
-    @property
-    def detector_name(self):
-        return self._detector_name
+        return self.eval_nside
 
     @property
     def blm(self):
@@ -51,10 +28,6 @@ class DetectorTOD:
     def noiseProperties(self):
         """Returns parameters describing the noise properties of the detector. TBD"""
         raise NotImplementedError()
-
-    @property
-    def scans(self) -> list[ScanTOD]:
-        return self._scanlist
 
     @property
     def bandShape(self):

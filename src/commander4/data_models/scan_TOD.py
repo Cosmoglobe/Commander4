@@ -28,7 +28,7 @@ class ScanTOD:
         self._psi_encoded = psi_encoded
         self._flag_encoded = flag_encoded
         self._flag_bitmask = flag_bitmask
-        self._start_time = start_time
+        self.start_time = start_time
         self._scanID = scanID
         self._eval_nside = nside
         self._data_nside = data_nside
@@ -45,10 +45,6 @@ class ScanTOD:
     @property
     def nsamples(self) -> int:
         return self._tod.shape[0]
-
-    @property
-    def start_time(self) -> float:
-        return self.start_time
 
     @property
     def tod(self) -> NDArray[np.floating]:
