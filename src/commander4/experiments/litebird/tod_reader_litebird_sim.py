@@ -11,6 +11,7 @@ from mpi4py import MPI
 from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
+from commander4.data_models.detector_group_TOD import DetGroupTOD
 from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.output.log import logassert
 
@@ -34,14 +35,13 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     return best_ntod
 
 
-def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: Bunch,
-               params: Bunch, my_det_id: int, scan_idx_start: int,
-               scan_idx_stop: int) -> DetectorTOD:
+def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_names: list[str],
+               params: Bunch, scan_idx_start: int,
+               scan_idx_stop: int) -> DetGroupTOD:
     logger = logging.getLogger(__name__)
     oids = []
     pids = []
     filepaths = []
-    detname = my_det._name
     bandname = my_band._name
     expname = my_experiment._name
 
@@ -53,8 +53,10 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: B
             filepaths.append(filepath[1:-1])
             oids.append(filepath.split(".")[0].split("_")[-1])
 
-    # processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
-    processing_mask_map = get_processing_mask(my_band)
+    if "processing_mask" in my_band:
+        processing_mask_map = get_processing_mask(my_band)
+    else:
+        processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
 
     if "bad_PIDs_path" in my_experiment:
         bad_PIDs = np.load(my_experiment.bad_PIDs_path)
@@ -66,83 +68,89 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: B
     # Attempting to reduce fragmentation by allocating buffers.
     ntod_upper_bound = int(my_band.fsamp*100*3600)  # 10 hour scan.
     flag_buffer = np.zeros(ntod_upper_bound, dtype=np.int64)
-    tod_buffer = np.zeros(ntod_upper_bound, dtype=np.float32)
-    
+
     ntod_sum_original = 0
     ntod_sum_final = 0
-    scanlist = []
+    scan_list = []
     num_included = 0
     for i_pid in range(scan_idx_start, scan_idx_stop):
         pid = pids[i_pid]
         filepath = filepaths[i_pid]
         if pid in bad_PIDs:
             continue
+        good_scan = True
         with h5py.File(filepath, "r") as f:
             data_nside = int(f["common/nside"][()].item())
             ntod = int(f[f"/{pid}/common/ntod"][()].item())
             ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
-            tod = f[f"/{pid}/{detname}/tod/"][:ntod_optimal].astype(np.float32)
             huffman_tree = f[f"/{pid}/common/hufftree"][()]
             huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
-            pix_encoded = f[f"/{pid}/{detname}/pix/"][()]
-            psi_encoded = f[f"/{pid}/{detname}/psi/"][()]
             vsun = f[f"/{pid}/common/vsun/"][()]
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
-            flag_encoded = f[f"/{pid}/{detname}/flag/"][()]
 
-        processing_mask_nside = hp.npix2nside(processing_mask_map.size)
-        logassert(my_band.eval_nside == processing_mask_nside, f"Processing mask (band {bandname}) "
-                  f"has nside {processing_mask_nside} while eval_nside = {my_band.eval_nside} "
-                  "(NB: eval_nside can be set different from native data nside)", logger)
+            processing_mask_nside = hp.npix2nside(processing_mask_map.size)
+            logassert(my_band.eval_nside == processing_mask_nside,
+                      f"Processing mask (band {bandname}) "
+                      f"has nside {processing_mask_nside} while eval_nside = {my_band.eval_nside} "
+                      "(NB: eval_nside can be set different from native data nside)", logger)
 
-        # I noticed that some simulations have a (1,N) shape for its pixels, while others do not,
-        # so we look for this first dimension and remove it if it exists:
-        if pix_encoded.ndim == 2 and pix_encoded.shape[0] == 1:
-            pix_encoded = pix_encoded[0]
-        if psi_encoded.ndim == 2 and psi_encoded.shape[0] == 1:
-            psi_encoded = psi_encoded[0]
+            if ntod > ntod_upper_bound:
+                raise ValueError(f"{ntod_upper_bound} {ntod}")
 
-        if ntod > ntod_upper_bound:
-            raise ValueError(f"{ntod_upper_bound} {ntod}")
+            detector_list = []
+            for det_name in det_names:
+                tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32)
+                pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
+                psi_encoded = f[f"/{pid}/{det_name}/psi/"][()]
+                flag_encoded = f[f"/{pid}/{det_name}/flag/"][()]
 
-        flag_buffer[:ntod] = 0.0
-        flag_buffer[:ntod] = cpp_utils.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8),
-                                                      huffman_tree, huffman_symbols,
-                                                      flag_buffer[:ntod])
-        flag_buffer[:ntod_optimal] = np.cumsum(flag_buffer[:ntod_optimal])
-        flag_buffer[:ntod_optimal] &= 6111232
+                # Some simulations have a (1,N) shape for pixels; remove leading dimension.
+                if pix_encoded.ndim == 2 and pix_encoded.shape[0] == 1:
+                    pix_encoded = pix_encoded[0]
+                if psi_encoded.ndim == 2 and psi_encoded.shape[0] == 1:
+                    psi_encoded = psi_encoded[0]
 
-        if np.sum(flag_buffer[:ntod_optimal]) == 0:
-            tod_buffer[:ntod_optimal] = np.abs(tod)
+                flag_buffer[:ntod] = 0.0
+                flag_buffer[:ntod] = cpp_utils.huffman_decode(
+                    np.frombuffer(flag_encoded, dtype=np.uint8),
+                    huffman_tree, huffman_symbols, flag_buffer[:ntod])
+                flag_buffer[:ntod_optimal] = np.cumsum(flag_buffer[:ntod_optimal])
+                flag_buffer[:ntod_optimal] &= 6111232
+                if np.sum(flag_buffer[:ntod_optimal]) != 0:
+                    good_scan = False
+
+                detector = DetectorTOD(tod, pix_encoded, psi_encoded, my_band.eval_nside,
+                                       data_nside, fsamp, vsun, huffman_tree, huffman_symbols,
+                                       npsi, processing_mask_map, ntod,
+                                       pix_is_compressed=my_experiment.pix_is_compressed,
+                                       psi_is_compressed=my_experiment.psi_is_compressed)
+                detector_list.append(detector)
+                ntod_sum_original += ntod
+                ntod_sum_final += ntod_optimal
+        if good_scan:
             scanID = int(pid)
-            scanlist.append(ScanTOD(tod, pix_encoded, psi_encoded, 0., scanID, my_band.eval_nside,
-                                    data_nside, fsamp, vsun, huffman_tree, huffman_symbols, npsi,
-                                    processing_mask_map, ntod,
-                                    pix_is_compressed=my_experiment.pix_is_compressed,
-                                    psi_is_compressed=my_experiment.psi_is_compressed))
-
+            scan = ScanTOD(detector_list, 0., scanID, scan_idx_start, scan_idx_stop)
+            scan_list.append(scan)
             num_included += 1
-            ntod_sum_original += ntod
-            ntod_sum_final += ntod_optimal
         if i_pid % 10 == 0:
             gc.collect()
-    my_det_central_freq = my_band.freq
-    if "bandpass_shift" in my_det:
-        my_det_central_freq += my_det.bandpass_shift
-    det_static = DetectorTOD(scanlist, my_det_central_freq, my_band.fwhm, my_band.eval_nside,
-                             data_nside, expname, bandname, detname)
-    det_static.detector_id = my_det_id
+    ndet = len(det_names)
+
+    band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
+                           my_band.fwhm, ndet)
 
     if my_experiment.replace_tod_with_sim:
-        replace_tod_with_sim(det_static, my_band, params)
+        replace_tod_with_sim(band_tod, my_band, params)
 
     ### Collect some info on master rank of each detector and print it ###
     local_tot_scans = scan_idx_stop - scan_idx_start
     local_stats = np.array([num_included, local_tot_scans, ntod_sum_final, ntod_sum_original])
     global_stats = np.zeros_like(local_stats)
-    det_comm.Reduce(local_stats, global_stats, op=MPI.SUM, root=0)
-    if det_comm.Get_rank() == 0:
+    # Non-blocking reduce so that non-master ranks can continue with the main program.
+    req = band_comm.Ireduce(local_stats, global_stats, op=MPI.SUM, root=0)
+    if band_comm.Get_rank() == 0:
+        req.Wait()
         total_included, total_scans, total_ntod_final, total_ntod_original = global_stats
         frac_included = 0.0
         if total_scans > 0:
@@ -150,9 +158,11 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: B
         avg_scan_remaining = 0.0
         if total_ntod_original > 0:
             avg_scan_remaining = total_ntod_final / total_ntod_original * 100.0
-        logger.info(f"Detector {detname} (band {bandname}) finished reading TODs from file.")
-        logger.info(f"Fraction of scans included for {detname}: {frac_included:.1f} %")
-        logger.info(f"Fraction of TODs left after Fourier cut for {detname}: "\
+        logger.info(f"Band {bandname} finished reading TODs from file.")
+        logger.info(f"Fraction of scans included for {bandname}: {frac_included:.1f} %")
+        logger.info(f"Fraction of TODs left after Fourier cut for {bandname}: "\
                     f"{avg_scan_remaining:.1f} %")
+    else:
+        req.Free()
 
-    return det_static
+    return band_tod
