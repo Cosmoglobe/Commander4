@@ -8,7 +8,7 @@ from commander4.experiments.litebird.tod_reader_litebird_sim_spawndetectors impo
     as tod_reader_litebird_sim_spawndetectors
 from commander4.experiments.planck.tod_reader_planck import tod_reader as tod_reader_planck
 from commander4.experiments.planck.tod_reader_planck_sim import tod_reader as tod_reader_planck_sim
-from commander4.data_models.detector_TOD import DetectorTOD
+from commander4.data_models.detector_group_TOD import DetGroupTOD
 
 # Dictionary containing known experiments and the location of their TOD reading scripts.
 # The `experiment_id`` field in the parameter file decides what TOD reader is used in this dict.
@@ -20,9 +20,9 @@ experiment_tod_readers = {
     "litebird_sim_spawndetectors" : tod_reader_litebird_sim_spawndetectors,
 }
 
-def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
-                        det_names: list[str], params: Bunch,
-                        my_scans_start: int, my_scans_stop: int) -> DetectorTOD:
+def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, my_det: Bunch,
+                        params: Bunch, my_detector_id: int, my_scans_start: int,
+                        my_scans_stop: int) -> DetGroupTOD:
     
     # Confirm that the specified experiment type (e.g. "planck") is in dictionary.
     if my_experiment.experiment_id not in experiment_tod_readers.keys():
@@ -33,6 +33,6 @@ def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunc
 
     # Load and execute TOD loader script for this specific experiment.
     my_tod_reader = experiment_tod_readers[my_experiment.experiment_id]
-    experiment_data = my_tod_reader(band_comm, my_experiment, my_band, det_names, params,
-                                    my_scans_start, my_scans_stop)
+    experiment_data = my_tod_reader(band_comm, my_experiment, my_band, my_det, params,
+                                    my_detector_id, my_scans_start, my_scans_stop)
     return experiment_data
