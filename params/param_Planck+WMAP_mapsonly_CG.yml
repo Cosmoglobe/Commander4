@@ -40,7 +40,7 @@ components:
     enabled: true
     component_class: "CMB"
     params:
-      polarizations: [True, True, True] #I Q U 
+      polarization: "IQU" 
       longname: "CMB"
       shortname: "cmb"
       smoothing_prior_FWHM: 30.0 # arcmin
@@ -53,7 +53,7 @@ components:
     enabled: true
     component_class: "ThermalDust"
     params:
-      polarizations: [True, True, True] #[True, True, True]
+      polarization: "IQU"
       longname: "Thermal-Dust"
       shortname: "dust"
       smoothing_prior_FWHM: 5.0 # 10.0 # arcmin
@@ -69,7 +69,7 @@ components:
     enabled: true
     component_class: "Synchrotron"
     params:
-      polarizations: [True, True, True]
+      polarization: "IQU"
       longname: "Synchrotron"
       shortname: "sync"
       smoothing_prior_FWHM: 60.0 # arcmin
@@ -84,7 +84,7 @@ components:
     enabled: true
     component_class: "FreeFree"
     params:
-      polarizations: [True, False, False]
+      polarization: "I"
       longname: "Free-Free"
       shortname: "ff"
       smoothing_prior_FWHM: 30.0 # arcmin
@@ -142,7 +142,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
     fwhm: 60.0  # [arcmin]
     freq: 0.408 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPKa:
     enabled: true
@@ -154,7 +154,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_N_v4.fits"
     fwhm: 39.6 # [arcmin]
     freq: 33.0 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPQ1:
     enabled: true
@@ -166,7 +166,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_N_v4.fits"
     fwhm: 30.6 # [arcmin]
     freq: 40.6 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPQ2:
     enabled: true
@@ -178,7 +178,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_N_v4.fits"
     fwhm: 30.6 # [arcmin]
     freq: 40.6 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPV1:
     enabled: true
@@ -190,7 +190,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_N_v4.fits"
     fwhm: 21.0 # [arcmin]
     freq: 60.8 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPV2:
     enabled: true
@@ -202,7 +202,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_N_v4.fits"
     fwhm: 21.0 # [arcmin]
     freq: 60.8 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   Planck857GHz:
     enabled: true
@@ -214,7 +214,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_rms_n1024_10arcmin_uK_hrscaled_true.fits"
     fwhm: 10 # [arcmin]
     freq: 857.0 # [GHz]
-    polarizations: [True, False, False]
+    polarization: "I"
 
   ### POLARIZATION MAPS ###
   Planck353GHz:
@@ -227,7 +227,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_rms_n1024_hrscaled_uK_udgrade.fits"
     fwhm: 4.86 # [arcmin]
     freq: 353.0 # [GHz]
-    polarizations: [False, True, True]
+    polarization: "QU"
 
   # WMAPV_pol:  # TODO: allow for dense covariance matrices so we can add maps like these.
   #   enabled: true

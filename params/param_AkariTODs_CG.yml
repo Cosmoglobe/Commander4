@@ -86,7 +86,7 @@ components:
     enabled: true
     component_class: "CMB"
     params:
-      polarizations: [True, True, True] #I Q U 
+      polarization: "IQU" #I Q U 
       longname: "CMB"
       shortname: "cmb"
       smoothing_prior_FWHM: 30.0 # arcmin
@@ -100,7 +100,7 @@ components:
     enabled: true
     component_class: "ThermalDust"
     params:
-      polarizations: [True, True, True] #[True, True, True]
+      polarization: "IQU" #[True, True, True]
       longname: "Thermal-Dust"
       shortname: "dust"
       smoothing_prior_FWHM: 5.0 # 10.0 # arcmin
@@ -190,11 +190,11 @@ CompSep_bands:
   Planck44GHz:
     get_from: PlanckLFI
     enabled: false
-    polarizations: [True, True, True]
+    polarization: "IQU"
   Planck70GHz:
     get_from: PlanckLFI
     enabled: false
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   ### TOTAL INTENSITY MAPS ###
   Haslam408MHz:
@@ -207,7 +207,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
     fwhm: 60.0  # [arcmin]
     freq: 0.408 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPKa:
     enabled: false
@@ -219,7 +219,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_N_v4.fits"
     fwhm: 39.6 # [arcmin]
     freq: 33.0 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPQ1:
     enabled: false
@@ -231,7 +231,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_N_v4.fits"
     fwhm: 30.6 # [arcmin]
     freq: 40.6 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPQ2:
     enabled: false
@@ -243,7 +243,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_N_v4.fits"
     fwhm: 30.6 # [arcmin]
     freq: 40.6 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPV1:
     enabled: false
@@ -255,7 +255,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_N_v4.fits"
     fwhm: 21.0 # [arcmin]
     freq: 60.8 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPV2:
     enabled: false
@@ -267,7 +267,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_N_v4.fits"
     fwhm: 21.0 # [arcmin]
     freq: 60.8 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   Planck857GHz:
     enabled: false
@@ -279,7 +279,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_rms_n1024_10arcmin_uK_hrscaled_true.fits"
     fwhm: 10 # [arcmin]
     freq: 857.0 # [GHz]
-    polarizations: [True, False, False]
+    polarization: "I"
 
   ### POLARIZATION MAPS ###
   Planck353GHz:
@@ -292,7 +292,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_rms_n1024_hrscaled_uK_udgrade.fits"
     fwhm: 4.86 # [arcmin]
     freq: 353.0 # [GHz]
-    polarizations: [False, True, True]
+    polarization: "QU"
 
 
 experiments:
@@ -302,6 +302,7 @@ experiments:
     pix_is_compressed: true
     psi_is_compressed: true
     data_type: "TOD"
+    mapmaker: "bin"
     experiment_id: "planck"  # Decides expected data format, what TOD reader is used, etc.
     bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
@@ -310,6 +311,7 @@ experiments:
       Planck30GHz:
         enabled: true
         tod_files_prefix: "LFI_030_"
+        polarization: "IQU"
         num_MPI_tasks: 64 #24
         eval_nside: 512
         data_nside: 512
@@ -338,6 +340,7 @@ experiments:
       Planck44GHz:
         enabled: false
         tod_files_prefix: "LFI_044_"
+        polarization: "IQU"
         num_MPI_tasks: 40
         eval_nside: 512
         data_nside: 512
@@ -374,6 +377,7 @@ experiments:
       Planck70GHz:
         enabled: false
         tod_files_prefix: "LFI_070_"
+        polarization: "IQU"
         num_MPI_tasks: 64
         eval_nside: 1024
         data_nside: 1024
@@ -438,6 +442,7 @@ experiments:
     is_sim: false
     pix_is_compressed: true
     data_type: "TOD"
+    mapmaker: "CG"
     flag_bitmask: 0b1111111111111111111111111111101
     #bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
