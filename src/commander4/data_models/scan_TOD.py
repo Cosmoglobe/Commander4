@@ -7,26 +7,32 @@ from commander4.cmdr4_support import utils as cpp_utils
 import commander4.output.log as log
 
 class ScanTOD:
-    def __init__ (self, tod, pix_encoded, psi_encoded, startTime, scanID, nside, data_nside, fsamp,
+    def __init__ (self, tod, pix_encoded, psi_encoded, start_time, scanID, nside, data_nside, fsamp,
                   orb_dir_vec, huffman_tree, huffman_symbols, npsi, processing_mask_map,
-                  ntod_original, pix_is_compressed=True, psi_is_compressed=True):
+                  ntod_original, flag_encoded=None, flag_bitmask=None, pix_is_compressed=True, 
+                  psi_is_compressed=True):
         logger = logging.getLogger(__name__)
         log.logassert_np(tod.ndim==1, "'value' must be a 1D array", logger)
         log.logassert_np(tod.dtype in [np.float64,np.float32], "TOD dtype must be floating type,"
                          f" is {tod.dtype}", logger)
-        log.logassert_np(orb_dir_vec.size == 3, "orb_dir_vec must be a vector of size 3.", logger)
+        if orb_dir_vec is not None:
+            log.logassert_np(orb_dir_vec.size == 3, "orb_dir_vec must be a vector of size 3.", logger)
+            self._orb_dir_vec = orb_dir_vec.astype(np.float32)
+        else:
+            self._orb_dir_vec = None
         log.logassert_np(processing_mask_map.dtype == bool, "Processing mask is not boolean type",
                          logger)
         self._tod = tod
         self.ntod = self._tod.shape[-1]
         self._pix_encoded = pix_encoded
         self._psi_encoded = psi_encoded
-        self._startTime = startTime
+        self._flag_encoded = flag_encoded
+        self._flag_bitmask = flag_bitmask
+        self.start_time = start_time
         self._scanID = scanID
         self._eval_nside = nside
         self._data_nside = data_nside
         self._fsamp = fsamp
-        self._orb_dir_vec = orb_dir_vec.astype(np.float32)
         self._huffman_tree = huffman_tree
         self._huffman_symbols = huffman_symbols
         self._ntod_original = ntod_original  # Size of the original TOD before Fourier cropping.
@@ -39,10 +45,6 @@ class ScanTOD:
     @property
     def nsamples(self) -> int:
         return self._tod.shape[0]
-
-    @property
-    def startTime(self) -> float:
-        return self.startTime
 
     @property
     def tod(self) -> NDArray[np.floating]:
@@ -98,7 +100,25 @@ class ScanTOD:
             psi = self._psi_encoded
         return psi[:self.ntod]  # Crop to actual size (might be cut to fast FFT length)
         
-        
+    @property
+    def flags(self) -> NDArray[np.floating]:
+        """
+        Returns the uncompressed flag array.
+        """
+        flags = np.zeros(self._ntod_original, dtype=np.int64)
+        flags = cpp_utils.huffman_decode(np.frombuffer(self._flag_encoded, dtype=np.uint8), 
+                                        self._huffman_tree, self._huffman_symbols, flags)
+        flags = np.cumsum(flags)
+        flags = flags[:self.ntod]
+        return flags
+
+    @property
+    def excluded_tod_mask(self) -> NDArray[np.bool]:
+        """
+        Returns a mask given by the intersection between the flag array and the flag bitmask.
+        """
+        return (self.flags & self._flag_bitmask).astype(np.bool)
+    
     @property
     def scanID(self) -> int:
         return self._scanID
@@ -117,5 +137,5 @@ class ScanTOD:
         return self._fsamp
     
     @property
-    def orb_dir_vec(self) -> NDArray[np.floating]:
+    def orb_dir_vec(self):
         return self._orb_dir_vec

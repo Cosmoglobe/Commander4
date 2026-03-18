@@ -1,13 +1,13 @@
 import logging
 import numpy as np
 import healpy as hp
+import os
 import h5py
 import gc
-import time
+from pixell.bunch import Bunch
 from numpy.typing import NDArray
 from astropy.io import fits
 from mpi4py import MPI
-from pixell.bunch import Bunch
 from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
@@ -17,7 +17,7 @@ def get_processing_mask(my_band: Bunch) -> DetectorTOD:
     """ Finds and returns the processing mask for the relevant band.
     """
     hdul = fits.open(my_band.processing_mask)
-    mask = hdul[1].data["TEMPERATURE"].flatten().astype(bool)
+    mask = hdul[1].data['I_Stokes'].flatten().astype(bool)
     nside = np.sqrt(mask.size//12)
     if nside != my_band.eval_nside:
         mask = hp.ud_grade(mask.astype(np.float64), my_band.eval_nside) == 1
@@ -33,23 +33,23 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     return best_ntod
 
 
-def tod_reader(det_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, my_det: Bunch,
-               params: Bunch, my_det_id: int, scan_idx_start: int,
+def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: Bunch,
+               Bunch: Bunch, my_det_id: int, scan_idx_start: int,
                scan_idx_stop: int) -> DetectorTOD:
     logger = logging.getLogger(__name__)
     oids = []
     pids = []
-    filepaths = []
-    detname = my_det._name
-    bandname = my_band._name
-    expname = my_experiment._name
+    filenames = []
+    detname = str(my_det.detname)
+    bandname = str(my_band)
+    expname = str(my_experiment)
 
     with open(my_band.filelist) as infile:
         infile.readline()
         for line in infile:
             pid, filename, _, _, _ = line.split()
             pids.append(f"{int(pid):06d}")
-            filepaths.append(filename[1:-1])
+            filenames.append(filename[1:-1])
             oids.append(filename.split(".")[0].split("_")[-1])
 
     processing_mask_map = get_processing_mask(my_band)
@@ -71,59 +71,64 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, my_det:
     ntod_sum_final = 0
     for i_pid in range(scan_idx_start, scan_idx_stop):
         pid = pids[i_pid]
-        filepath = filepaths[i_pid]
+        oid = oids[i_pid]
         if pid in bad_PIDs:
             continue
+
+        filepath = filenames[i_pid]
+        #filepath = os.path.join(my_band.data_path, filename)
         with h5py.File(filepath, "r") as f:
-            data_nside = int(f["common/nside"][()].item())
             ntod = int(f[f"/{pid}/common/ntod"][()].item())
             ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
             tod = f[f"/{pid}/{detname}/tod/"][:ntod_optimal].astype(np.float32)
             huffman_tree = f[f"/{pid}/common/hufftree"][()]
             huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
             pix_encoded = f[f"/{pid}/{detname}/pix/"][()]
-            psi_encoded = f[f"/{pid}/{detname}/psi/"][()] if "QU" in my_band.polarization else []
-            vsun = f[f"/{pid}/common/vsun/"][()]
+            # psi_encoded = f[f"/{pid}/{detname}/psi/"][()]
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
             flag_encoded = f[f"/{pid}/{detname}/flag/"][()]
         if ntod > ntod_upper_bound:
             raise ValueError(f"{ntod_upper_bound} {ntod}")
-        flag_buffer[:ntod] = 0.0
-        flag_buffer[:ntod] = cpp_utils.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8),
-                                                  huffman_tree, huffman_symbols, flag_buffer[:ntod])
-        flag_buffer[:ntod_optimal] = np.cumsum(flag_buffer[:ntod_optimal])
-        flag_buffer[:ntod_optimal] &= 6111232
-        if np.sum(flag_buffer[:ntod_optimal]) == 0:
-            tod_buffer[:ntod_optimal] = np.abs(tod)
-            # Check for crazy data.
-            if np.mean(tod_buffer[:ntod_optimal]) > 0.001 or np.std(tod) > 0.001:
-                continue
-            scanID = int(pid)
-            scanlist.append(ScanTOD(tod, pix_encoded, psi_encoded, 0., scanID, my_band.eval_nside,
-                                    data_nside, fsamp, vsun, huffman_tree, huffman_symbols, npsi,
-                                    processing_mask_map, ntod,
-                                    pix_is_compressed=my_experiment.pix_is_compressed,
-                                    psi_is_compressed=my_experiment.psi_is_compressed \
-                                        if "QU" in my_band.polarization else False))
-            num_included += 1
-            ntod_sum_original += ntod
-            ntod_sum_final += ntod_optimal
+
+        scanID = int(pid)
+        vsun = np.ones(3) #dummy, we don't have that in Akari.
+        scanlist.append(ScanTOD(
+            tod = tod, 
+            pix_encoded = pix_encoded, 
+            psi_encoded = [],
+            start_time = 0., 
+            scanID = scanID, 
+            nside = my_band.eval_nside, 
+            data_nside = my_band.data_nside, 
+            fsamp = fsamp, 
+            orb_dir_vec = vsun, 
+            huffman_tree = huffman_tree, 
+            huffman_symbols = huffman_symbols, 
+            npsi = npsi, 
+            processing_mask_map = processing_mask_map, 
+            ntod_original = ntod,
+            flag_encoded = flag_encoded,
+            flag_bitmask = my_experiment.flag_bitmaks,
+            pix_is_compressed=my_experiment.pix_is_compressed,
+            psi_is_compressed=False))
+        num_included += 1
+        ntod_sum_original += ntod
+        ntod_sum_final += ntod_optimal
         if i_pid % 10 == 0:
             gc.collect()
+        
+    logger.info(f"Nscans on rank {det_comm.Get_rank()} is {len(scanlist)}")
 
-    my_det_central_freq = my_band.freq
-    if "bandpass_shift" in my_det:
-        my_det_central_freq += my_det.bandpass_shift
-    det_static = DetectorTOD(scanlist, my_det_central_freq, my_band.fwhm, my_band.eval_nside,
-                             data_nside, expname, bandname, detname, my_band.polarization)
+    det_static = DetectorTOD(scanlist, float(my_band.freq)+float(my_det.bandpass_shift),
+                             my_band.fwhm, my_band.eval_nside, my_band.data_nside, expname, 
+                             bandname, detname, my_band.polarizations)
     det_static.detector_id = my_det_id
 
     ### Collect some info on master rank of each detector and print it ###
     local_tot_scans = scan_idx_stop - scan_idx_start
     local_stats = np.array([num_included, local_tot_scans, ntod_sum_final, ntod_sum_original])
     global_stats = np.zeros_like(local_stats)
-    # Non-blocking reduce so that non-master ranks can continue with the main program.
     req = det_comm.Ireduce(local_stats, global_stats, op=MPI.SUM, root=0)
     if det_comm.Get_rank() == 0:
         req.Wait()
@@ -136,7 +141,7 @@ def tod_reader(det_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, my_det:
             avg_scan_remaining = total_ntod_final / total_ntod_original * 100.0
         logger.info(f"Detector {detname} (band {bandname}) finished reading TODs from file.")
         logger.info(f"Fraction of scans included for {detname}: {frac_included:.1f} %")
-        logger.info(f"Fraction of TODs left after Fourier cut for {detname}: "\
+        logger.info(f"Fraction of TODs left after Fourier cut for {detname}: "
                     f"{avg_scan_remaining:.1f} %")
     else:
         req.Free()

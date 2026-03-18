@@ -50,7 +50,7 @@ class Band:
                                 f"{alms.ndim} != 2")
             
     @property
-    def pol(self):
+    def is_pol(self):
         return False if self._alms.shape[0] == 1 else True
     
     @property

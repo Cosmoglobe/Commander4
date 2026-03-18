@@ -15,13 +15,14 @@ import os
 from math import sqrt
 from numba import njit, prange
 from scipy.linalg import blas as blas_wrapper
+from mpi4py import MPI
 
 from commander4.output.log import logassert
 
 import typing
 # Only import when performing type checking, avoiding circular import during normal runtime.
 if typing.TYPE_CHECKING:
-    from commander4.sky_models.component import Component
+    from commander4.sky_models.component import Component, CompList
 
 
 ###### NUMPY REPLACEMENTS ######
@@ -124,6 +125,16 @@ def dot(arr1, arr2):
         res += flat1[i]*flat2[i]
     return res
 
+def norm(arr):
+    return dot(arr, arr)
+
+def MPI_dot(arr1, arr2, comm:MPI.Comm, double_prec:bool = False):
+    """
+    Computes the dot product locally and accumulates it on all the ranks involved in `comm`.
+    """
+    local_res = np.array(dot(arr1, arr2), dtype=np.float64 if double_prec else np.float32) #single-value array so mpi Allreduce does not complain.
+    res = comm.allreduce(local_res, op=MPI.SUM) #comm.Allreduce(MPI.IN_PLACE, local_res, op=MPI.SUM)
+    return res #np.float64(local_res) if double_prec else np.float32(local_res) #unpack it
 
 @njit(fastmath=True)
 def calculate_sigma0(tod: NDArray, mask: NDArray[np.bool_]) -> float:
@@ -251,7 +262,7 @@ def inplace_complist_scale_and_add(list_inplace:list[Component], list_other:list
     for ci, co in zip(list_inplace, list_other):
         inplace_scale_add(ci._data, co._data, scalar)
 
-def complist_dot(comp_list1:list[Component], comp_list2:list[Component]) -> float:
+def complist_dot(comp_list1:CompList, comp_list2:CompList) -> float:
     """ `dot(comp_list1, comp_list2)`. Calculates the correct dot product between two lists of
         Component objects where the alms follow the Healpy complex storing convention, for
         components with alms. It will automatically handle the correct dot product definition for
@@ -284,6 +295,7 @@ def forward_rfft(data:NDArray[np.floating], nthreads:int = 1):
             data_f (np.array): The Fourier transform of the input.
                                A complex array of length tod.size//2 + 1.
     """
+    nthreads = int(os.environ["OMP_NUM_THREADS"]) if nthreads is None else nthreads
     return ducc0.fft.r2c(data, nthreads=nthreads)
 
 def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray[np.floating]:

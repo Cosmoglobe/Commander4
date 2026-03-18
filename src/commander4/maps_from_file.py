@@ -30,10 +30,17 @@ def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
     """
     logger = logging.getLogger(__name__)
     #polarizations relevant for the current compsep band (either I or QU).
-    logassert(my_band.identifier.endswith("_I") or my_band.identifier.endswith("_QU"),
-              f"band identifier {my_band.identifier} has wrong or missing polarization ending, "
-              "_I or _QU expected.", logger)
-    pols_to_read = [True,False,False] if my_band.identifier.endswith("_I") else [False,True,True]
+    # logassert(my_band.identifier.endswith("_I") or my_band.identifier.endswith("_QU"),
+    #           f"band identifier {my_band.identifier} has wrong or missing polarization ending, "
+    #           "_I or _QU expected.", logger)
+    if my_band.polarization == "I":
+        pols_to_read = [True,False,False]
+    elif my_band.polarization == "QU":
+        pols_to_read = [False,True,True]
+    elif my_band.polarization == "IQU":
+        pols_to_read = [True,True,True]
+    else:
+        raise ValueError(f"Unrecognized polarization of band {my_band.identifier} in map file reader")
     npol = np.count_nonzero(pols_to_read) #Polarizations to be stored in myband
     map_signal = []
     map_rms = []
