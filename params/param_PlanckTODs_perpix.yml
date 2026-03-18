@@ -17,13 +17,15 @@ general:
   noise_alpha: -0.9
 
   sample_corr_noise: True
-  sample_corr_noise_from_iter_num: 8
+  sample_corr_noise_from_iter_num: 2
   sample_abs_gain: True
   sample_abs_gain_from_iter_num: 2
   sample_rel_gain: True
-  sample_rel_gain_from_iter_num: 4
+  sample_rel_gain_from_iter_num: 2
   sample_temporal_gain: True
-  sample_temporal_gain_from_iter_num: 4
+  sample_temporal_gain_from_iter_num: 2
+
+  perform_compsep: true
 
   CG_float_precision: "single"
 
@@ -33,9 +35,12 @@ general:
   pixel_compsep_sampling: True
   smooth_to_common_res: True
 
+  chains_to_write: [1,]
   write_orb_dipole_maps_to_chain: True
   write_corr_noise_maps_to_chain: True
   write_sky_model_maps_to_chain: True
+  chain_maps_nside: 128
+  chain_maps_interval: 5
 
   output_paths:
     chains: "../cmdr4_chains/PlanckTODs_perpix/"
@@ -43,7 +48,7 @@ general:
 
   logging:
     console:
-      level: 'info'
+      level: 'debug'
     file:
       level: 'info'
       filename: '../cmdr4_logs/output_PlanckTODs_perpix.log'
