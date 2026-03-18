@@ -17,7 +17,7 @@ import typing
 # Only import when performing type checking, avoiding circular import during normal runtime.
 if typing.TYPE_CHECKING:
     from commander4.solvers.CG_compsep_solver import CompSepSolver
-    from commander4.sky_models.component import Component
+    from commander4.sky_models.component import Component, CompList
     from commander4.utils.mapmaker import WeightsMapmakerIQU
 
 
@@ -204,7 +204,7 @@ class JointPreconditioner:
         #TODO: 1. Get Wigner 3j stuff to work to get full N-diagonal. 2. Get the full mixing matrix
         # stuff implemented.
     """
-    def __init__(self, compsep: CompSepSolver, comp_list: list[Component]):
+    def __init__(self, compsep: CompSepSolver, comp_list:CompList):
         self.compsep = compsep
         self.is_master = compsep.CompSep_comm.Get_rank() == 0
 
@@ -258,12 +258,12 @@ class JointPreconditioner:
             # Regularize the final operator to avoid division by zero
             self.A_diag_inv_list.append(1.0/A_diag)
 
-    def __call__(self, a_complist: list[Component]) -> list[Component]:
+    def __call__(self, a_complist: CompList) -> CompList:
         if not self.is_master:
             return a_complist
 
         # Need to parse the list to make copy, as the list.copy() is a shallow copy.
-        a_complist_out = [deepcopy(a) for a in a_complist]
+        a_complist_out = deepcopy(a_complist)
         for icomp in range(len(a_complist)):
             #comp_lmax = self.compsep.lmax_per_comp[icomp]
             if hasattr(a_complist[icomp], "alms"):

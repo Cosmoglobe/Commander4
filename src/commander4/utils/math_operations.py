@@ -22,7 +22,7 @@ from commander4.output.log import logassert
 import typing
 # Only import when performing type checking, avoiding circular import during normal runtime.
 if typing.TYPE_CHECKING:
-    from commander4.sky_models.component import Component
+    from commander4.sky_models.component import Component, CompList
 
 
 ###### NUMPY REPLACEMENTS ######
@@ -262,7 +262,7 @@ def inplace_complist_scale_and_add(list_inplace:list[Component], list_other:list
     for ci, co in zip(list_inplace, list_other):
         inplace_scale_add(ci._data, co._data, scalar)
 
-def complist_dot(comp_list1:list[Component], comp_list2:list[Component]) -> float:
+def complist_dot(comp_list1:CompList, comp_list2:CompList) -> float:
     """ `dot(comp_list1, comp_list2)`. Calculates the correct dot product between two lists of
         Component objects where the alms follow the Healpy complex storing convention, for
         components with alms. It will automatically handle the correct dot product definition for

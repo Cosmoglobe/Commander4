@@ -100,7 +100,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output
                     preconditioner=precond, nthreads=params.general.nthreads_tod, 
                     CG_maxiter=params.general.CG_mapmaker.maxiter)
     else:
-        raise ValueError(f"specified polarizations {pols} is not allowed.")
+        raise ValueError(f"specified polarizations {pols} is notsupported yet.")
 
     BinMapmaker = MapmakerIQU if pols == "IQU" else Mapmaker #general bin mapmaker class object.
     # mapmaker = BinMapmaker(band_comm, experiment_data.nside)
@@ -454,8 +454,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_outpu
     return detmap_dict_out #empty on non-master ranks
 
 
-def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[bool, MPI.Comm, MPI.Comm, str,
-                                                                 dict[str,int], DetectorTOD,
+def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, DetectorTOD,
                                                                  DetectorSamples]:
     """To be run once before starting TOD processing.
 
@@ -1094,17 +1093,20 @@ def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: Detecto
 
 
 def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
-                detector_samples, compsep_output: NDArray,
-                params: Bunch, chain, iter) -> list[DetectorMap]:
+                detector_samples: DetectorSamples, compsep_output: NDArray,
+                params: Bunch, chain:int, iter:int) -> list[DetectorMap]:
     """ Performs a single TOD iteration.
 
     Input:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
         experiment_data (DetectorTOD): The input experiment TOD for the band
             belonging to the current process.
+        detector_samples (DetectorSamples): sampled parameters relative to the current detector.
         compsep_output (np.array): The current best estimate of the sky model
             as seen by the band belonging to the current process.
         params (Bunch): The parameters from the input parameter file.
+        chain (int): id of the current chain we are on.
+        iter (int): iteration within the Gibbs chain. 
 
     Output:
         list[DetectorMap] list of instance which represents the correlated noise subtracted
@@ -1194,10 +1196,24 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     do_ncorr_sampling = params.general.sample_corr_noise and iter >=\
                         params.general.sample_corr_noise_from_iter_num
     t0 = time.time()
-    # detmap_dict = tod2map_CG(band_comm, experiment_data, compsep_output, detector_samples, params, chain,
-    #                  iter, do_ncorr_sampling)
-    detmap_dict = tod2map_bin(band_comm, experiment_data, compsep_output, detector_samples, params, 
+
+    if "mapmaker" in params.experiments[experiment_data.experiment_name].bands[experiment_data.band_name]:
+        mapmaker_str = params.experiments[experiment_data.experiment_name].bands[experiment_data.band_name].mapmaker
+    elif "mapmaker" in params.experiments[experiment_data.experiment_name]:
+        mapmaker_str = params.experiments[experiment_data.experiment_name].mapmaker
+    else:
+        raise ValueError(f"Unspecified mapmaker for experiment {experiment_data.experiment_name}," \
+                        f" band {experiment_data.band_name}.")
+
+    if mapmaker_str == "CG":
+        detmap_dict = tod2map_CG(band_comm, experiment_data, compsep_output, detector_samples, params, chain,
+                     iter, do_ncorr_sampling)
+    elif mapmaker_str == "bin":
+        detmap_dict = tod2map_bin(band_comm, experiment_data, compsep_output, detector_samples, params, 
                             chain, iter, do_ncorr_sampling)
+    else:
+        raise ValueError(f'Mapmaker must be either "CG" or "bin", but {mapmaker_str} was given for'\
+                         f' experiment {experiment_data.experiment_name}, band {experiment_data.band_name}')
     timing_dict["mapmaker"] = time.time() - t0
     if band_comm.Get_rank() == 0:
         logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished mapmaking in "\

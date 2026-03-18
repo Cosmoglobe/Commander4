@@ -28,11 +28,11 @@ class distributed_CG:
         self.err = np.inf
         self.i   = 0
         if x0 is None:
-            self.x = [np.zeros_like(_b) for _b in b]
+            self.x = np.zeros_like(b)
             self.r = deepcopy(b) if not destroy_b else b
         else:
             self.x  = deepcopy(x0)
-            self.r  = [_b - _Ax for _b,_Ax in zip(b,self.A(self.x))]
+            self.r  = b - self.A(self.x)
         if is_master:  # Only the master needs these.
             # Internal work variables
             z = self.M(self.r)
@@ -40,7 +40,7 @@ class distributed_CG:
             self.rz0 = float(self.rz)
             self.p   = z
         else:
-            self.p = [np.zeros_like(_b) for _b in b]
+            self.p = np.zeros_like(b)
             
     def step(self):
         """Take a single step in the iteration. Results in .x, .i
@@ -55,10 +55,10 @@ class distributed_CG:
             alpha = self.rz/self.dot(self.p, Ap)
 
             # Line below equivalent to: self.x = [_x + alpha*_p for _x, _p in zip(self.x, self.p)]
-            inplace_complist_add_scaled_array(self.x, self.p, alpha)
+            self.x.inplace_add_scaled(self.p, alpha)
 
             # Line below equivalent to: self.r = [_r - alpha*_Ap for _r, _Ap in zip(self.r, Ap)]
-            inplace_complist_add_scaled_array(self.r, Ap, -alpha)
+            self.r.inplace_add_scaled(Ap, -alpha)
 
             del Ap
             z       = self.M(self.r)
@@ -68,7 +68,7 @@ class distributed_CG:
             self.rz = next_rz
 
             # Line below equivalent to: self.p = [_p*beta + _z for _p, _z in zip(self.p, z)]
-            inplace_complist_scale_and_add(self.p, z, beta)
+            self.p.inplace_scale_and_add(z, beta)
 
         self.i += 1
 

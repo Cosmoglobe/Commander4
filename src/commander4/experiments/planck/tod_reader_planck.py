@@ -33,7 +33,7 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     return best_ntod
 
 
-def tod_reader(det_comm: MPI.Comm, my_experiment: str, my_band: Bunch, my_det: Bunch,
+def tod_reader(det_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, my_det: Bunch,
                params: Bunch, my_det_id: int, scan_idx_start: int,
                scan_idx_stop: int) -> DetectorTOD:
     logger = logging.getLogger(__name__)

@@ -1,9 +1,9 @@
 import numpy as np
-from commander4.sky_models.component import Component
+from commander4.sky_models.component import CompList
 
 
 class SkyModel:
-    def __init__(self, components:list[Component]):
+    def __init__(self, components:CompList):
         # components = list of Component objects
         self._components = components
 
@@ -12,25 +12,25 @@ class SkyModel:
         """
         raise NotImplementedError
 
-    def get_sky_at_nu(self, nu, nside, pols, fwhm=None):
+    def get_sky_at_nu(self, nu, nside, pols_required, fwhm=None):
         """ Get sky at specific frequency.
         """
         npix = 12*nside**2
         
-        if pols == "I":
+        if pols_required == "I":
             skymap = np.zeros((1, npix), dtype=np.float32)
             for component in self._components:
-                if not component.pol:
+                if not component.is_pol:
                     skymap[0] += component.get_sky(nu, nside, fwhm)[0]
-        elif pols == "QU":
+        elif pols_required == "QU":
             skymap = np.zeros((2, npix), dtype=np.float32)
             for component in self._components:
-                if component.pol:
+                if component.is_pol:
                     skymap[0:] += component.get_sky(nu, nside, fwhm)
-        elif pols == "IQU":
+        elif pols_required == "IQU":
             skymap = np.zeros((3, npix), dtype=np.float32)
             for component in self._components:
-                if component.pol:
+                if component.is_pol:
                     skymap[1:] += component.get_sky(nu, nside, fwhm)
                 else:
                     skymap[0] += component.get_sky(nu, nside, fwhm)[0]

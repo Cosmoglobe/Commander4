@@ -10,11 +10,12 @@ from numpy.typing import NDArray
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
+import commander4.sky_models.component as component_lib
 from commander4.output import log
 from commander4.utils.math_operations import alm_to_map, map_to_alm, project_alms, inplace_scale,\
         inplace_add_scaled_vec, map_to_alm_adjoint, alm_to_map_adjoint, almxfl,\
         inplace_arr_add, inplace_arr_sub, inplace_arr_prod, inplace_arr_truediv, dot, \
-        _dot_complex_alm_1D_arrays, _numba_proj2map, _numba_eval_from_map 
+        _dot_complex_alm_1D_arrays, _numba_proj2map, _numba_eval_from_map, inplace_scale_add
 from commander4.utils.map_utils import gauss_beam, get_gauss_beam_radius, get_npol, assert_pol_supported
 from commander4.data_models.band import Band
 
@@ -233,7 +234,7 @@ class DiffuseComponent(Component):
         elif self.eval_pol == "QU":
             return True
         else:
-            raise ValueError("Polarization undefined, or both I and QU are specified.")
+            raise ValueError("Specific polarization undefined, or set as IQU.")
 
     @property
     def alms(self):
@@ -625,8 +626,8 @@ class RadioSources(PointSourcesComponent):
         super().__init__(comp_params, global_params)
         self.longname = comp_params.longname if "longname" in comp_params else "RadioPointSources"
         self.shortname = comp_params.shortname if "shortname" in comp_params else "radsources"
-        self.nu0 = comp_params.nu_0                   #reference frequency
-
+        #reference frequency
+        self.nu0 = comp_params.nu_0
         #tabulated data
         ps_bunch = self.read_dat_to_bunch(comp_params.template_path)
         #per-source amplitudes
@@ -828,21 +829,250 @@ class RadioSources(PointSourcesComponent):
     
 
 #FIXME: this will go within ComponentList object when implemented
-def split_complist(comp_list: list[Component], color:int,
-                   IvsQU_colors:tuple = (0,1)) -> list[Component]:
-    """
-    Extracts from `comp_list` only the components containing the correct Stokes parameter based
-    on the passed `color` of the local MPI rank. By default, color=0 will treat Intensity and
-    color=1 polarization. A list with the relevant components is returned.
-    """
-    out_comp_list = []
-    IvsQU_colors = IvsQU_colors[:2] #cut off eventual elements in excess
-    if color not in IvsQU_colors:
-        logging.warning(f"Color {color} not in colors assigned to I or QU ({IvsQU_colors})!")
-    else:
-        for comp in comp_list:
-            if comp.is_pol == (color == IvsQU_colors[1]):
-                # print("Comp", comp.shortname, comp.pol)
+# def split_complist(comp_list: list[Component], color:int,
+#                    IvsQU_colors:tuple = (0,1)) -> list[Component]:
+#     """
+#     Extracts from `comp_list` only the components containing the correct Stokes parameter based
+#     on the passed `color` of the local MPI rank. By default, color=0 will treat Intensity and
+#     color=1 polarization. A list with the relevant components is returned.
+#     """
+#     out_comp_list = []
+#     IvsQU_colors = IvsQU_colors[:2] #cut off eventual elements in excess
+#     if color not in IvsQU_colors:
+#         logging.warning(f"Color {color} not in colors assigned to I or QU ({IvsQU_colors})!")
+#     else:
+#         for comp in comp_list:
+#             if comp.is_pol == (color == IvsQU_colors[1]):
+#                 # print("Comp", comp.shortname, comp.pol)
+#                 out_comp_list.append(comp)
+
+#     return out_comp_list
+
+
+class CompList:
+    def __init__(self, comp_list:list[Component]):
+        self.comp_list = comp_list
+
+    @classmethod
+    def init_from_params(cls, components:Bunch, params:Bunch):
+        comp_list = []
+        for component_str in components:
+            component = components[component_str]
+            if component.enabled:
+                if component.params.lmax == "full":
+                    component.params.lmax = (params.general.nside*5)//2
+                if component.params.polarization == "I": #I-only
+                    # 'getattr' loads the class specified by "component_class" from model.component.
+                    # This class is then instantiated with the "params" specified, and appended to
+                    # the components list.
+                    comp_list.append(getattr(component_lib, component.component_class)(component.params,
+                                                            params.general, allocate_empty_alms=True))
+                elif component.params.polarization == "QU": #QU-only
+                    comp_list.append(getattr(component_lib, component.component_class)(component.params,
+                                                            params.general, allocate_empty_alms=True))
+                elif component.params.polarization == "IQU":
+                    #I
+                    comp_list.append(getattr(component_lib, component.component_class)(
+                                            component.params,
+                                            params.general, 
+                                            allocate_empty_alms=True,
+                                            longname = component.params.longname+"_Instensity",
+                                            shortname = component.params.longname+"_I",
+                                            eval_pol="I"))
+                    #QU
+                    comp_list.append(getattr(component_lib, component.component_class)(
+                                            component.params,
+                                            params.general,
+                                            allocate_empty_alms=True,
+                                            longname = component.params.longname+"_Polarization",
+                                            shortname = component.params.longname+"_QU",
+                                            eval_pol="QU"))
+                else:
+                    raise ValueError(f"Unrecognized polarization in parameter file for component {component_str}")
+        return cls(comp_list)
+
+    def split(self, color:int, IvsQU_colors:tuple = (0,1)):
+        """
+        Extracts from `comp_list` only the components containing the correct Stokes parameter based
+        on the passed `color` of the local MPI rank. By default, color=0 will treat Intensity and
+        color=1 QU. A list with the relevant components is returned.
+        """
+        out_comp_list = []
+        IvsQU_colors = IvsQU_colors[:2] #cut off eventual elements in excess
+        if color not in IvsQU_colors:
+            logging.warning(f"Color {color} not in colors assigned to I or QU ({IvsQU_colors})!")
+        elif color == IvsQU_colors[0]:
+            target_pol = "I"
+        elif color == IvsQU_colors[1]:
+            target_pol = "QU"
+
+        for comp in self.comp_list:
+            if comp.eval_pol == target_pol:
                 out_comp_list.append(comp)
 
-    return out_comp_list
+        return CompList(out_comp_list)
+    
+    @property
+    def components(self):
+        return self.comp_list
+    
+    def __len__(self):
+        return len(self.comp_list)
+    
+    def __matmul__(self, other) -> float:
+        """ `dot(comp_list1, comp_list2)`. Calculates the correct dot product between two lists of
+            Component objects where the alms follow the Healpy complex storing convention, for
+            components with alms. It will automatically handle the correct dot product definition for
+            each type of Component.
+        """
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        res = 0.0
+        for c1, c2 in zip(self.components, other.components):
+            res += float(c1 @ c2)
+        return res
+    
+    def __add__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        out = deepcopy(self)
+        for o, c in zip(out.components, other.components):
+            o += c
+        return o
+
+    def __iadd__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        for c1, c2 in zip(self.components, other.components):
+            c1 += c2
+        return self
+
+    def __sub__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        out = deepcopy(self)
+        for o, c in zip(out.components, other.components):
+            o -= c
+        return o
+
+    def __isub__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        for c1, c2 in zip(self.components, other.components):
+            c1 -= c2
+        return self
+
+    def __mul__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        out = deepcopy(self)
+        for o, c in zip(out.components, other.components):
+            o *= c
+        return o
+
+    def __imul__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        for c1, c2 in zip(self.components, other.components):
+            c1 *= c2
+        return self
+
+    def __truediv__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        out = deepcopy(self)
+        for o, c in zip(out.components, other.components):
+            o /= c
+        return o
+
+    def __itruediv__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        for c1, c2 in zip(self.components, other.components):
+            c1 /= c2
+        return self
+
+    def __getitem__(self, index):
+        return self.comp_list[index]
+
+    def __iter__(self):
+        for item in self.comp_list:
+            yield item
+
+    def __array_function__(self, func, types, args, kwargs):
+        #for numpy func overloads
+        if not all(issubclass(t, CompList) for t in types):
+            return NotImplemented
+
+        if func is np.zeros_like:
+            return self._zeros_like(*args, **kwargs)
+
+        return NotImplemented
+
+    def _zeros_like(self, other, dtype=None, order='K', subok=True, shape=None):
+        out = deepcopy(other)
+        out.comp_list = [
+            np.zeros_like(c,
+            dtype=dtype,
+            order=order,
+            subok=subok,
+            shape=shape) for c in other
+            ]
+        return out
+
+    #MPI functions
+    def bcast_data_blocking(self, comm:MPI.Comm, root:int=0):
+        for comp in self.comp_list:
+            comp.bcast_data_blocking(comm, root=root)
+    
+    def accum_data_blocking(self, comm:MPI.Comm, root:int=0):
+        for comp in self.comp_list:
+            comp.accum_data_blocking(comm, root=root)
+
+    def accum_data_non_blocking(self, comm:MPI.Comm, root:int=0) -> list[MPI.Request]:
+        requests = []
+        for comp in self.comp_list:
+            req = comp.accum_data_non_blocking(comm, root=root)
+            requests.append(req)
+        return requests
+
+    #CompSep solver functions
+    def eval_comp_from_band(self, band_in:Band, nthreads:int=1):
+        """ Evaluates the band_in's contribution to all the comp_list_out objects, and stores them
+            in-place.
+        """
+        for comp in self.comp_list:
+            comp.eval_comp_from_band(band_in, nthreads=nthreads)
+    
+    def project_comp_to_band(self, band_out:Band, nthreads:int=1) -> NDArray[np.complexfloating]:
+        """
+        Projects all the components in `comp_list_in`, overwriting the `band_out` object's alms. 
+        """
+        band_out.alms = np.zeros_like(band_out.alms)
+        for comp in self.comp_list:
+            comp.project_comp_to_band(band_out, nthreads=nthreads)
+
+    def apply_smoothing_prior_sqrt(self):
+        """
+        Applies per-component the corresponding smoothing prior.
+        """
+        for comp in self.comp_list:
+            comp.apply_smoothing_prior_sqrt()
+
+    def inplace_add_scaled(self, list_other, scalar):
+        """ `list_inplace += scalar*list_other`
+        """
+        if len(self) != len(list_other):
+            raise ValueError("Component lists must match in length.")
+        
+        for ci, co in zip(self.comp_list, list_other.comp_list):
+            inplace_add_scaled_vec(ci._data, co._data, scalar)
+    
+    def inplace_scale_and_add(self, list_other, scalar):
+        """ `list_inplace = scalar*list_inplace + list_other`
+        """
+        if len(self) != len(list_other):
+            raise ValueError("Component lists must match in length.")
+
+        for ci, co in zip(self.comp_list, list_other.comp_list):
+            inplace_scale_add(ci._data, co._data, scalar)

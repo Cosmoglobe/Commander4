@@ -115,8 +115,6 @@ def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep
     """
     logger = logging.getLogger(__name__)
     my_compsep_rank = mpi_info.compsep.rank
-    # todproc_band_id = compsep_band_id.split("_")[0]
-    # my_compsep_pol = compsep_band_id.split("_")[-1]
     if my_band.get_from == "file":
         if curr_tod_output is None:
             logger.info(f"CompSep: Rank {my_compsep_rank} reading static map data from file.")
@@ -126,10 +124,6 @@ def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep
     else:
         logger.info(f"CompSep: Rank {my_compsep_rank} receiving TOD data for ({compsep_band_id}) "\
                     f" from TOD process with global rank {senders[compsep_band_id]}")
-        # todproc_pols = mpi_info.world.tod_band_pols[todproc_band_id]
-        # log.logassert(my_compsep_pol in todproc_pols, 
-        #               f"Pol {todproc_pols} requested from compsep but not found in TOD proc.",
-        #               logger)
         curr_tod_output = mpi_info.world.comm.recv(source=senders[compsep_band_id])
     
     return curr_tod_output
