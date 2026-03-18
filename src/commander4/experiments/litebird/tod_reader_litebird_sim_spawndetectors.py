@@ -132,10 +132,8 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
     local_tot_scans = scan_idx_stop - scan_idx_start
     local_stats = np.array([num_included, local_tot_scans, ntod_sum_final, ntod_sum_original])
     global_stats = np.zeros_like(local_stats)
-    # Non-blocking reduce so that non-master ranks can continue with the main program.
-    req = band_comm.Ireduce(local_stats, global_stats, op=MPI.SUM, root=0)
+    band_comm.Reduce(local_stats, global_stats, op=MPI.SUM, root=0)
     if band_comm.Get_rank() == 0:
-        req.Wait()
         total_included, total_scans, total_ntod_final, total_ntod_original = global_stats
         frac_included = 0.0
         if total_scans > 0:
@@ -147,7 +145,5 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
         logger.info(f"Fraction of scans included for {bandname}: {frac_included:.1f} %")
         logger.info(f"Fraction of TODs left after Fourier cut for {bandname}: "\
                     f"{avg_scan_remaining:.1f} %")
-    else:
-        req.Free()
 
     return band_tod
