@@ -4,6 +4,8 @@ from pixell.bunch import Bunch
 # from commander4.experiments.litebird.tod_reader_litebird import tod_reader as tod_reader_litebird
 from commander4.experiments.litebird.tod_reader_litebird_sim import tod_reader\
     as tod_reader_litebird_sim
+from commander4.experiments.litebird.tod_reader_litebird_sim_spawndetectors import tod_reader\
+    as tod_reader_litebird_sim_spawndetectors
 from commander4.experiments.planck.tod_reader_planck import tod_reader as tod_reader_planck
 from commander4.experiments.planck.tod_reader_planck_sim import tod_reader as tod_reader_planck_sim
 from commander4.data_models.detector_TOD import DetectorTOD
@@ -15,6 +17,7 @@ experiment_tod_readers = {
     "planck_sim" : tod_reader_planck_sim,
     # "litebird" : tod_reader_litebird,
     "litebird_sim" : tod_reader_litebird_sim,
+    "litebird_sim_spawndetectors" : tod_reader_litebird_sim_spawndetectors,
 }
 
 def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
