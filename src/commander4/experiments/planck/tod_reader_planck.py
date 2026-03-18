@@ -116,7 +116,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             num_included += 1
         if i_pid % 10 == 0:
             gc.collect()
-    ndet = len(detector_list)  # Number of detectors *should* be the same for all scans.
+    ndet = len(det_names)  # Number of detectors *should* be the same for all scans.
 
     band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, ndet)
