@@ -23,7 +23,6 @@ def write_map_chain_to_file(params: Bunch, chain: int, iter: int, exp_name:str,
     with h5py.File(chain_file, "w") as file:
         file["metadata/datetime"] = datetime.datetime.now().isoformat()
         file["metadata/parameter_file_as_string"] = params.parameter_file_as_string
-        file["metadata/parameter_file_as_binary_yaml"] = params.parameter_file_binary_yaml
         for key, value, in maps_to_file.items():
             if nside_out != "native" and hp.npix2nside(value.shape[-1]) != nside_out:
                 value = hp.ud_grade(value, nside_out, dtype=np.float32)
@@ -57,7 +56,6 @@ def write_tod_chain_to_file(band_comm: MPI.Comm, tod_samples: TODSamples,
         with h5py.File(chain_file, "w") as file:
             file["metadata/datetime"] = datetime.datetime.now().isoformat()
             file["metadata/parameter_file_as_string"] = params.parameter_file_as_string
-            file["metadata/parameter_file_as_binary_yaml"] = params.parameter_file_binary_yaml
             for key in write_dict.keys():
                 # If each entry is 0-dimensional, concatenate will crash, so use regular np.array.
                 if key in ["g0_est", "rel_gain_est", "time_dep_rel_gain_est", "alpha_est", "fknee_est"]:
@@ -74,7 +72,6 @@ def write_compsep_chain_to_file(comp_list: list[Component], params: Bunch, chain
     with h5py.File(chain_file, "w") as file:
         file["metadata/datetime"] = datetime.datetime.now().isoformat()
         file["metadata/parameter_file_as_string"] = params.parameter_file_as_string
-        file["metadata/parameter_file_as_binary_yaml"] = params.parameter_file_binary_yaml
         for comp in comp_list:
             file[f"comps/{comp.shortname}/alms"] = comp.alms
             file[f"comps/{comp.shortname}/longname"] = comp.longname

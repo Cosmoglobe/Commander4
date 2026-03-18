@@ -82,11 +82,7 @@ def _load_params_from_chain(chain_dir: str) -> Bunch | None:
         for path in sorted(glob.glob(pattern)):
             try:
                 with h5py.File(path, "r") as handle:
-                    if "metadata/parameter_file_as_binary_yaml" in handle:
-                        raw_yaml = _decode_h5_value(
-                            handle["metadata/parameter_file_as_binary_yaml"][()]
-                        )
-                    elif "metadata/parameter_file_as_string" in handle:
+                    if "metadata/parameter_file_as_string" in handle:
                         raw_yaml = _decode_h5_value(handle["metadata/parameter_file_as_string"][()])
                     else:
                         continue
