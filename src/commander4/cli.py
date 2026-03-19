@@ -229,7 +229,7 @@ def main():
     except Exception:
         print_exc()  # Print the full exception raise, including trace-back.
         logger.error(f">>>>>>>> Error on rank {MPI.COMM_WORLD.Get_rank()}, calling MPI abort.")
-        MPI.COMM_WORLD.Abort()
+        MPI.COMM_WORLD.Abort(1)
 
 if __name__ == "__main__":
     main()
