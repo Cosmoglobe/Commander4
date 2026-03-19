@@ -5,7 +5,7 @@ class Scan:
         raise NotImplementedError()
 
     @property
-    def startTime(self) -> float:
+    def start_time(self) -> float:
         """Returns the time stamp of the first sample in this scan.
            (Reference time TBD)"""
         raise NotImplementedError()

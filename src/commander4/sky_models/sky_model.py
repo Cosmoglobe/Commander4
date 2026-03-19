@@ -1,9 +1,9 @@
 import numpy as np
-from commander4.sky_models.component import Component
+from commander4.sky_models.component import CompList
 
 
 class SkyModel:
-    def __init__(self, components:list[Component]):
+    def __init__(self, components:CompList):
         # components = list of Component objects
         self._components = components
 
@@ -12,17 +12,30 @@ class SkyModel:
         """
         raise NotImplementedError
 
-    def get_sky_at_nu(self, nu, nside, fwhm=None, pol=(True, True, True)):
+    def get_sky_at_nu(self, nu, nside, pols_required, fwhm=None):
         """ Get sky at specific frequency.
         """
         npix = 12*nside**2
-        npol = np.sum(pol)
-        skymap = np.zeros((npol, npix), dtype=np.float32)
-        for component in self._components:
-            if component.pol:
-                skymap[1:] += component.get_sky(nu, nside, fwhm)
-            else:
-                skymap[0] += component.get_sky(nu, nside, fwhm)[0]
+        
+        if pols_required == "I":
+            skymap = np.zeros((1, npix), dtype=np.float32)
+            for component in self._components:
+                if not component.is_pol:
+                    skymap[0] += component.get_sky(nu, nside, fwhm)[0]
+        elif pols_required == "QU":
+            skymap = np.zeros((2, npix), dtype=np.float32)
+            for component in self._components:
+                if component.is_pol:
+                    skymap[0:] += component.get_sky(nu, nside, fwhm)
+        elif pols_required == "IQU":
+            skymap = np.zeros((3, npix), dtype=np.float32)
+            for component in self._components:
+                if component.is_pol:
+                    skymap[1:] += component.get_sky(nu, nside, fwhm)
+                else:
+                    skymap[0] += component.get_sky(nu, nside, fwhm)[0]
+        else:
+            raise ValueError("Unrecognized polarization string")
         return skymap
 
 # class SkyModel:

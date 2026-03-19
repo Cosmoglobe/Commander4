@@ -3,6 +3,7 @@ import numpy as np
 import healpy as hp
 import h5py
 import gc
+import time
 from numpy.typing import NDArray
 from astropy.io import fits
 from mpi4py import MPI
@@ -33,9 +34,8 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     return best_ntod
 
 
-def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_names: list[str],
-               params: Bunch, scan_idx_start: int,
-               scan_idx_stop: int) -> DetectorTOD:
+def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_names: list[str],
+               params: Bunch, scan_idx_start: int, scan_idx_stop: int) -> DetectorTOD:
     logger = logging.getLogger(__name__)
     oids = []
     pids = []
@@ -89,7 +89,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             for det_name in det_names:
                 tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32)
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
-                psi_encoded = f[f"/{pid}/{det_name}/psi/"][()]
+                psi_encoded = f[f"/{pid}/{det_name}/psi/"][()] if "QU" in my_band.polarization else []
                 flag_encoded = f[f"/{pid}/{det_name}/flag/"][()]
 
                 flag_buffer[:ntod] = cpp_utils.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8),
@@ -106,7 +106,8 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                                         data_nside, fsamp, vsun, huffman_tree, huffman_symbols,
                                         npsi, processing_mask_map, ntod,
                                         pix_is_compressed=my_experiment.pix_is_compressed,
-                                        psi_is_compressed=my_experiment.psi_is_compressed)
+                                        psi_is_compressed=my_experiment.psi_is_compressed \
+                                        if "QU" in my_band.polarization else False)
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
@@ -119,7 +120,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
     ndet = len(det_names)  # Number of detectors *should* be the same for all scans.
 
     band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, ndet)
+                           my_band.fwhm, ndet, my_experiment.pols)
     # my_det_central_freq = my_band.freq
 
     # TODO: Re-implement bandpass shift.

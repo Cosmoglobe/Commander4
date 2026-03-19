@@ -1,4 +1,5 @@
 from mpi4py import MPI
+import logging
 from pixell.bunch import Bunch
 
 # from commander4.experiments.litebird.tod_reader_litebird import tod_reader as tod_reader_litebird
@@ -9,6 +10,7 @@ from commander4.experiments.litebird.tod_reader_litebird_sim_spawndetectors impo
 from commander4.experiments.planck.tod_reader_planck import tod_reader as tod_reader_planck
 from commander4.experiments.planck.tod_reader_planck_sim import tod_reader as tod_reader_planck_sim
 from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.experiments.akari.tod_reader_akari import tod_reader as tod_reader_akari
 
 # Dictionary containing known experiments and the location of their TOD reading scripts.
 # The `experiment_id`` field in the parameter file decides what TOD reader is used in this dict.
@@ -18,6 +20,7 @@ experiment_tod_readers = {
     # "litebird" : tod_reader_litebird,
     "litebird_sim" : tod_reader_litebird_sim,
     "litebird_sim_spawndetectors" : tod_reader_litebird_sim_spawndetectors,
+    "akari" : tod_reader_akari,
 }
 
 def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, my_det: Bunch,
@@ -34,5 +37,5 @@ def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunc
     # Load and execute TOD loader script for this specific experiment.
     my_tod_reader = experiment_tod_readers[my_experiment.experiment_id]
     experiment_data = my_tod_reader(band_comm, my_experiment, my_band, my_det, params,
-                                    my_detector_id, my_scans_start, my_scans_stop)
+                                    my_scans_start, my_scans_stop)
     return experiment_data

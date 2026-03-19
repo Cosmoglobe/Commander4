@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import numpy as np
+import ctypes as ct
 import healpy as hp
 from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell import curvedsky
 from copy import deepcopy
-from commander4.utils.math_operations import alm_real2complex, alm_complex2real
+import logging
+from commander4.utils.math_operations import alm_real2complex, alm_complex2real, inplace_arr_prod
+from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
 
 import typing
 # Only import when performing type checking, avoiding circular import during normal runtime.
 if typing.TYPE_CHECKING:
     from commander4.solvers.CG_compsep_solver import CompSepSolver
-    from commander4.sky_models.component import Component
+    from commander4.sky_models.component import Component, CompList
+    from commander4.utils.mapmaker import WeightsMapmakerIQU
 
 
 class NoPreconditioner:
@@ -200,7 +204,7 @@ class JointPreconditioner:
         #TODO: 1. Get Wigner 3j stuff to work to get full N-diagonal. 2. Get the full mixing matrix
         # stuff implemented.
     """
-    def __init__(self, compsep: CompSepSolver, comp_list: list[Component]):
+    def __init__(self, compsep: CompSepSolver, comp_list:CompList):
         self.compsep = compsep
         self.is_master = compsep.CompSep_comm.Get_rank() == 0
 
@@ -254,12 +258,12 @@ class JointPreconditioner:
             # Regularize the final operator to avoid division by zero
             self.A_diag_inv_list.append(1.0/A_diag)
 
-    def __call__(self, a_complist: list[Component]) -> list[Component]:
+    def __call__(self, a_complist: CompList) -> CompList:
         if not self.is_master:
             return a_complist
 
         # Need to parse the list to make copy, as the list.copy() is a shallow copy.
-        a_complist_out = [deepcopy(a) for a in a_complist]
+        a_complist_out = deepcopy(a_complist)
         for icomp in range(len(a_complist)):
             #comp_lmax = self.compsep.lmax_per_comp[icomp]
             if hasattr(a_complist[icomp], "alms"):
@@ -269,3 +273,60 @@ class JointPreconditioner:
                 pass
  
         return a_complist_out
+
+
+class InvNPreconditionerIQU:
+    """ Standard diagonal preconditioner for CG mapmaker. It builds an estimate of the diagonal of the A matrix
+        by estimating the RMS of the i-th pixel as sigma_0/n_hit_i.
+    """
+
+    def __init__(self, inv_N_IQU:NDArray, double_prec=True):
+        """
+        Initialize preconditioner starting from the RMS.
+        """
+        assert inv_N_IQU.ndim == 2, "InvN_IQU must be 2-dimensional array."
+        assert inv_N_IQU.shape[0] == 3, "InvN_IQU must be must have shape (3,npix)."
+        self.npix = inv_N_IQU.shape[1]
+        self.inv_N_IQU = inv_N_IQU
+
+    def __call__(self, map: NDArray) -> NDArray:
+        assert map.shape[1] == self.npix, "map should have same npix as the preconditioner"
+        assert map.shape[0] == 3, "map should have 3 polarization components: I, Q and U."
+        map_out = np.copy(map)
+        inplace_arr_prod(map_out, self.inv_N_IQU)
+        return map_out
+
+
+class InvNPreconditionerI:
+    """ Standard diagonal preconditioner for temperature-only CG mapmaker. It builds an estimate of 
+    the diagonal of the A matrix by estimating the RMS of the i-th pixel as sigma_0/n_hit_i.
+    """
+
+    def __init__(self, inv_N_map:NDArray):
+        """
+        Initialize preconditioner starting from the mapmaker object it will be used in.
+        It precomputes the hitmap
+        """
+        self.inv_N_map = inv_N_map.reshape((1,-1)) if inv_N_map.ndim == 1 else inv_N_map
+        self.npix = self.inv_N_map.shape[1]
+        self.logger = logging.getLogger(__name__)
+
+    def __call__(self, map: NDArray) -> NDArray:
+        assert map.shape[1] == self.npix
+        map_out = np.copy(map)
+        self.logger.debug(f"## Preconditioner called. map shape: {map.shape}, inv N shape: {self.inv_N_map.shape}")
+        # this allows it to be applied to IQU maps as well
+        map_out = map_out.reshape((1,-1)) if map_out.ndim == 1 else map_out
+        if map_out.shape[0] == 1:
+            inplace_arr_prod(map_out, self.inv_N_map)
+        else:
+            for i in range(map_out.shape[0]):
+                inplace_arr_prod(map_out[i,:], self.inv_N_map)
+        return map_out
+
+
+
+
+
+
+

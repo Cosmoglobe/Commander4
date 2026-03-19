@@ -10,12 +10,13 @@ from numpy.typing import NDArray
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
+import commander4.sky_models.component as component_lib
 from commander4.output import log
 from commander4.utils.math_operations import alm_to_map, map_to_alm, project_alms, inplace_scale,\
         inplace_add_scaled_vec, map_to_alm_adjoint, alm_to_map_adjoint, almxfl,\
         inplace_arr_add, inplace_arr_sub, inplace_arr_prod, inplace_arr_truediv, dot, \
-        _dot_complex_alm_1D_arrays, _numba_proj2map, _numba_eval_from_map 
-from commander4.utils.map_utils import fwhm2sigma, gauss_beam, get_gauss_beam_radius
+        _dot_complex_alm_1D_arrays, _numba_proj2map, _numba_eval_from_map, inplace_scale_add
+from commander4.utils.map_utils import gauss_beam, get_gauss_beam_radius, get_npol, assert_pol_supported
 from commander4.data_models.band import Band
 
 MPI_LIMIT_32BIT = 2**31 - 1
@@ -36,6 +37,7 @@ class Component:
     def __init__(self, comp_params: Bunch, global_params: Bunch):
         self.comp_params = comp_params
         self.global_params = global_params
+        self.logger = logging.getLogger(__name__)
         self.longname = comp_params.longname if "longname" in comp_params else "Unknown Component"
         self.shortname = comp_params.shortname if "shortname" in comp_params else "comp"
         self.double_prec = False if global_params.CG_float_precision == "single" else True
@@ -199,18 +201,40 @@ class Component:
 
 # Second tier component classes
 class DiffuseComponent(Component):
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False):
+    def __init__(self, comp_params: Bunch, global_params: Bunch, 
+                 allocate_empty_alms=False, eval_pol:None|str=None):
         super().__init__(comp_params, global_params)
         self.spatially_varying_MM = comp_params.spatially_varying_MM
         self.lmax = comp_params.lmax
         self.smoothing_prior_FWHM = comp_params.smoothing_prior_FWHM
         self.smoothing_prior_amplitude = comp_params.smoothing_prior_amplitude
-        self.pol = comp_params.polarized
-        self.npol = 2 if comp_params.polarized else 1
         self._data = None  # Alm data is not allocated by default.
+        assert_pol_supported(comp_params.polarization)
+        self.defined_pol = comp_params.polarization #polarization as defined on the parameter file
+        if eval_pol is not None:
+            assert_pol_supported(eval_pol)
+            self.eval_pol = eval_pol
+        else:
+            self.eval_pol = self.defined_pol #if not passed, eval_pol defaults to defined_pol
         if allocate_empty_alms:
             self.allocate_empty_alms()
 
+    @property
+    def npol(self):
+        return get_npol(self.eval_pol)
+
+    @property
+    def spin(self):
+        return 2 if self.is_pol else 0
+    
+    @property
+    def is_pol(self):
+        if self.eval_pol == "I":
+            return False
+        elif self.eval_pol == "QU":
+            return True
+        else:
+            raise ValueError("Specific polarization undefined, or set as IQU.")
 
     @property
     def alms(self):
@@ -261,8 +285,9 @@ class DiffuseComponent(Component):
         return P_inv
     
     def __repr__(self):
-        return f"Diffuse Component {self.shortname} {'Polarization' if self.pol else 'Intensity'} "\
-               f"\n   lmax = {self.lmax} \n   alms: {self.alms}"
+        return f"Diffuse Component {self.shortname}, with polarization: {self.eval_pol}"\
+                f" (originally defined as {self.defined_pol})" \
+                f"\n   lmax = {self.lmax} \n   alms: {self.alms}"
 
     def apply_smoothing_prior_sqrt(self):
         """
@@ -280,10 +305,10 @@ class DiffuseComponent(Component):
         if component_alms is None:
             raise ValueError("component_alms property not set.")
         if fwhm == 0:
-            return alm_to_map(component_alms, nside, self.lmax, spin = 2 if self.pol else 0)
+            return alm_to_map(component_alms, nside, self.lmax, spin = self.spin)
         else:
             return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax,
-                              spin = 2 if self.pol else 0)
+                              spin = self.spin)
 
     def get_sky(self, nu, nside, fwhm=0):
         return self.get_component_map(nside, fwhm)*self.get_sed(nu)
@@ -312,28 +337,23 @@ class DiffuseComponent(Component):
 
         NB: this function does not include the beam smoothing.
         """
-        if self.pol:
-            assert band.pol, "Polarized component can only be projected to polarized band alms"
-            npol = 2
-            spin = 2
-        else:
-            assert not band.pol, "Intensity component can only be projected to intensity band alms"
-            npol = 1
-            spin = 0
+        log.logassert(self.is_pol == band.is_pol, 
+                    "Band and component polarization must match",
+                    self.logger)
 
         alm_in_band_space = project_alms(self.alms, band.lmax)
         if self.spatially_varying_MM:  # If this component has a MM that is pixel-depnedent.
             # Y a
-            comp_map = alm_to_map(alm_in_band_space, band.nside, band.lmax, spin=spin,
+            comp_map = alm_to_map(alm_in_band_space, band.nside, band.lmax, spin=self.spin,
                                   nthreads=nthreads)
             # M Y a
-            for ipol in range(npol):
+            for ipol in range(self.npol):
                 inplace_scale(comp_map[ipol], self.get_sed(band.nu)) 
             # Y^-1 M Y a
-            band.alms = map_to_alm(comp_map, band.nside, band.lmax, spin=spin, out=band.alms,
+            band.alms = map_to_alm(comp_map, band.nside, band.lmax, spin=self.spin, out=band.alms,
                                    acc=True, nthreads=nthreads)
         else:
-            for ipol in range(npol):
+            for ipol in range(self.npol):
                 inplace_add_scaled_vec(band.alms[ipol], alm_in_band_space[ipol],
                                        self.get_sed(band.nu))
         return band.alms
@@ -347,31 +367,27 @@ class DiffuseComponent(Component):
 
         NB: this function does not include the beam smoothing.
         """
-        if self.pol:
-            assert band.pol, "Polarized component can only be evaluated from polarized band alms"
-            npol = 2
-            spin = 2
-        else:
-            assert not band.pol, "Intensity comp can only be evaluated from intensity band alms"
-            npol = 1
-            spin = 0
+
+        log.logassert(self.is_pol == band.is_pol, 
+                    "Band and component polarization must match",
+                    self.logger)
 
         if self.spatially_varying_MM:  # If this component has a MM that is pixel-depnedent.
             # Y^-1^T B^T a
-            band_map = map_to_alm_adjoint(band.alms, band.nside, band.lmax, spin=spin, out=None,
+            band_map = map_to_alm_adjoint(band.alms, band.nside, band.lmax, spin=self.spin, out=None,
                                           nthreads=nthreads)
 
             # M^T Y^-1 B^T a
-            for ipol in range(npol):
+            for ipol in range(self.npol):
                 inplace_scale(band_map[ipol], self.get_sed(band.nu))
 
             # Y^T M^T Y^-1^T B^T a
-            tmp_alm = alm_to_map_adjoint(band_map, band.nside, band.lmax, spin=spin, out=None,
+            tmp_alm = alm_to_map_adjoint(band_map, band.nside, band.lmax, spin=self.spin, out=None,
                                          nthreads=nthreads)
 
         else:
             tmp_alm = band.alms.copy()
-            for ipol in range(npol):
+            for ipol in range(self.npol):
                 inplace_scale(tmp_alm[ipol], self.get_sed(band.nu))
             
         # Project alm from band to component lmax.
@@ -388,10 +404,14 @@ class TemplateComponent(Component):
 
 # Third tier component classes
 class CMB(DiffuseComponent):
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False):
-        super().__init__(comp_params, global_params, allocate_empty_alms)
-        self.longname = comp_params.longname if "longname" in comp_params else "CMB"
-        self.shortname = comp_params.shortname if "shortname" in comp_params else "cmb"
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
+                 shortname = None, longname = None, eval_pol = None):
+        super().__init__(comp_params, global_params, allocate_empty_alms, eval_pol)
+        #this gives priority: 1) arg, 2) param and 3) default 
+        self.longname = longname if longname is not None else \
+            comp_params.longname if "longname" in comp_params else "CMB"
+        self.shortname = shortname if shortname is not None else \
+            comp_params.shortname if "shortname" in comp_params else "cmb"
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for CMB emission.
@@ -417,24 +437,26 @@ class CMB(DiffuseComponent):
         for m in range(3):  # m = 0, 1, 2
             component_alms[:,hp.Alm.getidx(self.lmax, 2, m)] = 0.0 + 0.0j
         if fwhm == 0:
-            return alm_to_map(component_alms, nside, self.lmax,
-                              spin = 2 if self.pol else 0)*self.get_sed(nu)
+            return alm_to_map(component_alms, nside, self.lmax, spin = self.spin)*self.get_sed(nu)
         else:
             return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax,
-                              spin = 2 if self.pol else 0)*self.get_sed(nu)
+                              spin = self.spin)*self.get_sed(nu)
 
 class CMBRelQuad(TemplateComponent):
     pass
 
 class ThermalDust(DiffuseComponent):
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False):
-        super().__init__(comp_params, global_params, allocate_empty_alms)
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
+                 shortname = None, longname = None, eval_pol = None):
+        super().__init__(comp_params, global_params, allocate_empty_alms, eval_pol)
         self.beta = comp_params.beta
         self.T = comp_params.T
         self.nu0 = comp_params.nu0
         self.prior_l_power_law = 2.5
-        self.longname = comp_params.longname if "longname" in comp_params else "Thermal Dust"
-        self.shortname = comp_params.shortname if "shortname" in comp_params else "term-dust"
+        self.longname = longname if longname is not None else \
+            comp_params.longname if "longname" in comp_params else "Thermal Dust"
+        self.shortname = shortname if shortname is not None else \
+            comp_params.shortname if "shortname" in comp_params else "term-dust"
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for Thermal Dust emission.
@@ -451,14 +473,17 @@ class ThermalDust(DiffuseComponent):
 
 
 class Synchrotron(DiffuseComponent):
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False):
-        super().__init__(comp_params, global_params, allocate_empty_alms)
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
+                 shortname = None, longname = None, eval_pol = None):
+        super().__init__(comp_params, global_params, allocate_empty_alms, eval_pol)
         self.beta = comp_params.beta
         self.nu0 = comp_params.nu0
         self.nside_comp_map = 512
         self.prior_l_power_law = -3
-        self.longname = comp_params.longname if "longname" in comp_params else "Synchrotron"
-        self.shortname = comp_params.shortname if "shortname" in comp_params else "sync"
+        self.longname = longname if longname is not None else \
+            comp_params.longname if "longname" in comp_params else "Synchrotron"
+        self.shortname = shortname if shortname is not None else \
+            comp_params.shortname if "shortname" in comp_params else "sync"
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for Synchrotron emission.
@@ -472,12 +497,15 @@ class Synchrotron(DiffuseComponent):
 
 
 class FreeFree(DiffuseComponent):
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False):
-        super().__init__(comp_params, global_params, allocate_empty_alms)
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
+                 shortname = None, longname = None, eval_pol = None):
+        super().__init__(comp_params, global_params, allocate_empty_alms, eval_pol)
         self.T = comp_params.T  # Electron temperature in K
         self.nu0 = comp_params.nu0 # Reference frequency in GHz
-        self.longname = comp_params.longname if "longname" in comp_params else "Free-Free"
-        self.shortname = comp_params.shortname if "shortname" in comp_params else "ff"
+        self.longname = longname if longname is not None else \
+            comp_params.longname if "longname" in comp_params else "Free-Free"
+        self.shortname = shortname if shortname is not None else \
+            comp_params.shortname if "shortname" in comp_params else "ff"
 
     def _gaunt_factor(self, nu, T):
         """Calculates the Gaunt factor for free-free emission, as per Eq. 18 in BP1.
@@ -516,22 +544,26 @@ class SpinningDust(DiffuseComponent):
     # This template has an intensity peak at 30 GHz.
     # Columns: Frequency (GHz), Emissivity (proportional to Intensity)
 
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False):
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
+                 shortname = None, longname = None, eval_pol = None):
         """
         Args:
             nu_peak (float): The peak frequency of the spinning dust component in GHz.
             nu_0 (float): The reference frequency of the spinning dust template in GHz.
                           This will not impact the shape of the SED, just the absolute scaling.
         """
-        super().__init__(comp_params, global_params, allocate_empty_alms)
+        super().__init__(comp_params, global_params, allocate_empty_alms, eval_pol)
+
         # Read SpDust2 template data. This is a simulation of what the spectral shape of
         # spinning dust emission should look like if it happens to peak at 30 GHz.
         freqs, SED = np.loadtxt(comp_params.template_path).T
         self.nu_peak_ref = 30.0  # The reference peak frequency of 30 GHz.
         self.nu_peak_eval = comp_params.nu_peak
         self.nu_0 = comp_params.nu_0  # Reference frequency for the amplitude map in GHz
-        self.longname = comp_params.longname if "longname" in comp_params else "Spinning Dust"
-        self.shortname = comp_params.shortname if "shortname" in comp_params else "spin-dust"
+        self.longname = longname if longname is not None else \
+            comp_params.longname if "longname" in comp_params else "Spinning Dust"
+        self.shortname = shortname if shortname is not None else \
+            comp_params.shortname if "shortname" in comp_params else "spin-dust"
 
         # Create an logarithmic interpolation function from the SpDust2 template
         log_nu = np.log(freqs)
@@ -582,7 +614,7 @@ class PointSourcesComponent(Component):
         self.shortname = comp_params.shortname if "shortname" in comp_params else "pscomp"
 
     @property
-    def pol(self) -> bool:
+    def is_pol(self) -> bool:
         return False
     
     @property
@@ -594,8 +626,8 @@ class RadioSources(PointSourcesComponent):
         super().__init__(comp_params, global_params)
         self.longname = comp_params.longname if "longname" in comp_params else "RadioPointSources"
         self.shortname = comp_params.shortname if "shortname" in comp_params else "radsources"
-        self.nu0 = comp_params.nu_0                   #reference frequency
-
+        #reference frequency
+        self.nu0 = comp_params.nu_0
         #tabulated data
         ps_bunch = self.read_dat_to_bunch(comp_params.template_path)
         #per-source amplitudes
@@ -744,7 +776,7 @@ class RadioSources(PointSourcesComponent):
 
         NB: this function does not include the beam smoothing.
         """
-        assert not band.pol, "Point sources component can only be projected to intensity band alms"
+        assert not band.is_pol, "Point sources component can only be projected to intensity band alms"
         band_fwhm_r, band_nside = np.deg2rad(band.fwhm/60.0), band.nside
         #if not initialized or if band's characteristics changed, recompute the arrays.
         self.compute_pix_beams(band_fwhm_r, band_nside)
@@ -771,7 +803,7 @@ class RadioSources(PointSourcesComponent):
         NB: this function does not include the beam smoothing.
         """
 
-        assert not band.pol, "Point sources comps can only be evaluated from intensity band alms"
+        assert not band.is_pol, "Point sources comps can only be evaluated from intensity band alms"
         band_fwhm_r, band_nside = np.deg2rad(band.fwhm/60.0), band.nside
         #if not initialized or if band's characteristics changed, recompute the arrays.
         self.compute_pix_beams(band_fwhm_r, band_nside)
@@ -797,21 +829,250 @@ class RadioSources(PointSourcesComponent):
     
 
 #FIXME: this will go within ComponentList object when implemented
-def split_complist(comp_list: list[Component], color:int,
-                   IvsQU_colors:tuple = (0,1)) -> list[Component]:
-    """
-    Extracts from `comp_list` only the components containing the correct Stokes parameter based
-    on the passed `color` of the local MPI rank. By default, color=0 will treat Intensity and
-    color=1 polarization. A list with the relevant components is returned.
-    """
-    out_comp_list = []
-    IvsQU_colors = IvsQU_colors[:2] #cut off eventual elements in excess
-    if color not in IvsQU_colors:
-        logging.warning(f"Color {color} not in colors assigned to I or QU ({IvsQU_colors})!")
-    else:
-        for comp in comp_list:
-            if comp.pol == (color == IvsQU_colors[1]):
-                # print("Comp", comp.shortname, comp.pol)
+# def split_complist(comp_list: list[Component], color:int,
+#                    IvsQU_colors:tuple = (0,1)) -> list[Component]:
+#     """
+#     Extracts from `comp_list` only the components containing the correct Stokes parameter based
+#     on the passed `color` of the local MPI rank. By default, color=0 will treat Intensity and
+#     color=1 polarization. A list with the relevant components is returned.
+#     """
+#     out_comp_list = []
+#     IvsQU_colors = IvsQU_colors[:2] #cut off eventual elements in excess
+#     if color not in IvsQU_colors:
+#         logging.warning(f"Color {color} not in colors assigned to I or QU ({IvsQU_colors})!")
+#     else:
+#         for comp in comp_list:
+#             if comp.is_pol == (color == IvsQU_colors[1]):
+#                 # print("Comp", comp.shortname, comp.pol)
+#                 out_comp_list.append(comp)
+
+#     return out_comp_list
+
+
+class CompList:
+    def __init__(self, comp_list:list[Component]):
+        self.comp_list = comp_list
+
+    @classmethod
+    def init_from_params(cls, components:Bunch, params:Bunch):
+        comp_list = []
+        for component_str in components:
+            component = components[component_str]
+            if component.enabled:
+                if component.params.lmax == "full":
+                    component.params.lmax = (params.general.nside*5)//2
+                if component.params.polarization == "I": #I-only
+                    # 'getattr' loads the class specified by "component_class" from model.component.
+                    # This class is then instantiated with the "params" specified, and appended to
+                    # the components list.
+                    comp_list.append(getattr(component_lib, component.component_class)(component.params,
+                                                            params.general, allocate_empty_alms=True))
+                elif component.params.polarization == "QU": #QU-only
+                    comp_list.append(getattr(component_lib, component.component_class)(component.params,
+                                                            params.general, allocate_empty_alms=True))
+                elif component.params.polarization == "IQU":
+                    #I
+                    comp_list.append(getattr(component_lib, component.component_class)(
+                                            component.params,
+                                            params.general, 
+                                            allocate_empty_alms=True,
+                                            longname = component.params.longname+"_Instensity",
+                                            shortname = component.params.longname+"_I",
+                                            eval_pol="I"))
+                    #QU
+                    comp_list.append(getattr(component_lib, component.component_class)(
+                                            component.params,
+                                            params.general,
+                                            allocate_empty_alms=True,
+                                            longname = component.params.longname+"_Polarization",
+                                            shortname = component.params.longname+"_QU",
+                                            eval_pol="QU"))
+                else:
+                    raise ValueError(f"Unrecognized polarization in parameter file for component {component_str}")
+        return cls(comp_list)
+
+    def split(self, color:int, IvsQU_colors:tuple = (0,1)):
+        """
+        Extracts from `comp_list` only the components containing the correct Stokes parameter based
+        on the passed `color` of the local MPI rank. By default, color=0 will treat Intensity and
+        color=1 QU. A list with the relevant components is returned.
+        """
+        out_comp_list = []
+        IvsQU_colors = IvsQU_colors[:2] #cut off eventual elements in excess
+        if color not in IvsQU_colors:
+            logging.warning(f"Color {color} not in colors assigned to I or QU ({IvsQU_colors})!")
+        elif color == IvsQU_colors[0]:
+            target_pol = "I"
+        elif color == IvsQU_colors[1]:
+            target_pol = "QU"
+
+        for comp in self.comp_list:
+            if comp.eval_pol == target_pol:
                 out_comp_list.append(comp)
 
-    return out_comp_list
+        return CompList(out_comp_list)
+    
+    @property
+    def components(self):
+        return self.comp_list
+    
+    def __len__(self):
+        return len(self.comp_list)
+    
+    def __matmul__(self, other) -> float:
+        """ `dot(comp_list1, comp_list2)`. Calculates the correct dot product between two lists of
+            Component objects where the alms follow the Healpy complex storing convention, for
+            components with alms. It will automatically handle the correct dot product definition for
+            each type of Component.
+        """
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        res = 0.0
+        for c1, c2 in zip(self.components, other.components):
+            res += float(c1 @ c2)
+        return res
+    
+    def __add__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        out = deepcopy(self)
+        for o, c in zip(out.components, other.components):
+            o += c
+        return o
+
+    def __iadd__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        for c1, c2 in zip(self.components, other.components):
+            c1 += c2
+        return self
+
+    def __sub__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        out = deepcopy(self)
+        for o, c in zip(out.components, other.components):
+            o -= c
+        return o
+
+    def __isub__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        for c1, c2 in zip(self.components, other.components):
+            c1 -= c2
+        return self
+
+    def __mul__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        out = deepcopy(self)
+        for o, c in zip(out.components, other.components):
+            o *= c
+        return o
+
+    def __imul__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        for c1, c2 in zip(self.components, other.components):
+            c1 *= c2
+        return self
+
+    def __truediv__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        out = deepcopy(self)
+        for o, c in zip(out.components, other.components):
+            o /= c
+        return o
+
+    def __itruediv__(self, other):
+        if len(self.comp_list) != len(other):
+            raise ValueError("Component lists must match in length.")
+        for c1, c2 in zip(self.components, other.components):
+            c1 /= c2
+        return self
+
+    def __getitem__(self, index):
+        return self.comp_list[index]
+
+    def __iter__(self):
+        for item in self.comp_list:
+            yield item
+
+    def __array_function__(self, func, types, args, kwargs):
+        #for numpy func overloads
+        if not all(issubclass(t, CompList) for t in types):
+            return NotImplemented
+
+        if func is np.zeros_like:
+            return self._zeros_like(*args, **kwargs)
+
+        return NotImplemented
+
+    def _zeros_like(self, other, dtype=None, order='K', subok=True, shape=None):
+        out = deepcopy(other)
+        out.comp_list = [
+            np.zeros_like(c,
+            dtype=dtype,
+            order=order,
+            subok=subok,
+            shape=shape) for c in other
+            ]
+        return out
+
+    #MPI functions
+    def bcast_data_blocking(self, comm:MPI.Comm, root:int=0):
+        for comp in self.comp_list:
+            comp.bcast_data_blocking(comm, root=root)
+    
+    def accum_data_blocking(self, comm:MPI.Comm, root:int=0):
+        for comp in self.comp_list:
+            comp.accum_data_blocking(comm, root=root)
+
+    def accum_data_non_blocking(self, comm:MPI.Comm, root:int=0) -> list[MPI.Request]:
+        requests = []
+        for comp in self.comp_list:
+            req = comp.accum_data_non_blocking(comm, root=root)
+            requests.append(req)
+        return requests
+
+    #CompSep solver functions
+    def eval_comp_from_band(self, band_in:Band, nthreads:int=1):
+        """ Evaluates the band_in's contribution to all the comp_list_out objects, and stores them
+            in-place.
+        """
+        for comp in self.comp_list:
+            comp.eval_comp_from_band(band_in, nthreads=nthreads)
+    
+    def project_comp_to_band(self, band_out:Band, nthreads:int=1) -> NDArray[np.complexfloating]:
+        """
+        Projects all the components in `comp_list_in`, overwriting the `band_out` object's alms. 
+        """
+        band_out.alms = np.zeros_like(band_out.alms)
+        for comp in self.comp_list:
+            comp.project_comp_to_band(band_out, nthreads=nthreads)
+
+    def apply_smoothing_prior_sqrt(self):
+        """
+        Applies per-component the corresponding smoothing prior.
+        """
+        for comp in self.comp_list:
+            comp.apply_smoothing_prior_sqrt()
+
+    def inplace_add_scaled(self, list_other, scalar):
+        """ `list_inplace += scalar*list_other`
+        """
+        if len(self) != len(list_other):
+            raise ValueError("Component lists must match in length.")
+        
+        for ci, co in zip(self.comp_list, list_other.comp_list):
+            inplace_add_scaled_vec(ci._data, co._data, scalar)
+    
+    def inplace_scale_and_add(self, list_other, scalar):
+        """ `list_inplace = scalar*list_inplace + list_other`
+        """
+        if len(self) != len(list_other):
+            raise ValueError("Component lists must match in length.")
+
+        for ci, co in zip(self.comp_list, list_other.comp_list):
+            inplace_scale_add(ci._data, co._data, scalar)

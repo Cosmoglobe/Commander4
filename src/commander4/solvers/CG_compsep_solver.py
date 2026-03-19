@@ -8,7 +8,7 @@ from copy import deepcopy
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
-from commander4.sky_models.component import Component
+from commander4.sky_models.component import Component, CompList
 from commander4.utils.math_operations import alm_to_map_adjoint, gaussian_random_alm, almxfl,\
     complist_dot, complist_norm
 from commander4.solvers.dense_matrix_math import DenseMatrix
@@ -69,37 +69,45 @@ class CompSepSolver:
             self.nthreads = self.params.general.nthreads_compsep[self.CompSep_comm.Get_rank()]
     
 
-    def project_all_comps_to_band(self, comp_list_in: list[Component],
+    def project_all_comps_to_band(self, comp_list_in: CompList,
                                   band_out:Band) -> NDArray[np.complexfloating]:
         """
         Projects all the components in `comp_list_in`, overwriting the `band_out` object's alms. 
 
+        It also applies the beam operator.
+
         In Commander4 notation, applies A matrix, from comp list to band alms.
         """
-        band_out.alms = np.zeros_like(band_out.alms)
-        for comp in comp_list_in:
-            comp.project_comp_to_band(band_out, nthreads=self.nthreads)
+        # band_out.alms = np.zeros_like(band_out.alms)
+        # for comp in comp_list_in:
+        #     comp.project_comp_to_band(band_out, nthreads=self.nthreads)
+        comp_list_in.project_comp_to_band(band_out, nthreads=self.nthreads)
         # B Y^-1 M Y a
         alm_out = self.det_map.apply_B(band_out.alms)
         return alm_out
 
 
     def eval_all_comps_from_band(self, band_in:Band,
-                                 comp_list_out:list[Component]) -> list[Component]:
+                                 comp_list_out:CompList) -> CompList:
         """ Evaluates the band_in's contribution to all the comp_list_out objects, and stores them
-            in-place. In Commander4 notation, applies A_adj matrix, from band alms to comp list.
+            in-place. 
+
+            It also applies the beam operator.
+            
+            In Commander4 notation, applies A_adj matrix, from band alms to comp list.
         """
 
         # B^T a
         self.det_map.apply_B(band_in.alms)
         
         # Y^T M^T Y^-1^T B^T a
-        for comp in comp_list_out:
-            comp.eval_comp_from_band(band_in, nthreads=self.nthreads)
+        # for comp in comp_list_out:
+        #     comp.eval_comp_from_band(band_in, nthreads=self.nthreads)
+        comp_list_out.eval_comp_from_band(band_in, nthreads=self.nthreads)
         return comp_list_out
 
 
-    def apply_LHS_matrix(self, comp_list_in: list[Component]) -> list[Component]:
+    def apply_LHS_matrix(self, comp_list_in: CompList) -> CompList:
         #This a_in should become a list of Component objects instead. 
         """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of
             the Ax=b system for global component separation. The full A matrix is:
@@ -107,7 +115,7 @@ class CompSepSolver:
             This function should be called by all ranks holding a frequency map, even if they do
             not hold a compoenent, as they are still needed to compute the LHS operation.
             Args:
-                a_in (list[Component]): List of Components contributing to the local band
+                comp_list_in (CompList): List of Components contributing to the local band
             Returns:
                 Aa (np.array): The result of applying A to the input alms. Will return a zero-sized
                                array if this MPI rank does not hold a component.                               
@@ -117,17 +125,21 @@ class CompSepSolver:
         
         comp_list = deepcopy(comp_list_in)
         if myrank == 0:  # this task actually holds a component
-            for comp in comp_list:
-                # S^{1/2} a
-                comp.apply_smoothing_prior_sqrt()
+            # for comp in comp_list:
+            #     
+            #     comp.apply_smoothing_prior_sqrt()
+
+            # S^{1/2} a
+            comp_list.apply_smoothing_prior_sqrt()
 
         # Spread initial a to all ranks from master.
         # NB: For some stupid reason the non-blocking mpi4py calls do not have 64-bit length support
         # and are therefore limited to <2GB arrays... We have to fallback to blocking communication
         # for >2GB arrays. In the future we should probably implement chunking instead.
 
-        for comp in comp_list:
-            comp.bcast_data_blocking(self.CompSep_comm)
+        # for comp in comp_list:
+        #     comp.bcast_data_blocking(self.CompSep_comm)
+        comp_list.bcast_data_blocking(self.CompSep_comm)
 
         # B Y^-1 M Y S^{1/2} a
         self.project_all_comps_to_band(comp_list, self.my_band)
@@ -143,14 +155,16 @@ class CompSepSolver:
         use_blocking = biggest_size_bytes > MPI_LIMIT_32BIT
         if use_blocking:
             print(f"Fallback to blocking comm (array size = {biggest_size_bytes:.2e}B)")
-            for comp in comp_list:
-                comp.accum_data_blocking(self.CompSep_comm)
+            # for comp in comp_list:
+            #     comp.accum_data_blocking(self.CompSep_comm)
+            comp_list.accum_data_blocking
 
         else:
-            requests = []
-            for comp in comp_list:
-                req = comp.accum_data_non_blocking(self.CompSep_comm)
-                requests.append(req)
+            # requests = []
+            # for comp in comp_list:
+            #     req = comp.accum_data_non_blocking(self.CompSep_comm)
+            #     requests.append(req)
+            requests = comp_list.accum_data_non_blocking(self.CompSep_comm)
 
         if myrank == 0:
             for icomp in range(len(comp_list)):
@@ -160,19 +174,19 @@ class CompSepSolver:
                     # Wait until all data for component icomp has been received.
                     MPI.Request.Wait(requests[icomp])
                 # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
-                comp_list[icomp].apply_smoothing_prior_sqrt()
+                comp_list.components[icomp].apply_smoothing_prior_sqrt()
                 # Adds input vector to output, since (1 + S^{1/2}...)a = a + (S^{1/2}...)a
-                comp_list[icomp] += comp_list_in[icomp]
+                comp_list.components[icomp] += comp_list_in.components[icomp]
         else: # Worker ranks just wait for all their sends to complete.
             if not use_blocking:
                 for icomp in range(len(comp_list)):
                     MPI.Request.Wait(requests[icomp])
-            comp_list = []
+            comp_list = CompList([])
 
         return comp_list
 
 
-    def calc_RHS_mean(self, comp_list: list[Component]) -> list[Component]:
+    def calc_RHS_mean(self, comp_list: CompList) -> CompList:
         """ Caculates the right-hand-side b-vector of the Ax=b CompSep equation for the
             Wiener filtered (or mean-field) solution. If used alone on the right-hand-side,
             gives the deterministic maximum likelihood map-space solution, but a biased PS solution.
@@ -210,7 +224,7 @@ class CompSepSolver:
         return comp_list
 
 
-    def calc_RHS_fluct(self, comp_list: list[Component]) -> list[Component]:
+    def calc_RHS_fluct(self, comp_list: CompList) -> CompList:
         """ Calculates the right-hand-side fluctuation vector. Provides unbiased realizations
             (of foregrounds or the CMB) if added together with the right-hand-side of the 
             Wiener filtered solution : Ax = b_mean + b_fluct.
@@ -250,7 +264,7 @@ class CompSepSolver:
         return b
 
 
-    def calc_RHS_prior_mean(self, comp_list: list[Component]) -> list[Component]:
+    def calc_RHS_prior_mean(self, comp_list: CompList) -> CompList:
         
         #FIXME: how will this be for point sources?
         
@@ -270,7 +284,7 @@ class CompSepSolver:
         return mu_s
 
 
-    def calc_RHS_prior_fluct(self, comp_list: list[Component]) -> list[Component]:
+    def calc_RHS_prior_fluct(self, comp_list: CompList) -> CompList:
         
         #FIXME: how will this be for point sources?
 
@@ -288,8 +302,8 @@ class CompSepSolver:
         return eta2_s
 
 
-    def solve_CG(self, LHS: Callable, RHS: list[Component], x0 = None, M = None,
-                 x_true = None) -> list[Component]:
+    def solve_CG(self, LHS: Callable, RHS: CompList, x0 = None, M = None,
+                 x_true = None) -> CompList:
         """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG.
             Assumes that both x and b are in alm space.
 
@@ -324,7 +338,7 @@ class CompSepSolver:
             if master:
                 self.xtrue_A_xtrue = complist_dot(x_true, LHS(x_true))
             else:
-                LHS([])
+                LHS(CompList([]))
         if master:
             logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG starting up!")
         iter = 0
@@ -353,7 +367,7 @@ class CompSepSolver:
                                     f"True L2 error: {CG_errors_true:.3e}")
                 else:
                     if x_true is not None:
-                        LHS([])  # Matching LHS call for the calculation of LHS(CG_solver.x-x_true).
+                        LHS(CompList([]))  # Matching LHS call for the calculation of LHS(CG_solver.x-x_true).
             if iter >= max_iter:
                 if master:
                     logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
@@ -376,7 +390,7 @@ class CompSepSolver:
         return complist_sol
 
 
-    def solve(self, comp_list:list[Component], seed=None) -> list[Component]:
+    def solve(self, comp_list:CompList, seed=None) -> CompList:
         if seed is not None:
             np.random.seed(seed)
 

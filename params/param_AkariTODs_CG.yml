@@ -5,8 +5,8 @@
 general:
   MPI_config:
     ntask_tod: 64
-    ntask_compsep_I: 8
-    ntask_compsep_QU: 8
+    ntask_compsep_I: 1 #8
+    ntask_compsep_QU: 0 #8
   nthreads_tod: 12
   nthreads_compsep: 2
   betzy_mode: false
@@ -37,18 +37,39 @@ general:
   sample_temporal_gain: True
   sample_temporal_gain_from_iter_num: 4
 
+  tod_processing_steps:
+    Akari:
+      - estimate_white_noise:
+        from_iter: 0
+      - sample_absolute_gain:
+        from_iter: 2
+      - sample_relative_gain:
+        from_iter: 4
+      - sample_temporal_gain_variations:
+        from_iter: 4
+      - estimate_white_noise:
+        from_iter: 0
+    PlanckLFI:
+      - estimate_white_noise:
+        from_iter: 0
+      - sample_absolute_gain:
+        from_iter: 2
+      - sample_relative_gain:
+        from_iter: 4
+      - sample_temporal_gain_variations:
+        from_iter: 4
+      - estimate_white_noise:
+        from_iter: 0
+
   output_stats: False
 
   galactic_mask: True
   pixel_compsep_sampling: False
 
-  chains_to_write: [1,]
   write_orb_dipole_maps_to_chain: True
   write_corr_noise_maps_to_chain: True
   write_sky_model_maps_to_chain: True
-  chain_maps_nside: 128
-  chain_maps_interval: 5
-  
+
   output_paths:
     stats: "../cmdr4_stats/PlanckTODs_CG/"
     chains: "../cmdr4_chains/PlanckTODs_CG/"
@@ -65,7 +86,7 @@ components:
     enabled: true
     component_class: "CMB"
     params:
-      polarization: "IQU" 
+      polarization: "IQU" #I Q U 
       longname: "CMB"
       shortname: "cmb"
       smoothing_prior_FWHM: 30.0 # arcmin
@@ -79,7 +100,7 @@ components:
     enabled: true
     component_class: "ThermalDust"
     params:
-      polarization: "IQU"
+      polarization: "IQU" #[True, True, True]
       longname: "Thermal-Dust"
       shortname: "dust"
       smoothing_prior_FWHM: 5.0 # 10.0 # arcmin
@@ -95,7 +116,7 @@ components:
     enabled: true
     component_class: "Synchrotron"
     params:
-      polarization: "I" 
+      polarizations: [True, False, False]
       longname: "Synchrotron"
       shortname: "sync"
       smoothing_prior_FWHM: 60.0 # arcmin
@@ -110,7 +131,7 @@ components:
     enabled: true
     component_class: "FreeFree"
     params:
-      polarization: "I" 
+      polarizations: [True, False, False]
       longname: "Free-Free"
       shortname: "ff"
       smoothing_prior_FWHM: 30.0 # arcmin
@@ -125,7 +146,7 @@ components:
     enabled: False
     component_class: "RadioSources"
     params:
-      polarization: "I" 
+      polarizations: [True, False, False]
       longname: "RadioSources"
       shortname: "radsources"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
@@ -138,7 +159,7 @@ components:
     enabled: False
     component_class: "SpinningDust"
     params:
-      polarization: "I"
+      polarizations: [True, False, False]
       longname: "SpinningDust"
       shortname: "sdust"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
@@ -160,8 +181,12 @@ CompSep_bands:
   ### TOD BANDS ###
   Planck30GHz:
     get_from: PlanckLFI
+    enabled: false
+    polarizations: [True, False, False]
+  AkariN60:
+    get_from: Akari
     enabled: true
-    polarization: "IQU"
+    polarizations: [True, False, False]
   Planck44GHz:
     get_from: PlanckLFI
     enabled: false
@@ -173,7 +198,7 @@ CompSep_bands:
 
   ### TOTAL INTENSITY MAPS ###
   Haslam408MHz:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 512
     data_nside: 512
@@ -185,7 +210,7 @@ CompSep_bands:
     polarization: "IQU"
 
   WMAPKa:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 512
     data_nside: 512
@@ -197,7 +222,7 @@ CompSep_bands:
     polarization: "IQU"
 
   WMAPQ1:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 512
     data_nside: 512
@@ -209,7 +234,7 @@ CompSep_bands:
     polarization: "IQU"
 
   WMAPQ2:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 512
     data_nside: 512
@@ -221,7 +246,7 @@ CompSep_bands:
     polarization: "IQU"
 
   WMAPV1:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 512
     data_nside: 512
@@ -233,7 +258,7 @@ CompSep_bands:
     polarization: "IQU"
 
   WMAPV2:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 512
     data_nside: 512
@@ -245,7 +270,7 @@ CompSep_bands:
     polarization: "IQU"
 
   Planck857GHz:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 1024
     data_nside: 1024
@@ -258,7 +283,7 @@ CompSep_bands:
 
   ### POLARIZATION MAPS ###
   Planck353GHz:
-    enabled: true
+    enabled: false
     get_from: "file"
     eval_nside: 1024
     data_nside: 1024
@@ -281,18 +306,18 @@ experiments:
     experiment_id: "planck"  # Decides expected data format, what TOD reader is used, etc.
     bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
-    num_scans: 45860
+    num_scans: 8000 #45860
     bands:
       Planck30GHz:
         enabled: true
         tod_files_prefix: "LFI_030_"
+        polarization: "IQU"
         num_MPI_tasks: 64 #24
         eval_nside: 512
         data_nside: 512
         fwhm: 32.4 # [arcmin]
         freq: 28.4 # [GHz]
         fsamp: 32.5079365079365 # [Hz]
-        polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
         detectors:
@@ -300,10 +325,10 @@ experiments:
             name: "27M"
             gain_est: 78.0e-9
             bandpass_shift: 0.28  # Ghz
-          27S:
-            name: "27S"
-            gain_est: 65.5e-9
-            bandpass_shift: 0.47
+          # 27S:
+          #   name: "27S"
+          #   gain_est: 65.5e-9
+          #   bandpass_shift: 0.47
           28M:
             name: "28M"
             gain_est: 63.0e-9
@@ -315,13 +340,13 @@ experiments:
       Planck44GHz:
         enabled: false
         tod_files_prefix: "LFI_044_"
+        polarization: "IQU"
         num_MPI_tasks: 40
         eval_nside: 512
         data_nside: 512
         fwhm: 27.1 # [arcmin]
         freq: 44.1 # [GHz]
         fsamp: 46.5454545454545
-        polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
         detectors:
@@ -352,13 +377,13 @@ experiments:
       Planck70GHz:
         enabled: false
         tod_files_prefix: "LFI_070_"
+        polarization: "IQU"
         num_MPI_tasks: 64
         eval_nside: 1024
         data_nside: 1024
         fwhm: 13.3 # [arcmin]
         freq: 70.1 # [GHz]
         fsamp: 78.7692307692308
-        polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_70.txt"
         detectors:
@@ -411,3 +436,35 @@ experiments:
           #   name: "23S"
           #   gain_est: 19.0e-9
           #   bandpass_shift: -0.05
+  Akari:
+    enabled: false
+    experiment_id: "akari"
+    is_sim: false
+    pix_is_compressed: true
+    data_type: "TOD"
+    mapmaker: "CG"
+    flag_bitmask: 0b1111111111111111111111111111101
+    #bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
+    Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
+    num_scans: 11395
+    bands:
+      AkariN60:
+        enabled: true
+        tod_files_prefix: "AKARI_N60_v1_"
+        polarization: "I"
+        num_MPI_tasks: 64 #128 #24
+        detector_id: 0
+        freq_identifier: 30
+        eval_nside: 512
+        data_nside: 2048
+        fwhm: 0.6166 # [arcmin]
+        freq: 4996 # [GHz]
+        fsamp: 25.28 # [Hz]
+        data_path: "/mn/stornext/d23/cmbco/akari/tamakim/h5_test/"
+        processing_mask: "/mn/stornext/d23/cmbco/globe/akari/mask/mask_proc_akari_n60_v1.fits"
+        filelist: "/mn/stornext/d23/cmbco/globe/akari/tod/n065/filelist_akari_n65.txt"
+        detectors:
+          AKARI_N60_01:
+            detname: "AKARI_N60_01"
+            gain_est: 0.05
+            bandpass_shift: 0  # Ghz
