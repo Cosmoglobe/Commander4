@@ -55,10 +55,14 @@ def init_mpi(params):
             logger.warning(f"mpi4py version ({mpi4py_version}) is below (4,0)!")
 
     if is_world_master:  # Every rank doesn't need to throw an error.
-        tot_num_Compsep_bands = len([band for band in params.CompSep_bands if   #I
-        params.CompSep_bands[band].enabled and "I" in params.CompSep_bands[band].polarization]) +\
-        len([band for band in params.CompSep_bands if   #QU
-        params.CompSep_bands[band].enabled and "QU" in params.CompSep_bands[band].polarization])
+        tot_num_Compsep_bands_I = 0
+        tot_num_Compsep_bands_QU = 0
+        for band in params.CompSep_bands:
+            if params.CompSep_bands[band].enabled and "I" in params.CompSep_bands[band].polarization:
+                tot_num_Compsep_bands_I += 1
+            if params.CompSep_bands[band].enabled and "QU" in params.CompSep_bands[band].polarization:
+                tot_num_Compsep_bands_QU += 1
+        tot_num_Compsep_bands = tot_num_Compsep_bands_I + tot_num_Compsep_bands_QU
         if worldsize != (global_params.MPI_config.ntask_tod + tot_num_CompSep_ranks):
             log.lograise(RuntimeError, f"Total number of MPI tasks ({worldsize}) must equal the sum "
                                        f"of tasks for TOD ({global_params.MPI_config.ntask_tod}) + CompSep I + QU"

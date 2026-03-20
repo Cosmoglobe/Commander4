@@ -19,6 +19,8 @@ general:
   noise_fknee: 0.1
   noise_alpha: -0.9
 
+  perform_compsep: true
+
   output_stats: False
 
   galactic_mask: True
@@ -45,7 +47,7 @@ components:
       shortname: "cmb"
       smoothing_prior_FWHM: 30.0 # arcmin
       smoothing_prior_amplitude: 1.0e+7 #1.0  # uK_RJ^2
-      lmax: 512
+      lmax: 1024
       smoothing_scale: 0
       spatially_varying_MM: False
 
@@ -69,7 +71,7 @@ components:
     enabled: true
     component_class: "Synchrotron"
     params:
-      polarization: "IQU"
+      polarization: "IQU" 
       longname: "Synchrotron"
       shortname: "sync"
       smoothing_prior_FWHM: 60.0 # arcmin
@@ -84,7 +86,7 @@ components:
     enabled: true
     component_class: "FreeFree"
     params:
-      polarization: "I"
+      polarization: "I" 
       longname: "Free-Free"
       shortname: "ff"
       smoothing_prior_FWHM: 30.0 # arcmin
@@ -95,34 +97,34 @@ components:
       smoothing_scale: 0.0
       spatially_varying_MM: False
   
-  # RadioSources:
-  #   enabled: True
-  #   component_class: "RadioSources"
-  #   params:
-  #     polarizations: [True, False, False]
-  #     longname: "RadioSources"
-  #     shortname: "radsources"
-  #     template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
-  #     nu_0: 30.0  # Ghz
-  #     lmax: "full" #just a placeholder
-  #     smoothing_scale: 0 # placeholder? Do we ever want a smoothing of point sources?
-  #     sample_alphas: False
+  RadioSources:
+    enabled: False
+    component_class: "RadioSources"
+    params:
+      polarization: "I" 
+      longname: "RadioSources"
+      shortname: "radsources"
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
+      nu_0: 30.0  # Ghz
+      lmax: "full" #just a placeholder
+      smoothing_scale: 0 # placeholder? Do we ever want a smoothing of point sources?
+      sample_alphas: False
       
-  # SpinningDust:
-  #   enabled: False
-  #   component_class: "SpinningDust"
-  #   params:
-  #     polarizations: [True, False, False]
-  #     longname: "SpinningDust"
-  #     shortname: "sdust"
-  #     template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
-  #     smoothing_prior_FWHM: 0.0 # arcmin
-  #     smoothing_prior_amplitude: 1.0e+10  # uK_RJ^2
-  #     nu_peak: 25.3  # Ghz
-  #     nu_0: 22.0  # Ghz
-  #     lmax: 1000
-  #     smoothing_scale: 0 # 30.0
-  #     spatially_varying_MM: False
+  SpinningDust:
+    enabled: False
+    component_class: "SpinningDust"
+    params:
+      polarization: "I"
+      longname: "SpinningDust"
+      shortname: "sdust"
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
+      smoothing_prior_FWHM: 0.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+10  # uK_RJ^2
+      nu_peak: 25.3  # Ghz
+      nu_0: 22.0  # Ghz
+      lmax: 1000
+      smoothing_scale: 0 # 30.0
+      spatially_varying_MM: False
 
 
 compsep:

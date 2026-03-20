@@ -120,7 +120,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
     ndet = len(det_names)  # Number of detectors *should* be the same for all scans.
 
     band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, ndet, my_experiment.pols)
+                           my_band.fwhm, ndet, my_band.polarization)
     # my_det_central_freq = my_band.freq
 
     # TODO: Re-implement bandpass shift.

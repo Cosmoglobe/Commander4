@@ -116,7 +116,7 @@ components:
     enabled: true
     component_class: "Synchrotron"
     params:
-      polarizations: [True, False, False]
+      polarization: "IQU"
       longname: "Synchrotron"
       shortname: "sync"
       smoothing_prior_FWHM: 60.0 # arcmin
@@ -131,7 +131,7 @@ components:
     enabled: true
     component_class: "FreeFree"
     params:
-      polarizations: [True, False, False]
+      polarization: "I"
       longname: "Free-Free"
       shortname: "ff"
       smoothing_prior_FWHM: 30.0 # arcmin
@@ -146,7 +146,7 @@ components:
     enabled: False
     component_class: "RadioSources"
     params:
-      polarizations: [True, False, False]
+      polarization: "I"
       longname: "RadioSources"
       shortname: "radsources"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
@@ -159,7 +159,7 @@ components:
     enabled: False
     component_class: "SpinningDust"
     params:
-      polarizations: [True, False, False]
+      polarization: "I"
       longname: "SpinningDust"
       shortname: "sdust"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
@@ -179,14 +179,14 @@ compsep:
 
 CompSep_bands:
   ### TOD BANDS ###
-  Planck30GHz:
-    get_from: PlanckLFI
-    enabled: false
-    polarizations: [True, False, False]
   AkariN60:
     get_from: Akari
     enabled: true
-    polarizations: [True, False, False]
+    polarization: "I"
+  Planck30GHz:
+    get_from: PlanckLFI
+    enabled: false
+    polarization: "IQU"
   Planck44GHz:
     get_from: PlanckLFI
     enabled: false
@@ -297,7 +297,7 @@ CompSep_bands:
 
 experiments:
   PlanckLFI:
-    enabled: true
+    enabled: false
     is_sim: false
     pix_is_compressed: true
     psi_is_compressed: true
@@ -437,7 +437,7 @@ experiments:
           #   gain_est: 19.0e-9
           #   bandpass_shift: -0.05
   Akari:
-    enabled: false
+    enabled: true
     experiment_id: "akari"
     is_sim: false
     pix_is_compressed: true

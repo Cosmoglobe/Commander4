@@ -650,7 +650,7 @@ def estimate_white_noise(experiment_data: DetGroupTOD, tod_samples: TODSamples,
     for iscan, scan in enumerate(experiment_data.scans):
         for idetector, detector in enumerate(scan.detectors):
             pix = detector.pix
-            psi = scan.psi if "QU" in experiment_data.pols else None
+            psi = detector.psi if "QU" in experiment_data.pols else None
             # FIXME: Should maybe n_corr be subtracted here as well?
             gain = tod_samples.gain_est[idetector,iscan]
             sky_subtracted_tod = detector.tod.copy()

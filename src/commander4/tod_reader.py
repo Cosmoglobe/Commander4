@@ -24,7 +24,7 @@ experiment_tod_readers = {
 }
 
 def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, my_det: Bunch,
-                        params: Bunch, my_detector_id: int, my_scans_start: int,
+                        params: Bunch, my_scans_start: int,
                         my_scans_stop: int) -> DetGroupTOD:
     
     # Confirm that the specified experiment type (e.g. "planck") is in dictionary.
