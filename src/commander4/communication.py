@@ -4,7 +4,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
-from commander4.data_models.detector_TOD import DetectorTOD
+from commander4.data_models.detector_group_TOD import DetGroupTOD
 from commander4.maps_from_file import read_data_map_from_file
 from commander4.output import log
 
@@ -13,20 +13,22 @@ from commander4.output import log
 
 # TODO: Communication in this script should be switched from picked (lowercase) to buffered
 # (uppercase) whereever possible (e.g. where arrays are communicated).
-def receive_compsep(mpi_info: Bunch, experiment_data: DetectorTOD, todproc_my_band_id: str,
+def receive_compsep(mpi_info: Bunch, experiment_data: DetGroupTOD, todproc_my_band_id: str,
                     senders: dict[str, int]) -> NDArray[np.floating]:
     """ MPI-receive the results from compsep (used in conjunction with send_compsep).
 
     Input:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
+        experiment_data (DetGroupTOD): The experiment TOD data, used to determine band frequency,
+            resolution, and polarization for evaluating the sky model.
         todproc_my_band_id (str): The string uniquely indentifying the experiment+band of this rank
                                   (example: 'PlanckLFI$$$30GHz').
-        senders (dict[str->int]): A dictionary mapping the string in 'todproc_my_band_id' to the
-                                  world rank of the senbder task (on the CompSep side).
+        senders (dict[str, int]): A dictionary mapping the string in 'todproc_my_band_id' to the
+                                  world rank of the sender task (on the CompSep side).
 
     Returns:
-        detector_map_arr (np.array): The detector map of a single band, distributed to all processes
-                                 belonging to the band communicator.
+        detector_map_arr (NDArray): The sky model evaluated at the band frequency and resolution,
+            broadcast to all processes on the band communicator.
     """
     world_comm = mpi_info.world.comm
     band_comm = mpi_info.band.comm
@@ -51,8 +53,8 @@ def send_tod(mpi_info: Bunch, tod_map_dict: dict[DetectorMap], todproc_my_band_i
 
     Input:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
-        tod_map_list (list[DetectorMap]): The output maps ([I, QU]) from process_tod for the band
-                                          belonging to this process.
+        tod_map_dict (dict[str, DetectorMap]): The output maps keyed by polarization component
+            (e.g. 'I', 'QU') from process_tod for the band belonging to this process.
         todproc_my_band_id (str): The string uniquely indentifying the experiment+band of this rank,
                                   regardless of polarization (example: 'PlanckLFI$$$30GHz').
         receivers (Bunch): Maps a band identifier to the band master on the compsep side.
@@ -128,7 +130,7 @@ def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep
     
     return curr_tod_output
 
-def send_compsep(mpi_info: Bunch, compsep_my_band_id: str, band_sky_map: NDArray[np.floating],
+def send_compsep(mpi_info: Bunch, compsep_my_band_id: str, band_sky_map,
                  destinations: dict[str, int]|None) -> None:
     """ MPI-send the results from compsep to a destinations on the TOD processing side
         (used in conjunction with receive_compsep). Assumes the COMM_WORLD communicator.
@@ -137,7 +139,7 @@ def send_compsep(mpi_info: Bunch, compsep_my_band_id: str, band_sky_map: NDArray
         mpi_info (Bunch): The data structure containing all MPI relevant data.
         compsep_my_band_id (str): The string uniquely indentifying the experiment+band+pol of this
                                   rank (example: 'PlanckLFI$$$30GHz_I').
-        band_sky_map (np.array[float]): A sky realization at a given band frequency.
+        band_sky_map (NDArray): A sky realization at a given band frequency.
         destinations (dict[str->int]): A dictionary mapping the string in 'compsep_my_band_id' to
                                        the world rank of the destination task (on the TOD side)
                                        (This is the same as is found in mpi_info)

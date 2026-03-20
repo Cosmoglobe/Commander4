@@ -204,9 +204,9 @@ def replace_tod_with_sim(detector_data: DetGroupTOD, band_params: Bunch, params:
             pix = det.pix
             psi = det.psi
             ntod = pix.size
-            det._tod = np.zeros(ntod, dtype=np.float32)
-            det._tod[:] = I[pix] + Q[pix]*np.cos(2*psi) + U[pix]*np.sin(2*psi)
-            det._tod[:] += get_orbital_dipole(det, pix, freq, units)
+            det.tod = np.zeros(ntod, dtype=np.float32)
+            det.tod[:] = I[pix] + Q[pix]*np.cos(2*psi) + U[pix]*np.sin(2*psi)
+            det.tod[:] += get_orbital_dipole(det, pix, freq, units)
 
             # Create some white noise.
             noise = np.random.normal(0, sigma0_persamp, ntod)
@@ -217,6 +217,6 @@ def replace_tod_with_sim(detector_data: DetGroupTOD, band_params: Bunch, params:
             # Morph the shape of the noise power spectrum to be 1/f + white noise.
             noise = irfft(rfft(noise)*np.sqrt(PS))
 
-            det._tod[:] += noise
+            det.tod[:] += noise
 
     return detector_data

@@ -50,6 +50,22 @@ class CGMapmaker:
                 CG_maxiter:int=200, 
                 CG_tol:float=1e-10, 
                 CG_check_interval:int = 1):
+        """Initialise the CG mapmaker.
+
+        Args:
+            detector_tod: Detector-group TOD data (``DetGroupTOD``).
+            detector_samples: Sampled noise and gain parameters.
+            map_comm: MPI communicator shared by ranks contributing to
+                the same output map.
+            T_omega: Bolometer transfer function T(omega). Must accept a
+                real-frequency array and return a complex filter.
+            preconditioner: Preconditioner callable ``M(x) -> x'``.
+            nthreads: Number of threads for FFT and HEALPix operations.
+            double_prec: If True, use float64 for internal maps.
+            CG_maxiter: Maximum number of CG iterations.
+            CG_tol: Convergence tolerance on the CG residual.
+            CG_check_interval: Check convergence every this many iterations.
+        """
         
         self.logger = logging.getLogger(__name__)
         self.detector_tod = detector_tod
@@ -76,6 +92,7 @@ class CGMapmaker:
        
     @property
     def solved_map(self):
+        """The solved sky map. Only valid on the master rank after ``solve()``."""
         if self.map_comm.Get_rank() == 0:
             logassert(self._map_signal is not None, "Attempted to read solution map on master rank before it was solved.",
                       self.logger)
@@ -83,6 +100,7 @@ class CGMapmaker:
     
     @property
     def RHS_map(self):
+        """The finalised RHS map. Only valid on master rank after ``finalize_RHS()``."""
         if self.map_comm.Get_rank() == 0:
             logassert(self._rhs_finalized_map is not None, "Attempted to read RHS map on master rank before it was finalized.",
                       self.logger)
@@ -172,7 +190,7 @@ class CGMapmaker:
             self._rhs_loca_map = self._zeros_map
 
         if scan_tod_arr is None:
-            scan_tod_arr = np.copy(scan_tod._tod) #aux array to not modify scan._tod
+            scan_tod_arr = np.copy(scan_tod.tod) #aux array to not modify scan.tod
         #N^-1 d
         # if self.ismaster:
         #     self.logger.info(f"RHS_1: {scan_tod_arr.shape}")
@@ -223,7 +241,7 @@ class CGMapmaker:
         for scan, sample in zip(self.detector_tod.scans, self.detector_samples.scans):
             pix = scan.pix
             psi = scan.psi
-            scan_tod_arr_aux = np.zeros_like(scan._tod, dtype=self.f_dtype) #aux array to not modify scan._tod
+            scan_tod_arr_aux = np.zeros_like(scan.tod, dtype=self.f_dtype) #aux array to not modify scan.tod
             # if self.map_comm.Get_rank() == 0 and pri:
             #     self.logger.info(f"##LHS 1 mean: {np.mean(in_map)}")
             #P m
@@ -332,6 +350,11 @@ class CGMapmaker:
 
     
 class CGMapmakerI(CGMapmaker):
+    """Intensity-only (temperature) CG mapmaker.
+
+    Inherits from ``CGMapmaker`` and implements the pointing matrix operators
+    ``apply_P`` and ``apply_P_adjoint`` for a scalar (I-only) map.
+    """
 
     def __init__(self, 
                  detector_tod, 
@@ -389,8 +412,8 @@ class CGMapmakerI(CGMapmaker):
         from `out_scan`. If a `scan_tod_arr` is passed it is used instead of overwriting `out_scan`.
         In the CGMapmakerI the psi will be ignored.
         """
-        scan_tod_arr = out_scan._tod if scan_tod_arr is None else scan_tod_arr
-        npix_out = hp.nside2npix(out_scan._eval_nside)
+        scan_tod_arr = out_scan.tod if scan_tod_arr is None else scan_tod_arr
+        npix_out = hp.nside2npix(out_scan.nside)
         assert npix_out == in_map.shape[-1], "in_map size must match scan's eval nside."
         assert pix.shape == scan_tod_arr.shape, "pix shape must match scan_tod_arr."
         pix = out_scan.pix if pix is None else pix
@@ -408,9 +431,9 @@ class CGMapmakerI(CGMapmaker):
         from `in_scan`. If a `scan_tod_arr` is passed it is used instead of overwriting `in_scan`.
         In the CGMapmakerI the psi will be ignored.
         """
-        scan_tod_arr = in_scan._tod if scan_tod_arr is None else scan_tod_arr
+        scan_tod_arr = in_scan.tod if scan_tod_arr is None else scan_tod_arr
         npix_out = out_map.shape[-1]
-        assert npix_out == hp.nside2npix(in_scan._eval_nside), "out_map size must match scan's eval nside."
+        assert npix_out == hp.nside2npix(in_scan.nside), "out_map size must match scan's eval nside."
         assert pix.shape == scan_tod_arr.shape, "pix shape must match scan_tod_arr."
         pix = in_scan.pix if pix is None else pix
         ntod = in_scan.tod.shape[-1]
@@ -425,6 +448,11 @@ class CGMapmakerI(CGMapmaker):
         return np.zeros((1, hp.nside2npix(self.detector_tod.eval_nside)), dtype=self.f_dtype)
 
 class CGMapmakerIQU(CGMapmaker):
+    """Polarised (I, Q, U) CG mapmaker.
+
+    Inherits from ``CGMapmaker`` and implements the pointing matrix operators
+    ``apply_P`` and ``apply_P_adjoint`` for a full I/Q/U map.
+    """
 
     def __init__(self, 
                  detector_tod, 
@@ -492,8 +520,8 @@ class CGMapmakerIQU(CGMapmaker):
         a new one from `out_scan`. 
         If a `scan_tod_arr` is passed it is used instead of overwriting `out_scan`
         """
-        scan_tod_arr = out_scan._tod if scan_tod_arr is None else scan_tod_arr
-        npix_out = hp.nside2npix(out_scan._eval_nside)
+        scan_tod_arr = out_scan.tod if scan_tod_arr is None else scan_tod_arr
+        npix_out = hp.nside2npix(out_scan.nside)
         assert npix_out == in_map.shape[-1], "in_map size must match scan's eval nside."
         # if pix.shape != scan_tod_arr.shape:
         #     self.logger.info(f"### Shape pix: {pix.shape}, shape scan: {scan_tod_arr.shape}")
@@ -516,9 +544,9 @@ class CGMapmakerIQU(CGMapmaker):
         a new one from `out_scan`. 
         If a `scan_tod_arr` is passed it is used instead of overwriting `out_scan`
         """
-        scan_tod_arr = in_scan._tod if scan_tod_arr is None else scan_tod_arr
+        scan_tod_arr = in_scan.tod if scan_tod_arr is None else scan_tod_arr
         npix_out = out_map.shape[-1]
-        assert npix_out == hp.nside2npix(in_scan._eval_nside), "out_map size must match scan's eval nside."
+        assert npix_out == hp.nside2npix(in_scan.nside), "out_map size must match scan's eval nside."
         # if pix.shape != scan_tod_arr.shape:
         #     self.logger.info(f"### Shape pix: {pix.shape}, shape scan: {scan_tod_arr.shape}")
         # assert pix.shape == scan_tod_arr.shape, "pix shape must match scan_tod_arr."
