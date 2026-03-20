@@ -832,27 +832,26 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
     band_comm.Allreduce(MPI.IN_PLACE, local_r_T_N_inv_s, op=MPI.SUM)
 
     ### 3. Solve Global System ###
-    A = np.zeros((ndet + 1, ndet + 1))
-    b = np.zeros(ndet + 1)
-    diagonal = np.array(local_s_T_N_inv_s)
-    A[:ndet, :ndet] = np.diag(diagonal)
-    A[:ndet, ndet] = 0.5
-    A[ndet, :ndet] = 1.0
-    eta = np.random.randn(ndet)
-    fluctuation_term = np.sqrt(diagonal) * eta
+    delta_g_samples = np.zeros(ndet, dtype=np.float32)
+    if band_comm.Get_rank() == 0:
+        A = np.zeros((ndet + 1, ndet + 1))
+        b = np.zeros(ndet + 1)
+        diagonal = np.array(local_s_T_N_inv_s)
+        A[:ndet, :ndet] = np.diag(diagonal)
+        A[:ndet, ndet] = 0.5
+        A[ndet, :ndet] = 1.0
+        eta = np.random.randn(ndet)
+        fluctuation_term = np.sqrt(diagonal) * eta
+        
+        b[:ndet] = np.array(local_r_T_N_inv_s) + fluctuation_term
     
-    b[:ndet] = np.array(local_r_T_N_inv_s) + fluctuation_term
-    
-    try:
-        solution = np.linalg.solve(A, b)
-        delta_g_samples = solution[:ndet]
-        if band_comm.Get_rank() == 0:
+        try:
+            solution = np.linalg.solve(A, b)
+            delta_g_samples[:] = solution
             logger.info(f"Solved global relative gains for {ndet} detectors.")
-    except np.linalg.LinAlgError:
-        if band_comm.Get_rank() == 0:
+        except np.linalg.LinAlgError:
             logger.error("Failed to solve global linear system for relative gain: Not updating")
-        delta_g_samples = np.zeros(ndet, dtype=np.float32)
-        # result_to_bcast = None
+    band_comm.Bcast(delta_g_samples, root=0)
     
     wait_time = 0
     tod_samples.rel_gain_est[:] = delta_g_samples
