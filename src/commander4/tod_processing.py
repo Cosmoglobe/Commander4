@@ -847,7 +847,7 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
     
         try:
             solution = np.linalg.solve(A, b)
-            delta_g_samples[:] = solution
+            delta_g_samples[:] = solution[:ndet]
             logger.info(f"Solved global relative gains for {ndet} detectors.")
         except np.linalg.LinAlgError:
             logger.error("Failed to solve global linear system for relative gain: Not updating")
