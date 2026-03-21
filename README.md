@@ -44,7 +44,7 @@ git submodule update
 ## Installation for developers
 If you intend to edit Commander4, you must first have the build tools installed:
 ```bash
-pip install scikit-build-core pybind11 pybind11-stubgen numpy
+pip install scikit-build-core cmake pybind11 pybind11-stubgen numpy
 ```
 Then, clone the repo (and submodules), and perform a so-called *editable* PIP install:
 ```bash
