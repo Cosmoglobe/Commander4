@@ -123,7 +123,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
     ndet = len(det_names)
 
     band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, ndet)
+                           my_band.fwhm, ndet, my_band.polarization)
 
     if my_experiment.replace_tod_with_sim:
         replace_tod_with_sim(band_tod, my_band, params)
