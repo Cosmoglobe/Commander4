@@ -6,8 +6,34 @@ from commander4.utils.math_operations import alm_to_map, alm_to_map_adjoint, inp
 
 
 class DetectorMap:
+    """Holds a sky map and associated metadata for a single detector or band.
+
+    Stores the sky signal map, inverse noise variance map, beam properties, and
+    resolution parameters. Derived quantities such as ``map_rms``, ``pol``, and
+    ``spin`` are computed on the fly via properties.
+
+    Attributes:
+        map_sky (NDArray): Sky signal map of shape ``(npol, npix)``.
+        inv_n_map (NDArray): Inverse noise variance map, same shape as ``map_sky``.
+        nu (float): Band centre frequency in GHz.
+        fwhm (float): Beam full-width-at-half-maximum in arcminutes.
+        nside (int): HEALPix nside of the map.
+        lmax (int): Maximum multipole for harmonic transforms.
+        double_precision (bool): Whether the inverse noise map is stored in float64.
+    """
     def __init__(self, map_sky:NDArray, map_rms:NDArray, nu:float, fwhm:float, nside:int,
                  double_precision:bool=False, lmax:int|None = None):
+        """Construct a DetectorMap.
+
+        Args:
+            map_sky: Sky signal map, shape ``(npol, npix)`` or ``(npix,)``.
+            map_rms: RMS noise map (same shape as ``map_sky``).
+            nu: Band centre frequency in GHz.
+            fwhm: Beam FWHM in arcminutes.
+            nside: HEALPix nside of the maps.
+            double_precision: If True, store ``inv_n_map`` in float64.
+            lmax: Maximum multipole. Defaults to ``int(2.5 * nside)``.
+        """
         #cast dimensions correctly to allow constructer with 1-d array for intensity maps.
         map_sky = map_sky.reshape((1,-1)) if map_sky.ndim == 1 else map_sky
         map_rms = map_rms.reshape((1,-1)) if map_rms.ndim == 1 else map_rms
@@ -18,64 +44,41 @@ class DetectorMap:
             raise ValueError("Trying to set sky map with wrong first axis length "
                              f"{map_sky.shape[0]} != 1 or 2")
 
-        self._map_sky = map_sky
-        self._nu = nu
-        self._fwhm = fwhm #stored in arcmin
-        self._nside = nside
+        self.map_sky = map_sky
+        self.nu = nu
+        self.fwhm = fwhm #stored in arcmin
+        self.nside = nside
         # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
-        self._lmax = int(2.5*nside) if lmax is None else lmax
-        self._beam_Cl = hp.gauss_beam(np.deg2rad(fwhm/60.0), self._lmax)
-        self._double_precision = double_precision
-        self._inv_n_map = (1./map_rms**2).astype(np.float64 if double_precision else np.float32)
+        self.lmax = int(2.5*nside) if lmax is None else lmax
+        self._beam_Cl = hp.gauss_beam(np.deg2rad(fwhm/60.0), self.lmax)
+        self.double_precision = double_precision
+        self.inv_n_map = (1./map_rms**2).astype(np.float64 if double_precision else np.float32)
 
-    @property
-    def map_sky(self):
-        return self._map_sky
-    
-    @property
-    def inv_n_map(self):
-        return self._inv_n_map
-    
     @property
     def map_rms(self):
-        return 1./np.sqrt(self._inv_n_map)
+        """RMS noise map, computed as ``1 / sqrt(inv_n_map)``."""
+        return 1./np.sqrt(self.inv_n_map)
 
-    @property
-    def nu(self):
-        return self._nu
-
-    @property
-    def fwhm(self):
-        return self._fwhm
-    
     @property
     def fwhm_rad(self):
+        """Beam FWHM in radians."""
         return np.deg2rad(self.fwhm/60.0)
     
     @property
-    def double_precision(self):
-        return self._double_precision
-
-    @property
-    def nside(self):
-        return self._nside
-    
-    @property
-    def lmax(self):
-        return self._lmax
-    
-    @property
     def pol(self):
+        """Whether the map is polarised (True for Q/U, False for I only)."""
         #polarization: True->Q/U, False->I
-        return False if len(self._map_sky) == 1 else True
+        return False if len(self.map_sky) == 1 else True
     
     @property
     def spin(self):
+        """Spin weight of the map (2 for polarised, 0 for intensity)."""
         return 2 if self.pol else 0
 
     @property
     def npol(self):
-        return len(self._map_sky) # 2 if self.pol else 1
+        """Number of polarisation components (1 or 2)."""
+        return len(self.map_sky) # 2 if self.pol else 1
     
     def apply_inv_N_map(self, map: NDArray, inplace = True):
         """
@@ -84,7 +87,7 @@ class DetectorMap:
         """
         map_out = map if inplace else deepcopy(map)
         for ipol in range(self.npol):
-            inplace_arr_prod(map_out[ipol,:], self._inv_n_map[ipol,:])
+            inplace_arr_prod(map_out[ipol,:], self.inv_n_map[ipol,:])
 
         return map_out
 
@@ -125,18 +128,8 @@ class DetectorMap:
         raise NotImplementedError()
 
     @property
-    def fsamp(self) -> float:
-        """Returns the sampling frequency for this detector in Hz."""
-        raise NotImplementedError()
-
-    @property
     def noiseProperties(self):
         """Returns parameters describing the noise properties of the detector. TBD"""
-        raise NotImplementedError()
-
-    @property
-    def map(self) -> np.array:
-        """Returns the sky map of the detector."""
         raise NotImplementedError()
 
     @property

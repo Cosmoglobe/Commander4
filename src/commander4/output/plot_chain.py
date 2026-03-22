@@ -82,11 +82,7 @@ def _load_params_from_chain(chain_dir: str) -> Bunch | None:
         for path in sorted(glob.glob(pattern)):
             try:
                 with h5py.File(path, "r") as handle:
-                    if "metadata/parameter_file_as_binary_yaml" in handle:
-                        raw_yaml = _decode_h5_value(
-                            handle["metadata/parameter_file_as_binary_yaml"][()]
-                        )
-                    elif "metadata/parameter_file_as_string" in handle:
+                    if "metadata/parameter_file_as_string" in handle:
                         raw_yaml = _decode_h5_value(handle["metadata/parameter_file_as_string"][()])
                     else:
                         continue
@@ -122,14 +118,14 @@ def _build_component_list(params: Bunch) -> list[Component]:
         if base_params.lmax == "full":
             base_params.lmax = (params.general.nside * 5) // 2
 
-        if base_params.polarizations[0]:
+        if "I" in base_params.polarization:
             params_i = deepcopy(base_params)
             params_i.longname = comp_longname + "_Intensity"
             params_i.shortname = comp_shortname + "_I"
             params_i.polarized = False
             comp_type = getattr(component_lib, component.component_class)
             comp_list.append(comp_type(params_i, params.general))
-        if base_params.polarizations[1] and base_params.polarizations[2]:
+        if "QU" in base_params.polarization:
             params_qu = deepcopy(base_params)
             params_qu.longname = comp_longname + "_Polarization"
             params_qu.shortname = comp_shortname + "_QU"

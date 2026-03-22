@@ -44,7 +44,7 @@ git submodule update
 ## Installation for developers
 If you intend to edit Commander4, you must first have the build tools installed:
 ```bash
-pip install scikit-build-core pybind11 pybind11-stubgen numpy
+pip install scikit-build-core cmake pybind11 pybind11-stubgen numpy
 ```
 Then, clone the repo (and submodules), and perform a so-called *editable* PIP install:
 ```bash
@@ -104,17 +104,23 @@ Commander 4 uses a maximum line length of 100 characters.
 #### Line breaks
 You are generally encouraged to avoid unnecessary line breaks, unless you feel it strongly adds to the readability of the code.
 ```Python
-my_sum = the_first_value + some_other_value + a_third_value  # Correct
-my_sum = the_first_value\  # Incorrect
+my_sum = the_first_value + some_other_value + a_third_value  # Better
+my_sum = the_first_value\  # Worse
        + some_other_value\
        + a_third_value
+
+result = some_func(arg1, arg2)  # Better
+result = some_func(arg1,  # Worse
+                   arg2)
 ```
 
+
+
 #### Function arguments
-You are generally encouraged to not line-break for the first function argument, and the keep multi-line arguments aligned.
+You are generally encouraged not to line-break between every function argument, unless you feel it is necessary.
 ```Python
-def my_very_long_function_name(argument1, argument2, argument3,
-                               argument4, argument5):
+def my_very_long_function_name(argument1: NDArray, argument2: NDArray, argument3: NDArray,
+                               argument4: float = 10.0, argument5: int = 1):
     return argument1 + argument2
 ```
 
@@ -138,7 +144,7 @@ class MyClass:
 ```
 
 #### Type hints
-Functions should have type hints for all their function arguments and return type. Beyond this, type hints are optional.
+Functions should normally have type hints for all their function arguments and return type.
 ```Python
 from numpy.typing import NDArray
 

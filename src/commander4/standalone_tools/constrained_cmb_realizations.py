@@ -66,6 +66,15 @@ class ConstrainedCMB:
         self.alm_len = ((self.lmax+1)*(self.lmax+2))//2
         self.Cl_prior = cmb_Cell
 
+        # Precompute C_ell^{1/2} for the square-root reformulation.
+        # Any negative values are clamped to 0.
+        Cl_safe = self.Cl_prior[:self.lmax+1].copy()
+        Cl_safe[Cl_safe < 0] = 0.0
+        self.Cl_sqrt = np.sqrt(Cl_safe)
+
+        # Build diagonal preconditioner in harmonic space
+        self._build_preconditioner()
+
         # # TEMPORARY. Set Cl prior to true CMB Cls.
         # import camb
         # pars = camb.set_params(H0=67.5, ombh2=0.022, omch2=0.122, mnu=0.06, omk=0, tau=0.06, As=2e-9, ns=0.965, halofit_version='mead', lmax=self.lmax)
@@ -81,61 +90,116 @@ class ConstrainedCMB:
         #                         # In the future, the C(ell)s will be sampled and used as a prior here.
 
 
+    def _build_preconditioner(self):
+        """Build a diagonal (in ell) preconditioner for the renormalized CG system.
+
+        The renormalized LHS is  (I + C^{1/2} sum_i B_i^T Y^T N_i^{-1} Y B_i C^{1/2}).
+        Approximating pixel-space noise by its sky-average makes this diagonal
+        in harmonic space:
+
+            d_ell = 1 + C_ell * sum_i  b_ell_i^2 * <1/sigma_i^2>
+
+        The preconditioner is M = 1 / d_ell.
+        """
+        Cl = self.Cl_sqrt ** 2  # = Cl_safe, the clamped version
+        diag = np.ones(self.lmax + 1)  # identity contribution
+
+        # The LHS uses ducc0 synthesis (Y) and adjoint_synthesis (Y^T),
+        # which are un-normalized: Y^T Y ≈ (Npix/4π) I in harmonic space.
+        # The preconditioner must include this factor to match the true diagonal.
+        pix_factor = self.npix / (4.0 * np.pi)
+
+        for iband in range(self.nband):
+            bl = hp.gauss_beam(self.fwhm[iband], lmax=self.lmax)
+
+            inv_noise_var = 1.0 / self.map_rms[iband] ** 2
+            inv_noise_var = np.where(np.isfinite(inv_noise_var), inv_noise_var, 0.0)
+            avg_inv_noise_var = np.mean(inv_noise_var)
+
+            diag += Cl * bl ** 2 * avg_inv_noise_var * pix_factor
+
+        self._precond_ell = 1.0 / diag
+        logger.info(
+            "Preconditioner dynamic range: %.3e  (min/max of M_ell)",
+            self._precond_ell.min() / self._precond_ell.max(),
+        )
+
+    def preconditioner(self, x):
+        """Apply the diagonal harmonic-space preconditioner."""
+        return hp.almxfl(x, self._precond_ell)
+
     def dot_alm(self, alm1, alm2):
         """ Function calculating the dot product of two alms, given that they follow the Healpy standard,
             where alms are represented as complex numbers, but with the conjugate 'negative' ms missing.
         """        
-        return np.sum((alm1[:self.lmax]*alm2[:self.lmax]).real) + np.sum((alm1[self.lmax:]*np.conj(alm2[self.lmax:])).real*2)
+        # return np.sum((alm1[:self.lmax]*alm2[:self.lmax]).real) + np.sum((alm1[self.lmax:]*np.conj(alm2[self.lmax:])).real*2)
+        n_m0 = self.lmax + 1  # number of m=0 modes
+        return np.sum((alm1[:n_m0]*alm2[:n_m0]).real) + np.sum((alm1[n_m0:]*np.conj(alm2[n_m0:])).real*2)
 
 
-    def LHS_func(self, x):
-        """ The LHS of equations 5 and 6 from Eriksen 2004, implemented as a function on the alm-vector x.
-            The equation can be written as (C^-1 x + A^T Y^T N Y A x), where Y is a map->alm conversion, and Y^T is map-> alm,
-            A is the beam-smoothing, and C is the current C(ell) sample.
+    def LHS_func(self, x_tilde):
+        """ The LHS of the C^{1/2}-renormalized system:
+            (I + C^{1/2} sum_i B_i^T Y^T N_i^{-1} Y B_i C^{1/2}) x_tilde
+            where x_tilde = C^{-1/2} x.
+            All inputs are assumed to be in CMB uK units.
         """
-        LHS_sum = np.zeros_like(x)
-        LHS_sum += hp.almxfl(x, 1.0/self.Cl_prior)
+        # Start with the identity contribution
+        LHS_sum = x_tilde.copy()
+
+        # C^{1/2} x_tilde
+        Cx = hp.almxfl(x_tilde, self.Cl_sqrt)
+
         for iband in range(self.nband):
-            Ax = hp.smoothalm(x, self.fwhm[iband], inplace=False)
-            YAx = alm2map(Ax, self.nside, self.lmax)
-            NYAx = YAx/self.map_rms[iband]**2
-            YTNYAx = alm2map_adjoint(NYAx, self.nside, self.lmax)
-            ATYTNYAx = hp.smoothalm(YTNYAx, self.fwhm[iband], inplace=False)
-            LHS_sum += ATYTNYAx
+            # B C^{1/2} x_tilde
+            BCx = hp.smoothalm(Cx.copy(), self.fwhm[iband], inplace=False)
+            # Y B C^{1/2} x_tilde
+            YBCx = alm2map(BCx, self.nside, self.lmax)
+            # N^{-1} Y B C^{1/2} x_tilde
+            NYBCx = YBCx / self.map_rms[iband]**2
+            # Y^T N^{-1} Y B C^{1/2} x_tilde
+            YTNYBCx = alm2map_adjoint(NYBCx, self.nside, self.lmax)
+            # B^T Y^T N^{-1} Y B C^{1/2} x_tilde
+            BTYTNYBCx = hp.smoothalm(YTNYBCx, self.fwhm[iband], inplace=False)
+            # C^{1/2} B^T Y^T N^{-1} Y B C^{1/2} x_tilde
+            LHS_sum += hp.almxfl(BTYTNYBCx, self.Cl_sqrt)
+
         return LHS_sum
 
 
     def get_RHS_eqn_mean(self):
-        """ Calculates and returns the RHS of the mean-field (Wiener filtered) map equation (eqn 5 from Eriksen 2004).
-            This RHS can be written as (A^T Y^T N d), where d is the observed sky, and Y^T is a map->alm conversion,
-            N is the noise covariance, and A is the beam.
+        """ Calculates and returns the RHS of the renormalized mean-field equation:
+            C^{1/2} sum_i B_i^T Y^T N_i^{-1} d_i
+            All inputs are assumed to be in CMB uK units.
         """
         RHS_sum = np.zeros(self.alm_len, dtype=np.complex128)
         for iband in range(self.nband):
-            Nd = self.map_sky[iband]/self.map_rms[iband]**2
+            Nd = self.map_sky[iband] / self.map_rms[iband]**2
             YTNd = alm2map_adjoint(Nd, self.nside, self.lmax)
-            ATYTNd = hp.smoothalm(YTNd, self.fwhm[iband], inplace=False)
-            RHS_sum += ATYTNd
+            BTYTNd = hp.smoothalm(YTNd, self.fwhm[iband], inplace=False)
+            RHS_sum += BTYTNd
+        # Apply C^{1/2}
+        RHS_sum = hp.almxfl(RHS_sum, self.Cl_sqrt)
         return RHS_sum
 
 
     def get_RHS_eqn_fluct(self):
-        """ Calculates and returns the RHS of the map fluctuation equation (eqn 6 from Eriksen 2004).
-            This RHS can be written as (C^-1/2 Y^T omega0 + A^T Y^T N^-1/2 omega1), where omega0 and omega1 are N(0,1) maps,
-            and C is the currentl C(ell) sample.
+        """ Calculates and returns the RHS of the renormalized fluctuation equation:
+            omega_0 + C^{1/2} sum_i B_i^T Y^T N_i^{-1/2} omega_1
+            where omega_0 and omega_1 are drawn from N(0, I).
+            All inputs are assumed to be in CMB uK units.
         """
-        # YTomega0 = hp.map2alm(np.random.normal(0, 1, self.npix), iter=0)#*(4*np.pi/self.npix)
-        # CYTomega0 = hp.almxfl(YTomega0, np.sqrt(1.0/self.Cl_sample))
         RHS_sum = np.zeros(self.alm_len, dtype=np.complex128)
-        CYTomega0 = hp.synalm(1.0/self.Cl_prior, self.lmax)
-        RHS_sum += CYTomega0
+        # omega_0 term: in the renormalized system this is simply a unit-variance random alm.
+        # hp.synalm(Cl) draws alms with <|a_lm|^2> = Cl, so synalm(ones) gives unit variance.
+        omega0 = hp.synalm(np.ones(self.lmax + 1), self.lmax)
+        RHS_sum += omega0
 
         for iband in range(self.nband):
             omega1 = np.random.normal(0, 1, self.npix)
-            Nomega1 = omega1/self.map_rms[iband]
+            Nomega1 = omega1 / self.map_rms[iband]  # N^{-1/2} omega_1
             YTNomega1 = alm2map_adjoint(Nomega1, self.nside, self.lmax)
-            ATYTNomega1 = hp.smoothalm(YTNomega1, self.fwhm[iband], inplace=False)
-            RHS_sum += ATYTNomega1
+            BTYTNomega1 = hp.smoothalm(YTNomega1, self.fwhm[iband], inplace=False)
+            RHS_sum += hp.almxfl(BTYTNomega1, self.Cl_sqrt)  # C^{1/2} B^T Y^T N^{-1/2} omega_1
         return RHS_sum
 
 
@@ -150,21 +214,21 @@ class ConstrainedCMB:
                 m_bestfit: The resulting best-fit solution, in alm space.
         """
         # logger = logging.getLogger(__name__)
-        CG_solver = utils.CG(LHS, RHS, dot=self.dot_alm)
-        err_tol = 1e-10
+        CG_solver = utils.CG(LHS, RHS, dot=self.dot_alm, M=self.preconditioner)
+        err_tol = 1e-100
         iter = 0
         while CG_solver.err > err_tol:
             CG_solver.step()
             iter += 1
-            # if self.iter%10 == 1:
             logger.info(f"CG iter {iter:3d} - Residual {CG_solver.err:.3e}")
             print(f"CG iter {iter:3d} - Residual {CG_solver.err:.3e}")
             if iter >= self.maxiter:
                 logger.warning(f"Maximum number of iterations ({self.maxiter}) reached in CG.")
                 break
-        # logger.info(f"CG finished after {self.iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {err_tol})")
         print(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {err_tol})")
-        s_bestfit = CG_solver.x
+
+        # Recover physical solution: x = C^{1/2} x_tilde
+        s_bestfit = hp.almxfl(CG_solver.x, self.Cl_sqrt)
 
         return s_bestfit
 
@@ -334,17 +398,19 @@ def main() -> int:
             sky = SkyModel(components)
             foreground_map = sky.get_sky_at_nu(band_freq, map_nside, "IQU", fwhm=0)[0]
 
-            lmax = hp.Alm.getlmax(cmb_alm.shape[0])
-            for idx in [hp.Alm.getidx(lmax, 0, 0),
-                        hp.Alm.getidx(lmax, 1, 0),
-                        hp.Alm.getidx(lmax, 1, 1)]:
-                cmb_alm[:,idx] = 0.0
+            # lmax = hp.Alm.getlmax(cmb_alm.shape[0])
+            # for idx in [hp.Alm.getidx(lmax, 0, 0),
+            #             hp.Alm.getidx(lmax, 1, 0),
+            #             hp.Alm.getidx(lmax, 1, 1)]:
+            #     cmb_alm[:,idx] = 0.0
             cmb_map = hp.alm2map(cmb_alm[0], map_nside)
             # foreground_map = hp.alm2map(dust_alm, map_nside)
             map_observed_sky -= foreground_map
 
             cmb_Cell = hp.alm2cl(cmb_alm[0].astype(np.complex128))
-            cmb_Cell[:2] = 1e100
+            # Loose prior on monopole/dipole: large enough that data dominates,
+            # small enough to avoid floating-point issues with C^{1/2} renormalization.
+            cmb_Cell[:2] = 1000*np.max(cmb_Cell[2:])
 
             hdul = fits.open("/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits")
             binary_mask = hdul[1].data["TEMPERATURE"].flatten().astype(bool)
@@ -361,27 +427,42 @@ def main() -> int:
             # rms = 1.0/np.sqrt(inv_var)
             map_rms /= smoothed_mask
 
+            # Convert data and RMS from RJ uK to CMB uK before feeding
+            # into the solver, so the solver stays unit-agnostic.
+            import pysm3.units as pysm3u
+            from astropy import units as u
+            g_nu = (1.0 * pysm3u.uK_CMB).to(
+                pysm3u.uK_RJ,
+                equivalencies=pysm3u.cmb_equivalencies(band_freq * u.GHz)
+            ).value  # CMB -> RJ factor
+            # Divide by g to go from RJ -> CMB:  T_CMB = T_RJ / g
+            map_observed_sky /= g_nu
+            map_rms /= g_nu
+
             signal_maps.append(map_observed_sky)
             rms_maps.append(map_rms)
             foreground_maps.append(foreground_map)
         
         signal_maps = np.array(signal_maps)
         rms_maps = np.array(rms_maps)
+        dir = "plots/precond_v2/"
+        os.makedirs(dir, exist_ok=True)
         plt.figure()
         hp.mollview(signal_maps[5] + foreground_maps[5])
-        plt.savefig("map_observed_sky.png")
+        plt.savefig(f"{dir}map_observed_sky.png")
         plt.close()
         plt.figure()
         hp.mollview(foreground_maps[5])
-        plt.savefig("foreground_map.png")
+        plt.savefig(f"{dir}foreground_map.png")
         plt.close()
-        plt.figure()
-        hp.mollview(signal_maps[5])
-        plt.savefig("signal_map.png")
+        for i in range(len(signal_maps)):
+            plt.figure()
+            hp.mollview(signal_maps[5])
+            plt.savefig(f"{dir}signal_map{i}.png")
         plt.close()
         plt.figure()
         hp.mollview(signal_maps[5]/rms_maps[5])
-        plt.savefig("signal_map_norm.png")
+        plt.savefig(f"{dir}signal_map_norm.png")
         plt.close()
 
         CMB = ConstrainedCMB(signal_maps, rms_maps, cmb_Cell, maxiter=100)
@@ -394,22 +475,22 @@ def main() -> int:
         print(cmb_alm.shape, cmb_alms_bestfit.shape)
 
         plt.figure()
-        plt.loglog(hp.alm2cl(cmb_alm.astype(np.complex128)), label="prior")
+        plt.loglog(hp.alm2cl(cmb_alm[0].astype(np.complex128)), label="prior")
         plt.loglog(hp.alm2cl(cmb_alms_bestfit), label="bestfit")
         plt.legend()
-        plt.savefig(f"Cell_cmb.png")
+        plt.savefig(f"{dir}Cell_cmb.png")
         plt.close()
         plt.figure()
         hp.mollview(cmb_map_bestfit, cmap="RdBu_r")
-        plt.savefig(f"test_cmb.png")
+        plt.savefig(f"{dir}test_cmb.png")
         plt.close()
         plt.figure()
         hp.mollview(cmb_map, cmap="RdBu_r")
-        plt.savefig("initial_cmb.png")
+        plt.savefig(f"{dir}initial_cmb.png")
         plt.close()
         plt.figure()
         hp.mollview(rms_maps[0])
-        plt.savefig("rms_cmb.png")
+        plt.savefig(f"{dir}rms_cmb.png")
         plt.close()
 
         return 0

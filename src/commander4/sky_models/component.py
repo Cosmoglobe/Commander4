@@ -829,24 +829,24 @@ class RadioSources(PointSourcesComponent):
     
 
 #FIXME: this will go within ComponentList object when implemented
-# def split_complist(comp_list: list[Component], color:int,
-#                    IvsQU_colors:tuple = (0,1)) -> list[Component]:
-#     """
-#     Extracts from `comp_list` only the components containing the correct Stokes parameter based
-#     on the passed `color` of the local MPI rank. By default, color=0 will treat Intensity and
-#     color=1 polarization. A list with the relevant components is returned.
-#     """
-#     out_comp_list = []
-#     IvsQU_colors = IvsQU_colors[:2] #cut off eventual elements in excess
-#     if color not in IvsQU_colors:
-#         logging.warning(f"Color {color} not in colors assigned to I or QU ({IvsQU_colors})!")
-#     else:
-#         for comp in comp_list:
-#             if comp.is_pol == (color == IvsQU_colors[1]):
-#                 # print("Comp", comp.shortname, comp.pol)
-#                 out_comp_list.append(comp)
+def split_complist(comp_list: list[Component], color:int,
+                   IvsQU_colors:tuple = (0,1)) -> list[Component]:
+    """
+    Extracts from `comp_list` only the components containing the correct Stokes parameter based
+    on the passed `color` of the local MPI rank. By default, color=0 will treat Intensity and
+    color=1 polarization. A list with the relevant components is returned.
+    """
+    out_comp_list = []
+    IvsQU_colors = IvsQU_colors[:2] #cut off eventual elements in excess
+    if color not in IvsQU_colors:
+        logging.warning(f"Color {color} not in colors assigned to I or QU ({IvsQU_colors})!")
+    else:
+        for comp in comp_list:
+            if comp.is_pol == (color == IvsQU_colors[1]):
+                # print("Comp", comp.shortname, comp.pol)
+                out_comp_list.append(comp)
 
-#     return out_comp_list
+    return out_comp_list
 
 
 class CompList:

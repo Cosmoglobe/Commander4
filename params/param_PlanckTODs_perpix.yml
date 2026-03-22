@@ -11,19 +11,23 @@ general:
 
   niter_gibbs: 10
 
+  perform_compsep: false
+
   nside: 512
 
   noise_fknee: 0.1
   noise_alpha: -0.9
 
   sample_corr_noise: True
-  sample_corr_noise_from_iter_num: 8
+  sample_corr_noise_from_iter_num: 2
   sample_abs_gain: True
   sample_abs_gain_from_iter_num: 2
   sample_rel_gain: True
-  sample_rel_gain_from_iter_num: 4
+  sample_rel_gain_from_iter_num: 2
   sample_temporal_gain: True
-  sample_temporal_gain_from_iter_num: 4
+  sample_temporal_gain_from_iter_num: 2
+
+  perform_compsep: true
 
   CG_float_precision: "single"
 
@@ -33,9 +37,12 @@ general:
   pixel_compsep_sampling: True
   smooth_to_common_res: True
 
+  chains_to_write: [1,]
   write_orb_dipole_maps_to_chain: True
   write_corr_noise_maps_to_chain: True
   write_sky_model_maps_to_chain: True
+  chain_maps_nside: 128
+  chain_maps_interval: 5
 
   output_paths:
     chains: "../cmdr4_chains/PlanckTODs_perpix/"
@@ -43,7 +50,7 @@ general:
 
   logging:
     console:
-      level: 'info'
+      level: 'debug'
     file:
       level: 'info'
       filename: '../cmdr4_logs/output_PlanckTODs_perpix.log'
@@ -54,28 +61,28 @@ components:
     enabled: true
     component_class: "CMB"
     params:
-      polarizations: [True, True, True] #I Q U 
+      polarization: "IQU" 
       longname: "CMB"
       shortname: "cmb"
       smoothing_prior_FWHM: 30.0 # arcmin
-      smoothing_prior_amplitude: 1.0e+7  # uK_RJ^2
+      smoothing_prior_amplitude: 1.0e+7 #1.0  # uK_RJ^2
       lmax: 1024
-      smoothing_scale: 0.0
+      smoothing_scale: 0
       spatially_varying_MM: False
 
   ThermalDust:
     enabled: true
     component_class: "ThermalDust"
     params:
-      polarizations: [True, True, True] #I Q U 
-      longname: "Thermal Dust"
+      polarization: "IQU"
+      longname: "Thermal-Dust"
       shortname: "dust"
       smoothing_prior_FWHM: 5.0 # 10.0 # arcmin
       smoothing_prior_amplitude: 2.0e-3  # uK_RJ^2
       beta: 1.56
       T: 20
       nu0: 545
-      lmax: 2048
+      lmax: 1024
       smoothing_scale: 0.0
       spatially_varying_MM: False
 
@@ -83,14 +90,14 @@ components:
     enabled: true
     component_class: "Synchrotron"
     params:
-      polarizations: [True, True, True] #I Q U 
+      polarization: "IQU" 
       longname: "Synchrotron"
       shortname: "sync"
       smoothing_prior_FWHM: 60.0 # arcmin
       smoothing_prior_amplitude: 2.0e-2  # uK_RJ^2
       beta: -3.1
       nu0: 30
-      lmax: 1024
+      lmax: 512
       smoothing_scale: 0.0
       spatially_varying_MM: False
 
@@ -98,32 +105,45 @@ components:
     enabled: true
     component_class: "FreeFree"
     params:
-      polarizations: [True, False, False] #I Q U 
+      polarization: "I" 
       longname: "Free-Free"
       shortname: "ff"
       smoothing_prior_FWHM: 30.0 # arcmin
       smoothing_prior_amplitude: 1.0e+9  # uK_RJ^2
       T: 7000
       nu0: 0.408 #40
-      lmax: 1024
+      lmax: 512
       smoothing_scale: 0.0
       spatially_varying_MM: False
   
-  # SpinningDust:
-  #   enabled: False
-  #   component_class: "SpinningDust"
-  #   params:
-  #     polarized: False
-  #     longname: "SpinningDust"
-  #     shortname: "sdust"
-  #     template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
-  #     smoothing_prior_FWHM: 0.0 # arcmin
-  #     smoothing_prior_amplitude: 1.0e+10  # uK_RJ^2
-  #     nu_peak: 25.3  # Ghz
-  #     nu_0: 22.0  # Ghz
-  #     lmax: 1000
-  #     smoothing_scale: 0 # 30.0
-  #     spatially_varying_MM: False
+  RadioSources:
+    enabled: False
+    component_class: "RadioSources"
+    params:
+      polarization: "I" 
+      longname: "RadioSources"
+      shortname: "radsources"
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
+      nu_0: 30.0  # Ghz
+      lmax: "full" #just a placeholder
+      smoothing_scale: 0 # placeholder? Do we ever want a smoothing of point sources?
+      sample_alphas: False
+      
+  SpinningDust:
+    enabled: False
+    component_class: "SpinningDust"
+    params:
+      polarization: "I"
+      longname: "SpinningDust"
+      shortname: "sdust"
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
+      smoothing_prior_FWHM: 0.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+10  # uK_RJ^2
+      nu_peak: 25.3  # Ghz
+      nu_0: 22.0  # Ghz
+      lmax: 1000
+      smoothing_scale: 0 # 30.0
+      spatially_varying_MM: False
 
 
 CompSep_bands:
@@ -131,15 +151,15 @@ CompSep_bands:
   Planck30GHz:
     get_from: PlanckLFI
     enabled: true
-    polarizations: [True, True, True] #I Q U 
+    polarization: "IQU"
   Planck44GHz:
     get_from: PlanckLFI
     enabled: true
-    polarizations: [True, True, True] #I Q U 
+    polarization: "IQU"
   Planck70GHz:
     get_from: PlanckLFI
     enabled: true
-    polarizations: [True, True, True] #I Q U 
+    polarization: "IQU"
 
   ### TOTAL INTENSITY MAPS ###
   Haslam408MHz:
@@ -152,7 +172,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
     fwhm: 60.0  # [arcmin]
     freq: 0.408 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPKa:
     enabled: true
@@ -164,7 +184,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_N_v4.fits"
     fwhm: 39.6 # [arcmin]
     freq: 33.0 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPQ1:
     enabled: true
@@ -176,7 +196,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_N_v4.fits"
     fwhm: 30.6 # [arcmin]
     freq: 40.6 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPQ2:
     enabled: true
@@ -188,7 +208,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_N_v4.fits"
     fwhm: 30.6 # [arcmin]
     freq: 40.6 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPV1:
     enabled: true
@@ -200,7 +220,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_N_v4.fits"
     fwhm: 21.0 # [arcmin]
     freq: 60.8 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   WMAPV2:
     enabled: true
@@ -212,7 +232,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_N_v4.fits"
     fwhm: 21.0 # [arcmin]
     freq: 60.8 # [GHz]
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
   Planck857GHz:
     enabled: true
@@ -224,7 +244,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_rms_n1024_10arcmin_uK_hrscaled_true.fits"
     fwhm: 10 # [arcmin]
     freq: 857.0 # [GHz]
-    polarizations: [True, False, False]
+    polarization: "I"
 
   ### POLARIZATION MAPS ###
   Planck353GHz:
@@ -237,7 +257,7 @@ CompSep_bands:
     path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_rms_n1024_hrscaled_uK_udgrade.fits"
     fwhm: 4.86 # [arcmin]
     freq: 353.0 # [GHz]
-    polarizations: [False, True, True]
+    polarization: "QU"
 
 
 experiments:
@@ -247,6 +267,7 @@ experiments:
     pix_is_compressed: true
     psi_is_compressed: true
     data_type: "TOD"
+    mapmaker: "bin"
     experiment_id: "planck"  # Decides expected data format, what TOD reader is used, etc.
     bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
@@ -261,6 +282,7 @@ experiments:
         fwhm: 32.4 # [arcmin]
         freq: 28.4 # [GHz]
         fsamp: 32.5079365079365 # [Hz]
+        polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
         detectors:
@@ -281,6 +303,7 @@ experiments:
         fwhm: 27.1 # [arcmin]
         freq: 44.1 # [GHz]
         fsamp: 46.5454545454545
+        polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
         detectors:
@@ -301,6 +324,7 @@ experiments:
         fwhm: 13.3 # [arcmin]
         freq: 70.1 # [GHz]
         fsamp: 78.7692307692308
+        polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_70.txt"
         detectors:

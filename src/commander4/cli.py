@@ -61,7 +61,7 @@ def run_commander4(params: Bunch, params_dict: dict):
     # as Numpy will not respect a change in thread count after it has been loaded.
     import numpy as np
     import commander4.output.log as log
-    from commander4.tod_processing import process_tod, init_tod_processing, get_empty_compsep_output
+    from commander4.tod_processing import process_tod, init_tod_processing, get_initial_sky
     from commander4.compsep_processing import process_compsep, init_compsep_processing
     from commander4.communication import receive_tod, send_tod, receive_compsep, send_compsep
 
@@ -76,14 +76,14 @@ def run_commander4(params: Bunch, params_dict: dict):
     world_compsep_band_masters_dict = None
     world_tod_band_masters_dict = None
     if mpi_info.world.color == 0:
-        mpi_info, my_band_tod_id, experiment_data, detector_samples = init_tod_processing(mpi_info,
+        mpi_info, my_band_tod_id, experiment_data, tod_samples = init_tod_processing(mpi_info,
                                                                                           params)
         # Even though we're always only working on one of the two chains we still need two sets of
         # samples, as we can't "hot swap" them (both TOD processing and component separation would
         # have to send and receive from the same local buffer). However, perhaps it would be cleaner
         # to call these "current_chain" and "other chain" or something.
-        detector_samples_chain1 = detector_samples
-        detector_samples_chain2 = deepcopy(detector_samples)
+        tod_samples_chain1 = tod_samples
+        tod_samples_chain2 = deepcopy(tod_samples)
     elif mpi_info.world.color == 1:
         components, mpi_info, my_band_compsep_id, my_band = init_compsep_processing(mpi_info, params)
 
@@ -105,12 +105,13 @@ def run_commander4(params: Bunch, params_dict: dict):
     if mpi_info.world.color == 0:
         # Chain #1 do TOD processing, resulting in maps_chain1 (we start with a fake output of
         # component separation, containing a completely empty sky).
-        compsep_output_black = get_empty_compsep_output(experiment_data)
+        compsep_output_black = get_initial_sky(experiment_data)
 
-        curr_tod_output, detector_samples = process_tod(mpi_info, experiment_data,
-                                                        detector_samples_chain1,
+        curr_tod_output, tod_samples = process_tod(mpi_info, experiment_data,
+                                                        tod_samples_chain1,
                                                         compsep_output_black, params, 1, 1)
-        send_tod(mpi_info, curr_tod_output, my_band_tod_id, mpi_info.world.compsep_band_masters)
+        if params.general.perform_compsep:
+            send_tod(mpi_info, curr_tod_output, my_band_tod_id, mpi_info.world.compsep_band_masters)
         curr_compsep_output = compsep_output_black
 
     elif mpi_info.world.color == 1:
@@ -131,31 +132,33 @@ def run_commander4(params: Bunch, params_dict: dict):
                 logger.info(f"Worldrank {mpi_info.world.rank}, subrank"\
                             f"{mpi_info.tod.rank} starting TOD iteration {iter_num}.")
             # TODO: I think this ugly branching logic could be removed if we just renamed
-            # detector_samples_chain1 and 2 to "current" and "other" instead of 1 and 2.
+            # tod_samples_chain1 and 2 to "current" and "other" instead of 1 and 2.
             if chain_num == 1:
-                curr_tod_output, detector_samples_chain1 = process_tod(mpi_info, experiment_data,
-                                                                       detector_samples_chain1,
+                curr_tod_output, tod_samples_chain1 = process_tod(mpi_info, experiment_data,
+                                                                       tod_samples_chain1,
                                                                        curr_compsep_output, params,
                                                                        chain_num, iter_num)
             elif chain_num == 2:
-                curr_tod_output, detector_samples_chain2 = process_tod(mpi_info, experiment_data,
-                                                                       detector_samples_chain2,
+                curr_tod_output, tod_samples_chain2 = process_tod(mpi_info, experiment_data,
+                                                                       tod_samples_chain2,
                                                                        curr_compsep_output, params,
                                                                        chain_num, iter_num)
             if mpi_info.tod.is_master:
                 logger.info(f"TOD: Rank {mpi_info.tod.rank} finished chain {chain_num}, iter "\
                             f"{iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
             t0 = time.time()
-            curr_compsep_output = receive_compsep(mpi_info, experiment_data,
-                                                  my_band_tod_id,
-                                                  mpi_info.world.compsep_band_masters)
+            if params.general.perform_compsep:
+                curr_compsep_output = receive_compsep(mpi_info, experiment_data,
+                                                    my_band_tod_id,
+                                                    mpi_info.world.compsep_band_masters)
             if mpi_info.band.is_master:
                 logger.info(f"TOD: Rank {mpi_info.tod.rank} finished receiving "\
                             f"results for chain {chain_num}, iter {iter_num} "\
                             f"(time spent waiting+receiving = "\
                             f"{time.time()-t0:.1f}s).")
-            send_tod(mpi_info, curr_tod_output, my_band_tod_id,
-                     mpi_info.world.compsep_band_masters)
+            if params.general.perform_compsep:
+                send_tod(mpi_info, curr_tod_output, my_band_tod_id,
+                        mpi_info.world.compsep_band_masters)
             if mpi_info.tod.is_master:
                 logger.info(f"TOD: Rank {mpi_info.tod.rank} finished sending "\
                             f"results for chain {chain_num}, iter {iter_num}.")
@@ -226,7 +229,7 @@ def main():
     except Exception:
         print_exc()  # Print the full exception raise, including trace-back.
         logger.error(f">>>>>>>> Error on rank {MPI.COMM_WORLD.Get_rank()}, calling MPI abort.")
-        MPI.COMM_WORLD.Abort()
+        MPI.COMM_WORLD.Abort(1)
 
 if __name__ == "__main__":
     main()

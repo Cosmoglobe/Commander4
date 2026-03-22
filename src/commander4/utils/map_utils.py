@@ -2,6 +2,7 @@ import numpy as np
 import pysm3.units as pysm3_u
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_TOD import DetectorTOD
+from commander4.data_models.detector_group_TOD import DetGroupTOD
 from commander4.output import log
 from numpy.typing import NDArray
 import ducc0
@@ -59,8 +60,23 @@ def _get_static_sky_TOD_I(det_compsep_map: NDArray[np.floating], pix: NDArray[np
     sky = det_compsep_map[0, pix]
     return sky.astype(np.float32)
 
-def get_s_orb_TOD(scan: ScanTOD, experiment: DetectorTOD, pix: NDArray[np.integer],
+def get_s_orb_TOD(det: DetectorTOD, experiment: DetGroupTOD, pix: NDArray[np.integer],
                   nthreads:int = None) -> NDArray:
+    """ Compute the orbital dipole contribution to the TOD for a single detector.
+
+    Projects the CMB dipole induced by the satellite's orbital motion into the
+    detector pointing, returning a TOD-length array in uK_RJ units.
+
+    Args:
+        det (DetectorTOD): Single-detector TOD data (provides orbital velocity direction).
+        experiment (DetGroupTOD): Experiment-level data (provides nu and nside).
+        pix (NDArray[np.integer]): Decompressed pixel indices for this detector.
+        nthreads (int, optional): Number of threads for HEALPix operations.
+            Defaults to the OMP_NUM_THREADS environment variable.
+
+    Returns:
+        NDArray: Orbital dipole signal in uK_RJ, shape ``(npix,)``.
+    """
     # If nthreads is not set, put it to how many threads OMP has.
     nthreads = int(os.environ["OMP_NUM_THREADS"]) if nthreads is None else nthreads
     if experiment.nu not in uK_CMB_to_uK_RJ_dict:
@@ -68,8 +84,8 @@ def get_s_orb_TOD(scan: ScanTOD, experiment: DetectorTOD, pix: NDArray[np.intege
                         equivalencies=pysm3_u.cmb_equivalencies(experiment.nu*pysm3_u.GHz)).value
     geom = ducc0.healpix.Healpix_Base(experiment.nside, "RING")
     LOS_vec = geom.pix2vec(pix, nthreads=nthreads)
-    if scan.orb_dir_vec is not None:
-        LOS_vec *= scan.orb_dir_vec
+    if det.orb_dir_vec is not None:
+        LOS_vec *= det.orb_dir_vec
     # How much do the LOS and orbital velocity align?
     s_orb = np.sum(LOS_vec, axis=-1, dtype=np.float32)
     s_orb *= T_CMB_div_C

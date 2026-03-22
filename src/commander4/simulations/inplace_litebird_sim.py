@@ -10,6 +10,7 @@ from pixell.bunch import Bunch
 from scipy.fft import rfftfreq, rfft, irfft
 
 from commander4.data_models.detector_TOD import DetectorTOD
+from commander4.data_models.detector_group_TOD import DetGroupTOD
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.sky_models.component import ThermalDust, Synchrotron, FreeFree
 
@@ -152,10 +153,10 @@ def generate_spdust(freq, fwhm, units, nside, params):
 
 T_CMB = 2.72548  # K_CMB
 C_LIGHT = 299792458.0  # m/s
-def get_orbital_dipole(scan: ScanTOD, pix: NDArray[np.integer], freq: float, units) -> NDArray:
-    orb_vel_vec = scan.orb_dir_vec  # Satellite velocity vector relative to sun.
-    # pointing_vec = hp.pix2vec(scan.nside, scan.pix)
-    geom = ducc0.healpix.Healpix_Base(scan.nside, "RING")
+def get_orbital_dipole(det: DetectorTOD, pix: NDArray[np.integer], freq: float, units) -> NDArray:
+    orb_vel_vec = det.orb_dir_vec  # Satellite velocity vector relative to sun.
+    # pointing_vec = hp.pix2vec(det.nside, pix)
+    geom = ducc0.healpix.Healpix_Base(det.nside, "RING")
     pointing_vec = geom.pix2vec(pix)
 
     v_orbital_speed = np.linalg.norm(orb_vel_vec, axis=-1)
@@ -174,7 +175,7 @@ def get_orbital_dipole(scan: ScanTOD, pix: NDArray[np.integer], freq: float, uni
 
 
 
-def replace_tod_with_sim(detector_data: DetectorTOD, band_params: Bunch, params: Bunch):
+def replace_tod_with_sim(detector_data: DetGroupTOD, band_params: Bunch, params: Bunch):
     nside = detector_data.nside
     npix = 12*nside**2
     fwhm = np.deg2rad(detector_data.fwhm/60.0)
@@ -199,22 +200,23 @@ def replace_tod_with_sim(detector_data: DetectorTOD, band_params: Bunch, params:
 
     I, Q, U = comps_sum_smoothed
     for scan in detector_data.scans:
-        pix = scan.pix
-        psi = scan.psi
-        ntod = pix.size
-        scan._tod = np.zeros(ntod, dtype=np.float32)
-        scan._tod[:] = I[pix] + Q[pix]*np.cos(2*psi) + U[pix]*np.sin(2*psi)
-        scan._tod[:] += get_orbital_dipole(scan, pix, freq, units)
+        for det in scan.detectors:
+            pix = det.pix
+            psi = det.psi
+            ntod = pix.size
+            det.tod = np.zeros(ntod, dtype=np.float32)
+            det.tod[:] = I[pix] + Q[pix]*np.cos(2*psi) + U[pix]*np.sin(2*psi)
+            det.tod[:] += get_orbital_dipole(det, pix, freq, units)
 
-        # Create some white noise.
-        noise = np.random.normal(0, sigma0_persamp, ntod)
-        # 1/f power spectrum, without sigma0**2 factor (which is already in the data).
-        PS_freqs = rfftfreq(ntod, 1.0/band_params.fsamp)
-        PS_freqs[0] = 0.5*PS_freqs[1]  # Add some DC power while avoiding divide by 0.
-        PS = 1.0 + (PS_freqs/fknee_ncorr)**alpha_ncorr
-        # Morph the shape of the noise power spectrum to be 1/f + white noise.
-        noise = irfft(rfft(noise)*np.sqrt(PS))
+            # Create some white noise.
+            noise = np.random.normal(0, sigma0_persamp, ntod)
+            # 1/f power spectrum, without sigma0**2 factor (which is already in the data).
+            PS_freqs = rfftfreq(ntod, 1.0/band_params.fsamp)
+            PS_freqs[0] = 0.5*PS_freqs[1]  # Add some DC power while avoiding divide by 0.
+            PS = 1.0 + (PS_freqs/fknee_ncorr)**alpha_ncorr
+            # Morph the shape of the noise power spectrum to be 1/f + white noise.
+            noise = irfft(rfft(noise)*np.sqrt(PS))
 
-        scan._tod[:] += noise
+            det.tod[:] += noise
 
     return detector_data

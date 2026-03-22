@@ -37,6 +37,8 @@ general:
   sample_temporal_gain: True
   sample_temporal_gain_from_iter_num: 4
 
+  perform_compsep: true
+
   output_stats: False
 
   galactic_mask: True
@@ -74,7 +76,6 @@ components:
       smoothing_scale: 0
       spatially_varying_MM: False
 
-
   ThermalDust:
     enabled: true
     component_class: "ThermalDust"
@@ -95,7 +96,7 @@ components:
     enabled: true
     component_class: "Synchrotron"
     params:
-      polarization: "I" 
+      polarization: "IQU" 
       longname: "Synchrotron"
       shortname: "sync"
       smoothing_prior_FWHM: 60.0 # arcmin

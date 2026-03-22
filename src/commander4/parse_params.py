@@ -2,6 +2,7 @@ import yaml
 import os
 from argparse import ArgumentParser
 from pixell.bunch import Bunch
+import yaml_include
 
 
 # TODO: Below is code for finding either the Commander4 PIP version number, or the git hash in case
@@ -116,16 +117,24 @@ commandline_params = parser.parse_args()
 if not os.path.isfile(commandline_params.parameter_file):
     raise FileExistsError(f"Could not find parameter file {commandline_params.parameter_file}")
 
+# Register the !inc constructor so that YAML files can include other YAML files via
+# e.g.  detectors: !inc detectors/LiteBIRD40GHz_L1.yml
+# Paths in !inc directives are resolved relative to the parameter file's directory.
+param_file_dir = os.path.dirname(os.path.abspath(commandline_params.parameter_file))
+yaml.add_constructor(
+    "!inc",
+    yaml_include.Constructor(base_dir=param_file_dir),
+)
+
 with open(commandline_params.parameter_file, "r") as f:
     binary_yaml_data = f.read()
-params_dict = yaml.safe_load(binary_yaml_data)
+params_dict = yaml.full_load(binary_yaml_data)
 
 params = as_bunch_recursive(params_dict)
 
 # For reproducability, create custom entries in the parameter object which holds the entire
-# parameter file, both as a single string, and as a binary YAML file.
+# parameter file as a fully resolved YAML string (with any !inc directives expanded).
 params.parameter_file_as_string = yaml.dump(params_dict)
-params.parameter_file_binary_yaml = binary_yaml_data
 
 # Storing Commander4 version number or git commit.
 # params.metadata.version_number = # print(get_version_info("commander4", __file__))

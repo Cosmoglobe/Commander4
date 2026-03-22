@@ -6,60 +6,70 @@ import logging
 from scipy.fft import rfftfreq
 import time
 from numpy.typing import NDArray
-import math
-import os
-import h5py
-
-import numpy as np
-from scipy.sparse.linalg import LinearOperator, eigs
 
 import healpy as hp
 import matplotlib.pyplot as plt
 from pixell.bunch import Bunch
+from astropy.io import fits
+import pysm3.units as pysm3_u
 
 from commander4.data_models.detector_map import DetectorMap
-from commander4.data_models.detector_TOD import DetectorTOD
-from commander4.data_models.detector_samples import DetectorSamples
-from commander4.data_models.scan_samples import ScanSamples
+from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.data_models.TOD_samples import TODSamples
 from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU, WeightsMapmaker, Mapmaker
 from commander4.utils.CG_mapmaker import CGMapmakerI, CGMapmakerIQU
 from commander4.solvers.preconditioners import InvNPreconditionerI, InvNPreconditionerIQU
 from commander4.noise_sampling import corr_noise_realization_with_gaps, sample_noise_PS_params
 from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
-from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0, norm
+from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0
 from commander4.tod_reader import read_tods_from_file
 from commander4.output.write_chains_files import write_tod_chain_to_file, write_map_chain_to_file
 # from commander4.logging.performance_logger import benchmark, summarize, start_bench, stop_bench
 
 
-def get_empty_compsep_output(staticData: DetectorTOD) -> NDArray[np.float32]:
-    "Creates a dummy compsep output for a single band"
-    return np.zeros((3, 12*staticData.nside**2), dtype=np.float32)
+def get_initial_sky(experiment_data: DetGroupTOD) -> NDArray[np.float32]:
+    """ Returns a sky realization from a set of components. The set of components are listed in
+        the provided DetGroupTOD object, originally specified in the parameter file. 
+    """
+    initial_sky = np.zeros((3, 12*experiment_data.nside**2), dtype=np.float32)
+    for skyfile in experiment_data.sky_init_files:
+        with fits.open(skyfile) as hdul:
+            fields = ["TEMPERATURE", "Q_POLARISATION", "U_POLARISATION"]
+            for i, field in enumerate(fields):
+                data = hdul[1].data[field].flatten()
+                nside = hp.npix2nside(data.size)
+                if nside != experiment_data.nside:
+                    data = hp.ud_grade(data, experiment_data.nside)
+                initial_sky[i] += data
+
+    # Convert from uK_CMB to uK_RJ
+    initial_sky *= (1*pysm3_u.uK_CMB).to(pysm3_u.uK_RJ,
+                    equivalencies=pysm3_u.cmb_equivalencies(experiment_data.nu*pysm3_u.GHz)).value
+    return initial_sky
 
 def called_on_non_master(arr):
     logger = logging.getLogger(__name__)
     logger.debug("Dummy precond has been called")
     return np.copy(arr)
 
-def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: NDArray,
-            detector_samples: DetectorSamples, params: Bunch, chain: int, iter: int,
-            do_ncorr_sampling: bool) -> dict[DetectorMap]:
+def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output: NDArray,
+            detector_samples: TODSamples, params: Bunch, chain: int, iter: int,
+            do_ncorr_sampling: bool) -> dict[str, DetectorMap]:
     """ Commander4 CG mapmaking. All ranks on the provided MPI communicator collaborates on creating
         the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
     Args:
         band_comm (Comm): The communicator consisting of all MPI ranks which holds TOD data that
                           should go into the same map.
-        experiment_data (DetectorTOD): TOD data class to be made into maps.
-        compsep_output (np.array): The sky model at our band. Not used, but written to chain file.
-        detector_samples (DetectorSamples): Sampled TOD parameters, such as gain.
+        experiment_data (DetGroupTOD): TOD data class to be made into maps.
+        compsep_output (NDArray): The sky model at our band. Not used, but written to chain file.
+        detector_samples (TODSamples): Sampled TOD parameters, such as gain.
         params (Bunch): Parameter file as 'Param' object.
         chain (int): Current chain number.
         iter (int): Current Gibbs iteration.
         do_ncorr_sampling (bool): Perform correlated noise sampling or not.
-    Optional:
-        pols (str): IQU by default, if I only solves for a temperature map.
     Output:
-        dict[DetectorMap]: dictionary containing the solved detector maps, [I, QU], [I] or [QU].
+        dict[str, DetectorMap]: Dictionary containing the solved detector maps, keyed by
+            polarization component ('I', 'QU').
 
     """
     logger = logging.getLogger(__name__)
@@ -272,7 +282,6 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output
 
         maps_to_file = {}
         maps_to_file["map_observed_sky"] = map_signal
-        maps_to_file["map_observed_sky"] = map_signal
         maps_to_file["map_rms"] = map_rms
         if params.general.write_orb_dipole_maps_to_chain:
             maps_to_file["map_orbdipole"] = map_orbdipole
@@ -287,25 +296,24 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output
     return detmap_dict_out #empty on non-master ranks
 
 
-def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_output: NDArray,
-            detector_samples: DetectorSamples, params: Bunch, chain: int, iter: int,
-            do_ncorr_sampling: bool) -> dict[DetectorMap]:
+def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output: NDArray,
+            tod_samples: TODSamples, params: Bunch, chain: int, iter: int,
+            do_ncorr_sampling: bool) -> dict[str, DetectorMap]:
     """ Commander4 bin mapmaking. All ranks on the provided MPI communicator collaborates on creating
         the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
     Args:
         band_comm (Comm): The communicator consisting of all MPI ranks which holds TOD data that
                           should go into the same map.
-        experiment_data (DetectorTOD): TOD data class to be made into maps.
-        compsep_output (np.array): The sky model at our band. Not used, but written to chain file.
-        detector_samples (DetectorSamples): Sampled TOD parameters, such as gain.
+        experiment_data (DetGroupTOD): TOD data class to be made into maps.
+        compsep_output (NDArray): The sky model at our band. Not used, but written to chain file.
+        tod_samples (TODSamples): Sampled TOD parameters, such as gain.
         params (Bunch): Parameter file as 'Param' object.
         chain (int): Current chain number.
         iter (int): Current Gibbs iteration.
         do_ncorr_sampling (bool): Perform correlated noise sampling or not.
-    Optional:
-        pols (str): IQU by default, if I only solves for a temperature map.
     Output:
-        dict[DetectorMap]: dictionary containing the solved detector maps, [I, QU], [I] or [QU].
+        dict[str, DetectorMap]: Dictionary containing the solved detector maps, keyed by
+            polarization component ('I', 'QU').
 
     """
     logger = logging.getLogger(__name__)
@@ -315,11 +323,12 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_outpu
     # as we have to de-compress pix and psi twice.
     pols = experiment_data.pols
     mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)    
-    for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-        pix = scan.pix
-        psi = scan.psi
-        inv_var = 1.0/scan_samples.sigma0**2
-        mapmaker_invvar.accumulate_to_map(inv_var, pix, psi)
+    for iscan, scan in enumerate(experiment_data.scans):
+        for idet, det in enumerate(scan.detectors):
+            pix = det.pix
+            psi = det.psi
+            inv_var = 1.0/tod_samples.sigma0_est[idet,iscan]**2
+            mapmaker_invvar.accumulate_to_map(inv_var, pix, psi)
     mapmaker_invvar.gather_map()
     mapmaker_invvar.normalize_map()
 
@@ -334,64 +343,70 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_outpu
         worst_residual_ncorr = 0
 
     ### MAIN SCAN LOOP ###
-    for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-        d_sky = scan.tod.copy()
-        pix = scan.pix
-        psi = scan.psi
-        inv_var = 1.0/scan_samples.sigma0**2
+    for iscan, scan in enumerate(experiment_data.scans):
+        for idet, det in enumerate(scan.detectors):
+            d_sky = det.tod.copy()
+            pix = det.pix
+            psi = det.psi
+            inv_var = 1.0/tod_samples.sigma0_est[idet,iscan]**2
+            gain = tod_samples.gain_est[idet,iscan]
 
-        ### ORBITAL DIPOLE ###
-        sky_orb_dipole = get_s_orb_TOD(scan, experiment_data, pix)
-        d_sky -= scan_samples.gain_est*sky_orb_dipole
+            ### ORBITAL DIPOLE ###
+            sky_orb_dipole = get_s_orb_TOD(det, experiment_data, pix)
+            d_sky -= gain*sky_orb_dipole
 
-        ### CORRELATED NOISE SAMPLING ###
-        if do_ncorr_sampling:
-            s_tot = get_static_sky_TOD(compsep_output, pix, psi)
-            s_tot += sky_orb_dipole
-            sky_subtracted_TOD = scan.tod.copy()
-            sky_subtracted_TOD -= scan_samples.gain_est*s_tot
-            Ntod = sky_subtracted_TOD.shape[0]
-            Nfft = Ntod//2 + 1
-            freq = rfftfreq(Ntod, d = 1/scan.fsamp)
-            fknee = scan_samples.fknee_est
-            alpha = scan_samples.alpha_est
-            mask = scan.processing_mask_TOD
-            sigma0_ncorr = calculate_sigma0(sky_subtracted_TOD, mask)
-            C_1f_inv = np.zeros(Nfft)
-            C_1f_inv[1:] = 1.0 / (sigma0_ncorr**2*(freq[1:]/fknee)**alpha)
-            # C_1f_inv[0] = C_1f_inv[-1]  # Test: try and constrain DC mode somewhat.
-            err_tol = 1e-8
-            n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
-                                                                    mask, sigma0_ncorr, C_1f_inv,
-                                                                    err_tol=err_tol)
-            mapmaker_ncorr.accumulate_to_map((n_corr_est/scan_samples.gain_est).astype(np.float32),
-                                             inv_var, pix, psi)
-            if residual > err_tol:
-                num_failed_convergences_ncorr += 1
-                worst_residual_ncorr = max(worst_residual_ncorr, residual)
+            ### CORRELATED NOISE SAMPLING ###
+            if do_ncorr_sampling:
+                s_tot = get_static_sky_TOD(compsep_output, pix, psi)
+                s_tot += sky_orb_dipole
+                sky_subtracted_TOD = det.tod.copy()
+                sky_subtracted_TOD -= gain*s_tot
+                Ntod = sky_subtracted_TOD.shape[0]
+                Nfft = Ntod//2 + 1
+                freq = rfftfreq(Ntod, d = 1/det.fsamp)
+                fknee = tod_samples.fknee_est[idet,iscan]
+                alpha = tod_samples.alpha_est[idet,iscan]
+                mask = det.processing_mask_TOD
+                sigma0_ncorr = calculate_sigma0(sky_subtracted_TOD, mask)
+                C_1f_inv = np.zeros(Nfft)
+                C_1f_inv[1:] = 1.0 / (sigma0_ncorr**2*(freq[1:]/fknee)**alpha)
+                # C_1f_inv[0] = C_1f_inv[1]
+                C_1f_inv[0] = 1e6*C_1f_inv[1]
+                # C_1f_inv[0] = C_1f_inv[-1]  # Test: try and constrain DC mode somewhat.
+                err_tol = 1e-8
+                n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
+                                                                        mask, sigma0_ncorr, C_1f_inv,
+                                                                        err_tol=err_tol)
+                mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32),
+                                                  inv_var, pix, psi)
+                if residual > err_tol:
+                    num_failed_convergences_ncorr += 1
+                    worst_residual_ncorr = max(worst_residual_ncorr, residual)
 
-            ### CORRELATED NOISE POWER SPECTRUM PARAMETERS SAMPLING ###
-            fknee, alpha = sample_noise_PS_params(n_corr_est, sigma0_ncorr, scan.fsamp, alpha,
-                                                  freq_max=2.0, n_grid=150, n_burnin=4)
-            scan_samples.fknee_est = fknee
-            scan_samples.alpha_est = alpha
-            alphas.append(alpha)
-            fknees.append(fknee)
+                ### CORRELATED NOISE POWER SPECTRUM PARAMETERS SAMPLING ###
+                fknee, alpha = sample_noise_PS_params(n_corr_est, sigma0_ncorr, det.fsamp, alpha,
+                                                      freq_max=2.0, n_grid=150, n_burnin=4)
+                tod_samples.fknee_est[idet,iscan] = fknee
+                tod_samples.alpha_est[idet,iscan] = alpha
+                alphas.append(alpha)
+                fknees.append(fknee)
 
-            d_sky -= n_corr_est
+                d_sky -= n_corr_est
 
-        mapmaker.accumulate_to_map(d_sky/scan_samples.gain_est, inv_var, pix, psi)
-        mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
+            mapmaker.accumulate_to_map(d_sky/gain, inv_var, pix, psi)
+            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
 
     ### PRINT NOISE SAMPLING STATS ###
     if do_ncorr_sampling:
         num_failed_convergences_ncorr = band_comm.reduce(num_failed_convergences_ncorr, op=MPI.SUM)
         worst_residual_ncorr = band_comm.reduce(worst_residual_ncorr, op=MPI.MAX)
         if band_comm.Get_rank() == 0:
+            logger.debug(f"Worst corr-noise sampling residual (band {experiment_data.nu}GHz) = "\
+                         f"{worst_residual_ncorr:.2e}.")
             if num_failed_convergences_ncorr > 0:
-                logger.info(f"Band {experiment_data.nu}GHz failed noise CG for "\
-                            f"{num_failed_convergences_ncorr} scans. "\
-                            f"Worst residual = {worst_residual_ncorr:.3e}.")
+                logger.warning(f"Band {experiment_data.nu}GHz failed noise CG for "\
+                               f"{num_failed_convergences_ncorr} scans. "\
+                               f"Worst residual = {worst_residual_ncorr:.3e}.")
 
         alphas = band_comm.gather(alphas, root=0)
         fknees = band_comm.gather(fknees, root=0)
@@ -427,18 +442,16 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_outpu
         if "I" in pols:
             detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
                                 experiment_data.fwhm, experiment_data.nside)
-            detmap_I.g0 = detector_samples.g0_est
-            detmap_I.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
+            detmap_I.g0 = tod_samples.g0_est
+            
             detmap_dict_out.update({"I": detmap_I})
         if "QU" in pols:
             detmap_QU = DetectorMap(map_signal[1:3,:], map_rms[1:3,:], experiment_data.nu,
                                 experiment_data.fwhm, experiment_data.nside)
-            detmap_QU.g0 = detector_samples.g0_est
-            detmap_QU.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
+            detmap_QU.g0 = tod_samples.g0_est
             detmap_dict_out.update({"QU": detmap_QU})
 
         maps_to_file = {}
-        maps_to_file["map_observed_sky"] = map_signal
         maps_to_file["map_observed_sky"] = map_signal
         maps_to_file["map_rms"] = map_rms
         if params.general.write_orb_dipole_maps_to_chain:
@@ -454,8 +467,8 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorTOD, compsep_outpu
     return detmap_dict_out #empty on non-master ranks
 
 
-def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, DetectorTOD,
-                                                                 DetectorSamples]:
+def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, DetGroupTOD,
+                                                                 TODSamples]:
     """To be run once before starting TOD processing.
 
     Determines whether the process is TOD master, creates the band communicator
@@ -472,7 +485,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
             master mappings.
         todproc_my_band_id (str): Unique string identifier for the experiment+band this process is
           responsible for, regardless of polarization.
-        experiment_data (DetectorTOD): THe TOD data for the band of this process.
+        experiment_data (DetGroupTOD): The TOD data for the band of this process.
     """
 
     logger = logging.getLogger(__name__)
@@ -481,6 +494,9 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
     # TOD MPI communicator. These ranks will then become the "band masters" for those bands,
     # handling all communication with CompSep.
     # All the non-master ranks will have None values, and receive info from master further down.
+    nranks_on_my_band = mpi_info.band.size
+    ndets_on_my_band = None
+    det_names = []
     my_experiment_name = None
     my_band_name = None
     my_experiment = None
@@ -500,36 +516,32 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
             band = experiment.bands[band_name]
             if not band.enabled:
                 continue
-            for idet, det_name in enumerate(band.detectors):
-                detector = band.detectors[det_name]
-                # Checking if our rank is allocated to this experiment + band + detector.
-                if mpi_info.experiment.name == exp_name and mpi_info.band.name == band_name\
-                and mpi_info.det.name == det_name:
-                    my_band_name = band_name
-                    my_band = band
-                    my_band_pol = band.polarization
-                    my_band_id = iband
-                    # What is my rank number among the ranks processing this detector?
-                    my_experiment_name = exp_name
-                    my_experiment = experiment
-                    my_det = detector
-                    # Setting our unique detector id. Note that this is a global, not per band.
-                    my_detector_id = current_detector_id
-                    tot_num_scans = experiment.num_scans
-                    scans = np.arange(tot_num_scans)
-                    my_scans = np.array_split(scans, mpi_info.det.size)[mpi_info.det.rank]
-                    my_scans_start = my_scans[0]
-                    my_scans_stop = my_scans[-1]
-                # Update unique detector counter either way.
-                current_detector_id += 1
-                # Collect all gain values from detectors on the same experiment as us.
-                if mpi_info.experiment.name == exp_name:
+            # Checking if our rank is allocated to this experiment + band.
+            if mpi_info.experiment.name == exp_name and mpi_info.band.name == band_name:
+                my_band_name = band_name
+                my_band = band
+                my_band_pol = band.polarization
+                my_band_id = iband
+                # What is my rank number among the ranks processing this detector?
+                my_experiment_name = exp_name
+                my_experiment = experiment
+                # Setting our unique detector id. Note that this is a global, not per band.
+                tot_num_scans = experiment.num_scans
+                scans = np.arange(tot_num_scans)
+                my_scans = np.array_split(scans, mpi_info.band.size)[mpi_info.band.rank]
+                my_scans_start = my_scans[0]
+                my_scans_stop = my_scans[-1]
+                ndets_on_my_band = len(band.detectors)
+                det_names = [det for det in band.detectors]
+                for idet, det_name in enumerate(band.detectors):
+                    detector = band.detectors[det_name]
                     all_det_gains.append(detector.gain_est)
+    all_det_gains = np.array(all_det_gains)
     mpi_info.tod.comm.Barrier()
 
 
     logger.debug(f"TOD-rank {mpi_info.tod.rank:4} (on machine {mpi_info.processor_name}), "\
-                 f"dedicated to detector {my_detector_id:4}, with local rank {mpi_info.det.rank:4}"\
+                #  f"dedicated to detector {my_detector_id:4}, with local rank {mpi_info.det.rank:4}"\
                  f" (local communicator size: {mpi_info.det.size:4}).")
     time.sleep(mpi_info.tod.rank*1e-5)  # Small sleep to get prints in nice order.
     # MPIcolor_band = MPIrank_tod%tot_num_bands  # Spread the MPI tasks over the different bands.
@@ -539,39 +551,44 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
                  f"(local communicator size: {mpi_info.band.size:4}).")
     
     # Create communicators for each different band.
-    det_comm = band_comm.Split(my_detector_id, key=mpi_info.tod.rank)
+    # det_comm = band_comm.Split(my_detector_id, key=mpi_info.tod.rank)
     logger.debug(f"TOD-rank {mpi_info.tod.rank:4} (on machine {mpi_info.processor_name}), "\
-                 f"dedicated to detector {my_detector_id:4}, with local rank {mpi_info.det.rank:4}"\
+                #  f"dedicated to detector {my_detector_id:4}, with local rank {mpi_info.det.rank:4}"\
                  f" (local communicator size: {mpi_info.det.size:4}).")
 
     t0 = time.time()
-    experiment_data = read_tods_from_file(det_comm, my_experiment, my_band, my_det, params,
-                                          my_detector_id, my_scans_start, my_scans_stop)
-
+    experiment_data = read_tods_from_file(band_comm, my_experiment, my_band, det_names, params,
+                                          my_scans_start, my_scans_stop)
+    #FIXME: Make this not a hacky fix.
+    if "init_sky_from" in my_band:
+        experiment_data.sky_init_files = my_band.init_sky_from
+    else:
+        experiment_data.sky_init_files = []
     mpi_info.tod.comm.Barrier()
     if mpi_info.tod.is_master:
         logger.info(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")
 
-    # Find the detector-averaged gain for our experiment, which serves as the initial g0 estimate.
-    initial_g0_est = np.mean(all_det_gains)
-    # Then calculate our detectors relative gain.
-    my_det_rel_gain_est = my_det.gain_est - initial_g0_est
-    num_scans = len(experiment_data.scans)
-    scansample_list = []
-    for iscan in range(num_scans):
-        scansample_list.append(ScanSamples())
-        scansample_list[-1].scanID = experiment_data.scans[iscan].scanID
-        scansample_list[-1].time_dep_rel_gain_est = 0.0
-        scansample_list[-1].gain_est = my_det.gain_est
-        scansample_list[-1].rel_gain_est = my_det_rel_gain_est
-    det_samples = DetectorSamples(scansample_list)
-    det_samples.detector_id = my_detector_id
-    det_samples.g0_est = initial_g0_est
-    det_samples.detector_name = my_det._name
-    det_samples.experiment_name = my_experiment._name
+    # The actual number of scans may be less than my_scans_stop - my_scans_start, because
+    # bad PIDs are filtered out during TOD reading.
+    my_num_scans = len(experiment_data.scans)
 
-    if mpi_info.tod.is_master:
-        logger.info(f"Initial absolute gain estimate for {exp_name}: {initial_g0_est:.2e}.")
+    # Find the detector-averaged gain for our experiment, which serves as the initial g0 estimate.
+    initial_g0_est = float(np.mean(all_det_gains))
+    tod_samples = TODSamples()
+    tod_samples.experiment_name = my_experiment._name
+    tod_samples.band_name = my_band._name
+    tod_samples.g0_est = initial_g0_est
+    tod_samples.rel_gain_est = np.zeros(ndets_on_my_band, dtype=np.float32)
+    tod_samples.rel_gain_est[:] = all_det_gains - initial_g0_est
+    tod_samples.time_dep_rel_gain_est = np.zeros((ndets_on_my_band, my_num_scans), dtype=np.float32)
+    tod_samples.gain_est = tod_samples.g0_est + tod_samples.rel_gain_est[:,None] + tod_samples.time_dep_rel_gain_est
+    tod_samples.sigma0_est = np.zeros((ndets_on_my_band, my_num_scans), dtype=np.float32)
+    tod_samples.alpha_est = np.zeros((ndets_on_my_band, my_num_scans), dtype=np.float32) + params.general.noise_alpha
+    tod_samples.fknee_est = np.zeros((ndets_on_my_band, my_num_scans), dtype=np.float32) + params.general.noise_fknee
+
+    if mpi_info.band.is_master:
+        logger.debug(f"Initial absolute gain estimate for {my_band._name}: {initial_g0_est:.3e}.")
+        logger.debug(f"Initial rel gain estimates for {my_band._name}: {tod_samples.rel_gain_est}.")
 
     # Creating "tod_band_masters", an array which maps the band index to the rank of the master
     # of that band.
@@ -596,522 +613,465 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
     logger.info(f"tod_band_masters_dict: {tod_band_masters_dict}")
     # logger.info(f"tod_band_pol_dict: {tod_band_pol_dict}")
     logger.info(f"TOD: Rank {mpi_info.tod.rank:4} assigned scans {my_scans_start:6} - "\
-                f"{my_scans_stop:6} on band {my_band_id:4}, det{my_detector_id:4}.")
+                f"{my_scans_stop:6} on band {my_band_id:4}.")
     mpi_info['world']['tod_band_masters'] = world_band_masters_dict
     mpi_info['tod']['tod_band_masters'] = tod_band_masters_dict
     # mpi_info['world']['tod_band_pols'] = tod_band_pol_dict
 
-    return mpi_info, todproc_my_band_id, experiment_data, det_samples
+    return mpi_info, todproc_my_band_id, experiment_data, tod_samples
 
 
-def estimate_white_noise(experiment_data: DetectorTOD, detector_samples: DetectorSamples,
-                         det_compsep_map: NDArray, params: Bunch) -> DetectorTOD:
-    """ Estimate the white noise level in the TOD data, add it to the scans, and return the updated
-        experiment data.
+def estimate_white_noise(experiment_data: DetGroupTOD, tod_samples: TODSamples,
+                         det_compsep_map: NDArray, params: Bunch) -> TODSamples:
+    """ Estimate the white noise level in the TOD data and return the updated TOD samples.
     Input:
-        experiment_data (DetectorTOD): The experiment TOD object.
+        experiment_data (DetGroupTOD): The experiment TOD object.
+        tod_samples (TODSamples): Current sampled TOD parameters.
+        det_compsep_map (NDArray): The component-separation sky map for the detector.
         params (Bunch): The parameters from the input parameter file.
     Output:
-        experiment_data (DetectorTOD): The experiment TOD with the estimated white noise level
-        added to each scan.
+        tod_samples (TODSamples): Updated TOD samples with sigma0 estimates.
     """
-    for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-        pix = scan.pix
-        psi = scan.psi if "QU" in experiment_data.pols else None
-        # FIXME: Should maybe n_corr be subtracted here as well?
-        sky_subtracted_tod = scan.tod.copy()
-        sky_subtracted_tod -= scan_samples.gain_est*get_static_sky_TOD(det_compsep_map, pix, psi=psi)
-        sky_subtracted_tod -= scan_samples.gain_est*get_s_orb_TOD(scan, experiment_data, pix)
-        mask = scan.processing_mask_TOD
-        sigma0 = calculate_sigma0(sky_subtracted_tod, mask)
-        scan_samples.sigma0 = float(sigma0/scan_samples.gain_est)
-    return detector_samples
+    for iscan, scan in enumerate(experiment_data.scans):
+        for idetector, detector in enumerate(scan.detectors):
+            pix = detector.pix
+            psi = detector.psi if "QU" in experiment_data.pols else None
+            # FIXME: Should maybe n_corr be subtracted here as well?
+            gain = tod_samples.gain_est[idetector,iscan]
+            sky_subtracted_tod = detector.tod.copy()
+            sky_subtracted_tod -= gain*get_static_sky_TOD(det_compsep_map, pix, psi=psi)
+            sky_subtracted_tod -= gain*get_s_orb_TOD(detector, experiment_data, pix)
+            mask = detector.processing_mask_TOD
+            sigma0 = calculate_sigma0(sky_subtracted_tod, mask)
+            tod_samples.sigma0_est[idetector,iscan] = sigma0/gain
+    return tod_samples
 
 
 
-def sample_absolute_gain(TOD_comm: MPI.Comm, experiment_data: DetectorTOD, detector_samples,
+def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_samples: TODSamples,
                          det_compsep_map: NDArray):
-    """ Function for drawing a realization of the absolute gain term, g0, which is constant
-        across both all bands and all scans.
-        Args:
-            TOD_comm (MPI.Comm): The full TOD communicator, since we will calculate a single g0
-            value across all bands. experiment_data (DetectorTOD): The object holding all the scan
-            data. Will be changed in-place to update g0. params (Bunch): Parameters from param file
+    """ Draw a realization of the absolute gain term, g0, which is constant across all
+        detectors and all scans within a band.
+    Args:
+        band_comm (MPI.Comm): The band-level MPI communicator.
+        experiment_data (DetGroupTOD): The object holding all the scan data.
+        tod_samples (TODSamples): Current sampled TOD parameters (updated in-place with g0).
+        det_compsep_map (NDArray): The component-separation sky map for the detector.
+    Returns:
+        tod_samples (TODSamples): Updated TOD samples with the new g0 estimate.
+        wait_time (float): Time spent waiting at the MPI barrier.
     """
     logger = logging.getLogger(__name__)
 
     sum_s_T_N_inv_d = 0  # Accumulators for the numerator and denominator of eqn 16.
     sum_s_T_N_inv_s = 0
 
-    for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-        f_samp = scan.fsamp
-        down_factor = int(f_samp)
-        indices_edges = np.arange(0, scan.ntod, down_factor)
-        indices_centers = (indices_edges[1:] + indices_edges[:-1])//2
-        ntod_down = indices_centers.size
+    for iscan, scan in enumerate(experiment_data.scans):
+        for idet, det in enumerate(scan.detectors):
+            f_samp = det.fsamp
+            down_factor = int(f_samp)
+            indices_edges = np.arange(0, det.ntod, down_factor)
+            indices_centers = (indices_edges[1:] + indices_edges[:-1])//2
+            ntod_down = indices_centers.size
 
-        assert((ntod_down+1)*down_factor >= scan.tod.shape[0])
+            assert((ntod_down+1)*down_factor >= det.tod.shape[0])
 
-        pix = scan.pix  # Only decompressing pix once for efficiency.
-        psi = scan.psi
-        pix = pix[indices_centers]
-        psi = psi[indices_centers]
+            pix = det.pix  # Only decompressing pix once for efficiency.
+            psi = det.psi
+            pix = pix[indices_centers]
+            psi = psi[indices_centers]
 
-        s_orb = get_s_orb_TOD(scan, experiment_data, pix)
-        sky_model_TOD = get_static_sky_TOD(det_compsep_map, pix, psi=psi)
+            s_orb = get_s_orb_TOD(det, experiment_data, pix)
+            sky_model_TOD = get_static_sky_TOD(det_compsep_map, pix, psi=psi)
 
-        residual_tod = scan.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
-        residual_tod = np.mean(residual_tod, axis=-1)
-        residual_tod -= scan_samples.gain_est*sky_model_TOD  # Subtracting sky signals.
-        residual_tod -= scan_samples.gain_est*s_orb 
-        mask = scan.processing_mask_TOD[indices_centers]
-        sigma0 = calculate_sigma0(residual_tod, mask)
-        residual_tod += detector_samples.g0_est*s_orb  # Now we can add back in the orbital dipole.
+            residual_tod = det.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
+            residual_tod = np.mean(residual_tod, axis=-1)
+            residual_tod -= tod_samples.gain_est[idet,iscan]*sky_model_TOD  # Subtracting sky signals.
+            residual_tod -= tod_samples.gain_est[idet,iscan]*s_orb 
+            mask = det.processing_mask_TOD[indices_centers]
+            sigma0 = calculate_sigma0(residual_tod, mask)
+            residual_tod += tod_samples.g0_est*s_orb  # Now we can add back in the orbital dipole.
 
-        Ntod = residual_tod.shape[0]
-        Nrfft = Ntod//2+1
-        freqs = rfftfreq(Ntod, 1.0)
-        # freqs = rfftfreq(Ntod, 1.0/scan.fsamp)
-        inv_power_spectrum = np.zeros(Nrfft)
-        inv_power_spectrum[1:] = 1.0/(sigma0**2*(1 + (freqs[1:]/scan_samples.fknee_est)\
-                                                 **scan_samples.alpha_est))
+            Ntod = residual_tod.shape[0]
+            Nrfft = Ntod//2+1
+            freqs = rfftfreq(Ntod, 1.0)
+            inv_power_spectrum = np.zeros(Nrfft)
+            inv_power_spectrum[1:] = 1.0/(sigma0**2*(1 + (freqs[1:]/tod_samples.fknee_est[idet,iscan])\
+                                                    **tod_samples.alpha_est[idet,iscan]))
 
-        ### Solving Equation 16 from BP7 ###
-        mask = scan.processing_mask_TOD[indices_centers]
-        # In the masked regions, inpaint the orbital dipole times the absolute gain.
-        residual_tod[~mask] = detector_samples.g0_est*s_orb[~mask]\
-                            + np.random.normal(0, sigma0, s_orb[~mask].shape)
-        
-        s_fft = forward_rfft(s_orb)
-        d_fft = forward_rfft(residual_tod)
-        N_inv_s_fft = s_fft * inv_power_spectrum
-        N_inv_d_fft = d_fft * inv_power_spectrum
-        N_inv_s = backward_rfft(N_inv_s_fft, Ntod)
-        N_inv_d = backward_rfft(N_inv_d_fft, Ntod)
-        
-        # We now exclude the time-samples hitting the masked area.
-        # We don't want to do this before now, because it would mess up the FFT stuff.
+            ### Solving Equation 16 from BP7 ###
+            mask = det.processing_mask_TOD[indices_centers]
+            # In the masked regions, inpaint the orbital dipole times the absolute gain.
+            residual_tod[~mask] = tod_samples.g0_est*s_orb[~mask]\
+                                + np.random.normal(0, sigma0, s_orb[~mask].shape)
+            
+            s_fft = forward_rfft(s_orb)
+            d_fft = forward_rfft(residual_tod)
+            N_inv_s_fft = s_fft * inv_power_spectrum
+            N_inv_d_fft = d_fft * inv_power_spectrum
+            N_inv_s = backward_rfft(N_inv_s_fft, Ntod)
+            N_inv_d = backward_rfft(N_inv_d_fft, Ntod)
+            
+            # We now exclude the time-samples hitting the masked area.
+            # We don't want to do this before now, because it would mess up the FFT stuff.
 
-        # mask = experiment_data.processing_mask_map[scan.pix]
-        # Add to the numerator and denominator.
-        # sum_s_T_N_inv_d += np.dot(s_orb[mask], N_inv_d[mask])
-        # sum_s_T_N_inv_s += np.dot(s_orb[mask], N_inv_s[mask])
-        sum_s_T_N_inv_d += np.dot(s_orb, N_inv_d)
-        sum_s_T_N_inv_s += np.dot(s_orb, N_inv_s)
+            # mask = experiment_data.processing_mask_map[scan.pix]
+            # Add to the numerator and denominator.
+            # sum_s_T_N_inv_d += np.dot(s_orb[mask], N_inv_d[mask])
+            # sum_s_T_N_inv_s += np.dot(s_orb[mask], N_inv_s[mask])
+            sum_s_T_N_inv_d += np.dot(s_orb, N_inv_d)
+            sum_s_T_N_inv_s += np.dot(s_orb, N_inv_s)
 
     # The g0 term is fully global, so we reduce across both all scans and all bands:
-    sum_s_T_N_inv_d = TOD_comm.reduce(sum_s_T_N_inv_d, op=MPI.SUM, root=0)
-    sum_s_T_N_inv_s = TOD_comm.reduce(sum_s_T_N_inv_s, op=MPI.SUM, root=0)
+    sum_s_T_N_inv_d = band_comm.reduce(sum_s_T_N_inv_d, op=MPI.SUM, root=0)
+    sum_s_T_N_inv_s = band_comm.reduce(sum_s_T_N_inv_s, op=MPI.SUM, root=0)
     g_sampled = 0.0
     # Rank 0 draws a sample of g0 from eq (16) from BP6, and bcasts it to the other ranks.
-    if TOD_comm.Get_rank() == 0:
+    if band_comm.Get_rank() == 0:
         eta = np.random.randn()
         g_mean = sum_s_T_N_inv_d / sum_s_T_N_inv_s
         g_std = 1.0 / np.sqrt(sum_s_T_N_inv_s)
 
         g_sampled = g_mean + eta * g_std
-        logger.info(f"Previous g0:   {detector_samples.g0_est*1e9:10.5f}.")
+        logger.info(f"Previous g0:   {tod_samples.g0_est*1e9:10.5f}.")
         logger.info(f"New g0 mean:   {g_mean*1e9:10.5f}.")
         logger.info(f"New g0 std:    {g_std*1e9:10.5f}.")
         logger.info(f"New g0 sample: {g_sampled*1e9:10.5f}.")
 
     t0 = time.time()
-    TOD_comm.Barrier()
+    band_comm.Barrier()
     wait_time = time.time() - t0
-    g_sampled = TOD_comm.bcast(g_sampled, root=0)
+    g_sampled = band_comm.bcast(g_sampled, root=0)
 
     # As of Numpy 2.0 it's good practice to explicitly cast to Python scalar types, as this would
     # otherwise have been a np.float64 type, potentially causing unexpected casting behavior later.
-    detector_samples.g0_est = float(g_sampled)
+    tod_samples.g0_est = float(g_sampled)
 
-    return detector_samples, wait_time
+    return tod_samples, wait_time
 
 
-def sample_relative_gain(TOD_comm: MPI.Comm, det_comm: MPI.Comm, experiment_data: DetectorTOD,
-                         detector_samples: DetectorSamples, det_compsep_map: NDArray):
-    """ Samples the detector-dependent relative gain (Delta g_i). This function implements the logic
-        from Sec. 3.4 of the BP7. It uses a two-stage MPI communication:
-        1. A reduction over the `det_comm` to accumulate sums for a single detector
-        that is distributed across multiple ranks.
-        2. A gather over the global `TOD_comm` to collect the final sums from each
-        unique detector on the root rank for solving the global system.
+def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
+                         tod_samples: TODSamples, det_compsep_map: NDArray):
+    """ Samples the detector-dependent relative gain (Delta g_i). This function implements the
+        logic from Sec. 3.4 of BP7.
     Args:
-        TOD_comm (MPI.Comm): The global MPI communicator for all bands.
-        det_comm (MPI.Comm): The communicator for ranks sharing the same detector.
-        experiment_data (DetectorTOD): The object holding scan data for a single
-                                       detector on the calling rank.
-        params (Bunch): Parameters from the parameter file.
+        band_comm (MPI.Comm): The band-level MPI communicator.
+        experiment_data (DetGroupTOD): The object holding scan data for the band.
+        tod_samples (TODSamples): Current sampled TOD parameters.
+        det_compsep_map (NDArray): The component-separation sky map for the detector.
     Returns:
-        detector_samples (DetectorSamples): In-place edited input samples.
+        tod_samples (TODSamples): Updated TOD samples with relative gain estimates.
     """
     logger = logging.getLogger(__name__)
-    global_rank = TOD_comm.Get_rank()
-    band_rank = det_comm.Get_rank()
+    global_rank = band_comm.Get_rank()
+    # band_rank = det_comm.Get_rank()
+    ndet = experiment_data.ndet
 
     #### 1. Local Calculation (on each rank) ###
     # Each rank calculates the sum of terms for its local subset of scans.
-    local_s_T_N_inv_s = 0.0
-    local_r_T_N_inv_s = 0.0
+    # local_s_T_N_inv_s = 0.0
+    local_s_T_N_inv_s = np.zeros(ndet, dtype=np.float32)
 
-    for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-        f_samp = scan.fsampwait_time
-        down_factor = int(f_samp)
-        indices_edges = np.arange(0, scan.ntod, down_factor)
-        indices_centers = (indices_edges[1:] + indices_edges[:-1])//2
-        ntod_down = indices_centers.size
+    # local_r_T_N_inv_s = 0.0
+    local_r_T_N_inv_s = np.zeros(ndet, dtype=np.float32)
 
-        # Define the residual for this sampling step, as per Eq. (17)
-        pix = scan.pix
-        psi = scan.psi
-        pix = pix[indices_centers]
-        psi = psi[indices_centers]
 
-        s_tot = get_static_sky_TOD(det_compsep_map, pix, psi=psi)
+    for iscan, scan in enumerate(experiment_data.scans):
+        for idet, det in enumerate(scan.detectors):
+            f_samp = det.fsamp
+            down_factor = int(f_samp)
+            indices_edges = np.arange(0, det.ntod, down_factor)
+            indices_centers = (indices_edges[1:] + indices_edges[:-1])//2
+            ntod_down = indices_centers.size
 
-        s_tot += get_s_orb_TOD(scan, experiment_data, pix)
+            # Define the residual for this sampling step, as per Eq. (17)
+            pix = det.pix
+            psi = det.psi
+            pix = pix[indices_centers]
+            psi = psi[indices_centers]
 
-        # residual_tod = scan.tod.copy()
-        gain = detector_samples.g0_est + scan_samples.time_dep_rel_gain_est
-        residual_tod = scan.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
-        residual_tod = np.mean(residual_tod, axis=-1)
-        residual_tod -= gain*s_tot
-        mask = scan.processing_mask_TOD[indices_centers]
-        sigma0 = calculate_sigma0(residual_tod, mask)
+            s_tot = get_static_sky_TOD(det_compsep_map, pix, psi)
 
-        # Setup FFT-based calculation for N^-1 operations
-        Ntod = residual_tod.shape[0]
-        Nrfft = Ntod // 2 + 1
-        # sigma0 = scan_samples.gain_est*scan_samples.sigma0  # scan.sigma0 is in tempearture units.
-        # freqs = rfftfreq(Ntod, 1.0 / scan.fsamp)
-        freqs = rfftfreq(Ntod, 1.0)
-        inv_power_spectrum = np.zeros(Nrfft)
-        inv_power_spectrum[1:] = 1.0 / (sigma0**2 * (1 + (freqs[1:] / scan_samples.fknee_est)\
-                                                     **scan_samples.alpha_est))
+            s_tot += get_s_orb_TOD(det, experiment_data, pix)
 
-        s_fft = forward_rfft(s_tot)
-        N_inv_s_fft = s_fft * inv_power_spectrum
-        N_inv_s = backward_rfft(N_inv_s_fft, Ntod)
-        
-        # mask = experiment_data.processing_mask_map[scan.pix]
-        # Inpaint on the masked regions the sky signal times only the detector-residual gain.
-        residual_tod[~mask] = scan_samples.rel_gain_est*s_tot[~mask]\
-                            + np.random.normal(0, sigma0, s_tot[~mask].shape)
-        s_T_N_inv_s_scan = np.dot(s_tot, N_inv_s)
-        r_T_N_inv_s_scan = np.dot(residual_tod, N_inv_s)
-        # s_T_N_inv_s_scan = np.dot(s_tot[mask], N_inv_s[mask])
-        # r_T_N_inv_s_scan = np.dot(residual_tod[mask], N_inv_s[mask])
+            gain = tod_samples.g0_est + tod_samples.time_dep_rel_gain_est[idet,iscan]
+            residual_tod = det.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
+            residual_tod = np.mean(residual_tod, axis=-1)
+            residual_tod -= gain*s_tot
+            mask = det.processing_mask_TOD[indices_centers]
+            sigma0 = calculate_sigma0(residual_tod, mask)
 
-        # Add the contribution from this scan to the local sum
-        local_s_T_N_inv_s += s_T_N_inv_s_scan
-        local_r_T_N_inv_s += r_T_N_inv_s_scan
+            # Setup FFT-based calculation for N^-1 operations
+            Ntod = residual_tod.shape[0]
+            Nrfft = Ntod // 2 + 1
+            freqs = rfftfreq(Ntod, 1.0)
+            inv_power_spectrum = np.zeros(Nrfft)
+            inv_power_spectrum[1:] = 1.0 / (sigma0**2 * (1 + (freqs[1:] / tod_samples.fknee_est[idet,iscan])\
+                                                        **tod_samples.alpha_est[idet,iscan]))
+
+            s_fft = forward_rfft(s_tot)
+            N_inv_s_fft = s_fft * inv_power_spectrum
+            N_inv_s = backward_rfft(N_inv_s_fft, Ntod)
+            
+            # Inpaint on the masked regions the sky signal times only the detector-residual gain.
+            residual_tod[~mask] = tod_samples.rel_gain_est[idet]*s_tot[~mask]\
+                                + np.random.normal(0, sigma0, s_tot[~mask].shape)
+            s_T_N_inv_s_scan = np.dot(s_tot, N_inv_s)
+            r_T_N_inv_s_scan = np.dot(residual_tod, N_inv_s)
+            # s_T_N_inv_s_scan = np.dot(s_tot[mask], N_inv_s[mask])
+            # r_T_N_inv_s_scan = np.dot(residual_tod[mask], N_inv_s[mask])
+
+            # Add the contribution from this scan to the local sum
+            local_s_T_N_inv_s[idet] += s_T_N_inv_s_scan
+            local_r_T_N_inv_s[idet] += r_T_N_inv_s_scan
 
     ### 2. Intra-Detector Reduction ###
     # Sum the local values across all ranks that share the same detector using det_comm.
     # After this, every rank in the det_comm will have the total sum for their detector.
-    total_s_for_detector = det_comm.allreduce(local_s_T_N_inv_s, op=MPI.SUM)
-    total_r_for_detector = det_comm.allreduce(local_r_T_N_inv_s, op=MPI.SUM)
+    band_comm.Allreduce(MPI.IN_PLACE, local_s_T_N_inv_s, op=MPI.SUM)
+    band_comm.Allreduce(MPI.IN_PLACE, local_r_T_N_inv_s, op=MPI.SUM)
 
-    ### 3. Gather all unique detector sums on the global Rank 0 ###
-    # To avoid redundant communication, only the root of each detector group (band_rank 0)
-    # sends its data to the global root. Other ranks send None.
-    if band_rank == 0:
-        data_to_send = (experiment_data.detector_id, total_s_for_detector, total_r_for_detector)
-    else:
-        data_to_send = None
+    ### 3. Solve Global System ###
+    delta_g_samples = np.zeros(ndet, dtype=np.float32)
+    if band_comm.Get_rank() == 0:
+        A = np.zeros((ndet + 1, ndet + 1))
+        b = np.zeros(ndet + 1)
+        diagonal = np.array(local_s_T_N_inv_s)
+        A[:ndet, :ndet] = np.diag(diagonal)
+        A[:ndet, ndet] = 0.5
+        A[ndet, :ndet] = 1.0
+        eta = np.random.randn(ndet)
+        fluctuation_term = np.sqrt(diagonal) * eta
+        
+        b[:ndet] = np.array(local_r_T_N_inv_s) + fluctuation_term
     
-    t0 = time.time()
-    TOD_comm.Barrier()
-    wait_time = time.time() - t0
-    gathered_data = TOD_comm.gather(data_to_send, root=0)
-
-    ### 4. Solve Global System on Rank 0 and Broadcast Result ###
-    result_to_bcast = None
-    if global_rank == 0:
-        # Filter out the None entries from non-sending ranks
-        valid_data = [data for data in gathered_data if data is not None]
-        
-        # Aggregate results into dictionaries.
-        s_map = {}
-        r_map = {}
-        for det_id, s_val, r_val in valid_data:
-            s_map[det_id] = s_val
-            r_map[det_id] = r_val
-        
-        detector_ids = sorted(s_map.keys())
-        n_detectors = len(detector_ids)
-
-        if n_detectors > 1:
-            s_T_N_inv_s_list = [s_map[did] for did in detector_ids]
-            r_T_N_inv_s_list = [r_map[did] for did in detector_ids]
-
-            A = np.zeros((n_detectors + 1, n_detectors + 1))
-            b = np.zeros(n_detectors + 1)
-            diagonal = np.array(s_T_N_inv_s_list)
-            A[:n_detectors, :n_detectors] = np.diag(diagonal)
-            A[:n_detectors, n_detectors] = 0.5
-            A[n_detectors, :n_detectors] = 1.0
-            eta = np.random.randn(n_detectors)
-            fluctuation_term = np.sqrt(diagonal) * eta
-            
-            b[:n_detectors] = np.array(r_T_N_inv_s_list) + fluctuation_term
-            
-            try:
-                solution = np.linalg.solve(A, b)
-                delta_g_samples = solution[:n_detectors]
-                result_to_bcast = {'dids': detector_ids, 'dgs': delta_g_samples}
-                logger.info(f"Solved global relative gains for {n_detectors} detectors.")
-            except np.linalg.LinAlgError:
-                logger.error("Failed to solve global linear system for relative gain: Not updating")
-                result_to_bcast = None
-        else:
-            logger.error(f"Relative gain sampling requires > 1 detector, but only {n_detectors} "\
-                         "found across all ranks. Skipping.")
-
-    # Broadcast the result to all ranks in the global communicator
-    result_to_bcast = TOD_comm.bcast(result_to_bcast, root=0)
-
-    ### 5. Update Gain on All Ranks ###
-    if result_to_bcast:
-        my_did = experiment_data.detector_id
         try:
-            my_dg_index = result_to_bcast['dids'].index(my_did)
-            my_delta_g = result_to_bcast['dgs'][my_dg_index]
-            for scan_samples in detector_samples.scans:
-                scan_samples.rel_gain_est = float(my_delta_g)
-            if det_comm.Get_rank() == 0:
-                logging.info(f"Relative gain for detector {experiment_data.detector_name} "
-                    f"({experiment_data.nu}GHz): {detector_samples.g0_est*1e9+my_delta_g*1e9:8.3f} "
-                    f"({detector_samples.g0_est*1e9:8.3f} + {my_delta_g*1e9:8.3f})")
-        except ValueError:
-            logger.error(f"Rank {global_rank} with detector {my_did} not found in solved gain list")
-    else:
-        logger.warning("No valid relative gain solution was broadcast. Not updating gains on "\
-                       f"rank {global_rank}.")
+            solution = np.linalg.solve(A, b)
+            delta_g_samples[:] = solution[:ndet]
+            logger.info(f"Solved global relative gains for {ndet} detectors.")
+        except np.linalg.LinAlgError:
+            logger.error("Failed to solve global linear system for relative gain: Not updating")
+    band_comm.Bcast(delta_g_samples, root=0)
+    
+    wait_time = 0
+    tod_samples.rel_gain_est[:] = delta_g_samples
+    if band_comm.Get_rank() == 0:
+        logger.info(f"Rel gain for band {experiment_data.band_name}: {tod_samples.g0_est:.3e} "\
+                    f"+/- {np.std(delta_g_samples):.3e}")
 
-    return detector_samples, wait_time
-
+    return tod_samples, wait_time
 
 
-def sample_temporal_gain_variations(det_comm: MPI.Comm, experiment_data: DetectorTOD,
-                                    detector_samples: DetectorSamples, det_compsep_map: NDArray,
+
+def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
+                                    tod_samples: TODSamples, det_compsep_map: NDArray,
                                     chain: int, iter: int, params: Bunch):
     """ Samples the time-dependent relative gain variations (delta g_qi). This function implements
         the logic from Sec. 3.5 of the BP7 paper, using a Wiener filter to smooth the gain solution
         over time (PIDs). It solves a global system for all scans of a given detector, which are
-        distributed across the ranks of the det_comm.
+        distributed across the ranks of the band_comm.
 
     Args:
-        det_comm (MPI.Comm): The communicator for ranks sharing the same detector.
-        experiment_data (DetectorTOD): The object holding scan data.
+        band_comm (MPI.Comm): The communicator for ranks sharing the same band.
+        experiment_data (DetGroupTOD): The object holding scan data.
+        tod_samples (TODSamples): The sampled TOD parameters.
+        det_compsep_map (NDArray): The sky model at our band.
+        chain (int): Current chain number.
+        iter (int): Current Gibbs iteration.
         params (Bunch): Parameters from the parameter file.
     """
     logger = logging.getLogger(__name__)
-    band_rank = det_comm.Get_rank()
-    band_size = det_comm.Get_size()
+    band_rank = band_comm.Get_rank()
+    band_size = band_comm.Get_size()
+    ndet = experiment_data.ndet
+    nscans_local = len(experiment_data.scans)
 
     # Local calculations on each rank
-    A_qq_local = []
-    b_q_local = []
+    A_qq_local = np.zeros((ndet, nscans_local), dtype=np.float64)
+    b_q_local = np.zeros((ndet, nscans_local), dtype=np.float64)
 
-    for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-        # I'm still not sure what way of dealing with the masked samples are best:
-        # 1. Replace masked values with 0s before FFT.
-        # 2. Replace masked values with n_corr realizations before FFT.
-        # 3. Remove masked values by reducing TOD size before FFTs.
-        # (simply passing the full data through the FFTs seems like a bad idea because of
-        # ringing from the large residual in the galactic plane).
+    for iscan, scan in enumerate(experiment_data.scans):
+        for idet, det in enumerate(scan.detectors):
+            # I'm still not sure what way of dealing with the masked samples are best:
+            # 1. Replace masked values with 0s before FFT.
+            # 2. Replace masked values with n_corr realizations before FFT.
+            # 3. Remove masked values by reducing TOD size before FFTs.
+            # (simply passing the full data through the FFTs seems like a bad idea because of
+            # ringing from the large residual in the galactic plane).
 
-        f_samp = scan.fsamp
-        down_factor = int(f_samp)
-        indices_edges = np.arange(0, scan.ntod, down_factor)
-        indices_centers = (indices_edges[1:] + indices_edges[:-1])//2
-        ntod_down = indices_centers.size
+            f_samp = det.fsamp
+            down_factor = int(f_samp)
+            indices_edges = np.arange(0, det.ntod, down_factor)
+            indices_centers = (indices_edges[1:] + indices_edges[:-1])//2
+            ntod_down = indices_centers.size
 
-        # Per Eq. (26), the residual is d - (g0 + Delta_g)*s
-        pix = scan.pix
-        psi = scan.psi
-        pix = pix[indices_centers]
-        psi = psi[indices_centers]
+            # Per Eq. (26), the residual is d - (g0 + Delta_g)*s
+            pix = det.pix
+            psi = det.psi
+            pix = pix[indices_centers]
+            psi = psi[indices_centers]
 
-        #FIXME: this is done in every noise/gain sampling step, can be pulled out.
-        s_tot = get_static_sky_TOD(det_compsep_map, pix, psi=psi)
-        s_tot += get_s_orb_TOD(scan, experiment_data, pix)
+            s_tot = get_static_sky_TOD(det_compsep_map, pix, psi)
+            s_tot += get_s_orb_TOD(det, experiment_data, pix)
 
+            gain = tod_samples.g0_est + tod_samples.rel_gain_est[idet]
+            residual_tod = det.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
+            residual_tod = np.mean(residual_tod, axis=-1)
+            residual_tod -= gain*s_tot
 
-        residual_tod = scan.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
-        residual_tod = np.mean(residual_tod, axis=-1)
-        gain = detector_samples.g0_est + scan_samples.rel_gain_est
-        residual_tod -= gain*s_tot
+            mask = det.processing_mask_TOD[indices_centers]
+            sigma0 = calculate_sigma0(residual_tod, mask)
 
-        mask = scan.processing_mask_TOD[indices_centers]
-        sigma0 = calculate_sigma0(residual_tod, mask) #FIXME: isn't this call useless now?
+            # FFT-based N^-1 operation setup
+            Ntod = residual_tod.shape[0]
+            Nrfft = Ntod // 2 + 1
+            freqs = rfftfreq(Ntod, 1.0)
+            inv_power_spectrum = np.zeros(Nrfft)
+            inv_power_spectrum[1:] = 1.0 / (sigma0**2 * (1 + (freqs[1:] / tod_samples.fknee_est[idet,iscan])\
+                                                         **tod_samples.alpha_est[idet,iscan]))
 
-        # FFT-based N^-1 operation setup
-        Ntod = residual_tod.shape[0]
-        Nrfft = Ntod // 2 + 1
-        # freqs = rfftfreq(Ntod, 1.0 / scan.fsamp)
-        freqs = rfftfreq(Ntod, 1.0)
-        sigma0 = scan_samples.gain_est*scan_samples.sigma0
-        inv_power_spectrum = np.zeros(Nrfft)
-        inv_power_spectrum[1:] = 1.0 / (sigma0**2 * (1 + (freqs[1:] / scan_samples.fknee_est)\
-                                                     **scan_samples.alpha_est))
+            # In the masked regions, inpaint the total sky model times only the temporal gain estimate.
+            residual_tod[~mask] = tod_samples.time_dep_rel_gain_est[idet,iscan]*s_tot[~mask]\
+                                + np.random.normal(0, sigma0, s_tot[~mask].shape)
 
-        # s_tot[~mask] = 0.0  #TODO: Needs to be handled differently.
-        # residual_tod[~mask] = 0.0
-        # s_tot[~mask] = scan_samples.n_corr_est[~mask]/scan_samples.gain_est
-        # residual_tod[~mask] = scan_samples.n_corr_est[~mask]
+            # Calculate N^-1 * s_tot and N^-1 * residual_tod
+            N_inv_s = backward_rfft(forward_rfft(s_tot) * inv_power_spectrum, Ntod)
+            N_inv_r = backward_rfft(forward_rfft(residual_tod) * inv_power_spectrum, Ntod)
 
-        # In the masked regions, inpaint the total sky model times only the temporal gain estimate.
-        residual_tod[~mask] = scan_samples.time_dep_rel_gain_est*s_tot[~mask]\
-                            + np.random.normal(0, sigma0, s_tot[~mask].shape)
+            # Calculate elements for the linear system
+            A_qq = np.dot(s_tot, N_inv_s)
+            b_q = np.dot(s_tot, N_inv_r)
 
-        # Calculate N^-1 * s_tot and N^-1 * residual_tod
-        N_inv_s = backward_rfft(forward_rfft(s_tot) * inv_power_spectrum, Ntod)
-        N_inv_r = backward_rfft(forward_rfft(residual_tod) * inv_power_spectrum, Ntod)
-        
-        # Calculate elements for the linear system
-        A_qq = np.dot(s_tot, N_inv_s)
-        b_q = np.dot(s_tot, N_inv_r) # v2 = removed the masks from this step.
-        
-        A_qq_local.append(A_qq)
-        b_q_local.append(b_q)
+            A_qq_local[idet, iscan] = A_qq
+            b_q_local[idet, iscan] = b_q
 
-    A_qq_local = np.array(A_qq_local, dtype=np.float64)
-    b_q_local = np.array(b_q_local, dtype=np.float64)
-
-    # Gather all data on the root rank of the band communicator
-    scan_counts = det_comm.gather(len(A_qq_local), root=0)
-    all_A_qq = det_comm.gather(A_qq_local, root=0)
-    all_b_q = det_comm.gather(b_q_local, root=0)
-    
-    delta_g_sample = None
+    # Gather scan counts once (same for all detectors)
+    scan_counts = band_comm.gather(nscans_local, root=0)
+    displacements = None
     if band_rank == 0:
-        # Concatenate gathered arrays into single flat arrays
-        A_diag = np.concatenate(all_A_qq)
-        b = np.concatenate(all_b_q)
-        
-        n_scans_total = len(A_diag)
-        if n_scans_total > 1:
-            # Define Prior (Wiener Filter) based on Eq. (31)
-            alpha_gain = -2.5
-            fknee_gain = 1.0  # Hour (which equals 1 scan)
+        scan_counts = np.array(scan_counts, dtype=int)
+        displacements = np.insert(np.cumsum(scan_counts), 0, 0)[:-1]
 
-            # These sigma0 values should match the BP analysis values,
-            # sigma0_sq_gain_V2_per_K2 = 3e-4  # V^2/K^2
-            # sigma0_sq_gain = 1e-12 * sigma0_sq_gain_V2_per_K2  # V^2/K^2 -> V^2/uK^2
+    # For each detector, gather across band_comm, solve, and scatter back
+    for idet in range(ndet):
+        all_A_qq = band_comm.gather(A_qq_local[idet], root=0)
+        all_b_q = band_comm.gather(b_q_local[idet], root=0)
 
-            # However, I found the BP prior too weak, and this gives me more sensible results.
-            mean_gain = detector_samples.g0_est + detector_samples.scans[0].rel_gain_est
-            sigma0_gain = 1e-4*mean_gain
-            sigma0_sq_gain = sigma0_gain**2
-
-            gain_freqs = rfftfreq(n_scans_total, d=1.0)
-            prior_ps = np.zeros_like(gain_freqs)
-            prior_ps[1:] = sigma0_sq_gain * (np.abs(gain_freqs[1:]) / fknee_gain)**alpha_gain
-            
-            prior_ps_inv = np.zeros_like(gain_freqs)
-            prior_ps_inv[prior_ps > 0] = 1.0 / prior_ps[prior_ps > 0]
-            prior_ps_inv_sqrt = np.sqrt(prior_ps_inv)
-
-            # Define Linear Operator for Conjugate Gradient Solver
-            def matvec(v):
-                g_inv_v = backward_rfft(forward_rfft(v) * prior_ps_inv, n_scans_total).real
-                diag_v = A_diag * v
-                return g_inv_v + diag_v
-
-            # Construct RHS of the sampling equation (Eq. 30)
-            eta1 = np.random.randn(n_scans_total)
-            fluctuation1 = np.sqrt(np.maximum(A_diag, 0)) * eta1
-
-            eta2 = np.random.randn(n_scans_total)
-            fluctuation2 = backward_rfft(forward_rfft(eta2) * prior_ps_inv_sqrt, n_scans_total).real
-
-            RHS = b + fluctuation1 + fluctuation2
-
-            ### Simpler sanity check solution  ##
-            epsilon = 1e-12
-            # The mean value is simply b / A
-            g_mean = b / (A_diag + epsilon)
-            # The standard deviation is 1 / sqrt(A)
-            g_std = 1.0 / np.sqrt(np.maximum(A_diag, 0) + epsilon)
-            # logger.info(f"Sanity check solution A, b = {A_diag} {b}")
-            # logger.info(f"Sanity check solution: {g_mean} {g_std}")
-            # logger.info(f"Sanity check solution(means): {np.mean(g_mean)} {np.mean(g_std)}")
-
-            CG_solver = pixell.utils.CG(matvec, RHS, x0=g_mean)
-            for i in range(200):
-                CG_solver.step()
-                if CG_solver.err < 1e-10:
-                    break
-            # logging.info(f"CG solver for gain fluctuations (nu={experiment_data.nu})"
-            #             f"finished after {i} iterations (residual = {CG_solver.err})")
-            delta_g_sample = CG_solver.x
-            logger.info(f"delta_g_sample mean = {np.mean(delta_g_sample)}")
-            delta_g_sample -= np.mean(delta_g_sample)
-            logger.info(f"delta_g: {delta_g_sample}")
-            logger.info(f"Band {experiment_data.nu}GHz time-dependent gain: "\
-                        f"min={np.min(delta_g_sample)*1e9:14.4f} "\
-                        f"mean={np.mean(delta_g_sample)*1e9:14.4f} "\
-                        f"std={np.std(delta_g_sample)*1e9:14.4f} "\
-                        f"max={np.max(delta_g_sample)*1e9:14.4f}")
-
-            if False: #debug stuff
-                import matplotlib.pyplot as plt
-                plt.figure(figsize=(10,8))
-                other_gain = detector_samples.g0_est + detector_samples.scans[0].rel_gain_est
-                plt.plot(1e9*(other_gain + delta_g_sample))
-                plt.ylim(0, np.max(1e9*(other_gain + delta_g_sample)))
-                plt.xlabel("PID")
-                plt.ylabel("Gain [mV/K]")
-                plt.savefig(f"{params.general.output_paths.plots}chain{chain}_iter{iter}_"
-                            f"{detector_samples.detector_name}.png")
-                plt.close()
-        else:
-            delta_g_sample = np.zeros(n_scans_total)
-
-    # Scatter the results back to all ranks
-    if band_size > 1:
-        displacements = None
+        delta_g_sample = None
         if band_rank == 0:
-            scan_counts = np.array(scan_counts, dtype=int)
-            displacements = np.insert(np.cumsum(scan_counts), 0, 0)[:-1]
-        
-        delta_g_local = np.empty(len(A_qq_local), dtype=np.float64)
-        det_comm.Scatterv([delta_g_sample, scan_counts, displacements, MPI.DOUBLE],
-                          delta_g_local, root=0)
-    else:
-        delta_g_local = delta_g_sample if delta_g_sample is not None else np.array([])
+            # Concatenate gathered arrays into single flat arrays
+            A_diag = np.concatenate(all_A_qq)
+            b = np.concatenate(all_b_q)
 
-    # Update local scan objects
-    if delta_g_local.size == len(experiment_data.scans):
-        for i, scan_samples in enumerate(detector_samples.scans):
-            scan_samples.time_dep_rel_gain_est = delta_g_local[i].astype(np.float32)
-    else:
-        logger.warning(f"Rank {band_rank} received mismatched number of gain samples. "\
-                       f"Expected {len(experiment_data.scans)}, got {delta_g_local.size}.")
-    return detector_samples
+            n_scans_total = len(A_diag)
+            if n_scans_total > 1:
+                # Define Prior (Wiener Filter) based on Eq. (31)
+                alpha_gain = -2.5
+                fknee_gain = 1.0  # Hour (which equals 1 scan)
+
+                # However, I found the BP prior too weak, and this gives me more sensible results.
+                mean_gain = tod_samples.g0_est + tod_samples.rel_gain_est[idet]
+                sigma0_gain = 1e-4*mean_gain
+                sigma0_sq_gain = sigma0_gain**2
+
+                gain_freqs = rfftfreq(n_scans_total, d=1.0)
+                prior_ps = np.zeros_like(gain_freqs)
+                prior_ps[1:] = sigma0_sq_gain * (np.abs(gain_freqs[1:]) / fknee_gain)**alpha_gain
+
+                prior_ps_inv = np.zeros_like(gain_freqs)
+                prior_ps_inv[prior_ps > 0] = 1.0 / prior_ps[prior_ps > 0]
+                prior_ps_inv_sqrt = np.sqrt(prior_ps_inv)
+
+                # Define Linear Operator for Conjugate Gradient Solver
+                def matvec(v, A_diag=A_diag, prior_ps_inv=prior_ps_inv,
+                           n_scans_total=n_scans_total):
+                    g_inv_v = backward_rfft(forward_rfft(v) * prior_ps_inv, n_scans_total).real
+                    diag_v = A_diag * v
+                    return g_inv_v + diag_v
+
+                # Construct RHS of the sampling equation (Eq. 30)
+                eta1 = np.random.randn(n_scans_total)
+                fluctuation1 = np.sqrt(np.maximum(A_diag, 0)) * eta1
+
+                eta2 = np.random.randn(n_scans_total)
+                fluctuation2 = backward_rfft(forward_rfft(eta2) * prior_ps_inv_sqrt, n_scans_total).real
+
+                RHS = b + fluctuation1 + fluctuation2
+
+                ### Simpler sanity check solution  ##
+                epsilon = 1e-12
+                g_mean = b / (A_diag + epsilon)
+                g_std = 1.0 / np.sqrt(np.maximum(A_diag, 0) + epsilon)
+
+                CG_solver = pixell.utils.CG(matvec, RHS, x0=g_mean)
+                for i in range(200):
+                    CG_solver.step()
+                    if CG_solver.err < 1e-10:
+                        break
+
+                delta_g_sample = CG_solver.x
+                delta_g_sample -= np.mean(delta_g_sample)
+                logger.info(f"Band {experiment_data.nu}GHz det {idet} time-dependent gain: "\
+                            f"min={np.min(delta_g_sample)*1e9:14.4f} "\
+                            f"mean={np.mean(delta_g_sample)*1e9:14.4f} "\
+                            f"std={np.std(delta_g_sample)*1e9:14.4f} "\
+                            f"max={np.max(delta_g_sample)*1e9:14.4f}")
+
+                if False: #debug stuff
+                    import matplotlib.pyplot as plt
+                    plt.figure(figsize=(10,8))
+                    other_gain = tod_samples.g0_est + tod_samples.rel_gain_est[idet]
+                    plt.plot(1e9*(other_gain + delta_g_sample))
+                    plt.ylim(0, np.max(1e9*(other_gain + delta_g_sample)))
+                    plt.xlabel("PID")
+                    plt.ylabel("Gain [mV/K]")
+                    plt.savefig(f"{params.general.output_paths.plots}chain{chain}_iter{iter}_"
+                                f"det{idet}_{experiment_data.band_name}.png")
+                    plt.close()
+            else:
+                delta_g_sample = np.zeros(n_scans_total)
+
+        # Scatter the results back to all ranks
+        if band_size > 1:
+            delta_g_local = np.empty(nscans_local, dtype=np.float64)
+            if band_rank == 0:
+                sendbuf = [delta_g_sample, scan_counts, displacements, MPI.DOUBLE]
+            else:
+                sendbuf = None
+            band_comm.Scatterv(sendbuf, delta_g_local, root=0)
+        else:
+            delta_g_local = delta_g_sample if delta_g_sample is not None else np.array([])
+
+        # Update tod_samples for this detector
+        if delta_g_local.size == nscans_local:
+            tod_samples.time_dep_rel_gain_est[idet, :] = delta_g_local.astype(np.float32)
+        else:
+            logger.warning(f"Rank {band_rank} received mismatched number of gain samples "\
+                           f"for det {idet}. Expected {nscans_local}, got {delta_g_local.size}.")
+
+    return tod_samples
 
 
-def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
-                detector_samples: DetectorSamples, compsep_output: NDArray,
-                params: Bunch, chain:int, iter:int) -> list[DetectorMap]:
+def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
+                tod_samples: TODSamples, compsep_output: NDArray,
+                params: Bunch, chain: int, iter: int) -> tuple[dict[str, DetectorMap], TODSamples]:
     """ Performs a single TOD iteration.
 
     Input:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
-        experiment_data (DetectorTOD): The input experiment TOD for the band
+        experiment_data (DetGroupTOD): The input experiment TOD for the band
             belonging to the current process.
-        detector_samples (DetectorSamples): sampled parameters relative to the current detector.
-        compsep_output (np.array): The current best estimate of the sky model
+        tod_samples (TODSamples): Sampled TOD parameters (gain, noise, etc.).
+        compsep_output (NDArray): The current best estimate of the sky model
             as seen by the band belonging to the current process.
         params (Bunch): The parameters from the input parameter file.
-        chain (int): id of the current chain we are on.
-        iter (int): iteration within the Gibbs chain. 
+        chain (int): ID of the current chain.
+        iter (int): Iteration within the Gibbs chain.
 
     Output:
-        list[DetectorMap] list of instance which represents the correlated noise subtracted
-            TOD data in map space for the band belonging to the current process, 
-            [I, QU] respectively.
+        dict[str, DetectorMap]: Correlated-noise-subtracted TOD data projected into map
+            space for the band belonging to the current process.
+        tod_samples (TODSamples): Updated sampled TOD parameters.
     """
     # Steps:
     # 1. Initialize n_corr_est and alpha/fknee values.
@@ -1123,11 +1083,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     # (In other words, on iteration 1 we do just do White noise estimation -> Mapmaking.)
 
     logger = logging.getLogger(__name__)
-    if iter == 1:
-        for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-            scan_samples.alpha_est = params.general.noise_alpha
-            scan_samples.fknee_est = params.general.noise_fknee
-    
+
     timing_dict = {}
     waittime_dict = {}
 
@@ -1136,7 +1092,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     TOD_comm = mpi_info.tod.comm
     ### WHITE NOISE ESTIMATION ###
     t0 = time.time()
-    detector_samples = estimate_white_noise(experiment_data, detector_samples, compsep_output,
+    tod_samples = estimate_white_noise(experiment_data, tod_samples, compsep_output,
                                             params)
     timing_dict["wn-est-1"] = time.time() - t0
     if mpi_info.tod.is_master:
@@ -1146,8 +1102,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     ### ABSOLUTE GAIN CALIBRATION ### 
     if params.general.sample_abs_gain and iter >= params.general.sample_abs_gain_from_iter_num:
         t0 = time.time()
-        detector_samples, wait_time = sample_absolute_gain(TOD_comm, experiment_data,
-                                                           detector_samples, compsep_output)
+        tod_samples, wait_time = sample_absolute_gain(band_comm, experiment_data,
+                                                           tod_samples, compsep_output)
         timing_dict["abs-gain"] = time.time() - t0
         waittime_dict["abs-gain"] = wait_time
         if mpi_info.band.is_master:
@@ -1157,8 +1113,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     ### RELATIVE GAIN CALIBRATION ### 
     if params.general.sample_rel_gain and iter >= params.general.sample_rel_gain_from_iter_num:
         t0 = time.time()
-        detector_samples, wait_time = sample_relative_gain(TOD_comm, det_comm, experiment_data,
-                                                           detector_samples, compsep_output)
+        tod_samples, wait_time = sample_relative_gain(band_comm, experiment_data, tod_samples,
+                                                      compsep_output)
         timing_dict["rel-gain"] = time.time() - t0
         waittime_dict["rel-gain"] = wait_time
         if mpi_info.band.is_master:
@@ -1170,22 +1126,19 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
     if params.general.sample_temporal_gain\
     and iter >= params.general.sample_temporal_gain_from_iter_num:
         t0 = time.time()
-        #updates time_dep_rel_gain_est in the scan_samples in detector_samples
-        detector_samples = sample_temporal_gain_variations(det_comm, experiment_data,
-                                              detector_samples, compsep_output, chain, iter, params)
+        tod_samples = sample_temporal_gain_variations(band_comm, experiment_data,
+                                              tod_samples, compsep_output, chain, iter, params)
         timing_dict["temp-gain"] = time.time() - t0
         if mpi_info.band.is_master:
             logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished temporal "\
                         f"gain estimation in {timing_dict['temp-gain']:.1f}s.")
 
     ### Update total gain from sum of all three gain terms. ###
-    for scan_samples in detector_samples.scans:
-        scan_samples.gain_est = detector_samples.g0_est + scan_samples.rel_gain_est\
-                                + scan_samples.time_dep_rel_gain_est
+    tod_samples.gain_est = tod_samples.g0_est + tod_samples.rel_gain_est[:,None] + tod_samples.time_dep_rel_gain_est
 
     ### WHITE NOISE ESTIMATION ###
     t0 = time.time()
-    detector_samples = estimate_white_noise(experiment_data, detector_samples, compsep_output,
+    tod_samples = estimate_white_noise(experiment_data, tod_samples, compsep_output,
                                             params)
     timing_dict["wn-est-2"] = time.time() - t0
     if band_comm.Get_rank() == 0:
@@ -1206,10 +1159,10 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
                         f" band {experiment_data.band_name}.")
 
     if mapmaker_str == "CG":
-        detmap_dict = tod2map_CG(band_comm, experiment_data, compsep_output, detector_samples, params, chain,
+        detmap_dict = tod2map_CG(band_comm, experiment_data, compsep_output, tod_samples, params, chain,
                      iter, do_ncorr_sampling)
     elif mapmaker_str == "bin":
-        detmap_dict = tod2map_bin(band_comm, experiment_data, compsep_output, detector_samples, params, 
+        detmap_dict = tod2map_bin(band_comm, experiment_data, compsep_output, tod_samples, params, 
                             chain, iter, do_ncorr_sampling)
     else:
         raise ValueError(f'Mapmaker must be either "CG" or "bin", but {mapmaker_str} was given for'\
@@ -1220,7 +1173,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
                     f"{timing_dict['mapmaker']:.1f}s.")
 
     ### WRITE CHAIN TO FILE ###
-    write_tod_chain_to_file(det_comm, detector_samples, params, chain, iter)
+    write_tod_chain_to_file(band_comm, tod_samples, params, chain, iter)
 
     t0 = time.time()
     TOD_comm.Barrier()
@@ -1242,4 +1195,4 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorTOD,
             logger.info(f"Average wait overhead for {experiment_data.nu}GHz on {key} = "\
                         f"{waittime_dict[key]:.1f}s.")
 
-    return detmap_dict, detector_samples
+    return detmap_dict, tod_samples
