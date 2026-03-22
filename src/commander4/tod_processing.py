@@ -39,7 +39,7 @@ def get_initial_sky(experiment_data: DetGroupTOD) -> NDArray[np.float32]:
                 data = hdul[1].data[field].flatten()
                 nside = hp.npix2nside(data.size)
                 if nside != experiment_data.nside:
-                    data = hp.ud_grade(data, nside)
+                    data = hp.ud_grade(data, experiment_data.nside)
                 initial_sky[i] += data
 
     # Convert from uK_CMB to uK_RJ
@@ -1034,8 +1034,11 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
         # Scatter the results back to all ranks
         if band_size > 1:
             delta_g_local = np.empty(nscans_local, dtype=np.float64)
-            band_comm.Scatterv([delta_g_sample, scan_counts, displacements, MPI.DOUBLE],
-                              delta_g_local, root=0)
+            if band_rank == 0:
+                sendbuf = [delta_g_sample, scan_counts, displacements, MPI.DOUBLE]
+            else:
+                sendbuf = None
+            band_comm.Scatterv(sendbuf, delta_g_local, root=0)
         else:
             delta_g_local = delta_g_sample if delta_g_sample is not None else np.array([])
 
