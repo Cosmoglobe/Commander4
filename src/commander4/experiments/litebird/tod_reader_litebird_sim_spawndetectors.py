@@ -96,8 +96,8 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                 # Temporary hard-coded solution.
                 det_name_Synne = "001_000_002_60A_166_T"
                 tod = np.zeros(ntod, dtype=np.float32)
-                pix_encoded = f[f"/{pid}/{det_name_Synne}/pix/"][:ntod_optimal]
-                psi_encoded = f[f"/{pid}/{det_name_Synne}/psi/"][:ntod_optimal]
+                pix_encoded = f[f"/{pid}/{det_name_Synne}/pix/"][:ntod_optimal].astype(np.int32)
+                psi_encoded = f[f"/{pid}/{det_name_Synne}/psi/"][:ntod_optimal].astype(np.float32)
                 psi_encoded += psi_offsets[idet%psi_offsets.size]
 
                 # Some simulations have a (1,N) shape for pixels; remove leading dimension.
