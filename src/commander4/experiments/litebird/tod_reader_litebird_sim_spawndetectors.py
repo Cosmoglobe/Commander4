@@ -95,7 +95,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             for idet, det_name in enumerate(det_names):
                 # Temporary hard-coded solution.
                 det_name_Synne = "001_000_002_60A_166_T"
-                tod = np.zeros(ntod, dtype=np.float32)
+                tod = np.zeros(ntod_optimal, dtype=np.float32)
                 pix_encoded = f[f"/{pid}/{det_name_Synne}/pix/"][:ntod_optimal].astype(np.int32)
                 psi_encoded = f[f"/{pid}/{det_name_Synne}/psi/"][:ntod_optimal].astype(np.float32)
                 psi_encoded += psi_offsets[idet%psi_offsets.size]
@@ -108,7 +108,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
 
                 detector = DetectorTOD(tod, pix_encoded, psi_encoded, my_band.eval_nside,
                                        data_nside, fsamp, vsun, huffman_tree, huffman_symbols,
-                                       npsi, processing_mask_map, ntod,
+                                       npsi, processing_mask_map, ntod_optimal,
                                        pix_is_compressed=my_experiment.pix_is_compressed,
                                        psi_is_compressed=my_experiment.psi_is_compressed)
                 detector_list.append(detector)
