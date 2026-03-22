@@ -47,8 +47,9 @@ def write_tod_chain_to_file(band_comm: MPI.Comm, tod_samples: TODSamples,
         already_seen_bands = []
         for tod_samples_other in tod_samples_batches:
             for key, value in vars(tod_samples_other).items():
-                if np.ndim(value) == 0 and tod_samples_other.band_name not in already_seen_bands:
-                    write_dict[key].append(value)
+                if np.ndim(value) == 0:
+                    if tod_samples_other.band_name not in already_seen_bands:
+                        write_dict[key].append(value)
                 else:
                     write_dict[key].append(value)
             already_seen_bands.append(tod_samples_other.band_name)
