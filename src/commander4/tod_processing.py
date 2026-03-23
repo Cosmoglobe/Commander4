@@ -19,7 +19,7 @@ from commander4.data_models.TOD_samples import TODSamples
 from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU, WeightsMapmaker, Mapmaker
 from commander4.utils.CG_mapmaker import CGMapmakerI, CGMapmakerIQU
 from commander4.solvers.preconditioners import InvNPreconditionerI, InvNPreconditionerIQU
-from commander4.noise_sampling import corr_noise_realization_with_gaps, sample_noise_PS_params
+from commander4.noise_sampling import corr_noise_realization_with_gaps, sample_noise_PS_params, fill_all_masked
 from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0
 from commander4.tod_reader import read_tods_from_file
@@ -149,7 +149,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
             sigma0_ncorr = calculate_sigma0(sky_subtracted_TOD, mask)
             C_1f_inv = np.zeros(Nfft)
             C_1f_inv[1:] = 1.0 / (sigma0_ncorr**2*(freq[1:]/fknee)**alpha)
-            # C_1f_inv[0] = C_1f_inv[-1]  # Test: try and constrain DC mode somewhat.
+            # fill_all_masked(sky_subtracted_TOD, mask, sigma0_ncorr)
             err_tol = 1e-8
             n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                                                     mask, sigma0_ncorr, C_1f_inv,
@@ -372,6 +372,11 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 sigma0_ncorr = calculate_sigma0(sky_subtracted_TOD, mask)
                 C_1f_inv = np.zeros(Nfft)
                 C_1f_inv[1:] = 1.0 / (sigma0_ncorr**2*(freq[1:]/fknee)**alpha)
+                # Perform gap-filling with linear slope + white noise.
+                # Note that this currently just decides the starting guess for the noise CG
+                # search, and nothing else, as we have not implemented 
+                # TODO: Might want to enable.
+                # fill_all_masked(sky_subtracted_TOD, mask, sigma0_ncorr)
                 err_tol = 1e-10
                 n_corr_est, residual, niter = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                                                         mask, sigma0_ncorr, C_1f_inv,
