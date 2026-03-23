@@ -14,6 +14,7 @@ from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_group_TOD import DetGroupTOD
 from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.output.log import logassert
+import commander4.compression.huffman as huffman
 
 def get_processing_mask(my_band: Bunch) -> DetectorTOD:
     """ Finds and returns the processing mask for the relevant band.
@@ -39,6 +40,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                params: Bunch, scan_idx_start: int,
                scan_idx_stop: int) -> DetGroupTOD:
     logger = logging.getLogger(__name__)
+    ndet = len(det_names)
     oids = []
     pids = []
     filepaths = []
@@ -74,11 +76,14 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             data_nside = int(f["common/nside"][()].item())
             ntod = int(f[f"/{pid}/common/ntod"][()].item())
             ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
-            huffman_tree = f[f"/{pid}/common/hufftree"][()]
-            huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
             vsun = f[f"/{pid}/common/vsun/"][()]
             fsamp = float(f["/common/fsamp/"][()].item())
-            npsi = int(f["/common/npsi/"][()].item())
+
+            if my_experiment.pix_is_compressed or my_experiment.psi_is_compressed:
+                raise NotImplementedError("Compressed data not yet implemented in litebird injection sims.")
+                huffman_tree = f[f"/{pid}/common/hufftree"][()]
+                huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
+                npsi = int(f["/common/npsi/"][()].item())
 
             processing_mask_nside = hp.npix2nside(processing_mask_map.size)
             logassert(my_band.eval_nside == processing_mask_nside,
@@ -92,34 +97,44 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             # Add these four rotation options to the read-in psi angles.
             psi_offsets = np.deg2rad(np.array([0.0, 22.5, 45.0, 67.5, 90.0, 112.5, 135.0, 157.5]))
             detector_list = []
-            for idet, det_name in enumerate(det_names):
+            tod_alldet = np.zeros((ndet, ntod_optimal), dtype=np.float32)
+            for idet in range(ndet):
+                tod = tod_alldet[idet]
                 # Temporary hard-coded solution.
                 det_name_Synne = "001_000_002_60A_166_T"
-                tod = np.zeros(ntod_optimal, dtype=np.float32)
-                pix_encoded = f[f"/{pid}/{det_name_Synne}/pix/"][:ntod_optimal].astype(np.int32)
-                psi_encoded = f[f"/{pid}/{det_name_Synne}/psi/"][:ntod_optimal].astype(np.float32)
-                psi_encoded += psi_offsets[idet%psi_offsets.size]
+                # tod = np.zeros(ntod_optimal, dtype=np.float32)
+                pix = f[f"/{pid}/{det_name_Synne}/pix/"][:ntod_optimal].astype(np.int32)
+                psi = f[f"/{pid}/{det_name_Synne}/psi/"][:ntod_optimal].astype(np.float32)
+                psi += psi_offsets[idet%psi_offsets.size]
 
                 # Some simulations have a (1,N) shape for pixels; remove leading dimension.
-                if pix_encoded.ndim == 2 and pix_encoded.shape[0] == 1:
-                    pix_encoded = pix_encoded[0]
-                if psi_encoded.ndim == 2 and psi_encoded.shape[0] == 1:
-                    psi_encoded = psi_encoded[0]
+                if pix.ndim == 2 and pix.shape[0] == 1:
+                    pix = pix[0]
+                if psi.ndim == 2 and psi.shape[0] == 1:
+                    psi = psi[0]
+                
+                npsi = 4096
+                psi = huffman.preproc_digitize_and_diff(psi, npsi)
+                pix = huffman.preproc_diff(pix)
+                huffman_tree, huffman_symbols, sym_codes, sym_lengths = huffman.build_huffman_tree([pix, psi])
+                psi_encoded = huffman.huffman_compress_array(psi, sym_codes, sym_lengths)
+                pix_encoded = huffman.huffman_compress_array(pix, sym_codes, sym_lengths)
 
                 detector = DetectorTOD(tod, pix_encoded, psi_encoded, my_band.eval_nside,
                                        data_nside, fsamp, vsun, huffman_tree, huffman_symbols,
                                        npsi, processing_mask_map, ntod_optimal,
-                                       pix_is_compressed=my_experiment.pix_is_compressed,
-                                       psi_is_compressed=my_experiment.psi_is_compressed)
+                                       pix_is_compressed=True,
+                                       psi_is_compressed=True)
+                                    #    pix_is_compressed=my_experiment.pix_is_compressed,
+                                    #    psi_is_compressed=my_experiment.psi_is_compressed)
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
+            gc.collect()
         scanID = int(pid)
         scan = ScanTOD(detector_list, 0., scanID, scan_idx_start, scan_idx_stop)
         scan_list.append(scan)
         num_included += 1
-        if i_pid % 10 == 0:
-            gc.collect()
     ndet = len(det_names)
 
     band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
