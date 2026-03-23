@@ -9,10 +9,10 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 from scipy.fft import rfftfreq, rfft, irfft
 import gc
+from mpi4py import MPI
 
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.detector_group_TOD import DetGroupTOD
-from commander4.data_models.scan_TOD import ScanTOD
 from commander4.sky_models.component import ThermalDust, Synchrotron, FreeFree
 
 
@@ -176,7 +176,8 @@ def get_orbital_dipole(det: DetectorTOD, pix: NDArray[np.integer], freq: float, 
 
 
 
-def replace_tod_with_sim(detector_data: DetGroupTOD, band_params: Bunch, params: Bunch):
+def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetGroupTOD, band_params: Bunch,
+                         params: Bunch) -> DetGroupTOD:
     nside = detector_data.nside
     npix = 12*nside**2
     fwhm = np.deg2rad(detector_data.fwhm/60.0)
@@ -192,15 +193,17 @@ def replace_tod_with_sim(detector_data: DetGroupTOD, band_params: Bunch, params:
     sigma0_persamp = KCMB_to_KRJ*band_params.sigma0_rts*np.sqrt(band_params.fsamp)
 
     comps_sum_smoothed = np.zeros((3, npix), dtype=np.float32)
-    comps_sum_smoothed += generate_thermal_dust(freq, fwhm, units, nside, params)
-    gc.collect()
-    comps_sum_smoothed += generate_sync(freq, fwhm, units, nside, params)
-    gc.collect()
-    comps_sum_smoothed += generate_ff(freq, fwhm, units, nside, params)
-    gc.collect()
-    # comps_sum_smoothed += generate_spdust(freq, fwhm, units, nside, 3*nside, params)
-    comps_sum_smoothed += generate_cmb(freq, fwhm, units, nside, 3*nside, params)
-    gc.collect()
+    if band_comm.Get_rank() == 0:
+        comps_sum_smoothed += generate_thermal_dust(freq, fwhm, units, nside, params)
+        gc.collect()
+        comps_sum_smoothed += generate_sync(freq, fwhm, units, nside, params)
+        gc.collect()
+        comps_sum_smoothed += generate_ff(freq, fwhm, units, nside, params)
+        gc.collect()
+        # comps_sum_smoothed += generate_spdust(freq, fwhm, units, nside, 3*nside, params)
+        comps_sum_smoothed += generate_cmb(freq, fwhm, units, nside, 3*nside, params)
+        gc.collect()
+    band_comm.Bcast(comps_sum_smoothed, root=0)
 
     I, Q, U = comps_sum_smoothed
     for scan in detector_data.scans:
