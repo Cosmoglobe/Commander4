@@ -282,7 +282,7 @@ class MapBundle:
     corrnoise: np.ndarray | None
     orbdipole: np.ndarray | None
     skymodel: np.ndarray | None
-    skysub: np.ndarray | None
+    residual: np.ndarray | None
     nside: int
     npol: int
 
@@ -293,7 +293,7 @@ class MapBundle:
             corrnoise=_optional_slice(self.corrnoise, s),
             orbdipole=_optional_slice(self.orbdipole, s),
             skymodel=_optional_slice(self.skymodel, s),
-            skysub=_optional_slice(self.skysub, s),
+            residual=_optional_slice(self.residual, s),
             nside=self.nside,
             npol=self.signal[s].shape[0],
         )
@@ -325,16 +325,16 @@ def _load_and_prepare_maps(map_path: str, nside_target: int | None) -> MapBundle
     orbdipole = _align_map_rows(orbdipole, npol, npix)
     skymodel = _align_map_rows(skymodel, npol, npix)
 
-    skysub = None
+    residual = None
     if skymodel is not None:
-        skysub = signal.copy()
+        residual = signal.copy()
         if corrnoise is not None:
-            skysub += corrnoise
-        skysub -= skymodel
+            residual += corrnoise
+        residual -= skymodel
 
     return MapBundle(
         signal=signal, rms=rms, corrnoise=corrnoise, orbdipole=orbdipole,
-        skymodel=skymodel, skysub=skysub, nside=nside, npol=npol,
+        skymodel=skymodel, residual=residual, nside=nside, npol=npol,
     )
 
 
@@ -445,7 +445,7 @@ def _plot_chain_maps(
         plotting.plot_data_maps(
             plot_params, detector_base, chain, iteration,
             map_signal=maps.signal, map_rms=maps.rms, map_corrnoise=maps.corrnoise,
-            map_skysub=maps.skysub, map_orbdipole=maps.orbdipole,
+            map_residual=maps.residual, map_orbdipole=maps.orbdipole,
         )
         LOGGER.debug(
             "Finished data plots chain=%d iter=%d detector=%s in %.1fs.",

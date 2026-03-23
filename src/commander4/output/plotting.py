@@ -100,7 +100,7 @@ def plot_tod_combined(
     key: str,
     series_by_detector: dict[str, tuple[list[int], list[float]]],
 ) -> None:
-    plt.figure()
+    plt.figure(figsize=(12,6))
     any_line = False
     for detector, (x_vals, y_vals) in sorted(series_by_detector.items()):
         if not x_vals:
@@ -113,7 +113,7 @@ def plot_tod_combined(
     plt.title(f"Chain {chain}: {key} (sample 0)")
     plt.xlabel("iteration")
     plt.ylabel(key)
-    plt.legend(loc="best")
+    plt.legend(loc="best", ncol=3)
     filename = os.path.join(out_folder, f"chain{chain:02d}_{key}_combined.png")
     plt.savefig(filename, bbox_inches="tight")
     plt.close()
@@ -172,7 +172,7 @@ def plot_combo_maps(
         residual = signal.copy()
         cmb_map_anisotropies = np.zeros_like(signal)
 
-        fig, ax = plt.subplots(3, 5, figsize=(42, 18))
+        fig, ax = plt.subplots(3, 5, figsize=(32, 13.7))
         if gain is not None and g0 is not None:
             title = (
                 f"Iter {iteration:04d}. Freq: {nu:.2f} GHz (det {detector}). Chain {chain}. "
@@ -356,7 +356,7 @@ def plot_data_maps(
     map_signal: np.ndarray,
     map_rms: np.ndarray | None = None,
     map_corrnoise: np.ndarray | None = None,
-    map_skysub: np.ndarray | None = None,
+    map_residual: np.ndarray | None = None,
     map_orbdipole: np.ndarray | None = None,
 ) -> None:
     out_folder = os.path.join(params.output_paths.plots, "maps_data")
@@ -366,14 +366,14 @@ def plot_data_maps(
         "map_signal": map_signal,
         "map_corrnoise": map_corrnoise,
         "map_rms": map_rms,
-        "map_skysub": map_skysub,
+        "map_residual": map_residual,
         "map_orbdipole": map_orbdipole,
     }
     desc = {
         "map_signal": "Signal map",
         "map_corrnoise": "Corr noise map",
         "map_rms": "RMS map",
-        "map_skysub": "Sky-subtracted map",
+        "map_residual": "Residual map",
         "map_orbdipole": "Orbital dipole map",
     }
 
@@ -383,9 +383,9 @@ def plot_data_maps(
         if map_iqu is None:
             continue
 
-        residual_types = {"map_skysub", "map_corrnoise"}
+        residual_types = {"map_residual", "map_corrnoise"}
         cmap = None if map_type == "map_rms" else "RdBu_r"
-        plt.figure(figsize=(25.5, 5.4))
+        plt.figure(figsize=(17, 4))
         for i in range(3):
             arr = map_iqu[i]
             if map_type == "map_rms":
