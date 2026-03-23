@@ -143,7 +143,8 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
         CG_err = CG_solver.err
     else:
         x_small = np.zeros((0,), dtype=dtype)
-        CG_err = 0
+        CG_err = 0.0
+        i = 0
 
     correction_gaps_only = np.zeros(Ntod, dtype=dtype)
     correction_gaps_only[~mask] = x_small
@@ -151,7 +152,7 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
     # Now, apply M^-1 to get the full correction term
     full_correction = apply_filter(correction_gaps_only, M_inv)
     x_final = m_inv_b + full_correction
-    return x_final, CG_err
+    return x_final, CG_err, i
 
 
 

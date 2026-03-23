@@ -339,6 +339,8 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
         mapmaker_ncorr = MapmakerIQU(band_comm, experiment_data.nside)
         fknees = []
         alphas = []
+        residuals = []
+        niters = []
         num_failed_convergences_ncorr = 0
         worst_residual_ncorr = 0
 
@@ -370,18 +372,15 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 sigma0_ncorr = calculate_sigma0(sky_subtracted_TOD, mask)
                 C_1f_inv = np.zeros(Nfft)
                 C_1f_inv[1:] = 1.0 / (sigma0_ncorr**2*(freq[1:]/fknee)**alpha)
-                # C_1f_inv[0] = C_1f_inv[1]
-                C_1f_inv[0] = 1e6*C_1f_inv[1]
-                # C_1f_inv[0] = C_1f_inv[-1]  # Test: try and constrain DC mode somewhat.
-                err_tol = 1e-8
-                n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
+                err_tol = 1e-10
+                n_corr_est, residual, niter = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                                                         mask, sigma0_ncorr, C_1f_inv,
                                                                         err_tol=err_tol)
                 mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32),
                                                   inv_var, pix, psi)
                 if residual > err_tol:
                     num_failed_convergences_ncorr += 1
-                    worst_residual_ncorr = max(worst_residual_ncorr, residual)
+                worst_residual_ncorr = max(worst_residual_ncorr, residual)
 
                 ### CORRELATED NOISE POWER SPECTRUM PARAMETERS SAMPLING ###
                 fknee, alpha = sample_noise_PS_params(n_corr_est, sigma0_ncorr, det.fsamp, alpha,
@@ -390,6 +389,8 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 tod_samples.alpha_est[idet,iscan] = alpha
                 alphas.append(alpha)
                 fknees.append(fknee)
+                residuals.append(residual)
+                niters.append(niter)
 
                 d_sky -= n_corr_est
 
@@ -410,15 +411,25 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
 
         alphas = band_comm.gather(alphas, root=0)
         fknees = band_comm.gather(fknees, root=0)
+        residuals = band_comm.gather(residuals, root=0)
+        niters = band_comm.gather(niters, root=0)
         if band_comm.Get_rank() == 0:
             alphas = np.concatenate(alphas)
             fknees = np.concatenate(fknees)
+            residuals = np.concatenate(residuals)
+            niters = np.concatenate(niters)
             logger.info(f"{experiment_data.nu}GHz: fknees {np.min(fknees):.4f} "\
             f"{np.percentile(fknees, 1):.4f} {np.mean(fknees):.4f} {np.percentile(fknees, 99):.4f}"\
             f" {np.max(fknees):.4f}")
             logger.info(f"{experiment_data.nu}GHz: alphas {np.min(alphas):.4f} "\
             f"{np.percentile(alphas, 1):.4f} {np.mean(alphas):.4f} {np.percentile(alphas, 99):.4f}"\
             f" {np.max(alphas):.4f}")
+            logger.info(f"{experiment_data.nu}GHz: residuals {np.min(residuals):.2e} "\
+            f"{np.percentile(residuals, 1):.2e} {np.mean(residuals):.2e} {np.percentile(residuals, 99):.2e}"\
+            f" {np.max(residuals):.4f}")
+            logger.info(f"{experiment_data.nu}GHz: iterations {np.min(niters):.4f} "\
+            f"{np.percentile(niters, 1):.4f} {np.mean(niters):.4f} {np.percentile(niters, 99):.4f}"\
+            f" {np.max(niters):.4f}")
 
 
     ### GATHER AND NORMALIZE MAPS ###
