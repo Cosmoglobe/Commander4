@@ -961,20 +961,21 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
             A_qq_local[idet, iscan] = A_qq
             b_q_local[idet, iscan] = b_q
 
-    # Gather scan counts once (same for all detectors)
-    scan_counts = band_comm.gather(nscans_local, root=0)
-    displacements = None
-    if band_rank == 0:
-        scan_counts = np.array(scan_counts, dtype=int)
-        displacements = np.insert(np.cumsum(scan_counts), 0, 0)[:-1]
+    # Gather scan counts on all ranks (needed for gather/scatter with varying roots)
+    scan_counts = np.array(band_comm.allgather(nscans_local), dtype=int)
+    displacements = np.insert(np.cumsum(scan_counts), 0, 0)[:-1]
 
-    # For each detector, gather across band_comm, solve, and scatter back
+    # Distribute detector solves across ranks in round-robin fashion.
+    # Each detector's equation system is gathered to, solved on, and scattered from
+    # the rank given by solving_rank = idet % band_size.
     for idet in range(ndet):
-        all_A_qq = band_comm.gather(A_qq_local[idet], root=0)
-        all_b_q = band_comm.gather(b_q_local[idet], root=0)
+        solving_rank = idet % band_size
+
+        all_A_qq = band_comm.gather(A_qq_local[idet], root=solving_rank)
+        all_b_q = band_comm.gather(b_q_local[idet], root=solving_rank)
 
         delta_g_sample = None
-        if band_rank == 0:
+        if band_rank == solving_rank:
             # Concatenate gathered arrays into single flat arrays
             A_diag = np.concatenate(all_A_qq)
             b = np.concatenate(all_b_q)
@@ -1047,14 +1048,14 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
             else:
                 delta_g_sample = np.zeros(n_scans_total)
 
-        # Scatter the results back to all ranks
+        # Scatter the results back to all ranks from the solving rank
         if band_size > 1:
             delta_g_local = np.empty(nscans_local, dtype=np.float64)
-            if band_rank == 0:
+            if band_rank == solving_rank:
                 sendbuf = [delta_g_sample, scan_counts, displacements, MPI.DOUBLE]
             else:
                 sendbuf = None
-            band_comm.Scatterv(sendbuf, delta_g_local, root=0)
+            band_comm.Scatterv(sendbuf, delta_g_local, root=solving_rank)
         else:
             delta_g_local = delta_g_sample if delta_g_sample is not None else np.array([])
 
