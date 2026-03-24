@@ -177,7 +177,7 @@ def get_orbital_dipole(det: DetectorTOD, pix: NDArray[np.integer], freq: float, 
 
 
 def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetGroupTOD, band_params: Bunch,
-                         params: Bunch) -> DetGroupTOD:
+                         params: Bunch, sim_params: Bunch) -> DetGroupTOD:
     nside = detector_data.nside
     npix = 12*nside**2
     fwhm = np.deg2rad(detector_data.fwhm/60.0)
@@ -194,15 +194,18 @@ def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetGroupTOD, band_p
 
     comps_sum_smoothed = np.zeros((3, npix), dtype=np.float32)
     if band_comm.Get_rank() == 0:
-        comps_sum_smoothed += generate_thermal_dust(freq, fwhm, units, nside, params)
-        gc.collect()
-        comps_sum_smoothed += generate_sync(freq, fwhm, units, nside, params)
-        gc.collect()
-        comps_sum_smoothed += generate_ff(freq, fwhm, units, nside, params)
-        gc.collect()
-        # comps_sum_smoothed += generate_spdust(freq, fwhm, units, nside, 3*nside, params)
-        comps_sum_smoothed += generate_cmb(freq, fwhm, units, nside, 3*nside, params)
-        gc.collect()
+        if sim_params.include_CMB:
+            comps_sum_smoothed += generate_cmb(freq, fwhm, units, nside, 3*nside, params)
+            gc.collect()
+        if sim_params.include_ThermalDust:
+            comps_sum_smoothed += generate_thermal_dust(freq, fwhm, units, nside, params)
+            gc.collect()
+        if sim_params.include_Synchrotron:
+            comps_sum_smoothed += generate_sync(freq, fwhm, units, nside, params)
+            gc.collect()
+        if sim_params.include_FreeFree:
+            comps_sum_smoothed += generate_ff(freq, fwhm, units, nside, params)
+            gc.collect()
     band_comm.Bcast(comps_sum_smoothed, root=0)
 
     I, Q, U = comps_sum_smoothed
@@ -211,18 +214,20 @@ def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetGroupTOD, band_p
             ntod = det.tod.size
             det.tod[:] = np.zeros(ntod, dtype=np.float32)
             det.tod[:] = I[det.pix] + Q[det.pix]*np.cos(2*det.psi) + U[det.pix]*np.sin(2*det.psi)
-            det.tod[:] += get_orbital_dipole(det, det.pix, freq, units)
+            if sim_params.include_OrbitalDipole:
+                det.tod[:] += get_orbital_dipole(det, det.pix, freq, units)
 
             # Create some white noise.
             noise = np.random.normal(0, sigma0_persamp, ntod)
-            # 1/f power spectrum, without sigma0**2 factor (which is already in the data).
-            PS_freqs = rfftfreq(ntod, 1.0/band_params.fsamp)
-            PS_freqs[0] = 0.5*PS_freqs[1]  # Add some DC power while avoiding divide by 0.
-            PS = 1.0 + (PS_freqs/fknee_ncorr)**alpha_ncorr
-            # Morph the shape of the noise power spectrum to be 1/f + white noise.
-            det.tod[:] += irfft(rfft(noise)*np.sqrt(PS))
 
-            del(PS_freqs, PS, noise)
-            gc.collect()
+            if sim_params.include_corr_noise:
+                # 1/f power spectrum, without sigma0**2 factor (which is already in the data).
+                PS_freqs = rfftfreq(ntod, 1.0/band_params.fsamp)
+                PS_freqs[0] = 0.5*PS_freqs[1]  # Add some DC power while avoiding divide by 0.
+                PS = 1.0 + (PS_freqs/fknee_ncorr)**alpha_ncorr
+                # Morph the shape of the noise power spectrum to be 1/f + white noise.
+                det.tod[:] += irfft(rfft(noise)*np.sqrt(PS))
+                del(PS_freqs, PS, noise)
+                gc.collect()
 
     return detector_data
