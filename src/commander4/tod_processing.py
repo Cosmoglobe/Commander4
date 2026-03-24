@@ -24,7 +24,7 @@ from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0
 from commander4.tod_reader import read_tods_from_file
 from commander4.output.write_chains_files import write_tod_chain_to_file, write_map_chain_to_file
-from commander4.logging.performance_logger import benchmark, get_bench_summary, start_bench,\
+from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
                                             stop_bench, log_memory, increment_count, bench_reset
 
 
@@ -413,7 +413,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 d_sky -= n_corr_est
                 stop_bench("ncorr-sampling", increment_count=False)
                 if iscan == len(experiment_data.scans) - 1:
-                    log_memory("ncorr_sampling")
+                    log_memory("ncorr-sampling")
 
 
             start_bench("binned-mapmaker")
@@ -1231,8 +1231,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
         TOD_comm.Barrier()
     waittime_dict["end-barrier"] = time.time() - t0
 
-    logger.info(get_bench_summary(TOD_comm, label="All bands"))
-    logger.debug(get_bench_summary(band_comm, label="Band {experiment_data.band_name}"))
+    bench_summary(TOD_comm, label="All bands")
+    bench_summary(band_comm, label="Band {experiment_data.band_name}")
     bench_reset()
 
     for key in timing_dict:

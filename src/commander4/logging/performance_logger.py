@@ -38,7 +38,7 @@ class PerfLogger:
     -------------
     - Recording is LOCAL: 'benchmark', 'start', and 'stop' only record data
       to the local process memory. No MPI communication happens during profiling.
-    - Reporting is COLLECTIVE: 'get_bench_summary(comm)' must be called by all ranks
+    - Reporting is COLLECTIVE: 'bench_summary(comm)' must be called by all ranks
       in the provided communicator. It gathers local stats to Rank 0 of that
       communicator for printing.
 
@@ -178,7 +178,7 @@ class PerfLogger:
         """Returns the last recorded memory for 'tag' in bytes, or 0 if never logged."""
         return self.mem_data[tag]['last_bytes'] if tag in self.mem_data else 0
 
-    def get_bench_summary(self, comm, label="Stats") -> str:
+    def bench_summary(self, comm, label="Stats") -> str:
         """
         Aggregates statistics for the given MPI communicator and returns a string to be printed.
         Memory data (from log_memory) is included when present.
@@ -200,7 +200,7 @@ class PerfLogger:
             all_timing     = [p[0] for p in all_packages]
             all_mem        = [p[1] for p in all_packages]
             all_tag_orders = [p[2] for p in all_packages]
-            return self._print_report(all_timing, all_mem, all_tag_orders, size, label)
+            self._print_report(all_timing, all_mem, all_tag_orders, size, label)
 
     def _print_report(self, all_ranks_data, all_mem_data, all_tag_orders, size, label):
         # --- Merge timing data ---
@@ -263,10 +263,10 @@ class PerfLogger:
         # --- Build header ---
         t_unit = f"({unit})"
         m_unit = "(GB)"
-        h_timing = (f" {'N':>{W_N}} | {'Avg':>{W_VAL-4}}{t_unit} |"
-                    f" {'Min':>{W_VAL-4}}{t_unit} | {'Max':>{W_VAL-4}}{t_unit} | {'Imb%':>{W_IMB}}")
-        h_mem = (f" || {'Avg':>{W_VAL-4}}{m_unit} |"
-                 f" {'Min':>{W_VAL-4}}{m_unit} | {'Max':>{W_VAL-4}}{m_unit} | {'Imb%':>{W_IMB}}") if has_mem else ""
+        h_timing = (f" {'N':>{W_N}} | {'Avg'+t_unit:>{W_VAL}} |"
+                    f" {'Min'+t_unit:>{W_VAL}} | {'Max'+t_unit:>{W_VAL}} | {'Imb%':>{W_IMB}}")
+        h_mem = (f" || {'Avg'+m_unit:>{W_VAL}} |"
+                 f" {'Min'+m_unit:>{W_VAL}} | {'Max'+m_unit:>{W_VAL}} | {'Imb%':>{W_IMB}}") if has_mem else ""
         header = f"{'Tag':<{W_TAG}} |{h_timing}{h_mem}"
         sep = "-" * len(header)
 
@@ -311,8 +311,7 @@ class PerfLogger:
             lines.append(f"{tag_str} |{t_str}{m_str}")
 
         lines.append(sep)
-        # self.logger.info("\n".join(lines))
-        return "\n".join(lines)
+        self.logger.info("\n".join(lines))
 
     def _get_auto_unit(self, max_ns):
         if max_ns >= 1e9:    return "s", 1e9
@@ -406,6 +405,6 @@ stop_bench        = _bench.stop_bench       # Manual Stop
 increment_count   = _bench.increment_count  # Manually bump a tag's call counter
 log_memory        = _bench.log_memory       # Memory snapshot
 bench_reset       = _bench.reset            # Clear all accumulated data
-get_bench_summary = _bench.get_bench_summary        # Report Generation (timing + memory)
+bench_summary     = _bench.bench_summary        # Report Generation (timing + memory)
 get_last          = _bench.get_last         # Last timing in seconds
 get_last_memory   = _bench.get_last_memory  # Last memory snapshot in bytes
