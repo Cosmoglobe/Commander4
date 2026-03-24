@@ -238,17 +238,12 @@ def init_mpi_tod(mpi_info, params):
                 # Update detector counter for ranks not assigned to current band.
                 current_detector_id += len(band.detectors)
             TOD_rank += band.num_MPI_tasks
-    tot_num_bands = TOD_rank
-    if tot_num_bands != MPIsize_tod:
-        log.lograise(RuntimeError, f"Total number of bands dedicated to the various experiments "
-                     f"({tot_num_bands}) differs from the total number of tasks dedicated to "
+    if TOD_rank != MPIsize_tod:
+        log.lograise(RuntimeError, f"Total number of ranks dedicated to the various experiments "
+                     f"({TOD_rank}) differs from the total number of tasks dedicated to "
                      f"TOD processing ({MPIsize_tod}).", logger)
-
     if is_tod_master:
-        logger.info(f"TOD: {MPIsize_tod} tasks allocated to TOD proc of {tot_num_bands} bands.")
-        log.logassert(MPIsize_tod >= tot_num_bands, "Number of MPI tasks dedicated to TOD "\
-                      f"processing ({MPIsize_tod}) must be equal to or larger than the number of "\
-                      f"bands ({tot_num_bands}).", logger) 
+        logger.info(f"TOD: {MPIsize_tod} tasks successfully allocated to TOD proc.")
 
     # Create communicators for each different band.
     band_comm = mpi_info.tod.comm.Split(my_band_id, key=MPIrank_tod)

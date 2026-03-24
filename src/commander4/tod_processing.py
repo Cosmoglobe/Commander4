@@ -24,7 +24,8 @@ from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from commander4.utils.math_operations import forward_rfft, backward_rfft, calculate_sigma0
 from commander4.tod_reader import read_tods_from_file
 from commander4.output.write_chains_files import write_tod_chain_to_file, write_map_chain_to_file
-# from commander4.logging.performance_logger import benchmark, summarize, start_bench, stop_bench
+from commander4.logging.performance_logger import benchmark, get_bench_summary, start_bench,\
+                                            stop_bench, log_memory, increment_count, bench_reset
 
 
 def get_initial_sky(experiment_data: DetGroupTOD) -> NDArray[np.float32]:
@@ -321,6 +322,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
     # We separate the inverse-variance mapmaking from the other 3 mapmakers.
     # This is purely to reduce the maximum concurrent memory requirement, and is slightly slower
     # as we have to de-compress pix and psi twice.
+    start_bench("binned-mapmaker")
     pols = experiment_data.pols
     mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)    
     for iscan, scan in enumerate(experiment_data.scans):
@@ -343,10 +345,12 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
         niters = []
         num_failed_convergences_ncorr = 0
         worst_residual_ncorr = 0
+    stop_bench("binned-mapmaker")
 
     ### MAIN SCAN LOOP ###
     for iscan, scan in enumerate(experiment_data.scans):
         for idet, det in enumerate(scan.detectors):
+            start_bench("binned-mapmaker")
             d_sky = det.tod.copy()
             pix = det.pix
             psi = det.psi
@@ -357,8 +361,10 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
             sky_orb_dipole = get_s_orb_TOD(det, experiment_data, pix)
             d_sky -= gain*sky_orb_dipole
 
+            stop_bench("binned-mapmaker", increment_count=False)
             ### CORRELATED NOISE SAMPLING ###
             if do_ncorr_sampling:
+                start_bench("ncorr-sampling")
                 s_tot = get_static_sky_TOD(compsep_output, pix, psi)
                 s_tot += sky_orb_dipole
                 sky_subtracted_TOD = det.tod.copy()
@@ -381,6 +387,13 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 n_corr_est, residual, niter = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                                                         mask, sigma0_ncorr, C_1f_inv,
                                                                         err_tol=err_tol)
+                # if band_comm.Get_rank() == 0:
+                #     if idet == 0:
+                #         if iscan == 300 or iscan == 600 or iscan == 900:
+                #             np.save(f"ncorr_signal_{iscan}.npy", sky_subtracted_TOD)
+                #             np.save(f"ncorr_ncorr_{iscan}.npy", n_corr_est)
+                #             np.save(f"ncorr_mask_{iscan}.npy", mask)
+                #             np.save(f"ncorr_C_1f_inv_{iscan}.npy", C_1f_inv)
                 mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32),
                                                   inv_var, pix, psi)
                 if residual > err_tol:
@@ -398,9 +411,15 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 niters.append(niter)
 
                 d_sky -= n_corr_est
+                stop_bench("ncorr-sampling", increment_count=False)
+                if iscan == len(experiment_data.scans) - 1:
+                    log_memory("ncorr_sampling")
 
+
+            start_bench("binned-mapmaker")
             mapmaker.accumulate_to_map(d_sky/gain, inv_var, pix, psi)
             mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
+            stop_bench("binned-mapmaker", increment_count=False)
 
     ### PRINT NOISE SAMPLING STATS ###
     if do_ncorr_sampling:
@@ -431,12 +450,13 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
             f" {np.max(alphas):.4f}")
             logger.info(f"{experiment_data.nu}GHz: residuals {np.min(residuals):.2e} "\
             f"{np.percentile(residuals, 1):.2e} {np.mean(residuals):.2e} {np.percentile(residuals, 99):.2e}"\
-            f" {np.max(residuals):.4f}")
+            f" {np.max(residuals):.2e}")
             logger.info(f"{experiment_data.nu}GHz: iterations {np.min(niters):.4f} "\
             f"{np.percentile(niters, 1):.4f} {np.mean(niters):.4f} {np.percentile(niters, 99):.4f}"\
             f" {np.max(niters):.4f}")
 
 
+    start_bench("binned-mapmaker")
     ### GATHER AND NORMALIZE MAPS ###
     mapmaker.gather_map()
     mapmaker_orbdipole.gather_map()
@@ -450,6 +470,8 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
         mapmaker_ncorr.gather_map()
         mapmaker_ncorr.normalize_map(map_cov)
         map_corrnoise = mapmaker_ncorr.final_map
+    stop_bench("binned-mapmaker", increment_count=False)
+    log_memory("binned-mapmaker")
 
     ### FINAL CLEANUP ON MASTER RANK ###
     detmap_dict_out = {}
@@ -477,8 +499,10 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
         if params.general.write_sky_model_maps_to_chain:
             maps_to_file["map_skymodel"] = compsep_output
 
+        start_bench("filewrite-datamaps")
         write_map_chain_to_file(params, chain, iter, experiment_data.experiment_name,
                                 experiment_data.band_name, maps_to_file)
+        stop_bench("filewrite-datamaps")
 
     return detmap_dict_out #empty on non-master ranks
 
@@ -573,8 +597,9 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
                  f" (local communicator size: {mpi_info.det.size:4}).")
 
     t0 = time.time()
-    experiment_data = read_tods_from_file(band_comm, my_experiment, my_band, det_names, params,
-                                          my_scans_start, my_scans_stop)
+    with benchmark("fileread-tod"):
+        experiment_data = read_tods_from_file(band_comm, my_experiment, my_band, det_names, params,
+                                              my_scans_start, my_scans_stop)
     #FIXME: Make this not a hacky fix.
     if "init_sky_from" in my_band:
         experiment_data.sky_init_files = my_band.init_sky_from
@@ -625,11 +650,11 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
                                         item[1] for item in all_data_world if item is not None})
     tod_band_masters_dict = {item[0]: item[1] for item in all_data_tod if item is not None}
     # tod_band_pol_dict = {item[0]: item[1] for item in all_pol_data if item is not None}
-    logger.info(f"world_band_masters_dict: {world_band_masters_dict}")
-    logger.info(f"tod_band_masters_dict: {tod_band_masters_dict}")
+    # logger.info(f"world_band_masters_dict: {world_band_masters_dict}")
+    # logger.info(f"tod_band_masters_dict: {tod_band_masters_dict}")
     # logger.info(f"tod_band_pol_dict: {tod_band_pol_dict}")
-    logger.info(f"TOD: Rank {mpi_info.tod.rank:4} assigned scans {my_scans_start:6} - "\
-                f"{my_scans_stop:6} on band {my_band_id:4}.")
+    # logger.info(f"TOD: Rank {mpi_info.tod.rank:4} assigned scans {my_scans_start:6} - "\
+    #             f"{my_scans_stop:6} on band {my_band_id:4}.")
     mpi_info['world']['tod_band_masters'] = world_band_masters_dict
     mpi_info['tod']['tod_band_masters'] = tod_band_masters_dict
     # mpi_info['world']['tod_band_pols'] = tod_band_pol_dict
@@ -660,6 +685,8 @@ def estimate_white_noise(experiment_data: DetGroupTOD, tod_samples: TODSamples,
             mask = detector.processing_mask_TOD
             sigma0 = calculate_sigma0(sky_subtracted_tod, mask)
             tod_samples.sigma0_est[idetector,iscan] = sigma0/gain
+        if iscan == len(experiment_data.scans) - 1:
+            log_memory("sigma0-est")
     return tod_samples
 
 
@@ -749,15 +776,16 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
         g_std = 1.0 / np.sqrt(sum_s_T_N_inv_s)
 
         g_sampled = g_mean + eta * g_std
-        logger.info(f"Previous g0:   {tod_samples.g0_est*1e9:10.5f}.")
-        logger.info(f"New g0 mean:   {g_mean*1e9:10.5f}.")
-        logger.info(f"New g0 std:    {g_std*1e9:10.5f}.")
-        logger.info(f"New g0 sample: {g_sampled*1e9:10.5f}.")
+        logger.info(f"Previous g0:   {tod_samples.g0_est:10.8f}.")
+        logger.info(f"New g0 mean:   {g_mean:10.8f}.")
+        logger.info(f"New g0 std:    {g_std:10.8f}.")
+        logger.info(f"New g0 sample: {g_sampled:10.8f}.")
 
     t0 = time.time()
     band_comm.Barrier()
     wait_time = time.time() - t0
     g_sampled = band_comm.bcast(g_sampled, root=0)
+    log_memory("abs-gain")
 
     # As of Numpy 2.0 it's good practice to explicitly cast to Python scalar types, as this would
     # otherwise have been a np.float64 type, potentially causing unexpected casting behavior later.
@@ -868,6 +896,7 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
         except np.linalg.LinAlgError:
             logger.error("Failed to solve global linear system for relative gain: Not updating")
     band_comm.Bcast(delta_g_samples, root=0)
+    log_memory("rel-gain")
     
     wait_time = 0
     tod_samples.rel_gain_est[:] = delta_g_samples
@@ -1028,11 +1057,11 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
 
                 delta_g_sample = CG_solver.x
                 delta_g_sample -= np.mean(delta_g_sample)
-                logger.info(f"Band {experiment_data.nu}GHz det {idet} time-dependent gain: "\
-                            f"min={np.min(delta_g_sample)*1e9:14.4f} "\
-                            f"mean={np.mean(delta_g_sample)*1e9:14.4f} "\
-                            f"std={np.std(delta_g_sample)*1e9:14.4f} "\
-                            f"max={np.max(delta_g_sample)*1e9:14.4f}")
+                # logger.info(f"Band {experiment_data.nu}GHz det {idet} time-dependent gain: "\
+                #             f"min={np.min(delta_g_sample)*1e9:14.4f} "\
+                #             f"mean={np.mean(delta_g_sample)*1e9:14.4f} "\
+                #             f"std={np.std(delta_g_sample)*1e9:14.4f} "\
+                #             f"max={np.max(delta_g_sample)*1e9:14.4f}")
 
                 if False: #debug stuff
                     import matplotlib.pyplot as plt
@@ -1058,6 +1087,7 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
             band_comm.Scatterv(sendbuf, delta_g_local, root=solving_rank)
         else:
             delta_g_local = delta_g_sample if delta_g_sample is not None else np.array([])
+        log_memory("temporal-gain")
 
         # Update tod_samples for this detector
         if delta_g_local.size == nscans_local:
@@ -1109,8 +1139,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
     TOD_comm = mpi_info.tod.comm
     ### WHITE NOISE ESTIMATION ###
     t0 = time.time()
-    tod_samples = estimate_white_noise(experiment_data, tod_samples, compsep_output,
-                                            params)
+    with benchmark("sigma0-est"):
+        tod_samples = estimate_white_noise(experiment_data, tod_samples, compsep_output, params)
     timing_dict["wn-est-1"] = time.time() - t0
     if mpi_info.tod.is_master:
         logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished white noise "\
@@ -1119,8 +1149,9 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
     ### ABSOLUTE GAIN CALIBRATION ### 
     if params.general.sample_abs_gain and iter >= params.general.sample_abs_gain_from_iter_num:
         t0 = time.time()
-        tod_samples, wait_time = sample_absolute_gain(band_comm, experiment_data,
-                                                           tod_samples, compsep_output)
+        with benchmark("abs-gain"):
+            tod_samples, wait_time = sample_absolute_gain(band_comm, experiment_data, tod_samples,
+                                                          compsep_output)
         timing_dict["abs-gain"] = time.time() - t0
         waittime_dict["abs-gain"] = wait_time
         if mpi_info.band.is_master:
@@ -1130,8 +1161,9 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
     ### RELATIVE GAIN CALIBRATION ### 
     if params.general.sample_rel_gain and iter >= params.general.sample_rel_gain_from_iter_num:
         t0 = time.time()
-        tod_samples, wait_time = sample_relative_gain(band_comm, experiment_data, tod_samples,
-                                                      compsep_output)
+        with benchmark("rel-gain"):
+            tod_samples, wait_time = sample_relative_gain(band_comm, experiment_data, tod_samples,
+                                                          compsep_output)
         timing_dict["rel-gain"] = time.time() - t0
         waittime_dict["rel-gain"] = wait_time
         if mpi_info.band.is_master:
@@ -1143,8 +1175,9 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
     if params.general.sample_temporal_gain\
     and iter >= params.general.sample_temporal_gain_from_iter_num:
         t0 = time.time()
-        tod_samples = sample_temporal_gain_variations(band_comm, experiment_data,
-                                              tod_samples, compsep_output, chain, iter, params)
+        with benchmark("temporal-gain"):
+            tod_samples = sample_temporal_gain_variations(band_comm, experiment_data,
+                                                tod_samples, compsep_output, chain, iter, params)
         timing_dict["temp-gain"] = time.time() - t0
         if mpi_info.band.is_master:
             logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished temporal "\
@@ -1155,8 +1188,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
 
     ### WHITE NOISE ESTIMATION ###
     t0 = time.time()
-    tod_samples = estimate_white_noise(experiment_data, tod_samples, compsep_output,
-                                            params)
+    with benchmark("sigma0-est"):
+        tod_samples = estimate_white_noise(experiment_data, tod_samples, compsep_output, params)
     timing_dict["wn-est-2"] = time.time() - t0
     if band_comm.Get_rank() == 0:
         logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished white noise "\
@@ -1190,11 +1223,17 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
                     f"{timing_dict['mapmaker']:.1f}s.")
 
     ### WRITE CHAIN TO FILE ###
-    write_tod_chain_to_file(band_comm, tod_samples, params, chain, iter)
+    with benchmark("filewrite-tod"):
+        write_tod_chain_to_file(band_comm, tod_samples, params, chain, iter)
 
     t0 = time.time()
-    TOD_comm.Barrier()
+    with benchmark("end-barrier"):
+        TOD_comm.Barrier()
     waittime_dict["end-barrier"] = time.time() - t0
+
+    logger.info(get_bench_summary(TOD_comm, label="All bands"))
+    logger.debug(get_bench_summary(band_comm, label="Band {experiment_data.band_name}"))
+    bench_reset()
 
     for key in timing_dict:
         timing_dict[key] = band_comm.reduce(timing_dict[key], op=MPI.SUM, root=0)
