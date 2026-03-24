@@ -383,7 +383,7 @@ def plot_data_maps(
         if map_iqu is None:
             continue
 
-        residual_types = {"map_residual", "map_corrnoise"}
+        symlim_types = {"map_signal", "map_residual", "map_corrnoise"}
         cmap = None if map_type == "map_rms" else "RdBu_r"
         plt.figure(figsize=(17, 4))
         for i in range(3):
@@ -391,7 +391,7 @@ def plot_data_maps(
             if map_type == "map_rms":
                 limup = _safe_percentile(arr, 99, 1.0)
                 limdown = max(float(np.nanmin(arr)), 0.0)
-            elif map_type in residual_types:
+            elif map_type in symlim_types:
                 limdown, limup = _sym_limits(arr)
             else:
                 limdown = _safe_percentile(arr, 1, -1.0)
