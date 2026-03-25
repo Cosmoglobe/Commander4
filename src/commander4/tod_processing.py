@@ -694,7 +694,8 @@ def estimate_white_noise(experiment_data: DetGroupTOD, tod_samples: TODSamples,
 def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_samples: TODSamples,
                          det_compsep_map: NDArray):
     """ Draw a realization of the absolute gain term, g0, which is constant across all
-        detectors and all scans within a band.
+        detectors and all scans within a band. For frequencies < 380.0 GHz this is done using
+        only the orbital dipole, and above it uses the full sky.
     Args:
         band_comm (MPI.Comm): The band-level MPI communicator.
         experiment_data (DetGroupTOD): The object holding all the scan data.
@@ -708,6 +709,9 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
 
     sum_s_T_N_inv_d = 0  # Accumulators for the numerator and denominator of eqn 16.
     sum_s_T_N_inv_s = 0
+
+    # Calibrate on the full sky at high frequencies, as the orbital dipole is too faint.
+    calibrate_on_full_sky = experiment_data.nu > 380.0
 
     for iscan, scan in enumerate(experiment_data.scans):
         for idet, det in enumerate(scan.detectors):
@@ -727,13 +731,25 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
             s_orb = get_s_orb_TOD(det, experiment_data, pix)
             sky_model_TOD = get_static_sky_TOD(det_compsep_map, pix, psi=psi)
 
-            residual_tod = det.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
-            residual_tod = np.mean(residual_tod, axis=-1)
-            residual_tod -= tod_samples.gain_est[idet,iscan]*sky_model_TOD  # Subtracting sky signals.
-            residual_tod -= tod_samples.gain_est[idet,iscan]*s_orb 
+            if calibrate_on_full_sky:
+                # Calibrate on the full sky model (static sky + orbital dipole),
+                # analogous to sample_relative_gain / sample_temporal_gain_variations.
+                s_cal = sky_model_TOD + s_orb
+                gain = tod_samples.rel_gain_est[idet] + tod_samples.time_dep_rel_gain_est[idet,iscan]
+                residual_tod = det.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
+                residual_tod = np.mean(residual_tod, axis=-1)
+                residual_tod -= gain*s_cal
+            else:
+                # Default: calibrate on the orbital dipole only.
+                s_cal = s_orb
+                residual_tod = det.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
+                residual_tod = np.mean(residual_tod, axis=-1)
+                residual_tod -= tod_samples.gain_est[idet,iscan]*sky_model_TOD  # Subtracting sky signals.
+                residual_tod -= tod_samples.gain_est[idet,iscan]*s_orb
+                residual_tod += tod_samples.g0_est*s_orb  # Now we can add back in the orbital dipole.
+
             mask = det.processing_mask_TOD[indices_centers]
             sigma0 = calculate_sigma0(residual_tod, mask)
-            residual_tod += tod_samples.g0_est*s_orb  # Now we can add back in the orbital dipole.
 
             Ntod = residual_tod.shape[0]
             Nrfft = Ntod//2+1
@@ -744,11 +760,11 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
 
             ### Solving Equation 16 from BP7 ###
             mask = det.processing_mask_TOD[indices_centers]
-            # In the masked regions, inpaint the orbital dipole times the absolute gain.
-            residual_tod[~mask] = tod_samples.g0_est*s_orb[~mask]\
-                                + np.random.normal(0, sigma0, s_orb[~mask].shape)
+            # In the masked regions, inpaint the calibration signal times the absolute gain.
+            residual_tod[~mask] = tod_samples.g0_est*s_cal[~mask]\
+                                + np.random.normal(0, sigma0, s_cal[~mask].shape)
             
-            s_fft = forward_rfft(s_orb)
+            s_fft = forward_rfft(s_cal)
             d_fft = forward_rfft(residual_tod)
             N_inv_s_fft = s_fft * inv_power_spectrum
             N_inv_d_fft = d_fft * inv_power_spectrum
@@ -760,10 +776,10 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
 
             # mask = experiment_data.processing_mask_map[scan.pix]
             # Add to the numerator and denominator.
-            # sum_s_T_N_inv_d += np.dot(s_orb[mask], N_inv_d[mask])
-            # sum_s_T_N_inv_s += np.dot(s_orb[mask], N_inv_s[mask])
-            sum_s_T_N_inv_d += np.dot(s_orb, N_inv_d)
-            sum_s_T_N_inv_s += np.dot(s_orb, N_inv_s)
+            # sum_s_T_N_inv_d += np.dot(s_cal[mask], N_inv_d[mask])
+            # sum_s_T_N_inv_s += np.dot(s_cal[mask], N_inv_s[mask])
+            sum_s_T_N_inv_d += np.dot(s_cal, N_inv_d)
+            sum_s_T_N_inv_s += np.dot(s_cal, N_inv_s)
 
     # The g0 term is fully global, so we reduce across both all scans and all bands:
     sum_s_T_N_inv_d = band_comm.reduce(sum_s_T_N_inv_d, op=MPI.SUM, root=0)
@@ -776,10 +792,8 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
         g_std = 1.0 / np.sqrt(sum_s_T_N_inv_s)
 
         g_sampled = g_mean + eta * g_std
-        logger.info(f"Previous g0:   {tod_samples.g0_est:10.8f}.")
-        logger.info(f"New g0 mean:   {g_mean:10.8f}.")
-        logger.info(f"New g0 std:    {g_std:10.8f}.")
-        logger.info(f"New g0 sample: {g_sampled:10.8f}.")
+        logger.info(f"Band {experiment_data.band_name} g0: {tod_samples.g0_est:.4e} "\
+                    f"-> {g_sampled:.4e} (+/- {g_std:.4e})")
 
     t0 = time.time()
     band_comm.Barrier()
