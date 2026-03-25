@@ -335,7 +335,7 @@ def _fmt3sig(value):
     if value == 0:
         return "0"
     mag = math.floor(math.log10(abs(value)))
-    if mag < -2:
+    if mag < -1:
         return "0.00"
     decimals = max(0, 2 - mag)
     return f"{value:.{decimals}f}"

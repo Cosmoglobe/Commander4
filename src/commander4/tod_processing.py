@@ -1232,7 +1232,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
     waittime_dict["end-barrier"] = time.time() - t0
 
     bench_summary(TOD_comm, label="All bands")
-    bench_summary(band_comm, label="Band {experiment_data.band_name}")
+    bench_summary(band_comm, label=f"Band {experiment_data.band_name}")
     bench_reset()
 
     for key in timing_dict:
