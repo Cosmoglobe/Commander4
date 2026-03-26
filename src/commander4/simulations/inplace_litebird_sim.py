@@ -14,6 +14,8 @@ from mpi4py import MPI
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.detector_group_TOD import DetGroupTOD
 from commander4.sky_models.component import ThermalDust, Synchrotron, FreeFree
+from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
+                                            stop_bench, log_memory, increment_count, bench_reset
 
 
 def generate_cmb(freq, fwhm, units, nside, lmax, params):
@@ -185,13 +187,14 @@ def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetGroupTOD, band_p
     units = u.uK_RJ
 
     # Hard-coded noise parameters
-    alpha_ncorr = -1.0
-    fknee_ncorr = 0.1
+    alpha_ncorr = sim_params.corr_noise_alpha
+    fknee_ncorr = sim_params.corr_noise_fknee
 
     KCMB_to_KRJ = (1.0 * u.K_CMB).to(u.K_RJ, equivalencies=u.cmb_equivalencies(freq * u.GHz)).value
     # Convert per-root-second RMS to per-sample RMS.
     sigma0_persamp = KCMB_to_KRJ*band_params.sigma0_rts*np.sqrt(band_params.fsamp)
 
+    start_bench("sky")
     comps_sum_smoothed = np.zeros((3, npix), dtype=np.float32)
     if band_comm.Get_rank() == 0:
         if sim_params.include_CMB:
@@ -206,17 +209,23 @@ def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetGroupTOD, band_p
         if sim_params.include_FreeFree:
             comps_sum_smoothed += generate_ff(freq, fwhm, units, nside, params)
             gc.collect()
+    stop_bench("sky")
+    start_bench("bcast")
     band_comm.Bcast(comps_sum_smoothed, root=0)
+    stop_bench("bcast")
 
     I, Q, U = comps_sum_smoothed
     for scan in detector_data.scans:
         for det in scan.detectors:
+            start_bench("orbdip")
             ntod = det.tod.size
             det.tod[:] = np.zeros(ntod, dtype=np.float32)
             det.tod[:] = I[det.pix] + Q[det.pix]*np.cos(2*det.psi) + U[det.pix]*np.sin(2*det.psi)
             if sim_params.include_OrbitalDipole:
                 det.tod[:] += get_orbital_dipole(det, det.pix, freq, units)
+            stop_bench("orbdip")
 
+            start_bench("noise")
             # Create some white noise.
             noise = np.random.normal(0, sigma0_persamp, ntod)
 
@@ -229,5 +238,6 @@ def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetGroupTOD, band_p
                 det.tod[:] += irfft(rfft(noise)*np.sqrt(PS))
                 del(PS_freqs, PS, noise)
                 gc.collect()
+            stop_bench("noise")
 
     return detector_data

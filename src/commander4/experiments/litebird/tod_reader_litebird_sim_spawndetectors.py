@@ -15,6 +15,8 @@ from commander4.data_models.detector_group_TOD import DetGroupTOD
 from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.output.log import logassert
 import commander4.compression.huffman as huffman
+from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
+                                            stop_bench, log_memory, increment_count, bench_reset
 
 def get_processing_mask(my_band: Bunch) -> DetectorTOD:
     """ Finds and returns the processing mask for the relevant band.
@@ -72,6 +74,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
     for i_pid in range(scan_idx_start, scan_idx_stop):
         pid = pids[i_pid]
         filepath = filepaths[i_pid]
+        start_bench("fileread")
         with h5py.File(filepath, "r") as f:
             data_nside = int(f["common/nside"][()].item())
             ntod = int(f[f"/{pid}/common/ntod"][()].item())
@@ -85,52 +88,60 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                 huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
                 npsi = int(f["/common/npsi/"][()].item())
 
-            processing_mask_nside = hp.npix2nside(processing_mask_map.size)
-            logassert(my_band.eval_nside == processing_mask_nside,
-                      f"Processing mask (band {bandname}) "
-                      f"has nside {processing_mask_nside} while eval_nside = {my_band.eval_nside} "
-                      "(NB: eval_nside can be set different from native data nside)", logger)
+            # Since we spawn all detectors from the same pointing, we keep the pix and psi reading
+            # outside the detector-loop, to avoid loading the disk system too much.
+            det_name_Synne = "001_000_002_60A_166_T" # Temporary hard-coded solution.
+            # tod = np.zeros(ntod_optimal, dtype=np.float32)
+            default_pix = f[f"/{pid}/{det_name_Synne}/pix/"][:ntod_optimal].astype(np.int32)
+            default_psi = f[f"/{pid}/{det_name_Synne}/psi/"][:ntod_optimal].astype(np.float32)
+        stop_bench("fileread")
 
-            if ntod > ntod_upper_bound:
-                raise ValueError(f"{ntod_upper_bound} {ntod}")
+        start_bench("compress")
+        processing_mask_nside = hp.npix2nside(processing_mask_map.size)
+        logassert(my_band.eval_nside == processing_mask_nside,
+                    f"Processing mask (band {bandname}) "
+                    f"has nside {processing_mask_nside} while eval_nside = {my_band.eval_nside} "
+                    "(NB: eval_nside can be set different from native data nside)", logger)
 
-            # Add these four rotation options to the read-in psi angles.
-            psi_offsets = np.deg2rad(np.array([0.0, 22.5, 45.0, 67.5, 90.0, 112.5, 135.0, 157.5]))
-            detector_list = []
-            tod_alldet = np.zeros((ndet, ntod_optimal), dtype=np.float32)
-            for idet in range(ndet):
-                tod = tod_alldet[idet]
-                # Temporary hard-coded solution.
-                det_name_Synne = "001_000_002_60A_166_T"
-                # tod = np.zeros(ntod_optimal, dtype=np.float32)
-                pix = f[f"/{pid}/{det_name_Synne}/pix/"][:ntod_optimal].astype(np.int32)
-                psi = f[f"/{pid}/{det_name_Synne}/psi/"][:ntod_optimal].astype(np.float32)
-                psi += psi_offsets[idet%psi_offsets.size]
+        if ntod > ntod_upper_bound:
+            raise ValueError(f"{ntod_upper_bound} {ntod}")
+        
+        # Add some artificial rotations of the polarization angles.
+        psi_offsets = np.deg2rad(np.array([0.0, 22.5, 45.0, 67.5, 90.0, 112.5, 135.0, 157.5]))
 
-                # Some simulations have a (1,N) shape for pixels; remove leading dimension.
-                if pix.ndim == 2 and pix.shape[0] == 1:
-                    pix = pix[0]
-                if psi.ndim == 2 and psi.shape[0] == 1:
-                    psi = psi[0]
-                
-                npsi = 4096
-                psi = huffman.preproc_digitize_and_diff(psi, npsi)
-                pix = huffman.preproc_diff(pix)
-                huffman_tree, huffman_symbols, sym_codes, sym_lengths = huffman.build_huffman_tree([pix, psi])
-                psi_encoded = huffman.huffman_compress_array(psi, sym_codes, sym_lengths)
-                pix_encoded = huffman.huffman_compress_array(pix, sym_codes, sym_lengths)
+        # Some simulations have a (1,N) shape for pixels; remove leading dimension.
+        if default_pix.ndim == 2 and default_pix.shape[0] == 1:
+            default_pix = default_pix[0]
+        if default_psi.ndim == 2 and default_psi.shape[0] == 1:
+            default_psi = default_psi[0]
+        
+        npsi = 4096
+        # Add these four rotation options to the read-in psi angles.
+        detector_list = []
+        tod_alldet = np.zeros((ndet, ntod_optimal), dtype=np.float32)
+        for idet in range(ndet):
+            tod = tod_alldet[idet]
 
-                detector = DetectorTOD(tod, pix_encoded, psi_encoded, my_band.eval_nside,
-                                       data_nside, fsamp, vsun, huffman_tree, huffman_symbols,
-                                       npsi, processing_mask_map, ntod_optimal,
-                                       pix_is_compressed=True,
-                                       psi_is_compressed=True)
-                                    #    pix_is_compressed=my_experiment.pix_is_compressed,
-                                    #    psi_is_compressed=my_experiment.psi_is_compressed)
-                detector_list.append(detector)
-                ntod_sum_original += ntod
-                ntod_sum_final += ntod_optimal
+            # Ideally we would do the huffman compression outside the detector-loop, but that's
+            # tricky if we want to add psi-offsets. Also, it's not that expensive anyway
+            psi = default_psi.copy()
+            psi += psi_offsets[idet%psi_offsets.size]
+            psi = huffman.preproc_digitize_and_diff(psi, npsi)
+            pix = huffman.preproc_diff(default_pix)
+            huffman_tree, huffman_symbols, sym_codes, sym_lengths = huffman.build_huffman_tree([pix, psi])
+            psi_encoded = huffman.huffman_compress_array(psi, sym_codes, sym_lengths)
+            pix_encoded = huffman.huffman_compress_array(pix, sym_codes, sym_lengths)
+
+            detector = DetectorTOD(tod, pix_encoded, psi_encoded, my_band.eval_nside,
+                                    data_nside, fsamp, vsun, huffman_tree, huffman_symbols,
+                                    npsi, processing_mask_map, ntod_optimal,
+                                    pix_is_compressed=True, # Hard-coded to true since we compress manually.
+                                    psi_is_compressed=True)
+            detector_list.append(detector)
+            ntod_sum_original += ntod
+            ntod_sum_final += ntod_optimal
             gc.collect()
+        stop_bench("compress")
         scanID = int(pid)
         scan = ScanTOD(detector_list, 0., scanID, scan_idx_start, scan_idx_stop)
         scan_list.append(scan)
@@ -140,8 +151,13 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
     band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, ndet, my_band.polarization)
 
+    start_bench("skysim")
     if my_experiment.replace_tod_with_sim:
         replace_tod_with_sim(band_comm, band_tod, my_band, params, my_experiment.sim_params)
+    stop_bench("skysim")
+
+    bench_summary(band_comm)
+    bench_reset()
 
     ### Collect some info on master rank of each detector and print it ###
     local_tot_scans = scan_idx_stop - scan_idx_start
