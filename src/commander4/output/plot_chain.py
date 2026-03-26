@@ -121,14 +121,16 @@ def _build_component_list(params: Bunch) -> list[Component]:
         if "I" in base_params.polarization:
             params_i = deepcopy(base_params)
             params_i.longname = comp_longname + "_Intensity"
-            params_i.shortname = comp_shortname + "_I"
+            params_i.shortname = comp_longname + "_I"
+            params_i.polarization = "I"
             params_i.polarized = False
             comp_type = getattr(component_lib, component.component_class)
             comp_list.append(comp_type(params_i, params.general))
         if "QU" in base_params.polarization:
             params_qu = deepcopy(base_params)
             params_qu.longname = comp_longname + "_Polarization"
-            params_qu.shortname = comp_shortname + "_QU"
+            params_qu.shortname = comp_longname + "_QU"
+            params_qu.polarization = "QU"
             params_qu.polarized = True
             comp_type = getattr(component_lib, component.component_class)
             comp_list.append(comp_type(params_qu, params.general))
@@ -328,8 +330,6 @@ def _load_and_prepare_maps(map_path: str, nside_target: int | None) -> MapBundle
     residual = None
     if skymodel is not None:
         residual = signal.copy()
-        if corrnoise is not None:
-            residual += corrnoise
         residual -= skymodel
 
     return MapBundle(
@@ -432,6 +432,7 @@ def _plot_chain_maps(
     iteration: int,
     maps: MapBundle,
     nu: float,
+    fwhm_arcmin: float,
     map_types: set[str],
     comp_list: list[Component] | None,
 ) -> None:
@@ -472,7 +473,7 @@ def _plot_chain_maps(
                 plot_params, det_label, chain, iteration, comp_list,
                 map_signal=sub.signal, map_rms=sub.rms, map_corrnoise=sub.corrnoise,
                 map_orbdipole=sub.orbdipole, map_skymodel=sub.skymodel,
-                nu=nu, nside=sub.nside,
+                nu=nu, nside=sub.nside, fwhm_arcmin=fwhm_arcmin,
             )
             LOGGER.debug(
                 "Finished combo plots chain=%d iter=%d detector=%s in %.1fs.",
@@ -482,7 +483,7 @@ def _plot_chain_maps(
             t0 = time.time()
             plotting.plot_components(
                 plot_params, det_label, chain, iteration, comp_list,
-                map_signal=sub.signal, nu=nu, nside=sub.nside,
+                map_signal=sub.signal, nu=nu, nside=sub.nside, fwhm_arcmin=fwhm_arcmin,
             )
             LOGGER.debug(
                 "Finished component plots chain=%d iter=%d detector=%s in %.1fs.",
@@ -619,10 +620,12 @@ def main() -> int:
         filename = os.path.basename(map_path)
         exp_name, band_name, band_info = _match_band_info(filename, params)
         nu = np.nan
+        fwhm_arcmin = np.nan
         if band_info is not None:
             nu = getattr(band_info, "freq", None)
             if nu is None:
                 nu = getattr(band_info, "nu", np.nan)
+            fwhm_arcmin = getattr(band_info, "fwhm", np.nan)
 
         maps = _load_and_prepare_maps(map_path, nside_target)
         if maps is None:
@@ -642,7 +645,7 @@ def main() -> int:
             idx, total_selected, chain, iteration, det_label_base, filename,
         )
 
-        _plot_chain_maps(plot_params, det_label_base, chain, iteration, maps, nu, map_types, comp_list)
+        _plot_chain_maps(plot_params, det_label_base, chain, iteration, maps, nu, fwhm_arcmin, map_types, comp_list)
 
         if idx % progress_stride == 0 or idx == total_selected:
             elapsed = time.time() - t_maps

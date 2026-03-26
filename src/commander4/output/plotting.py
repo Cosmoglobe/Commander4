@@ -67,11 +67,11 @@ def _get_component_map(
 ) -> np.ndarray:
     npix = 12 * nside**2
     if npol == 1:
-        if component.pol:
+        if component.is_pol:
             return np.zeros((npix,))
         return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[0]
 
-    if component.pol:
+    if component.is_pol:
         return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[ipol]
     return np.zeros((npix,))
 
@@ -135,6 +135,7 @@ def plot_combo_maps(
     map_skymodel: np.ndarray | None = None,
     gain: float | None = None,
     g0: float | None = None,
+    fwhm_arcmin: float = np.nan,
 ) -> None:
     out_folder = os.path.join(params.output_paths.plots, "combo_maps")
     os.makedirs(out_folder, exist_ok=True)
@@ -183,9 +184,9 @@ def plot_combo_maps(
         fig.suptitle(title, fontsize=24)
 
         max_component_panels = min(len(comp_sublist), 5)
+        beam_radians = fwhm_arcmin * np.pi / (180 * 60) if np.isfinite(fwhm_arcmin) else 0.0
         for i, component in enumerate(comp_sublist[:max_component_panels]):
-            smoothing_scale_radians = component.comp_params.smoothing_scale * np.pi / (180 * 60)
-            comp_map = _get_component_map(component, nu, nside, npol, ipol, smoothing_scale_radians)
+            comp_map = _get_component_map(component, nu, nside, npol, ipol, beam_radians)
             if "cmb" not in component.shortname:
                 foreground_subtracted -= comp_map
             else:
@@ -193,7 +194,7 @@ def plot_combo_maps(
                 cmb_maps = component.get_sky_anisotropies(
                     nu,
                     nside,
-                    fwhm=smoothing_scale_radians,
+                    fwhm=beam_radians,
                 )
                 cmb_map_anisotropies = cmb_maps[ipol if npol > 1 else 0]
             residual -= comp_map
@@ -429,6 +430,7 @@ def plot_components(
     map_signal: np.ndarray,
     nu: float,
     nside: int,
+    fwhm_arcmin: float = np.nan,
 ) -> None:
     map_comp_out = os.path.join(params.output_paths.plots, "maps_comps")
     dl_out = os.path.join(params.output_paths.plots, "spectra_comps_Dl")
@@ -446,6 +448,7 @@ def plot_components(
 
     ells = np.arange(3 * nside)
     Z = ells * (ells + 1) / (2 * np.pi)
+    beam_radians = fwhm_arcmin * np.pi / (180 * 60) if np.isfinite(fwhm_arcmin) else 0.0
 
     for ipol in range(npol):
         signal = map_signal[ipol]
@@ -453,8 +456,7 @@ def plot_components(
         residual = signal.copy()
 
         for component in comp_sublist:
-            smoothing_scale_radians = component.comp_params.smoothing_scale * np.pi / (180 * 60)
-            comp_map = _get_component_map(component, nu, nside, npol, ipol, smoothing_scale_radians)
+            comp_map = _get_component_map(component, nu, nside, npol, ipol, beam_radians)
             if component.shortname != "cmb":
                 foreground_subtracted -= comp_map
             residual -= comp_map
