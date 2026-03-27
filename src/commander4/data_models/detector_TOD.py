@@ -69,7 +69,7 @@ class DetectorTOD:
                          logger)
         if orb_dir_vec is not None:
             log.logassert_np(orb_dir_vec.size == 3, "orb_dir_vec must be a vector of size 3.", logger)
-            self._orb_dir_vec = orb_dir_vec.astype(np.float32)
+            self._orb_dir_vec = orb_dir_vec.astype(np.float32, copy=False)
         else:
             self._orb_dir_vec = None
         self.tod = tod
@@ -138,7 +138,7 @@ class DetectorTOD:
                                         self._huffman_tree, self._huffman_symbols, psi)
             psi = np.cumsum(psi)
             psi = psi[:self.ntod]
-            psi = 2*np.pi * psi.astype(np.float32)/self._npsi
+            psi = 2*np.pi * psi.astype(np.float32, copy=False)/self._npsi
         else:
             psi = self._psi_encoded
         return psi[:self.ntod]  # Crop to actual size (might be cut to fast FFT length)

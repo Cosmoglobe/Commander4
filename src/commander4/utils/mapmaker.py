@@ -50,7 +50,7 @@ class Mapmaker:
         tod_f64 = np.ascontiguousarray(tod, dtype=np.float64)
         weight_f64 = float(weights)
         self.maplib.map_accumulator_f64(self._map_signal, tod_f64, weight_f64,
-                                    pix.astype(np.int64), ntod)
+                                    pix.astype(np.int64, copy=False), ntod)
 
     def gather_map(self):
         """Reduce the local map buffers across MPI ranks into the root map."""
@@ -99,7 +99,7 @@ class WeightsMapmaker:
         if self.map_comm.Get_rank() == 0:
             logassert(self._gathered_map is not None, "Attempted to retrieve unfinished map",
                     self.logger)
-        return self._gathered_map #.astype(self.dtype, copy=False)
+        return self._gathered_map
 
     def accumulate_to_map(self, weight:NDArray, pix:NDArray, psi=None):
         """Accumulate per-sample weights into the local map buffer."""
@@ -107,8 +107,8 @@ class WeightsMapmaker:
         logassert(self._map_signal is not None, "Tried accumulating to finalized map", self.logger)
         ntod = pix.shape[0]
         weight_f64 = float(weight)
-        self.maplib.map_weight_accumulator_f64(self._map_signal, weight_f64, pix.astype(np.int64),
-                                               ntod, self.npix)
+        self.maplib.map_weight_accumulator_f64(self._map_signal, weight_f64,
+                                               pix.astype(np.int64, copy=False), ntod, self.npix)
 
     def gather_map(self):
         """Reduce the local weights buffers across MPI ranks into the root map."""
@@ -172,7 +172,8 @@ class MapmakerIQU:
         weight_f64 = float(weights)
         psi_f64 = np.ascontiguousarray(psi, dtype=np.float64)
         self.maplib.map_accumulator_IQU_f64(self._map_signal, tod_f64, weight_f64,
-                                            pix.astype(np.int64), psi_f64, ntod, self.npix)
+                                            pix.astype(np.int64, copy=False), psi_f64, ntod,
+                                            self.npix)
 
     def accumulate_to_map_Python(self, tod:NDArray, weights:NDArray, pix:NDArray, psi:NDArray):
         """Reference accumulator matching the ctypes IQU implementation."""
@@ -301,7 +302,8 @@ class WeightsMapmakerIQU:
         weight_f64 = float(weight)
         psi_f64 = np.ascontiguousarray(psi, dtype=np.float64)
         self.maplib.map_weight_accumulator_IQU_f64(self._map_signal, weight_f64,
-                                                   pix.astype(np.int64), psi_f64, ntod, self.npix)
+                                                   pix.astype(np.int64, copy=False), psi_f64, ntod,
+                                                   self.npix)
 
     def accumulate_to_map_Python(self, weight:float, pix:NDArray, psi:NDArray):
         """Reference accumulator matching the ctypes IQU weights implementation."""

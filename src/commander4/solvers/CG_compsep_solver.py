@@ -202,7 +202,7 @@ class CompSepSolver:
                               double_precision = self.params.general.CG_float_precision == "double")
         b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin,
                                    nthreads=mythreads)
-        b_band.alms = b_alm.astype(b_band.alms.dtype)
+        b_band.alms = b_alm.astype(b_band.alms.dtype, copy=False)
   
         # (Y^T M^T Y^-1^T B^T) Y^T N^-1 d
         self.eval_all_comps_from_band(b_band, comp_list)
@@ -276,7 +276,8 @@ class CompSepSolver:
             for comp in comp_list:
                 mu = np.zeros((self.npol, comp.alm_len_complex), dtype=self.complex_dtype)
                 for ipol in range(self.npol):
-                    almxfl(mu[ipol], comp.P_smoothing_prior.astype(self.float_dtype), inplace=True)
+                    almxfl(mu[ipol], comp.P_smoothing_prior.astype(self.float_dtype, copy=False),
+                           inplace=True)
                 self.logger.info(f"RHS3 comp-{comp.longname}: {np.mean(np.abs(mu)):.2e}")
                 mu_s.append(mu)
         else:

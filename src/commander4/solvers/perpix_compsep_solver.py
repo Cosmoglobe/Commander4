@@ -145,8 +145,8 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
             # TODO: Write unit tests that confirm Python and C gives same answers.
             # TODO: Should scale M to make solution more well-conditioned, and then adjust
             # solution with the scaling factor used.
-            ctypes_lib.solve_compsep(npix, nband, ncomp, maps_sky.astype(np.float64),
-                                     maps_rms.astype(np.float64), M, rand, comp_maps[ipol])
+            ctypes_lib.solve_compsep(npix, nband, ncomp, maps_sky.astype(np.float64, copy=False),
+                                  maps_rms.astype(np.float64, copy=False), M, rand, comp_maps[ipol])
             logger.info(f"Finished pixel-by-pixel component separation in {time.time()-t0:.2f}s "\
                         f"for polarization {ipol+1} of 3.")
 
@@ -158,6 +158,6 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
             input_map = np.array([comp_maps[0][icomp]], dtype=real_dtype)
         comp_alms = curvedsky.map2alm_healpix(input_map, niter=3, spin=spin,
                                               lmax=comp_list[icomp].lmax)
-        comp_list[icomp].alms = comp_alms.astype(complex_dtype)
+        comp_list[icomp].alms = comp_alms.astype(complex_dtype, copy=False)
 
     return comp_list

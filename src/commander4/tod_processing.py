@@ -155,7 +155,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
             n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                                                     mask, sigma0_ncorr, C_1f_inv,
                                                                     err_tol=err_tol)
-            mapmaker_ncorr.accumulate_to_map((n_corr_est/scan_samples.gain_est).astype(np.float32),
+            mapmaker_ncorr.accumulate_to_map((n_corr_est/scan_samples.gain_est).astype(np.float32, copy=False),
                                              inv_var, pix, psi)
             if residual > err_tol:
                 num_failed_convergences_ncorr += 1
@@ -408,7 +408,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                     #     if iscan == 300 or iscan == 600 or iscan == 900:
                     #         np.save(f"corrdata/mirrorfft_corrected_ncorr_signal_{experiment_data.band_name}_{iscan}_{iter}.npy", sky_subtracted_TOD)
                     #         np.save(f"corrdata/mirrorfft_corrected_ncorr_ncorr_{experiment_data.band_name}_{iscan}_{iter}.npy", n_corr_est)
-                mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32),
+                mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32, copy=False),
                                                   inv_var, pix, psi)
                 if not did_conv:
                     num_failed_convergences_ncorr += 1
@@ -1128,7 +1128,7 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
 
         # Update tod_samples for this detector
         if delta_g_local.size == nscans_local:
-            tod_samples.time_dep_rel_gain_est[idet, :] = delta_g_local.astype(np.float32)
+            tod_samples.time_dep_rel_gain_est[idet, :] = delta_g_local.astype(np.float32, copy=False)
         else:
             logger.warning(f"Rank {band_rank} received mismatched number of gain samples "\
                            f"for det {idet}. Expected {nscans_local}, got {delta_g_local.size}.")

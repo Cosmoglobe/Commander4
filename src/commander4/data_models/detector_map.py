@@ -52,7 +52,7 @@ class DetectorMap:
         self.lmax = int(2.5*nside) if lmax is None else lmax
         self._beam_Cl = hp.gauss_beam(np.deg2rad(fwhm/60.0), self.lmax)
         self.double_precision = double_precision
-        self.inv_n_map = (1./map_rms**2).astype(np.float64 if double_precision else np.float32)
+        self.inv_n_map = (1./map_rms**2).astype(np.float64 if double_precision else np.float32, copy=False)
 
     @property
     def map_rms(self):

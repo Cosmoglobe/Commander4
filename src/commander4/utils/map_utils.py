@@ -39,7 +39,7 @@ def _get_static_sky_TOD_IQU(det_compsep_map: NDArray[np.floating], pix: NDArray[
     """
     sky = det_compsep_map[0, pix] + np.cos(2*psi)*det_compsep_map[1, pix] \
     + np.sin(2*psi)*det_compsep_map[2, pix]
-    return sky.astype(np.float32)
+    return sky.astype(np.float32, copy=False)
 
 @njit(fastmath=True)
 def _get_static_sky_TOD_QU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
@@ -49,7 +49,7 @@ def _get_static_sky_TOD_QU(det_compsep_map: NDArray[np.floating], pix: NDArray[n
     """
     sky = np.cos(2*psi)*det_compsep_map[0, pix] \
     + np.sin(2*psi)*det_compsep_map[1, pix]
-    return sky.astype(np.float32)
+    return sky.astype(np.float32, copy=False)
 
 @njit(fastmath=True)
 def _get_static_sky_TOD_I(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer]
@@ -58,7 +58,7 @@ def _get_static_sky_TOD_I(det_compsep_map: NDArray[np.floating], pix: NDArray[np
         specified scan pointing. The sky model does not include the orbital dipole.
     """
     sky = det_compsep_map[0, pix]
-    return sky.astype(np.float32)
+    return sky.astype(np.float32, copy=False)
 
 def get_s_orb_TOD(det: DetectorTOD, experiment: DetGroupTOD, pix: NDArray[np.integer],
                   nthreads:int = None) -> NDArray:
@@ -90,7 +90,7 @@ def get_s_orb_TOD(det: DetectorTOD, experiment: DetGroupTOD, pix: NDArray[np.int
     s_orb = np.sum(LOS_vec, axis=-1, dtype=np.float32)
     s_orb *= T_CMB_div_C
     s_orb *= uK_CMB_to_uK_RJ_dict[experiment.nu]  # Converting to uK_RJ units.
-    return s_orb.astype(np.float32)
+    return s_orb.astype(np.float32, copy=False)
 
 def fwhm2sigma(fwhm):
     return fwhm/(2*np.sqrt(2*np.log(2)))
