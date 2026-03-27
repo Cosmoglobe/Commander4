@@ -216,9 +216,10 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
                                                 fwhm=np.deg2rad(detector_data.fwhm/60.0))
 
     pol_names = ["Q", "U"] if detector_data.pol else ["I"]
+    pol_offset = 1 if detector_data.pol else 0
     for ipol in range(detector_data.npol):
         chi2 = np.mean(np.abs(detector_data.map_sky[ipol] -
-                              sky_model_at_band[ipol])/detector_data.map_rms[ipol])
+                              sky_model_at_band[ipol + pol_offset])/detector_data.map_rms[ipol])
         logger.info(f"Reduced chi2 on rank {compsep_rank} for pol={pol_names[ipol]} "\
                     f"({detector_data.nu}GHz): {chi2:.3f}")
 
