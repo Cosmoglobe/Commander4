@@ -210,6 +210,7 @@ def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetGroupTOD, band_p
             comps_sum_smoothed += generate_ff(freq, fwhm, units, nside, params)
             gc.collect()
     stop_bench("sky")
+
     start_bench("bcast")
     band_comm.Bcast(comps_sum_smoothed, root=0)
     stop_bench("bcast")

@@ -41,6 +41,7 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
 def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_names: list[str],
                params: Bunch, scan_idx_start: int,
                scan_idx_stop: int) -> DetGroupTOD:
+    start_bench("reader-startup")
     logger = logging.getLogger(__name__)
     ndet = len(det_names)
     oids = []
@@ -58,7 +59,10 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             oids.append(filepath.split(".")[0].split("_")[-1])
 
     if "processing_mask" in my_band:
-        processing_mask_map = get_processing_mask(my_band)
+        processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
+        if band_comm.Get_rank() == 0:
+            processing_mask_map[:] = get_processing_mask(my_band)        
+        band_comm.Bcast(processing_mask_map, root=0)
     else:
         processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
 
@@ -71,6 +75,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
     ntod_sum_final = 0
     scan_list = []
     num_included = 0
+    stop_bench("reader-startup")
     for i_pid in range(scan_idx_start, scan_idx_stop):
         pid = pids[i_pid]
         filepath = filepaths[i_pid]
