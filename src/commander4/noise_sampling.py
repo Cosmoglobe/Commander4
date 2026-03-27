@@ -229,8 +229,9 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
     M_inv_scaled = M_inv / sigma0**2
 
     if b_small_scaled.size > 0:
-        # Replicate convergence target used in Commander3: eps * sigma_bp * nmask
+        has_converged = False
         nmask = b_small_scaled.size
+        # Replicate convergence target used in Commander3: eps * sigma_bp * nmask
         sigma_bp = np.std(b_small_scaled) if nmask > 1 else np.std(TOD / sigma0**2)
         target_residual = err_tol * sigma_bp * nmask
 
@@ -240,10 +241,12 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
             if current_residual_norm > target_residual:
                 CG_solver.step()
             else:
+                has_converged = True
                 break
         x_small = CG_solver.x
-        CG_err = current_residual_norm
+        CG_err = current_residual_norm / (sigma_bp * nmask)
     else:
+        has_converged = True
         x_small = np.zeros((0,), dtype=np.float64)
         CG_err = 0.0
         i = 0
@@ -254,7 +257,7 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
     # Now, apply M^-1 to get the full correction term
     full_correction = apply_filter(correction_gaps_only, M_inv)
     x_final = m_inv_b + full_correction
-    return x_final.astype(out_dtype), CG_err, i
+    return x_final.astype(out_dtype), CG_err, i, has_converged
 
 
 

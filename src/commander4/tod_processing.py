@@ -386,9 +386,9 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 # In the CG solver this is only used to define the starting guess,
                 # but if the CG fails it is also used to generate the fallback solution.
                 fill_all_masked(sky_subtracted_TOD, mask, sigma0_ncorr)
-                n_corr_est, residual, niter = corr_noise_realization_with_gaps(sky_subtracted_TOD,
+                n_corr_est, residual, niter, did_conv = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                                                     mask, sigma0_ncorr, C_1f_inv,
-                                                                    err_tol=err_tol)
+                                                                    err_tol=err_tol, max_iter=200)
 
                 # if band_comm.Get_rank() == 0 and idet == 0 and chain == 1:
                 #     if iscan == 300 or iscan == 600 or iscan == 900:
@@ -400,9 +400,9 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 var_resid = np.dot(resid, resid)
                 var_data = np.dot(sky_subtracted_TOD * mask, sky_subtracted_TOD * mask)
                 # If either of the two tests failed, use fallback for n_corr.
-                if var_resid > var_data or residual > err_tol:
+                if var_resid > var_data or not did_conv:
                     # Direcly solve constrained realization system without a mask.
-                    n_corr_est, _, _ = corr_noise_realization_with_gaps(sky_subtracted_TOD,
+                    n_corr_est, _, _, _ = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                              np.ones_like(mask, dtype=bool), sigma0_ncorr, C_1f_inv)
                     # if band_comm.Get_rank() == 0 and idet == 0 and chain == 1:
                     #     if iscan == 300 or iscan == 600 or iscan == 900:
@@ -410,7 +410,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                     #         np.save(f"corrdata/mirrorfft_corrected_ncorr_ncorr_{experiment_data.band_name}_{iscan}_{iter}.npy", n_corr_est)
                 mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32),
                                                   inv_var, pix, psi)
-                if residual > err_tol:
+                if not did_conv:
                     num_failed_convergences_ncorr += 1
                 if var_resid > var_data:
                     num_too_high_var_ncorr += 1
