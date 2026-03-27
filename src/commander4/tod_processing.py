@@ -402,7 +402,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 # If either of the two tests failed, use fallback for n_corr.
                 if var_resid > var_data or residual > err_tol:
                     # Direcly solve constrained realization system without a mask.
-                    n_corr_est, residual, niter = corr_noise_realization_with_gaps(sky_subtracted_TOD,
+                    n_corr_est, _, _ = corr_noise_realization_with_gaps(sky_subtracted_TOD,
                                              np.ones_like(mask, dtype=bool), sigma0_ncorr, C_1f_inv)
                     # if band_comm.Get_rank() == 0 and idet == 0 and chain == 1:
                     #     if iscan == 300 or iscan == 600 or iscan == 900:
