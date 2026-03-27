@@ -33,32 +33,33 @@ def get_static_sky_TOD(det_compsep_map: NDArray[np.floating], pix: NDArray[np.in
 
 @njit(fastmath=True)
 def _get_static_sky_TOD_IQU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
-                       psi: NDArray[np.floating]) -> NDArray[np.floating]:
-    """ Projects the current sky-model at our band frequency (in uK_RJ, without gain) into the
-        specified scan pointing. The sky model does not include the orbital dipole.
-    """
-    sky = det_compsep_map[0, pix] + np.cos(2*psi)*det_compsep_map[1, pix] \
-    + np.sin(2*psi)*det_compsep_map[2, pix]
-    return sky.astype(np.float32, copy=False)
+                       psi: NDArray[np.floating]) -> NDArray[np.float32]:
+    sky = np.empty(pix.shape[0], dtype=np.float32)
+    for i in range(pix.shape[0]):
+        p = pix[i]
+        angle = 2.0 * psi[i]
+        sky[i] = det_compsep_map[0, p] + np.cos(angle)*det_compsep_map[1, p]\
+               + np.sin(angle)*det_compsep_map[2, p]                 
+    return sky
 
 @njit(fastmath=True)
 def _get_static_sky_TOD_QU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
-                       psi: NDArray[np.floating]) -> NDArray[np.floating]:
-    """ Projects the current sky-model at our band frequency (in uK_RJ, without gain) into the
-        specified scan pointing. The sky model does not include the orbital dipole.
-    """
-    sky = np.cos(2*psi)*det_compsep_map[0, pix] \
-    + np.sin(2*psi)*det_compsep_map[1, pix]
-    return sky.astype(np.float32, copy=False)
+                       psi: NDArray[np.floating]) -> NDArray[np.float32]:
+    sky = np.empty(pix.shape[0], dtype=np.float32)
+    for i in range(pix.shape[0]):
+        p = pix[i]
+        angle = 2.0 * psi[i]
+        sky[i] = np.cos(angle)*det_compsep_map[0, p] + np.sin(angle)*det_compsep_map[1, p]                 
+    return sky
 
 @njit(fastmath=True)
 def _get_static_sky_TOD_I(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer]
-                          ) -> NDArray[np.floating]:
-    """ Projects the current sky-model at our band frequency (in uK_RJ, without gain) into the
-        specified scan pointing. The sky model does not include the orbital dipole.
-    """
-    sky = det_compsep_map[0, pix]
-    return sky.astype(np.float32, copy=False)
+                          ) -> NDArray[np.float32]:
+    sky = np.empty(pix.shape[0], dtype=np.float32)
+    for i in range(pix.shape[0]):
+        sky[i] = det_compsep_map[0, pix[i]]
+    return sky
+
 
 def get_s_orb_TOD(det: DetectorTOD, experiment: DetGroupTOD, pix: NDArray[np.integer],
                   nthreads:int = None) -> NDArray:

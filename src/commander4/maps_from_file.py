@@ -53,9 +53,9 @@ def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
         for ipol in range(3):
             if pols_to_read[ipol]:
                 map_signal.append(1e3*fits.open(my_band.path_signal_map)[1].data[data_names[ipol]]\
-                                  .flatten().astype(np.float32))
+                                  .flatten().astype(np.float32, copy=False))
                 map_rms.append(1e3*np.sqrt(fits.open(my_band.path_rms_map)[1].data[rms_names[ipol]]\
-                            .flatten().astype(np.float32)))
+                            .flatten().astype(np.float32, copy=False)))
     elif my_band.file_convention == "WMAP_pol":
         # WMAP maps are in mK_CMB and need to be multiplied by 1000.
         # Also, the uncertainty is in variance units, and needs to be square-rooted.
@@ -68,9 +68,9 @@ def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
         rms_names = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
         for ipol in range(1,3):
                 map_signal[ipol] = 1e3*fits.open(my_band.path_signal_map)[1].data[data_names[ipol]]\
-                                   .flatten().astype(np.float32)
+                                   .flatten().astype(np.float32, copy=False)
                 map_signal[ipol] = hp.reorder(map_signal[ipol], inp="NEST", out="RING")
-        _map_cov = 1e6*fits.open(my_band.path_cov_map)[0].data.astype(np.float32)
+        _map_cov = 1e6*fits.open(my_band.path_cov_map)[0].data.astype(np.float32, copy=False)
         map_cov = np.zeros_like(_map_cov)
         map_cov[indices_ring,:] = _map_cov[indices_nest,:]
         map_cov[12*nside**2+indices_ring,:] = _map_cov[12*nside**2+indices_nest,:]
