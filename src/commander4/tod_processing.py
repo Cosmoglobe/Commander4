@@ -333,7 +333,10 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
         for idet, det in enumerate(scan.detectors):
             pix = det.pix
             psi = det.psi
-            inv_var = 1.0/tod_samples.noise_params[iscan,idet,0]**2
+            sigma0, fknee, alpha = tod_samples.noise_params[iscan,idet,:]
+            gain = tod_samples.gain(iscan, idet)
+            # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
+            inv_var = (gain/sigma0)**2
             mapmaker_invvar.accumulate_to_map(inv_var, pix, psi)
     mapmaker_invvar.gather_map()
     mapmaker_invvar.normalize_map()
@@ -359,8 +362,10 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
             d_sky = det.tod.copy()
             pix = det.pix
             psi = det.psi
-            inv_var = 1.0/tod_samples.noise_params[iscan, idet, 0]**2
             gain = tod_samples.gain(iscan, idet)
+            sigma0, fknee, alpha = tod_samples.noise_params[iscan,idet,:]
+            # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
+            inv_var = (gain/sigma0)**2
 
             ### ORBITAL DIPOLE ###
             sky_orb_dipole = get_s_orb_TOD(det, experiment_data, pix)
@@ -378,7 +383,6 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 Nfft = Ntod + 1  # mirrored FFT: nfft=2*Ntod, n=nfft/2+1=Ntod+1
                 freq = rfftfreq(2 * Ntod, d = 1/det.fsamp)
 
-                sigma0, fknee, alpha = tod_samples.noise_params[iscan,idet,:]
                 mask = det.processing_mask_TOD
                 sigma0_ncorr = calc_sigma0_robust(sky_subtracted_TOD, mask)
                 C_1f_inv = np.zeros(Nfft)
@@ -667,7 +671,7 @@ def estimate_white_noise(experiment_data: DetGroupTOD, tod_samples: TODSamples,
             sky_subtracted_tod -= gain*get_s_orb_TOD(detector, experiment_data, pix)
             mask = detector.processing_mask_TOD
             sigma0 = calc_sigma0_robust(sky_subtracted_tod, mask)
-            tod_samples.noise_params[iscan,idetector,0] = sigma0/gain
+            tod_samples.noise_params[iscan,idetector,0] = sigma0
         if iscan == len(experiment_data.scans) - 1:
             log_memory("sigma0-est")
     return tod_samples
@@ -717,7 +721,7 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
                 # Calibrate on the full sky model (static sky + orbital dipole),
                 # analogous to sample_relative_gain / sample_temporal_gain_variations.
                 s_cal = sky_model_TOD + s_orb
-                gain = tod_samples.rel_gain[idet] + tod_samples.temporal_gain[iscan,idet]
+                gain = tod_samples.gain(iscan,idet)
                 residual_tod = det.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
                 residual_tod = np.mean(residual_tod, axis=-1)
                 residual_tod -= gain*s_cal
@@ -731,13 +735,13 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
                 residual_tod += tod_samples.abs_gain*s_orb  # Now we can add back in the orbital dipole.
 
             mask = det.processing_mask_TOD[indices_centers]
-            sigma0 = calc_sigma0_robust(residual_tod, mask)
 
             Ntod = residual_tod.shape[0]
             Nrfft = Ntod//2+1
             freqs = rfftfreq(Ntod, 1.0)
             inv_power_spectrum = np.zeros(Nrfft)
             sigma0, fknee, alpha = tod_samples.noise_params[iscan,idet,:]
+            # FIXME: I believe this does not correctly account for the different sampling rate.
             inv_power_spectrum[1:] = 1.0 / (sigma0**2 * (1 + (freqs[1:] / fknee))**alpha)
 
             ### Solving Equation 16 from BP7 ###
