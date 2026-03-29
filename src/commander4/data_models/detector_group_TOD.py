@@ -28,3 +28,8 @@ class DetGroupTOD:
         self.fwhm = fwhm
         self.ndet = ndet
         self.pols = pols
+        # The below values are not known until all ranks are finished reading in data, because some
+        # scans might be rejected. THey will be set after-the-fact.
+        self.scan_idx_start: int = 0  # Index of my first scan in a compact indexing.
+        self.scan_idx_stop: int = 0  # Index of my last scan.
+        self.nscans_allranks: int = 0  # Total number of scans across all ranks (on this band).
