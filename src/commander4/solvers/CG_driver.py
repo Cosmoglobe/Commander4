@@ -4,6 +4,8 @@ from copy import deepcopy, copy
 from commander4.utils.math_operations import inplace_complist_add_scaled_array,\
     inplace_complist_scale_and_add, complist_dot, inplace_add_scaled_vec, inplace_scale_add, dot
 
+logger = logging.getLogger(__name__)
+
 def default_M(x):     return np.copy(x)
 
 class distributed_CG:
@@ -18,7 +20,6 @@ class distributed_CG:
         and returning vectors. The dot product may be manually specified using the
         dot argument. This is useful for MPI-parallelization, for example."""
         self.is_master = is_master
-        self.logger = logging.getLogger(__name__)
         self.A   = A
         self.M   = M
         self.dot = dot
@@ -86,7 +87,6 @@ class distributed_CG_arr:
         and returning vectors. The dot product may be manually specified using the
         dot argument. This is useful for MPI-parallelization, for example."""
         self.is_master = is_master
-        self.logger = logging.getLogger(__name__)
         self.A   = A
         self.M   = M
         self.dot = dot

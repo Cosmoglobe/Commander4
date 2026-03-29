@@ -7,6 +7,8 @@ from pixell.bunch import Bunch
 
 from commander4.output import log
 
+logger = logging.getLogger(__name__)
+
 def init_mpi(params):
     """ To be run before anything else to set up the MPI environment.
 
@@ -37,7 +39,6 @@ def init_mpi(params):
     Output:
         mpi_info (Bunch): The data structure containing all MPI relevant data, as explained above.
     """
-    logger = logging.getLogger(__name__)
     mpi_info = Bunch()
     world_comm = MPI.COMM_WORLD
     worldsize, worldrank = world_comm.Get_size(), world_comm.Get_rank()
@@ -198,7 +199,6 @@ def init_mpi_tod(mpi_info, params):
     """
     import numpy as np  # Can't be loaded at top-level because it must be loaded after init_mpi().
 
-    logger = logging.getLogger(__name__)
     MPIsize_tod, MPIrank_tod = mpi_info.tod.size, mpi_info.tod.rank
     is_tod_master = mpi_info.tod.is_master
     tod_comm = mpi_info.tod.comm
@@ -301,7 +301,6 @@ def init_mpi_compsep(mpi_info, params):
             for the 'compsep' context.
     """
 
-    logger = logging.getLogger(__name__)
     MPIsize_compsep, MPIrank_compsep = mpi_info.compsep.size, mpi_info.compsep.rank
 
     ### Setting up info for each band, including where to get the data from ###

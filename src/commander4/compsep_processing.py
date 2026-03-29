@@ -10,6 +10,8 @@ from commander4.solvers.CG_compsep_solver import CompSepSolver
 from commander4.solvers.perpix_compsep_solver import solve_compsep_perpix
 from commander4.output.write_chains_files import write_compsep_chain_to_file
 
+logger = logging.getLogger(__name__)
+
 
 def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     -> tuple[CompList, str, dict[str, int], Bunch]:
@@ -26,7 +28,6 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
         band_identifier (str): Unique string for the experiment+band this rank is working on.
         my_band (Bunch): A subset of the full parameter file for the band this rank is working on.
     """
-    logger = logging.getLogger(__name__)
     logger.info(f"CompSep: Hello from CompSep-rank {mpi_info.compsep.rank} (on machine "\
                 f"{mpi_info.processor_name}), dedicated to band {mpi_info.compsep.rank}.")
 
@@ -162,8 +163,6 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
     Returns:
        detector_maps (np.array): The band-integrated total sky. 
     """
-
-    logger = logging.getLogger(__name__)
 
     ### 1. MPI SETUP: Split into I and QU ###
     compsep_comm = mpi_info.compsep.comm

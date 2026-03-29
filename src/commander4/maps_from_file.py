@@ -8,9 +8,10 @@ from pixell.bunch import Bunch
 from commander4.output.log import logassert
 from commander4.data_models.detector_map import DetectorMap
 
+logger = logging.getLogger(__name__)
+
 def read_sim_map_from_file(my_band: Bunch) -> DetectorMap:
     """ Currently deprecated """
-    logger = logging.getLogger(__name__)
     map_signal = hp.read_map(my_band.path_signal_map)
     map_rms = hp.read_map(my_band.path_rms_map)
     nside = np.sqrt(map_signal.size//12)
@@ -28,7 +29,6 @@ def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
     Returns:
         detector_map (DetectorMap): Object holding signal map and other relevant data (rms, nu...)
     """
-    logger = logging.getLogger(__name__)
     #polarizations relevant for the current compsep band (either I or QU).
     # logassert(my_band.identifier.endswith("_I") or my_band.identifier.endswith("_QU"),
     #           f"band identifier {my_band.identifier} has wrong or missing polarization ending, "

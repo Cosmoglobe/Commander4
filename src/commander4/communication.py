@@ -8,8 +8,11 @@ from commander4.data_models.detector_group_TOD import DetGroupTOD
 from commander4.maps_from_file import read_data_map_from_file
 from commander4.output import log
 
+logger = logging.getLogger(__name__)
 
-### ON TOD SIDE
+###########################################################
+# ON TOD SIDE
+###########################################################
 
 # TODO: Communication in this script should be switched from picked (lowercase) to buffered
 # (uppercase) whereever possible (e.g. where arrays are communicated).
@@ -59,7 +62,6 @@ def send_tod(mpi_info: Bunch, tod_map_dict: dict[DetectorMap], todproc_my_band_i
                                   regardless of polarization (example: 'PlanckLFI$$$30GHz').
         receivers (Bunch): Maps a band identifier to the band master on the compsep side.
     """
-    logger = logging.getLogger(__name__)
     if mpi_info.tod.is_master:
         logger.info(f"Compsep band masters: {mpi_info.world.compsep_band_masters}")
     if mpi_info.band.is_master:
@@ -95,7 +97,9 @@ def send_tod(mpi_info: Bunch, tod_map_dict: dict[DetectorMap], todproc_my_band_i
         #                 "only defined for Intensity.")
 
 
-### ON COMPSEP SIDE
+###########################################################
+# ON COMPSEP SIDE
+###########################################################
 
 def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep_band_id: str,
                 curr_tod_output: DetectorMap|None) -> DetectorMap:
@@ -115,7 +119,6 @@ def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep
     Returns:
         data (list of DetectorMaps): nbands (DetectorMap)
     """
-    logger = logging.getLogger(__name__)
     my_compsep_rank = mpi_info.compsep.rank
     if my_band.get_from == "file":
         if curr_tod_output is None:

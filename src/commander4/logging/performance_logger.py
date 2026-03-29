@@ -4,6 +4,8 @@ import logging
 from collections import defaultdict
 from contextlib import ContextDecorator
 
+logger = logging.getLogger(__name__)
+
 class PerfLogger:
     """
     A lightweight, MPI-aware performance profiling tool for HPC applications.
@@ -74,7 +76,6 @@ class PerfLogger:
         self._tag_order_set = set()
 
         # Configure logging to ensure output is visible
-        self.logger = logging.getLogger(__name__)
 
     def reset(self):
         """
@@ -124,7 +125,7 @@ class PerfLogger:
                 once per outer iteration instead.
         """
         if tag not in self.active_timers:
-            self.logger.warning(f"Performance Warning: stop('{tag}') called without start()")
+            logger.warning(f"Performance Warning: stop('{tag}') called without start()")
             return
 
         t_start = self.active_timers.pop(tag)
@@ -311,7 +312,7 @@ class PerfLogger:
             lines.append(f"{tag_str} |{t_str}{m_str}")
 
         lines.append(sep)
-        self.logger.info("\n".join(lines))
+        logger.info("\n".join(lines))
 
     def _get_auto_unit(self, max_ns):
         if max_ns >= 1e9:    return "s", 1e9

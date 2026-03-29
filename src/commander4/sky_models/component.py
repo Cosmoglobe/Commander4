@@ -19,6 +19,9 @@ from commander4.utils.math_operations import alm_to_map, map_to_alm, project_alm
 from commander4.utils.map_utils import gauss_beam, get_gauss_beam_radius, get_npol, assert_pol_supported
 from commander4.data_models.band import Band
 
+logger = logging.getLogger(__name__)
+
+
 MPI_LIMIT_32BIT = 2**31 - 1
 
 A = (2*c.h*u.GHz**3/c.c**2).to('MJy').value
@@ -37,7 +40,6 @@ class Component:
     def __init__(self, comp_params: Bunch, global_params: Bunch):
         self.comp_params = comp_params
         self.global_params = global_params
-        self.logger = logging.getLogger(__name__)
         self.longname = comp_params.longname if "longname" in comp_params else "Unknown Component"
         self.shortname = comp_params.shortname if "shortname" in comp_params else "comp"
         self.double_prec = False if global_params.CG_float_precision == "single" else True
@@ -140,7 +142,6 @@ class Component:
         """
         Broadcasts the data object of the component stored on the root MPI rank.
         """
-        logger = logging.getLogger(__name__)
         log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
         comm.Bcast(self._data, root=root)
 
@@ -149,7 +150,6 @@ class Component:
         Broadcasts the data object of the component stored on the root MPI rank,
         it only returns the request.
         """
-        logger = logging.getLogger(__name__)
         log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
         req = comm.Ibcast(self._data, root=root)
         return req
@@ -159,7 +159,6 @@ class Component:
         Accumulates on the root rank the data object of the component through and
         MPI reduce with a sum.
         """
-        logger = logging.getLogger(__name__)
         log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
         myrank=comm.Get_rank()
         send, recv = (MPI.IN_PLACE, self._data) if myrank == root else (self._data, None)
@@ -170,7 +169,6 @@ class Component:
         Accumulates on the root rank the data object of the component through and MPI reduce with
         a sum, it only returns the request.
         """
-        logger = logging.getLogger(__name__)
         log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
         myrank=comm.Get_rank()
         send, recv = (MPI.IN_PLACE, self._data) if myrank == root else (self._data, None)
@@ -314,7 +312,6 @@ class DiffuseComponent(Component):
         return self.get_component_map(nside, fwhm)*self.get_sed(nu)
     
     def get_sed(self, nu):
-        logger = logging.getLogger(__name__)
         log.lograise(NotImplementedError, "", logger)
 
     #overwrite of the dot product as the diffuse component will have alm _data with complex encoding
@@ -337,9 +334,8 @@ class DiffuseComponent(Component):
 
         NB: this function does not include the beam smoothing.
         """
-        log.logassert(self.is_pol == band.is_pol, 
-                    "Band and component polarization must match",
-                    self.logger)
+        log.logassert(self.is_pol == band.is_pol, "Band and component polarization must match",
+                      logger)
 
         alm_in_band_space = project_alms(self.alms, band.lmax)
         if self.spatially_varying_MM:  # If this component has a MM that is pixel-depnedent.
@@ -368,9 +364,8 @@ class DiffuseComponent(Component):
         NB: this function does not include the beam smoothing.
         """
 
-        log.logassert(self.is_pol == band.is_pol, 
-                    "Band and component polarization must match",
-                    self.logger)
+        log.logassert(self.is_pol == band.is_pol, "Band and component polarization must match",
+                      logger)
 
         if self.spatially_varying_MM:  # If this component has a MM that is pixel-depnedent.
             # Y^-1^T B^T a

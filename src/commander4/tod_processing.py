@@ -30,6 +30,8 @@ from commander4.output.write_chains_files import write_map_chain_to_file
 from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
                                             stop_bench, log_memory, increment_count, bench_reset
 
+logger = logging.getLogger(__name__)
+
 
 def get_initial_sky(experiment_data: DetGroupTOD) -> NDArray[np.float32]:
     """ Returns a sky realization from a set of components. The set of components are listed in
@@ -52,7 +54,6 @@ def get_initial_sky(experiment_data: DetGroupTOD) -> NDArray[np.float32]:
     return initial_sky
 
 def called_on_non_master(arr):
-    logger = logging.getLogger(__name__)
     logger.debug("Dummy precond has been called")
     return np.copy(arr)
 
@@ -76,7 +77,6 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
             polarization component ('I', 'QU').
 
     """
-    logger = logging.getLogger(__name__)
     ismaster = band_comm.Get_rank() == 0
     ### CG MAPMAKER ###
     # We separate the inverse-variance mapmaking from the other 3 mapmakers.
@@ -320,7 +320,6 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
             polarization component ('I', 'QU').
 
     """
-    logger = logging.getLogger(__name__)
     ### INVERSE VARIANCE MAPMAKER ###
     # We separate the inverse-variance mapmaking from the other 3 mapmakers.
     # This is purely to reduce the maximum concurrent memory requirement, and is slightly slower
@@ -553,8 +552,6 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
         experiment_data (DetGroupTOD): The TOD data for the band of this process.
     """
 
-    logger = logging.getLogger(__name__)
-
     # We now loop over all bands in all experiments, and allocate them to the first ranks of the
     # TOD MPI communicator. These ranks will then become the "band masters" for those bands,
     # handling all communication with CompSep.
@@ -691,7 +688,6 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
         tod_samples (TODSamples): Updated TOD samples with the new g0 estimate.
         wait_time (float): Time spent waiting at the MPI barrier.
     """
-    logger = logging.getLogger(__name__)
 
     sum_s_T_N_inv_d = 0  # Accumulators for the numerator and denominator of eqn 16.
     sum_s_T_N_inv_s = 0
@@ -807,9 +803,6 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
     Returns:
         tod_samples (TODSamples): Updated TOD samples with relative gain estimates.
     """
-    logger = logging.getLogger(__name__)
-    global_rank = band_comm.Get_rank()
-    # band_rank = det_comm.Get_rank()
     ndet = experiment_data.ndet
 
     #### 1. Local Calculation (on each rank) ###
@@ -926,7 +919,6 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
         iter (int): Current Gibbs iteration.
         params (Bunch): Parameters from the parameter file.
     """
-    logger = logging.getLogger(__name__)
     band_rank = band_comm.Get_rank()
     band_size = band_comm.Get_size()
     ndet = experiment_data.ndet
@@ -1129,8 +1121,6 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
     # 4. Sample correlated noise and PS parameters (skipped on iter==1).
     # 5. Mapmaking on TOD - corr_noise_TOD - orb_dipole_TOD.
     # (In other words, on iteration 1 we do just do White noise estimation -> Mapmaking.)
-
-    logger = logging.getLogger(__name__)
 
     timing_dict = {}
     waittime_dict = {}

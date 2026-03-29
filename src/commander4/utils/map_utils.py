@@ -1,14 +1,17 @@
 import numpy as np
 import pysm3.units as pysm3_u
-from commander4.data_models.scan_TOD import ScanTOD
-from commander4.data_models.detector_TOD import DetectorTOD
-from commander4.data_models.detector_group_TOD import DetGroupTOD
-from commander4.output import log
 from numpy.typing import NDArray
 import ducc0
 import logging
 import os
 from numba import njit
+
+from commander4.data_models.scan_TOD import ScanTOD
+from commander4.data_models.detector_TOD import DetectorTOD
+from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.output import log
+
+logger = logging.getLogger(__name__)
 
 POLS_DICT = {"I":1, "QU":2, "IQU":3} #more allowed in the future.
 T_CMB = 2.725 * 1e6  # CMB temperature in uK_CMB units.
@@ -116,7 +119,6 @@ def get_npol(pols:str):
     """
     Return the number of map polarizaiton components given the polarization string `pols`.
     """
-    logger = logging.getLogger(__name__)
     log.logassert(pols in POLS_DICT, "Unrecognised polarization string", logger)
     return POLS_DICT[pols]
     

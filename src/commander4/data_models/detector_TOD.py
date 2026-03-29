@@ -6,6 +6,8 @@ import os
 from commander4.cmdr4_support import utils as cpp_utils
 import commander4.output.log as log
 
+logger = logging.getLogger(__name__)
+
 class DetectorTOD:
     """Holds time-ordered data (TOD) for a single detector within a scan.
 
@@ -61,7 +63,6 @@ class DetectorTOD:
             pix_is_compressed: Whether ``pix_encoded`` is Huffman-compressed.
             psi_is_compressed: Whether ``psi_encoded`` is Huffman-compressed.
         """
-        logger = logging.getLogger(__name__)
         log.logassert_np(tod.ndim==1, "'value' must be a 1D array", logger)
         log.logassert_np(tod.dtype in [np.float64,np.float32], "TOD dtype must be floating type,"
                          f" is {tod.dtype}", logger)

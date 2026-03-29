@@ -157,8 +157,8 @@ class TODSamples:
                 self.noise_params = f["noise_params"][local_indices, ...] if "noise_params" in f else None
 
         if self.band_comm.Get_rank() == 0:
-            logger.debug(f"Initial absolute gain estimate for {band_name}: {self.abs_gain:.3e}.")
-            logger.debug(f"Initial rel gain estimates for {band_name}: {self.rel_gain}.")
+            logger.debug(f"Initial absolute gain estimate for {self.band_name}: {self.abs_gain:.3e}.")
+            logger.debug(f"Initial rel gain estimates for {self.band_name}: {self.rel_gain}.")
 
 
     def gain(self, iscan: int, idet: int) -> float:

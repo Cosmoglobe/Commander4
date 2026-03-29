@@ -13,6 +13,8 @@ from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_group_TOD import DetGroupTOD
 
+logger = logging.getLogger(__name__)
+
 
 def get_processing_mask(my_band: Bunch) -> DetectorTOD:
     """ Finds and returns the processing mask for the relevant band.
@@ -36,7 +38,6 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
 
 def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_names: list[str],
                params: Bunch, scan_idx_start: int, scan_idx_stop: int) -> DetectorTOD:
-    logger = logging.getLogger(__name__)
     oids = []
     pids = []
     filepaths = []

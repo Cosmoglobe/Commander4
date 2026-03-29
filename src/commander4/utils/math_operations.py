@@ -18,11 +18,12 @@ from scipy.linalg import blas as blas_wrapper
 from mpi4py import MPI
 
 from commander4.output.log import logassert
-
 import typing
 # Only import when performing type checking, avoiding circular import during normal runtime.
 if typing.TYPE_CHECKING:
     from commander4.sky_models.component import Component, CompList
+
+logger = logging.getLogger(__name__)
 
 
 ###### NUMPY REPLACEMENTS ######
@@ -444,7 +445,6 @@ def alm_complex2real(alm: NDArray[np.complexfloating], lmax: int) -> NDArray[np.
         Returns:
             x (np.array): Real alm array where the last axis has length (lmax+1)^2.
     """
-    logger = logging.getLogger(__name__)
     logassert(alm.dtype in [np.complex128, np.complex64], "Input alms are not of type np.complex128"
              f" or np.complex64  (they are {alm.dtype})", logger)
     float_dtype = np.float64 if alm.dtype == np.complex128 else np.float32
@@ -463,7 +463,6 @@ def alm_real2complex(x: NDArray[np.floating], lmax: int) -> NDArray[np.complexfl
         Returns:
             oalm (np.array): Complex alm array where the last axis has length ((lmax+1)*(lmax+2))/2.
     """
-    logger = logging.getLogger(__name__)
     logassert(x.dtype in [np.float32, np.float64], f"Input map is not of type np.float32 or "
               f"np.float64 (it is {x.dtype})", logger)
     complex_dtype = np.complex128 if x.dtype == np.float64 else np.complex64
