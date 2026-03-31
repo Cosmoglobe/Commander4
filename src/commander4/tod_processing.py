@@ -716,12 +716,12 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
 
             s_orb = get_s_orb_TOD(det, experiment_data, pix)
             sky_model_TOD = get_static_sky_TOD(det_compsep_map, pix, psi=psi)
+            gain = tod_samples.gain(iscan,idet)
 
             if calibrate_on_full_sky:
                 # Calibrate on the full sky model (static sky + orbital dipole),
                 # analogous to sample_relative_gain / sample_temporal_gain_variations.
                 s_cal = sky_model_TOD + s_orb
-                gain = tod_samples.gain(iscan,idet)
                 residual_tod = det.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
                 residual_tod = np.mean(residual_tod, axis=-1)
                 residual_tod -= gain*s_cal
@@ -730,38 +730,23 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
                 s_cal = s_orb
                 residual_tod = det.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
                 residual_tod = np.mean(residual_tod, axis=-1)
-                residual_tod -= tod_samples.gain(iscan, idet)*sky_model_TOD  # Subtracting sky signals.
-                residual_tod -= tod_samples.gain(iscan, idet)*s_orb
+                residual_tod -= gain*sky_model_TOD  # Subtracting sky signals.
+                residual_tod -= gain*s_orb
                 residual_tod += tod_samples.abs_gain*s_orb  # Now we can add back in the orbital dipole.
-
-            mask = det.processing_mask_TOD[indices_centers]
-
-            Ntod = residual_tod.shape[0]
-            Nrfft = Ntod//2+1
-            freqs = rfftfreq(Ntod, 1.0)
-            inv_power_spectrum = np.zeros(Nrfft)
-            sigma0, fknee, alpha = tod_samples.noise_params[iscan,idet,:]
-            # FIXME: I believe this does not correctly account for the different sampling rate.
-            inv_power_spectrum[1:] = 1.0 / (sigma0**2 * (1 + (freqs[1:] / fknee))**alpha)
 
             ### Solving Equation 16 from BP7 ###
             mask = det.processing_mask_TOD[indices_centers]
-            # In the masked regions, inpaint the calibration signal times the absolute gain.
-            # TODO: Shouldn't this be using the full gain, and not just g0?
+            # White noise level, adjusted for downsampling.
+            sigma0_effective = tod_samples.noise_params[iscan,idet,0] * np.sqrt(1.0/f_samp)
+            # Inpaint masked regions with the calib signal times the absolute gain (+ white noise).
+            # TODO: This should ideally be some constrained realization with correlated noise,
+            # but I'm not 100% sure how to do so safely without potentially biasing the signal.
             residual_tod[~mask] = tod_samples.abs_gain*s_cal[~mask]\
-                                + np.random.normal(0, sigma0, s_cal[~mask].shape)
-            
-            s_fft = forward_rfft(s_cal)
-            d_fft = forward_rfft(residual_tod)
-            N_inv_s_fft = s_fft * inv_power_spectrum
-            N_inv_d_fft = d_fft * inv_power_spectrum
-            N_inv_s = backward_rfft(N_inv_s_fft, Ntod)
-            N_inv_d = backward_rfft(N_inv_d_fft, Ntod)
-            
-            # We now exclude the time-samples hitting the masked area.
-            # We don't want to do this before now, because it would mess up the FFT stuff.
+                                + np.random.normal(0, sigma0_effective, s_cal[~mask].shape)
 
-            # mask = experiment_data.processing_mask_map[scan.pix]
+            N_inv_s = experiment_data.apply_N_inv(s_cal, tod_samples.noise_params[iscan,idet], samprate=1.0)
+            N_inv_d = experiment_data.apply_N_inv(residual_tod, tod_samples.noise_params[iscan,idet], samprate=1.0)
+
             # Add to the numerator and denominator.
             # sum_s_T_N_inv_d += np.dot(s_cal[mask], N_inv_d[mask])
             # sum_s_T_N_inv_s += np.dot(s_cal[mask], N_inv_s[mask])
@@ -832,33 +817,37 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
             pix = pix[indices_centers]
             psi = psi[indices_centers]
 
-            s_tot = get_static_sky_TOD(det_compsep_map, pix, psi)
+            s_cal = get_static_sky_TOD(det_compsep_map, pix, psi)
 
-            s_tot += get_s_orb_TOD(det, experiment_data, pix)
+            s_cal += get_s_orb_TOD(det, experiment_data, pix)
 
             gain = tod_samples.abs_gain + tod_samples.temporal_gain[iscan,idet]
             residual_tod = det.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
             residual_tod = np.mean(residual_tod, axis=-1)
-            residual_tod -= gain*s_tot
+            residual_tod -= gain*s_cal
             mask = det.processing_mask_TOD[indices_centers]
-            sigma0 = calc_sigma0_robust(residual_tod, mask)
+            # sigma0 = calc_sigma0_robust(residual_tod, mask)
 
             # Setup FFT-based calculation for N^-1 operations
-            Ntod = residual_tod.shape[0]
-            Nrfft = Ntod // 2 + 1
-            freqs = rfftfreq(Ntod, 1.0)
-            inv_power_spectrum = np.zeros(Nrfft)
-            sigma0, fknee, alpha = tod_samples.noise_params[iscan,idet,:]
-            inv_power_spectrum[1:] = 1.0 / (sigma0**2 * (1 + (freqs[1:] / fknee))**alpha)
+            # Ntod = residual_tod.shape[0]
+            # Nrfft = Ntod // 2 + 1
+            # freqs = rfftfreq(Ntod, 1.0)
+            # inv_power_spectrum = np.zeros(Nrfft)
+            # sigma0, fknee, alpha = tod_samples.noise_params[iscan,idet,:]
+            # inv_power_spectrum[1:] = 1.0 / (sigma0**2 * (1 + (freqs[1:] / fknee))**alpha)
 
-            s_fft = forward_rfft(s_tot)
-            N_inv_s_fft = s_fft * inv_power_spectrum
-            N_inv_s = backward_rfft(N_inv_s_fft, Ntod)
-            
+            # s_fft = forward_rfft(s_tot)
+            # N_inv_s_fft = s_fft * inv_power_spectrum
+            # N_inv_s = backward_rfft(N_inv_s_fft, Ntod)
+
+            sigma0_effective = tod_samples.noise_params[iscan,idet,0] * np.sqrt(1.0/f_samp)
+            N_inv_s = experiment_data.apply_N_inv(s_cal, tod_samples.noise_params[iscan,idet], samprate=1.0)
+
             # Inpaint on the masked regions the sky signal times only the detector-residual gain.
-            residual_tod[~mask] = tod_samples.rel_gain[idet]*s_tot[~mask]\
-                                + np.random.normal(0, sigma0, s_tot[~mask].shape)
-            s_T_N_inv_s_scan = np.dot(s_tot, N_inv_s)
+            residual_tod[~mask] = tod_samples.rel_gain[idet]*s_cal[~mask]\
+                                + np.random.normal(0, sigma0_effective, s_cal[~mask].shape)
+
+            s_T_N_inv_s_scan = np.dot(s_cal, N_inv_s)
             r_T_N_inv_s_scan = np.dot(residual_tod, N_inv_s)
             # s_T_N_inv_s_scan = np.dot(s_tot[mask], N_inv_s[mask])
             # r_T_N_inv_s_scan = np.dot(residual_tod[mask], N_inv_s[mask])
@@ -896,12 +885,14 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
     band_comm.Bcast(delta_g_samples, root=0)
     log_memory("rel-gain")
     
-    wait_time = 0
-    tod_samples.rel_gain[:] = delta_g_samples
     if band_comm.Get_rank() == 0:
-        logger.info(f"Rel gain for band {experiment_data.band_name}: {tod_samples.abs_gain:.3e} "\
-                    f"+/- {np.std(delta_g_samples):.3e}")
+        logger.info(f"Rel gain for band {experiment_data.band_name}: min = "\
+                    f"{np.min(delta_g_samples):.3e} max = {np.max(delta_g_samples):.3e}")
+        logger.debug(f"Rel gains for band {experiment_data.band_name}: {delta_g_samples}\n"\
+                     f"Average change = {np.mean(np.abs(tod_samples.rel_gain - delta_g_samples))}")
+    tod_samples.rel_gain[:] = delta_g_samples
 
+    wait_time = 0
     return tod_samples, wait_time
 
 
@@ -953,36 +944,40 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
             pix = pix[indices_centers]
             psi = psi[indices_centers]
 
-            s_tot = get_static_sky_TOD(det_compsep_map, pix, psi)
-            s_tot += get_s_orb_TOD(det, experiment_data, pix)
+            s_cal = get_static_sky_TOD(det_compsep_map, pix, psi)
+            s_cal += get_s_orb_TOD(det, experiment_data, pix)
 
             gain = tod_samples.abs_gain + tod_samples.rel_gain[idet]
             residual_tod = det.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
             residual_tod = np.mean(residual_tod, axis=-1)
-            residual_tod -= gain*s_tot
+            residual_tod -= gain*s_cal
 
             mask = det.processing_mask_TOD[indices_centers]
-            sigma0 = calc_sigma0_robust(residual_tod, mask)
 
             # FFT-based N^-1 operation setup
-            Ntod = residual_tod.shape[0]
-            Nrfft = Ntod // 2 + 1
-            freqs = rfftfreq(Ntod, 1.0)
-            inv_power_spectrum = np.zeros(Nrfft)
-            sigma0, fknee, alpha = tod_samples.noise_params[iscan,idet,:]
-            inv_power_spectrum[1:] = 1.0 / (sigma0**2 * (1 + (freqs[1:] / fknee))**alpha)
+            # Ntod = residual_tod.shape[0]
+            # Nrfft = Ntod // 2 + 1
+            # freqs = rfftfreq(Ntod, 1.0)
+            # inv_power_spectrum = np.zeros(Nrfft)
+            # sigma0, fknee, alpha = tod_samples.noise_params[iscan,idet,:]
+            # inv_power_spectrum[1:] = 1.0 / (sigma0**2 * (1 + (freqs[1:] / fknee))**alpha)
+
+            sigma0_effective = tod_samples.noise_params[iscan,idet,0] * np.sqrt(1.0/f_samp)
 
             # In the masked regions, inpaint the total sky model times only the temporal gain estimate.
-            residual_tod[~mask] = tod_samples.temporal_gain[iscan,idet]*s_tot[~mask]\
-                                + np.random.normal(0, sigma0, s_tot[~mask].shape)
+            residual_tod[~mask] = tod_samples.temporal_gain[iscan,idet]*s_cal[~mask]\
+                                + np.random.normal(0, sigma0_effective, s_cal[~mask].shape)
 
             # Calculate N^-1 * s_tot and N^-1 * residual_tod
-            N_inv_s = backward_rfft(forward_rfft(s_tot) * inv_power_spectrum, Ntod)
-            N_inv_r = backward_rfft(forward_rfft(residual_tod) * inv_power_spectrum, Ntod)
+            # N_inv_s = backward_rfft(forward_rfft(s_tot) * inv_power_spectrum, Ntod)
+            # N_inv_r = backward_rfft(forward_rfft(residual_tod) * inv_power_spectrum, Ntod)
+
+            N_inv_s = experiment_data.apply_N_inv(s_cal, tod_samples.noise_params[iscan,idet], samprate=1.0)
+            N_inv_r = experiment_data.apply_N_inv(residual_tod, tod_samples.noise_params[iscan,idet], samprate=1.0)
 
             # Calculate elements for the linear system
-            A_qq = np.dot(s_tot, N_inv_s)
-            b_q = np.dot(s_tot, N_inv_r)
+            A_qq = np.dot(s_cal, N_inv_s)
+            b_q = np.dot(s_cal, N_inv_r)
 
             A_qq_local[idet, iscan] = A_qq
             b_q_local[idet, iscan] = b_q

@@ -12,6 +12,7 @@ from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.noise_sampling.noise_psd import NoisePSD, NoisePSDOof
 
 logger = logging.getLogger(__name__)
 
@@ -135,8 +136,10 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
             gc.collect()
     ndet = len(det_names)  # Number of detectors *should* be the same for all scans.
 
+    noise_model = NoisePSDOof()
+
     band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, ndet, my_band.polarization)
+                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
     # my_det_central_freq = my_band.freq
 
     # TODO: Re-implement bandpass shift.
