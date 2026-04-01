@@ -21,7 +21,6 @@ from commander4.utils.CG_mapmaker import CGMapmakerI, CGMapmakerIQU
 from commander4.solvers.preconditioners import InvNPreconditionerI, InvNPreconditionerIQU
 from commander4.noise_sampling.noise_sampling import sample_noise_PS_params, fill_all_masked
 from commander4.noise_sampling.sample_ncorr import corr_noise_realization_with_gaps
-from commander4.noise_sampling.noise_psd import NoisePSDOof
 from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 from commander4.utils.math_operations import forward_rfft, backward_rfft
 from commander4.noise_sampling.sigma0 import calc_sigma0_robust

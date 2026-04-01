@@ -105,6 +105,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
                 psi_encoded = f[f"/{pid}/{det_name}/psi/"][()] if "QU" in my_band.polarization else []
                 flag_encoded = f[f"/{pid}/{det_name}/flag/"][()]
+                init_scalars = f[f"/{pid}/{det_name}/scalars/"][()]
 
                 flag_buffer[:ntod] = cpp_utils.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8),
                                                         huffman_tree, huffman_symbols, flag_buffer[:ntod])
@@ -119,6 +120,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
                 detector = DetectorTOD(tod, pix_encoded, psi_encoded, my_band.eval_nside,
                                         data_nside, fsamp, vsun, huffman_tree, huffman_symbols,
                                         npsi, processing_mask_map, ntod,
+                                        init_scalars = init_scalars,
                                         pix_is_compressed=my_experiment.pix_is_compressed,
                                         psi_is_compressed=my_experiment.psi_is_compressed \
                                         if "QU" in my_band.polarization else False)

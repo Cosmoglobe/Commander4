@@ -1,13 +1,13 @@
 CG_float_precision: "single"
 general:
   MPI_config:
-    ntask_tod: 352
-    ntask_compsep_I: 27
-    ntask_compsep_QU: 27
+    ntask_tod: 176
+    ntask_compsep_I: 22
+    ntask_compsep_QU: 22
   nthreads_tod: 2
   nthreads_compsep: 8
 
-  niter_gibbs: 30
+  niter_gibbs: 5
 
   nside: 512
   
@@ -21,15 +21,19 @@ general:
   noise_alpha: -0.8
 
   sample_corr_noise: True
-  sample_corr_noise_from_iter_num: 10
+  sample_corr_noise_from_iter_num: 2
   sample_abs_gain: True
-  sample_abs_gain_from_iter_num: 2
+  sample_abs_gain_from_iter_num: 6
   sample_rel_gain: True
   sample_rel_gain_from_iter_num: 6
   sample_temporal_gain: True
   sample_temporal_gain_from_iter_num: 12
 
   output_stats: False
+
+  init_from_chain: false
+
+  perform_compsep: true
 
   galactic_mask: False
   pixel_compsep_sampling: True
@@ -59,20 +63,7 @@ components:
     enabled: true
     component_class: "CMB"
     params:
-      polarizations: [True, False, False] #I Q U 
-      longname: "CMB"
-      shortname: "cmb"
-      smoothing_prior_FWHM: 30.0 # arcmin
-      smoothing_prior_amplitude: 1.0e+7 #1.0  # uK_RJ^2
-      lmax: 1024
-      smoothing_scale: 0
-      spatially_varying_MM: False
-
-  CMB_pol:
-    enabled: true
-    component_class: "CMB"
-    params:
-      polarizations: [False, True, True] #I Q U 
+      polarization: "IQU" #I Q U 
       longname: "CMB"
       shortname: "cmb"
       smoothing_prior_FWHM: 30.0 # arcmin
@@ -85,7 +76,7 @@ components:
     enabled: true
     component_class: "ThermalDust"
     params:
-      polarizations: [True, True, True] #I Q U 
+      polarization: "IQU" #I Q U 
       longname: "Thermal Dust"
       shortname: "dust"
       smoothing_prior_FWHM: 0.0 #5.0 # 10.0 # arcmin
@@ -101,7 +92,7 @@ components:
     enabled: true
     component_class: "Synchrotron"
     params:
-      polarizations: [True, True, True] #I Q U 
+      polarization: "IQU" #I Q U 
       longname: "Synchrotron"
       shortname: "sync"
       smoothing_prior_FWHM: 0.0 #60.0 # arcmin
@@ -112,20 +103,20 @@ components:
       smoothing_scale: 0 # 60.0
       spatially_varying_MM: False
 
-  FreeFree:
-    enabled: true
-    component_class: "FreeFree"
-    params:
-      polarizations: [True, False, False] #I Q U 
-      longname: "Free-Free"
-      shortname: "ff"
-      smoothing_prior_FWHM: 0.0 #30.0 # arcmin
-      smoothing_prior_amplitude: 1.0e+10  # uK_RJ^2
-      T: 7000
-      nu0: 0.408 #40
-      lmax: 1024
-      smoothing_scale: 0 # 30.0
-      spatially_varying_MM: False
+  # FreeFree:
+  #   enabled: true
+  #   component_class: "FreeFree"
+  #   params:
+  #     polarization: "I" #I Q U 
+  #     longname: "Free-Free"
+  #     shortname: "ff"
+  #     smoothing_prior_FWHM: 0.0 #30.0 # arcmin
+  #     smoothing_prior_amplitude: 1.0e+10  # uK_RJ^2
+  #     T: 7000
+  #     nu0: 0.408 #40
+  #     lmax: 1024
+  #     smoothing_scale: 0 # 30.0
+  #     spatially_varying_MM: False
 
 compsep:
   dense_matrix_debug_mode: false  # Solve system first with dense matrix math, for debugging CG. Very slow for nside>32.
@@ -137,166 +128,166 @@ CompSep_bands:
   LiteBIRD40GHz_L1:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD50GHz_L2:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD60GHz_L1:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD68GHz_L2:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD68GHz_L3:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD78GHz_L1:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD78GHz_L4:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD89GHz_L2:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD89GHz_L3:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD100GHz_L4:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD100GHz_M1:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD119GHz_L3:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD119GHz_M2:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD140GHz_L4:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD140GHz_M1:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD166GHz_M2:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD195GHz_M1:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD195GHz_H1:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD235GHz_H2:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD280GHz_H1:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD337GHz_H2:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
   LiteBIRD402GHz_H3:
     enabled: true
     get_from: "LiteBIRD"
-    polarizations: [True, True, True]
+    polarization: "IQU"
 
 
-  ### TOTAL INTENSITY MAPS ###
-  Haslam408MHz:
-    enabled: true
-    get_from: "file"
-    eval_nside: 512
-    data_nside: 512
-    file_convention: "Haslam"
-    path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
-    path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
-    fwhm: 60.0  # [arcmin]
-    freq: 0.408 # [GHz]
-    polarizations: [True, True, True]
+  # ### TOTAL INTENSITY MAPS ###
+  # Haslam408MHz:
+  #   enabled: true
+  #   get_from: "file"
+  #   eval_nside: 512
+  #   data_nside: 512
+  #   file_convention: "Haslam"
+  #   path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
+  #   path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
+  #   fwhm: 60.0  # [arcmin]
+  #   freq: 0.408 # [GHz]
+  #   polarization: "IQU"
 
-  WMAPKa:
-    enabled: true
-    get_from: "file"
-    eval_nside: 512
-    data_nside: 512
-    file_convention: "WMAP"
-    path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_map_v4.fits"
-    path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_N_v4.fits"
-    fwhm: 39.6 # [arcmin]
-    freq: 33.0 # [GHz]
-    polarizations: [True, True, True]
+  # WMAPKa:
+  #   enabled: true
+  #   get_from: "file"
+  #   eval_nside: 512
+  #   data_nside: 512
+  #   file_convention: "WMAP"
+  #   path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_map_v4.fits"
+  #   path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_N_v4.fits"
+  #   fwhm: 39.6 # [arcmin]
+  #   freq: 33.0 # [GHz]
+  #   polarization: "IQU"
 
-  WMAPQ1:
-    enabled: true
-    get_from: "file"
-    eval_nside: 512
-    data_nside: 512
-    file_convention: "WMAP"
-    path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_map_v4.fits"
-    path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_N_v4.fits"
-    fwhm: 30.6 # [arcmin]
-    freq: 40.6 # [GHz]
-    polarizations: [True, True, True]
+  # WMAPQ1:
+  #   enabled: true
+  #   get_from: "file"
+  #   eval_nside: 512
+  #   data_nside: 512
+  #   file_convention: "WMAP"
+  #   path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_map_v4.fits"
+  #   path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_N_v4.fits"
+  #   fwhm: 30.6 # [arcmin]
+  #   freq: 40.6 # [GHz]
+  #   polarization: "IQU"
 
-  WMAPV1:
-    enabled: true
-    get_from: "file"
-    eval_nside: 512
-    data_nside: 512
-    file_convention: "WMAP"
-    path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_map_v4.fits"
-    path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_N_v4.fits"
-    fwhm: 21.0 # [arcmin]
-    freq: 60.8 # [GHz]
-    polarizations: [True, True, True]
+  # WMAPV1:
+  #   enabled: true
+  #   get_from: "file"
+  #   eval_nside: 512
+  #   data_nside: 512
+  #   file_convention: "WMAP"
+  #   path_signal_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_map_v4.fits"
+  #   path_rms_map: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_N_v4.fits"
+  #   fwhm: 21.0 # [arcmin]
+  #   freq: 60.8 # [GHz]
+  #   polarization: "IQU"
 
-  Planck857GHz:
-    enabled: true
-    get_from: "file"
-    eval_nside: 512
-    data_nside: 1024
-    file_convention: "HFI"
-    path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_map_n1024_10arcmin_QUADCOR_ZODICOR_uK.fits"
-    path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_rms_n1024_10arcmin_uK_hrscaled_true.fits"
-    fwhm: 10 # [arcmin]
-    freq: 857.0 # [GHz]
-    polarizations: [True, False, False]
+  # Planck857GHz:
+  #   enabled: true
+  #   get_from: "file"
+  #   eval_nside: 512
+  #   data_nside: 1024
+  #   file_convention: "HFI"
+  #   path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_map_n1024_10arcmin_QUADCOR_ZODICOR_uK.fits"
+  #   path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_rms_n1024_10arcmin_uK_hrscaled_true.fits"
+  #   fwhm: 10 # [arcmin]
+  #   freq: 857.0 # [GHz]
+  #   polarization: "I"
 
-  ### POLARIZATION MAPS ###
-  Planck353GHz:
-    enabled: true
-    get_from: "file"
-    eval_nside: 512
-    data_nside: 1024
-    file_convention: "HFI"
-    path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_map_n1024_uK_udgrade.fits"
-    path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_rms_n1024_hrscaled_uK_udgrade.fits"
-    fwhm: 4.86 # [arcmin]
-    freq: 353.0 # [GHz]
-    polarizations: [False, True, True]
+  # ### POLARIZATION MAPS ###
+  # Planck353GHz:
+  #   enabled: true
+  #   get_from: "file"
+  #   eval_nside: 512
+  #   data_nside: 1024
+  #   file_convention: "HFI"
+  #   path_signal_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_map_n1024_uK_udgrade.fits"
+  #   path_rms_map: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_rms_n1024_hrscaled_uK_udgrade.fits"
+  #   fwhm: 4.86 # [arcmin]
+  #   freq: 353.0 # [GHz]
+  #   polarization: "QU"
 
 
 experiments:
@@ -306,6 +297,7 @@ experiments:
     pix_is_compressed: true
     psi_is_compressed: true
     data_type: "TOD"
+    mapmaker: "bin"
     experiment_id: "litebird_sim"  # Decides expected data format, what TOD reader is used, etc.
     # bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
@@ -316,23 +308,24 @@ experiments:
       include_CMB: True
       include_ThermalDust: True
       include_Synchrotron: True
-      include_FreeFree: True
-      include_SpinningDust: True
+      include_FreeFree: False
+      include_SpinningDust: False
       include_OrbitalDipole: True
-      noise_sigma0: 1.0
       include_corr_noise: True
+      noise_sigma0: 1.0
       corr_noise_fknee: 1.0
       corr_noise_alpha: -1.0
 
     bands:
       LiteBIRD40GHz_L1:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 70.5 # [arcmin]
         freq: 40.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 18.5
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_040_L1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -347,12 +340,13 @@ experiments:
 
       LiteBIRD50GHz_L2:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         sigma0_rts: 16.54
         fwhm: 58.5 # [arcmin]
         freq: 50.0 # [GHz]
         fsamp: 19.0 # [Hz]
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_050_L2_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -367,12 +361,13 @@ experiments:
 
       LiteBIRD60GHz_L1:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 51.1 # [arcmin]
         freq: 60.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 10.54
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_060_L1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -387,12 +382,13 @@ experiments:
 
       LiteBIRD68GHz_L2:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         sigma0_rts: 16.87
         fwhm: 41.6 # [arcmin]
         freq: 68.0 # [GHz]
         fsamp: 19.0 # [Hz]
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_068_L2_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -407,12 +403,13 @@ experiments:
 
       LiteBIRD68GHz_L3:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 47.1 # [arcmin]
         freq: 68.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 16.87
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_068_L3_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -427,12 +424,13 @@ experiments:
 
       LiteBIRD78GHz_L1:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 36.9 # [arcmin]
         freq: 78.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 12.07
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_078_L1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -447,12 +445,13 @@ experiments:
 
       LiteBIRD78GHz_L4:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 43.8 # [arcmin]
         freq: 78.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 12.07
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_078_L4_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -467,12 +466,13 @@ experiments:
 
       LiteBIRD89GHz_L2:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 33.8 # [arcmin]
         freq: 89.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 11.30
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_089_L2_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -487,12 +487,13 @@ experiments:
 
       LiteBIRD89GHz_L3:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 41.5 # [arcmin]
         freq: 89.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 11.30
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_089_L3_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -507,12 +508,13 @@ experiments:
 
       LiteBIRD100GHz_L4:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 30.2 # [arcmin]
         freq: 100.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 6.56
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_100_L4_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -527,12 +529,13 @@ experiments:
 
       LiteBIRD100GHz_M1:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 37.8 # [arcmin]
         freq: 100.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 6.56
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_100_M1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -547,12 +550,13 @@ experiments:
 
       LiteBIRD119GHz_L3:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 26.3 # [arcmin]
         freq: 119.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 4.58
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_119_L3_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -567,12 +571,13 @@ experiments:
 
       LiteBIRD119GHz_M2:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 33.6 # [arcmin]
         freq: 119.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 4.58
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_119_M2_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -587,12 +592,13 @@ experiments:
 
       LiteBIRD140GHz_M1:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 30.8 # [arcmin]
         freq: 140.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 4.79
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_140_M1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -609,12 +615,13 @@ experiments:
 
       LiteBIRD140GHz_L4:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 23.7 # [arcmin]
         freq: 140.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 4.79
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_140_L4_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -629,12 +636,13 @@ experiments:
 
       LiteBIRD166GHz_M2:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 28.9 # [arcmin]
         freq: 166.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 5.57
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_166_M2_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -649,12 +657,13 @@ experiments:
 
       LiteBIRD195GHz_M1:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 28.0 # [arcmin]
         freq: 195.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 5.85
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_195_M1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -669,12 +678,13 @@ experiments:
 
       LiteBIRD195GHz_H1:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 28.6 # [arcmin]
         freq: 195.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 5.85
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_195_H1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -689,12 +699,13 @@ experiments:
 
       LiteBIRD235GHz_H2:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 24.7 # [arcmin]
         freq: 235.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 10.79
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_235_H2_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -709,12 +720,13 @@ experiments:
 
       LiteBIRD280GHz_H1:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 22.5 # [arcmin]
         freq: 280.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 13.80
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_280_H1_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -729,12 +741,13 @@ experiments:
 
       LiteBIRD337GHz_H2:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 20.9 # [arcmin]
         freq: 337.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 21.95
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_337_H2_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:
@@ -749,12 +762,13 @@ experiments:
 
       LiteBIRD402GHz_H3:
         enabled: true
-        num_MPI_tasks: 16
+        num_MPI_tasks: 8
         eval_nside: 512
         fwhm: 17.9 # [arcmin]
         freq: 402.0 # [GHz]
         fsamp: 19.0 # [Hz]
         sigma0_rts: 47.45
+        polarization: "IQU" #I Q U 
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/litebird/TOD_analysis/data_LB/filelist_LB_402_H3_tod_eirik_cmb_fg_wn_ncorr30_dipol_v5.txt"
         detectors:

@@ -23,6 +23,8 @@ general:
 
   CG_float_precision: "single"
 
+  init_from_chain: false
+
   galactic_mask: True
   pixel_compsep_sampling: True
   smooth_to_common_res: True

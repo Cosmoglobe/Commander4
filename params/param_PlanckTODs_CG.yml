@@ -37,6 +37,8 @@ general:
   sample_temporal_gain: True
   sample_temporal_gain_from_iter_num: 4
 
+  init_from_chain: false
+
   perform_compsep: true
 
   output_stats: False

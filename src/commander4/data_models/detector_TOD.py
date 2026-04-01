@@ -22,6 +22,7 @@ class DetectorTOD:
         nside (int): HEALPix nside at which this detector should be evaluated.
         data_nside (int): HEALPix nside at which the pixel indices are stored on disk.
         fsamp (float): Sampling frequency in Hz.
+        init_scalars (array): 4-element array of initial guesses for gain, sigma0, fknee, and alpha.
     """
     def __init__(
         self,
@@ -39,6 +40,7 @@ class DetectorTOD:
         ntod_original: int,
         flag_encoded: NDArray[np.integer] | bytes | None = None,
         flag_bitmask: int | None = None,
+        init_scalars: NDArray | None = None,
         pix_is_compressed: bool = True,
         psi_is_compressed: bool = True,
     ):
@@ -68,20 +70,16 @@ class DetectorTOD:
                          f" is {tod.dtype}", logger)
         log.logassert_np(processing_mask_map.dtype == bool, "Processing mask is not boolean type",
                          logger)
-        if orb_dir_vec is not None:
-            log.logassert_np(orb_dir_vec.size == 3, "orb_dir_vec must be a vector of size 3.", logger)
-            self._orb_dir_vec = orb_dir_vec.astype(np.float32, copy=False)
-        else:
-            self._orb_dir_vec = None
         self.tod = tod
         self.ntod = self.tod.shape[-1]
+        self.nside = nside
+        self.data_nside = data_nside
+        self.fsamp = fsamp
+        self.init_scalars = init_scalars
         self._pix_encoded = pix_encoded
         self._psi_encoded = psi_encoded
         self._flag_encoded = flag_encoded
         self._flag_bitmask = flag_bitmask
-        self.nside = nside
-        self.data_nside = data_nside
-        self.fsamp = fsamp
         self._huffman_tree = huffman_tree
         self._huffman_symbols = huffman_symbols
         self._ntod_original = ntod_original  # Size of the original TOD before Fourier cropping.
@@ -89,6 +87,11 @@ class DetectorTOD:
         self._pix_is_compressed = pix_is_compressed
         self._psi_is_compressed = psi_is_compressed
         self._processing_mask_TOD = np.packbits(processing_mask_map[self.pix])
+        if orb_dir_vec is not None:
+            log.logassert_np(orb_dir_vec.size == 3, "orb_dir_vec must be a vector of size 3.", logger)
+            self._orb_dir_vec = orb_dir_vec.astype(np.float32, copy=False)
+        else:
+            self._orb_dir_vec = None
 
 
     @property

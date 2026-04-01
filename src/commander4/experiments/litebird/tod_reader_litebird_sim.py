@@ -12,8 +12,11 @@ from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.noise_sampling.noise_psd import NoisePSD, NoisePSDOof
 from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.output.log import logassert
+
+logger = logging.getLogger(__name__)
 
 def get_processing_mask(my_band: Bunch) -> DetectorTOD:
     """ Finds and returns the processing mask for the relevant band.
@@ -38,7 +41,6 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
 def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_names: list[str],
                params: Bunch, scan_idx_start: int,
                scan_idx_stop: int) -> DetGroupTOD:
-    logger = logging.getLogger(__name__)
     oids = []
     pids = []
     filepaths = []
@@ -100,7 +102,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
 
             detector_list = []
             for det_name in det_names:
-                tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32)
+                tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32, copy=False)
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
                 psi_encoded = f[f"/{pid}/{det_name}/psi/"][()]
                 flag_encoded = f[f"/{pid}/{det_name}/flag/"][()]
@@ -130,15 +132,17 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                 ntod_sum_final += ntod_optimal
         if good_scan:
             scanID = int(pid)
-            scan = ScanTOD(detector_list, 0., scanID, scan_idx_start, scan_idx_stop)
+            scan = ScanTOD(detector_list, 0., scanID)
             scan_list.append(scan)
             num_included += 1
         if i_pid % 10 == 0:
             gc.collect()
     ndet = len(det_names)
 
+    noise_model = NoisePSDOof()
+
     band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, ndet, my_band.polarization)
+                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
 
     if my_experiment.replace_tod_with_sim:
         replace_tod_with_sim(band_comm, band_tod, my_band, params, my_experiment.sim_params)

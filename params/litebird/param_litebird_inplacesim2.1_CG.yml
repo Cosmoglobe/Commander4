@@ -5,38 +5,36 @@ general:
     ntask_compsep_I: 13
     ntask_compsep_QU: 13
   nthreads_tod: 2
-  nthreads_compsep: 8
+  nthreads_compsep: 16
 
-  niter_gibbs: 3
+  niter_gibbs: 30
 
   nside: 512
   
-  CG_max_iter: 100
-  CG_max_iter_pol: 100
+  CG_max_iter: 240
+  CG_max_iter_pol: 160
   CG_err_tol: 1.0e-100
   CG_float_precision: "single"
   CG_real_alm_mode: False
   
-  noise_fknee: 0.002
+  noise_fknee: 0.1
   noise_alpha: -1.0
 
   sample_corr_noise: True
   sample_corr_noise_from_iter_num: 2
   sample_abs_gain: True
   sample_abs_gain_from_iter_num: 2
-  sample_rel_gain: True
+  sample_rel_gain: 
   sample_rel_gain_from_iter_num: 2
-  sample_temporal_gain: True
+  sample_temporal_gain: False
   sample_temporal_gain_from_iter_num: 2
 
   perform_compsep: True
 
   output_stats: False
 
-  init_from_chain: false
-
   galactic_mask: False
-  pixel_compsep_sampling: True
+  pixel_compsep_sampling: False
   smooth_to_common_res: True
 
   chains_to_write: [1,]
@@ -46,16 +44,18 @@ general:
   chain_maps_nside: 512
   chain_maps_interval: 1
 
+  init_from_chain: false
+
   output_paths:
-    chains: "../cmdr4_chains/litebird/inplacesim2.1_comp_newerer3/"
-    stats: "../cmdr4_stats/litebird/inplacesim2.1_comp_newerer3/"
+    chains: "../cmdr4_chains/litebird/inplacesim2.1_comp_CG_smoothcomps_absgain+relgain+corr/"
+    stats: "../cmdr4_stats/litebird/inplacesim2.1_comp_CG_smoothcomps_absgain+relgain+corr/"
 
   logging:
     console:
       level: 'info'
     file:
       level: 'info'
-      filename: '../cmdr4_logs/litebird/inplacesim2.1_comp_newerer3.log'
+      filename: '../cmdr4_logs/litebird/inplacesim2.1_comp_CG_smoothcomps_absgain+corr_strict.log'
 
 
 components:
@@ -79,7 +79,7 @@ components:
       polarization: "IQU" #I Q U 
       longname: "Thermal Dust"
       shortname: "dust"
-      smoothing_prior_FWHM: 0.0 #5.0 # 10.0 # arcmin
+      smoothing_prior_FWHM: 10.0 # arcmin
       smoothing_prior_amplitude: 1.0e+7  # uK_RJ^2
       beta: 1.56
       T: 20
@@ -95,7 +95,7 @@ components:
       polarization: "IQU" #I Q U 
       longname: "Synchrotron"
       shortname: "sync"
-      smoothing_prior_FWHM: 0.0 #60.0 # arcmin
+      smoothing_prior_FWHM: 60.0 # arcmin
       smoothing_prior_amplitude: 1.0e+4  # uK_RJ^2
       beta: -3.1
       nu0: 30
@@ -110,7 +110,7 @@ components:
       polarization: "I"
       longname: "Free-Free"
       shortname: "ff"
-      smoothing_prior_FWHM: 0.0 #30.0 # arcmin
+      smoothing_prior_FWHM: 30.0 # arcmin
       smoothing_prior_amplitude: 1.0e+10  # uK_RJ^2
       T: 7000
       nu0: 0.408 #40
@@ -272,8 +272,8 @@ experiments:
       include_CMB: True
       include_ThermalDust: True
       include_Synchrotron: True
-      include_FreeFree: True
-      include_SpinningDust: True
+      include_FreeFree: False
+      include_SpinningDust: False
       include_OrbitalDipole: True
       include_corr_noise: True
       corr_noise_fknee: 0.1
