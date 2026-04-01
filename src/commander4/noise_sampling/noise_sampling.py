@@ -1,8 +1,10 @@
 import numpy as np
 from scipy.fft import rfftfreq
 import pixell
+from numba import njit
 from numpy.typing import NDArray
-from commander4.utils.math_operations import forward_rfft, backward_rfft
+from commander4.utils.math_operations import forward_rfft, backward_rfft, forward_rfft_mirrored,\
+    backward_rfft_mirrored
 
 def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray) -> float:
     """ Performs 1D inversion sampling on a grid. This involves calculating the cumulative
@@ -84,107 +86,82 @@ def sample_noise_PS_params(n_corr: NDArray, sigma0: float, f_samp: float, alpha_
     return fknee_sample, alpha_current
 
 
-def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigma0: float,
-                                     C_corr_inv: NDArray, err_tol=1e-8, max_iter=400,
-                                     rnd_seed=None) -> NDArray:
-    """ Draws a correlated noise realization given a TOD (with gaps/masked samples) a correlated
-        noise power spectrum. Requires solving a CG, which this function solves in a very efficient
-        way by splitting up the problem such that the CG only has to be performed on the missing
-        data, not the full TOD (see arXiv:2011.06024).
+@njit(fastmath=True)
+def _fill_masked_region(tod: NDArray, mask: NDArray[np.bool_], i_start: int, i_end: int) -> None:
+    """ Fills a contiguous masked region [i_start, i_end] (0-indexed, inclusive) in-place with a
+        linear interpolation between the mean of up to 20 valid samples near each end of the gap.
+        Translated from fill_masked_region in comm_tod_mod.f90.
         Args:
-            TOD (np.array): The 1D time ordered data potentially containing gaps.
-            mask (np.array): A boolean array where False indices indicates missing or masked data.
-            sigma0 (float): The stationary white noise level of the data.
-            C_corr_inv (np.array): The inverse covariance of the TOD we want to sample.
-            err_tol (float): The error tolerance for the CG search.
-            max_iter (int): Maximum iterations used by the CG search.
-            rnd_seed (int): Seed for drawing random numbers during the realization.
-        Returns:
-            x_final (np.array): The TOD realization of the correlated noise.
+            tod: TOD array, modified in-place.
+            mask: Boolean mask (True = valid, False = masked).
+            i_start: Index of the first masked sample.
+            i_end: Index of the last masked sample.
     """
-    def apply_filter(vec, Fourier_filter):
-        return backward_rfft(forward_rfft(vec) * Fourier_filter, ntod=len(vec))
+    ntod = len(tod)
+    n_mean = 20
+    earliest = max(i_start - (n_mean + 1), 0)
+    latest   = min(i_end   + (n_mean + 1), ntod - 1)
 
-    def apply_LHS(x_small):
-        term1 = sigma0**2 * x_small
-        u_x = np.zeros(Ntod, dtype=x_small.dtype)
-        u_x[~mask] = x_small
-        m_inv_u_x = apply_filter(u_x, M_inv)
-        u_t_m_inv_u_x = m_inv_u_x[~mask]
-        term2 = u_t_m_inv_u_x
-        return term1 - term2
-
-    dtype = TOD.dtype
-    Ntod = TOD.shape[0]
-    M_inv = 1.0 / ( (1/sigma0**2) + C_corr_inv)  # The stationary LHS operator.
-    if rnd_seed is not None:
-        np.random.seed(rnd_seed)
-    omega_2 = np.random.randn(Ntod).astype(dtype)
-    omega_3 = np.random.randn(Ntod).astype(dtype)
-
-    C_wn_timedomain = np.ones(Ntod, dtype=dtype)*sigma0**2
-    C_wn_timedomain[~mask] = np.inf
-    b_full = TOD/C_wn_timedomain + omega_2/np.sqrt(C_wn_timedomain)\
-           + apply_filter(omega_3, np.sqrt(C_corr_inv))
-    b_full = b_full.astype(dtype)
-    M_inv = M_inv.astype(dtype)
-    m_inv_b = apply_filter(b_full, M_inv)
-    # Then, apply U^T to extract the values at the flagged locations.
-    b_small = m_inv_b[~mask]
-
-    if b_small.size > 0:
-        CG_solver = pixell.utils.CG(apply_LHS, b_small)
-        for i in range(1, max_iter+1):
-            if CG_solver.err > err_tol:
-                CG_solver.step()
-            else:
-                break
-        x_small = CG_solver.x
-        CG_err = CG_solver.err
-    else:
-        x_small = np.zeros((0,), dtype=dtype)
-        CG_err = 0
-
-    correction_gaps_only = np.zeros(Ntod, dtype=dtype)
-    correction_gaps_only[~mask] = x_small
-    
-    # Now, apply M^-1 to get the full correction term
-    full_correction = apply_filter(correction_gaps_only, M_inv)
-    x_final = m_inv_b + full_correction
-    return x_final, CG_err
+    if i_start == 0:  # gap at start of TOD
+        s = 0.0; n = 0
+        for i in range(i_end, latest + 1):
+            if mask[i]:
+                s += tod[i]; n += 1
+        mu2 = s / n if n > 0 else 0.0
+        for i in range(i_start, i_end + 1):
+            tod[i] = mu2
+    elif i_end == ntod - 1:  # gap at end of TOD
+        s = 0.0; n = 0
+        for i in range(earliest, i_start + 1):
+            if mask[i]:
+                s += tod[i]; n += 1
+        mu1 = s / n if n > 0 else 0.0
+        for i in range(i_start, i_end + 1):
+            tod[i] = mu1
+    else:  # gap in middle of TOD
+        s1 = 0.0; n1 = 0
+        for i in range(earliest, i_start + 1):
+            if mask[i]:
+                s1 += tod[i]; n1 += 1
+        s2 = 0.0; n2 = 0
+        for i in range(i_end, latest + 1):
+            if mask[i]:
+                s2 += tod[i]; n2 += 1
+        mu1 = s1 / n1 if n1 > 0 else 0.0
+        mu2 = s2 / n2 if n2 > 0 else 0.0
+        denom = float(i_end - i_start + 2)
+        for idx in range(i_end - i_start + 1):
+            tod[i_start + idx] = mu1 + (mu2 - mu1) * (idx + 1) / denom
 
 
-
-def inefficient_corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_],
-                                                 sigma0: float, C_corr_inv: NDArray, err_tol=1e-12,
-                                                 max_iter=300, rnd_seed=None) -> NDArray:
-    """ A simpler and less efficient implementation of the function
-        'corr_noise_realization_with_gaps'. This function performs the 'full' straight-forward CG
-        search. Should only be used to test the proper function.
+@njit(fastmath=True)
+def fill_all_masked(tod: NDArray, mask: NDArray[np.bool_], sigma0: float) -> None:
+    """ Fills all masked (gap) regions in the TOD with linear interpolation and then adds
+        Gaussian white noise at the gap-filled positions. Translated from fill_all_masked in
+        comm_tod_mod.f90.
+        Args:
+            tod: TOD array, modified in-place at masked positions.
+            mask: Boolean mask (True = valid, False = masked).
+            sigma0: White noise standard deviation used for the gap noise realizations.
     """
-    def apply_filter(vec, Fourier_filter):
-        return backward_rfft(forward_rfft(vec) * Fourier_filter, ntod=len(vec))
-
-    def apply_LHS(x_full):
-        return x_full/C_wn_timedomain + apply_filter(x_full, C_corr_inv)
-    Ntod = TOD.shape[0]
-
-    C_wn_timedomain = np.ones(Ntod)*sigma0**2
-    C_wn_timedomain[~mask] = np.inf
-
-    if rnd_seed is not None:
-        np.random.seed(rnd_seed)
-    omega_2 = np.random.randn(Ntod)
-    omega_3 = np.random.randn(Ntod)
-
-    b_full = TOD/C_wn_timedomain + omega_2/np.sqrt(C_wn_timedomain)\
-           + apply_filter(omega_3, np.sqrt(C_corr_inv))
-
-    CG_solver = pixell.utils.CG(apply_LHS, b_full)
-    for i in range(1, max_iter+1):
-        if CG_solver.err > err_tol:
-            CG_solver.step()
+    ntod   = len(tod)
+    in_gap = False
+    j_start = 0
+    for j in range(ntod):
+        if mask[j]:
+            if in_gap:
+                j_end  = j - 1
+                _fill_masked_region(tod, mask, j_start, j_end)
+                for k in range(j_start, j_end + 1):
+                    tod[k] += sigma0 * np.random.randn()
+                in_gap = False
         else:
-            break
-    x_full = CG_solver.x
-    return x_full
+            if not in_gap:
+                in_gap  = True
+                j_start = j
+    if in_gap:  # TOD ends with a masked region
+        j_end = ntod - 1
+        _fill_masked_region(tod, mask, j_start, j_end)
+        for k in range(j_start, j_end + 1):
+            tod[k] += sigma0 * np.random.randn()
+

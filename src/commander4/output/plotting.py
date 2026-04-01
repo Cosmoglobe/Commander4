@@ -67,11 +67,11 @@ def _get_component_map(
 ) -> np.ndarray:
     npix = 12 * nside**2
     if npol == 1:
-        if component.pol:
+        if component.is_pol:
             return np.zeros((npix,))
         return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[0]
 
-    if component.pol:
+    if component.is_pol:
         return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[ipol]
     return np.zeros((npix,))
 
@@ -100,7 +100,7 @@ def plot_tod_combined(
     key: str,
     series_by_detector: dict[str, tuple[list[int], list[float]]],
 ) -> None:
-    plt.figure()
+    plt.figure(figsize=(12,6))
     any_line = False
     for detector, (x_vals, y_vals) in sorted(series_by_detector.items()):
         if not x_vals:
@@ -113,7 +113,7 @@ def plot_tod_combined(
     plt.title(f"Chain {chain}: {key} (sample 0)")
     plt.xlabel("iteration")
     plt.ylabel(key)
-    plt.legend(loc="best")
+    plt.legend(loc="best", ncol=3)
     filename = os.path.join(out_folder, f"chain{chain:02d}_{key}_combined.png")
     plt.savefig(filename, bbox_inches="tight")
     plt.close()
@@ -135,6 +135,7 @@ def plot_combo_maps(
     map_skymodel: np.ndarray | None = None,
     gain: float | None = None,
     g0: float | None = None,
+    fwhm_arcmin: float = np.nan,
 ) -> None:
     out_folder = os.path.join(params.output_paths.plots, "combo_maps")
     os.makedirs(out_folder, exist_ok=True)
@@ -172,7 +173,7 @@ def plot_combo_maps(
         residual = signal.copy()
         cmb_map_anisotropies = np.zeros_like(signal)
 
-        fig, ax = plt.subplots(3, 5, figsize=(42, 18))
+        fig, ax = plt.subplots(3, 5, figsize=(32, 13.7))
         if gain is not None and g0 is not None:
             title = (
                 f"Iter {iteration:04d}. Freq: {nu:.2f} GHz (det {detector}). Chain {chain}. "
@@ -183,9 +184,9 @@ def plot_combo_maps(
         fig.suptitle(title, fontsize=24)
 
         max_component_panels = min(len(comp_sublist), 5)
+        beam_radians = fwhm_arcmin * np.pi / (180 * 60) if np.isfinite(fwhm_arcmin) else 0.0
         for i, component in enumerate(comp_sublist[:max_component_panels]):
-            smoothing_scale_radians = component.comp_params.smoothing_scale * np.pi / (180 * 60)
-            comp_map = _get_component_map(component, nu, nside, npol, ipol, smoothing_scale_radians)
+            comp_map = _get_component_map(component, nu, nside, npol, ipol, beam_radians)
             if "cmb" not in component.shortname:
                 foreground_subtracted -= comp_map
             else:
@@ -193,7 +194,7 @@ def plot_combo_maps(
                 cmb_maps = component.get_sky_anisotropies(
                     nu,
                     nside,
-                    fwhm=smoothing_scale_radians,
+                    fwhm=beam_radians,
                 )
                 cmb_map_anisotropies = cmb_maps[ipol if npol > 1 else 0]
             residual -= comp_map
@@ -356,7 +357,7 @@ def plot_data_maps(
     map_signal: np.ndarray,
     map_rms: np.ndarray | None = None,
     map_corrnoise: np.ndarray | None = None,
-    map_skysub: np.ndarray | None = None,
+    map_residual: np.ndarray | None = None,
     map_orbdipole: np.ndarray | None = None,
 ) -> None:
     out_folder = os.path.join(params.output_paths.plots, "maps_data")
@@ -366,14 +367,14 @@ def plot_data_maps(
         "map_signal": map_signal,
         "map_corrnoise": map_corrnoise,
         "map_rms": map_rms,
-        "map_skysub": map_skysub,
+        "map_residual": map_residual,
         "map_orbdipole": map_orbdipole,
     }
     desc = {
         "map_signal": "Signal map",
         "map_corrnoise": "Corr noise map",
         "map_rms": "RMS map",
-        "map_skysub": "Sky-subtracted map",
+        "map_residual": "Residual map",
         "map_orbdipole": "Orbital dipole map",
     }
 
@@ -383,15 +384,15 @@ def plot_data_maps(
         if map_iqu is None:
             continue
 
-        residual_types = {"map_skysub", "map_corrnoise"}
+        symlim_types = {"map_signal", "map_residual", "map_corrnoise"}
         cmap = None if map_type == "map_rms" else "RdBu_r"
-        plt.figure(figsize=(25.5, 5.4))
+        plt.figure(figsize=(17, 4))
         for i in range(3):
             arr = map_iqu[i]
             if map_type == "map_rms":
                 limup = _safe_percentile(arr, 99, 1.0)
                 limdown = max(float(np.nanmin(arr)), 0.0)
-            elif map_type in residual_types:
+            elif map_type in symlim_types:
                 limdown, limup = _sym_limits(arr)
             else:
                 limdown = _safe_percentile(arr, 1, -1.0)
@@ -429,6 +430,7 @@ def plot_components(
     map_signal: np.ndarray,
     nu: float,
     nside: int,
+    fwhm_arcmin: float = np.nan,
 ) -> None:
     map_comp_out = os.path.join(params.output_paths.plots, "maps_comps")
     dl_out = os.path.join(params.output_paths.plots, "spectra_comps_Dl")
@@ -446,6 +448,7 @@ def plot_components(
 
     ells = np.arange(3 * nside)
     Z = ells * (ells + 1) / (2 * np.pi)
+    beam_radians = fwhm_arcmin * np.pi / (180 * 60) if np.isfinite(fwhm_arcmin) else 0.0
 
     for ipol in range(npol):
         signal = map_signal[ipol]
@@ -453,8 +456,7 @@ def plot_components(
         residual = signal.copy()
 
         for component in comp_sublist:
-            smoothing_scale_radians = component.comp_params.smoothing_scale * np.pi / (180 * 60)
-            comp_map = _get_component_map(component, nu, nside, npol, ipol, smoothing_scale_radians)
+            comp_map = _get_component_map(component, nu, nside, npol, ipol, beam_radians)
             if component.shortname != "cmb":
                 foreground_subtracted -= comp_map
             residual -= comp_map

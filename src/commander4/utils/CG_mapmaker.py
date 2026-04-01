@@ -418,7 +418,7 @@ class CGMapmakerI(CGMapmaker):
         assert pix.shape == scan_tod_arr.shape, "pix shape must match scan_tod_arr."
         pix = out_scan.pix if pix is None else pix
         ntod = out_scan.tod.shape[-1]
-        self.map2tod(in_map, scan_tod_arr, pix.astype(np.int64), ntod)
+        self.map2tod(in_map, scan_tod_arr, pix.astype(np.int64, copy=False), ntod)
         return scan_tod_arr
 
     def apply_P_adjoint(self, in_scan: ScanTOD, out_map:NDArray, pix=None, psi=None, scan_tod_arr=None):
@@ -437,7 +437,7 @@ class CGMapmakerI(CGMapmaker):
         assert pix.shape == scan_tod_arr.shape, "pix shape must match scan_tod_arr."
         pix = in_scan.pix if pix is None else pix
         ntod = in_scan.tod.shape[-1]
-        self.map_accumulator(out_map, scan_tod_arr, 1, pix.astype(np.int64), ntod)
+        self.map_accumulator(out_map, scan_tod_arr, 1, pix.astype(np.int64, copy=False), ntod)
         return out_map
 
     @property
@@ -530,8 +530,8 @@ class CGMapmakerIQU(CGMapmaker):
         pix = out_scan.pix if pix is None else pix
         psi = out_scan.psi if psi is None else psi
         ntod = out_scan.tod.shape[-1]
-        self.map2tod_IQU(in_map, scan_tod_arr, pix.astype(np.int64), psi.astype(np.float64),
-                        ntod, npix_out)
+        self.map2tod_IQU(in_map, scan_tod_arr, pix.astype(np.int64, copy=False),
+                         psi.astype(np.float64, copy=False), ntod, npix_out)
         return scan_tod_arr
     
     def apply_P_adjoint(self, in_scan: ScanTOD, out_map:NDArray, pix=None, psi=None, scan_tod_arr=None):
@@ -554,8 +554,8 @@ class CGMapmakerIQU(CGMapmaker):
         pix = in_scan.pix if pix is None else pix
         psi = in_scan.psi if psi is None else psi
         ntod = in_scan.tod.shape[-1]
-        self.map_accumulator_IQU(out_map, scan_tod_arr, 1, pix.astype(np.int64), 
-                                 psi.astype(np.float64), ntod, npix_out)
+        self.map_accumulator_IQU(out_map, scan_tod_arr, 1, pix.astype(np.int64, copy=False), 
+                                 psi.astype(np.float64, copy=False), ntod, npix_out)
         return out_map
     
     @property

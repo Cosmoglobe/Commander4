@@ -20,6 +20,8 @@ if typing.TYPE_CHECKING:
     from commander4.sky_models.component import Component, CompList
     from commander4.utils.mapmaker import WeightsMapmakerIQU
 
+logger = logging.getLogger(__name__)
+
 
 class NoPreconditioner:
     """ Preconditioner for the case where no preconditioner is used.
@@ -309,12 +311,11 @@ class InvNPreconditionerI:
         """
         self.inv_N_map = inv_N_map.reshape((1,-1)) if inv_N_map.ndim == 1 else inv_N_map
         self.npix = self.inv_N_map.shape[1]
-        self.logger = logging.getLogger(__name__)
 
     def __call__(self, map: NDArray) -> NDArray:
         assert map.shape[1] == self.npix
         map_out = np.copy(map)
-        self.logger.debug(f"## Preconditioner called. map shape: {map.shape}, inv N shape: {self.inv_N_map.shape}")
+        logger.debug(f"## Preconditioner called. map shape: {map.shape}, inv N shape: {self.inv_N_map.shape}")
         # this allows it to be applied to IQU maps as well
         map_out = map_out.reshape((1,-1)) if map_out.ndim == 1 else map_out
         if map_out.shape[0] == 1:

@@ -12,6 +12,9 @@ from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.noise_sampling.noise_psd import NoisePSD, NoisePSDOof
+
+logger = logging.getLogger(__name__)
 
 
 def get_processing_mask(my_band: Bunch) -> DetectorTOD:
@@ -36,7 +39,6 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
 
 def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_names: list[str],
                params: Bunch, scan_idx_start: int, scan_idx_stop: int) -> DetectorTOD:
-    logger = logging.getLogger(__name__)
     oids = []
     pids = []
     filepaths = []
@@ -52,7 +54,14 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
             filepaths.append(filename[1:-1])
             oids.append(filename.split(".")[0].split("_")[-1])
 
-    processing_mask_map = get_processing_mask(my_band)
+    if "processing_mask" in my_band:
+        processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
+        if band_comm.Get_rank() == 0:
+            processing_mask_map[:] = get_processing_mask(my_band)        
+        band_comm.Bcast(processing_mask_map, root=0)
+    else:
+        processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
+
     if "bad_PIDs_path" in my_experiment:
         bad_PIDs = np.load(my_experiment.bad_PIDs_path)
     else:
@@ -66,10 +75,15 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
     # tod_buffer = np.zeros(ntod_upper_bound, dtype=np.float32)
 
     scan_list = []
+    nscans = scan_idx_stop - scan_idx_start
     num_included = 0
     ntod_sum_original = 0
     ntod_sum_final = 0
+    # Small de-sycnronization sleep.
+    # time.sleep(5.0 * (band_comm.Get_rank() / band_comm.Get_size()))
     for i_pid in range(scan_idx_start, scan_idx_stop):
+        # Evenly distributed small sleep-interupts, distributed across scans, totalling 60 seconds.
+        # time.sleep(60.0 / (nscans * band_comm.Get_size()))
         pid = pids[i_pid]
         scanID = int(pid)
         filepath = filepaths[i_pid]
@@ -87,7 +101,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
             npsi = int(f["/common/npsi/"][()].item())
             detector_list = []
             for det_name in det_names:
-                tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32)
+                tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32, copy=False)
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
                 psi_encoded = f[f"/{pid}/{det_name}/psi/"][()] if "QU" in my_band.polarization else []
                 flag_encoded = f[f"/{pid}/{det_name}/flag/"][()]
@@ -112,15 +126,20 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
         if good_scan:
-            scan = ScanTOD(detector_list, 0., scanID, scan_idx_start, scan_idx_stop)
+            scan = ScanTOD(detector_list, 0., scanID)
             scan_list.append(scan)
             num_included += 1
+        if band_comm.Get_rank() == 0 and (i_pid-scan_idx_start) % (nscans // 5) == 0:
+            logger.debug(f"Reading scans from disk, progress on master rank of band {bandname}: "\
+                         f"{i_pid-scan_idx_start}/{nscans}")
         if i_pid % 10 == 0:
             gc.collect()
     ndet = len(det_names)  # Number of detectors *should* be the same for all scans.
 
+    noise_model = NoisePSDOof()
+
     band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, ndet, my_band.polarization)
+                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
     # my_det_central_freq = my_band.freq
 
     # TODO: Re-implement bandpass shift.

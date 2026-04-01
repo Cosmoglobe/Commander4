@@ -16,6 +16,8 @@ from pixell.bunch import Bunch
 
 from commander4.output import log
 from commander4 import mpi_management
+from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
+                                            stop_bench, log_memory, increment_count, bench_reset
 
 
 def run_commander4(params: Bunch, params_dict: dict):
@@ -34,7 +36,8 @@ def run_commander4(params: Bunch, params_dict: dict):
     global_params = params.general
 
     # Perform initial MPI setup, assigning tasks to different MPI ranks and deciding master ranks.
-    mpi_info = mpi_management.init_mpi(params)
+    with benchmark("init-mpi"):
+        mpi_info = mpi_management.init_mpi(params)
 
     if mpi_info['world']['is_master']:
         import random
@@ -76,14 +79,14 @@ def run_commander4(params: Bunch, params_dict: dict):
     world_compsep_band_masters_dict = None
     world_tod_band_masters_dict = None
     if mpi_info.world.color == 0:
-        mpi_info, my_band_tod_id, experiment_data, tod_samples = init_tod_processing(mpi_info,
-                                                                                          params)
+        mpi_info, my_band_tod_id, experiment_data, tod_samples_chain1, tod_samples_chain2\
+                                                            = init_tod_processing(mpi_info, params)
         # Even though we're always only working on one of the two chains we still need two sets of
         # samples, as we can't "hot swap" them (both TOD processing and component separation would
         # have to send and receive from the same local buffer). However, perhaps it would be cleaner
         # to call these "current_chain" and "other chain" or something.
-        tod_samples_chain1 = tod_samples
-        tod_samples_chain2 = deepcopy(tod_samples)
+        # tod_samples_chain1 = tod_samples
+        # tod_samples_chain2 = deepcopy(tod_samples)
     elif mpi_info.world.color == 1:
         components, mpi_info, my_band_compsep_id, my_band = init_compsep_processing(mpi_info, params)
 

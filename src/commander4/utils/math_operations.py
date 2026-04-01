@@ -18,11 +18,12 @@ from scipy.linalg import blas as blas_wrapper
 from mpi4py import MPI
 
 from commander4.output.log import logassert
-
 import typing
 # Only import when performing type checking, avoiding circular import during normal runtime.
 if typing.TYPE_CHECKING:
     from commander4.sky_models.component import Component, CompList
+
+logger = logging.getLogger(__name__)
 
 
 ###### NUMPY REPLACEMENTS ######
@@ -135,46 +136,6 @@ def MPI_dot(arr1, arr2, comm:MPI.Comm, double_prec:bool = False):
     local_res = np.array(dot(arr1, arr2), dtype=np.float64 if double_prec else np.float32) #single-value array so mpi Allreduce does not complain.
     res = comm.allreduce(local_res, op=MPI.SUM) #comm.Allreduce(MPI.IN_PLACE, local_res, op=MPI.SUM)
     return res #np.float64(local_res) if double_prec else np.float32(local_res) #unpack it
-
-@njit(fastmath=True)
-def calculate_sigma0(tod: NDArray, mask: NDArray[np.bool_]) -> float:
-    """
-    Calcualtes the white noise level of the "tod" array, using only elements where the boolean
-    array "mask" is True. Uses the std(tod[1:] - tod[:-1])/sqrt(2) trick to get sigma0.
-    Args:
-        tod: The input time-ordered data array.
-        mask: A boolean mask array of the same size as tod.
-    Returns:
-        The calculated sigma value, or np.inf if fewer than two valid data points exist.
-    """
-    assert tod.shape == mask.shape, "Input shapes don't match"
-    # Variables in "Welford's online algorithm" for variance calculation
-    count = 0
-    mean = 0.0
-    m2 = 0.0  # Sum of squares of differences from the current mean
-    last_valid_val = 0.0
-    has_first_val = False  # Track whether we have hit first non-masked value.
-    for i in range(tod.size):
-        if mask[i]:
-            current_val = tod[i]
-            if not has_first_val:
-                # First valid value found.
-                last_valid_val = current_val
-                has_first_val = True
-            else:
-                diff = current_val - last_valid_val
-                count += 1
-                delta = diff - mean
-                mean += delta / count
-                delta2 = diff - mean
-                m2 += delta * delta2
-                # The current value becomes the last valid value for the next pair.
-                last_valid_val = current_val
-    if count == 0:
-        return np.inf
-    var = m2 / count
-    std_dev = sqrt(var)
-    return float(std_dev/sqrt(2.0))
 
 
 @njit(fastmath=True, parallel=True)
@@ -295,7 +256,7 @@ def forward_rfft(data:NDArray[np.floating], nthreads:int = 1):
             data_f (np.array): The Fourier transform of the input.
                                A complex array of length tod.size//2 + 1.
     """
-    nthreads = int(os.environ["OMP_NUM_THREADS"]) if nthreads is None else nthreads
+    nthreads = int(os.environ.get("OMP_NUM_THREADS", 1)) if nthreads is None else nthreads
     return ducc0.fft.r2c(data, nthreads=nthreads)
 
 def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray[np.floating]:
@@ -309,11 +270,64 @@ def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray[np.f
             data (np.array): A real-valued data array of length ntod.
     """
     # If nthreads is not set, put it to how many threads OMP has been given.
-    nthreads = int(os.environ["OMP_NUM_THREADS"]) if nthreads is None else nthreads
+    nthreads = int(os.environ.get("OMP_NUM_THREADS", 1)) if nthreads is None else nthreads
     # Forward = False makes ducc correctly order the output, as the output order is not
     # symmetric for forward and reverse Fourier when doing rfft as supposed to regular fft.
     # inorm = 2 tells ducc to normalize by dividing by ntod, which is the same as what scipy does.
     return ducc0.fft.c2r(data_f, lastsize=ntod, forward=False, nthreads=nthreads, inorm=2)
+
+
+def forward_rfft_mirrored(data: NDArray, nthreads: int = 1):
+    """Forward real FFT on a mirrored (reflected) copy of the input.
+
+    The input is mirrored so that ``dt[0:ntod] = data``,
+    ``dt[ntod:2*ntod] = data[::-1]``, giving a length-``2*ntod`` symmetric
+    array.  This reduces boundary/periodicity artefacts.
+
+    Parameters
+    ----------
+    data : NDArray
+        Real-valued 1-D array of length *ntod*.
+    nthreads : int
+        Number of FFT threads.
+
+    Returns
+    -------
+    dv : NDArray (complex)
+        Length ``ntod + 1`` complex Fourier coefficients.
+    """
+    ntod = len(data)
+    dt = np.empty(2 * ntod, dtype=data.dtype)
+    dt[:ntod] = data
+    dt[ntod:] = data[::-1]
+    nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
+    return ducc0.fft.r2c(dt, nthreads=nthreads)
+
+
+def backward_rfft_mirrored(data_f: NDArray, ntod: int, nthreads: int = None) -> NDArray:
+    """Inverse real FFT returning only the first *ntod* samples.
+
+    The inverse is performed on the full ``2*ntod``-length spectrum and
+    divided by ``2*ntod``.  Only the first *ntod* samples are returned.
+
+    Parameters
+    ----------
+    data_f : NDArray (complex)
+        Fourier coefficients from :func:`forward_rfft_mirrored`.
+    ntod : int
+        Original time-domain length.
+    nthreads : int
+        Number of FFT threads.
+
+    Returns
+    -------
+    data : NDArray
+        Real-valued 1-D array of length *ntod*.
+    """
+    nfft = 2 * ntod
+    nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
+    dt = ducc0.fft.c2r(data_f, lastsize=nfft, forward=False, nthreads=nthreads, inorm=0)
+    return dt[:ntod] / nfft
 
 
 ##### GENERAL ALM STUFF ############
@@ -431,7 +445,6 @@ def alm_complex2real(alm: NDArray[np.complexfloating], lmax: int) -> NDArray[np.
         Returns:
             x (np.array): Real alm array where the last axis has length (lmax+1)^2.
     """
-    logger = logging.getLogger(__name__)
     logassert(alm.dtype in [np.complex128, np.complex64], "Input alms are not of type np.complex128"
              f" or np.complex64  (they are {alm.dtype})", logger)
     float_dtype = np.float64 if alm.dtype == np.complex128 else np.float32
@@ -450,7 +463,6 @@ def alm_real2complex(x: NDArray[np.floating], lmax: int) -> NDArray[np.complexfl
         Returns:
             oalm (np.array): Complex alm array where the last axis has length ((lmax+1)*(lmax+2))/2.
     """
-    logger = logging.getLogger(__name__)
     logassert(x.dtype in [np.float32, np.float64], f"Input map is not of type np.float32 or "
               f"np.float64 (it is {x.dtype})", logger)
     complex_dtype = np.complex128 if x.dtype == np.float64 else np.complex64

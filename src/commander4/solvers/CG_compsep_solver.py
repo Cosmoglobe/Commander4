@@ -16,6 +16,8 @@ from commander4.solvers.CG_driver import distributed_CG
 import commander4.solvers.preconditioners as preconditioners
 from commander4.data_models.band import Band
 
+logger = logging.getLogger(__name__)
+
 MPI_LIMIT_32BIT = 2**31 - 1
 
 
@@ -39,7 +41,6 @@ class CompSepSolver:
     def __init__(self, det_map: DetectorMap,
                  params: Bunch, CompSep_comm: MPI.Comm):
         
-        self.logger = logging.getLogger(__name__)
         self.CompSep_comm = CompSep_comm
         self.my_rank = CompSep_comm.Get_rank()
         self.det_map = det_map
@@ -120,7 +121,6 @@ class CompSepSolver:
                 Aa (np.array): The result of applying A to the input alms. Will return a zero-sized
                                array if this MPI rank does not hold a component.                               
         """
-        logger = logging.getLogger(__name__)
         myrank = self.CompSep_comm.Get_rank()
         
         comp_list = deepcopy(comp_list_in)
@@ -202,7 +202,7 @@ class CompSepSolver:
                               double_precision = self.params.general.CG_float_precision == "double")
         b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin,
                                    nthreads=mythreads)
-        b_band.alms = b_alm.astype(b_band.alms.dtype)
+        b_band.alms = b_alm.astype(b_band.alms.dtype, copy=False)
   
         # (Y^T M^T Y^-1^T B^T) Y^T N^-1 d
         self.eval_all_comps_from_band(b_band, comp_list)
@@ -216,7 +216,7 @@ class CompSepSolver:
         
         if myrank == 0:
             for comp in comp_list:
-                self.logger.info(f"RHS1 comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
+                logger.info(f"RHS1 comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
         #     b = comp_list
         # else:
         #     b = []
@@ -257,7 +257,7 @@ class CompSepSolver:
         
         if myrank == 0:
             for comp in comp_list:
-                self.logger.info(f"RHS1 comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
+                logger.info(f"RHS1 comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
         else:
             b = []
 
@@ -276,8 +276,9 @@ class CompSepSolver:
             for comp in comp_list:
                 mu = np.zeros((self.npol, comp.alm_len_complex), dtype=self.complex_dtype)
                 for ipol in range(self.npol):
-                    almxfl(mu[ipol], comp.P_smoothing_prior.astype(self.float_dtype), inplace=True)
-                self.logger.info(f"RHS3 comp-{comp.longname}: {np.mean(np.abs(mu)):.2e}")
+                    almxfl(mu[ipol], comp.P_smoothing_prior.astype(self.float_dtype, copy=False),
+                           inplace=True)
+                logger.info(f"RHS3 comp-{comp.longname}: {np.mean(np.abs(mu)):.2e}")
                 mu_s.append(mu)
         else:
             mu_s = []
@@ -295,7 +296,7 @@ class CompSepSolver:
                 eta2 = np.zeros((self.npol, comp.alm_len_complex), dtype=self.complex_dtype)
                 for ipol in range(self.npol):
                     eta2[ipol] = gaussian_random_alm(comp.lmax, comp.lmax, self.spin, 1)
-                self.logger.info(f"RHS4 comp-{comp.longname}: {np.mean(np.abs(eta2)):.2e}")
+                logger.info(f"RHS4 comp-{comp.longname}: {np.mean(np.abs(eta2)):.2e}")
                 eta2_s.append(eta2)
         else:
             eta2_s = []
@@ -322,7 +323,6 @@ class CompSepSolver:
         else:
             max_iter = self.params.general.CG_max_iter
 
-        logger = logging.getLogger(__name__)
         checkpt_int = 10
         master = self.CompSep_comm.Get_rank() == 0
         mycomp = self.CompSep_comm.Get_rank()
