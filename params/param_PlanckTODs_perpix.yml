@@ -3,28 +3,25 @@
 
 general:
   MPI_config:
-    ntask_tod: 128
-    ntask_compsep_I: 10
-    ntask_compsep_QU: 10
+    ntask_tod: 256
+    ntask_compsep_I: 8
+    ntask_compsep_QU: 8
   nthreads_tod: 1
   nthreads_compsep: 8
 
-  niter_gibbs: 10
+  niter_gibbs: 20
 
-  perform_compsep: false
+  perform_compsep: true
 
   nside: 512
 
-  noise_fknee: 0.1
-  noise_alpha: -0.9
-
-  sample_corr_noise: True
+  sample_corr_noise: False
   sample_corr_noise_from_iter_num: 2
   sample_abs_gain: True
   sample_abs_gain_from_iter_num: 2
   sample_rel_gain: True
   sample_rel_gain_from_iter_num: 2
-  sample_temporal_gain: True
+  sample_temporal_gain: False
   sample_temporal_gain_from_iter_num: 2
 
   perform_compsep: true
@@ -44,16 +41,18 @@ general:
   chain_maps_nside: 128
   chain_maps_interval: 5
 
+  init_from_chain: false
+
   output_paths:
-    chains: "../cmdr4_chains/PlanckTODs_perpix/"
-    stats: "../cmdr4_stats/PlanckTODs_perpix/"
+    chains: "../cmdr4_chains/PlanckTODs_perpix_newclass_v5_abs+rel/"
+    stats: "../cmdr4_stats/PlanckTODs_perpix_newclass_v5_abs+rel/"
 
   logging:
     console:
       level: 'debug'
     file:
       level: 'info'
-      filename: '../cmdr4_logs/output_PlanckTODs_perpix.log'
+      filename: '../cmdr4_logs/output_PlanckTODs_perpix_newclass_v1.log'
 
 
 components:
@@ -154,11 +153,11 @@ CompSep_bands:
     polarization: "IQU"
   Planck44GHz:
     get_from: PlanckLFI
-    enabled: true
+    enabled: false
     polarization: "IQU"
   Planck70GHz:
     get_from: PlanckLFI
-    enabled: true
+    enabled: false
     polarization: "IQU"
 
   ### TOTAL INTENSITY MAPS ###
@@ -275,14 +274,15 @@ experiments:
     bands:
       Planck30GHz:
         enabled: true
-        tod_files_prefix: "LFI_030_"
-        num_MPI_tasks: 24
+        num_MPI_tasks: 256
         eval_nside: 512
         data_nside: 512
         fwhm: 32.4 # [arcmin]
         freq: 28.4 # [GHz]
         fsamp: 32.5079365079365 # [Hz]
         polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        initial_noise_params: [1.0, 0.1, -0.9]
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
         detectors:
@@ -295,8 +295,7 @@ experiments:
             gain_est: 63.0e-9
             bandpass_shift: 0.08
       Planck44GHz:
-        enabled: true
-        tod_files_prefix: "LFI_044_"
+        enabled: false
         num_MPI_tasks: 40
         eval_nside: 512
         data_nside: 512
@@ -304,6 +303,8 @@ experiments:
         freq: 44.1 # [GHz]
         fsamp: 46.5454545454545
         polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        initial_noise_params: [1.0, 0.1, -0.9]
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
         detectors:
@@ -316,8 +317,7 @@ experiments:
             gain_est: 8.00e-9
             bandpass_shift: 0.28
       Planck70GHz:
-        enabled: true
-        tod_files_prefix: "LFI_070_"
+        enabled: false
         num_MPI_tasks: 64
         eval_nside: 512
         data_nside: 1024
@@ -325,6 +325,8 @@ experiments:
         freq: 70.1 # [GHz]
         fsamp: 78.7692307692308
         polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        initial_noise_params: [1.0, 0.1, -0.9]
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_70.txt"
         detectors:

@@ -101,10 +101,29 @@ class TODSamples:
                     band = experiment.bands[band_name]
                     # Fixed typo here: self.band.name -> self.band_name
                     if self.experiment_name == exp_name and self.band_name == band_name:
-                        myband_noise_params = band.initial_noise_params
+                        # Decide how to set initial noise parmams.
+                        if "initial_noise_params" in band:
+                            # Option 1: They are specified in the parameter file.
+                            myband_noise_params = np.array(band.initial_noise_params)
+                        elif experiment_data.scans[0].detectors[0].init_scalars is not None:
+                            # Option 2: There were entries in the read-in files.
+                            myband_noise_params = np.array([[det.init_scalars[1:4] for det in scan.detectors] for scan in experiment_data.scans])
+                        else:
+                            # Option 3: Fallback to sensible defaults.
+                            myband_noise_params = np.array([1e-3, 0.1, -1.0])
+                        # Loop over all detectors to record their initial gain values.
                         for idet, det_name in enumerate(band.detectors):
                             detector = band.detectors[det_name]
-                            all_det_gains.append(detector.gain_est)
+                            # Decide how to set initial gain values.
+                            if "gain_est" in detector:
+                                all_det_gains.append(detector.gain_est)
+                            # TODO: Make this work
+                            # elif experiment_data.scans[0].detectors[0].init_scalars is not None:
+                            #     # FIXME: This entry seemed to be off by 1e-6 compared to my
+                            #     # estimates, but is this always true? Needs to be checked!
+                            #     all_det_gains.append(1e-6*experiment_data.scans[0].detectors[].init_scalars[0])
+                            else:
+                                all_det_gains.append(1.0)
                             
             all_det_gains = np.array(all_det_gains)
             abs_gain = float(np.mean(all_det_gains))

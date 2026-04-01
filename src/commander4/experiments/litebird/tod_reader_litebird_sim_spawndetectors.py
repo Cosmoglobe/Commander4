@@ -12,11 +12,14 @@ from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.noise_sampling.noise_psd import NoisePSD, NoisePSDOof
 from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.output.log import logassert
 import commander4.compression.huffman as huffman
 from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
                                             stop_bench, log_memory, increment_count, bench_reset
+
+logger = logging.getLogger(__name__)
 
 def get_processing_mask(my_band: Bunch) -> DetectorTOD:
     """ Finds and returns the processing mask for the relevant band.
@@ -42,7 +45,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                params: Bunch, scan_idx_start: int,
                scan_idx_stop: int) -> DetGroupTOD:
     start_bench("reader-startup")
-    logger = logging.getLogger(__name__)
     ndet = len(det_names)
     oids = []
     pids = []
@@ -97,8 +99,8 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             # outside the detector-loop, to avoid loading the disk system too much.
             det_name_Synne = "001_000_002_60A_166_T" # Temporary hard-coded solution.
             # tod = np.zeros(ntod_optimal, dtype=np.float32)
-            default_pix = f[f"/{pid}/{det_name_Synne}/pix/"][:ntod_optimal].astype(np.int32)
-            default_psi = f[f"/{pid}/{det_name_Synne}/psi/"][:ntod_optimal].astype(np.float32)
+            default_pix = f[f"/{pid}/{det_name_Synne}/pix/"][:ntod_optimal].astype(np.int32, copy=False)
+            default_psi = f[f"/{pid}/{det_name_Synne}/psi/"][:ntod_optimal].astype(np.float32, copy=False)
         stop_bench("fileread")
 
         start_bench("compress")
@@ -148,13 +150,15 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             gc.collect()
         stop_bench("compress")
         scanID = int(pid)
-        scan = ScanTOD(detector_list, 0., scanID, scan_idx_start, scan_idx_stop)
+        scan = ScanTOD(detector_list, 0., scanID)
         scan_list.append(scan)
         num_included += 1
     ndet = len(det_names)
 
+    noise_model = NoisePSDOof()
+
     band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, ndet, my_band.polarization)
+                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
 
     start_bench("skysim")
     if my_experiment.replace_tod_with_sim:
