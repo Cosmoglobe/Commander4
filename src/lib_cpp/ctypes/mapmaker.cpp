@@ -259,10 +259,12 @@ void _apply_invN_to_map_IQU_T(const T *map_in, T *map_out, const T *inv_N_map, i
  *   norm_map -- 2D array [6, num_pix] with unique A elements (II, IQ, IU, QQ, QU, UU).
  *   num_pix -- Number of pixels.
  *
- * Singular or ill-conditioned pixels are zeroed.
+ * Singular or ill-conditioned pixels are set to +inf.
  */
 template<typename T>
 void _map_invdiag_IQU_T(T *rms_out, const T *norm_map, int64_t num_pix){
+    // Use the type-specific IEEE +infinity sentinel for unconstrained pixels.
+    const T inf = std::numeric_limits<T>::infinity();
     for (int64_t ipix = 0; ipix < num_pix; ipix++) {
         // Find the array elements that form the 3x3 A matrix to be inverted.
         const T a00 = norm_map[ipix];
@@ -277,17 +279,17 @@ void _map_invdiag_IQU_T(T *rms_out, const T *norm_map, int64_t num_pix){
         bool successful_invert = _invert_SPD_3x3(a00, a01, a02, a11, a12, a22,
                                                  inv00, inv01, inv02, inv11, inv12, inv22);
         if (!successful_invert){
-            // If solver failed (singular matrix) set values to zero.
-            rms_out[ipix] = 0.0;
-            rms_out[num_pix + ipix] = 0.0;
-            rms_out[2 * num_pix + ipix] = 0.0;
+            // If inversion failed (missing/singular/ill-conditioned), RMS is infinite.
+            rms_out[ipix] = inf;
+            rms_out[num_pix + ipix] = inf;
+            rms_out[2 * num_pix + ipix] = inf;
             continue;
         }
         
-        // Rms values are the sqrt of the diagonal. However, set them to zero if diag is negative.
-        rms_out[ipix] = inv00 > static_cast<T>(0) ? std::sqrt(inv00) : static_cast<T>(0);
-        rms_out[num_pix + ipix] = inv11 > static_cast<T>(0) ? std::sqrt(inv11) : static_cast<T>(0);
-        rms_out[2 * num_pix + ipix] = inv22 > static_cast<T>(0) ? std::sqrt(inv22) : static_cast<T>(0);
+        // RMS is sqrt(diag(A^-1)) for valid positive diagonals, otherwise infinite.
+        rms_out[ipix] = inv00 > static_cast<T>(0) ? std::sqrt(inv00) : inf;
+        rms_out[num_pix + ipix] = inv11 > static_cast<T>(0) ? std::sqrt(inv11) : inf;
+        rms_out[2 * num_pix + ipix] = inv22 > static_cast<T>(0) ? std::sqrt(inv22) : inf;
     }
 }
 
