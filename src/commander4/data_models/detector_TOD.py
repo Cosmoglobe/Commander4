@@ -38,9 +38,13 @@ class DetectorTOD:
         npsi: int,
         processing_mask_map: NDArray[np.bool_],
         ntod_original: int,
+        ntod_optimal: int,
+        huffman_tree2: NDArray | None = None,
+        huffman_symbols2: NDArray | None = None,
         flag_encoded: NDArray[np.integer] | bytes | None = None,
         flag_bitmask: int | None = None,
         init_scalars: NDArray | None = None,
+        tod_is_compressed: bool = True,
         pix_is_compressed: bool = True,
         psi_is_compressed: bool = True,
     ):
@@ -65,13 +69,15 @@ class DetectorTOD:
             pix_is_compressed: Whether ``pix_encoded`` is Huffman-compressed.
             psi_is_compressed: Whether ``psi_encoded`` is Huffman-compressed.
         """
-        log.logassert_np(tod.ndim==1, "'value' must be a 1D array", logger)
-        log.logassert_np(tod.dtype in [np.float64,np.float32], "TOD dtype must be floating type,"
-                         f" is {tod.dtype}", logger)
+        if not tod_is_compressed:
+            log.logassert_np(tod.ndim==1, "'value' must be a 1D array", logger)
+            log.logassert_np(tod.dtype in [np.float64,np.float32], "TOD dtype must be floating "\
+                             f"type, is {tod.dtype}", logger)
         log.logassert_np(processing_mask_map.dtype == bool, "Processing mask is not boolean type",
                          logger)
-        self.tod = tod
-        self.ntod = self.tod.shape[-1]
+        self._tod = tod
+        self.ntod_original = ntod_original
+        self.ntod = ntod_optimal
         self.nside = nside
         self.data_nside = data_nside
         self.fsamp = fsamp
@@ -82,8 +88,10 @@ class DetectorTOD:
         self._flag_bitmask = flag_bitmask
         self._huffman_tree = huffman_tree
         self._huffman_symbols = huffman_symbols
-        self._ntod_original = ntod_original  # Size of the original TOD before Fourier cropping.
+        self._huffman_tree2 = huffman_tree2
+        self._huffman_symbols2 = huffman_symbols2
         self._npsi = npsi
+        self._tod_is_compressed = tod_is_compressed
         self._pix_is_compressed = pix_is_compressed
         self._psi_is_compressed = psi_is_compressed
         self._processing_mask_TOD = np.packbits(processing_mask_map[self.pix])
@@ -95,9 +103,17 @@ class DetectorTOD:
 
 
     @property
-    def nsamples(self) -> int:
-        """Number of time samples in the TOD (alias for ``ntod``)."""
-        return self.tod.shape[0]
+    def tod(self) -> NDArray[np.floating]:
+        if self._tod_is_compressed:
+            tod = np.zeros(self.ntod_original, dtype=np.int32)
+            tod[:] = cpp_utils.huffman_decode(np.frombuffer(self._tod, dtype=np.uint8),
+                                    self._huffman_tree2, self._huffman_symbols2, tod)[:self.ntod]
+            tod[:] = np.cumsum(tod)
+            tod = tod.astype(np.float32)
+        else:
+            tod = self._tod
+        return tod
+
 
     @property
     def pix(self) -> NDArray[np.integer]:
@@ -108,7 +124,7 @@ class DetectorTOD:
         indices are re-projected to the evaluation resolution.
         """
         if self._pix_is_compressed:
-            pix = np.zeros(self._ntod_original, dtype=np.int64)
+            pix = np.zeros(self.ntod_original, dtype=np.int64)
             pix = cpp_utils.huffman_decode(np.frombuffer(self._pix_encoded, dtype=np.uint8),
                                            self._huffman_tree, self._huffman_symbols, pix)
             #TODO: Include cumsum in the C++ decode, so it can't be forgotten?
@@ -137,7 +153,7 @@ class DetectorTOD:
         and converted from integer bins to radians on each access.
         """
         if self._psi_is_compressed:
-            psi = np.zeros(self._ntod_original, dtype=np.int64)
+            psi = np.zeros(self.ntod_original, dtype=np.int64)
             psi = cpp_utils.huffman_decode(np.frombuffer(self._psi_encoded, dtype=np.uint8),
                                         self._huffman_tree, self._huffman_symbols, psi)
             psi = np.cumsum(psi)
@@ -165,7 +181,7 @@ class DetectorTOD:
         """
         Returns the uncompressed flag array.
         """
-        flags = np.zeros(self._ntod_original, dtype=np.int64)
+        flags = np.zeros(self.ntod_original, dtype=np.int64)
         flags = cpp_utils.huffman_decode(np.frombuffer(self._flag_encoded, dtype=np.uint8), 
                                         self._huffman_tree, self._huffman_symbols, flags)
         flags = np.cumsum(flags)
