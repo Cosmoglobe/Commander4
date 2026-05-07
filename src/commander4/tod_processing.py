@@ -57,7 +57,7 @@ def called_on_non_master(arr):
     return np.copy(arr)
 
 def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output: NDArray,
-            detector_samples: TODSamples, params: Bunch, chain: int, iter: int,
+            tod_samples: TODSamples, params: Bunch, chain: int, iter: int,
             do_ncorr_sampling: bool) -> dict[str, DetectorMap]:
     """ Commander4 CG mapmaking. All ranks on the provided MPI communicator collaborates on creating
         the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
@@ -66,7 +66,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
                           should go into the same map.
         experiment_data (DetGroupTOD): TOD data class to be made into maps.
         compsep_output (NDArray): The sky model at our band. Not used, but written to chain file.
-        detector_samples (TODSamples): Sampled TOD parameters, such as gain.
+        tod_samples (TODSamples): Sampled TOD parameters, such as gain.
         params (Bunch): Parameter file as 'Param' object.
         chain (int): Current chain number.
         iter (int): Current Gibbs iteration.
@@ -84,32 +84,38 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     pols = experiment_data.pols
     if pols == "IQU":
         mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)
-        for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-            pix = scan.pix
-            psi = scan.psi
-            inv_var = 1.0/scan_samples.sigma0**2
-            mapmaker_invvar.accumulate_to_map(inv_var, pix, psi)
+        for iscan, scan in enumerate(experiment_data.scans):
+            for idet, det in enumerate(scan.detectors):
+                pix = det.pix
+                psi = det.psi
+                sigma0, fknee, alpha = tod_samples.noise_params[iscan, idet, :]
+                gain = tod_samples.gain(iscan, idet)
+                inv_var = (gain/sigma0)**2
+                mapmaker_invvar.accumulate_to_map(inv_var, pix, psi)
         mapmaker_invvar.gather_map()
         mapmaker_invvar.normalize_map()
         if ismaster:
             precond = InvNPreconditionerIQU(mapmaker_invvar.final_rms_map**2)
         else:
             precond = called_on_non_master
-        cg_mapmaker = CGMapmakerIQU(experiment_data, detector_samples, band_comm,
+        cg_mapmaker = CGMapmakerIQU(experiment_data, tod_samples, band_comm,
                     preconditioner=precond, nthreads=params.general.nthreads_tod, 
                     CG_maxiter=params.general.CG_mapmaker.maxiter)
     elif pols == "I":
         mapmaker_invvar = WeightsMapmaker(band_comm, experiment_data.nside)
-        for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-            pix = scan.pix
-            inv_var = 1.0/scan_samples.sigma0**2
-            mapmaker_invvar.accumulate_to_map(inv_var, pix)
+        for iscan, scan in enumerate(experiment_data.scans):
+            for idet, det in enumerate(scan.detectors):
+                pix = det.pix
+                sigma0, fknee, alpha = tod_samples.noise_params[iscan, idet, :]
+                gain = tod_samples.gain(iscan, idet)
+                inv_var = (gain/sigma0)**2
+                mapmaker_invvar.accumulate_to_map(inv_var, pix)
         mapmaker_invvar.gather_map()
         if ismaster:
             precond = InvNPreconditionerI(utils.without_nan(1./mapmaker_invvar.final_map))
         else:
             precond = called_on_non_master
-        cg_mapmaker = CGMapmakerI(experiment_data, detector_samples, band_comm,
+        cg_mapmaker = CGMapmakerI(experiment_data, tod_samples, band_comm,
                     preconditioner=precond, nthreads=params.general.nthreads_tod, 
                     CG_maxiter=params.general.CG_mapmaker.maxiter)
     else:
@@ -127,60 +133,60 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
         worst_residual_ncorr = 0
     
     ### MAIN SCAN LOOP ###
-    for scan, scan_samples in zip(experiment_data.scans, detector_samples.scans):
-        d_sky = scan.tod.copy()
-        pix = scan.pix
-        psi = None if pols=="I" else scan.psi
-        inv_var = 1.0/scan_samples.sigma0**2
+    for iscan, scan in enumerate(experiment_data.scans):
+        for idet, det in enumerate(scan.detectors):
+            d_sky = det.tod.copy()
+            pix = det.pix
+            psi = None if pols=="I" else det.psi
+            sigma0, fknee, alpha = tod_samples.noise_params[iscan, idet, :]
+            gain = tod_samples.gain(iscan, idet)
+            inv_var = (gain/sigma0)**2
 
-        ### ORBITAL DIPOLE ###
-        sky_orb_dipole = get_s_orb_TOD(scan, experiment_data, pix)
-        d_sky -= scan_samples.gain_est*sky_orb_dipole
+            ### ORBITAL DIPOLE ###
+            sky_orb_dipole = get_s_orb_TOD(det, experiment_data, pix)
+            d_sky -= gain*sky_orb_dipole
+            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
 
-        ### CORRELATED NOISE SAMPLING ###
-        if do_ncorr_sampling:
-            s_tot = get_static_sky_TOD(compsep_output, pix, psi=psi)
-            s_tot += sky_orb_dipole
-            sky_subtracted_TOD = scan.tod.copy()
-            sky_subtracted_TOD -= scan_samples.gain_est*s_tot
-            Ntod = sky_subtracted_TOD.shape[0]
-            Nfft = Ntod + 1  # mirrored FFT: nfft=2*Ntod, n=nfft/2+1=Ntod+1
-            freq = rfftfreq(2 * Ntod, d = 1/scan.fsamp)
-            fknee = scan_samples.fknee_est
-            alpha = scan_samples.alpha_est
-            mask = scan.processing_mask_TOD
-            sigma0_ncorr = calc_sigma0_robust(sky_subtracted_TOD, mask)
-            C_1f_inv = np.zeros(Nfft)
-            C_1f_inv[1:] = 1.0 / (sigma0_ncorr**2*(freq[1:]/fknee)**alpha)
-            # fill_all_masked(sky_subtracted_TOD, mask, sigma0_ncorr)
-            err_tol = 1e-6
-            n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
-                                                                    mask, sigma0_ncorr, C_1f_inv,
-                                                                    err_tol=err_tol)
-            mapmaker_ncorr.accumulate_to_map((n_corr_est/scan_samples.gain_est).astype(np.float32, copy=False),
-                                             inv_var, pix, psi)
-            if residual > err_tol:
-                num_failed_convergences_ncorr += 1
-                worst_residual_ncorr = max(worst_residual_ncorr, residual)
+            ### CORRELATED NOISE SAMPLING ###
+            if do_ncorr_sampling:
+                s_tot = get_static_sky_TOD(compsep_output, pix, psi=psi)
+                s_tot += sky_orb_dipole
+                sky_subtracted_TOD = det.tod.copy()
+                sky_subtracted_TOD -= gain*s_tot
+                Ntod = sky_subtracted_TOD.shape[0]
+                Nfft = Ntod + 1  # mirrored FFT: nfft=2*Ntod, n=nfft/2+1=Ntod+1
+                freq = rfftfreq(2 * Ntod, d = 1/det.fsamp)
+                mask = det.processing_mask_TOD
+                sigma0_ncorr = calc_sigma0_robust(sky_subtracted_TOD, mask)
+                C_1f_inv = np.zeros(Nfft)
+                C_1f_inv[1:] = 1.0 / (sigma0_ncorr**2*(freq[1:]/fknee)**alpha)
+                # fill_all_masked(sky_subtracted_TOD, mask, sigma0_ncorr)
+                err_tol = 1e-6
+                n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
+                                                                        mask, sigma0_ncorr, C_1f_inv,
+                                                                        err_tol=err_tol)
+                mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32, copy=False),
+                                                 inv_var, pix, psi)
+                if residual > err_tol:
+                    num_failed_convergences_ncorr += 1
+                    worst_residual_ncorr = max(worst_residual_ncorr, residual)
 
-            ### CORRELATED NOISE POWER SPECTRUM PARAMETERS SAMPLING ###
-            fknee, alpha = sample_noise_PS_params(n_corr_est, sigma0_ncorr, scan.fsamp, alpha,
-                                                  freq_max=2.0, n_grid=150, n_burnin=4)
-            scan_samples.fknee_est = fknee
-            scan_samples.alpha_est = alpha
-            alphas.append(alpha)
-            fknees.append(fknee)
+                ### CORRELATED NOISE POWER SPECTRUM PARAMETERS SAMPLING ###
+                fknee, alpha = sample_noise_PS_params(n_corr_est, sigma0_ncorr, det.fsamp, alpha,
+                                                      freq_max=2.0, n_grid=150, n_burnin=4)
+                tod_samples.noise_params[iscan, idet, :] = sigma0, fknee, alpha
+                alphas.append(alpha)
+                fknees.append(fknee)
 
-            d_sky -= n_corr_est
+                d_sky -= n_corr_est
 
-        # mapmaker.accumulate_to_map(d_sky/scan_samples.gain_est, inv_var, pix, psi=psi)
-        cg_mapmaker.accum_to_RHS(
-                    scan_tod=scan, 
-                    scan_samp=scan_samples, 
-                    pix=pix,
-                    psi=psi,
-                    scan_tod_arr=d_sky/scan_samples.gain_est
-                    )
+            cg_mapmaker.accum_to_RHS(
+                        scan_tod=det,
+                        sigma0=sigma0,
+                        pix=pix,
+                        psi=psi,
+                        scan_tod_arr=d_sky/gain
+                        )
 
     ### PRINT NOISE SAMPLING STATS ###
     if do_ncorr_sampling:
@@ -222,42 +228,42 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     map_signal = cg_mapmaker.solved_map
     
     ########### temporary debug plots
-    if ismaster:
-        if pols == "IQU":
-            plt.figure(figsize=(8.5*3, 5.4))
-            npol = 3
-            for i in range(npol):
-                limup   = np.nanpercentile(cg_mapmaker.RHS_map[i,:], 99)
-                limdown = np.nanpercentile(cg_mapmaker.RHS_map[i,:], 1)
-                hp.mollview(cg_mapmaker.RHS_map[i,:], cmap='RdBu_r', title='RHS',
-                            sub=(1,npol,i+1), min=limdown, max=limup)
-            plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/RHS.png")
-            plt.close()
+    # if ismaster:
+    #     if pols == "IQU":
+    #         plt.figure(figsize=(8.5*3, 5.4))
+    #         npol = 3
+    #         for i in range(npol):
+    #             limup   = np.nanpercentile(cg_mapmaker.RHS_map[i,:], 99)
+    #             limdown = np.nanpercentile(cg_mapmaker.RHS_map[i,:], 1)
+    #             hp.mollview(cg_mapmaker.RHS_map[i,:], cmap='RdBu_r', title='RHS',
+    #                         sub=(1,npol,i+1), min=limdown, max=limup)
+    #         plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/RHS.png")
+    #         plt.close()
 
-            plt.figure(figsize=(8.5*3, 5.4))
-            for i in range(npol):
-                limup   = np.nanpercentile(precond(cg_mapmaker.RHS_map)[i,:], 99)
-                limdown = np.nanpercentile(precond(cg_mapmaker.RHS_map)[i,:], 1)
-                hp.mollview(precond(cg_mapmaker.RHS_map)[i,:], cmap='RdBu_r', title='M RHS',
-                            sub=(1,npol,i+1), min=limdown, max=limup)
-            plt.savefig("/mn/stornext/u3/leoab/cmdr4_plots/M_RHS.png")
-            plt.close()
-        else:
-            plt.figure()
-            limup   = np.nanpercentile(cg_mapmaker.RHS_map[0,:], 99)
-            limdown = np.nanpercentile(cg_mapmaker.RHS_map[0,:], 1)
-            hp.mollview(cg_mapmaker.RHS_map[0,:], cmap='RdBu_r', title='RHS',
-                            min=limdown, max=limup)
-            plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/RHS.png")
-            plt.close()
+    #         plt.figure(figsize=(8.5*3, 5.4))
+    #         for i in range(npol):
+    #             limup   = np.nanpercentile(precond(cg_mapmaker.RHS_map)[i,:], 99)
+    #             limdown = np.nanpercentile(precond(cg_mapmaker.RHS_map)[i,:], 1)
+    #             hp.mollview(precond(cg_mapmaker.RHS_map)[i,:], cmap='RdBu_r', title='M RHS',
+    #                         sub=(1,npol,i+1), min=limdown, max=limup)
+    #         plt.savefig("/mn/stornext/u3/leoab/cmdr4_plots/M_RHS.png")
+    #         plt.close()
+    #     else:
+    #         plt.figure()
+    #         limup   = np.nanpercentile(cg_mapmaker.RHS_map[0,:], 99)
+    #         limdown = np.nanpercentile(cg_mapmaker.RHS_map[0,:], 1)
+    #         hp.mollview(cg_mapmaker.RHS_map[0,:], cmap='RdBu_r', title='RHS',
+    #                         min=limdown, max=limup)
+    #         plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/RHS.png")
+    #         plt.close()
 
-            plt.figure()
-            limup   = np.nanpercentile(precond(cg_mapmaker.RHS_map)[0,:], 99)
-            limdown = np.nanpercentile(precond(cg_mapmaker.RHS_map)[0,:], 1)
-            hp.mollview(precond(cg_mapmaker.RHS_map)[0,:], cmap='RdBu_r', title='M RHS',
-                            min=limdown, max=limup)
-            plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/M_RHS.png")
-            plt.close()
+    #         plt.figure()
+    #         limup   = np.nanpercentile(precond(cg_mapmaker.RHS_map)[0,:], 99)
+    #         limdown = np.nanpercentile(precond(cg_mapmaker.RHS_map)[0,:], 1)
+    #         hp.mollview(precond(cg_mapmaker.RHS_map)[0,:], cmap='RdBu_r', title='M RHS',
+    #                         min=limdown, max=limup)
+    #         plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/M_RHS.png")
+    #         plt.close()
 
     #####################
 
@@ -273,14 +279,12 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
         if "I" in pols:
             detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
                                 experiment_data.fwhm, experiment_data.nside)
-            detmap_I.g0 = detector_samples.g0_est
-            detmap_I.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
+            detmap_I.g0 = tod_samples.abs_gain
             detmap_dict_out.update({"I": detmap_I})
         if "QU" in pols:
             detmap_QU = DetectorMap(map_signal[1:3,:], map_rms[1:3,:], experiment_data.nu,
                                 experiment_data.fwhm, experiment_data.nside)
-            detmap_QU.g0 = detector_samples.g0_est
-            detmap_QU.gain = detector_samples.scans[0].rel_gain_est + detector_samples.g0_est
+            detmap_QU.g0 = tod_samples.abs_gain
             detmap_dict_out.update({"QU": detmap_QU})
 
         maps_to_file = {}

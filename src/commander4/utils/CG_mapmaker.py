@@ -177,13 +177,13 @@ class CGMapmaker:
         """
         return self._apply_T(scan_tod_arr, adjoint=True)
     
-    def accum_to_RHS(self, scan_tod: ScanTOD, scan_samp: ScanSamples, 
+    def accum_to_RHS(self, scan_tod: DetectorTOD, sigma0: float,
                      pix=None, psi=None, scan_tod_arr=None):
         """
         Computes the contribution to RHS of the mapmaking problem: P^T T^T N^-1 d for one scan. 
-        Both scan TOD and samples must be given. This allows to compute the RHS contirbutions in an
-        external loop together with the correlated noise sampling, pix can be passed already
-        uncompressed from an external loop to avoid double uncompression.
+        Both scan TOD and the white noise level sigma0 must be given. This allows to compute the RHS
+        contributions in an external loop together with the correlated noise sampling, pix can be
+        passed already uncompressed from an external loop to avoid double uncompression.
         """
         if self._rhs_loca_map is None:
             #if not done already, allocate memory for local maps
@@ -194,7 +194,7 @@ class CGMapmaker:
         #N^-1 d
         # if self.ismaster:
         #     self.logger.info(f"RHS_1: {scan_tod_arr.shape}")
-        scan_tod_arr = self.apply_inv_N(scan_tod_arr, scan_samp.sigma0)
+        scan_tod_arr = self.apply_inv_N(scan_tod_arr, sigma0)
         #T^T N^-1 d
         # if self.ismaster:
         #     self.logger.info(f"RHS_2: {scan_tod_arr.shape}")
@@ -238,33 +238,35 @@ class CGMapmaker:
         self.map_comm.Bcast(in_map, root=0)
         out_map = np.zeros_like(in_map)
         pri = True
-        for scan, sample in zip(self.detector_tod.scans, self.detector_samples.scans):
-            pix = scan.pix
-            psi = scan.psi
-            scan_tod_arr_aux = np.zeros_like(scan.tod, dtype=self.f_dtype) #aux array to not modify scan.tod
-            # if self.map_comm.Get_rank() == 0 and pri:
-            #     self.logger.info(f"##LHS 1 mean: {np.mean(in_map)}")
-            #P m
-            scan_tod_arr_aux = self.apply_P(in_map, scan, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
-            # if self.map_comm.Get_rank() == 0 and pri:
-            #     self.logger.info(f"##LHS 2 mean: {np.mean(scan_tod_arr_aux)}")
-            #T P m
-            scan_tod_arr_aux = self.apply_T(scan_tod_arr_aux)
-            # if self.map_comm.Get_rank() == 0 and pri:
-            #     self.logger.info(f"##LHS 3 mean: {np.mean(scan_tod_arr_aux)}")
-            #N^-1 T P m
-            scan_tod_arr_aux = self.apply_inv_N(scan_tod_arr_aux, sample.sigma0)
-            # if self.map_comm.Get_rank() == 0 and pri:
-            #     self.logger.info(f"##LHS 4 mean: {np.mean(scan_tod_arr_aux)}")
-            #T^T N^-1 T P m
-            scan_tod_arr_aux = self.apply_T_adjoint(scan_tod_arr_aux)
-            # if self.map_comm.Get_rank() == 0 and pri:
-            #     self.logger.info(f"##LHS 5 mean: {np.mean(scan_tod_arr_aux)}")
-            #P^T T^T N^-1 T P
-            out_map = self.apply_P_adjoint(scan, out_map, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
-            # if self.map_comm.Get_rank() == 0 and pri:
-            #     self.logger.info(f"##LHS 6 mean: {np.mean(out_map)}")
-            pri=False
+        for iscan, scan in enumerate(self.detector_tod.scans):
+            for idet, det in enumerate(scan.detectors):
+                pix = det.pix
+                psi = det.psi
+                sigma0 = self.detector_samples.noise_params[iscan, idet, 0]
+                scan_tod_arr_aux = np.zeros_like(det.tod, dtype=self.f_dtype) #aux array to not modify scan.tod
+                # if self.map_comm.Get_rank() == 0 and pri:
+                #     self.logger.info(f"##LHS 1 mean: {np.mean(in_map)}")
+                #P m
+                scan_tod_arr_aux = self.apply_P(in_map, det, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
+                # if self.map_comm.Get_rank() == 0 and pri:
+                #     self.logger.info(f"##LHS 2 mean: {np.mean(scan_tod_arr_aux)}")
+                #T P m
+                scan_tod_arr_aux = self.apply_T(scan_tod_arr_aux)
+                # if self.map_comm.Get_rank() == 0 and pri:
+                #     self.logger.info(f"##LHS 3 mean: {np.mean(scan_tod_arr_aux)}")
+                #N^-1 T P m
+                scan_tod_arr_aux = self.apply_inv_N(scan_tod_arr_aux, sigma0)
+                # if self.map_comm.Get_rank() == 0 and pri:
+                #     self.logger.info(f"##LHS 4 mean: {np.mean(scan_tod_arr_aux)}")
+                #T^T N^-1 T P m
+                scan_tod_arr_aux = self.apply_T_adjoint(scan_tod_arr_aux)
+                # if self.map_comm.Get_rank() == 0 and pri:
+                #     self.logger.info(f"##LHS 5 mean: {np.mean(scan_tod_arr_aux)}")
+                #P^T T^T N^-1 T P
+                out_map = self.apply_P_adjoint(det, out_map, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
+                # if self.map_comm.Get_rank() == 0 and pri:
+                #     self.logger.info(f"##LHS 6 mean: {np.mean(out_map)}")
+                pri=False
         send, recv = (MPI.IN_PLACE, out_map) if self.map_comm.Get_rank() == 0 else (out_map, None)
         self.map_comm.Reduce(send, recv, op=MPI.SUM, root=0)
         if not ismaster:
@@ -299,16 +301,16 @@ class CGMapmaker:
                 if ismaster:
                     self.logger.info(f"Mapmaker CG iter {i:3d} - Residual {CG_solver.err:.6e}")
                     res_s.append(CG_solver.err)
-                    plt.figure(figsize=(8.5*3, 5.4))
-                    npol = 3
-                    self.logger.info(f"## Plotting ... iter {i}")
-                    for p in range(npol):
-                        limup   = np.nanpercentile(CG_solver.x[p,:], 99)
-                        limdown = np.nanpercentile(CG_solver.x[p,:], 1)
-                        hp.mollview(CG_solver.x[p,:], cmap='RdBu_r', title='CG sol',
-                                    sub=(1,npol,p+1), min=limdown, max=limup)
-                    plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/x_sol_IQU_iter{i}.png")
-                    plt.close()
+                    # plt.figure(figsize=(8.5*3, 5.4))
+                    # npol = 3
+                    # self.logger.info(f"## Plotting ... iter {i}")
+                    # for p in range(npol):
+                    #     limup   = np.nanpercentile(CG_solver.x[p,:], 99)
+                    #     limdown = np.nanpercentile(CG_solver.x[p,:], 1)
+                    #     hp.mollview(CG_solver.x[p,:], cmap='RdBu_r', title='CG sol',
+                    #                 sub=(1,npol,p+1), min=limdown, max=limup)
+                    # plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/x_sol_IQU_iter{i}.png")
+                    # plt.close()
                     if x_true is not None:
                         CG_errors_true = norm(CG_solver.x - x_true)/norm(x_true)
                         A_residual = self.apply_LHS(CG_solver.x - x_true)
@@ -340,12 +342,12 @@ class CGMapmaker:
             
             if CG_solver.err < self.CG_tol:
                 break
-        if ismaster:
-            plt.figure()
-            plt.plot(np.arange(self.CG_maxiter), res_s)
-            plt.yscale('log')
-            plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/CG_residuals.png")
-            plt.close
+        # if ismaster:
+        #     plt.figure()
+        #     plt.plot(np.arange(self.CG_maxiter), res_s)
+        #     plt.yscale('log')
+        #     plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/CG_residuals.png")
+        #     plt.close
         self._map_signal = CG_solver.x
 
     
@@ -371,10 +373,10 @@ class CGMapmakerI(CGMapmaker):
                          nthreads, double_prec, CG_maxiter, CG_tol, CG_check_interval)
         
         #output map to be solved for
-        self._map_signal = np.zeros((1,hp.nside2npix(detector_tod.eval_nside)), 
+        self._map_signal = np.zeros((1,hp.nside2npix(detector_tod.nside)), 
             dtype=self.f_dtype) if self.ismaster else None
         #RHS map to be accumulated on master rank
-        self._rhs_finalized_map = np.zeros((1,hp.nside2npix(detector_tod.eval_nside)), 
+        self._rhs_finalized_map = np.zeros((1,hp.nside2npix(detector_tod.nside)), 
             dtype=self.f_dtype) if self.ismaster else None
         
         #RHS map to be accumulate
@@ -445,7 +447,7 @@ class CGMapmakerI(CGMapmaker):
         """
         Internal function to allocate an empty map.
         """
-        return np.zeros((1, hp.nside2npix(self.detector_tod.eval_nside)), dtype=self.f_dtype)
+        return np.zeros((1, hp.nside2npix(self.detector_tod.nside)), dtype=self.f_dtype)
 
 class CGMapmakerIQU(CGMapmaker):
     """Polarised (I, Q, U) CG mapmaker.
@@ -470,12 +472,12 @@ class CGMapmakerIQU(CGMapmaker):
                          nthreads, double_prec, CG_maxiter, CG_tol, CG_check_interval)
         
         #output map to be solved for
-        self._map_signal = np.zeros((3,hp.nside2npix(detector_tod.eval_nside)), 
+        self._map_signal = np.zeros((3,hp.nside2npix(detector_tod.nside)), 
             dtype=self.f_dtype) if self.ismaster else None
         #local RHS map
         self._rhs_loca_map = None
         #RHS map to be accumulated on master rank
-        self._rhs_finalized_map = np.zeros((3,hp.nside2npix(detector_tod.eval_nside)), 
+        self._rhs_finalized_map = np.zeros((3,hp.nside2npix(detector_tod.nside)), 
             dtype=self.f_dtype) if self.ismaster else None
         
         if double_prec:
@@ -563,4 +565,4 @@ class CGMapmakerIQU(CGMapmaker):
         """
         Internal function to allocate an empty map.
         """
-        return np.zeros((3, hp.nside2npix(self.detector_tod.eval_nside)), dtype=self.f_dtype)
+        return np.zeros((3, hp.nside2npix(self.detector_tod.nside)), dtype=self.f_dtype)
