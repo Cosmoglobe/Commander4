@@ -123,13 +123,33 @@ def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
               "does not match polarization count.", logger)
     logassert(len(map_rms) == len(map_signal), f"Shape of loaded rms map {my_band.path_rms_map} "
               "does not match signal map's one.", logger)
+
     # Convert from input units (uK_CMB) to Commander processing units (uK_RJ)
+    if "units" in my_band:
+        if my_band.units == "uK_CMB":
+            input_units = pysm3_u.uK_CMB
+        elif my_band.units == "K_CMB":
+            input_units = pysm3_u.K_CMB
+        elif my_band.units == "mK_CMB":
+            input_units = pysm3_u.mK_CMB
+        elif my_band.units == "uK_RJ":
+            input_units = pysm3_u.uK_RJ
+        elif my_band.units == "K_RJ":
+            input_units = pysm3_u.K_RJ
+        elif my_band.units == "mK_RJ":
+            input_units = pysm3_u.mK_RJ
+        else:
+            raise ValueError(f"Unrecognized units {my_band.units} for band {my_band._name}.")
+    else:
+        input_units = pysm3_u.uK_CMB
+        logging.warning(f"No units specified for {my_band._name}. Assuming uK_CMB!")
+
     n_corr = []
     for ipol in range(npol):
-        map_signal[ipol] = map_signal[ipol] * pysm3_u.uK_CMB
+        map_signal[ipol] = map_signal[ipol] * input_units
         map_signal[ipol] = map_signal[ipol].to(pysm3_u.uK_RJ,
                             equivalencies=pysm3_u.cmb_equivalencies(my_band.freq*pysm3_u.GHz)).value
-        map_rms[ipol] = map_rms[ipol] * pysm3_u.uK_CMB
+        map_rms[ipol] = map_rms[ipol] * input_units
         map_rms[ipol] = map_rms[ipol].to(pysm3_u.uK_RJ,
                             equivalencies=pysm3_u.cmb_equivalencies(my_band.freq*pysm3_u.GHz)).value
 
