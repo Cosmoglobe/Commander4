@@ -143,8 +143,9 @@ def _dot_complex_alm_1D_arrays(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArr
     """ Function calculating the dot product of two alms, given that they follow the Healpy standard
         where alms are represented as complex numbers, but with the conjugate 'negative' ms missing.
     """
-    return np.sum((alm1[:lmax]*alm2[:lmax]).real)\
-           + np.sum((alm1[lmax:]*np.conj(alm2[lmax:])).real*2)
+    nm0 = lmax + 1
+    return np.sum((alm1[:nm0] * alm2[:nm0]).real)\
+           + np.sum((alm1[nm0:] * np.conj(alm2[nm0:])).real * 2)
 
 #Specific function for point sources:
 @njit(fastmath=True, parallel=True)
@@ -431,8 +432,9 @@ def alm_dot_product(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArray:
     """ Function calculating the dot product of two alms, given that they follow the Healpy standard
         where alms are represented as complex numbers, but with the conjugate 'negative' ms missing.
     """
-    return np.sum((alm1[:lmax]*alm2[:lmax]).real)\
-        + np.sum((alm1[lmax:]*np.conj(alm2[lmax:])).real*2)
+    nm0 = lmax + 1
+    return np.sum((alm1[:nm0] * alm2[:nm0]).real)\
+        + np.sum((alm1[nm0:] * np.conj(alm2[nm0:])).real * 2)
 
 
 def alm_complex2real(alm: NDArray[np.complexfloating], lmax: int) -> NDArray[np.floating]:
