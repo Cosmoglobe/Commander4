@@ -157,7 +157,7 @@ class CompSepSolver:
             print(f"Fallback to blocking comm (array size = {biggest_size_bytes:.2e}B)")
             # for comp in comp_list:
             #     comp.accum_data_blocking(self.CompSep_comm)
-            comp_list.accum_data_blocking
+            comp_list.accum_data_blocking(self.CompSep_comm)
 
         else:
             # requests = []
