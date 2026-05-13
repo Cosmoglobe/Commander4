@@ -27,16 +27,11 @@ class NoPreconditioner:
     """ Preconditioner for the case where no preconditioner is used.
         Returns the input array unchanged.
     """
-    def __init__(self, compsep: CompSepSolver, complist: list[Component]):
-        """
-        Arguments:
-            compsep (CompSepSolver): The CompSepSolver object from which this class is initialized.
-        """
-        self.compsep = compsep
+    def __init__(self, compsep: CompSepSolver, complist: CompList):
+        pass
 
-
-    def __call__(self, a_complist: list[Component]):
-        return [deepcopy(a) for a in a_complist]
+    def __call__(self, complist: CompList):
+        return deepcopy(complist)
 
 
 
