@@ -116,6 +116,18 @@ def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
                           .flatten().astype(np.float32)
                 map_rms.append(aux_map)
 
+    elif my_band.file_convention == "Ananya":
+        data_names = ["TEMPERATURE", "Q_POLARISATION", "U_POLARISATION"]
+        rms_names = ["T"]
+        for ipol in range(3):
+            if pols_to_read[ipol]:
+                aux_map = fits.open(my_band.path_signal_map)[1].data[data_names[ipol]]\
+                          .flatten().astype(np.float32)
+                map_signal.append(aux_map)
+                aux_map = fits.open(my_band.path_rms_map)[1].data[rms_names[ipol]]\
+                          .flatten().astype(np.float32)
+                map_rms.append(aux_map)
+
     else:
         raise ValueError(f"Map file convension '{my_band.file_convention}' not recognized.")
 
@@ -124,7 +136,7 @@ def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
     logassert(len(map_rms) == len(map_signal), f"Shape of loaded rms map {my_band.path_rms_map} "
               "does not match signal map's one.", logger)
 
-    # Convert from input units (uK_CMB) to Commander processing units (uK_RJ)
+    # Convert from input units (normally uK_CMB) to Commander processing units (uK_RJ)
     if "units" in my_band:
         if my_band.units == "uK_CMB":
             input_units = pysm3_u.uK_CMB
@@ -158,18 +170,18 @@ def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
                   f"resulting in a non-integer nside ({nside}).", logger)
         nside = int(nside)
 
-        if nside != my_band.eval_nside:
+        if "eval_nside" in my_band and nside != my_band.eval_nside:
             logger.info(f"Converting map {my_band.identifier} from nside {nside} to "\
                         f"{my_band.eval_nside}.")
             map_signal[ipol] = hp.ud_grade(map_signal[ipol], my_band.eval_nside)
             map_rms[ipol] = 1.0/np.sqrt(hp.ud_grade(1.0/map_rms[ipol]**2, my_band.eval_nside))
+            nside = my_band.eval_nside
         n_corr.append(np.zeros_like(map_signal[ipol], dtype=np.float32))
 
     logassert(len(map_rms) == len(map_signal), "Shape of correlated noise map does not match "
               f"shape of signal map {my_band.path_signal_map}.", logger)
 
-    detmap = DetectorMap(np.array(map_signal), np.array(map_rms), my_band.freq, my_band.fwhm,
-                         my_band.eval_nside)
+    detmap = DetectorMap(np.array(map_signal), np.array(map_rms), my_band.freq, my_band.fwhm, nside)
     detmap.g0 = 0.0
     detmap.gain = 0.0
 
