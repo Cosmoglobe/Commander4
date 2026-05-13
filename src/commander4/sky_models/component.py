@@ -850,6 +850,9 @@ class CompList:
 
     @classmethod
     def init_from_params(cls, components:Bunch, params:Bunch):
+        # Determine whether any of the bands actually have polarization by checking whether any
+        # MPI ranks are dedicated to QU-processing (maybe slightly hacky but works fine).
+        pol_bands_exist = params.general.MPI_config.ntask_compsep_QU > 0
         comp_list = []
         for component_str in components:
             component = components[component_str]
@@ -863,10 +866,14 @@ class CompList:
                     comp_list.append(getattr(component_lib, component.component_class)(component.params,
                                                             params.general, allocate_empty_alms=True))
                 elif component.params.polarization == "QU": #QU-only
+                    if not pol_bands_exist:
+                        logging.warning(f"Component '{component_str}' is specified as QU-only but "
+                                        f"ntask_compsep_QU=0 (no polarized bands). Skipping.")
+                        continue
                     comp_list.append(getattr(component_lib, component.component_class)(component.params,
                                                             params.general, allocate_empty_alms=True))
                 elif component.params.polarization == "IQU":
-                    #I
+                    # I
                     comp_list.append(getattr(component_lib, component.component_class)(
                                             component.params,
                                             params.general, 
@@ -874,14 +881,19 @@ class CompList:
                                             longname = component.params.longname+"_Instensity",
                                             shortname = component.params.longname+"_I",
                                             eval_pol="I"))
-                    #QU
-                    comp_list.append(getattr(component_lib, component.component_class)(
-                                            component.params,
-                                            params.general,
-                                            allocate_empty_alms=True,
-                                            longname = component.params.longname+"_Polarization",
-                                            shortname = component.params.longname+"_QU",
-                                            eval_pol="QU"))
+                    # QU
+                    if not pol_bands_exist:
+                        logging.warning(f"Component '{component_str}' is specified as IQU but "
+                                        f"ntask_compsep_QU=0 (no polarized bands). "
+                                        f"Only the intensity (I) part will be used.")
+                    else:
+                        comp_list.append(getattr(component_lib, component.component_class)(
+                                                component.params,
+                                                params.general,
+                                                allocate_empty_alms=True,
+                                                longname = component.params.longname+"_Polarization",
+                                                shortname = component.params.longname+"_QU",
+                                                eval_pol="QU"))
                 else:
                     raise ValueError(f"Unrecognized polarization in parameter file for component {component_str}")
         return cls(comp_list)
