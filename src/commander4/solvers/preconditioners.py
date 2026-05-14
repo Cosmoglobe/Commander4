@@ -194,7 +194,7 @@ class MixingMatrixPreconditioner:
 
 
 
-class JointPreconditioner:
+class DiagonalJointPreconditioner:
     """ Preconditioner taking beam, noise, and mixing matrices into account, but all only partially.
         only the component-l-m-diagonal of A is calculated, and for the noise covariance we assume
         constant rms across the map (but not across components).
@@ -268,6 +268,231 @@ class JointPreconditioner:
                 a_complist_out[icomp].alms *= self.A_diag_inv_list[icomp]
             else:
                 pass
+ 
+        return a_complist_out
+
+
+class JointPreconditioner:
+    """Block preconditioner for the component-separation CG system.
+
+    The exact solver applies the left-hand side
+
+        I + S^(1/2) A^T N^(-1) A S^(1/2),
+
+    where ``A`` collects the mixing matrix, spherical-harmonic synthesis/analysis, and beam
+    convolution for all bands. This operator is expensive because it is applied through map-space
+    transforms and MPI communication, and because in the discrete polarized case it is not exactly
+    diagonal in harmonic space.
+
+    This preconditioner keeps the parts of the operator that are cheap and dominant when the test
+    problem is close to isotropic:
+
+    - the full component-component coupling for each multipole ``ell``
+    - the beam suppression per band and per ``ell``
+    - the smoothing-prior scaling that comes from the ``S^(1/2)`` reparameterization
+    - a small polarization-space block for each ``ell``
+
+    The approximation drops the remaining alm off-diagonal structure coming from the discrete
+    spin-weighted transforms. In particular, it assumes that each ``ell`` can be treated
+    independently, and that all ``m`` values at fixed ``ell`` share the same small dense block.
+
+    For intensity this reduces to a per-``ell`` component block. For polarization we work in the
+    two spin-2 harmonic channels used by ``ducc0.sht``. These are grad/curl-like channels, not
+    literal Q/U harmonic coefficients, so it is not sensible to feed distinct Q and U weights
+    directly onto the two rows of the harmonic vector. Instead, the isotropic polarized
+    approximation retains only the trace part of the Stokes-space weight matrix,
+
+        W_pol -> 0.5 * trace(W_pol) * I,
+
+    which is the rotationally invariant part seen by the spin-2 harmonic channels.
+
+    The resulting preconditioner block for a fixed ``ell`` is built as
+
+        M_ell^(-1) ~= kron(I_pol, D_ell^(-2))
+                     + sum_b B_b(ell)^2 * kron(W_b, m_b m_b^T),
+
+    where ``D_ell`` is the diagonal matrix of prior square-roots for the active components,
+    ``W_b`` is the small polarization-space weight block for band ``b``, and ``m_b`` is the band
+    mixing vector evaluated at that band's frequency. The final inverse is applied in the
+    similarity-transformed basis ``D_ell^(-1) A_ell D_ell^(-1)`` to avoid numerical problems when
+    the smoothing prior amplitude is very large.
+
+    Notes
+    -----
+    - Only the master rank constructs and applies this preconditioner. Worker ranks return their
+      input unchanged.
+    - Components without harmonic alms, such as current point-source representations, are skipped.
+    - Bands only contribute up to their own ``lmax``.
+    - This is a preconditioner for the isotropic part of the operator, not an exact inverse of the
+      full discrete polarized system.
+    """
+    def __init__(self, compsep: CompSepSolver, comp_list:CompList):
+        self.compsep = compsep
+        self.is_master = compsep.CompSep_comm.Get_rank() == 0
+        self.ell_block_data = []
+        self.npol = 0
+
+        # Gather the band-local ingredients needed to build the isotropic approximation. Every rank
+        # holds one band, but only the master rank actually assembles the small dense blocks.
+        all_fwhm_rad = compsep.CompSep_comm.gather(np.deg2rad(compsep.my_band.fwhm/60), root=0)
+        all_map_inv_var = compsep.CompSep_comm.gather(compsep.det_map.inv_n_map, root=0)
+        all_freqs = compsep.CompSep_comm.gather(compsep.my_band.nu, root=0)
+        all_band_lmax = compsep.CompSep_comm.gather(compsep.det_map.lmax, root=0)
+
+        # Worker ranks participate in the gather above, but the actual block construction is done
+        # only on the master rank.
+        if not self.is_master:
+            return
+
+        nband = len(all_fwhm_rad)
+        # Restrict the preconditioner to components represented by diffuse harmonic alms.
+        diffuse_comp_indices = [
+            icomp for icomp, comp in enumerate(comp_list) if hasattr(comp, "alms")
+        ]
+        if not diffuse_comp_indices:
+            return
+
+        diffuse_comps = [comp_list[icomp] for icomp in diffuse_comp_indices]
+        self.npol = diffuse_comps[0].npol
+        diffuse_lmax = np.array([comp.lmax for comp in diffuse_comps], dtype=np.int64)
+        max_lmax = int(np.max(diffuse_lmax))
+
+        # Convert each band's inverse-noise map to the corresponding isotropic weight block. The
+        # factor npix/(4*pi) is the continuum normalization of a constant inverse-noise map in the
+        # harmonic inner product. For polarization we keep only the trace part of the Stokes-space
+        # weight matrix so that the approximation acts sensibly on the two spin-2 harmonic channels.
+        band_pol_matrices = []
+        for inv_n_map in all_map_inv_var:
+            npix = inv_n_map.shape[-1]
+            stokes_weights = np.mean(inv_n_map, axis=-1).astype(np.float64, copy=False)
+            stokes_weights *= npix/(4*np.pi)
+            if self.npol == 1:
+                band_pol_matrices.append(np.array([[stokes_weights[0]]], dtype=np.float64))
+            else:
+                # The two rows of a spin-2 alm object are grad/curl-like harmonic channels, not Q/U.
+                # Using separate Q and U weights here would therefore impose an unphysical harmonic
+                # weighting. The trace part is the rotationally invariant piece of the constant
+                # polarized weight matrix.
+                pol_weight = np.mean(stokes_weights)
+                band_pol_matrices.append(np.eye(self.npol, dtype=np.float64) * pol_weight)
+
+        # Mixing is assumed to be spatially constant, so each band contributes only a single
+        # frequency-dependent mixing vector.
+        mixing_matrix = np.empty((nband, len(diffuse_comps)), dtype=np.float64)
+        for iband, band_freq in enumerate(all_freqs):
+            for jcomp, comp in enumerate(diffuse_comps):
+                mixing_matrix[iband, jcomp] = comp.get_sed(np.float64(band_freq))
+
+        # Precompute the per-band beam transfer functions and the diagonal prior factors.
+        beam_windows_squared = [
+            hp.gauss_beam(fwhm_rad, lmax=band_lmax)**2
+            for fwhm_rad, band_lmax in zip(all_fwhm_rad, all_band_lmax)
+        ]
+        prior_inv = [
+            comp.P_smoothing_prior_inv.astype(np.float64, copy=False)
+            for comp in diffuse_comps
+        ]
+
+        self.ell_block_data = [None] * (max_lmax + 1)
+        for ell in range(max_lmax + 1):
+            # Only components defined up to the current ell participate in this block.
+            active_local = np.flatnonzero(diffuse_lmax >= ell)
+            if active_local.size == 0:
+                continue
+
+            active_global = [diffuse_comp_indices[iloc] for iloc in active_local]
+            # All m-modes at fixed ell share the same dense block. We store the alm indices once so
+            # that application only becomes gather -> dense matmul -> scatter.
+            alm_indices = [
+                np.array([hp.Alm.getidx(comp_list[icomp].lmax, ell, m) for m in range(ell + 1)],
+                         dtype=np.int64)
+                for icomp in active_global
+            ]
+
+            active_prior_inv = np.array([prior_inv[iloc][ell] for iloc in active_local],
+                                        dtype=np.float64)
+            active_prior_inv_sqrt = np.sqrt(active_prior_inv)
+            block_prior_inv_sqrt = np.tile(active_prior_inv_sqrt, self.npol)
+
+            # Build the dense block in the similarity-transformed basis
+            #
+            #     D_ell^(-1) A_ell D_ell^(-1) = D_ell^(-2) + K_ell,
+            #
+            # rather than inverting I + D_ell K_ell D_ell directly. This keeps the block numerically
+            # stable when the smoothing prior amplitude is large and D_ell contains huge values.
+            system_block = np.kron(np.eye(self.npol, dtype=np.float64), np.diag(active_prior_inv))
+            for iband in range(nband):
+                # A band contributes only while it has support at this ell.
+                if ell > all_band_lmax[iband]:
+                    continue
+                pol_block = band_pol_matrices[iband]
+                if not np.any(pol_block):
+                    continue
+                # The isotropic band contribution factorizes into a polarization block and a
+                # component-mixing outer product, scaled by the beam window at this ell.
+                scaled_mixing = mixing_matrix[iband, active_local]
+                system_block += beam_windows_squared[iband][ell] * np.kron(
+                    pol_block,
+                    np.outer(scaled_mixing, scaled_mixing),
+                )
+            # Enforce exact symmetry before diagonalization to suppress tiny roundoff asymmetries.
+            system_block = 0.5 * (system_block + system_block.T)
+            eigvals, eigvecs = np.linalg.eigh(system_block)
+            # Floor tiny eigenvalues so that the preconditioner remains well-defined even when the
+            # block is numerically close to singular.
+            eig_floor = np.finfo(np.float64).eps * max(1.0, eigvals[-1]) * system_block.shape[0]
+            eigvals = np.clip(eigvals, eig_floor, None)
+            block_inv = (eigvecs / eigvals) @ eigvecs.T
+
+            self.ell_block_data[ell] = (
+                active_global,
+                alm_indices,
+                block_prior_inv_sqrt,
+                block_inv,
+            )
+
+    def __call__(self, a_complist: CompList) -> CompList:
+        """Apply the preconditioner to a component list on the master rank.
+
+        For each ell we gather all active component coefficients for all polarization channels into
+        one dense matrix of shape ``(npol * nactive_comp, ell + 1)``. The same precomputed inverse
+        block is then applied to every m at this ell in one batched matrix multiplication, and the
+        result is scattered back into the component alms.
+        """
+        if not self.is_master:
+            return a_complist
+
+        # Need to parse the list to make copy, as the list.copy() is a shallow copy.
+        a_complist_out = deepcopy(a_complist)
+        for ell_data in self.ell_block_data:
+            if ell_data is None:
+                continue
+            active_global, alm_indices, block_prior_inv_sqrt, block_inv = ell_data
+            nmodes = alm_indices[0].size
+            coeff_dtype = a_complist_out[active_global[0]].alms.dtype
+
+            # Stack all active component coefficients for this ell into one dense array.
+            coeffs = np.empty((self.npol * len(active_global), nmodes), dtype=coeff_dtype)
+            for ipol in range(self.npol):
+                offset = ipol * len(active_global)
+                for iactive, icomp in enumerate(active_global):
+                    coeffs[offset + iactive] = a_complist_out[icomp].alms[
+                        ipol, alm_indices[iactive]
+                    ]
+
+            # Apply D_ell^(-1) A_ell^(-1) D_ell^(-1) in the same similarity-transformed basis used
+            # during construction.
+            coeffs = block_prior_inv_sqrt[:, None] * coeffs
+            coeffs = block_inv @ coeffs
+            coeffs = block_prior_inv_sqrt[:, None] * coeffs
+
+            # Scatter the updated coefficients back to the component objects.
+            for ipol in range(self.npol):
+                offset = ipol * len(active_global)
+                for iactive, icomp in enumerate(active_global):
+                    a_complist_out[icomp].alms[ipol, alm_indices[iactive]] = coeffs[
+                        offset + iactive
+                    ]
  
         return a_complist_out
 
