@@ -1,0 +1,226 @@
+# Parameter file for doing Planck LFI TOD processing, but with per-pixel component separation
+# Note that this means all maps have to be common resolution (chosen to be nside=512).
+# Useful if you are primarily working on the TOD processing and don't want the CG overhead.
+
+general:
+  MPI_config:
+    ntask_tod: 0  # Map-only processing: No TOD tasks.
+    ntask_compsep_I: 9
+    ntask_compsep_QU: 0
+  nthreads_tod: 1
+  nthreads_compsep: 1
+
+  niter_gibbs: 40
+
+  perform_compsep: false
+
+  nside: 1024
+
+  noise_fknee: 0.1
+  noise_alpha: -0.9
+
+  output_stats: False
+
+  CG_float_precision: "single"
+
+  init_from_chain: false
+
+  galactic_mask: True
+  pixel_compsep_sampling: True
+  smooth_to_common_res: False
+
+  output_paths:
+    chains: "../cmdr4_chains/Ananya_mapsonly_perpix_test_sis2/"
+    stats: "../cmdr4_stats/Ananya_mapsonly_perpix_test_sis2/"
+
+  logging:
+    console:
+      level: 'info'
+    file:
+      level: 'info'
+      filename: '../cmdr4_logs/Ananya_mapsonly_perpix_test_sis2.log'
+
+
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU" 
+      longname: "CMB"
+      shortname: "cmb"
+      smoothing_prior_FWHM: 0.0 # arcmin
+      smoothing_prior_amplitude: 0.0  # uK_RJ^2
+      lmax: 1024
+      smoothing_scale: 0
+      spatially_varying_MM: False
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      smoothing_prior_FWHM: 0.0 # arcmin
+      smoothing_prior_amplitude: 0.0  # uK_RJ^2
+      beta: 1.56
+      T: 20
+      nu0: 545
+      lmax: 1024
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU" 
+      longname: "Synchrotron"
+      shortname: "sync"
+      smoothing_prior_FWHM: 0.0 # arcmin
+      smoothing_prior_amplitude: 0.0  # uK_RJ^2
+      beta: -3.1
+      nu0: 30
+      lmax: 512
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
+
+CompSep_bands:
+  Planck30GHz:
+    enabled: true
+    get_from: "file"
+    units: "uK_RJ"
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_30GHz_1deg.fits"
+      dataset_names: ["TEMPERATURE", "Q_POLARISATION", "U_POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_30GHz_RMS.fits"
+      dataset_names: ["T", "", ""]
+    fwhm: 60.0 # [arcmin]
+    freq: 30.0 # [GHz]
+    polarization: "I"
+
+  Planck44GHz:
+    enabled: true
+    get_from: "file"
+    units: "uK_RJ"
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_44GHz_1deg.fits"
+      dataset_names: ["TEMPERATURE", "Q_POLARISATION", "U_POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_44GHz_RMS.fits"
+      dataset_names: ["T", "", ""]
+    fwhm: 60.0 # [arcmin]
+    freq: 44.0 # [GHz]
+    polarization: "I"
+
+  Planck70GHz:
+    enabled: true
+    get_from: "file"
+    units: "uK_RJ"
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_70GHz_1deg.fits"
+      dataset_names: ["TEMPERATURE", "Q_POLARISATION", "U_POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_70GHz_RMS.fits"
+      dataset_names: ["T", "", ""]
+    fwhm: 60.0 # [arcmin]
+    freq: 70.0 # [GHz]
+    polarization: "I"
+
+  Planck100GHz:
+    enabled: true
+    get_from: "file"
+    units: "uK_RJ"
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_100GHz_1deg.fits"
+      dataset_names: ["TEMPERATURE", "Q_POLARISATION", "U_POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_100GHz_RMS.fits"
+      dataset_names: ["T", "", ""]
+    fwhm: 60.0 # [arcmin]
+    freq: 100.0 # [GHz]
+    polarization: "I"
+
+  Planck143GHz:
+    enabled: true
+    get_from: "file"
+    units: "uK_RJ"
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_143GHz_1deg.fits"
+      dataset_names: ["TEMPERATURE", "Q_POLARISATION", "U_POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_143GHz_RMS.fits"
+      dataset_names: ["T", "", ""]
+    fwhm: 60.0 # [arcmin]
+    freq: 143.0 # [GHz]
+    polarization: "I"
+
+  Planck217GHz:
+    enabled: true
+    get_from: "file"
+    units: "uK_RJ"
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_217GHz_1deg.fits"
+      dataset_names: ["TEMPERATURE", "Q_POLARISATION", "U_POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_217GHz_RMS.fits"
+      dataset_names: ["T", "", ""]
+    fwhm: 60.0 # [arcmin]
+    freq: 217.0 # [GHz]
+    polarization: "I"
+
+  Planck353GHz:
+    enabled: true
+    get_from: "file"
+    units: "uK_RJ"
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_353GHz_1deg.fits"
+      dataset_names: ["TEMPERATURE", "Q_POLARISATION", "U_POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_353GHz_RMS.fits"
+      dataset_names: ["T", "", ""]
+    fwhm: 60.0 # [arcmin]
+    freq: 353.0 # [GHz]
+    polarization: "I"
+
+  Planck545GHz:
+    enabled: true
+    get_from: "file"
+    units: "uK_RJ"
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_545GHz_1deg.fits"
+      dataset_names: ["TEMPERATURE", "Q_POLARISATION", "U_POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_545GHz_RMS.fits"
+      dataset_names: ["T", "", ""]
+    fwhm: 60.0 # [arcmin]
+    freq: 545.0 # [GHz]
+    polarization: "I"
+
+  Planck857GHz:
+    enabled: true
+    get_from: "file"
+    units: "uK_RJ"
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_857GHz_1deg.fits"
+      dataset_names: ["TEMPERATURE", "Q_POLARISATION", "U_POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/commander4_shared/external_data/data/pysm_CMBSynchTD_857GHz_RMS.fits"
+      dataset_names: ["T", "", ""]
+    fwhm: 60.0 # [arcmin]
+    freq: 857.0 # [GHz]
+    polarization: "I"
+
+experiments:
+  []
