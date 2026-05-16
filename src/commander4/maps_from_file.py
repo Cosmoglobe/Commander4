@@ -10,15 +10,103 @@ from commander4.data_models.detector_map import DetectorMap
 
 logger = logging.getLogger(__name__)
 
-def read_sim_map_from_file(my_band: Bunch) -> DetectorMap:
-    """ Currently deprecated """
-    map_signal = hp.read_map(my_band.path_signal_map)
-    map_rms = hp.read_map(my_band.path_rms_map)
-    nside = np.sqrt(map_signal.size//12)
-    logassert(nside.is_integer(), f"Npix dimension of map ({map_signal.size}) resulting in a "
-              f"non-integer nside ({nside}).", logger)
-    nside = int(nside)
-    return DetectorMap(map_signal, map_rms, my_band.freq, my_band.fwhm, my_band.nside)
+POLARIZATION_INDEX = {"I": 0, "Q": 1, "U": 2}
+
+
+def _get_map_info(band: Bunch, maptype: str):
+    if maptype not in {"signal", "rms"}:
+        raise ValueError(f"Unknown maptype {maptype}.")
+
+    map_key = f"{maptype}_map"
+    if map_key not in band:
+        raise ValueError(f"Band {band._name} must specify {map_key}.")
+
+    map_config = band[map_key]
+    map_data_type = map_config.type if "type" in map_config else maptype
+    if "path" not in map_config and not (maptype == "rms" and map_data_type != "rms"):
+        raise ValueError(f"Band {band._name} must specify a path for {map_key}.")
+    if "dataset_names" not in map_config or len(map_config.dataset_names) != 3:
+        raise ValueError(f"Band {band._name} must specify exactly three dataset_names for "\
+                         f"{map_key}, even if all three do not exist (use None or '').")
+    filename = map_config.path if "path" in map_config else None
+    return filename, map_config.dataset_names, map_data_type
+
+
+def retrieve_map_from_fits_file(band: Bunch, pol: str, maptype: str):
+    filename, dataset_names, _ = _get_map_info(band, maptype)
+    dataset_name = dataset_names[POLARIZATION_INDEX[pol]]
+
+    with fits.open(filename) as hdul:
+        if dataset_name not in hdul[1].data.columns.names:
+            raise ValueError(f"Could not find dataset {dataset_name} for polarization {pol} "\
+                             f"in file {filename}.")
+
+        ### FIND DATA ###
+        data = hdul[1].data[dataset_name].flatten().astype(np.float32, copy=False)
+
+        ### FIND UNITS ###
+        units_param = band.units if "units" in band else None
+        column_idx = hdul[1].data.columns.names.index(dataset_name)
+        units_file = hdul[1].data.columns.units[column_idx]
+        if isinstance(units_param, str):
+            units_param = units_param.strip() or None
+        if isinstance(units_file, str):
+            units_file = units_file.strip() or None
+        if units_file is not None and units_file.lower() == "unknown":
+            units_file = None
+        if units_file is None and units_param is None:
+            logging.warning(f"No units specified for {band._name}. Assuming uK_CMB!")
+            units = "uK_CMB"
+        elif units_file is not None and units_param is not None:
+            if units_file != units_param:
+                logging.warning(
+                    f"Both data-file ({units_file}) and param-file ({units_param}) specify "
+                    f"map units for {band._name}; using param-file value."
+                )
+            units = units_param
+        else:
+            units = units_file or units_param
+
+        ### FIND ORDERING ###
+        ordering_file = hdul[1].header.get("ORDERING")
+        ordering_param = band.ordering.upper() if "ordering" in band else None
+        if ordering_param == "NESTED":
+            ordering_param = "NEST"
+        if ordering_file == "NESTED":
+            ordering_file = "NEST"
+        if ordering_file is not None:
+            ordering_file = ordering_file.upper()
+        if ordering_file == "UNKNOWN":
+            ordering_file = None
+        if ordering_file is None and ordering_param is None:
+            logging.warning(f"No ordering specified for {band._name}. Assuming RING ordering!")
+            ordering = "RING"
+        elif ordering_file is not None and ordering_param is not None:
+            if ordering_file != ordering_param:
+                logging.warning(f"Both map-file ({ordering_file}) and param-file ({band.ordering}) "
+                                f"specify healpix ordering for {band._name}; using the latter.")
+            ordering = ordering_param
+        else:
+            ordering = ordering_file or ordering_param
+        if ordering not in {"RING", "NEST"}:
+            raise ValueError(
+                f"Unrecognized healpix ordering {ordering} for band {band._name}. "
+                "Expected RING or NEST."
+            )
+
+        ### REORDER ###
+        if ordering == "NEST":
+            data = hp.reorder(data, inp="NEST", out="RING")
+
+        ### UNIT CONVERSION ###
+        if units != "uK_RJ":
+            data = (data * pysm3_u.Unit(units)).to(
+                pysm3_u.uK_RJ,
+                equivalencies=pysm3_u.cmb_equivalencies(band.freq * pysm3_u.GHz),
+            ).value
+
+    return data
+
 
 
 def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
@@ -29,165 +117,43 @@ def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
     Returns:
         detector_map (DetectorMap): Object holding signal map and other relevant data (rms, nu...)
     """
-    #polarizations relevant for the current compsep band (either I or QU).
-    # logassert(my_band.identifier.endswith("_I") or my_band.identifier.endswith("_QU"),
-    #           f"band identifier {my_band.identifier} has wrong or missing polarization ending, "
-    #           "_I or _QU expected.", logger)
-    if my_band.polarization == "I":
-        pols_to_read = [True,False,False]
-    elif my_band.polarization == "QU":
-        pols_to_read = [False,True,True]
-    elif my_band.polarization == "IQU":
-        pols_to_read = [True,True,True]
-    else:
-        raise ValueError(f"Unrecognized polarization of band {my_band.identifier} in map file reader")
-    npol = np.count_nonzero(pols_to_read) #Polarizations to be stored in myband
-    map_signal = []
-    map_rms = []
-    map_cov = None
-    if my_band.file_convention == "WMAP":
-        # WMAP maps are in mK_CMB and need to be multiplied by 1000.
-        # Also, the uncertainty is in variance units, and needs to be square-rooted.
-        data_names = ["I_Stokes", "Q_Stokes", "U_Stokes"]
-        rms_names = ["II_Stokes", "Q_Stokes", "U_Stokes"]
-        for ipol in range(3):
-            if pols_to_read[ipol]:
-                map_signal.append(1e3*fits.open(my_band.path_signal_map)[1].data[data_names[ipol]]\
-                                  .flatten().astype(np.float32, copy=False))
-                map_rms.append(1e3*np.sqrt(fits.open(my_band.path_rms_map)[1].data[rms_names[ipol]]\
-                            .flatten().astype(np.float32, copy=False)))
-    elif my_band.file_convention == "WMAP_pol":
-        # WMAP maps are in mK_CMB and need to be multiplied by 1000.
-        # Also, the uncertainty is in variance units, and needs to be square-rooted.
-        logassert(pols_to_read == [False, True, True],
-                  "File convention 'WMAP_pol' can not be used for Intensity maps", logger)
-        nside = 16
-        indices_ring = np.arange(0, 12*nside**2, dtype=int)
-        indices_nest = hp.ring2nest(nside, indices_ring)
-        data_names = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
-        rms_names = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
-        for ipol in range(1,3):
-                map_signal[ipol] = 1e3*fits.open(my_band.path_signal_map)[1].data[data_names[ipol]]\
-                                   .flatten().astype(np.float32, copy=False)
-                map_signal[ipol] = hp.reorder(map_signal[ipol], inp="NEST", out="RING")
-        _map_cov = 1e6*fits.open(my_band.path_cov_map)[0].data.astype(np.float32, copy=False)
-        map_cov = np.zeros_like(_map_cov)
-        map_cov[indices_ring,:] = _map_cov[indices_nest,:]
-        map_cov[12*nside**2+indices_ring,:] = _map_cov[12*nside**2+indices_nest,:]
-        map_cov[:,12*nside**2+indices_ring] = _map_cov[:,12*nside**2+indices_nest]
-        map_cov[:,indices_ring] = _map_cov[:,indices_nest]
-        
-    elif my_band.file_convention == "HFI":
-        # HFI maps are in uK_CMB, and are in "nested" healpix ordering: Must be converted to "ring".
-        data_names = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
-        rms_names = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
-        for ipol in range(3):
-            if pols_to_read[ipol]:
-                aux_map = fits.open(my_band.path_signal_map)[1].data[data_names[ipol]]\
-                          .flatten().astype(np.float32)
-                map_signal.append(hp.reorder(aux_map, inp="NEST", out="RING"))
-                aux_map = fits.open(my_band.path_rms_map)[1].data[rms_names[ipol]]\
-                          .flatten().astype(np.float32)
-                map_rms.append(hp.reorder(aux_map, inp="NEST", out="RING"))
-    elif my_band.file_convention == "Haslam":
-        # I think Haslam maps are in uK_CMB.
-        data_names = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
-        rms_names = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
-        append_idx = 0
-        for ipol in range(3):
-            if pols_to_read[ipol]:
-                map_signal.append(fits.open(my_band.path_signal_map)[1].data[data_names[ipol]]\
-                                  .flatten().astype(np.float32))
-                aux_map = fits.open(my_band.path_rms_map)[1].data[rms_names[ipol]]\
-                                    .flatten().astype(np.float32)
-                # Add 1% of the map signal to RMS to mitigate ill-bahaved bright regions.
-                map_rms.append(np.sqrt(aux_map**2 + (0.01*map_signal[append_idx])**2))
-                append_idx += 1
-    
-    elif my_band.file_convention == "LFI":
-        data_names = ["I_MEAN", "Q_MEAN", "U_MEAN"]
-        rms_names = ["I_RMS", "Q_RMS", "U_RMS"]
-        for ipol in range(3):
-            if pols_to_read[ipol]:
-                aux_map = fits.open(my_band.path_signal_map)[1].data[data_names[ipol]]\
-                          .flatten().astype(np.float32)
-                map_signal.append(aux_map)
-                aux_map = fits.open(my_band.path_rms_map)[1].data[rms_names[ipol]]\
-                          .flatten().astype(np.float32)
-                map_rms.append(aux_map)
+    pols = my_band.polarization
+    logassert(pols in ["I", "QU", "IQU"], f"Specified polarization {pols} not recognized.", logger)
+    maps_sky = []
+    maps_rms = []
+    rms_map_type = _get_map_info(my_band, "rms")[2]
 
-    elif my_band.file_convention == "Ananya":
-        data_names = ["TEMPERATURE", "Q_POLARISATION", "U_POLARISATION"]
-        rms_names = ["T"]
-        for ipol in range(3):
-            if pols_to_read[ipol]:
-                aux_map = fits.open(my_band.path_signal_map)[1].data[data_names[ipol]]\
-                          .flatten().astype(np.float32)
-                map_signal.append(aux_map)
-                aux_map = fits.open(my_band.path_rms_map)[1].data[rms_names[ipol]]\
-                          .flatten().astype(np.float32)
-                map_rms.append(aux_map)
-
-    else:
-        raise ValueError(f"Map file convension '{my_band.file_convention}' not recognized.")
-
-    logassert(len(map_signal) == npol, f"Shape of loaded signal map {my_band.path_signal_map} "
-              "does not match polarization count.", logger)
-    logassert(len(map_rms) == len(map_signal), f"Shape of loaded rms map {my_band.path_rms_map} "
-              "does not match signal map's one.", logger)
-
-    # Convert from input units (normally uK_CMB) to Commander processing units (uK_RJ)
-    if "units" in my_band:
-        if my_band.units == "uK_CMB":
-            input_units = pysm3_u.uK_CMB
-        elif my_band.units == "K_CMB":
-            input_units = pysm3_u.K_CMB
-        elif my_band.units == "mK_CMB":
-            input_units = pysm3_u.mK_CMB
-        elif my_band.units == "uK_RJ":
-            input_units = pysm3_u.uK_RJ
-        elif my_band.units == "K_RJ":
-            input_units = pysm3_u.K_RJ
-        elif my_band.units == "mK_RJ":
-            input_units = pysm3_u.mK_RJ
+    for pol in pols:
+        map_sky = retrieve_map_from_fits_file(my_band, pol, "signal")
+        if rms_map_type == "debug_uniform":
+            map_rms = np.zeros_like(map_sky) + np.nanmean(np.abs(map_sky))
+        elif rms_map_type == "rms":
+            map_rms = retrieve_map_from_fits_file(my_band, pol, "rms")
         else:
-            raise ValueError(f"Unrecognized units {my_band.units} for band {my_band._name}.")
-    else:
-        input_units = pysm3_u.uK_CMB
-        logging.warning(f"No units specified for {my_band._name}. Assuming uK_CMB!")
+            raise ValueError(f"Unrecognized rms map type {rms_map_type} for band {my_band._name}.")
 
-    n_corr = []
-    for ipol in range(npol):
-        map_signal[ipol] = map_signal[ipol] * input_units
-        map_signal[ipol] = map_signal[ipol].to(pysm3_u.uK_RJ,
-                            equivalencies=pysm3_u.cmb_equivalencies(my_band.freq*pysm3_u.GHz)).value
-        map_rms[ipol] = map_rms[ipol] * input_units
-        map_rms[ipol] = map_rms[ipol].to(pysm3_u.uK_RJ,
-                            equivalencies=pysm3_u.cmb_equivalencies(my_band.freq*pysm3_u.GHz)).value
+        if "add_signal_fraction_to_rms" in my_band:
+            map_rms = np.sqrt(map_rms**2 \
+                              + (my_band.add_signal_fraction_to_rms*np.nanmean(np.abs(map_sky)))**2)
+        # TODO: Figure out how to read covariance maps as opposed to RMS maps.
 
-        nside = np.sqrt(map_signal[ipol].size//12)
-        logassert(nside.is_integer(), f"Npix dimension of map ({map_signal[ipol].size}) "
+        nside = np.sqrt(map_sky.size//12)
+        logassert(nside.is_integer(), f"Npix dimension of map ({map_sky.size}) "
                   f"resulting in a non-integer nside ({nside}).", logger)
         nside = int(nside)
 
         if "eval_nside" in my_band and nside != my_band.eval_nside:
-            logger.info(f"Converting map {my_band.identifier} from nside {nside} to "\
+            logger.info(f"Converting map {my_band._name} from nside {nside} to "\
                         f"{my_band.eval_nside}.")
-            map_signal[ipol] = hp.ud_grade(map_signal[ipol], my_band.eval_nside)
-            map_rms[ipol] = 1.0/np.sqrt(hp.ud_grade(1.0/map_rms[ipol]**2, my_band.eval_nside))
+            map_sky = hp.ud_grade(map_sky, my_band.eval_nside)
+            map_rms = 1.0/np.sqrt(hp.ud_grade(1.0/map_rms**2, my_band.eval_nside))
             nside = my_band.eval_nside
-        n_corr.append(np.zeros_like(map_signal[ipol], dtype=np.float32))
 
-    logassert(len(map_rms) == len(map_signal), "Shape of correlated noise map does not match "
-              f"shape of signal map {my_band.path_signal_map}.", logger)
+        maps_sky.append(map_sky)
+        maps_rms.append(map_rms)
 
-    detmap = DetectorMap(np.array(map_signal), np.array(map_rms), my_band.freq, my_band.fwhm, nside)
+    detmap = DetectorMap(np.array(maps_sky), np.array(maps_rms), my_band.freq, my_band.fwhm, nside)
     detmap.g0 = 0.0
     detmap.gain = 0.0
-
-    # TODO: no plots support for now, will be readded through chain files afterwards.
-    # detmap.skysub_map = n_corr
-    # detmap.rawobs_map = n_corr
-    # detmap.orbdipole_map = n_corr
 
     return detmap
