@@ -1,0 +1,359 @@
+general:
+  MPI_config:
+    ntask_tod: 0
+    ntask_compsep_I: 15
+    ntask_compsep_QU: 13
+  nthreads_tod: 1
+  nthreads_compsep: 24
+
+  niter_gibbs: 1
+
+  perform_compsep: true
+
+  perform_compsep: true
+
+  output_stats: False
+
+  galactic_mask: True
+  pixel_compsep_sampling: False
+  smooth_to_common_res: False
+
+  CG_max_iter: 60
+  CG_max_iter_pol: 60
+  CG_err_tol: 1.0e-100
+  CG_float_precision: "single"
+  CG_real_alm_mode: False
+
+  chains_to_write: [1,]
+  write_orb_dipole_maps_to_chain: True
+  write_corr_noise_maps_to_chain: True
+  write_sky_model_maps_to_chain: True
+  chain_maps_nside: "native"
+  chain_maps_interval: 1
+
+  init_from_chain: false
+
+  output_paths:
+    chains: "../cmdr4_chains/Planck_mapsonly/test_CG_1000iter_priors/"
+    stats: "../cmdr4_stats/Planck_mapsonly/test_CG_1000iter_priors/"
+
+  logging:
+    console:
+      level: 'debug'
+    file:
+      level: 'info'
+      filename: '../cmdr4_logs/Planck_mapsonly/output.log'
+
+compsep:
+  dense_matrix_debug_mode: false  # Solve system first with dense matrix math, for debugging CG. Very slow for nside>32.
+  preconditioner: JointPreconditioner #NoiseOnlyPreconditioner #FullPreconditioner #MixingMatrixPreconditioner #BeamOnlyPreconditioner #
+
+
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU" 
+      longname: "CMB"
+      shortname: "cmb"
+      smoothing_prior_FWHM: 10.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+7 #1.0  # uK_RJ^2
+      lmax: 2048
+      smoothing_scale: 0
+      spatially_varying_MM: False
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      smoothing_prior_FWHM: 5.0 # arcmin
+      smoothing_prior_amplitude:  1.0e+7  # uK_RJ^2
+      beta: 1.56
+      T: 20
+      nu0: 545.0
+      lmax: 4096
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU" 
+      longname: "Synchrotron"
+      shortname: "sync"
+      smoothing_prior_FWHM: 60.0 # arcmin
+      smoothing_prior_amplitude: 3.0e+3  # uK_RJ^2
+      beta: -3.1
+      nu0: 30
+      lmax: 1024
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
+
+  FreeFree:
+    enabled: false
+    component_class: "FreeFree"
+    params:
+      polarization: "I" 
+      longname: "Free-Free"
+      shortname: "ff"
+      smoothing_prior_FWHM: 0.0 # 60.0 # arcmin
+      smoothing_prior_amplitude: 3.0e+13  # uK_RJ^2
+      T: 7000
+      nu0: 0.408 #40
+      lmax: 1024
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
+
+
+CompSep_bands:
+  ###### HASLAM MAPS ######
+  Haslam408MHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    signal_map:
+      path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    fwhm: 60.0  # [arcmin]
+    freq: 0.408 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+  ###### WMAP MAPS ######
+  WMAPKa:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    signal_map:
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_map_v4.fits"
+      dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_N_v4.fits"
+      dataset_names: ["II_Stokes", "Q_Stokes", "U_Stokes"]
+    fwhm: 39.6 # [arcmin]
+    freq: 33.0 # [GHz]
+    polarization: "IQU"
+    units: "mK_CMB"
+
+  WMAPQ1:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    signal_map:
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_map_v4.fits"
+      dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_N_v4.fits"
+      dataset_names: ["II_Stokes", "Q_Stokes", "U_Stokes"]
+    fwhm: 30.6 # [arcmin]
+    freq: 40.6 # [GHz]
+    polarization: "IQU"
+    units: "mK_CMB"
+
+  WMAPQ2:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    signal_map:
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_map_v4.fits"
+      dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_N_v4.fits"
+      dataset_names: ["II_Stokes", "Q_Stokes", "U_Stokes"]
+    fwhm: 30.6 # [arcmin]
+    freq: 40.6 # [GHz]
+    polarization: "IQU"
+    units: "mK_CMB"
+
+  WMAPV1:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    signal_map:
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_map_v4.fits"
+      dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_N_v4.fits"
+      dataset_names: ["II_Stokes", "Q_Stokes", "U_Stokes"]
+    fwhm: 21.0 # [arcmin]
+    freq: 60.8 # [GHz]
+    polarization: "IQU"
+    units: "mK_CMB"
+
+  WMAPV2:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    signal_map:
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_map_v4.fits"
+      dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_N_v4.fits"
+      dataset_names: ["II_Stokes", "Q_Stokes", "U_Stokes"]
+    fwhm: 21.0 # [arcmin]
+    freq: 60.8 # [GHz]
+    polarization: "IQU"
+    units: "mK_CMB"
+
+
+  ###### LFI MAPS ######
+  PlancK30GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_030_IQU_n0512_HM2.fits"
+      dataset_names: ["I_MEAN", "Q_MEAN", "U_MEAN"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_030_IQU_n0512_HM2.fits"
+      dataset_names: ["I_RMS", "Q_RMS", "U_RMS"]
+    fwhm: 32.3 # [arcmin]
+    freq: 30.0 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+  PlancK44GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 512
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_044_IQU_n0512_HM2.fits"
+      dataset_names: ["I_MEAN", "Q_MEAN", "U_MEAN"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_044_IQU_n0512_HM2.fits"
+      dataset_names: ["I_RMS", "Q_RMS", "U_RMS"]
+    fwhm: 27.0 # [arcmin]
+    freq: 44.0 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+  PlancK70GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 1024
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_070_IQU_n1024_HM2.fits"
+      dataset_names: ["I_MEAN", "Q_MEAN", "U_MEAN"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_070_IQU_n1024_HM2.fits"
+      dataset_names: ["I_RMS", "Q_RMS", "U_RMS"]
+    fwhm: 13.2 # [arcmin]
+    freq: 70.0 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+
+  ###### HFI MAPS ######
+  PlancK100GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 2048
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_100_npipe_02048_fullres_full_TQU.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/planck/rms/rms_planck_100_npipe_02048_fullres_full_TQU.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    fwhm: 9.7 # [arcmin]
+    freq: 100.0 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+  PlancK143GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 2048
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_143_npipe_02048_fullres_full_TQU.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/planck/rms/rms_planck_143_npipe_02048_fullres_full_TQU.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    fwhm: 7.3 # [arcmin]
+    freq: 143.0 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+  PlancK217GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 2048
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_217_npipe_02048_fullres_full_TQU.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/planck/rms/rms_planck_217_npipe_02048_fullres_full_TQU.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    fwhm: 5.0 # [arcmin]
+    freq: 217.0 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+  PlancK353GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 2048
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_353_npipe_02048_fullres_full_TQU.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/planck/rms/rms_planck_353_npipe_02048_fullres_full_TQU.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    fwhm: 4.9 # [arcmin]
+    freq: 353.0 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+  ### INTENSITY ONLY MAPS ###
+  PlancK545GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 2048
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_545_npipe_02048_fullres_full_T.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/planck/rms/rms_planck_545_npipe_02048_fullres_full_T.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    fwhm: 4.8 # [arcmin]
+    freq: 545.0 # [GHz]
+    polarization: "I"
+    units: "uK_CMB"
+
+  PlancK857GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 2048
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_857_npipe_02048_fullres_full_T.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/planck/rms/rms_planck_857_npipe_02048_fullres_full_T.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    fwhm: 4.6 # [arcmin]
+    freq: 857.0 # [GHz]
+    polarization: "I"
+    units: "uK_CMB"
