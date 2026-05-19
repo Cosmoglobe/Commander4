@@ -15,7 +15,6 @@ def write_map_chain_to_file(params: Bunch, chain: int, iter: int, exp_name:str,
     if chain not in params.general.chains_to_write or (iter-1)%params.general.chain_maps_interval != 0:
         return
     nside_out = params.general.chain_maps_nside
-
     chain_dir = os.path.join(params.general.output_paths.chains, "datamaps")
     filename = f"{exp_name}_{band_name}_chain{chain:02d}_iter{iter:04d}.h5"
     chain_file = os.path.join(chain_dir, filename)
@@ -25,7 +24,11 @@ def write_map_chain_to_file(params: Bunch, chain: int, iter: int, exp_name:str,
         file["metadata/parameter_file_as_string"] = params.parameter_file_as_string
         for key, value, in maps_to_file.items():
             if nside_out != "native" and hp.npix2nside(value.shape[-1]) != nside_out:
-                value = hp.ud_grade(value, nside_out, dtype=np.float32)
+                if "rms" in key:
+                    value = 1.0/hp.ud_grade(1.0/value**2, nside_out, dtype=np.float32)**2
+                else:
+                    value = hp.ud_grade(value, nside_out, dtype=np.float32)
+            print("key", key, np.min(value), np.max(value), flush=True)
             file[key] = value
 
 
