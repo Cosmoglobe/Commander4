@@ -47,6 +47,7 @@ class DetectorTOD:
         tod_is_compressed: bool = True,
         pix_is_compressed: bool = True,
         psi_is_compressed: bool = True,
+        flag_is_compressed: bool = True,
     ):
         """Construct a DetectorTOD.
 
@@ -94,7 +95,13 @@ class DetectorTOD:
         self._tod_is_compressed = tod_is_compressed
         self._pix_is_compressed = pix_is_compressed
         self._psi_is_compressed = psi_is_compressed
-        self._processing_mask_TOD = np.packbits(processing_mask_map[self.pix])
+        self._flag_is_compressed = flag_is_compressed
+        processing_mask = processing_mask_map[self.pix]
+        self._processing_mask_TOD = np.packbits(processing_mask)
+        if flag_encoded is not None and flag_bitmask is not None:
+            bad_data_mask = ~(self.flag & flag_bitmask)
+            self._bad_data_mask = np.packbits(bad_data_mask)
+            self._full_mask = np.packbits(bad_data_mask & processing_mask)
         if orb_dir_vec is not None:
             log.logassert_np(orb_dir_vec.size == 3, "orb_dir_vec must be a vector of size 3.", logger)
             self._orb_dir_vec = orb_dir_vec.astype(np.float32, copy=False)
@@ -164,6 +171,18 @@ class DetectorTOD:
         return psi[:self.ntod]  # Crop to actual size (might be cut to fast FFT length)
         
     @property
+    def flag(self) -> NDArray[np.integer]:
+        if self._flag_is_compressed:
+            flag = np.zeros(self.ntod_original, dtype=np.int64)
+            flag = cpp_utils.huffman_decode(np.frombuffer(self._flag_encoded, dtype=np.uint8),
+                                           self._huffman_tree, self._huffman_symbols, flag)
+            # TODO: Uncomment when SO flags are fixed.
+            # flag = np.cumsum(flag)
+        else:
+            flag = self._flag_encoded
+        return flag[:self.ntod]
+
+    @property
     def processing_mask_TOD(self) -> NDArray[np.bool_]:
         """Boolean mask selecting valid (unmasked) TOD samples.
 
@@ -176,24 +195,27 @@ class DetectorTOD:
             raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.tod.size}.")
         return mask[:self.tod.size]
 
-    @property
-    def flags(self) -> NDArray[np.floating]:
-        """
-        Returns the uncompressed flag array.
-        """
-        flags = np.zeros(self.ntod_original, dtype=np.int64)
-        flags = cpp_utils.huffman_decode(np.frombuffer(self._flag_encoded, dtype=np.uint8), 
-                                        self._huffman_tree, self._huffman_symbols, flags)
-        flags = np.cumsum(flags)
-        flags = flags[:self.ntod]
-        return flags
 
     @property
-    def excluded_tod_mask(self) -> NDArray[np.bool_]:
-        """
-        Returns a mask given by the intersection between the flag array and the flag bitmask.
-        """
-        return (self.flags & self._flag_bitmask).astype(np.bool_)
+    def full_mask(self) -> NDArray[np.bool_]:
+        mask = np.unpackbits(self._full_mask).view(bool)
+        if mask.size > self.tod.size + 7 or mask.size < self.tod.size:
+            raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.tod.size}.")
+        return mask[:self.tod.size]
+
+    @property
+    def bad_data_mask(self) -> NDArray[np.bool_]:
+        mask = np.unpackbits(self._bad_data_mask).view(bool)
+        if mask.size > self.tod.size + 7 or mask.size < self.tod.size:
+            raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.tod.size}.")
+        return mask[:self.tod.size]
+
+    # @property
+    # def excluded_tod_mask(self) -> NDArray[np.bool_]:
+    #     """
+    #     Returns a mask given by the intersection between the flag array and the flag bitmask.
+    #     """
+    #     return (self.flags & self._flag_bitmask).astype(np.bool_)
     
 
     @property
