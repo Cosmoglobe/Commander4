@@ -29,6 +29,8 @@ dependencies = [
     "healpy",
     "tqdm",
     "camb",
+    "numpy-quaternion",
+    "qpoint",
     ]  # Add new Python runtime dependencies here.
 
 [project.optional-dependencies]
