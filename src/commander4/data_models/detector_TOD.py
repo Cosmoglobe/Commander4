@@ -41,7 +41,7 @@ class DetectorTOD:
         huffman_tree2: NDArray | None = None,
         huffman_symbols2: NDArray | None = None,
         flag_encoded: NDArray[np.integer] | bytes | None = None,
-        flag_bitmask: int | None = None,
+        bad_data_bitmask: int | None = None,
         init_scalars: NDArray | None = None,
         tod_is_compressed: bool = True,
         flag_is_compressed: bool = True,
@@ -98,19 +98,20 @@ class DetectorTOD:
         self.fsamp = fsamp
         self.init_scalars = init_scalars
         self._flag_encoded = flag_encoded
-        self._flag_bitmask = flag_bitmask
+        self._bad_data_bitmask = bad_data_bitmask
         self._huffman_tree = huffman_tree
         self._huffman_symbols = huffman_symbols
         self._huffman_tree2 = huffman_tree2
         self._huffman_symbols2 = huffman_symbols2
         self._tod_is_compressed = tod_is_compressed
         self._flag_is_compressed = flag_is_compressed
+        self.processing_mask_map = processing_mask_map
         self.pointing = pointing
         processing_mask = processing_mask_map[self.get_pix()]
-        self._processing_mask_TOD = np.packbits(processing_mask)
+        self._processing_mask = np.packbits(processing_mask)
         self.det_response = det_response
-        if flag_encoded is not None and flag_bitmask is not None:
-            bad_data_mask = ~(self.flag & flag_bitmask)
+        if flag_encoded is not None and bad_data_bitmask is not None:
+            bad_data_mask = ~(self.flag & bad_data_bitmask)
             self._bad_data_mask = np.packbits(bad_data_mask)
             self._full_mask = np.packbits(bad_data_mask & processing_mask)
         if orb_dir_vec is not None:
@@ -166,12 +167,12 @@ class DetectorTOD:
         return flag[:self.ntod]
 
     @property
-    def processing_mask_TOD(self) -> NDArray[np.bool_]:
+    def processing_mask(self) -> NDArray[np.bool_]:
         """Boolean mask selecting valid (unmasked) TOD samples.
 
         Stored internally as a packed bit array and unpacked on each access.
         """
-        mask = np.unpackbits(self._processing_mask_TOD).view(bool)
+        mask = np.unpackbits(self._processing_mask).view(bool)
         if mask.size > self.tod.size + 7 or mask.size < self.tod.size:
             # The bytearray is stored in multiples of 8, so it can be up to 7 elements
             # longer than the TOD. If it's even longer or shorter, something is wrong.
