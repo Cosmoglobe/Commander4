@@ -1,20 +1,23 @@
 import numpy as np
 import logging
 from numpy.typing import NDArray
-import ducc0
-import os
+
 from commander4.cmdr4_support import utils as cpp_utils
+from commander4.data_models.pointing import PixelPointing, DetectorBoresightPointing
 import commander4.output.log as log
+from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
+                                            stop_bench, log_memory, increment_count, bench_reset
 
 logger = logging.getLogger(__name__)
+
 
 class DetectorTOD:
     """Holds time-ordered data (TOD) for a single detector within a scan.
 
-    The raw pixel and polarization angle arrays are stored in Huffman-compressed form
-    and decompressed on demand via the ``pix`` and ``psi`` properties. The TOD array,
-    evaluation nside, data nside, and sampling frequency are stored as plain public
-    attributes.
+    The pointing information is stored in a ``PixelPointing`` or
+    ``DetectorBoresightPointing`` object and exposed via ``get_pix()``,
+    ``get_psi()``, and ``get_pix_psi()``. The TOD array, evaluation nside,
+    data nside, and sampling frequency are stored as plain public attributes.
 
     Attributes:
         tod (NDArray[np.floating]): 1-D array of calibrated time-ordered samples.
@@ -27,15 +30,11 @@ class DetectorTOD:
     def __init__(
         self,
         tod: NDArray[np.floating],
-        pix_encoded: NDArray[np.integer] | bytes,
-        psi_encoded: NDArray[np.integer] | NDArray[np.floating] | bytes,
-        nside: int,
-        data_nside: int,
+        pointing: PixelPointing | DetectorBoresightPointing,
         fsamp: float,
         orb_dir_vec: NDArray[np.floating] | None,
-        huffman_tree: NDArray,
-        huffman_symbols: NDArray,
-        npsi: int,
+        huffman_tree: NDArray | None,
+        huffman_symbols: NDArray | None,
         processing_mask_map: NDArray[np.bool_],
         ntod_original: int,
         ntod_optimal: int,
@@ -45,30 +44,24 @@ class DetectorTOD:
         flag_bitmask: int | None = None,
         init_scalars: NDArray | None = None,
         tod_is_compressed: bool = True,
-        pix_is_compressed: bool = True,
-        psi_is_compressed: bool = True,
         flag_is_compressed: bool = True,
+        det_response: NDArray | None = None,
     ):
         """Construct a DetectorTOD.
 
         Args:
             tod: 1-D floating-point array of calibrated time samples.
-            pix_encoded: Huffman-encoded (or raw) pixel index array.
-            psi_encoded: Huffman-encoded (or raw) polarization angle array.
-            nside: HEALPix nside for map evaluation.
-            data_nside: HEALPix nside the pixel indices are stored at on disk.
+            pointing: Pointing representation for this detector. Must be a
+                ``PixelPointing`` or ``DetectorBoresightPointing`` instance.
             fsamp: Sampling frequency in Hz.
             orb_dir_vec: Unit vector of the spacecraft orbital velocity (size 3),
                 or None if orbital dipole is not used.
-            huffman_tree: Huffman decoding tree (passed to C++ decoder).
-            huffman_symbols: Huffman symbol table (passed to C++ decoder).
-            npsi: Number of discretised polarization angle bins.
+            huffman_tree: Huffman decoding tree for the flag stream, or None.
+            huffman_symbols: Huffman symbol table for the flag stream, or None.
             processing_mask_map: Boolean HEALPix map selecting valid pixels.
             ntod_original: Original TOD length before Fourier-length cropping.
             flag_encoded: Huffman-encoded flag array, or None.
             flag_bitmask: Bitmask applied to flags to identify excluded samples.
-            pix_is_compressed: Whether ``pix_encoded`` is Huffman-compressed.
-            psi_is_compressed: Whether ``psi_encoded`` is Huffman-compressed.
         """
         if not tod_is_compressed:
             log.logassert_np(tod.ndim==1, "'value' must be a 1D array", logger)
@@ -76,28 +69,46 @@ class DetectorTOD:
                              f"type, is {tod.dtype}", logger)
         log.logassert_np(processing_mask_map.dtype == bool, "Processing mask is not boolean type",
                          logger)
+        log.logassert_np(
+            isinstance(pointing, (PixelPointing, DetectorBoresightPointing)),
+            "pointing must be a PixelPointing or DetectorBoresightPointing instance.",
+            logger,
+        )
+        log.logassert_np(
+            pointing.ntod_original == ntod_original,
+            "Pointing ntod_original does not match DetectorTOD ntod_original.",
+            logger,
+        )
+        log.logassert_np(
+            pointing.ntod == ntod_optimal,
+            "Pointing ntod does not match DetectorTOD ntod_optimal.",
+            logger,
+        )
+        if flag_encoded is not None and flag_is_compressed:
+            log.logassert_np(
+                huffman_tree is not None and huffman_symbols is not None,
+                "Compressed flags require Huffman metadata.",
+                logger,
+            )
         self._tod = tod
         self.ntod_original = ntod_original
         self.ntod = ntod_optimal
-        self.nside = nside
-        self.data_nside = data_nside
+        self.nside = pointing.nside
+        self.data_nside = pointing.data_nside
         self.fsamp = fsamp
         self.init_scalars = init_scalars
-        self._pix_encoded = pix_encoded
-        self._psi_encoded = psi_encoded
         self._flag_encoded = flag_encoded
         self._flag_bitmask = flag_bitmask
         self._huffman_tree = huffman_tree
         self._huffman_symbols = huffman_symbols
         self._huffman_tree2 = huffman_tree2
         self._huffman_symbols2 = huffman_symbols2
-        self._npsi = npsi
         self._tod_is_compressed = tod_is_compressed
-        self._pix_is_compressed = pix_is_compressed
-        self._psi_is_compressed = psi_is_compressed
         self._flag_is_compressed = flag_is_compressed
-        processing_mask = processing_mask_map[self.pix]
+        self.pointing = pointing
+        processing_mask = processing_mask_map[self.get_pix()]
         self._processing_mask_TOD = np.packbits(processing_mask)
+        self.det_response = det_response
         if flag_encoded is not None and flag_bitmask is not None:
             bad_data_mask = ~(self.flag & flag_bitmask)
             self._bad_data_mask = np.packbits(bad_data_mask)
@@ -112,7 +123,7 @@ class DetectorTOD:
     @property
     def tod(self) -> NDArray[np.floating]:
         if self._tod_is_compressed:
-            tod = np.zeros(self.ntod_original, dtype=np.int32)
+            tod = np.zeros(self.ntod_original, dtype=self._huffman_symbols2.dtype)
             tod[:] = cpp_utils.huffman_decode(np.frombuffer(self._tod, dtype=np.uint8),
                                     self._huffman_tree2, self._huffman_symbols2, tod)[:self.ntod]
             tod[:] = np.cumsum(tod)
@@ -122,62 +133,34 @@ class DetectorTOD:
         return tod
 
 
-    @property
-    def pix(self) -> NDArray[np.integer]:
-        """Decompressed HEALPix pixel indices at the evaluation nside.
-
-        If the stored pixel array is Huffman-compressed, it is decoded and
-        cumulative-summed on each access. When ``data_nside != nside`` the
-        indices are re-projected to the evaluation resolution.
-        """
-        if self._pix_is_compressed:
-            pix = np.zeros(self.ntod_original, dtype=np.int64)
-            pix = cpp_utils.huffman_decode(np.frombuffer(self._pix_encoded, dtype=np.uint8),
-                                           self._huffman_tree, self._huffman_symbols, pix)
-            #TODO: Include cumsum in the C++ decode, so it can't be forgotten?
-            pix = np.cumsum(pix)
-        else:
-            pix = self._pix_encoded
-        # The TOD was cropped to an ideal Fourier length, but because the pix entry is compressed,
-        # we need to unpack the entire original array, and then crop it to the correct length.
-        pix = pix[:self.ntod]
-        
-        if self.nside != self.data_nside:
-            # If the data nside does not match the specified evaluation nside, we convert to it.
-            # pix = hp.ang2pix(self.nside, *hp.pix2ang(self.data_nside, pix))
-            nthreads = int(os.environ["OMP_NUM_THREADS"])
-            geom_from = ducc0.healpix.Healpix_Base(self.data_nside, "RING")
-            geom_to = ducc0.healpix.Healpix_Base(self.nside, "RING")
-            ang = geom_from.pix2ang(pix, nthreads=nthreads)
-            pix = geom_to.ang2pix(ang, nthreads=nthreads)
+    def get_pix(self, nside: int | None = None) -> NDArray[np.integer]:
+        start_bench("pointing")
+        pix = self.pointing.get_pix(nside)
+        stop_bench("pointing")
         return pix
 
-    @property
-    def psi(self) -> NDArray[np.floating]:
-        """Decompressed polarization angles in radians.
+    def get_psi(self, nside: int | None = None) -> NDArray[np.integer] | NDArray[np.floating]:
+        start_bench("pointing")
+        psi = self.pointing.get_psi(nside)
+        stop_bench("pointing")
+        return psi
 
-        If the stored array is Huffman-compressed, it is decoded, cumulative-summed,
-        and converted from integer bins to radians on each access.
-        """
-        if self._psi_is_compressed:
-            psi = np.zeros(self.ntod_original, dtype=np.int64)
-            psi = cpp_utils.huffman_decode(np.frombuffer(self._psi_encoded, dtype=np.uint8),
-                                        self._huffman_tree, self._huffman_symbols, psi)
-            psi = np.cumsum(psi)
-            psi = psi[:self.ntod]
-            psi = 2*np.pi * psi.astype(np.float32, copy=False)/self._npsi
-        else:
-            psi = self._psi_encoded
-        return psi[:self.ntod]  # Crop to actual size (might be cut to fast FFT length)
+    def get_pix_psi(
+        self,
+        nside: int | None = None,
+    ) -> tuple[NDArray[np.integer], NDArray[np.integer] | NDArray[np.floating]]:
+        start_bench("pointing")
+        pix_psi = self.pointing.get_pix_psi(nside)
+        stop_bench("pointing")
+        return pix_psi
         
     @property
     def flag(self) -> NDArray[np.integer]:
         if self._flag_is_compressed:
-            flag = np.zeros(self.ntod_original, dtype=np.int64)
+            flag = np.zeros(self.ntod_original, dtype=self._huffman_symbols.dtype)
             flag = cpp_utils.huffman_decode(np.frombuffer(self._flag_encoded, dtype=np.uint8),
                                            self._huffman_tree, self._huffman_symbols, flag)
-            # TODO: Uncomment when SO flags are fixed.
-            # flag = np.cumsum(flag)
+            flag = np.cumsum(flag)
         else:
             flag = self._flag_encoded
         return flag[:self.ntod]
@@ -229,3 +212,15 @@ class DetectorTOD:
             return self._orb_dir_vec
         else:
             raise ValueError("Attempted to access self.orb_dir_vec, which is not set.")
+        
+    def IQU_response(self, psi: NDArray | None = None):
+        # psi can be passed as an argument to avoid re-calculating it if already available.
+        if psi is None:
+            psi = self.get_psi()
+        response = np.zeros((3, psi.shape[-1]))
+        if self.det_response[0] != 0:
+            response[0,:] = self.det_response[0]
+        if self.det_response[1] != 0:
+            response[1,:] = np.cos(2.0*psi)*self.det_response[1]
+            response[2,:] = np.sin(2.0*psi)*self.det_response[1]
+        return response

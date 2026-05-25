@@ -8,11 +8,11 @@ import time
 from numpy.typing import NDArray
 
 import healpy as hp
-import matplotlib.pyplot as plt
 from pixell.bunch import Bunch
 from astropy.io import fits
 import pysm3.units as pysm3_u
 
+from commander4.output.log import logassert
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_TOD import DetGroupTOD
 from commander4.data_models.TOD_samples import TODSamples
@@ -86,12 +86,14 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
         mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)
         for iscan, scan in enumerate(experiment_data.scans):
             for idet, det in enumerate(scan.detectors):
-                pix = det.pix
-                psi = det.psi
+                mask_bad = det.bad_data_mask
+                pix, psi = det.get_pix_psi()
+                pix = pix[mask_bad]
+                psi = psi[mask_bad]
                 sigma0, fknee, alpha = tod_samples.noise_params[iscan, idet, :]
                 gain = tod_samples.gain(iscan, idet)
                 inv_var = (gain/sigma0)**2
-                mapmaker_invvar.accumulate_to_map(inv_var, pix, psi)
+                mapmaker_invvar.accumulate_to_map(inv_var, pix, psi, response=det.det_response)
         mapmaker_invvar.gather_map()
         mapmaker_invvar.normalize_map()
         if ismaster:
@@ -105,7 +107,8 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
         mapmaker_invvar = WeightsMapmaker(band_comm, experiment_data.nside)
         for iscan, scan in enumerate(experiment_data.scans):
             for idet, det in enumerate(scan.detectors):
-                pix = det.pix
+                mask_bad = det.bad_data_mask
+                pix = det.get_pix()[mask_bad]
                 sigma0, fknee, alpha = tod_samples.noise_params[iscan, idet, :]
                 gain = tod_samples.gain(iscan, idet)
                 inv_var = (gain/sigma0)**2
@@ -136,16 +139,20 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     for iscan, scan in enumerate(experiment_data.scans):
         for idet, det in enumerate(scan.detectors):
             d_sky = det.tod.copy()
-            pix = det.pix
-            psi = None if pols=="I" else det.psi
+            pix, psi = det.get_pix_psi()
             sigma0, fknee, alpha = tod_samples.noise_params[iscan, idet, :]
             gain = tod_samples.gain(iscan, idet)
             inv_var = (gain/sigma0)**2
+            response = det.det_response if pols == "IQU" else None
 
             ### ORBITAL DIPOLE ###
             sky_orb_dipole = get_s_orb_TOD(det, experiment_data, pix)
             d_sky -= gain*sky_orb_dipole
-            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
+            if pols == "IQU":
+                mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi,
+                                                     response=response)
+            else:
+                mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
 
             ### CORRELATED NOISE SAMPLING ###
             if do_ncorr_sampling:
@@ -156,17 +163,21 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
                 Ntod = sky_subtracted_TOD.shape[0]
                 Nfft = Ntod + 1  # mirrored FFT: nfft=2*Ntod, n=nfft/2+1=Ntod+1
                 freq = rfftfreq(2 * Ntod, d = 1/det.fsamp)
-                mask = det.processing_mask_TOD
-                sigma0_ncorr = calc_sigma0_robust(sky_subtracted_TOD, mask)
+                mask_full = det.full_mask
+                sigma0_ncorr = calc_sigma0_robust(sky_subtracted_TOD, mask_full)
                 C_1f_inv = np.zeros(Nfft)
                 C_1f_inv[1:] = 1.0 / (sigma0_ncorr**2*(freq[1:]/fknee)**alpha)
                 # fill_all_masked(sky_subtracted_TOD, mask, sigma0_ncorr)
                 err_tol = 1e-6
                 n_corr_est, residual = corr_noise_realization_with_gaps(sky_subtracted_TOD,
-                                                                        mask, sigma0_ncorr, C_1f_inv,
-                                                                        err_tol=err_tol)
-                mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32, copy=False),
-                                                 inv_var, pix, psi)
+                                                                        mask_full, sigma0_ncorr,
+                                                                        C_1f_inv, err_tol=err_tol)
+                if pols == "IQU":
+                    mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32, copy=False),
+                                                     inv_var, pix, psi, response=response)
+                else:
+                    mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32, copy=False),
+                                                     inv_var, pix, psi)
                 if residual > err_tol:
                     num_failed_convergences_ncorr += 1
                     worst_residual_ncorr = max(worst_residual_ncorr, residual)
@@ -334,13 +345,15 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
     mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)    
     for iscan, scan in enumerate(experiment_data.scans):
         for idet, det in enumerate(scan.detectors):
-            pix = det.pix
-            psi = det.psi
+            mask_bad = det.bad_data_mask
+            pix, psi = det.get_pix_psi()
+            pix = pix[mask_bad]
+            psi = psi[mask_bad]
             sigma0, fknee, alpha = tod_samples.noise_params[iscan,idet,:]
             gain = tod_samples.gain(iscan, idet)
             # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
             inv_var = (gain/sigma0)**2
-            mapmaker_invvar.accumulate_to_map(inv_var, pix, psi)
+            mapmaker_invvar.accumulate_to_map(inv_var, pix, psi, response=det.det_response)
     mapmaker_invvar.gather_map()
     mapmaker_invvar.normalize_map()
 
@@ -362,23 +375,26 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
     for iscan, scan in enumerate(experiment_data.scans):
         for idet, det in enumerate(scan.detectors):
             start_bench("binned-mapmaker")
-            d_sky = det.tod.copy()
-            pix = det.pix
-            psi = det.psi
+            mask_bad = det.bad_data_mask
+            d_sky = det.tod.copy()[mask_bad]
+            pix, psi = det.get_pix_psi()
+            pix = pix[mask_bad]
+            psi = psi[mask_bad]
+            response = det.det_response
             gain = tod_samples.gain(iscan, idet)
             sigma0, fknee, alpha = tod_samples.noise_params[iscan,idet,:]
             # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
             inv_var = (gain/sigma0)**2
 
             ### ORBITAL DIPOLE ###
-            sky_orb_dipole = get_s_orb_TOD(det, experiment_data, pix)
+            sky_orb_dipole = get_s_orb_TOD(det, experiment_data, pix)[mask_bad]
             d_sky -= gain*sky_orb_dipole
 
             stop_bench("binned-mapmaker", increment_count=False)
             ### CORRELATED NOISE SAMPLING ###
             if do_ncorr_sampling:
                 start_bench("ncorr-sampling")
-                s_tot = get_static_sky_TOD(compsep_output, pix, psi)
+                s_tot = get_static_sky_TOD(compsep_output, pix, psi)[mask_bad]
                 s_tot += sky_orb_dipole
                 sky_subtracted_TOD = det.tod.copy()
                 sky_subtracted_TOD -= gain*s_tot
@@ -386,39 +402,32 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 Nfft = Ntod + 1  # mirrored FFT: nfft=2*Ntod, n=nfft/2+1=Ntod+1
                 freq = rfftfreq(2 * Ntod, d = 1/det.fsamp)
 
-                mask = det.processing_mask_TOD
-                sigma0_ncorr = calc_sigma0_robust(sky_subtracted_TOD, mask)
+                mask_full = det.full_mask
+                sigma0_ncorr = calc_sigma0_robust(sky_subtracted_TOD, mask_full)
                 C_1f_inv = np.zeros(Nfft)
                 C_1f_inv[1:] = 1.0 / (sigma0_ncorr**2*(freq[1:]/fknee)**alpha)
                 err_tol = 1e-6
                 # Inpaint masked regions with linear slope + white noise.
                 # In the CG solver this is only used to define the starting guess,
                 # but if the CG fails it is also used to generate the fallback solution.
-                fill_all_masked(sky_subtracted_TOD, mask, sigma0_ncorr)
+                fill_all_masked(sky_subtracted_TOD, mask_full, sigma0_ncorr)
                 n_corr_est, residual, niter, did_conv = corr_noise_realization_with_gaps(sky_subtracted_TOD,
-                                                                    mask, sigma0_ncorr, C_1f_inv,
+                                                                    mask_full, sigma0_ncorr, C_1f_inv,
                                                                     err_tol=err_tol, max_iter=200)
-
-                # if band_comm.Get_rank() == 0 and idet == 0 and chain == 1:
-                #     if iscan == 300 or iscan == 600 or iscan == 900:
-                #         np.save(f"corrdata/mirrorfft_ncorr_signal_{experiment_data.band_name}_{iscan}_{iter}.npy", sky_subtracted_TOD)
-                #         np.save(f"corrdata/mirrorfft_ncorr_ncorr_{experiment_data.band_name}_{iscan}_{iter}.npy", n_corr_est)
-                #         np.save(f"corrdata/mirrorfft_ncorr_mask_{experiment_data.band_name}_{iscan}_{iter}.npy", mask)
-                #         np.save(f"corrdata/mirrorfft_ncorr_C_1f_inv_{experiment_data.band_name}_{iscan}_{iter}.npy", C_1f_inv)
-                resid = (sky_subtracted_TOD - n_corr_est) * mask
+                resid = (sky_subtracted_TOD - n_corr_est) * mask_full
                 var_resid = np.dot(resid, resid)
-                var_data = np.dot(sky_subtracted_TOD * mask, sky_subtracted_TOD * mask)
+                var_data = np.dot(sky_subtracted_TOD * mask_full, sky_subtracted_TOD * mask_full)
                 # If either of the two tests failed, use fallback for n_corr.
                 if var_resid > var_data or not did_conv:
                     # Direcly solve constrained realization system without a mask.
                     n_corr_est, _, _, _ = corr_noise_realization_with_gaps(sky_subtracted_TOD,
-                                             np.ones_like(mask, dtype=bool), sigma0_ncorr, C_1f_inv)
+                                             np.ones_like(mask_full, dtype=bool), sigma0_ncorr, C_1f_inv)
                     # if band_comm.Get_rank() == 0 and idet == 0 and chain == 1:
                     #     if iscan == 300 or iscan == 600 or iscan == 900:
                     #         np.save(f"corrdata/mirrorfft_corrected_ncorr_signal_{experiment_data.band_name}_{iscan}_{iter}.npy", sky_subtracted_TOD)
                     #         np.save(f"corrdata/mirrorfft_corrected_ncorr_ncorr_{experiment_data.band_name}_{iscan}_{iter}.npy", n_corr_est)
                 mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32, copy=False),
-                                                  inv_var, pix, psi)
+                                                 inv_var, pix, psi, response=response)
                 if not did_conv:
                     num_failed_convergences_ncorr += 1
                 if var_resid > var_data:
@@ -441,8 +450,9 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                     log_memory("ncorr-sampling")
 
             start_bench("binned-mapmaker")
-            mapmaker.accumulate_to_map(d_sky/gain, inv_var, pix, psi)
-            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
+            mapmaker.accumulate_to_map(d_sky/gain, inv_var, pix, psi, response=response)
+            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi,
+                                                 response=response)
             stop_bench("binned-mapmaker", increment_count=False)
 
     ### PRINT NOISE SAMPLING STATS ###
@@ -473,18 +483,18 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
             residuals = residuals[residuals != 0]
             residuals = np.array([0]) if len(residuals) == 0 else residuals
             niters = np.concatenate(niters)
-            logger.info(f"{experiment_data.nu}GHz: fknees {np.min(fknees):.4f} "\
-            f"{np.percentile(fknees, 1):.4f} {np.mean(fknees):.4f} {np.percentile(fknees, 99):.4f}"\
-            f" {np.max(fknees):.4f}")
-            logger.info(f"{experiment_data.nu}GHz: alphas {np.min(alphas):.4f} "\
-            f"{np.percentile(alphas, 1):.4f} {np.mean(alphas):.4f} {np.percentile(alphas, 99):.4f}"\
-            f" {np.max(alphas):.4f}")
-            logger.info(f"{experiment_data.nu}GHz: residuals {np.min(residuals):.2e} "\
-            f"{np.percentile(residuals, 1):.2e} {np.mean(residuals):.2e} {np.percentile(residuals, 99):.2e}"\
-            f" {np.max(residuals):.2e}")
-            logger.info(f"{experiment_data.nu}GHz: iterations {np.min(niters):.4f} "\
-            f"{np.percentile(niters, 1):.4f} {np.mean(niters):.4f} {np.percentile(niters, 99):.4f}"\
-            f" {np.max(niters):.4f}")
+            logger.info(f"{experiment_data.nu}GHz: fknees {np.nanmin(fknees):.4f} "\
+            f"{np.nanpercentile(fknees, 1):.4f} {np.nanmean(fknees):.4f} {np.nanpercentile(fknees, 99):.4f}"\
+            f" {np.nanmax(fknees):.4f}")
+            logger.info(f"{experiment_data.nu}GHz: alphas {np.nanmin(alphas):.4f} "\
+            f"{np.nanpercentile(alphas, 1):.4f} {np.nanmean(alphas):.4f} {np.nanpercentile(alphas, 99):.4f}"\
+            f" {np.nanmax(alphas):.4f}")
+            logger.info(f"{experiment_data.nu}GHz: residuals {np.nanmin(residuals):.2e} "\
+            f"{np.nanpercentile(residuals, 1):.2e} {np.nanmean(residuals):.2e} {np.nanpercentile(residuals, 99):.2e}"\
+            f" {np.nanmax(residuals):.2e}")
+            logger.info(f"{experiment_data.nu}GHz: iterations {np.nanmin(niters):.4f} "\
+            f"{np.nanpercentile(niters, 1):.4f} {np.nanmean(niters):.4f} {np.nanpercentile(niters, 99):.4f}"\
+            f" {np.nanmax(niters):.4f}")
 
 
     start_bench("binned-mapmaker")
@@ -664,17 +674,17 @@ def estimate_white_noise(experiment_data: DetGroupTOD, tod_samples: TODSamples,
         tod_samples (TODSamples): Updated TOD samples with sigma0 estimates.
     """
     for iscan, scan in enumerate(experiment_data.scans):
-        for idetector, detector in enumerate(scan.detectors):
-            pix = detector.pix
-            psi = detector.psi if "QU" in experiment_data.pols else None
+        for idet, det in enumerate(scan.detectors):
+            pix, psi = det.get_pix_psi()
             # FIXME: Should maybe n_corr be subtracted here as well?
-            gain = tod_samples.gain(iscan, idetector)
-            sky_subtracted_tod = detector.tod.copy()
+            gain = tod_samples.gain(iscan, idet)
+            sky_subtracted_tod = det.tod.copy()
             sky_subtracted_tod -= gain*get_static_sky_TOD(det_compsep_map, pix, psi=psi)
-            sky_subtracted_tod -= gain*get_s_orb_TOD(detector, experiment_data, pix)
-            mask = detector.processing_mask_TOD
+            sky_subtracted_tod -= gain*get_s_orb_TOD(det, experiment_data, pix)
+            mask = det.full_mask
             sigma0 = calc_sigma0_robust(sky_subtracted_tod, mask)
-            tod_samples.noise_params[iscan,idetector,0] = sigma0
+            logassert(sigma0 != 0, "sigma0 is 0, which should never happen.", logger)
+            tod_samples.noise_params[iscan,idet,0] = sigma0
         if iscan == len(experiment_data.scans) - 1:
             log_memory("sigma0-est")
     return tod_samples
@@ -712,8 +722,7 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
 
             assert((ntod_down+1)*down_factor >= det.tod.shape[0])
 
-            pix = det.pix  # Only decompressing pix once for efficiency.
-            psi = det.psi
+            pix, psi = det.get_pix_psi()
             pix = pix[indices_centers]
             psi = psi[indices_centers]
 
@@ -738,7 +747,7 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
                 residual_tod += tod_samples.abs_gain*s_orb  # Now we can add back in the orbital dipole.
 
             ### Solving Equation 16 from BP7 ###
-            mask = det.processing_mask_TOD[indices_centers]
+            mask = det.full_mask[indices_centers]
             # White noise level, adjusted for downsampling.
             sigma0_effective = tod_samples.noise_params[iscan,idet,0] * np.sqrt(1.0/f_samp)
             # Inpaint masked regions with the calib signal times the absolute gain (+ white noise).
@@ -815,8 +824,7 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
             ntod_down = indices_centers.size
 
             # Define the residual for this sampling step, as per Eq. (17)
-            pix = det.pix
-            psi = det.psi
+            pix, psi = det.get_pix_psi()
             pix = pix[indices_centers]
             psi = psi[indices_centers]
 
@@ -828,7 +836,7 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
             residual_tod = det.tod[:ntod_down*down_factor].reshape((ntod_down, down_factor))
             residual_tod = np.mean(residual_tod, axis=-1)
             residual_tod -= gain*s_cal
-            mask = det.processing_mask_TOD[indices_centers]
+            mask = det.full_mask[indices_centers]
             # sigma0 = calc_sigma0_robust(residual_tod, mask)
 
             # Setup FFT-based calculation for N^-1 operations
@@ -942,8 +950,7 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
             ntod_down = indices_centers.size
 
             # Per Eq. (26), the residual is d - (g0 + Delta_g)*s
-            pix = det.pix
-            psi = det.psi
+            pix, psi = det.get_pix_psi()
             pix = pix[indices_centers]
             psi = psi[indices_centers]
 
@@ -955,7 +962,7 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
             residual_tod = np.mean(residual_tod, axis=-1)
             residual_tod -= gain*s_cal
 
-            mask = det.processing_mask_TOD[indices_centers]
+            mask = det.full_mask[indices_centers]
 
             # FFT-based N^-1 operation setup
             # Ntod = residual_tod.shape[0]
@@ -1176,14 +1183,14 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
             logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished temporal "\
                         f"gain estimation in {timing_dict['temp-gain']:.1f}s.")
 
-    ### WHITE NOISE ESTIMATION ###
-    t0 = time.time()
-    with benchmark("sigma0-est"):
-        tod_samples = estimate_white_noise(experiment_data, tod_samples, compsep_output, params)
-    timing_dict["wn-est-2"] = time.time() - t0
-    if band_comm.Get_rank() == 0:
-        logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished white noise "\
-                    f"estimation in {timing_dict['wn-est-2']:.1f}s.")
+    # ### WHITE NOISE ESTIMATION ###
+    # t0 = time.time()
+    # with benchmark("sigma0-est"):
+    #     tod_samples = estimate_white_noise(experiment_data, tod_samples, compsep_output, params)
+    # timing_dict["wn-est-2"] = time.time() - t0
+    # if band_comm.Get_rank() == 0:
+    #     logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished white noise "\
+    #                 f"estimation in {timing_dict['wn-est-2']:.1f}s.")
 
     ### MAPMAKING ###
     do_ncorr_sampling = params.general.sample_corr_noise and iter >=\
