@@ -42,6 +42,7 @@ from time import perf_counter
 import healpy as hp
 import numpy as np
 from healpy import pixelfunc
+import ducc0
 
 from fast_ang2pix import ang2pix_ring_ctypes, ang2pix_ring_poly_ctypes, load_ang2pix_ctypes_lib
 
@@ -97,7 +98,7 @@ def main() -> int:
         f"cpp_threads={CPP_THREADS}, poly_boundary_tol={POLY_BOUNDARY_TOL}"
     )
     print(
-        f"{'size':>12} {'healpy [ms]':>13} {'hp-core [ms]':>15} {'cpp [ms]':>11} {'cpp-poly [ms]':>16} "
+        f"{'size':>12} {'healpy [ms]':>13} {'hp-core [ms]':>15} {'ducc [ms]':>15} {'cpp [ms]':>11} {'cpp-poly [ms]':>16} "
         f"{'core/hp':>9} {'cpp/core':>9} {'cpoly/core':>11}"
     )
 
@@ -113,9 +114,14 @@ def main() -> int:
             boundary_tol=POLY_BOUNDARY_TOL,
             nthreads=CPP_THREADS,
         )
+        base = ducc0.healpix.Healpix_Base(NSIDE,"RING")
+        ptg = np.stack([theta,phi],axis=1)
+        res = np.empty(len(theta),dtype=np.int64)
+        ducc_pixels = base.ang2pix(ptg,nthreads=CPP_THREADS,out=res).copy()
 
         healpy_time = median_seconds(time_operation(lambda: hp.ang2pix(NSIDE, theta, phi)))
         healpy_core_time = median_seconds(time_operation(lambda: healpy_ring_core(NSIDE, theta, phi)))
+        ducc_time = median_seconds(time_operation(lambda: base.ang2pix(ptg,nthreads=CPP_THREADS,out=res)))
         cpp_time = median_seconds(
             time_operation(lambda: ang2pix_ring_ctypes(theta, phi, NSIDE, nthreads=CPP_THREADS))
         )
@@ -132,17 +138,19 @@ def main() -> int:
         )
 
         print(
-            f"{size:12d} {1.0e3 * healpy_time:13.3f} {1.0e3 * healpy_core_time:15.3f} {1.0e3 * cpp_time:11.3f} "
+            f"{size:12d} {1.0e3 * healpy_time:13.3f} {1.0e3 * healpy_core_time:15.3f} {1.0e3 * ducc_time:15.3f} {1.0e3 * cpp_time:11.3f} "
             f"{1.0e3 * cpp_poly_time:16.3f} {healpy_core_time / healpy_time:9.2f} {cpp_time / healpy_core_time:9.2f} "
             f"{cpp_poly_time / healpy_core_time:11.2f}"
         )
 
         healpy_core_errors, healpy_core_error_fraction = count_errors(healpy_pixels, healpy_core_pixels)
+        ducc_errors, ducc_error_fraction = count_errors(healpy_pixels, ducc_pixels)
         cpp_errors, cpp_error_fraction = count_errors(healpy_pixels, cpp_pixels)
         cpp_poly_errors, cpp_poly_error_fraction = count_errors(healpy_pixels, cpp_poly_pixels)
         print(
             "  errors vs healpy: "
             f"hp-core={healpy_core_errors} ({healpy_core_error_fraction:.8e}), "
+            f"ducc={ducc_errors} ({ducc_error_fraction:.8e}), "
             f"cpp={cpp_errors} ({cpp_error_fraction:.8e}), "
             f"cpp-poly={cpp_poly_errors} ({cpp_poly_error_fraction:.8e})"
         )
