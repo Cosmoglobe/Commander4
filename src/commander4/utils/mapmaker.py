@@ -147,6 +147,11 @@ class MapmakerIQU:
         self.maplib.map_accumulator_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim1, ct.c_double,
                                 ct_i64_dim1, ct_f64_dim1, ct.c_int64,
                                 ct.c_int64]
+        self.maplib.map_accumulator_IQU_response_f64.argtypes = [ct_f64_dim2, ct_f64_dim1,
+                                     ct.c_double, ct_i64_dim1,
+                                     ct_f64_dim1, ct.c_double,
+                                     ct.c_double, ct.c_int64,
+                                     ct.c_int64]
         self.maplib.map_solve_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim2, ct_f64_dim2,
                       ct.c_int64]
 
@@ -158,7 +163,8 @@ class MapmakerIQU:
         return self._finalized_map
 
 
-    def accumulate_to_map(self, tod:NDArray, weights:NDArray, pix:NDArray, psi:NDArray):
+    def accumulate_to_map(self, tod:NDArray, weights:NDArray, pix:NDArray, psi:NDArray,
+                          response: NDArray | None = None):
         """Accumulate I,Q,U signal into the local map buffer."""
         # Check that we are still in business, and haven't already called "gather_map".
         logassert(self._map_signal is not None, "Tried accumulating to finalized map", logger)
@@ -166,11 +172,19 @@ class MapmakerIQU:
         tod_f64 = np.ascontiguousarray(tod, dtype=np.float64)
         weight_f64 = float(weights)
         psi_f64 = np.ascontiguousarray(psi, dtype=np.float64)
-        self.maplib.map_accumulator_IQU_f64(self._map_signal, tod_f64, weight_f64,
-                                            pix.astype(np.int64, copy=False), psi_f64, ntod,
-                                            self.npix)
+        pix_i64 = pix.astype(np.int64, copy=False)
+        if response is None:
+            self.maplib.map_accumulator_IQU_f64(self._map_signal, tod_f64, weight_f64,
+                                                pix_i64, psi_f64, ntod, self.npix)
+        else:
+            response_I = float(response[0])
+            response_QU = float(response[1])
+            self.maplib.map_accumulator_IQU_response_f64(self._map_signal, tod_f64, weight_f64,
+                                                         pix_i64, psi_f64, response_I,
+                                                         response_QU, ntod, self.npix)
 
-    def accumulate_to_map_Python(self, tod:NDArray, weights:NDArray, pix:NDArray, psi:NDArray):
+    def accumulate_to_map_Python(self, tod:NDArray, weights:NDArray, pix:NDArray, psi:NDArray,
+                                 response: NDArray | None = None):
         """Reference accumulator matching the ctypes IQU implementation."""
         # Reference implementation matching the ctypes IQU accumulator.
         logassert(self._map_signal is not None, "Tried accumulating to finalized map", logger)
@@ -179,9 +193,14 @@ class MapmakerIQU:
         ang = 2.0 * np.ascontiguousarray(psi, dtype=np.float64)
         c2 = np.cos(ang)
         s2 = np.sin(ang)
-        np.add.at(self._map_signal[0], pix_idx, w_tod)
-        np.add.at(self._map_signal[1], pix_idx, w_tod * c2)
-        np.add.at(self._map_signal[2], pix_idx, w_tod * s2)
+        if response is None:
+            response_I, response_QU = 1.0, 1.0
+        else:
+            response_I = float(response[0])
+            response_QU = float(response[1])
+        np.add.at(self._map_signal[0], pix_idx, w_tod * response_I)
+        np.add.at(self._map_signal[1], pix_idx, w_tod * response_QU * c2)
+        np.add.at(self._map_signal[2], pix_idx, w_tod * response_QU * s2)
 
     def gather_map(self):
         """Reduce the local IQU buffers across MPI ranks into the root map."""
@@ -270,8 +289,10 @@ class WeightsMapmakerIQU:
         ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
         ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
         self.maplib.map_weight_accumulator_IQU_f64.argtypes = [ct_f64_dim2, ct.c_double,
-                                                               ct_i64_dim1, ct_f64_dim1, ct.c_int64,
-                                                               ct.c_int64]
+                                        ct_i64_dim1, ct_f64_dim1, ct.c_int64, ct.c_int64]
+        self.maplib.map_weight_accumulator_IQU_response_f64.argtypes = [ct_f64_dim2,
+                                        ct.c_double, ct_i64_dim1, ct_f64_dim1, ct.c_double,
+                                        ct.c_double, ct.c_int64, ct.c_int64]
         self.maplib.map_invdiag_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim2, ct.c_int64]
 
     @property
@@ -288,18 +309,26 @@ class WeightsMapmakerIQU:
                       logger)
         return self._gathered_map
 
-    def accumulate_to_map(self, weight:float, pix:NDArray, psi:NDArray):
+    def accumulate_to_map(self, weight:float, pix:NDArray, psi:NDArray, response:NDArray | None = None):
         """Accumulate IQU weight/covariance elements into the local buffer."""
         # Check that we are still in business, and haven't already called "gather_map".
         logassert(self._map_signal is not None, "Tried accumulating to finalized map", logger)
         ntod = pix.shape[0]
         weight_f64 = float(weight)
         psi_f64 = np.ascontiguousarray(psi, dtype=np.float64)
-        self.maplib.map_weight_accumulator_IQU_f64(self._map_signal, weight_f64,
-                                                   pix.astype(np.int64, copy=False), psi_f64, ntod,
-                                                   self.npix)
+        pix_i64 = pix.astype(np.int64, copy=False)
+        if response is None:
+            self.maplib.map_weight_accumulator_IQU_f64(self._map_signal, weight_f64,
+                                                       pix_i64, psi_f64, ntod, self.npix)
+        else:
+            response_I = float(response[0])
+            response_QU = float(response[1])
+            self.maplib.map_weight_accumulator_IQU_response_f64(self._map_signal, weight_f64,
+                                                                pix_i64, psi_f64, response_I,
+                                                                response_QU, ntod, self.npix)
 
-    def accumulate_to_map_Python(self, weight:float, pix:NDArray, psi:NDArray):
+    def accumulate_to_map_Python(self, weight:float, pix:NDArray, psi:NDArray,
+                                 response: NDArray | None = None):
         """Reference accumulator matching the ctypes IQU weights implementation."""
         # Reference implementation matching the ctypes IQU weight accumulator.
         logassert(self._map_signal is not None, "Tried accumulating to finalized map", logger)
@@ -308,12 +337,17 @@ class WeightsMapmakerIQU:
         c2 = np.cos(ang)
         s2 = np.sin(ang)
         weight_f64 = float(weight)
-        np.add.at(self._map_signal[0], pix_idx, weight_f64)
-        np.add.at(self._map_signal[1], pix_idx, weight_f64 * c2)
-        np.add.at(self._map_signal[2], pix_idx, weight_f64 * s2)
-        np.add.at(self._map_signal[3], pix_idx, weight_f64 * c2 * c2)
-        np.add.at(self._map_signal[4], pix_idx, weight_f64 * s2 * c2)
-        np.add.at(self._map_signal[5], pix_idx, weight_f64 * s2 * s2)
+        if response is None:
+            response_I, response_QU = 1.0, 1.0
+        else:
+            response_I = float(response[0])
+            response_QU = float(response[1])
+        np.add.at(self._map_signal[0], pix_idx, weight_f64 * response_I * response_I)
+        np.add.at(self._map_signal[1], pix_idx, weight_f64 * response_I * response_QU * c2)
+        np.add.at(self._map_signal[2], pix_idx, weight_f64 * response_I * response_QU * s2)
+        np.add.at(self._map_signal[3], pix_idx, weight_f64 * response_QU * response_QU * c2 * c2)
+        np.add.at(self._map_signal[4], pix_idx, weight_f64 * response_QU * response_QU * s2 * c2)
+        np.add.at(self._map_signal[5], pix_idx, weight_f64 * response_QU * response_QU * s2 * s2)
 
     @property
     def inv_N_diag(self):
