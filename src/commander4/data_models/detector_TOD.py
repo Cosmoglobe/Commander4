@@ -155,15 +155,18 @@ class DetectorTOD:
         self._huffman_symbols2 = huffman_symbols2
         self._tod_is_compressed = tod_is_compressed
         self._flag_is_compressed = flag_is_compressed
+        # The Huffman decoder expects uint8 arrays; for bytes and HDF5-backed
+        # numpy.void payloads the internal storage is rewritten as a zero-copy
+        # uint8 view once at construction.
         self.processing_mask_map = processing_mask_map
         self.pointing = pointing
         processing_mask = processing_mask_map[self.get_pix()]
         self._processing_mask = np.packbits(processing_mask)
         self.det_response = det_response
         if flag_encoded is not None and bad_data_bitmask is not None:
-            bad_data_mask = ~(self.flag & bad_data_bitmask)
-            self._bad_data_mask = np.packbits(bad_data_mask)
-            self._full_mask = np.packbits(bad_data_mask & processing_mask)
+            good_data_mask = (self.flag & bad_data_bitmask) == 0
+            self._good_data_mask = np.packbits(good_data_mask)
+            self._full_mask = np.packbits(good_data_mask & processing_mask)
         if orb_dir_vec is not None:
             log.logassert_np(orb_dir_vec.size == 3, "orb_dir_vec must be a vector of size 3.", logger)
             self._orb_dir_vec = orb_dir_vec.astype(np.float32, copy=False)
@@ -232,14 +235,16 @@ class DetectorTOD:
 
     @property
     def full_mask(self) -> NDArray[np.bool_]:
+        """Boolean mask keeping samples that pass both flag and processing cuts."""
         mask = np.unpackbits(self._full_mask).view(bool)
         if mask.size > self.tod.size + 7 or mask.size < self.tod.size:
             raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.tod.size}.")
         return mask[:self.tod.size]
 
     @property
-    def bad_data_mask(self) -> NDArray[np.bool_]:
-        mask = np.unpackbits(self._bad_data_mask).view(bool)
+    def good_data_mask(self) -> NDArray[np.bool_]:
+        """Boolean mask keeping samples that pass the bad-data flag cut."""
+        mask = np.unpackbits(self._good_data_mask).view(bool)
         if mask.size > self.tod.size + 7 or mask.size < self.tod.size:
             raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.tod.size}.")
         return mask[:self.tod.size]

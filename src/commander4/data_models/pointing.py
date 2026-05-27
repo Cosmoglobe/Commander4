@@ -13,7 +13,14 @@ logger = logging.getLogger(__name__)
 
 
 class ScanBoresightPointing:
-    """Scan-level boresight pointing evaluated once for all detectors."""
+    """Evaluate one scan's boresight once and reuse it for all detectors.
+
+    The scan boresight is propagated for the full original TOD length in sky
+    coordinates and kept as a shared object. Individual detector pointings are
+    then obtained by rotating that common boresight with per-detector xi/eta
+    offsets and polarization angles, which avoids recomputing the expensive
+    time-dependent coordinate transform for every detector.
+    """
 
     def __init__(self,
                  time_start_mjd: float,
@@ -45,10 +52,13 @@ class ScanBoresightPointing:
             "polangs must contain one polarization angle per detector.",
             logger,
         )
+        # pixell's time-dependent coordinate transforms use Unix seconds.
         time_start_unix = (time_start_mjd - 40587.0) * 86400.0
         time_end_unix = (time_end_mjd - 40587.0) * 86400.0
         time_unix = np.linspace(time_start_unix, time_end_unix, ntod_original)
 
+        # Build the boresight for the full native scan once; shorter requests
+        # are handled later by slicing to self.ntod.
         self.bore_point = self.initialize_boresight(time_unix, bore, site=self.site)
 
 
@@ -60,6 +70,7 @@ class ScanBoresightPointing:
         site=None,
         weather: str = "typical",
     ):
+        """Transform boresight az/el/roll samples into the requested sky frame."""
         icoord = coordsys.Coords(az=bore[0], el=bore[1], roll=bore[2])
         return coordsys.transform("hor", sys, icoord, ctime=ctime, site=site, weather=weather)
 
@@ -72,6 +83,8 @@ class ScanBoresightPointing:
         # By slicing instead of indexing we keep the 1-sized detector dimension.
         detoff = self.detoffs[idet:idet+1]
         polang = self.polangs[idet:idet+1]
+        # Apply the detector's focal-plane offset and polarization rotation on
+        # top of the shared boresight quaternion.
         qdet = coordsys.rotation_xieta(detoff[:, 0], detoff[:, 1], polang)
         ocoord = self.bore_point * qdet[:, None]
         # TODO: The lines below are absurdly slow, taking 95% of the runtime of this function,
@@ -90,6 +103,7 @@ class ScanBoresightPointing:
     ) -> tuple[NDArray[np.integer], NDArray[np.floating]]:
         target_nside = self.nside if nside is None else nside
         dec, ra, psi = self.get_det_point(idet)
+        # healpy expects co-latitude theta rather than declination.
         theta = np.pi/2.0 - dec
         pix = hp.ang2pix(target_nside, theta, ra)
         psi = psi.astype(np.float32, copy=False)[:self.ntod]
@@ -106,6 +120,13 @@ class ScanBoresightPointing:
 
 
 class DetectorBoresightPointing:
+    """Detector-specific view onto a shared ScanBoresightPointing.
+
+    This wrapper stores only the detector index and forwards all queries to the
+    shared scan-level object. That keeps the per-detector interface simple while
+    avoiding duplication of boresight and site state.
+    """
+
     def __init__(self, scan_pointing: ScanBoresightPointing, idet: int):
         self.scan_pointing = scan_pointing
         self.idet = int(idet)
@@ -131,11 +152,18 @@ class DetectorBoresightPointing:
 
 
 class PixelPointing:
-    """Joint pixel and polarization-angle representation for one detector TOD."""
+    """Store pixel and polarization-angle pointing for one detector TOD.
+
+    The pointing can be supplied either as decoded 1D arrays or as Huffman-
+    compressed binary payloads. Compressed payloads are kept compact in memory
+    and decoded only on demand in `get_pix()` and `get_psi()`. Pixel samples are
+    stored at `data_nside` and optionally remapped to another output `nside`
+    after decompression.
+    """
 
     def __init__(self,
-                 pix: bytes | NDArray[np.integer],
-                 psi: bytes | NDArray[np.integer] | NDArray[np.floating],
+                 pix: bytes | np.void | NDArray[np.integer],
+                 psi: bytes | np.void | NDArray[np.integer] | NDArray[np.floating],
                  huffman_tree: NDArray | None,
                  huffman_symbols: NDArray | None,
                  npsi: int | None,
@@ -153,8 +181,12 @@ class PixelPointing:
         self.huffman_tree = huffman_tree
         self.huffman_symbols = huffman_symbols
         self.npsi = npsi
-        self.pix_is_compressed = isinstance(pix, bytes)
-        self.psi_is_compressed = isinstance(psi, bytes)
+        self.pix_is_compressed = isinstance(pix, (bytes, np.void))
+        self.psi_is_compressed = isinstance(psi, (bytes, np.void))
+        # The Huffman decoder consumes uint8 arrays; for HDF5-backed np.void
+        # inputs, frombuffer gives a zero-copy view over the stored payload.
+        self.pix_compressed_u8 = np.frombuffer(pix, dtype=np.uint8) if self.pix_is_compressed else None
+        self.psi_compressed_u8 = np.frombuffer(psi, dtype=np.uint8) if self.psi_is_compressed else None
         self._test_input()
 
     
@@ -162,12 +194,12 @@ class PixelPointing:
         log.logassert_np(self.ntod <= self.ntod_original, "ntod cannot exceed ntod_original.", logger)
         log.logassert_np(
             self.pix_is_compressed or isinstance(self.pix_encoded, np.ndarray),
-            "'pix' must be provided as bytes or a numpy array.",
+            "'pix' must be provided as bytes, numpy.void, or a numpy array.",
             logger,
         )
         log.logassert_np(
             self.psi_is_compressed or isinstance(self.psi_encoded, np.ndarray),
-            "'psi' must be provided as bytes or a numpy array.",
+            "'psi' must be provided as bytes, numpy.void, or a numpy array.",
             logger,
         )
         if self.pix_is_compressed:
@@ -216,8 +248,10 @@ class PixelPointing:
         target_nside = self.nside if nside is None else nside
         if self.pix_is_compressed:
             pix = np.zeros(self.ntod_original, dtype=np.int64)
-            pix = cpp_utils.huffman_decode(np.frombuffer(self.pix_encoded, dtype=np.uint8),
-                                           self.huffman_tree, self.huffman_symbols, pix)
+            pix = cpp_utils.huffman_decode(self.pix_compressed_u8, self.huffman_tree,
+                                           self.huffman_symbols, pix)
+            # The compressed stream stores first differences, so reconstruct the
+            # absolute pixel indices with a cumulative sum.
             pix = np.cumsum(pix)
         else:
             pix = self.pix_encoded
@@ -235,8 +269,10 @@ class PixelPointing:
         """Return polarization angles, cropped to the active TOD length."""
         if self.psi_is_compressed:
             psi = np.zeros(self.ntod_original, dtype=np.int64)
-            psi = cpp_utils.huffman_decode(np.frombuffer(self.psi_encoded, dtype=np.uint8),
-                                           self.huffman_tree, self.huffman_symbols, psi)
+            psi = cpp_utils.huffman_decode(self.psi_compressed_u8, self.huffman_tree,
+                                           self.huffman_symbols, psi)
+            # psi is compressed as differences of digitized angle bins; first
+            # recover the bin index stream, then convert bins back to radians.
             psi = np.cumsum(psi)
             psi = psi[:self.ntod]
             psi = 2 * np.pi * psi.astype(np.float32, copy=False) / self.npsi
