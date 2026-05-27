@@ -68,6 +68,7 @@ class TODSamples:
     def __init__(self,
                  experiment_data: DetGroupTOD,
                  params: Bunch,
+                 my_band: Bunch,
                  band_comm: MPI.Comm,
                  chain: int,
                  noise_psd_class: str = "oof",
@@ -92,45 +93,43 @@ class TODSamples:
             if self.band_comm.Get_rank() == 0:
                 logger.info(f"Band {self.band_name} initializing TOD samples from default values.")
 
-            all_det_gains = []
-            myband_noise_params = None
-            
-            for exp_name in params.experiments:
-                experiment = params.experiments[exp_name]
-                for iband, band_name in enumerate(experiment.bands):
-                    band = experiment.bands[band_name]
-                    # Fixed typo here: self.band.name -> self.band_name
-                    if self.experiment_name == exp_name and self.band_name == band_name:
-                        # Decide how to set initial noise parmams.
-                        if "initial_noise_params" in band:
-                            # Option 1: They are specified in the parameter file.
-                            myband_noise_params = np.array(band.initial_noise_params)
-                        elif experiment_data.scans[0].detectors[0].init_scalars is not None:
-                            # Option 2: There were entries in the read-in files.
-                            myband_noise_params = np.array([[det.init_scalars[1:4] for det in scan.detectors] for scan in experiment_data.scans])
-                        else:
-                            # Option 3: Fallback to sensible defaults.
-                            myband_noise_params = np.array([1e-3, 0.1, -1.0])
-                        # Loop over all detectors to record their initial gain values.
-                        for idet, det_name in enumerate(band.detectors):
-                            detector = band.detectors[det_name]
-                            # Decide how to set initial gain values.
-                            if "gain_est" in detector:
-                                all_det_gains.append(detector.gain_est)
-                            # TODO: Make this work
-                            # elif experiment_data.scans[0].detectors[0].init_scalars is not None:
-                            #     # FIXME: This entry seemed to be off by 1e-6 compared to my
-                            #     # estimates, but is this always true? Needs to be checked!
-                            #     all_det_gains.append(1e-6*experiment_data.scans[0].detectors[].init_scalars[0])
-                            else:
-                                all_det_gains.append(1.0)
-                            
-            all_det_gains = np.array(all_det_gains)
-            abs_gain = float(np.mean(all_det_gains))
-            self.abs_gain = abs_gain
-            self.rel_gain = all_det_gains - abs_gain
+            self.noise_params = np.zeros((self.nscans, self.ndet, 3)) + np.nan
+            self.abs_gain = 0.0
+            self.rel_gain = np.zeros((self.ndet))
             self.temporal_gain = np.zeros((self.nscans, self.ndet))
-            self.noise_params = np.full((self.nscans, self.ndet, 3), myband_noise_params)
+
+            all_det_gains = np.zeros((self.nscans, self.ndet))
+            # all_det_gains = []
+            # myband_noise_params = None
+
+            if "initial_noise_params" in my_band:
+                # Option 1: They are specified in the parameter file.
+                self.noise_params[:] = np.array(my_band.initial_noise_params)
+            elif experiment_data.scans[0].detectors[0].init_scalars is not None:
+                # Option 2: There were entries in the read-in files.
+                for iscan, scan in enumerate(experiment_data.scans):
+                    for idet, det in enumerate(scan.detectors):
+                        self.noise_params[iscan,idet] = det.init_scalars[1:]
+            else:
+                # Option 3: Fallback to sensible defaults.
+                logger.warning("Did not find initial noise parameters, falling back to sensible defaults.")
+                self.noise_params[:] = np.array([1e-3, 0.1, -1.0])
+
+            if "gain" in my_band.detectors[experiment_data.scans[0].detectors[0].name]:
+                for iscan, scan in enumerate(experiment_data.scans):
+                    for idet, det in enumerate(scan.detectors):
+                        all_det_gains[iscan,idet] = my_band[det.name].gain
+            elif experiment_data.scans[0].detectors[0].init_scalars is not None:
+                for iscan, scan in enumerate(experiment_data.scans):
+                    for idet, det in enumerate(scan.detectors):
+                        all_det_gains[iscan,idet] = det.init_scalars[0]
+            else:
+                raise ValueError("Did not find initial gain value in input files.")
+
+            all_det_gains = np.array(all_det_gains)
+            self.abs_gain = float(np.nanmean(all_det_gains))
+            self.rel_gain = np.nanmean(all_det_gains, axis=0) - self.abs_gain
+            self.temporal_gain = all_det_gains - self.rel_gain - self.abs_gain
 
         else:
             # ---------------------------------------------------------

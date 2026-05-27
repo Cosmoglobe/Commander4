@@ -628,8 +628,8 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
     if mpi_info.tod.is_master:
         logger.info(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")
 
-    tod_samples_chain1 = TODSamples(experiment_data, params, band_comm, 1)
-    tod_samples_chain2 = TODSamples(experiment_data, params, band_comm, 2)
+    tod_samples_chain1 = TODSamples(experiment_data, params, my_band, band_comm, 1)
+    tod_samples_chain2 = TODSamples(experiment_data, params, my_band, band_comm, 2)
 
     # Creating "tod_band_masters", an array which maps the band index to the rank of the master
     # of that band.

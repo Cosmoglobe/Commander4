@@ -20,16 +20,19 @@ class DetectorTOD:
     data nside, and sampling frequency are stored as plain public attributes.
 
     Attributes:
+        name (str): Unique name of this detector.
         tod (NDArray[np.floating]): 1-D array of calibrated time-ordered samples.
         ntod (int): Number of time samples (after any Fourier-length cropping).
         nside (int): HEALPix nside at which this detector should be evaluated.
         data_nside (int): HEALPix nside at which the pixel indices are stored on disk.
         fsamp (float): Sampling frequency in Hz.
-        init_scalars (array): 4-element array of initial guesses for gain, sigma0, fknee, and alpha.
     """
     def __init__(
         self,
-        tod: NDArray[np.floating],
+        name: str,
+        det_idx_fullband: int,
+        det_idx_local: int,
+        tod: NDArray[np.floating] | bytes | np.void,
         pointing: PixelPointing | DetectorBoresightPointing,
         fsamp: float,
         orb_dir_vec: NDArray[np.floating] | None,
@@ -40,7 +43,7 @@ class DetectorTOD:
         ntod_optimal: int,
         huffman_tree2: NDArray | None = None,
         huffman_symbols2: NDArray | None = None,
-        flag_encoded: NDArray[np.integer] | bytes | None = None,
+        flag_encoded: NDArray[np.integer] | bytes | np.void | None = None,
         bad_data_bitmask: int | None = None,
         init_scalars: NDArray | None = None,
         tod_is_compressed: bool = True,
@@ -50,7 +53,12 @@ class DetectorTOD:
         """Construct a DetectorTOD.
 
         Args:
-            tod: 1-D floating-point array of calibrated time samples.
+            name: Unique name of the current detector.
+            det_idx_fullband: Unique detector-index among all the detectors on the relevant band.
+            det_idx_local: Unique detector-index among all detectors in the current scan, where
+                some detectors might be missing from the full set of detectors on the band.
+            tod: Calibrated time samples, either as a decoded 1-D floating-point
+                array or as a compressed binary payload.
             pointing: Pointing representation for this detector. Must be a
                 ``PixelPointing`` or ``DetectorBoresightPointing`` instance.
             fsamp: Sampling frequency in Hz.
@@ -60,10 +68,22 @@ class DetectorTOD:
             huffman_symbols: Huffman symbol table for the flag stream, or None.
             processing_mask_map: Boolean HEALPix map selecting valid pixels.
             ntod_original: Original TOD length before Fourier-length cropping.
-            flag_encoded: Huffman-encoded flag array, or None.
+            flag_encoded: Flag samples, either decoded or Huffman-encoded, or None.
             flag_bitmask: Bitmask applied to flags to identify excluded samples.
         """
-        if not tod_is_compressed:
+        if tod_is_compressed:
+            log.logassert_np(
+                isinstance(tod, (bytes, np.void)),
+                "Compressed TOD must be provided as bytes or numpy.void.",
+                logger,
+            )
+            log.logassert_np(
+                huffman_tree2 is not None and huffman_symbols2 is not None,
+                "Compressed TOD requires Huffman metadata.",
+                logger,
+            )
+        else:
+            log.logassert_np(isinstance(tod, np.ndarray), "'tod' must be a numpy array.", logger)
             log.logassert_np(tod.ndim==1, "'value' must be a 1D array", logger)
             log.logassert_np(tod.dtype in [np.float64,np.float32], "TOD dtype must be floating "\
                              f"type, is {tod.dtype}", logger)
@@ -84,20 +104,50 @@ class DetectorTOD:
             "Pointing ntod does not match DetectorTOD ntod_optimal.",
             logger,
         )
-        if flag_encoded is not None and flag_is_compressed:
-            log.logassert_np(
-                huffman_tree is not None and huffman_symbols is not None,
-                "Compressed flags require Huffman metadata.",
-                logger,
-            )
-        self._tod = tod
+        if flag_encoded is not None:
+            if flag_is_compressed:
+                log.logassert_np(
+                    isinstance(flag_encoded, (bytes, np.void)),
+                    "Compressed flags must be provided as bytes or numpy.void.",
+                    logger,
+                )
+                log.logassert_np(
+                    huffman_tree is not None and huffman_symbols is not None,
+                    "Compressed flags require Huffman metadata.",
+                    logger,
+                )
+            else:
+                log.logassert_np(
+                    isinstance(flag_encoded, np.ndarray),
+                    "Decoded flags must be provided as a numpy array.",
+                    logger,
+                )
+                log.logassert_np(flag_encoded.ndim == 1, "'flag' must be a 1D array.", logger)
+                log.logassert_np(
+                    np.issubdtype(flag_encoded.dtype, np.integer),
+                    "Decoded flags must have integer dtype.",
+                    logger,
+                )
+                log.logassert_np(
+                    flag_encoded.size >= ntod_optimal,
+                    f"'flag' length {flag_encoded.size} is shorter than ntod {ntod_optimal}.",
+                    logger,
+                )
+        self.name = name
+        self.det_idx_fullband = det_idx_fullband
+        self.det_idx_local = det_idx_local
+        self._tod = np.frombuffer(tod, dtype=np.uint8) if tod_is_compressed else tod
         self.ntod_original = ntod_original
         self.ntod = ntod_optimal
         self.nside = pointing.nside
         self.data_nside = pointing.data_nside
         self.fsamp = fsamp
         self.init_scalars = init_scalars
-        self._flag_encoded = flag_encoded
+        self._flag_encoded = (
+            np.frombuffer(flag_encoded, dtype=np.uint8)
+            if flag_encoded is not None and flag_is_compressed
+            else flag_encoded
+        )
         self._bad_data_bitmask = bad_data_bitmask
         self._huffman_tree = huffman_tree
         self._huffman_symbols = huffman_symbols
@@ -125,13 +175,13 @@ class DetectorTOD:
     def tod(self) -> NDArray[np.floating]:
         if self._tod_is_compressed:
             tod = np.zeros(self.ntod_original, dtype=self._huffman_symbols2.dtype)
-            tod[:] = cpp_utils.huffman_decode(np.frombuffer(self._tod, dtype=np.uint8),
-                                    self._huffman_tree2, self._huffman_symbols2, tod)[:self.ntod]
+            tod[:] = cpp_utils.huffman_decode(self._tod,
+                                    self._huffman_tree2, self._huffman_symbols2, tod)
             tod[:] = np.cumsum(tod)
             tod = tod.astype(np.float32)
         else:
             tod = self._tod
-        return tod
+        return tod[:self.ntod]
 
 
     def get_pix(self, nside: int | None = None) -> NDArray[np.integer]:
@@ -159,7 +209,7 @@ class DetectorTOD:
     def flag(self) -> NDArray[np.integer]:
         if self._flag_is_compressed:
             flag = np.zeros(self.ntod_original, dtype=self._huffman_symbols.dtype)
-            flag = cpp_utils.huffman_decode(np.frombuffer(self._flag_encoded, dtype=np.uint8),
+            flag = cpp_utils.huffman_decode(self._flag_encoded,
                                            self._huffman_tree, self._huffman_symbols, flag)
             flag = np.cumsum(flag)
         else:
