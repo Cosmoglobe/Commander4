@@ -683,20 +683,96 @@ def estimate_white_noise(experiment_data: DetGroupTOD, tod_samples: TODSamples,
     Output:
         tod_samples (TODSamples): Updated TOD samples with sigma0 estimates.
     """
+    scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map)
     for iscan, scan in enumerate(experiment_data.scans):
         for idet, det in enumerate(scan.detectors):
-            pix, psi = det.get_pix_psi()
+            view = scan_view.focus(iscan, idet)
             # FIXME: Should maybe n_corr be subtracted here as well?
-            gain = tod_samples.gain(iscan, idet)
-            sky_subtracted_tod = det.tod.copy()
-            sky_subtracted_tod -= gain*get_static_sky_TOD(det_compsep_map, pix, psi=psi)
-            sky_subtracted_tod -= gain*get_s_orb_TOD(det, experiment_data, pix)
-            mask = det.full_mask
+            sky_subtracted_tod = view.get_tod(
+                subtract=(("sky", TODView._ALL_GAIN_TERMS),
+                          ("orbital_dipole", TODView._ALL_GAIN_TERMS)),
+            )
+            mask = view.full_mask
             sigma0 = calc_sigma0_robust(sky_subtracted_tod, mask)
             logassert(sigma0 != 0, "sigma0 is 0, which should never happen.", logger)
+            logassert(sigma0 != np.inf, "sigma0 is inf, which should never happen.", logger)
             tod_samples.noise_params[iscan,idet,0] = sigma0
         if iscan == len(experiment_data.scans) - 1:
             log_memory("sigma0-est")
+    return tod_samples
+
+
+def sample_jump_detection(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
+                          tod_samples: TODSamples, params: Bunch) -> TODSamples:
+    """Detect jump discontinuities from the flag stream and store additive post-jump offsets.
+
+    A jump is identified by a contiguous region with a non-zero
+    ``flag & experiments.[experiment_name].jump_bitmask``. For each region, the offset is
+    estimated from the last ``N`` valid samples before the jump and the first ``N`` valid samples
+    after it, where validity is defined by ``full_mask``. The correction is then applied to all
+    later samples when a TOD is requested through ``TODView.get_tod()``.
+    """
+    n_window = int(getattr(params.general, "jump_detection_window", 10))
+    if n_window < 1:
+        raise ValueError("jump_detection_window must be >= 1.")
+    experiment_params = params.experiments[experiment_data.experiment_name]
+    if "jump_bitmask" not in experiment_params or experiment_params.jump_bitmask is None:
+        raise ValueError(
+            "Jump sampling is enabled, but "
+            f"experiments.{experiment_data.experiment_name}.jump_bitmask is not specified."
+        )
+    jump_bitmask = int(experiment_params.jump_bitmask)
+
+    scan_view = TODView(experiment_data, tod_samples)
+    num_applied_local = 0
+    num_skipped_local = 0
+    offsets_local = []
+    jump_counts_local = []
+
+    for iscan, scan in enumerate(experiment_data.scans):
+        for idet, det in enumerate(scan.detectors):
+            view = scan_view.focus(iscan, idet)
+            if getattr(view.detector, "_flag_encoded", None) is None or not hasattr(view.detector, "_full_mask"):
+                tod_samples.jumps.set(iscan, idet, None)
+                jump_counts_local.append(0)
+                continue
+            jump, num_skipped = JumpCorrection.detect(
+                view.tod,
+                view.flag,
+                view.full_mask,
+                n_window,
+                jump_bitmask=jump_bitmask,
+            )
+            tod_samples.jumps.set(iscan, idet, jump)
+            jump_counts_local.append(jump.size)
+            num_skipped_local += num_skipped
+            if not jump.is_empty():
+                offsets_local.extend(jump.offsets.astype(np.float64, copy=False))
+                num_applied_local += jump.size
+
+    num_applied = band_comm.reduce(num_applied_local, op=MPI.SUM, root=0)
+    num_skipped = band_comm.reduce(num_skipped_local, op=MPI.SUM, root=0)
+    gathered_offsets = band_comm.gather(np.asarray(offsets_local, dtype=np.float64), root=0)
+    gathered_jump_counts = band_comm.gather(np.asarray(jump_counts_local, dtype=np.int32), root=0)
+
+    if band_comm.Get_rank() == 0:
+        all_jump_counts = np.concatenate(gathered_jump_counts) if gathered_jump_counts else np.empty(0)
+        if all_jump_counts.size > 0:
+            logger.debug(
+                f"Band {experiment_data.band_name} jump counts per detector-scan: "
+                f"min={np.min(all_jump_counts)}, avg={np.mean(all_jump_counts):.2f}, "
+                f"max={np.max(all_jump_counts)} over {all_jump_counts.size} samples."
+            )
+        if num_applied > 0:
+            all_offsets = np.concatenate([arr for arr in gathered_offsets if arr.size > 0])
+            logger.info(f"Band {experiment_data.band_name} jump detection: applied {num_applied} "
+                        f"offsets, skipped {num_skipped}, median |offset| = "
+                        f"{np.median(np.abs(all_offsets)):.3e}.")
+        elif num_skipped > 0:
+            logger.info(f"Band {experiment_data.band_name} jump detection skipped {num_skipped} "
+                        f"flagged regions because there were not enough valid samples around them.")
+
+    log_memory("jump-detect")
     return tod_samples
 
 
@@ -1046,6 +1122,18 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
     det_comm = mpi_info.det.comm
     band_comm = mpi_info.band.comm
     TOD_comm = mpi_info.tod.comm
+    ### JUMP DETECTION ###
+    if getattr(params.general, "sample_jump_detection", True) and iter >= int(
+        getattr(params.general, "sample_jump_detection_from_iter_num", 1)
+    ):
+        t0 = time.time()
+        with benchmark("jump-detect"):
+            tod_samples = sample_jump_detection(band_comm, experiment_data, tod_samples, params)
+        timing_dict["jump-detect"] = time.time() - t0
+        if mpi_info.band.is_master:
+            logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished jump "
+                        f"detection in {timing_dict['jump-detect']:.1f}s.")
+
     ### WHITE NOISE ESTIMATION ###
     t0 = time.time()
     with benchmark("sigma0-est"):
