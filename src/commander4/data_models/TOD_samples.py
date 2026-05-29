@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import numpy as np
 import h5py
@@ -7,8 +9,11 @@ from numpy.typing import NDArray
 from mpi4py import MPI
 from pixell.bunch import Bunch
 import logging
+import typing
 
-from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.data_models.jump_corrections import JumpCatalog
+if typing.TYPE_CHECKING:
+    from commander4.data_models.detector_group_TOD import DetGroupTOD
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +62,29 @@ def _gather_scan_distributed_array(band_comm: MPI.Comm, local_array: NDArray,
         return global_array
 
 
+def _gather_variable_length_1d_array(band_comm: MPI.Comm, local_array: NDArray) -> NDArray | None:
+        """Gather a 1-D array with rank-dependent length onto the root rank."""
+        local_array = np.ascontiguousarray(local_array)
+        local_count = np.array([local_array.size], dtype=np.int64)
+
+        if band_comm.Get_rank() == 0:
+            counts = np.zeros(band_comm.Get_size(), dtype=np.int64)
+        else:
+            counts = None
+        band_comm.Gather(local_count, counts, root=0)
+
+        recvbuf = None
+        global_array = None
+        if band_comm.Get_rank() == 0:
+            displacements = np.cumsum(counts) - counts
+            global_array = np.empty(np.sum(counts), dtype=local_array.dtype)
+            mpi_type = MPI._typedict[local_array.dtype.char]
+            recvbuf = (global_array, counts, displacements, mpi_type)
+
+        band_comm.Gatherv(local_array, recvbuf=recvbuf, root=0)
+        return global_array
+
+
 class TODSamples:
     """ A class for holding all sampled TOD-quantities, such as gains and correlated noise
         parameters, for one MPI rank. Quantities that vary with detectors and/or scans are stored as
@@ -65,6 +93,7 @@ class TODSamples:
         Quantities that are the same across a band (like absolute gain) have identical copies for
         all ranks on the same band.
     """
+
     def __init__(self,
                  experiment_data: DetGroupTOD,
                  params: Bunch,
@@ -84,6 +113,7 @@ class TODSamples:
         self.scan_idx_start = experiment_data.scan_idx_start
         self.scan_idx_stop = experiment_data.scan_idx_stop
         self.scan_ids = np.array([scan.scan_id for scan in experiment_data.scans])
+        self.jumps = JumpCatalog.empty(self.nscans, self.ndet)
 
         # Gibbs-sampled quantities
         if not params.general.init_from_chain:
@@ -173,6 +203,7 @@ class TODSamples:
                 # 4. Load and slice Per-Scan arrays (Distributed across ranks)
                 self.temporal_gain = f["temporal_gain"][local_indices, :] if "temporal_gain" in f else None
                 self.noise_params = f["noise_params"][local_indices, ...] if "noise_params" in f else None
+                self.jumps = JumpCatalog.from_hdf5(f, local_indices, self.ndet)
 
         if self.band_comm.Get_rank() == 0:
             logger.debug(f"Initial absolute gain estimate for {self.band_name}: {self.abs_gain:.3e}.")
@@ -240,6 +271,13 @@ class TODSamples:
         if self.noise_params is not None:
             noise_params_global = _gather_scan_distributed_array(band_comm, self.noise_params,
                                                                  scans_per_rank)
+
+        # 5. Jump corrections (per-scan per-detector ragged quantity)
+        jump_counts_local, jump_locations_local, jump_offsets_local = self.jumps.pack()
+        jump_counts_global = _gather_scan_distributed_array(band_comm, jump_counts_local,
+                                                            scans_per_rank)
+        jump_locations_global = _gather_variable_length_1d_array(band_comm, jump_locations_local)
+        jump_offsets_global = _gather_variable_length_1d_array(band_comm, jump_offsets_local)
         ####################################################################
         # Write results to file.
         ####################################################################
@@ -262,3 +300,7 @@ class TODSamples:
                     file["temporal_gain"] = temporal_gain_global
                 if noise_params_global is not None:
                     file["noise_params"] = noise_params_global
+                if jump_counts_global is not None:
+                    file["jump_counts"] = jump_counts_global
+                    file["jump_locations"] = jump_locations_global
+                    file["jump_offsets"] = jump_offsets_global
