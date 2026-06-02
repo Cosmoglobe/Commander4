@@ -90,7 +90,6 @@ def init_mpi(params):
         # Testing revealed 24 to be a good number (regardless of nside), but I tested this on the
         # new 384-core nodes, the optimal number is probably slightly lower on the older owls.
         my_num_threads_numba = min(24,my_num_threads)
-        my_num_threads_numba = min(24,my_num_threads)
     else:
         raise ValueError("My rank ({worldrank}) exceeds the combined number of allocated tasks to"
                          f"both TOD ({global_params.MPI_config.ntask_tod}) and compsep " \
@@ -108,7 +107,6 @@ def init_mpi(params):
     # resulted in some weirdeties, like many duplicate open file handles even when x=1.
 
     if False: # This code should enter production, but threadpoolctl is not yet a dependency.
-        import numpy
         import numba
         from threadpoolctl import threadpool_info
 
@@ -208,6 +206,11 @@ def init_mpi_tod(mpi_info, params):
     # handling all communication with CompSep.
     TOD_rank = 0
     current_detector_id = 0  # A unique number identifying every detector of every band.
+    my_band_name = None
+    my_band_id = None
+    my_experiment_name = None
+    my_det_id = None
+    my_detector_name = None
     for exp_name in params.experiments:
         experiment = params.experiments[exp_name]
         if not experiment.enabled:
@@ -224,14 +227,10 @@ def init_mpi_tod(mpi_info, params):
                 my_band_id = iband
                 my_experiment_name = exp_name
                 for idet, det_name in enumerate(band.detectors):
-                    num_ranks_this_detector = len(TOD_ranks_per_detector[idet])
-                    detector = band.detectors[det_name]
                     # Check if our rank belongs to this detector
                     if MPIrank_tod in TOD_ranks_per_detector[idet]:
                         # What is my rank number among the ranks processing this detector?
                         my_det_id = idet
-                        # Setting our unique detector id. Note that this is a global, not per band.
-                        my_detector_id = current_detector_id
                         my_detector_name = det_name
                     current_detector_id += 1  # Update detector counter.
             else:
@@ -244,6 +243,14 @@ def init_mpi_tod(mpi_info, params):
                      f"TOD processing ({MPIsize_tod}).", logger)
     if is_tod_master:
         logger.info(f"TOD: {MPIsize_tod} tasks successfully allocated to TOD proc.")
+
+    if my_band_id is None or my_det_id is None or my_experiment_name is None:
+        log.lograise(
+            RuntimeError,
+            f"TOD rank {MPIrank_tod} was not assigned to an enabled band/detector. "
+            "Check experiment enable flags and the TOD rank allocation in the parameter file.",
+            logger,
+        )
 
     # Create communicators for each different band.
     band_comm = mpi_info.tod.comm.Split(my_band_id, key=MPIrank_tod)
@@ -301,7 +308,7 @@ def init_mpi_compsep(mpi_info, params):
             for the 'compsep' context.
     """
 
-    MPIsize_compsep, MPIrank_compsep = mpi_info.compsep.size, mpi_info.compsep.rank
+    MPIsize_compsep = mpi_info.compsep.size
 
     ### Setting up info for each band, including where to get the data from ###
     ###(map from file, or receive from TOD processing) ###

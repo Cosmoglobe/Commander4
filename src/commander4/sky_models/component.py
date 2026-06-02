@@ -3,6 +3,7 @@ import astropy.constants as c
 import numpy as np
 import pysm3.units as pysm3u
 import healpy as hp
+import inspect
 import logging
 from copy import deepcopy
 from scipy.interpolate import interp1d
@@ -42,100 +43,133 @@ class Component:
         self.global_params = global_params
         self.longname = comp_params.longname if "longname" in comp_params else "Unknown Component"
         self.shortname = comp_params.shortname if "shortname" in comp_params else "comp"
+        self.defined_pol = comp_params.polarization if "polarization" in comp_params else None
+        self.eval_pol = self.defined_pol
         self.double_prec = False if global_params.CG_float_precision == "single" else True
         self._data = None
 
-    def __add__(self, other):
+    @property
+    def logical_id(self) -> str:
+        return self.longname
+
+    @property
+    def logical_key(self) -> tuple[type["Component"], str]:
+        return (type(self), self.logical_id)
+
+    @property
+    def execution_key(self) -> tuple[type["Component"], str, str | None]:
+        return (type(self), self.logical_id, self.eval_pol)
+
+    @property
+    def is_split_view(self) -> bool:
+        return self.defined_pol == "IQU" and self.eval_pol in ("I", "QU")
+
+    @property
+    def execution_label(self) -> str:
+        if self.eval_pol is None or not self.is_split_view:
+            return self.shortname
+        return f"{self.shortname}[{self.eval_pol}]"
+
+    def _assert_consistent_comp(self, other: "Component") -> None:
+        if not isinstance(other, Component):
+            raise TypeError("Both operands must be Component objects.")
         if type(self) is not type(other):
             raise TypeError("Both operands must be of the same Component type.")
+        mismatched = [
+            attr for attr in (
+                "longname",
+                "shortname",
+                "defined_pol",
+                "eval_pol",
+            )
+            if getattr(self, attr) != getattr(other, attr)
+        ]
+        if mismatched:
+            raise ValueError(
+                "Components must represent the same execution view. "
+                f"Mismatched fields: {', '.join(mismatched)}"
+            )
         if self._data is None or other._data is None:
-            raise ValueError("Cannot add Components with no data.")
+            raise ValueError("Cannot operate on Components with no data.")
         if self._data.shape != other._data.shape:
             raise ValueError("Data arrays of the two Components must match in size.")
+
+    def join_split_views(self, other: "Component") -> "Component":
+        if not isinstance(other, Component):
+            raise TypeError("Can only join Component objects.")
+        if type(self) is not type(other):
+            raise TypeError("Split views must be of the same Component type.")
+        if self.defined_pol != "IQU" or other.defined_pol != "IQU":
+            raise ValueError("Only IQU-defined components can be joined.")
+        if not self.is_split_view or not other.is_split_view:
+            raise ValueError("Only split component views can be joined.")
+        if {self.eval_pol, other.eval_pol} != {"I", "QU"}:
+            raise ValueError("Joining requires one intensity view and one QU view.")
+        mismatched = [
+            attr for attr in ("longname", "shortname", "defined_pol")
+            if getattr(self, attr) != getattr(other, attr)
+        ]
+        if mismatched:
+            raise ValueError(
+                "Split views must refer to the same logical component. "
+                f"Mismatched fields: {', '.join(mismatched)}"
+            )
+        if self._data is None or other._data is None:
+            raise ValueError("Cannot join split views with no data.")
+        intensity_comp, pol_comp = (self, other) if self.eval_pol == "I" else (other, self)
+        if intensity_comp._data.shape[1:] != pol_comp._data.shape[1:]:
+            raise ValueError("Split views must have compatible alm dimensions.")
+        joined = deepcopy(intensity_comp)
+        joined.eval_pol = joined.defined_pol
+        joined._data = np.concatenate((intensity_comp._data, pol_comp._data), axis=0)
+        return joined
+
+    def __add__(self, other):
+        self._assert_consistent_comp(other)
         out = deepcopy(self)
         inplace_arr_add(out._data, other._data)
         return out
     
     def __iadd__(self, other):
-        if type(self) is not type(other):
-            raise TypeError("Both operands must be of the same Component type.")
-        if self._data is None or other._data is None:
-            raise ValueError("Cannot add Components with no data.")
-        if self._data.shape != other._data.shape:
-            raise ValueError("Data arrays of the two Components must match in size.")
+        self._assert_consistent_comp(other)
         inplace_arr_add(self._data, other._data)
         return self
     
     def __sub__(self, other):
-        if type(self) is not type(other):
-            raise TypeError("Both operands must be of the same Component type.")
-        if self._data is None or other._data is None:
-            raise ValueError("Cannot add Components with no data.")
-        if self._data.shape != other._data.shape:
-            raise ValueError("Data arrays of the two Components must match in size.")
+        self._assert_consistent_comp(other)
         out = deepcopy(self)
         inplace_arr_sub(out._data, other._data)
         return out
     
     def __isub__(self, other):
-        if type(self) is not type(other):
-            raise TypeError("Both operands must be of the same Component type.")
-        if self._data is None or other._data is None:
-            raise ValueError("Cannot add Components with no data.")
-        if self._data.shape != other._data.shape:
-            raise ValueError("Data arrays of the two Components must match in size.")
+        self._assert_consistent_comp(other)
         inplace_arr_sub(self._data, other._data)
         return self
     
     def __mul__(self, other):
-        if type(self) is not type(other):
-            raise TypeError("Both operands must be of the same Component type.")
-        if self._data is None or other._data is None:
-            raise ValueError("Cannot add Components with no data.")
-        if self._data.shape != other._data.shape:
-            raise ValueError("Data arrays of the two Components must match in size.")
+        self._assert_consistent_comp(other)
         out = deepcopy(self)
         inplace_arr_prod(out._data, other._data)
         return out
     
     def __imul__(self, other):
-        if type(self) is not type(other):
-            raise TypeError("Both operands must be of the same Component type.")
-        if self._data is None or other._data is None:
-            raise ValueError("Cannot add Components with no data.")
-        if self._data.shape != other._data.shape:
-            raise ValueError("Data arrays of the two Components must match in size.")
+        self._assert_consistent_comp(other)
         inplace_arr_prod(self._data, other._data)
         return self
     
     def __truediv__(self, other):
-        if type(self) is not type(other):
-            raise TypeError("Both operands must be of the same Component type.")
-        if self._data is None or other._data is None:
-            raise ValueError("Cannot add Components with no data.")
-        if self._data.shape != other._data.shape:
-            raise ValueError("Data arrays of the two Components must match in size.")
+        self._assert_consistent_comp(other)
         out = deepcopy(self)
         inplace_arr_truediv(out._data, other._data)
         return out
     
     def __itruediv__(self, other):
-        if type(self) is not type(other):
-            raise TypeError("Both operands must be of the same Component type.")
-        if self._data is None or other._data is None:
-            raise ValueError("Cannot add Components with no data.")
-        if self._data.shape != other._data.shape:
-            raise ValueError("Data arrays of the two Components must match in size.")
-        inplace_arr_add(self._data, other._data)
+        self._assert_consistent_comp(other)
+        inplace_arr_truediv(self._data, other._data)
         return self
     
     def __matmul__(self, other):
-        if type(self) is not type(other):
-            raise TypeError("Both operands must be of the same Component type.")
-        if self._data is None or other._data is None:
-            raise ValueError("Cannot add Components with no data.")
-        if self._data.shape != other._data.shape:
-            raise ValueError("Data arrays of the two Components must match in size.")
+        self._assert_consistent_comp(other)
         return dot(self._data, other._data)
 
     def bcast_data_blocking(self, comm:MPI.Comm, root=0):
@@ -223,7 +257,11 @@ class DiffuseComponent(Component):
 
     @property
     def spin(self):
-        return 2 if self.is_pol else 0
+        if self.eval_pol == "I":
+            return 0
+        if self.eval_pol in ("QU", "IQU"):
+            return 2
+        raise ValueError(f"Unsupported polarization '{self.eval_pol}'.")
     
     @property
     def is_pol(self):
@@ -298,15 +336,24 @@ class DiffuseComponent(Component):
             almxfl(self._data[ipol], smooth_p_sqrt, inplace=True)
         return self._data
 
+    def _realize_alms_as_map(self, component_alms, nside: int, fwhm: float = 0):
+        """Realize component alms as a map.
+
+        Joined `IQU` components still need separate intensity and spin-2 synthesis calls, since
+        DUCC does not accept a 3-row alm block in one call.
+        """
+        component_alms = hp.smoothalm(component_alms, fwhm, inplace=False)
+        if self.eval_pol != "IQU":
+            return alm_to_map(component_alms, nside, self.lmax, spin=self.spin)
+        intensity_map = alm_to_map(component_alms[:1], nside, self.lmax, spin=0)
+        pol_map = alm_to_map(component_alms[1:], nside, self.lmax, spin=2)
+        return np.concatenate((intensity_map, pol_map), axis=0)
+
     def get_component_map(self, nside:int, fwhm:int=0):
         component_alms = self.alms
         if component_alms is None:
             raise ValueError("component_alms property not set.")
-        if fwhm == 0:
-            return alm_to_map(component_alms, nside, self.lmax, spin = self.spin)
-        else:
-            return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax,
-                              spin = self.spin)
+        return self._realize_alms_as_map(component_alms, nside, fwhm)
 
     def get_sky(self, nu, nside, fwhm=0):
         return self.get_component_map(nside, fwhm)*self.get_sed(nu)
@@ -316,12 +363,7 @@ class DiffuseComponent(Component):
 
     #overwrite of the dot product as the diffuse component will have alm _data with complex encoding
     def __matmul__(self, other):
-        if type(self) is not type(other):
-            raise TypeError("Both operands must be of the same Component type.")
-        if self._data is None or other._data is None:
-            raise ValueError("Cannot add Components with no data.")
-        if self._data.shape != other._data.shape:
-            raise ValueError("Data arrays of the two Components must match in size.")
+        self._assert_consistent_comp(other)
         res = 0.0
         for ipol in range(self.npol):
             res += _dot_complex_alm_1D_arrays(self._data[ipol], other._data[ipol], self.lmax)
@@ -431,11 +473,7 @@ class CMB(DiffuseComponent):
         # Zero out the quadrupole (l=2)
         for m in range(3):  # m = 0, 1, 2
             component_alms[:,hp.Alm.getidx(self.lmax, 2, m)] = 0.0 + 0.0j
-        if fwhm == 0:
-            return alm_to_map(component_alms, nside, self.lmax, spin = self.spin)*self.get_sed(nu)
-        else:
-            return alm_to_map(hp.smoothalm(component_alms, fwhm, inplace=False), nside, self.lmax,
-                              spin = self.spin)*self.get_sed(nu)
+        return self._realize_alms_as_map(component_alms, nside, fwhm) * self.get_sed(nu)
 
 class CMBRelQuad(TemplateComponent):
     pass
@@ -607,6 +645,8 @@ class PointSourcesComponent(Component):
         self.longname = comp_params.longname if "longname" in comp_params\
             else "Unknown PointSourceComp"
         self.shortname = comp_params.shortname if "shortname" in comp_params else "pscomp"
+        self.defined_pol = "I"
+        self.eval_pol = "I"
 
     @property
     def is_pol(self) -> bool:
@@ -757,8 +797,6 @@ class RadioSources(PointSourcesComponent):
         """
         mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ,
                                             equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
-        uKRJ_to_mJysr = (pysm3u.uK_RJ).to(pysm3u.mJy / pysm3u.steradian,
-                                          equivalencies=pysm3u.cmb_equivalencies(nu*pysm3u.GHz))
         sed_s = self.get_sed(nu)
         _numba_eval_from_map(map[0,:], self.pix_disc_idx_list,
                              self.beam_disc_val_list, self._data[0,:], sed_s = sed_s)
@@ -836,9 +874,9 @@ def split_complist(comp_list: list[Component], color:int,
     if color not in IvsQU_colors:
         logging.warning(f"Color {color} not in colors assigned to I or QU ({IvsQU_colors})!")
     else:
+        target_pol = "I" if color == IvsQU_colors[0] else "QU"
         for comp in comp_list:
-            if comp.is_pol == (color == IvsQU_colors[1]):
-                # print("Comp", comp.shortname, comp.pol)
+            if comp.eval_pol == target_pol:
                 out_comp_list.append(comp)
 
     return out_comp_list
@@ -846,7 +884,81 @@ def split_complist(comp_list: list[Component], color:int,
 
 class CompList:
     def __init__(self, comp_list:list[Component]):
+        self._validate_comp_list(comp_list)
         self.comp_list = comp_list
+
+    @staticmethod
+    def _validate_comp_list(comp_list: list[Component]) -> None:
+        """Check that a component list has a coherent logical and execution-view layout."""
+        if not isinstance(comp_list, list):
+            raise TypeError("comp_list must be a list of Component objects.")
+
+        grouped_by_longname = {}
+        shortname_to_longname = {}
+        for idx, comp in enumerate(comp_list):
+            if not isinstance(comp, Component):
+                raise TypeError(f"comp_list[{idx}] must be a Component.")
+            if comp.defined_pol is not None:
+                assert_pol_supported(comp.defined_pol)
+            if comp.eval_pol is not None:
+                assert_pol_supported(comp.eval_pol)
+
+            prev_longname = shortname_to_longname.get(comp.shortname)
+            if prev_longname is not None and prev_longname != comp.longname:
+                raise ValueError(
+                    f"Shortname {comp.shortname!r} is used for both {prev_longname!r} and "
+                    f"{comp.longname!r}."
+                )
+            shortname_to_longname[comp.shortname] = comp.longname
+            grouped_by_longname.setdefault(comp.longname, []).append(comp)
+
+        for longname, group in grouped_by_longname.items():
+            component_types = {type(comp) for comp in group}
+            if len(component_types) > 1:
+                raise ValueError(f"Longname {longname!r} is shared across multiple component classes.")
+
+            shortnames = {comp.shortname for comp in group}
+            if len(shortnames) > 1:
+                raise ValueError(
+                    f"Longname {longname!r} is associated with multiple shortnames: "
+                    f"{sorted(shortnames)!r}."
+                )
+
+            split_views = [comp for comp in group if comp.is_split_view]
+            unsplit_views = [comp for comp in group if not comp.is_split_view]
+            if split_views and unsplit_views:
+                raise ValueError(
+                    f"Longname {longname!r} mixes split and unsplit execution views."
+                )
+            if len(unsplit_views) > 1:
+                raise ValueError(f"Duplicate logical component {longname!r}.")
+            if len(split_views) > 2:
+                raise ValueError(f"Component {longname!r} has too many split execution views.")
+            split_pols = [comp.eval_pol for comp in split_views]
+            if len(set(split_pols)) != len(split_pols):
+                raise ValueError(f"Component {longname!r} repeats a split execution view.")
+
+    @staticmethod
+    def _instantiate_component(component: Bunch, global_params: Bunch,
+                               eval_pol: str | None = None) -> Component:
+        """Instantiate one execution-view component from a parameter-file component entry.
+
+        Diffuse IQU components opt into splitting via the `eval_pol` constructor argument, while
+        other component classes can ignore that detail entirely by omitting the parameter.
+        """
+        component_cls = getattr(component_lib, component.component_class)
+        init_params = inspect.signature(component_cls.__init__).parameters
+        kwargs = {}
+        if "allocate_empty_alms" in init_params:
+            kwargs["allocate_empty_alms"] = True
+        if eval_pol is not None:
+            log.logassert(
+                "eval_pol" in init_params,
+                f"Component class '{component.component_class}' does not support polarization splitting.",
+                logger,
+            )
+            kwargs["eval_pol"] = eval_pol
+        return component_cls(component.params, global_params, **kwargs)
 
     @classmethod
     def init_from_params(cls, components:Bunch, params:Bunch):
@@ -857,46 +969,135 @@ class CompList:
         for component_str in components:
             component = components[component_str]
             if component.enabled:
-                if component.params.lmax == "full":
+                if "lmax" in component.params and component.params.lmax == "full":
                     component.params.lmax = (params.general.nside*5)//2
-                if component.params.polarization == "I": #I-only
-                    # 'getattr' loads the class specified by "component_class" from model.component.
-                    # This class is then instantiated with the "params" specified, and appended to
-                    # the components list.
-                    comp_list.append(getattr(component_lib, component.component_class)(component.params,
-                                                            params.general, allocate_empty_alms=True))
-                elif component.params.polarization == "QU": #QU-only
+                component_pol = component.params.polarization if "polarization" in component.params else "I"
+                if component_pol == "I":
+                    comp_list.append(cls._instantiate_component(component, params.general))
+                elif component_pol == "QU":
                     if not pol_bands_exist:
                         logging.warning(f"Component '{component_str}' is specified as QU-only but "
                                         f"ntask_compsep_QU=0 (no polarized bands). Skipping.")
                         continue
-                    comp_list.append(getattr(component_lib, component.component_class)(component.params,
-                                                            params.general, allocate_empty_alms=True))
-                elif component.params.polarization == "IQU":
-                    # I
-                    comp_list.append(getattr(component_lib, component.component_class)(
-                                            component.params,
-                                            params.general, 
-                                            allocate_empty_alms=True,
-                                            longname = component.params.longname+"_Instensity",
-                                            shortname = component.params.longname+"_I",
-                                            eval_pol="I"))
-                    # QU
+                    comp_list.append(cls._instantiate_component(component, params.general))
+                elif component_pol == "IQU":
+                    intensity_comp = cls._instantiate_component(component, params.general, eval_pol="I")
+                    comp_list.append(intensity_comp)
                     if not pol_bands_exist:
                         logging.warning(f"Component '{component_str}' is specified as IQU but "
                                         f"ntask_compsep_QU=0 (no polarized bands). "
                                         f"Only the intensity (I) part will be used.")
                     else:
-                        comp_list.append(getattr(component_lib, component.component_class)(
-                                                component.params,
-                                                params.general,
-                                                allocate_empty_alms=True,
-                                                longname = component.params.longname+"_Polarization",
-                                                shortname = component.params.longname+"_QU",
-                                                eval_pol="QU"))
+                        pol_comp = cls._instantiate_component(component, params.general,
+                                                              eval_pol="QU")
+                        comp_list.append(pol_comp)
                 else:
-                    raise ValueError(f"Unrecognized polarization in parameter file for component {component_str}")
+                    raise ValueError(
+                        f"Unrecognized polarization in parameter file for component {component_str}"
+                    )
         return cls(comp_list)
+
+    def _assert_consistent_comps(self, other: "CompList") -> None:
+        if not isinstance(other, CompList):
+            raise TypeError("Both operands must be CompList objects.")
+        if len(self.comp_list) != len(other.comp_list):
+            raise ValueError("Component lists must match in length.")
+        self_keys = [comp.execution_key for comp in self.comp_list]
+        other_keys = [comp.execution_key for comp in other.comp_list]
+        if self_keys != other_keys:
+            raise ValueError("Component lists must contain the same execution views in the same order.")
+
+    def components_for_eval_pol(self, target_pol: str) -> list[Component]:
+        assert_pol_supported(target_pol)
+        return [comp for comp in self.comp_list if comp.eval_pol == target_pol]
+
+    def split_for_eval_pol(self, target_pol: str) -> "CompList":
+        """Return the execution-view subset evaluated for one polarization stream."""
+        return CompList(self.components_for_eval_pol(target_pol))
+
+    def copy_matching_data_from(self, other: "CompList") -> None:
+        if not isinstance(other, CompList):
+            raise TypeError("Input must be a CompList.")
+        other_by_key = {}
+        for comp in other.comp_list:
+            if comp.execution_key in other_by_key:
+                raise ValueError(f"Duplicate component execution key {comp.execution_key!r}.")
+            other_by_key[comp.execution_key] = comp
+        self_keys = {comp.execution_key for comp in self.comp_list}
+        extra_keys = [key for key in other_by_key if key not in self_keys]
+        if extra_keys:
+            raise ValueError(f"Found unknown components in source CompList: {extra_keys!r}")
+        for comp in self.comp_list:
+            other_comp = other_by_key.get(comp.execution_key)
+            if other_comp is None:
+                continue
+            comp._assert_consistent_comp(other_comp)
+            np.copyto(comp._data, other_comp._data)
+
+    def reassemble_from_split_solution(self, local_solution: "CompList", comm: MPI.Comm,
+                                       *, is_I_master: bool, is_QU_master: bool,
+                                       I_master: int, QU_master: int, root: int = 0) -> None:
+        """Collect split I/QU solver results back into the full execution list on the CompSep root.
+
+        The intensity master already owns the local I solution and receives the QU views from the
+        QU master. Once the full execution list is assembled on the root, every rank gets a copy
+        through a blocking broadcast so `SkyModel` realization can happen locally.
+        """
+        if is_I_master:
+            self.copy_matching_data_from(local_solution)
+
+        pol_components = self.components_for_eval_pol("QU")
+        if pol_components:
+            if is_QU_master:
+                local_pol_by_key = {comp.execution_key: comp for comp in local_solution.comp_list}
+                for tag, comp in enumerate(pol_components):
+                    local_comp = local_pol_by_key.get(comp.execution_key)
+                    if local_comp is None:
+                        raise ValueError(
+                            f"Missing QU component {comp.execution_label} on QU master."
+                        )
+                    comm.Send(local_comp._data, dest=I_master, tag=tag)
+            if is_I_master:
+                for tag, comp in enumerate(pol_components):
+                    comm.Recv(comp._data, source=QU_master, tag=tag)
+
+        for comp in self.comp_list:
+            comp.bcast_data_blocking(comm, root=root)
+
+    def joined(self) -> "CompList":
+        """Collapse split execution views back to one logical component per `longname`."""
+        grouped_components = {}
+        logical_order = []
+        for comp in self.comp_list:
+            if comp.logical_key not in grouped_components:
+                grouped_components[comp.logical_key] = []
+                logical_order.append(comp.logical_key)
+            grouped_components[comp.logical_key].append(comp)
+
+        joined_components = []
+        for logical_key in logical_order:
+            group = grouped_components[logical_key]
+            split_views = [comp for comp in group if comp.is_split_view]
+            unsplit_views = [comp for comp in group if not comp.is_split_view]
+            if unsplit_views and split_views:
+                raise ValueError(
+                    f"Logical component {logical_key[1]!r} mixes split and unsplit execution views."
+                )
+            if len(unsplit_views) > 1:
+                raise ValueError(f"Duplicate unsplit component {logical_key[1]!r}.")
+            if unsplit_views:
+                joined_components.append(deepcopy(unsplit_views[0]))
+                continue
+            if len(split_views) == 1:
+                joined_components.append(deepcopy(split_views[0]))
+                continue
+            if len(split_views) != 2:
+                raise ValueError(
+                    f"Expected one or two execution views for {logical_key[1]!r}, got {len(group)}."
+                )
+            joined_components.append(split_views[0].join_split_views(split_views[1]))
+
+        return CompList(joined_components)
 
     def split(self, color:int, IvsQU_colors:tuple = (0,1)):
         """
@@ -904,20 +1105,16 @@ class CompList:
         on the passed `color` of the local MPI rank. By default, color=0 will treat Intensity and
         color=1 QU. A list with the relevant components is returned.
         """
-        out_comp_list = []
         IvsQU_colors = IvsQU_colors[:2] #cut off eventual elements in excess
         if color not in IvsQU_colors:
             logging.warning(f"Color {color} not in colors assigned to I or QU ({IvsQU_colors})!")
+            return CompList([])
         elif color == IvsQU_colors[0]:
             target_pol = "I"
         elif color == IvsQU_colors[1]:
             target_pol = "QU"
 
-        for comp in self.comp_list:
-            if comp.eval_pol == target_pol:
-                out_comp_list.append(comp)
-
-        return CompList(out_comp_list)
+        return self.split_for_eval_pol(target_pol)
     
     @property
     def components(self):
@@ -932,69 +1129,60 @@ class CompList:
             components with alms. It will automatically handle the correct dot product definition for
             each type of Component.
         """
-        if len(self.comp_list) != len(other):
-            raise ValueError("Component lists must match in length.")
+        self._assert_consistent_comps(other)
         res = 0.0
         for c1, c2 in zip(self.components, other.components):
             res += float(c1 @ c2)
         return res
     
     def __add__(self, other):
-        if len(self.comp_list) != len(other):
-            raise ValueError("Component lists must match in length.")
+        self._assert_consistent_comps(other)
         out = deepcopy(self)
-        for o, c in zip(out.components, other.components):
-            o += c
-        return o
+        for out_comp, other_comp in zip(out.components, other.components):
+            out_comp += other_comp
+        return out
 
     def __iadd__(self, other):
-        if len(self.comp_list) != len(other):
-            raise ValueError("Component lists must match in length.")
+        self._assert_consistent_comps(other)
         for c1, c2 in zip(self.components, other.components):
             c1 += c2
         return self
 
     def __sub__(self, other):
-        if len(self.comp_list) != len(other):
-            raise ValueError("Component lists must match in length.")
+        self._assert_consistent_comps(other)
         out = deepcopy(self)
-        for o, c in zip(out.components, other.components):
-            o -= c
-        return o
+        for out_comp, other_comp in zip(out.components, other.components):
+            out_comp -= other_comp
+        return out
 
     def __isub__(self, other):
-        if len(self.comp_list) != len(other):
-            raise ValueError("Component lists must match in length.")
+        self._assert_consistent_comps(other)
         for c1, c2 in zip(self.components, other.components):
             c1 -= c2
         return self
 
     def __mul__(self, other):
-        if len(self.comp_list) != len(other):
-            raise ValueError("Component lists must match in length.")
+        self._assert_consistent_comps(other)
         out = deepcopy(self)
-        for o, c in zip(out.components, other.components):
-            o *= c
-        return o
+        for out_comp, other_comp in zip(out.components, other.components):
+            out_comp *= other_comp
+        return out
 
     def __imul__(self, other):
-        if len(self.comp_list) != len(other):
-            raise ValueError("Component lists must match in length.")
+        self._assert_consistent_comps(other)
         for c1, c2 in zip(self.components, other.components):
             c1 *= c2
         return self
 
     def __truediv__(self, other):
-        if len(self.comp_list) != len(other):
-            raise ValueError("Component lists must match in length.")
+        self._assert_consistent_comps(other)
         out = deepcopy(self)
-        for o, c in zip(out.components, other.components):
-            o /= c
-        return o
+        for out_comp, other_comp in zip(out.components, other.components):
+            out_comp /= other_comp
+        return out
 
     def __itruediv__(self, other):
-        if len(self.comp_list) != len(other):
-            raise ValueError("Component lists must match in length.")
+        self._assert_consistent_comps(other)
         for c1, c2 in zip(self.components, other.components):
             c1 /= c2
         return self
@@ -1069,8 +1257,7 @@ class CompList:
     def inplace_add_scaled(self, list_other, scalar):
         """ `list_inplace += scalar*list_other`
         """
-        if len(self) != len(list_other):
-            raise ValueError("Component lists must match in length.")
+        self._assert_consistent_comps(list_other)
         
         for ci, co in zip(self.comp_list, list_other.comp_list):
             inplace_add_scaled_vec(ci._data, co._data, scalar)
@@ -1078,8 +1265,7 @@ class CompList:
     def inplace_scale_and_add(self, list_other, scalar):
         """ `list_inplace = scalar*list_inplace + list_other`
         """
-        if len(self) != len(list_other):
-            raise ValueError("Component lists must match in length.")
+        self._assert_consistent_comps(list_other)
 
         for ci, co in zip(self.comp_list, list_other.comp_list):
             inplace_scale_add(ci._data, co._data, scalar)

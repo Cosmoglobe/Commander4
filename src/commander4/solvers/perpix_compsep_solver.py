@@ -148,7 +148,7 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
             ctypes_lib.solve_compsep(npix, nband, ncomp, maps_sky.astype(np.float64, copy=False),
                                   maps_rms.astype(np.float64, copy=False), M, rand, comp_maps[ipol])
             logger.info(f"Finished pixel-by-pixel component separation in {time.time()-t0:.2f}s "\
-                        f"for polarization {ipol+1} of 3.")
+                        f"for polarization {ipol+1} of {npol}.")
 
     comp_maps = proc_comm.bcast(comp_maps, root=0)
     for icomp in range(ncomp):

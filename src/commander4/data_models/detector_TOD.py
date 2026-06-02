@@ -46,7 +46,7 @@ class DetectorTOD:
         flag_encoded: NDArray[np.integer] | bytes | np.void | None = None,
         bad_data_bitmask: int | None = None,
         init_scalars: NDArray | None = None,
-        tod_is_compressed: bool = True,
+        tod_is_compressed: bool = False,
         flag_is_compressed: bool = True,
         det_response: NDArray | None = None,
     ):
@@ -225,7 +225,9 @@ class DetectorTOD:
 
         Stored internally as a packed bit array and unpacked on each access.
         """
+        start_bench("numpy-unpack")
         mask = np.unpackbits(self._processing_mask).view(bool)
+        stop_bench("numpy-unpack")
         if mask.size > self.tod.size + 7 or mask.size < self.tod.size:
             # The bytearray is stored in multiples of 8, so it can be up to 7 elements
             # longer than the TOD. If it's even longer or shorter, something is wrong.
@@ -236,7 +238,9 @@ class DetectorTOD:
     @property
     def full_mask(self) -> NDArray[np.bool_]:
         """Boolean mask keeping samples that pass both flag and processing cuts."""
+        start_bench("numpy-unpack")
         mask = np.unpackbits(self._full_mask).view(bool)
+        stop_bench("numpy-unpack")
         if mask.size > self.tod.size + 7 or mask.size < self.tod.size:
             raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.tod.size}.")
         return mask[:self.tod.size]
@@ -244,7 +248,9 @@ class DetectorTOD:
     @property
     def good_data_mask(self) -> NDArray[np.bool_]:
         """Boolean mask keeping samples that pass the bad-data flag cut."""
+        start_bench("numpy-unpack")
         mask = np.unpackbits(self._good_data_mask).view(bool)
+        stop_bench("numpy-unpack")
         if mask.size > self.tod.size + 7 or mask.size < self.tod.size:
             raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.tod.size}.")
         return mask[:self.tod.size]

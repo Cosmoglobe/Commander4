@@ -24,6 +24,7 @@ from commander4.solvers.preconditioners import InvNPreconditionerI, InvNPrecondi
 from commander4.noise_sampling.noise_sampling import sample_noise_PS_params, fill_all_masked
 from commander4.noise_sampling.sample_ncorr import corr_noise_realization_with_gaps
 from commander4.utils.math_operations import forward_rfft, backward_rfft
+from commander4.utils.execution_ids import get_execution_band_ids
 from commander4.noise_sampling.sigma0 import calc_sigma0_robust
 from commander4.tod_reader import read_tods_from_file
 from commander4.output.write_chains_files import write_map_chain_to_file
@@ -421,10 +422,14 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 # In the CG solver this is only used to define the starting guess,
                 # but if the CG fails it is also used to generate the fallback solution.
                 fill_all_masked(sky_subtracted_TOD, mask_full, sigma0_ncorr)
-                n_corr_est, residual, niter, did_conv = corr_noise_realization_with_gaps(sky_subtracted_TOD,
-                                                                    mask_full, sigma0_ncorr, C_1f_inv,
-                                                                    err_tol=1e-4, max_iter=20)
-                resid = (sky_subtracted_TOD - n_corr_est) * mask_full
+                # n_corr_est, residual, niter, did_conv = corr_noise_realization_with_gaps(sky_subtracted_TOD,
+                #                                                     mask_full, sigma0_ncorr, C_1f_inv,
+                #                                                     err_tol=1e-4, max_iter=1)
+                residual = np.inf
+                resid = np.inf
+                niter = 0
+                did_conv = False
+                # resid = (sky_subtracted_TOD - n_corr_est) * mask_full
                 var_resid = np.dot(resid, resid)
                 var_data = np.dot(sky_subtracted_TOD * mask_full, sky_subtracted_TOD * mask_full)
                 # If either of the two tests failed, use fallback for n_corr.
@@ -584,7 +589,6 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
     # handling all communication with CompSep.
     # All the non-master ranks will have None values, and receive info from master further down.
     det_names = []
-    my_experiment_name = None
     my_band_name = None
     my_experiment = None
     my_band = None
@@ -607,7 +611,6 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
                 my_band_pol = band.polarization
                 my_band_id = iband
                 # What is my rank number among the ranks processing this detector?
-                my_experiment_name = exp_name
                 my_experiment = experiment
                 # Setting our unique detector id. Note that this is a global, not per band.
                 tot_num_scans = experiment.num_scans
@@ -643,31 +646,24 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
 
     # Creating "tod_band_masters", an array which maps the band index to the rank of the master
     # of that band.
-    todproc_my_band_id = f"{my_experiment_name}$$${my_band_name}"
-    data_world = (todproc_my_band_id, mpi_info.world.rank) if mpi_info.band.is_master else None
+    todproc_my_band_id = my_band_name
+    data_world = (
+        todproc_my_band_id,
+        mpi_info.world.rank,
+        my_band_pol,
+    ) if mpi_info.band.is_master else None
     data_tod = (todproc_my_band_id, mpi_info.tod.rank) if mpi_info.band.is_master else None
-    # pols_tod_bands = (todproc_my_band_id, my_band_pol) if mpi_info.band.is_master else None
     all_data_world = mpi_info.tod.comm.allgather(data_world)
     all_data_tod = mpi_info.tod.comm.allgather(data_tod)
-    # all_pol_data = mpi_info.tod.comm.allgather(pols_tod_bands)
 
-    world_band_masters_dict = {}
-    if "I" in my_band_pol:
-        world_band_masters_dict.update({item[0]+'_I':  # First I:
-                                        item[1] for item in all_data_world if item is not None})
-    if "QU" in my_band_pol:
-        world_band_masters_dict.update({item[0]+'_QU':  # Then QU:
-                                        item[1] for item in all_data_world if item is not None})
+    world_band_masters_dict = {
+        execution_band_id: item[1]
+        for item in all_data_world if item is not None
+        for execution_band_id in get_execution_band_ids(item[0], item[2])
+    }
     tod_band_masters_dict = {item[0]: item[1] for item in all_data_tod if item is not None}
-    # tod_band_pol_dict = {item[0]: item[1] for item in all_pol_data if item is not None}
-    # logger.info(f"world_band_masters_dict: {world_band_masters_dict}")
-    # logger.info(f"tod_band_masters_dict: {tod_band_masters_dict}")
-    # logger.info(f"tod_band_pol_dict: {tod_band_pol_dict}")
-    # logger.info(f"TOD: Rank {mpi_info.tod.rank:4} assigned scans {my_scans_start:6} - "\
-    #             f"{my_scans_stop:6} on band {my_band_id:4}.")
     mpi_info['world']['tod_band_masters'] = world_band_masters_dict
     mpi_info['tod']['tod_band_masters'] = tod_band_masters_dict
-    # mpi_info['world']['tod_band_pols'] = tod_band_pol_dict
 
     return mpi_info, todproc_my_band_id, experiment_data, tod_samples_chain1, tod_samples_chain2
 
@@ -1123,7 +1119,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
     band_comm = mpi_info.band.comm
     TOD_comm = mpi_info.tod.comm
     ### JUMP DETECTION ###
-    if getattr(params.general, "sample_jump_detection", True) and iter >= int(
+    if getattr(params.general, "sample_jump_detection", False) and iter >= int(
         getattr(params.general, "sample_jump_detection_from_iter_num", 1)
     ):
         t0 = time.time()

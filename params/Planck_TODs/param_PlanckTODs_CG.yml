@@ -331,11 +331,11 @@ experiments:
         tod_files_prefix: "LFI_030_"
         num_MPI_tasks: 64 #24
         eval_nside: 512
-        data_nside: 512
         fwhm: 32.4 # [arcmin]
         freq: 28.4 # [GHz]
         fsamp: 32.5079365079365 # [Hz]
         polarization: "IQU"
+        noise_psd: "NoisePSDOof"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
         detectors:
@@ -360,10 +360,8 @@ experiments:
         tod_files_prefix: "LFI_044_"
         num_MPI_tasks: 40
         eval_nside: 512
-        data_nside: 512
         fwhm: 27.1 # [arcmin]
         freq: 44.1 # [GHz]
-        fsamp: 46.5454545454545
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
@@ -397,14 +395,11 @@ experiments:
         tod_files_prefix: "LFI_070_"
         num_MPI_tasks: 64
         eval_nside: 1024
-        data_nside: 1024
         fwhm: 13.3 # [arcmin]
         freq: 70.1 # [GHz]
-        fsamp: 78.7692307692308
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_70.txt"
-        detectors:
         detectors:
           18M:
             name: "18M"

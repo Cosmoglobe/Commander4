@@ -148,7 +148,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                                        huffman_tree2=huffman_tree2,
                                        huffman_symbols2=huffman_symbols2,
                                        flag_encoded=flag_encoded,
-                                       flag_bitmask=my_experiment.flag_bitmask,
+                                       bad_data_bitmask=my_experiment.bad_data_bitmask,
                                        tod_is_compressed=my_experiment.tod_is_compressed,
                                        det_response=det_response)
                 if np.sum(detector.full_mask) == 0 or (detector.tod == 0).all():

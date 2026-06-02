@@ -438,7 +438,7 @@ class CGMapmakerI(CGMapmaker):
         assert npix_out == hp.nside2npix(in_scan.nside), "out_map size must match scan's eval nside."
         assert pix.shape == scan_tod_arr.shape, "pix shape must match scan_tod_arr."
         pix = in_scan.pix if pix is None else pix
-        ntod = in_scan.tod.shape[-1]
+        ntod = scan_tod_arr.shape[-1]
         self.map_accumulator(out_map, scan_tod_arr, 1, pix.astype(np.int64, copy=False), ntod)
         return out_map
 
@@ -555,7 +555,7 @@ class CGMapmakerIQU(CGMapmaker):
         # assert psi.shape == scan_tod_arr.shape, "psi shape must match scan_tod_arr."
         pix = in_scan.pix if pix is None else pix
         psi = in_scan.psi if psi is None else psi
-        ntod = in_scan.tod.shape[-1]
+        ntod = scan_tod_arr.shape[-1]
         self.map_accumulator_IQU(out_map, scan_tod_arr, 1, pix.astype(np.int64, copy=False), 
                                  psi.astype(np.float64, copy=False), ntod, npix_out)
         return out_map

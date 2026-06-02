@@ -230,8 +230,7 @@ def complist_dot(comp_list1:CompList, comp_list2:CompList) -> float:
         components with alms. It will automatically handle the correct dot product definition for
         each type of Component.
     """
-    if len(comp_list1) != len(comp_list2):
-        raise ValueError("Component lists must match in length.")
+    comp_list1._assert_consistent_comps(comp_list2)
     if len(comp_list1) == 0:
         print("WARNING dot prod between empty comp list")
     res = 0.0

@@ -21,7 +21,7 @@ general:
   sample_abs_gain_from_iter_num: 2
   sample_rel_gain: True
   sample_rel_gain_from_iter_num: 2
-  sample_temporal_gain: False
+  sample_temporal_gain: True
   sample_temporal_gain_from_iter_num: 2
 
   perform_compsep: true

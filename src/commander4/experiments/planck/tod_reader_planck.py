@@ -13,6 +13,9 @@ from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_group_TOD import DetGroupTOD
 from commander4.noise_sampling.noise_psd import NoisePSD, NoisePSDOof
+from commander4.data_models.pointing import PixelPointing
+from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
+                                            stop_bench, log_memory, increment_count, bench_reset
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +40,9 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     return best_ntod
 
 
-def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_names: list[str],
-               params: Bunch, scan_idx_start: int, scan_idx_stop: int) -> DetectorTOD:
+def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_names: list[str],
+               params: Bunch, scan_idx_start: int,
+               scan_idx_stop: int) -> DetGroupTOD:
     oids = []
     pids = []
     filepaths = []
@@ -79,6 +83,8 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
     num_included = 0
     ntod_sum_original = 0
     ntod_sum_final = 0
+    ndet = len(all_det_names)
+    det_init_scalars = np.zeros((ndet, 4)) + np.nan
     # Small de-sycnronization sleep.
     # time.sleep(5.0 * (band_comm.Get_rank() / band_comm.Get_size()))
     for i_pid in range(scan_idx_start, scan_idx_stop):
@@ -100,12 +106,15 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
             detector_list = []
-            for det_name in det_names:
+            idet_accepted = 0
+            for idet, det_name in enumerate(all_det_names):
                 tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32, copy=False)
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
                 psi_encoded = f[f"/{pid}/{det_name}/psi/"][()] if "QU" in my_band.polarization else []
                 flag_encoded = f[f"/{pid}/{det_name}/flag/"][()]
                 init_scalars = f[f"/{pid}/{det_name}/scalars/"][()]
+                # Data format has this weird thing were gain seems to be in "micro-gain"...
+                init_scalars[0] *= 1e-6
 
                 flag_buffer[:ntod] = cpp_utils.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8),
                                                         huffman_tree, huffman_symbols, flag_buffer[:ntod])
@@ -117,16 +126,21 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
                 # Check for crazy data.
                 if np.mean(np.abs(tod)) > 0.001 or np.std(tod) > 0.001:
                     good_scan = False
-                detector = DetectorTOD(tod, pix_encoded, psi_encoded, my_band.eval_nside,
-                                        data_nside, fsamp, vsun, huffman_tree, huffman_symbols,
-                                        npsi, processing_mask_map, ntod,
-                                        init_scalars = init_scalars,
-                                        pix_is_compressed=my_experiment.pix_is_compressed,
-                                        psi_is_compressed=my_experiment.psi_is_compressed \
-                                        if "QU" in my_band.polarization else False)
+
+                det_init_scalars[idet] = init_scalars
+                det_pointing = PixelPointing(pix_encoded, psi_encoded, huffman_tree,
+                                             huffman_symbols, npsi, my_band.eval_nside, data_nside,
+                                             ntod, ntod_optimal)
+
+                detector = DetectorTOD(det_name, idet, idet_accepted, tod, det_pointing, fsamp,
+                                       vsun, huffman_tree, huffman_symbols, processing_mask_map,
+                                       ntod, ntod_optimal,
+                                       bad_data_bitmask = 6111232,
+                                       init_scalars = init_scalars)
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
+                idet_accepted += 1
         if good_scan:
             scan = ScanTOD(detector_list, 0., scanID)
             scan_list.append(scan)
@@ -136,7 +150,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
                          f"{i_pid-scan_idx_start}/{nscans}")
         if i_pid % 10 == 0:
             gc.collect()
-    ndet = len(det_names)  # Number of detectors *should* be the same for all scans.
 
     noise_model = NoisePSDOof()
 

@@ -13,29 +13,41 @@ class SkyModel:
         raise NotImplementedError
 
     def get_sky_at_nu(self, nu, nside, pols_required, fwhm=None):
-        """ Get sky at specific frequency.
+        """Get the realized sky at one frequency.
+
+        The component list may be either the split execution list used during CompSep (`I` and
+        `QU` views) or a joined logical list containing `IQU` components.
         """
         npix = 12*nside**2
         
         if pols_required == "I":
             skymap = np.zeros((1, npix), dtype=np.float32)
-            for component in self._components:
-                if not component.is_pol:
-                    skymap[0] += component.get_sky(nu, nside, fwhm)[0]
         elif pols_required == "QU":
             skymap = np.zeros((2, npix), dtype=np.float32)
-            for component in self._components:
-                if component.is_pol:
-                    skymap[0:] += component.get_sky(nu, nside, fwhm)
         elif pols_required == "IQU":
             skymap = np.zeros((3, npix), dtype=np.float32)
-            for component in self._components:
-                if component.is_pol:
-                    skymap[1:] += component.get_sky(nu, nside, fwhm)
-                else:
-                    skymap[0] += component.get_sky(nu, nside, fwhm)[0]
         else:
             raise ValueError("Unrecognized polarization string")
+
+        for component in self._components:
+            if component.eval_pol == "I":
+                if pols_required in ("I", "IQU"):
+                    skymap[0] += component.get_sky(nu, nside, fwhm)[0]
+            elif component.eval_pol == "QU":
+                if pols_required == "QU":
+                    skymap += component.get_sky(nu, nside, fwhm)
+                elif pols_required == "IQU":
+                    skymap[1:] += component.get_sky(nu, nside, fwhm)
+            elif component.eval_pol == "IQU":
+                component_sky = component.get_sky(nu, nside, fwhm)
+                if pols_required == "I":
+                    skymap[0] += component_sky[0]
+                elif pols_required == "QU":
+                    skymap += component_sky[1:]
+                else:
+                    skymap += component_sky
+            else:
+                raise ValueError(f"Unsupported component polarization '{component.eval_pol}'.")
         return skymap
 
 # class SkyModel:
