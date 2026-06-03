@@ -134,7 +134,7 @@ params = as_bunch_recursive(params_dict)
 
 # For reproducability, create custom entries in the parameter object which holds the entire
 # parameter file as a fully resolved YAML string (with any !inc directives expanded).
-params.parameter_file_as_string = yaml.dump(params_dict)
+params.parameter_file_as_string = yaml.dump(params_dict, sort_keys=False)
 
 # Storing Commander4 version number or git commit.
 # params.metadata.version_number = # print(get_version_info("commander4", __file__))
