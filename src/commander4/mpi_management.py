@@ -133,7 +133,7 @@ def init_mpi(params):
     compsep_master = global_params.MPI_config.ntask_tod
 
     world_comm.barrier()
-    time.sleep(worldrank*1e-2)  # Small sleep to get prints in nice order.
+    time.sleep(worldrank*1e-5)  # Small sleep to get prints in nice order.
 
     mpi_info['world'] = Bunch()
     mpi_info['world']['comm'] = world_comm
