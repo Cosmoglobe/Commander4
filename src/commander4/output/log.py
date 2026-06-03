@@ -1,5 +1,6 @@
 import logging
 import logging.config
+import sys
 
 # --- Debug levels and their numeric values, including the Python defaults (commented out) ---
 # DEBUG (10)    # >100 per iter, intermediate processing steps and per-rank or per-detector details.
@@ -12,6 +13,38 @@ QUIET = 25      # < 5 per iter, short iteration summary.
 
 logging.QUIET = QUIET
 logging.VERBOSE = VERBOSE
+
+
+class ColorFormatter(logging.Formatter):
+    """
+    Logging formatter that prepends ANSI color codes to console output based on
+    log level.
+
+    Color scheme:
+        DEBUG    - dim/faint (subtle, lower visual weight)
+        VERBOSE  - dark gray
+        INFO     - default terminal color
+        QUIET    - default terminal color
+        WARNING  - yellow
+        ERROR    - red
+        CRITICAL - bold red
+    """
+
+    _RESET  = '\033[0m'
+    _COLORS = {
+        logging.DEBUG:    '\033[2m',    # Dim / faint
+        VERBOSE:          '\033[90m',   # Dark gray (bright-black)
+        logging.INFO:     '',           # Default – no color code
+        QUIET:            '',           # Default – no color code
+        logging.WARNING:  '\033[33m',   # Yellow
+        logging.ERROR:    '\033[31m',   # Red
+        logging.CRITICAL: '\033[1;31m', # Bold red
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        color = self._COLORS.get(record.levelno, '')
+        return f'{color}{message}{self._RESET}' if color else message
 
 
 def init_loggers(logger_params): 
@@ -108,6 +141,19 @@ def init_loggers(logger_params):
         config_dict['loggers'][None]['handlers'].append('file')
 
     logging.config.dictConfig(config_dict)
+
+    # Apply ColorFormatter to the console handler manually. dictConfig's '()'
+    # factory passes keyword arguments directly to the constructor, but
+    # logging.Formatter.__init__ uses 'fmt' not 'format', so the factory path
+    # silently falls back to an unconfigured formatter. Setting it here avoids
+    # that problem entirely.
+    if 'console' in logger_params:
+        _fmt = '{asctime} - {name} - {levelname} - {message}'
+        _color_fmt = ColorFormatter(fmt=_fmt, style='{')
+        for _handler in logging.root.handlers:
+            if isinstance(_handler, logging.StreamHandler) and not isinstance(_handler, logging.FileHandler):
+                _handler.setFormatter(_color_fmt)
+                break
 
     # Configure logging to redirect warnings from py.warning. Note that this will *prevent* these
     # from being sent to sys.stderr, to avoid duplication.
