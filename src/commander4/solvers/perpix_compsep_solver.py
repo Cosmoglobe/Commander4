@@ -136,12 +136,9 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
             nband = len(freqs)
             comp_maps[ipol] = np.zeros((ncomp, npix))
             M = np.empty((nband, ncomp))
-            idx = 0
-            for i in range(ncomp):
-                # if ipol == 0 or comp_list[i].polarized:
-                M[:,idx] = comp_list[i].get_sed(freqs)
-                idx += 1
-            rand = np.random.randn(npix,nband)
+            for icomp in range(ncomp):
+                M[:, icomp] = comp_list[icomp].get_sed(freqs)
+            rand = np.random.randn(npix, nband)
             # TODO: Write unit tests that confirm Python and C gives same answers.
             # TODO: Should scale M to make solution more well-conditioned, and then adjust
             # solution with the scaling factor used.

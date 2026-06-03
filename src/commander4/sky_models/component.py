@@ -3,7 +3,6 @@ import astropy.constants as c
 import numpy as np
 import pysm3.units as pysm3u
 import healpy as hp
-import inspect
 import logging
 from copy import deepcopy
 from scipy.interpolate import interp1d
@@ -19,6 +18,7 @@ from commander4.utils.math_operations import alm_to_map, map_to_alm, project_alm
         _dot_complex_alm_1D_arrays, _numba_proj2map, _numba_eval_from_map, inplace_scale_add
 from commander4.utils.map_utils import gauss_beam, get_gauss_beam_radius, get_npol, assert_pol_supported
 from commander4.data_models.band import Band
+from commander4.utils.execution_ids import EXECUTION_POLS
 
 logger = logging.getLogger(__name__)
 
@@ -38,19 +38,53 @@ def g(nu):
 
 # First tier component classes
 class Component:
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
+    default_shortname = "comp"
+    legal_pols: tuple[str, ...] = ("I", "QU", "IQU")
+    requires_defined_pol = False
+
+    @classmethod
+    def _assert_legal_pol(cls, pol: str | None, *, role: str, required: bool = False) -> None:
+        if pol is None:
+            log.logassert(
+                not required,
+                f"{cls.__name__} requires a defined polarization mode.",
+                logger,
+            )
+            return
+        assert_pol_supported(pol)
+        log.logassert(
+            pol in cls.legal_pols,
+            f"{cls.__name__} does not support {role} polarization {pol!r}. "
+            f"Allowed polarizations: {cls.legal_pols!r}.",
+            logger,
+        )
+
+    def __init__(self, comp_params: Bunch, global_params: Bunch, *,
+                 shortname: str | None = None, comp_name: str | None = None,
+                 eval_pol: str | None = None, allocate_empty_alms: bool = False):
         self.comp_params = comp_params
         self.global_params = global_params
-        self.longname = comp_params.longname if "longname" in comp_params else "Unknown Component"
-        self.shortname = comp_params.shortname if "shortname" in comp_params else "comp"
+        self.shortname = (
+            shortname
+            if shortname is not None
+            else comp_params.shortname if "shortname" in comp_params
+            else self.default_shortname
+        )
+        self.comp_name = comp_params._name if comp_name is None else comp_name
         self.defined_pol = comp_params.polarization if "polarization" in comp_params else None
-        self.eval_pol = self.defined_pol
+        type(self)._assert_legal_pol(
+            self.defined_pol,
+            role="defined",
+            required=type(self).requires_defined_pol,
+        )
+        self.eval_pol = self.defined_pol if eval_pol is None else eval_pol
+        type(self)._assert_legal_pol(self.eval_pol, role="evaluation")
         self.double_prec = False if global_params.CG_float_precision == "single" else True
         self._data = None
 
     @property
     def logical_id(self) -> str:
-        return self.longname
+        return self.comp_name
 
     @property
     def logical_key(self) -> tuple[type["Component"], str]:
@@ -77,7 +111,7 @@ class Component:
             raise TypeError("Both operands must be of the same Component type.")
         mismatched = [
             attr for attr in (
-                "longname",
+                "comp_name",
                 "shortname",
                 "defined_pol",
                 "eval_pol",
@@ -106,7 +140,7 @@ class Component:
         if {self.eval_pol, other.eval_pol} != {"I", "QU"}:
             raise ValueError("Joining requires one intensity view and one QU view.")
         mismatched = [
-            attr for attr in ("longname", "shortname", "defined_pol")
+            attr for attr in ("comp_name", "shortname", "defined_pol")
             if getattr(self, attr) != getattr(other, attr)
         ]
         if mismatched:
@@ -124,49 +158,35 @@ class Component:
         joined._data = np.concatenate((intensity_comp._data, pol_comp._data), axis=0)
         return joined
 
-    def __add__(self, other):
+    def _apply_array_op(self, other: "Component", arr_op, *, inplace: bool) -> "Component":
         self._assert_consistent_comp(other)
-        out = deepcopy(self)
-        inplace_arr_add(out._data, other._data)
-        return out
+        target = self if inplace else deepcopy(self)
+        arr_op(target._data, other._data)
+        return target
+
+    def __add__(self, other):
+        return self._apply_array_op(other, inplace_arr_add, inplace=False)
     
     def __iadd__(self, other):
-        self._assert_consistent_comp(other)
-        inplace_arr_add(self._data, other._data)
-        return self
+        return self._apply_array_op(other, inplace_arr_add, inplace=True)
     
     def __sub__(self, other):
-        self._assert_consistent_comp(other)
-        out = deepcopy(self)
-        inplace_arr_sub(out._data, other._data)
-        return out
+        return self._apply_array_op(other, inplace_arr_sub, inplace=False)
     
     def __isub__(self, other):
-        self._assert_consistent_comp(other)
-        inplace_arr_sub(self._data, other._data)
-        return self
+        return self._apply_array_op(other, inplace_arr_sub, inplace=True)
     
     def __mul__(self, other):
-        self._assert_consistent_comp(other)
-        out = deepcopy(self)
-        inplace_arr_prod(out._data, other._data)
-        return out
+        return self._apply_array_op(other, inplace_arr_prod, inplace=False)
     
     def __imul__(self, other):
-        self._assert_consistent_comp(other)
-        inplace_arr_prod(self._data, other._data)
-        return self
+        return self._apply_array_op(other, inplace_arr_prod, inplace=True)
     
     def __truediv__(self, other):
-        self._assert_consistent_comp(other)
-        out = deepcopy(self)
-        inplace_arr_truediv(out._data, other._data)
-        return out
+        return self._apply_array_op(other, inplace_arr_truediv, inplace=False)
     
     def __itruediv__(self, other):
-        self._assert_consistent_comp(other)
-        inplace_arr_truediv(self._data, other._data)
-        return self
+        return self._apply_array_op(other, inplace_arr_truediv, inplace=True)
     
     def __matmul__(self, other):
         self._assert_consistent_comp(other)
@@ -233,21 +253,24 @@ class Component:
 
 # Second tier component classes
 class DiffuseComponent(Component):
+    requires_defined_pol = True
+
     def __init__(self, comp_params: Bunch, global_params: Bunch, 
-                 allocate_empty_alms=False, eval_pol:None|str=None):
-        super().__init__(comp_params, global_params)
+                 allocate_empty_alms=False, eval_pol:None|str=None,
+                 comp_name: str | None = None, shortname: str | None = None):
+        super().__init__(
+            comp_params,
+            global_params,
+            shortname=shortname,
+            comp_name=comp_name,
+            eval_pol=eval_pol,
+            allocate_empty_alms=allocate_empty_alms,
+        )
         self.spatially_varying_MM = comp_params.spatially_varying_MM
         self.lmax = comp_params.lmax
         self.smoothing_prior_FWHM = comp_params.smoothing_prior_FWHM
         self.smoothing_prior_amplitude = comp_params.smoothing_prior_amplitude
         self._data = None  # Alm data is not allocated by default.
-        assert_pol_supported(comp_params.polarization)
-        self.defined_pol = comp_params.polarization #polarization as defined on the parameter file
-        if eval_pol is not None:
-            assert_pol_supported(eval_pol)
-            self.eval_pol = eval_pol
-        else:
-            self.eval_pol = self.defined_pol #if not passed, eval_pol defaults to defined_pol
         if allocate_empty_alms:
             self.allocate_empty_alms()
 
@@ -441,14 +464,18 @@ class TemplateComponent(Component):
 
 # Third tier component classes
 class CMB(DiffuseComponent):
+    default_shortname = "cmb"
+
     def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
-                 shortname = None, longname = None, eval_pol = None):
-        super().__init__(comp_params, global_params, allocate_empty_alms, eval_pol)
-        #this gives priority: 1) arg, 2) param and 3) default 
-        self.longname = longname if longname is not None else \
-            comp_params.longname if "longname" in comp_params else "CMB"
-        self.shortname = shortname if shortname is not None else \
-            comp_params.shortname if "shortname" in comp_params else "cmb"
+                 shortname = None, eval_pol = None, comp_name: str | None = None):
+        super().__init__(
+            comp_params,
+            global_params,
+            allocate_empty_alms=allocate_empty_alms,
+            eval_pol=eval_pol,
+            comp_name=comp_name,
+            shortname=shortname,
+        )
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for CMB emission.
@@ -479,17 +506,22 @@ class CMBRelQuad(TemplateComponent):
     pass
 
 class ThermalDust(DiffuseComponent):
+    default_shortname = "term-dust"
+
     def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
-                 shortname = None, longname = None, eval_pol = None):
-        super().__init__(comp_params, global_params, allocate_empty_alms, eval_pol)
+                 shortname = None, eval_pol = None, comp_name: str | None = None):
+        super().__init__(
+            comp_params,
+            global_params,
+            allocate_empty_alms=allocate_empty_alms,
+            eval_pol=eval_pol,
+            comp_name=comp_name,
+            shortname=shortname,
+        )
         self.beta = comp_params.beta
         self.T = comp_params.T
         self.nu0 = comp_params.nu0
         self.prior_l_power_law = 2.5
-        self.longname = longname if longname is not None else \
-            comp_params.longname if "longname" in comp_params else "Thermal Dust"
-        self.shortname = shortname if shortname is not None else \
-            comp_params.shortname if "shortname" in comp_params else "term-dust"
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for Thermal Dust emission.
@@ -506,17 +538,22 @@ class ThermalDust(DiffuseComponent):
 
 
 class Synchrotron(DiffuseComponent):
+    default_shortname = "sync"
+
     def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
-                 shortname = None, longname = None, eval_pol = None):
-        super().__init__(comp_params, global_params, allocate_empty_alms, eval_pol)
+                 shortname = None, eval_pol = None, comp_name: str | None = None):
+        super().__init__(
+            comp_params,
+            global_params,
+            allocate_empty_alms=allocate_empty_alms,
+            eval_pol=eval_pol,
+            comp_name=comp_name,
+            shortname=shortname,
+        )
         self.beta = comp_params.beta
         self.nu0 = comp_params.nu0
         self.nside_comp_map = 512
         self.prior_l_power_law = -3
-        self.longname = longname if longname is not None else \
-            comp_params.longname if "longname" in comp_params else "Synchrotron"
-        self.shortname = shortname if shortname is not None else \
-            comp_params.shortname if "shortname" in comp_params else "sync"
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for Synchrotron emission.
@@ -530,15 +567,20 @@ class Synchrotron(DiffuseComponent):
 
 
 class FreeFree(DiffuseComponent):
+    default_shortname = "ff"
+
     def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
-                 shortname = None, longname = None, eval_pol = None):
-        super().__init__(comp_params, global_params, allocate_empty_alms, eval_pol)
+                 shortname = None, eval_pol = None, comp_name: str | None = None):
+        super().__init__(
+            comp_params,
+            global_params,
+            allocate_empty_alms=allocate_empty_alms,
+            eval_pol=eval_pol,
+            comp_name=comp_name,
+            shortname=shortname,
+        )
         self.T = comp_params.T  # Electron temperature in K
         self.nu0 = comp_params.nu0 # Reference frequency in GHz
-        self.longname = longname if longname is not None else \
-            comp_params.longname if "longname" in comp_params else "Free-Free"
-        self.shortname = shortname if shortname is not None else \
-            comp_params.shortname if "shortname" in comp_params else "ff"
 
     def _gaunt_factor(self, nu, T):
         """Calculates the Gaunt factor for free-free emission, as per Eq. 18 in BP1.
@@ -569,6 +611,8 @@ class FreeFree(DiffuseComponent):
         return sed
 
 class SpinningDust(DiffuseComponent):
+    default_shortname = "spin-dust"
+
     """
     Spinning Dust component spectral model, based on spinning dust.
     The SED is derived from the SpDust2 code template for the Cold Neutral Medium.
@@ -578,14 +622,21 @@ class SpinningDust(DiffuseComponent):
     # Columns: Frequency (GHz), Emissivity (proportional to Intensity)
 
     def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
-                 shortname = None, longname = None, eval_pol = None):
+                 shortname = None, eval_pol = None, comp_name: str | None = None):
         """
         Args:
             nu_peak (float): The peak frequency of the spinning dust component in GHz.
             nu_0 (float): The reference frequency of the spinning dust template in GHz.
                           This will not impact the shape of the SED, just the absolute scaling.
         """
-        super().__init__(comp_params, global_params, allocate_empty_alms, eval_pol)
+        super().__init__(
+            comp_params,
+            global_params,
+            allocate_empty_alms=allocate_empty_alms,
+            eval_pol=eval_pol,
+            comp_name=comp_name,
+            shortname=shortname,
+        )
 
         # Read SpDust2 template data. This is a simulation of what the spectral shape of
         # spinning dust emission should look like if it happens to peak at 30 GHz.
@@ -593,10 +644,6 @@ class SpinningDust(DiffuseComponent):
         self.nu_peak_ref = 30.0  # The reference peak frequency of 30 GHz.
         self.nu_peak_eval = comp_params.nu_peak
         self.nu_0 = comp_params.nu_0  # Reference frequency for the amplitude map in GHz
-        self.longname = longname if longname is not None else \
-            comp_params.longname if "longname" in comp_params else "Spinning Dust"
-        self.shortname = shortname if shortname is not None else \
-            comp_params.shortname if "shortname" in comp_params else "spin-dust"
 
         # Create an logarithmic interpolation function from the SpDust2 template
         log_nu = np.log(freqs)
@@ -640,11 +687,20 @@ class SpinningDust(DiffuseComponent):
 # NON DIFFUSE COMPONENTS
 
 class PointSourcesComponent(Component):
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
-        super().__init__(comp_params, global_params)
-        self.longname = comp_params.longname if "longname" in comp_params\
-            else "Unknown PointSourceComp"
-        self.shortname = comp_params.shortname if "shortname" in comp_params else "pscomp"
+    default_shortname = "pscomp"
+    legal_pols: tuple[str, ...] = ("I",)
+
+    def __init__(self, comp_params: Bunch, global_params: Bunch, *,
+                 shortname: str | None = None, comp_name: str | None = None,
+                 eval_pol: str | None = None, allocate_empty_alms: bool = False):
+        super().__init__(
+            comp_params,
+            global_params,
+            shortname=shortname,
+            comp_name=comp_name,
+            eval_pol="I" if eval_pol is None else eval_pol,
+            allocate_empty_alms=allocate_empty_alms,
+        )
         self.defined_pol = "I"
         self.eval_pol = "I"
 
@@ -657,10 +713,19 @@ class PointSourcesComponent(Component):
         return 1
 
 class RadioSources(PointSourcesComponent):
-    def __init__(self, comp_params: Bunch, global_params: Bunch):
-        super().__init__(comp_params, global_params)
-        self.longname = comp_params.longname if "longname" in comp_params else "RadioPointSources"
-        self.shortname = comp_params.shortname if "shortname" in comp_params else "radsources"
+    default_shortname = "radsources"
+
+    def __init__(self, comp_params: Bunch, global_params: Bunch, *,
+                 shortname: str | None = None, comp_name: str | None = None,
+                 eval_pol: str | None = None, allocate_empty_alms: bool = False):
+        super().__init__(
+            comp_params,
+            global_params,
+            shortname=shortname,
+            comp_name=comp_name,
+            eval_pol=eval_pol,
+            allocate_empty_alms=allocate_empty_alms,
+        )
         #reference frequency
         self.nu0 = comp_params.nu_0
         #tabulated data
@@ -860,32 +925,31 @@ class RadioSources(PointSourcesComponent):
     def __repr__(self):
         return f"Radio Source \n amps: {self._data}"
     
-
-#FIXME: this will go within ComponentList object when implemented
-def split_complist(comp_list: list[Component], color:int,
-                   IvsQU_colors:tuple = (0,1)) -> list[Component]:
-    """
-    Extracts from `comp_list` only the components containing the correct Stokes parameter based
-    on the passed `color` of the local MPI rank. By default, color=0 will treat Intensity and
-    color=1 polarization. A list with the relevant components is returned.
-    """
-    out_comp_list = []
-    IvsQU_colors = IvsQU_colors[:2] #cut off eventual elements in excess
-    if color not in IvsQU_colors:
-        logging.warning(f"Color {color} not in colors assigned to I or QU ({IvsQU_colors})!")
-    else:
-        target_pol = "I" if color == IvsQU_colors[0] else "QU"
-        for comp in comp_list:
-            if comp.eval_pol == target_pol:
-                out_comp_list.append(comp)
-
-    return out_comp_list
-
-
 class CompList:
     def __init__(self, comp_list:list[Component]):
         self._validate_comp_list(comp_list)
         self.comp_list = comp_list
+
+    @staticmethod
+    def _group_by_logical_key(
+        comp_list: list[Component],
+    ) -> list[tuple[tuple[type["Component"], str], list[Component]]]:
+        grouped_components = {}
+        logical_order = []
+        for comp in comp_list:
+            if comp.logical_key not in grouped_components:
+                grouped_components[comp.logical_key] = []
+                logical_order.append(comp.logical_key)
+            grouped_components[comp.logical_key].append(comp)
+        return [(logical_key, grouped_components[logical_key]) for logical_key in logical_order]
+
+    @staticmethod
+    def _partition_execution_views(
+        group: list[Component],
+    ) -> tuple[list[Component], list[Component]]:
+        split_views = [comp for comp in group if comp.is_split_view]
+        unsplit_views = [comp for comp in group if not comp.is_split_view]
+        return split_views, unsplit_views
 
     @staticmethod
     def _validate_comp_list(comp_list: list[Component]) -> None:
@@ -893,8 +957,7 @@ class CompList:
         if not isinstance(comp_list, list):
             raise TypeError("comp_list must be a list of Component objects.")
 
-        grouped_by_longname = {}
-        shortname_to_longname = {}
+        shortname_to_comp_name = {}
         for idx, comp in enumerate(comp_list):
             if not isinstance(comp, Component):
                 raise TypeError(f"comp_list[{idx}] must be a Component.")
@@ -903,98 +966,80 @@ class CompList:
             if comp.eval_pol is not None:
                 assert_pol_supported(comp.eval_pol)
 
-            prev_longname = shortname_to_longname.get(comp.shortname)
-            if prev_longname is not None and prev_longname != comp.longname:
+            prev_comp_name = shortname_to_comp_name.get(comp.shortname)
+            if prev_comp_name is not None and prev_comp_name != comp.comp_name:
                 raise ValueError(
-                    f"Shortname {comp.shortname!r} is used for both {prev_longname!r} and "
-                    f"{comp.longname!r}."
+                    f"Shortname {comp.shortname!r} is used for both {prev_comp_name!r} and "
+                    f"{comp.comp_name!r}."
                 )
-            shortname_to_longname[comp.shortname] = comp.longname
-            grouped_by_longname.setdefault(comp.longname, []).append(comp)
+            shortname_to_comp_name[comp.shortname] = comp.comp_name
 
-        for longname, group in grouped_by_longname.items():
+        for logical_key, group in CompList._group_by_logical_key(comp_list):
+            comp_name = logical_key[1]
             component_types = {type(comp) for comp in group}
             if len(component_types) > 1:
-                raise ValueError(f"Longname {longname!r} is shared across multiple component classes.")
+                raise ValueError(
+                    f"Component name {comp_name!r} is shared across multiple component classes."
+                )
 
             shortnames = {comp.shortname for comp in group}
             if len(shortnames) > 1:
                 raise ValueError(
-                    f"Longname {longname!r} is associated with multiple shortnames: "
+                    f"Component name {comp_name!r} is associated with multiple shortnames: "
                     f"{sorted(shortnames)!r}."
                 )
 
-            split_views = [comp for comp in group if comp.is_split_view]
-            unsplit_views = [comp for comp in group if not comp.is_split_view]
+            split_views, unsplit_views = CompList._partition_execution_views(group)
             if split_views and unsplit_views:
                 raise ValueError(
-                    f"Longname {longname!r} mixes split and unsplit execution views."
+                    f"Component name {comp_name!r} mixes split and unsplit execution views."
                 )
             if len(unsplit_views) > 1:
-                raise ValueError(f"Duplicate logical component {longname!r}.")
+                raise ValueError(f"Duplicate logical component {comp_name!r}.")
             if len(split_views) > 2:
-                raise ValueError(f"Component {longname!r} has too many split execution views.")
+                raise ValueError(f"Component {comp_name!r} has too many split execution views.")
             split_pols = [comp.eval_pol for comp in split_views]
             if len(set(split_pols)) != len(split_pols):
-                raise ValueError(f"Component {longname!r} repeats a split execution view.")
-
-    @staticmethod
-    def _instantiate_component(component: Bunch, global_params: Bunch,
-                               eval_pol: str | None = None) -> Component:
-        """Instantiate one execution-view component from a parameter-file component entry.
-
-        Diffuse IQU components opt into splitting via the `eval_pol` constructor argument, while
-        other component classes can ignore that detail entirely by omitting the parameter.
-        """
-        component_cls = getattr(component_lib, component.component_class)
-        init_params = inspect.signature(component_cls.__init__).parameters
-        kwargs = {}
-        if "allocate_empty_alms" in init_params:
-            kwargs["allocate_empty_alms"] = True
-        if eval_pol is not None:
-            log.logassert(
-                "eval_pol" in init_params,
-                f"Component class '{component.component_class}' does not support polarization splitting.",
-                logger,
-            )
-            kwargs["eval_pol"] = eval_pol
-        return component_cls(component.params, global_params, **kwargs)
+                raise ValueError(f"Component {comp_name!r} repeats a split execution view.")
 
     @classmethod
     def init_from_params(cls, components:Bunch, params:Bunch):
-        # Determine whether any of the bands actually have polarization by checking whether any
-        # MPI ranks are dedicated to QU-processing (maybe slightly hacky but works fine).
-        pol_bands_exist = params.general.MPI_config.ntask_compsep_QU > 0
+        # An execution view for a given polarization is only created if there are CompSep MPI ranks
+        # assigned to process it. This lets the same component configuration run in intensity-only,
+        # QU-only, or joint IQU setups; any requested polarization with no ranks is dropped (with a
+        # warning), and a component left with no views at all is skipped entirely.
+        pol_has_ranks = {
+            "I": params.general.MPI_config.ntask_compsep_I > 0,
+            "QU": params.general.MPI_config.ntask_compsep_QU > 0,
+        }
         comp_list = []
         for component_str in components:
             component = components[component_str]
-            if component.enabled:
-                if "lmax" in component.params and component.params.lmax == "full":
-                    component.params.lmax = (params.general.nside*5)//2
-                component_pol = component.params.polarization if "polarization" in component.params else "I"
-                if component_pol == "I":
-                    comp_list.append(cls._instantiate_component(component, params.general))
-                elif component_pol == "QU":
-                    if not pol_bands_exist:
-                        logging.warning(f"Component '{component_str}' is specified as QU-only but "
-                                        f"ntask_compsep_QU=0 (no polarized bands). Skipping.")
-                        continue
-                    comp_list.append(cls._instantiate_component(component, params.general))
-                elif component_pol == "IQU":
-                    intensity_comp = cls._instantiate_component(component, params.general, eval_pol="I")
-                    comp_list.append(intensity_comp)
-                    if not pol_bands_exist:
-                        logging.warning(f"Component '{component_str}' is specified as IQU but "
-                                        f"ntask_compsep_QU=0 (no polarized bands). "
-                                        f"Only the intensity (I) part will be used.")
-                    else:
-                        pol_comp = cls._instantiate_component(component, params.general,
-                                                              eval_pol="QU")
-                        comp_list.append(pol_comp)
-                else:
-                    raise ValueError(
-                        f"Unrecognized polarization in parameter file for component {component_str}"
-                    )
+            if not component.enabled:
+                continue
+            component_cls = getattr(component_lib, component.component_class)
+            if "lmax" in component.params and component.params.lmax == "full":
+                component.params.lmax = (params.general.nside*5)//2
+            component_pol = component.params.polarization if "polarization" in component.params \
+                else "I"
+            if component_pol not in EXECUTION_POLS:
+                raise ValueError(
+                    f"Unrecognized polarization in parameter file for component {component_str}")
+            requested_pols = EXECUTION_POLS[component_pol]
+            active_pols = [eval_pol for eval_pol in requested_pols if pol_has_ranks[eval_pol]]
+            if not active_pols:
+                logging.warning(f"Component '{component_str}' is specified as {component_pol} but "
+                                f"no CompSep ranks are assigned to its polarization(s) "
+                                f"({'/'.join(requested_pols)}). Skipping.")
+                continue
+            if len(active_pols) < len(requested_pols):
+                skipped = [pol for pol in requested_pols if pol not in active_pols]
+                logging.warning(f"Component '{component_str}' is specified as {component_pol} but "
+                                f"no CompSep ranks are assigned to {'/'.join(skipped)}; only the "
+                                f"{'/'.join(active_pols)} part will be used.")
+            for eval_pol in active_pols:
+                comp_list.append(component_cls(component.params, params.general, eval_pol=eval_pol,
+                                               comp_name=component._name, allocate_empty_alms=True))
         return cls(comp_list)
 
     def _assert_consistent_comps(self, other: "CompList") -> None:
@@ -1034,51 +1079,21 @@ class CompList:
             comp._assert_consistent_comp(other_comp)
             np.copyto(comp._data, other_comp._data)
 
-    def reassemble_from_split_solution(self, local_solution: "CompList", comm: MPI.Comm,
-                                       *, is_I_master: bool, is_QU_master: bool,
-                                       I_master: int, QU_master: int, root: int = 0) -> None:
-        """Collect split I/QU solver results back into the full execution list on the CompSep root.
+    def broadcast_pol_views(self, comm: MPI.Comm, *, eval_pol: str, source: int) -> None:
+        """Broadcast all execution views of `eval_pol` from `source` to every rank in `comm`.
 
-        The intensity master already owns the local I solution and receives the QU views from the
-        QU master. Once the full execution list is assembled on the root, every rank gets a copy
-        through a blocking broadcast so `SkyModel` realization can happen locally.
+        Used after a sampling step: only the ranks that actually solved a given polarization hold
+        the updated component data, so broadcasting that polarization's views from one authoritative
+        `source` rank restores a globally consistent component list.
         """
-        if is_I_master:
-            self.copy_matching_data_from(local_solution)
-
-        pol_components = self.components_for_eval_pol("QU")
-        if pol_components:
-            if is_QU_master:
-                local_pol_by_key = {comp.execution_key: comp for comp in local_solution.comp_list}
-                for tag, comp in enumerate(pol_components):
-                    local_comp = local_pol_by_key.get(comp.execution_key)
-                    if local_comp is None:
-                        raise ValueError(
-                            f"Missing QU component {comp.execution_label} on QU master."
-                        )
-                    comm.Send(local_comp._data, dest=I_master, tag=tag)
-            if is_I_master:
-                for tag, comp in enumerate(pol_components):
-                    comm.Recv(comp._data, source=QU_master, tag=tag)
-
-        for comp in self.comp_list:
-            comp.bcast_data_blocking(comm, root=root)
+        for comp in self.components_for_eval_pol(eval_pol):
+            comp.bcast_data_blocking(comm, root=source)
 
     def joined(self) -> "CompList":
-        """Collapse split execution views back to one logical component per `longname`."""
-        grouped_components = {}
-        logical_order = []
-        for comp in self.comp_list:
-            if comp.logical_key not in grouped_components:
-                grouped_components[comp.logical_key] = []
-                logical_order.append(comp.logical_key)
-            grouped_components[comp.logical_key].append(comp)
-
+        """Collapse split execution views back to one logical component per `comp_name`."""
         joined_components = []
-        for logical_key in logical_order:
-            group = grouped_components[logical_key]
-            split_views = [comp for comp in group if comp.is_split_view]
-            unsplit_views = [comp for comp in group if not comp.is_split_view]
+        for logical_key, group in self._group_by_logical_key(self.comp_list):
+            split_views, unsplit_views = self._partition_execution_views(group)
             if unsplit_views and split_views:
                 raise ValueError(
                     f"Logical component {logical_key[1]!r} mixes split and unsplit execution views."
@@ -1098,23 +1113,6 @@ class CompList:
             joined_components.append(split_views[0].join_split_views(split_views[1]))
 
         return CompList(joined_components)
-
-    def split(self, color:int, IvsQU_colors:tuple = (0,1)):
-        """
-        Extracts from `comp_list` only the components containing the correct Stokes parameter based
-        on the passed `color` of the local MPI rank. By default, color=0 will treat Intensity and
-        color=1 QU. A list with the relevant components is returned.
-        """
-        IvsQU_colors = IvsQU_colors[:2] #cut off eventual elements in excess
-        if color not in IvsQU_colors:
-            logging.warning(f"Color {color} not in colors assigned to I or QU ({IvsQU_colors})!")
-            return CompList([])
-        elif color == IvsQU_colors[0]:
-            target_pol = "I"
-        elif color == IvsQU_colors[1]:
-            target_pol = "QU"
-
-        return self.split_for_eval_pol(target_pol)
     
     @property
     def components(self):
@@ -1134,58 +1132,37 @@ class CompList:
         for c1, c2 in zip(self.components, other.components):
             res += float(c1 @ c2)
         return res
+
+    def _apply_componentwise_op(self, other: "CompList", component_op, *, inplace: bool) -> "CompList":
+        self._assert_consistent_comps(other)
+        target = self if inplace else deepcopy(self)
+        for target_comp, other_comp in zip(target.components, other.components):
+            component_op(target_comp, other_comp)
+        return target
     
     def __add__(self, other):
-        self._assert_consistent_comps(other)
-        out = deepcopy(self)
-        for out_comp, other_comp in zip(out.components, other.components):
-            out_comp += other_comp
-        return out
+        return self._apply_componentwise_op(other, Component.__iadd__, inplace=False)
 
     def __iadd__(self, other):
-        self._assert_consistent_comps(other)
-        for c1, c2 in zip(self.components, other.components):
-            c1 += c2
-        return self
+        return self._apply_componentwise_op(other, Component.__iadd__, inplace=True)
 
     def __sub__(self, other):
-        self._assert_consistent_comps(other)
-        out = deepcopy(self)
-        for out_comp, other_comp in zip(out.components, other.components):
-            out_comp -= other_comp
-        return out
+        return self._apply_componentwise_op(other, Component.__isub__, inplace=False)
 
     def __isub__(self, other):
-        self._assert_consistent_comps(other)
-        for c1, c2 in zip(self.components, other.components):
-            c1 -= c2
-        return self
+        return self._apply_componentwise_op(other, Component.__isub__, inplace=True)
 
     def __mul__(self, other):
-        self._assert_consistent_comps(other)
-        out = deepcopy(self)
-        for out_comp, other_comp in zip(out.components, other.components):
-            out_comp *= other_comp
-        return out
+        return self._apply_componentwise_op(other, Component.__imul__, inplace=False)
 
     def __imul__(self, other):
-        self._assert_consistent_comps(other)
-        for c1, c2 in zip(self.components, other.components):
-            c1 *= c2
-        return self
+        return self._apply_componentwise_op(other, Component.__imul__, inplace=True)
 
     def __truediv__(self, other):
-        self._assert_consistent_comps(other)
-        out = deepcopy(self)
-        for out_comp, other_comp in zip(out.components, other.components):
-            out_comp /= other_comp
-        return out
+        return self._apply_componentwise_op(other, Component.__itruediv__, inplace=False)
 
     def __itruediv__(self, other):
-        self._assert_consistent_comps(other)
-        for c1, c2 in zip(self.components, other.components):
-            c1 /= c2
-        return self
+        return self._apply_componentwise_op(other, Component.__itruediv__, inplace=True)
 
     def __getitem__(self, index):
         return self.comp_list[index]

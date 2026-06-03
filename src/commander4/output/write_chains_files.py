@@ -44,7 +44,7 @@ def write_compsep_chain_to_file(comp_list: list[Component] | CompList, params: B
                 raise ValueError(f"Duplicate component shortname '{comp.shortname}' in compsep chain.")
             seen_shortnames.add(comp.shortname)
             file[f"comps/{comp.shortname}/alms"] = comp.alms
-            file[f"comps/{comp.shortname}/longname"] = comp.longname
+            file[f"comps/{comp.shortname}/comp_name"] = comp.comp_name
             file[f"comps/{comp.shortname}/shortname"] = comp.shortname
             if comp.defined_pol is not None:
                 file[f"comps/{comp.shortname}/defined_pol"] = comp.defined_pol
