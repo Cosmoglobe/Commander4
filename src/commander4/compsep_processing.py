@@ -16,6 +16,20 @@ from commander4.utils.execution_ids import get_execution_band_id, EXECUTION_POLS
 logger = logging.getLogger(__name__)
 
 
+def _sampling_group_selection(sampling_group: Bunch, key: str) -> list[str] | None:
+    """Return the names a sampling group selects for `key` ('comps' or 'bands'), or None for "all".
+
+    Both a missing entry and the literal string ``"all"`` select everything (returned as None);
+    otherwise the entry is expected to be a list of names.
+    """
+    if key not in sampling_group:
+        return None
+    value = sampling_group[key]
+    if isinstance(value, str) and value == "all":
+        return None
+    return value
+
+
 def _sampling_group_selects_band(selected_bands: list[str] | None, band_name: str,
                                  band_identifier: str) -> bool:
     """Whether a sampling group acts on a band, matched by base name or execution-view identifier.
@@ -44,7 +58,8 @@ def _validate_sampling_groups(sampling_groups: Bunch, comp_list: CompList, param
     """Fail fast if any enabled sampling group references a non-existent component or band.
 
     `comps` and `bands` are expected to be lists of strings naming existing components and bands
-    (bands may be given either as a base name or as an execution-view identifier).
+    (bands may be given either as a base name or as an execution-view identifier), the string
+    "all", or omitted. The latter two select everything and are not checked against names.
     """
     known_comp_names = {comp.comp_name for comp in comp_list.joined()}
     known_band_names = set()
@@ -60,13 +75,15 @@ def _validate_sampling_groups(sampling_groups: Bunch, comp_list: CompList, param
         group = sampling_groups[group_name]
         if "enabled" in group and not group.enabled:
             continue
-        if "comps" in group:
-            unknown = sorted(set(group.comps) - known_comp_names)
+        selected_comps = _sampling_group_selection(group, "comps")
+        if selected_comps is not None:
+            unknown = sorted(set(selected_comps) - known_comp_names)
             logassert(not unknown,
                       f"Sampling group {group_name!r} references unknown component(s) {unknown}. "
                       f"Known components: {sorted(known_comp_names)}.", logger)
-        if "bands" in group:
-            unknown = sorted(set(group.bands) - known_band_names)
+        selected_bands = _sampling_group_selection(group, "bands")
+        if selected_bands is not None:
+            unknown = sorted(set(selected_bands) - known_band_names)
             logassert(not unknown,
                       f"Sampling group {group_name!r} references unknown band(s) {unknown}. "
                       f"Known bands: {sorted(known_band_names)}.", logger)
@@ -141,6 +158,10 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
         else Bunch()
     _validate_sampling_groups(sampling_groups, comp_list, params)
 
+    # Load the initial component alms (from each component's init_from / init_chain_path, else
+    # zeros). Done identically on every CompSep rank so comp_list starts globally consistent.
+    comp_list.load_initial_alms(params)
+
     mpi_info.compsep.band_name = band_name
     mpi_info.compsep.band_identifier = band_identifier
 
@@ -154,6 +175,15 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     mpi_info.compsep.compsep_band_masters = compsep_band_masters_dict
 
     return comp_list, mpi_info, band_identifier, my_band
+
+
+def get_initial_sky_model(comp_list: CompList) -> SkyModel:
+    """Wrap the freshly-initialized `comp_list` as a SkyModel for the pre-loop initial send to TOD.
+
+    `comp_list` already holds its initial alms (set in `init_compsep_processing`), so this is just
+    the same `SkyModel(comp_list)` that `process_compsep` produces in later iterations.
+    """
+    return SkyModel(comp_list)
 
 
 def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chain: int,
@@ -195,8 +225,8 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
         if "enabled" in sampling_group and not sampling_group.enabled:
             continue
 
-        sampled_components = sampling_group.comps if "comps" in sampling_group else None
-        sampled_bands = sampling_group.bands if "bands" in sampling_group else None
+        sampled_components = _sampling_group_selection(sampling_group, "comps")
+        sampled_bands = _sampling_group_selection(sampling_group, "bands")
         band_is_active = _sampling_group_selects_band(sampled_bands, mpi_info.compsep.band_name,
                                                       mpi_info.compsep.band_identifier)
         # This rank's components (for its own polarization stream) that take part in this group.
@@ -240,14 +270,15 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
             if source < compsep_comm.size:
                 comp_list.broadcast_pol_views(compsep_comm, eval_pol=eval_pol, source=source)
 
-        # Print new per-band chi2s against the updated sky model.
-        sky_model_at_band = sky_model.get_sky_at_nu(detector_data.nu, detector_data.nside, "IQU",
+        # Print new per-band chi2s against the updated sky model. Realize only this band's own
+        # polarization, so inert (unsolved) component views are not synthesized needlessly.
+        band_pol = "QU" if detector_data.pol else "I"
+        sky_model_at_band = sky_model.get_sky_at_nu(detector_data.nu, detector_data.nside, band_pol,
                                                     fwhm=np.deg2rad(detector_data.fwhm/60.0))
         pol_names = ["Q", "U"] if detector_data.pol else ["I"]
-        pol_offset = 1 if detector_data.pol else 0
         for ipol in range(detector_data.npol):
             chi2 = np.mean(np.abs(detector_data.map_sky[ipol] -
-                                sky_model_at_band[ipol + pol_offset])/detector_data.map_rms[ipol])
+                                  sky_model_at_band[ipol])/detector_data.map_rms[ipol])
             logger.info(f"Reduced chi2 on rank {compsep_rank} for pol={pol_names[ipol]} "\
                         f"({detector_data.nu}GHz): {chi2:.3f}")
 

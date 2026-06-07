@@ -3,6 +3,7 @@ import astropy.constants as c
 import numpy as np
 import pysm3.units as pysm3u
 import healpy as hp
+import h5py
 import logging
 from copy import deepcopy
 from scipy.interpolate import interp1d
@@ -254,8 +255,12 @@ class Component:
 # Second tier component classes
 class DiffuseComponent(Component):
     requires_defined_pol = True
+    # The unit in which this component's amplitude (alms) is internally represented -- always uK_RJ
+    # for diffuse components, including the CMB. Init sky maps are converted to it from their own
+    # ``units`` (at the component's reference frequency); chain alms are already stored in it.
+    amplitude_unit = "uK_RJ"
 
-    def __init__(self, comp_params: Bunch, global_params: Bunch, 
+    def __init__(self, comp_params: Bunch, global_params: Bunch,
                  allocate_empty_alms=False, eval_pol:None|str=None,
                  comp_name: str | None = None, shortname: str | None = None):
         super().__init__(
@@ -270,9 +275,41 @@ class DiffuseComponent(Component):
         self.lmax = comp_params.lmax
         self.smoothing_prior_FWHM = comp_params.smoothing_prior_FWHM
         self.smoothing_prior_amplitude = comp_params.smoothing_prior_amplitude
+        # Unit of an init_from sky map for this component (None -> assume it is already in
+        # `amplitude_unit`). Only used when reading FITS init maps, not compsep chains.
+        self.units = comp_params.units if "units" in comp_params else None
         self._data = None  # Alm data is not allocated by default.
         if allocate_empty_alms:
             self.allocate_empty_alms()
+
+    def _reference_frequency(self, comp_params: Bunch) -> float:
+        """Reference frequency (GHz) for this view's polarization.
+
+        ``nu_ref`` is either a scalar (shared by I and QU) or a 2-element list ``[nu_I, nu_QU]``.
+        """
+        nu_ref = comp_params.nu_ref
+        if isinstance(nu_ref, (list, tuple)):
+            return nu_ref[0] if self.eval_pol == "I" else nu_ref[1]
+        return nu_ref
+
+    def init_map_to_amplitude(self, sky_map: NDArray) -> NDArray:
+        """Convert an init sky map (in ``self.units``) to this component's amplitude unit.
+
+        The conversion is done at the component's reference frequency (``self.nu_ref``) using pysm3's
+        CMB equivalencies. It is a no-op when the units are unspecified or already equal to the
+        amplitude unit.
+        """
+        if self.units is None or self.units == self.amplitude_unit:
+            return sky_map
+        ref_freq = getattr(self, "nu_ref", None)
+        log.logassert(ref_freq is not None,
+                      f"Component {self.comp_name!r}: converting an init map from {self.units!r} to "
+                      f"{self.amplitude_unit!r} requires a reference frequency, but none is defined.",
+                      logger)
+        factor = (1*pysm3u.Unit(self.units)).to(
+            pysm3u.Unit(self.amplitude_unit),
+            equivalencies=pysm3u.cmb_equivalencies(ref_freq*pysm3u.GHz)).value
+        return sky_map * factor
 
     @property
     def npol(self):
@@ -465,6 +502,9 @@ class TemplateComponent(Component):
 # Third tier component classes
 class CMB(DiffuseComponent):
     default_shortname = "cmb"
+    # Like all diffuse components, the CMB amplitude is stored internally in uK_RJ, referenced to
+    # `nu_ref` (default 1 GHz, where uK_RJ ~= uK_CMB). `get_sed` is therefore the *ratio* of the
+    # thermodynamic-to-RJ conversion at `nu` relative to `nu_ref` (it inherits amplitude_unit=uK_RJ).
 
     def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
                  shortname = None, eval_pol = None, comp_name: str | None = None):
@@ -476,17 +516,25 @@ class CMB(DiffuseComponent):
             comp_name=comp_name,
             shortname=shortname,
         )
+        # The CMB blackbody is polarization-independent, so a scalar reference suffices. The choice
+        # is arbitrary (the sky is invariant to it); 1 GHz keeps stored amplitudes ~= uK_CMB.
+        self.nu_ref = self._reference_frequency(comp_params) if "nu_ref" in comp_params else 1.0
 
     def get_sed(self, nu):
-        """Calculates the spectral energy distribution (SED) for CMB emission.
-           The result is unitless, but meant to be multiplied by a RJ brightness temperature.
+        """SED for CMB emission: the thermodynamic-to-RJ conversion at `nu` relative to `nu_ref`.
+
+        The CMB amplitude is stored in uK_RJ referenced to `nu_ref`, so multiplying by this ratio
+        yields the uK_RJ brightness at `nu`. The result is dimensionless.
+
         Args:
-            nu (float or np.ndarray): Frequency in GHz at which to evaluate the SED.            
+            nu (float or np.ndarray): Frequency in GHz at which to evaluate the SED.
         Returns:
             The SED scaling factor (float or np.ndarray).
         """
-        return (np.ones_like(nu)*pysm3u.uK_CMB).to(pysm3u.uK_RJ,equivalencies=
-                                                   pysm3u.cmb_equivalencies(nu*u.GHz)).value
+        def cmb_to_rj(f):
+            return (np.ones_like(f)*pysm3u.uK_CMB).to(
+                pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(f*u.GHz)).value
+        return cmb_to_rj(nu) / cmb_to_rj(self.nu_ref)
     
     def get_sky_anisotropies(self, nu, nside, fwhm=0):
         if self.alms is None:
@@ -520,7 +568,7 @@ class ThermalDust(DiffuseComponent):
         )
         self.beta = comp_params.beta
         self.T = comp_params.T
-        self.nu0 = comp_params.nu0
+        self.nu_ref = self._reference_frequency(comp_params)
         self.prior_l_power_law = 2.5
 
     def get_sed(self, nu):
@@ -533,8 +581,8 @@ class ThermalDust(DiffuseComponent):
         """
         # Modified blackbody, in uK_CMB
         x = (h_over_k*nu)/(self.T)
-        x0 = (h_over_k*self.nu0)/(self.T)
-        return (nu / self.nu0)**(self.beta + 1.0) * np.expm1(x0) / np.expm1(x)
+        x0 = (h_over_k*self.nu_ref)/(self.T)
+        return (nu / self.nu_ref)**(self.beta + 1.0) * np.expm1(x0) / np.expm1(x)
 
 
 class Synchrotron(DiffuseComponent):
@@ -551,7 +599,7 @@ class Synchrotron(DiffuseComponent):
             shortname=shortname,
         )
         self.beta = comp_params.beta
-        self.nu0 = comp_params.nu0
+        self.nu_ref = self._reference_frequency(comp_params)
         self.nside_comp_map = 512
         self.prior_l_power_law = -3
 
@@ -563,7 +611,7 @@ class Synchrotron(DiffuseComponent):
         Returns:
             The SED scaling factor (float or np.ndarray).
         """
-        return (nu/self.nu0)**self.beta
+        return (nu/self.nu_ref)**self.beta
 
 
 class FreeFree(DiffuseComponent):
@@ -580,7 +628,7 @@ class FreeFree(DiffuseComponent):
             shortname=shortname,
         )
         self.T = comp_params.T  # Electron temperature in K
-        self.nu0 = comp_params.nu0 # Reference frequency in GHz
+        self.nu_ref = self._reference_frequency(comp_params) # Reference frequency in GHz
 
     def _gaunt_factor(self, nu, T):
         """Calculates the Gaunt factor for free-free emission, as per Eq. 18 in BP1.
@@ -604,10 +652,10 @@ class FreeFree(DiffuseComponent):
             The SED scaling factor (float or np.ndarray).
         """
         gaunt_nu = self._gaunt_factor(nu, self.T)
-        gaunt_nu0 = self._gaunt_factor(self.nu0, self.T)
-        
-        # The scaling is proportional to nu^-2 * g_ff(nu), normalized to 1 at nu0.
-        sed = (self.nu0 / nu)**2 * (gaunt_nu / gaunt_nu0)
+        gaunt_nu_ref = self._gaunt_factor(self.nu_ref, self.T)
+
+        # The scaling is proportional to nu^-2 * g_ff(nu), normalized to 1 at nu_ref.
+        sed = (self.nu_ref / nu)**2 * (gaunt_nu / gaunt_nu_ref)
         return sed
 
 class SpinningDust(DiffuseComponent):
@@ -727,7 +775,7 @@ class RadioSources(PointSourcesComponent):
             allocate_empty_alms=allocate_empty_alms,
         )
         #reference frequency
-        self.nu0 = comp_params.nu_0
+        self.nu_ref = comp_params.nu_0
         #tabulated data
         ps_bunch = self.read_dat_to_bunch(comp_params.template_path)
         #per-source amplitudes
@@ -795,10 +843,10 @@ class RadioSources(PointSourcesComponent):
 
     def get_sed(self, nu:float):
         """
-        Returns a list of sed's, one per `alpha_list`, evaluated at `nu`, with ref frequency `nu0`. 
+        Returns a list of sed's, one per `alpha_list`, evaluated at `nu`, with ref frequency `nu_ref`.
         Freq. are in GHz.
         """
-        return (nu/self.nu0)**(self.alpha_arr - 2)
+        return (nu/self.nu_ref)**(self.alpha_arr - 2)
     
     def get_sky(self, nu:float, nside:int, fwhm:float=0.0):
         """
@@ -925,6 +973,90 @@ class RadioSources(PointSourcesComponent):
     def __repr__(self):
         return f"Radio Source \n amps: {self._data}"
     
+# Stokes channels stored, in order, for each polarization mode. Used to map the rows of a stored
+# (npol, ...) array (whose layout follows its polarization mode) onto the rows an execution view
+# needs. Applies equally to chain alm arrays and FITS maps, since both are laid out by polarization.
+_POL_CHANNELS = {"I": ("I",), "QU": ("Q", "U"), "IQU": ("I", "Q", "U")}
+
+
+def _pol_row_indices(data: NDArray, eval_pol: str, shortname: str, source_path: str):
+    """Row indices in a stored (npol, ...) array for `eval_pol`'s Stokes channels.
+
+    The stored polarization mode is inferred from the number of rows (1=I, 2=QU, 3=IQU). Returns
+    None if the stored data does not contain all channels `eval_pol` needs, so the caller can leave
+    those alms at zero. Raises only if the row count is not a recognized polarization mode.
+    """
+    nrows = data.shape[0]
+    stored_pol = {1: "I", 2: "QU", 3: "IQU"}.get(nrows)
+    log.logassert(stored_pol is not None,
+                  f"Initial data for component {shortname!r} in {source_path!r} has an unexpected "
+                  f"first dimension ({nrows}); expected 1 (I), 2 (QU) or 3 (IQU).", logger)
+    row_of = {channel: row for row, channel in enumerate(_POL_CHANNELS[stored_pol])}
+    if any(channel not in row_of for channel in _POL_CHANNELS[eval_pol]):
+        return None
+    return [row_of[channel] for channel in _POL_CHANNELS[eval_pol]]
+
+
+def _read_view_alms_from_chain(comp: "DiffuseComponent", chain_path: str) -> NDArray | None:
+    """This view's alms from a compsep chain (``comps/<shortname>/alms``), or None if not present.
+
+    A missing component is logged as an error (but not fatal); a component present without this
+    view's polarization is a benign partial initialization and only debug-logged.
+    """
+    with h5py.File(chain_path, "r") as f:
+        group_path = f"comps/{comp.shortname}"
+        if group_path not in f or "alms" not in f[group_path]:
+            logger.error(f"Component {comp.comp_name!r} (shortname {comp.shortname!r}) not found in "
+                         f"init chain {chain_path!r}; leaving its alms at zero.")
+            return None
+        stored_alms = f[f"{group_path}/alms"][()]
+    rows = _pol_row_indices(stored_alms, comp.eval_pol, comp.shortname, chain_path)
+    if rows is None:
+        logger.debug(f"Init chain {chain_path!r} has no {comp.eval_pol!r} data for component "
+                     f"{comp.comp_name!r}; leaving those alms at zero.")
+        return None
+    return project_alms(np.ascontiguousarray(stored_alms[rows]), comp.lmax)
+
+
+def _read_view_alms_from_fits(comp: "DiffuseComponent", fits_path: str) -> NDArray | None:
+    """This view's alms from a FITS sky map (transformed), or None if its polarization isn't present.
+
+    The map's polarization content is inferred purely from its shape (npol, npix), so the column
+    names do not matter. The map is converted from its ``units`` to the component's amplitude unit
+    (at the component's reference frequency) before being transformed to alms.
+    """
+    sky_map = np.atleast_2d(hp.read_map(fits_path, field=None))
+    rows = _pol_row_indices(sky_map, comp.eval_pol, comp.shortname, fits_path)
+    if rows is None:
+        logger.debug(f"Init map {fits_path!r} has no {comp.eval_pol!r} data for component "
+                     f"{comp.comp_name!r}; leaving those alms at zero.")
+        return None
+    view_map = np.ascontiguousarray(sky_map[rows], dtype=np.float64)
+    view_map = comp.init_map_to_amplitude(view_map)
+    nside = hp.npix2nside(view_map.shape[-1])
+    return map_to_alm(view_map, nside, comp.lmax, spin=comp.spin)
+
+
+def _load_component_alms(comp: "DiffuseComponent", source_path: str) -> None:
+    """Set `comp`'s initial alms from `source_path`, dispatching on its file type.
+
+    ``.h5``/``.hd5`` files are read as compsep chains (alms taken directly); ``.fits`` files are
+    read as sky maps and transformed to alms. If the source does not contain this component or its
+    polarization, the alms are left at their initial value (zeros).
+    """
+    lower_path = str(source_path).lower()
+    if lower_path.endswith((".h5", ".hd5")):
+        view_alms = _read_view_alms_from_chain(comp, source_path)
+    elif lower_path.endswith(".fits"):
+        view_alms = _read_view_alms_from_fits(comp, source_path)
+    else:
+        log.logassert(False,
+                      f"Unsupported init file {source_path!r} for component {comp.comp_name!r}: "
+                      f"expected a .h5/.hd5 chain or a .fits map.", logger)
+    if view_alms is not None:
+        comp.alms = view_alms.astype(comp.dtype, copy=False)
+
+
 class CompList:
     def __init__(self, comp_list:list[Component]):
         self._validate_comp_list(comp_list)
@@ -1004,14 +1136,10 @@ class CompList:
 
     @classmethod
     def init_from_params(cls, components:Bunch, params:Bunch):
-        # An execution view for a given polarization is only created if there are CompSep MPI ranks
-        # assigned to process it. This lets the same component configuration run in intensity-only,
-        # QU-only, or joint IQU setups; any requested polarization with no ranks is dropped (with a
-        # warning), and a component left with no views at all is skipped entirely.
-        pol_has_ranks = {
-            "I": params.general.MPI_config.ntask_compsep_I > 0,
-            "QU": params.general.MPI_config.ntask_compsep_QU > 0,
-        }
+        # Build the full logical component list: every enabled component contributes one execution
+        # view per polarization it defines (I, QU, or both for an IQU component). Construction is
+        # deliberately independent of the MPI/compsep layout -- a view whose polarization is not
+        # actually solved or used in a given run simply stays inert at its initial value.
         comp_list = []
         for component_str in components:
             component = components[component_str]
@@ -1025,22 +1153,33 @@ class CompList:
             if component_pol not in EXECUTION_POLS:
                 raise ValueError(
                     f"Unrecognized polarization in parameter file for component {component_str}")
-            requested_pols = EXECUTION_POLS[component_pol]
-            active_pols = [eval_pol for eval_pol in requested_pols if pol_has_ranks[eval_pol]]
-            if not active_pols:
-                logging.warning(f"Component '{component_str}' is specified as {component_pol} but "
-                                f"no CompSep ranks are assigned to its polarization(s) "
-                                f"({'/'.join(requested_pols)}). Skipping.")
-                continue
-            if len(active_pols) < len(requested_pols):
-                skipped = [pol for pol in requested_pols if pol not in active_pols]
-                logging.warning(f"Component '{component_str}' is specified as {component_pol} but "
-                                f"no CompSep ranks are assigned to {'/'.join(skipped)}; only the "
-                                f"{'/'.join(active_pols)} part will be used.")
-            for eval_pol in active_pols:
+            for eval_pol in EXECUTION_POLS[component_pol]:
                 comp_list.append(component_cls(component.params, params.general, eval_pol=eval_pol,
                                                comp_name=component._name, allocate_empty_alms=True))
         return cls(comp_list)
+
+    def load_initial_alms(self, params: Bunch) -> None:
+        """Populate each component's alms with an initial guess read from a file.
+
+        For every component the source is its own ``init_from`` parameter (inside the component's
+        ``params`` block) if present, otherwise the global ``params.general.init_chain_path``. The
+        source may be a compsep chain (``.h5``/``.hd5``, alms read directly) or a FITS sky map
+        (``.fits``, transformed to alms); the type is decided by the file extension. If neither path
+        is set the alms are left at their allocated value (zeros). Only diffuse (alm-based)
+        components are supported for now.
+        """
+        global_path = params.general.init_chain_path if "init_chain_path" in params.general else None
+        for comp in self.comp_list:
+            has_explicit_path = "init_from" in comp.comp_params
+            source_path = comp.comp_params.init_from if has_explicit_path else global_path
+            if not source_path:
+                continue  # No initial guess requested; leave the allocated zeros.
+            if not isinstance(comp, DiffuseComponent):
+                log.logassert(not has_explicit_path,
+                              f"Component {comp.comp_name!r}: 'init_from' is currently only "
+                              f"supported for diffuse (alm-based) components.", logger)
+                continue
+            _load_component_alms(comp, source_path)
 
     def _assert_consistent_comps(self, other: "CompList") -> None:
         if not isinstance(other, CompList):

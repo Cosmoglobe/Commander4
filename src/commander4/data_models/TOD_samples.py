@@ -115,13 +115,15 @@ class TODSamples:
         self.scan_ids = np.array([scan.scan_id for scan in experiment_data.scans])
         self.jumps = JumpCatalog.empty(self.nscans, self.ndet)
 
+        init_chain_path = getattr(params.general, "init_chain_path", False)
+        init_from_chain = bool(init_chain_path)
         # Gibbs-sampled quantities
-        if not params.general.init_from_chain:
+        if not init_from_chain:
             # ---------------------------------------------------------
             # Standard Initialization (No file provided)
             # ---------------------------------------------------------
             if self.band_comm.Get_rank() == 0:
-                logger.info(f"Band {self.band_name} initializing TOD samples from default values.")
+                logger.info("No previous chain provided. Starting fresh Gibbs chain.")
 
             self.noise_params = np.zeros((self.nscans, self.ndet, 3)) + np.nan
             self.abs_gain = 0.0
@@ -166,24 +168,24 @@ class TODSamples:
             # Disk Initialization (Read from previous chain)
             # ---------------------------------------------------------
             # 1. Find the latest iteration for chain 01
-            init_dir = params.general.init_chain_dir
-            pattern = f"tod/{self.experiment_name}_{self.band_name}_chain{self.chain:02d}_iter*.h5"
-            search_path = os.path.join(init_dir, pattern)
-            files = glob.glob(search_path)
+            # init_dir = params.general.init_chain_dir
+            # pattern = f"tod/{self.experiment_name}_{self.band_name}_chain{self.chain:02d}_iter*.h5"
+            # search_path = os.path.join(init_dir, pattern)
+            # files = glob.glob(search_path)
             
-            if not files:
-                raise FileNotFoundError(f"No chain files found matching: {search_path}")
+            # if not files:
+            #     raise FileNotFoundError(f"No chain files found matching: {search_path}")
             
-            # Sorting alphabetically naturally sorts by the zero-padded iteration number
-            files.sort()
-            latest_file = files[-1]
+            # # Sorting alphabetically naturally sorts by the zero-padded iteration number
+            # files.sort()
+            # latest_file = files[-1]
 
             if self.band_comm.Get_rank() == 0:
                 logger.info(f"Band {self.band_name} initializing TOD samples from existing chain: "\
-                            f"{latest_file}.")
+                            f"{init_chain_path}.")
 
             # 2. Extract data mapping
-            with h5py.File(latest_file, "r") as f:
+            with h5py.File(init_chain_path, "r") as f:
                 # Read the global scan_ids saved by the Gatherv operation
                 global_scan_ids = f["scan_ids"][:]
                 

@@ -58,7 +58,8 @@ def init_mpi(params):
     if is_world_master:  # Every rank doesn't need to throw an error.
         tot_num_Compsep_bands_I = 0
         tot_num_Compsep_bands_QU = 0
-        for band in params.CompSep_bands:
+        bands = getattr(params, "CompSep_bands", [])  # Fallback to empty list if doesn't exist.
+        for band in bands:
             if params.CompSep_bands[band].enabled and "I" in params.CompSep_bands[band].polarization:
                 tot_num_Compsep_bands_I += 1
             if params.CompSep_bands[band].enabled and "QU" in params.CompSep_bands[band].polarization:
@@ -68,10 +69,27 @@ def init_mpi(params):
             log.lograise(RuntimeError, f"Total number of MPI tasks ({worldsize}) must equal the sum "
                                        f"of tasks for TOD ({global_params.MPI_config.ntask_tod}) + CompSep I + QU"
                                        f"({global_params.MPI_config.ntask_compsep_I} + {global_params.MPI_config.ntask_compsep_QU}).", logger)
-        if tot_num_CompSep_ranks != tot_num_Compsep_bands:
+        # With CompSep ranks allocated, there must be exactly one per enabled band view. With none
+        # allocated, CompSep is simply off (TOD-only) and any enabled CompSep_bands are ignored.
+        if tot_num_CompSep_ranks > 0 and tot_num_CompSep_ranks != tot_num_Compsep_bands:
             log.lograise(RuntimeError, f"CompSep needs exactly as many MPI tasks "
                                        f"({tot_num_CompSep_ranks}) as there are bands "
                                        f"({tot_num_Compsep_bands}).", logger)
+        if tot_num_CompSep_ranks == 0 and tot_num_Compsep_bands > 0:
+            logger.info(f"No CompSep MPI ranks allocated; running TOD-only. The "
+                        f"{tot_num_Compsep_bands} enabled CompSep band view(s) are ignored, and TOD "
+                        f"ranks use the initial sky model built from the components.")
+        # Component separation is "on" iff CompSep ranks are allocated; enabled sampling groups
+        # therefore require at least one CompSep rank to run on.
+        sampling_groups = params.sampling_groups_compsep if "sampling_groups_compsep" in params \
+            else {}
+        has_enabled_sampling_group = any(
+            "enabled" not in sampling_groups[group] or sampling_groups[group].enabled
+            for group in sampling_groups)
+        if has_enabled_sampling_group and tot_num_CompSep_ranks == 0:
+            log.lograise(RuntimeError, "Enabled compsep sampling groups are configured, but no "
+                         "CompSep MPI ranks are allocated (ntask_compsep_I = ntask_compsep_QU = 0).",
+                         logger)
 
     # Split the world communicator into a communicator for compsep and one for TOD (with "color"
     # being the keyword for the split).
@@ -122,7 +140,7 @@ def init_mpi(params):
     if color == MPI.UNDEFINED:
         return -1
     world_comm.barrier()
-    time.sleep(worldrank*1e-3)  # Small sleep to get prints in nice order.
+    time.sleep(worldrank*1e-5)  # Small sleep to get prints in nice order.
     logger.debug(f"MPI split performed, hi from worldrank {worldrank} (on machine "\
                 f"{MPI.Get_processor_name()}) subcomrank {proc_comm.Get_rank()} from color "\
                 f"{color} of size {proc_comm.Get_size()}.")
@@ -130,7 +148,7 @@ def init_mpi(params):
     # Determine the world ranks of the respective master tasks for compsep and TOD
     # We ensured that this works by the "key=worldrank" in the split command.
     tod_master = 0 if global_params.MPI_config.ntask_tod > 0 else None
-    compsep_master = global_params.MPI_config.ntask_tod
+    compsep_master = global_params.MPI_config.ntask_tod if tot_num_CompSep_ranks > 0 else None
 
     world_comm.barrier()
     time.sleep(worldrank*1e-5)  # Small sleep to get prints in nice order.
@@ -263,7 +281,7 @@ def init_mpi_tod(mpi_info, params):
     is_det_master = MPIrank_det == 0
 
     tod_comm.Barrier()
-    time.sleep(MPIrank_tod*1e-3)  # Small sleep to get prints in nice order.
+    time.sleep(MPIrank_tod*1e-5)  # Small sleep to get prints in nice order.
     
     logger.debug(f"TOD: Hello from TOD-rank {MPIrank_tod} (on machine {MPI.Get_processor_name()}) "\
                  f"dedicated to band {my_band_id}, with local rank {MPIrank_band} (local "\

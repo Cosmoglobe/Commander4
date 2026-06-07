@@ -8,6 +8,7 @@ from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_TOD import DetGroupTOD
 from commander4.maps_from_file import read_data_map_from_file
 from commander4.utils.execution_ids import get_execution_band_id
+from commander4.sky_models.sky_model import build_initial_sky_model
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,23 @@ def receive_compsep(mpi_info: Bunch, experiment_data: DetGroupTOD, todproc_my_ba
     detector_map_arr = sky_model.get_sky_at_nu(experiment_data.nu, experiment_data.nside,
                                 experiment_data.pols, fwhm=np.deg2rad(experiment_data.fwhm/60.0))
     return detector_map_arr
+
+
+def get_local_initial_sky(mpi_info: Bunch, experiment_data: DetGroupTOD,
+                          params: Bunch) -> NDArray[np.floating]:
+    """Build the initial sky model locally and realize it at this TOD band.
+
+    Used when there are no CompSep ranks: the band master builds the SkyModel from the component
+    parameters and init files, broadcasts it within the band communicator, and every rank realizes
+    it at the band frequency/resolution. Mirrors `receive_compsep`, minus the cross-world receive.
+    """
+    if mpi_info.band.is_master:
+        sky_model = build_initial_sky_model(params)
+    else:
+        sky_model = None
+    sky_model = mpi_info.band.comm.bcast(sky_model, root=0)
+    return sky_model.get_sky_at_nu(experiment_data.nu, experiment_data.nside, experiment_data.pols,
+                                   fwhm=np.deg2rad(experiment_data.fwhm/60.0))
 
 
 def send_tod(mpi_info: Bunch, tod_map_dict: dict[DetectorMap], todproc_my_band_id: str,
