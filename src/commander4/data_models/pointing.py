@@ -178,7 +178,8 @@ class PixelPointing:
         self.ntod = ntod
         self.pix_encoded = pix
         self.psi_encoded = psi
-        self.huffman_tree = huffman_tree
+        # C++ decoder accepts only int64 for the tree.
+        self.huffman_tree = huffman_tree.astype(np.int64, copy=False)
         self.huffman_symbols = huffman_symbols
         self.npsi = npsi
         self.pix_is_compressed = isinstance(pix, (bytes, np.void))
@@ -247,7 +248,7 @@ class PixelPointing:
         """Return HEALPix pixel indices at the requested output nside."""
         target_nside = self.nside if nside is None else nside
         if self.pix_is_compressed:
-            pix = np.zeros(self.ntod_original, dtype=np.int64)
+            pix = np.zeros(self.ntod_original, dtype=self.huffman_symbols.dtype)
             pix = cpp_utils.huffman_decode(self.pix_compressed_u8, self.huffman_tree,
                                            self.huffman_symbols, pix)
             # The compressed stream stores first differences, so reconstruct the
@@ -268,7 +269,7 @@ class PixelPointing:
     def get_psi(self, nside: int | None = None) -> NDArray[np.floating]:
         """Return polarization angles, cropped to the active TOD length."""
         if self.psi_is_compressed:
-            psi = np.zeros(self.ntod_original, dtype=np.int64)
+            psi = np.zeros(self.ntod_original, dtype=self.huffman_symbols.dtype)
             psi = cpp_utils.huffman_decode(self.psi_compressed_u8, self.huffman_tree,
                                            self.huffman_symbols, psi)
             # psi is compressed as differences of digitized angle bins; first

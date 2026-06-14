@@ -21,6 +21,13 @@ class TODView:
     """
 
     _ALL_GAIN_TERMS = ("abs", "rel", "temp")
+    # Calibration targets, mapped onto the model signals they span. Sampling a gain term against
+    # one of these reduces the calibration residual to (target gain term) * s_cal + noise.
+    _CALIB_TARGET_SIGNALS = {
+        "orbital_dipole": ("orbital_dipole",),
+        "sky": ("sky",),
+        "full_sky": ("sky", "orbital_dipole"),
+    }
 
     def __init__(
         self,
@@ -101,6 +108,12 @@ class TODView:
     @property
     def sigma0(self) -> float:
         return float(self.noise_params[0])
+
+    @property
+    def accept(self) -> bool:
+        """Whether the focused detector-scan is accepted (currently always True)."""
+        self._require_focus()
+        return bool(self.tod_samples.accept[self._iscan, self._idet])
 
     def get_gain(self, gain_terms: tuple[str, ...] | None = _ALL_GAIN_TERMS) -> float:
         """Return the selected subset of the current detector gain model."""
@@ -215,8 +228,9 @@ class TODView:
                 indices=np.arange(self.detector.ntod, dtype=np.int64),
             )
         else:
-            # Average the jump-corrected TOD blocks, while keeping pointing and masks at the block
-            # centers to match the existing gain-calibration logic.
+            # Average the jump-corrected TOD over contiguous blocks. Pointing and masks are kept at
+            # the block centers; model TODs are not evaluated at this pointing but block-averaged at
+            # full rate (see get_static_sky_tod), so they share the data's downsampling transfer.
             indices_edges = np.arange(0, self.detector.ntod, factor)
             indices = (indices_edges[1:] + indices_edges[:-1]) // 2
             ntod_down = indices.size
@@ -258,31 +272,45 @@ class TODView:
             raise ValueError("A component-separation sky map must be provided for sky subtraction.")
         return sky_model
 
+    def _block_average(self, tod: NDArray[np.floating], factor: int) -> NDArray[np.floating]:
+        """Average a full-rate array over the same contiguous blocks as the downsampled TOD."""
+        ntod_down = self._materialize_downsampled(factor).tod.shape[0]
+        return tod[:ntod_down*factor].reshape((ntod_down, factor)).mean(axis=-1)
+
     def get_static_sky_tod(
         self,
         compsep_output: NDArray | None = None,
         downsample_factor: int | None = None,
     ) -> NDArray[np.floating]:
-        """Evaluate the static sky model along the focused detector pointing."""
+        """Evaluate the static sky model along the focused detector pointing.
+
+        For ``downsample_factor > 1`` the model is evaluated at the full sampling rate and averaged
+        over the same sample blocks as the data, integrating the model over the scan path within
+        each block rather than sampling it at the block-center pixel. Model and data thereby see
+        the same downsampling transfer function, which keeps e.g. gain estimates unbiased.
+        """
         factor = self._downsample_factor_or_default(downsample_factor)
         sky_model = self._require_compsep_output(compsep_output)
-        if factor == 1 and compsep_output is None:
+        if compsep_output is None:
             if self._static_sky is None:
                 # Reuse the full-resolution sky TOD when both pointing and sky model match.
                 self._static_sky = get_static_sky_TOD(sky_model, self.pix, psi=self.psi)
-            return self._static_sky
-        data = self._materialize_downsampled(factor)
-        return get_static_sky_TOD(sky_model, data.pix, psi=data.psi)
+            sky_tod = self._static_sky
+        else:
+            sky_tod = get_static_sky_TOD(sky_model, self.pix, psi=self.psi)
+        return sky_tod if factor == 1 else self._block_average(sky_tod, factor)
 
     def get_orbital_dipole_tod(self, downsample_factor: int | None = None) -> NDArray[np.floating]:
-        """Evaluate the orbital dipole for the focused detector."""
+        """Evaluate the orbital dipole for the focused detector.
+
+        Downsampling block-averages the full-rate dipole TOD, mirroring ``get_static_sky_tod``.
+        """
         factor = self._downsample_factor_or_default(downsample_factor)
+        if self._orbital_dipole is None:
+            self._orbital_dipole = get_s_orb_TOD(self.detector, self.experiment_data, self.pix)
         if factor == 1:
-            if self._orbital_dipole is None:
-                self._orbital_dipole = get_s_orb_TOD(self.detector, self.experiment_data, self.pix)
             return self._orbital_dipole
-        data = self._materialize_downsampled(factor)
-        return get_s_orb_TOD(self.detector, self.experiment_data, data.pix)
+        return self._block_average(self._orbital_dipole, factor)
 
     def _normalize_signal_name(self, signal_name: str) -> str:
         """Map user-facing TOD component names onto internal canonical names."""
@@ -370,89 +398,68 @@ class TODView:
             filled[~mask] = self.get_gain(gain_terms) * signal[~mask] + noise
         return filled
 
-    def get_abs_calib_tod(
+    def get_calib_tod(
         self,
-        *,
-        compsep_output: NDArray | None = None,
-        downsample_factor: int | None = None,
-        calibrate_on_full_sky: bool | None = None,
-        preserve_target_gain: bool = True,
-        fill_masked: bool = True,
-        rng: np.random.Generator | None = None,
-    ) -> Bunch:
-        """Return the residual, calibrator signal, and mask used for absolute-gain sampling."""
-        factor = int(self.fsamp) if downsample_factor is None else int(downsample_factor)
-        data = self._materialize_downsampled(factor)
-        mask = self.get_mask("full", downsample_factor=factor)
-        s_sky = self.get_static_sky_tod(compsep_output=compsep_output, downsample_factor=factor)
-        s_orb = self.get_orbital_dipole_tod(downsample_factor=factor)
-
-        if calibrate_on_full_sky is None:
-            calibrate_on_full_sky = self.experiment_data.nu > 380.0
-
-        if calibrate_on_full_sky:
-            s_cal = s_sky + s_orb
-            # For the full-sky branch, optionally preserve the absolute term in the residual so
-            # callers can choose between the current implementation and the algebraically cleaner
-            # target-gain-preserving form.
-            abs_subtract = ("rel", "temp") if preserve_target_gain else self._ALL_GAIN_TERMS
-            subtract = (("sky", abs_subtract), ("orbital_dipole", abs_subtract))
-        else:
-            s_cal = s_orb
-            # Low-frequency absolute calibration keeps only the absolute orbital-dipole term.
-            subtract = (("sky", self._ALL_GAIN_TERMS), ("orbital_dipole", ("rel", "temp")))
-
-        tod = self.get_tod(subtract=subtract, downsample_factor=factor, compsep_output=compsep_output)
-        if fill_masked:
-            tod = self._fill_masked_calibration_samples(tod, mask, s_cal, ("abs",), factor, rng)
-        return Bunch(tod=tod, s_cal=s_cal, pix=data.pix, psi=data.psi, mask=mask)
-
-    def get_rel_calib_tod(
-        self,
+        target_term: str,
+        calibrate_against: str,
         *,
         compsep_output: NDArray | None = None,
         downsample_factor: int | None = None,
         fill_masked: bool = True,
         rng: np.random.Generator | None = None,
     ) -> Bunch:
-        """Return the residual, calibrator signal, and mask used for relative-gain sampling."""
+        """Return the residual, calibrator signal, and mask used to sample one gain term.
+
+        The detector model is ``d = (g_abs + g_rel + g_temp) * (s_sky + s_orb) + n``. To sample
+        ``target_term`` against a calibrator signal ``s_cal`` (the subset of {static sky, orbital
+        dipole} selected by ``calibrate_against``), each model signal is subtracted with the
+        appropriate gain terms so the residual reduces to ``g_target * s_cal + n``:
+            - signals making up the calibrator keep the target term (only the *other* terms are
+              subtracted), contributing ``g_target * s`` to the residual;
+            - signals outside the calibrator are subtracted in full and thus removed.
+
+        Args:
+            target_term: Gain term being sampled, one of ``_ALL_GAIN_TERMS`` ("abs", "rel", "temp").
+            calibrate_against: Calibrator, one of "orbital_dipole", "full_sky", or "sky".
+            compsep_output: Optional sky-model override for the static-sky term.
+            downsample_factor: Block-averaging factor applied to both the data and the model
+                TODs; defaults to one second (``int(fsamp)``).
+            fill_masked: If True, fill masked samples with ``g_target * s_cal`` plus white noise.
+            rng: Optional NumPy generator for the masked-sample noise.
+
+        Returns:
+            Bunch with ``tod`` (residual), ``s_cal``, ``pix``, ``psi``, and ``mask``.
+        """
+        if target_term not in self._ALL_GAIN_TERMS:
+            raise ValueError(f"Unknown gain term '{target_term}'; expected one of "
+                             f"{self._ALL_GAIN_TERMS}.")
+        if calibrate_against not in self._CALIB_TARGET_SIGNALS:
+            raise ValueError(f"Unknown calibrate_against '{calibrate_against}'; expected one of "
+                             f"{tuple(self._CALIB_TARGET_SIGNALS)}.")
+
         factor = int(self.fsamp) if downsample_factor is None else int(downsample_factor)
         data = self._materialize_downsampled(factor)
         mask = self.get_mask("full", downsample_factor=factor)
         s_sky = self.get_static_sky_tod(compsep_output=compsep_output, downsample_factor=factor)
         s_orb = self.get_orbital_dipole_tod(downsample_factor=factor)
-        s_cal = s_sky + s_orb
-        # Relative-gain sampling removes the absolute and temporal gain terms, leaving only the
-        # detector-dependent residual gain multiplying the calibrator signal.
-        subtract = (("sky", ("abs", "temp")), ("orbital_dipole", ("abs", "temp")))
 
-        tod = self.get_tod(subtract=subtract, downsample_factor=factor, compsep_output=compsep_output)
+        calib_signals = self._CALIB_TARGET_SIGNALS[calibrate_against]
+        other_terms = tuple(t for t in self._ALL_GAIN_TERMS if t != target_term)
+        # Calibrator signals keep the target gain term (subtract only the others); non-calibrator
+        # signals are subtracted in full so they drop out of the residual entirely.
+        subtract = tuple((name, other_terms if name in calib_signals else self._ALL_GAIN_TERMS)
+                         for name in ("sky", "orbital_dipole"))
+        s_cal = np.zeros_like(s_sky)
+        if "sky" in calib_signals:
+            s_cal = s_cal + s_sky
+        if "orbital_dipole" in calib_signals:
+            s_cal = s_cal + s_orb
+
+        tod = self.get_tod(subtract=subtract, downsample_factor=factor,
+                           compsep_output=compsep_output)
         if fill_masked:
-            tod = self._fill_masked_calibration_samples(tod, mask, s_cal, ("rel",), factor, rng)
-        return Bunch(tod=tod, s_cal=s_cal, pix=data.pix, psi=data.psi, mask=mask)
-
-    def get_temp_calib_tod(
-        self,
-        *,
-        compsep_output: NDArray | None = None,
-        downsample_factor: int | None = None,
-        fill_masked: bool = True,
-        rng: np.random.Generator | None = None,
-    ) -> Bunch:
-        """Return the residual, calibrator signal, and mask used for temporal-gain sampling."""
-        factor = int(self.fsamp) if downsample_factor is None else int(downsample_factor)
-        data = self._materialize_downsampled(factor)
-        mask = self.get_mask("full", downsample_factor=factor)
-        s_sky = self.get_static_sky_tod(compsep_output=compsep_output, downsample_factor=factor)
-        s_orb = self.get_orbital_dipole_tod(downsample_factor=factor)
-        s_cal = s_sky + s_orb
-        # Temporal-gain sampling removes the band-mean and detector-mean gains so the residual
-        # only carries the scan-dependent gain fluctuation.
-        subtract = (("sky", ("abs", "rel")), ("orbital_dipole", ("abs", "rel")))
-
-        tod = self.get_tod(subtract=subtract, downsample_factor=factor, compsep_output=compsep_output)
-        if fill_masked:
-            tod = self._fill_masked_calibration_samples(tod, mask, s_cal, ("temp",), factor, rng)
+            tod = self._fill_masked_calibration_samples(tod, mask, s_cal, (target_term,), factor,
+                                                        rng)
         return Bunch(tod=tod, s_cal=s_cal, pix=data.pix, psi=data.psi, mask=mask)
 
 

@@ -94,13 +94,14 @@ class TODSamples:
         all ranks on the same band.
     """
 
+    TOD_PS_NBIN = 100  # Fixed bin count for the optional low-resolution TOD power spectra.
+
     def __init__(self,
                  experiment_data: DetGroupTOD,
                  params: Bunch,
                  my_band: Bunch,
                  band_comm: MPI.Comm,
                  chain: int,
-                 noise_psd_class: str = "oof",
                  ):
         # Meta-information
         self.params = params
@@ -110,10 +111,38 @@ class TODSamples:
         self.band_name = experiment_data.band_name
         self.ndet = experiment_data.ndet
         self.nscans = experiment_data.nscans
+        # The noise model defines how many parameters per detector-scan (first entry is sigma0).
+        self.noise_model = experiment_data.noise_model
+        self.npar = self.noise_model.npar
         self.scan_idx_start = experiment_data.scan_idx_start
         self.scan_idx_stop = experiment_data.scan_idx_stop
         self.scan_ids = np.array([scan.scan_id for scan in experiment_data.scans])
         self.jumps = JumpCatalog.empty(self.nscans, self.ndet)
+        # Per detector-scan acceptance flag. Currently always True (no scans rejected); kept as a
+        # chain-tracked quantity so scan rejection can become a sampled step in the future.
+        self.accept = np.ones((self.nscans, self.ndet), dtype=bool)
+
+        # Low-resolution (log-binned) TOD power spectra, written to the chain by default: a shared
+        # binned frequency axis plus the binned periodograms of several per-detector-scan TOD views
+        # (all in detector units): the raw TOD, the correlated-noise realization, the TOD with only
+        # the correlated noise removed (sky + white noise retained), and the residual (sky model,
+        # orbital dipole, and correlated noise all subtracted). Filled during TOD processing. The
+        # binned frequency edges differ per scan (scans have different lengths), so freqs are stored.
+        ps_shape = (self.nscans, self.ndet, self.TOD_PS_NBIN)
+        self.tod_ps_freqs = np.full(ps_shape, np.nan, dtype=np.float32)
+        self.tod_ps_ncorr = np.full(ps_shape, np.nan, dtype=np.float32)
+        self.tod_ps_raw = np.full(ps_shape, np.nan, dtype=np.float32)
+        self.tod_ps_ncorrsub = np.full(ps_shape, np.nan, dtype=np.float32)
+        self.tod_ps_residual = np.full(ps_shape, np.nan, dtype=np.float32)
+
+        # Optional DEBUG: the entire per-sample correlated-noise (n_corr) TODs, written to the chain
+        # only when explicitly requested (the data is very large). Collected ragged as one float32
+        # array per detector-scan; ``None`` disables collection.
+        if bool(getattr(params.general, "write_ncorr_tods_to_chain", False)):
+            self.ncorr_tods: list[list[NDArray | None]] | None = \
+                [[None] * self.ndet for _ in range(self.nscans)]
+        else:
+            self.ncorr_tods = None
 
         init_chain_path = getattr(params.general, "init_chain_path", False)
         init_from_chain = bool(init_chain_path)
@@ -125,7 +154,7 @@ class TODSamples:
             if self.band_comm.Get_rank() == 0:
                 logger.info("No previous chain provided. Starting fresh Gibbs chain.")
 
-            self.noise_params = np.zeros((self.nscans, self.ndet, 3)) + np.nan
+            self.noise_params = np.zeros((self.nscans, self.ndet, self.npar)) + np.nan
             self.abs_gain = 0.0
             self.rel_gain = np.zeros((self.ndet))
             self.temporal_gain = np.zeros((self.nscans, self.ndet))
@@ -143,9 +172,14 @@ class TODSamples:
                     for idet, det in enumerate(scan.detectors):
                         self.noise_params[iscan,idet] = det.init_scalars[1:]
             else:
-                # Option 3: Fallback to sensible defaults.
-                logger.warning("Did not find initial noise parameters, falling back to sensible defaults.")
-                self.noise_params[:] = np.array([1e-3, 0.1, -1.0])
+                # Option 3: Fall back to the noise model's default parameters (ensuring a finite
+                # sigma0, which the model leaves as NaN to be estimated from the data).
+                logger.warning("Did not find initial noise parameters, falling back to the noise "
+                               "model's default parameters.")
+                default_params = np.array(self.noise_model.params, dtype=np.float64)
+                if not np.isfinite(default_params[0]):
+                    default_params[0] = 1e-3
+                self.noise_params[:] = default_params
 
             if "gain" in my_band.detectors[experiment_data.scans[0].detectors[0].name]:
                 for iscan, scan in enumerate(experiment_data.scans):
@@ -196,7 +230,8 @@ class TODSamples:
                 try:
                     local_indices = [global_id_to_index[sid] for sid in self.scan_ids]
                 except KeyError as e:
-                    raise ValueError(f"Local scan ID {e} not found in the global chain file {latest_file}.")
+                    raise ValueError(f"Local scan ID {e} not found in the global chain file "
+                                     f"{init_chain_path}.") from e
 
                 # 3. Load Per-Band and Per-Detector arrays (Identical across ranks)
                 self.abs_gain = float(f["abs_gain"][...]) if "abs_gain" in f else None
@@ -205,6 +240,7 @@ class TODSamples:
                 # 4. Load and slice Per-Scan arrays (Distributed across ranks)
                 self.temporal_gain = f["temporal_gain"][local_indices, :] if "temporal_gain" in f else None
                 self.noise_params = f["noise_params"][local_indices, ...] if "noise_params" in f else None
+                self.accept = f["accept"][local_indices, ...].astype(bool)
                 self.jumps = JumpCatalog.from_hdf5(f, local_indices, self.ndet)
 
         if self.band_comm.Get_rank() == 0:
@@ -233,6 +269,26 @@ class TODSamples:
         if self.temporal_gain is not None:
             gain[:] += self.temporal_gain
         return gain
+
+
+    def _pack_ncorr_tods(self) -> tuple[NDArray, NDArray]:
+        """Pack the optional per-(scan, det) correlated-noise TODs for ragged chain storage.
+
+        Returns a ``(nscans, ndet)`` int64 array of per-detector-scan lengths and a 1-D float32
+        concatenation of all segments in scan-major, detector-minor order (matching how the
+        gather routines concatenate). The reader reconstructs each TOD by walking the lengths.
+        """
+        lengths = np.zeros((self.nscans, self.ndet), dtype=np.int64)
+        segments = []
+        for iscan in range(self.nscans):
+            for idet in range(self.ndet):
+                seg = self.ncorr_tods[iscan][idet]
+                if seg is not None:
+                    seg = np.asarray(seg, dtype=np.float32).ravel()
+                    lengths[iscan, idet] = seg.size
+                    segments.append(seg)
+        flat = np.concatenate(segments) if segments else np.zeros(0, dtype=np.float32)
+        return lengths, flat
 
 
     def write_chain_to_file(self, itr: int):
@@ -274,6 +330,30 @@ class TODSamples:
             noise_params_global = _gather_scan_distributed_array(band_comm, self.noise_params,
                                                                  scans_per_rank)
 
+        # 4b. Acceptance flags (per-scan per-detector; stored as int8 for MPI/HDF compatibility)
+        accept_global = _gather_scan_distributed_array(band_comm, self.accept.astype(np.int8),
+                                                       scans_per_rank)
+
+        # 4c. Low-resolution TOD power spectra (per-scan per-detector per-bin).
+        tod_ps_freqs_global = _gather_scan_distributed_array(band_comm, self.tod_ps_freqs,
+                                                            scans_per_rank)
+        tod_ps_ncorr_global = _gather_scan_distributed_array(band_comm, self.tod_ps_ncorr,
+                                                            scans_per_rank)
+        tod_ps_raw_global = _gather_scan_distributed_array(band_comm, self.tod_ps_raw,
+                                                          scans_per_rank)
+        tod_ps_ncorrsub_global = _gather_scan_distributed_array(band_comm, self.tod_ps_ncorrsub,
+                                                               scans_per_rank)
+        tod_ps_residual_global = _gather_scan_distributed_array(band_comm, self.tod_ps_residual,
+                                                               scans_per_rank)
+
+        # 4d. Optional DEBUG: full per-sample correlated-noise TODs (ragged per-scan per-detector).
+        ncorr_lengths_global = ncorr_flat_global = None
+        if self.ncorr_tods is not None:
+            ncorr_lengths_local, ncorr_flat_local = self._pack_ncorr_tods()
+            ncorr_lengths_global = _gather_scan_distributed_array(band_comm, ncorr_lengths_local,
+                                                                 scans_per_rank)
+            ncorr_flat_global = _gather_variable_length_1d_array(band_comm, ncorr_flat_local)
+
         # 5. Jump corrections (per-scan per-detector ragged quantity)
         jump_counts_local, jump_locations_local, jump_offsets_local = self.jumps.pack()
         jump_counts_global = _gather_scan_distributed_array(band_comm, jump_counts_local,
@@ -302,6 +382,15 @@ class TODSamples:
                     file["temporal_gain"] = temporal_gain_global
                 if noise_params_global is not None:
                     file["noise_params"] = noise_params_global
+                file["accept"] = accept_global
+                file["tod_ps_freqs"] = tod_ps_freqs_global
+                file["tod_ps_ncorr"] = tod_ps_ncorr_global
+                file["tod_ps_raw"] = tod_ps_raw_global
+                file["tod_ps_ncorrsub"] = tod_ps_ncorrsub_global
+                file["tod_ps_residual"] = tod_ps_residual_global
+                if ncorr_lengths_global is not None:
+                    file["ncorr_tod_lengths"] = ncorr_lengths_global
+                    file["ncorr_tod_flat"] = ncorr_flat_global
                 if jump_counts_global is not None:
                     file["jump_counts"] = jump_counts_global
                     file["jump_locations"] = jump_locations_global

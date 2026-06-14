@@ -149,10 +149,15 @@ class DetectorTOD:
             else flag_encoded
         )
         self._bad_data_bitmask = bad_data_bitmask
-        self._huffman_tree = huffman_tree
         self._huffman_symbols = huffman_symbols
-        self._huffman_tree2 = huffman_tree2
+        self._huffman_tree = huffman_tree
+        # C++ decoder accepts only int64 for the tree.
+        if self._huffman_tree is not None:
+            self._huffman_tree = self._huffman_tree.astype(np.int64, copy=False)
         self._huffman_symbols2 = huffman_symbols2
+        self._huffman_tree2 = huffman_tree2
+        if self._huffman_tree2 is not None:
+            self._huffman_tree2 = self._huffman_tree2.astype(np.int64, copy=False)
         self._tod_is_compressed = tod_is_compressed
         self._flag_is_compressed = flag_is_compressed
         # The Huffman decoder expects uint8 arrays; for bytes and HDF5-backed
