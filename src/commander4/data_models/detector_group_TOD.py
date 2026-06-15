@@ -41,6 +41,28 @@ class DetGroupTOD:
         self.nscans_allranks: int = 0  # Total number of scans across all ranks (on this band).
         self.noise_model = noise_model
 
+    def iter_detector_scans(self, accept: NDArray | None = None):
+        """Iterate over present detector-scans, yielding ``(iscan, det)`` pairs.
+
+        ``ScanTOD.detectors`` is sparse -- each scan lists only the detectors actually present in it
+        -- so this nested walk is the canonical way to traverse detector-scans. The detector's
+        full-band column ``det.det_idx_fullband`` is the index into the dense ``(nscans, ndet)``
+        per-detector sample arrays (gain, noise params, accept, ...); the per-scan enumerate position
+        must never be used for that, and this iterator deliberately never exposes one.
+
+        Args:
+            accept: Optional ``(nscans, ndet)`` boolean mask. When given, detector-scans whose entry
+                is False are skipped, so callers process only accepted (good-quality) data.
+
+        Yields:
+            tuple[int, DetectorTOD]: the local scan index ``iscan`` and the present detector ``det``.
+        """
+        for iscan, scan in enumerate(self.scans):
+            for det in scan.detectors:
+                if accept is not None and not accept[iscan, det.det_idx_fullband]:
+                    continue
+                yield iscan, det
+
     def apply_N_inv(self, tod: NDArray, noise_params: NDArray, samprate: float|None = None,
                     inplace=False) -> NDArray:
         """ Applies the inverse noise covariance N^-1 of this Det-Group to the input TOD, using the

@@ -233,7 +233,7 @@ def _make_real_view(monkeypatch):
     pix = rng.integers(0, 12, size=NTOD)        # Valid pixels for the nside=1 experiment below.
     psi = rng.uniform(0.0, np.pi, size=NTOD)
     det = SimpleNamespace(tod=rng.normal(size=NTOD), ntod=NTOD, fsamp=float(FACTOR),
-                          get_pix_psi=lambda: (pix, psi),
+                          det_idx_fullband=0, get_pix_psi=lambda: (pix, psi),
                           orb_dir_vec=np.array([1.0, 0.0, 0.0], dtype=np.float32))
     experiment_data = SimpleNamespace(scans=[SimpleNamespace(detectors=[det])], nside=1, nu=30.0)
     no_jump = SimpleNamespace(is_empty=lambda: True)
@@ -242,7 +242,7 @@ def _make_real_view(monkeypatch):
                                   temporal_gain=np.array([[0.25]]),
                                   accept=np.ones((1, 1), dtype=bool))
     skymap = rng.normal(size=(3, 12))
-    view = TODView(experiment_data, tod_samples, compsep_output=skymap).focus(0, 0)
+    view = TODView(experiment_data, tod_samples, compsep_output=skymap).focus(0, det)
     s_full = skymap[0, pix] + np.cos(2*psi)*skymap[1, pix] + np.sin(2*psi)*skymap[2, pix]
     return view, det, s_full
 

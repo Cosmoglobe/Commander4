@@ -229,11 +229,12 @@ def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetGroupTOD, band_p
     for scan in detector_data.scans:
         for det in scan.detectors:
             start_bench("orbdip")
+            pix, psi = det.get_pix_psi()
             ntod = det.tod.size
             det.tod[:] = np.zeros(ntod, dtype=np.float32)
-            det.tod[:] = I[det.pix] + Q[det.pix]*np.cos(2*det.psi) + U[det.pix]*np.sin(2*det.psi)
+            det.tod[:] = I[pix] + Q[pix]*np.cos(2*psi) + U[pix]*np.sin(2*psi)
             if sim_params.include_OrbitalDipole:
-                det.tod[:] += get_orbital_dipole(det, det.pix, freq, units)
+                det.tod[:] += get_orbital_dipole(det, pix, freq, units)
             stop_bench("orbdip")
 
             start_bench("noise")

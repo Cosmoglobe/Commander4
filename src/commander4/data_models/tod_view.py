@@ -6,6 +6,7 @@ from typing import Literal
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.TOD_samples import TODSamples
 from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 
@@ -64,13 +65,46 @@ class TODView:
         self._orbital_dipole = None
         self._downsampled: dict[int, Bunch] = {}
 
-    def focus(self, iscan: int, idet: int) -> "TODView":
-        """Focus the view on one detector and discard any previous materialization."""
-        self._det = self.experiment_data.scans[iscan].detectors[idet]
+    def focus(self, iscan: int, det: DetectorTOD) -> "TODView":
+        """Focus the view on one present detector and discard any previous materialization.
+
+        Args:
+            iscan: Scan index, local to this rank.
+            det: The detector to focus on -- an element of ``scans[iscan].detectors`` (which holds
+                only the detectors actually present in that scan). Its full-band index
+                ``det.det_idx_fullband`` is the column used to address every per-detector sample
+                array, so detectors absent from a scan are simply skipped rather than misaligning
+                the dense ``(nscans, ndet)`` arrays.
+        """
+        self._det = det
         self._iscan = iscan
-        self._idet = idet
+        self._idet = det.det_idx_fullband  # full-band column in the (nscans, ndet) sample arrays
         self._clear_cache()
         return self
+
+    def iter_focused(self, *, accepted_only: bool = False):
+        """Focus on each present detector-scan in turn, yielding this re-focused view.
+
+        Canonical detector-scan loop for TOD processing. It folds away the per-detector boilerplate
+        (``focus`` + the ``accept`` check) and, importantly, never exposes a per-scan detector
+        position that could be mistaken for a dense-array column: address the ``(nscans, ndet)``
+        sample arrays through ``view.idet`` (the full-band column) and ``view.iscan`` only.
+
+        The same view instance is re-focused and yielded on every iteration (matching the
+        one-detector-at-a-time design), so callers must consume each view within the loop body and
+        not retain it across iterations.
+
+        Args:
+            accepted_only: If True, skip detector-scans whose ``accept`` flag is False (bad data);
+                if False (default), every present detector-scan is yielded (e.g. white-noise/jump
+                passes).
+
+        Yields:
+            TODView: this view, focused on the current present detector-scan.
+        """
+        accept = self.tod_samples.accept if accepted_only else None
+        for iscan, det in self.experiment_data.iter_detector_scans(accept):
+            yield self.focus(iscan, det)
 
     def _require_focus(self):
         """Return the current detector or raise if the view was not focused yet."""
@@ -85,6 +119,7 @@ class TODView:
 
     @property
     def idet(self) -> int:
+        """Full-band detector index (``det_idx_fullband``): the column in per-detector arrays."""
         self._require_focus()
         return self._idet
 
@@ -111,7 +146,8 @@ class TODView:
 
     @property
     def accept(self) -> bool:
-        """Whether the focused detector-scan is accepted (currently always True)."""
+        """Whether the focused detector-scan is accepted, i.e. present *and* not flagged as bad
+        data. ``accept`` (data quality) is distinct from ``present`` (data exists at all)."""
         self._require_focus()
         return bool(self.tod_samples.accept[self._iscan, self._idet])
 

@@ -132,18 +132,14 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
     if pols == "IQU":
         mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)
-        for iscan, scan in enumerate(experiment_data.scans):
-            for idet, det in enumerate(scan.detectors):
-                view = scan_view.focus(iscan, idet)
-                if not view.accept:
-                    continue
-                good_data_mask = view.good_data_mask
-                pix = view.pix[good_data_mask]
-                psi = view.psi[good_data_mask]
-                sigma0 = view.sigma0
-                gain = view.get_gain()
-                inv_var = (gain/sigma0)**2
-                mapmaker_invvar.accumulate_to_map(inv_var, pix, psi, response=view.det_response)
+        for view in scan_view.iter_focused(accepted_only=True):
+            good_data_mask = view.good_data_mask
+            pix = view.pix[good_data_mask]
+            psi = view.psi[good_data_mask]
+            sigma0 = view.sigma0
+            gain = view.get_gain()
+            inv_var = (gain/sigma0)**2
+            mapmaker_invvar.accumulate_to_map(inv_var, pix, psi, response=view.det_response)
         mapmaker_invvar.gather_map()
         mapmaker_invvar.normalize_map()
         if ismaster:
@@ -155,17 +151,13 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
                     CG_maxiter=params.general.CG_mapmaker.maxiter)
     elif pols == "I":
         mapmaker_invvar = WeightsMapmaker(band_comm, experiment_data.nside)
-        for iscan, scan in enumerate(experiment_data.scans):
-            for idet, det in enumerate(scan.detectors):
-                view = scan_view.focus(iscan, idet)
-                if not view.accept:
-                    continue
-                good_data_mask = view.good_data_mask
-                pix = view.pix[good_data_mask]
-                sigma0 = view.sigma0
-                gain = view.get_gain()
-                inv_var = (gain/sigma0)**2
-                mapmaker_invvar.accumulate_to_map(inv_var, pix)
+        for view in scan_view.iter_focused(accepted_only=True):
+            good_data_mask = view.good_data_mask
+            pix = view.pix[good_data_mask]
+            sigma0 = view.sigma0
+            gain = view.get_gain()
+            inv_var = (gain/sigma0)**2
+            mapmaker_invvar.accumulate_to_map(inv_var, pix)
         mapmaker_invvar.gather_map()
         if ismaster:
             precond = InvNPreconditionerI(utils.without_nan(1./mapmaker_invvar.final_map))
@@ -191,84 +183,80 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
         worst_residual_ncorr = 0
 
     ### MAIN SCAN LOOP ###
-    for iscan, scan in enumerate(experiment_data.scans):
-        for idet, det in enumerate(scan.detectors):
-            view = scan_view.focus(iscan, idet)
-            if not view.accept:
-                continue
-            pix, psi = view.pix, view.psi
-            good_data_mask = view.good_data_mask
-            pix_masked = pix[good_data_mask]
-            psi_masked = psi[good_data_mask]
-            sigma0 = view.sigma0
-            gain = view.get_gain()
-            inv_var = (gain/sigma0)**2
-            response = view.det_response if pols == "IQU" else None
+    for view in scan_view.iter_focused(accepted_only=True):
+        pix, psi = view.pix, view.psi
+        good_data_mask = view.good_data_mask
+        pix_masked = pix[good_data_mask]
+        psi_masked = psi[good_data_mask]
+        sigma0 = view.sigma0
+        gain = view.get_gain()
+        inv_var = (gain/sigma0)**2
+        response = view.det_response if pols == "IQU" else None
 
-            ### ORBITAL DIPOLE ###
-            sky_orb_dipole = view.get_orbital_dipole_tod()
-            d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
+        ### ORBITAL DIPOLE ###
+        sky_orb_dipole = view.get_orbital_dipole_tod()
+        d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
+        if pols == "IQU":
+            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi,
+                                                 response=response)
+        else:
+            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
+
+        ### CORRELATED NOISE SAMPLING ###
+        if ncorr_cfg.do_ncorr:
+            sky_subtracted_TOD = view.get_tod(
+                subtract=(("sky", TODView._ALL_GAIN_TERMS),
+                          ("orbital_dipole", TODView._ALL_GAIN_TERMS)),
+            )
+            res = sample_correlated_noise(
+                sky_subtracted_TOD, view.full_mask, np.array(view.noise_params, copy=True),
+                experiment_data.noise_model, view.fsamp, cg_err_tol=ncorr_cfg.cg_err_tol,
+                cg_max_iter=ncorr_cfg.cg_max_iter, sample_params=ncorr_cfg.do_param,
+                sample_sigma0=ncorr_cfg.sample_sigma0, nomono=ncorr_cfg.nomono,
+                onlymono=ncorr_cfg.onlymono,
+                sigma0_dec=ncorr_cfg.sigma0_dec, psd_fit_nu_min=ncorr_cfg.psd_fit_nu_min,
+                psd_fit_nu_max=ncorr_cfg.psd_fit_nu_max, psd_bin=ncorr_cfg.psd_bin)
+            n_corr_est = res.n_corr
             if pols == "IQU":
-                mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi,
-                                                     response=response)
+                mapmaker_ncorr.accumulate_to_map(
+                    (n_corr_est/gain).astype(np.float32, copy=False),
+                    inv_var, pix, psi, response=response)
             else:
-                mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
+                mapmaker_ncorr.accumulate_to_map(
+                    (n_corr_est/gain).astype(np.float32, copy=False),
+                    inv_var, pix, psi)
+            tod_samples.noise_params[view.iscan, view.idet, :] = res.noise_params
+            if ncorr_cfg.do_param:
+                sampled_params.append(np.array(res.noise_params, copy=True))
+            if not res.converged:
+                num_failed_convergences_ncorr += 1
+            if res.high_var:
+                num_too_high_var_ncorr += 1
+            worst_residual_ncorr = max(worst_residual_ncorr, res.residual)
+            residuals.append(res.residual)
+            niters.append(res.niter)
 
-            ### CORRELATED NOISE SAMPLING ###
-            if ncorr_cfg.do_ncorr:
-                sky_subtracted_TOD = view.get_tod(
-                    subtract=(("sky", TODView._ALL_GAIN_TERMS),
-                              ("orbital_dipole", TODView._ALL_GAIN_TERMS)),
-                )
-                res = sample_correlated_noise(
-                    sky_subtracted_TOD, view.full_mask, np.array(view.noise_params, copy=True),
-                    experiment_data.noise_model, view.fsamp, cg_err_tol=ncorr_cfg.cg_err_tol,
-                    cg_max_iter=ncorr_cfg.cg_max_iter, sample_params=ncorr_cfg.do_param,
-                    sample_sigma0=ncorr_cfg.sample_sigma0, nomono=ncorr_cfg.nomono,
-                    onlymono=ncorr_cfg.onlymono,
-                    sigma0_dec=ncorr_cfg.sigma0_dec, psd_fit_nu_min=ncorr_cfg.psd_fit_nu_min,
-                    psd_fit_nu_max=ncorr_cfg.psd_fit_nu_max, psd_bin=ncorr_cfg.psd_bin)
-                n_corr_est = res.n_corr
-                if pols == "IQU":
-                    mapmaker_ncorr.accumulate_to_map(
-                        (n_corr_est/gain).astype(np.float32, copy=False),
-                        inv_var, pix, psi, response=response)
-                else:
-                    mapmaker_ncorr.accumulate_to_map(
-                        (n_corr_est/gain).astype(np.float32, copy=False),
-                        inv_var, pix, psi)
-                tod_samples.noise_params[iscan, idet, :] = res.noise_params
-                if ncorr_cfg.do_param:
-                    sampled_params.append(np.array(res.noise_params, copy=True))
-                if not res.converged:
-                    num_failed_convergences_ncorr += 1
-                if res.high_var:
-                    num_too_high_var_ncorr += 1
-                worst_residual_ncorr = max(worst_residual_ncorr, res.residual)
-                residuals.append(res.residual)
-                niters.append(res.niter)
+            d_sky -= n_corr_est
 
-                d_sky -= n_corr_est
+        _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view,
+                                n_corr_est if ncorr_cfg.do_ncorr else None)
 
-            _record_tod_diagnostics(tod_samples, iscan, idet, view,
-                                    n_corr_est if ncorr_cfg.do_ncorr else None)
+        d_sky_masked = d_sky[good_data_mask]
 
-            d_sky_masked = d_sky[good_data_mask]
-
-            cg_mapmaker.accum_to_RHS(
-                        scan_tod=det,
-                        sigma0=sigma0,
-                        pix=pix_masked,
-                        psi=psi_masked,
-                        scan_tod_arr=d_sky_masked/gain
-                        )
+        cg_mapmaker.accum_to_RHS(
+                    scan_tod=view.detector,
+                    sigma0=sigma0,
+                    pix=pix_masked,
+                    psi=psi_masked,
+                    scan_tod_arr=d_sky_masked/gain
+                    )
 
     ### PRINT NOISE SAMPLING STATS ###
     if ncorr_cfg.do_ncorr:
         log_corr_noise_stats(band_comm, experiment_data.nu, experiment_data.noise_model,
                              sampled_params, residuals, niters, num_failed_convergences_ncorr,
                              num_too_high_var_ncorr, worst_residual_ncorr,
-                             len(experiment_data.scans)*experiment_data.ndet)
+                             sum(len(s.detectors) for s in experiment_data.scans))
 
 
     ### GATHER AND NORMALIZE MAPS ###
@@ -389,24 +377,18 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
     # This is purely to reduce the maximum concurrent memory requirement, and is slightly slower
     # as we have to de-compress pix and psi twice.
     start_bench("binned-mapmaker")
-    nscans = len(experiment_data.scans)
-    ndet = experiment_data.ndet
     pols = experiment_data.pols
     scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
-    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)    
-    for iscan, scan in enumerate(experiment_data.scans):
-        for idet, det in enumerate(scan.detectors):
-            view = scan_view.focus(iscan, idet)
-            if not view.accept:
-                continue
-            good_data_mask = view.good_data_mask
-            pix = view.pix[good_data_mask]
-            psi = view.psi[good_data_mask]
-            sigma0 = view.sigma0
-            gain = view.get_gain()
-            # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
-            inv_var = (gain/sigma0)**2
-            mapmaker_invvar.accumulate_to_map(inv_var, pix, psi, response=view.det_response)
+    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)
+    for view in scan_view.iter_focused(accepted_only=True):
+        good_data_mask = view.good_data_mask
+        pix = view.pix[good_data_mask]
+        psi = view.psi[good_data_mask]
+        sigma0 = view.sigma0
+        gain = view.get_gain()
+        # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
+        inv_var = (gain/sigma0)**2
+        mapmaker_invvar.accumulate_to_map(inv_var, pix, psi, response=view.det_response)
     mapmaker_invvar.gather_map()
     mapmaker_invvar.normalize_map()
 
@@ -424,75 +406,72 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
     stop_bench("binned-mapmaker")
 
     ### MAIN SCAN LOOP ###
-    for iscan, scan in enumerate(experiment_data.scans):
-        for idet, det in enumerate(scan.detectors):
-            if not tod_samples.accept[iscan, idet]:
-                continue
-            start_bench("binned-mapmaker")
-            view = scan_view.focus(iscan, idet)
-            good_data_mask = view.good_data_mask
-            pix, psi = view.pix, view.psi
-            pix_masked = pix[good_data_mask]
-            psi_masked = psi[good_data_mask]
-            response = view.det_response
-            gain = view.get_gain()
-            sigma0 = view.sigma0
-            # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
-            inv_var = (gain/sigma0)**2
+    for view in scan_view.iter_focused(accepted_only=True):
+        start_bench("binned-mapmaker")
+        good_data_mask = view.good_data_mask
+        pix, psi = view.pix, view.psi
+        pix_masked = pix[good_data_mask]
+        psi_masked = psi[good_data_mask]
+        response = view.det_response
+        gain = view.get_gain()
+        sigma0 = view.sigma0
+        # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
+        inv_var = (gain/sigma0)**2
 
-            ### ORBITAL DIPOLE ###
-            sky_orb_dipole = view.get_orbital_dipole_tod()
-            d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
+        ### ORBITAL DIPOLE ###
+        sky_orb_dipole = view.get_orbital_dipole_tod()
+        d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
 
-            stop_bench("binned-mapmaker", increment_count=False)
-            ### CORRELATED NOISE SAMPLING ###
-            if ncorr_cfg.do_ncorr:
-                start_bench("ncorr-sampling")
-                sky_subtracted_TOD = view.get_tod(
-                    subtract=(("sky", TODView._ALL_GAIN_TERMS),
-                              ("orbital_dipole", TODView._ALL_GAIN_TERMS)),
-                )
-                res = sample_correlated_noise(
-                    sky_subtracted_TOD, view.full_mask, np.array(view.noise_params, copy=True),
-                    experiment_data.noise_model, view.fsamp, cg_err_tol=ncorr_cfg.cg_err_tol,
-                    cg_max_iter=ncorr_cfg.cg_max_iter, sample_params=ncorr_cfg.do_param,
-                    sample_sigma0=ncorr_cfg.sample_sigma0, nomono=ncorr_cfg.nomono,
-                    onlymono=ncorr_cfg.onlymono,
-                    sigma0_dec=ncorr_cfg.sigma0_dec, psd_fit_nu_min=ncorr_cfg.psd_fit_nu_min,
-                    psd_fit_nu_max=ncorr_cfg.psd_fit_nu_max, psd_bin=ncorr_cfg.psd_bin)
-                n_corr_est = res.n_corr
-                mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32, copy=False),
-                                                 inv_var, pix, psi, response=response)
-                tod_samples.noise_params[iscan,idet,:] = res.noise_params
-                if ncorr_cfg.do_param:
-                    sampled_params.append(np.array(res.noise_params, copy=True))
-                if not res.converged:
-                    num_failed_convergences_ncorr += 1
-                if res.high_var:
-                    num_too_high_var_ncorr += 1
-                worst_residual_ncorr = max(worst_residual_ncorr, res.residual)
-                residuals.append(res.residual)
-                niters.append(res.niter)
+        stop_bench("binned-mapmaker", increment_count=False)
+        ### CORRELATED NOISE SAMPLING ###
+        if ncorr_cfg.do_ncorr:
+            start_bench("ncorr-sampling")
+            sky_subtracted_TOD = view.get_tod(
+                subtract=(("sky", TODView._ALL_GAIN_TERMS),
+                          ("orbital_dipole", TODView._ALL_GAIN_TERMS)),
+            )
+            res = sample_correlated_noise(
+                sky_subtracted_TOD, view.full_mask, np.array(view.noise_params, copy=True),
+                experiment_data.noise_model, view.fsamp, cg_err_tol=ncorr_cfg.cg_err_tol,
+                cg_max_iter=ncorr_cfg.cg_max_iter, sample_params=ncorr_cfg.do_param,
+                sample_sigma0=ncorr_cfg.sample_sigma0, nomono=ncorr_cfg.nomono,
+                onlymono=ncorr_cfg.onlymono,
+                sigma0_dec=ncorr_cfg.sigma0_dec, psd_fit_nu_min=ncorr_cfg.psd_fit_nu_min,
+                psd_fit_nu_max=ncorr_cfg.psd_fit_nu_max, psd_bin=ncorr_cfg.psd_bin)
+            n_corr_est = res.n_corr
+            mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32, copy=False),
+                                             inv_var, pix, psi, response=response)
+            tod_samples.noise_params[view.iscan, view.idet, :] = res.noise_params
+            if ncorr_cfg.do_param:
+                sampled_params.append(np.array(res.noise_params, copy=True))
+            if not res.converged:
+                num_failed_convergences_ncorr += 1
+            if res.high_var:
+                num_too_high_var_ncorr += 1
+            worst_residual_ncorr = max(worst_residual_ncorr, res.residual)
+            residuals.append(res.residual)
+            niters.append(res.niter)
 
-                d_sky -= n_corr_est
-                stop_bench("ncorr-sampling")
-                if iscan == len(experiment_data.scans) - 1:
-                    log_memory("ncorr-sampling")
+            d_sky -= n_corr_est
+            stop_bench("ncorr-sampling")
 
-            _record_tod_diagnostics(tod_samples, iscan, idet, view,
-                                    n_corr_est if ncorr_cfg.do_ncorr else None)
+        _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view,
+                                n_corr_est if ncorr_cfg.do_ncorr else None)
 
-            d_sky_masked = d_sky[good_data_mask]
-            start_bench("binned-mapmaker")
-            mapmaker.accumulate_to_map(d_sky_masked/gain, inv_var, pix_masked, psi_masked, response=response)
-            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi, response=response)
-            stop_bench("binned-mapmaker", increment_count=False)
+        d_sky_masked = d_sky[good_data_mask]
+        start_bench("binned-mapmaker")
+        mapmaker.accumulate_to_map(d_sky_masked/gain, inv_var, pix_masked, psi_masked, response=response)
+        mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi, response=response)
+        stop_bench("binned-mapmaker", increment_count=False)
+    if ncorr_cfg.do_ncorr:
+        log_memory("ncorr-sampling")
 
     ### PRINT NOISE SAMPLING STATS ###
     if ncorr_cfg.do_ncorr:
         log_corr_noise_stats(band_comm, experiment_data.nu, experiment_data.noise_model,
                              sampled_params, residuals, niters, num_failed_convergences_ncorr,
-                             num_too_high_var_ncorr, worst_residual_ncorr, nscans*ndet)
+                             num_too_high_var_ncorr, worst_residual_ncorr,
+                             sum(len(s.detectors) for s in experiment_data.scans))
 
 
     start_bench("binned-mapmaker")
@@ -660,21 +639,18 @@ def estimate_white_noise(experiment_data: DetGroupTOD, tod_samples: TODSamples,
         tod_samples (TODSamples): Updated TOD samples with sigma0 estimates.
     """
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map)
-    for iscan, scan in enumerate(experiment_data.scans):
-        for idet, det in enumerate(scan.detectors):
-            view = scan_view.focus(iscan, idet)
-            # FIXME: Should maybe n_corr be subtracted here as well?
-            sky_subtracted_tod = view.get_tod(
-                subtract=(("sky", TODView._ALL_GAIN_TERMS),
-                          ("orbital_dipole", TODView._ALL_GAIN_TERMS)),
-            )
-            mask = view.full_mask
-            sigma0 = calc_sigma0_robust(sky_subtracted_tod, mask)
-            logassert(sigma0 != 0, "sigma0 is 0, which should never happen.", logger)
-            logassert(sigma0 != np.inf, "sigma0 is inf, which should never happen.", logger)
-            tod_samples.noise_params[iscan,idet,0] = sigma0
-        if iscan == len(experiment_data.scans) - 1:
-            log_memory("sigma0-est")
+    for view in scan_view.iter_focused():
+        # FIXME: Should maybe n_corr be subtracted here as well?
+        sky_subtracted_tod = view.get_tod(
+            subtract=(("sky", TODView._ALL_GAIN_TERMS),
+                      ("orbital_dipole", TODView._ALL_GAIN_TERMS)),
+        )
+        mask = view.full_mask
+        sigma0 = calc_sigma0_robust(sky_subtracted_tod, mask)
+        logassert(sigma0 != 0, "sigma0 is 0, which should never happen.", logger)
+        logassert(sigma0 != np.inf, "sigma0 is inf, which should never happen.", logger)
+        tod_samples.noise_params[view.iscan, view.idet, 0] = sigma0
+    log_memory("sigma0-est")
     return tod_samples
 
 
@@ -705,26 +681,24 @@ def sample_jump_detection(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
     offsets_local = []
     jump_counts_local = []
 
-    for iscan, scan in enumerate(experiment_data.scans):
-        for idet, det in enumerate(scan.detectors):
-            view = scan_view.focus(iscan, idet)
-            if getattr(view.detector, "_flag_encoded", None) is None or not hasattr(view.detector, "_full_mask"):
-                tod_samples.jumps.set(iscan, idet, None)
-                jump_counts_local.append(0)
-                continue
-            jump, num_skipped = JumpCorrection.detect(
-                view.tod,
-                view.flag,
-                view.full_mask,
-                n_window,
-                jump_bitmask=jump_bitmask,
-            )
-            tod_samples.jumps.set(iscan, idet, jump)
-            jump_counts_local.append(jump.size)
-            num_skipped_local += num_skipped
-            if not jump.is_empty():
-                offsets_local.extend(jump.offsets.astype(np.float64, copy=False))
-                num_applied_local += jump.size
+    for view in scan_view.iter_focused():
+        if getattr(view.detector, "_flag_encoded", None) is None or not hasattr(view.detector, "_full_mask"):
+            tod_samples.jumps.set(view.iscan, view.idet, None)
+            jump_counts_local.append(0)
+            continue
+        jump, num_skipped = JumpCorrection.detect(
+            view.tod,
+            view.flag,
+            view.full_mask,
+            n_window,
+            jump_bitmask=jump_bitmask,
+        )
+        tod_samples.jumps.set(view.iscan, view.idet, jump)
+        jump_counts_local.append(jump.size)
+        num_skipped_local += num_skipped
+        if not jump.is_empty():
+            offsets_local.extend(jump.offsets.astype(np.float64, copy=False))
+            num_applied_local += jump.size
 
     num_applied = band_comm.reduce(num_applied_local, op=MPI.SUM, root=0)
     num_skipped = band_comm.reduce(num_skipped_local, op=MPI.SUM, root=0)
@@ -852,24 +826,19 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
 
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map)
 
-    for iscan, scan in enumerate(experiment_data.scans):
-        for idet, det in enumerate(scan.detectors):
-            view = scan_view.focus(iscan, idet)
-            if not view.accept:  # Skip detector-scans flagged as bad; they carry no gain info.
-                continue
-            calib = view.get_calib_tod("abs", calibrate_against,
-                                       downsample_factor=downsample_factor)
-            s_cal = calib.s_cal
-            residual_tod = calib.tod
+    # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
+    for view in scan_view.iter_focused(accepted_only=True):
+        calib = view.get_calib_tod("abs", calibrate_against,
+                                   downsample_factor=downsample_factor)
+        s_cal = calib.s_cal
+        residual_tod = calib.tod
 
-            N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=1.0)
-            N_inv_d = experiment_data.apply_N_inv(residual_tod, view.noise_params, samprate=1.0)
+        N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=1.0)
+        N_inv_d = experiment_data.apply_N_inv(residual_tod, view.noise_params, samprate=1.0)
 
-            # Add to the numerator and denominator.
-            # sum_s_T_N_inv_d += np.dot(s_cal[mask], N_inv_d[mask])
-            # sum_s_T_N_inv_s += np.dot(s_cal[mask], N_inv_s[mask])
-            sum_s_T_N_inv_d += np.dot(s_cal, N_inv_d)
-            sum_s_T_N_inv_s += np.dot(s_cal, N_inv_s)
+        # Add to the numerator and denominator.
+        sum_s_T_N_inv_d += np.dot(s_cal, N_inv_d)
+        sum_s_T_N_inv_s += np.dot(s_cal, N_inv_s)
 
     # The g0 term is fully global, so we reduce across both all scans and all bands:
     sum_s_T_N_inv_d = band_comm.reduce(sum_s_T_N_inv_d, op=MPI.SUM, root=0)
@@ -929,25 +898,20 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map)
 
 
-    for iscan, scan in enumerate(experiment_data.scans):
-        for idet, det in enumerate(scan.detectors):
-            view = scan_view.focus(iscan, idet)
-            if not view.accept:  # Skip detector-scans flagged as bad; they carry no gain info.
-                continue
-            calib = view.get_calib_tod("rel", calibrate_against,
-                                       downsample_factor=downsample_factor)
-            s_cal = calib.s_cal
-            residual_tod = calib.tod
-            N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=1.0)
+    # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
+    for view in scan_view.iter_focused(accepted_only=True):
+        calib = view.get_calib_tod("rel", calibrate_against,
+                                   downsample_factor=downsample_factor)
+        s_cal = calib.s_cal
+        residual_tod = calib.tod
+        N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=1.0)
 
-            s_T_N_inv_s_scan = np.dot(s_cal, N_inv_s)
-            r_T_N_inv_s_scan = np.dot(residual_tod, N_inv_s)
-            # s_T_N_inv_s_scan = np.dot(s_tot[mask], N_inv_s[mask])
-            # r_T_N_inv_s_scan = np.dot(residual_tod[mask], N_inv_s[mask])
+        s_T_N_inv_s_scan = np.dot(s_cal, N_inv_s)
+        r_T_N_inv_s_scan = np.dot(residual_tod, N_inv_s)
 
-            # Add the contribution from this scan to the local sum
-            local_s_T_N_inv_s[idet] += s_T_N_inv_s_scan
-            local_r_T_N_inv_s[idet] += r_T_N_inv_s_scan
+        # Add the contribution from this scan to the local sum (full-band detector column).
+        local_s_T_N_inv_s[view.idet] += s_T_N_inv_s_scan
+        local_r_T_N_inv_s[view.idet] += r_T_N_inv_s_scan
 
     ### 2. Intra-Detector Reduction ###
     # Sum the local values across all ranks that share the same detector using det_comm.
@@ -1023,32 +987,29 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
     b_q_local = np.zeros((ndet, nscans_local), dtype=np.float64)
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map)
 
-    for iscan, scan in enumerate(experiment_data.scans):
-        for idet, det in enumerate(scan.detectors):
-            # I'm still not sure what way of dealing with the masked samples are best:
-            # 1. Replace masked values with 0s before FFT.
-            # 2. Replace masked values with n_corr realizations before FFT.
-            # 3. Remove masked values by reducing TOD size before FFTs.
-            # (simply passing the full data through the FFTs seems like a bad idea because of
-            # ringing from the large residual in the galactic plane).
+    # I'm still not sure what way of dealing with the masked samples are best:
+    # 1. Replace masked values with 0s before FFT.
+    # 2. Replace masked values with n_corr realizations before FFT.
+    # 3. Remove masked values by reducing TOD size before FFTs.
+    # (simply passing the full data through the FFTs seems like a bad idea because of
+    # ringing from the large residual in the galactic plane).
+    # Rejected detector-scans (accepted_only) contribute zero weight (A_qq = b_q = 0); the Wiener
+    # prior then fills their temporal gain from neighbors.
+    for view in scan_view.iter_focused(accepted_only=True):
+        calib = view.get_calib_tod("temp", calibrate_against,
+                                   downsample_factor=downsample_factor)
+        s_cal = calib.s_cal
+        residual_tod = calib.tod
 
-            view = scan_view.focus(iscan, idet)
-            if not view.accept:  # Rejected detector-scans contribute zero weight (A_qq = b_q = 0);
-                continue          # the Wiener prior then fills their temporal gain from neighbors.
-            calib = view.get_calib_tod("temp", calibrate_against,
-                                       downsample_factor=downsample_factor)
-            s_cal = calib.s_cal
-            residual_tod = calib.tod
+        N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=1.0)
+        N_inv_r = experiment_data.apply_N_inv(residual_tod, view.noise_params, samprate=1.0)
 
-            N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=1.0)
-            N_inv_r = experiment_data.apply_N_inv(residual_tod, view.noise_params, samprate=1.0)
+        # Calculate elements for the linear system
+        A_qq = np.dot(s_cal, N_inv_s)
+        b_q = np.dot(s_cal, N_inv_r)
 
-            # Calculate elements for the linear system
-            A_qq = np.dot(s_cal, N_inv_s)
-            b_q = np.dot(s_cal, N_inv_r)
-
-            A_qq_local[idet, iscan] = A_qq
-            b_q_local[idet, iscan] = b_q
+        A_qq_local[view.idet, view.iscan] = A_qq
+        b_q_local[view.idet, view.iscan] = b_q
 
     # Gather scan counts on all ranks (needed for gather/scatter with varying roots)
     scan_counts = np.array(band_comm.allgather(nscans_local), dtype=int)
