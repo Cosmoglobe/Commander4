@@ -109,14 +109,21 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                                        flag_encoded=flag_encoded,
                                        bad_data_bitmask=my_experiment.bad_data_bitmask,
                                        init_scalars=init_scalars)
+                if (detector.tod == 0).all():
+                    continue
+                if not np.isfinite(detector.tod).all():
+                    continue
+                if detector.full_mask.mean() < 0.5:
+                    continue
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
                 idet_accepted += 1
-        scanID = int(pid)
-        scan = ScanTOD(detector_list, 0., scanID)
-        scan_list.append(scan)
-        num_included += 1
+        if len(detector_list) > 0:
+            scanID = int(pid)
+            scan = ScanTOD(detector_list, 0., scanID)
+            scan_list.append(scan)
+            num_included += 1
         if i_pid % 10 == 0:
             gc.collect()
 

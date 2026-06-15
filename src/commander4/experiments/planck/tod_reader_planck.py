@@ -128,15 +128,13 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
                                        flag_encoded=flag_encoded,
                                        bad_data_bitmask = 6111232,
                                        init_scalars = init_scalars)
-                # Bad samples are handled per-sample by the detector's full_mask (flag &
-                # bad_data_bitmask), rather than dropping the whole scan. Following the SO readers,
-                # only skip detectors with too little usable data (or pathological TOD magnitudes).
-                unmasked_fraction = np.sum(detector.full_mask)/detector.full_mask.size
-                if unmasked_fraction < 0.99:
-                    continue
                 if (detector.tod == 0).all():
                     continue
-                if np.mean(np.abs(tod)) > 0.001 or np.std(tod) > 0.001:
+                if np.mean(np.abs(detector.tod)) > 0.001 or np.std(detector.tod) > 0.001:
+                    continue
+                if not np.isfinite(detector.tod).all():
+                    continue
+                if detector.full_mask.mean() < 0.5:
                     continue
                 detector_list.append(detector)
                 ntod_sum_original += ntod

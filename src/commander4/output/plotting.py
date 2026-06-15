@@ -66,12 +66,17 @@ def _get_component_map(
     smoothing_scale_radians: float,
 ) -> np.ndarray:
     npix = 12 * nside**2
+    use_raw = not np.isfinite(freq)
     if npol == 1:
         if component.is_pol:
             return np.zeros((npix,))
+        if use_raw:
+            return component.get_component_map(nside, fwhm=smoothing_scale_radians)[0]
         return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[0]
 
     if component.is_pol:
+        if use_raw:
+            return component.get_component_map(nside, fwhm=smoothing_scale_radians)[ipol]
         return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[ipol]
     return np.zeros((npix,))
 
@@ -487,10 +492,12 @@ def plot_components(
             plt.close()
 
             Cl = hp.alm2cl(hp.map2alm(comp_map))
+            Dl = Z * Cl
             plt.figure()
-            plt.plot(ells, Z * Cl, label=component.longname)
+            plt.plot(ells, Dl, label=component.longname)
             plt.xscale("log")
-            plt.yscale("log")
+            if np.any(Dl > 0):
+                plt.yscale("log")
             plt.savefig(
                 os.path.join(
                     dl_out,
@@ -506,7 +513,8 @@ def plot_components(
             plt.figure()
             plt.plot(ells, Cl, label=component.longname)
             plt.xscale("log")
-            plt.yscale("log")
+            if np.any(Cl > 0):
+                plt.yscale("log")
             plt.savefig(
                 os.path.join(
                     cl_out,

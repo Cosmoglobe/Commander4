@@ -660,6 +660,97 @@ def main() -> int:
                 elapsed,
             )
 
+    # --- Plot component maps for compsep iterations with no corresponding datamaps ---
+    compsep_plot_types = {"combo", "components"} & map_types
+    if compsep_plot_types and params is not None and compsep_files:
+        handled = {(chain, iteration) for _, chain, iteration in selected_maps}
+        compsep_only_items = sorted(
+            (k, v) for k, v in compsep_files.items() if k not in handled
+        )
+        if compsep_only_items:
+            LOGGER.info(
+                "Found %d compsep-only (chain, iter) pairs without datamaps; plotting components.",
+                len(compsep_only_items),
+            )
+            nside = nside_target or getattr(getattr(params, "general", None), "nside", 512)
+            npix = 12 * nside**2
+
+            bands_info: list[tuple[str, float, float]] = []
+
+            def _extract_bands_from_bunch(container, prefix: str = "") -> None:
+                """Recursively walk a Bunch/dict and collect entries that look like bands."""
+                items = container.items() if hasattr(container, "items") else enumerate(container)
+                for key, val in items:
+                    if hasattr(val, "freq") or hasattr(val, "nu"):
+                        nu_val = getattr(val, "freq", None)
+                        if nu_val is None:
+                            nu_val = getattr(val, "nu", np.nan)
+                        fwhm_val = getattr(val, "fwhm", np.nan)
+                        label = f"{prefix}{key}" if prefix else str(key)
+                        bands_info.append((
+                            label,
+                            float(nu_val) if nu_val is not None else np.nan,
+                            float(fwhm_val) if fwhm_val is not None else np.nan,
+                        ))
+                    elif hasattr(val, "items") or hasattr(val, "__iter__") and not isinstance(val, str):
+                        sub_prefix = f"{prefix}{key}_" if prefix else f"{key}_"
+                        try:
+                            _extract_bands_from_bunch(val, sub_prefix)
+                        except Exception:
+                            pass
+
+            for attr in ("experiments", "CompSep_bands"):
+                container = getattr(params, attr, None)
+                if container is None:
+                    continue
+                # Skip empty lists/dicts
+                try:
+                    if not container:
+                        continue
+                except Exception:
+                    pass
+                _extract_bands_from_bunch(container, prefix="")
+                if bands_info:
+                    break
+
+            if not bands_info:
+                bands_info = [("compsep", np.nan, np.nan)]
+
+            for (chain, iteration), compsep_path in compsep_only_items:
+                if chain_filter is not None and chain not in chain_filter:
+                    continue
+                if iter_filter is not None and iteration not in iter_filter:
+                    continue
+                comp_list = comp_cache.get((chain, iteration))
+                if comp_list is None:
+                    comp_list = _load_compsep_components(params, compsep_path)
+                    comp_cache[(chain, iteration)] = comp_list
+                if not comp_list:
+                    LOGGER.debug("No components loaded for chain=%d iter=%d", chain, iteration)
+                    continue
+
+                for det_label, nu, fwhm_arcmin in bands_info:
+                    exp_part, _, band_part = det_label.partition("_")
+                    if not _matches_pixel_filter(
+                        pixel_filter, det_label, exp_part or None, band_part or det_label
+                    ):
+                        continue
+                    dummy_signal = np.zeros((3, npix))
+                    dummy_maps = MapBundle(
+                        signal=dummy_signal,
+                        rms=None, corrnoise=None, orbdipole=None,
+                        skymodel=None, residual=None,
+                        nside=nside, npol=3,
+                    )
+                    LOGGER.debug(
+                        "Plotting compsep-only chain=%d iter=%d band=%s nu=%.2f",
+                        chain, iteration, det_label, nu,
+                    )
+                    _plot_chain_maps(
+                        plot_params, det_label, chain, iteration, dummy_maps,
+                        nu, fwhm_arcmin, compsep_plot_types, comp_list,
+                    )
+
     LOGGER.info("Plots written to %s", output_dir)
     return 0
 
