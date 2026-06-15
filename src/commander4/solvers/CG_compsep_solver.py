@@ -8,7 +8,7 @@ from copy import deepcopy
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
-from commander4.sky_models.component import Component, CompList
+from commander4.sky_models.component import CompList
 from commander4.utils.math_operations import alm_to_map_adjoint, gaussian_random_alm, almxfl,\
     complist_dot, complist_norm
 from commander4.solvers.dense_matrix_math import DenseMatrix
@@ -79,9 +79,6 @@ class CompSepSolver:
 
         In Commander4 notation, applies A matrix, from comp list to band alms.
         """
-        # band_out.alms = np.zeros_like(band_out.alms)
-        # for comp in comp_list_in:
-        #     comp.project_comp_to_band(band_out, nthreads=self.nthreads)
         comp_list_in.project_comp_to_band(band_out, nthreads=self.nthreads)
         # B Y^-1 M Y a
         alm_out = self.det_map.apply_B(band_out.alms)
@@ -102,8 +99,6 @@ class CompSepSolver:
         self.det_map.apply_B(band_in.alms)
         
         # Y^T M^T Y^-1^T B^T a
-        # for comp in comp_list_out:
-        #     comp.eval_comp_from_band(band_in, nthreads=self.nthreads)
         comp_list_out.eval_comp_from_band(band_in, nthreads=self.nthreads)
         return comp_list_out
 
@@ -125,10 +120,6 @@ class CompSepSolver:
         
         comp_list = deepcopy(comp_list_in)
         if myrank == 0:  # this task actually holds a component
-            # for comp in comp_list:
-            #     
-            #     comp.apply_smoothing_prior_sqrt()
-
             # S^{1/2} a
             comp_list.apply_smoothing_prior_sqrt()
 
@@ -137,8 +128,6 @@ class CompSepSolver:
         # and are therefore limited to <2GB arrays... We have to fallback to blocking communication
         # for >2GB arrays. In the future we should probably implement chunking instead.
 
-        # for comp in comp_list:
-        #     comp.bcast_data_blocking(self.CompSep_comm)
         comp_list.bcast_data_blocking(self.CompSep_comm)
 
         # B Y^-1 M Y S^{1/2} a
@@ -155,15 +144,9 @@ class CompSepSolver:
         use_blocking = biggest_size_bytes > MPI_LIMIT_32BIT
         if use_blocking:
             print(f"Fallback to blocking comm (array size = {biggest_size_bytes:.2e}B)")
-            # for comp in comp_list:
-            #     comp.accum_data_blocking(self.CompSep_comm)
             comp_list.accum_data_blocking(self.CompSep_comm)
 
         else:
-            # requests = []
-            # for comp in comp_list:
-            #     req = comp.accum_data_non_blocking(self.CompSep_comm)
-            #     requests.append(req)
             requests = comp_list.accum_data_non_blocking(self.CompSep_comm)
 
         if myrank == 0:
@@ -217,9 +200,6 @@ class CompSepSolver:
         if myrank == 0:
             for comp in comp_list:
                 logger.info(f"RHS1 comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
-        #     b = comp_list
-        # else:
-        #     b = []
 
         return comp_list
 
@@ -257,11 +237,9 @@ class CompSepSolver:
         
         if myrank == 0:
             for comp in comp_list:
-                logger.info(f"RHS1 comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
-        else:
-            b = []
+                logger.info(f"RHS2 comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
 
-        return b
+        return comp_list
 
 
     def calc_RHS_prior_mean(self, comp_list: CompList) -> CompList:
@@ -278,7 +256,7 @@ class CompSepSolver:
                 for ipol in range(self.npol):
                     almxfl(mu[ipol], comp.P_smoothing_prior.astype(self.float_dtype, copy=False),
                            inplace=True)
-                logger.info(f"RHS3 comp-{comp.longname}: {np.mean(np.abs(mu)):.2e}")
+                logger.info(f"RHS3 comp-{comp.comp_name}: {np.mean(np.abs(mu)):.2e}")
                 mu_s.append(mu)
         else:
             mu_s = []
@@ -296,7 +274,7 @@ class CompSepSolver:
                 eta2 = np.zeros((self.npol, comp.alm_len_complex), dtype=self.complex_dtype)
                 for ipol in range(self.npol):
                     eta2[ipol] = gaussian_random_alm(comp.lmax, comp.lmax, self.spin, 1)
-                logger.info(f"RHS4 comp-{comp.longname}: {np.mean(np.abs(eta2)):.2e}")
+                logger.info(f"RHS4 comp-{comp.comp_name}: {np.mean(np.abs(eta2)):.2e}")
                 eta2_s.append(eta2)
         else:
             eta2_s = []
@@ -363,7 +341,7 @@ class CompSepSolver:
                         # A-norm error is only defined for the full vector.
                         logger.info(f"CG iter {iter:3d} - True A-norm error: {CG_Anorm_error:.3e}")
                         # We can print the individual component L2 errors.
-                        logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].longname} - "\
+                        logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].comp_name} - "\
                                     f"True L2 error: {CG_errors_true:.3e}")
                 else:
                     if x_true is not None:
@@ -402,7 +380,6 @@ class CompSepSolver:
         # RHS4 = self.calc_RHS_prior_fluct()
         # RHS = [_R1 + _R2 + _R3 + _R4 for _R1, _R2, _R3, _R4 in zip(RHS1, RHS2, RHS3, RHS4)]
         RHS = RHS1
-        #del(self.map_sky)
 
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners",
         # and has a name specified by self.params.compsep.preconditioner.

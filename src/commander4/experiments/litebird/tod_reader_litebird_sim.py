@@ -12,6 +12,7 @@ from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.data_models.pointing import PixelPointing
 from commander4.noise_sampling.noise_psd import NoisePSD, NoisePSDOof
 from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.output.log import logassert
@@ -101,7 +102,10 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                 raise ValueError(f"{ntod_upper_bound} {ntod}")
 
             detector_list = []
-            for det_name in det_names:
+            # All detectors are kept (whole-scan rejection via the flag check below), so the
+            # full-band column idet and the per-scan column idet_accepted advance together here.
+            idet_accepted = 0
+            for idet, det_name in enumerate(det_names):
                 tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32, copy=False)
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
                 psi_encoded = f[f"/{pid}/{det_name}/psi/"][()]
@@ -122,14 +126,16 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                 if np.sum(flag_buffer[:ntod_optimal]) != 0:
                     good_scan = False
 
-                detector = DetectorTOD(tod, pix_encoded, psi_encoded, my_band.eval_nside,
-                                       data_nside, fsamp, vsun, huffman_tree, huffman_symbols,
-                                       npsi, processing_mask_map, ntod,
-                                       pix_is_compressed=my_experiment.pix_is_compressed,
-                                       psi_is_compressed=my_experiment.psi_is_compressed)
+                det_pointing = PixelPointing(pix_encoded, psi_encoded, huffman_tree,
+                                             huffman_symbols, npsi, my_band.eval_nside, data_nside,
+                                             ntod, ntod_optimal)
+                detector = DetectorTOD(det_name, idet, idet_accepted, tod, det_pointing, fsamp,
+                                       vsun, huffman_tree, huffman_symbols, processing_mask_map,
+                                       ntod, ntod_optimal)
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
+                idet_accepted += 1
         if good_scan:
             scanID = int(pid)
             scan = ScanTOD(detector_list, 0., scanID)

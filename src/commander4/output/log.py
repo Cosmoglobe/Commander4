@@ -1,5 +1,6 @@
 import logging
 import logging.config
+import sys
 
 # --- Debug levels and their numeric values, including the Python defaults (commented out) ---
 # DEBUG (10)    # >100 per iter, intermediate processing steps and per-rank or per-detector details.
@@ -12,6 +13,47 @@ QUIET = 25      # < 5 per iter, short iteration summary.
 
 logging.QUIET = QUIET
 logging.VERBOSE = VERBOSE
+
+
+class C4Formatter(logging.Formatter):
+    """Formatter that strips the leading 'commander4.' from logger names, so that
+    e.g. 'commander4.tod_processing' is displayed as just 'tod_processing'."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        record.name = record.name.removeprefix('commander4.')
+        return super().format(record)
+
+
+class ColorFormatter(C4Formatter):
+    """
+    Logging formatter that prepends ANSI color codes to console output based on
+    log level.
+
+    Color scheme:
+        DEBUG    - dim/faint (subtle, lower visual weight)
+        VERBOSE  - dark gray
+        INFO     - default terminal color
+        QUIET    - default terminal color
+        WARNING  - yellow
+        ERROR    - red
+        CRITICAL - bold red
+    """
+
+    _RESET  = '\033[0m'
+    _COLORS = {
+        logging.DEBUG:    '\033[2m',    # Dim / faint
+        VERBOSE:          '\033[90m',   # Dark gray (bright-black)
+        logging.INFO:     '',           # Default – no color code
+        QUIET:            '',           # Default – no color code
+        logging.WARNING:  '\033[33m',   # Yellow
+        logging.ERROR:    '\033[31m',   # Red
+        logging.CRITICAL: '\033[1;31m', # Bold red
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        color = self._COLORS.get(record.levelno, '')
+        return f'{color}{message}{self._RESET}' if color else message
 
 
 def init_loggers(logger_params): 
@@ -67,7 +109,8 @@ def init_loggers(logger_params):
         'formatters': {
             'standard': {
                 'style': '{',
-                'format': '{asctime} - {name} - {levelname} - {message}'
+                'format': '{asctime} - {name} - {levelname} - {message}',
+                'datefmt': '%H:%M:%S'  # Time only; drops date and sub-second precision.
             },
         },
         'handlers': {},
@@ -108,6 +151,21 @@ def init_loggers(logger_params):
         config_dict['loggers'][None]['handlers'].append('file')
 
     logging.config.dictConfig(config_dict)
+
+    # Apply ColorFormatter to the console handler, and the (non-color) C4Formatter
+    # to the file handler, both manually. This is also where prefix-stripping is
+    # wired in for the file handler, since dictConfig's 'standard' formatter is a
+    # plain logging.Formatter. dictConfig's '()' factory passes keyword arguments
+    # directly to the constructor, but logging.Formatter.__init__ uses 'fmt' not
+    # 'format', so the factory path silently falls back to an unconfigured
+    # formatter; setting the formatters here avoids that problem entirely.
+    _fmt = '{asctime} - {name} - {levelname} - {message}'
+    _datefmt = '%H:%M:%S'  # Time only; drops date and sub-second precision.
+    for _handler in logging.root.handlers:
+        if isinstance(_handler, logging.FileHandler):
+            _handler.setFormatter(C4Formatter(fmt=_fmt, datefmt=_datefmt, style='{'))
+        elif isinstance(_handler, logging.StreamHandler):
+            _handler.setFormatter(ColorFormatter(fmt=_fmt, datefmt=_datefmt, style='{'))
 
     # Configure logging to redirect warnings from py.warning. Note that this will *prevent* these
     # from being sent to sys.stderr, to avoid duplication.

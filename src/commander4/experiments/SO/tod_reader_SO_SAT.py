@@ -1,23 +1,24 @@
 import logging
 import numpy as np
 import healpy as hp
+from astropy.io import fits
 import h5py
 import gc
-import time
 from numpy.typing import NDArray
-from astropy.io import fits
-from mpi4py import MPI
 from pixell.bunch import Bunch
+from mpi4py import MPI
+
+from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
-from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.data_models.scan_TOD import ScanTOD
+from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
+from commander4.output.log import logassert
 from commander4.noise_sampling.noise_psd import NoisePSD, NoisePSDOof
-from commander4.data_models.pointing import PixelPointing
 from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
                                             stop_bench, log_memory, increment_count, bench_reset
-
+from commander4.data_models.pointing import DetectorBoresightPointing, ScanBoresightPointing
 logger = logging.getLogger(__name__)
-
 
 def get_processing_mask(my_band: Bunch) -> DetectorTOD:
     """ Finds and returns the processing mask for the relevant band.
@@ -39,24 +40,23 @@ def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     return best_ntod
 
 
-def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_names: list[str],
+def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_names: list[str],
                params: Bunch, scan_idx_start: int,
                scan_idx_stop: int) -> DetGroupTOD:
+    start_bench("reader-startup")
     oids = []
     pids = []
     filepaths = []
-    # detname = my_det._name
     bandname = my_band._name
     expname = my_experiment._name
 
     with open(my_band.filelist) as infile:
         infile.readline()
         for line in infile:
-            pid, filename, _, _, _ = line.split()
+            pid, filepath, _, _, _ = line.split()
             pids.append(f"{int(pid):06d}")
-            filepaths.append(filename[1:-1])
-            oids.append(filename.split(".")[0].split("_")[-1])
-
+            filepaths.append(filepath[1:-1])
+            oids.append(filepath.split(".")[0].split("_")[-1])
     if "processing_mask" in my_band:
         processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
         if band_comm.Get_rank() == 0:
@@ -72,104 +72,113 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
 
     Fourier_times = np.load(my_experiment.Fourier_times_path)
 
-    scan_list = []
-    nscans = scan_idx_stop - scan_idx_start
-    num_included = 0
+    # Attempting to reduce fragmentation by allocating buffers.
+    ntod_upper_bound = int(100*100*3600)  # 10 hour scan.
+    
     ntod_sum_original = 0
     ntod_sum_final = 0
-    ndet = len(all_det_names)
-    det_init_scalars = np.zeros((ndet, 4)) + np.nan
-    # Small de-sycnronization sleep.
-    # time.sleep(5.0 * (band_comm.Get_rank() / band_comm.Get_size()))
-    for i_pid in range(scan_idx_start, scan_idx_stop):
-        # Evenly distributed small sleep-interupts, distributed across scans, totalling 60 seconds.
-        # time.sleep(60.0 / (nscans * band_comm.Get_size()))
+    scan_list = []
+    num_included = 0
+    stop_bench("reader-startup")
+    for i_pid in range(scan_idx_start, scan_idx_stop+1):
         pid = pids[i_pid]
-        scanID = int(pid)
         filepath = filepaths[i_pid]
+        start_bench("fileread")
         if pid in bad_PIDs:
             continue
         good_scan = True
         with h5py.File(filepath, "r") as f:
-            data_nside = int(f["common/nside"][()].item())
             ntod = int(f[f"/{pid}/common/ntod"][()].item())
             ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
             huffman_tree = f[f"/{pid}/common/hufftree"][()]
             huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
-            vsun = f[f"/{pid}/common/vsun/"][()]
+            # Second Huffman set might not exist.
+            if f"/{pid}/common/hufftree2" in f and f"/{pid}/common/huffsymb2" in f:
+                huffman_tree2 = f[f"/{pid}/common/hufftree2"][()]
+                huffman_symbols2 = f[f"/{pid}/common/huffsymb2"][()]
+            else:
+                huffman_tree2 = None
+                huffman_symbols2 = None
             fsamp = float(f["/common/fsamp/"][()].item())
-            npsi = int(f["/common/npsi/"][()].item())
+            det_responses = f["/common/resp/"][()]
+
+            # The detector names are stored as a single "Bytes-like" string, formatted like a
+            # Python list. We extract the string from the Bytes, and then re-create the list with .split(",").
+            det_names_file = f["/common/det"].asstr()[()].split(",")
+            det_names_file = [det.strip() for det in det_names_file]
+
+            processing_mask_nside = hp.npix2nside(processing_mask_map.size)
+            logassert(my_band.eval_nside == processing_mask_nside,
+                      f"Processing mask (band {bandname}) "
+                      f"has nside {processing_mask_nside} while eval_nside = {my_band.eval_nside} "
+                      "(NB: eval_nside can be set different from native data nside)", logger)
+
+            if ntod > ntod_upper_bound:
+                raise ValueError(f"{ntod_upper_bound} {ntod}")
+
+            all_detector_offsets = f["/common/detoff/"][()]
+            all_polarization_angles = f["/common/polang/"][()]
+            site_location = f["/common/site/"][()]
+            boresight = f[f"/{pid}/common/bore/"][()]
+            time_start_mjd = f[f"/{pid}/common/time/"][0]
+            time_end_mjd = f[f"/{pid}/common/time_end/"][0]
+
+            scan_pointing = ScanBoresightPointing(time_start_mjd, time_end_mjd, ntod, site_location,
+                                            boresight, all_detector_offsets, all_polarization_angles,
+                                            my_band.eval_nside, ntod_optimal)
+
             detector_list = []
-            # idet is the detector's full-band column (its position in ``all_det_names``);
-            # idet_accepted (det_idx_local) advances only when a detector survives the cuts below.
+            # idet is the detector's full-band column (its position in ``det_names``); idet_accepted
+            # is its position among the detectors actually kept in this scan (det_idx_local), and is
+            # only advanced when a detector passes the cuts below.
             idet_accepted = 0
-            for idet, det_name in enumerate(all_det_names):
-                tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32, copy=False)
-                pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
-                # Intensity-only bands have no psi in the files; feed a zero psi (unused by I-only
-                # mapmaking, but PixelPointing requires a length-matched array).
-                if "QU" in my_band.polarization:
-                    psi_encoded = f[f"/{pid}/{det_name}/psi/"][()]
+            for idet, det_name in enumerate(det_names):
+                # Find the index of the current detector in the file order of detectors.
+                det_file_idx = det_names_file.index(det_name)
+
+                if my_experiment.tod_is_compressed:
+                    tod = f[f"/{pid}/{det_name}/ztod/"][()]
                 else:
-                    psi_encoded = np.zeros(ntod_optimal, dtype=np.float32)
+                    tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32)
+
+                pointing = DetectorBoresightPointing(scan_pointing, det_file_idx)
+                det_response = det_responses[det_file_idx]
+
                 flag_encoded = f[f"/{pid}/{det_name}/flag/"][()]
-                init_scalars = f[f"/{pid}/{det_name}/scalars/"][()]
-                # Data format has this weird thing were gain seems to be in "micro-gain"...
-                init_scalars[0] *= 1e-6
+                # gain_init, sigma0_init, fknee_init, alpha_init:
+                init_scalars = f[f"/{pid}/{det_name}/scalars"][()]
 
-                det_init_scalars[idet] = init_scalars
-                det_pointing = PixelPointing(pix_encoded, psi_encoded, huffman_tree,
-                                             huffman_symbols, npsi, my_band.eval_nside, data_nside,
-                                             ntod, ntod_optimal)
-
-                detector = DetectorTOD(det_name, idet, idet_accepted, tod, det_pointing, fsamp,
-                                       vsun, huffman_tree, huffman_symbols, processing_mask_map,
-                                       ntod, ntod_optimal,
+                detector = DetectorTOD(det_name, idet, idet_accepted, tod, pointing, fsamp,
+                                       np.zeros(3), huffman_tree, huffman_symbols,
+                                       processing_mask_map, ntod, ntod_optimal,
+                                       huffman_tree2=huffman_tree2,
+                                       huffman_symbols2=huffman_symbols2,
                                        flag_encoded=flag_encoded,
-                                       bad_data_bitmask = 6111232,
-                                       init_scalars = init_scalars)
-                # Bad samples are handled per-sample by the detector's full_mask (flag &
-                # bad_data_bitmask), rather than dropping the whole scan. Following the SO readers,
-                # only skip detectors with too little usable data (or pathological TOD magnitudes).
-                unmasked_fraction = np.sum(detector.full_mask)/detector.full_mask.size
-                if unmasked_fraction < 0.99:
-                    continue
-                if (detector.tod == 0).all():
-                    continue
-                if np.mean(np.abs(tod)) > 0.001 or np.std(tod) > 0.001:
+                                       bad_data_bitmask=my_experiment.bad_data_bitmask,
+                                       init_scalars=init_scalars,
+                                       tod_is_compressed=my_experiment.tod_is_compressed,
+                                       det_response=det_response)
+                if np.sum(detector.full_mask) == 0 or (detector.tod == 0).all():
                     continue
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
                 idet_accepted += 1
+
         if len(detector_list) == 0:
             good_scan = False
         if good_scan:
+            scanID = int(pid)
             scan = ScanTOD(detector_list, 0., scanID)
             scan_list.append(scan)
             num_included += 1
-        if band_comm.Get_rank() == 0 and (i_pid-scan_idx_start) % (nscans // 5) == 0:
-            logger.debug(f"Reading scans from disk, progress on master rank of band {bandname}: "\
-                         f"{i_pid-scan_idx_start}/{nscans}")
         if i_pid % 10 == 0:
             gc.collect()
 
-    # Initialize noise model with defaults and uniform priors suited for LFI.
-    noise_model = NoisePSDOof(P_active_mean = [np.nan, 0.1, -1.0],
-                              P_active_rms = [np.nan, np.inf, np.inf],
-                              P_uni = [[np.nan, np.nan], [0.01, 0.5], [-2.5, -0.25]],
-                              nu_fit = [[np.nan, np.nan], [0, 3.0], [0, 3.0]])
-
+    ndet = len(det_names)
+    noise_model = NoisePSDOof()
     band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
-    # my_det_central_freq = my_band.freq
-
-    # TODO: Re-implement bandpass shift.
-    # if "bandpass_shift" in my_det:
-    #     my_det_central_freq += my_det.bandpass_shift
-    # det_static = DetectorTOD(scanlist, my_det_central_freq, my_band.fwhm, my_band.eval_nside,
-    #                          data_nside, expname, bandname, detname)
-    # det_static.detector_id = my_det_id
 
     ### Collect some info on master rank of each detector and print it ###
     local_tot_scans = scan_idx_stop - scan_idx_start

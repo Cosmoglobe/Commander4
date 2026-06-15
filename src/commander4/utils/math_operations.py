@@ -230,8 +230,7 @@ def complist_dot(comp_list1:CompList, comp_list2:CompList) -> float:
         components with alms. It will automatically handle the correct dot product definition for
         each type of Component.
     """
-    if len(comp_list1) != len(comp_list2):
-        raise ValueError("Component lists must match in length.")
+    comp_list1._assert_consistent_comps(comp_list2)
     if len(comp_list1) == 0:
         print("WARNING dot prod between empty comp list")
     res = 0.0
@@ -248,7 +247,7 @@ def complist_norm(comp_list:list[Component]) -> float:
 
 ###### GENERAL MATH STUFF ######
 
-def forward_rfft(data:NDArray[np.floating], nthreads:int = 1):
+def forward_rfft(data:NDArray[np.floating], nthreads:int = None) -> NDArray:
     """ Forward real Fourier transform, equivalent to scipy.fft.rfft.
         Args:
             data (np.array): Real-valued data array to be Fourier transformed.
@@ -260,7 +259,7 @@ def forward_rfft(data:NDArray[np.floating], nthreads:int = 1):
     nthreads = int(os.environ.get("OMP_NUM_THREADS", 1)) if nthreads is None else nthreads
     return ducc0.fft.r2c(data, nthreads=nthreads)
 
-def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray[np.floating]:
+def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray:
     """ Backward real Fourier transform, equivalent to scipy.fft.irfft.
         Args:
             data_f (np.array): Complex Fourier coefficients to be converted back to real data.
@@ -278,7 +277,7 @@ def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray[np.f
     return ducc0.fft.c2r(data_f, lastsize=ntod, forward=False, nthreads=nthreads, inorm=2)
 
 
-def forward_rfft_mirrored(data: NDArray, nthreads: int = 1):
+def forward_rfft_mirrored(data: NDArray, nthreads: int = None) -> NDArray:
     """Forward real FFT on a mirrored (reflected) copy of the input.
 
     The input is mirrored so that ``dt[0:ntod] = data``,

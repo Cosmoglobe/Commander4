@@ -3,7 +3,7 @@ from numpy.typing import NDArray
 
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.noise_sampling.noise_psd import NoisePSD
-from commander4.utils.math_operations import forward_rfft, backward_rfft
+from commander4.utils.math_operations import forward_rfft_mirrored, backward_rfft_mirrored
 
 class DetGroupTOD:
     """Container for all scan TODs belonging to one detector group (experiment + band).
@@ -41,22 +41,55 @@ class DetGroupTOD:
         self.nscans_allranks: int = 0  # Total number of scans across all ranks (on this band).
         self.noise_model = noise_model
 
+    def iter_detector_scans(self, accept: NDArray | None = None):
+        """Iterate over present detector-scans, yielding ``(iscan, det)`` pairs.
+
+        ``ScanTOD.detectors`` is sparse -- each scan lists only the detectors actually present in it
+        -- so this nested walk is the canonical way to traverse detector-scans. The detector's
+        full-band column ``det.det_idx_fullband`` is the index into the dense ``(nscans, ndet)``
+        per-detector sample arrays (gain, noise params, accept, ...); the per-scan enumerate position
+        must never be used for that, and this iterator deliberately never exposes one.
+
+        Args:
+            accept: Optional ``(nscans, ndet)`` boolean mask. When given, detector-scans whose entry
+                is False are skipped, so callers process only accepted (good-quality) data.
+
+        Yields:
+            tuple[int, DetectorTOD]: the local scan index ``iscan`` and the present detector ``det``.
+        """
+        for iscan, scan in enumerate(self.scans):
+            for det in scan.detectors:
+                if accept is not None and not accept[iscan, det.det_idx_fullband]:
+                    continue
+                yield iscan, det
+
     def apply_N_inv(self, tod: NDArray, noise_params: NDArray, samprate: float|None = None,
                     inplace=False) -> NDArray:
-        """ Modulates the input TOD with the noise model of this Det-Group, using the specified
-            noise parameters. If a sample rate is specified, the TOD is assumed to have been
-            downsampled, and the white noise level will be adjusted accordingly.
+        """ Applies the inverse noise covariance N^-1 of this Det-Group to the input TOD, using the
+            specified noise parameters. If a sample rate is specified, the TOD is assumed to have
+            been downsampled, and the noise level is scaled accordingly. The DC (mean) mode is
+            projected out, matching the Commander3 ``multiply_inv_N`` convention.
         """
-        # TODO: Some noise-PS types might require different handling, such as flat PS.
         actual_samprate = samprate if samprate is not None else self.fsamp
         tod_out = tod if inplace else np.zeros_like(tod)
-        ntod = tod.shape[0]
-        freqs = np.fft.rfftfreq(ntod, d=1.0/actual_samprate)
-        noise_PS = self.noise_model.eval_full(freqs, noise_params)
 
-        tod_f = forward_rfft(tod)
+        # White-noise fast path: P(f) = sigma0^2 (flat), so N^-1 is a scalar and the FFT is skipped.
+        if self.noise_model.is_white:
+            scale = float(noise_params[0])**2
+            if samprate is not None and samprate != self.fsamp:
+                scale *= samprate/self.fsamp
+            tod_out[:] = tod/scale
+            tod_out -= np.mean(tod_out)  # Project out the DC mode (mean).
+            return tod_out
+
+        # Mirrored FFT (length 2*ntod) reduces boundary/periodicity ringing.
+        ntod = tod.shape[0]
+        freqs = np.fft.rfftfreq(2*ntod, d=1.0/actual_samprate)
+        noise_PS = self.noise_model.eval_full(freqs, noise_params)
         if samprate is not None and samprate != self.fsamp:
             noise_PS *= samprate/self.fsamp
+        tod_f = forward_rfft_mirrored(tod)
         tod_f /= noise_PS
-        tod_out[:] = backward_rfft(tod_f, ntod)
+        tod_f[0] = 0.0  # Project out the DC mode (mean), matching Commander multiply_inv_N.
+        tod_out[:] = backward_rfft_mirrored(tod_f, ntod)
         return tod_out

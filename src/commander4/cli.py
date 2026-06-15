@@ -64,9 +64,11 @@ def run_commander4(params: Bunch, params_dict: dict):
     # as Numpy will not respect a change in thread count after it has been loaded.
     import numpy as np
     import commander4.output.log as log
-    from commander4.tod_processing import process_tod, init_tod_processing, get_initial_sky
-    from commander4.compsep_processing import process_compsep, init_compsep_processing
-    from commander4.communication import receive_tod, send_tod, receive_compsep, send_compsep
+    from commander4.tod_processing import process_tod, init_tod_processing
+    from commander4.compsep_processing import process_compsep, init_compsep_processing,\
+        get_initial_sky_model
+    from commander4.communication import receive_tod, send_tod, receive_compsep, send_compsep,\
+        get_local_initial_sky
 
     # Unique seed per worldrank. Hash used for slightly improved entropy. Modulus because seed needs
     # to be 32 bit. Numpy recommends instead carrying around an instance of 'np.random.default_rng',
@@ -103,21 +105,32 @@ def run_commander4(params: Bunch, params_dict: dict):
             mpi_info.world.compsep_band_masters, root=mpi_info.world.compsep_master)
         mpi_info['world']['compsep_band_masters'] = world_compsep_band_masters_dict
 
-    ###### Sending empty data back and forth ######
+    ###### Exchanging the initial sky model ######
+    # Component separation is active iff CompSep ranks were allocated (compsep_master is then a
+    # valid world rank). This single flag replaces the old `perform_compsep` parameter.
+    compsep_active = mpi_info.world.compsep_master is not None
     curr_tod_output = None
     if mpi_info.world.color == 0:
-        # Chain #1 do TOD processing, resulting in maps_chain1 (we start with a fake output of
-        # component separation, containing a completely empty sky).
-        compsep_output_black = get_initial_sky(experiment_data)
+        # The initial sky model is built from each component's init_from / init_chain_path (else
+        # zeros). If CompSep ranks exist they build and send it (as for every later iteration);
+        # otherwise we build it locally so a sensible fixed sky is available with no CompSep ranks.
+        if compsep_active:
+            curr_compsep_output = receive_compsep(mpi_info, experiment_data, my_band_tod_id,
+                                                  mpi_info.world.compsep_band_masters)
+        else:
+            curr_compsep_output = get_local_initial_sky(mpi_info, experiment_data, params)
 
         curr_tod_output, tod_samples = process_tod(mpi_info, experiment_data,
                                                         tod_samples_chain1,
-                                                        compsep_output_black, params, 1, 1)
-        if params.general.perform_compsep:
+                                                        curr_compsep_output, params, 1, 1)
+        if compsep_active:
             send_tod(mpi_info, curr_tod_output, my_band_tod_id, mpi_info.world.compsep_band_masters)
-        curr_compsep_output = compsep_output_black
 
     elif mpi_info.world.color == 1:
+        # Send the initial sky model to TOD before receiving the first TOD output, mirroring the
+        # process_compsep -> send_compsep -> receive_tod order used inside the main loop.
+        send_compsep(mpi_info, my_band_compsep_id, get_initial_sky_model(components),
+                     mpi_info.world.tod_band_masters)
         curr_tod_output = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
                                       my_band_compsep_id, curr_tod_output)
 
@@ -150,7 +163,7 @@ def run_commander4(params: Bunch, params_dict: dict):
                 logger.info(f"TOD: Rank {mpi_info.tod.rank} finished chain {chain_num}, iter "\
                             f"{iter_num} in {time.time()-t0:.2f}s. Receiving compsep results.")
             t0 = time.time()
-            if params.general.perform_compsep:
+            if compsep_active:
                 curr_compsep_output = receive_compsep(mpi_info, experiment_data,
                                                     my_band_tod_id,
                                                     mpi_info.world.compsep_band_masters)
@@ -159,7 +172,7 @@ def run_commander4(params: Bunch, params_dict: dict):
                             f"results for chain {chain_num}, iter {iter_num} "\
                             f"(time spent waiting+receiving = "\
                             f"{time.time()-t0:.1f}s).")
-            if params.general.perform_compsep:
+            if compsep_active:
                 send_tod(mpi_info, curr_tod_output, my_band_tod_id,
                         mpi_info.world.compsep_band_masters)
             if mpi_info.tod.is_master:
@@ -191,7 +204,7 @@ def run_commander4(params: Bunch, params_dict: dict):
                         f" chain {chain_num}, iter {iter_num} (time spent waiting+receiving = "\
                         f"{time.time()-t0:.1f}s).")
     # stop compsep machinery
-    if mpi_info.world.is_master:
+    if mpi_info.world.is_master and compsep_active:
         logger.info("TOD: sending STOP signal to compsep")
         mpi_info.world.comm.send(True, dest=mpi_info.world.compsep_master)
 

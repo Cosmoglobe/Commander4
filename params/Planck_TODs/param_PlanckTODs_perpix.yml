@@ -21,7 +21,7 @@ general:
   sample_abs_gain_from_iter_num: 2
   sample_rel_gain: True
   sample_rel_gain_from_iter_num: 2
-  sample_temporal_gain: False
+  sample_temporal_gain: True
   sample_temporal_gain_from_iter_num: 2
 
   perform_compsep: true
@@ -44,15 +44,22 @@ general:
   init_from_chain: false
 
   output_paths:
-    chains: "../cmdr4_chains/PlanckTODs_perpix_newclass_v5_abs+rel/"
-    stats: "../cmdr4_stats/PlanckTODs_perpix_newclass_v5_abs+rel/"
+    chains: "../cmdr4_chains/PlanckTODs_perpix_sampgroups/"
+    stats: "../cmdr4_stats/PlanckTODs_perpix_sampgroups/"
 
   logging:
     console:
       level: 'debug'
     file:
       level: 'info'
-      filename: '../cmdr4_logs/output_PlanckTODs_perpix_newclass_v1.log'
+      filename: '../cmdr4_logs/output_PlanckTODs_perpix_sampgroups'
+
+sampling_groups_compsep:
+  sample_amps_perpix:
+    enabled: true
+    sample_class: "amplitude_sampler_perpix"
+    comps: [CMB, Synchrotron, ThermalDust, FreeFree]
+    bands: [Planck30GHz, Haslam408MHz, WMAPKa, WMAPQ1, WMAPQ2, WMAPV1, WMAPV2, Planck857GHz, Planck353GHz]
 
 
 components:

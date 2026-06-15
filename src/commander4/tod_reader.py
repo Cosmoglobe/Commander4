@@ -10,6 +10,8 @@ from commander4.experiments.litebird.tod_reader_litebird_sim_spawndetectors impo
 from commander4.experiments.planck.tod_reader_planck import tod_reader as tod_reader_planck
 from commander4.experiments.planck.tod_reader_planck_sim import tod_reader as tod_reader_planck_sim
 from commander4.experiments.akari.tod_reader_akari import tod_reader as tod_reader_akari
+from commander4.experiments.SO.tod_reader_SO_LAT import tod_reader as tod_reader_SO_LAT
+from commander4.experiments.SO.tod_reader_SO_SAT import tod_reader as tod_reader_SO_SAT
 
 # Dictionary containing known experiments and the location of their TOD reading scripts.
 # The `experiment_id`` field in the parameter file decides what TOD reader is used in this dict.
@@ -20,6 +22,8 @@ experiment_tod_readers = {
     "litebird_sim" : tod_reader_litebird_sim,
     "litebird_sim_spawndetectors" : tod_reader_litebird_sim_spawndetectors,
     "akari" : tod_reader_akari,
+    "SO_LAT" : tod_reader_SO_LAT,
+    "SO_SAT" : tod_reader_SO_SAT,
 }
 
 def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, my_det: Bunch,

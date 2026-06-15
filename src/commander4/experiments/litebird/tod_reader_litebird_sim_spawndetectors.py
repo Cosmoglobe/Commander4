@@ -12,6 +12,7 @@ from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.data_models.pointing import PixelPointing
 from commander4.noise_sampling.noise_psd import NoisePSD, NoisePSDOof
 from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.output.log import logassert
@@ -127,6 +128,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
         detector_list = []
         tod_alldet = np.zeros((ndet, ntod_optimal), dtype=np.float32)
         for idet in range(ndet):
+            det_name = det_names[idet]
             tod = tod_alldet[idet]
 
             # Ideally we would do the huffman compression outside the detector-loop, but that's
@@ -139,11 +141,16 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             psi_encoded = huffman.huffman_compress_array(psi, sym_codes, sym_lengths)
             pix_encoded = huffman.huffman_compress_array(pix, sym_codes, sym_lengths)
 
-            detector = DetectorTOD(tod, pix_encoded, psi_encoded, my_band.eval_nside,
-                                    data_nside, fsamp, vsun, huffman_tree, huffman_symbols,
-                                    npsi, processing_mask_map, ntod_optimal,
-                                    pix_is_compressed=True, # Hard-coded to true since we compress manually.
-                                    psi_is_compressed=True)
+            # Detectors are spawned from one shared pointing, so every detector is present in every
+            # scan: det_idx_fullband == det_idx_local == idet. pix/psi were just compressed to bytes
+            # (PixelPointing auto-detects the compression) at the optimal length, so for this reader
+            # ntod_original == ntod == ntod_optimal.
+            det_pointing = PixelPointing(pix_encoded, psi_encoded, huffman_tree, huffman_symbols,
+                                         npsi, my_band.eval_nside, data_nside, ntod_optimal,
+                                         ntod_optimal)
+            detector = DetectorTOD(det_name, idet, idet, tod, det_pointing, fsamp, vsun,
+                                   huffman_tree, huffman_symbols, processing_mask_map,
+                                   ntod_optimal, ntod_optimal)
             detector_list.append(detector)
             ntod_sum_original += ntod
             ntod_sum_final += ntod_optimal

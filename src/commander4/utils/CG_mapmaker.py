@@ -237,36 +237,23 @@ class CGMapmaker:
 
         self.map_comm.Bcast(in_map, root=0)
         out_map = np.zeros_like(in_map)
-        pri = True
-        for iscan, scan in enumerate(self.detector_tod.scans):
-            for idet, det in enumerate(scan.detectors):
-                pix = det.pix
-                psi = det.psi
-                sigma0 = self.detector_samples.noise_params[iscan, idet, 0]
-                scan_tod_arr_aux = np.zeros_like(det.tod, dtype=self.f_dtype) #aux array to not modify scan.tod
-                # if self.map_comm.Get_rank() == 0 and pri:
-                #     self.logger.info(f"##LHS 1 mean: {np.mean(in_map)}")
-                #P m
-                scan_tod_arr_aux = self.apply_P(in_map, det, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
-                # if self.map_comm.Get_rank() == 0 and pri:
-                #     self.logger.info(f"##LHS 2 mean: {np.mean(scan_tod_arr_aux)}")
-                #T P m
-                scan_tod_arr_aux = self.apply_T(scan_tod_arr_aux)
-                # if self.map_comm.Get_rank() == 0 and pri:
-                #     self.logger.info(f"##LHS 3 mean: {np.mean(scan_tod_arr_aux)}")
-                #N^-1 T P m
-                scan_tod_arr_aux = self.apply_inv_N(scan_tod_arr_aux, sigma0)
-                # if self.map_comm.Get_rank() == 0 and pri:
-                #     self.logger.info(f"##LHS 4 mean: {np.mean(scan_tod_arr_aux)}")
-                #T^T N^-1 T P m
-                scan_tod_arr_aux = self.apply_T_adjoint(scan_tod_arr_aux)
-                # if self.map_comm.Get_rank() == 0 and pri:
-                #     self.logger.info(f"##LHS 5 mean: {np.mean(scan_tod_arr_aux)}")
-                #P^T T^T N^-1 T P
-                out_map = self.apply_P_adjoint(det, out_map, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
-                # if self.map_comm.Get_rank() == 0 and pri:
-                #     self.logger.info(f"##LHS 6 mean: {np.mean(out_map)}")
-                pri=False
+        # Iterate accepted detector-scans only, matching accum_to_RHS: the LHS operator
+        # P^T T^T N^-1 T P and the RHS P^T T^T N^-1 d must span the same set of detector-scans, or
+        # the CG would solve an inconsistent (A, b) pair. det.det_idx_fullband is the dense column.
+        for iscan, det in self.detector_tod.iter_detector_scans(self.detector_samples.accept):
+            pix, psi = det.get_pix_psi()
+            sigma0 = self.detector_samples.noise_params[iscan, det.det_idx_fullband, 0]
+            scan_tod_arr_aux = np.zeros_like(det.tod, dtype=self.f_dtype) #aux array to not modify scan.tod
+            #P m
+            scan_tod_arr_aux = self.apply_P(in_map, det, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
+            #T P m
+            scan_tod_arr_aux = self.apply_T(scan_tod_arr_aux)
+            #N^-1 T P m
+            scan_tod_arr_aux = self.apply_inv_N(scan_tod_arr_aux, sigma0)
+            #T^T N^-1 T P m
+            scan_tod_arr_aux = self.apply_T_adjoint(scan_tod_arr_aux)
+            #P^T T^T N^-1 T P
+            out_map = self.apply_P_adjoint(det, out_map, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
         send, recv = (MPI.IN_PLACE, out_map) if self.map_comm.Get_rank() == 0 else (out_map, None)
         self.map_comm.Reduce(send, recv, op=MPI.SUM, root=0)
         if not ismaster:
@@ -438,7 +425,7 @@ class CGMapmakerI(CGMapmaker):
         assert npix_out == hp.nside2npix(in_scan.nside), "out_map size must match scan's eval nside."
         assert pix.shape == scan_tod_arr.shape, "pix shape must match scan_tod_arr."
         pix = in_scan.pix if pix is None else pix
-        ntod = in_scan.tod.shape[-1]
+        ntod = scan_tod_arr.shape[-1]
         self.map_accumulator(out_map, scan_tod_arr, 1, pix.astype(np.int64, copy=False), ntod)
         return out_map
 
@@ -555,7 +542,7 @@ class CGMapmakerIQU(CGMapmaker):
         # assert psi.shape == scan_tod_arr.shape, "psi shape must match scan_tod_arr."
         pix = in_scan.pix if pix is None else pix
         psi = in_scan.psi if psi is None else psi
-        ntod = in_scan.tod.shape[-1]
+        ntod = scan_tod_arr.shape[-1]
         self.map_accumulator_IQU(out_map, scan_tod_arr, 1, pix.astype(np.int64, copy=False), 
                                  psi.astype(np.float64, copy=False), ntod, npix_out)
         return out_map

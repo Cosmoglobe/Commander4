@@ -13,9 +13,16 @@ from mpi4py import MPI
 
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.detector_group_TOD import DetGroupTOD
-from commander4.sky_models.component import ThermalDust, Synchrotron, FreeFree
+from commander4.sky_models.component import ThermalDust, Synchrotron, FreeFree, SpinningDust
 from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
                                             stop_bench, log_memory, increment_count, bench_reset
+
+
+def _scalar_nu_ref(comp_params):
+    """Resolve a component's `nu_ref` (scalar or [nu_I, nu_QU] list) to a single scalar (the I
+    value), since the in-place simulator uses one reference frequency per component."""
+    nu_ref = comp_params.nu_ref
+    return nu_ref[0] if isinstance(nu_ref, (list, tuple)) else nu_ref
 
 
 def generate_cmb(freq, fwhm, units, nside, lmax, params):
@@ -85,7 +92,7 @@ def generate_cmb(freq, fwhm, units, nside, lmax, params):
 
 
 def generate_thermal_dust(freq, fwhm, units, nside, params):
-    nu_dust = params.components.ThermalDust.params.nu0
+    nu_dust = _scalar_nu_ref(params.components.ThermalDust.params)
 
     #d0 = constant beta 1.54 and T = 20
     dust = pysm3.Sky(nside=min(1024,nside), preset_strings=["d0"], output_unit=units)
@@ -93,9 +100,10 @@ def generate_thermal_dust(freq, fwhm, units, nside, params):
     dust_ref_smoothed = hp.smoothing(dust_ref, fwhm=fwhm)*dust_ref.unit
 
     dust_params = deepcopy(params.components.ThermalDust.params)
+    dust_params.nu_ref = nu_dust  # single reference frequency for the in-place sim
     dust_params.polarized = True
 
-    dust = ThermalDust(dust_params, params)
+    dust = ThermalDust(dust_params, params, comp_name="ThermalDust")
     dust_s = dust_ref_smoothed*dust.get_sed(freq)
     dust_s = hp.ud_grade(dust_s.value, nside)*dust_s.unit
 
@@ -103,7 +111,7 @@ def generate_thermal_dust(freq, fwhm, units, nside, params):
 
 
 def generate_sync(freq, fwhm, units, nside, params):
-    nu_sync = params.components.Synchrotron.params.nu0
+    nu_sync = _scalar_nu_ref(params.components.Synchrotron.params)
 
     # s5 = const beta -3.1
     sync = pysm3.Sky(nside=min(1024,nside), preset_strings=["s5"], output_unit=units)
@@ -111,9 +119,10 @@ def generate_sync(freq, fwhm, units, nside, params):
     sync_ref_smoothed = hp.smoothing(sync_ref, fwhm=fwhm)*sync_ref.unit
 
     sync_params = deepcopy(params.components.Synchrotron.params)
+    sync_params.nu_ref = nu_sync  # single reference frequency for the in-place sim
     sync_params.polarized = True
 
-    sync = Synchrotron(sync_params, params)
+    sync = Synchrotron(sync_params, params, comp_name="Synchrotron")
     sync_s = sync_ref_smoothed*sync.get_sed(freq)
     sync_s = hp.ud_grade(sync_s.value, nside)*sync_s.unit
 
@@ -121,16 +130,17 @@ def generate_sync(freq, fwhm, units, nside, params):
 
 
 def generate_ff(freq, fwhm, units, nside, params):
-    nu_ff = params.components.FreeFree.params.nu0
+    nu_ff = _scalar_nu_ref(params.components.FreeFree.params)
 
     ff = pysm3.Sky(nside=min(1024,nside), preset_strings=["f1"], output_unit=units)
     ff_ref = ff.get_emission(nu_ff*u.GHz)
     ff_ref_smoothed = hp.smoothing(ff_ref, fwhm=fwhm)*ff_ref.unit
 
     ff_params = deepcopy(params.components.FreeFree.params)
+    ff_params.nu_ref = nu_ff  # single reference frequency for the in-place sim
     ff_params.polarized = False
 
-    ff = FreeFree(ff_params, params)
+    ff = FreeFree(ff_params, params, comp_name="FreeFree")
     ff_s = ff_ref_smoothed*ff.get_sed(freq)
     ff_s = hp.ud_grade(ff_s.value, nside)*ff_s.unit
 
@@ -147,7 +157,7 @@ def generate_spdust(freq, fwhm, units, nside, params):
     spdust_params = deepcopy(params.components.SpinningDust.params)
     spdust_params.polarized = False
 
-    spdust = Synchrotron(spdust_params, params)
+    spdust = SpinningDust(spdust_params, params, comp_name="SpinningDust")
     spdust_s = spdust_ref_smoothed*spdust.get_sed(freq)
     spdust_s = hp.ud_grade(spdust_s.value, nside)*spdust_s.unit
 
@@ -219,11 +229,12 @@ def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetGroupTOD, band_p
     for scan in detector_data.scans:
         for det in scan.detectors:
             start_bench("orbdip")
+            pix, psi = det.get_pix_psi()
             ntod = det.tod.size
             det.tod[:] = np.zeros(ntod, dtype=np.float32)
-            det.tod[:] = I[det.pix] + Q[det.pix]*np.cos(2*det.psi) + U[det.pix]*np.sin(2*det.psi)
+            det.tod[:] = I[pix] + Q[pix]*np.cos(2*psi) + U[pix]*np.sin(2*psi)
             if sim_params.include_OrbitalDipole:
-                det.tod[:] += get_orbital_dipole(det, det.pix, freq, units)
+                det.tod[:] += get_orbital_dipole(det, pix, freq, units)
             stop_bench("orbdip")
 
             start_bench("noise")

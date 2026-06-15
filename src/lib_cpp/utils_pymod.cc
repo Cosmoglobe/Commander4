@@ -298,14 +298,35 @@ template<typename T> static NpArr Py2_huffman_decode(const CNpArr &bytes_,
   return out_;
   }
 
+template<typename T> static NpArr Py3_huffman_decode(const CNpArr &bytes,
+  const CNpArr &tree, const CNpArr &symb, const NpArr &out,
+  const char *dtype_descr)
+  {
+  MR_assert(isPyarr<T>(out), "type mismatch: 'out' must have the same dtype as 'symb' (",
+    dtype_descr, ")");
+  return Py2_huffman_decode<T>(bytes, tree, symb, out);
+  }
+
 static NpArr Py_huffman_decode(const CNpArr &bytes,
   const CNpArr &tree, const CNpArr &symb, const NpArr &out)
   {
-  if (isPyarr<int64_t>(symb))
-    return Py2_huffman_decode<int64_t> (bytes, tree, symb, out);
+  if (isPyarr<int8_t>(symb))
+    return Py3_huffman_decode<int8_t>(bytes, tree, symb, out, "i1");
+  if (isPyarr<uint8_t>(symb))
+    return Py3_huffman_decode<uint8_t>(bytes, tree, symb, out, "u1");
+  if (isPyarr<int16_t>(symb))
+    return Py3_huffman_decode<int16_t>(bytes, tree, symb, out, "i2");
+  if (isPyarr<uint16_t>(symb))
+    return Py3_huffman_decode<uint16_t>(bytes, tree, symb, out, "u2");
   if (isPyarr<int32_t>(symb))
-    return Py2_huffman_decode<int32_t> (bytes, tree, symb, out);
-  MR_fail("type matching failed: 'symb' has neither type 'i8' nor 'i4'");
+    return Py3_huffman_decode<int32_t>(bytes, tree, symb, out, "i4");
+  if (isPyarr<uint32_t>(symb))
+    return Py3_huffman_decode<uint32_t>(bytes, tree, symb, out, "u4");
+  if (isPyarr<int64_t>(symb))
+    return Py3_huffman_decode<int64_t>(bytes, tree, symb, out, "i8");
+  if (isPyarr<uint64_t>(symb))
+    return Py3_huffman_decode<uint64_t>(bytes, tree, symb, out, "u8");
+  MR_fail("type mismatch: 'symb' must have an integer dtype among 'i1', 'u1', 'i2', 'u2', 'i4', 'u4', 'i8', or 'u8'");
   }
 
 constexpr const char *Py_huffman_decode_DS = R"""(
@@ -317,11 +338,12 @@ bytes: numpy.ndarray((nbytes,), dtype=np.uint8)
     the bit stream
 tree: numpy.ndarray((ntree,), dtype=np.int64)
     the tree array
-symb: numpy.ndarray((nsymb,), dtype=np.int64 or np.int32)
+symb: numpy.ndarray((nsymb,), dtype any signed or unsigned 8/16/32/64-bit integer type)
     the array of possible symbols in the stream
 out: numpy.ndarray((ndata,), dtype identical to that of symb)
     the array into which the uncopressed data is written
-    The size of this array *must* match the number of decoded symbols!
+  The size of this array *must* match the number of decoded symbols!
+  The dtype of this array *must* be identical to that of symb.
 
 Returns
 -------

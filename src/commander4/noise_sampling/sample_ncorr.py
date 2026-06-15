@@ -1,8 +1,20 @@
+import logging
 import numpy as np
 import pixell
+from scipy.fft import rfftfreq
+from mpi4py import MPI
 from numpy.typing import NDArray
+from pixell.bunch import Bunch
 from commander4.utils.math_operations import forward_rfft, backward_rfft, forward_rfft_mirrored,\
     backward_rfft_mirrored
+from commander4.noise_sampling.noise_sampling import fill_all_masked
+from commander4.noise_sampling.noise_psd import NoisePSD
+from commander4.noise_sampling.sigma0 import calc_sigma0_robust
+
+from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
+                                            stop_bench, log_memory, increment_count, bench_reset
+
+logger = logging.getLogger(__name__)
 
 
 def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigma0: float,
@@ -28,7 +40,10 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
             x_final (np.array): The TOD realization of the correlated noise.
     """
     def apply_filter(vec, Fourier_filter):
-        return backward_rfft_mirrored(forward_rfft_mirrored(vec) * Fourier_filter, ntod=len(vec))
+        start_bench("FFT")
+        res = backward_rfft_mirrored(forward_rfft_mirrored(vec) * Fourier_filter, ntod=len(vec))
+        stop_bench("FFT")
+        return res
 
     def apply_LHS_scaled(x_small):
         u_x = np.zeros(Ntod, dtype=x_small.dtype)
@@ -134,3 +149,170 @@ def inefficient_corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.
             break
     x_full = CG_solver.x
     return x_full
+
+
+def _estimate_sigma0(residual: NDArray, n_corr: NDArray, mask: NDArray[np.bool_],
+                     dec: int) -> float:
+    """Robust white-noise level from the fully-cleaned residual (sky- and n_corr-subtracted)."""
+    return float(calc_sigma0_robust(residual - n_corr, mask, down_factor=int(dec)))
+
+
+def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params: NDArray,
+                            noise_model: NoisePSD, fsamp: float, *, cg_err_tol: float,
+                            cg_max_iter: int, sample_params: bool, sample_sigma0: bool = True,
+                            nomono: bool = False, onlymono: bool = False, sigma0_dec: int = 1,
+                            psd_fit_nu_min: float = 0.0, psd_fit_nu_max: float = np.inf,
+                            psd_bin: bool = False) -> Bunch:
+    """ Draw a correlated-noise realization for one detector-scan and optionally resample sigma0 and
+        the noise-model parameters. The inverse correlated-noise spectrum is supplied by
+        *noise_model*, so any NoisePSD subclass (parameters of any length) can be plugged in.
+
+        Masked gaps are inpainted in-place in *tod* (linear slope + white noise). The filled values
+        seed the CG warm-start and, when the masked CG is skipped or rejected, define the stationary
+        (full-mask) Wiener fallback solution.
+
+    Args:
+        tod: Sky-subtracted TOD for one detector-scan. Modified in-place by gap inpainting.
+        mask: Boolean validity mask (True = valid sample).
+        noise_params: Current noise parameters; ``noise_params[0]`` is sigma0 (used for the CG).
+        noise_model: NoisePSD model providing ``compute_inv_corr_spectrum`` and ``sample_params``.
+        fsamp: Sampling rate of the TOD (Hz).
+        cg_err_tol: CG convergence tolerance (relative residual).
+        cg_max_iter: Maximum CG iterations. If 0, the masked-gap CG is skipped entirely and the
+            stationary (full-mask) Wiener solution is returned directly.
+        sample_params: Whether to resample the noise-model parameters (fknee, alpha, ...).
+        sample_sigma0: Whether to re-estimate sigma0 (noise_params[0]) from the n_corr-subtracted
+            residual after drawing n_corr (Commander3-aligned).
+        nomono: If True, project the per-scan monopole out of the residual and of n_corr (Fortran
+            ``nomono``); otherwise the DC is left in n_corr.
+        onlymono: If True, model the correlated noise as only the per-scan offset, skipping the CG
+            and parameter sampling (Fortran ``onlymono``). Takes precedence over ``nomono``.
+        sigma0_dec: Decimation (block-average) factor for the sigma0 estimator.
+        psd_fit_nu_min, psd_fit_nu_max: Frequency range (Hz) for PSD-parameter fitting.
+        psd_bin: Whether the PSD-parameter fit uses a (mode-count-weighted) binned periodogram.
+    Returns:
+        Bunch with fields ``n_corr`` (realization), ``noise_params`` (with updated sigma0 and/or
+        parameters), ``residual`` (CG residual; 0 when no masked CG ran), ``niter`` (CG iterations),
+        ``converged`` (bool), and ``high_var`` (variance sanity check failed).
+    """
+    noise_params = np.array(noise_params, dtype=np.float64, copy=True)
+    sigma0 = float(noise_params[0])
+    Ntod = tod.shape[0]
+
+    # "Only monopole" mode: model the correlated noise as just the per-scan offset.
+    if onlymono:
+        mono = float(np.mean(tod[mask])) if mask.any() else 0.0
+        n_corr = np.full(Ntod, mono, dtype=tod.dtype)
+        if sample_sigma0:
+            noise_params[0] = _estimate_sigma0(tod, n_corr, mask, sigma0_dec)
+        return Bunch(n_corr=n_corr, noise_params=noise_params, residual=0.0, niter=0,
+                     converged=True, high_var=False)
+
+    freq = rfftfreq(2 * Ntod, d=1.0/fsamp)  # Mirrored-FFT grid: nfft=2*Ntod -> length Ntod+1.
+    C_corr_inv = noise_model.compute_inv_corr_spectrum(freq, noise_params)
+    # Inpaint masked regions: seeds the CG warm-start and feeds the stationary fallback solve.
+    fill_all_masked(tod, mask, sigma0)
+    if nomono and mask.any():
+        tod = tod - np.mean(tod[mask])  # Solve for a mean-zero correlated noise component.
+
+    high_var = False
+    if cg_max_iter == 0:
+        # User requested no CG steps: use the stationary (full-mask) Wiener solution directly.
+        n_corr, residual, niter, converged = corr_noise_realization_with_gaps(
+            tod, np.ones_like(mask), sigma0, C_corr_inv)
+    else:
+        n_corr, residual, niter, converged = corr_noise_realization_with_gaps(
+            tod, mask, sigma0, C_corr_inv, err_tol=cg_err_tol, max_iter=cg_max_iter)
+        # Sanity check: the residual (data minus n_corr) should not carry more power than the data.
+        resid = (tod - n_corr) * mask
+        high_var = bool(np.dot(resid, resid) > np.dot(tod*mask, tod*mask))
+        if high_var or not converged:
+            # Fall back to the stationary solution that ignores the gaps.
+            n_corr, _, _, _ = corr_noise_realization_with_gaps(
+                tod, np.ones_like(mask), sigma0, C_corr_inv)
+
+    if nomono and mask.any():
+        n_corr = n_corr - np.mean(n_corr[mask])
+
+    # Re-estimate sigma0 from the fully-cleaned residual (after subtracting the n_corr realization).
+    if sample_sigma0:
+        noise_params[0] = _estimate_sigma0(tod, n_corr, mask, sigma0_dec)
+
+    # Fit the PSD parameters to the residual periodogram (full model), inpainting masked samples
+    # with the n_corr realization plus white noise (Commander3 sample_noise_psd convention).
+    if sample_params:
+        residual_tod = tod.copy()
+        ngap = int(np.count_nonzero(~mask))
+        if ngap > 0:
+            residual_tod[~mask] = n_corr[~mask] + float(noise_params[0]) * np.random.randn(ngap)
+        noise_params = noise_model.sample_params(residual_tod, noise_params, fsamp,
+                                                 nu_min=psd_fit_nu_min, nu_max=psd_fit_nu_max,
+                                                 bin_psd=psd_bin)
+
+    return Bunch(n_corr=n_corr, noise_params=noise_params, residual=float(residual),
+                 niter=int(niter), converged=bool(converged), high_var=high_var)
+
+
+def _log_distribution(nu: float, label: str, values: NDArray, fmt: str = ".4f") -> None:
+    """Log the min / 1st-pct / mean / 99th-pct / max of *values* for one band."""
+    values = np.asarray(values, dtype=np.float64)
+    logger.info(f"{nu}GHz: {label} {np.nanmin(values):{fmt}} {np.nanpercentile(values, 1):{fmt}} "
+                f"{np.nanmean(values):{fmt}} {np.nanpercentile(values, 99):{fmt}} "
+                f"{np.nanmax(values):{fmt}}")
+
+
+def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
+                         sampled_params: list[NDArray], residuals: list[float],
+                         niters: list[int], n_failed_conv: int, n_high_var: int,
+                         worst_residual: float, n_local_scans: int) -> None:
+    """ Reduce per-detector-scan correlated-noise diagnostics across the band communicator and log
+        a summary on the band master. Parameter distributions are reported per model parameter name
+        (skipping sigma0), so the summary adapts to any NoisePSD model.
+
+    Args:
+        band_comm: Band-level MPI communicator.
+        nu: Band centre frequency (GHz), for labelling.
+        noise_model: The band's NoisePSD model (used for ``param_names``).
+        sampled_params: Locally sampled ``noise_params`` arrays (empty if params were not sampled).
+        residuals: Local CG residuals (0 entries are excluded from the summary).
+        niters: Local CG iteration counts.
+        n_failed_conv: Local count of non-converged masked-CG solves.
+        n_high_var: Local count of variance-sanity-check failures.
+        worst_residual: Local worst CG residual.
+        n_local_scans: Local number of detector-scans (for the "out of N" message).
+    """
+    n_failed_conv = band_comm.reduce(n_failed_conv, op=MPI.SUM)
+    n_high_var = band_comm.reduce(n_high_var, op=MPI.SUM)
+    worst_residual = band_comm.reduce(worst_residual, op=MPI.MAX)
+    n_total = band_comm.reduce(n_local_scans, op=MPI.SUM)
+    residuals = band_comm.gather(residuals)
+    niters = band_comm.gather(niters)
+    sampled_params = band_comm.gather(sampled_params)
+    if band_comm.Get_rank() != 0:
+        return
+
+    logger.debug(f"Worst corr-noise sampling residual (band {nu}GHz) = {worst_residual:.2e}.")
+    if n_failed_conv > 0:
+        logger.warning(f"Band {nu}GHz failed noise CG for {n_failed_conv} out of {n_total} scans. "
+                       f"Worst residual = {worst_residual:.3e}.")
+    if n_high_var > 0:
+        logger.warning(f"Band {nu}GHz failed variance sanity check for {n_high_var} out of "
+                       f"{n_total} scans.")
+
+    residuals = np.concatenate([np.asarray(r, dtype=np.float64) for r in residuals])
+    residuals = residuals[residuals != 0]
+    if residuals.size == 0:
+        residuals = np.array([0.0])
+    niters = np.concatenate([np.asarray(n, dtype=np.float64) for n in niters])
+    if niters.size == 0:
+        niters = np.array([0.0])
+    _log_distribution(nu, "residuals", residuals, fmt=".2e")
+    _log_distribution(nu, "iterations", niters, fmt=".4f")
+
+    # Per-parameter distributions (model-agnostic; sigma0 at index 0 is reported elsewhere).
+    flat = [p for sub in sampled_params for p in sub]
+    if flat:
+        arr = np.asarray(flat, dtype=np.float64)  # shape (n_sampled_scans, npar)
+        for j in range(1, arr.shape[1]):
+            name = noise_model.param_names[j] if j < len(noise_model.param_names) else f"p{j}"
+            _log_distribution(nu, name, arr[:, j], fmt=".4f")
