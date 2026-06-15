@@ -8,7 +8,6 @@ from numpy.typing import NDArray
 from astropy.io import fits
 from mpi4py import MPI
 from pixell.bunch import Bunch
-from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_group_TOD import DetGroupTOD
@@ -73,11 +72,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
 
     Fourier_times = np.load(my_experiment.Fourier_times_path)
 
-    # Attempting to reduce fragmentation by allocating buffers.
-    ntod_upper_bound = int(my_band.fsamp*100*3600)  # 10 hour scan.
-    flag_buffer = np.zeros(ntod_upper_bound, dtype=np.int64)
-    # tod_buffer = np.zeros(ntod_upper_bound, dtype=np.float32)
-
     scan_list = []
     nscans = scan_idx_stop - scan_idx_start
     num_included = 0
@@ -106,26 +100,22 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
             detector_list = []
+            # idet is the detector's full-band column (its position in ``all_det_names``);
+            # idet_accepted (det_idx_local) advances only when a detector survives the cuts below.
             idet_accepted = 0
             for idet, det_name in enumerate(all_det_names):
                 tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32, copy=False)
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
-                psi_encoded = f[f"/{pid}/{det_name}/psi/"][()] if "QU" in my_band.polarization else []
+                # Intensity-only bands have no psi in the files; feed a zero psi (unused by I-only
+                # mapmaking, but PixelPointing requires a length-matched array).
+                if "QU" in my_band.polarization:
+                    psi_encoded = f[f"/{pid}/{det_name}/psi/"][()]
+                else:
+                    psi_encoded = np.zeros(ntod_optimal, dtype=np.float32)
                 flag_encoded = f[f"/{pid}/{det_name}/flag/"][()]
                 init_scalars = f[f"/{pid}/{det_name}/scalars/"][()]
                 # Data format has this weird thing were gain seems to be in "micro-gain"...
                 init_scalars[0] *= 1e-6
-
-                flag_buffer[:ntod] = cpp_utils.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8),
-                                                        huffman_tree, huffman_symbols, flag_buffer[:ntod])
-                flag_buffer[:ntod_optimal] = np.cumsum(flag_buffer[:ntod_optimal])
-                flag_buffer[:ntod_optimal] &= 6111232
-                if np.sum(flag_buffer[:ntod_optimal]) != 0:
-                    good_scan = False
-                # tod_buffer[:ntod_optimal] = np.abs(tod)
-                # Check for crazy data.
-                if np.mean(np.abs(tod)) > 0.001 or np.std(tod) > 0.001:
-                    good_scan = False
 
                 det_init_scalars[idet] = init_scalars
                 det_pointing = PixelPointing(pix_encoded, psi_encoded, huffman_tree,
@@ -135,12 +125,25 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
                 detector = DetectorTOD(det_name, idet, idet_accepted, tod, det_pointing, fsamp,
                                        vsun, huffman_tree, huffman_symbols, processing_mask_map,
                                        ntod, ntod_optimal,
+                                       flag_encoded=flag_encoded,
                                        bad_data_bitmask = 6111232,
                                        init_scalars = init_scalars)
+                # Bad samples are handled per-sample by the detector's full_mask (flag &
+                # bad_data_bitmask), rather than dropping the whole scan. Following the SO readers,
+                # only skip detectors with too little usable data (or pathological TOD magnitudes).
+                unmasked_fraction = np.sum(detector.full_mask)/detector.full_mask.size
+                if unmasked_fraction < 0.99:
+                    continue
+                if (detector.tod == 0).all():
+                    continue
+                if np.mean(np.abs(tod)) > 0.001 or np.std(tod) > 0.001:
+                    continue
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
                 idet_accepted += 1
+        if len(detector_list) == 0:
+            good_scan = False
         if good_scan:
             scan = ScanTOD(detector_list, 0., scanID)
             scan_list.append(scan)

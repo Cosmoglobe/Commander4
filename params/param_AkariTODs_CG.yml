@@ -28,14 +28,32 @@ general:
   noise_fknee: 0.1
   noise_alpha: -0.9
   
-  sample_corr_noise: True
-  sample_corr_noise_from_iter_num: 8
-  sample_abs_gain: True
-  sample_abs_gain_from_iter_num: 2
-  sample_rel_gain: True
-  sample_rel_gain_from_iter_num: 4
-  sample_temporal_gain: True
-  sample_temporal_gain_from_iter_num: 4
+  corr_noise:
+    sample_corr_noise: True
+    sample_corr_noise_from_iter_num: 8
+    sample_noise_params: True     # Resample noise-model params (needs sample_corr_noise).
+    sample_sigma0: True            # Re-estimate sigma0 from the n_corr-subtracted residual.
+    CG_err_tol: 1.0e-4             # Correlated-noise CG convergence tolerance.
+    CG_max_iter: 60                # Max CG iterations; 0 -> skip CG, use stationary fallback.
+    nomono: False                 # Project the per-scan monopole out of n_corr (Fortran "nomono").
+    onlymono: False               # Model the correlated noise as only the per-scan offset.
+    sigma0_decimation: 1          # Block-average factor for the sigma0 estimator.
+    psd_fit_nu_min: 0.0           # Min frequency (Hz) for noise-PSD parameter fitting.
+    psd_fit_nu_max: 2.0           # Max frequency (Hz) for noise-PSD parameter fitting.
+    psd_bin: False                # Fit every Fourier mode (False) or mode-weighted binned PSD.
+  gain_calib_downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+  abs_gain:                           # Absolute (band-global) gain g0.
+    sample: true
+    sample_from_iter_num: 2
+    calibrate_against: orbital_dipole # "orbital_dipole" | "full_sky" | "sky"; per-band overridable.
+  rel_gain:                           # Per-detector relative gain.
+    sample: true
+    sample_from_iter_num: 4
+    calibrate_against: full_sky       # "orbital_dipole" | "full_sky" | "sky"; per-band overridable.
+  temporal_gain:                      # Per-scan temporal gain variations.
+    sample: true
+    sample_from_iter_num: 4
+    calibrate_against: full_sky       # "orbital_dipole" | "full_sky" | "sky"; per-band overridable.
 
   tod_processing_steps:
     Akari:
@@ -69,6 +87,7 @@ general:
   write_orb_dipole_maps_to_chain: True
   write_corr_noise_maps_to_chain: True
   write_sky_model_maps_to_chain: True
+  write_ncorr_tods_to_chain: False   # DEBUG ONLY: full per-sample n_corr TODs (very large data).
 
   output_paths:
     stats: "../cmdr4_stats/PlanckTODs_CG/"
@@ -107,7 +126,8 @@ components:
       smoothing_prior_amplitude: 2.0e-3  # uK_RJ^2
       beta: 1.56
       T: 20
-      nu0: 545
+      nu_ref: [857, 353]  # [I, QU]
+      units: "uK_RJ"
       lmax: 1024
       smoothing_scale: 0.0
       spatially_varying_MM: False
@@ -122,7 +142,8 @@ components:
       smoothing_prior_FWHM: 60.0 # arcmin
       smoothing_prior_amplitude: 2.0e-2  # uK_RJ^2
       beta: -3.1
-      nu0: 30
+      nu_ref: [0.408, 30]  # [I, QU]
+      units: "uK_RJ"
       lmax: 512
       smoothing_scale: 0.0
       spatially_varying_MM: False
@@ -137,7 +158,8 @@ components:
       smoothing_prior_FWHM: 30.0 # arcmin
       smoothing_prior_amplitude: 1.0e+9  # uK_RJ^2
       T: 7000
-      nu0: 0.408 #40
+      nu_ref: 40
+      units: "uK_RJ"
       lmax: 512
       smoothing_scale: 0.0
       spatially_varying_MM: False
@@ -443,12 +465,14 @@ experiments:
     pix_is_compressed: true
     data_type: "TOD"
     mapmaker: "CG"
-    flag_bitmask: 0b1111111111111111111111111111101
+    bad_data_bitmask: 0b1111111111111111111111111111101
     #bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
     num_scans: 11395
     bands:
       AkariN60:
+        abs_gain:
+          calibrate_against: full_sky   # Preserve full-sky abs-gain calibration (legacy nu>380 rule).
         enabled: true
         tod_files_prefix: "AKARI_N60_v1_"
         polarization: "I"

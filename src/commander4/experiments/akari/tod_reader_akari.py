@@ -12,6 +12,8 @@ from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.data_models.pointing import PixelPointing
+from commander4.noise_sampling.noise_psd import NoisePSDOof
 
 
 def get_processing_mask(my_band: Bunch) -> DetectorTOD:
@@ -85,31 +87,43 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             if ntod > ntod_upper_bound:
                 raise ValueError(f"{ntod_upper_bound} {ntod}")
             vsun = np.ones(3)  # dummy, we don't have that in Akari.
+            # Akari is intensity-only: the files carry no psi, so we hand PixelPointing a zero psi of
+            # the right length (psi is unused by I-only mapmaking, but PixelPointing requires one).
+            psi_zeros = np.zeros(ntod_optimal, dtype=np.float32)
             detector_list = []
-            for det_name in det_names:
+            # All detectors are kept, so the full-band column idet and the per-scan column
+            # idet_accepted advance together here.
+            idet_accepted = 0
+            for idet, det_name in enumerate(det_names):
                 tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32)
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
                 flag_encoded = f[f"/{pid}/{det_name}/flag/"][()]
-                detector = DetectorTOD(tod, pix_encoded, [], my_band.eval_nside,
-                                       my_band.data_nside, fsamp, vsun, huffman_tree,
-                                       huffman_symbols, npsi, processing_mask_map, ntod,
+                # gain_init, sigma0_init, fknee_init, alpha_init:
+                init_scalars = f[f"/{pid}/{det_name}/scalars"][()]
+                det_pointing = PixelPointing(pix_encoded, psi_zeros, huffman_tree, huffman_symbols,
+                                             npsi, my_band.eval_nside, my_band.data_nside, ntod,
+                                             ntod_optimal)
+                detector = DetectorTOD(det_name, idet, idet_accepted, tod, det_pointing, fsamp,
+                                       vsun, huffman_tree, huffman_symbols, processing_mask_map,
+                                       ntod, ntod_optimal,
                                        flag_encoded=flag_encoded,
-                                       flag_bitmask=my_experiment.flag_bitmaks,
-                                       pix_is_compressed=my_experiment.pix_is_compressed,
-                                       psi_is_compressed=False)
+                                       bad_data_bitmask=my_experiment.bad_data_bitmask,
+                                       init_scalars=init_scalars)
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
+                idet_accepted += 1
         scanID = int(pid)
-        scan = ScanTOD(detector_list, 0., scanID, scan_idx_start, scan_idx_stop)
+        scan = ScanTOD(detector_list, 0., scanID)
         scan_list.append(scan)
         num_included += 1
         if i_pid % 10 == 0:
             gc.collect()
 
     ndet = len(det_names)
+    noise_model = NoisePSDOof()
     band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, ndet, my_band.polarizations)
+                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
 
     ### Collect some info on master rank of each band and print it ###
     local_tot_scans = scan_idx_stop - scan_idx_start
