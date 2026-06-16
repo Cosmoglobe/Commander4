@@ -14,6 +14,7 @@ from commander4.output.log import logassert
 from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
+from commander4.data_models.tod_view import TODView
 from commander4.solvers.CG_driver import distributed_CG_arr
 from commander4.data_models.detector_samples import DetectorSamples
 from commander4.data_models.scan_samples import ScanSamples
@@ -237,15 +238,20 @@ class CGMapmaker:
 
         self.map_comm.Bcast(in_map, root=0)
         out_map = np.zeros_like(in_map)
-        # Iterate accepted detector-scans only, matching accum_to_RHS: the LHS operator
-        # P^T T^T N^-1 T P and the RHS P^T T^T N^-1 d must span the same set of detector-scans, or
-        # the CG would solve an inconsistent (A, b) pair. det.det_idx_fullband is the dense column.
-        for iscan, det in self.detector_tod.iter_detector_scans(self.detector_samples.accept):
-            pix, psi = det.get_pix_psi()
-            sigma0 = self.detector_samples.noise_params[iscan, det.det_idx_fullband, 0]
-            scan_tod_arr_aux = np.zeros_like(det.tod, dtype=self.f_dtype) #aux array to not modify scan.tod
+        # The LHS operator P^T T^T N^-1 T P and the RHS P^T T^T N^-1 d must span the same set of
+        # detector-scans AND the same per-sample selection, or the CG solves an inconsistent (A, b).
+        # We therefore iterate through the exact same TODView path the RHS loop uses (accept gating +
+        # good_data_mask, addressing the dense (nscans, ndet) arrays by det_idx_fullband), so the two
+        # stay consistent by construction.
+        scan_view = TODView(self.detector_tod, self.detector_samples)
+        for view in scan_view.iter_focused(accepted_only=True):
+            good_data_mask = view.good_data_mask
+            pix = view.pix[good_data_mask]
+            psi = view.psi[good_data_mask]
+            sigma0 = view.sigma0
+            scan_tod_arr_aux = np.zeros(pix.shape[0], dtype=self.f_dtype)  # good samples only, as RHS
             #P m
-            scan_tod_arr_aux = self.apply_P(in_map, det, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
+            scan_tod_arr_aux = self.apply_P(in_map, view.detector, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
             #T P m
             scan_tod_arr_aux = self.apply_T(scan_tod_arr_aux)
             #N^-1 T P m
@@ -253,7 +259,7 @@ class CGMapmaker:
             #T^T N^-1 T P m
             scan_tod_arr_aux = self.apply_T_adjoint(scan_tod_arr_aux)
             #P^T T^T N^-1 T P
-            out_map = self.apply_P_adjoint(det, out_map, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
+            out_map = self.apply_P_adjoint(view.detector, out_map, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
         send, recv = (MPI.IN_PLACE, out_map) if self.map_comm.Get_rank() == 0 else (out_map, None)
         self.map_comm.Reduce(send, recv, op=MPI.SUM, root=0)
         if not ismaster:
@@ -406,7 +412,9 @@ class CGMapmakerI(CGMapmaker):
         assert npix_out == in_map.shape[-1], "in_map size must match scan's eval nside."
         assert pix.shape == scan_tod_arr.shape, "pix shape must match scan_tod_arr."
         pix = out_scan.pix if pix is None else pix
-        ntod = out_scan.tod.shape[-1]
+        # Use the passed array length, not the full detector ntod: apply_LHS masks pix/scan_tod_arr
+        # down to good samples, so this must match (mirrors apply_P_adjoint).
+        ntod = scan_tod_arr.shape[-1]
         self.map2tod(in_map, scan_tod_arr, pix.astype(np.int64, copy=False), ntod)
         return scan_tod_arr
 
@@ -518,7 +526,9 @@ class CGMapmakerIQU(CGMapmaker):
         # assert psi.shape == scan_tod_arr.shape, "psi shape must match scan_tod_arr."
         pix = out_scan.pix if pix is None else pix
         psi = out_scan.psi if psi is None else psi
-        ntod = out_scan.tod.shape[-1]
+        # Use the passed array length, not the full detector ntod: apply_LHS masks pix/psi/scan_tod_arr
+        # down to good samples, so this must match (mirrors apply_P_adjoint).
+        ntod = scan_tod_arr.shape[-1]
         self.map2tod_IQU(in_map, scan_tod_arr, pix.astype(np.int64, copy=False),
                          psi.astype(np.float64, copy=False), ntod, npix_out)
         return scan_tod_arr

@@ -143,7 +143,12 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
         mapmaker_invvar.gather_map()
         mapmaker_invvar.normalize_map()
         if ismaster:
-            precond = InvNPreconditionerIQU(mapmaker_invvar.final_rms_map**2)
+            # Unobserved/singular pixels get rms=inf from the per-pixel inversion, so rms**2 is inf
+            # there. The diagonal preconditioner multiplies this into the residual; since the RHS is
+            # 0 at those pixels, 0*inf=nan would poison the global dot product (nan residual from
+            # iter 0). Zero them out (matching the I-only path's without_nan below): an unobserved
+            # pixel gets zero preconditioner weight, which is correct.
+            precond = InvNPreconditionerIQU(utils.without_nan(mapmaker_invvar.final_rms_map**2))
         else:
             precond = called_on_non_master
         cg_mapmaker = CGMapmakerIQU(experiment_data, tod_samples, band_comm,
