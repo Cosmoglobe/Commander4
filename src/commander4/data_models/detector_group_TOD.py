@@ -40,6 +40,20 @@ class DetGroupTOD:
         self.scan_idx_stop: int = 0  # Index of my last scan.
         self.nscans_allranks: int = 0  # Total number of scans across all ranks (on this band).
         self.noise_model = noise_model
+        self._pixel_domain = None  # Cached PixelDomain (built lazily; pointing is static).
+
+    def get_pixel_domain(self, scan_view, comm, sparse: bool):
+        """Return the band's map-distribution :class:`PixelDomain`, building and caching it once.
+
+        The domain depends only on the (static) pointing, so it is built once per run and reused
+        across Gibbs iterations. ``sparse=False`` gives the historical full-sky-per-rank layout;
+        ``sparse=True`` restricts each rank's map buffers to its locally-observed pixels.
+        """
+        from commander4.utils.pixel_domain import PixelDomain
+        mode = "sparse" if sparse else "full"
+        if self._pixel_domain is None or self._pixel_domain.mode != mode:
+            self._pixel_domain = PixelDomain.from_view(scan_view, comm, mode, self.nside)
+        return self._pixel_domain
 
     def iter_detector_scans(self, accept: NDArray | None = None):
         """Iterate over present detector-scans, yielding ``(iscan, det)`` pairs.

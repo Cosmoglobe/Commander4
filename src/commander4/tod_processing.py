@@ -19,6 +19,7 @@ from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU, WeightsMa
 from commander4.utils.CG_mapmaker import CGMapmakerI, CGMapmakerIQU
 from commander4.solvers.preconditioners import InvNPreconditionerI, InvNPreconditionerIQU
 from commander4.noise_sampling.sample_ncorr import sample_correlated_noise, log_corr_noise_stats
+from commander4.noise_sampling.noise_sampling import fill_all_masked
 from commander4.utils.math_operations import forward_rfft, backward_rfft
 from commander4.utils.execution_ids import get_execution_band_ids
 from commander4.noise_sampling.sigma0 import calc_sigma0_robust
@@ -130,12 +131,19 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     # as we have to de-compress pix and psi twice.
     pols = experiment_data.pols
     scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
+    # Optional per-experiment sparse map storage: each rank holds only its locally-observed pixels
+    # rather than a full sky map. The band master still ends up with full-sky maps.
+    exp_cfg = params.experiments[experiment_data.experiment_name]
+    sparse_maps = bool(exp_cfg["sparse_maps"]) if "sparse_maps" in exp_cfg else False
+    domain = experiment_data.get_pixel_domain(scan_view, band_comm, sparse_maps)
     if pols == "IQU":
-        mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)
+        mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
         for view in scan_view.iter_focused(accepted_only=True):
-            good_data_mask = view.good_data_mask
-            pix = view.pix[good_data_mask]
-            psi = view.psi[good_data_mask]
+            # Full-length pointing (no good_data_mask compaction): the CG operator gap-fills flagged
+            # samples rather than removing them, so every sample carries weight (gain/sigma0)^2 and
+            # the inverse-variance / preconditioner must count them all to match the A operator.
+            pix = view.pix
+            psi = view.psi
             sigma0 = view.sigma0
             gain = view.get_gain()
             inv_var = (gain/sigma0)**2
@@ -143,22 +151,25 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
         mapmaker_invvar.gather_map()
         mapmaker_invvar.normalize_map()
         if ismaster:
-            # Unobserved/singular pixels get rms=inf from the per-pixel inversion, so rms**2 is inf
-            # there. The diagonal preconditioner multiplies this into the residual; since the RHS is
-            # 0 at those pixels, 0*inf=nan would poison the global dot product (nan residual from
-            # iter 0). Zero them out (matching the I-only path's without_nan below): an unobserved
-            # pixel gets zero preconditioner weight, which is correct.
-            precond = InvNPreconditionerIQU(utils.without_nan(mapmaker_invvar.final_rms_map**2))
+            # Jacobi preconditioner M = 1/diag(A), where A is the accumulated inverse-noise matrix
+            # (final_cov_map holds its 6 unique elements; [0,3,5] are A_II, A_QQ, A_UU). This matches
+            # the robust I-only path below. The previous choice -- diag(A^-1) via rms**2 -- blows up
+            # at near-singular pixels (poor per-pixel polarization-angle coverage, where the 3x3
+            # inverse is inflated by a vanishing determinant), which wrecks the conditioning of the
+            # preconditioned operator and makes PCG diverge. 1/diag(A) stays bounded by the actual
+            # per-component inverse variance. without_nan zeros unobserved pixels (1/0 -> inf -> 0).
+            A_diag = mapmaker_invvar.final_cov_map[(0, 3, 5), :]
+            precond = InvNPreconditionerIQU(utils.without_nan(1.0 / A_diag))
         else:
             precond = called_on_non_master
         cg_mapmaker = CGMapmakerIQU(experiment_data, tod_samples, band_comm,
-                    preconditioner=precond, nthreads=params.general.nthreads_tod, 
-                    CG_maxiter=params.general.CG_mapmaker.maxiter)
+                    preconditioner=precond, nthreads=params.general.nthreads_tod,
+                    CG_maxiter=params.general.CG_mapmaker.maxiter, pixel_domain=domain)
     elif pols == "I":
-        mapmaker_invvar = WeightsMapmaker(band_comm, experiment_data.nside)
+        mapmaker_invvar = WeightsMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
         for view in scan_view.iter_focused(accepted_only=True):
-            good_data_mask = view.good_data_mask
-            pix = view.pix[good_data_mask]
+            # Full-length pointing (see IQU branch above): gap-filled samples are counted too.
+            pix = view.pix
             sigma0 = view.sigma0
             gain = view.get_gain()
             inv_var = (gain/sigma0)**2
@@ -169,17 +180,17 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
         else:
             precond = called_on_non_master
         cg_mapmaker = CGMapmakerI(experiment_data, tod_samples, band_comm,
-                    preconditioner=precond, nthreads=params.general.nthreads_tod, 
-                    CG_maxiter=params.general.CG_mapmaker.maxiter)
+                    preconditioner=precond, nthreads=params.general.nthreads_tod,
+                    CG_maxiter=params.general.CG_mapmaker.maxiter, pixel_domain=domain)
     else:
         raise ValueError(f"specified polarizations {pols} is notsupported yet.")
 
     BinMapmaker = MapmakerIQU if pols == "IQU" else Mapmaker #general bin mapmaker class object.
     # mapmaker = BinMapmaker(band_comm, experiment_data.nside)
-    mapmaker_orbdipole = BinMapmaker(band_comm, experiment_data.nside)
+    mapmaker_orbdipole = BinMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
 
     if ncorr_cfg.do_ncorr:
-        mapmaker_ncorr = BinMapmaker(band_comm, experiment_data.nside)
+        mapmaker_ncorr = BinMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
         sampled_params = []
         residuals = []
         niters = []
@@ -191,8 +202,6 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     for view in scan_view.iter_focused(accepted_only=True):
         pix, psi = view.pix, view.psi
         good_data_mask = view.good_data_mask
-        pix_masked = pix[good_data_mask]
-        psi_masked = psi[good_data_mask]
         sigma0 = view.sigma0
         gain = view.get_gain()
         inv_var = (gain/sigma0)**2
@@ -246,14 +255,20 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
         _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view,
                                 n_corr_est if ncorr_cfg.do_ncorr else None)
 
-        d_sky_masked = d_sky[good_data_mask]
+        # Gap-fill flagged samples instead of compacting them away. The CG operator applies a
+        # Fourier transform (apply_T), which requires a continuous, full-length TOD: removing masked
+        # samples corrupts the FFT, and a single non-finite sample (or an empty compacted scan)
+        # otherwise poisons/crashes the whole solve. fill_all_masked (linear interpolation + white
+        # noise) is the same gap-filling used in correlated-noise sampling; the filled samples are
+        # noisy realizations carrying weight 1/sigma0^2, consistent with the full-length A operator.
+        fill_all_masked(d_sky, good_data_mask, sigma0)
 
         cg_mapmaker.accum_to_RHS(
                     scan_tod=view.detector,
                     sigma0=sigma0,
-                    pix=pix_masked,
-                    psi=psi_masked,
-                    scan_tod_arr=d_sky_masked/gain
+                    pix=pix,
+                    psi=psi,
+                    scan_tod_arr=d_sky/gain
                     )
 
     ### PRINT NOISE SAMPLING STATS ###
@@ -279,46 +294,6 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     cg_mapmaker.finalize_RHS()
     cg_mapmaker.solve()
     map_signal = cg_mapmaker.solved_map
-    
-    ########### temporary debug plots
-    # if ismaster:
-    #     if pols == "IQU":
-    #         plt.figure(figsize=(8.5*3, 5.4))
-    #         npol = 3
-    #         for i in range(npol):
-    #             limup   = np.nanpercentile(cg_mapmaker.RHS_map[i,:], 99)
-    #             limdown = np.nanpercentile(cg_mapmaker.RHS_map[i,:], 1)
-    #             hp.mollview(cg_mapmaker.RHS_map[i,:], cmap='RdBu_r', title='RHS',
-    #                         sub=(1,npol,i+1), min=limdown, max=limup)
-    #         plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/RHS.png")
-    #         plt.close()
-
-    #         plt.figure(figsize=(8.5*3, 5.4))
-    #         for i in range(npol):
-    #             limup   = np.nanpercentile(precond(cg_mapmaker.RHS_map)[i,:], 99)
-    #             limdown = np.nanpercentile(precond(cg_mapmaker.RHS_map)[i,:], 1)
-    #             hp.mollview(precond(cg_mapmaker.RHS_map)[i,:], cmap='RdBu_r', title='M RHS',
-    #                         sub=(1,npol,i+1), min=limdown, max=limup)
-    #         plt.savefig("/mn/stornext/u3/leoab/cmdr4_plots/M_RHS.png")
-    #         plt.close()
-    #     else:
-    #         plt.figure()
-    #         limup   = np.nanpercentile(cg_mapmaker.RHS_map[0,:], 99)
-    #         limdown = np.nanpercentile(cg_mapmaker.RHS_map[0,:], 1)
-    #         hp.mollview(cg_mapmaker.RHS_map[0,:], cmap='RdBu_r', title='RHS',
-    #                         min=limdown, max=limup)
-    #         plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/RHS.png")
-    #         plt.close()
-
-    #         plt.figure()
-    #         limup   = np.nanpercentile(precond(cg_mapmaker.RHS_map)[0,:], 99)
-    #         limdown = np.nanpercentile(precond(cg_mapmaker.RHS_map)[0,:], 1)
-    #         hp.mollview(precond(cg_mapmaker.RHS_map)[0,:], cmap='RdBu_r', title='M RHS',
-    #                         min=limdown, max=limup)
-    #         plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/M_RHS.png")
-    #         plt.close()
-
-    #####################
 
     if ncorr_cfg.do_ncorr:
         mapmaker_ncorr.gather_map()
@@ -384,7 +359,12 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
     start_bench("binned-mapmaker")
     pols = experiment_data.pols
     scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
-    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside)
+    # Optional per-experiment sparse map storage: each rank holds only its locally-observed pixels
+    # rather than a full sky map. The band master still ends up with full-sky maps.
+    exp_cfg = params.experiments[experiment_data.experiment_name]
+    sparse_maps = bool(exp_cfg["sparse_maps"]) if "sparse_maps" in exp_cfg else False
+    domain = experiment_data.get_pixel_domain(scan_view, band_comm, sparse_maps)
+    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
     for view in scan_view.iter_focused(accepted_only=True):
         good_data_mask = view.good_data_mask
         pix = view.pix[good_data_mask]
@@ -397,11 +377,11 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
     mapmaker_invvar.gather_map()
     mapmaker_invvar.normalize_map()
 
-    mapmaker = MapmakerIQU(band_comm, experiment_data.nside)
-    mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside)
-    
+    mapmaker = MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
+    mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
+
     if ncorr_cfg.do_ncorr:
-        mapmaker_ncorr = MapmakerIQU(band_comm, experiment_data.nside)
+        mapmaker_ncorr = MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
         sampled_params = []
         residuals = []
         niters = []
