@@ -55,6 +55,11 @@ class DetGroupTOD:
             self._pixel_domain = PixelDomain.from_view(scan_view, comm, mode, self.nside)
         return self._pixel_domain
 
+    @property
+    def pixel_domain(self):
+        """The cached map-distribution :class:`PixelDomain`, or ``None`` if not built yet."""
+        return self._pixel_domain
+
     def iter_detector_scans(self, accept: NDArray | None = None):
         """Iterate over present detector-scans, yielding ``(iscan, det)`` pairs.
 

@@ -31,6 +31,17 @@ from commander4.logging.performance_logger import benchmark, bench_summary, star
 logger = logging.getLogger(__name__)
 
 
+def _read_sparse_maps_flag(params: Bunch, experiment_data: DetGroupTOD) -> bool:
+    """Whether sparse (per-rank local-pixel) map storage is enabled for this experiment.
+
+    ``sparse_maps`` is an experiment-level option: when set, each rank's map buffers *and* its slice
+    of the sky model hold only the pixels its scans observe, rather than a full sky map (the band
+    master still assembles full-sky maps). Defaults to the historical full-sky-per-rank layout.
+    """
+    exp_cfg = params.experiments[experiment_data.experiment_name]
+    return bool(exp_cfg["sparse_maps"]) if "sparse_maps" in exp_cfg else False
+
+
 def called_on_non_master(arr):
     logger.debug("Dummy precond has been called")
     return np.copy(arr)
@@ -133,8 +144,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
     # Optional per-experiment sparse map storage: each rank holds only its locally-observed pixels
     # rather than a full sky map. The band master still ends up with full-sky maps.
-    exp_cfg = params.experiments[experiment_data.experiment_name]
-    sparse_maps = bool(exp_cfg["sparse_maps"]) if "sparse_maps" in exp_cfg else False
+    sparse_maps = _read_sparse_maps_flag(params, experiment_data)
     domain = experiment_data.get_pixel_domain(scan_view, band_comm, sparse_maps)
     if pols == "IQU":
         mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
@@ -361,8 +371,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
     scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
     # Optional per-experiment sparse map storage: each rank holds only its locally-observed pixels
     # rather than a full sky map. The band master still ends up with full-sky maps.
-    exp_cfg = params.experiments[experiment_data.experiment_name]
-    sparse_maps = bool(exp_cfg["sparse_maps"]) if "sparse_maps" in exp_cfg else False
+    sparse_maps = _read_sparse_maps_flag(params, experiment_data)
     domain = experiment_data.get_pixel_domain(scan_view, band_comm, sparse_maps)
     mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
     for view in scan_view.iter_focused(accepted_only=True):
@@ -587,6 +596,13 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
 
     tod_samples_chain1 = TODSamples(experiment_data, params, my_band, band_comm, 1)
     tod_samples_chain2 = TODSamples(experiment_data, params, my_band, band_comm, 2)
+
+    # Build the band's map-distribution PixelDomain once now: the pointing is static, so it is
+    # reused across Gibbs iterations by both the mapmakers and the sky-model distribution (which
+    # needs it to give each rank only its local pixels). In full mode this is a cheap no-op.
+    sparse_maps = _read_sparse_maps_flag(params, experiment_data)
+    experiment_data.get_pixel_domain(TODView(experiment_data, tod_samples_chain1), band_comm,
+                                     sparse_maps)
 
     # Creating "tod_band_masters", an array which maps the band index to the rank of the master
     # of that band.

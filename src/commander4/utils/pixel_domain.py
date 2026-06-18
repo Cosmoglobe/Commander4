@@ -2,6 +2,9 @@ import numpy as np
 from mpi4py import MPI
 from numpy.typing import NDArray
 
+# MPI elementary datatypes for the float buffers exchanged by the collectives below.
+_NUMPY_TO_MPI_DTYPE = {np.dtype(np.float64): MPI.DOUBLE, np.dtype(np.float32): MPI.FLOAT}
+
 # Map distribution across the ranks of a band communicator.
 #
 # Commander4 builds each band map collaboratively: every rank accumulates the contributions of its
@@ -121,9 +124,9 @@ class PixelDomain:
                           dtype=np.float64) -> NDArray:
         """Send each rank the values of a full-sky map at its local pixels (inverse of reduce).
 
-        Used by the CG LHS, where the master holds the full iterate and each rank needs only its
-        local slice to apply its block of the operator. Returns an ``(ncomp, n_local)`` buffer on
-        every rank. In full mode this is a plain broadcast of the full-sky map.
+        Used by the CG LHS (full map -> per-rank operator slice) and by the sky-model distribution.
+        Returns an ``(ncomp, n_local)`` buffer on every rank. In full mode this is a plain broadcast
+        of the full-sky map. ``dtype`` selects the float precision of the exchanged buffers.
         """
         rank = self.comm.Get_rank()
         if self.mode == "full":
@@ -133,12 +136,13 @@ class PixelDomain:
             return buf
 
         counts, displs = self._recvcounts, self._displs
-        local = np.empty((ncomp, self.n_local), dtype=np.float64)
+        mpi_dtype = _NUMPY_TO_MPI_DTYPE[np.dtype(dtype)]
+        local = np.empty((ncomp, self.n_local), dtype=dtype)
         for c in range(ncomp):
             if rank == root:
                 # Gather the full map at the concatenated per-rank pixels, then scatter the slices.
-                send = np.ascontiguousarray(full_data[c][self._all_pix], dtype=np.float64)
-                sendbuf = [send, counts, displs, MPI.DOUBLE]
+                send = np.ascontiguousarray(full_data[c][self._all_pix], dtype=dtype)
+                sendbuf = [send, counts, displs, mpi_dtype]
             else:
                 sendbuf = None
             self.comm.Scatterv(sendbuf, local[c], root=root)
