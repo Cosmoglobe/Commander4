@@ -336,7 +336,8 @@ class CGMapmakerI(CGMapmaker):
     def __init__(self, 
                  detector_tod, 
                  detector_samples,
-                 map_comm, T_omega = np.ones_like, 
+                 map_comm, 
+                 T_omega = np.ones_like, 
                  preconditioner = np.copy, 
                  nthreads = 1, 
                  double_prec = True, 
@@ -371,7 +372,7 @@ class CGMapmakerI(CGMapmaker):
             self.maplib.map_accumulator_f32.argtypes = [self.ct_f32_dim2, 
                                                         self.ct_f32_dim1, 
                                                         ct.c_double, 
-                                                        self.ct_f64_dim1, 
+                                                        self.ct_i64_dim1, 
                                                         ct.c_int64]
             self.maplib.map2tod_f32.argtypes = [self.ct_f32_dim2, 
                                                 self.ct_f32_dim1,
