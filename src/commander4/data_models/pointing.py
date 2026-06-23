@@ -11,6 +11,11 @@ import commander4.output.log as log
 
 logger = logging.getLogger(__name__)
 
+class Pointing:
+    """Base class for pointing objects.
+
+    This class is not meant to be instantiated directly.
+    """
 
 class ScanBoresightPointing:
     """Evaluate one scan's boresight once and reuse it for all detectors.
@@ -119,7 +124,7 @@ class ScanBoresightPointing:
 
 
 
-class DetectorBoresightPointing:
+class DetectorBoresightPointing(Pointing):
     """Detector-specific view onto a shared ScanBoresightPointing.
 
     This wrapper stores only the detector index and forwards all queries to the
@@ -139,7 +144,8 @@ class DetectorBoresightPointing:
         self.data_nside = scan_pointing.data_nside
         self.ntod_original = scan_pointing.ntod_original
         self.ntod = scan_pointing.ntod
-    
+        self.is_polarized = True  # All detectors of this kind are assumed to be polarized.
+
     def get_pix(self, nside: int | None = None) -> NDArray[np.integer]:
         return self.scan_pointing.get_pix(self.idet, nside)
 
@@ -150,8 +156,7 @@ class DetectorBoresightPointing:
         return self.scan_pointing.get_pix_psi(self.idet, nside)
 
 
-
-class PixelPointing:
+class PixelPointing(Pointing):
     """Store pixel and polarization-angle pointing for one detector TOD.
 
     The pointing can be supplied either as decoded 1D arrays or as Huffman-
@@ -163,7 +168,7 @@ class PixelPointing:
 
     def __init__(self,
                  pix: bytes | np.void | NDArray[np.integer],
-                 psi: bytes | np.void | NDArray[np.integer] | NDArray[np.floating],
+                 psi: bytes | np.void | NDArray[np.integer] | NDArray[np.floating] | None,
                  huffman_tree: NDArray | None,
                  huffman_symbols: NDArray | None,
                  npsi: int | None,
@@ -178,6 +183,7 @@ class PixelPointing:
         self.ntod = ntod
         self.pix_encoded = pix
         self.psi_encoded = psi
+        self.is_polarized = psi is not None
         # C++ decoder accepts only int64 for the tree.
         self.huffman_tree = huffman_tree.astype(np.int64, copy=False)
         self.huffman_symbols = huffman_symbols
@@ -199,7 +205,7 @@ class PixelPointing:
             logger,
         )
         log.logassert_np(
-            self.psi_is_compressed or isinstance(self.psi_encoded, np.ndarray),
+            self.psi_is_compressed or isinstance(self.psi_encoded, np.ndarray) or not self.is_polarized,
             "'psi' must be provided as bytes, numpy.void, or a numpy array.",
             logger,
         )
@@ -229,7 +235,7 @@ class PixelPointing:
                 f"'pix' length {pix_array.size} is shorter than ntod {self.ntod}.",
                 logger,
             )
-        if not self.psi_is_compressed:
+        if not self.psi_is_compressed and self.is_polarized:
             psi_array = np.asarray(self.psi_encoded)
             log.logassert_np(psi_array.ndim == 1, "'psi' must be a 1D array", logger)
             log.logassert_np(
@@ -268,6 +274,8 @@ class PixelPointing:
 
     def get_psi(self, nside: int | None = None) -> NDArray[np.floating]:
         """Return polarization angles, cropped to the active TOD length."""
+        if self.is_polarized is False:
+            return None
         if self.psi_is_compressed:
             psi = np.zeros(self.ntod_original, dtype=self.huffman_symbols.dtype)
             psi = cpp_utils.huffman_decode(self.psi_compressed_u8, self.huffman_tree,

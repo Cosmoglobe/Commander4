@@ -89,7 +89,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             vsun = np.ones(3)  # dummy, we don't have that in Akari.
             # Akari is intensity-only: the files carry no psi, so we hand PixelPointing a zero psi of
             # the right length (psi is unused by I-only mapmaking, but PixelPointing requires one).
-            psi_zeros = np.zeros(ntod_optimal, dtype=np.float32)
+            psi_zeros = None #np.zeros(ntod_optimal, dtype=np.float32)
             detector_list = []
             # All detectors are kept, so the full-band column idet and the per-scan column
             # idet_accepted advance together here.
@@ -110,11 +110,14 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                                        bad_data_bitmask=my_experiment.bad_data_bitmask,
                                        init_scalars=init_scalars)
                 if (detector.tod == 0).all():
+                    print(f"Detector {det_name} has all zero TOD values.")
                     continue
                 if not np.isfinite(detector.tod).all():
+                    print(f"Detector {det_name} has non-finite values in TOD.")
                     continue
-                if detector.full_mask.mean() < 0.5:
-                    continue
+                if detector.good_data_mask.mean() < 0.5:
+                    print(f"Detector {det_name} has low good data mask mean.")
+                    # continue
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal

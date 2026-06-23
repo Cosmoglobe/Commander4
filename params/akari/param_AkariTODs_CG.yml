@@ -1,0 +1,548 @@
+# Parameter file for performing a full TOD processing + CG compsep on the Planck LFI TOD data with
+# auxiliary maps (Haslam + WMAP + HFI). Analysis performed at native resolutions.
+# By default not all detectors are included, but they are just commented out.
+
+general:
+  MPI_config:
+    ntask_tod: 18
+    ntask_compsep_I: 0 #8
+    ntask_compsep_QU: 0 #8
+  nthreads_tod: 4
+  nthreads_compsep: 2
+  betzy_mode: false
+
+  CG_max_iter: 200
+  CG_max_iter_pol: 200
+  CG_err_tol: 1.0e-100
+  CG_float_precision: "single"
+  CG_real_alm_mode: False
+
+  CG_mapmaker:
+    maxiter: 10
+    err_tol: 1.0e-10
+
+  niter_gibbs: 10
+
+  nside: 512
+
+  noise_fknee: 0.1
+  noise_alpha: -0.9
+
+  corr_noise:
+    sample_corr_noise: True
+    sample_corr_noise_from_iter_num: 8
+    sample_noise_params: True     # Resample noise-model params (needs sample_corr_noise).
+    sample_sigma0: True            # Re-estimate sigma0 from the n_corr-subtracted residual.
+    CG_err_tol: 1.0e-4             # Correlated-noise CG convergence tolerance.
+    CG_max_iter: 60                # Max CG iterations; 0 -> skip CG, use stationary fallback.
+    nomono: False                 # Project the per-scan monopole out of n_corr (Fortran "nomono").
+    onlymono: False               # Model the correlated noise as only the per-scan offset.
+    sigma0_decimation: 1          # Block-average factor for the sigma0 estimator.
+    psd_fit_nu_min: 0.0           # Min frequency (Hz) for noise-PSD parameter fitting.
+    psd_fit_nu_max: 2.0           # Max frequency (Hz) for noise-PSD parameter fitting.
+    psd_bin: False                # Fit every Fourier mode (False) or mode-weighted binned PSD.
+  gain_calib_downsample_time: 0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+  abs_gain:                           # Absolute (band-global) gain g0.
+    sample: false
+    sample_from_iter_num: 2
+    calibrate_against: orbital_dipole # "orbital_dipole" | "full_sky" | "sky"; per-band overridable.
+  rel_gain:                           # Per-detector relative gain.
+    sample: false
+    sample_from_iter_num: 4
+    calibrate_against: full_sky       # "orbital_dipole" | "full_sky" | "sky"; per-band overridable.
+  temporal_gain:                      # Per-scan temporal gain variations.
+    sample: false
+    sample_from_iter_num: 4
+    calibrate_against: full_sky       # "orbital_dipole" | "full_sky" | "sky"; per-band overridable.
+
+  tod_processing_steps:
+    Akari:
+      - estimate_white_noise:
+        from_iter: 0
+      - sample_absolute_gain:
+        from_iter: 2
+      - sample_relative_gain:
+        from_iter: 4
+      - sample_temporal_gain_variations:
+        from_iter: 4
+      - estimate_white_noise:
+        from_iter: 0
+    PlanckLFI:
+      - estimate_white_noise:
+        from_iter: 0
+      - sample_absolute_gain:
+        from_iter: 2
+      - sample_relative_gain:
+        from_iter: 4
+      - sample_temporal_gain_variations:
+        from_iter: 4
+      - estimate_white_noise:
+        from_iter: 0
+
+  output_stats: False
+
+  galactic_mask: True
+  pixel_compsep_sampling: False
+
+  write_orb_dipole_maps_to_chain: False
+  write_corr_noise_maps_to_chain: True
+  write_sky_model_maps_to_chain: True
+  write_ncorr_tods_to_chain: False   # DEBUG ONLY: full per-sample n_corr TODs (very large data).
+  chain_maps_nside: 2048
+  chain_maps_interval: 5
+  init_from_chain: false
+
+  output_paths:
+    stats: "../cmdr4_stats/AKARITODs_CG/"
+    chains: "../cmdr4_chains/AKARITODs_CG/"
+
+  logging:
+    console:
+      level: 'info'
+    file:
+      level: 'info'
+      filename: '../AKARITODs_CG.log'
+
+perform_compsep: false
+sampling_groups_compsep:
+  sample_amps_CG:
+    enabled: false
+    sample_class: "amplitude_sampler_CG"
+    comps: [CMB, Synchrotron, ThermalDust, FreeFree]
+    bands: [Planck30GHz, Haslam408MHz, WMAPKa, WMAPQ1, WMAPQ2, WMAPV1, WMAPV2, Planck857GHz, Planck353GHz]
+
+components:
+  CMB:
+    enabled: false
+    component_class: "CMB"
+    params:
+      polarization: "IQU" #I Q U 
+      longname: "CMB"
+      shortname: "cmb"
+      smoothing_prior_FWHM: 30.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+7 #1.0  # uK_RJ^2
+      lmax: 1024
+      smoothing_scale: 0
+      spatially_varying_MM: False
+
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU" #[True, True, True]
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      smoothing_prior_FWHM: 5.0 # 10.0 # arcmin
+      smoothing_prior_amplitude: 2.0e-3  # uK_RJ^2
+      beta: 1.56
+      T: 20
+      nu_ref: [857, 353]  # [I, QU]
+      units: "uK_RJ"
+      lmax: 1024
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
+
+  Synchrotron:
+    enabled: false
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      longname: "Synchrotron"
+      shortname: "sync"
+      smoothing_prior_FWHM: 60.0 # arcmin
+      smoothing_prior_amplitude: 2.0e-2  # uK_RJ^2
+      beta: -3.1
+      nu_ref: [0.408, 30]  # [I, QU]
+      units: "uK_RJ"
+      lmax: 512
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
+
+  FreeFree:
+    enabled: false
+    component_class: "FreeFree"
+    params:
+      polarization: "I"
+      longname: "Free-Free"
+      shortname: "ff"
+      smoothing_prior_FWHM: 30.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+9  # uK_RJ^2
+      T: 7000
+      nu_ref: 40
+      units: "uK_RJ"
+      lmax: 512
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
+  
+  RadioSources:
+    enabled: False
+    component_class: "RadioSources"
+    params:
+      polarization: "I"
+      longname: "RadioSources"
+      shortname: "radsources"
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
+      nu_0: 30.0  # Ghz
+      lmax: "full" #just a placeholder
+      smoothing_scale: 0 # placeholder? Do we ever want a smoothing of point sources?
+      sample_alphas: False
+      
+  SpinningDust:
+    enabled: False
+    component_class: "SpinningDust"
+    params:
+      polarization: "I"
+      longname: "SpinningDust"
+      shortname: "sdust"
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
+      smoothing_prior_FWHM: 0.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+10  # uK_RJ^2
+      nu_peak: 25.3  # Ghz
+      nu_0: 22.0  # Ghz
+      lmax: 1000
+      smoothing_scale: 0 # 30.0
+      spatially_varying_MM: False
+
+
+compsep:
+  dense_matrix_debug_mode: false  # Solve system first with dense matrix math, for debugging CG. Very slow for nside>32.
+  preconditioner: JointPreconditioner #NoiseOnlyPreconditioner #FullPreconditioner #MixingMatrixPreconditioner #BeamOnlyPreconditioner #
+
+
+CompSep_bands:
+  ### TOD BANDS ###
+  Akari065:
+    get_from: Akari
+    enabled: true
+    polarization: "I"
+  Planck30GHz:
+    get_from: PlanckLFI
+    enabled: false
+    polarization: "IQU"
+  Planck44GHz:
+    get_from: PlanckLFI
+    enabled: false
+    polarization: "IQU"
+  Planck70GHz:
+    get_from: PlanckLFI
+    enabled: false
+    polarization: "IQU"
+
+  ### TOTAL INTENSITY MAPS ###
+  Haslam408MHz:
+    enabled: false
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    signal_map:
+      path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    fwhm: 60.0  # [arcmin]
+    freq: 0.408 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+  WMAPKa:
+    enabled: false
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    signal_map:
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_map_v4.fits"
+      dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_N_v4.fits"
+      dataset_names: ["II_Stokes", "Q_Stokes", "U_Stokes"]
+    fwhm: 39.6 # [arcmin]
+    freq: 33.0 # [GHz]
+    polarization: "IQU"
+    units: "mK_CMB"
+
+  WMAPQ1:
+    enabled: false
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    signal_map:
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_map_v4.fits"
+      dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_N_v4.fits"
+      dataset_names: ["II_Stokes", "Q_Stokes", "U_Stokes"]
+    fwhm: 30.6 # [arcmin]
+    freq: 40.6 # [GHz]
+    polarization: "IQU"
+    units: "mK_CMB"
+
+  WMAPQ2:
+    enabled: false
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    signal_map:
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_map_v4.fits"
+      dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_N_v4.fits"
+      dataset_names: ["II_Stokes", "Q_Stokes", "U_Stokes"]
+    fwhm: 30.6 # [arcmin]
+    freq: 40.6 # [GHz]
+    polarization: "IQU"
+    units: "mK_CMB"
+
+  WMAPV1:
+    enabled: false
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    signal_map:
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_map_v4.fits"
+      dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_N_v4.fits"
+      dataset_names: ["II_Stokes", "Q_Stokes", "U_Stokes"]
+    fwhm: 21.0 # [arcmin]
+    freq: 60.8 # [GHz]
+    polarization: "IQU"
+    units: "mK_CMB"
+
+  WMAPV2:
+    enabled: false
+    get_from: "file"
+    eval_nside: 512
+    data_nside: 512
+    signal_map:
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_map_v4.fits"
+      dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_N_v4.fits"
+      dataset_names: ["II_Stokes", "Q_Stokes", "U_Stokes"]
+    fwhm: 21.0 # [arcmin]
+    freq: 60.8 # [GHz]
+    polarization: "IQU"
+    units: "mK_CMB"
+
+  Planck857GHz:
+    enabled: false
+    get_from: "file"
+    eval_nside: 1024
+    data_nside: 1024
+    signal_map:
+      path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_map_n1024_10arcmin_QUADCOR_ZODICOR_uK.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_rms_n1024_10arcmin_uK_hrscaled_true.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    fwhm: 10 # [arcmin]
+    freq: 857.0 # [GHz]
+    polarization: "I"
+    units: "uK_CMB"
+
+  ### POLARIZATION MAPS ###
+  Planck353GHz:
+    enabled: false
+    get_from: "file"
+    eval_nside: 1024
+    data_nside: 1024
+    signal_map:
+      path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_map_n1024_uK_udgrade.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_rms_n1024_hrscaled_uK_udgrade.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    fwhm: 4.86 # [arcmin]
+    freq: 353.0 # [GHz]
+    polarization: "QU"
+    units: "uK_CMB"
+
+
+experiments:
+  PlanckLFI:
+    enabled: false
+    is_sim: false
+    pix_is_compressed: true
+    psi_is_compressed: true
+    data_type: "TOD"
+    mapmaker: "bin"
+    experiment_id: "planck"  # Decides expected data format, what TOD reader is used, etc.
+    bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
+    Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
+    num_scans: 8000 #45860
+    bands:
+      Planck30GHz:
+        enabled: true
+        tod_files_prefix: "LFI_030_"
+        polarization: "IQU"
+        num_MPI_tasks: 64 #24
+        eval_nside: 512
+        data_nside: 512
+        fwhm: 32.4 # [arcmin]
+        freq: 28.4 # [GHz]
+        fsamp: 32.5079365079365 # [Hz]
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
+        detectors:
+          27M:
+            name: "27M"
+            gain_est: 78.0e-9
+            bandpass_shift: 0.28  # Ghz
+          # 27S:
+          #   name: "27S"
+          #   gain_est: 65.5e-9
+          #   bandpass_shift: 0.47
+          28M:
+            name: "28M"
+            gain_est: 63.0e-9
+            bandpass_shift: 0.08
+          # 28S:
+          #   name: "28S"
+          #   gain_est: 52.0e-9
+          #   bandpass_shift: 0.13
+      Planck44GHz:
+        enabled: false
+        tod_files_prefix: "LFI_044_"
+        polarization: "IQU"
+        num_MPI_tasks: 40
+        eval_nside: 512
+        data_nside: 512
+        fwhm: 27.1 # [arcmin]
+        freq: 44.1 # [GHz]
+        fsamp: 46.5454545454545
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
+        detectors:
+          24M:
+            name: "24M"
+            gain_est: 3.52e-9
+            bandpass_shift: -0.55  # Ghz
+          # 24S:
+          #   name: "24S"
+          #   gain_est: 5.60e-9
+          #   bandpass_shift: 0.16
+          25M:
+            name: "25M"
+            gain_est: 8.00e-9
+            bandpass_shift: 0.28
+          # 25S:
+          #   name: "25S"
+          #   gain_est: 7.95e-9
+          #   bandpass_shift: 0.07
+          # 26M:
+          #   name: "26M"
+          #   gain_est: 5.95e-9
+          #   bandpass_shift: 0.09
+          # 26S:
+          #   name: "26S"
+          #   gain_est: 6.90e-9
+          #   bandpass_shift: -0.05
+      Planck70GHz:
+        enabled: false
+        tod_files_prefix: "LFI_070_"
+        polarization: "IQU"
+        num_MPI_tasks: 64
+        eval_nside: 1024
+        data_nside: 1024
+        fwhm: 13.3 # [arcmin]
+        freq: 70.1 # [GHz]
+        fsamp: 78.7692307692308
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_70.txt"
+        detectors:
+        detectors:
+          18M:
+            name: "18M"
+            gain_est: 68.0e-9
+            bandpass_shift: -0.87
+          # 18S:
+          #   name: "18S"
+          #   gain_est: 45.0e-9
+          #   bandpass_shift: 0.14
+          # 19M:
+          #   name: "19M"
+          #   gain_est: 37.0e-9
+          #   bandpass_shift: 0.73
+          # 19S:
+          #   name: "19S"
+          #   gain_est: 24.0e-9
+          #   bandpass_shift: 0.59
+          # 20M:
+          #   name: "20M"
+          #   gain_est: 39.3e-9
+          #   bandpass_shift: -0.27
+          # 20S:
+          #   name: "20S"
+          #   gain_est: 33.2e-9
+          #   bandpass_shift: 0.20
+          # 21M:
+          #   name: "21M"
+          #   gain_est: 23.5e-9
+          #   bandpass_shift: 0.06
+          # 21S:
+          #   name: "21S"
+          #   gain_est: 24.0e-9
+          #   bandpass_shift: -0.71
+          # 22M:
+          #   name: "22M"
+          #   gain_est: 15.8e-9
+          #   bandpass_shift: 0.36
+          # 22S:
+          #   name: "22S"
+          #   gain_est: 16.2e-9
+          #   bandpass_shift: -0.32
+          23M:
+            name: "23M"
+            gain_est: 28.0e-9
+            bandpass_shift: 0.13
+          # 23S:
+          #   name: "23S"
+          #   gain_est: 19.0e-9
+          #   bandpass_shift: -0.05
+  Akari:
+    enabled: true
+    experiment_id: "akari"
+    is_sim: false
+    pix_is_compressed: true
+    data_type: "TOD"
+    mapmaker: "CG"
+    bad_data_bitmask: 0b1111111111111111111111111111101
+    #bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
+    Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
+    start_scan_id: 584 # Check whether the HDF files actually conform to this
+    num_scans: 11395
+    bands:
+      Akari065:
+        abs_gain:
+          calibrate_against: full_sky   # Preserve full-sky abs-gain calibration (legacy nu>380 rule).
+        enabled: true
+        polarization: "I"
+        num_MPI_tasks: 18 #128 #24
+#        detector_id: 0
+        eval_nside: 512
+        data_nside: 2048
+        fwhm: 7.5 #0.6166 # [arcmin]
+        freq: 4612 # [GHz]
+        fsamp: 25.28 # [Hz]
+        noise_psd: "NoisePSDOof"
+        processing_mask: "/mn/stornext/d23/cmbco/globe/akari/mask/mask_proc_akari_065_v1.fits"
+        filelist: "/mn/stornext/d23/cmbco/globe/akari/tod/eirik_newhdf/v6/n2048/filelist_065.txt"
+        detectors:
+          AKARI_065-01:
+            detname: "AKARI_065-01"
+            gain_est: 0.05
+            bandpass_shift: 0  # Ghz
+          AKARI_065-02:
+            detname: "AKARI_065-02"
+            gain_est: 0.05
+            bandpass_shift: 0  # Ghz

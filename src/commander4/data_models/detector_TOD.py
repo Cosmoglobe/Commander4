@@ -191,6 +191,9 @@ class DetectorTOD:
             tod = self._tod
         return tod[:self.ntod]
 
+    @property
+    def is_polarized(self) -> bool:
+        return self.pointing.is_polarized
 
     def get_pix(self, nside: int | None = None) -> NDArray[np.integer]:
         start_bench("pointing")
@@ -235,7 +238,7 @@ class DetectorTOD:
         stop_bench("numpy-unpack")
         if mask.size > self.tod.size + 7 or mask.size < self.tod.size:
             # The bytearray is stored in multiples of 8, so it can be up to 7 elements
-            # longer than the TOD. If it's even longer or shorter, something is wrong.
+            # longer than the TOD. If it's either longer or shorter, something is wrong.
             raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.tod.size}.")
         return mask[:self.tod.size]
 
