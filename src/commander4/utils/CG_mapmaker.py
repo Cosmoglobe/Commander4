@@ -17,7 +17,6 @@ from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.tod_view import TODView
 from commander4.solvers.CG_driver import distributed_CG_arr
 from commander4.data_models.detector_samples import DetectorSamples
-from commander4.data_models.scan_samples import ScanSamples
 from commander4.utils.math_operations import inplace_scale, dot, norm, forward_rfft, backward_rfft
 
 # I need to CG-solve P^T T^T N^−1 T P m = P^T T^T N^-1 d
@@ -210,9 +209,9 @@ class CGMapmaker:
         """
         Reduces RHS map on main rank, summing up all the contributions.
         """
-        logassert(self._rhs_loca_map is not None, 
-            "Attempted to reduce RHS map on master rank before its contributions have been computed.",
-            self.logger)
+        # Check for None, which indicates a rank without any scans. Give it a zero-map.
+        if self._rhs_loca_map is None:
+            self._rhs_loca_map = self._zeros_map
         if self.map_comm.Get_rank() == 0:
             send, recv = (self._rhs_loca_map, self._rhs_finalized_map)  
         else: 
