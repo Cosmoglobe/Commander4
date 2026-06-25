@@ -163,8 +163,10 @@ class DetectorTOD:
         # The Huffman decoder expects uint8 arrays; for bytes and HDF5-backed
         # numpy.void payloads the internal storage is rewritten as a zero-copy
         # uint8 view once at construction.
-        self.processing_mask_map = processing_mask_map
         self.pointing = pointing
+        # The full-sky processing mask (npix bytes, shared across detectors) is only needed to build
+        # the packed per-sample mask below. It is deliberately not retained on the detector: holding
+        # it would keep a ~npix-byte array alive on every rank for the whole run for nothing.
         processing_mask = processing_mask_map[self.get_pix()]
         self._processing_mask = np.packbits(processing_mask)
         self.det_response = det_response

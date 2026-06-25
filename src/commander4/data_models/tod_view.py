@@ -308,6 +308,18 @@ class TODView:
             raise ValueError("A component-separation sky map must be provided for sky subtraction.")
         return sky_model
 
+    def _sky_map_pix(self, sky_model: NDArray) -> NDArray[np.integer]:
+        """Pixel indices into a sky map that may be full-sky or restricted to this rank's domain.
+
+        The realized sky model is full-sky ``(ncomp, npix)`` on the band master and in non-sparse
+        map mode, but only ``(ncomp, n_local)`` on workers in sparse mode (see
+        ``communication._realize_and_distribute_sky``). Distinguish the two by the map's column
+        count and return either global HEALPix indices or compact local-buffer indices.
+        """
+        if sky_model.shape[-1] == 12 * self.experiment_data.nside**2:
+            return self.pix
+        return self.experiment_data.pixel_domain.to_local(self.pix)
+
     def _block_average(self, tod: NDArray[np.floating], factor: int) -> NDArray[np.floating]:
         """Average a full-rate array over the same contiguous blocks as the downsampled TOD."""
         ntod_down = self._materialize_downsampled(factor).tod.shape[0]
@@ -327,13 +339,14 @@ class TODView:
         """
         factor = self._downsample_factor_or_default(downsample_factor)
         sky_model = self._require_compsep_output(compsep_output)
+        sky_pix = self._sky_map_pix(sky_model)
         if compsep_output is None:
             if self._static_sky is None:
                 # Reuse the full-resolution sky TOD when both pointing and sky model match.
-                self._static_sky = get_static_sky_TOD(sky_model, self.pix, psi=self.psi)
+                self._static_sky = get_static_sky_TOD(sky_model, sky_pix, psi=self.psi)
             sky_tod = self._static_sky
         else:
-            sky_tod = get_static_sky_TOD(sky_model, self.pix, psi=self.psi)
+            sky_tod = get_static_sky_TOD(sky_model, sky_pix, psi=self.psi)
         return sky_tod if factor == 1 else self._block_average(sky_tod, factor)
 
     def get_orbital_dipole_tod(self, downsample_factor: int | None = None) -> NDArray[np.floating]:
