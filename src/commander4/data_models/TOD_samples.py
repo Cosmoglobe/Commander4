@@ -116,7 +116,8 @@ class TODSamples:
         self.npar = self.noise_model.npar
         self.scan_idx_start = experiment_data.scan_idx_start
         self.scan_idx_stop = experiment_data.scan_idx_stop
-        self.scan_ids = np.array([scan.scan_id for scan in experiment_data.scans])
+        # Explicit int64 so a rank that holds no scans still yields an int64 array.
+        self.scan_ids = np.array([scan.scan_id for scan in experiment_data.scans], dtype=np.int64)
         # Ordered per-band detector names. Their position is the ``idet`` axis shared by every
         # per-detector array (rel_gain, noise_params, temporal_gain, accept, tod_ps_*, jumps), so
         # writing them to the chain lets a reader map each array column back to a physical detector.
@@ -172,46 +173,50 @@ class TODSamples:
             self.rel_gain = np.zeros((self.ndet))
             self.temporal_gain = np.zeros((self.nscans, self.ndet))
 
-            # NaN so detector-scans with no data are excluded from the gain means below.
-            all_det_gains = np.full((self.nscans, self.ndet), np.nan)
+            # Find the first detector in the first scan. Used for checking if default values
+            # are present. Default to None in case there are no scans.
+            rep_det = next((det for _, det in experiment_data.iter_detector_scans()), None)
 
-            if "initial_noise_params" in my_band:
-                # Option 1: They are specified in the parameter file.
-                self.noise_params[:] = np.array(my_band.initial_noise_params)
-            elif experiment_data.scans[0].detectors[0].init_scalars is not None:
-                # Option 2: There were entries in the read-in files. Index by the detector's
-                # full-band column; absent detector-scans stay NaN.
-                for iscan, det in experiment_data.iter_detector_scans():
-                    self.noise_params[iscan, det.det_idx_fullband] = det.init_scalars[1:]
-            else:
-                # Option 3: Fall back to the noise model's default parameters (ensuring a finite
-                # sigma0, which the model leaves as NaN to be estimated from the data).
-                logger.warning("Did not find initial noise parameters, falling back to the noise "
-                               "model's default parameters.")
-                default_params = np.array(self.noise_model.params, dtype=np.float64)
-                if not np.isfinite(default_params[0]):
-                    default_params[0] = 1.0
-                self.noise_params[:] = default_params
+            if rep_det is not None:
+                # NaN so detector-scans with no data are excluded from the gain means below.
+                all_det_gains = np.full((self.nscans, self.ndet), np.nan)
 
-            if "gain" in my_band.detectors[experiment_data.scans[0].detectors[0].name]:
-                for iscan, det in experiment_data.iter_detector_scans():
-                    all_det_gains[iscan, det.det_idx_fullband] = my_band[det.name].gain
-            elif experiment_data.scans[0].detectors[0].init_scalars is not None:
-                for iscan, det in experiment_data.iter_detector_scans():
-                    all_det_gains[iscan, det.det_idx_fullband] = det.init_scalars[0]
-            else:
-                raise ValueError("Did not find initial gain value in input files.")
+                if "initial_noise_params" in my_band:
+                    # Option 1: They are specified in the parameter file.
+                    self.noise_params[:] = np.array(my_band.initial_noise_params)
+                elif rep_det.init_scalars is not None:
+                    # Option 2: There were entries in the read-in files. Index by the detector's
+                    # full-band column; absent detector-scans stay NaN.
+                    for iscan, det in experiment_data.iter_detector_scans():
+                        self.noise_params[iscan, det.det_idx_fullband] = det.init_scalars[1:]
+                else:
+                    # Option 3: Fall back to the noise model's default parameters (ensuring a finite
+                    # sigma0, which the model leaves as NaN to be estimated from the data).
+                    logger.warning("Did not find initial noise parameters, falling back to the "
+                                   "noise model's default parameters.")
+                    default_params = np.array(self.noise_model.params, dtype=np.float64)
+                    if not np.isfinite(default_params[0]):
+                        default_params[0] = 1.0
+                    self.noise_params[:] = default_params
 
-            self.abs_gain = float(np.nanmean(all_det_gains))
-            # Relative gain only for detectors with data in >=1 local scan; detectors absent from
-            # every local scan get 0 (never used downstream) and are kept out of the empty-slice
-            # mean. temporal_gain holes (absent detector-scans) collapse to 0 likewise.
-            present_any = np.isfinite(all_det_gains).any(axis=0)
-            self.rel_gain = np.zeros(self.ndet)
-            self.rel_gain[present_any] = (np.nanmean(all_det_gains[:, present_any], axis=0)
-                                          - self.abs_gain)
-            self.temporal_gain = np.nan_to_num(all_det_gains - self.rel_gain - self.abs_gain,
-                                               nan=0.0)
+                if "gain" in my_band.detectors[rep_det.name]:
+                    for iscan, det in experiment_data.iter_detector_scans():
+                        all_det_gains[iscan, det.det_idx_fullband] = my_band[det.name].gain
+                elif rep_det.init_scalars is not None:
+                    for iscan, det in experiment_data.iter_detector_scans():
+                        all_det_gains[iscan, det.det_idx_fullband] = det.init_scalars[0]
+                else:
+                    raise ValueError("Did not find initial gain value in input files.")
+
+                self.abs_gain = float(np.nanmean(all_det_gains))
+                # Relative gain only for detectors with data in >=1 local scan; detectors absent
+                # from every local scan get 0 (never used downstream) and are kept out of the
+                # empty-slice mean. temporal_gain holes (absent detector-scans) collapse to 0.
+                present_any = np.isfinite(all_det_gains).any(axis=0)
+                self.rel_gain[present_any] = (np.nanmean(all_det_gains[:, present_any], axis=0)
+                                              - self.abs_gain)
+                self.temporal_gain = np.nan_to_num(all_det_gains - self.rel_gain - self.abs_gain,
+                                                   nan=0.0)
 
         else:
             # ---------------------------------------------------------
