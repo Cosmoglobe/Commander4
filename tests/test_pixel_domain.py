@@ -102,6 +102,39 @@ def test_scatter_from_full_round_trips():
     assert_allclose(local, full_b[:, local_pix], rtol=1e-12, atol=1e-12)
 
 
+def test_scatter_from_full_float32_round_trips():
+    """The float32 scatter path (used to distribute the realized sky model) must be exact."""
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    nside, npix = 4, 12 * 16
+    rng = np.random.default_rng(300 + rank)
+    local_pix = np.unique(rng.integers(0, npix, size=25))
+    dom = _sparse_domain(comm, nside, local_pix)
+
+    full = rng.normal(size=(3, npix)).astype(np.float32) if rank == 0 else None
+    local = dom.scatter_from_full(full, ncomp=3, dtype=np.float32)
+    assert local.dtype == np.float32
+    full_b = comm.bcast(full, root=0)
+    # A scatter only moves values (no arithmetic), so the f32 result must match bit-for-bit.
+    assert_allclose(local, full_b[:, local_pix], rtol=0, atol=0)
+
+
+def test_sky_model_local_slice_matches_full_at_pointing():
+    """Invariant the sparse sky model relies on (see TODView._sky_map_pix): a domain-scattered sky
+    map indexed by ``to_local(pix)`` equals the full-sky map indexed by the global ``pix``."""
+    comm = MPI.COMM_SELF
+    nside, npix = 4, 12 * 16
+    rng = np.random.default_rng(17)
+    # A rank's observed pixels (what from_view collects) and a per-sample pointing into them.
+    local_pix = np.unique(rng.integers(0, npix, size=30))
+    dom = _sparse_domain(comm, nside, local_pix)
+    full_map = rng.normal(size=(3, npix)).astype(np.float32)
+    local_map = dom.scatter_from_full(full_map, ncomp=3, dtype=np.float32)
+
+    pix = rng.choice(local_pix, size=200)  # the pointing only ever hits observed pixels
+    assert_allclose(local_map[:, dom.to_local(pix)], full_map[:, pix], rtol=0, atol=0)
+
+
 # --- sparse-vs-full mapmaker equivalence (single-rank, exercises the local-buffer kernels) ---
 
 def _random_scan(rng, npix_observed, ntod):

@@ -3,7 +3,7 @@
 
 general:
   MPI_config:
-    ntask_tod: 256
+    ntask_tod: 64
     ntask_compsep_I: 8
     ntask_compsep_QU: 8
   nthreads_tod: 1
@@ -30,11 +30,11 @@ general:
     psd_bin: False                # Fit every Fourier mode (False) or mode-weighted binned PSD.
   gain_calib_downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
   abs_gain:                           # Absolute (band-global) gain g0.
-    sample: true
+    sample: false
     sample_from_iter_num: 2
     calibrate_against: orbital_dipole # "orbital_dipole" | "full_sky" | "sky"; per-band overridable.
   rel_gain:                           # Per-detector relative gain.
-    sample: true
+    sample: false
     sample_from_iter_num: 2
     calibrate_against: full_sky       # "orbital_dipole" | "full_sky" | "sky"; per-band overridable.
   temporal_gain:                      # Per-scan temporal gain variations.
@@ -63,15 +63,15 @@ general:
   init_from_chain: false
 
   output_paths:
-    chains: "../cmdr4_chains/PlanckTODs_perpix_newclass_v5_abs+rel_mapCG/"
-    stats: "../cmdr4_stats/PlanckTODs_perpix_newclass_v5_abs+rel_mapCG/"
+    chains: "../cmdr4_chains/PlanckTODs_perpix_mapCG_densemap/"
+    stats: "../cmdr4_stats/PlanckTODs_perpix_mapCG_densemap/"
 
   logging:
     console:
       level: 'debug'
     file:
       level: 'info'
-      filename: '../cmdr4_logs/output_PlanckTODs_perpix_newclass_v1_mapCG.log'
+      filename: '../cmdr4_logs/output_PlanckTODs_mapCG_densemap.log'
 
   CG_mapmaker:
     maxiter: 100
@@ -339,7 +339,7 @@ experiments:
     bands:
       Planck30GHz:
         enabled: true
-        num_MPI_tasks: 256
+        num_MPI_tasks: 64
         eval_nside: 512
         data_nside: 512
         fwhm: 32.4 # [arcmin]
@@ -391,10 +391,10 @@ experiments:
         fsamp: 78.7692307692308
         polarization: "IQU"
         noise_psd: "NoisePSDOof"
+        sparse_maps: false
         initial_noise_params: [1.0, 0.1, -0.9]
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_70.txt"
-        detectors:
         detectors:
           18M:
             name: "18M"

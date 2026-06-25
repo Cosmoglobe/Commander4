@@ -160,7 +160,7 @@ def send_tod(mpi_info: Bunch, tod_map_dict: dict[DetectorMap], todproc_my_band_i
 ###########################################################
 
 def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep_band_id: str,
-                curr_tod_output: DetectorMap|None) -> DetectorMap:
+                curr_tod_output: DetectorMap|None, params: Bunch) -> DetectorMap:
     """ MPI-receive the results from the TOD processing (used in conjunction with send_tod).
 
     Input:
@@ -168,11 +168,12 @@ def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep
         senders: (dict[str->int]): A dictionary mapping a string uniquely identifying each
                  band to the world rank of the sender task (on the CompSep side).
         my_band (Bunch): The section of the parameter file corresponding to this CompSep band,
-                 as a "Bunch" type, it also has an 'identifier' field. 
+                 as a "Bunch" type, it also has an 'identifier' field.
         compsep_band_id (str): The string uniquely indentifying the band+pol of this
                  rank (example: '30GHz_I').
         curr_tod_output (DetectorMap): The current map output from the TOD process.
                  Should be None unless map is read from file already in a previous iteration.
+        params (Bunch): Full parameter file, forwarded to the file reader for common-res smoothing.
 
     Returns:
         data (list of DetectorMaps): nbands (DetectorMap)
@@ -181,7 +182,7 @@ def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep
     if my_band.get_from == "file":
         if curr_tod_output is None:
             logger.info(f"CompSep: Rank {my_compsep_rank} reading static map data from file.")
-            curr_tod_output = read_data_map_from_file(my_band)
+            curr_tod_output = read_data_map_from_file(my_band, params)
         else:
             logger.info(f"CompSep: Rank {my_compsep_rank} already has static map data. Continuing.")
     else:

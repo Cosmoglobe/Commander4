@@ -232,9 +232,9 @@ class CGMapmaker:
         """
         Reduces the local RHS contributions onto the full-sky RHS map held by the master rank.
         """
-        logassert(self._rhs_loca_map is not None,
-            "Attempted to reduce RHS map on master rank before its contributions have been computed.",
-            self.logger)
+        # Check for None, which indicates a rank without any scans. Give it a zero-map.
+        if self._rhs_loca_map is None:
+            self._rhs_loca_map = self._zeros_map
         full = self.domain.reduce_to_full(self._rhs_loca_map, root=root)
         if self.map_comm.Get_rank() == root:
             self._rhs_finalized_map = full

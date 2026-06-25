@@ -3,7 +3,7 @@
 
 general:
   MPI_config:
-    ntask_tod: 256
+    ntask_tod: 64
     ntask_compsep_I: 8
     ntask_compsep_QU: 8
   nthreads_tod: 1
@@ -59,15 +59,15 @@ general:
   init_chain_path: false
 
   output_paths:
-    chains: "../cmdr4_chains/PlanckTODs_perpix_initcomps/"
-    stats: "../cmdr4_stats/PlanckTODs_perpix_initcomps/"
+    chains: "../cmdr4_chains/PlanckTODs_perpix_test/"
+    stats: "../cmdr4_stats/PlanckTODs_perpix_test/"
 
   logging:
     console:
       level: 'debug'
     file:
       level: 'info'
-      filename: '../cmdr4_logs/output_PlanckTODs_perpix_initcomps'
+      filename: '../cmdr4_logs/output_PlanckTODs_perpix_test'
 
 sampling_groups_compsep:
   sample_amps_perpix:
@@ -343,7 +343,7 @@ experiments:
     bands:
       Planck30GHz:
         enabled: true
-        num_MPI_tasks: 256
+        num_MPI_tasks: 64
         eval_nside: 512
         data_nside: 512
         fwhm: 32.4 # [arcmin]

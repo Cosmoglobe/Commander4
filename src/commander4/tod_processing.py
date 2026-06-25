@@ -314,15 +314,23 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     detmap_dict_out = {}
     if band_comm.Get_rank() == 0:
         #Here we split here between I and QU
+        # Smooth maps to the common analysis resolution after mapmaking (single switch:
+        # general.common_res_fwhm; a missing or falsy value leaves bands at their native beam).
+        common_res_fwhm = (float(params.general.common_res_fwhm)
+                           if "common_res_fwhm" in params.general else 0.0)
         if "I" in pols:
             detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
                                 experiment_data.fwhm, experiment_data.nside)
             detmap_I.g0 = tod_samples.abs_gain
+            if common_res_fwhm:
+                detmap_I.smooth_to_resolution(common_res_fwhm)
             detmap_dict_out.update({"I": detmap_I})
         if "QU" in pols:
             detmap_QU = DetectorMap(map_signal[1:3,:], map_rms[1:3,:], experiment_data.nu,
                                 experiment_data.fwhm, experiment_data.nside)
             detmap_QU.g0 = tod_samples.abs_gain
+            if common_res_fwhm:
+                detmap_QU.smooth_to_resolution(common_res_fwhm)
             detmap_dict_out.update({"QU": detmap_QU})
 
         maps_to_file = {}
@@ -489,16 +497,23 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
     detmap_dict_out = {}
     if band_comm.Get_rank() == 0:
         #Here we split here between I and QU
+        # Smooth maps to the common analysis resolution after mapmaking (single switch:
+        # general.common_res_fwhm; a missing or falsy value leaves bands at their native beam).
+        common_res_fwhm = (float(params.general.common_res_fwhm)
+                           if "common_res_fwhm" in params.general else 0.0)
         if "I" in pols:
             detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
                                 experiment_data.fwhm, experiment_data.nside)
             detmap_I.g0 = tod_samples.abs_gain
-            
+            if common_res_fwhm:
+                detmap_I.smooth_to_resolution(common_res_fwhm)
             detmap_dict_out.update({"I": detmap_I})
         if "QU" in pols:
             detmap_QU = DetectorMap(map_signal[1:3,:], map_rms[1:3,:], experiment_data.nu,
                                 experiment_data.fwhm, experiment_data.nside)
             detmap_QU.g0 = tod_samples.abs_gain
+            if common_res_fwhm:
+                detmap_QU.smooth_to_resolution(common_res_fwhm)
             detmap_dict_out.update({"QU": detmap_QU})
 
         maps_to_file = {}
