@@ -109,11 +109,12 @@ def retrieve_map_from_fits_file(band: Bunch, pol: str, maptype: str):
 
 
 
-def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
+def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
     """ Reads the map data for a given band from disk. Used for bands that do not have a TOD
-        processing component.
+        processing component. The map is smoothed to the common resolution on read (when enabled).
     Args:
         my_band (Bunch): A parameter file subset for the band to read from file.
+        params (Bunch): Full parameter file, for the common-resolution smoothing settings.
     Returns:
         detector_map (DetectorMap): Object holding signal map and other relevant data (rms, nu...)
     """
@@ -155,5 +156,9 @@ def read_data_map_from_file(my_band: Bunch) -> DetectorMap:
     detmap = DetectorMap(np.array(maps_sky), np.array(maps_rms), my_band.freq, my_band.fwhm, nside)
     detmap.g0 = 0.0
     detmap.gain = 0.0
+    # Smooth to the common analysis resolution on read (single switch: general.common_res_fwhm; a
+    # missing or falsy value leaves the band at its native beam).
+    if "common_res_fwhm" in params.general and params.general.common_res_fwhm:
+        detmap.smooth_to_resolution(float(params.general.common_res_fwhm))
 
     return detmap

@@ -1,12 +1,10 @@
 import time
-import healpy as hp
 import ctypes
 import logging
 import numpy as np
 from mpi4py import MPI
 from pixell import curvedsky
 from pixell.bunch import Bunch
-from numpy.typing import NDArray
 
 from commander4.output.log import logassert
 from commander4.sky_models.component import Component
@@ -14,58 +12,12 @@ from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
 from commander4.data_models.detector_map import DetectorMap
 
 
-def smooth_signal_map_noiseweighted(map_signal: NDArray, map_rms: NDArray, fwhm_rad: float):
-    """ Smooths a signal map with noise weighting.
-    """
-    # Weight map is 1 / variance
-    map_inv_var = 1.0 / (map_rms**2) 
-    
-    # Normalize the weight:
-    smoothed_weight = hp.smoothing(map_inv_var, fwhm=fwhm_rad)
-    
-    # Multiply signal by weight, smooth, and divide by smoothed weight
-    unnormalized_smooth_signal = hp.smoothing(map_signal * map_inv_var, fwhm=fwhm_rad)
-    
-    return unnormalized_smooth_signal / smoothed_weight
-
-
-def smooth_rms_map_noiseweighted(rms_map: NDArray, fwhm_rad: float):
-    """ Calculates what the per-pixel RMS is for any signal map that has beem smoothed by a
-        Gaussian beam using inverse-variance noise weighted smoothing. I.e. produces the correct RMS
-        for the function `smooth_signal_map_noiseweighted`.
-    """
-    npix = rms_map.shape[0]
-    nside = hp.npix2nside(npix)
-    smoothed_inv_var = hp.smoothing(1.0/rms_map**2, fwhm=fwhm_rad)
-
-    lmax = 3 * nside - 1
-    ell = np.arange(lmax + 1)
-
-    # Retrieve the beam and pixel window harmonic coefficients
-    b_ell = hp.gauss_beam(fwhm_rad, lmax=lmax)
-    p_ell = hp.pixwin(nside, lmax=lmax)
-
-    # 2. Calculate the solid angle of a single pixel (C_ell for unit white noise)
-    omega_pix = hp.nside2resol(nside)**2 
-
-    # 3. Compute the exact harmonic variance of the band-limited, windowed noise
-    true_empirical_norm = np.sum((2 * ell + 1) / (4 * np.pi) * omega_pix * (p_ell**2) * (b_ell**2))
-
-    # Scale FWHM for the squared Gaussian kernel
-    fwhm_rad_sq = fwhm_rad / np.sqrt(2.0)
-
-    # Noise-Weighted Analytical: smooth weight map with squared beam, divide by (smoothed_weight)^2
-    numerator = hp.smoothing(1.0/rms_map**2, fwhm=fwhm_rad_sq) * true_empirical_norm
-    analytical_variance = numerator / (smoothed_inv_var**2)
-
-    return np.sqrt(analytical_variance)
-
-
 def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
                          comp_list: list[Component], params: Bunch) -> list[Component]:
-    """ A pixel-by-pixel solver for the component separation problem. Requires uniform nside, unlike
-        the CG solver. Also requires common beam smoothing, but handles this by smoothing all maps
-        to the lowest resolution map.
+    """ A pixel-by-pixel solver for the component separation problem. Requires uniform nside and a
+        common beam across all bands (smoothing to a common resolution is done at the data sources,
+        controlled by ``general.common_res_fwhm``); this solver ignores beams entirely, so mixed
+        resolutions silently mix resolutions and trigger a warning below.
     """
     # TODO: Add support for non-Diffuse components (point sources, templates).
     logger = logging.getLogger(__name__)
@@ -81,9 +33,9 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     npol = detector_data.npol
     pol = detector_data.pol
     spin = 2 if pol else 0
-    map_sky = detector_data.map_sky.copy()  # Make copy so we don't overwrite if we are smoothing.
+    map_sky = detector_data.map_sky
     band_freq = detector_data.nu
-    map_rms = detector_data.map_rms.copy() 
+    map_rms = detector_data.map_rms
     ctypes_lib = load_cmdr4_ctypes_lib()
     ctypes_lib.solve_compsep.argtypes = [
         ctypes.c_int, ctypes.c_int, ctypes.c_int,
@@ -94,19 +46,12 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
         np.ctypeslib.ndpointer(dtype=np.float64, ndim=2, flags='C_CONTIGUOUS'), # map_out
     ]
 
-    if params.general.smooth_to_common_res:
-        fwhm = detector_data.fwhm
-        all_fwhm = proc_comm.allgather(fwhm)
-        max_fwhm = np.max(all_fwhm)
-        my_smoothing_fwhm = np.sqrt(max_fwhm**2 - fwhm**2)
-        logger.info(f"{detector_data.nu} GHz map with FWHM = {fwhm:.1f} arcmin will be smoothed by"\
-                    f" {my_smoothing_fwhm:.1f} arcmin to reach {max_fwhm:.1f} arcmin.")
-        if params.general.smooth_to_common_res:
-            fwhm_rad = np.deg2rad(my_smoothing_fwhm/60.0)
-            for ipol in range(map_sky.shape[0]):  # Loop over 1 or 2 polarizations.
-                map_sky[ipol] = smooth_signal_map_noiseweighted(map_sky[ipol], map_rms[ipol],
-                                                                fwhm_rad)
-                map_rms[ipol] = smooth_rms_map_noiseweighted(map_rms[ipol], fwhm_rad)
+    # This solver has no beam model, so all bands should already share one resolution (smoothed at
+    # ingest via general.common_res_fwhm); differing FWHMs silently mix resolutions, so warn.
+    all_fwhm = proc_comm.allgather(detector_data.fwhm)
+    if not np.allclose(all_fwhm, all_fwhm[0]):
+        logger.warning(f"Per-pixel solver received bands at differing resolutions {all_fwhm}; the "
+                       "result mixes resolutions. Set general.common_res_fwhm to a common beam.")
 
     ncomp = len(comp_list)
     all_freq = proc_comm.gather(band_freq, root=0)
@@ -156,5 +101,8 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
         comp_alms = curvedsky.map2alm_healpix(input_map, niter=3, spin=spin,
                                               lmax=comp_list[icomp].lmax)
         comp_list[icomp].alms = comp_alms.astype(complex_dtype, copy=False)
+        # These amplitudes are component maps at the data resolution; record that beam so the
+        # forward model applies no extra smoothing when predicting a band at this resolution.
+        comp_list[icomp].amp_fwhm_rad = detector_data.fwhm_rad
 
     return comp_list

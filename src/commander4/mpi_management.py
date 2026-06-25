@@ -80,12 +80,12 @@ def init_mpi(params):
                         f"{tot_num_Compsep_bands} enabled CompSep band view(s) are ignored, and TOD "
                         f"ranks use the initial sky model built from the components.")
         # Component separation is "on" iff CompSep ranks are allocated; enabled sampling groups
-        # therefore require at least one CompSep rank to run on.
-        sampling_groups = params.sampling_groups_compsep if "sampling_groups_compsep" in params \
-            else {}
+        # (in either the CG or the MCMC tier) therefore require at least one CompSep rank to run on.
         has_enabled_sampling_group = any(
-            "enabled" not in sampling_groups[group] or sampling_groups[group].enabled
-            for group in sampling_groups)
+            "enabled" not in groups[group] or groups[group].enabled
+            for key in ("CG_sampling_groups_compsep", "MCMC_sampling_groups_compsep")
+            for groups in (params[key] if key in params else {},)
+            for group in groups)
         if has_enabled_sampling_group and tot_num_CompSep_ranks == 0:
             log.lograise(RuntimeError, "Enabled compsep sampling groups are configured, but no "
                          "CompSep MPI ranks are allocated (ntask_compsep_I = ntask_compsep_QU = 0).",

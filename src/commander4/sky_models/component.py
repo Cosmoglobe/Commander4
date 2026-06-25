@@ -82,6 +82,9 @@ class Component:
         type(self)._assert_legal_pol(self.eval_pol, role="evaluation")
         self.double_prec = False if global_params.CG_float_precision == "single" else True
         self._data = None
+        # FWHM beam of the component. If the CG solver was used, this will be 0, as it solves for
+        # deconvolved components. Only non-zero if the common-resolution per-pix solver was used.
+        self.amp_fwhm_rad = 0.0
 
     @property
     def logical_id(self) -> str:
@@ -416,7 +419,14 @@ class DiffuseComponent(Component):
         return self._realize_alms_as_map(component_alms, nside, fwhm)
 
     def get_sky(self, nu, nside, fwhm=0):
-        return self.get_component_map(nside, fwhm)*self.get_sed(nu)
+        """ Realize this component at a beam-resolution `fwhm` (radians), scaled by its SED at `nu`.
+            Note that if the component amplitudes already carry beam-smoothing (which happens when
+            the per-pix common-resolution amplitude solver is used), only the effective fwhm
+            difference is applied.
+        """
+        target_fwhm = 0.0 if fwhm is None else fwhm
+        applied_fwhm = np.sqrt(max(target_fwhm**2 - self.amp_fwhm_rad**2, 0.0))
+        return self.get_component_map(nside, applied_fwhm)*self.get_sed(nu)
     
     def get_sed(self, nu):
         log.lograise(NotImplementedError, "", logger)
@@ -1217,6 +1227,7 @@ class CompList:
                 continue
             comp._assert_consistent_comp(other_comp)
             np.copyto(comp._data, other_comp._data)
+            comp.amp_fwhm_rad = other_comp.amp_fwhm_rad
 
     def broadcast_pol_views(self, comm: MPI.Comm, *, eval_pol: str, source: int) -> None:
         """Broadcast all execution views of `eval_pol` from `source` to every rank in `comm`.
@@ -1227,6 +1238,14 @@ class CompList:
         """
         for comp in self.components_for_eval_pol(eval_pol):
             comp.bcast_data_blocking(comm, root=source)
+            # The amplitudes' resolution travels with them: the solving rank's value is authoritative.
+            comp.amp_fwhm_rad = comm.bcast(comp.amp_fwhm_rad, root=source)
+            # FIXME: The above feels fragile: If we add more attributes that could change during
+            # amplitude solve, they would have to be added here. We could either introduce an 
+            # amplitude object that holds related information as well as the alms, or at least make
+            # things more visible by specfying things that must be transferred in __init__:
+            #     _amp_metadata_attrs: tuple[str, ...] = ("amp_fwhm_rad",)
+
 
     def joined(self) -> "CompList":
         """Collapse split execution views back to one logical component per `comp_name`."""
