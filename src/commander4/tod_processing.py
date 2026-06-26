@@ -18,11 +18,12 @@ from commander4.data_models.tod_view import TODView
 from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU, WeightsMapmaker, Mapmaker
 from commander4.utils.CG_mapmaker import CGMapmakerI, CGMapmakerIQU
 from commander4.solvers.preconditioners import InvNPreconditionerI, InvNPreconditionerIQU
-from commander4.noise_sampling.sample_ncorr import sample_correlated_noise, log_corr_noise_stats
+from commander4.noise_sampling.sample_ncorr import sample_correlated_noise, log_corr_noise_stats,\
+    SIGMA0_METHODS, GAP_FILL_METHODS
 from commander4.noise_sampling.noise_sampling import fill_all_masked
 from commander4.utils.math_operations import forward_rfft, backward_rfft
 from commander4.utils.execution_ids import get_execution_band_ids
-from commander4.noise_sampling.sigma0 import calc_sigma0_robust
+from commander4.noise_sampling.sigma0 import calc_sigma0_robust, calc_sigma0_binned_psd
 from commander4.tod_reader import read_tods_from_file
 from commander4.output.write_chains_files import write_map_chain_to_file
 from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
@@ -236,7 +237,8 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
                 sky_subtracted_TOD, view.full_mask, np.array(view.noise_params, copy=True),
                 experiment_data.noise_model, view.fsamp, cg_err_tol=ncorr_cfg.cg_err_tol,
                 cg_max_iter=ncorr_cfg.cg_max_iter, sample_params=ncorr_cfg.do_param,
-                sample_sigma0=ncorr_cfg.sample_sigma0, nomono=ncorr_cfg.nomono,
+                sample_sigma0=ncorr_cfg.sample_sigma0, sigma0_method=ncorr_cfg.sigma0_method,
+                gap_fill_method=ncorr_cfg.gap_fill_method, nomono=ncorr_cfg.nomono,
                 onlymono=ncorr_cfg.onlymono,
                 sigma0_dec=ncorr_cfg.sigma0_dec, psd_fit_nu_min=ncorr_cfg.psd_fit_nu_min,
                 psd_fit_nu_max=ncorr_cfg.psd_fit_nu_max, psd_bin=ncorr_cfg.psd_bin)
@@ -261,6 +263,11 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
             niters.append(res.niter)
 
             d_sky -= n_corr_est
+        elif ncorr_cfg.sample_sigma0:
+            # No correlated noise this iteration: estimate sigma0 here, at the same point in the
+            # chain (after gain) as the n_corr-coupled estimate, instead of a separate pre-gain pass.
+            tod_samples.noise_params[view.iscan, view.idet, 0] = _estimate_standalone_sigma0(
+                view, ncorr_cfg.sigma0_method)
 
         _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view,
                                 n_corr_est if ncorr_cfg.do_ncorr else None)
@@ -436,7 +443,8 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 sky_subtracted_TOD, view.full_mask, np.array(view.noise_params, copy=True),
                 experiment_data.noise_model, view.fsamp, cg_err_tol=ncorr_cfg.cg_err_tol,
                 cg_max_iter=ncorr_cfg.cg_max_iter, sample_params=ncorr_cfg.do_param,
-                sample_sigma0=ncorr_cfg.sample_sigma0, nomono=ncorr_cfg.nomono,
+                sample_sigma0=ncorr_cfg.sample_sigma0, sigma0_method=ncorr_cfg.sigma0_method,
+                gap_fill_method=ncorr_cfg.gap_fill_method, nomono=ncorr_cfg.nomono,
                 onlymono=ncorr_cfg.onlymono,
                 sigma0_dec=ncorr_cfg.sigma0_dec, psd_fit_nu_min=ncorr_cfg.psd_fit_nu_min,
                 psd_fit_nu_max=ncorr_cfg.psd_fit_nu_max, psd_bin=ncorr_cfg.psd_bin)
@@ -456,6 +464,11 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
 
             d_sky -= n_corr_est
             stop_bench("ncorr-sampling")
+        elif ncorr_cfg.sample_sigma0:
+            # No correlated noise this iteration: estimate sigma0 here, at the same point in the
+            # chain (after gain) as the n_corr-coupled estimate, instead of a separate pre-gain pass.
+            tod_samples.noise_params[view.iscan, view.idet, 0] = _estimate_standalone_sigma0(
+                view, ncorr_cfg.sigma0_method)
 
         _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view,
                                 n_corr_est if ncorr_cfg.do_ncorr else None)
@@ -643,31 +656,30 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
     return mpi_info, todproc_my_band_id, experiment_data, tod_samples_chain1, tod_samples_chain2
 
 
-def estimate_white_noise(experiment_data: DetGroupTOD, tod_samples: TODSamples,
-                         det_compsep_map: NDArray, params: Bunch) -> TODSamples:
-    """ Estimate the white noise level in the TOD data and return the updated TOD samples.
-    Input:
-        experiment_data (DetGroupTOD): The experiment TOD object.
-        tod_samples (TODSamples): Current sampled TOD parameters.
-        det_compsep_map (NDArray): The component-separation sky map for the detector.
-        params (Bunch): The parameters from the input parameter file.
-    Output:
-        tod_samples (TODSamples): Updated TOD samples with sigma0 estimates.
+def _estimate_standalone_sigma0(view: TODView, sigma0_method: str) -> float:
+    """ White-noise sigma0 for one detector-scan when correlated noise is *not* being sampled.
+
+    Estimated from the sky- and orbital-dipole-subtracted residual (which still contains the 1/f
+    component; both estimators target the white floor). This mirrors the sigma0 estimate that
+    ``sample_correlated_noise`` performs when n_corr is sampled, so sigma0 is always (re)estimated at
+    the same point in the chain -- inside the mapmaker scan loop, after gain -- matching Commander3.
+
+    Args:
+        view: The focused TODView for one detector-scan.
+        sigma0_method: ``'pairwise'`` (first-difference) or ``'binned_psd'`` (bottom of binned PSD).
+    Returns:
+        The estimated white-noise level (float).
     """
-    scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map)
-    for view in scan_view.iter_focused():
-        # FIXME: Should maybe n_corr be subtracted here as well?
-        sky_subtracted_tod = view.get_tod(
-            subtract=(("sky", TODView._ALL_GAIN_TERMS),
-                      ("orbital_dipole", TODView._ALL_GAIN_TERMS)),
-        )
-        mask = view.full_mask
-        sigma0 = calc_sigma0_robust(sky_subtracted_tod, mask)
-        logassert(sigma0 != 0, "sigma0 is 0, which should never happen.", logger)
-        logassert(sigma0 != np.inf, "sigma0 is inf, which should never happen.", logger)
-        tod_samples.noise_params[view.iscan, view.idet, 0] = sigma0
-    log_memory("sigma0-est")
-    return tod_samples
+    residual = view.get_tod(subtract=(("sky", TODView._ALL_GAIN_TERMS),
+                                      ("orbital_dipole", TODView._ALL_GAIN_TERMS)))
+    mask = view.full_mask
+    if sigma0_method == "binned_psd":
+        sigma0 = calc_sigma0_binned_psd(residual, mask, view.fsamp)
+    else:
+        sigma0 = calc_sigma0_robust(residual, mask)
+    logassert(sigma0 != 0, "sigma0 is 0, which should never happen.", logger)
+    logassert(sigma0 != np.inf, "sigma0 is inf, which should never happen.", logger)
+    return sigma0
 
 
 def sample_jump_detection(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
@@ -1199,10 +1211,20 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
     if nomono and onlymono and mpi_info.band.is_master:
         logger.error("general.corr_noise.nomono and onlymono are both True, which is contradictory; "
                      "onlymono takes precedence.")
+    sigma0_method = getattr(cn, "sigma0_method", "pairwise")
+    if sigma0_method not in SIGMA0_METHODS:
+        raise ValueError(f"general.corr_noise.sigma0_method must be one of {SIGMA0_METHODS}, got "
+                         f"{sigma0_method!r}.")
+    gap_fill_method = getattr(cn, "gap_fill_method", "proper_cg")
+    if gap_fill_method not in GAP_FILL_METHODS:
+        raise ValueError(f"general.corr_noise.gap_fill_method must be one of {GAP_FILL_METHODS}, "
+                         f"got {gap_fill_method!r}.")
     ncorr_cfg = Bunch(
         do_ncorr=do_ncorr,
         do_param=do_ncorr and sample_noise_params,
         sample_sigma0=getattr(cn, "sample_sigma0", True),
+        sigma0_method=sigma0_method,
+        gap_fill_method=gap_fill_method,
         cg_err_tol=cn.CG_err_tol,
         cg_max_iter=cn.CG_max_iter,
         nomono=nomono,
@@ -1213,17 +1235,9 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
         psd_bin=getattr(cn, "psd_bin", False),
     )
 
-    ### WHITE NOISE ESTIMATION ###
-    # When correlated-noise sampling runs it re-estimates sigma0 after subtracting n_corr
-    # (Commander3-aligned), so only estimate sigma0 standalone here when that will not happen.
-    if not (ncorr_cfg.do_ncorr and ncorr_cfg.sample_sigma0):
-        t0 = time.time()
-        with benchmark("sigma0-est"):
-            tod_samples = estimate_white_noise(experiment_data, tod_samples, compsep_output, params)
-        timing_dict["wn-est-1"] = time.time() - t0
-        if mpi_info.tod.is_master:
-            logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished white noise "\
-                        f"estimation in {timing_dict['wn-est-1']:.1f}s.")
+    # NOTE: sigma0 is estimated inside the mapmaker scan loop (after gain), co-located with the
+    # n_corr-coupled estimate -- see the do_ncorr if/elif in tod2map_CG/tod2map_bin. This matches
+    # Commander3, where gain always runs on the previous iteration's sigma0.
 
     ### ABSOLUTE GAIN CALIBRATION ###
     if params.general.abs_gain.sample and iter >= params.general.abs_gain.sample_from_iter_num:
@@ -1270,15 +1284,6 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
         if mpi_info.band.is_master:
             logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished temporal "\
                         f"gain estimation in {timing_dict['temp-gain']:.1f}s.")
-
-    # ### WHITE NOISE ESTIMATION ###
-    # t0 = time.time()
-    # with benchmark("sigma0-est"):
-    #     tod_samples = estimate_white_noise(experiment_data, tod_samples, compsep_output, params)
-    # timing_dict["wn-est-2"] = time.time() - t0
-    # if band_comm.Get_rank() == 0:
-    #     logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished white noise "\
-    #                 f"estimation in {timing_dict['wn-est-2']:.1f}s.")
 
     ### MAPMAKING ###
     t0 = time.time()

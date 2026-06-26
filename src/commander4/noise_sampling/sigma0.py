@@ -3,6 +3,7 @@
     Top level functions:
     - `calc_sigma0_simple` -- direct first-difference sigma0 estimation.
     - `calc_sigma0_robust` -- same as above, but with iterative outlier-clipping
+    - `calc_sigma0_binned_psd` -- "bottom of the binned PSD" estimator (Commander3-style).
 """
 
 from __future__ import annotations
@@ -11,6 +12,9 @@ import numpy as np
 from numpy.typing import NDArray
 from math import sqrt
 from numba import njit
+from scipy.fft import rfftfreq
+
+from commander4.utils.math_operations import forward_rfft_mirrored
 
 
 @njit(fastmath=True)
@@ -148,3 +152,49 @@ def calc_sigma0_robust(tod: NDArray, mask: NDArray[np.bool_], down_factor: int =
         mask0 = mask
 
     return float(_sigma_clip_pairs(res0, mask0, n_clip_iter, threshold, down_factor))
+
+
+def calc_sigma0_binned_psd(tod: NDArray, mask: NDArray[np.bool_], fsamp: float,
+                           dnu: float = 0.5, safety: float = 0.95) -> float:
+    """ Estimate sigma0 as the "bottom of the binned PSD": sqrt of the minimum binned periodogram.
+
+    Faithful port of the Commander3 steady-state white-noise estimator
+    (comm_tod_noise_mod.f90:135-176): the mirrored-FFT periodogram of the (signal-subtracted) TOD
+    is averaged into ``dnu``-Hz bins, and the minimum bin -- the high-frequency white-noise floor,
+    where the 1/f component is negligible -- defines sigma0. A ``safety`` factor (<1) shrinks the
+    estimate slightly, mirroring C3's 0.95 guard against a singular correlated-noise covariance
+    when sigma0^2 is later subtracted from the total PSD.
+
+    The periodogram is normalized as ``|forward_rfft_mirrored(tod)|^2 / (2*ntod)`` so that its
+    white-noise floor equals sigma0^2 in C4's convention (the true white-noise variance, matching
+    ``calc_sigma0_robust`` and ``NoisePSD.eval_full``); this is C3's ``|dv|^2/ntod`` divided by an
+    extra 2 to undo the mirroring.
+
+    Taking the *minimum* over bins is intrinsically robust to glitch/spike power (spikes only raise
+    bins), so ``mask`` is accepted for signature parity with the other estimators but is not applied
+    -- matching C3, which estimates on the raw residual before any gap-filling.
+
+    Args:
+        tod: Signal-subtracted residual TOD (1D); masked samples may still carry data.
+        mask: Boolean validity mask (unused; see above).
+        fsamp: Sampling rate (Hz).
+        dnu: Bin width (Hz) for averaging the periodogram.
+        safety: Multiplicative shrink factor on the final estimate.
+    Returns:
+        Estimated white-noise level (float), or ``np.inf`` if no bin is populated.
+    """
+    ntod = len(tod)
+    # Mirrored-FFT periodogram (length-2*ntod grid), normalized so its white floor is sigma0^2.
+    power = np.abs(forward_rfft_mirrored(tod.astype(np.float64))) ** 2 / (2.0 * ntod)
+    freqs = rfftfreq(2 * ntod, d=1.0 / fsamp)
+    # Drop the DC and Nyquist modes (the mirrored signal's Nyquist coefficient is identically zero,
+    # which would otherwise make the top bin spuriously the minimum), then bin into dnu-wide bins.
+    power, freqs = power[1:-1], freqs[1:-1]
+    bin_idx = np.floor(freqs / dnu).astype(np.int64)
+    nbin = int(bin_idx[-1]) + 1
+    bin_cnt = np.bincount(bin_idx, minlength=nbin)
+    bin_sum = np.bincount(bin_idx, weights=power, minlength=nbin)
+    populated = bin_cnt > 0
+    if not np.any(populated):
+        return np.inf
+    return float(sqrt((bin_sum[populated] / bin_cnt[populated]).min()) * safety)
