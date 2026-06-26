@@ -212,7 +212,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     ### MAIN SCAN LOOP ###
     for view in scan_view.iter_focused(accepted_only=True):
         pix, psi = view.pix, view.psi
-        good_data_mask = view.good_data_mask
+        good_data_mask = view.get_mask(proc_mask=False)
         sigma0 = view.sigma0
         gain = view.get_gain()
         inv_var = (gain/sigma0)**2
@@ -234,7 +234,8 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
                           ("orbital_dipole", TODView._ALL_GAIN_TERMS)),
             )
             res = sample_correlated_noise(
-                sky_subtracted_TOD, view.full_mask, np.array(view.noise_params, copy=True),
+                sky_subtracted_TOD, view.get_mask(proc_mask_type="ncorr"),
+                np.array(view.noise_params, copy=True),
                 experiment_data.noise_model, view.fsamp, cg_err_tol=ncorr_cfg.cg_err_tol,
                 cg_max_iter=ncorr_cfg.cg_max_iter, sample_params=ncorr_cfg.do_param,
                 sample_sigma0=ncorr_cfg.sample_sigma0, sigma0_method=ncorr_cfg.sigma0_method,
@@ -390,7 +391,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
     domain = experiment_data.get_pixel_domain(scan_view, band_comm, sparse_maps)
     mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
     for view in scan_view.iter_focused(accepted_only=True):
-        good_data_mask = view.good_data_mask
+        good_data_mask = view.get_mask(proc_mask=False)
         pix = view.pix[good_data_mask]
         psi = view.psi[good_data_mask]
         sigma0 = view.sigma0
@@ -417,7 +418,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
     ### MAIN SCAN LOOP ###
     for view in scan_view.iter_focused(accepted_only=True):
         start_bench("binned-mapmaker")
-        good_data_mask = view.good_data_mask
+        good_data_mask = view.get_mask(proc_mask=False)
         pix, psi = view.pix, view.psi
         pix_masked = pix[good_data_mask]
         psi_masked = psi[good_data_mask]
@@ -440,7 +441,8 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                           ("orbital_dipole", TODView._ALL_GAIN_TERMS)),
             )
             res = sample_correlated_noise(
-                sky_subtracted_TOD, view.full_mask, np.array(view.noise_params, copy=True),
+                sky_subtracted_TOD, view.get_mask(proc_mask_type="ncorr"),
+                np.array(view.noise_params, copy=True),
                 experiment_data.noise_model, view.fsamp, cg_err_tol=ncorr_cfg.cg_err_tol,
                 cg_max_iter=ncorr_cfg.cg_max_iter, sample_params=ncorr_cfg.do_param,
                 sample_sigma0=ncorr_cfg.sample_sigma0, sigma0_method=ncorr_cfg.sigma0_method,
@@ -672,7 +674,7 @@ def _estimate_standalone_sigma0(view: TODView, sigma0_method: str) -> float:
     """
     residual = view.get_tod(subtract=(("sky", TODView._ALL_GAIN_TERMS),
                                       ("orbital_dipole", TODView._ALL_GAIN_TERMS)))
-    mask = view.full_mask
+    mask = view.get_mask(proc_mask_type="ncorr")
     if sigma0_method == "binned_psd":
         sigma0 = calc_sigma0_binned_psd(residual, mask, view.fsamp)
     else:
@@ -710,14 +712,16 @@ def sample_jump_detection(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
     jump_counts_local = []
 
     for view in scan_view.iter_focused():
-        if getattr(view.detector, "_flag_encoded", None) is None or not hasattr(view.detector, "_full_mask"):
+        # Jump detection needs the flag stream both to locate jumps (via jump_bitmask) and to
+        # define valid pre/post-jump samples; skip detector-scans without it.
+        if getattr(view.detector, "_flag_encoded", None) is None:
             tod_samples.jumps.set(view.iscan, view.idet, None)
             jump_counts_local.append(0)
             continue
         jump, num_skipped = JumpCorrection.detect(
             view.tod,
             view.flag,
-            view.full_mask,
+            view.get_mask(proc_mask_type="jump"),
             n_window,
             jump_bitmask=jump_bitmask,
         )
@@ -855,13 +859,13 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
     sum_s_T_N_inv_d = 0  # Accumulators for the numerator and denominator of eqn 16.
     sum_s_T_N_inv_s = 0
 
-    scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map)
+    scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
+                        downsample_factor=downsample_factor)
 
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
     for view in scan_view.iter_focused(accepted_only=True):
-        calib = view.get_calib_tod("abs", calibrate_against,
-                                   downsample_factor=downsample_factor,
-                                   gap_fill_method=gap_fill_method)
+        calib = view.get_calib_tod("abs", calibrate_against, gap_fill_method=gap_fill_method,
+                                   proc_mask_type="gain")
         s_cal = calib.s_cal
         residual_tod = calib.tod
 
@@ -929,14 +933,13 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
 
     # local_r_T_N_inv_s = 0.0
     local_r_T_N_inv_s = np.zeros(ndet, dtype=np.float32)
-    scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map)
-
+    scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
+                        downsample_factor=downsample_factor)
 
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
     for view in scan_view.iter_focused(accepted_only=True):
-        calib = view.get_calib_tod("rel", calibrate_against,
-                                   downsample_factor=downsample_factor,
-                                   gap_fill_method=gap_fill_method)
+        calib = view.get_calib_tod("rel", calibrate_against, gap_fill_method=gap_fill_method,
+                                   proc_mask_type="gain")
         s_cal = calib.s_cal
         residual_tod = calib.tod
         N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=1.0)
@@ -1022,7 +1025,8 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
     # Local calculations on each rank
     A_qq_local = np.zeros((ndet, nscans_local), dtype=np.float64)
     b_q_local = np.zeros((ndet, nscans_local), dtype=np.float64)
-    scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map)
+    scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
+                        downsample_factor=downsample_factor)
 
     # I'm still not sure what way of dealing with the masked samples are best:
     # 1. Replace masked values with 0s before FFT.
@@ -1033,9 +1037,8 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
     # Rejected detector-scans (accepted_only) contribute zero weight (A_qq = b_q = 0); the Wiener
     # prior then fills their temporal gain from neighbors.
     for view in scan_view.iter_focused(accepted_only=True):
-        calib = view.get_calib_tod("temp", calibrate_against,
-                                   downsample_factor=downsample_factor,
-                                   gap_fill_method=gap_fill_method)
+        calib = view.get_calib_tod("temp", calibrate_against, gap_fill_method=gap_fill_method,
+                                   proc_mask_type="gain")
         s_cal = calib.s_cal
         residual_tod = calib.tod
 

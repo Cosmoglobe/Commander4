@@ -85,20 +85,16 @@ class _StubView(TODView):
         self._s_orb = s_orb
         self.captured_subtract = None
 
-    def _materialize_downsampled(self, factor):
-        n = self._s_sky.size
-        return Bunch(tod=np.zeros(n), pix=np.zeros(n, dtype=int), psi=np.zeros(n))
-
-    def get_mask(self, which, downsample_factor=1):
+    def get_mask(self, good_data_mask=True, proc_mask=True, proc_mask_type=""):
         return np.ones(self._s_sky.size, dtype=bool)
 
-    def get_static_sky_tod(self, compsep_output=None, downsample_factor=None):
+    def get_static_sky_tod(self, compsep_output=None):
         return self._s_sky
 
-    def get_orbital_dipole_tod(self, downsample_factor=None):
+    def get_orbital_dipole_tod(self):
         return self._s_orb
 
-    def get_tod(self, *, subtract=None, downsample_factor=1, compsep_output=None, **kw):
+    def get_tod(self, *, subtract=None, compsep_output=None, **kw):
         self.captured_subtract = subtract
         return np.zeros(self._s_sky.size)
 
@@ -129,7 +125,7 @@ ALL = ("abs", "rel", "temp")
 ])
 def test_get_calib_tod_builds_residual(target, calib, expected_subtract, scal):
     view = _make_stub()
-    out = view.get_calib_tod(target, calib, downsample_factor=1, fill_masked=False)
+    out = view.get_calib_tod(target, calib, fill_masked=False)
     assert view.captured_subtract == expected_subtract
     expected_scal = {"orb": view._s_orb, "sky": view._s_sky,
                      "sky+orb": view._s_sky + view._s_orb}[scal]
@@ -139,9 +135,9 @@ def test_get_calib_tod_builds_residual(target, calib, expected_subtract, scal):
 def test_get_calib_tod_rejects_bad_arguments():
     view = _make_stub()
     with pytest.raises(ValueError):
-        view.get_calib_tod("bogus", "full_sky", downsample_factor=1)
+        view.get_calib_tod("bogus", "full_sky")
     with pytest.raises(ValueError):
-        view.get_calib_tod("abs", "bogus", downsample_factor=1)
+        view.get_calib_tod("abs", "bogus")
 
 
 # --------------------------------------------------------------------------------------
@@ -167,11 +163,12 @@ class _FillStubView(TODView):
     def noise_params(self): return self._np
     @property
     def sigma0(self): return float(self._np[0])
+    @property
+    def corrected_tod(self): return self._data
     def get_gain(self, gain_terms=None): return self._gain
-    def get_mask(self, which, downsample_factor=1): return self._mask
-    def get_static_sky_tod(self, compsep_output=None, downsample_factor=None): return np.zeros(self._n)
-    def get_orbital_dipole_tod(self, downsample_factor=None): return np.zeros(self._n)
-    def _materialize_downsampled(self, factor): return Bunch(tod=self._data)
+    def get_mask(self, good_data_mask=True, proc_mask=True, proc_mask_type=""): return self._mask
+    def get_static_sky_tod(self, compsep_output=None): return np.zeros(self._n)
+    def get_orbital_dipole_tod(self): return np.zeros(self._n)
 
 
 def test_gain_gap_fill_methods_replace_masked_samples():
@@ -187,7 +184,7 @@ def test_gain_gap_fill_methods_replace_masked_samples():
     for method in ("wn", "fallback", "full_cg"):
         view = _FillStubView(n, mask, NoisePSDOof(), params, fsamp=1.0, gain=2.0)
         np.random.seed(0)
-        filled = view._fill_masked_calibration_samples(resid, mask, s_cal, ("abs",), 1, None,
+        filled = view._fill_masked_calibration_samples(resid, mask, s_cal, ("abs",), None,
                                                        method=method)
         assert np.array_equal(filled[mask], resid[mask])         # valid samples untouched
         assert np.all(np.isfinite(filled))
@@ -195,7 +192,7 @@ def test_gain_gap_fill_methods_replace_masked_samples():
         # Masked fill is centered on the target gain x calibrator (= 2.0), the noise being zero-mean.
         assert filled[gap].mean() == pytest.approx(2.0, abs=0.4)
         if method != "wn":
-            assert (1, method) in view._gap_noise   # the shared realization was cached
+            assert method in view._gap_noise   # the shared realization was cached
 
 
 def test_gain_gap_fill_realization_is_shared_across_terms():
@@ -209,9 +206,9 @@ def test_gain_gap_fill_realization_is_shared_across_terms():
     resid = np.zeros(n)
     view = _FillStubView(n, mask, NoisePSDOof(), params, fsamp=1.0, gain=1.0)
     np.random.seed(0)
-    a = view._fill_masked_calibration_samples(resid, mask, s_cal, ("abs",), 1, None,
+    a = view._fill_masked_calibration_samples(resid, mask, s_cal, ("abs",), None,
                                               method="fallback")
-    b = view._fill_masked_calibration_samples(resid, mask, s_cal, ("rel",), 1, None,
+    b = view._fill_masked_calibration_samples(resid, mask, s_cal, ("rel",), None,
                                               method="fallback")
     # Same gain and cached draw -> identical masked fill across the two terms.
     np.testing.assert_array_equal(a[~mask], b[~mask])
@@ -301,12 +298,17 @@ NBLOCKS = NTOD // FACTOR - 1
 
 
 def _make_real_view(monkeypatch):
-    """A TODView over a minimal fake detector, exercising the real downsampling code paths."""
+    """Factory for a TODView over a minimal fake detector, exercising the real downsampling paths.
+
+    Returns ``make_view(downsample_factor)`` so a test can build views at full *and* downsampled
+    resolution over the same detector (the factor is now fixed per view), plus the detector and the
+    full-rate static-sky TOD for the expected-value comparisons.
+    """
     monkeypatch.setenv("OMP_NUM_THREADS", "1")  # Required by get_s_orb_TOD.
     rng = np.random.default_rng(7)
     pix = rng.integers(0, 12, size=NTOD)        # Valid pixels for the nside=1 experiment below.
     psi = rng.uniform(0.0, np.pi, size=NTOD)
-    det = SimpleNamespace(tod=rng.normal(size=NTOD), ntod=NTOD, fsamp=float(FACTOR),
+    det = SimpleNamespace(tod=rng.normal(size=NTOD), ntod=NTOD, fsamp=float(FACTOR), nside=1,
                           det_idx_fullband=0, get_pix_psi=lambda: (pix, psi),
                           orb_dir_vec=np.array([1.0, 0.0, 0.0], dtype=np.float32))
     experiment_data = SimpleNamespace(scans=[SimpleNamespace(detectors=[det])], nside=1, nu=30.0)
@@ -316,9 +318,13 @@ def _make_real_view(monkeypatch):
                                   temporal_gain=np.array([[0.25]]),
                                   accept=np.ones((1, 1), dtype=bool))
     skymap = rng.normal(size=(3, 12))
-    view = TODView(experiment_data, tod_samples, compsep_output=skymap).focus(0, det)
+
+    def make_view(downsample_factor=1):
+        return TODView(experiment_data, tod_samples, compsep_output=skymap,
+                       downsample_factor=downsample_factor).focus(0, det)
+
     s_full = skymap[0, pix] + np.cos(2*psi)*skymap[1, pix] + np.sin(2*psi)*skymap[2, pix]
-    return view, det, s_full
+    return make_view, det, s_full
 
 
 def _block_mean(arr):
@@ -326,8 +332,8 @@ def _block_mean(arr):
 
 
 def test_static_sky_downsampling_is_block_average(monkeypatch):
-    view, _, s_full = _make_real_view(monkeypatch)
-    out = view.get_static_sky_tod(downsample_factor=FACTOR)
+    make_view, _, s_full = _make_real_view(monkeypatch)
+    out = make_view(FACTOR).get_static_sky_tod()
     np.testing.assert_allclose(out, _block_mean(s_full), rtol=2e-5, atol=1e-6)
     # Regression guard: must NOT be the model sampled at the block-center pixels.
     block_centers = np.array([2, 6])
@@ -335,23 +341,23 @@ def test_static_sky_downsampling_is_block_average(monkeypatch):
 
 
 def test_data_and_model_share_block_definition(monkeypatch):
-    view, det, _ = _make_real_view(monkeypatch)
-    np.testing.assert_allclose(view.get_tod(downsample_factor=FACTOR), _block_mean(det.tod))
+    make_view, det, _ = _make_real_view(monkeypatch)
+    np.testing.assert_allclose(make_view(FACTOR).get_tod(), _block_mean(det.tod))
 
 
 def test_orbital_dipole_downsampling_is_block_average(monkeypatch):
-    view, _, _ = _make_real_view(monkeypatch)
-    orb_full = view.get_orbital_dipole_tod()
-    np.testing.assert_allclose(view.get_orbital_dipole_tod(downsample_factor=FACTOR),
+    make_view, _, _ = _make_real_view(monkeypatch)
+    orb_full = make_view(1).get_orbital_dipole_tod()
+    np.testing.assert_allclose(make_view(FACTOR).get_orbital_dipole_tod(),
                                _block_mean(orb_full), rtol=2e-5, atol=1e-9)
 
 
 def test_get_calib_tod_downsampled_end_to_end(monkeypatch):
     # Absolute gain against the static sky: residual = <d> - (g_rel+g_temp)<s_sky> - g_all*<s_orb>,
     # with every term block-averaged with the same kernel.
-    view, det, s_full = _make_real_view(monkeypatch)
-    orb_full = view.get_orbital_dipole_tod()
-    out = view.get_calib_tod("abs", "sky", downsample_factor=FACTOR, fill_masked=False)
+    make_view, det, s_full = _make_real_view(monkeypatch)
+    orb_full = make_view(1).get_orbital_dipole_tod()
+    out = make_view(FACTOR).get_calib_tod("abs", "sky", fill_masked=False)
     np.testing.assert_allclose(out.s_cal, _block_mean(s_full), rtol=2e-5, atol=1e-6)
     expected = _block_mean(det.tod) - 0.75*_block_mean(s_full) - 2.75*_block_mean(orb_full)
     np.testing.assert_allclose(out.tod, expected, rtol=2e-5, atol=1e-6)

@@ -1,7 +1,7 @@
 import numpy as np
+import healpy as hp
 import logging
 from numpy.typing import NDArray
-from typing import Literal
 
 from pixell.bunch import Bunch
 
@@ -17,9 +17,18 @@ logger = logging.getLogger(__name__)
 class TODView:
     """Materialize one detector at a time and build derived TOD views on demand.
 
-    The view keeps only the currently focused detector decoded in memory. Calling
-    ``focus()`` always discards the previous detector's cached arrays, which matches the
-    one-detector-at-a-time TOD-processing architecture.
+    The view keeps only the currently focused detector decoded in memory. Calling ``focus()``
+    always discards the previous detector's cached arrays, which matches the one-detector-at-a-time
+    TOD-processing architecture.
+
+    Downsampling. The view carries a single ``downsample_factor`` fixed at construction (overridable
+    per detector via ``focus``). The raw ``tod`` / ``corrected_tod`` and the *internal* full-rate
+    pointing stay at full resolution -- model TODs must be integrated over each block, not sampled at
+    its center -- but every quantity exposed for downstream use is returned at the active resolution:
+    ``pix`` / ``psi`` take block centers, the model and data getters (``get_tod``,
+    ``get_static_sky_tod``, ``get_orbital_dipole_tod``, ``get_calib_tod``) are block-averaged, and
+    ``get_mask`` is AND-reduced over each block. ``downsample_factor == 1`` (the default) is a no-op,
+    so callers that never downsample see the full-rate arrays unchanged.
     """
 
     _ALL_GAIN_TERMS = ("abs", "rel", "temp")
@@ -36,6 +45,7 @@ class TODView:
         experiment_data: DetGroupTOD,
         tod_samples: TODSamples,
         compsep_output: NDArray | None = None,
+        downsample_factor: int = 1,
     ):
         """Initialize a detector-local view over one band's TOD data.
 
@@ -43,14 +53,25 @@ class TODView:
             experiment_data: Static TOD container for the current band.
             tod_samples: Sampled gain and noise parameters for the current chain state.
             compsep_output: Optional default sky model used by sky-subtraction helpers.
+            downsample_factor: Block-averaging factor applied to every derived TOD/mask the view
+                returns (1 = full resolution). Each operation that needs a coarser rate (e.g. gain
+                calibration) constructs its own view at the desired factor.
         """
         self.experiment_data = experiment_data
         self.tod_samples = tod_samples
         self.compsep_output = compsep_output
+        self._downsample_factor = self._validate_factor(downsample_factor)
         self._iscan: int | None = None
         self._idet: int | None = None
         self._det = None
         self._clear_cache()
+
+    @staticmethod
+    def _validate_factor(downsample_factor: int) -> int:
+        factor = 1 if downsample_factor is None else int(downsample_factor)
+        if factor < 1:
+            raise ValueError("downsample_factor must be >= 1.")
+        return factor
 
     def _clear_cache(self):
         """Drop all arrays materialized for the current detector."""
@@ -59,15 +80,13 @@ class TODView:
         self._pix = None
         self._psi = None
         self._flag = None
-        self._processing_mask = None
-        self._good_data_mask = None
-        self._full_mask = None
+        self._ds_indices = None
         self._static_sky = None
         self._orbital_dipole = None
-        self._downsampled: dict[int, Bunch] = {}
-        self._gap_noise: dict[tuple[int, str], NDArray] = {}
+        self._gap_noise: dict[str, NDArray] = {}
 
-    def focus(self, iscan: int, det: DetectorTOD) -> "TODView":
+    def focus(self, iscan: int, det: DetectorTOD,
+              downsample_factor: int | None = None) -> "TODView":
         """Focus the view on one present detector and discard any previous materialization.
 
         Args:
@@ -77,10 +96,14 @@ class TODView:
                 ``det.det_idx_fullband`` is the column used to address every per-detector sample
                 array, so detectors absent from a scan are simply skipped rather than misaligning
                 the dense ``(nscans, ndet)`` arrays.
+            downsample_factor: Optional per-detector override of the view's downsample factor; the
+                construction-time factor is kept when omitted.
         """
         self._det = det
         self._iscan = iscan
         self._idet = det.det_idx_fullband  # full-band column in the (nscans, ndet) sample arrays
+        if downsample_factor is not None:
+            self._downsample_factor = self._validate_factor(downsample_factor)
         self._clear_cache()
         return self
 
@@ -134,6 +157,10 @@ class TODView:
         return self.detector.fsamp
 
     @property
+    def downsample_factor(self) -> int:
+        return self._downsample_factor
+
+    @property
     def det_response(self) -> NDArray | None:
         return self.detector.det_response
 
@@ -170,33 +197,95 @@ class TODView:
                 gain += self.tod_samples.temporal_gain[self.iscan, self.idet]
         return float(gain)
 
+
+    # ------------------------------------------------------------------ downsampling helpers
+    @property
+    def _block_indices(self) -> NDArray[np.integer]:
+        """Block-center sample indices mapping the active resolution back to the full rate.
+
+        For ``factor == 1`` this is ``arange(ntod)``; otherwise the full-rate stream is cut into
+        contiguous blocks of ``factor`` samples and only the leading complete blocks are kept (the
+        trailing partial block, if any, is dropped), matching the data block-averaging. Cached per
+        detector (reset by ``_clear_cache``).
+        """
+        if self._ds_indices is None:
+            factor, ntod = self._downsample_factor, self.detector.ntod
+            if factor == 1:
+                self._ds_indices = np.arange(ntod, dtype=np.int64)
+            else:
+                edges = np.arange(0, ntod, factor)
+                self._ds_indices = (edges[1:] + edges[:-1]) // 2
+        return self._ds_indices
+
+    @property
+    def ntod(self) -> int:
+        """Number of samples at the active (downsampled) resolution."""
+        return self._block_indices.size
+
+    def _downsample_mean(self, arr: NDArray[np.floating]) -> NDArray[np.floating]:
+        """Block-average a full-rate array onto the active resolution (identity when factor == 1)."""
+        factor = self._downsample_factor
+        if factor == 1:
+            return arr
+        n = self._block_indices.size
+        return arr[:n * factor].reshape(n, factor).mean(axis=-1)
+
+    def _downsample_all(self, mask: NDArray[np.bool_]) -> NDArray[np.bool_]:
+        """AND-reduce a full-rate boolean mask onto the active resolution.
+
+        A downsampled sample is valid only if *every* high-res sample in its block is valid:
+        block-averaging smears a single masked sample (e.g. a point source) across the whole averaged
+        value, so masks are AND-reduced over each block rather than sampled at its center.
+        """
+        factor = self._downsample_factor
+        if factor == 1:
+            return mask
+        n = self._block_indices.size
+        return mask[:n * factor].reshape(n, factor).all(axis=-1)
+
+    # ------------------------------------------------------------------ raw / pointing accessors
     @property
     def tod(self) -> NDArray[np.floating]:
+        """The raw detector TOD, at full resolution."""
         if self._tod is None:
             self._tod = self.detector.tod
         return self._tod
 
     @property
     def corrected_tod(self) -> NDArray[np.floating]:
-        """Return the raw TOD with the stored jump offsets applied in detector units."""
+        """The raw TOD with the stored jump offsets applied, at full resolution (detector units)."""
         if self._corrected_tod is None:
             jump = self.tod_samples.jumps.get(self.iscan, self.idet)
             self._corrected_tod = self.tod if jump.is_empty() else jump.apply(self.tod)
         return self._corrected_tod
 
-    def _get_fullres_pix_psi(self) -> tuple[NDArray[np.integer], NDArray[np.floating] | NDArray[np.integer]]:
-        """Decode full-resolution pointing once and reuse it for the current detector."""
-        if self._pix is None or self._psi is None:
+    @property
+    def _fullres_pix(self) -> NDArray[np.integer]:
+        """Full-rate pixel pointing (used internally for model evaluation and mask projection)."""
+        if self._pix is None:
             self._pix, self._psi = self.detector.get_pix_psi()
-        return self._pix, self._psi
+        return self._pix
+
+    @property
+    def _fullres_psi(self) -> NDArray[np.floating] | NDArray[np.integer]:
+        """Full-rate polarization angle (used internally for model evaluation)."""
+        if self._psi is None:
+            self._pix, self._psi = self.detector.get_pix_psi()
+        return self._psi
 
     @property
     def pix(self) -> NDArray[np.integer]:
-        return self._get_fullres_pix_psi()[0]
+        """Pixel pointing at the active resolution (block centers when downsampled)."""
+        if self._downsample_factor == 1:
+            return self._fullres_pix
+        return self._fullres_pix[self._block_indices]
 
     @property
     def psi(self) -> NDArray[np.floating] | NDArray[np.integer]:
-        return self._get_fullres_pix_psi()[1]
+        """Polarization angle at the active resolution (block centers when downsampled)."""
+        if self._downsample_factor == 1:
+            return self._fullres_psi
+        return self._fullres_psi[self._block_indices]
 
     @property
     def flag(self) -> NDArray[np.integer]:
@@ -204,110 +293,58 @@ class TODView:
             self._flag = self.detector.flag
         return self._flag
 
-    def _unpack_mask(self, attr_name: str) -> NDArray[np.bool_]:
-        """Unpack one of DetectorTOD's packed bit masks for the focused detector."""
-        det = self.detector
-        packed = getattr(det, attr_name, None)
-        if packed is None:
-            # Some datasets may not define every cut explicitly; fall back to permissive masks.
-            if attr_name == "_processing_mask":
-                return np.ones(det.ntod, dtype=bool)
-            if attr_name == "_good_data_mask":
-                return np.ones(det.ntod, dtype=bool)
-            if attr_name == "_full_mask":
-                return self.processing_mask.copy()
-            raise ValueError(f"Detector mask '{attr_name}' is unavailable.")
-        mask = np.unpackbits(packed).view(bool)
-        if mask.size > det.ntod + 7 or mask.size < det.ntod:
-            raise ValueError(f"Mask size {mask.size} doesn't match ntod {det.ntod}.")
-        return mask[:det.ntod]
+    # ------------------------------------------------------------------ masks
+    def _project_processing_mask(self, mask_type: str = "") -> NDArray[np.bool_] | None:
+        """Project a processing-mask HEALPix map onto the focused detector's pointing.
 
-    @property
-    def processing_mask(self) -> NDArray[np.bool_]:
-        if self._processing_mask is None:
-            self._processing_mask = self._unpack_mask("_processing_mask")
-        return self._processing_mask
-
-    @property
-    def good_data_mask(self) -> NDArray[np.bool_]:
-        if self._good_data_mask is None:
-            self._good_data_mask = self._unpack_mask("_good_data_mask")
-        return self._good_data_mask
-
-    @property
-    def full_mask(self) -> NDArray[np.bool_]:
-        if self._full_mask is None:
-            self._full_mask = self._unpack_mask("_full_mask")
-        return self._full_mask
-
-    def _downsample_factor_or_default(self, downsample_factor: int | None) -> int:
-        """Validate a downsampling factor and replace ``None`` with unity."""
-        if downsample_factor is None:
-            downsample_factor = 1
-        if downsample_factor < 1:
-            raise ValueError("downsample_factor must be >= 1.")
-        return int(downsample_factor)
-
-    def _materialize_downsampled(self, downsample_factor: int) -> Bunch:
-        """Cache a downsampled detector view for the requested averaging factor."""
-        factor = self._downsample_factor_or_default(downsample_factor)
-        cached = self._downsampled.get(factor)
-        if cached is not None:
-            return cached
-
-        if factor == 1:
-            data = Bunch(
-                tod=self.corrected_tod,
-                pix=self.pix,
-                psi=self.psi,
-                processing_mask=self.processing_mask,
-                good_data_mask=self.good_data_mask,
-                full_mask=self.full_mask,
-                indices=np.arange(self.detector.ntod, dtype=np.int64),
-            )
+        The named ``mask_type`` is used when the band defines one under ``processing_masks:``;
+        otherwise the band's default ``processing_mask:`` is used; if neither exists, returns
+        ``None`` (no processing cut). A named type the band does not define falls back to the default
+        *silently*, so single-mask bands need no per-operation entries (mistyped ``processing_masks:``
+        keys are caught at config load, not per sample). The map is looked up at its native nside,
+        converting the pointing from the detector's evaluation nside when the two differ.
+        """
+        specific = getattr(self.detector, "specific_proc_masks", None) or {}
+        default = getattr(self.detector, "default_proc_mask", None)
+        if mask_type and mask_type in specific:
+            mask_map = specific[mask_type]
+        elif default is not None:
+            mask_map = default
         else:
-            # Average the jump-corrected TOD over contiguous blocks. Pointing is kept at the block
-            # centers; model TODs are not evaluated at this pointing but block-averaged at full rate
-            # (see get_static_sky_tod), so they share the data's downsampling transfer.
-            indices_edges = np.arange(0, self.detector.ntod, factor)
-            indices = (indices_edges[1:] + indices_edges[:-1]) // 2
-            ntod_down = indices.size
-            tod = self.corrected_tod[:ntod_down*factor].reshape((ntod_down, factor))
-            # A downsampled sample is valid only if *every* high-res sample in its block is valid:
-            # block-averaging smears a single masked sample (e.g. a point source) across the whole
-            # averaged value, so masks are AND-reduced over each block rather than sampled at its center.
-            def block_and(mask):
-                return mask[:ntod_down*factor].reshape((ntod_down, factor)).all(axis=-1)
-            data = Bunch(
-                tod=np.mean(tod, axis=-1),
-                pix=self.pix[indices],
-                psi=self.psi[indices],
-                processing_mask=block_and(self.processing_mask),
-                good_data_mask=block_and(self.good_data_mask),
-                full_mask=block_and(self.full_mask),
-                indices=indices,
-            )
-
-        self._downsampled[factor] = data
-        return data
-
-    def get_mask(
-        self,
-        mask: Literal["none", "processing", "good", "full"] = "none",
-        downsample_factor: int | None = None,
-    ) -> NDArray[np.bool_] | None:
-        """Return one of the cached detector masks, optionally at downsampled resolution."""
-        if mask == "none":
             return None
-        data = self._materialize_downsampled(self._downsample_factor_or_default(downsample_factor))
-        if mask == "processing":
-            return data.processing_mask
-        if mask == "good":
-            return data.good_data_mask
-        if mask == "full":
-            return data.full_mask
-        raise ValueError(f"Unknown mask mode '{mask}'.")
 
+        pix = self._fullres_pix
+        map_nside = hp.npix2nside(mask_map.size)
+        if map_nside != self.detector.nside:
+            pix = hp.ang2pix(map_nside, *hp.pix2ang(self.detector.nside, pix))
+        return mask_map[pix]
+
+
+    def get_mask(self, good_data_mask: bool = True, proc_mask: bool = True,
+                 proc_mask_type: str = "") -> NDArray[np.bool_]:
+        """Return a boolean keep-mask for the focused TOD at the active resolution.
+
+        Combines the bad-data flag cut and a sky processing mask; either can be switched off. The
+        full-rate cut is AND-reduced onto the active downsample resolution.
+
+        Args:
+            good_data_mask: Whether to exclude samples flagged as bad by the bit-flag cut.
+            proc_mask: Whether to apply a sky processing mask.
+            proc_mask_type: Which processing mask to apply -- a key under ``processing_masks:`` in
+                the band's parameter section, or "" to use the default ``processing_mask:`` entry.
+        """
+        mask = np.ones(self.detector.ntod, dtype=bool)
+        # Datasets without an explicit flag cut behave as if all samples pass it.
+        if good_data_mask and getattr(self.detector, "_good_data_mask", None) is not None:
+            mask &= self.detector.good_data_mask
+        if proc_mask:
+            proc = self._project_processing_mask(proc_mask_type)
+            if proc is not None:
+                mask &= proc
+        return self._downsample_all(mask)
+
+
+    # ------------------------------------------------------------------ model TODs
     def _require_compsep_output(self, compsep_output: NDArray | None) -> NDArray:
         """Resolve the sky model to use for static-sky subtraction."""
         sky_model = self.compsep_output if compsep_output is None else compsep_output
@@ -315,8 +352,9 @@ class TODView:
             raise ValueError("A component-separation sky map must be provided for sky subtraction.")
         return sky_model
 
+
     def _sky_map_pix(self, sky_model: NDArray) -> NDArray[np.integer]:
-        """Pixel indices into a sky map that may be full-sky or restricted to this rank's domain.
+        """Full-rate pixel indices into a sky map that may be full-sky or restricted to this rank.
 
         The realized sky model is full-sky ``(ncomp, npix)`` on the band master and in non-sparse
         map mode, but only ``(ncomp, n_local)`` on workers in sparse mode (see
@@ -324,49 +362,39 @@ class TODView:
         count and return either global HEALPix indices or compact local-buffer indices.
         """
         if sky_model.shape[-1] == 12 * self.experiment_data.nside**2:
-            return self.pix
-        return self.experiment_data.pixel_domain.to_local(self.pix)
+            return self._fullres_pix
+        return self.experiment_data.pixel_domain.to_local(self._fullres_pix)
 
-    def _block_average(self, tod: NDArray[np.floating], factor: int) -> NDArray[np.floating]:
-        """Average a full-rate array over the same contiguous blocks as the downsampled TOD."""
-        ntod_down = self._materialize_downsampled(factor).tod.shape[0]
-        return tod[:ntod_down*factor].reshape((ntod_down, factor)).mean(axis=-1)
 
-    def get_static_sky_tod(
-        self,
-        compsep_output: NDArray | None = None,
-        downsample_factor: int | None = None,
-    ) -> NDArray[np.floating]:
+    def get_static_sky_tod(self, compsep_output: NDArray | None = None) -> NDArray[np.floating]:
         """Evaluate the static sky model along the focused detector pointing.
 
-        For ``downsample_factor > 1`` the model is evaluated at the full sampling rate and averaged
-        over the same sample blocks as the data, integrating the model over the scan path within
-        each block rather than sampling it at the block-center pixel. Model and data thereby see
-        the same downsampling transfer function, which keeps e.g. gain estimates unbiased.
+        The model is evaluated at the full sampling rate and then block-averaged onto the active
+        resolution, integrating the model over the scan path within each block rather than sampling
+        it at the block-center pixel. Model and data thereby see the same downsampling transfer
+        function, which keeps e.g. gain estimates unbiased.
         """
-        factor = self._downsample_factor_or_default(downsample_factor)
         sky_model = self._require_compsep_output(compsep_output)
         sky_pix = self._sky_map_pix(sky_model)
         if compsep_output is None:
             if self._static_sky is None:
-                # Reuse the full-resolution sky TOD when both pointing and sky model match.
-                self._static_sky = get_static_sky_TOD(sky_model, sky_pix, psi=self.psi)
-            sky_tod = self._static_sky
-        else:
-            sky_tod = get_static_sky_TOD(sky_model, sky_pix, psi=self.psi)
-        return sky_tod if factor == 1 else self._block_average(sky_tod, factor)
+                full = get_static_sky_TOD(sky_model, sky_pix, psi=self._fullres_psi)
+                self._static_sky = self._downsample_mean(full)
+            return self._static_sky
+        full = get_static_sky_TOD(sky_model, sky_pix, psi=self._fullres_psi)
+        return self._downsample_mean(full)
 
-    def get_orbital_dipole_tod(self, downsample_factor: int | None = None) -> NDArray[np.floating]:
-        """Evaluate the orbital dipole for the focused detector.
 
-        Downsampling block-averages the full-rate dipole TOD, mirroring ``get_static_sky_tod``.
+    def get_orbital_dipole_tod(self) -> NDArray[np.floating]:
+        """Evaluate the orbital dipole for the focused detector at the active resolution.
+
+        Like ``get_static_sky_tod``, the dipole is built at full rate and block-averaged.
         """
-        factor = self._downsample_factor_or_default(downsample_factor)
         if self._orbital_dipole is None:
-            self._orbital_dipole = get_s_orb_TOD(self.detector, self.experiment_data, self.pix)
-        if factor == 1:
-            return self._orbital_dipole
-        return self._block_average(self._orbital_dipole, factor)
+            full = get_s_orb_TOD(self.detector, self.experiment_data, self._fullres_pix)
+            self._orbital_dipole = self._downsample_mean(full)
+        return self._orbital_dipole
+
 
     def _normalize_signal_name(self, signal_name: str) -> str:
         """Map user-facing TOD component names onto internal canonical names."""
@@ -381,48 +409,40 @@ class TODView:
             raise ValueError(f"Unknown TOD signal '{signal_name}'.")
         return aliases[normalized]
 
-    def _get_signal_tod(
-        self,
-        signal_name: str,
-        compsep_output: NDArray | None = None,
-        downsample_factor: int | None = None,
-    ) -> NDArray[np.floating]:
-        """Return one named model TOD evaluated for the focused detector."""
+
+    def _get_signal_tod(self, signal_name: str,
+                        compsep_output: NDArray | None = None) -> NDArray[np.floating]:
+        """Return one named model TOD evaluated for the focused detector at the active resolution."""
         normalized = self._normalize_signal_name(signal_name)
         if normalized == "static_sky":
-            return self.get_static_sky_tod(compsep_output=compsep_output,
-                                           downsample_factor=downsample_factor)
+            return self.get_static_sky_tod(compsep_output=compsep_output)
         if normalized == "orbital_dipole":
-            return self.get_orbital_dipole_tod(downsample_factor=downsample_factor)
+            return self.get_orbital_dipole_tod()
         raise ValueError(f"Unhandled TOD signal '{signal_name}'.")
+
 
     def get_tod(
         self,
         *,
         subtract: tuple[tuple[str, tuple[str, ...]], ...] | None = None,
         divide_by_gain: tuple[str, ...] | None = None,
-        downsample_factor: int = 1,
-        mask: Literal["none", "processing", "good", "full"] = "none",
         compsep_output: NDArray | None = None,
     ) -> NDArray[np.floating]:
-        """Return a jump-corrected detector-local TOD after subtracting selected model terms.
+        """Return a jump-corrected detector-local TOD, at the active resolution, after subtracting
+        selected model terms.
 
         Args:
             subtract: Sequence of ``(signal_name, gain_terms)`` pairs. Each signal is evaluated
                 and subtracted after multiplying it by the selected gain subset.
             divide_by_gain: Gain terms to divide the final TOD by, or ``None``.
-            downsample_factor: Average the TOD in contiguous chunks before subtraction.
-            mask: Optional mask to apply to the output TOD.
             compsep_output: Optional sky model override for static-sky subtraction.
         """
-        factor = self._downsample_factor_or_default(downsample_factor)
-        tod = np.array(self._materialize_downsampled(factor).tod, copy=True)
+        tod = np.array(self._downsample_mean(self.corrected_tod), copy=True)
 
         if subtract is not None:
             for signal_name, gain_terms in subtract:
                 # All supported residuals in this class are linear combinations of named model TODs.
-                signal = self._get_signal_tod(signal_name, compsep_output=compsep_output,
-                                              downsample_factor=factor)
+                signal = self._get_signal_tod(signal_name, compsep_output=compsep_output)
                 tod -= self.get_gain(gain_terms) * signal
 
         if divide_by_gain is not None:
@@ -431,33 +451,35 @@ class TODView:
                 raise ValueError("Cannot divide TOD by a zero gain.")
             tod /= gain
 
-        # Apply masking last so callers can request either the full residual or the cut samples.
-        mask_arr = self.get_mask(mask, downsample_factor=factor)
-        return tod if mask_arr is None else tod[mask_arr]
+        return tod
 
-    def _gap_noise_draw(self, factor: int, method: str,
-                        compsep_output: NDArray | None = None) -> NDArray[np.floating]:
-        """Constrained noise realization at the masked samples of the downsampled calibration TOD.
+
+    # ------------------------------------------------------------------ gain calibration
+    def _gap_noise_draw(self, method: str, compsep_output: NDArray | None = None,
+                        proc_mask_type: str = "") -> NDArray[np.floating]:
+        """Constrained noise realization at the masked samples of the calibration TOD.
 
         The noise residual ``d - g*(s_sky + s_orb)`` (full gain) is identical for every gain term, so
         the 1/f + white gap draw is computed once and shared across the abs/rel/temporal solves
-        (cached per downsampling factor and method). ``method`` is ``'fallback'`` or ``'full_cg'``.
+        (cached per method, at the view's active resolution). ``method`` is ``'fallback'`` or
+        ``'full_cg'``. ``proc_mask_type`` selects which processing mask defines the gaps.
         """
-        cached = self._gap_noise.get((factor, method))
+        cached = self._gap_noise.get(method)
         if cached is not None:
             return cached
-        mask = self.get_mask("full", downsample_factor=factor)
-        s_sky = self.get_static_sky_tod(compsep_output=compsep_output, downsample_factor=factor)
-        s_orb = self.get_orbital_dipole_tod(downsample_factor=factor)
-        data = self._materialize_downsampled(factor).tod
+        mask = self.get_mask(proc_mask_type=proc_mask_type)
+        s_sky = self.get_static_sky_tod(compsep_output=compsep_output)
+        s_orb = self.get_orbital_dipole_tod()
+        data = self._downsample_mean(self.corrected_tod)
         # Noise residual: data minus the full sky model at the full gain (true noise at valid
         # samples; Galactic-plane garbage at masked ones, which the realization replaces).
         noise_resid = data - self.get_gain(self._ALL_GAIN_TERMS) * (s_sky + s_orb)
-        samprate = self.fsamp / factor  # block-averaging downsamples fsamp by `factor`
+        samprate = self.fsamp / self._downsample_factor  # block-averaging downsamples fsamp
         draw = realize_noise_in_gaps(noise_resid, mask, self.experiment_data.noise_model,
                                      self.noise_params, samprate, self.fsamp, method)
-        self._gap_noise[(factor, method)] = draw
+        self._gap_noise[method] = draw
         return draw
+
 
     def _fill_masked_calibration_samples(
         self,
@@ -465,10 +487,10 @@ class TODView:
         mask: NDArray[np.bool_],
         signal: NDArray[np.floating],
         gain_terms: tuple[str, ...],
-        downsample_factor: int,
         rng: np.random.Generator | None,
         method: str = "wn",
         compsep_output: NDArray | None = None,
+        proc_mask_type: str = "",
     ) -> NDArray[np.floating]:
         """Fill masked calibration samples with the target signal plus a noise realization.
 
@@ -476,6 +498,7 @@ class TODView:
         noise draw: white (``method='wn'``, sigma0/sqrt(factor)) or a constrained correlated 1/f +
         white draw (``'fallback'``/``'full_cg'``) shared across gain terms via ``_gap_noise_draw``,
         so the masked residual carries the same 1/f structure as the surrounding valid data.
+        ``proc_mask_type`` is forwarded to the 1/f gap draw so it sees the same gaps as ``mask``.
         """
         filled = np.array(tod, copy=True)
         gap = ~mask
@@ -483,13 +506,15 @@ class TODView:
             return filled
         target = self.get_gain(gain_terms) * signal[gap]
         if method == "wn":
-            sigma0_effective = self.sigma0 * np.sqrt(1.0 / downsample_factor)
+            sigma0_effective = self.sigma0 * np.sqrt(1.0 / self._downsample_factor)
             normal = np.random.normal if rng is None else rng.normal
             filled[gap] = target + normal(0.0, sigma0_effective, target.shape)
         else:
-            draw = self._gap_noise_draw(downsample_factor, method, compsep_output=compsep_output)
+            draw = self._gap_noise_draw(method, compsep_output=compsep_output,
+                                        proc_mask_type=proc_mask_type)
             filled[gap] = target + draw[gap]
         return filled
+
 
     def get_calib_tod(
         self,
@@ -497,17 +522,18 @@ class TODView:
         calibrate_against: str,
         *,
         compsep_output: NDArray | None = None,
-        downsample_factor: int | None = None,
         fill_masked: bool = True,
         gap_fill_method: str = "wn",
         rng: np.random.Generator | None = None,
+        proc_mask_type: str = "",
     ) -> Bunch:
         """Return the residual, calibrator signal, and mask used to sample one gain term.
 
-        The detector model is ``d = (g_abs + g_rel + g_temp) * (s_sky + s_orb) + n``. To sample
-        ``target_term`` against a calibrator signal ``s_cal`` (the subset of {static sky, orbital
-        dipole} selected by ``calibrate_against``), each model signal is subtracted with the
-        appropriate gain terms so the residual reduces to ``g_target * s_cal + n``:
+        Everything is returned at the view's active downsample resolution. The detector model is
+        ``d = (g_abs + g_rel + g_temp) * (s_sky + s_orb) + n``. To sample ``target_term`` against a
+        calibrator signal ``s_cal`` (the subset of {static sky, orbital dipole} selected by
+        ``calibrate_against``), each model signal is subtracted with the appropriate gain terms so
+        the residual reduces to ``g_target * s_cal + n``:
             - signals making up the calibrator keep the target term (only the *other* terms are
               subtracted), contributing ``g_target * s`` to the residual;
             - signals outside the calibrator are subtracted in full and thus removed.
@@ -516,16 +542,16 @@ class TODView:
             target_term: Gain term being sampled, one of ``_ALL_GAIN_TERMS`` ("abs", "rel", "temp").
             calibrate_against: Calibrator, one of "orbital_dipole", "full_sky", or "sky".
             compsep_output: Optional sky-model override for the static-sky term.
-            downsample_factor: Block-averaging factor applied to both the data and the model
-                TODs; defaults to one second (``int(fsamp)``).
             fill_masked: If True, fill masked samples with ``g_target * s_cal`` plus a noise draw.
             gap_fill_method: How masked samples are filled when ``fill_masked``: ``'wn'`` (white
                 noise), ``'fallback'`` (stationary 1/f Wiener draw), or ``'full_cg'`` (masked
                 constrained-CG 1/f draw). See ``_fill_masked_calibration_samples``.
             rng: Optional NumPy generator for the masked-sample white noise (``'wn'`` only).
+            proc_mask_type: Which processing mask defines the calibration gaps (a key under
+                ``processing_masks:``; "" uses the default ``processing_mask:``).
 
         Returns:
-            Bunch with ``tod`` (residual), ``s_cal``, ``pix``, ``psi``, and ``mask``.
+            Bunch with ``tod`` (residual), ``s_cal``, and ``mask``.
         """
         if target_term not in self._ALL_GAIN_TERMS:
             raise ValueError(f"Unknown gain term '{target_term}'; expected one of "
@@ -534,11 +560,9 @@ class TODView:
             raise ValueError(f"Unknown calibrate_against '{calibrate_against}'; expected one of "
                              f"{tuple(self._CALIB_TARGET_SIGNALS)}.")
 
-        factor = int(self.fsamp) if downsample_factor is None else int(downsample_factor)
-        data = self._materialize_downsampled(factor)
-        mask = self.get_mask("full", downsample_factor=factor)
-        s_sky = self.get_static_sky_tod(compsep_output=compsep_output, downsample_factor=factor)
-        s_orb = self.get_orbital_dipole_tod(downsample_factor=factor)
+        mask = self.get_mask(proc_mask_type=proc_mask_type)
+        s_sky = self.get_static_sky_tod(compsep_output=compsep_output)
+        s_orb = self.get_orbital_dipole_tod()
 
         calib_signals = self._CALIB_TARGET_SIGNALS[calibrate_against]
         other_terms = tuple(t for t in self._ALL_GAIN_TERMS if t != target_term)
@@ -552,12 +576,10 @@ class TODView:
         if "orbital_dipole" in calib_signals:
             s_cal = s_cal + s_orb
 
-        tod = self.get_tod(subtract=subtract, downsample_factor=factor,
-                           compsep_output=compsep_output)
+        tod = self.get_tod(subtract=subtract, compsep_output=compsep_output)
         if fill_masked:
-            tod = self._fill_masked_calibration_samples(tod, mask, s_cal, (target_term,), factor,
-                                                        rng, method=gap_fill_method,
-                                                        compsep_output=compsep_output)
-        return Bunch(tod=tod, s_cal=s_cal, pix=data.pix, psi=data.psi, mask=mask)
-
-
+            tod = self._fill_masked_calibration_samples(tod, mask, s_cal, (target_term,), rng,
+                                                        method=gap_fill_method,
+                                                        compsep_output=compsep_output,
+                                                        proc_mask_type=proc_mask_type)
+        return Bunch(tod=tod, s_cal=s_cal, mask=mask)

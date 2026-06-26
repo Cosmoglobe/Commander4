@@ -20,26 +20,9 @@ import commander4.compression.huffman as huffman
 from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
                                             stop_bench, log_memory, increment_count, bench_reset
 
+from commander4.experiments.tod_read_utils import read_processing_masks, find_good_Fourier_time
+
 logger = logging.getLogger(__name__)
-
-def get_processing_mask(my_band: Bunch) -> DetectorTOD:
-    """ Finds and returns the processing mask for the relevant band.
-    """
-    hdul = fits.open(my_band.processing_mask)
-    mask = hdul[1].data["TEMPERATURE"].flatten().astype(bool)
-    nside = np.sqrt(mask.size//12)
-    if nside != my_band.eval_nside:
-        mask = hp.ud_grade(mask.astype(np.float64), my_band.eval_nside) == 1
-    return mask
-
-def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
-    if ntod <= 10_000 or ntod >= 400_000:
-        return ntod
-    search_start = int(0.99*ntod)  # Consider sizes up to 1% smaller than ntod.
-    best_ntod = np.argmin(Fourier_times[search_start:ntod+1])
-    best_ntod += search_start
-    assert(best_ntod <= ntod)
-    return best_ntod
 
 
 def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_names: list[str],
@@ -61,13 +44,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             filepaths.append(filepath[1:-1])
             oids.append(filepath.split(".")[0].split("_")[-1])
 
-    if "processing_mask" in my_band:
-        processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
-        if band_comm.Get_rank() == 0:
-            processing_mask_map[:] = get_processing_mask(my_band)        
-        band_comm.Bcast(processing_mask_map, root=0)
-    else:
-        processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
+    default_mask, specific_masks = read_processing_masks(band_comm, my_band)
 
     Fourier_times = np.load(my_experiment.Fourier_times_path)
 
@@ -105,12 +82,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
         stop_bench("fileread")
 
         start_bench("compress")
-        processing_mask_nside = hp.npix2nside(processing_mask_map.size)
-        logassert(my_band.eval_nside == processing_mask_nside,
-                    f"Processing mask (band {bandname}) "
-                    f"has nside {processing_mask_nside} while eval_nside = {my_band.eval_nside} "
-                    "(NB: eval_nside can be set different from native data nside)", logger)
-
         if ntod > ntod_upper_bound:
             raise ValueError(f"{ntod_upper_bound} {ntod}")
         
@@ -149,7 +120,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                                          npsi, my_band.eval_nside, data_nside, ntod_optimal,
                                          ntod_optimal)
             detector = DetectorTOD(det_name, idet, idet, tod, det_pointing, fsamp, vsun,
-                                   huffman_tree, huffman_symbols, processing_mask_map,
+                                   huffman_tree, huffman_symbols, default_mask, specific_masks,
                                    ntod_optimal, ntod_optimal)
             detector_list.append(detector)
             ntod_sum_original += ntod
