@@ -19,7 +19,7 @@ from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU, WeightsMa
 from commander4.utils.CG_mapmaker import CGMapmakerI, CGMapmakerIQU
 from commander4.solvers.preconditioners import InvNPreconditionerI, InvNPreconditionerIQU
 from commander4.noise_sampling.sample_ncorr import sample_correlated_noise, log_corr_noise_stats,\
-    SIGMA0_METHODS, GAP_FILL_METHODS
+    SIGMA0_METHODS, GAIN_GAP_FILL_METHODS
 from commander4.noise_sampling.noise_sampling import fill_all_masked
 from commander4.utils.math_operations import forward_rfft, backward_rfft
 from commander4.utils.execution_ids import get_execution_band_ids
@@ -238,7 +238,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
                 experiment_data.noise_model, view.fsamp, cg_err_tol=ncorr_cfg.cg_err_tol,
                 cg_max_iter=ncorr_cfg.cg_max_iter, sample_params=ncorr_cfg.do_param,
                 sample_sigma0=ncorr_cfg.sample_sigma0, sigma0_method=ncorr_cfg.sigma0_method,
-                gap_fill_method=ncorr_cfg.gap_fill_method, nomono=ncorr_cfg.nomono,
+                nomono=ncorr_cfg.nomono,
                 onlymono=ncorr_cfg.onlymono,
                 sigma0_dec=ncorr_cfg.sigma0_dec, psd_fit_nu_min=ncorr_cfg.psd_fit_nu_min,
                 psd_fit_nu_max=ncorr_cfg.psd_fit_nu_max, psd_bin=ncorr_cfg.psd_bin)
@@ -444,7 +444,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 experiment_data.noise_model, view.fsamp, cg_err_tol=ncorr_cfg.cg_err_tol,
                 cg_max_iter=ncorr_cfg.cg_max_iter, sample_params=ncorr_cfg.do_param,
                 sample_sigma0=ncorr_cfg.sample_sigma0, sigma0_method=ncorr_cfg.sigma0_method,
-                gap_fill_method=ncorr_cfg.gap_fill_method, nomono=ncorr_cfg.nomono,
+                nomono=ncorr_cfg.nomono,
                 onlymono=ncorr_cfg.onlymono,
                 sigma0_dec=ncorr_cfg.sigma0_dec, psd_fit_nu_min=ncorr_cfg.psd_fit_nu_min,
                 psd_fit_nu_max=ncorr_cfg.psd_fit_nu_max, psd_bin=ncorr_cfg.psd_bin)
@@ -834,7 +834,8 @@ def _solve_relative_gain_system(s_weights: NDArray, r_weights: NDArray, prev_rel
 
 
 def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_samples: TODSamples,
-                         det_compsep_map: NDArray, calibrate_against: str, downsample_factor: int):
+                         det_compsep_map: NDArray, calibrate_against: str, downsample_factor: int,
+                         gap_fill_method: str = "wn"):
     """ Draw a realization of the absolute gain term, g0, which is constant across all
         detectors and all scans within a band, calibrated against ``calibrate_against``.
     Args:
@@ -844,6 +845,8 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
         det_compsep_map (NDArray): The component-separation sky map for the detector.
         calibrate_against (str): Calibrator signal, one of "orbital_dipole" | "full_sky" | "sky".
         downsample_factor (int): Block-averaging factor for the calibration TODs.
+        gap_fill_method (str): Masked-sample fill for the calibration residual, one of "wn" |
+            "fallback" | "full_cg" (see TODView.get_calib_tod).
     Returns:
         tod_samples (TODSamples): Updated TOD samples with the new g0 estimate.
         wait_time (float): Time spent waiting at the MPI barrier.
@@ -857,7 +860,8 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
     for view in scan_view.iter_focused(accepted_only=True):
         calib = view.get_calib_tod("abs", calibrate_against,
-                                   downsample_factor=downsample_factor)
+                                   downsample_factor=downsample_factor,
+                                   gap_fill_method=gap_fill_method)
         s_cal = calib.s_cal
         residual_tod = calib.tod
 
@@ -901,7 +905,7 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
 
 def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
                          tod_samples: TODSamples, det_compsep_map: NDArray, calibrate_against: str,
-                         downsample_factor: int):
+                         downsample_factor: int, gap_fill_method: str = "wn"):
     """ Samples the detector-dependent relative gain (Delta g_i). This function implements the
         logic from Sec. 3.4 of BP7.
     Args:
@@ -911,6 +915,8 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
         det_compsep_map (NDArray): The component-separation sky map for the detector.
         calibrate_against (str): Calibrator signal, one of "orbital_dipole" | "full_sky" | "sky".
         downsample_factor (int): Block-averaging factor for the calibration TODs.
+        gap_fill_method (str): Masked-sample fill for the calibration residual, one of "wn" |
+            "fallback" | "full_cg" (see TODView.get_calib_tod).
     Returns:
         tod_samples (TODSamples): Updated TOD samples with relative gain estimates.
     """
@@ -929,7 +935,8 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
     for view in scan_view.iter_focused(accepted_only=True):
         calib = view.get_calib_tod("rel", calibrate_against,
-                                   downsample_factor=downsample_factor)
+                                   downsample_factor=downsample_factor,
+                                   gap_fill_method=gap_fill_method)
         s_cal = calib.s_cal
         residual_tod = calib.tod
         N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=1.0)
@@ -988,7 +995,7 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
 def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
                                     tod_samples: TODSamples, det_compsep_map: NDArray,
                                     chain: int, iter: int, params: Bunch, calibrate_against: str,
-                                    downsample_factor: int):
+                                    downsample_factor: int, gap_fill_method: str = "wn"):
     """ Samples the time-dependent relative gain variations (delta g_qi). This function implements
         the logic from Sec. 3.5 of the BP7 paper, using a Wiener filter to smooth the gain solution
         over time (PIDs). It solves a global system for all scans of a given detector, which are
@@ -1004,6 +1011,8 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
         params (Bunch): Parameters from the parameter file.
         calibrate_against (str): Calibrator signal, one of "orbital_dipole" | "full_sky" | "sky".
         downsample_factor (int): Block-averaging factor for the calibration TODs.
+        gap_fill_method (str): Masked-sample fill for the calibration residual, one of "wn" |
+            "fallback" | "full_cg" (see TODView.get_calib_tod).
     """
     band_rank = band_comm.Get_rank()
     band_size = band_comm.Get_size()
@@ -1025,7 +1034,8 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
     # prior then fills their temporal gain from neighbors.
     for view in scan_view.iter_focused(accepted_only=True):
         calib = view.get_calib_tod("temp", calibrate_against,
-                                   downsample_factor=downsample_factor)
+                                   downsample_factor=downsample_factor,
+                                   gap_fill_method=gap_fill_method)
         s_cal = calib.s_cal
         residual_tod = calib.tod
 
@@ -1215,16 +1225,11 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
     if sigma0_method not in SIGMA0_METHODS:
         raise ValueError(f"general.corr_noise.sigma0_method must be one of {SIGMA0_METHODS}, got "
                          f"{sigma0_method!r}.")
-    gap_fill_method = getattr(cn, "gap_fill_method", "proper_cg")
-    if gap_fill_method not in GAP_FILL_METHODS:
-        raise ValueError(f"general.corr_noise.gap_fill_method must be one of {GAP_FILL_METHODS}, "
-                         f"got {gap_fill_method!r}.")
     ncorr_cfg = Bunch(
         do_ncorr=do_ncorr,
         do_param=do_ncorr and sample_noise_params,
         sample_sigma0=getattr(cn, "sample_sigma0", True),
         sigma0_method=sigma0_method,
-        gap_fill_method=gap_fill_method,
         cg_err_tol=cn.CG_err_tol,
         cg_max_iter=cn.CG_max_iter,
         nomono=nomono,
@@ -1234,6 +1239,13 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
         psd_fit_nu_max=getattr(cn, "psd_fit_nu_max", float("inf")),
         psd_bin=getattr(cn, "psd_bin", False),
     )
+
+    # Gap-fill method for the non-CG sampling steps (gain calibration). The correlated-noise step's
+    # own gap handling is fixed by CG_max_iter (masked CG, or stationary fallback when 0).
+    gain_gap_fill = getattr(params.general, "gap_fill_method", "wn")
+    if gain_gap_fill not in GAIN_GAP_FILL_METHODS:
+        raise ValueError(f"general.gap_fill_method must be one of {GAIN_GAP_FILL_METHODS}, got "
+                         f"{gain_gap_fill!r}.")
 
     # NOTE: sigma0 is estimated inside the mapmaker scan loop (after gain), co-located with the
     # n_corr-coupled estimate -- see the do_ncorr if/elif in tod2map_CG/tod2map_bin. This matches
@@ -1247,7 +1259,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
         with benchmark("abs-gain"):
             tod_samples, wait_time = sample_absolute_gain(band_comm, experiment_data, tod_samples,
                                                           compsep_output, calib_target,
-                                                          downsample_factor)
+                                                          downsample_factor, gain_gap_fill)
         timing_dict["abs-gain"] = time.time() - t0
         waittime_dict["abs-gain"] = wait_time
         if mpi_info.band.is_master:
@@ -1262,7 +1274,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
         with benchmark("rel-gain"):
             tod_samples, wait_time = sample_relative_gain(band_comm, experiment_data, tod_samples,
                                                           compsep_output, calib_target,
-                                                          downsample_factor)
+                                                          downsample_factor, gain_gap_fill)
         timing_dict["rel-gain"] = time.time() - t0
         waittime_dict["rel-gain"] = wait_time
         if mpi_info.band.is_master:
@@ -1279,7 +1291,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
         with benchmark("temporal-gain"):
             tod_samples = sample_temporal_gain_variations(band_comm, experiment_data, tod_samples,
                                     compsep_output, chain, iter, params, calib_target,
-                                    downsample_factor)
+                                    downsample_factor, gain_gap_fill)
         timing_dict["temp-gain"] = time.time() - t0
         if mpi_info.band.is_master:
             logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished temporal "\

@@ -145,6 +145,80 @@ def test_get_calib_tod_rejects_bad_arguments():
 
 
 # --------------------------------------------------------------------------------------
+# Masked-sample gap fill in the gain residual (wn | fallback | full_cg)
+# --------------------------------------------------------------------------------------
+class _FillStubView(TODView):
+    """Stub exposing just enough state for ``_fill_masked_calibration_samples`` to run all three
+    gap-fill methods over a residual with a real masked region."""
+
+    def __init__(self, n, mask, noise_model, noise_params, fsamp=1.0, gain=2.0):
+        super().__init__(None, None)
+        self.experiment_data = SimpleNamespace(noise_model=noise_model)
+        self._n = n
+        self._mask = mask
+        self._np = np.asarray(noise_params, float)
+        self._fsamp = fsamp
+        self._gain = gain
+        self._data = np.random.default_rng(0).normal(0.0, noise_params[0], n)
+
+    @property
+    def fsamp(self): return self._fsamp
+    @property
+    def noise_params(self): return self._np
+    @property
+    def sigma0(self): return float(self._np[0])
+    def get_gain(self, gain_terms=None): return self._gain
+    def get_mask(self, which, downsample_factor=1): return self._mask
+    def get_static_sky_tod(self, compsep_output=None, downsample_factor=None): return np.zeros(self._n)
+    def get_orbital_dipole_tod(self, downsample_factor=None): return np.zeros(self._n)
+    def _materialize_downsampled(self, factor): return Bunch(tod=self._data)
+
+
+def test_gain_gap_fill_methods_replace_masked_samples():
+    """All three methods fill the masked residual with target gain x s_cal plus a noise draw."""
+    from commander4.noise_sampling.noise_psd import NoisePSDOof
+    n = 4096
+    mask = np.ones(n, dtype=bool)
+    mask[1000:1400] = False
+    params = np.array([1.0, 0.3, -1.8])
+    s_cal = np.ones(n)
+    resid = np.zeros(n)  # valid-sample placeholder; masked entries get overwritten
+    gap = ~mask
+    for method in ("wn", "fallback", "full_cg"):
+        view = _FillStubView(n, mask, NoisePSDOof(), params, fsamp=1.0, gain=2.0)
+        np.random.seed(0)
+        filled = view._fill_masked_calibration_samples(resid, mask, s_cal, ("abs",), 1, None,
+                                                       method=method)
+        assert np.array_equal(filled[mask], resid[mask])         # valid samples untouched
+        assert np.all(np.isfinite(filled))
+        assert not np.allclose(filled[gap], 0.0)                 # gaps were filled
+        # Masked fill is centered on the target gain x calibrator (= 2.0), the noise being zero-mean.
+        assert filled[gap].mean() == pytest.approx(2.0, abs=0.4)
+        if method != "wn":
+            assert (1, method) in view._gap_noise   # the shared realization was cached
+
+
+def test_gain_gap_fill_realization_is_shared_across_terms():
+    """The cached 1/f gap draw is reused for every gain term (one realization per scan)."""
+    from commander4.noise_sampling.noise_psd import NoisePSDOof
+    n = 2048
+    mask = np.ones(n, dtype=bool)
+    mask[800:1000] = False
+    params = np.array([1.0, 0.3, -1.8])
+    s_cal = np.ones(n)
+    resid = np.zeros(n)
+    view = _FillStubView(n, mask, NoisePSDOof(), params, fsamp=1.0, gain=1.0)
+    np.random.seed(0)
+    a = view._fill_masked_calibration_samples(resid, mask, s_cal, ("abs",), 1, None,
+                                              method="fallback")
+    b = view._fill_masked_calibration_samples(resid, mask, s_cal, ("rel",), 1, None,
+                                              method="fallback")
+    # Same gain and cached draw -> identical masked fill across the two terms.
+    np.testing.assert_array_equal(a[~mask], b[~mask])
+    assert len(view._gap_noise) == 1
+
+
+# --------------------------------------------------------------------------------------
 # _solve_relative_gain_system (reduced constrained solve + bad-detector exclusion)
 # --------------------------------------------------------------------------------------
 _ZERO_RNG = SimpleNamespace(standard_normal=lambda n: np.zeros(n))  # disables the fluctuation term

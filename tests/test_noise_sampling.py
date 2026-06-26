@@ -6,10 +6,10 @@ from scipy.fft import rfftfreq
 from commander4.noise_sampling.sigma0 import (calc_sigma0_simple, calc_sigma0_robust,
                                               calc_sigma0_binned_psd)
 from commander4.noise_sampling.noise_psd import NoisePSDOof
-from commander4.noise_sampling.noise_sampling import (fill_all_masked, draw_local_1f,
-                                                      fill_gaps_local_1f)
+from commander4.noise_sampling.noise_sampling import fill_all_masked
 from commander4.noise_sampling.sample_ncorr import (sample_correlated_noise,
-                                                    corr_noise_realization_with_gaps)
+                                                    corr_noise_realization_with_gaps,
+                                                    realize_noise_in_gaps)
 from commander4.data_models.detector_group_TOD import DetGroupTOD
 
 
@@ -136,93 +136,69 @@ class TestBinnedPSDSigma0:
 
 
 # ===================================================================
-# Local 1/f gap-fill (middle-ground inpainting)
+# Gain-step gap-fill realization (realize_noise_in_gaps)
 # ===================================================================
 
-class TestLocalGapFill:
-    def test_draw_local_1f_tracks_eval_corr(self):
-        """The averaged periodogram of draw_local_1f follows the model's correlated PSD.
+class TestRealizeNoiseInGaps:
+    @staticmethod
+    def _setup(ntod=4096, fsamp=1.0, sigma0=1.0, fknee=0.2, alpha=-1.8, seed=4):
+        rng = np.random.default_rng(seed)
+        noise = _synth_corr_noise(seed, ntod, fsamp, sigma0, fknee, alpha) \
+            + rng.normal(0.0, sigma0, ntod)
+        mask = np.ones(ntod, dtype=bool)
+        mask[1000:1100] = False  # contiguous gap
+        mask[2000] = False       # single-sample gap
+        return noise, mask, np.array([sigma0, fknee, alpha]), fsamp
 
-        Compared in a *low*-frequency band where the dominant 1/f modes live: a rectangular-window
-        periodogram of steep red noise suffers spectral leakage into the sub-dominant high-frequency
-        modes (inherent to 1/f noise, not a normalization error), so the meaningful, leakage-free
-        check is at low frequencies where the spectrum is largest.
+    def test_fallback_and_full_cg_fill_gaps_keep_valid(self):
+        """Both methods replace masked samples with a finite draw and leave valid samples intact."""
+        m = NoisePSDOof()
+        noise, mask, params, fsamp = self._setup()
+        for method in ("fallback", "full_cg"):
+            _seed_all_rng(0)
+            out = realize_noise_in_gaps(noise.copy(), mask, m, params, fsamp, fsamp, method)
+            assert np.all(np.isfinite(out))
+            assert np.array_equal(out[mask], noise[mask])      # valid samples untouched
+            assert not np.allclose(out[~mask], noise[~mask])   # gaps replaced
+            assert np.var(out[~mask]) > 0
+
+    def test_no_gaps_is_identity(self):
+        """With an all-valid mask there is nothing to fill: the input is returned unchanged."""
+        m = NoisePSDOof()
+        noise, _, params, fsamp = self._setup()
+        full = np.ones(noise.size, dtype=bool)
+        out = realize_noise_in_gaps(noise.copy(), full, m, params, fsamp, fsamp, "fallback")
+        assert np.array_equal(out, noise)
+
+    def test_white_level_scales_with_samprate(self):
+        """The gap noise level follows sigma0*sqrt(samprate/fsamp) (the apply_N_inv convention).
+
+        Treating the same residual as 10x downsampled rescales sigma0 by sqrt(1/10), so the
+        white-dominated gap fluctuation must shrink substantially relative to the native-rate draw.
         """
-        m = NoisePSDOof()
-        L, fsamp = 8192, 10.0
-        params = np.array([1.0, 0.5, -2.0])
-        np.random.seed(0)
-        nrep = 400
-        P_acc = np.zeros(L // 2 + 1)
-        for _ in range(nrep):
-            x = draw_local_1f(L, m, params, fsamp, pad=1)
-            P_acc += np.abs(np.fft.rfft(x)) ** 2 / L
-        P_avg = P_acc / nrep
-        freqs = np.fft.rfftfreq(L, d=1.0 / fsamp)
-        P_true = m.eval_corr(freqs, params)
-        lo = (freqs > 0.02) & (freqs < 0.2)  # dominant 1/f band, free of high-f leakage
-        assert np.mean(P_avg[lo] / P_true[lo]) == pytest.approx(1.0, rel=0.1)
-        slope = np.polyfit(np.log(freqs[lo]), np.log(P_avg[lo]), 1)[0]
-        assert slope == pytest.approx(params[2], abs=0.1)  # recovers the 1/f slope alpha
-
-    def test_fill_gaps_anchors_to_neighbour_means(self):
-        """Gap-edge values follow the mean-anchored linear bridge; valid samples are untouched."""
-        m = NoisePSDOof()
-        n, fsamp = 2000, 10.0
-        params = np.array([1.0, 0.5, -2.0])
-        a, b = 500, 559
-        L = b - a + 1
+        class _White(NoisePSDOof):
+            def eval_corr(self, freqs, noise_params):
+                return np.zeros(len(freqs), dtype=np.float64)  # pure white: no 1/f gap structure
+        m = _White()
+        n, sigma0 = 8192, 2.0
+        params = np.array([sigma0, 0.2, -1.8])
         mask = np.ones(n, dtype=bool)
-        mask[a:b + 1] = False
-        A, B = 2.0, 5.0
-        base = np.where(np.arange(n) < a, A, B).astype(float)  # constant A before gap, B after
-        for draw_1f in (True, False):
-            n_corr = base.copy()
-            np.random.seed(0)
-            fill_gaps_local_1f(n_corr, mask, m, params, fsamp, draw_1f=draw_1f)
-            assert np.all(np.isfinite(n_corr))
-            assert np.array_equal(n_corr[mask], base[mask])  # valid samples untouched
-            # Anchors are the 20-sample means (= A and B here); the de-trended fluctuation vanishes
-            # at the first/last gap sample, so the edges sit on the linear bridge exactly.
-            assert n_corr[a] == pytest.approx(A + (B - A) * 1 / (L + 1))
-            assert n_corr[b] == pytest.approx(A + (B - A) * L / (L + 1))
-        # The pure linear bridge is affine across the gap (zero second difference).
-        n_corr = base.copy()
-        fill_gaps_local_1f(n_corr, mask, m, params, fsamp, draw_1f=False)
-        assert np.allclose(np.diff(n_corr[a:b + 1], n=2), 0.0, atol=1e-9)
+        mask[1000:5000] = False
+        noise = np.random.default_rng(0).normal(0.0, sigma0, n)
+        _seed_all_rng(0)
+        full_rate = realize_noise_in_gaps(noise.copy(), mask, m, params, 10.0, 10.0, "fallback")
+        _seed_all_rng(0)
+        down = realize_noise_in_gaps(noise.copy(), mask, m, params, 1.0, 10.0, "fallback")
+        # Downsampling 10x suppresses the white gap fluctuation by ~1/10 in variance.
+        assert np.var(down[~mask]) < 0.5 * np.var(full_rate[~mask])
 
-    def test_single_sample_gap_is_neighbour_mean(self):
-        """A single-sample gap gets the midpoint of the two anchor means (pure linear bridge)."""
+    def test_invalid_method_raises(self):
         m = NoisePSDOof()
-        n, fsamp = 2000, 10.0
-        params = np.array([1.0, 0.5, -2.0])
-        g = 1000
-        mask = np.ones(n, dtype=bool)
-        mask[g] = False
-        A, B = 1.0, 4.0
-        base = np.where(np.arange(n) < g, A, B).astype(float)
-        n_corr = base.copy()
-        np.random.seed(0)
-        fill_gaps_local_1f(n_corr, mask, m, params, fsamp, draw_1f=True)
-        assert n_corr[g] == pytest.approx((A + B) / 2)
-
-    def test_local_1f_adds_variance_over_linear(self):
-        """local_1f injects 1/f structure into the gap; the pure linear bridge does not."""
-        m = NoisePSDOof()
-        n, fsamp = 2000, 10.0
-        params = np.array([1.0, 0.3, -1.8])
-        mask = np.ones(n, dtype=bool)
-        mask[500:600] = False
-        orig = np.linspace(-1.0, 1.0, n)
-        a, b = orig.copy(), orig.copy()
-        np.random.seed(0)
-        fill_gaps_local_1f(a, mask, m, params, fsamp, draw_1f=True)
-        np.random.seed(0)
-        fill_gaps_local_1f(b, mask, m, params, fsamp, draw_1f=False)
-        gap = ~mask
-        assert np.var(a[gap]) > np.var(b[gap])
-        # The linear-bridge gap is exactly affine (constant second difference ~ 0).
-        assert np.allclose(np.diff(b[gap], n=2), 0.0, atol=1e-6)
+        noise, mask, params, fsamp = self._setup()
+        # 'wn' is handled by the caller (TODView) and is not valid for this realizer.
+        for bad in ("wn", "bogus"):
+            with pytest.raises(ValueError):
+                realize_noise_in_gaps(noise.copy(), mask, m, params, fsamp, fsamp, bad)
 
 
 # ===================================================================
@@ -402,9 +378,6 @@ class TestSampleCorrelatedNoise:
         with pytest.raises(ValueError):
             sample_correlated_noise(tod.copy(), mask, params.copy(), m, fsamp, cg_err_tol=1e-6,
                                     cg_max_iter=10, sample_params=False, sigma0_method="bogus")
-        with pytest.raises(ValueError):
-            sample_correlated_noise(tod.copy(), mask, params.copy(), m, fsamp, cg_err_tol=1e-6,
-                                    cg_max_iter=10, sample_params=False, gap_fill_method="bogus")
 
     def test_sigma0_binned_psd_routing(self):
         """sigma0_method='binned_psd' recovers the white floor from the pre-draw residual."""
@@ -418,35 +391,8 @@ class TestSampleCorrelatedNoise:
                                       sigma0_method="binned_psd")
         assert res.noise_params[0] == pytest.approx(1.0, rel=0.2)
 
-    def test_gap_fill_local_methods_run_without_cg(self):
-        """local_1f / linear produce a finite n_corr via the stationary draw + local gap fill."""
-        m = NoisePSDOof()
-        tod, mask, params, fsamp = self._setup()
-        for method in ("local_1f", "linear"):
-            _seed_all_rng(0)
-            res = sample_correlated_noise(tod.copy(), mask, params.copy(), m, fsamp,
-                                          cg_err_tol=1e-6, cg_max_iter=50, sample_params=False,
-                                          gap_fill_method=method)
-            assert res.n_corr.shape == tod.shape
-            assert np.all(np.isfinite(res.n_corr))
-            assert res.niter == 0          # no masked CG ran for the middle-ground methods
-
-    def test_gap_fill_local_1f_has_more_gap_variance_than_linear(self):
-        m = NoisePSDOof()
-        tod, mask, params, fsamp = self._setup()
-        _seed_all_rng(0)
-        local = sample_correlated_noise(tod.copy(), mask, params.copy(), m, fsamp, cg_err_tol=1e-6,
-                                        cg_max_iter=0, sample_params=False, sample_sigma0=False,
-                                        gap_fill_method="local_1f")
-        _seed_all_rng(0)
-        linear = sample_correlated_noise(tod.copy(), mask, params.copy(), m, fsamp, cg_err_tol=1e-6,
-                                         cg_max_iter=0, sample_params=False, sample_sigma0=False,
-                                         gap_fill_method="linear")
-        gap = ~mask
-        assert np.var(local.n_corr[gap]) > np.var(linear.n_corr[gap])
-
-    def test_proper_cg_default_unchanged(self):
-        """The default (proper_cg) path must reproduce the explicit-CG behavior bit-for-bit."""
+    def test_default_path_unchanged(self):
+        """The default args must reproduce the explicit masked-CG behavior bit-for-bit."""
         m = NoisePSDOof()
         tod, mask, params, fsamp = self._setup()
         _seed_all_rng(7)
@@ -455,7 +401,7 @@ class TestSampleCorrelatedNoise:
         _seed_all_rng(7)
         explicit = sample_correlated_noise(tod.copy(), mask, params.copy(), m, fsamp,
                                            cg_err_tol=1e-6, cg_max_iter=50, sample_params=False,
-                                           sigma0_method="pairwise", gap_fill_method="proper_cg")
+                                           sigma0_method="pairwise")
         assert np.array_equal(default.n_corr, explicit.n_corr)
         assert np.array_equal(default.noise_params, explicit.noise_params)
 

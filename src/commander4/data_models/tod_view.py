@@ -8,6 +8,7 @@ from pixell.bunch import Bunch
 from commander4.data_models.detector_group_TOD import DetGroupTOD
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.TOD_samples import TODSamples
+from commander4.noise_sampling.sample_ncorr import realize_noise_in_gaps
 from commander4.utils.map_utils import get_static_sky_TOD, get_s_orb_TOD
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ class TODView:
         self._static_sky = None
         self._orbital_dipole = None
         self._downsampled: dict[int, Bunch] = {}
+        self._gap_noise: dict[tuple[int, str], NDArray] = {}
 
     def focus(self, iscan: int, det: DetectorTOD) -> "TODView":
         """Focus the view on one present detector and discard any previous materialization.
@@ -433,6 +435,30 @@ class TODView:
         mask_arr = self.get_mask(mask, downsample_factor=factor)
         return tod if mask_arr is None else tod[mask_arr]
 
+    def _gap_noise_draw(self, factor: int, method: str,
+                        compsep_output: NDArray | None = None) -> NDArray[np.floating]:
+        """Constrained noise realization at the masked samples of the downsampled calibration TOD.
+
+        The noise residual ``d - g*(s_sky + s_orb)`` (full gain) is identical for every gain term, so
+        the 1/f + white gap draw is computed once and shared across the abs/rel/temporal solves
+        (cached per downsampling factor and method). ``method`` is ``'fallback'`` or ``'full_cg'``.
+        """
+        cached = self._gap_noise.get((factor, method))
+        if cached is not None:
+            return cached
+        mask = self.get_mask("full", downsample_factor=factor)
+        s_sky = self.get_static_sky_tod(compsep_output=compsep_output, downsample_factor=factor)
+        s_orb = self.get_orbital_dipole_tod(downsample_factor=factor)
+        data = self._materialize_downsampled(factor).tod
+        # Noise residual: data minus the full sky model at the full gain (true noise at valid
+        # samples; Galactic-plane garbage at masked ones, which the realization replaces).
+        noise_resid = data - self.get_gain(self._ALL_GAIN_TERMS) * (s_sky + s_orb)
+        samprate = self.fsamp / factor  # block-averaging downsamples fsamp by `factor`
+        draw = realize_noise_in_gaps(noise_resid, mask, self.experiment_data.noise_model,
+                                     self.noise_params, samprate, self.fsamp, method)
+        self._gap_noise[(factor, method)] = draw
+        return draw
+
     def _fill_masked_calibration_samples(
         self,
         tod: NDArray[np.floating],
@@ -441,15 +467,28 @@ class TODView:
         gain_terms: tuple[str, ...],
         downsample_factor: int,
         rng: np.random.Generator | None,
+        method: str = "wn",
+        compsep_output: NDArray | None = None,
     ) -> NDArray[np.floating]:
-        """Fill masked calibration samples with signal plus white noise in detector units."""
-        sigma0_effective = self.sigma0 * np.sqrt(1.0 / downsample_factor)
+        """Fill masked calibration samples with the target signal plus a noise realization.
+
+        The masked regions retain only the target gain term times the calibrator signal, plus a
+        noise draw: white (``method='wn'``, sigma0/sqrt(factor)) or a constrained correlated 1/f +
+        white draw (``'fallback'``/``'full_cg'``) shared across gain terms via ``_gap_noise_draw``,
+        so the masked residual carries the same 1/f structure as the surrounding valid data.
+        """
         filled = np.array(tod, copy=True)
-        if (~mask).any():
+        gap = ~mask
+        if not gap.any():
+            return filled
+        target = self.get_gain(gain_terms) * signal[gap]
+        if method == "wn":
+            sigma0_effective = self.sigma0 * np.sqrt(1.0 / downsample_factor)
             normal = np.random.normal if rng is None else rng.normal
-            noise = normal(0.0, sigma0_effective, signal[~mask].shape)
-            # The masked regions retain only the target gain term times the calibrator signal.
-            filled[~mask] = self.get_gain(gain_terms) * signal[~mask] + noise
+            filled[gap] = target + normal(0.0, sigma0_effective, target.shape)
+        else:
+            draw = self._gap_noise_draw(downsample_factor, method, compsep_output=compsep_output)
+            filled[gap] = target + draw[gap]
         return filled
 
     def get_calib_tod(
@@ -460,6 +499,7 @@ class TODView:
         compsep_output: NDArray | None = None,
         downsample_factor: int | None = None,
         fill_masked: bool = True,
+        gap_fill_method: str = "wn",
         rng: np.random.Generator | None = None,
     ) -> Bunch:
         """Return the residual, calibrator signal, and mask used to sample one gain term.
@@ -478,8 +518,11 @@ class TODView:
             compsep_output: Optional sky-model override for the static-sky term.
             downsample_factor: Block-averaging factor applied to both the data and the model
                 TODs; defaults to one second (``int(fsamp)``).
-            fill_masked: If True, fill masked samples with ``g_target * s_cal`` plus white noise.
-            rng: Optional NumPy generator for the masked-sample noise.
+            fill_masked: If True, fill masked samples with ``g_target * s_cal`` plus a noise draw.
+            gap_fill_method: How masked samples are filled when ``fill_masked``: ``'wn'`` (white
+                noise), ``'fallback'`` (stationary 1/f Wiener draw), or ``'full_cg'`` (masked
+                constrained-CG 1/f draw). See ``_fill_masked_calibration_samples``.
+            rng: Optional NumPy generator for the masked-sample white noise (``'wn'`` only).
 
         Returns:
             Bunch with ``tod`` (residual), ``s_cal``, ``pix``, ``psi``, and ``mask``.
@@ -513,7 +556,8 @@ class TODView:
                            compsep_output=compsep_output)
         if fill_masked:
             tod = self._fill_masked_calibration_samples(tod, mask, s_cal, (target_term,), factor,
-                                                        rng)
+                                                        rng, method=gap_fill_method,
+                                                        compsep_output=compsep_output)
         return Bunch(tod=tod, s_cal=s_cal, pix=data.pix, psi=data.psi, mask=mask)
 
 
