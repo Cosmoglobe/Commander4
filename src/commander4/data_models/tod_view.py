@@ -264,20 +264,25 @@ class TODView:
                 indices=np.arange(self.detector.ntod, dtype=np.int64),
             )
         else:
-            # Average the jump-corrected TOD over contiguous blocks. Pointing and masks are kept at
-            # the block centers; model TODs are not evaluated at this pointing but block-averaged at
-            # full rate (see get_static_sky_tod), so they share the data's downsampling transfer.
+            # Average the jump-corrected TOD over contiguous blocks. Pointing is kept at the block
+            # centers; model TODs are not evaluated at this pointing but block-averaged at full rate
+            # (see get_static_sky_tod), so they share the data's downsampling transfer.
             indices_edges = np.arange(0, self.detector.ntod, factor)
             indices = (indices_edges[1:] + indices_edges[:-1]) // 2
             ntod_down = indices.size
             tod = self.corrected_tod[:ntod_down*factor].reshape((ntod_down, factor))
+            # A downsampled sample is valid only if *every* high-res sample in its block is valid:
+            # block-averaging smears a single masked sample (e.g. a point source) across the whole
+            # averaged value, so masks are AND-reduced over each block rather than sampled at its center.
+            def block_and(mask):
+                return mask[:ntod_down*factor].reshape((ntod_down, factor)).all(axis=-1)
             data = Bunch(
                 tod=np.mean(tod, axis=-1),
                 pix=self.pix[indices],
                 psi=self.psi[indices],
-                processing_mask=self.processing_mask[indices],
-                good_data_mask=self.good_data_mask[indices],
-                full_mask=self.full_mask[indices],
+                processing_mask=block_and(self.processing_mask),
+                good_data_mask=block_and(self.good_data_mask),
+                full_mask=block_and(self.full_mask),
                 indices=indices,
             )
 
