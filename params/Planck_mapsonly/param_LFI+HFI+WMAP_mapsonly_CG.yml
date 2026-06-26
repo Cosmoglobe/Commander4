@@ -16,7 +16,6 @@ general:
 
   galactic_mask: True
   pixel_compsep_sampling: False
-  smooth_to_common_res: False
 
   CG_max_iter: 60
   CG_max_iter_pol: 60

@@ -41,7 +41,9 @@ general:
     psd_fit_nu_min: 0.0           # Min frequency (Hz) for noise-PSD parameter fitting.
     psd_fit_nu_max: 2.0           # Max frequency (Hz) for noise-PSD parameter fitting.
     psd_bin: False                # Fit every Fourier mode (False) or mode-weighted binned PSD.
+    sigma0_method: pairwise     # White-noise estimator: 'pairwise' (first-difference) or 'binned_psd'.
   gain_calib_downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+  gap_fill_method: wn         # Gap fill for non-CG (gain) steps: 'wn' | 'fallback' | 'full_cg'.
   abs_gain:                           # Absolute (band-global) gain g0.
     sample: true
     sample_from_iter_num: 2
@@ -85,12 +87,18 @@ general:
 
 
 
-sampling_groups_compsep:
+# Linear amplitude (CG) sampling groups: each is a conditional constrained realization of its
+# components' amplitudes, conditioning on the components it does not list.
+CG_sampling_groups_compsep:
   sample_amps_CG:
     enabled: true
     sample_class: "amplitude_sampler_CG"
     comps: [CMB, Synchrotron, ThermalDust, FreeFree]
     bands: [Planck30GHz, Haslam408MHz, WMAPKa, WMAPQ1, WMAPQ2, WMAPV1, WMAPV2, Planck857GHz, Planck353GHz]
+
+# Non-linear (MCMC) sampling groups: Metropolis-Hastings over spectral indices, each re-solving the
+# CG groups named in `update_CG_groups` between proposal and accept/reject. None enabled here.
+MCMC_sampling_groups_compsep: {}
 
 
 components:

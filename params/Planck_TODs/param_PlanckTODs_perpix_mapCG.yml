@@ -28,7 +28,9 @@ general:
     psd_fit_nu_min: 0.0           # Min frequency (Hz) for noise-PSD parameter fitting.
     psd_fit_nu_max: 2.0           # Max frequency (Hz) for noise-PSD parameter fitting.
     psd_bin: False                # Fit every Fourier mode (False) or mode-weighted binned PSD.
+    sigma0_method: pairwise     # White-noise estimator: 'pairwise' (first-difference) or 'binned_psd'.
   gain_calib_downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+  gap_fill_method: wn         # Gap fill for non-CG (gain) steps: 'wn' | 'fallback' | 'full_cg'.
   abs_gain:                           # Absolute (band-global) gain g0.
     sample: false
     sample_from_iter_num: 2
@@ -50,7 +52,7 @@ general:
 
   galactic_mask: True
   pixel_compsep_sampling: True
-  smooth_to_common_res: True
+  common_res_fwhm: 60.0  # arcmin; must be >= every band's beam (here Haslam at 60').
 
   chains_to_write: [1,]
   write_orb_dipole_maps_to_chain: True

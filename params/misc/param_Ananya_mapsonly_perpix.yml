@@ -27,7 +27,6 @@ general:
 
   galactic_mask: True
   pixel_compsep_sampling: True
-  smooth_to_common_res: False
 
   output_paths:
     chains: "../cmdr4_chains/Ananya_mapsonly_perpix_test_sis2/"

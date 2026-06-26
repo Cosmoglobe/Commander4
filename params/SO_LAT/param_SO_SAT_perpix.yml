@@ -1,22 +1,21 @@
-# This parameter file contains a reduced set of Planck LFI detectors: 6 (2 per band) out of 22 total.
-# It does per-pixel component separation.
-
 general:
   MPI_config:
-    ntask_tod: 64
-    ntask_compsep_I: 8
-    ntask_compsep_QU: 8
+    ntask_tod: 1
+    ntask_compsep_I: 16
+    ntask_compsep_QU: 14
   nthreads_tod: 1
   nthreads_compsep: 8
 
   niter_gibbs: 20
 
+  perform_compsep: true
+
   nside: 512
 
   corr_noise:
-    sample_corr_noise: False
+    sample_corr_noise: True
     sample_corr_noise_from_iter_num: 2
-    sample_noise_params: False     # Resample noise-model params (needs sample_corr_noise).
+    sample_noise_params: True     # Resample noise-model params (needs sample_corr_noise).
     sample_sigma0: True            # Re-estimate sigma0 from the n_corr-subtracted residual.
     CG_err_tol: 1.0e-4             # Correlated-noise CG convergence tolerance.
     CG_max_iter: 60                # Max CG iterations; 0 -> skip CG, use stationary fallback.
@@ -30,17 +29,19 @@ general:
   gain_calib_downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
   gap_fill_method: wn         # Gap fill for non-CG (gain) steps: 'wn' | 'fallback' | 'full_cg'.
   abs_gain:                           # Absolute (band-global) gain g0.
-    sample: true
+    sample: false
     sample_from_iter_num: 2
     calibrate_against: orbital_dipole # "orbital_dipole" | "full_sky" | "sky"; per-band overridable.
   rel_gain:                           # Per-detector relative gain.
-    sample: true
+    sample: false
     sample_from_iter_num: 2
     calibrate_against: full_sky       # "orbital_dipole" | "full_sky" | "sky"; per-band overridable.
   temporal_gain:                      # Per-scan temporal gain variations.
-    sample: true
+    sample: false
     sample_from_iter_num: 2
     calibrate_against: full_sky       # "orbital_dipole" | "full_sky" | "sky"; per-band overridable.
+
+  perform_compsep: true
 
   CG_float_precision: "single"
 
@@ -48,40 +49,28 @@ general:
 
   galactic_mask: True
   pixel_compsep_sampling: True
-  common_res_fwhm: 60.0  # arcmin; must be >= every band's beam (here Haslam at 60').
+  smooth_to_common_res: False
 
   chains_to_write: [1,]
   write_orb_dipole_maps_to_chain: True
   write_corr_noise_maps_to_chain: True
   write_sky_model_maps_to_chain: True
   write_ncorr_tods_to_chain: False   # DEBUG ONLY: full per-sample n_corr TODs (very large data).
-  chain_maps_nside: 128
-  chain_maps_interval: 5
+  chain_maps_nside: "native"
+  chain_maps_interval: 1
 
-  init_chain_path: false
+  init_from_chain: false
 
   output_paths:
-    chains: "../cmdr4_chains/PlanckTODs_perpix_test/"
-    stats: "../cmdr4_stats/PlanckTODs_perpix_test/"
+    chains: "../cmdr4_chains/SO/test_n4096_perpix_masking/"
+    stats: "../cmdr4_stats/SO/test_n4096_perpix_masking/"
 
   logging:
     console:
       level: 'debug'
     file:
       level: 'info'
-      filename: '../cmdr4_logs/output_PlanckTODs_perpix_test'
-
-# Linear amplitude (CG) sampling groups (the per-pixel solver is the amplitude sampler here).
-CG_sampling_groups_compsep:
-  sample_amps_perpix:
-    enabled: true
-    sample_class: "amplitude_sampler_perpix"
-    # comps: [CMB, Synchrotron, ThermalDust, FreeFree]
-    comps: [CMB, Synchrotron, ThermalDust]
-    bands: [Planck30GHz, Haslam408MHz, WMAPKa, WMAPQ1, WMAPQ2, WMAPV1, WMAPV2, Planck857GHz, Planck353GHz]
-
-# Non-linear (MCMC) spectral-index sampling groups. None enabled here.
-MCMC_sampling_groups_compsep: {}
+      filename: '../cmdr4_logs/SO/test_n4096_perpix_masking.log'
 
 
 components:
@@ -92,7 +81,6 @@ components:
       polarization: "IQU" 
       longname: "CMB"
       shortname: "cmb"
-      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_cmb_amp_BP8.1_v1.fits"
       smoothing_prior_FWHM: 30.0 # arcmin
       smoothing_prior_amplitude: 1.0e+7 #1.0  # uK_RJ^2
       lmax: 1024
@@ -106,7 +94,6 @@ components:
       polarization: "IQU"
       longname: "Thermal-Dust"
       shortname: "dust"
-      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1.fits"
       smoothing_prior_FWHM: 5.0 # 10.0 # arcmin
       smoothing_prior_amplitude: 2.0e-3  # uK_RJ^2
       beta: 1.56
@@ -124,7 +111,6 @@ components:
       polarization: "IQU" 
       longname: "Synchrotron"
       shortname: "sync"
-      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1.fits"
       smoothing_prior_FWHM: 60.0 # arcmin
       smoothing_prior_amplitude: 2.0e-2  # uK_RJ^2
       beta: -3.1
@@ -135,7 +121,7 @@ components:
       spatially_varying_MM: False
 
   FreeFree:
-    enabled: false
+    enabled: true
     component_class: "FreeFree"
     params:
       polarization: "I" 
@@ -182,25 +168,16 @@ components:
 
 CompSep_bands:
   ### TOD BANDS ###
-  Planck30GHz:
-    get_from: PlanckLFI
+  SO_SAT_90GHz:
+    get_from: SO_SAT
     enabled: true
     polarization: "IQU"
-  Planck44GHz:
-    get_from: PlanckLFI
-    enabled: false
-    polarization: "IQU"
-  Planck70GHz:
-    get_from: PlanckLFI
-    enabled: false
-    polarization: "IQU"
 
-  ### TOTAL INTENSITY MAPS ###
+  ###### HASLAM MAPS ######
   Haslam408MHz:
     enabled: true
     get_from: "file"
-    eval_nside: 512
-    data_nside: 512
+    eval_nside: 2048
     signal_map:
       path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
       dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
@@ -213,11 +190,11 @@ CompSep_bands:
     polarization: "IQU"
     units: "uK_CMB"
 
+  ###### WMAP MAPS ######
   WMAPKa:
     enabled: true
     get_from: "file"
-    eval_nside: 512
-    data_nside: 512
+    eval_nside: 2048
     signal_map:
       path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_map_v4.fits"
       dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
@@ -233,8 +210,7 @@ CompSep_bands:
   WMAPQ1:
     enabled: true
     get_from: "file"
-    eval_nside: 512
-    data_nside: 512
+    eval_nside: 2048
     signal_map:
       path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_map_v4.fits"
       dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
@@ -250,8 +226,7 @@ CompSep_bands:
   WMAPQ2:
     enabled: true
     get_from: "file"
-    eval_nside: 512
-    data_nside: 512
+    eval_nside: 2048
     signal_map:
       path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_map_v4.fits"
       dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
@@ -267,8 +242,7 @@ CompSep_bands:
   WMAPV1:
     enabled: true
     get_from: "file"
-    eval_nside: 512
-    data_nside: 512
+    eval_nside: 2048
     signal_map:
       path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_map_v4.fits"
       dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
@@ -284,8 +258,7 @@ CompSep_bands:
   WMAPV2:
     enabled: true
     get_from: "file"
-    eval_nside: 512
-    data_nside: 512
+    eval_nside: 2048
     signal_map:
       path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_map_v4.fits"
       dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
@@ -298,119 +271,179 @@ CompSep_bands:
     polarization: "IQU"
     units: "mK_CMB"
 
-  Planck857GHz:
+
+  ###### LFI MAPS ######
+  PlancK30GHz:
     enabled: true
     get_from: "file"
-    eval_nside: 512
-    data_nside: 1024
+    eval_nside: 2048
     signal_map:
-      path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_map_n1024_10arcmin_QUADCOR_ZODICOR_uK.fits"
+      path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_030_IQU_n0512_HM2.fits"
+      dataset_names: ["I_MEAN", "Q_MEAN", "U_MEAN"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_030_IQU_n0512_HM2.fits"
+      dataset_names: ["I_RMS", "Q_RMS", "U_RMS"]
+    fwhm: 32.3 # [arcmin]
+    freq: 30.0 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+  PlancK44GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 2048
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_044_IQU_n0512_HM2.fits"
+      dataset_names: ["I_MEAN", "Q_MEAN", "U_MEAN"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_044_IQU_n0512_HM2.fits"
+      dataset_names: ["I_RMS", "Q_RMS", "U_RMS"]
+    fwhm: 27.0 # [arcmin]
+    freq: 44.0 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+  PlancK70GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 2048
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_070_IQU_n1024_HM2.fits"
+      dataset_names: ["I_MEAN", "Q_MEAN", "U_MEAN"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_070_IQU_n1024_HM2.fits"
+      dataset_names: ["I_RMS", "Q_RMS", "U_RMS"]
+    fwhm: 13.2 # [arcmin]
+    freq: 70.0 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+
+  ###### HFI MAPS ######
+  PlancK100GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 2048
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_100_npipe_02048_fullres_full_TQU.fits"
       dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
     rms_map:
       type: "rms"
-      path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_857_rms_n1024_10arcmin_uK_hrscaled_true.fits"
+      path: "/mn/stornext/d23/cmbco/globe/planck/rms/rms_planck_100_npipe_02048_fullres_full_TQU.fits"
       dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
-    fwhm: 10 # [arcmin]
+    fwhm: 9.7 # [arcmin]
+    freq: 100.0 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+  PlancK143GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 2048
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_143_npipe_02048_fullres_full_TQU.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/planck/rms/rms_planck_143_npipe_02048_fullres_full_TQU.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    fwhm: 7.3 # [arcmin]
+    freq: 143.0 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+  PlancK217GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 2048
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_217_npipe_02048_fullres_full_TQU.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/planck/rms/rms_planck_217_npipe_02048_fullres_full_TQU.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    fwhm: 5.0 # [arcmin]
+    freq: 217.0 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+  PlancK353GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 2048
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_353_npipe_02048_fullres_full_TQU.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/planck/rms/rms_planck_353_npipe_02048_fullres_full_TQU.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    fwhm: 4.9 # [arcmin]
+    freq: 353.0 # [GHz]
+    polarization: "IQU"
+    units: "uK_CMB"
+
+  ### INTENSITY ONLY MAPS ###
+  PlancK545GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 2048
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_545_npipe_02048_fullres_full_T.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/planck/rms/rms_planck_545_npipe_02048_fullres_full_T.fits"
+      dataset_names: ["TEMPERATURE", "", ""]
+    fwhm: 4.8 # [arcmin]
+    freq: 545.0 # [GHz]
+    polarization: "I"
+    units: "uK_CMB"
+
+  PlancK857GHz:
+    enabled: true
+    get_from: "file"
+    eval_nside: 2048
+    signal_map:
+      path: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_857_npipe_02048_fullres_full_T.fits"
+      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+    rms_map:
+      type: "rms"
+      path: "/mn/stornext/d23/cmbco/globe/planck/rms/rms_planck_857_npipe_02048_fullres_full_T.fits"
+      dataset_names: ["TEMPERATURE", "", ""]
+    fwhm: 4.6 # [arcmin]
     freq: 857.0 # [GHz]
     polarization: "I"
     units: "uK_CMB"
 
-  ### POLARIZATION MAPS ###
-  Planck353GHz:
-    enabled: true
-    get_from: "file"
-    eval_nside: 512
-    data_nside: 1024
-    signal_map:
-      path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_map_n1024_uK_udgrade.fits"
-      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
-    rms_map:
-      type: "rms"
-      path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/npipe6v20_353_rms_n1024_hrscaled_uK_udgrade.fits"
-      dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
-    fwhm: 4.86 # [arcmin]
-    freq: 353.0 # [GHz]
-    polarization: "QU"
-    units: "uK_CMB"
-
-
+  
 experiments:
-  PlanckLFI:
+  SO_SAT:
     enabled: true
+    experiment_id: "SO_SAT"
     is_sim: false
-    pix_is_compressed: true
-    psi_is_compressed: true
+    tod_is_compressed: false
     data_type: "TOD"
     mapmaker: "bin"
-    experiment_id: "planck"  # Decides expected data format, what TOD reader is used, etc.
-    bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
-    num_scans: 45860
+    num_scans: 1
+    bad_data_bitmask: 0b11111111  # Entries in the 32-bit bitmask corresponding to bad data.
     bands:
-      Planck30GHz:
+      SO_SAT_90GHz:
         enabled: true
-        num_MPI_tasks: 64
-        eval_nside: 512
-        data_nside: 512
+        num_MPI_tasks: 1
+        eval_nside: 2048
+        data_nside: 8192
         fwhm: 32.4 # [arcmin]
-        freq: 28.4 # [GHz]
-        fsamp: 32.5079365079365 # [Hz]
+        freq: 90.0 # [GHz]
         polarization: "IQU"
         noise_psd: "NoisePSDOof"
         initial_noise_params: [1.0, 0.1, -0.9]
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelist_SO_SAT_test1.txt"
         detectors:
-          27M:
-            name: "27M"
-            gain_est: 78.0e-9
-            bandpass_shift: 0.28  # Ghz
-          28M:
-            name: "28M"
-            gain_est: 63.0e-9
-            bandpass_shift: 0.08
-      Planck44GHz:
-        enabled: false
-        num_MPI_tasks: 40
-        eval_nside: 512
-        data_nside: 512
-        fwhm: 27.1 # [arcmin]
-        freq: 44.1 # [GHz]
-        fsamp: 46.5454545454545
-        polarization: "IQU"
-        noise_psd: "NoisePSDOof"
-        initial_noise_params: [1.0, 0.1, -0.9]
-        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
-        detectors:
-          24M:
-            name: "24M"
-            gain_est: 3.52e-9
-            bandpass_shift: -0.55  # Ghz
-          25M:
-            name: "25M"
-            gain_est: 8.00e-9
-            bandpass_shift: 0.28
-      Planck70GHz:
-        enabled: false
-        num_MPI_tasks: 64
-        eval_nside: 512
-        data_nside: 1024
-        fwhm: 13.3 # [arcmin]
-        freq: 70.1 # [GHz]
-        fsamp: 78.7692307692308
-        polarization: "IQU"
-        noise_psd: "NoisePSDOof"
-        initial_noise_params: [1.0, 0.1, -0.9]
-        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_70.txt"
-        detectors:
-        detectors:
-          18M:
-            name: "18M"
-            gain_est: 68.0e-9
-            bandpass_shift: -0.87
-          23M:
-            name: "23M"
-            gain_est: 28.0e-9
-            bandpass_shift: 0.13
+          !inc detectors_SAT/detectors.yml

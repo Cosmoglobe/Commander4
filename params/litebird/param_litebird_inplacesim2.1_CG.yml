@@ -35,7 +35,6 @@ general:
 
   galactic_mask: False
   pixel_compsep_sampling: False
-  smooth_to_common_res: True
 
   chains_to_write: [1,]
   write_orb_dipole_maps_to_chain: True
