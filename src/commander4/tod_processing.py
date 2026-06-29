@@ -165,6 +165,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
             mapmaker_invvar.accumulate_to_map(inv_var, pix)
         mapmaker_invvar.gather_map()
         if ismaster:
+            logger.warning(f"InvN: mean={np.mean(mapmaker_invvar.final_map):.5f}, std={np.std(mapmaker_invvar.final_map):.5f}")
             precond = InvNPreconditionerI(utils.without_nan(1./mapmaker_invvar.final_map))
         else:
             precond = called_on_non_master
@@ -191,8 +192,6 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     for view in scan_view.iter_focused(accepted_only=True):
         pix, psi = view.pix, view.psi
         good_data_mask = view.good_data_mask
-        pix_masked = pix[good_data_mask]
-        psi_masked = psi[good_data_mask]
         sigma0 = view.sigma0
         gain = view.get_gain()
         inv_var = (gain/sigma0)**2
@@ -201,11 +200,14 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
         ### ORBITAL DIPOLE ###
         sky_orb_dipole = view.get_orbital_dipole_tod()
         d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
+        pix_masked = pix[good_data_mask]
         if pols == "IQU":
-            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi,
+            psi_masked = psi[good_data_mask]
+            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix_masked, psi_masked,
                                                  response=response)
-        else:
-            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
+        elif pols == "I":
+            psi_masked = None
+            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi_masked)
 
         ### CORRELATED NOISE SAMPLING ###
         if ncorr_cfg.do_ncorr:
@@ -265,17 +267,20 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
 
 
     ### GATHER AND NORMALIZE MAPS ###
-
     if pols == "IQU":
         map_rms = mapmaker_invvar.final_rms_map
         map_cov = mapmaker_invvar.final_cov_map
     else:
         map_cov = mapmaker_invvar.final_map
-        map_rms = 1./np.sqrt(map_cov)
+        if ismaster:
+            map_rms = 1./np.sqrt(map_cov)
+        else: 
+            map_rms = None
 
     mapmaker_orbdipole.gather_map()
     mapmaker_orbdipole.normalize_map(map_cov)
     map_orbdipole = mapmaker_orbdipole.final_map
+
     cg_mapmaker.finalize_RHS()
     cg_mapmaker.solve()
     map_signal = cg_mapmaker.solved_map
@@ -327,10 +332,10 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
 
     ### FINAL CLEANUP ON MASTER RANK ###
     detmap_dict_out = {}
-    if band_comm.Get_rank() == 0:
+    if ismaster:
         #Here we split here between I and QU
         if "I" in pols:
-            detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
+            detmap_I = DetectorMap(map_signal[0,:], map_rms.reshape(1, -1), experiment_data.nu,
                                 experiment_data.fwhm, experiment_data.nside)
             detmap_I.g0 = tod_samples.abs_gain
             detmap_dict_out.update({"I": detmap_I})
@@ -652,6 +657,10 @@ def estimate_white_noise(experiment_data: DetGroupTOD, tod_samples: TODSamples,
         )
         mask = view.full_mask
         sigma0 = calc_sigma0_robust(sky_subtracted_tod, mask)
+
+        if sigma0 == np.inf:
+            logger.warning(f"Estimating sigma0 for scan {view.iscan}, full mask mean = {np.mean(mask):.5f}, sky mean = {np.mean(sky_subtracted_tod):.5f}, sky std = {np.std(sky_subtracted_tod):.5f}")
+
         logassert(sigma0 != 0, "sigma0 is 0, which should never happen.", logger)
         logassert(sigma0 != np.inf, "sigma0 is inf, which should never happen.", logger)
         tod_samples.noise_params[view.iscan, view.idet, 0] = sigma0

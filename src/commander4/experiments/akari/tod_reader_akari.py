@@ -115,9 +115,9 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                 if not np.isfinite(detector.tod).all():
                     print(f"Detector {det_name} has non-finite values in TOD.")
                     continue
-                if detector.good_data_mask.mean() < 0.5:
-                    print(f"Detector {det_name} has low good data mask mean.")
-                    # continue
+                if detector.full_mask.mean() < 0.1:
+                    print(f"Detector {det_name} has low full mask mean: {detector.full_mask.mean():.5f}")
+                    continue
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal

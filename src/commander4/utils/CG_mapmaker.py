@@ -247,7 +247,7 @@ class CGMapmaker:
         for view in scan_view.iter_focused(accepted_only=True):
             good_data_mask = view.good_data_mask
             pix = view.pix[good_data_mask]
-            psi = view.psi[good_data_mask]
+            psi = view.psi[good_data_mask] if view.psi is not None else None
             sigma0 = view.sigma0
             scan_tod_arr_aux = np.zeros(pix.shape[0], dtype=self.f_dtype)  # good samples only, as RHS
             #P m
@@ -389,7 +389,7 @@ class CGMapmakerI(CGMapmaker):
             self.maplib.map_accumulator_f32.argtypes = [self.ct_f32_dim2, 
                                                         self.ct_f32_dim1, 
                                                         ct.c_double, 
-                                                        self.ct_f64_dim1, 
+                                                        self.ct_i64_dim1, 
                                                         ct.c_int64]
             self.maplib.map2tod_f32.argtypes = [self.ct_f32_dim2, 
                                                 self.ct_f32_dim1,

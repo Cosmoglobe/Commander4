@@ -84,6 +84,7 @@ general:
   galactic_mask: True
   pixel_compsep_sampling: False
 
+  chains_to_write: [1,]
   write_orb_dipole_maps_to_chain: False
   write_corr_noise_maps_to_chain: True
   write_sky_model_maps_to_chain: True
@@ -516,7 +517,7 @@ experiments:
     pix_is_compressed: true
     data_type: "TOD"
     mapmaker: "CG"
-    bad_data_bitmask: 0b1111111111111111111111111111101
+    bad_data_bitmask: 2097149 #0b1111111111111111111111111111101
     #bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
     start_scan_id: 584 # Check whether the HDF files actually conform to this
