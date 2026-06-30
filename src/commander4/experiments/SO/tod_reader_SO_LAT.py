@@ -71,9 +71,9 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
     for i_pid in range(scan_idx_start, scan_idx_stop+1):
         pid = pids[i_pid]
         filepath = filepaths[i_pid]
-        start_bench("fileread")
         if pid in bad_PIDs:
             continue
+        start_bench("fileread")
         good_scan = True
         with h5py.File(filepath, "r") as f:
             data_nside = int(f["common/nside"][()].item())
@@ -138,6 +138,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
                 idet_accepted += 1
 
             included_detector_scans += idet_accepted
+        stop_bench("fileread")
         if len(detector_list) == 0:
             good_scan = False
         if good_scan:
