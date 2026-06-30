@@ -863,14 +863,18 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
                         downsample_factor=downsample_factor)
 
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
+    i = 0
     for view in scan_view.iter_focused(accepted_only=True):
         calib = view.get_calib_tod("abs", calibrate_against, gap_fill_method=gap_fill_method,
                                    proc_mask_type="gain")
         s_cal = calib.s_cal
         residual_tod = calib.tod
 
-        N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=1.0)
-        N_inv_d = experiment_data.apply_N_inv(residual_tod, view.noise_params, samprate=1.0)
+        # Calibration TODs are block-averaged, so their true rate is fsamp/downsample_factor;
+        # apply_N_inv needs it to place the 1/f noise weight at the correct frequencies.
+        gain_samprate = view.fsamp / view.downsample_factor
+        N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=gain_samprate)
+        N_inv_d = experiment_data.apply_N_inv(residual_tod, view.noise_params, samprate=gain_samprate)
 
         # Add to the numerator and denominator.
         sum_s_T_N_inv_d += np.dot(s_cal, N_inv_d)
@@ -942,7 +946,10 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
                                    proc_mask_type="gain")
         s_cal = calib.s_cal
         residual_tod = calib.tod
-        N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=1.0)
+        # Calibration TODs are block-averaged, so their true rate is fsamp/downsample_factor;
+        # apply_N_inv needs it to place the 1/f noise weight at the correct frequencies.
+        gain_samprate = view.fsamp / view.downsample_factor
+        N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=gain_samprate)
 
         s_T_N_inv_s_scan = np.dot(s_cal, N_inv_s)
         r_T_N_inv_s_scan = np.dot(residual_tod, N_inv_s)
@@ -1042,8 +1049,11 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
         s_cal = calib.s_cal
         residual_tod = calib.tod
 
-        N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=1.0)
-        N_inv_r = experiment_data.apply_N_inv(residual_tod, view.noise_params, samprate=1.0)
+        # Calibration TODs are block-averaged, so their true rate is fsamp/downsample_factor;
+        # apply_N_inv needs it to place the 1/f noise weight at the correct frequencies.
+        gain_samprate = view.fsamp / view.downsample_factor
+        N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=gain_samprate)
+        N_inv_r = experiment_data.apply_N_inv(residual_tod, view.noise_params, samprate=gain_samprate)
 
         # Calculate elements for the linear system
         A_qq = np.dot(s_cal, N_inv_s)
