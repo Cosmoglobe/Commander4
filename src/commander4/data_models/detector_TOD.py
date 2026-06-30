@@ -262,10 +262,13 @@ class DetectorTOD:
         # psi can be passed as an argument to avoid re-calculating it if already available.
         if psi is None:
             psi = self.get_psi()
+        # "None" means standard detector with [1, 1] response for intensity and polarization.
+        resp_I, resp_QU = (1.0, 1.0) if self.det_response is None \
+            else (self.det_response[0], self.det_response[1])
         response = np.zeros((3, psi.shape[-1]))
-        if self.det_response[0] != 0:
-            response[0,:] = self.det_response[0]
-        if self.det_response[1] != 0:
-            response[1,:] = np.cos(2.0*psi)*self.det_response[1]
-            response[2,:] = np.sin(2.0*psi)*self.det_response[1]
+        if resp_I != 0:
+            response[0,:] = resp_I
+        if resp_QU != 0:
+            response[1,:] = np.cos(2.0*psi)*resp_QU
+            response[2,:] = np.sin(2.0*psi)*resp_QU
         return response
