@@ -311,6 +311,7 @@ class TODSamples:
         band_comm = self.band_comm
         params = self.params
 
+        logger.debug(f"Writing TOD samples for band {self.band_name} to chain file for iteration {itr}.")
         ####################################################################
         # Gather nscan info.
         ####################################################################
@@ -322,6 +323,7 @@ class TODSamples:
                          recvbuf = scans_per_rank,
                          root=0)
 
+        logger.debug("Gathering TOD samples ...")
         ####################################################################
         # Gather the various TOD samples.
         ####################################################################
@@ -382,6 +384,7 @@ class TODSamples:
         ####################################################################
         # Write results to file.
         ####################################################################
+        logger.debug("Writing to file ...")
         if band_comm.Get_rank() == 0:
             exp_name = self.experiment_name
             band_name = self.band_name

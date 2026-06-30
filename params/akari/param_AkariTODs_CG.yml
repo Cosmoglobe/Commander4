@@ -1,6 +1,4 @@
-# Parameter file for performing a full TOD processing + CG compsep on the Planck LFI TOD data with
-# auxiliary maps (Haslam + WMAP + HFI). Analysis performed at native resolutions.
-# By default not all detectors are included, but they are just commented out.
+# Parameter file for performing a full TOD processing +of AKARI
 
 general:
   MPI_config:

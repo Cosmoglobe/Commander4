@@ -285,45 +285,6 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     cg_mapmaker.solve()
     map_signal = cg_mapmaker.solved_map
     
-    ########### temporary debug plots
-    # if ismaster:
-    #     if pols == "IQU":
-    #         plt.figure(figsize=(8.5*3, 5.4))
-    #         npol = 3
-    #         for i in range(npol):
-    #             limup   = np.nanpercentile(cg_mapmaker.RHS_map[i,:], 99)
-    #             limdown = np.nanpercentile(cg_mapmaker.RHS_map[i,:], 1)
-    #             hp.mollview(cg_mapmaker.RHS_map[i,:], cmap='RdBu_r', title='RHS',
-    #                         sub=(1,npol,i+1), min=limdown, max=limup)
-    #         plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/RHS.png")
-    #         plt.close()
-
-    #         plt.figure(figsize=(8.5*3, 5.4))
-    #         for i in range(npol):
-    #             limup   = np.nanpercentile(precond(cg_mapmaker.RHS_map)[i,:], 99)
-    #             limdown = np.nanpercentile(precond(cg_mapmaker.RHS_map)[i,:], 1)
-    #             hp.mollview(precond(cg_mapmaker.RHS_map)[i,:], cmap='RdBu_r', title='M RHS',
-    #                         sub=(1,npol,i+1), min=limdown, max=limup)
-    #         plt.savefig("/mn/stornext/u3/leoab/cmdr4_plots/M_RHS.png")
-    #         plt.close()
-    #     else:
-    #         plt.figure()
-    #         limup   = np.nanpercentile(cg_mapmaker.RHS_map[0,:], 99)
-    #         limdown = np.nanpercentile(cg_mapmaker.RHS_map[0,:], 1)
-    #         hp.mollview(cg_mapmaker.RHS_map[0,:], cmap='RdBu_r', title='RHS',
-    #                         min=limdown, max=limup)
-    #         plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/RHS.png")
-    #         plt.close()
-
-    #         plt.figure()
-    #         limup   = np.nanpercentile(precond(cg_mapmaker.RHS_map)[0,:], 99)
-    #         limdown = np.nanpercentile(precond(cg_mapmaker.RHS_map)[0,:], 1)
-    #         hp.mollview(precond(cg_mapmaker.RHS_map)[0,:], cmap='RdBu_r', title='M RHS',
-    #                         min=limdown, max=limup)
-    #         plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/M_RHS.png")
-    #         plt.close()
-
-    #####################
 
     if ncorr_cfg.do_ncorr:
         mapmaker_ncorr.gather_map()
@@ -1320,7 +1281,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
         timing_dict[key] = band_comm.reduce(timing_dict[key], op=MPI.SUM, root=0)
     for key in waittime_dict:
         waittime_dict[key] = band_comm.reduce(waittime_dict[key], op=MPI.SUM, root=0)
-    
+
     if mpi_info.band.is_master:
         for key in timing_dict:
             timing_dict[key] /= band_comm.Get_size()

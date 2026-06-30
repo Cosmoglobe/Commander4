@@ -273,18 +273,12 @@ class CGMapmaker:
         """
         RHS_map = self.RHS_map
         ismaster = self.map_comm.Get_rank() == 0
-
-        def mydot(a, b):
-            return np.dot(a.flatten(), b.flatten())
-        
-        my_dot = mydot # lambda arr1, arr2: MPI_dot(arr1, arr2, self.map_comm, double_prec=self.double_perc)
         CG_solver = distributed_CG_arr(self.apply_LHS, 
                                        RHS_map, 
                                        ismaster,
                                        M = self.M, 
                                        dot = dot,
                                        destroy_b=True)
-        
         if ismaster:
             self.logger.info(f"Mapmaker CG starting up!")
         res_s = []
@@ -294,16 +288,6 @@ class CGMapmaker:
                 if ismaster:
                     self.logger.info(f"Mapmaker CG iter {i:3d} - Residual {CG_solver.err:.6e}")
                     res_s.append(CG_solver.err)
-                    # plt.figure(figsize=(8.5*3, 5.4))
-                    # npol = 3
-                    # self.logger.info(f"## Plotting ... iter {i}")
-                    # for p in range(npol):
-                    #     limup   = np.nanpercentile(CG_solver.x[p,:], 99)
-                    #     limdown = np.nanpercentile(CG_solver.x[p,:], 1)
-                    #     hp.mollview(CG_solver.x[p,:], cmap='RdBu_r', title='CG sol',
-                    #                 sub=(1,npol,p+1), min=limdown, max=limup)
-                    # plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/x_sol_IQU_iter{i}.png")
-                    # plt.close()
                     if x_true is not None:
                         CG_errors_true = norm(CG_solver.x - x_true)/norm(x_true)
                         A_residual = self.apply_LHS(CG_solver.x - x_true)
@@ -317,30 +301,11 @@ class CGMapmaker:
                         self.logger.info(f"CG iter {i:3d} - True A-norm error: {CG_Anorm_error:.3e}")
                         # We can print the individual component L2 errors.
                         self.logger.info(f"CG iter {i:3d} - True L2 error: {CG_errors_true:.3e}")
-
-                    # for s in ["I", "Q", "U"]:
-                        # plt.figure()
-                        # hp.mollview(CG_solver.x[0,:], min=-1e4, max=1e4, cmap = 'RdBu_r')
-                        # plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/x_sol_iter{i}_pol{s}.png")
-                        # plt.close()
-                    
-                    # else:
-                    #     plt.figure()
-                    #     limup   = np.nanpercentile(CG_solver.x[0,:], 99)
-                    #     limdown = np.nanpercentile(CG_solver.x[0,:], 1)
-                    #     hp.mollview(CG_solver.x[0,:], cmap='RdBu_r', title='CG sol',
-                    #                     min=limdown, max=limup)
-                    #     plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/x_sol_iter{i}_Akari.png")
-                    #     plt.close()
             
-            if CG_solver.err < self.CG_tol:
+            converged = self.map_comm.bcast(CG_solver.err < self.CG_tol if ismaster else None, root=0)
+            if converged:
                 break
-        # if ismaster:
-        #     plt.figure()
-        #     plt.plot(np.arange(self.CG_maxiter), res_s)
-        #     plt.yscale('log')
-        #     plt.savefig(f"/mn/stornext/u3/leoab/cmdr4_plots/CG_residuals.png")
-        #     plt.close
+
         self._map_signal = CG_solver.x
 
     

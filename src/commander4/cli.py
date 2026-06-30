@@ -118,6 +118,7 @@ def run_commander4(params: Bunch, params_dict: dict):
             curr_compsep_output = receive_compsep(mpi_info, experiment_data, my_band_tod_id,
                                                   mpi_info.world.compsep_band_masters)
         else:
+            logger.debug("No CompSep ranks allocated, building initial sky model locally.")
             curr_compsep_output = get_local_initial_sky(mpi_info, experiment_data, params)
 
         curr_tod_output, tod_samples = process_tod(mpi_info, experiment_data,
