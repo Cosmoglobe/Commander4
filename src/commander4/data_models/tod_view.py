@@ -213,7 +213,10 @@ class TODView:
             if factor == 1:
                 self._ds_indices = np.arange(ntod, dtype=np.int64)
             else:
-                edges = np.arange(0, ntod, factor)
+                # Keep every *complete* block of `factor` samples (ntod // factor of them)
+                # Trailing partial block is dropped.
+                nblock = ntod // factor
+                edges = np.arange(nblock + 1, dtype=np.int64) * factor
                 self._ds_indices = (edges[1:] + edges[:-1]) // 2
         return self._ds_indices
 
