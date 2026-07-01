@@ -2,6 +2,10 @@ import numpy as np
 from mpi4py import MPI
 from numpy.typing import NDArray
 
+from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
+                                            stop_bench, log_memory, increment_count, bench_reset
+
+
 # MPI elementary datatypes for the float buffers exchanged by the collectives below.
 _NUMPY_TO_MPI_DTYPE = {np.dtype(np.float64): MPI.DOUBLE, np.dtype(np.float32): MPI.FLOAT}
 
@@ -86,9 +90,12 @@ class PixelDomain:
     def to_local(self, pix: NDArray) -> NDArray:
         """Map global HEALPix indices to compact local-buffer indices (identity in full mode)."""
         if self.mode == "full":
-            return pix
-        # local_pix is sorted and contains every pixel this rank can pass, so searchsorted is exact.
-        return np.searchsorted(self.local_pix, pix)
+            out = pix
+        else:
+            with benchmark("pix-search"):
+                # local_pix is sorted and contains every pixel this rank can pass, so searchsorted is exact.
+                out = np.searchsorted(self.local_pix, pix)
+        return out
 
     def reduce_to_full(self, local_data: NDArray, root: int = 0) -> NDArray | None:
         """Sum the per-rank local buffers into a full-sky map on ``root`` (else return ``None``).

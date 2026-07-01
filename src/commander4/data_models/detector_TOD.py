@@ -237,9 +237,7 @@ class DetectorTOD:
     @property
     def good_data_mask(self) -> NDArray[np.bool_]:
         """Boolean mask keeping samples that pass the bad-data flag cut."""
-        start_bench("numpy-unpack")
         mask = np.unpackbits(self._good_data_mask).view(bool)
-        stop_bench("numpy-unpack")
         if mask.size > self.tod.size + 7 or mask.size < self.tod.size:
             raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.tod.size}.")
         return mask[:self.tod.size]
