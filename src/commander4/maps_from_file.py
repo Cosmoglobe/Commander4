@@ -127,6 +127,7 @@ def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
     for pol in pols:
         map_sky = retrieve_map_from_fits_file(my_band, pol, "signal")
         if rms_map_type == "debug_uniform":
+            logger.warning(f"Band {my_band._name} is using uniform rms maps meant for debugging.")
             map_rms = np.zeros_like(map_sky) + np.nanmean(np.abs(map_sky))
         elif rms_map_type == "rms":
             map_rms = retrieve_map_from_fits_file(my_band, pol, "rms")
