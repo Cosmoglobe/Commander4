@@ -1044,7 +1044,12 @@ def _read_view_alms_from_fits(comp: "DiffuseComponent", fits_path: str) -> NDArr
     view_map = np.ascontiguousarray(sky_map[rows], dtype=np.float64)
     view_map = comp.init_map_to_amplitude(view_map)
     nside = hp.npix2nside(view_map.shape[-1])
-    return map_to_alm(view_map, nside, comp.lmax, spin=comp.spin)
+
+    # Only perform map2alm up to ell = 3*map_nside - 1.
+    # If the component lmax exceeds this, truncate remaining alms to zero.
+    effective_lmax = min(comp.lmax, 3*nside-1)
+    alm_temp = map_to_alm(view_map, nside, effective_lmax, spin=comp.spin)
+    return project_alms(alm_temp, comp.lmax)
 
 
 def _load_component_alms(comp: "DiffuseComponent", source_path: str) -> None:
