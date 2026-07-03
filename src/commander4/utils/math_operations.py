@@ -532,6 +532,10 @@ def alm_to_map_adjoint(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
 
 def map_to_alm(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
                        nthreads: int=1, out=None, acc: bool=False) -> NDArray:
+    """ Spherical harmonic analysis (inverse synthesis; Y^-1), using only the scalar normalization
+        factor 4pi/npix, not any further processing.
+        See `pseudo_alm_to_map_inverse` for an equivalent to healpys iterative map2alm.
+    """
     use_theta_interpol = nside >= 2048
     mp, out, ndim_in = _prep_input(mp, out, nside, spin)
     if acc:
