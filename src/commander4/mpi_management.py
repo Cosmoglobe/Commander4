@@ -6,6 +6,7 @@ from mpi4py import MPI
 from pixell.bunch import Bunch
 
 from commander4.output import log
+from commander4.output.log import logassert_np
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,9 @@ def init_mpi(params):
         if isinstance(global_params.nthreads_compsep, int):  # If int, all ranks have same nthreads.
             my_num_threads = global_params.nthreads_compsep
         else:
+            logassert_np(len(global_params.nthreads_compsep) == tot_num_CompSep_ranks,
+                         f"Length of `nthreads_compsep` ({global_params.nthreads_compsep}) doesn't"\
+                         f"match number of compsep-ranks ({tot_num_CompSep_ranks}).", logger)
             my_num_threads = global_params.nthreads_compsep[worldrank - global_params.MPI_config.ntask_tod]
         # Testing revealed 24 to be a good number (regardless of nside), but I tested this on the
         # new 384-core nodes, the optimal number is probably slightly lower on the older owls.

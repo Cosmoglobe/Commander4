@@ -43,12 +43,11 @@ def _should_send_compsep_result(compsep_my_band_id: str,
             return False
     return True
 
+
 ###########################################################
 # ON TOD SIDE
 ###########################################################
 
-# TODO: Communication in this script should be switched from picked (lowercase) to buffered
-# (uppercase) whereever possible (e.g. where arrays are communicated).
 def _realize_and_distribute_sky(sky_model, experiment_data: DetGroupTOD,
                                 band_comm) -> NDArray[np.floating]:
     """Realize the band sky model on the master and hand each rank only the pixels it needs.
