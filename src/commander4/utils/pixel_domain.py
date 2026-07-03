@@ -2,6 +2,7 @@ import numpy as np
 from mpi4py import MPI
 from numpy.typing import NDArray
 
+from commander4.utils.general_algorithms import gallop_search_many
 from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
                                             stop_bench, log_memory, increment_count, bench_reset
 
@@ -94,7 +95,10 @@ class PixelDomain:
         else:
             with benchmark("pix-search"):
                 # local_pix is sorted and contains every pixel this rank can pass, so searchsorted is exact.
-                out = np.searchsorted(self.local_pix, pix)
+                out = np.zeros_like(pix)
+                gallop_search_many(self.local_pix, pix, out)
+                # The above should give the same result as doing:
+                # out = np.searchsorted(self.local_pix, pix)
         return out
 
     def reduce_to_full(self, local_data: NDArray, root: int = 0) -> NDArray | None:
