@@ -190,8 +190,9 @@ class DetectorTOD:
     def tod(self) -> NDArray[np.floating]:
         if self._tod_is_compressed:
             tod = np.zeros(self.ntod_original, dtype=self._huffman_symbols2.dtype)
-            tod[:] = cpp_utils.huffman_decode(self._tod,
-                                    self._huffman_tree2, self._huffman_symbols2, tod)
+            with benchmark("huffman"):
+                tod[:] = cpp_utils.huffman_decode(self._tod,
+                                        self._huffman_tree2, self._huffman_symbols2, tod)
             tod[:] = np.cumsum(tod)
             tod = tod.astype(np.float32)
         else:
@@ -226,8 +227,9 @@ class DetectorTOD:
     def flag(self) -> NDArray[np.integer]:
         if self._flag_is_compressed:
             flag = np.zeros(self.ntod_original, dtype=self._huffman_symbols.dtype)
-            flag = cpp_utils.huffman_decode(self._flag_encoded,
-                                           self._huffman_tree, self._huffman_symbols, flag)
+            with benchmark("huffman"):
+                flag = cpp_utils.huffman_decode(self._flag_encoded,
+                                            self._huffman_tree, self._huffman_symbols, flag)
             flag = np.cumsum(flag)
         else:
             flag = self._flag_encoded
