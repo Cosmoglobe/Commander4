@@ -378,10 +378,6 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
             polarization component ('I', 'QU').
 
     """
-    ### INVERSE VARIANCE MAPMAKER ###
-    # We separate the inverse-variance mapmaking from the other 3 mapmakers.
-    # This is purely to reduce the maximum concurrent memory requirement, and is slightly slower
-    # as we have to de-compress pix and psi twice.
     start_bench("binned-mapmaker")
     pols = experiment_data.pols
     scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
@@ -389,22 +385,11 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
     # rather than a full sky map. The band master still ends up with full-sky maps.
     sparse_maps = _read_sparse_maps_flag(params, experiment_data)
     domain = experiment_data.get_pixel_domain(scan_view, band_comm, sparse_maps)
-    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
-    for view in scan_view.iter_focused(accepted_only=True):
-        good_data_mask = view.get_mask(proc_mask=False)
-        pix = view.pix[good_data_mask]
-        psi = view.psi[good_data_mask]
-        sigma0 = view.sigma0
-        gain = view.get_gain()
-        # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
-        inv_var = (gain/sigma0)**2
-        mapmaker_invvar.accumulate_to_map(inv_var, pix, psi, response=view.det_response)
-    mapmaker_invvar.gather_map()
-    mapmaker_invvar.normalize_map()
 
+    # Set up various mapmakers.
+    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
     mapmaker = MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
     mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
-
     if ncorr_cfg.do_ncorr:
         mapmaker_ncorr = MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
         sampled_params = []
@@ -424,16 +409,10 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
         psi_masked = psi[good_data_mask]
         response = view.det_response
         gain = view.get_gain()
-        sigma0 = view.sigma0
-        # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
-        inv_var = (gain/sigma0)**2
-
-        ### ORBITAL DIPOLE ###
-        sky_orb_dipole = view.get_orbital_dipole_tod()
-        d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
-
         stop_bench("binned-mapmaker", increment_count=False)
-        ### CORRELATED NOISE SAMPLING ###
+
+        ### CORRELATED NOISE / SIGMA0 SAMPLING (first, so the weights below use the new sigma0) ###
+        n_corr_est = None
         if ncorr_cfg.do_ncorr:
             start_bench("ncorr-sampling")
             sky_subtracted_TOD = view.get_tod(
@@ -451,8 +430,6 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 sigma0_dec=ncorr_cfg.sigma0_dec, psd_fit_nu_min=ncorr_cfg.psd_fit_nu_min,
                 psd_fit_nu_max=ncorr_cfg.psd_fit_nu_max, psd_bin=ncorr_cfg.psd_bin)
             n_corr_est = res.n_corr
-            mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32, copy=False),
-                                             inv_var, pix, psi, response=response)
             tod_samples.noise_params[view.iscan, view.idet, :] = res.noise_params
             if ncorr_cfg.do_param:
                 sampled_params.append(np.array(res.noise_params, copy=True))
@@ -463,8 +440,6 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
             worst_residual_ncorr = max(worst_residual_ncorr, res.residual)
             residuals.append(res.residual)
             niters.append(res.niter)
-
-            d_sky -= n_corr_est
             stop_bench("ncorr-sampling")
         elif ncorr_cfg.sample_sigma0:
             # No correlated noise this iteration: estimate sigma0 here, at the same point in the
@@ -472,11 +447,26 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
             tod_samples.noise_params[view.iscan, view.idet, 0] = _estimate_standalone_sigma0(
                 view, ncorr_cfg.sigma0_method)
 
-        _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view,
-                                n_corr_est if ncorr_cfg.do_ncorr else None)
+        _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view, n_corr_est)
+
+        start_bench("binned-mapmaker")
+        # Retrieve the new sigma0 for this det-scan, sampled above.
+        sigma0 = view.sigma0
+        # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
+        inv_var = (gain/sigma0)**2
+        mapmaker_invvar.accumulate_to_map(inv_var, pix_masked, psi_masked, response=response)
+
+        ### ORBITAL DIPOLE ###
+        sky_orb_dipole = view.get_orbital_dipole_tod()
+        d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
+
+        # If we're doing ncorr, accumulate to map and subtract from sky TOD.
+        if ncorr_cfg.do_ncorr:
+            mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32, copy=False),
+                                             inv_var, pix, psi, response=response)
+            d_sky -= n_corr_est
 
         d_sky_masked = d_sky[good_data_mask]
-        start_bench("binned-mapmaker")
         mapmaker.accumulate_to_map(d_sky_masked/gain, inv_var, pix_masked, psi_masked, response=response)
         mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi, response=response)
         stop_bench("binned-mapmaker", increment_count=False)
@@ -493,6 +483,10 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
 
     start_bench("binned-mapmaker")
     ### GATHER AND NORMALIZE MAPS ###
+    # Finalize the inverse-variance map (now accumulated with this iteration's sigma0) before reading
+    # its rms/cov, which normalize the signal, orbital-dipole, and corr-noise maps below.
+    mapmaker_invvar.gather_map()
+    mapmaker_invvar.normalize_map()
     mapmaker.gather_map()
     mapmaker_orbdipole.gather_map()
     map_rms = mapmaker_invvar.final_rms_map
@@ -863,7 +857,6 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
                         downsample_factor=downsample_factor)
 
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
-    i = 0
     for view in scan_view.iter_focused(accepted_only=True):
         calib = view.get_calib_tod("abs", calibrate_against, gap_fill_method=gap_fill_method,
                                    proc_mask_type="gain")
