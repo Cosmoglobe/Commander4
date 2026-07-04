@@ -352,7 +352,8 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
             maps_to_file["map_skymodel"] = compsep_output
 
         write_map_chain_to_file(params, chain, iter, experiment_data.experiment_name,
-                                experiment_data.band_name, maps_to_file)
+                                experiment_data.band_name, maps_to_file,
+                                tod_samples.band_unit_factor, tod_samples.band_unit)
 
     return detmap_dict_out #empty on non-master ranks
 
@@ -537,7 +538,8 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
 
         start_bench("filewrite-datamaps")
         write_map_chain_to_file(params, chain, iter, experiment_data.experiment_name,
-                                experiment_data.band_name, maps_to_file)
+                                experiment_data.band_name, maps_to_file,
+                                tod_samples.band_unit_factor, tod_samples.band_unit)
         stop_bench("filewrite-datamaps")
 
     return detmap_dict_out #empty on non-master ranks

@@ -9,7 +9,14 @@ from commander4.sky_models.component import Component, CompList
 
 
 def write_map_chain_to_file(params: Bunch, chain: int, iter: int, exp_name:str,
-                            band_name: str, maps_to_file: dict) -> None:
+                            band_name: str, maps_to_file: dict, band_unit_factor: float = 1.0,
+                            band_unit: str = "uK_RJ") -> None:
+    """Write a band's per-iteration output maps to the datamaps chain file.
+
+    Maps in `maps_to_file` are uK_RJ brightnesses; they are written in the band's `band_unit` by
+    multiplying by `band_unit_factor` D (=1 for uK_RJ). The multiply is out-of-place so the caller's
+    arrays -- shared with the uK_RJ DetectorMap sent to compsep -- stay untouched.
+    """
     if chain not in params.general.chains_to_write or (iter-1)%params.general.chain_maps_interval != 0:
         return
     nside_out = params.general.chain_maps_nside
@@ -20,12 +27,17 @@ def write_map_chain_to_file(params: Bunch, chain: int, iter: int, exp_name:str,
     with h5py.File(chain_file, "w") as file:
         file["metadata/datetime"] = datetime.datetime.now().isoformat()
         file["metadata/parameter_file_as_string"] = params.parameter_file_as_string
+        # Thermodynamic unit the written maps are expressed in (all maps are brightnesses in band_unit).
+        file["metadata/band_unit"] = band_unit
         for key, value, in maps_to_file.items():
             if nside_out != "native" and hp.npix2nside(value.shape[-1]) != nside_out:
                 if "rms" in key:
                     value = 1.0/hp.ud_grade(1.0/value**2, nside_out, dtype=np.float32)**2
                 else:
                     value = hp.ud_grade(value, nside_out, dtype=np.float32)
+            # uK_RJ -> band_unit (out-of-place copy; D is a Python float, so dtype is preserved).
+            if band_unit_factor != 1.0:
+                value = value * band_unit_factor
             print("key", key, np.min(value), np.max(value), flush=True)
             file[key] = value
 

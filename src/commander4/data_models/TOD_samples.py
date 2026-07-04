@@ -12,6 +12,7 @@ import logging
 import typing
 
 from commander4.data_models.jump_corrections import JumpCatalog
+from commander4.utils.unit_conversions import rj_to_band_unit_factor
 if typing.TYPE_CHECKING:
     from commander4.data_models.detector_group_TOD import DetGroupTOD
 
@@ -116,6 +117,19 @@ class TODSamples:
         self.npar = self.noise_model.npar
         self.scan_idx_start = experiment_data.scan_idx_start
         self.scan_idx_stop = experiment_data.scan_idx_stop
+        # C4 works internally in uK_RJ; a band may quote its gain and maps in another unit via
+        # `band_unit`. `band_unit_factor` D (= value of 1 uK_RJ in band_unit) converts at the file
+        # boundary: brightness maps multiply by D, the gain (brightness in its denominator) divides by
+        # D on write and multiplies on read. Defaults to uK_RJ (D=1, a no-op). See [[unit_conversions]].
+        if "band_unit" in my_band:
+            band_unit = my_band.band_unit
+        else:
+            band_unit = "uK_RJ"
+            if self.band_comm.Get_rank() == 0:
+                logger.warning(f"Band {self.band_name} has no `band_unit`; assuming uK_RJ. Set it "
+                               f"explicitly (e.g. uK_CMB for CMB-calibrated gains) to silence this.")
+        self.band_unit = band_unit
+        self.band_unit_factor = rj_to_band_unit_factor(experiment_data.nu, band_unit)
         # Explicit int64 so a rank that holds no scans still yields an int64 array.
         self.scan_ids = np.array([scan.scan_id for scan in experiment_data.scans], dtype=np.int64)
         # Ordered per-band detector names. Their position is the ``idet`` axis shared by every
@@ -208,6 +222,10 @@ class TODSamples:
                 else:
                     raise ValueError("Did not find initial gain value in input files.")
 
+                # Initial gains are quoted in band_unit; convert to internal [det units]/uK_RJ
+                # (gain multiplies by D on read) before decomposing into abs/rel/temporal.
+                all_det_gains *= self.band_unit_factor
+
                 self.abs_gain = float(np.nanmean(all_det_gains))
                 # Relative gain only for detectors with data in >=1 local scan; detectors absent
                 # from every local scan get 0 (never used downstream) and are kept out of the
@@ -263,6 +281,15 @@ class TODSamples:
                 self.noise_params = f["noise_params"][local_indices, ...] if "noise_params" in f else None
                 self.accept = f["accept"][local_indices, ...].astype(bool)
                 self.jumps = JumpCatalog.from_hdf5(f, local_indices, self.ndet)
+
+            # Chain gains are stored in band_unit; convert back to internal [det units]/uK_RJ.
+            if self.band_unit_factor != 1.0:
+                if self.abs_gain is not None:
+                    self.abs_gain *= self.band_unit_factor
+                if self.rel_gain is not None:
+                    self.rel_gain = self.rel_gain * self.band_unit_factor
+                if self.temporal_gain is not None:
+                    self.temporal_gain = self.temporal_gain * self.band_unit_factor
 
         if self.band_comm.Get_rank() == 0:
             logger.debug(f"Initial absolute gain estimate for {self.band_name}: {self.abs_gain:.3e}.")
@@ -394,9 +421,20 @@ class TODSamples:
             filename = f"{exp_name}_{band_name}_chain{self.chain:02d}_iter{itr:04d}.h5"
             chain_file = os.path.join(chain_dir, filename)
 
+            # Write gains in band_unit: gain has brightness in its denominator, so divide by D
+            # (output maps instead multiply by D). Division makes copies, so self.* stays uK_RJ.
+            if abs_gain_global is not None:
+                abs_gain_global = abs_gain_global / self.band_unit_factor
+            if rel_gain_global is not None:
+                rel_gain_global = rel_gain_global / self.band_unit_factor
+            if temporal_gain_global is not None:
+                temporal_gain_global = temporal_gain_global / self.band_unit_factor
+
             with h5py.File(chain_file, "w") as file:
                 file["metadata/datetime"] = datetime.datetime.now().isoformat()
                 file["metadata/parameter_file_as_string"] = params.parameter_file_as_string
+                # Thermodynamic unit the written gains are expressed in (gain is [det units]/band_unit).
+                file["metadata/band_unit"] = self.band_unit
                 file["scan_ids"] = scan_ids_global
                 # Detector names (per-band, identical across ranks): the `idet` axis of every
                 # per-detector array below. Variable-length UTF-8 for a clean string round-trip.
