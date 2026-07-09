@@ -292,9 +292,10 @@ def test_gain_downsample_factor_from_time():
 # Downsampling: model TODs are block-averaged like the data, not block-center sampled
 # --------------------------------------------------------------------------------------
 NTOD, FACTOR = 12, 4
-# arange(0, ntod, factor) defines the block edges and the midpoint construction keeps the
-# ntod//factor - 1 leading complete blocks (the trailing block is dropped).
-NBLOCKS = NTOD // FACTOR - 1
+# Downsampling cuts the full-rate stream into contiguous blocks of `factor` samples and keeps every
+# complete block (ntod // factor of them); only a trailing *partial* block is dropped. Here ntod is
+# an exact multiple of factor, so all ntod // factor blocks are kept.
+NBLOCKS = NTOD // FACTOR
 
 
 def _make_real_view(monkeypatch):
@@ -336,7 +337,7 @@ def test_static_sky_downsampling_is_block_average(monkeypatch):
     out = make_view(FACTOR).get_static_sky_tod()
     np.testing.assert_allclose(out, _block_mean(s_full), rtol=2e-5, atol=1e-6)
     # Regression guard: must NOT be the model sampled at the block-center pixels.
-    block_centers = np.array([2, 6])
+    block_centers = np.array([2, 6, 10])
     assert not np.allclose(out, s_full[block_centers])
 
 

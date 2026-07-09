@@ -249,7 +249,7 @@ class DiagonalJointPreconditioner:
                 # Add the weighted contribution of this frequency band to the total
                 A_diag += M_fc**2 * beam_op_complex * mean_weights
 
-            hp.almxfl(A_diag, comp_list[icomp].P_smoothing_prior, inplace=True)
+            hp.almxfl(A_diag, comp_list[icomp].P_Cl_prior, inplace=True)
             # +1 because of the re-writing of the LHS equation with a S^{1/2} scaling.
             A_diag += 1
             # Regularize the final operator to avoid division by zero
@@ -289,7 +289,7 @@ class JointPreconditioner:
 
     - the full component-component coupling for each multipole ``ell``
     - the beam suppression per band and per ``ell``
-    - the smoothing-prior scaling that comes from the ``S^(1/2)`` reparameterization
+    - the C_l-prior scaling that comes from the ``S^(1/2)`` reparameterization
     - a small polarization-space block for each ``ell``
 
     The approximation drops the remaining alm off-diagonal structure coming from the discrete
@@ -315,7 +315,7 @@ class JointPreconditioner:
     ``W_b`` is the small polarization-space weight block for band ``b``, and ``m_b`` is the band
     mixing vector evaluated at that band's frequency. The final inverse is applied in the
     similarity-transformed basis ``D_ell^(-1) A_ell D_ell^(-1)`` to avoid numerical problems when
-    the smoothing prior amplitude is very large.
+    the C_l prior is very large.
 
     Notes
     -----
@@ -389,7 +389,7 @@ class JointPreconditioner:
             for fwhm_rad, band_lmax in zip(all_fwhm_rad, all_band_lmax)
         ]
         prior_inv = [
-            comp.P_smoothing_prior_inv.astype(np.float64, copy=False)
+            comp.P_Cl_prior_inv.astype(np.float64, copy=False)
             for comp in diffuse_comps
         ]
 
@@ -419,7 +419,7 @@ class JointPreconditioner:
             #     D_ell^(-1) A_ell D_ell^(-1) = D_ell^(-2) + K_ell,
             #
             # rather than inverting I + D_ell K_ell D_ell directly. This keeps the block numerically
-            # stable when the smoothing prior amplitude is large and D_ell contains huge values.
+            # stable when the C_l prior is large and D_ell contains huge values.
             system_block = np.kron(np.eye(self.npol, dtype=np.float64), np.diag(active_prior_inv))
             for iband in range(nband):
                 # A band contributes only while it has support at this ell.

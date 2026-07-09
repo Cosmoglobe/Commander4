@@ -68,7 +68,7 @@ class _DummyDiffuseComp:
         self._alms = value
 
     @property
-    def P_smoothing_prior_inv(self) -> np.ndarray:
+    def P_Cl_prior_inv(self) -> np.ndarray:
         return np.ones(self.lmax + 1, dtype=np.float64)
 
     def get_sed(self, nu: float) -> float:

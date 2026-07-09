@@ -38,8 +38,7 @@ def _make_component_cfg(polarization: str = "IQU") -> Bunch:
             polarization=polarization,
             shortname="cmb",
             spatially_varying_MM=False,
-            smoothing_prior_FWHM=0.0,
-            smoothing_prior_amplitude=1.0,
+            Cl_prior_amplitude=None,  # identity prior (C_l = 1)
         ),
     )
 
@@ -64,8 +63,7 @@ def _make_multi_comp_list() -> CompList:
             polarization="IQU",
             shortname="dust",
             spatially_varying_MM=False,
-            smoothing_prior_FWHM=0.0,
-            smoothing_prior_amplitude=1.0,
+            Cl_prior_amplitude=None,  # identity prior (C_l = 1)
         ),
     )
     object.__setattr__(dust, "_name", "ThermalDust")
@@ -77,8 +75,7 @@ def _make_multi_comp_list() -> CompList:
             polarization="I",
             shortname="ff",
             spatially_varying_MM=False,
-            smoothing_prior_FWHM=0.0,
-            smoothing_prior_amplitude=1.0,
+            Cl_prior_amplitude=None,  # identity prior (C_l = 1)
         ),
     )
     object.__setattr__(ff, "_name", "FreeFree")
@@ -215,7 +212,7 @@ def _make_spectral_comp_list() -> CompList:
         component_class="Synchrotron",
         params=Bunch(
             lmax=2, polarization="IQU", shortname="sync", spatially_varying_MM=False,
-            smoothing_prior_FWHM=0.0, smoothing_prior_amplitude=1.0, beta=-3.1, nu_ref=30.0,
+            Cl_prior_amplitude=None, beta=-3.1, nu_ref=30.0,
             sample_spectral_index=True, spectral_index_proposal_sigma=0.02,
             spectral_index_bounds=[-4.0, -2.0]),
     )
@@ -225,7 +222,7 @@ def _make_spectral_comp_list() -> CompList:
         component_class="ThermalDust",
         params=Bunch(
             lmax=2, polarization="IQU", shortname="dust", spatially_varying_MM=False,
-            smoothing_prior_FWHM=0.0, smoothing_prior_amplitude=1.0, beta=1.56, T=20.0,
+            Cl_prior_amplitude=None, beta=1.56, T=20.0,
             nu_ref=545.0, sample_spectral_index=True, spectral_index_proposal_sigma=0.01,
             spectral_index_prior=Bunch(type="gaussian", mean=1.5, rms=0.1)),
     )

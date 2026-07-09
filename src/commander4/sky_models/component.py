@@ -15,8 +15,9 @@ import commander4.sky_models.component as component_lib
 from commander4.output import log
 from commander4.utils.math_operations import alm_to_map, map_to_alm, project_alms, inplace_scale,\
         inplace_add_scaled_vec, map_to_alm_adjoint, alm_to_map_adjoint, almxfl,\
-        inplace_arr_add, inplace_arr_sub, inplace_arr_prod, inplace_arr_truediv, dot, \
-        _dot_complex_alm_1D_arrays, _numba_proj2map, _numba_eval_from_map, inplace_scale_add
+        inplace_arr_add, inplace_arr_sub, inplace_arr_prod, inplace_arr_truediv, dot,\
+        _dot_complex_alm_1D_arrays, _numba_proj2map, _numba_eval_from_map, inplace_scale_add,\
+        pseudo_alm_to_map_inverse
 from commander4.utils.map_utils import gauss_beam, get_gauss_beam_radius, get_npol, assert_pol_supported
 from commander4.data_models.band import Band
 from commander4.utils.execution_ids import EXECUTION_POLS
@@ -276,8 +277,22 @@ class DiffuseComponent(Component):
         )
         self.spatially_varying_MM = comp_params.spatially_varying_MM
         self.lmax = comp_params.lmax
-        self.smoothing_prior_FWHM = comp_params.smoothing_prior_FWHM
-        self.smoothing_prior_amplitude = comp_params.smoothing_prior_amplitude
+        log.logassert("smoothing_prior_FWHM" not in comp_params
+                      and "smoothing_prior_amplitude" not in comp_params,
+                      f"Component {self.comp_name!r}: the 'smoothing_prior_*' parameters were "
+                      "replaced by the C3-equivalent 'Cl_prior_*' parameters, which are defined in "
+                      "D_l space (see DiffuseComponent.P_Cl_prior). Update the parameter file.",
+                      logger)
+        # C(l) prior (C3 'power_law_gauss' equivalent, see P_Cl_prior). Each parameter may be a
+        # scalar or an [I, QU] pair, resolved per execution view like nu_ref; amplitude None
+        # disables the prior.
+        self.Cl_prior_amplitude = self._per_pol(comp_params.Cl_prior_amplitude)
+        self.Cl_prior_beta = self._per_pol(
+            comp_params.Cl_prior_beta if "Cl_prior_beta" in comp_params else 0.0)
+        self.Cl_prior_FWHM = self._per_pol(
+            comp_params.Cl_prior_FWHM if "Cl_prior_FWHM" in comp_params else 0.0)
+        self.Cl_prior_l_pivot = (
+            comp_params.Cl_prior_l_pivot if "Cl_prior_l_pivot" in comp_params else 50)
         # Unit of an init_from sky map for this component (None -> assume it is already in
         # `amplitude_unit`). Only used when reading FITS init maps, not compsep chains.
         self.units = comp_params.units if "units" in comp_params else None
@@ -285,15 +300,18 @@ class DiffuseComponent(Component):
         if allocate_empty_alms:
             self.allocate_empty_alms()
 
+    def _per_pol(self, value):
+        """Resolve a scalar-or-``[I, QU]`` parameter to this view's value (I -> first entry)."""
+        if isinstance(value, (list, tuple)):
+            return value[0] if self.eval_pol == "I" else value[1]
+        return value
+
     def _reference_frequency(self, comp_params: Bunch) -> float:
         """Reference frequency (GHz) for this view's polarization.
 
         ``nu_ref`` is either a scalar (shared by I and QU) or a 2-element list ``[nu_I, nu_QU]``.
         """
-        nu_ref = comp_params.nu_ref
-        if isinstance(nu_ref, (list, tuple)):
-            return nu_ref[0] if self.eval_pol == "I" else nu_ref[1]
-        return nu_ref
+        return self._per_pol(comp_params.nu_ref)
 
     def init_map_to_amplitude(self, sky_map: NDArray) -> NDArray:
         """Convert an init sky map (in ``self.units``) to this component's amplitude unit.
@@ -368,35 +386,54 @@ class DiffuseComponent(Component):
         return ((self.lmax+1)*(self.lmax+2))//2
 
     @property
-    def P_smoothing_prior(self):
-        fwhm_rad = np.deg2rad(self.smoothing_prior_FWHM / 60.0)
-        sigma = fwhm_rad / np.sqrt(8 * np.log(2))
-        ells = np.arange(self.lmax + 1)
-        prior_amplitude = self.smoothing_prior_amplitude
-        prior_exponential = -ells * (ells + 1) * sigma**2
-        return prior_amplitude * np.exp(prior_exponential)
+    def P_Cl_prior(self) -> NDArray[np.floating]:
+        """Prior angular power spectrum C_l for this component's amplitude alms.
+
+        This is the S in the CG system (1 + S^{1/2} A^T N^-1 A S^{1/2}). It is a Gaussian prior
+        constraining the alms to N(0, C_l). Equivalent to C3's 'power_law_gauss' (comm_cl_mod.f90),
+        which contains its 'power_law' (FWHM=0) and 'gauss' (beta=0) types as special cases.
+        Defined in D_l space, where CMB-like spectra are roughly flat:
+
+            D_l = amplitude * (l / l_pivot)^beta * max(exp(-l(l+1) sigma^2), 1e-10),
+            C_l = 2 pi D_l / (l(l+1)),
+
+        where sigma is the Gaussian width of Cl_prior_FWHM (arcmin; 0 disables the rolloff).
+        A 1e-10 floor (relative to the power law) keeps C_l strictly positive so 1/C_l is safe
+        for the preconditioners. Units are (uK_RJ @ nu_ref)^2, i.e. the units of the alms themselves
+        (C3 instead defines the prior in the component's native unit and converts internally).
+        """
+        if self.Cl_prior_amplitude is None:
+            return np.ones(self.lmax + 1)
+        sigma = np.deg2rad(self.Cl_prior_FWHM / 60.0) / np.sqrt(8.0 * np.log(2.0))
+        ells = np.arange(1, self.lmax + 1)
+        Dl = np.empty(self.lmax + 1)
+        Dl[1:] = self.Cl_prior_amplitude * (ells / self.Cl_prior_l_pivot)**self.Cl_prior_beta \
+            * np.maximum(np.exp(-ells * (ells + 1) * sigma**2), 1e-10)
+        Dl[0] = Dl[1]
+        Cl = np.empty(self.lmax + 1)
+        Cl[1:] = Dl[1:] * 2.0 * np.pi / (ells * (ells + 1))
+        Cl[0] = Dl[0]
+        return Cl
 
     @property
-    def P_smoothing_prior_inv(self):
-        P = self.P_smoothing_prior
-        P_inv = np.zeros_like(P)
-        P_inv[P != 0] = 1.0/P[P != 0]
-        return P_inv
-    
+    def P_Cl_prior_inv(self) -> NDArray[np.floating]:
+        # P_Cl_prior is strictly positive by construction (1e-10 floor), so plain inversion is safe.
+        return 1.0 / self.P_Cl_prior
+
     def __repr__(self):
         return f"Diffuse Component {self.shortname}, with polarization: {self.eval_pol}"\
                 f" (originally defined as {self.defined_pol})" \
                 f"\n   lmax = {self.lmax} \n   alms: {self.alms}"
 
-    def apply_smoothing_prior_sqrt(self):
+    def apply_Cl_prior_sqrt(self):
         """
-        Applies in-place the square root of the smoothing prior to the alms in-place,
+        Applies the square root of the C_l prior (S^{1/2}) to the alms in-place,
         which are also returned.
         """
-        smooth_p_sqrt = np.sqrt(self.P_smoothing_prior)
+        prior_sqrt = np.sqrt(self.P_Cl_prior)
         for ipol in range(self.npol):
             # S^{1/2} a
-            almxfl(self._data[ipol], smooth_p_sqrt, inplace=True)
+            almxfl(self._data[ipol], prior_sqrt, inplace=True)
         return self._data
 
     def _realize_alms_as_map(self, component_alms, nside: int, fwhm: float = 0):
@@ -974,7 +1011,7 @@ class RadioSources(PointSourcesComponent):
         #return band_alm's contribution to point sources amplitudes
         return self._data
     
-    def apply_smoothing_prior_sqrt(self):
+    def apply_Cl_prior_sqrt(self):
         """
         In the case of point sources this is just a dummy, the data object is simply returned.
         """
@@ -1048,7 +1085,8 @@ def _read_view_alms_from_fits(comp: "DiffuseComponent", fits_path: str) -> NDArr
     # Only perform map2alm up to ell = 3*map_nside - 1.
     # If the component lmax exceeds this, truncate remaining alms to zero.
     effective_lmax = min(comp.lmax, 3*nside-1)
-    alm_temp = map_to_alm(view_map, nside, effective_lmax, spin=comp.spin)
+    alm_temp = pseudo_alm_to_map_inverse(view_map, nside, effective_lmax,
+                            spin = 0 if view_map.shape[0] == 1 else 2, epsilon = 1e-8, maxiter = 5)
     return project_alms(alm_temp, comp.lmax)
 
 
@@ -1387,12 +1425,12 @@ class CompList:
         for comp in self.comp_list:
             comp.project_comp_to_band(band_out, nthreads=nthreads)
 
-    def apply_smoothing_prior_sqrt(self):
+    def apply_Cl_prior_sqrt(self):
         """
-        Applies per-component the corresponding smoothing prior.
+        Applies per-component the corresponding C_l prior square root (S^{1/2}).
         """
         for comp in self.comp_list:
-            comp.apply_smoothing_prior_sqrt()
+            comp.apply_Cl_prior_sqrt()
 
     def inplace_add_scaled(self, list_other, scalar):
         """ `list_inplace += scalar*list_other`
