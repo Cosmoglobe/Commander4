@@ -463,13 +463,15 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
 
         # If we're doing ncorr, accumulate to map and subtract from sky TOD.
         if ncorr_cfg.do_ncorr:
-            mapmaker_ncorr.accumulate_to_map((n_corr_est/gain).astype(np.float32, copy=False),
-                                             inv_var, pix, psi, response=response)
+            mapmaker_ncorr.accumulate_to_map(
+                (n_corr_est[good_data_mask]/gain).astype(np.float32, copy=False),
+                inv_var, pix_masked, psi_masked, response=response)
             d_sky -= n_corr_est
 
         d_sky_masked = d_sky[good_data_mask]
         mapmaker.accumulate_to_map(d_sky_masked/gain, inv_var, pix_masked, psi_masked, response=response)
-        mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi, response=response)
+        mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole[good_data_mask], inv_var,
+                                             pix_masked, psi_masked, response=response)
         stop_bench("binned-mapmaker", increment_count=False)
     if ncorr_cfg.do_ncorr:
         log_memory("ncorr-sampling")
