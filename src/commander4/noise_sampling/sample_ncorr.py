@@ -11,14 +11,14 @@ from commander4.noise_sampling.noise_sampling import fill_all_masked
 from commander4.noise_sampling.noise_psd import NoisePSD
 from commander4.noise_sampling.sigma0 import calc_sigma0_robust, calc_sigma0_binned_psd
 
+from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
+                                            stop_bench, log_memory, increment_count, bench_reset
+
 SIGMA0_METHODS = ("pairwise", "binned_psd")
 # Gap-fill methods for the non-CG sampling steps (gain calibration). The correlated-noise step
 # itself does not use these: its gap handling is the masked CG (CG_max_iter>0) or the stationary
 # fallback (CG_max_iter=0). See `realize_noise_in_gaps`.
 GAIN_GAP_FILL_METHODS = ("wn", "fallback", "full_cg")
-
-from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
-                                            stop_bench, log_memory, increment_count, bench_reset
 
 logger = logging.getLogger(__name__)
 
@@ -282,14 +282,16 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
             noise_params[0] = _estimate_sigma0(tod, n_corr, mask, sigma0_dec)
         return Bunch(n_corr=n_corr, noise_params=noise_params, residual=0.0, niter=0,
                      converged=True, high_var=False)
-
+    start_bench("ncorr-samp-setup")
     freq = rfftfreq(2 * Ntod, d=1.0/fsamp)  # Mirrored-FFT grid: nfft=2*Ntod -> length Ntod+1.
     C_corr_inv = noise_model.compute_inv_corr_spectrum(freq, noise_params)
     # Inpaint masked regions: seeds the CG warm-start and feeds the stationary fallback solve.
     fill_all_masked(tod, mask, sigma0)
     if nomono and mask.any():
         tod = tod - np.mean(tod[mask])  # Solve for a mean-zero correlated noise component.
+    stop_bench("ncorr-samp-setup")
 
+    start_bench("ncorr-sampling")
     high_var = False
     if cg_max_iter == 0:
         # User requested no CG steps: use the stationary (full-mask) Wiener solution directly.
@@ -305,6 +307,7 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
             # Fall back to the stationary solution that ignores the gaps.
             n_corr, _, _, _ = corr_noise_realization_with_gaps(
                 tod, np.ones_like(mask), sigma0, C_corr_inv)
+    stop_bench("ncorr-sampling")
 
     if nomono and mask.any():
         n_corr = n_corr - np.mean(n_corr[mask])
@@ -315,6 +318,7 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
 
     # Fit the PSD parameters to the residual periodogram (full model), inpainting masked samples
     # with the n_corr realization plus white noise (Commander3 sample_noise_psd convention).
+    start_bench("ncorr-psd-samp")
     if sample_params:
         residual_tod = tod.copy()
         ngap = int(np.count_nonzero(~mask))
@@ -323,6 +327,7 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
         noise_params = noise_model.sample_params(residual_tod, noise_params, fsamp,
                                                  nu_min=psd_fit_nu_min, nu_max=psd_fit_nu_max,
                                                  bin_psd=psd_bin)
+    stop_bench("ncorr-psd-samp")
 
     return Bunch(n_corr=n_corr, noise_params=noise_params, residual=float(residual),
                  niter=int(niter), converged=bool(converged), high_var=high_var)
