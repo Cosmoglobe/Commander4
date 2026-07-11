@@ -150,7 +150,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
 
     noise_model = NoisePSDOof(P_active_mean = [np.nan, 10.0, -2.7],
                               P_active_rms = [np.nan, np.inf, np.inf],
-                              P_uni = [[np.nan, np.nan], [0.03, 30.0], [-4.0, -1.5]],
+                              P_uni = [[np.nan, np.nan], [0.03, 40.0], [-4.0, -2.0]],
                               nu_fit = [[np.nan, np.nan], [0, 10.0], [0, 10.0]])
     band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)

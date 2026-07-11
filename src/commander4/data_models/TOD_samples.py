@@ -163,6 +163,16 @@ class TODSamples:
         self.tod_ps_ncorrsub = np.full(ps_shape, np.nan, dtype=np.float32)
         self.tod_ps_residual = np.full(ps_shape, np.nan, dtype=np.float32)
 
+        # Per-detector-scan data-selection diagnostics, written to the chain: chisq_z is the
+        # white-noise-residual chi-squared z-score (see masked_chisq_z in data_selection; ~N(0,1)
+        # for clean data, huge for bad scans), good_fraction the unflagged fraction of samples.
+        # NaN-reset before every mapmaking pass and refilled in its scan loop, so a finite entry
+        # means "evaluated this iteration"; the in-loop data-selection vetoes judge them and
+        # log_dataselect_summary reports them.
+        self.chisq_z = np.full((self.nscans, self.ndet), np.nan)
+        self.good_fraction = np.full((self.nscans, self.ndet), np.nan)
+
+
         # Optional DEBUG: the entire per-sample correlated-noise (n_corr) TODs, written to the chain
         # only when explicitly requested (the data is very large). Collected ragged as one float32
         # array per detector-scan; ``None`` disables collection.
@@ -280,6 +290,10 @@ class TODSamples:
                 self.temporal_gain = f["temporal_gain"][local_indices, :] if "temporal_gain" in f else None
                 self.noise_params = f["noise_params"][local_indices, ...] if "noise_params" in f else None
                 self.accept = f["accept"][local_indices, ...].astype(bool)
+                if "chisq_z" in f:  # Optional (older chains lack it).
+                    self.chisq_z = f["chisq_z"][local_indices, ...]
+                if "good_fraction" in f:
+                    self.good_fraction = f["good_fraction"][local_indices, ...]
                 self.jumps = JumpCatalog.from_hdf5(f, local_indices, self.ndet)
 
             # Chain gains are stored in band_unit; convert back to internal [det units]/uK_RJ.
@@ -384,6 +398,9 @@ class TODSamples:
                                                         scans_per_rank)
         accept_global = _gather_scan_distributed_array(band_comm, self.accept.astype(np.int8),
                                                        scans_per_rank)
+        chisq_z_global = _gather_scan_distributed_array(band_comm, self.chisq_z, scans_per_rank)
+        good_fraction_global = _gather_scan_distributed_array(band_comm, self.good_fraction,
+                                                              scans_per_rank)
 
         # 4c. Low-resolution TOD power spectra (per-scan per-detector per-bin).
         tod_ps_freqs_global = _gather_scan_distributed_array(band_comm, self.tod_ps_freqs,
@@ -450,6 +467,8 @@ class TODSamples:
                     file["noise_params"] = noise_params_global
                 file["present"] = present_global
                 file["accept"] = accept_global
+                file["chisq_z"] = chisq_z_global
+                file["good_fraction"] = good_fraction_global
                 file["tod_ps_freqs"] = tod_ps_freqs_global
                 file["tod_ps_ncorr"] = tod_ps_ncorr_global
                 file["tod_ps_raw"] = tod_ps_raw_global

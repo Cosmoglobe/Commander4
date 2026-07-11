@@ -13,6 +13,7 @@ from commander4.output.log import logassert
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_TOD import DetGroupTOD
 from commander4.data_models.TOD_samples import TODSamples
+from commander4.data_selection import masked_chisq_z, build_dataselect_cfg, log_dataselect_summary
 from commander4.data_models.jump_corrections import JumpCorrection
 from commander4.data_models.tod_view import TODView
 from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU, WeightsMapmaker, Mapmaker
@@ -115,10 +116,15 @@ def _record_tod_diagnostics(tod_samples: TODSamples, iscan: int, idet: int, view
         if tod_samples.ncorr_tods is not None:
             tod_samples.ncorr_tods[iscan][idet] = n_corr.astype(np.float32, copy=False)
 
+    # White-noise-residual chi-squared z-score (uses this iteration's sigma0, sampled just above);
+    # stored to the chain and consumed by the data-selection (accept) cuts.
+    tod_samples.chisq_z[iscan, idet] = masked_chisq_z(
+        residual_tod, view.get_mask(proc_mask=False), view.sigma0)
+
 
 def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output: NDArray,
             tod_samples: TODSamples, params: Bunch, chain: int, iter: int,
-            ncorr_cfg: Bunch) -> dict[str, DetectorMap]:
+            ncorr_cfg: Bunch, dataselect_cfg: Bunch) -> dict[str, DetectorMap]:
     """ Commander4 CG mapmaking. All ranks on the provided MPI communicator collaborates on creating
         the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
     Args:
@@ -132,6 +138,9 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
         iter (int): Current Gibbs iteration.
         ncorr_cfg (Bunch): Correlated-noise sampling config (do_ncorr, do_param, cg_err_tol,
             cg_max_iter).
+        dataselect_cfg (Bunch): Data-selection config (active, chisq_abs_threshold,
+            min_good_fraction); the cuts are applied as per-scan vetoes inside the scan loop here
+            (see data_selection.py).
     Output:
         dict[str, DetectorMap]: Dictionary containing the solved detector maps, keyed by
             polarization component ('I', 'QU').
@@ -191,6 +200,13 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
         gain = view.get_gain()
         response = view.det_response if pols == "IQU" else None
 
+        ### DATA-SELECTION VETO 1 (too little unflagged data).
+        good_frac = good_data_mask.mean()
+        tod_samples.good_fraction[view.iscan, view.idet] = good_frac
+        if dataselect_cfg.active and good_frac < dataselect_cfg.min_good_fraction:
+            tod_samples.accept[view.iscan, view.idet] = False
+            continue
+
         ### CORRELATED NOISE / SIGMA0 SAMPLING (first, so the weights below use the new sigma0) ###
         n_corr_est = None
         if ncorr_cfg.do_ncorr:
@@ -225,6 +241,18 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
             tod_samples.noise_params[view.iscan, view.idet, 0] = _estimate_standalone_sigma0(
                 view, ncorr_cfg.sigma0_method)
 
+        # Diagnostics (incl. chisq_z) before any accumulation, so a veto below leaves this
+        # detector-scan out of every map product (the CG operator passes re-read `accept`).
+        _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view, n_corr_est)
+
+        ### DATA-SELECTION VETO 2 (catastrophic chi^2), applied in-loop so this iteration's maps
+        ### already exclude the scan.
+        if dataselect_cfg.active:
+            z = tod_samples.chisq_z[view.iscan, view.idet]
+            if not (np.isfinite(z) and abs(z) <= dataselect_cfg.chisq_abs_threshold):
+                tod_samples.accept[view.iscan, view.idet] = False
+                continue
+
         # sigma0 now reflects this iteration's estimate; every weight below is consistent with it.
         sigma0 = view.sigma0
         inv_var = (gain/sigma0)**2
@@ -255,8 +283,6 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
                     (n_corr_est/gain).astype(np.float32, copy=False),
                     inv_var, pix, psi)
             d_sky -= n_corr_est
-
-        _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view, n_corr_est)
 
         # Gap-fill flagged samples instead of compacting them away. The CG operator applies a
         # Fourier transform (apply_T), which requires a continuous, full-length TOD: removing masked
@@ -360,7 +386,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
 
 def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output: NDArray,
             tod_samples: TODSamples, params: Bunch, chain: int, iter: int,
-            ncorr_cfg: Bunch) -> dict[str, DetectorMap]:
+            ncorr_cfg: Bunch, dataselect_cfg: Bunch) -> dict[str, DetectorMap]:
     """ Commander4 bin mapmaking. All ranks on the provided MPI communicator collaborates on creating
         the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
     Args:
@@ -374,6 +400,8 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
         iter (int): Current Gibbs iteration.
         ncorr_cfg (Bunch): Correlated-noise sampling config (do_ncorr, do_param, cg_err_tol,
             cg_max_iter).
+        dataselect_cfg (Bunch): Data-selection config the cuts are applied as per-scan vetoes
+            inside the scan loop here (see data_selection.py).
     Output:
         dict[str, DetectorMap]: Dictionary containing the solved detector maps, keyed by
             polarization component ('I', 'QU').
@@ -412,6 +440,13 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
         gain = view.get_gain()
         stop_bench("binned-mapmaker", increment_count=False)
 
+        ### DATA-SELECTION VETO 1 (too little unflagged data).
+        good_frac = good_data_mask.mean()
+        tod_samples.good_fraction[view.iscan, view.idet] = good_frac
+        if dataselect_cfg.active and good_frac < dataselect_cfg.min_good_fraction:
+            tod_samples.accept[view.iscan, view.idet] = False
+            continue
+
         ### CORRELATED NOISE / SIGMA0 SAMPLING (first, so the weights below use the new sigma0) ###
         n_corr_est = None
         if ncorr_cfg.do_ncorr:
@@ -449,6 +484,13 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 view, ncorr_cfg.sigma0_method)
 
         _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view, n_corr_est)
+
+        ### DATA-SELECTION VETO 2 (catastrophic chi^2)
+        if dataselect_cfg.active:
+            z = tod_samples.chisq_z[view.iscan, view.idet]
+            if not (np.isfinite(z) and abs(z) <= dataselect_cfg.chisq_abs_threshold):
+                tod_samples.accept[view.iscan, view.idet] = False
+                continue
 
         start_bench("binned-mapmaker")
         # Retrieve the new sigma0 for this det-scan, sampled above.
@@ -754,7 +796,6 @@ def sample_jump_detection(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
 
     log_memory("jump-detect")
     return tod_samples
-
 
 
 # Valid calibration targets for gain sampling, and the per-term defaults used when a parameter file
@@ -1250,6 +1291,12 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
         psd_bin=getattr(cn, "psd_bin", False),
     )
 
+    ### DATA-SELECTION (accept-flag) CONFIG ###
+    # Flags obviously bad detector-scans (catastrophic-only chi^2/flagged-fraction cuts, applied
+    # as eager vetoes inside the mapmaking scan loop so they never enter any map product); see
+    # data_selection.py for the cut definitions, gating, and the per-band summary.
+    dataselect_cfg = build_dataselect_cfg(params, iter, do_ncorr, sample_corr_noise)
+
     # Gap-fill method for the non-CG sampling steps (gain calibration). The correlated-noise step's
     # own gap handling is fixed by CG_max_iter (masked CG, or stationary fallback when 0).
     gain_gap_fill = getattr(params.general, "gap_fill_method", "wn")
@@ -1318,12 +1365,18 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
         raise ValueError(f"Unspecified mapmaker for experiment {experiment_data.experiment_name}," \
                         f" band {experiment_data.band_name}.")
 
+    # Per-iteration data-selection diagnostics: NaN-reset so a finite entry always means "evaluated
+    # this iteration" -- detector-scans skipped by the accepted_only scan loops (rejected earlier,
+    # or absent) stay NaN and are never re-counted on stale values by log_dataselect_summary.
+    tod_samples.chisq_z[:] = np.nan
+    tod_samples.good_fraction[:] = np.nan
+
     if mapmaker_str == "CG":
         detmap_dict = tod2map_CG(band_comm, experiment_data, compsep_output, tod_samples, params, chain,
-                     iter, ncorr_cfg)
+                     iter, ncorr_cfg, dataselect_cfg)
     elif mapmaker_str == "bin":
         detmap_dict = tod2map_bin(band_comm, experiment_data, compsep_output, tod_samples, params,
-                            chain, iter, ncorr_cfg)
+                            chain, iter, ncorr_cfg, dataselect_cfg)
     else:
         raise ValueError(f'Mapmaker must be either "CG" or "bin", but {mapmaker_str} was given for'\
                          f' experiment {experiment_data.experiment_name}, band {experiment_data.band_name}')
@@ -1331,6 +1384,10 @@ def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
     if band_comm.Get_rank() == 0:
         logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished mapmaking in "\
                     f"{timing_dict['mapmaker']:.1f}s.")
+
+    ### DATA-SELECTION SUMMARY (reporting only; the cuts are the vetoes in the mapmaking loop) ###
+    if dataselect_cfg.enabled:
+        log_dataselect_summary(band_comm, tod_samples, dataselect_cfg)
 
     ### WRITE CHAIN TO FILE ###
     with benchmark("filewrite-tod"):
