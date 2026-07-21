@@ -100,6 +100,73 @@ def test_finalize_RHS_without_accumulation_contributes_zeros():
     np.testing.assert_array_equal(rhs, 0.0)
 
 
+def _dense_operator(op, n):
+    """Materialize a length-preserving linear TOD operator ``op`` as its (n, n) matrix."""
+    M = np.zeros((n, n))
+    for j in range(n):
+        e = np.zeros(n)
+        e[j] = 1.0
+        M[:, j] = op(e)
+    return M
+
+
+def _single_pole(tau):
+    """A non-trivial, Hermitian-symmetric transfer function on the normalized (2N) frequency grid."""
+    return lambda f: 1.0 / (1.0 + 2j * np.pi * f * tau)
+
+
+def test_apply_T_identity_is_a_noop():
+    """The default identity ``T_omega`` must leave the TOD unchanged despite the mirrored round-trip."""
+    nside = 2
+    pix = np.arange(12, dtype=np.int64) % (12 * nside**2)
+    band, ts = _build_band(pix, [], nside, 1.0, "I")
+    cg = CGMapmakerI(band, ts, MPI.COMM_SELF)
+    x = np.random.default_rng(0).normal(size=pix.size)
+    np.testing.assert_allclose(cg.apply_T(x.copy()), x, atol=1e-12)
+    np.testing.assert_allclose(cg.apply_T_adjoint(x.copy()), x, atol=1e-12)
+
+
+def test_apply_T_adjoint_is_true_transpose():
+    """``apply_T_adjoint`` must be the exact transpose of ``apply_T`` for a non-trivial ``T_omega``.
+
+    This is the core-logic fix: the transpose conjugates the filter (``H*``) and pairs reflect-extend
+    with zero-pad/fold-back. The previous "flip the frequency array" adjoint is *not* the transpose
+    for any non-identity filter, so this test fails against it.
+    """
+    nside = 2
+    pix = np.arange(16, dtype=np.int64) % (12 * nside**2)
+    band, ts = _build_band(pix, [], nside, 1.0, "I")
+    cg = CGMapmakerI(band, ts, MPI.COMM_SELF, T_omega=_single_pole(0.9))
+    n = pix.size
+    rng = np.random.default_rng(3)
+    x, y = rng.normal(size=n), rng.normal(size=n)
+    # Inner-product identity <T x, y> == <x, T^T y>.
+    assert np.isclose(np.dot(cg.apply_T(x.copy()), y), np.dot(x, cg.apply_T_adjoint(y.copy())),
+                      rtol=1e-10, atol=1e-12)
+    # Full dense check: matrix of the adjoint equals the transpose of the forward's matrix.
+    T = _dense_operator(cg.apply_T, n)
+    Tt = _dense_operator(cg.apply_T_adjoint, n)
+    np.testing.assert_allclose(Tt, T.T, atol=1e-10)
+    assert not np.allclose(T, np.eye(n))     # the filter genuinely alters the TOD (guards no-op)
+
+
+def test_apply_LHS_symmetric_with_nontrivial_transfer_function():
+    """``P^T T^T N^-1 T P`` stays symmetric when ``T_omega != 1`` -- the point of the exact adjoint.
+
+    At the identity transfer function symmetry is trivial (T = T^T = I), so it cannot detect a wrong
+    adjoint; a genuine filter can, and the CG needs a symmetric operator to be well-posed.
+    """
+    nside, sigma0 = 2, 1.3
+    pix = np.array([0, 1, 2, 5, 4, 6, 7, 9, 8, 10], dtype=np.int64)
+    band, ts = _build_band(pix, [], nside, sigma0, "I")
+    cg = CGMapmakerI(band, ts, MPI.COMM_SELF, T_omega=_single_pole(0.7))
+    npix = 12 * nside**2
+    rng = np.random.default_rng(5)
+    m1, m2 = rng.normal(size=(1, npix)), rng.normal(size=(1, npix))
+    Am2, Am1 = cg.apply_LHS(m2.copy()), cg.apply_LHS(m1.copy())
+    np.testing.assert_allclose(np.vdot(m1, Am2), np.vdot(m2, Am1), rtol=1e-9, atol=1e-10)
+
+
 def test_apply_LHS_IQU_symmetric_and_spans_all_samples():
     """IQU LHS stays symmetric (A = A^T); flagged samples are gap-filled rather than dropped, so
     pixels reached only through them stay populated in I/Q/U (matching the RHS)."""

@@ -138,54 +138,52 @@ class CGMapmaker:
         return scan_tod_arr
 
     def _apply_T(self, scan_tod_arr, adjoint=False):
+        """Apply the transfer-function operator T (or its transpose T^T) to one scan; returns a new
+        length-N array.
+
+        The forward operator is ``T = R F^-1 diag(H) F E`` where ``E`` reflect-extends the scan to
+        length ``2N`` (``x -> [x, x[::-1]]``), ``H = T_omega`` is the filter evaluated on the ``2N``
+        frequency grid, and ``R`` restricts back to the first ``N`` samples. Mirroring makes the scan
+        boundary continuous so a causal ``H`` does not wrap the scan's end onto its start (matching
+        the mirrored FFT used in ``apply_N_inv`` and in the simulator that bakes ``H`` in).
+
+        The transpose is ``T^T = E^T F^-1 diag(H*) F R^T``: ``R^T`` zero-pads (``x -> [x, 0]``), the
+        filter is **conjugated** (``H*`` -- a frequency flip is *not* the transpose for a non-trivial
+        ``H``), and ``E^T`` folds the mirror back (``v -> v[:N] + v[N:][::-1]``). Implementing the two
+        directions as this exact adjoint pair keeps the mapmaking operator ``P^T T^T N^-1 T P``
+        symmetric, so the CG solve stays well-posed. At ``T_omega = 1`` both reduce to the identity.
         """
-        General function for T and T^T, inplace.
-        """
-        #F d
-        d = forward_rfft(scan_tod_arr, nthreads=self.nthreads) #ducc0.fft.r2c(scan_tod_arr, forward=True, inorm=1)
-        #T F d
-        freqs = np.fft.rfftfreq(len(scan_tod_arr)) #if we want freqs in Hz fro T(omega) the use scan.fsamp.
+        n = scan_tod_arr.shape[-1]
+        freqs = np.fft.rfftfreq(2 * n)  # normalized [cycles/sample]; scale by fsamp for H(omega) in Hz
         if adjoint:
-            freqs = np.flip(freqs)
-        d = d * self.T_omega(freqs)
-        #F^-1 T F
-        scan_tod_arr = backward_rfft(d, scan_tod_arr.shape[-1], nthreads=self.nthreads) #ducc0.fft.c2r(d, forward=False, inorm=1)
-        return scan_tod_arr
+            ext = np.concatenate([scan_tod_arr, np.zeros_like(scan_tod_arr)])  # R^T: zero-pad
+            filt = np.conj(self.T_omega(freqs))                               # H*
+        else:
+            ext = np.concatenate([scan_tod_arr, scan_tod_arr[::-1]])          # E: reflect-extend
+            filt = self.T_omega(freqs)                                        # H
+        out = backward_rfft(forward_rfft(ext, nthreads=self.nthreads) * filt, 2 * n,
+                            nthreads=self.nthreads)
+        if adjoint:
+            return out[:n] + out[n:][::-1]                                    # E^T: fold the mirror back
+        return np.ascontiguousarray(out[:n])                                 # R: keep the first N samples
 
     def apply_T(self, scan_tod_arr):
-        """
-        Applies INPLACE the T operator defined as T := F^-1 T(omega) F, to one scan.
+        """Apply the transfer-function operator ``T = R F^-1 diag(T_omega) F E`` to one scan.
 
-        If a `scan_tod_arr` is passed, it will be used to overwrite the result instead of using `scan.tod`.
-
-        Notes:
-        - T(omega) is a filter which must respect the Hermitian symmetry T*(omega) = T(-omega) 
-        in order to give real-valued outputs in time space, and F and F^-1 are RFFT and RFFT inverse.
-
-        - F returns an array of frequencies `omega_s` and an array of complex amplitudes, 1 for each 
-        of those frequencies. T(omega) must be evaluated at each of those omega's and the result 
-        (a complex amplitude for each omega) is also a complex array that must be multiplicated 
-        element-wise with the output of F. The result is then given in input to F^-1, which is a 
-        irfft taking the complex array back to real tod domain. 
-
-        - The "ortho" normalization of the FFT corresponds to option 1 in ducc0.
+        ``T_omega`` is the (Hermitian-symmetric) filter ``H(omega)``; the mirrored FFT (reflect-extend
+        to ``2N``, filter, keep the first ``N`` samples) suppresses boundary wrap-around. Returns a new
+        array of the same length; see ``_apply_T`` for the full definition.
         """
         return self._apply_T(scan_tod_arr, adjoint=False)
 
     def apply_T_adjoint(self, scan_tod_arr):
-        """
-        Applies INPLACE the adjoint, or transpose in matrix-notation, of the T operator to one scan. 
-        It is defined as T^T := (F^-1 T(omega) F)^T = F^T T*(omega) (F^-1)^T = F^-1 T(-omega) F.
+        """Apply the transpose ``T^T`` of the transfer-function operator to one scan.
 
-        If a `scan_tod_arr` is passed, it will be used to overwrite the result instead of using `scan.tod`.
-
-        Notes:
-        - T(omega) is a filter which must respect the Hermitian symmetry T*(omega) = T(-omega) 
-        in order to give real-valued outputs in time space, and F and F^-1 := F^T are RFFT and
-        RFFT inverse, which corresponds to the adjoint, which in this notation is improperly written as F^T.
-
-        - Numerically the procedure is identical to apply_T, with the difference that the complex array
-        given by T(omega) is flipped, as we are evaluating T(-omega).
+        This is the exact numerical transpose of ``apply_T``: zero-pad, filter with the **conjugated**
+        symbol ``T_omega*``, and fold the mirror back (``v -> v[:N] + v[N:][::-1]``). Conjugating the
+        filter -- not flipping the frequency array -- is what makes it the true adjoint for a
+        non-trivial ``T_omega`` (and hence keeps ``P^T T^T N^-1 T P`` symmetric). Returns a new array
+        of the same length; see ``_apply_T``.
         """
         return self._apply_T(scan_tod_arr, adjoint=True)
     
