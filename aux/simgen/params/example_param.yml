@@ -76,6 +76,14 @@ simulation:
   modifiers:
     crosstalk: {enabled: true}   # Per-band cross-talk matrices are defined on the bands below.
 
+  # Bolometer transfer function (per-detector time response). This run-wide block is the default for
+  # every detector; a detector overrides it with its own `tau_ms`/`tau_sec` or a `transfer_function`
+  # block (see the detectors below). H(f) is DC-normalized (H(0)=1), so it only changes the temporal
+  # shape (scan-direction lag/smearing), not the calibration. Planck HFI time constants are ~10 ms.
+  transfer_function:
+    enabled: true
+    tau_ms: 10.0               # single-pole default: H(f) = 1 / (1 + 2*pi*i*f*tau)
+
 experiments:
   SimSat:
     enabled: true
@@ -91,8 +99,8 @@ experiments:
         polarization: "IQU"
         crosstalk: {enabled: true, coupling: 0.01}   # uniform off-diagonal leakage; or matrix: [[...]]
         detectors:          # inline dict (name -> per-detector params)
-          det30_a: {psi_offset_deg: 0.0}
-          det30_b: {psi_offset_deg: 45.0}
+          det30_a: {psi_offset_deg: 0.0, tau_ms: 12.0}   # override the run-wide time constant
+          det30_b: {psi_offset_deg: 45.0, transfer_function: {enabled: false}}  # no TF for this det
 
       Band100GHz:
         enabled: true

@@ -106,7 +106,12 @@ def _simulate_scan(band: Band, strategy, sample_offset: int, skymap: NDArray, nt
                 signal = signal + shared_orbdip
         rng = np.random.default_rng([seed, band_idx, scan_idx, det.idx])
         noise = noise_model.realize(ntod, band.fsamp, det.sigma0, rng)
-        tod_matrix[det.idx] = det.gain * signal + noise
+        # Bolometer transfer function acts on the optical signal only (d = T(g*s) + n); detector
+        # noise is added after the thermal/readout response, matching the mapmaker model T P m + n.
+        clean = det.gain * signal
+        if det.transfer is not None:
+            clean = det.transfer.apply(clean, band.fsamp)
+        tod_matrix[det.idx] = clean + noise
         det_pix[det.name] = pix_data
         det_psi[det.name] = psi
 

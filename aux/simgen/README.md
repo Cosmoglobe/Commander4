@@ -2,8 +2,9 @@
 
 `simgen` generates simulated per-detector time-ordered data (TOD) in the **`litebird_sim`** HDF5
 format, directly readable by the main program (no Commander4 changes needed). It replaces the older
-`aux/make_simple_sim.py` with a modular design whose four extension points — **pointing strategies,
-sky components, noise models, TOD modifiers** — are each a small registry of swappable classes.
+`aux/make_simple_sim.py` with a modular design whose five extension points — **pointing strategies,
+sky components, noise models, bolometer transfer functions, TOD modifiers** — are each a small
+registry of swappable classes.
 
 ## Running
 
@@ -46,7 +47,15 @@ A YAML file (see [params/example_param.yml](params/example_param.yml)) reusing t
 - `experiments → bands → detectors`: per-band `freq`, `fwhm`, `fsamp`, `eval_nside`, `data_nside`,
   `sigma0`/`sigma0_rts`, `polarization`, optional `crosstalk`, and a `detectors` dict (inline or via
   `!inc <file>.yml`, exactly as the main param files do). Each detector may set `psi_offset_deg`
-  (polarization-angle offset) and `fp_offset_deg: [xi, eta]` (focal-plane offset).
+  (polarization-angle offset), `fp_offset_deg: [xi, eta]` (focal-plane offset), `gain`, and a
+  bolometer time constant `tau_ms`/`tau_sec` (or a `transfer_function` block; see below).
+- `simulation.transfer_function`: run-wide default **bolometer transfer function** applied to every
+  detector's signal, overridable per detector. `{enabled: true, tau_ms: 10.0}` gives a single-pole
+  low-pass `H(f) = 1/(1 + 2πi f τ)` (the per-detector time constant, ~10 ms for Planck HFI); a
+  `poles:` list of `{amp, tau_ms}` gives a multi-pole (HFI "LFER"-style) response instead. `H` is
+  DC-normalized (`H(0)=1`), so it changes only the temporal shape (scan-direction lag/smearing), not
+  the calibration. A detector opts out with `transfer_function: {enabled: false}`. This is the
+  time-domain convolution the Commander4 CG mapmaker's `T_omega` operator is built to deconvolve.
 
 ## Built-in plugins
 
@@ -74,12 +83,13 @@ power-law SED). Pair it with the `raster` strategy to image a patch of identical
 
 Each extension point is a base class + a name→class registry; add a class and register it.
 
-| Capability        | File           | Base class        | Registry              |
-|-------------------|----------------|-------------------|-----------------------|
-| Pointing strategy | `pointing.py`  | `PointingStrategy`| `POINTING_STRATEGIES` |
-| Sky component     | `sky.py`       | `SkyComponent`    | `_COMPONENT_BUILDERS` |
-| Noise model       | `noise.py`     | `NoiseModel`      | (`make_noise_model`)  |
-| TOD modifier      | `modifiers.py` | `TODModifier`     | `MODIFIERS`           |
+| Capability        | File           | Base class        | Registry                    |
+|-------------------|----------------|-------------------|-----------------------------|
+| Pointing strategy | `pointing.py`  | `PointingStrategy`| `POINTING_STRATEGIES`       |
+| Sky component     | `sky.py`       | `SkyComponent`    | `_COMPONENT_BUILDERS`       |
+| Noise model       | `noise.py`     | `NoiseModel`      | (`make_noise_model`)        |
+| Transfer function | `transfer.py`  | `TransferFunction`| (`make_detector_transfer`)  |
+| TOD modifier      | `modifiers.py` | `TODModifier`     | `MODIFIERS`                 |
 
 - **Pointing**: implement `compute(sample_offset, ntod, det_offset=(0,0)) -> PointingChunk(theta,
   phi, psi, vsun)`. Set `per_detector_pointing = True` to have the pipeline call `compute` per
@@ -87,6 +97,9 @@ Each extension point is a base class + a name→class registry; add a class and 
 - **Sky component**: implement `band_map(band) -> (npol, npix_eval)` in `uK_RJ`; reuse a C4 SED via
   `get_sed`.
 - **Noise model**: implement `realize(ntod, fsamp, sigma0, rng) -> ndarray`.
+- **Transfer function**: implement `response(freqs_hz) -> complex ndarray` (the DC-normalized filter
+  `H(f)`); the base class's `apply(signal, fsamp)` does the FFT convolution. Wire it into
+  `make_detector_transfer` to build it from the parameter file.
 - **TOD modifier**: implement `apply(tod[ndet, ntod], band, ctx) -> ndarray` (e.g. cross-talk).
 
 ## Consuming the output in Commander4

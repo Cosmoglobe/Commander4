@@ -4,6 +4,15 @@
 #   fp_offset_deg  : [xi, eta] focal-plane offset [deg] (reserved; currently unused in projection)
 #   sigma0         : per-sample white-noise RMS [band unit] (overrides the band default)
 #   gain           : multiplicative gain applied to the sky signal (default 1.0)
-det100_a: {psi_offset_deg: 0.0}
-det100_b: {psi_offset_deg: 45.0}
-det100_c: {psi_offset_deg: 22.5, sigma0: 90.0}
+#   tau_ms/tau_sec : bolometer single-pole time constant (overrides simulation.transfer_function),
+#                    or a `transfer_function:` block for a multi-pole (HFI LFER-style) response.
+det100_a: {psi_offset_deg: 0.0, tau_ms: 10.4}
+det100_b: {psi_offset_deg: 45.0, tau_ms: 8.7}
+det100_c:
+  psi_offset_deg: 22.5
+  sigma0: 90.0
+  transfer_function:              # multi-pole (HFI LFER-style) time response for this detector
+    poles:                        # H(f) = (sum_k a_k/(1+2*pi*i*f*tau_k)) / sum_k a_k
+      - {amp: 0.39, tau_ms: 10.5}
+      - {amp: 0.53, tau_ms: 50.0}
+      - {amp: 0.08, tau_ms: 1.0}

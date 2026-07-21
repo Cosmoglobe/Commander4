@@ -13,6 +13,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from simgen.config import bget
+from simgen.transfer import TransferFunction, make_detector_transfer
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ class Detector:
     fp_offset: tuple[float, float] = (0.0, 0.0)  # Focal-plane (xi, eta) offset [rad] (reserved).
     sigma0: float = 0.0            # Per-sample white-noise RMS in the band's TOD unit.
     gain: float = 1.0
+    transfer: TransferFunction | None = None  # Bolometer time-response filter (None -> identity).
 
 
 @dataclass
@@ -108,6 +110,7 @@ def _resolve_noise(band_spec: Bunch, global_noise: Bunch) -> Bunch:
 def build_bands(params: Bunch) -> list[Band]:
     """Construct the list of enabled ``Band`` objects from the parameter file."""
     global_noise = bget(params.simulation, "noise", Bunch())
+    global_transfer = bget(params.simulation, "transfer_function", None)  # run-wide TF default
     bands: list[Band] = []
     for exp_name, exp in params.experiments.items():
         if not bget(exp, "enabled", True):
@@ -128,6 +131,7 @@ def build_bands(params: Bunch) -> list[Band]:
                                                         dtype=np.float64))),
                     sigma0=_resolve_sigma0(dspec, fsamp, fallback=band_sigma0),
                     gain=float(bget(dspec, "gain", 1.0)),
+                    transfer=make_detector_transfer(dspec, global_transfer),
                 ))
             data_nside = int(bget(bspec, "data_nside", bspec.eval_nside))
             bands.append(Band(

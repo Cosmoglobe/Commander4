@@ -53,7 +53,7 @@ def _build_c4_component(comp_cfg: Bunch, global_params: Bunch):
     cls = getattr(c4comp, comp_cfg.component_class)
     cp = deepcopy(comp_cfg.params)
     defaults = {"polarization": "IQU", "spatially_varying_MM": False,
-                "smoothing_prior_FWHM": 0.0, "smoothing_prior_amplitude": 0.0,
+                "Cl_prior_amplitude": None,  # identity C_l prior; get_sed never uses it
                 "lmax": (global_params.nside * 5) // 2}
     for key, val in defaults.items():
         if key not in cp:
