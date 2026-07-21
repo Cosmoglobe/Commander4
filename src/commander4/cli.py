@@ -133,7 +133,7 @@ def run_commander4(params: Bunch, params_dict: dict):
         send_compsep(mpi_info, my_band_compsep_id, get_initial_sky_model(components),
                      mpi_info.world.tod_band_masters)
         curr_tod_output = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
-                                      my_band_compsep_id, curr_tod_output)
+                                      my_band_compsep_id, curr_tod_output, params)
 
     ###### Main loop ######
     # Iteration numbers are 1-indexed, and chain 1 iter 1 TOD step is already done pre-loop.
@@ -200,7 +200,7 @@ def run_commander4(params: Bunch, params_dict: dict):
                         f" {chain_num}, iter {iter_num}. Waiting for TOD results.")
             t0 = time.time()
             curr_tod_output = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
-                                          my_band_compsep_id, curr_tod_output)
+                                          my_band_compsep_id, curr_tod_output, params)
             logger.info(f"Compsep: Rank {mpi_info.compsep.rank} finished receiving TOD results for"\
                         f" chain {chain_num}, iter {iter_num} (time spent waiting+receiving = "\
                         f"{time.time()-t0:.1f}s).")

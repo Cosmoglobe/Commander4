@@ -3,12 +3,8 @@ import ctypes as ct
 from mpi4py import MPI
 import logging
 from numpy.typing import NDArray
-import ducc0
 import healpy as hp
-from pixell import utils
 from typing import Callable
-import time
-import matplotlib.pyplot as plt
 
 from commander4.output.log import logassert
 from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
@@ -17,7 +13,7 @@ from commander4.data_models.scan_TOD import ScanTOD
 from commander4.data_models.tod_view import TODView
 from commander4.solvers.CG_driver import distributed_CG_arr
 from commander4.data_models.detector_samples import DetectorSamples
-from commander4.data_models.scan_samples import ScanSamples
+from commander4.utils.pixel_domain import PixelDomain
 from commander4.utils.math_operations import inplace_scale, dot, norm, forward_rfft, backward_rfft
 
 # I need to CG-solve P^T T^T N^−1 T P m = P^T T^T N^-1 d
@@ -47,10 +43,11 @@ class CGMapmaker:
                 T_omega:Callable = np.ones_like, 
                 preconditioner:Callable = np.copy,
                 nthreads:int=1, 
-                double_prec:bool = True, 
-                CG_maxiter:int=200, 
-                CG_tol:float=1e-10, 
-                CG_check_interval:int = 1):
+                double_prec:bool = True,
+                CG_maxiter:int=60,
+                CG_tol:float=1e-6,
+                CG_check_interval:int = 1,
+                pixel_domain:PixelDomain|None = None):
         """Initialise the CG mapmaker.
 
         Args:
@@ -66,8 +63,13 @@ class CGMapmaker:
             CG_maxiter: Maximum number of CG iterations.
             CG_tol: Convergence tolerance on the CG residual.
             CG_check_interval: Check convergence every this many iterations.
+            pixel_domain: Pixel-distribution domain. When ``None`` a full-sky domain is built, in
+                which case every rank holds full-sky local maps (the historical behaviour). In
+                sparse mode each rank's RHS/LHS buffers cover only its observed pixels, and the
+                full-sky iterate held by the master is scattered/gathered to the ranks each
+                iteration.
         """
-        
+
         self.logger = logging.getLogger(__name__)
         self.detector_tod = detector_tod
         self.detector_samples = detector_samples
@@ -77,12 +79,26 @@ class CGMapmaker:
         self.f_dtype = np.float64 if double_prec else np.float32
         self.nthreads = nthreads
         self.T_omega = T_omega
+        # Native sampling rate [Hz] of the mapmaking TODs, so the transfer function T_omega(omega) is
+        # evaluated on a physical-frequency grid (a `tau` in seconds means seconds, not samples). The
+        # CG's own noise model is white, so unlike apply_N_inv this rate is only needed for apply_T.
+        self.fsamp = detector_tod.fsamp
         self.CG_maxiter = CG_maxiter
         self.CG_tol = CG_tol
         self.CG_check_interval = CG_check_interval
         self.M = preconditioner
+        self.domain = pixel_domain if pixel_domain is not None \
+            else PixelDomain(map_comm, detector_tod.nside, "full")
+        # The sparse gather/scatter collectives operate in float64; the float32 map path is only
+        # supported full-sky (and is unused in production, which always runs double_prec).
+        if self.domain.mode == "sparse" and not double_prec:
+            raise NotImplementedError("Sparse CG maps require double_prec=True.")
+        self._nloc = self.domain.n_local
+        # View over the band's detector-scans, used to access pointing (pix/psi) when applying the
+        self._scan_view = TODView(detector_tod, detector_samples)
         self._rhs_loca_map = None
         self._rhs_finalized_map = None
+        self.res_s = []
 
         self.maplib = load_cmdr4_ctypes_lib()
         self.ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
@@ -127,54 +143,54 @@ class CGMapmaker:
         return scan_tod_arr
 
     def _apply_T(self, scan_tod_arr, adjoint=False):
+        """Apply the transfer-function operator T (or its transpose T^T) to one scan; returns a new
+        length-N array.
+
+        The forward operator is ``T = R F^-1 diag(H) F E`` where ``E`` reflect-extends the scan to
+        length ``2N`` (``x -> [x, x[::-1]]``), ``H = T_omega`` is the filter evaluated on the ``2N``
+        frequency grid, and ``R`` restricts back to the first ``N`` samples. The grid is in physical
+        Hz (``rfftfreq(2N, d=1/fsamp)``), so ``T_omega`` sees true frequencies -- a time constant is
+        in seconds, not samples. Mirroring makes the scan boundary continuous so a causal ``H`` does
+        not wrap the scan's end onto its start (matching ``apply_N_inv`` and the simulator that bakes
+        ``H`` in).
+
+        The transpose is ``T^T = E^T F^-1 diag(H*) F R^T``: ``R^T`` zero-pads (``x -> [x, 0]``), the
+        filter is **conjugated** (``H*`` -- a frequency flip is *not* the transpose for a non-trivial
+        ``H``), and ``E^T`` folds the mirror back (``v -> v[:N] + v[N:][::-1]``). Implementing the two
+        directions as this exact adjoint pair keeps the mapmaking operator ``P^T T^T N^-1 T P``
+        symmetric, so the CG solve stays well-posed. At ``T_omega = 1`` both reduce to the identity.
         """
-        General function for T and T^T, inplace.
-        """
-        #F d
-        d = forward_rfft(scan_tod_arr, nthreads=self.nthreads) #ducc0.fft.r2c(scan_tod_arr, forward=True, inorm=1)
-        #T F d
-        freqs = np.fft.rfftfreq(len(scan_tod_arr)) #if we want freqs in Hz fro T(omega) the use scan.fsamp.
+        n = scan_tod_arr.shape[-1]
+        freqs = np.fft.rfftfreq(2 * n, d=1.0 / self.fsamp)  # physical frequency grid [Hz]
         if adjoint:
-            freqs = np.flip(freqs)
-        d = d * self.T_omega(freqs)
-        #F^-1 T F
-        scan_tod_arr = backward_rfft(d, scan_tod_arr.shape[-1], nthreads=self.nthreads) #ducc0.fft.c2r(d, forward=False, inorm=1)
-        return scan_tod_arr
+            ext = np.concatenate([scan_tod_arr, np.zeros_like(scan_tod_arr)])  # R^T: zero-pad
+            filt = np.conj(self.T_omega(freqs))                               # H*
+        else:
+            ext = np.concatenate([scan_tod_arr, scan_tod_arr[::-1]])          # E: reflect-extend
+            filt = self.T_omega(freqs)                                        # H
+        out = backward_rfft(forward_rfft(ext, nthreads=self.nthreads) * filt, 2 * n,
+                            nthreads=self.nthreads)
+        if adjoint:
+            return out[:n] + out[n:][::-1]                                    # E^T: fold the mirror back
+        return np.ascontiguousarray(out[:n])                                 # R: keep the first N samples
 
     def apply_T(self, scan_tod_arr):
-        """
-        Applies INPLACE the T operator defined as T := F^-1 T(omega) F, to one scan.
+        """Apply the transfer-function operator ``T = R F^-1 diag(T_omega) F E`` to one scan.
 
-        If a `scan_tod_arr` is passed, it will be used to overwrite the result instead of using `scan.tod`.
-
-        Notes:
-        - T(omega) is a filter which must respect the Hermitian symmetry T*(omega) = T(-omega) 
-        in order to give real-valued outputs in time space, and F and F^-1 are RFFT and RFFT inverse.
-
-        - F returns an array of frequencies `omega_s` and an array of complex amplitudes, 1 for each 
-        of those frequencies. T(omega) must be evaluated at each of those omega's and the result 
-        (a complex amplitude for each omega) is also a complex array that must be multiplicated 
-        element-wise with the output of F. The result is then given in input to F^-1, which is a 
-        irfft taking the complex array back to real tod domain. 
-
-        - The "ortho" normalization of the FFT corresponds to option 1 in ducc0.
+        ``T_omega`` is the (Hermitian-symmetric) filter ``H(omega)``; the mirrored FFT (reflect-extend
+        to ``2N``, filter, keep the first ``N`` samples) suppresses boundary wrap-around. Returns a new
+        array of the same length; see ``_apply_T`` for the full definition.
         """
         return self._apply_T(scan_tod_arr, adjoint=False)
 
     def apply_T_adjoint(self, scan_tod_arr):
-        """
-        Applies INPLACE the adjoint, or transpose in matrix-notation, of the T operator to one scan. 
-        It is defined as T^T := (F^-1 T(omega) F)^T = F^T T*(omega) (F^-1)^T = F^-1 T(-omega) F.
+        """Apply the transpose ``T^T`` of the transfer-function operator to one scan.
 
-        If a `scan_tod_arr` is passed, it will be used to overwrite the result instead of using `scan.tod`.
-
-        Notes:
-        - T(omega) is a filter which must respect the Hermitian symmetry T*(omega) = T(-omega) 
-        in order to give real-valued outputs in time space, and F and F^-1 := F^T are RFFT and
-        RFFT inverse, which corresponds to the adjoint, which in this notation is improperly written as F^T.
-
-        - Numerically the procedure is identical to apply_T, with the difference that the complex array
-        given by T(omega) is flipped, as we are evaluating T(-omega).
+        This is the exact numerical transpose of ``apply_T``: zero-pad, filter with the **conjugated**
+        symbol ``T_omega*``, and fold the mirror back (``v -> v[:N] + v[N:][::-1]``). Conjugating the
+        filter -- not flipping the frequency array -- is what makes it the true adjoint for a
+        non-trivial ``T_omega`` (and hence keeps ``P^T T^T N^-1 T P`` symmetric). Returns a new array
+        of the same length; see ``_apply_T``.
         """
         return self._apply_T(scan_tod_arr, adjoint=True)
     
@@ -192,6 +208,17 @@ class CGMapmaker:
 
         if scan_tod_arr is None:
             scan_tod_arr = np.copy(scan_tod.tod) #aux array to not modify scan.tod
+        # Guard against pathological scans that slip past read-in: an empty scan crashes the FFT,
+        # and a single non-finite sample is spread across the whole scan by apply_T (and then across
+        # every pixel that scan hits), making the CG residual NaN. Readers should discard these, but
+        # not all of them do, so fail loudly here identifying the offending detector-scan.
+        logassert(scan_tod_arr.shape[-1] > 0,
+                  f"Empty TOD passed to CG RHS for detector {getattr(scan_tod, 'name', '?')}.",
+                  self.logger)
+        logassert(np.isfinite(scan_tod_arr).all(),
+                  f"Non-finite samples in CG RHS for detector {getattr(scan_tod, 'name', '?')} "
+                  "(check gain, sigma0, and that flagged/non-finite samples are gap-filled).",
+                  self.logger)
         #N^-1 d
         # if self.ismaster:
         #     self.logger.info(f"RHS_1: {scan_tod_arr.shape}")
@@ -208,50 +235,44 @@ class CGMapmaker:
 
     def finalize_RHS(self, root=0):
         """
-        Reduces RHS map on main rank, summing up all the contributions.
+        Reduces the local RHS contributions onto the full-sky RHS map held by the master rank.
         """
-        logassert(self._rhs_loca_map is not None, 
-            "Attempted to reduce RHS map on master rank before its contributions have been computed.",
-            self.logger)
-        if self.map_comm.Get_rank() == 0:
-            send, recv = (self._rhs_loca_map, self._rhs_finalized_map)  
-        else: 
-            send, recv = (self._rhs_loca_map, np.empty(()))
-        self.map_comm.Reduce(send, recv, op=MPI.SUM, root=root)
+        # Check for None, which indicates a rank without any scans. Give it a zero-map.
+        if self._rhs_loca_map is None:
+            self._rhs_loca_map = self._zeros_map
+        full = self.domain.reduce_to_full(self._rhs_loca_map, root=root)
+        if self.map_comm.Get_rank() == root:
+            self._rhs_finalized_map = full
         self.map_comm.Barrier()
-
-        #free memory
-        self._rhs_loca_map = None
-        return recv
+        self._rhs_loca_map = None  # free memory
+        return self._rhs_finalized_map if self.map_comm.Get_rank() == root else np.empty(())
 
     def apply_LHS(self, in_map: NDArray):
         """
-        Applies the LHS of the mapmaking problem P^T T^T N^-1 T P m to an input map, without modifying it,
-        and updates the result in the out_tods object.
+        Applies the LHS of the mapmaking problem P^T T^T N^-1 T P m to an input map.
+
+        The master holds the full-sky iterate ``in_map``; each rank receives only the values at its
+        locally-observed pixels (a broadcast of the full map in full mode), applies its block of the
+        operator into a local buffer, and the contributions are summed back into a full-sky map on
+        the master.
         """
         ismaster = self.map_comm.Get_rank() == 0
-        if in_map.shape==():
-            if ismaster:
-                raise ValueError("input map can not be empty on master rank.")
-            else:
-                in_map = self._zeros_map
-
-        self.map_comm.Bcast(in_map, root=0)
-        out_map = np.zeros_like(in_map)
+        # Distribute the iterate to the ranks' local pixel domains (master -> ranks).
+        local_in = self.domain.scatter_from_full(in_map if ismaster else None, self._ncomp,
+                                                  dtype=self.f_dtype)
+        out_local = self._zeros_map
         # The LHS operator P^T T^T N^-1 T P and the RHS P^T T^T N^-1 d must span the same set of
-        # detector-scans AND the same per-sample selection, or the CG solves an inconsistent (A, b).
-        # We therefore iterate through the exact same TODView path the RHS loop uses (accept gating +
-        # good_data_mask, addressing the dense (nscans, ndet) arrays by det_idx_fullband), so the two
-        # stay consistent by construction.
-        scan_view = TODView(self.detector_tod, self.detector_samples)
-        for view in scan_view.iter_focused(accepted_only=True):
-            good_data_mask = view.good_data_mask
-            pix = view.pix[good_data_mask]
-            psi = view.psi[good_data_mask] if view.psi is not None else None
+        # detector-scans AND the same samples, or the CG solves an inconsistent (A, b). We iterate
+        # the same accept-gated TODView path the RHS loop uses, on the *full-length* pointing: the
+        # RHS gap-fills flagged samples rather than removing them (apply_T needs a continuous TOD),
+        # so both sides run over every sample of each accepted detector-scan.
+        for view in self._scan_view.iter_focused(accepted_only=True):
+            pix = view.pix
+            psi = view.psi
             sigma0 = view.sigma0
-            scan_tod_arr_aux = np.zeros(pix.shape[0], dtype=self.f_dtype)  # good samples only, as RHS
+            scan_tod_arr_aux = np.zeros(pix.shape[0], dtype=self.f_dtype)  # full-length, as RHS
             #P m
-            scan_tod_arr_aux = self.apply_P(in_map, view.detector, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
+            scan_tod_arr_aux = self.apply_P(local_in, view.detector, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
             #T P m
             scan_tod_arr_aux = self.apply_T(scan_tod_arr_aux)
             #N^-1 T P m
@@ -259,13 +280,9 @@ class CGMapmaker:
             #T^T N^-1 T P m
             scan_tod_arr_aux = self.apply_T_adjoint(scan_tod_arr_aux)
             #P^T T^T N^-1 T P
-            out_map = self.apply_P_adjoint(view.detector, out_map, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
-        send, recv = (MPI.IN_PLACE, out_map) if self.map_comm.Get_rank() == 0 else (out_map, None)
-        self.map_comm.Reduce(send, recv, op=MPI.SUM, root=0)
-        if not ismaster:
-            in_map = np.empty(())
-            out_map = None
-        return recv
+            out_local = self.apply_P_adjoint(view.detector, out_local, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
+        # Sum the local contributions back to the full-sky map on the master (None on other ranks).
+        return self.domain.reduce_to_full(out_local)
 
     def solve(self, x_true=None):
         """
@@ -273,21 +290,21 @@ class CGMapmaker:
         """
         RHS_map = self.RHS_map
         ismaster = self.map_comm.Get_rank() == 0
-        CG_solver = distributed_CG_arr(self.apply_LHS, 
-                                       RHS_map, 
+
+        CG_solver = distributed_CG_arr(self.apply_LHS,
+                                       RHS_map,
                                        ismaster,
-                                       M = self.M, 
+                                       M = self.M,
                                        dot = dot,
                                        destroy_b=True)
         if ismaster:
-            self.logger.info(f"Mapmaker CG starting up!")
-        res_s = []
+            self.logger.info("Mapmaker CG starting up!")
         for i in range(self.CG_maxiter):
             CG_solver.step()
             if i%self.CG_check_interval == 0:
                 if ismaster:
                     self.logger.info(f"Mapmaker CG iter {i:3d} - Residual {CG_solver.err:.6e}")
-                    res_s.append(CG_solver.err)
+                    self.res_s.append(CG_solver.err)
                     if x_true is not None:
                         CG_errors_true = norm(CG_solver.x - x_true)/norm(x_true)
                         A_residual = self.apply_LHS(CG_solver.x - x_true)
@@ -321,20 +338,23 @@ class CGMapmakerI(CGMapmaker):
                  detector_samples,
                  map_comm, T_omega = np.ones_like, 
                  preconditioner = np.copy, 
-                 nthreads = 1, 
-                 double_prec = True, 
-                 CG_maxiter = 200, 
-                 CG_tol = 1e-10, 
-                 CG_check_interval = 1):
-        
-        super().__init__(detector_tod, detector_samples, map_comm, T_omega, preconditioner, 
-                         nthreads, double_prec, CG_maxiter, CG_tol, CG_check_interval)
-        
-        #output map to be solved for
-        self._map_signal = np.zeros((1,hp.nside2npix(detector_tod.nside)), 
+                 nthreads = 1,
+                 double_prec = True,
+                 CG_maxiter = 200,
+                 CG_tol = 1e-10,
+                 CG_check_interval = 1,
+                 pixel_domain = None):
+
+        super().__init__(detector_tod, detector_samples, map_comm, T_omega, preconditioner,
+                         nthreads, double_prec, CG_maxiter, CG_tol, CG_check_interval, pixel_domain)
+
+        self._ncomp = 1
+        # Master holds the full-sky solution and RHS; the iterate is scattered to the ranks' local
+        # domains each iteration (see apply_LHS).
+        self._map_signal = np.zeros((1,hp.nside2npix(detector_tod.nside)),
             dtype=self.f_dtype) if self.ismaster else None
         #RHS map to be accumulated on master rank
-        self._rhs_finalized_map = np.zeros((1,hp.nside2npix(detector_tod.nside)), 
+        self._rhs_finalized_map = np.zeros((1,hp.nside2npix(detector_tod.nside)),
             dtype=self.f_dtype) if self.ismaster else None
         
         #RHS map to be accumulate
@@ -373,10 +393,9 @@ class CGMapmakerI(CGMapmaker):
         In the CGMapmakerI the psi will be ignored.
         """
         scan_tod_arr = out_scan.tod if scan_tod_arr is None else scan_tod_arr
-        npix_out = hp.nside2npix(out_scan.nside)
-        assert npix_out == in_map.shape[-1], "in_map size must match scan's eval nside."
+        # in_map is indexed by pix, so its pixel axis defines the domain (full-sky or rank-local).
+        pix = self.domain.to_local(out_scan.pix if pix is None else pix)
         assert pix.shape == scan_tod_arr.shape, "pix shape must match scan_tod_arr."
-        pix = out_scan.pix if pix is None else pix
         # Use the passed array length, not the full detector ntod: apply_LHS masks pix/scan_tod_arr
         # down to good samples, so this must match (mirrors apply_P_adjoint).
         ntod = scan_tod_arr.shape[-1]
@@ -394,20 +413,17 @@ class CGMapmakerI(CGMapmaker):
         In the CGMapmakerI the psi will be ignored.
         """
         scan_tod_arr = in_scan.tod if scan_tod_arr is None else scan_tod_arr
-        npix_out = out_map.shape[-1]
-        assert npix_out == hp.nside2npix(in_scan.nside), "out_map size must match scan's eval nside."
+        # out_map is indexed by pix, so its pixel axis defines the domain (full-sky or rank-local).
+        pix = self.domain.to_local(in_scan.pix if pix is None else pix)
         assert pix.shape == scan_tod_arr.shape, "pix shape must match scan_tod_arr."
-        pix = in_scan.pix if pix is None else pix
         ntod = scan_tod_arr.shape[-1]
         self.map_accumulator(out_map, scan_tod_arr, 1, pix.astype(np.int64, copy=False), ntod)
         return out_map
 
     @property
     def _zeros_map(self):
-        """
-        Internal function to allocate an empty map.
-        """
-        return np.zeros((1, hp.nside2npix(self.detector_tod.nside)), dtype=self.f_dtype)
+        """Allocate a zero local map buffer (full-sky in full mode, rank-local in sparse mode)."""
+        return np.zeros((1, self._nloc), dtype=self.f_dtype)
 
 class CGMapmakerIQU(CGMapmaker):
     """Polarised (I, Q, U) CG mapmaker.
@@ -422,22 +438,25 @@ class CGMapmakerIQU(CGMapmaker):
                  map_comm, 
                  T_omega = np.ones_like, 
                  preconditioner = np.copy, 
-                 nthreads = 1, 
-                 double_prec = True, 
-                 CG_maxiter = 200, 
-                 CG_tol = 1e-10, 
-                 CG_check_interval = 1):
-        
-        super().__init__(detector_tod, detector_samples, map_comm, T_omega, preconditioner, 
-                         nthreads, double_prec, CG_maxiter, CG_tol, CG_check_interval)
-        
-        #output map to be solved for
-        self._map_signal = np.zeros((3,hp.nside2npix(detector_tod.nside)), 
+                 nthreads = 1,
+                 double_prec = True,
+                 CG_maxiter = 200,
+                 CG_tol = 1e-10,
+                 CG_check_interval = 1,
+                 pixel_domain = None):
+
+        super().__init__(detector_tod, detector_samples, map_comm, T_omega, preconditioner,
+                         nthreads, double_prec, CG_maxiter, CG_tol, CG_check_interval, pixel_domain)
+
+        self._ncomp = 3
+        # Master holds the full-sky solution and RHS; the iterate is scattered to the ranks' local
+        # domains each iteration (see apply_LHS).
+        self._map_signal = np.zeros((3,hp.nside2npix(detector_tod.nside)),
             dtype=self.f_dtype) if self.ismaster else None
         #local RHS map
         self._rhs_loca_map = None
         #RHS map to be accumulated on master rank
-        self._rhs_finalized_map = np.zeros((3,hp.nside2npix(detector_tod.nside)), 
+        self._rhs_finalized_map = np.zeros((3,hp.nside2npix(detector_tod.nside)),
             dtype=self.f_dtype) if self.ismaster else None
         
         if double_prec:
@@ -483,13 +502,10 @@ class CGMapmakerIQU(CGMapmaker):
         If a `scan_tod_arr` is passed it is used instead of overwriting `out_scan`
         """
         scan_tod_arr = out_scan.tod if scan_tod_arr is None else scan_tod_arr
-        npix_out = hp.nside2npix(out_scan.nside)
-        assert npix_out == in_map.shape[-1], "in_map size must match scan's eval nside."
-        # if pix.shape != scan_tod_arr.shape:
-        #     self.logger.info(f"### Shape pix: {pix.shape}, shape scan: {scan_tod_arr.shape}")
-        # assert pix.shape == scan_tod_arr.shape, "pix shape must match scan_tod_arr."
-        # assert psi.shape == scan_tod_arr.shape, "psi shape must match scan_tod_arr."
-        pix = out_scan.pix if pix is None else pix
+        # in_map is indexed by pix and strided by its pixel axis, which defines the domain
+        # (full-sky or rank-local); num_pix is that axis length.
+        npix_out = in_map.shape[-1]
+        pix = self.domain.to_local(out_scan.pix if pix is None else pix)
         psi = out_scan.psi if psi is None else psi
         # Use the passed array length, not the full detector ntod: apply_LHS masks pix/psi/scan_tod_arr
         # down to good samples, so this must match (mirrors apply_P_adjoint).
@@ -509,22 +525,17 @@ class CGMapmakerIQU(CGMapmaker):
         If a `scan_tod_arr` is passed it is used instead of overwriting `out_scan`
         """
         scan_tod_arr = in_scan.tod if scan_tod_arr is None else scan_tod_arr
+        # out_map is indexed by pix and strided by its pixel axis, which defines the domain
+        # (full-sky or rank-local); num_pix is that axis length.
         npix_out = out_map.shape[-1]
-        assert npix_out == hp.nside2npix(in_scan.nside), "out_map size must match scan's eval nside."
-        # if pix.shape != scan_tod_arr.shape:
-        #     self.logger.info(f"### Shape pix: {pix.shape}, shape scan: {scan_tod_arr.shape}")
-        # assert pix.shape == scan_tod_arr.shape, "pix shape must match scan_tod_arr."
-        # assert psi.shape == scan_tod_arr.shape, "psi shape must match scan_tod_arr."
-        pix = in_scan.pix if pix is None else pix
+        pix = self.domain.to_local(in_scan.pix if pix is None else pix)
         psi = in_scan.psi if psi is None else psi
         ntod = scan_tod_arr.shape[-1]
-        self.map_accumulator_IQU(out_map, scan_tod_arr, 1, pix.astype(np.int64, copy=False), 
+        self.map_accumulator_IQU(out_map, scan_tod_arr, 1, pix.astype(np.int64, copy=False),
                                  psi.astype(np.float64, copy=False), ntod, npix_out)
         return out_map
-    
+
     @property
     def _zeros_map(self):
-        """
-        Internal function to allocate an empty map.
-        """
-        return np.zeros((3, hp.nside2npix(self.detector_tod.nside)), dtype=self.f_dtype)
+        """Allocate a zero local map buffer (full-sky in full mode, rank-local in sparse mode)."""
+        return np.zeros((3, self._nloc), dtype=self.f_dtype)

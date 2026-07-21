@@ -1,6 +1,8 @@
 import numpy as np
+import healpy as hp
 import logging
 from numpy.typing import NDArray
+from pixell.bunch import Bunch
 
 from commander4.cmdr4_support import utils as cpp_utils
 from commander4.data_models.pointing import PixelPointing, DetectorBoresightPointing
@@ -13,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 class DetectorTOD:
     """Holds time-ordered data (TOD) for a single detector within a scan.
+    This class is intended as a "data container", while the user-interaction should happen
+    through the TODView class (`see tod_view.py`).
 
     The pointing information is stored in a ``PixelPointing`` or
     ``DetectorBoresightPointing`` object and exposed via ``get_pix()``,
@@ -38,7 +42,8 @@ class DetectorTOD:
         orb_dir_vec: NDArray[np.floating] | None,
         huffman_tree: NDArray | None,
         huffman_symbols: NDArray | None,
-        processing_mask_map: NDArray[np.bool_],
+        default_proc_mask: NDArray[np.bool_] | None,
+        specific_proc_masks: dict,
         ntod_original: int,
         ntod_optimal: int,
         huffman_tree2: NDArray | None = None,
@@ -66,7 +71,10 @@ class DetectorTOD:
                 or None if orbital dipole is not used.
             huffman_tree: Huffman decoding tree for the flag stream, or None.
             huffman_symbols: Huffman symbol table for the flag stream, or None.
-            processing_mask_map: Boolean HEALPix map selecting valid pixels.
+            default_proc_mask: Default processing-mask HEALPix map (boolean), or None if the band
+                defines none. Used unless a sampling step requests a name in specific_proc_masks.
+            specific_proc_masks: Mapping of operation name -> processing-mask HEALPix map for bands
+                that define per-operation masks (empty dict if none).
             ntod_original: Original TOD length before Fourier-length cropping.
             flag_encoded: Flag samples, either decoded or Huffman-encoded, or None.
             flag_bitmask: Bitmask applied to flags to identify excluded samples.
@@ -87,8 +95,6 @@ class DetectorTOD:
             log.logassert_np(tod.ndim==1, "'value' must be a 1D array", logger)
             log.logassert_np(tod.dtype in [np.float64,np.float32], "TOD dtype must be floating "\
                              f"type, is {tod.dtype}", logger)
-        log.logassert_np(processing_mask_map.dtype == bool, "Processing mask is not boolean type",
-                         logger)
         log.logassert_np(
             isinstance(pointing, (PixelPointing, DetectorBoresightPointing)),
             "pointing must be a PixelPointing or DetectorBoresightPointing instance.",
@@ -163,28 +169,30 @@ class DetectorTOD:
         # The Huffman decoder expects uint8 arrays; for bytes and HDF5-backed
         # numpy.void payloads the internal storage is rewritten as a zero-copy
         # uint8 view once at construction.
-        self.processing_mask_map = processing_mask_map
         self.pointing = pointing
-        processing_mask = processing_mask_map[self.get_pix()]
-        self._processing_mask = np.packbits(processing_mask)
         self.det_response = det_response
         if flag_encoded is not None and bad_data_bitmask is not None:
             good_data_mask = (self.flag & bad_data_bitmask) == 0
             self._good_data_mask = np.packbits(good_data_mask)
-            self._full_mask = np.packbits(good_data_mask & processing_mask)
         if orb_dir_vec is not None:
             log.logassert_np(orb_dir_vec.size == 3, "orb_dir_vec must be a vector of size 3.", logger)
             self._orb_dir_vec = orb_dir_vec.astype(np.float32, copy=False)
         else:
             self._orb_dir_vec = None
+        # Band-level processing-mask HEALPix maps (shared references across the band's detectors;
+        # TODView projects them onto this detector's pointing on demand). The default mask is used
+        # unless a sampling step requests a name present in specific_proc_masks.
+        self.default_proc_mask = default_proc_mask
+        self.specific_proc_masks = specific_proc_masks
 
 
     @property
     def tod(self) -> NDArray[np.floating]:
         if self._tod_is_compressed:
             tod = np.zeros(self.ntod_original, dtype=self._huffman_symbols2.dtype)
-            tod[:] = cpp_utils.huffman_decode(self._tod,
-                                    self._huffman_tree2, self._huffman_symbols2, tod)
+            with benchmark("huffman"):
+                tod[:] = cpp_utils.huffman_decode(self._tod,
+                                        self._huffman_tree2, self._huffman_symbols2, tod)
             tod[:] = np.cumsum(tod)
             tod = tod.astype(np.float32)
         else:
@@ -207,6 +215,7 @@ class DetectorTOD:
         stop_bench("pointing")
         return psi
 
+
     def get_pix_psi(
         self,
         nside: int | None = None,
@@ -216,60 +225,28 @@ class DetectorTOD:
         stop_bench("pointing")
         return pix_psi
         
+
     @property
     def flag(self) -> NDArray[np.integer]:
         if self._flag_is_compressed:
             flag = np.zeros(self.ntod_original, dtype=self._huffman_symbols.dtype)
-            flag = cpp_utils.huffman_decode(self._flag_encoded,
-                                           self._huffman_tree, self._huffman_symbols, flag)
+            with benchmark("huffman"):
+                flag = cpp_utils.huffman_decode(self._flag_encoded,
+                                            self._huffman_tree, self._huffman_symbols, flag)
             flag = np.cumsum(flag)
         else:
             flag = self._flag_encoded
         return flag[:self.ntod]
 
-    @property
-    def processing_mask(self) -> NDArray[np.bool_]:
-        """Boolean mask selecting valid (unmasked) TOD samples.
-
-        Stored internally as a packed bit array and unpacked on each access.
-        """
-        start_bench("numpy-unpack")
-        mask = np.unpackbits(self._processing_mask).view(bool)
-        stop_bench("numpy-unpack")
-        if mask.size > self.tod.size + 7 or mask.size < self.tod.size:
-            # The bytearray is stored in multiples of 8, so it can be up to 7 elements
-            # longer than the TOD. If it's either longer or shorter, something is wrong.
-            raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.tod.size}.")
-        return mask[:self.tod.size]
-
-
-    @property
-    def full_mask(self) -> NDArray[np.bool_]:
-        """Boolean mask keeping samples that pass both flag and processing cuts."""
-        start_bench("numpy-unpack")
-        mask = np.unpackbits(self._full_mask).view(bool)
-        stop_bench("numpy-unpack")
-        if mask.size > self.tod.size + 7 or mask.size < self.tod.size:
-            raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.tod.size}.")
-        return mask[:self.tod.size]
 
     @property
     def good_data_mask(self) -> NDArray[np.bool_]:
         """Boolean mask keeping samples that pass the bad-data flag cut."""
-        start_bench("numpy-unpack")
         mask = np.unpackbits(self._good_data_mask).view(bool)
-        stop_bench("numpy-unpack")
         if mask.size > self.tod.size + 7 or mask.size < self.tod.size:
             raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.tod.size}.")
         return mask[:self.tod.size]
 
-    # @property
-    # def excluded_tod_mask(self) -> NDArray[np.bool_]:
-    #     """
-    #     Returns a mask given by the intersection between the flag array and the flag bitmask.
-    #     """
-    #     return (self.flags & self._flag_bitmask).astype(np.bool_)
-    
 
     @property
     def orb_dir_vec(self) -> NDArray[np.floating]:
@@ -282,15 +259,19 @@ class DetectorTOD:
             return self._orb_dir_vec
         else:
             raise ValueError("Attempted to access self.orb_dir_vec, which is not set.")
-        
+
+
     def IQU_response(self, psi: NDArray | None = None):
         # psi can be passed as an argument to avoid re-calculating it if already available.
         if psi is None:
             psi = self.get_psi()
+        # "None" means standard detector with [1, 1] response for intensity and polarization.
+        resp_I, resp_QU = (1.0, 1.0) if self.det_response is None \
+            else (self.det_response[0], self.det_response[1])
         response = np.zeros((3, psi.shape[-1]))
-        if self.det_response[0] != 0:
-            response[0,:] = self.det_response[0]
-        if self.det_response[1] != 0:
-            response[1,:] = np.cos(2.0*psi)*self.det_response[1]
-            response[2,:] = np.sin(2.0*psi)*self.det_response[1]
+        if resp_I != 0:
+            response[0,:] = resp_I
+        if resp_QU != 0:
+            response[1,:] = np.cos(2.0*psi)*resp_QU
+            response[2,:] = np.sin(2.0*psi)*resp_QU
         return response

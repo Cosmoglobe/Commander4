@@ -6,6 +6,7 @@ from numpy.typing import NDArray
 
 from commander4.output.log import logassert
 from commander4.utils.ctypes_lib import load_cmdr4_ctypes_lib
+from commander4.utils.pixel_domain import PixelDomain
 
 logger = logging.getLogger(__name__)
 
@@ -15,16 +16,23 @@ class Mapmaker:
     Accumulates weighted TOD samples into a map, reduces across MPI ranks,
     and normalizes with a precomputed weights map. The internal accumulation
     is performed in float64; output dtype is controlled by `dtype`.
+
+    The accumulation buffer lives on the rank's ``PixelDomain``: full-sky in the default mode, or
+    only the locally-observed pixels in sparse mode. ``gather_map`` always produces a full-sky map
+    on the master, so normalization and all downstream consumers are unchanged.
     """
-    def __init__(self, map_comm:MPI.Comm, nside:int, dtype=np.float32):
+    def __init__(self, map_comm:MPI.Comm, nside:int, dtype=np.float32,
+                 pixel_domain:PixelDomain|None=None):
         self.map_comm = map_comm
         self.nside = nside
         self.npix = 12*nside**2
         self.dtype= dtype
-        self._map_signal = np.zeros(self.npix, dtype=np.float64)
+        self.domain = pixel_domain if pixel_domain is not None else PixelDomain(map_comm, nside, "full")
+        self._nloc = self.domain.n_local
+        self._map_signal = np.zeros(self._nloc, dtype=np.float64)
         self._gathered_map = None
         self._finalized_map = None
-        
+
         # Setting up Ctypes mapmaker
         self.maplib = load_cmdr4_ctypes_lib()
         ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
@@ -46,16 +54,15 @@ class Mapmaker:
         ntod = tod.shape[0]
         tod_f64 = np.ascontiguousarray(tod, dtype=np.float64)
         weight_f64 = float(weights)
+        pix = self.domain.to_local(pix)
         self.maplib.map_accumulator_f64(self._map_signal, tod_f64, weight_f64,
                                     pix.astype(np.int64, copy=False), ntod)
 
     def gather_map(self):
-        """Reduce the local map buffers across MPI ranks into the root map."""
-        if self.map_comm.Get_rank() == 0:
-            self._gathered_map = np.zeros(self.npix, dtype=np.float64)
-        self.map_comm.Reduce(self._map_signal, self._gathered_map, op=MPI.SUM, root=0)
+        """Reduce the local map buffers across MPI ranks into the full-sky root map."""
+        self._gathered_map = self.domain.reduce_to_full(self._map_signal)
         self._map_signal = None  # Free memory and indicate that accumulation is done.
-    
+
     def normalize_map(self, normalization_map):
         """Normalize the gathered map by the provided weights map."""
         if self.map_comm.Get_rank() == 0:
@@ -75,14 +82,17 @@ class WeightsMapmaker:
     Accumulates per-sample weights into a map, reduces across MPI ranks,
     and exposes the gathered weights map for normalization of Mapmaker.
     """
-    def __init__(self, map_comm:MPI.Comm, nside:int, dtype=np.float32):
+    def __init__(self, map_comm:MPI.Comm, nside:int, dtype=np.float32,
+                 pixel_domain:PixelDomain|None=None):
         self.map_comm = map_comm
         self.nside = nside
         self.npix = 12*nside**2
         self.dtype= dtype
-        self._map_signal = np.zeros(self.npix, dtype=np.float64)
+        self.domain = pixel_domain if pixel_domain is not None else PixelDomain(map_comm, nside, "full")
+        self._nloc = self.domain.n_local
+        self._map_signal = np.zeros(self._nloc, dtype=np.float64)
         self._gathered_map = None
-        
+
         # Setting up Ctypes mapmaker
         self.maplib = load_cmdr4_ctypes_lib()
         ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
@@ -103,14 +113,14 @@ class WeightsMapmaker:
         logassert(self._map_signal is not None, "Tried accumulating to finalized map", logger)
         ntod = pix.shape[0]
         weight_f64 = float(weight)
+        pix = self.domain.to_local(pix)
+        # The scalar weight kernel indexes map[pix] directly and takes no num_pix argument.
         self.maplib.map_weight_accumulator_f64(self._map_signal, weight_f64,
-                                               pix.astype(np.int64, copy=False), ntod, self.npix)
+                                               pix.astype(np.int64, copy=False), ntod)
 
     def gather_map(self):
-        """Reduce the local weights buffers across MPI ranks into the root map."""
-        if self.map_comm.Get_rank() == 0:
-            self._gathered_map = np.zeros(self.npix, dtype=np.float64)
-        self.map_comm.Reduce(self._map_signal, self._gathered_map, op=MPI.SUM, root=0)
+        """Reduce the local weights buffers across MPI ranks into the full-sky root map."""
+        self._gathered_map = self.domain.reduce_to_full(self._map_signal)
         self._map_signal = None  # Free memory and indicate that accumulation is done.
 
 
@@ -129,16 +139,19 @@ class MapmakerIQU:
     - Use MapmakerIQU to accumulate signal maps, then call `normalize_map(A)`
         with the gathered A map to produce the finalized I,Q,U map.
     """
-    def __init__(self, map_comm:MPI.Comm, nside:int, dtype=np.float32):
+    def __init__(self, map_comm:MPI.Comm, nside:int, dtype=np.float32,
+                 pixel_domain:PixelDomain|None=None):
         self.map_comm = map_comm
         self.nside = nside
         self.npix = 12*nside**2
         self.dtype= dtype
-        self._map_signal = np.zeros((3, self.npix), dtype=np.float64)
+        self.domain = pixel_domain if pixel_domain is not None else PixelDomain(map_comm, nside, "full")
+        self._nloc = self.domain.n_local
+        self._map_signal = np.zeros((3, self._nloc), dtype=np.float64)
         self._gathered_map = None
         self._finalized_map = None
         self._has_gathered = False
-        
+
         # Setting up Ctypes mapmaker
         self.maplib = load_cmdr4_ctypes_lib()
         ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
@@ -172,23 +185,24 @@ class MapmakerIQU:
         tod_f64 = np.ascontiguousarray(tod, dtype=np.float64)
         weight_f64 = float(weights)
         psi_f64 = np.ascontiguousarray(psi, dtype=np.float64)
-        pix_i64 = pix.astype(np.int64, copy=False)
+        # The IQU kernels stride the (3, n) buffer by its pixel count, so num_pix must be n_local.
+        pix_i64 = self.domain.to_local(pix).astype(np.int64, copy=False)
         if response is None:
             self.maplib.map_accumulator_IQU_f64(self._map_signal, tod_f64, weight_f64,
-                                                pix_i64, psi_f64, ntod, self.npix)
+                                                pix_i64, psi_f64, ntod, self._nloc)
         else:
             response_I = float(response[0])
             response_QU = float(response[1])
             self.maplib.map_accumulator_IQU_response_f64(self._map_signal, tod_f64, weight_f64,
                                                          pix_i64, psi_f64, response_I,
-                                                         response_QU, ntod, self.npix)
+                                                         response_QU, ntod, self._nloc)
 
     def accumulate_to_map_Python(self, tod:NDArray, weights:NDArray, pix:NDArray, psi:NDArray,
                                  response: NDArray | None = None):
         """Reference accumulator matching the ctypes IQU implementation."""
         # Reference implementation matching the ctypes IQU accumulator.
         logassert(self._map_signal is not None, "Tried accumulating to finalized map", logger)
-        pix_idx = pix.astype(np.int64, copy=False)
+        pix_idx = self.domain.to_local(pix).astype(np.int64, copy=False)
         w_tod = np.ascontiguousarray(tod, dtype=np.float64) * float(weights)
         ang = 2.0 * np.ascontiguousarray(psi, dtype=np.float64)
         c2 = np.cos(ang)
@@ -203,13 +217,11 @@ class MapmakerIQU:
         np.add.at(self._map_signal[2], pix_idx, w_tod * response_QU * s2)
 
     def gather_map(self):
-        """Reduce the local IQU buffers across MPI ranks into the root map."""
-        if self.map_comm.Get_rank() == 0:
-            self._gathered_map = np.zeros((3, self.npix), dtype=np.float64)
-        self.map_comm.Reduce(self._map_signal, self._gathered_map, op=MPI.SUM, root=0)
+        """Reduce the local IQU buffers across MPI ranks into the full-sky root map."""
+        self._gathered_map = self.domain.reduce_to_full(self._map_signal)
         self._map_signal = None  # Free memory and indicate that accumulation is done.
         self._has_gathered = True
-    
+
     def normalize_map(self, normalization_map):
         """Solve the per-pixel 3x3 system using the provided A matrix."""
         if self.map_comm.Get_rank() == 0:
@@ -273,16 +285,19 @@ class WeightsMapmakerIQU:
     - Call `normalize_map()` to compute RMS maps and expose `final_cov_map`
         for MapmakerIQU normalization.
     """
-    def __init__(self, map_comm:MPI.Comm, nside:int, dtype=np.float32):
+    def __init__(self, map_comm:MPI.Comm, nside:int, dtype=np.float32,
+                 pixel_domain:PixelDomain|None=None):
         self.map_comm = map_comm
         self.nside = nside
         self.npix = 12*nside**2
         self.dtype= dtype
-        self._map_signal = np.zeros((6, self.npix), dtype=np.float64)
+        self.domain = pixel_domain if pixel_domain is not None else PixelDomain(map_comm, nside, "full")
+        self._nloc = self.domain.n_local
+        self._map_signal = np.zeros((6, self._nloc), dtype=np.float64)
         self._gathered_map = None
         self._finalized_rms_map = None
         self._has_gathered = False
-        
+
         # Setting up Ctypes mapmaker
         self.maplib = load_cmdr4_ctypes_lib()
         ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
@@ -316,23 +331,24 @@ class WeightsMapmakerIQU:
         ntod = pix.shape[0]
         weight_f64 = float(weight)
         psi_f64 = np.ascontiguousarray(psi, dtype=np.float64)
-        pix_i64 = pix.astype(np.int64, copy=False)
+        # The IQU kernels stride the (6, n) buffer by its pixel count, so num_pix must be n_local.
+        pix_i64 = self.domain.to_local(pix).astype(np.int64, copy=False)
         if response is None:
             self.maplib.map_weight_accumulator_IQU_f64(self._map_signal, weight_f64,
-                                                       pix_i64, psi_f64, ntod, self.npix)
+                                                       pix_i64, psi_f64, ntod, self._nloc)
         else:
             response_I = float(response[0])
             response_QU = float(response[1])
             self.maplib.map_weight_accumulator_IQU_response_f64(self._map_signal, weight_f64,
                                                                 pix_i64, psi_f64, response_I,
-                                                                response_QU, ntod, self.npix)
+                                                                response_QU, ntod, self._nloc)
 
     def accumulate_to_map_Python(self, weight:float, pix:NDArray, psi:NDArray,
                                  response: NDArray | None = None):
         """Reference accumulator matching the ctypes IQU weights implementation."""
         # Reference implementation matching the ctypes IQU weight accumulator.
         logassert(self._map_signal is not None, "Tried accumulating to finalized map", logger)
-        pix_idx = pix.astype(np.int64, copy=False)
+        pix_idx = self.domain.to_local(pix).astype(np.int64, copy=False)
         ang = 2.0 * np.ascontiguousarray(psi, dtype=np.float64)
         c2 = np.cos(ang)
         s2 = np.sin(ang)
@@ -349,24 +365,9 @@ class WeightsMapmakerIQU:
         np.add.at(self._map_signal[4], pix_idx, weight_f64 * response_QU * response_QU * s2 * c2)
         np.add.at(self._map_signal[5], pix_idx, weight_f64 * response_QU * response_QU * s2 * s2)
 
-    @property
-    def inv_N_diag(self):
-        """
-        Gives the diagonal of the accumulated inverse covariance matrix, per each pixel.
-
-        It is useful as a preconditioner for the CG mapmaker.
-
-        Note: call it before `gather_map` wipes the inverse covariance matrix away. 
-        """
-        logassert(self._map_signal is not None, "Attempted to access inv cov map after finalization.",
-                      logger)
-        return self._map_signal[(0,3,5), :]
-
     def gather_map(self):
-        """Reduce the local IQU weight buffers across MPI ranks into the root map."""
-        if self.map_comm.Get_rank() == 0:
-            self._gathered_map = np.zeros((6, self.npix), dtype=np.float64)
-        self.map_comm.Reduce(self._map_signal, self._gathered_map, op=MPI.SUM, root=0)
+        """Reduce the local IQU weight buffers across MPI ranks into the full-sky root map."""
+        self._gathered_map = self.domain.reduce_to_full(self._map_signal)
         self._map_signal = None  # Free memory and indicate that accumulation is done.
         self._has_gathered = True
 

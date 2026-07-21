@@ -3,7 +3,7 @@
 
 general:
   MPI_config:
-    ntask_tod: 256
+    ntask_tod: 64
     ntask_compsep_I: 8
     ntask_compsep_QU: 8
   nthreads_tod: 1
@@ -26,7 +26,9 @@ general:
     psd_fit_nu_min: 0.0           # Min frequency (Hz) for noise-PSD parameter fitting.
     psd_fit_nu_max: 2.0           # Max frequency (Hz) for noise-PSD parameter fitting.
     psd_bin: False                # Fit every Fourier mode (False) or mode-weighted binned PSD.
+    sigma0_method: pairwise     # White-noise estimator: 'pairwise' (first-difference) or 'binned_psd'.
   gain_calib_downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+  gap_fill_method: wn         # Gap fill for non-CG (gain) steps: 'wn' | 'fallback' | 'full_cg'.
   abs_gain:                           # Absolute (band-global) gain g0.
     sample: true
     sample_from_iter_num: 2
@@ -46,7 +48,7 @@ general:
 
   galactic_mask: True
   pixel_compsep_sampling: True
-  smooth_to_common_res: True
+  common_res_fwhm: 60.0  # arcmin; must be >= every band's beam (here Haslam at 60').
 
   chains_to_write: [1,]
   write_orb_dipole_maps_to_chain: True
@@ -59,23 +61,27 @@ general:
   init_chain_path: false
 
   output_paths:
-    chains: "../cmdr4_chains/PlanckTODs_perpix_initcomps/"
-    stats: "../cmdr4_stats/PlanckTODs_perpix_initcomps/"
+    chains: "../cmdr4_chains/PlanckTODs_perpix_test/"
+    stats: "../cmdr4_stats/PlanckTODs_perpix_test/"
 
   logging:
     console:
       level: 'debug'
     file:
       level: 'info'
-      filename: '../cmdr4_logs/output_PlanckTODs_perpix_initcomps'
+      filename: '../cmdr4_logs/output_PlanckTODs_perpix_test'
 
-sampling_groups_compsep:
+# Linear amplitude (CG) sampling groups (the per-pixel solver is the amplitude sampler here).
+CG_sampling_groups_compsep:
   sample_amps_perpix:
     enabled: true
     sample_class: "amplitude_sampler_perpix"
     # comps: [CMB, Synchrotron, ThermalDust, FreeFree]
     comps: [CMB, Synchrotron, ThermalDust]
     bands: [Planck30GHz, Haslam408MHz, WMAPKa, WMAPQ1, WMAPQ2, WMAPV1, WMAPV2, Planck857GHz, Planck353GHz]
+
+# Non-linear (MCMC) spectral-index sampling groups. None enabled here.
+MCMC_sampling_groups_compsep: {}
 
 
 components:
@@ -343,7 +349,7 @@ experiments:
     bands:
       Planck30GHz:
         enabled: true
-        num_MPI_tasks: 256
+        num_MPI_tasks: 64
         eval_nside: 512
         data_nside: 512
         fwhm: 32.4 # [arcmin]

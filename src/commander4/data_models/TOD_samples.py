@@ -12,6 +12,7 @@ import logging
 import typing
 
 from commander4.data_models.jump_corrections import JumpCatalog
+from commander4.utils.unit_conversions import rj_to_band_unit_factor
 if typing.TYPE_CHECKING:
     from commander4.data_models.detector_group_TOD import DetGroupTOD
 
@@ -116,7 +117,21 @@ class TODSamples:
         self.npar = self.noise_model.npar
         self.scan_idx_start = experiment_data.scan_idx_start
         self.scan_idx_stop = experiment_data.scan_idx_stop
-        self.scan_ids = np.array([scan.scan_id for scan in experiment_data.scans])
+        # C4 works internally in uK_RJ; a band may quote its gain and maps in another unit via
+        # `band_unit`. `band_unit_factor` D (= value of 1 uK_RJ in band_unit) converts at the file
+        # boundary: brightness maps multiply by D, the gain (brightness in its denominator) divides by
+        # D on write and multiplies on read. Defaults to uK_RJ (D=1, a no-op). See [[unit_conversions]].
+        if "band_unit" in my_band:
+            band_unit = my_band.band_unit
+        else:
+            band_unit = "uK_RJ"
+            if self.band_comm.Get_rank() == 0:
+                logger.warning(f"Band {self.band_name} has no `band_unit`; assuming uK_RJ. Set it "
+                               f"explicitly (e.g. uK_CMB for CMB-calibrated gains) to silence this.")
+        self.band_unit = band_unit
+        self.band_unit_factor = rj_to_band_unit_factor(experiment_data.nu, band_unit)
+        # Explicit int64 so a rank that holds no scans still yields an int64 array.
+        self.scan_ids = np.array([scan.scan_id for scan in experiment_data.scans], dtype=np.int64)
         # Ordered per-band detector names. Their position is the ``idet`` axis shared by every
         # per-detector array (rel_gain, noise_params, temporal_gain, accept, tod_ps_*, jumps), so
         # writing them to the chain lets a reader map each array column back to a physical detector.
@@ -148,6 +163,16 @@ class TODSamples:
         self.tod_ps_ncorrsub = np.full(ps_shape, np.nan, dtype=np.float32)
         self.tod_ps_residual = np.full(ps_shape, np.nan, dtype=np.float32)
 
+        # Per-detector-scan data-selection diagnostics, written to the chain: chisq_z is the
+        # white-noise-residual chi-squared z-score (see masked_chisq_z in data_selection; ~N(0,1)
+        # for clean data, huge for bad scans), good_fraction the unflagged fraction of samples.
+        # NaN-reset before every mapmaking pass and refilled in its scan loop, so a finite entry
+        # means "evaluated this iteration"; the in-loop data-selection vetoes judge them and
+        # log_dataselect_summary reports them.
+        self.chisq_z = np.full((self.nscans, self.ndet), np.nan)
+        self.good_fraction = np.full((self.nscans, self.ndet), np.nan)
+
+
         # Optional DEBUG: the entire per-sample correlated-noise (n_corr) TODs, written to the chain
         # only when explicitly requested (the data is very large). Collected ragged as one float32
         # array per detector-scan; ``None`` disables collection.
@@ -172,46 +197,54 @@ class TODSamples:
             self.rel_gain = np.zeros((self.ndet))
             self.temporal_gain = np.zeros((self.nscans, self.ndet))
 
-            # NaN so detector-scans with no data are excluded from the gain means below.
-            all_det_gains = np.full((self.nscans, self.ndet), np.nan)
+            # Find the first detector in the first scan. Used for checking if default values
+            # are present. Default to None in case there are no scans.
+            rep_det = next((det for _, det in experiment_data.iter_detector_scans()), None)
 
-            if "initial_noise_params" in my_band:
-                # Option 1: They are specified in the parameter file.
-                self.noise_params[:] = np.array(my_band.initial_noise_params)
-            elif experiment_data.scans[0].detectors[0].init_scalars is not None:
-                # Option 2: There were entries in the read-in files. Index by the detector's
-                # full-band column; absent detector-scans stay NaN.
-                for iscan, det in experiment_data.iter_detector_scans():
-                    self.noise_params[iscan, det.det_idx_fullband] = det.init_scalars[1:]
-            else:
-                # Option 3: Fall back to the noise model's default parameters (ensuring a finite
-                # sigma0, which the model leaves as NaN to be estimated from the data).
-                logger.warning("Did not find initial noise parameters, falling back to the noise "
-                               "model's default parameters.")
-                default_params = np.array(self.noise_model.params, dtype=np.float64)
-                if not np.isfinite(default_params[0]):
-                    default_params[0] = 1.0
-                self.noise_params[:] = default_params
+            if rep_det is not None:
+                # NaN so detector-scans with no data are excluded from the gain means below.
+                all_det_gains = np.full((self.nscans, self.ndet), np.nan)
 
-            if "gain" in my_band.detectors[experiment_data.scans[0].detectors[0].name]:
-                for iscan, det in experiment_data.iter_detector_scans():
-                    all_det_gains[iscan, det.det_idx_fullband] = my_band[det.name].gain
-            elif experiment_data.scans[0].detectors[0].init_scalars is not None:
-                for iscan, det in experiment_data.iter_detector_scans():
-                    all_det_gains[iscan, det.det_idx_fullband] = det.init_scalars[0]
-            else:
-                raise ValueError("Did not find initial gain value in input files.")
+                if "initial_noise_params" in my_band:
+                    # Option 1: They are specified in the parameter file.
+                    self.noise_params[:] = np.array(my_band.initial_noise_params)
+                elif rep_det.init_scalars is not None:
+                    # Option 2: There were entries in the read-in files. Index by the detector's
+                    # full-band column; absent detector-scans stay NaN.
+                    for iscan, det in experiment_data.iter_detector_scans():
+                        self.noise_params[iscan, det.det_idx_fullband] = det.init_scalars[1:]
+                else:
+                    # Option 3: Fall back to the noise model's default parameters (ensuring a finite
+                    # sigma0, which the model leaves as NaN to be estimated from the data).
+                    logger.warning("Did not find initial noise parameters, falling back to the "
+                                   "noise model's default parameters.")
+                    default_params = np.array(self.noise_model.params, dtype=np.float64)
+                    if not np.isfinite(default_params[0]):
+                        default_params[0] = 1.0
+                    self.noise_params[:] = default_params
 
-            self.abs_gain = float(np.nanmean(all_det_gains))
-            # Relative gain only for detectors with data in >=1 local scan; detectors absent from
-            # every local scan get 0 (never used downstream) and are kept out of the empty-slice
-            # mean. temporal_gain holes (absent detector-scans) collapse to 0 likewise.
-            present_any = np.isfinite(all_det_gains).any(axis=0)
-            self.rel_gain = np.zeros(self.ndet)
-            self.rel_gain[present_any] = (np.nanmean(all_det_gains[:, present_any], axis=0)
-                                          - self.abs_gain)
-            self.temporal_gain = np.nan_to_num(all_det_gains - self.rel_gain - self.abs_gain,
-                                               nan=0.0)
+                if "gain" in my_band.detectors[rep_det.name]:
+                    for iscan, det in experiment_data.iter_detector_scans():
+                        all_det_gains[iscan, det.det_idx_fullband] = my_band[det.name].gain
+                elif rep_det.init_scalars is not None:
+                    for iscan, det in experiment_data.iter_detector_scans():
+                        all_det_gains[iscan, det.det_idx_fullband] = det.init_scalars[0]
+                else:
+                    raise ValueError("Did not find initial gain value in input files.")
+
+                # Initial gains are quoted in band_unit; convert to internal [det units]/uK_RJ
+                # (gain multiplies by D on read) before decomposing into abs/rel/temporal.
+                all_det_gains *= self.band_unit_factor
+
+                self.abs_gain = float(np.nanmean(all_det_gains))
+                # Relative gain only for detectors with data in >=1 local scan; detectors absent
+                # from every local scan get 0 (never used downstream) and are kept out of the
+                # empty-slice mean. temporal_gain holes (absent detector-scans) collapse to 0.
+                present_any = np.isfinite(all_det_gains).any(axis=0)
+                self.rel_gain[present_any] = (np.nanmean(all_det_gains[:, present_any], axis=0)
+                                              - self.abs_gain)
+                self.temporal_gain = np.nan_to_num(all_det_gains - self.rel_gain - self.abs_gain,
+                                                   nan=0.0)
 
         else:
             # ---------------------------------------------------------
@@ -257,7 +290,20 @@ class TODSamples:
                 self.temporal_gain = f["temporal_gain"][local_indices, :] if "temporal_gain" in f else None
                 self.noise_params = f["noise_params"][local_indices, ...] if "noise_params" in f else None
                 self.accept = f["accept"][local_indices, ...].astype(bool)
+                if "chisq_z" in f:  # Optional (older chains lack it).
+                    self.chisq_z = f["chisq_z"][local_indices, ...]
+                if "good_fraction" in f:
+                    self.good_fraction = f["good_fraction"][local_indices, ...]
                 self.jumps = JumpCatalog.from_hdf5(f, local_indices, self.ndet)
+
+            # Chain gains are stored in band_unit; convert back to internal [det units]/uK_RJ.
+            if self.band_unit_factor != 1.0:
+                if self.abs_gain is not None:
+                    self.abs_gain *= self.band_unit_factor
+                if self.rel_gain is not None:
+                    self.rel_gain = self.rel_gain * self.band_unit_factor
+                if self.temporal_gain is not None:
+                    self.temporal_gain = self.temporal_gain * self.band_unit_factor
 
         if self.band_comm.Get_rank() == 0:
             logger.debug(f"Initial absolute gain estimate for {self.band_name}: {self.abs_gain:.3e}.")
@@ -354,6 +400,9 @@ class TODSamples:
                                                         scans_per_rank)
         accept_global = _gather_scan_distributed_array(band_comm, self.accept.astype(np.int8),
                                                        scans_per_rank)
+        chisq_z_global = _gather_scan_distributed_array(band_comm, self.chisq_z, scans_per_rank)
+        good_fraction_global = _gather_scan_distributed_array(band_comm, self.good_fraction,
+                                                              scans_per_rank)
 
         # 4c. Low-resolution TOD power spectra (per-scan per-detector per-bin).
         tod_ps_freqs_global = _gather_scan_distributed_array(band_comm, self.tod_ps_freqs,
@@ -392,9 +441,20 @@ class TODSamples:
             filename = f"{exp_name}_{band_name}_chain{self.chain:02d}_iter{itr:04d}.h5"
             chain_file = os.path.join(chain_dir, filename)
 
+            # Write gains in band_unit: gain has brightness in its denominator, so divide by D
+            # (output maps instead multiply by D). Division makes copies, so self.* stays uK_RJ.
+            if abs_gain_global is not None:
+                abs_gain_global = abs_gain_global / self.band_unit_factor
+            if rel_gain_global is not None:
+                rel_gain_global = rel_gain_global / self.band_unit_factor
+            if temporal_gain_global is not None:
+                temporal_gain_global = temporal_gain_global / self.band_unit_factor
+
             with h5py.File(chain_file, "w") as file:
                 file["metadata/datetime"] = datetime.datetime.now().isoformat()
                 file["metadata/parameter_file_as_string"] = params.parameter_file_as_string
+                # Thermodynamic unit the written gains are expressed in (gain is [det units]/band_unit).
+                file["metadata/band_unit"] = self.band_unit
                 file["scan_ids"] = scan_ids_global
                 # Detector names (per-band, identical across ranks): the `idet` axis of every
                 # per-detector array below. Variable-length UTF-8 for a clean string round-trip.
@@ -410,6 +470,8 @@ class TODSamples:
                     file["noise_params"] = noise_params_global
                 file["present"] = present_global
                 file["accept"] = accept_global
+                file["chisq_z"] = chisq_z_global
+                file["good_fraction"] = good_fraction_global
                 file["tod_ps_freqs"] = tod_ps_freqs_global
                 file["tod_ps_ncorr"] = tod_ps_ncorr_global
                 file["tod_ps_raw"] = tod_ps_raw_global

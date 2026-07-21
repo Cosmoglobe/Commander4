@@ -3,11 +3,13 @@ import pytest
 from numba import njit
 from scipy.fft import rfftfreq
 
-from commander4.noise_sampling.sigma0 import calc_sigma0_simple, calc_sigma0_robust
+from commander4.noise_sampling.sigma0 import (calc_sigma0_simple, calc_sigma0_robust,
+                                              calc_sigma0_binned_psd)
 from commander4.noise_sampling.noise_psd import NoisePSDOof
 from commander4.noise_sampling.noise_sampling import fill_all_masked
 from commander4.noise_sampling.sample_ncorr import (sample_correlated_noise,
-                                                    corr_noise_realization_with_gaps)
+                                                    corr_noise_realization_with_gaps,
+                                                    realize_noise_in_gaps)
 from commander4.data_models.detector_group_TOD import DetGroupTOD
 
 
@@ -98,6 +100,105 @@ class TestRobustSigma0:
         # With < 100 valid pairs, should return inf
         est = calc_sigma0_robust(tod, mask)
         assert est == np.inf
+
+
+class TestBinnedPSDSigma0:
+    def test_recovers_white_level(self):
+        """The binned-PSD floor (in C4's normalization) recovers the true white sigma0."""
+        rng = np.random.default_rng(7)
+        sigma, n, fsamp = 2.5, 2**16, 10.0
+        tod = rng.normal(0.0, sigma, n)
+        mask = np.ones(n, dtype=bool)
+        est = calc_sigma0_binned_psd(tod, mask, fsamp)
+        # Slightly biased low by the 0.95 safety factor and the min-over-bins; within ~15%.
+        assert est == pytest.approx(sigma, rel=0.15)
+        assert est < sigma  # the safety factor guarantees an under-estimate for pure white noise
+
+    def test_robust_to_1f_component(self):
+        """Adding a strong 1/f component must not raise the estimated white floor (min picks it)."""
+        sigma, fknee, alpha, n, fsamp = 1.5, 0.8, -2.0, 2**16, 10.0
+        white = np.random.default_rng(1).normal(0.0, sigma, n)
+        corr = _synth_corr_noise(2, n, fsamp, sigma, fknee, alpha)
+        mask = np.ones(n, dtype=bool)
+        est_white = calc_sigma0_binned_psd(white, mask, fsamp)
+        est_total = calc_sigma0_binned_psd(white + corr, mask, fsamp)
+        assert est_total == pytest.approx(est_white, rel=0.1)
+        assert est_total == pytest.approx(sigma, rel=0.15)
+
+    def test_agrees_with_pairwise_on_white(self):
+        rng = np.random.default_rng(3)
+        sigma, n, fsamp = 1.0, 2**16, 10.0
+        tod = rng.normal(0.0, sigma, n)
+        mask = np.ones(n, dtype=bool)
+        # The two estimators target the same quantity; binned is a touch lower (0.95 guard).
+        assert calc_sigma0_binned_psd(tod, mask, fsamp) == pytest.approx(
+            calc_sigma0_robust(tod, mask), rel=0.12)
+
+
+# ===================================================================
+# Gain-step gap-fill realization (realize_noise_in_gaps)
+# ===================================================================
+
+class TestRealizeNoiseInGaps:
+    @staticmethod
+    def _setup(ntod=4096, fsamp=1.0, sigma0=1.0, fknee=0.2, alpha=-1.8, seed=4):
+        rng = np.random.default_rng(seed)
+        noise = _synth_corr_noise(seed, ntod, fsamp, sigma0, fknee, alpha) \
+            + rng.normal(0.0, sigma0, ntod)
+        mask = np.ones(ntod, dtype=bool)
+        mask[1000:1100] = False  # contiguous gap
+        mask[2000] = False       # single-sample gap
+        return noise, mask, np.array([sigma0, fknee, alpha]), fsamp
+
+    def test_fallback_and_full_cg_fill_gaps_keep_valid(self):
+        """Both methods replace masked samples with a finite draw and leave valid samples intact."""
+        m = NoisePSDOof()
+        noise, mask, params, fsamp = self._setup()
+        for method in ("fallback", "full_cg"):
+            _seed_all_rng(0)
+            out = realize_noise_in_gaps(noise.copy(), mask, m, params, fsamp, fsamp, method)
+            assert np.all(np.isfinite(out))
+            assert np.array_equal(out[mask], noise[mask])      # valid samples untouched
+            assert not np.allclose(out[~mask], noise[~mask])   # gaps replaced
+            assert np.var(out[~mask]) > 0
+
+    def test_no_gaps_is_identity(self):
+        """With an all-valid mask there is nothing to fill: the input is returned unchanged."""
+        m = NoisePSDOof()
+        noise, _, params, fsamp = self._setup()
+        full = np.ones(noise.size, dtype=bool)
+        out = realize_noise_in_gaps(noise.copy(), full, m, params, fsamp, fsamp, "fallback")
+        assert np.array_equal(out, noise)
+
+    def test_white_level_scales_with_samprate(self):
+        """The gap noise level follows sigma0*sqrt(samprate/fsamp) (the apply_N_inv convention).
+
+        Treating the same residual as 10x downsampled rescales sigma0 by sqrt(1/10), so the
+        white-dominated gap fluctuation must shrink substantially relative to the native-rate draw.
+        """
+        class _White(NoisePSDOof):
+            def eval_corr(self, freqs, noise_params):
+                return np.zeros(len(freqs), dtype=np.float64)  # pure white: no 1/f gap structure
+        m = _White()
+        n, sigma0 = 8192, 2.0
+        params = np.array([sigma0, 0.2, -1.8])
+        mask = np.ones(n, dtype=bool)
+        mask[1000:5000] = False
+        noise = np.random.default_rng(0).normal(0.0, sigma0, n)
+        _seed_all_rng(0)
+        full_rate = realize_noise_in_gaps(noise.copy(), mask, m, params, 10.0, 10.0, "fallback")
+        _seed_all_rng(0)
+        down = realize_noise_in_gaps(noise.copy(), mask, m, params, 1.0, 10.0, "fallback")
+        # Downsampling 10x suppresses the white gap fluctuation by ~1/10 in variance.
+        assert np.var(down[~mask]) < 0.5 * np.var(full_rate[~mask])
+
+    def test_invalid_method_raises(self):
+        m = NoisePSDOof()
+        noise, mask, params, fsamp = self._setup()
+        # 'wn' is handled by the caller (TODView) and is not valid for this realizer.
+        for bad in ("wn", "bogus"):
+            with pytest.raises(ValueError):
+                realize_noise_in_gaps(noise.copy(), mask, m, params, fsamp, fsamp, bad)
 
 
 # ===================================================================
@@ -270,6 +371,39 @@ class TestSampleCorrelatedNoise:
                                        cg_err_tol=1e-6, cg_max_iter=50, sample_params=False,
                                        nomono=True, onlymono=True)
         assert np.allclose(both.n_corr, only.n_corr) and both.niter == 0
+
+    def test_invalid_method_names_raise(self):
+        m = NoisePSDOof()
+        tod, mask, params, fsamp = self._setup()
+        with pytest.raises(ValueError):
+            sample_correlated_noise(tod.copy(), mask, params.copy(), m, fsamp, cg_err_tol=1e-6,
+                                    cg_max_iter=10, sample_params=False, sigma0_method="bogus")
+
+    def test_sigma0_binned_psd_routing(self):
+        """sigma0_method='binned_psd' recovers the white floor from the pre-draw residual."""
+        m = NoisePSDOof()
+        tod, mask, params, fsamp = self._setup(sigma0=1.0)
+        params_in = params.copy()
+        params_in[0] = 5.0  # deliberately wrong sigma0 going in
+        _seed_all_rng(1)
+        res = sample_correlated_noise(tod.copy(), mask, params_in, m, fsamp, cg_err_tol=1e-6,
+                                      cg_max_iter=50, sample_params=False, sample_sigma0=True,
+                                      sigma0_method="binned_psd")
+        assert res.noise_params[0] == pytest.approx(1.0, rel=0.2)
+
+    def test_default_path_unchanged(self):
+        """The default args must reproduce the explicit masked-CG behavior bit-for-bit."""
+        m = NoisePSDOof()
+        tod, mask, params, fsamp = self._setup()
+        _seed_all_rng(7)
+        default = sample_correlated_noise(tod.copy(), mask, params.copy(), m, fsamp,
+                                          cg_err_tol=1e-6, cg_max_iter=50, sample_params=False)
+        _seed_all_rng(7)
+        explicit = sample_correlated_noise(tod.copy(), mask, params.copy(), m, fsamp,
+                                           cg_err_tol=1e-6, cg_max_iter=50, sample_params=False,
+                                           sigma0_method="pairwise")
+        assert np.array_equal(default.n_corr, explicit.n_corr)
+        assert np.array_equal(default.noise_params, explicit.noise_params)
 
 
 # ===================================================================

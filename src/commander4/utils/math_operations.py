@@ -499,7 +499,8 @@ def _prep_input(arr_in, arr_out, nside, spin):
 
 
 def alm_to_map(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
-               nthreads: int=1, out=None, acc: bool=False) -> NDArray:
+               nthreads: int|None=None, out=None, acc: bool=False) -> NDArray:
+    nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
     use_theta_interpol = nside >= 2048
     alm, out, ndim_in = _prep_input(alm, out, nside, spin)
     if acc:
@@ -515,7 +516,8 @@ def alm_to_map(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
 
 
 def alm_to_map_adjoint(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
-                       nthreads: int=1, out=None, acc: bool=False) -> NDArray:
+                       nthreads: int|None=None, out=None, acc: bool=False) -> NDArray:
+    nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
     use_theta_interpol = nside >= 2048
     mp, out, ndim_in = _prep_input(mp, out, nside, spin)
     if acc:
@@ -531,7 +533,12 @@ def alm_to_map_adjoint(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
 
 
 def map_to_alm(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
-                       nthreads: int=1, out=None, acc: bool=False) -> NDArray:
+                       nthreads: int|None=None, out=None, acc: bool=False) -> NDArray:
+    """ Spherical harmonic analysis (inverse synthesis; Y^-1), using only the scalar normalization
+        factor 4pi/npix, not any further processing.
+        See `pseudo_alm_to_map_inverse` for an equivalent to healpys iterative map2alm.
+    """
+    nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
     use_theta_interpol = nside >= 2048
     mp, out, ndim_in = _prep_input(mp, out, nside, spin)
     if acc:
@@ -548,7 +555,8 @@ def map_to_alm(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
 
 
 def map_to_alm_adjoint(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
-               nthreads: int=1, out=None, acc: bool=False) -> NDArray:
+               nthreads: int|None=None, out=None, acc: bool=False) -> NDArray:
+    nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
     use_theta_interpol = nside >= 2048
     alm, out, ndim_in = _prep_input(alm, out, nside, spin)
     if acc:
@@ -565,7 +573,8 @@ def map_to_alm_adjoint(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
 
 
 def pseudo_alm_to_map_inverse(map: NDArray, nside: int, lmax: int, *, spin: int=0,
-               nthreads: int=1, out=None, epsilon: float, maxiter: int) -> NDArray:
+               nthreads: int|None=None, out=None, epsilon: float, maxiter: int,
+               return_info: bool=False) -> NDArray:
     """Tries to extract spherical harmonic coefficients from (sets of) one or two maps
     by using the iterative LSMR algorithm.
     
@@ -579,9 +588,9 @@ def pseudo_alm_to_map_inverse(map: NDArray, nside: int, lmax: int, *, spin: int=
     spin: int >= 0
         the spin to use for the transform.
         If spin==0, ncomp must be 1, otherwise 2
-    nthreads: int >= 0
-        the number of threads to use for the computation
-        if 0, use as many threads as there are hardware threads available on the system
+    nthreads: None or int >= 0
+        the number of threads to use for the computation. Defaults to `None`, which yields to the
+        number specified in OMP_NUM_THREADS. nthreads=0 uses all threads on the system
     out: None or numpy.ndarray([ncomp,] (lmax+1)*(lmax+2)//2),
          dtype=numpy.complex of same precision as `map`)
         the set of spherical harmonic coefficients.
@@ -597,25 +606,30 @@ def pseudo_alm_to_map_inverse(map: NDArray, nside: int, lmax: int, *, spin: int=
         the set of spherical harmonic coefficients.
         If `out` was supplied, this will be the same object
     
-    int:
-        the reason for stopping the iteration
-        1: approximate solution to the equation system found
-        2: approximate least-squares solution found
-        3: condition number of the equation system too large
-        7: maximum number of iterations reached
-    
-    int:
-        the iteration count
-    
-    float:
-        the residual norm, divided by the norm of `map`
-    
-    float:
-        the quality of the least-squares solution
+    if `return_info` is True (default False), also returns a (5,) tuple containing:
+        int:
+            the reason for stopping the iteration
+            1: approximate solution to the equation system found
+            2: approximate least-squares solution found
+            3: condition number of the equation system too large
+            7: maximum number of iterations reached
+        
+        int:
+            the iteration count
+        
+        float:
+            the residual norm, divided by the norm of `map`
+        
+        float:
+            the quality of the least-squares solution
     """
+    nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
     map, out, ndim_in = _prep_input(map, out, nside, spin)
     res = ducc0.sht.pseudo_analysis(map=map, alm=out, lmax=lmax, spin=spin,
                                     nthreads=nthreads, **hp_geominfos[nside],
                                     epsilon=epsilon, maxiter=maxiter)
     out = res[0] if ndim_in == 2 else res[0].reshape((-1,))
-    return (out, res[1], res[2], res[3], res[4])
+    if return_info:
+        return out, res
+    else:
+        return out

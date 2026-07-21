@@ -121,7 +121,7 @@ class CompSepSolver:
         comp_list = deepcopy(comp_list_in)
         if myrank == 0:  # this task actually holds a component
             # S^{1/2} a
-            comp_list.apply_smoothing_prior_sqrt()
+            comp_list.apply_Cl_prior_sqrt()
 
         # Spread initial a to all ranks from master.
         # NB: For some stupid reason the non-blocking mpi4py calls do not have 64-bit length support
@@ -157,7 +157,7 @@ class CompSepSolver:
                     # Wait until all data for component icomp has been received.
                     MPI.Request.Wait(requests[icomp])
                 # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
-                comp_list.components[icomp].apply_smoothing_prior_sqrt()
+                comp_list.components[icomp].apply_Cl_prior_sqrt()
                 # Adds input vector to output, since (1 + S^{1/2}...)a = a + (S^{1/2}...)a
                 comp_list.components[icomp] += comp_list_in.components[icomp]
         else: # Worker ranks just wait for all their sends to complete.
@@ -195,7 +195,7 @@ class CompSepSolver:
             comp.accum_data_blocking(self.CompSep_comm)
             if myrank == 0:
                 # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 d
-                comp.apply_smoothing_prior_sqrt()
+                comp.apply_Cl_prior_sqrt()
         
         if myrank == 0:
             for comp in comp_list:
@@ -233,7 +233,7 @@ class CompSepSolver:
             comp.accum_data_blocking(self.CompSep_comm)
             if myrank == 0:
                 # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 eta_1
-                comp.apply_smoothing_prior_sqrt()
+                comp.apply_Cl_prior_sqrt()
         
         if myrank == 0:
             for comp in comp_list:
@@ -254,7 +254,7 @@ class CompSepSolver:
             for comp in comp_list:
                 mu = np.zeros((self.npol, comp.alm_len_complex), dtype=self.complex_dtype)
                 for ipol in range(self.npol):
-                    almxfl(mu[ipol], comp.P_smoothing_prior.astype(self.float_dtype, copy=False),
+                    almxfl(mu[ipol], comp.P_Cl_prior.astype(self.float_dtype, copy=False),
                            inplace=True)
                 logger.info(f"RHS3 comp-{comp.comp_name}: {np.mean(np.abs(mu)):.2e}")
                 mu_s.append(mu)
@@ -362,7 +362,7 @@ class CompSepSolver:
         complist_sol = CG_solver.x
         for comp in complist_sol:
             if master:
-                comp.apply_smoothing_prior_sqrt()
+                comp.apply_Cl_prior_sqrt()
             comp.bcast_data_blocking(self.CompSep_comm)
 
         return complist_sol

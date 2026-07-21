@@ -1,8 +1,43 @@
+import logging
 import numpy as np
 import healpy as hp
 from copy import deepcopy
 from numpy.typing import NDArray
 from commander4.utils.math_operations import alm_to_map, alm_to_map_adjoint, inplace_arr_prod, almxfl
+
+logger = logging.getLogger(__name__)
+
+
+def smooth_signal_map_noiseweighted(map_signal: NDArray, map_rms: NDArray,
+                                    fwhm_rad: float) -> NDArray:
+    """Inverse-variance-weighted Gaussian smoothing of a signal map.
+
+    Each pixel is weighted by 1/variance before smoothing (so noisy pixels contribute less) and the
+    result is renormalized by the smoothed weights -- used to bring a band to a coarser common beam.
+    """
+    map_inv_var = 1.0/map_rms**2
+    smoothed_weight = hp.smoothing(map_inv_var, fwhm=fwhm_rad)
+    return hp.smoothing(map_signal*map_inv_var, fwhm=fwhm_rad)/smoothed_weight
+
+
+def smooth_rms_map_noiseweighted(rms_map: NDArray, fwhm_rad: float) -> NDArray:
+    """Per-pixel noise RMS of a map smoothed by :func:`smooth_signal_map_noiseweighted`.
+
+    Propagates the inverse-variance-weighted Gaussian smoothing analytically, accounting for the
+    beam and pixel windows, so the returned map is the correct noise RMS of the smoothed signal.
+    """
+    npix = rms_map.shape[0]
+    nside = hp.npix2nside(npix)
+    smoothed_inv_var = hp.smoothing(1.0/rms_map**2, fwhm=fwhm_rad)
+    lmax = 3*nside - 1
+    ell = np.arange(lmax + 1)
+    b_ell = hp.gauss_beam(fwhm_rad, lmax=lmax)
+    p_ell = hp.pixwin(nside, lmax=lmax)
+    omega_pix = hp.nside2resol(nside)**2  # White-noise C_ell for a single pixel.
+    true_empirical_norm = np.sum((2*ell + 1)/(4*np.pi)*omega_pix*(p_ell**2)*(b_ell**2))
+    # Smooth the weights with the squared beam, divide by the squared smoothed weights.
+    numerator = hp.smoothing(1.0/rms_map**2, fwhm=fwhm_rad/np.sqrt(2.0))*true_empirical_norm
+    return np.sqrt(numerator/smoothed_inv_var**2)
 
 
 class DetectorMap:
@@ -79,7 +114,36 @@ class DetectorMap:
     def npol(self):
         """Number of polarisation components (1 or 2)."""
         return len(self.map_sky) # 2 if self.pol else 1
-    
+
+    def smooth_to_resolution(self, target_fwhm_arcmin: float) -> None:
+        """Noise-weighted in-place smoothing of this band to a target Gaussian beam.
+
+        Degrades the band from its native beam to ``target_fwhm_arcmin``, updating the signal map,
+        the propagated inverse-noise map, and the stored beam. A no-op if the band is already at the
+        target beam. Smoothing can only coarsen resolution, so a target finer (smaller FWHM) than the
+        current beam is skipped with a warning rather than applied.
+        """
+        if self.fwhm == target_fwhm_arcmin:
+            return
+        if target_fwhm_arcmin < self.fwhm:
+            logger.warning(f"Requested smoothing to {target_fwhm_arcmin} arcmin, finer than this "
+                           f"band's beam of {self.fwhm} arcmin; leaving the band unchanged.")
+            return
+        extra_fwhm_rad = np.deg2rad(np.sqrt(target_fwhm_arcmin**2 - self.fwhm**2)/60.0)
+        map_rms = self.map_rms
+        sky_dtype, inv_dtype = self.map_sky.dtype, self.inv_n_map.dtype
+        smoothed_sky = np.empty(self.map_sky.shape, dtype=np.float64)
+        smoothed_inv_n = np.empty(self.inv_n_map.shape, dtype=np.float64)
+        for ipol in range(self.npol):
+            smoothed_sky[ipol] = smooth_signal_map_noiseweighted(self.map_sky[ipol], map_rms[ipol],
+                                                                 extra_fwhm_rad)
+            smoothed_inv_n[ipol] = 1.0/smooth_rms_map_noiseweighted(map_rms[ipol],
+                                                                    extra_fwhm_rad)**2
+        self.map_sky = smoothed_sky.astype(sky_dtype, copy=False)
+        self.inv_n_map = smoothed_inv_n.astype(inv_dtype, copy=False)
+        self.fwhm = target_fwhm_arcmin
+        self._beam_Cl = hp.gauss_beam(self.fwhm_rad, self.lmax)
+
     def apply_inv_N_map(self, map: NDArray, inplace = True):
         """
         Applies in-place the inverse noise variance matrix to a `map`.

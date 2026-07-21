@@ -16,19 +16,11 @@ from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.output.log import logassert
 from commander4.noise_sampling.noise_psd import NoisePSD, NoisePSDOof
 from commander4.data_models.pointing import PixelPointing
+from commander4.experiments.tod_read_utils import read_processing_masks, find_good_Fourier_time
 from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
                                             stop_bench, log_memory, increment_count, bench_reset
 logger = logging.getLogger(__name__)
 
-def get_processing_mask(my_band: Bunch) -> DetectorTOD:
-    """ Finds and returns the processing mask for the relevant band.
-    """
-    hdul = fits.open(my_band.processing_mask)
-    mask = hdul[1].data["TEMPERATURE"].flatten().astype(bool)
-    nside = np.sqrt(mask.size//12)
-    if nside != my_band.eval_nside:
-        mask = hp.ud_grade(mask.astype(np.float64), my_band.eval_nside) == 1
-    return mask
 
 def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
     if ntod <= 10_000 or ntod >= 400_000:
@@ -57,13 +49,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
             pids.append(f"{int(pid):06d}")
             filepaths.append(filepath[1:-1])
             oids.append(filepath.split(".")[0].split("_")[-1])
-    if "processing_mask" in my_band:
-        processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
-        if band_comm.Get_rank() == 0:
-            processing_mask_map[:] = get_processing_mask(my_band)        
-        band_comm.Bcast(processing_mask_map, root=0)
-    else:
-        processing_mask_map = np.ones(12*my_band.eval_nside**2, dtype=bool)
+    default_mask, specific_masks = read_processing_masks(band_comm, my_band)
 
     if "bad_PIDs_path" in my_experiment:
         bad_PIDs = np.load(my_experiment.bad_PIDs_path)
@@ -85,9 +71,9 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
     for i_pid in range(scan_idx_start, scan_idx_stop+1):
         pid = pids[i_pid]
         filepath = filepaths[i_pid]
-        start_bench("fileread")
         if pid in bad_PIDs:
             continue
+        start_bench("fileread")
         good_scan = True
         with h5py.File(filepath, "r") as f:
             data_nside = int(f["common/nside"][()].item())
@@ -105,12 +91,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
             vsun = f[f"/{pid}/common/vsun/"][()]
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
-
-            processing_mask_nside = hp.npix2nside(processing_mask_map.size)
-            logassert(my_band.eval_nside == processing_mask_nside,
-                      f"Processing mask (band {bandname}) "
-                      f"has nside {processing_mask_nside} while eval_nside = {my_band.eval_nside} "
-                      "(NB: eval_nside can be set different from native data nside)", logger)
 
             if ntod > ntod_upper_bound:
                 raise ValueError(f"{ntod_upper_bound} {ntod}")
@@ -137,15 +117,16 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
                                              ntod, ntod_optimal)
 
                 detector = DetectorTOD(det_name, idet, idet_accepted, tod, det_pointing, fsamp, vsun, huffman_tree,
-                                       huffman_symbols, processing_mask_map, ntod,
-                                       ntod_optimal, huffman_tree2=huffman_tree2,
+                                       huffman_symbols, default_mask, specific_masks, ntod,
+                                       ntod_optimal,
+                                       huffman_tree2=huffman_tree2,
                                        huffman_symbols2=huffman_symbols2,
                                        flag_encoded=flag_encoded,
                                        bad_data_bitmask=my_experiment.bad_data_bitmask,
                                        init_scalars=init_scalars,
                                        tod_is_compressed=my_experiment.tod_is_compressed)
-                unmasked_fraction = np.sum(detector.full_mask)/detector.full_mask.size
-                if unmasked_fraction < 0.99:
+                unmasked_fraction = np.sum(detector.good_data_mask)/detector.good_data_mask.size
+                if unmasked_fraction < 0.9:
                     continue
                 if(detector.tod == 0).all():
                     continue
@@ -157,6 +138,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
                 idet_accepted += 1
 
             included_detector_scans += idet_accepted
+        stop_bench("fileread")
         if len(detector_list) == 0:
             good_scan = False
         if good_scan:
@@ -168,7 +150,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
 
     noise_model = NoisePSDOof(P_active_mean = [np.nan, 10.0, -2.7],
                               P_active_rms = [np.nan, np.inf, np.inf],
-                              P_uni = [[np.nan, np.nan], [0.03, 30.0], [-4.0, -1.5]],
+                              P_uni = [[np.nan, np.nan], [0.03, 40.0], [-4.0, -2.0]],
                               nu_fit = [[np.nan, np.nan], [0, 10.0], [0, 10.0]])
     band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)

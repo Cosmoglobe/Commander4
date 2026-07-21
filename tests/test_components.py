@@ -28,8 +28,7 @@ def _make_component_cfg(polarization: str = "IQU") -> Bunch:
             polarization=polarization,
             shortname="cmb",
             spatially_varying_MM=False,
-            smoothing_prior_FWHM=0.0,
-            smoothing_prior_amplitude=1.0,
+            Cl_prior_amplitude=None,  # identity prior (C_l = 1)
         ),
     )
 
@@ -371,7 +370,7 @@ def test_build_initial_sky_model_returns_realizable_model() -> None:
 
 def _dust_params(**overrides) -> Bunch:
     params = Bunch(polarization="IQU", shortname="dust", spatially_varying_MM=False,
-                   smoothing_prior_FWHM=0.0, smoothing_prior_amplitude=1.0, lmax=2,
+                   Cl_prior_amplitude=None, lmax=2,
                    beta=1.5, T=20.0, nu_ref=[857.0, 353.0], units="uK_RJ")
     for key, value in overrides.items():
         params[key] = value
@@ -399,6 +398,71 @@ def test_scalar_reference_frequency_is_shared_by_both_polarizations() -> None:
 
     # A scalar nu_ref applies to both I and QU.
     assert dust_I.nu_ref == 545.0 and dust_QU.nu_ref == 545.0
+
+
+def test_P_Cl_prior_flat_Dl_falls_as_ell_squared_in_Cl() -> None:
+    # C3 convention (comm_cl_mod.f90): the prior is defined in D_l space, so a flat amplitude
+    # "roof" corresponds to C_l = 2*pi*amp/(l(l+1)), with C_0 := D_0 := D_1.
+    params = _dust_params(lmax=16, Cl_prior_amplitude=100.0, Cl_prior_beta=0.0,
+                          Cl_prior_l_pivot=50, Cl_prior_FWHM=0.0)
+    comp = ThermalDust(params, _make_general(), eval_pol="I", comp_name="dust")
+
+    ells = np.arange(1, 17)
+    np.testing.assert_allclose(comp.P_Cl_prior[1:], 100.0 * 2 * np.pi / (ells * (ells + 1)))
+    assert comp.P_Cl_prior[0] == 100.0
+
+
+def test_P_Cl_prior_power_law_pivot_and_tilt() -> None:
+    params = _dust_params(lmax=100, Cl_prior_amplitude=7.0, Cl_prior_beta=-0.5,
+                          Cl_prior_l_pivot=10, Cl_prior_FWHM=0.0)
+    comp = ThermalDust(params, _make_general(), eval_pol="I", comp_name="dust")
+
+    # D_l equals the amplitude at the pivot, and scales as (l/l_pivot)^beta away from it.
+    assert np.isclose(comp.P_Cl_prior[10], 7.0 * 2 * np.pi / (10 * 11))
+    assert np.isclose(comp.P_Cl_prior[40] / comp.P_Cl_prior[10],
+                      (40 / 10)**-0.5 * (10 * 11) / (40 * 41))
+
+
+def test_P_Cl_prior_gaussian_rolloff_floors_at_1e_minus_10() -> None:
+    # 600 arcmin FWHM: at l=100 the exponential is ~1e-24, far below C3's relative 1e-10 floor.
+    params = _dust_params(lmax=100, Cl_prior_amplitude=1.0, Cl_prior_FWHM=600.0)
+    comp = ThermalDust(params, _make_general(), eval_pol="I", comp_name="dust")
+
+    sigma = np.deg2rad(10.0) / np.sqrt(8 * np.log(2))
+    np.testing.assert_allclose(comp.P_Cl_prior[5], np.exp(-30 * sigma**2) * 2 * np.pi / 30)
+    np.testing.assert_allclose(comp.P_Cl_prior[100], 1e-10 * 2 * np.pi / (100 * 101))
+    # The floor keeps the prior strictly positive and its inverse finite.
+    assert np.all(comp.P_Cl_prior > 0)
+    np.testing.assert_allclose(comp.P_Cl_prior * comp.P_Cl_prior_inv, 1.0)
+
+
+def test_P_Cl_prior_resolves_per_pol_lists() -> None:
+    # Like nu_ref, every Cl_prior parameter can be an [I, QU] pair resolved per execution view.
+    def make(eval_pol):
+        params = _dust_params(lmax=4, Cl_prior_amplitude=[2.0, 8.0], Cl_prior_beta=[0.0, -0.5],
+                              Cl_prior_FWHM=[0.0, 10.0])
+        return ThermalDust(params, _make_general(), eval_pol=eval_pol, comp_name="dust")
+
+    dust_I, dust_QU = make("I"), make("QU")
+    assert (dust_I.Cl_prior_amplitude, dust_I.Cl_prior_beta, dust_I.Cl_prior_FWHM) == (2.0, 0.0, 0.0)
+    assert (dust_QU.Cl_prior_amplitude, dust_QU.Cl_prior_beta, dust_QU.Cl_prior_FWHM) \
+        == (8.0, -0.5, 10.0)
+
+
+def test_P_Cl_prior_none_amplitude_gives_identity() -> None:
+    # Cl_prior_amplitude=None: C_l = 1, i.e. no S^{1/2} scaling in the CG reparameterization
+    # (the C3 CL_TYPE 'none' analogue).
+    comp = ThermalDust(_dust_params(lmax=8), _make_general(), eval_pol="I", comp_name="dust")
+
+    np.testing.assert_array_equal(comp.P_Cl_prior, np.ones(9))
+    np.testing.assert_array_equal(comp.P_Cl_prior_inv, np.ones(9))
+
+
+def test_old_smoothing_prior_params_are_rejected() -> None:
+    # The old C_l-space 'smoothing_prior_*' parameters changed semantics; fail loudly on stale files.
+    with pytest.raises(AssertionError):
+        ThermalDust(_dust_params(smoothing_prior_amplitude=1.0e7), _make_general(),
+                    eval_pol="I", comp_name="dust")
 
 
 def test_init_map_to_amplitude_is_noop_when_units_match() -> None:

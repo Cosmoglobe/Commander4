@@ -1,0 +1,70 @@
+# Example simgen parameter file: raster scan of a small patch with gridded point sources.
+#
+# Run from the `aux` directory:
+#     mpirun -n 4 python -m simgen -p simgen/params/example_raster_param.yml
+#
+# Demonstrates the two synthetic plugins:
+#   - pointing strategy "raster": sweeps a small patch row-by-row, covering it over many scans.
+#   - sky component "GriddedPointSources": equal-amplitude point sources on a regular grid.
+# The band's detectors are given focal-plane offsets (fp_offset_deg), so the raster strategy (which
+# uses per-detector pointing) makes them trace mutually offset tracks across the patch.
+
+general:
+  nside: 256
+  units: "uK_RJ"
+  CG_float_precision: "single"
+  seed: 1234
+  output_dir: "../../c4_sims/simgen_raster/"
+
+components:
+  # Equal-amplitude point sources on a 8x8 grid spanning the 20x20 deg patch.
+  GriddedPointSources:
+    enabled: true
+    component_class: "GriddedPointSources"
+    params:
+      polarization: "I"
+      amplitude: 1.0e+4      # uK_RJ per source (pre-beam)
+      nlon: 1
+      nlat: 1
+      lon_range_deg: [0.0, 5.0]
+      lat_range_deg: [0.0, 5.0]
+      # beta: 0.0            # optional SED power-law; 0 (default) = same amplitude in every band
+
+simulation:
+  nscans: 32               # each scan is one full patch fill; more scans = more repeats (deeper integration)
+  scan_duration_sec: 60     # ignored by the raster strategy (scan length = n_rows * samples_per_row)
+  orbital_dipole: false     # a raster scan has no orbital motion (vsun = 0)
+  compress: false            # Huffman-compress pix/psi (false -> plain int32/float32 arrays). flag is always compressed.
+
+  pointing:
+    strategy: "raster"
+    patch_center_deg: [0.0, 0.0]    # Galactic (lon, lat) of the patch centre
+    patch_size_deg: [10.0, 10.0]    # patch (width, height)
+    n_rows: 128                     # perpendicular rows covering the height
+    samples_per_row: 300            # samples to traverse one along-scan row
+
+  noise:
+    white: true
+    oof: {enabled: true, fknee: 0.1, alpha: -1.0}
+
+  modifiers:
+    crosstalk: {enabled: true}
+
+experiments:
+  PatchSat:
+    bands:
+      Patch100GHz:
+        enabled: true
+        freq: 100.0
+        fwhm: 10.0            # arcmin
+        fsamp: 30.0           # Hz
+        eval_nside: 1024
+        data_nside: 1024
+        sigma0: 30.0          # per-sample white-noise RMS [uK_RJ]
+        polarization: "I"
+        crosstalk: {enabled: true, coupling: 0.5}
+        detectors:            # focal-plane offsets stagger the detectors across the patch
+          det_a: {fp_offset_deg: [0.0, 0.0]}
+          det_b: {fp_offset_deg: [0.0, 1.0]}
+          det_c: {fp_offset_deg: [1.0, 0.0]}
+          det_d: {fp_offset_deg: [1.0, 1.0]}

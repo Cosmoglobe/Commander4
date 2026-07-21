@@ -1,0 +1,622 @@
+general:
+  MPI_config:
+    ntask_tod: 64
+    ntask_compsep_I: 0
+    ntask_compsep_QU: 0
+  nthreads_tod: 4
+  nthreads_compsep: 24
+
+  niter_gibbs: 16
+
+  perform_compsep: true
+  sample_jump_detection: false
+  sample_jump_detection_from_iter_num: 1
+
+  nside: 512
+
+  corr_noise:
+    sample_corr_noise: True
+    sample_corr_noise_from_iter_num: 1
+    sample_noise_params: True     # Resample the noise-model parameters (needs sample_corr_noise).
+    sample_sigma0: True           # Re-estimate sigma0 from the n_corr-subtracted residual.
+    CG_err_tol: 1.0e-4            # Correlated-noise CG convergence tolerance.
+    CG_max_iter: 0                # Max CG iterations; 0 -> skip CG and use the stationary fallback.
+    nomono: False                 # Project the per-scan monopole out of n_corr (Fortran "nomono").
+    onlymono: False               # Model the correlated noise as only the per-scan offset.
+    sigma0_decimation: 1          # Block-average factor for the sigma0 estimator.
+    psd_fit_nu_min: 0.02          # Min frequency (Hz) for noise-PSD parameter fitting.
+    psd_fit_nu_max: 10.0          # Max frequency (Hz) for noise-PSD parameter fitting.
+    psd_bin: true                 # Fit every Fourier mode (False) or a mode-weighted binned PSD.
+    sigma0_method: pairwise     # White-noise estimator: 'pairwise' (first-difference) or 'binned_psd'.
+  gain_calib_downsample_time: 0.2   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+  gap_fill_method: wn         # Gap fill for non-CG (gain) steps: 'wn' | 'fallback' | 'full_cg'.
+  abs_gain:                           # Absolute (band-global) gain g0.
+    sample: true
+    sample_from_iter_num: 2
+    # calibrate_against: orbital_dipole # "orbital_dipole" | "full_sky" | "sky"; per-band overridable.
+    calibrate_against: full_sky # "orbital_dipole" | "full_sky" | "sky"; per-band overridable.
+  rel_gain:                           # Per-detector relative gain.
+    sample: true
+    sample_from_iter_num: 2
+    calibrate_against: full_sky       # "orbital_dipole" | "full_sky" | "sky"; per-band overridable.
+  temporal_gain:                      # Per-scan temporal gain variations.
+    sample: false
+    sample_from_iter_num: 2
+    calibrate_against: full_sky       # "orbital_dipole" | "full_sky" | "sky"; per-band overridable.
+
+  perform_compsep: true
+
+  CG_float_precision: "single"
+
+  output_stats: True
+
+  galactic_mask: True
+  pixel_compsep_sampling: True
+  smooth_to_common_res: False
+
+  chains_to_write: [1,]
+  write_orb_dipole_maps_to_chain: True
+  write_corr_noise_maps_to_chain: True
+  write_sky_model_maps_to_chain: True
+  write_ncorr_tods_to_chain: False   # DEBUG ONLY: full per-sample n_corr TODs (very large data).
+  chain_maps_nside: "native"
+  chain_maps_interval: 1
+
+  init_from_chain: false
+
+  output_paths:
+    chains: "../cmdr4_chains/SO_LAT_2/nside8192_nocompsep_allbands/"
+    stats: "../cmdr4_stats/SO_LAT_2/nside8192_nocompsep_allbands/"
+
+  logging:
+    console:
+      level: 'debug'
+    file:
+      level: 'info'
+      filename: '../cmdr4_logs/SO_LAT_2/nside8192_nocompsep_allbands.log'
+
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU" 
+      longname: "CMB"
+      shortname: "cmb"
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_cmb_amp_BP8.1_v1.fits"
+      units: "uK_CMB"
+      smoothing_prior_FWHM: 30.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+7 #1.0  # uK_RJ^2
+      lmax: 1024
+      smoothing_scale: 0
+      spatially_varying_MM: False
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1.fits"
+      smoothing_prior_FWHM: 5.0 # 10.0 # arcmin
+      smoothing_prior_amplitude: 2.0e-3  # uK_RJ^2
+      beta: 1.56
+      T: 20
+      nu_ref: [857, 353]  # [I, QU]
+      units: "uK_RJ"
+      lmax: 1024
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU" 
+      longname: "Synchrotron"
+      shortname: "sync"
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1.fits"
+      smoothing_prior_FWHM: 60.0 # arcmin
+      smoothing_prior_amplitude: 2.0e-2  # uK_RJ^2
+      beta: -3.1
+      nu_ref: [0.408, 30]  # [I, QU]
+      units: "uK_RJ"
+      lmax: 512
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
+
+  FreeFree:
+    enabled: true
+    component_class: "FreeFree"
+    params:
+      polarization: "I" 
+      longname: "Free-Free"
+      shortname: "ff"
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_ff_amp_BP8.1_v1.fits"
+      smoothing_prior_FWHM: 30.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+9  # uK_RJ^2
+      T: 7000
+      nu_ref: 40
+      units: "uK_RJ"
+      lmax: 512
+      smoothing_scale: 0.0
+      spatially_varying_MM: False
+  
+  RadioSources:
+    enabled: False
+    component_class: "RadioSources"
+    params:
+      polarization: "I" 
+      longname: "RadioSources"
+      shortname: "radsources"
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
+      nu_0: 30.0  # Ghz
+      lmax: "full" #just a placeholder
+      smoothing_scale: 0 # placeholder? Do we ever want a smoothing of point sources?
+      sample_alphas: False
+      
+  SpinningDust:
+    enabled: False
+    component_class: "SpinningDust"
+    params:
+      polarization: "I"
+      longname: "SpinningDust"
+      shortname: "sdust"
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
+      smoothing_prior_FWHM: 0.0 # arcmin
+      smoothing_prior_amplitude: 1.0e+10  # uK_RJ^2
+      nu_peak: 25.3  # Ghz
+      nu_0: 22.0  # Ghz
+      lmax: 1000
+      smoothing_scale: 0 # 30.0
+      spatially_varying_MM: False
+
+
+experiments:
+  SO_LAT:
+    enabled: true
+    experiment_id: "SO_LAT"
+    is_sim: false
+    tod_is_compressed: true
+    pix_is_compressed: true
+    psi_is_compressed: true
+    data_type: "TOD"
+    mapmaker: "bin"
+    Fourier_times_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/analysis/FFT_times_0_399999.npy"
+    num_scans: 233
+    bad_data_bitmask: 0b11111111111111111111111111111111  # Entries in the 32-bit bitmask corresponding to bad data.
+    jump_bitmask: 0b00000000000000000000000000000010
+    bands:
+      SO_LAT_i1ws0_f090:
+        enabled: true
+        num_MPI_tasks: 19
+        num_scans: 233
+        eval_nside: 8192
+        fwhm: 2.2 # [arcmin]
+        freq: 90.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i1ws0_f090.txt"
+        detectors:
+          !inc detectors/detectors_i1ws0_f090.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i1ws0_f150:
+        enabled: true
+        num_MPI_tasks: 17
+        num_scans: 228
+        eval_nside: 8192
+        fwhm: 1.4 # [arcmin]
+        freq: 150.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i1ws0_f150.txt"
+        detectors:
+          !inc detectors/detectors_i1ws0_f150.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i1ws1_f090:
+        enabled: true
+        num_MPI_tasks: 2
+        num_scans: 22
+        eval_nside: 8192
+        fwhm: 2.2 # [arcmin]
+        freq: 90.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i1ws1_f090.txt"
+        detectors:
+          !inc detectors/detectors_i1ws1_f090.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i1ws1_f150:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 19
+        eval_nside: 8192
+        fwhm: 1.4 # [arcmin]
+        freq: 150.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i1ws1_f150.txt"
+        detectors:
+          !inc detectors/detectors_i1ws1_f150.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i1ws2_f090:
+        enabled: true
+        num_MPI_tasks: 2
+        num_scans: 22
+        eval_nside: 8192
+        fwhm: 2.2 # [arcmin]
+        freq: 90.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i1ws2_f090.txt"
+        detectors:
+          !inc detectors/detectors_i1ws2_f090.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i1ws2_f150:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 19
+        eval_nside: 8192
+        fwhm: 1.4 # [arcmin]
+        freq: 150.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i1ws2_f150.txt"
+        detectors:
+          !inc detectors/detectors_i1ws2_f150.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i3ws0_f090:
+        enabled: true
+        num_MPI_tasks: 2
+        num_scans: 21
+        eval_nside: 8192
+        fwhm: 2.2 # [arcmin]
+        freq: 90.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i3ws0_f090.txt"
+        detectors:
+          !inc detectors/detectors_i3ws0_f090.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i3ws0_f150:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 17
+        eval_nside: 8192
+        fwhm: 1.4 # [arcmin]
+        freq: 150.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i3ws0_f150.txt"
+        detectors:
+          !inc detectors/detectors_i3ws0_f150.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i3ws1_f090:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 20
+        eval_nside: 8192
+        fwhm: 2.2 # [arcmin]
+        freq: 90.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i3ws1_f090.txt"
+        detectors:
+          !inc detectors/detectors_i3ws1_f090.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i3ws1_f150:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 19
+        eval_nside: 8192
+        fwhm: 1.4 # [arcmin]
+        freq: 150.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i3ws1_f150.txt"
+        detectors:
+          !inc detectors/detectors_i3ws1_f150.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i3ws2_f090:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 17
+        eval_nside: 8192
+        fwhm: 2.2 # [arcmin]
+        freq: 90.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i3ws2_f090.txt"
+        detectors:
+          !inc detectors/detectors_i3ws2_f090.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i3ws2_f150:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 16
+        eval_nside: 8192
+        fwhm: 1.4 # [arcmin]
+        freq: 150.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i3ws2_f150.txt"
+        detectors:
+          !inc detectors/detectors_i3ws2_f150.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i4ws0_f090:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 10
+        eval_nside: 8192
+        fwhm: 2.2 # [arcmin]
+        freq: 90.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i4ws0_f090.txt"
+        detectors:
+          !inc detectors/detectors_i4ws0_f090.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i4ws0_f150:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 11
+        eval_nside: 8192
+        fwhm: 1.4 # [arcmin]
+        freq: 150.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i4ws0_f150.txt"
+        detectors:
+          !inc detectors/detectors_i4ws0_f150.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i4ws1_f090:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 15
+        eval_nside: 8192
+        fwhm: 2.2 # [arcmin]
+        freq: 90.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i4ws1_f090.txt"
+        detectors:
+          !inc detectors/detectors_i4ws1_f090.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i4ws1_f150:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 16
+        eval_nside: 8192
+        fwhm: 1.4 # [arcmin]
+        freq: 150.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i4ws1_f150.txt"
+        detectors:
+          !inc detectors/detectors_i4ws1_f150.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i4ws2_f090:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 16
+        eval_nside: 8192
+        fwhm: 2.2 # [arcmin]
+        freq: 90.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i4ws2_f090.txt"
+        detectors:
+          !inc detectors/detectors_i4ws2_f090.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i4ws2_f150:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 12
+        eval_nside: 8192
+        fwhm: 1.4 # [arcmin]
+        freq: 150.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i4ws2_f150.txt"
+        detectors:
+          !inc detectors/detectors_i4ws2_f150.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i6ws0_f090:
+        enabled: true
+        num_MPI_tasks: 2
+        num_scans: 22
+        eval_nside: 8192
+        fwhm: 2.2 # [arcmin]
+        freq: 90.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i6ws0_f090.txt"
+        detectors:
+          !inc detectors/detectors_i6ws0_f090.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i6ws0_f150:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 20
+        eval_nside: 8192
+        fwhm: 1.4 # [arcmin]
+        freq: 150.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i6ws0_f150.txt"
+        detectors:
+          !inc detectors/detectors_i6ws0_f150.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i6ws1_f090:
+        enabled: true
+        num_MPI_tasks: 2
+        num_scans: 23
+        eval_nside: 8192
+        fwhm: 2.2 # [arcmin]
+        freq: 90.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i6ws1_f090.txt"
+        detectors:
+          !inc detectors/detectors_i6ws1_f090.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i6ws1_f150:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 18
+        eval_nside: 8192
+        fwhm: 1.4 # [arcmin]
+        freq: 150.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i6ws1_f150.txt"
+        detectors:
+          !inc detectors/detectors_i6ws1_f150.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i6ws2_f090:
+        enabled: true
+        num_MPI_tasks: 2
+        num_scans: 21
+        eval_nside: 8192
+        fwhm: 2.2 # [arcmin]
+        freq: 90.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i6ws2_f090.txt"
+        detectors:
+          !inc detectors/detectors_i6ws2_f090.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
+      SO_LAT_i6ws2_f150:
+        enabled: true
+        num_MPI_tasks: 1
+        num_scans: 18
+        eval_nside: 8192
+        fwhm: 1.4 # [arcmin]
+        freq: 150.0 # [GHz]
+        polarization: "IQU"
+        noise_psd: "NoisePSDOof"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i6ws2_f150.txt"
+        detectors:
+          !inc detectors/detectors_i6ws2_f150.yml
+        abs_gain:
+          calibrate_against: "full_sky"
+        rel_gain:
+          calibrate_against: "full_sky"
+        temp_gain:
+          calibrate_against: "full_sky"
