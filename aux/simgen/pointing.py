@@ -89,6 +89,10 @@ class PlanckScan(PointingStrategy):
     sweeps a cone of half-angle ``los_angle`` at ``spin_rate`` rpm. Pointing and the relativistic
     orbital velocity are computed in the ecliptic frame and rotated to Galactic coordinates. Unlike
     the original, this evaluates an arbitrary time window so scans can be distributed across ranks.
+
+    The precession period defaults to the real Planck value of 182.625 days (6 months). Setting
+    ``precession_period_days`` to a smaller value speeds up sky coverage proportionally, e.g. 1.0
+    gives a full precession cycle per day and covers the full sky in O(days) of simulated time.
     """
     # Physical / scanning constants.
     C_LIGHT = 299792458.0
@@ -101,6 +105,8 @@ class PlanckScan(PointingStrategy):
         self.spin_tilt = np.deg2rad(bget(params, "spin_angle_tilt", 7.5))
         self.spin_rate = bget(params, "spin_rate", 1.00165345964511)  # [rpm]
         self.mission_start = bget(params, "mission_start", "2009-08-13T00:00:00")
+        precession_period_days = bget(params, "precession_period_days", 182.625)
+        self.precession_period_sec = precession_period_days * 24 * 3600
         # Ecliptic->Galactic rotation matrix, built once (astropy import is local to keep the module
         # importable without astropy where only other strategies are used).
         from astropy.coordinates import SkyCoord
@@ -133,9 +139,8 @@ class PlanckScan(PointingStrategy):
         b_vec = np.vstack([-np.sin(anti_sun_lon), np.cos(anti_sun_lon), np.zeros(ntod)]).T
         c_vec = np.array([0., 0., 1.])
 
-        # Spin axis precesses about the anti-Sun direction with a 6-month period.
-        six_months = 182.625 * 24 * 3600
-        prec_phase = 2 * np.pi * t_abs / six_months
+        # Spin axis precesses about the anti-Sun direction.
+        prec_phase = 2 * np.pi * t_abs / self.precession_period_sec
         s_vec = (np.cos(self.spin_tilt) * a_vec
                  + np.sin(self.spin_tilt) * (np.cos(prec_phase)[:, None] * b_vec
                                              + np.sin(prec_phase)[:, None] * c_vec))
