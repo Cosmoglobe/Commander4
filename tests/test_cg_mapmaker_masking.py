@@ -26,7 +26,7 @@ _BITMASK = 1  # one bad-data bit; a flagged sample has (flag & _BITMASK) != 0
 
 
 def _build_band(pix: np.ndarray, bad_idx, nside: int, sigma0: float, pols: str,
-                psi: np.ndarray | None = None):
+                psi: np.ndarray | None = None, fsamp: float = 1.0):
     """Real one-detector, one-scan band with `bad_idx` samples flagged bad (uncompressed pointing)."""
     ntod = pix.size
     npix = 12 * nside**2
@@ -43,7 +43,7 @@ def _build_band(pix: np.ndarray, bad_idx, nside: int, sigma0: float, pols: str,
                       flag_is_compressed=False)
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
     band = DetGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=nside, nu=0.0, fwhm=0.0,
-                       fsamp=1.0, ndet=1, pols=pols, noise_model=noise_model)
+                       fsamp=fsamp, ndet=1, pols=pols, noise_model=noise_model)
     ts = TODSamples.__new__(TODSamples)
     ts.accept = np.ones((1, 1), dtype=bool)
     ts.noise_params = np.full((1, 1, 1), sigma0)
@@ -148,6 +148,31 @@ def test_apply_T_adjoint_is_true_transpose():
     Tt = _dense_operator(cg.apply_T_adjoint, n)
     np.testing.assert_allclose(Tt, T.T, atol=1e-10)
     assert not np.allclose(T, np.eye(n))     # the filter genuinely alters the TOD (guards no-op)
+
+
+def test_apply_T_uses_physical_sampling_rate():
+    """apply_T must evaluate T_omega on a physical-Hz grid (rfftfreq(2N, d=1/fsamp)), not assume 1 Hz.
+
+    The filter is written with tau in *seconds*; the result must match the mirrored physical-frequency
+    convolution (the same convention the simulator bakes in), and must change when fsamp changes.
+    """
+    nside, tau = 2, 0.05
+    T_omega = _single_pole(tau)
+    pix = np.arange(24, dtype=np.int64) % (12 * nside**2)
+    x = np.random.default_rng(7).normal(size=pix.size)
+    n = pix.size
+
+    def apply_at(fsamp):
+        band, ts = _build_band(pix, [], nside, 1.0, "I", fsamp=fsamp)
+        return CGMapmakerI(band, ts, MPI.COMM_SELF, T_omega=T_omega).apply_T(x.copy())
+
+    fsamp = 8.0
+    ext = np.concatenate([x, x[::-1]])
+    H = 1.0 / (1.0 + 2j * np.pi * np.fft.rfftfreq(2 * n, d=1.0 / fsamp) * tau)
+    ref = np.fft.irfft(np.fft.rfft(ext) * H, n=2 * n)[:n]   # simulator's mirrored physical convention
+    np.testing.assert_allclose(apply_at(fsamp), ref, rtol=1e-10, atol=1e-12)
+    # The filtering genuinely depends on fsamp -> the old implicit-1 Hz behavior is gone.
+    assert not np.allclose(apply_at(8.0), apply_at(20.0))
 
 
 def test_apply_LHS_symmetric_with_nontrivial_transfer_function():

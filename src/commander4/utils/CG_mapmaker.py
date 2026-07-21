@@ -79,6 +79,10 @@ class CGMapmaker:
         self.f_dtype = np.float64 if double_prec else np.float32
         self.nthreads = nthreads
         self.T_omega = T_omega
+        # Native sampling rate [Hz] of the mapmaking TODs, so the transfer function T_omega(omega) is
+        # evaluated on a physical-frequency grid (a `tau` in seconds means seconds, not samples). The
+        # CG's own noise model is white, so unlike apply_N_inv this rate is only needed for apply_T.
+        self.fsamp = detector_tod.fsamp
         self.CG_maxiter = CG_maxiter
         self.CG_tol = CG_tol
         self.CG_check_interval = CG_check_interval
@@ -143,9 +147,11 @@ class CGMapmaker:
 
         The forward operator is ``T = R F^-1 diag(H) F E`` where ``E`` reflect-extends the scan to
         length ``2N`` (``x -> [x, x[::-1]]``), ``H = T_omega`` is the filter evaluated on the ``2N``
-        frequency grid, and ``R`` restricts back to the first ``N`` samples. Mirroring makes the scan
-        boundary continuous so a causal ``H`` does not wrap the scan's end onto its start (matching
-        the mirrored FFT used in ``apply_N_inv`` and in the simulator that bakes ``H`` in).
+        frequency grid, and ``R`` restricts back to the first ``N`` samples. The grid is in physical
+        Hz (``rfftfreq(2N, d=1/fsamp)``), so ``T_omega`` sees true frequencies -- a time constant is
+        in seconds, not samples. Mirroring makes the scan boundary continuous so a causal ``H`` does
+        not wrap the scan's end onto its start (matching ``apply_N_inv`` and the simulator that bakes
+        ``H`` in).
 
         The transpose is ``T^T = E^T F^-1 diag(H*) F R^T``: ``R^T`` zero-pads (``x -> [x, 0]``), the
         filter is **conjugated** (``H*`` -- a frequency flip is *not* the transpose for a non-trivial
@@ -154,7 +160,7 @@ class CGMapmaker:
         symmetric, so the CG solve stays well-posed. At ``T_omega = 1`` both reduce to the identity.
         """
         n = scan_tod_arr.shape[-1]
-        freqs = np.fft.rfftfreq(2 * n)  # normalized [cycles/sample]; scale by fsamp for H(omega) in Hz
+        freqs = np.fft.rfftfreq(2 * n, d=1.0 / self.fsamp)  # physical frequency grid [Hz]
         if adjoint:
             ext = np.concatenate([scan_tod_arr, np.zeros_like(scan_tod_arr)])  # R^T: zero-pad
             filt = np.conj(self.T_omega(freqs))                               # H*
