@@ -13,10 +13,10 @@ band (``round(duration * fsamp)``, made even), so bands with different sampling 
 time-aligned. The scan length is owned by the pointing strategy, so a strategy can override it (e.g.
 RasterScan makes one scan exactly one full fill of the patch).
 """
-import os
 import logging
-import numpy as np
+import os
 import healpy as hp
+import numpy as np
 from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
@@ -27,6 +27,7 @@ from simgen.pointing import make_pointing
 from simgen.sky import build_band_sky_maps, compute_orbital_dipole
 from simgen.noise import make_noise_model
 from simgen.modifiers import build_modifiers
+from simgen.diagnostics import hit_map, noise_map_rhs, white_noise_normal_matrix, write_band_diagnostics
 from simgen.writers import write_scan_file, write_filelist, DEFAULT_NPSI
 
 logger = logging.getLogger(__name__)
@@ -40,10 +41,15 @@ def _eval_and_data_pix(theta: NDArray, phi: NDArray, data_nside: int,
     them on read, so the baked signal matches what the reader reconstructs.
     """
     pix_data = hp.ang2pix(data_nside, theta, phi)
+    return pix_data, _remap_data_pix(pix_data, data_nside, eval_nside)
+
+
+def _remap_data_pix(pix_data: NDArray, data_nside: int, eval_nside: int) -> NDArray:
+    """Remap stored data-resolution pixels exactly as ``PixelPointing.get_pix`` does."""
     if eval_nside == data_nside:
-        return pix_data, pix_data
+        return pix_data
     th, ph = hp.pix2ang(data_nside, pix_data)
-    return pix_data, hp.ang2pix(eval_nside, th, ph)
+    return hp.ang2pix(eval_nside, th, ph)
 
 
 def _project_signal(skymap: NDArray, pix: NDArray, psi: NDArray, polarization: str) -> NDArray:
@@ -80,7 +86,7 @@ def _det_signal(band: Band, chunk, det, skymap: NDArray,
 
 def _simulate_scan(band: Band, strategy, sample_offset: int, skymap: NDArray, ntod: int,
                    scan_idx: int, band_idx: int, noise_model, modifiers,
-                   seed: int, include_orbdip: bool) -> tuple[dict, dict, dict, NDArray]:
+                   seed: int, include_orbdip: bool) -> tuple[dict, dict, dict, dict, NDArray]:
     """Build one scan's per-detector pix / psi / TOD dicts (signal + noise + modifiers) and vsun.
 
     For shared-boresight strategies the pointing is computed once and reused (only the per-detector
@@ -93,6 +99,7 @@ def _simulate_scan(band: Band, strategy, sample_offset: int, skymap: NDArray, nt
                                                                             include_orbdip)
     det_pix, det_psi = {}, {}
     tod_matrix = np.zeros((band.ndet, ntod), dtype=np.float32)
+    noise_matrix = np.zeros((band.ndet, ntod), dtype=np.float32)
     for det in band.detectors:
         if strategy.per_detector_pointing:
             chunk = strategy.compute(sample_offset, ntod, det_offset=det.fp_offset)
@@ -112,15 +119,18 @@ def _simulate_scan(band: Band, strategy, sample_offset: int, skymap: NDArray, nt
         if det.transfer is not None:
             clean = det.transfer.apply(clean, band.fsamp)
         tod_matrix[det.idx] = clean + noise
+        noise_matrix[det.idx] = noise
         det_pix[det.name] = pix_data
         det_psi[det.name] = psi
 
     ctx = Bunch(scan_idx=scan_idx, band_idx=band_idx)
     for mod in modifiers:
         tod_matrix = mod.apply(tod_matrix, band, ctx)
+        noise_matrix = mod.apply(noise_matrix, band, ctx)
 
     det_tod = {det.name: tod_matrix[det.idx] for det in band.detectors}
-    return det_pix, det_psi, det_tod, bore.vsun
+    det_noise = {det.name: noise_matrix[det.idx] for det in band.detectors}
+    return det_pix, det_psi, det_tod, det_noise, bore.vsun
 
 
 def _det_signal_shared(band: Band, bore, skymap: NDArray, include_orbdip: bool):
@@ -146,10 +156,13 @@ def run(parameter_file: str) -> int:
     include_orbdip = bool(bget(sim, "orbital_dipole", True))
     compress = bool(bget(sim, "compress", True))  # Huffman-compress pix/psi (flag is always compressed).
     output_dir = params.general.output_dir
+    debug_output_dir = bget(sim, "debug_output_dir", None)
 
     # Create per-band output directories before any rank writes into them.
     if rank == 0:
         os.makedirs(output_dir, exist_ok=True)
+        if debug_output_dir:
+            os.makedirs(debug_output_dir, exist_ok=True)
         for band in bands:
             os.makedirs(os.path.join(output_dir, band.name), exist_ok=True)
         with open(os.path.join(output_dir, "simgen_params.yml"), "w") as f:
@@ -172,24 +185,61 @@ def run(parameter_file: str) -> int:
                     len(bands), nscans, len(work), size)
 
     my_entries: dict[str, list[tuple[int, str]]] = {b.name: [] for b in bands}
+    my_hits = {b.name: np.zeros(12 * b.eval_nside**2, dtype=np.int64) for b in bands} if debug_output_dir else {}
+    my_normal = {
+        b.name: np.zeros(({"I": 1, "QU": 3, "IQU": 6}[b.polarization], 12 * b.eval_nside**2),
+                         dtype=np.float64)
+        for b in bands
+    } if debug_output_dir else {}
+    my_noise_rhs = {
+        b.name: np.zeros((b.npol, 12 * b.eval_nside**2), dtype=np.float64)
+        for b in bands
+    } if debug_output_dir else {}
     for bi, si in my_work:
         band = bands[int(bi)]
         ntod = pointing[band.name].samples_per_scan(scan_duration, band.fsamp)
-        det_pix, det_psi, det_tod, vsun = _simulate_scan(
+        det_pix, det_psi, det_tod, det_noise, vsun = _simulate_scan(
             band, pointing[band.name], int(si) * ntod, band_maps[band.name], ntod, int(si), int(bi),
             noise_models[band.name], modifiers, seed, include_orbdip)
         pid = int(si) + 1
         path = os.path.join(output_dir, band.name, f"scan_{pid:06d}.h5")
         write_scan_file(path, pid, band.data_nside, band.fsamp, npsi, ntod, vsun,
                         band.det_names, det_pix, det_psi, det_tod, compress=compress)
+        if debug_output_dir:
+            det_eval_pix = {
+                name: _remap_data_pix(pix, band.data_nside, band.eval_nside)
+                for name, pix in det_pix.items()
+            }
+            my_hits[band.name] += hit_map(band, det_eval_pix)
+            my_normal[band.name] += white_noise_normal_matrix(band, det_eval_pix, det_psi)
+            my_noise_rhs[band.name] += noise_map_rhs(band, det_eval_pix, det_psi, det_noise)
         my_entries[band.name].append((pid, path))
 
     # Gather written files on rank 0 and write per-band filelists.
     all_entries = comm.gather(my_entries, root=0)
+    debug_hits, debug_normal, debug_noise_rhs = {}, {}, {}
+    if debug_output_dir:
+        for band in bands:
+            hits = np.empty_like(my_hits[band.name]) if rank == 0 else None
+            normal = np.empty_like(my_normal[band.name]) if rank == 0 else None
+            noise_rhs = np.empty_like(my_noise_rhs[band.name]) if rank == 0 else None
+            comm.Reduce(my_hits[band.name], hits, op=MPI.SUM, root=0)
+            comm.Reduce(my_normal[band.name], normal, op=MPI.SUM, root=0)
+            comm.Reduce(my_noise_rhs[band.name], noise_rhs, op=MPI.SUM, root=0)
+            if rank == 0:
+                debug_hits[band.name] = hits
+                debug_normal[band.name] = normal
+                debug_noise_rhs[band.name] = noise_rhs
     if rank == 0:
         for band in bands:
             merged = [e for part in all_entries for e in part[band.name]]
             write_filelist(os.path.join(output_dir, band.name, "filelist.txt"), merged)
             logger.info("Band %s: wrote %d scan files + filelist.", band.name, len(merged))
+            if debug_output_dir:
+                write_band_diagnostics(debug_output_dir, band, band_maps[band.name],
+                                       debug_hits[band.name], debug_normal[band.name],
+                                       debug_noise_rhs[band.name])
+                logger.info("Band %s: wrote diagnostic maps and plots to %s.", band.name,
+                            debug_output_dir)
         logger.info("simgen finished. Output in %s", output_dir)
     return 0

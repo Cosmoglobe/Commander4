@@ -31,6 +31,27 @@ Each scan file holds `common/{nside,fsamp,npsi}`, `<pid>/common/{ntod,hufftree,h
 per detector `<pid>/<det>/{tod, pix, psi, flag}` where `pix`/`psi`/`flag` are Huffman-compressed
 with one shared per-scan tree.
 
+Set the optional `simulation.debug_output_dir` to also write diagnostic products outside the TOD
+directory:
+
+```
+<debug_output_dir>/<BandName>_diagnostics.h5
+<debug_output_dir>/<BandName>_sky_{I,Q,U}.png
+<debug_output_dir>/<BandName>_hits.png
+<debug_output_dir>/<BandName>_rms_white_noise_{I,Q,U}.png
+<debug_output_dir>/<BandName>_noise_{I,Q,U}.png
+```
+
+Each diagnostic HDF5 file contains band metadata plus `maps/sky` (beam-smoothed input sky at the
+band's evaluation `nside`), `maps/hits` (all detector samples), `maps/inv_white_noise` (the packed
+upper triangle of the per-pixel pointing normal matrix), `maps/rms_white_noise`, and `maps/noise`.
+The RMS is the diagonal of the inverse normal matrix, so it accounts for polarization-angle coverage
+and is `NaN` where a Stokes component is unconstrained. It includes only the configured detector
+white-noise level: correlated noise, orbital dipole, transfer functions, and TOD modifiers are
+intentionally not propagated into this diagnostic uncertainty. `maps/noise` is the actual simulated
+noise realization binned with that same nominal normal matrix after TOD modifiers, including the
+configured cross-talk.
+
 ## Parameter file
 
 A YAML file (see [params/example_param.yml](params/example_param.yml)) reusing the main program's conventions:
@@ -41,9 +62,10 @@ A YAML file (see [params/example_param.yml](params/example_param.yml)) reusing t
   take a `template:` block (`{source: pysm3, preset: ...}` or `{source: fits, path: ...}`); the CMB
   is a CAMB realization (optional `solar_dipole`).
 - `simulation`: `nscans`, `scan_duration_sec`, `npsi`, `orbital_dipole`, `pointing`, `noise`,
-  `modifiers`, and `compress` (default `true`). With `compress: false`, `pix`/`psi` are written as
-  plain `int32`/`float32` arrays instead of Huffman payloads (`tod_reader_litebird_sim` reads either
-  transparently). `flag` is always Huffman-compressed because that reader unconditionally decodes it.
+  `modifiers`, `compress` (default `true`), and optional `debug_output_dir`. With `compress: false`,
+  `pix`/`psi` are written as plain `int32`/`float32` arrays instead of Huffman payloads
+  (`tod_reader_litebird_sim` reads either transparently). `flag` is always Huffman-compressed because
+  that reader unconditionally decodes it.
 - `experiments → bands → detectors`: per-band `freq`, `fwhm`, `fsamp`, `eval_nside`, `data_nside`,
   `sigma0`/`sigma0_rts`, `polarization`, optional `crosstalk`, and a `detectors` dict (inline or via
   `!inc <file>.yml`, exactly as the main param files do). Each detector may set `psi_offset_deg`

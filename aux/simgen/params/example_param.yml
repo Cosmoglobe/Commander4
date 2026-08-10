@@ -58,12 +58,14 @@ simulation:
   npsi: 4096                # psi digitization bins for Huffman storage (only used when compress: true).
   orbital_dipole: true      # Bake the relativistic orbital dipole into the TOD (uses pointing vsun).
   compress: true            # Huffman-compress pix/psi (false -> plain int32/float32 arrays). flag is always compressed.
+  debug_output_dir: "../cmdr4_sims/simgen_example_debug/"  # Optional per-band HDF5 maps + PNG previews.
 
   pointing:
     strategy: "planck_scan"      # "planck_scan" (analytic) | "file" (load precomputed pointing H5)
     los_angle: 85.0
     spin_angle_tilt: 7.5
     spin_rate: 1.00165345964511  # rpm
+    precession_period_days: 182.625  # 
     mission_start: "2009-08-13T00:00:00"
     # For strategy "file":
     # file_path: "/path/to/pointing.h5"
