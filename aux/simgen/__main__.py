@@ -13,6 +13,17 @@ from traceback import print_exc
 from mpi4py import MPI
 
 
+def configure_logging(rank: int, verbose: bool) -> None:
+    """Configure rank-aware output for simgen without enabling third-party INFO logging."""
+    logger = logging.getLogger("simgen")
+    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+    logger.propagate = False
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        f"[rank {rank}] %(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logger.handlers[:] = [handler]
+
+
 def main() -> None:
     parser = ArgumentParser(description="Modular TOD simulator for Commander4 (litebird format).")
     parser.add_argument("-p", "--parameter_file", required=True,
@@ -21,9 +32,7 @@ def main() -> None:
     args = parser.parse_args()
 
     rank = MPI.COMM_WORLD.Get_rank()
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format=f"[rank {rank}] %(asctime)s %(levelname)s %(name)s: %(message)s")
+    configure_logging(rank, args.verbose)
 
     # Import here (not at module load) so --help works without the heavy sky stack.
     from simgen.pipeline import run
