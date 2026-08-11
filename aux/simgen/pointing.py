@@ -90,9 +90,10 @@ class PlanckScan(PointingStrategy):
     orbital velocity are computed in the ecliptic frame and rotated to Galactic coordinates. Unlike
     the original, this evaluates an arbitrary time window so scans can be distributed across ranks.
 
-    The precession period defaults to the real Planck value of 182.625 days (6 months). Setting
-    ``precession_period_days`` to a smaller value speeds up sky coverage proportionally, e.g. 1.0
-    gives a full precession cycle per day and covers the full sky in O(days) of simulated time.
+    The anti-Sun direction progresses on the physical 365.25-day period by default. Set
+    ``anti_sun_period_days`` to a shorter value to accelerate the large-scale sky sweep; full-sky
+    coverage takes roughly half that period. ``precession_period_days`` and ``spin_angle_tilt``
+    independently control the small cone traced by the spin axis around the anti-Sun direction.
     """
     # Physical / scanning constants.
     C_LIGHT = 299792458.0
@@ -105,6 +106,10 @@ class PlanckScan(PointingStrategy):
         self.spin_tilt = np.deg2rad(bget(params, "spin_angle_tilt", 7.5))
         self.spin_rate = bget(params, "spin_rate", 1.00165345964511)  # [rpm]
         self.mission_start = bget(params, "mission_start", "2009-08-13T00:00:00")
+        anti_sun_period_days = float(bget(params, "anti_sun_period_days", 365.25))
+        if anti_sun_period_days <= 0.0:
+            raise ValueError("anti_sun_period_days must be positive")
+        self.anti_sun_time_scale = 365.25 / anti_sun_period_days
         precession_period_days = bget(params, "precession_period_days", 182.625)
         self.precession_period_sec = precession_period_days * 24 * 3600
         # Ecliptic->Galactic rotation matrix, built once (astropy import is local to keep the module
@@ -124,10 +129,13 @@ class PlanckScan(PointingStrategy):
         t_abs = (sample_offset + np.arange(ntod, dtype=np.float64)) / self.fsamp
         start_time = Time(self.mission_start)
 
-        # Anti-Sun longitude on a coarse grid, then linearly interpolated to all samples (matching
-        # the original implementation; interpolating cos/sin avoids the 2*pi wrap).
-        t_coarse = np.arange(t_abs[0], t_abs[-1] + self.COARSE_STEP_SEC, self.COARSE_STEP_SEC)
-        sun_coarse = get_sun(start_time + t_coarse * u.s).transform_to('geocentrictrueecliptic')
+        # Anti-Sun longitude on a coarse grid, then linearly interpolated to all samples. The
+        # ephemeris time scale can be accelerated for short full-sky simulations; interpolating
+        # cos/sin avoids the 2*pi wrap.
+        coarse_step = self.COARSE_STEP_SEC / self.anti_sun_time_scale
+        t_coarse = np.arange(t_abs[0], t_abs[-1] + coarse_step, coarse_step)
+        sun_time = start_time + (t_coarse * self.anti_sun_time_scale) * u.s
+        sun_coarse = get_sun(sun_time).transform_to('geocentrictrueecliptic')
         anti_sun_lon_coarse = sun_coarse.lon.rad + np.pi
         cos_i = np.interp(t_abs, t_coarse, np.cos(anti_sun_lon_coarse))
         sin_i = np.interp(t_abs, t_coarse, np.sin(anti_sun_lon_coarse))
@@ -153,7 +161,8 @@ class PlanckScan(PointingStrategy):
                  + np.sin(self.los_angle) * (np.cos(spin_phase)[:, None] * u_vec
                                              + np.sin(spin_phase)[:, None] * v_vec))
 
-        # Orbital velocity (anti-Sun tangential direction b_vec) in the ecliptic, then Galactic.
+        # Orbital velocity tracks the accelerated anti-Sun direction, but retains the physical
+        # amplitude so coverage acceleration does not inflate the orbital-dipole signal.
         v_orb_ecl = self.V_ORBITAL_SPEED * b_vec
         z_gal = z_ecl @ self._ecl_to_gal.T
         v_orb_gal = v_orb_ecl @ self._ecl_to_gal.T

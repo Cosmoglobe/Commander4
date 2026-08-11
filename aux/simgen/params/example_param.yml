@@ -65,7 +65,8 @@ simulation:
     los_angle: 85.0
     spin_angle_tilt: 7.5
     spin_rate: 1.00165345964511  # rpm
-    precession_period_days: 182.625  # 
+    anti_sun_period_days: 365.25  # Main sky sweep; full-sky coverage takes roughly half this period.
+    precession_period_days: 182.625  # Spin-axis wobble period around the anti-Sun direction.
     mission_start: "2009-08-13T00:00:00"
     # For strategy "file":
     # file_path: "/path/to/pointing.h5"

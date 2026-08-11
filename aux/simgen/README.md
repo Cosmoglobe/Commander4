@@ -83,6 +83,11 @@ A YAML file (see [params/example_param.yml](params/example_param.yml)) reusing t
 
 **Pointing** (`simulation.pointing.strategy`):
 - `planck_scan` — analytic Planck-like satellite scan (anti-Sun spin + precession + orbital dipole).
+  `anti_sun_period_days` sets the large-scale sweep period (default `365.25`; full-sky coverage
+  takes roughly half this period). `precession_period_days` and `spin_angle_tilt` separately set
+  the period and radius of the spin-axis wobble around the anti-Sun direction. Shortening
+  `anti_sun_period_days` accelerates coverage while retaining the physical $30\,\mathrm{km\,s^{-1}}$
+  orbital-dipole amplitude.
 - `file` — load precomputed pointing from an HDF5 file (configurable dataset names).
 - `raster` — sweep a small patch row-by-row: traverse along longitude, teleport back at the end of
   each row, step one row in latitude, and wrap after the last row. **One scan is exactly one full
