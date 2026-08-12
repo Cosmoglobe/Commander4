@@ -18,9 +18,12 @@ correct variance (the pre-2026-08 `gaussian_random_alm` bug) inflates the first 
 about 19% for the configuration used here.
 
 The components use an identity C_l prior (S = I) so that the solver's returned amplitudes
-a = S^{1/2}x coincide with x, letting the tests apply M directly to the returned CompList.
+a = S^{1/2}x coincide with x, letting the tests apply M directly to the returned CompList. The
+prior-mean tests below deliberately do the opposite and use a *non-flat* prior, because S^{-1/2}
+is the identity under a flat one and would hide both a wrong exponent and a corrupted mu cache.
 """
 
+import healpy as hp
 import numpy as np
 import pytest
 from mpi4py import MPI
@@ -29,7 +32,7 @@ from pixell.bunch import Bunch
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky_models.component import CompList
 from commander4.solvers.CG_compsep_solver import CompSepSolver
-from commander4.utils.math_operations import (complist_dot, gaussian_random_alm,
+from commander4.utils.math_operations import (alm_to_map, complist_dot, gaussian_random_alm,
                                               _dot_complex_alm_1D_arrays)
 
 LMAX = 4
@@ -166,3 +169,245 @@ def test_sample_amplitudes_defaults_to_on_when_unset():
     del params.compsep["sample_amplitudes"]
     solver = CompSepSolver(_make_det_map(), params, MPI.COMM_SELF)
     assert solver.sample_amplitudes is True
+
+
+class TestPriorScalingContract:
+    """`apply_Cl_prior_sqrt` and `apply_Cl_prior_inv_sqrt` are an exact pair sharing one contract.
+
+    Both scale an explicitly given alm array by S^{+-1/2} in place and return it, so the call site
+    always says what is being scaled -- `comp.apply_Cl_prior_sqrt(comp.alms)` for the component's
+    own amplitudes. Uses a non-flat prior throughout, since under S = I both operations are the
+    identity and prove nothing.
+    """
+
+    @staticmethod
+    def _comp():
+        return TestPriorMean._comp_list_with_prior(_make_params())[0]
+
+    def test_round_trip_on_a_supplied_array_is_the_identity(self):
+        comp = self._comp()
+        rng = np.random.default_rng(21)
+        alms = (rng.normal(size=comp.alms.shape) + 1j*rng.normal(size=comp.alms.shape))
+        original = alms.copy()
+        comp.apply_Cl_prior_inv_sqrt(comp.apply_Cl_prior_sqrt(alms))
+        np.testing.assert_allclose(alms, original, rtol=1e-10, atol=1e-12)
+
+    def test_round_trip_on_own_alms_is_the_identity(self):
+        comp = self._comp()
+        rng = np.random.default_rng(22)
+        comp.alms[:] = rng.normal(size=comp.alms.shape) + 1j*rng.normal(size=comp.alms.shape)
+        original = comp.alms.copy()
+        comp.apply_Cl_prior_sqrt(comp.alms)
+        assert not np.allclose(comp.alms, original)   # the prior is genuinely non-flat
+        comp.apply_Cl_prior_inv_sqrt(comp.alms)
+        np.testing.assert_allclose(comp.alms, original, rtol=1e-10, atol=1e-12)
+
+    def test_supplied_array_is_scaled_and_own_alms_are_untouched(self):
+        """Passing an array must not touch self._data."""
+        comp = self._comp()
+        comp.alms[:] = 1.0
+        own_before = comp.alms.copy()
+        supplied = np.ones_like(comp.alms)
+
+        returned = comp.apply_Cl_prior_sqrt(supplied)
+        assert returned is supplied                    # in place, and handed back
+        assert not np.allclose(supplied, own_before)
+        np.testing.assert_array_equal(comp.alms, own_before)
+
+    def test_the_target_is_required(self):
+        """No implicit default: omitting the target is an error, not a silent 'use my own alms'."""
+        comp = self._comp()
+        with pytest.raises(TypeError):
+            comp.apply_Cl_prior_sqrt()
+        with pytest.raises(TypeError):
+            comp.apply_Cl_prior_inv_sqrt()
+
+
+class TestPriorMean:
+    """The S^{-1/2} mu term. mu is zero today, so these drive it via a patched `amp_prior_mean`.
+
+    The decisive case is the uninformative-data limit N^-1 -> 0: there the LHS reduces to the
+    identity and b -> S^{-1/2}mu, so the returned amplitudes a = S^{1/2}x converge on mu itself,
+    for *any* prior S. Running that with a non-identity C_l prior also pins the sign of the
+    exponent: applying S^{+1/2} by mistake would return S*mu rather than mu.
+    """
+
+    @staticmethod
+    def _comp_list_with_prior(params: Bunch) -> CompList:
+        """A component with a genuinely non-flat C_l prior, so S != I."""
+        cmb = Bunch(enabled=True, component_class="CMB",
+                    params=Bunch(lmax=LMAX, polarization="I", shortname="cmb",
+                                 spatially_varying_MM=False, Cl_prior_amplitude=1.0e3,
+                                 Cl_prior_beta=-2.0, Cl_prior_l_pivot=2))
+        object.__setattr__(cmb, "_name", "CMB")
+        comp_list = CompList.init_from_params(Bunch({"CMB": cmb}), params)
+        for comp in comp_list:
+            comp.alms[:] = 0.0
+        return comp_list
+
+    @staticmethod
+    def _patch_prior_mean(monkeypatch, comp, mu):
+        monkeypatch.setattr(type(comp), "amp_prior_mean",
+                            property(lambda self: mu.astype(self.dtype, copy=True)))
+
+    def test_uninformative_data_returns_the_prior_mean(self, monkeypatch):
+        params = _make_params(sample_amplitudes=False)
+        comp_list = self._comp_list_with_prior(params)
+        rng = np.random.default_rng(3)
+        mu = rng.normal(0.0, 1.0, comp_list[0].alms.shape) \
+            + 1j*rng.normal(0.0, 1.0, comp_list[0].alms.shape)
+        mu[:, :LMAX + 1] = mu[:, :LMAX + 1].real     # m = 0 alms are real
+        self._patch_prior_mean(monkeypatch, comp_list[0], mu)
+
+        # Enormous noise: A^T N^-1 A is negligible against S^-1, so only the prior informs the fit.
+        npix = 12*NSIDE**2
+        det_map = DetectorMap(np.full((1, npix), 5.0), np.full((1, npix), 1e8),
+                              nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
+        solution = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(comp_list)
+
+        np.testing.assert_allclose(solution[0].alms, mu, rtol=1e-4, atol=1e-6)
+
+    def test_zero_prior_mean_leaves_the_solution_unchanged(self):
+        """The default mu = 0 must be an exact no-op, not merely a small perturbation."""
+        params = _make_params(sample_amplitudes=False)
+        det_map = _make_det_map()
+        baseline = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(_make_comp_list(params))
+
+        comp = _make_comp_list(params)[0]
+        assert comp.amp_prior_mean is None
+        again = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(_make_comp_list(params))
+        np.testing.assert_array_equal(baseline[0].alms, again[0].alms)
+
+    def test_prior_mean_enters_the_sampled_solve_too(self, monkeypatch):
+        """mu shifts the constrained realization as well, not just the MAP solve."""
+        params = _make_params(sample_amplitudes=True)
+        det_map = DetectorMap(np.zeros((1, 12*NSIDE**2)), np.full((1, 12*NSIDE**2), 1e8),
+                              nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
+
+        # `amp_prior_mean` is a property, so it can only be patched on the class -- which every
+        # component instance shares. The unpatched control therefore has to run first.
+        unshifted = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(
+            self._comp_list_with_prior(params), seed=5)
+
+        comp_list = self._comp_list_with_prior(params)
+        mu = np.full(comp_list[0].alms.shape, 50.0 + 0j)
+        self._patch_prior_mean(monkeypatch, comp_list[0], mu)
+        shifted = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(comp_list, seed=5)
+
+        # Same seed, so the eta draws are identical and the difference is exactly the mu term.
+        np.testing.assert_allclose(shifted[0].alms - unshifted[0].alms, mu, rtol=1e-4, atol=1e-6)
+
+
+class TestPriorMeanMap:
+    """Loading mu from an `amp_prior_mean_map` FITS sky map (C3's COMP_AMP_PRIOR_MAP)."""
+
+    @staticmethod
+    def _comp_list(tmp_path, prior_map=None, flat_prior=True, **extra) -> CompList:
+        """A single-component list, optionally with `amp_prior_mean_map` written to `tmp_path`.
+
+        `flat_prior=False` gives a genuinely non-flat C_l prior (S != I). That matters wherever the
+        S^{-1/2} of the prior-mean term must actually do something: with the default flat prior
+        S^{-1/2} is the identity, and a test would not notice it being applied to the wrong array.
+        """
+        params = _make_params()
+        fields = dict(lmax=LMAX, polarization="I", shortname="cmb", spatially_varying_MM=False,
+                      Cl_prior_amplitude=None)
+        if not flat_prior:
+            fields.update(Cl_prior_amplitude=1.0e3, Cl_prior_beta=-2.0, Cl_prior_l_pivot=2)
+        fields.update(extra)
+        if prior_map is not None:
+            path = tmp_path / "prior_mean.fits"
+            hp.write_map(str(path), prior_map, overwrite=True)
+            fields["amp_prior_mean_map"] = str(path)
+        cmb = Bunch(enabled=True, component_class="CMB", params=Bunch(**fields))
+        object.__setattr__(cmb, "_name", "CMB")
+        comp_list = CompList.init_from_params(Bunch({"CMB": cmb}), params)
+        for comp in comp_list:
+            comp.alms[:] = 0.0
+        return comp_list
+
+    def test_defaults_to_none_without_the_parameter(self, tmp_path):
+        """A zero-mean prior is signalled by None, so the CG can skip the term entirely."""
+        assert self._comp_list(tmp_path)[0].amp_prior_mean is None
+
+    def test_absent_prior_mean_skips_the_scaling_entirely(self, tmp_path, monkeypatch):
+        """The short-circuit is real: no prior mean means S^{-1/2} is never applied.
+
+        Dropping the None check would now raise (mu is None and the target is required) rather than
+        corrupt anything, but this keeps the common zero-mean path from quietly regaining a
+        full-size scale-and-add.
+        """
+        comp_list = self._comp_list(tmp_path)
+
+        def fail(*args, **kwargs):
+            raise AssertionError("apply_Cl_prior_inv_sqrt called for a zero-mean prior")
+        monkeypatch.setattr(type(comp_list[0]), "apply_Cl_prior_inv_sqrt", fail)
+
+        params = _make_params(sample_amplitudes=False)
+        CompSepSolver(_make_det_map(), params, MPI.COMM_SELF).solve(comp_list)
+
+    def test_map_round_trips_through_the_transform(self, tmp_path):
+        """mu synthesized back to a map must reproduce the input map."""
+        nside = 16
+        rng = np.random.default_rng(11)
+        smooth_map = hp.alm2map(hp.map2alm(rng.normal(0.0, 1.0, hp.nside2npix(nside)),
+                                           lmax=LMAX), nside)
+        comp_list = self._comp_list(tmp_path, prior_map=smooth_map)
+        comp_list.load_amp_prior_means()
+
+        mu = comp_list[0].amp_prior_mean
+        assert not np.allclose(mu, 0.0)
+        recovered = alm_to_map(mu.astype(np.complex128), nside, LMAX, spin=0, nthreads=1)
+        np.testing.assert_allclose(recovered[0], smooth_map, rtol=1e-3, atol=1e-3)
+
+    def test_cached_mu_survives_repeated_solves(self, tmp_path):
+        """The CG applies S^{-1/2} to mu in place, so the cache must be handed out as a copy.
+
+        Uses a non-flat prior: under the default S = I the in-place scaling is the identity and a
+        corrupted cache would be indistinguishable from a healthy one.
+        """
+        nside = 16
+        prior_map = np.full(hp.nside2npix(nside), 4.0)
+        comp_list = self._comp_list(tmp_path, prior_map=prior_map, flat_prior=False)
+        comp_list.load_amp_prior_means()
+        mu_before = comp_list[0].amp_prior_mean.copy()
+
+        # Solve the *same* component objects twice, as the Gibbs loop does across iterations.
+        params = _make_params(sample_amplitudes=False)
+        det_map = _make_det_map()
+        first = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(comp_list)
+        second = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(comp_list)
+
+        np.testing.assert_array_equal(comp_list[0].amp_prior_mean, mu_before)
+        np.testing.assert_allclose(first[0].alms, second[0].alms, rtol=1e-10, atol=1e-12)
+
+    def test_uninformative_data_recovers_the_prior_map(self, tmp_path):
+        """End-to-end: with no data information the solution is the prior-mean map itself."""
+        nside = 16
+        rng = np.random.default_rng(4)
+        prior_map = hp.alm2map(hp.map2alm(rng.normal(0.0, 1.0, hp.nside2npix(nside)),
+                                          lmax=LMAX), nside)
+        # Non-flat prior, so the round trip through S^{-1/2} ... S^{1/2} is a real cancellation.
+        comp_list = self._comp_list(tmp_path, prior_map=prior_map, flat_prior=False)
+        comp_list.load_amp_prior_means()
+        mu = comp_list[0].amp_prior_mean
+
+        params = _make_params(sample_amplitudes=False)
+        npix = 12*NSIDE**2
+        det_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1e8),
+                              nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
+        solution = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(comp_list)
+
+        np.testing.assert_allclose(solution[0].alms, mu, rtol=1e-4, atol=1e-6)
+
+    def test_rejects_a_non_fits_prior_mean(self, tmp_path, caplog):
+        comp_list = self._comp_list(tmp_path, amp_prior_mean_map="/some/chain.h5")
+        # logassert logs the reason and raises a bare AssertionError, so match on the log.
+        with pytest.raises(AssertionError):
+            comp_list.load_amp_prior_means()
+        assert "must be a .fits sky map" in caplog.text
+
+    def test_setter_rejects_a_wrongly_shaped_mu(self, tmp_path):
+        comp = self._comp_list(tmp_path)[0]
+        with pytest.raises(ValueError, match="prior mean has shape"):
+            comp.amp_prior_mean = np.zeros((comp.npol, comp.alm_len_complex + 1), dtype=comp.dtype)
