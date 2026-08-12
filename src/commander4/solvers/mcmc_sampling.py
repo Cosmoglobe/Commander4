@@ -4,14 +4,33 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Callable
 
+import healpy as hp
 import numpy as np
 from mpi4py import MPI
+from numpy.typing import NDArray
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky_models.component import CompList
 from commander4.sky_models.sky_model import SkyModel
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_chisq_mask(mask_map: NDArray | None, nside: int) -> NDArray[np.bool_] | None:
+    """Convert a raw HEALPix mask to a boolean keep-mask at `nside`, or None for full sky.
+
+    Follows C3's ``compute_chisq(maskpath=...)`` convention: ud_grade to the evaluation resolution,
+    then threshold at 0.5, so a partially-covered coarse pixel is kept only if more than half of it
+    was. True means "include this pixel in the chi-squared". A mask that keeps everything returns
+    None, so the likelihood takes the cheaper full-sky path.
+    """
+    if mask_map is None:
+        return None
+    mask_map = np.asarray(mask_map, dtype=np.float64)
+    if hp.npix2nside(mask_map.size) != nside:
+        mask_map = hp.ud_grade(mask_map, nside)
+    keep = mask_map > 0.5
+    return None if keep.all() else keep
 
 
 class MCMCSamplingGroup(ABC):
@@ -49,7 +68,8 @@ class MCMCSamplingGroup(ABC):
     """
 
     def __init__(self, compsep_comm: MPI.Comm, detector_data: DetectorMap, comp_list: CompList, *,
-                 target_pol: str, chisq_active: bool, root: int = 0):
+                 target_pol: str, chisq_active: bool, chisq_mask: NDArray | None = None,
+                 root: int = 0):
         """
         Args:
             compsep_comm: Full CompSep communicator (spans all band views and both polarizations).
@@ -57,6 +77,8 @@ class MCMCSamplingGroup(ABC):
             comp_list: Globally-replicated full component list, updated in place.
             target_pol: This rank's polarization stream, ``"I"`` or ``"QU"``.
             chisq_active: Whether this rank's band contributes to the chi-squared likelihood.
+            chisq_mask: Optional HEALPix mask restricting which pixels enter the likelihood, at
+                any nside (see `resolve_chisq_mask`). None means full sky.
             root: Rank (in ``compsep_comm``) that draws proposals and the accept/reject decision.
         """
         self.comm = compsep_comm
@@ -66,6 +88,8 @@ class MCMCSamplingGroup(ABC):
         self.chisq_active = chisq_active
         self.root = root
         self.is_root = compsep_comm.Get_rank() == root
+        # Resolved once here rather than per MH step: the band's nside is fixed for the group's life.
+        self.chisq_mask = resolve_chisq_mask(chisq_mask, detector_data.nside)
 
     # ------------------------------------------------------------------ #
     # Parameter-specific hooks (must be implemented by subclasses).
@@ -117,12 +141,16 @@ class MCMCSamplingGroup(ABC):
         and data-resolution (per-pixel) amplitudes both land at the band resolution. Uses *all*
         components in this rank's polarization stream, so the components a group holds fixed still
         enter the residual -- this is the conditional likelihood of the MH move.
+
+        When the group defines a ``chisq_mask``, only the kept pixels enter the sum.
         """
         band_pol = "QU" if self.detector_data.pol else "I"
         model_sky = SkyModel(self.comp_list.split_for_eval_pol(self.target_pol)).get_sky_at_nu(
             self.detector_data.nu, self.detector_data.nside, band_pol,
             fwhm=self.detector_data.fwhm_rad)
-        whitened_residual = (self.detector_data.map_sky - model_sky) / self.detector_data.map_rms
+        pix = slice(None) if self.chisq_mask is None else self.chisq_mask
+        residual = self.detector_data.map_sky[:, pix] - model_sky[:, pix]
+        whitened_residual = residual*np.sqrt(self.detector_data.inv_n_map[:, pix])
         return -0.5 * float(np.sum(whitened_residual**2))
 
     def global_loglike(self) -> float:

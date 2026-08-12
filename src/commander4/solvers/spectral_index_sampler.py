@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from mpi4py import MPI
+from numpy.typing import NDArray
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky_models.component import CompList, Component
@@ -42,14 +43,14 @@ class SpectralIndexSamplingGroup(MCMCSamplingGroup):
 
     def __init__(self, compsep_comm: MPI.Comm, detector_data: DetectorMap, comp_list: CompList, *,
                  target_pol: str, chisq_active: bool, selected_comps: list[str] | None,
-                 root: int = 0):
+                 chisq_mask: NDArray | None = None, root: int = 0):
         """
         Args (in addition to the base class):
             selected_comps: Component names whose spectral indices this group proposes, or None for
                 all components that have spectral-index sampling enabled.
         """
         super().__init__(compsep_comm, detector_data, comp_list, target_pol=target_pol,
-                         chisq_active=chisq_active, root=root)
+                         chisq_active=chisq_active, chisq_mask=chisq_mask, root=root)
         self._groups = _discover_spectral_index_groups(comp_list, selected_comps)
 
     def has_parameters(self) -> bool:

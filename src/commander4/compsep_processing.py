@@ -34,6 +34,33 @@ def _enabled_sampling_groups(params: Bunch, key: str) -> Bunch:
                   if "enabled" not in groups[name] or groups[name].enabled})
 
 
+def _read_chisq_masks(compsep_comm: MPI.Comm, mcmc_groups: Bunch) -> dict[str, NDArray]:
+    """Read each MCMC group's optional ``chisq_mask`` HEALPix file once, and broadcast it.
+
+    This is C3's ``MCMC_SAMPLING_GROUP_CHISQ_MASK``: one mask per sampling group, applied to every
+    band in that group's chi-squared, restricting which sky the accept/reject decision sees. It is
+    deliberately *not* a per-band data mask -- it does not enter the amplitude solve or the noise
+    model, only the non-linear likelihood.
+
+    Read at native resolution and kept as-is; `resolve_chisq_mask` ud_grades and thresholds it to
+    each band's nside when the sampling group is built. Only field 0 is read (as on the TOD side),
+    so a single mask applies to both Q and U for polarization bands.
+
+    Returns:
+        Mapping from group name to its raw mask map, omitting groups that define no mask.
+    """
+    masks: dict[str, NDArray] = {}
+    if compsep_comm.Get_rank() == 0:
+        for group_name in mcmc_groups:
+            group = mcmc_groups[group_name]
+            if "chisq_mask" not in group or not group.chisq_mask:
+                continue
+            masks[group_name] = hp.read_map(group.chisq_mask, field=0, dtype=np.float64)
+            logger.info(f"CompSep: read chisq mask for MCMC group {group_name!r} from "
+                        f"{group.chisq_mask} (fsky = {np.mean(masks[group_name] > 0.5):.3f}).")
+    return compsep_comm.bcast(masks, root=0)
+
+
 def _selected_names(sampling_group: Bunch, key: str) -> list[str] | None:
     """Normalize a sampling group's selection for `key` ('comps'/'bands'/...) to names-or-all.
 
@@ -233,9 +260,12 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
                   "Check that CompSep_bands matches the configured I/QU rank counts.",
                   logger)
 
+    mcmc_groups = _enabled_sampling_groups(params, MCMC_SAMPLING_GROUPS_KEY)
     _validate_sampling_group_tiers(_enabled_sampling_groups(params, CG_SAMPLING_GROUPS_KEY),
-                                   _enabled_sampling_groups(params, MCMC_SAMPLING_GROUPS_KEY),
-                                   comp_list, params)
+                                   mcmc_groups, comp_list, params)
+    # Read the MCMC groups' chi-squared masks once here, rather than on every Gibbs iteration when
+    # the sampling groups are rebuilt.
+    mpi_info.compsep.chisq_masks = _read_chisq_masks(mpi_info.compsep.comm, mcmc_groups)
 
     # Load the initial component alms (from each component's init_from / init_chain_path, else
     # zeros). Done identically on every CompSep rank so comp_list starts globally consistent.
@@ -403,10 +433,11 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
                                                     mpi_info.compsep.band_identifier)
         # Build this rank's spectral-index MCMC group and take `numstep` coupled MH steps; proposals
         # and the accept/reject decision are made on `compsep_master` and broadcast to all ranks.
+        chisq_masks = mpi_info.compsep.chisq_masks if "chisq_masks" in mpi_info.compsep else {}
         sampler = SpectralIndexSamplingGroup(
             compsep_comm, detector_data, comp_list, target_pol=target_pol,
             selected_comps=_selected_names(group, "comps"), chisq_active=chisq_active,
-            root=compsep_master)
+            chisq_mask=chisq_masks.get(group_name), root=compsep_master)
         sampler.run(numstep=group.numstep if "numstep" in group else 1,
                     resolve_amplitudes=resolve_amplitudes)
         log_band_chi2(f"MCMC group {group_name!r}")
