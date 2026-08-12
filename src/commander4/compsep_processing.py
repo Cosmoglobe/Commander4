@@ -1,7 +1,9 @@
 import numpy as np
+import healpy as hp
 import logging
 from copy import deepcopy
 from mpi4py import MPI
+from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.output.log import logassert
@@ -238,6 +240,9 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     # Load the initial component alms (from each component's init_from / init_chain_path, else
     # zeros). Done identically on every CompSep rank so comp_list starts globally consistent.
     comp_list.load_initial_alms(params)
+    # Likewise for the Gaussian amplitude prior's mean mu (each component's amp_prior_mean_map, else a
+    # zero-mean prior). Read once here; the CG applies S^{-1/2} to it on every solve.
+    comp_list.load_amp_prior_means()
 
     mpi_info.compsep.band_name = band_name
     mpi_info.compsep.band_identifier = band_identifier

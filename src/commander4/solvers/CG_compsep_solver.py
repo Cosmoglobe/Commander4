@@ -163,9 +163,10 @@ class CompSepSolver:
                     # Wait until all data for component icomp has been received.
                     MPI.Request.Wait(requests[icomp])
                 # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
-                comp_list.components[icomp].apply_Cl_prior_sqrt()
+                comp = comp_list.components[icomp]
+                comp.apply_Cl_prior_sqrt(comp.alms)
                 # Adds input vector to output, since (1 + S^{1/2}...)a = a + (S^{1/2}...)a
-                comp_list.components[icomp] += comp_list_in.components[icomp]
+                comp += comp_list_in.components[icomp]
         else: # Worker ranks just wait for all their sends to complete.
             if not use_blocking:
                 for icomp in range(len(comp_list)):
@@ -179,17 +180,19 @@ class CompSepSolver:
         """ Calculates the right-hand-side b-vector of the Ax=b CompSep equation, overwriting and
             returning `comp_list`:
 
-                b = S^{1/2} A^T (N^-1 d + N^{-1/2} eta_1) + eta_2,
+                b = S^{1/2} A^T (N^-1 d + N^{-1/2} eta_1) + S^{-1/2} mu + eta_2,
 
             where the two eta terms are included only when `sample_amplitudes` is set. Without them
-            b gives the deterministic Wiener-filtered (maximum-likelihood) mean, whose power
-            spectrum is biased low; with them the CG solution is a constrained realization.
+            b gives the deterministic Wiener-filtered (maximum a posteriori) mean, whose power
+            spectrum is biased low; with them the CG solution is a constrained realization, i.e. a
+            draw from the full conditional posterior of the amplitudes.
 
             The data and the eta_1 fluctuation are summed in *map* space, before the single shared
             application of S^{1/2}A^T: they differ only in which map-space vector they start from,
             and the operator between there and the component alms is linear, so one adjoint SHT, one
-            MPI reduce and one prior application serve both terms. eta_2 needs neither -- it lives
-            directly in the component alm space -- so it is simply added at the end.
+            MPI reduce and one prior application serve both terms. The prior mean mu and the prior
+            fluctuation eta_2 need none of that (they live directly in the component alm space)
+            so they are added afterwards, on the rank that holds the accumulated result.
         """
         #FIXME: how will eta_2 work for point sources?
         myrank = self.CompSep_comm.Get_rank()
@@ -219,16 +222,26 @@ class CompSepSolver:
         for comp in comp_list:
             comp.accum_data_blocking(self.CompSep_comm)
             if myrank == 0:
-                comp.apply_Cl_prior_sqrt()
+                comp.apply_Cl_prior_sqrt(comp.alms)
 
         if myrank == 0:
             for comp in comp_list:
+                # + S^{-1/2} mu, the prior mean. Added whether or not we are sampling: unlike the
+                # eta terms this belongs to the *mean* solution, so a non-zero prior mean shifts the
+                # Wiener filter itself and must be present in the MAP solve too. mu is an alm
+                # vector, None unless the component sets `amp_prior_mean_map` (read as a sky map
+                # and transformed once at startup by CompList.load_amp_prior_means); the usual
+                # zero-mean prior therefore costs one None check, not a full-size scale-and-add.
+                amp_prior_mean = comp.amp_prior_mean
+                if amp_prior_mean is not None:
+                    comp.alms += comp.apply_Cl_prior_inv_sqrt(amp_prior_mean)
                 if self.sample_amplitudes:
                     # + eta_2, the prior's own fluctuation. In the preconditioned variable it enters
                     # unmodified: substituting a = S^{1/2}x into the S^{-1/2}eta_2 term and
                     # left-multiplying by S^{1/2} leaves it alone.
                     for ipol in range(self.npol):
-                        comp.alms[ipol] += gaussian_random_alm(comp.lmax, comp.lmax, self.spin, 1)[0]
+                        comp.alms[ipol] += gaussian_random_alm(comp.lmax, comp.lmax,
+                                                               self.spin, 1)[0]
                 logger.info(f"RHS comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
 
         return comp_list
@@ -315,7 +328,7 @@ class CompSepSolver:
         complist_sol = CG_solver.x
         for comp in complist_sol:
             if master:
-                comp.apply_Cl_prior_sqrt()
+                comp.apply_Cl_prior_sqrt(comp.alms)
             comp.bcast_data_blocking(self.CompSep_comm)
 
         return complist_sol

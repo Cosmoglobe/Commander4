@@ -163,6 +163,16 @@ class Component:
         joined._data = np.concatenate((intensity_comp._data, pol_comp._data), axis=0)
         return joined
 
+    @property
+    def amp_prior_mean(self):
+        """The mean mu of the Gaussian prior on this component's amplitudes, or `None` if there is
+        no prior.
+
+        Defined on the base class, where it is always None; `DiffuseComponent` overrides it with a
+        mean that can be read from a sky map.
+        """
+        return None
+
     def _apply_array_op(self, other: "Component", arr_op, *, inplace: bool) -> "Component":
         self._assert_consistent_comp(other)
         target = self if inplace else deepcopy(self)
@@ -296,6 +306,9 @@ class DiffuseComponent(Component):
         # Unit of an init_from sky map for this component (None -> assume it is already in
         # `amplitude_unit`). Only used when reading FITS init maps, not compsep chains.
         self.units = comp_params.units if "units" in comp_params else None
+        # Cached prior mean mu, filled from `amp_prior_mean_map` by CompList.load_amp_prior_means;
+        # None means a zero-mean prior. See the amp_prior_mean property.
+        self._amp_prior_mean_alms = None
         self._data = None  # Alm data is not allocated by default.
         if allocate_empty_alms:
             self.allocate_empty_alms()
@@ -425,16 +438,56 @@ class DiffuseComponent(Component):
                 f" (originally defined as {self.defined_pol})" \
                 f"\n   lmax = {self.lmax} \n   alms: {self.alms}"
 
-    def apply_Cl_prior_sqrt(self):
-        """
-        Applies the square root of the C_l prior (S^{1/2}) to the alms in-place,
-        which are also returned.
+    def apply_Cl_prior_sqrt(self, alms: NDArray[np.complexfloating]) \
+            -> NDArray[np.complexfloating]:
+        """Multiplies `alms` by the C_l prior square root S^{1/2}, in place, and returns them.
+
+        The target is always explicit, so that scaling the component's own amplitudes and scaling
+        something else that lives in its alm space read differently at the call site. To apply this
+        to the component's own alms (the usual case, the CG's a = S^{1/2}x reparameterization)
+        call ``comp.apply_Cl_prior_sqrt(comp.alms)``.
         """
         prior_sqrt = np.sqrt(self.P_Cl_prior)
         for ipol in range(self.npol):
-            # S^{1/2} a
-            almxfl(self._data[ipol], prior_sqrt, inplace=True)
-        return self._data
+            almxfl(alms[ipol], prior_sqrt, inplace=True)
+        return alms
+
+    def apply_Cl_prior_inv_sqrt(self, alms: NDArray[np.complexfloating]) \
+            -> NDArray[np.complexfloating]:
+        """Multiplies `alms` by S^{-1/2}, in place, and returns them; the inverse of the above.
+
+        Same contract as `apply_Cl_prior_sqrt`, including the explicit target: use
+        ``comp.apply_Cl_prior_inv_sqrt(comp.alms)`` to act on the component's own amplitudes.
+        P_Cl_prior is strictly positive by construction (it carries a 1e-10 floor), so the inversion
+        needs no guard.
+        """
+        prior_inv_sqrt = np.sqrt(self.P_Cl_prior_inv)
+        for ipol in range(self.npol):
+            almxfl(alms[ipol], prior_inv_sqrt, inplace=True)
+        return alms
+
+    @property
+    def amp_prior_mean(self) -> NDArray[np.complexfloating] | None:
+        """The prior mean mu of this component's amplitude alms, in the units of `alms`.
+
+        The Gaussian amplitude prior is a ~ N(mu, S), with S given by `P_Cl_prior`; mu is where the
+        solution is pulled in the absence of informative data. Returns None (meaning a zero-mean
+        prior, and letting the caller skip the whole term) unless the component sets
+        `amp_prior_mean_map`, C3's ``COMP_AMP_PRIOR_MAP``.
+
+        When set, always returns a fresh copy: the CG right-hand side applies S^{-1/2} to it *in
+        place*, so handing out the cached mu itself would re-scale the cache on every iteration.
+        """
+        if self._amp_prior_mean_alms is None:
+            return None
+        return self._amp_prior_mean_alms.copy()
+
+    @amp_prior_mean.setter
+    def amp_prior_mean(self, alms: NDArray[np.complexfloating]) -> None:
+        if alms.shape != (self.npol, self.alm_len_complex):
+            raise ValueError(f"Component {self.comp_name!r}: prior mean has shape {alms.shape}, "
+                             f"expected {(self.npol, self.alm_len_complex)}.")
+        self._amp_prior_mean_alms = alms
 
     def _realize_alms_as_map(self, component_alms, nside: int, fwhm: float = 0):
         """Realize component alms as a map.
@@ -1011,11 +1064,21 @@ class RadioSources(PointSourcesComponent):
         #return band_alm's contribution to point sources amplitudes
         return self._data
     
-    def apply_Cl_prior_sqrt(self):
+    def apply_Cl_prior_sqrt(self, alms):
         """
-        In the case of point sources this is just a dummy, the data object is simply returned.
+        In the case of point sources this is just a dummy, the input is simply returned.
+
+        NB: point-source support in compsep is unfinished and awaiting review. In particular these
+        components expose no ``alms`` attribute, so the ``comp.apply_Cl_prior_sqrt(comp.alms)``
+        calls in the CG solver would not reach this dummy for a point source in the first place.
         """
-        return self._data
+        return alms
+
+    def apply_Cl_prior_inv_sqrt(self, alms):
+        """
+        Dummy matching `apply_Cl_prior_sqrt`: point sources carry no C_l prior to invert.
+        """
+        return alms
 
     def __repr__(self):
         return f"Radio Source \n amps: {self._data}"
@@ -1071,11 +1134,14 @@ def _read_view_alms_from_fits(comp: "DiffuseComponent", fits_path: str) -> NDArr
     The map's polarization content is inferred purely from its shape (npol, npix), so the column
     names do not matter. The map is converted from its ``units`` to the component's amplitude unit
     (at the component's reference frequency) before being transformed to alms.
+
+    Shared by the ``init_from`` initial guess and the ``amp_prior_mean_map`` prior mean, which must
+    be read identically: both are sky maps living in the component's own amplitude space.
     """
     sky_map = np.atleast_2d(hp.read_map(fits_path, field=None))
     rows = _pol_row_indices(sky_map, comp.eval_pol, comp.shortname, fits_path)
     if rows is None:
-        logger.debug(f"Init map {fits_path!r} has no {comp.eval_pol!r} data for component "
+        logger.debug(f"Map {fits_path!r} has no {comp.eval_pol!r} data for component "
                      f"{comp.comp_name!r}; leaving those alms at zero.")
         return None
     view_map = np.ascontiguousarray(sky_map[rows], dtype=np.float64)
@@ -1233,6 +1299,37 @@ class CompList:
                               f"supported for diffuse (alm-based) components.", logger)
                 continue
             _load_component_alms(comp, source_path)
+
+    def load_amp_prior_means(self) -> None:
+        """Populate each component's prior mean mu from its ``amp_prior_mean_map`` parameter.
+
+        This is C3's ``COMP_AMP_PRIOR_MAP``: a FITS sky map giving the mean of the Gaussian
+        amplitude prior a ~ N(mu, S). It goes through the same conversion as an ``init_from``
+        map -- unit conversion at the component's reference frequency, truncation to l = 3*nside-1,
+        and the iterative (LSMR) inverse SHT -- because mu and the amplitudes live in the same space
+        and must be treated identically; C3 instead uses a single non-iterative `YtW` analysis here,
+        which is the less accurate of the two on a HEALPix grid.
+
+        Read once and cached on the component (C3 likewise transforms its mu once, at component
+        initialization). The S^{-1/2} that turns mu into a right-hand-side term is *not* applied
+        here but per solve, since the prior S may change between Gibbs iterations while mu does not.
+        """
+        for comp in self.comp_list:
+            source_path = comp.comp_params.amp_prior_mean_map \
+                if "amp_prior_mean_map" in comp.comp_params else None
+            if not source_path:
+                continue  # Zero-mean prior.
+            log.logassert(isinstance(comp, DiffuseComponent),
+                          f"Component {comp.comp_name!r}: 'amp_prior_mean_map' is only supported "
+                          "for diffuse (alm-based) components.", logger)
+            log.logassert(str(source_path).lower().endswith(".fits"),
+                          f"Component {comp.comp_name!r}: 'amp_prior_mean_map' must be a .fits "
+                          f"sky map, but got {source_path!r}.", logger)
+            view_alms = _read_view_alms_from_fits(comp, source_path)
+            if view_alms is not None:
+                comp.amp_prior_mean = view_alms.astype(comp.dtype, copy=False)
+                logger.info(f"Component {comp.comp_name!r} ({comp.eval_pol}): prior mean read from "
+                            f"{source_path!r}.")
 
     def _assert_consistent_comps(self, other: "CompList") -> None:
         if not isinstance(other, CompList):
@@ -1427,10 +1524,13 @@ class CompList:
 
     def apply_Cl_prior_sqrt(self):
         """
-        Applies per-component the corresponding C_l prior square root (S^{1/2}).
+        Applies per-component the corresponding C_l prior square root (S^{1/2}) to its own alms.
+
+        Takes no target argument, unlike the per-component method: each component has its own C_l
+        prior and its own alms, so there is no single array a list-level call could scale.
         """
         for comp in self.comp_list:
-            comp.apply_Cl_prior_sqrt()
+            comp.apply_Cl_prior_sqrt(comp.alms)
 
     def inplace_add_scaled(self, list_other, scalar):
         """ `list_inplace += scalar*list_other`
