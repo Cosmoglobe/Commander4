@@ -9,7 +9,7 @@ from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky_models.component import CompList
-from commander4.utils.math_operations import alm_to_map_adjoint, gaussian_random_alm, almxfl,\
+from commander4.utils.math_operations import alm_to_map_adjoint, gaussian_random_alm,\
     complist_dot, complist_norm
 from commander4.solvers.dense_matrix_math import DenseMatrix
 from commander4.solvers.CG_driver import distributed_CG
@@ -32,8 +32,10 @@ class CompSepSolver:
             = Y^T M^T Y^-1^T B^T d + Y^T M^T Y^-1^T B^T N^-{1/2} eta_1 + S^-1 mu + S^{-1/2} eta_2,
         where B is the beam smoothing, M is the mixing matrix, N is the noise covariance matrix,
         Y is alm->map spherical harmonic synthesis, d is the observed frequency maps (as alms),
-        a is the component maps we want to solve for (as alms), and z1 and z2 are random numbers
-        drawn from N(0,1). For better numerical stability, we actually solve the equivalent equation
+        a is the component maps we want to solve for (as alms), and eta_1 and eta_2 are random
+        numbers drawn from N(0,1). Toggling `compsep.sample_amplitudes` switches between a full
+        constrained realization and just optimizing for MAP.
+        For numerical stability, we actually solve the equivalent
         (1 + S^{1/2} Y^T M^T Y^-1^T B^T N^-1 B Y^-1 M Y S^{1/2})[S^{-1/2} a]
             = S^{1/2} Y^T M^T {Y^{-1}}^T B^T N^{-1} d
             + S^{1/2}A^TN^{-1/2} eta_1 + S^{-1/2} mu + eta_2.
@@ -68,6 +70,10 @@ class CompSepSolver:
             self.nthreads = self.params.general.nthreads_compsep
         else:
             self.nthreads = self.params.general.nthreads_compsep[self.CompSep_comm.Get_rank()]
+
+        # Whether to add the two fluctuation terms to the RHS, or just optimize for MAP.
+        self.sample_amplitudes = params.compsep.sample_amplitudes \
+            if "sample_amplitudes" in params.compsep else True
     
 
     def project_all_comps_to_band(self, comp_list_in: CompList,
@@ -169,116 +175,63 @@ class CompSepSolver:
         return comp_list
 
 
-    def calc_RHS_mean(self, comp_list: CompList) -> CompList:
-        """ Caculates the right-hand-side b-vector of the Ax=b CompSep equation for the
-            Wiener filtered (or mean-field) solution. If used alone on the right-hand-side,
-            gives the deterministic maximum likelihood map-space solution, but a biased PS solution.
+    def calc_RHS(self, comp_list: CompList) -> CompList:
+        """ Calculates the right-hand-side b-vector of the Ax=b CompSep equation, overwriting and
+            returning `comp_list`:
+
+                b = S^{1/2} A^T (N^-1 d + N^{-1/2} eta_1) + eta_2,
+
+            where the two eta terms are included only when `sample_amplitudes` is set. Without them
+            b gives the deterministic Wiener-filtered (maximum-likelihood) mean, whose power
+            spectrum is biased low; with them the CG solution is a constrained realization.
+
+            The data and the eta_1 fluctuation are summed in *map* space, before the single shared
+            application of S^{1/2}A^T: they differ only in which map-space vector they start from,
+            and the operator between there and the component alms is linear, so one adjoint SHT, one
+            MPI reduce and one prior application serve both terms. eta_2 needs neither -- it lives
+            directly in the component alm space -- so it is simply added at the end.
         """
+        #FIXME: how will eta_2 work for point sources?
         myrank = self.CompSep_comm.Get_rank()
-        mythreads = self.nthreads
-        
+
         # N^-1 d
         b_map = self.det_map.apply_inv_N_map(self.det_map.map_sky, inplace=False)
-        
-        # # Y^T N^-1 d
+        if self.sample_amplitudes:
+            # + N^{-1/2} eta_1. Drawn per band and independently on every rank, as it must be:
+            # eta_1 is the white-noise realization of *this* band's data. Zero-weight pixels
+            # (unobserved, inv_n_map = 0) get no fluctuation, matching their absence from the LHS.
+            eta_1 = np.random.normal(0.0, 1.0, b_map.shape)*np.sqrt(self.det_map.inv_n_map)
+            logger.info(f"RHS |N^-1 d| = {np.mean(np.abs(b_map)):.2e}, "
+                        f"|N^-1/2 eta_1| = {np.mean(np.abs(eta_1)):.2e}")
+            b_map += eta_1.astype(b_map.dtype, copy=False)
+
+        # Y^T (N^-1 d + N^{-1/2} eta_1)
         b_band = Band.init_from_detector(det_map = self.det_map,
                               double_precision = self.params.general.CG_float_precision == "double")
         b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin,
-                                   nthreads=mythreads)
+                                   nthreads=self.nthreads)
         b_band.alms = b_alm.astype(b_band.alms.dtype, copy=False)
-  
-        # (Y^T M^T Y^-1^T B^T) Y^T N^-1 d
+
+        # (Y^T M^T Y^-1^T B^T) Y^T (...)
         self.eval_all_comps_from_band(b_band, comp_list)
 
-        # Accumulate solution on master
+        # Accumulate on master and apply the prior there: S^{1/2} Y^T M^T Y^-1^T B^T Y^T (...)
         for comp in comp_list:
             comp.accum_data_blocking(self.CompSep_comm)
             if myrank == 0:
-                # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 d
                 comp.apply_Cl_prior_sqrt()
-        
+
         if myrank == 0:
             for comp in comp_list:
-                logger.info(f"RHS1 comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
+                if self.sample_amplitudes:
+                    # + eta_2, the prior's own fluctuation. In the preconditioned variable it enters
+                    # unmodified: substituting a = S^{1/2}x into the S^{-1/2}eta_2 term and
+                    # left-multiplying by S^{1/2} leaves it alone.
+                    for ipol in range(self.npol):
+                        comp.alms[ipol] += gaussian_random_alm(comp.lmax, comp.lmax, self.spin, 1)[0]
+                logger.info(f"RHS comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
 
         return comp_list
-
-
-    def calc_RHS_fluct(self, comp_list: CompList) -> CompList:
-        """ Calculates the right-hand-side fluctuation vector. Provides unbiased realizations
-            (of foregrounds or the CMB) if added together with the right-hand-side of the 
-            Wiener filtered solution : Ax = b_mean + b_fluct.
-        """
-        myrank = self.CompSep_comm.Get_rank()
-        mythreads = self.nthreads
-
-        # eta_1
-        b_map = np.random.normal(0.0, 1.0, self.det_map.inv_var_map.shape)
-
-        # N^-1/2 eta_1
-        b_map *= np.sqrt(self.det_map.inv_var_map)
-
-        # Y^T N^-1 eta_1
-        b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax,
-                                   spin=self.spin, nthreads=mythreads)
-        b_band = Band.init_from_detector(det_map = self.det_map,
-                              double_precision = self.params.general.CG_float_precision == "double")
-        b_band.alms = b_alm
-
-        # (Y^T M^T Y^-1^T B^T) Y^T N^-1 eta_1
-        self.eval_all_comps_from_band(b_band, comp_list)
-
-        # Accumulate solution on master
-        for comp in comp_list:
-            comp.accum_data_blocking(self.CompSep_comm)
-            if myrank == 0:
-                # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 eta_1
-                comp.apply_Cl_prior_sqrt()
-        
-        if myrank == 0:
-            for comp in comp_list:
-                logger.info(f"RHS2 comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
-
-        return comp_list
-
-
-    def calc_RHS_prior_mean(self, comp_list: CompList) -> CompList:
-        
-        #FIXME: how will this be for point sources?
-        
-        myrank = self.CompSep_comm.Get_rank()
-        if myrank == 0:
-            # Currently this will always return 0, since we have not yet implemented support for
-            # a spatial prior, but when we do it will go here.
-            mu_s = []
-            for comp in comp_list:
-                mu = np.zeros((self.npol, comp.alm_len_complex), dtype=self.complex_dtype)
-                for ipol in range(self.npol):
-                    almxfl(mu[ipol], comp.P_Cl_prior.astype(self.float_dtype, copy=False),
-                           inplace=True)
-                logger.info(f"RHS3 comp-{comp.comp_name}: {np.mean(np.abs(mu)):.2e}")
-                mu_s.append(mu)
-        else:
-            mu_s = []
-        return mu_s
-
-
-    def calc_RHS_prior_fluct(self, comp_list: CompList) -> CompList:
-        
-        #FIXME: how will this be for point sources?
-
-        myrank = self.CompSep_comm.Get_rank()
-        if myrank == 0:
-            eta2_s = []
-            for comp in comp_list:
-                eta2 = np.zeros((self.npol, comp.alm_len_complex), dtype=self.complex_dtype)
-                for ipol in range(self.npol):
-                    eta2[ipol] = gaussian_random_alm(comp.lmax, comp.lmax, self.spin, 1)
-                logger.info(f"RHS4 comp-{comp.comp_name}: {np.mean(np.abs(eta2)):.2e}")
-                eta2_s.append(eta2)
-        else:
-            eta2_s = []
-        return eta2_s
 
 
     def solve_CG(self, LHS: Callable, RHS: CompList, x0 = None, M = None,
@@ -311,7 +264,7 @@ class CompSepSolver:
             CG_solver = distributed_CG(LHS, RHS, master, dot=mydot, x0=x0, destroy_b=True)
         else:
             CG_solver = distributed_CG(LHS, RHS, master, dot=mydot, x0=x0, M=M, destroy_b=True)
-        self.CG_residuals = np.zeros((max_iter))
+        self.CG_residuals = np.zeros(max_iter)
         if x_true is not None:
             if master:
                 self.xtrue_A_xtrue = complist_dot(x_true, LHS(x_true))
@@ -369,17 +322,21 @@ class CompSepSolver:
 
 
     def solve(self, comp_list:CompList, seed=None) -> CompList:
-        if seed is not None:
-            np.random.seed(seed)
+        """Solve  the amplitudes of `comp_list` for this rank's band.
 
-        RHS1 = self.calc_RHS_mean(comp_list)
-        # FIXME: These were only commented out during debugging, they need to be re-introduced,
-        # do they currently work?
-        # RHS2 = self.calc_RHS_fluct()
-        # RHS3 = self.calc_RHS_prior_mean()
-        # RHS4 = self.calc_RHS_prior_fluct()
-        # RHS = [_R1 + _R2 + _R3 + _R4 for _R1, _R2, _R3, _R4 in zip(RHS1, RHS2, RHS3, RHS4)]
-        RHS = RHS1
+        If `sample_amplitudes==True` the solution is a constrained realization, i.e the Wiener mean
+        plus two fluctuation terms, i.e. the amplitudes are a draw from the conditional posterior.
+        If `sample_amplitudes==False`, only the mean term is used and the result is the
+        deterministic maximum a posteriori solution, which is biased low in power.
+        """
+        if seed is not None:
+            # Offset per rank: eta_1 is *this* band's white-noise realization, so an identically
+            # seeded RNG on every rank would make the fluctuation correlated across bands.
+            np.random.seed(seed + self.CompSep_comm.Get_rank())
+
+        # `calc_RHS` overwrites the CompList it is handed, so comp_list doubles as the RHS buffer
+        # (the preconditioner below reads only its metadata, never its alms).
+        RHS = self.calc_RHS(comp_list)
 
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners",
         # and has a name specified by self.params.compsep.preconditioner.

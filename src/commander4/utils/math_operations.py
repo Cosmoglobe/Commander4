@@ -339,10 +339,18 @@ def nalm(lmax: int, mmax: int) -> int:
     return ((mmax+1)*(mmax+2))//2 + (mmax+1)*(lmax-mmax)
 
 
-# MR FIXME: I'm not absolutely sure that this is fully correct. Please double-check!
 def gaussian_random_alm(lmax, mmax, spin, ncomp):
-    """ Calculates Gaussianly distributed alms for the complex alm convension
-        (not storing m<0 because map is real.)
+    """Draw unit-variance white-noise alms in the Healpy complex convention (m<0 dropped).
+
+    "Unit variance" is defined with respect to the inner product these alms are actually used
+    under, `_dot_complex_alm_1D_arrays`: <a,b> = sum_{m=0} Re(a b) + 2 sum_{m>0} Re(a b*). Writing
+    the corresponding real coordinates (a_l0 for m=0; sqrt(2)Re(a_lm), sqrt(2)Im(a_lm) for m>0),
+    <a,a> is their plain sum of squares, so those coordinates must each be N(0,1). That means the
+    m=0 entries are real with variance 1, while the m>0 real and imaginary parts each carry
+    variance 1/2 -- hence the 1/sqrt(2) below. The result satisfies E[<eta,eta>] = (lmax+1)^2, the
+    number of real degrees of freedom, which is the property the CG fluctuation term relies on.
+
+    For spin>0 fields the first `spin` multipoles are not defined and are zeroed.
     """
     res = np.random.normal(0., 1., (ncomp, nalm(lmax, mmax))) \
      + 1j*np.random.normal(0., 1., (ncomp, nalm(lmax, mmax)))
@@ -352,7 +360,7 @@ def gaussian_random_alm(lmax, mmax, spin, ncomp):
     for s in range(spin):
         res[:, ofs:ofs+spin-s] = 0.
         ofs += lmax+1-s
-    res[lmax+1:] *= np.sqrt(2.)
+    res[:, lmax+1:] /= np.sqrt(2.)
     return res
 
 
