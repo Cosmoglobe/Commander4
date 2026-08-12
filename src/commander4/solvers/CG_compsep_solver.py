@@ -162,7 +162,7 @@ class CompSepSolver:
                 if not use_blocking:
                     # Wait until all data for component icomp has been received.
                     MPI.Request.Wait(requests[icomp])
-                # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
+                # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
                 comp = comp_list.components[icomp]
                 comp.apply_Cl_prior_sqrt(comp.alms)
                 # Adds input vector to output, since (1 + S^{1/2}...)a = a + (S^{1/2}...)a
