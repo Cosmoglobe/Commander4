@@ -393,27 +393,44 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
                 comp_list.broadcast_pol_views(compsep_comm, eval_pol=eval_pol, source=source)
 
 
-    def log_band_chi2(label: str) -> None:
-        """Print this band's fit diagnostics against the full updated sky model.
+    def log_chi2(label: str) -> None:
+        """Print this band's fit diagnostics, plus the global chi-squared summed over all bands.
 
-        Reports two per-pixel whitened-residual statistics z = (d - model)/rms: the mean absolute
-        deviation mean(|z|) (≈0.80 for a good fit) and the reduced chi-square mean(z^2) (≈1).
+        Reports two per-pixel whitened-residual statistics z = (d - model)*sqrt(inv_n): the mean
+        absolute deviation mean(|z|) (≈0.80 for a good fit) and the reduced chi-square mean(z^2)
+        (≈1). Both are evaluated only where inv_n_map > 0: unobserved pixels carry zero weight and
+        contribute nothing to the numerator, so counting them would dilute both averages by a
+        factor fsky (a factor ~10 for a small SO patch). The global figure mirrors C3's
+        `cr_compute_chisq` diagnostic -- chi^2 summed over every band view and polarization, with
+        ndof the number of contributing pixels. Collective over `compsep_comm`.
         """
         band_pol = "QU" if detector_data.pol else "I"
         sky_model_at_band = sky_model.get_sky_at_nu(detector_data.nu, detector_data.nside, band_pol,
                                                     fwhm=detector_data.fwhm_rad)
         pol_names = ["Q", "U"] if detector_data.pol else ["I"]
+        chi2_local, ndof_local = 0.0, 0
         for ipol in range(detector_data.npol):
-            z = (detector_data.map_sky[ipol] - sky_model_at_band[ipol]) / detector_data.map_rms[ipol]
+            observed = detector_data.inv_n_map[ipol] > 0
+            z = ((detector_data.map_sky[ipol] - sky_model_at_band[ipol])[observed]
+                 * np.sqrt(detector_data.inv_n_map[ipol][observed]))
+            chi2_local += np.sum(z**2, dtype=np.float64)
+            ndof_local += z.size
             logger.info(f"Fit after {label} on rank {compsep_rank} for pol={pol_names[ipol]} "
                         f"({detector_data.nu}GHz): mean|z|={np.mean(np.abs(z)):.3f}, "
-                        f"red.chi2={np.mean(z**2):.3f}")
+                        f"red.chi2={np.mean(z**2):.3f} (ndof={z.size}).")
+        # Each CompSep rank owns exactly one band execution view, so summing over ranks counts every
+        # (band, polarization) pair exactly once.
+        chi2_tot = compsep_comm.allreduce(chi2_local, op=MPI.SUM)
+        ndof_tot = compsep_comm.allreduce(ndof_local, op=MPI.SUM)
+        if compsep_rank == compsep_master:
+            logger.info(f"Fit after {label}, all bands: chi2={chi2_tot:.6e}, ndof={ndof_tot}, "
+                        f"red.chi2={chi2_tot/ndof_tot:.4f}")
 
 
     # Tier 1: linear amplitude (CG) sampling groups.
     for group_name in cg_groups:
         run_amplitude_group(cg_groups[group_name], group_name)
-        log_band_chi2(f"CG group {group_name!r}")
+        log_chi2(f"CG group {group_name!r}")
 
     # Tier 2: non-linear (MCMC) sampling groups, each coupled to re-solving its named CG groups.
     for group_name in mcmc_groups:
@@ -440,7 +457,7 @@ def process_compsep(mpi_info: Bunch, detector_data: DetectorMap, iter: int, chai
             chisq_mask=chisq_masks.get(group_name), root=compsep_master)
         sampler.run(numstep=group.numstep if "numstep" in group else 1,
                     resolve_amplitudes=resolve_amplitudes)
-        log_band_chi2(f"MCMC group {group_name!r}")
+        log_chi2(f"MCMC group {group_name!r}")
 
     if compsep_rank == compsep_master:
         write_compsep_chain_to_file(comp_list.joined(), params, chain, iter)
