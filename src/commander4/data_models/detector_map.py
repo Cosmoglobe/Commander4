@@ -14,10 +14,18 @@ def smooth_signal_map_noiseweighted(map_signal: NDArray, map_rms: NDArray,
 
     Each pixel is weighted by 1/variance before smoothing (so noisy pixels contribute less) and the
     result is renormalized by the smoothed weights -- used to bring a band to a coarser common beam.
+
+    A band covering only part of the sky has zero weight outside its footprint, and far enough from
+    it the smoothed weight is zero (or slightly negative, from beam ringing) as well. Those pixels
+    are left at zero rather than divided into a NaN: they are unobserved, which the paired
+    ``smooth_rms_map_noiseweighted`` records as an infinite RMS, i.e. zero inverse-noise weight.
     """
     map_inv_var = 1.0/map_rms**2
     smoothed_weight = hp.smoothing(map_inv_var, fwhm=fwhm_rad)
-    return hp.smoothing(map_signal*map_inv_var, fwhm=fwhm_rad)/smoothed_weight
+    smoothed_signal = hp.smoothing(map_signal*map_inv_var, fwhm=fwhm_rad)
+    observed = smoothed_weight > 0.0
+    return np.divide(smoothed_signal, smoothed_weight, out=np.zeros_like(smoothed_signal),
+                     where=observed)
 
 
 def smooth_rms_map_noiseweighted(rms_map: NDArray, fwhm_rad: float) -> NDArray:
@@ -25,6 +33,10 @@ def smooth_rms_map_noiseweighted(rms_map: NDArray, fwhm_rad: float) -> NDArray:
 
     Propagates the inverse-variance-weighted Gaussian smoothing analytically, accounting for the
     beam and pixel windows, so the returned map is the correct noise RMS of the smoothed signal.
+
+    Pixels the smoothed weight does not reach (outside a partial-sky band's footprint) get an
+    infinite RMS, which is how an unobserved pixel is represented: the caller inverts this to an
+    inverse-noise weight of exactly zero.
     """
     npix = rms_map.shape[0]
     nside = hp.npix2nside(npix)
@@ -37,7 +49,13 @@ def smooth_rms_map_noiseweighted(rms_map: NDArray, fwhm_rad: float) -> NDArray:
     true_empirical_norm = np.sum((2*ell + 1)/(4*np.pi)*omega_pix*(p_ell**2)*(b_ell**2))
     # Smooth the weights with the squared beam, divide by the squared smoothed weights.
     numerator = hp.smoothing(1.0/rms_map**2, fwhm=fwhm_rad/np.sqrt(2.0))*true_empirical_norm
-    return np.sqrt(numerator/smoothed_inv_var**2)
+    # Beam ringing can push either smoothed weight map slightly negative just outside the
+    # footprint; those pixels are unobserved too, and must not come back as a zero (i.e. infinitely
+    # weighted) RMS. For a full-sky band both maps are positive everywhere and this is a no-op.
+    observed = (smoothed_inv_var > 0.0) & (numerator > 0.0)
+    variance = np.divide(numerator, smoothed_inv_var**2, out=np.full_like(numerator, np.inf),
+                         where=observed)
+    return np.sqrt(variance)
 
 
 class DetectorMap:
