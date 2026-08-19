@@ -6,8 +6,8 @@ import os
 import healpy as hp
 from pixell.bunch import Bunch
 from pixell import coordsys
-from commander4.cmdr4_support import utils as cpp_utils
-import commander4.output.log as log
+from commander4.backend import utils as cpp_utils
+import commander4.diagnostics.log as log
 
 logger = logging.getLogger(__name__)
 

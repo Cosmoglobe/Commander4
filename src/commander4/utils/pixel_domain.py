@@ -3,8 +3,8 @@ from mpi4py import MPI
 from numpy.typing import NDArray
 
 from commander4.utils.general_algorithms import gallop_search_many
-from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
-                                            stop_bench, log_memory, increment_count, bench_reset
+from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
+                                               stop_bench, log_memory, increment_count, bench_reset
 
 
 # MPI elementary datatypes for the float buffers exchanged by the collectives below.

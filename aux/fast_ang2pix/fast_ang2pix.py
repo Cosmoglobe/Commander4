@@ -98,7 +98,7 @@ def _configure_ang2pix_ctypes(lib: ct.CDLL) -> None:
 
 
 def load_ang2pix_ctypes_lib() -> ct.CDLL:
-	"""Load the standalone shared library from ``aux/``.
+	"""Load the standalone shared library from ``aux/fast_ang2pix/``.
 
 	The library is built with ``-march=native``, so it must be rebuilt on each machine
 	where it is benchmarked.
@@ -127,8 +127,8 @@ def load_ang2pix_ctypes_lib() -> ct.CDLL:
 
 	if lib is None:
 		raise RuntimeError(
-			"Could not load aux/fast_ang2pix_ctypes.so. Rebuild it on the current machine "
-			"with `bash aux/build_fast_ang2pix.sh`."
+			"Could not load fast_ang2pix_ctypes.so. Rebuild it on the current machine with "
+			"`bash aux/fast_ang2pix/build_fast_ang2pix.sh`."
 		)
 
 	_configure_ang2pix_ctypes(lib)

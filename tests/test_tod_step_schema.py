@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from pixell.bunch import Bunch
 
-from commander4.tod_processing import (
+from commander4.tod.processing import (
     CorrelatedNoiseConfig,
     DataSelectionConfig,
     GainConfig,

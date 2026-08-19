@@ -14,11 +14,12 @@ from copy import deepcopy
 from traceback import print_exc
 from pixell.bunch import Bunch
 
-from commander4.output import log, paths
-from commander4 import mpi_management
-from commander4.param_schema import validate_param_schema
-from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
-                                            stop_bench, log_memory, increment_count, bench_reset
+from commander4.diagnostics import log
+from commander4.file_io import paths
+from commander4.mpi import setup as mpi_setup
+from commander4.parameters.schema import validate_param_schema
+from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
+                                               stop_bench, log_memory, increment_count, bench_reset
 
 
 def run_commander4(params: Bunch, params_dict: dict):
@@ -36,7 +37,7 @@ def run_commander4(params: Bunch, params_dict: dict):
 
     # Perform initial MPI setup, assigning tasks to different MPI ranks and deciding master ranks.
     with benchmark("init-mpi"):
-        mpi_info = mpi_management.init_mpi(params)
+        mpi_info = mpi_setup.init_mpi(params)
 
     if mpi_info['world']['is_master']:
         import random
@@ -56,11 +57,11 @@ def run_commander4(params: Bunch, params_dict: dict):
     # Important to import Numpy *after* specifying number of threads per rank (happens in init_mpi),
     # as Numpy will not respect a change in thread count after it has been loaded.
     import numpy as np
-    import commander4.output.log as log
-    from commander4.tod_processing import process_tod, init_tod_processing
-    from commander4.compsep_processing import process_compsep, init_compsep_processing,\
+    import commander4.diagnostics.log as log
+    from commander4.tod.processing import process_tod, init_tod_processing
+    from commander4.compsep.processing import process_compsep, init_compsep_processing,\
         get_initial_sky_model
-    from commander4.communication import receive_tod, send_tod, receive_compsep, send_compsep,\
+    from commander4.mpi.transfer import receive_tod, send_tod, receive_compsep, send_compsep,\
         get_local_initial_sky
 
     # Unique seed per worldrank. Hash used for slightly improved entropy. Modulus because seed needs
@@ -216,7 +217,7 @@ def run_commander4(params: Bunch, params_dict: dict):
 
 def main():
     # Parse parameter file
-    from commander4.parse_params import params, params_dict
+    from commander4.parameters.parse import params, params_dict
     # Temporary check for old parameter files, so they fail quickly.
     validate_param_schema(params_dict)
 

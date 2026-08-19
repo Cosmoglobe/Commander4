@@ -3,14 +3,14 @@ import pytest
 from numba import njit
 from scipy.fft import rfftfreq
 
-from commander4.noise_sampling.sigma0 import (calc_sigma0_simple, calc_sigma0_robust,
+from commander4.noise.sigma0 import (calc_sigma0_simple, calc_sigma0_robust,
                                               calc_sigma0_binned_psd)
-from commander4.noise_sampling.noise_psd import NoisePSDOof
-from commander4.noise_sampling.noise_sampling import fill_all_masked
-from commander4.noise_sampling.sample_ncorr import (sample_correlated_noise,
+from commander4.noise.psd import NoisePSDOof
+from commander4.noise.gap_filling import fill_all_masked
+from commander4.noise.sample_ncorr import (sample_correlated_noise,
                                                     corr_noise_realization_with_gaps,
                                                     realize_noise_in_gaps)
-from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.data_models.detector_group_tod import DetectorGroupTOD
 
 
 @njit
@@ -413,7 +413,7 @@ class TestSampleCorrelatedNoise:
 class TestApplyNInv:
     @staticmethod
     def _detgroup(noise_model, fsamp=10.0):
-        return DetGroupTOD(scans=[], experiment_name="x", band_name="b", nside=64, nu=100.0,
+        return DetectorGroupTOD(scans=[], experiment_name="x", band_name="b", nside=64, nu=100.0,
                            fwhm=30.0, fsamp=fsamp, ndet=1, pols="IQU", noise_model=noise_model)
 
     def test_projects_out_dc(self):

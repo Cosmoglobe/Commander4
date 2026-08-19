@@ -14,7 +14,7 @@ from numpy.testing import assert_allclose
 import pytest
 
 from commander4.utils.pixel_domain import PixelDomain
-from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU, Mapmaker, WeightsMapmaker
+from commander4.tod.mapmaker import MapmakerIQU, WeightsMapmakerIQU, Mapmaker, WeightsMapmaker
 
 
 def _sparse_domain(comm, nside, local_pix):

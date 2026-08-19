@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from commander4.tod_processing import _binned_tod_power_spectrum, _record_tod_diagnostics
-from commander4.data_models.TOD_samples import TODSamples
+from commander4.tod.processing import _binned_tod_power_spectrum, _record_tod_diagnostics
+from commander4.data_models.tod_samples import TODSamples
 
 
 def test_shape_and_nan_padding():

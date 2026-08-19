@@ -1,0 +1,92 @@
+# simgen: correlated-noise / noise-PSD test simulation.
+#
+#   cd sims && mpirun -n 8 python -m simgen -p simgen/params/param_corrnoise.yml
+#
+# Feature under test in the main code: `general.corr_noise` -- the n_corr Gibbs step
+# (noise_sampling.sample_ncorr.sample_correlated_noise), the noise-PSD parameter sampler
+# (`sample_noise_params`, i.e. fknee and alpha) and the white-noise estimator (`sample_sigma0`).
+# Matching main parameter file: `params/sims/simparam_corrnoise.yml`.
+#
+# What makes this simulation a correlated-noise test:
+#   * The noise is drawn from exactly the PSD the main code assumes,
+#     P(f) = sigma0^2 (1 + (f/fknee)^alpha)  (simgen.noise.OofNoise <-> NoisePSDOof), with a knee
+#     high above the 1/300 Hz scan fundamental (fknee/f_min = 150) and a steep alpha, so the
+#     correlated component dominates the low-frequency TOD by orders of magnitude.  If the sampler
+#     is right, the recovered (sigma0, fknee, alpha) return the injected values.
+#   * The sky is CMB *only*.  The matching run fits a single CMB component to a single band, which
+#     is an exactly determined component separation with the correct SED -- so the sky model is not
+#     a source of residual power that the noise sampler could mistake for 1/f.
+#   * No gain offsets (every gain is 1.0) and no gain sampling in the matching run, so the noise
+#     step is isolated.
+#
+# The matching run starts from `initial_noise_params: [80.0, 0.1, -1.0]`, i.e. a knee 5x too low and
+# a slope too shallow, so the PSD sampler has to move.
+
+general:
+  nside: 64
+  units: "uK_RJ"
+  float_precision: "single"
+  seed: 909
+  output_dir: "../../c4_sims/simgen_corrnoise/"
+
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      shortname: "cmb"
+      lmax: 191
+      solar_dipole: false    # A clean CAMB realization; no l=1 monopole/dipole to fight the 1/f.
+
+simulation:
+  # 600 x 300 s = 2.1 days.  300 s at 32.5 Hz is 9750 samples, just under the 10 000-sample
+  # threshold below which `find_good_Fourier_time` is a no-op, so every scan is analysed at its full
+  # length and the Fourier grid the PSD is fit on is exactly the one simulated here.
+  nscans: 600
+  scan_duration_sec: 300
+  npsi: 4096
+  orbital_dipole: true      # Kept on for consistency with the analysis (see param_gain.yml).
+  compress: true
+  debug_output_dir: "../../c4_sims/simgen_corrnoise_debug/"
+
+  pointing:
+    strategy: "planck_scan"
+    los_angle: 85.0
+    spin_angle_tilt: 30.0
+    spin_rate: 1.00165345964511
+    anti_sun_period_days: 2.5   # ~300 deg sweep over the 2.1-day run -> full-sky coverage.
+    precession_period_days: 0.7
+    mission_start: "2009-08-13T00:00:00"
+
+  noise:
+    white: true
+    # The injected truth.  fknee = 0.5 Hz sits well inside the band (Nyquist 16.25 Hz) and far above
+    # the 0.0033 Hz scan fundamental; alpha = -1.5 is steep enough that the low-f modes are strongly
+    # correlated-noise dominated.
+    oof: {enabled: true, fknee: 0.5, alpha: -1.5}
+
+  modifiers:
+    crosstalk: {enabled: false}
+
+  transfer_function:
+    enabled: false
+
+experiments:
+  SimSat:
+    enabled: true
+    bands:
+      Band100GHz:
+        enabled: true
+        freq: 100.0
+        fwhm: 50.0
+        fsamp: 32.5
+        eval_nside: 64
+        data_nside: 64
+        sigma0: 80.0        # Injected white-noise floor [TOD units ~ uK_RJ at gain 1].
+        polarization: "IQU"
+        detectors:
+          det100_a: {psi_offset_deg: 0.0,   gain: 1.0}
+          det100_b: {psi_offset_deg: 45.0,  gain: 1.0}
+          det100_c: {psi_offset_deg: 90.0,  gain: 1.0}
+          det100_d: {psi_offset_deg: 135.0, gain: 1.0}

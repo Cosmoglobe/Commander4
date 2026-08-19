@@ -174,3 +174,5 @@ cython_debug/
 stats-*
 
 src/commander4/_cmdr4_backend
+# Intel compiler optimization reports (e.g. from aux/fast_ang2pix/build_fast_ang2pix.sh)
+*.optrpt

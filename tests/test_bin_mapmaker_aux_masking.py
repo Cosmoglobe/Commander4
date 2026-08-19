@@ -16,11 +16,11 @@ from types import SimpleNamespace
 import numpy as np
 from mpi4py import MPI
 
-from commander4.data_models.detector_TOD import DetectorTOD
-from commander4.data_models.scan_TOD import ScanTOD
-from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.data_models.detector_tod import DetectorTOD
+from commander4.data_models.scan_tod import ScanTOD
+from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
-import commander4.tod_processing as tod_processing
+import commander4.tod.processing as tod_processing
 
 _BITMASK = 1        # one bad-data bit; a flagged sample has (flag & _BITMASK) != 0
 _NSIDE = 1
@@ -28,7 +28,7 @@ _NPIX = 12 * _NSIDE**2
 _NU = 30.0
 
 
-def _build_band(pix: np.ndarray, psi: np.ndarray, flag: np.ndarray, tod: np.ndarray) -> DetGroupTOD:
+def _build_band(pix: np.ndarray, psi: np.ndarray, flag: np.ndarray, tod: np.ndarray) -> DetectorGroupTOD:
     """Build an IQU band whose flag marks bad samples with uncompressed pointing."""
     ntod = pix.size
     pointing = PixelPointing(pix.astype(np.int64), psi.astype(np.float64), np.array([0], np.int64),
@@ -38,7 +38,7 @@ def _build_band(pix: np.ndarray, psi: np.ndarray, flag: np.ndarray, tod: np.ndar
                       np.ones(_NPIX, bool), {}, ntod, ntod, flag_encoded=flag.astype(np.int64),
                       bad_data_bitmask=_BITMASK, flag_is_compressed=False)
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
-    return DetGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=_NU, fwhm=0.0,
+    return DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=_NU, fwhm=0.0,
                        fsamp=1.0, ndet=1, pols="IQU", noise_model=noise_model)
 
 
@@ -55,7 +55,7 @@ def _fake_tod_samples(sigma0: float = 2.0) -> SimpleNamespace:
         tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None)
 
 
-def _run_bin_mapmaker(band: DetGroupTOD) -> dict[str, np.ndarray]:
+def _run_bin_mapmaker(band: DetectorGroupTOD) -> dict[str, np.ndarray]:
     """Run binned mapmaking and return the maps selected for chain output."""
     mapmaking = tod_processing.MapmakingConfig(
         mapmaker="bin",
@@ -76,7 +76,7 @@ def _run_bin_mapmaker(band: DetGroupTOD) -> dict[str, np.ndarray]:
 
 
 def test_bin_aux_maps_ignore_flagged_samples(monkeypatch):
-    monkeypatch.setenv("OMP_NUM_THREADS", "1")  # get_s_orb_TOD reads this.
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")  # get_s_orb_tod reads this.
     rng = np.random.default_rng(1)
     # Long enough for the log-binned diagnostic PSD and to condition the per-pixel IQU (3x3) solve.
     n = 256

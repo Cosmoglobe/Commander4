@@ -1,4 +1,4 @@
-"""Tests for detector-scan data selection (the accept-flag machinery in data_selection.py).
+"""Tests for detector-scan data selection (the accept-flag machinery in tod/data_selection.py).
 
 Covers the chi-squared z-score judged by the in-loop vetoes and the per-band summary logging (run
 single-rank on ``MPI.COMM_SELF`` with a minimal TODSamples stand-in). Parameter gating is tested in
@@ -13,7 +13,7 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.data_selection import masked_chisq_z, log_dataselect_summary
+from commander4.tod.data_selection import masked_chisq_z, log_dataselect_summary
 
 
 def test_chisq_z_white_noise_is_standard_normal():
@@ -77,7 +77,7 @@ def test_log_dataselect_summary_counts_veto_rejections(caplog):
     stub = _stub_samples(z, gf)
     stub.accept[3, 0] = False
 
-    with caplog.at_level(logging.INFO, logger="commander4.data_selection"):
+    with caplog.at_level(logging.INFO, logger="commander4.tod.data_selection"):
         log_dataselect_summary(MPI.COMM_SELF, stub, _cfg(), active=True)
     assert "rejected 2 detector-scans" in caplog.text
     assert "low-good-fraction: 1" in caplog.text
@@ -90,6 +90,6 @@ def test_log_dataselect_summary_inactive_counts_nothing(caplog):
     # Cuts gated off this iteration (before from_iter_num / past until_iter_num): report-only.
     z = np.full((20, 1), 5e5)
     stub = _stub_samples(z, np.full((20, 1), 0.95))
-    with caplog.at_level(logging.INFO, logger="commander4.data_selection"):
+    with caplog.at_level(logging.INFO, logger="commander4.tod.data_selection"):
         log_dataselect_summary(MPI.COMM_SELF, stub, _cfg(), active=False)
     assert "rejected 0 detector-scans" in caplog.text

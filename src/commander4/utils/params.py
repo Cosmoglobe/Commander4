@@ -1,3 +1,7 @@
+""" This is a currently unused extension to the `pixel.bunch.Bunch` implementation.
+    It might be re-introduced at some later point.
+"""
+
 # from pixell.bunch import Bunch
 
 # class Params(Bunch):

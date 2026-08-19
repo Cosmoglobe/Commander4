@@ -15,7 +15,7 @@ import sys
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "aux"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sims"))
 
 
 @pytest.mark.parametrize("compress", [False, True])
@@ -29,7 +29,7 @@ def test_end_to_end_transfer_function(tmp_path, compress):
     from simgen import pipeline
     from simgen.transfer import SinglePole
     from commander4.compression import huffman
-    from commander4.cmdr4_support import utils as cpp_utils
+    from commander4.backend import utils as cpp_utils
 
     tau_ms, fsamp, nside = 15.0, 12.0, 16
     out_dir = str(tmp_path / "sim")

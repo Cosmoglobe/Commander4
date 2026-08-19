@@ -15,8 +15,8 @@ import numpy as np
 import pytest
 from pixell.bunch import Bunch
 
-from commander4.data_models.tod_view import TODView
-from commander4.tod_processing import GainConfig, _VALID_CALIB_TARGETS, _solve_relative_gain_system
+from commander4.tod.view import TODView
+from commander4.tod.processing import GainConfig, _VALID_CALIB_TARGETS, _solve_relative_gain_system
 
 
 # --------------------------------------------------------------------------------------
@@ -86,12 +86,12 @@ def test_an_invalid_gap_fill_method_raises():
 def test_orbital_dipole_calibration_warns_at_high_frequency(caplog):
     """The dipole is a blackbody signal: in the sub-mm it is faint next to dust, so calibrating a
     545 GHz channel on it is a configuration mistake worth flagging."""
-    with caplog.at_level("WARNING", logger="commander4.tod_processing"):
+    with caplog.at_level("WARNING", logger="commander4.tod.processing"):
         assert _inputs({}, passed="orbital_dipole", nu=545.0)[0] == "orbital_dipole"
     assert "orbital dipole" in caplog.text and "545" in caplog.text
     # Not at the frequencies where the dipole is the standard absolute calibrator ...
     caplog.clear()
-    with caplog.at_level("WARNING", logger="commander4.tod_processing"):
+    with caplog.at_level("WARNING", logger="commander4.tod.processing"):
         _inputs({}, passed="orbital_dipole", nu=100.0)
         _inputs({}, passed="orbital_dipole", nu=353.0)
         _inputs({}, passed="sky", nu=857.0)           # ... nor for the other calibrators,
@@ -101,11 +101,11 @@ def test_orbital_dipole_calibration_warns_at_high_frequency(caplog):
 
 def test_the_warning_follows_the_per_band_override(caplog):
     """A band that overrides to the dipole must warn; one that overrides away from it must not."""
-    with caplog.at_level("WARNING", logger="commander4.tod_processing"):
+    with caplog.at_level("WARNING", logger="commander4.tod.processing"):
         _inputs({"abs_gain": {"calibrate_against": "orbital_dipole"}}, passed="sky", nu=545.0)
     assert "orbital dipole" in caplog.text
     caplog.clear()
-    with caplog.at_level("WARNING", logger="commander4.tod_processing"):
+    with caplog.at_level("WARNING", logger="commander4.tod.processing"):
         _inputs({"abs_gain": {"calibrate_against": "sky"}}, passed="orbital_dipole", nu=545.0)
     assert caplog.text == ""
 
@@ -224,7 +224,7 @@ class _FillStubView(TODView):
 
 def test_gain_gap_fill_methods_replace_masked_samples():
     """All three methods fill the masked residual with target gain x s_cal plus a noise draw."""
-    from commander4.noise_sampling.noise_psd import NoisePSDOof
+    from commander4.noise.psd import NoisePSDOof
     n = 4096
     mask = np.ones(n, dtype=bool)
     mask[1000:1400] = False
@@ -248,7 +248,7 @@ def test_gain_gap_fill_methods_replace_masked_samples():
 
 def test_gain_gap_fill_realization_is_shared_across_terms():
     """The cached 1/f gap draw is reused for every gain term (one realization per scan)."""
-    from commander4.noise_sampling.noise_psd import NoisePSDOof
+    from commander4.noise.psd import NoisePSDOof
     n = 2048
     mask = np.ones(n, dtype=bool)
     mask[800:1000] = False
@@ -347,7 +347,7 @@ def _make_real_view(monkeypatch):
     resolution over the same detector (the factor is now fixed per view), plus the detector and the
     full-rate static-sky TOD for the expected-value comparisons.
     """
-    monkeypatch.setenv("OMP_NUM_THREADS", "1")  # Required by get_s_orb_TOD.
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")  # Required by get_s_orb_tod.
     rng = np.random.default_rng(7)
     pix = rng.integers(0, 12, size=NTOD)        # Valid pixels for the nside=1 experiment below.
     psi = rng.uniform(0.0, np.pi, size=NTOD)

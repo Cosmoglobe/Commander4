@@ -11,11 +11,11 @@ from scipy.fft import rfftfreq, rfft, irfft
 import gc
 from mpi4py import MPI
 
-from commander4.data_models.detector_TOD import DetectorTOD
-from commander4.data_models.detector_group_TOD import DetGroupTOD
-from commander4.sky_models.component import ThermalDust, Synchrotron, FreeFree, SpinningDust
-from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
-                                            stop_bench, log_memory, increment_count, bench_reset
+from commander4.data_models.detector_tod import DetectorTOD
+from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.sky.component import ThermalDust, Synchrotron, FreeFree, SpinningDust
+from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
+                                               stop_bench, log_memory, increment_count, bench_reset
 
 
 def _scalar_nu_ref(comp_params):
@@ -188,8 +188,8 @@ def get_orbital_dipole(det: DetectorTOD, pix: NDArray[np.integer], freq: float, 
 
 
 
-def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetGroupTOD, band_params: Bunch,
-                         params: Bunch, sim_params: Bunch) -> DetGroupTOD:
+def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetectorGroupTOD, band_params: Bunch,
+                         params: Bunch, sim_params: Bunch) -> DetectorGroupTOD:
     nside = detector_data.nside
     npix = 12*nside**2
     fwhm = np.deg2rad(detector_data.fwhm/60.0)

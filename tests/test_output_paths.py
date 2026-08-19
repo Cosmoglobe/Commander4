@@ -11,7 +11,7 @@ import os
 import pytest
 from pixell.bunch import Bunch
 
-from commander4.output import paths
+from commander4.file_io import paths
 
 
 def _output(output_dir: str, log_name: str | None = "run.log") -> Bunch:
@@ -81,7 +81,7 @@ def test_the_log_directory_must_exist_before_the_loggers_open_the_file(tmp_path)
     """
     import logging
 
-    from commander4.output import log
+    from commander4.diagnostics import log
 
     output = _output(str(tmp_path / "run"), log_name="ordering.log")
     log_path = paths.log_file_path(output)
@@ -105,7 +105,7 @@ def test_the_log_directory_must_exist_before_the_loggers_open_the_file(tmp_path)
 
 
 def test_init_loggers_needs_a_path_for_a_configured_file_logger():
-    from commander4.output import log
+    from commander4.diagnostics import log
 
     output = _output("unused", log_name="run.log")
     with pytest.raises(ValueError, match="log_file_path"):

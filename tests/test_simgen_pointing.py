@@ -5,7 +5,7 @@ import sys
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "aux"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sims"))
 
 from simgen.config import as_bunch_recursive
 from simgen.pointing import PlanckScan

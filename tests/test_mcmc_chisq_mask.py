@@ -10,10 +10,10 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.compsep_processing import MCMCSamplingGroupConfig, _read_chisq_masks
+from commander4.compsep.processing import MCMCSamplingGroupConfig, _read_chisq_masks
 from commander4.data_models.detector_map import DetectorMap
-from commander4.sky_models.component import CompList
-from commander4.solvers.mcmc_sampling import MCMCSamplingGroup, resolve_chisq_mask
+from commander4.sky.component import CompList
+from commander4.compsep.mcmc import MCMCSamplingGroup, resolve_chisq_mask
 
 NSIDE = 2
 NPIX = 12*NSIDE**2

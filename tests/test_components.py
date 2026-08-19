@@ -6,9 +6,9 @@ import numpy as np
 import pytest
 from pixell.bunch import Bunch
 
-from commander4.sky_models.component import CMB, CompList, PointSourcesComponent, ThermalDust
-from commander4.sky_models.sky_model import build_initial_sky_model
-from commander4.utils.math_operations import complist_dot, map_to_alm
+from commander4.sky.component import CMB, CompList, PointSourcesComponent, ThermalDust
+from commander4.sky.sky_model import build_initial_sky_model
+from commander4.math_utils.math_operations import complist_dot, map_to_alm
 
 
 def _make_compsep(ntask_compsep_qu: int = 1, ntask_compsep_i: int = 1) -> Bunch:

@@ -5,7 +5,7 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.compsep_processing import (
+from commander4.compsep.processing import (
     CGSamplingGroupConfig,
     MCMCSamplingGroupConfig,
     PerPixelSamplingGroupConfig,
@@ -19,12 +19,12 @@ from commander4.compsep_processing import (
     _validate_component_lmax,
     init_compsep_processing,
 )
-from commander4.communication import _get_compsep_sender_id_for_tod_band, _should_send_compsep_result
+from commander4.mpi.transfer import _get_compsep_sender_id_for_tod_band, _should_send_compsep_result
 from commander4.data_models.detector_map import DetectorMap
-from commander4.sky_models.component import CompList
-from commander4.sky_models.sky_model import SkyModel
-from commander4.solvers.perpix_compsep_solver import solve_compsep_perpix
-from commander4.solvers.spectral_index_sampler import (
+from commander4.sky.component import CompList
+from commander4.sky.sky_model import SkyModel
+from commander4.compsep.perpix_solver import solve_compsep_perpix
+from commander4.compsep.spectral_index import (
     _discover_spectral_index_groups, SpectralIndexGroup, SpectralIndexSamplingGroup)
 from commander4.utils.execution_ids import get_execution_band_id, get_execution_band_ids
 

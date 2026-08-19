@@ -6,10 +6,10 @@ import logging
 import os
 from numba import njit
 
-from commander4.data_models.scan_TOD import ScanTOD
-from commander4.data_models.detector_TOD import DetectorTOD
-from commander4.data_models.detector_group_TOD import DetGroupTOD
-from commander4.output import log
+from commander4.data_models.scan_tod import ScanTOD
+from commander4.data_models.detector_tod import DetectorTOD
+from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.diagnostics import log
 
 logger = logging.getLogger(__name__)
 
@@ -20,22 +20,22 @@ T_CMB_div_C = T_CMB / C
 # Precomputing the conversion factor from 1 uK_CMB to 1 uK_RJ
 uK_CMB_to_uK_RJ_dict = {}
 
-def get_static_sky_TOD(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
+def get_static_sky_tod(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
                        psi: NDArray[np.floating]|None = None) -> NDArray[np.floating]:
     """ Projects the current sky-model at our band frequency (in uK_RJ, without gain) into the
         specified scan pointing. The sky model does not include the orbital dipole.
     """
     if psi is None:
-        return _get_static_sky_TOD_I(det_compsep_map, pix)
+        return _get_static_sky_tod_I(det_compsep_map, pix)
     elif det_compsep_map.shape[0] == 2:
-        return _get_static_sky_TOD_QU(det_compsep_map, pix, psi)
+        return _get_static_sky_tod_QU(det_compsep_map, pix, psi)
     elif det_compsep_map.shape[0] == 3:
-        return _get_static_sky_TOD_IQU(det_compsep_map, pix, psi)
+        return _get_static_sky_tod_IQU(det_compsep_map, pix, psi)
     else:
         raise ValueError("Input compsep map has mismatching dimensions.")
 
 @njit(fastmath=True)
-def _get_static_sky_TOD_IQU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
+def _get_static_sky_tod_IQU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
                        psi: NDArray[np.floating]) -> NDArray[np.float32]:
     sky = np.empty(pix.shape[0], dtype=np.float32)
     for i in range(pix.shape[0]):
@@ -46,7 +46,7 @@ def _get_static_sky_TOD_IQU(det_compsep_map: NDArray[np.floating], pix: NDArray[
     return sky
 
 @njit(fastmath=True)
-def _get_static_sky_TOD_QU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
+def _get_static_sky_tod_QU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
                        psi: NDArray[np.floating]) -> NDArray[np.float32]:
     sky = np.empty(pix.shape[0], dtype=np.float32)
     for i in range(pix.shape[0]):
@@ -56,7 +56,7 @@ def _get_static_sky_TOD_QU(det_compsep_map: NDArray[np.floating], pix: NDArray[n
     return sky
 
 @njit(fastmath=True)
-def _get_static_sky_TOD_I(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer]
+def _get_static_sky_tod_I(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer]
                           ) -> NDArray[np.float32]:
     sky = np.empty(pix.shape[0], dtype=np.float32)
     for i in range(pix.shape[0]):
@@ -64,7 +64,7 @@ def _get_static_sky_TOD_I(det_compsep_map: NDArray[np.floating], pix: NDArray[np
     return sky
 
 
-def get_s_orb_TOD(det: DetectorTOD, experiment: DetGroupTOD, pix: NDArray[np.integer],
+def get_s_orb_tod(det: DetectorTOD, experiment: DetectorGroupTOD, pix: NDArray[np.integer],
                   nthreads:int = None) -> NDArray:
     """ Compute the orbital dipole contribution to the TOD for a single detector.
 
@@ -73,7 +73,7 @@ def get_s_orb_TOD(det: DetectorTOD, experiment: DetGroupTOD, pix: NDArray[np.int
 
     Args:
         det (DetectorTOD): Single-detector TOD data (provides orbital velocity direction).
-        experiment (DetGroupTOD): Experiment-level data (provides nu and nside).
+        experiment (DetectorGroupTOD): Experiment-level data (provides nu and nside).
         pix (NDArray[np.integer]): Decompressed pixel indices for this detector.
         nthreads (int, optional): Number of threads for HEALPix operations.
             Defaults to the OMP_NUM_THREADS environment variable.

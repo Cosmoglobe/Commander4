@@ -1,4 +1,4 @@
-"""Tests for the simgen bolometer transfer functions (aux/simgen/transfer.py).
+"""Tests for the simgen bolometer transfer functions (sims/simgen/transfer.py).
 
 Pure-numpy: no ducc0/pysm3/camb, so these run even where the heavier simgen sky/reader path can't.
 The ``aux`` directory is added to sys.path so the ``simgen`` package imports as it does at runtime.
@@ -9,7 +9,7 @@ import sys
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "aux"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sims"))
 
 from simgen.config import as_bunch_recursive
 from simgen.transfer import SinglePole, MultiPole, make_detector_transfer

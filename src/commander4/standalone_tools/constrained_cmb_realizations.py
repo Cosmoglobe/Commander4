@@ -13,8 +13,9 @@ import re
 from astropy.io import fits
 from pixell.bunch import Bunch
 
-from commander4.sky_models.component import ThermalDust, FreeFree, Synchrotron
-from commander4.sky_models.sky_model import SkyModel
+from commander4.file_io import paths
+from commander4.sky.component import ThermalDust, FreeFree, Synchrotron
+from commander4.sky.sky_model import SkyModel
 
 logger = logging.getLogger("cmb_realizations")
 
@@ -271,7 +272,7 @@ class ConstrainedCMB:
 #             CMB_fluct_Cl = hp.alm2cl(CMB_fluct_alms)
 #             CMB_fluct_map = alm2map(CMB_fluct_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax)
 
-#             if params.general.make_plots:
+#             if params.output.plots.enabled:
 #                 plotting.plot_constrained_cmb_results(
 #                     master, params, detector, chain, iter,
 #                     constrained_cmb_solver.ell, CMB_mean_field_map,
@@ -282,13 +283,14 @@ class ConstrainedCMB:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Plot Commander4 chain outputs from disk.")
     parser.add_argument(
-        "cmb_dir",
-        help="Path to a cmb chain output directory (by default called compsep/).",
+        "run_dir",
+        help=f"Path to a Commander4 run's output directory (its `output.dir`, containing "
+             f"{paths.CHAINS_COMPSEP}/ and {paths.CHAINS_DATAMAPS}/).",
     )
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Directory for plots. Defaults to <cmb_dir>/cmb_realizations.",
+        help="Directory for plots. Defaults to <run_dir>/cmb_realizations.",
     )
     parser.add_argument(
         "--verbose",
@@ -307,12 +309,12 @@ def main() -> int:
     logger.setLevel(level)
     logger.propagate = False
 
-    chain_dir = os.path.abspath(args.cmb_dir)
-    compsep_dir = os.path.join(chain_dir, "compsep")
-    datamaps_dir = os.path.join(chain_dir, "datamaps")
+    run_dir = os.path.abspath(args.run_dir)
+    compsep_dir = os.path.join(run_dir, paths.CHAINS_COMPSEP)
+    datamaps_dir = os.path.join(run_dir, paths.CHAINS_DATAMAPS)
 
     if not os.path.isdir(compsep_dir) or not os.path.isdir(datamaps_dir):
-        logger.error(f"Chain directory not found: {compsep_dir} or {datamaps_dir}")
+        logger.error(f"Run output directory not found: {compsep_dir} or {datamaps_dir}")
         return 1
 
     compsep_files = sorted(os.listdir(compsep_dir))
@@ -355,15 +357,14 @@ def main() -> int:
                 sync_alm = f["/comps/sync_I/alms"][()]
 
             global_params = Bunch()
-            global_params.CG_float_precision = -3.1
+            global_params.float_precision = -3.1
             dust_params = Bunch()
             dust_params.beta = 1.56
             dust_params.T = 20
             dust_params.nu0 = 545
             dust_params.lmax = 1024
             dust_params.spatially_varying_MM = False
-            dust_params.smoothing_prior_FWHM = 0
-            dust_params.smoothing_prior_amplitude = 1.0
+            dust_params.Cl_prior_amplitude = None  # identity prior (was amp=1, FWHM=0)
             dust_params.polarized = False 
             dust_params.longname = "Thermal Dust"
             dust_params.shortname = "dust"
@@ -374,8 +375,7 @@ def main() -> int:
             ff_params.nu0 = 0.408
             ff_params.lmax = 1024
             ff_params.spatially_varying_MM = False
-            ff_params.smoothing_prior_FWHM = 0
-            ff_params.smoothing_prior_amplitude = 1.0
+            ff_params.Cl_prior_amplitude = None  # identity prior (was amp=1, FWHM=0)
             ff_params.polarized = False 
             ff_params.longname = "Free Free"
             ff_params.shortname = "ff"
@@ -386,8 +386,7 @@ def main() -> int:
             sync_params.nu0 = 30
             sync_params.lmax = 1024
             sync_params.spatially_varying_MM = False
-            sync_params.smoothing_prior_FWHM = 0
-            sync_params.smoothing_prior_amplitude = 1.0
+            sync_params.Cl_prior_amplitude = None  # identity prior (was amp=1, FWHM=0)
             sync_params.polarized = False 
             sync_params.longname = "Synchrotron"
             sync_params.shortname = "sync"

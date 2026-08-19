@@ -93,14 +93,14 @@ bunch_module = types.ModuleType("pixell.bunch")
 bunch_module.Bunch = AttrBunch
 pixell_module.bunch = bunch_module
 
-component_module = types.ModuleType("commander4.sky_models.component")
+component_module = types.ModuleType("commander4.sky.component")
 component_module.Component = StubComponent
 component_module.CompList = FakeCompList
 
 detector_map_module = types.ModuleType("commander4.data_models.detector_map")
 detector_map_module.DetectorMap = FakeDetectorMap
 
-sky_model_module = types.ModuleType("commander4.sky_models.sky_model")
+sky_model_module = types.ModuleType("commander4.sky.sky_model")
 sky_model_module.SkyModel = FakeSkyModel
 
 # The sampler is imported against these lightweight stubs so this test does not need the compiled
@@ -109,13 +109,13 @@ sky_model_module.SkyModel = FakeSkyModel
 # top -- and sys.modules is restored afterwards. Leaving them installed would poison every test
 # module collected after this one, and any runtime (in-function) import of the real classes.
 _stubs = {"pixell": pixell_module, "pixell.bunch": bunch_module,
-          "commander4.sky_models.component": component_module,
-          "commander4.sky_models.sky_model": sky_model_module,
+          "commander4.sky.component": component_module,
+          "commander4.sky.sky_model": sky_model_module,
           "commander4.data_models.detector_map": detector_map_module}
 _saved = {name: sys.modules.get(name) for name in _stubs}
 sys.modules.update(_stubs)
 try:
-    spectral_index_sampler = importlib.import_module("commander4.solvers.spectral_index_sampler")
+    spectral_index_sampler = importlib.import_module("commander4.compsep.spectral_index")
 finally:
     for name, module in _saved.items():
         if module is None:

@@ -22,7 +22,7 @@ else()
   set(OPTFLAGS "native-strip")
 endif()
 
-# Match the macros used by src/lib_cpp/cmdr4_support.cc
+# Match the macros used by src/lib_cpp/cmdr4_backend.cc
 # - PKGNAME must expand to an identifier for PYBIND11_MODULE(PKGNAME, m)
 # - PKGVERSION is stringified inside the C++ code.
 set(PKGNAME _cmdr4_backend)
@@ -36,7 +36,7 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/ducc0/src/ducc0/infra/mav.cc
 endif()
 
 set(CXX_SOURCES
-  src/lib_cpp/cmdr4_support.cc
+  src/lib_cpp/cmdr4_backend.cc
   external/ducc0/src/ducc0/infra/string_utils.cc
   external/ducc0/src/ducc0/infra/threading.cc
   external/ducc0/src/ducc0/infra/mav.cc

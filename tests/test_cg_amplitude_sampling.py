@@ -29,11 +29,11 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.compsep_processing import CGSamplingGroupConfig
+from commander4.compsep.processing import CGSamplingGroupConfig
 from commander4.data_models.detector_map import DetectorMap
-from commander4.sky_models.component import CompList
-from commander4.solvers.CG_compsep_solver import CompSepSolver
-from commander4.utils.math_operations import (alm_to_map, complist_dot, gaussian_random_alm,
+from commander4.sky.component import CompList
+from commander4.compsep.cg_solver import CompSepSolver
+from commander4.math_utils.math_operations import (alm_to_map, complist_dot, gaussian_random_alm,
                                               _dot_complex_alm_1D_arrays)
 
 LMAX = 4

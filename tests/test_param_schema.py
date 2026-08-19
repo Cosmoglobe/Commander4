@@ -10,7 +10,7 @@ the solver whose behaviour it actually changes.
 import pytest
 from pixell.bunch import Bunch
 
-from commander4.param_schema import (TOP_LEVEL_BLOCKS, validate_param_schema, compsep_enabled,
+from commander4.parameters.schema import (TOP_LEVEL_BLOCKS, validate_param_schema, compsep_enabled,
                                      derive_task_counts, task_count_breakdown, resolve_param,
                                      resolve_band_lmax)
 
@@ -149,11 +149,11 @@ def test_an_optional_scope_may_be_absent_without_complaint(caplog):
     """A per-band override block most bands do not carry is not a mistake, so opting out of the
     error must not just move the noise to the log: it drops to debug."""
     params = Bunch(tod_processing=Bunch(mapmaker="bin"))
-    with caplog.at_level("ERROR", logger="commander4.param_schema"):
+    with caplog.at_level("ERROR", logger="commander4.parameters.schema"):
         assert resolve_param(params, "mapmaker", ("no.such.scope", "tod_processing"),
                              raise_on_missing_scope=False) == "bin"
     assert caplog.text == ""
-    with caplog.at_level("DEBUG", logger="commander4.param_schema"):
+    with caplog.at_level("DEBUG", logger="commander4.parameters.schema"):
         resolve_param(params, "mapmaker", ("no.such.scope", "tod_processing"),
                       raise_on_missing_scope=False)
     assert "no.such.scope" in caplog.text
@@ -209,7 +209,7 @@ def test_falsy_values_still_count_as_defined():
 
 def test_where_the_value_came_from_is_logged(caplog):
     """An overridden setting is otherwise invisible in a chain's log."""
-    with caplog.at_level("DEBUG", logger="commander4.param_schema"):
+    with caplog.at_level("DEBUG", logger="commander4.parameters.schema"):
         _mapmaker(global_mm="bin", exp_mm="CG")
     assert "mapmaker" in caplog.text and "experiments.EXP" in caplog.text
 
