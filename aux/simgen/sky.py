@@ -15,6 +15,7 @@ Add a new component by mapping its ``component_class`` to a ``SkyComponent`` sub
 ``_COMPONENT_BUILDERS``.
 """
 import logging
+import os
 from abc import ABC, abstractmethod
 from copy import deepcopy
 import numpy as np
@@ -78,6 +79,17 @@ class SkyComponent(ABC):
     def band_map(self, band) -> NDArray[np.floating]:
         """Beam-smoothed (npol, npix_eval) map for ``band``, in the band's unit (uK_RJ)."""
 
+    def truth_map(self, nside: int) -> NDArray[np.floating]:
+        """This component's input *amplitude*: the (3, npix) IQU sky at its own ``nu_ref``.
+
+        Unsmoothed and in the run's sky unit, so that ``truth_map(nside) * get_sed(nu)``, smoothed
+        by the band beam, reproduces ``band_map``. That is exactly the quantity a Commander4
+        ``DiffuseComponent`` carries in its alms -- see ``write_component_truth_maps``.
+        """
+        raise NotImplementedError(
+            f"Sky component {type(self).__name__} does not define truth_map; either implement it "
+            "or set simulation.write_component_truth_maps: false.")
+
 
 class DiffuseComponent(SkyComponent):
     """Foreground with a PySM3-preset (or FITS) spatial template scaled by a C4 SED.
@@ -119,6 +131,10 @@ class DiffuseComponent(SkyComponent):
         m = hp.ud_grade(smoothed, band.eval_nside).astype(np.float32) * self.c4.get_sed(band.freq)
         return _select_pol(m, band.polarization)
 
+    def truth_map(self, nside: int) -> NDArray[np.floating]:
+        # The template is already realized at nu_ref in the run's unit, so it *is* the amplitude.
+        return hp.ud_grade(self._template(), nside).astype(np.float32)
+
 
 class CMBComponent(SkyComponent):
     """CMB realization from CAMB (optionally plus the solar dipole), scaled to each band.
@@ -134,6 +150,10 @@ class CMBComponent(SkyComponent):
         self.lmax = bget(comp_cfg.params, "lmax", 3 * global_params.nside - 1)
         if self.lmax == "full":
             self.lmax = (global_params.nside * 5) // 2
+        # Commander4's CMB stores its amplitude in uK_RJ referenced to `nu_ref` (default 1 GHz,
+        # where uK_RJ ~= uK_CMB), and its SED is the thermodynamic-to-RJ ratio relative to it.
+        self.nu_ref = float(bget(comp_cfg.params, "nu_ref", 1.0))
+        self.units = bget(global_params, "units", "uK_RJ")
         self.seed = int(bget(global_params, "seed", 0))
         self.solar_dipole = bool(bget(comp_cfg.params, "solar_dipole", False))
         self.cosmo = {**self._DEFAULT_COSMO, **bget(comp_cfg.params, "cosmology", {})}
@@ -173,6 +193,16 @@ class CMBComponent(SkyComponent):
         cmb = (cmb * u.uK_CMB).to(u.Unit(band.units),
                                   equivalencies=u.cmb_equivalencies(band.freq * u.GHz)).value
         return _select_pol(np.asarray(cmb, dtype=np.float32), band.polarization)
+
+    def truth_map(self, nside: int) -> NDArray[np.floating]:
+        # Same realization as band_map, but converted at nu_ref rather than the band frequency and
+        # left unsmoothed -- so multiplying by the C4 CMB SED (the ratio of the two conversions)
+        # and smoothing reproduces band_map exactly.
+        import pysm3.units as u
+        cmb = hp.alm2map(self._build_alms(), nside, pixwin=False)   # uK_CMB
+        cmb = (cmb * u.uK_CMB).to(u.Unit(self.units),
+                                  equivalencies=u.cmb_equivalencies(self.nu_ref * u.GHz)).value
+        return np.asarray(cmb, dtype=np.float32)
 
 
 class GriddedPointSources(SkyComponent):
@@ -220,6 +250,12 @@ class GriddedPointSources(SkyComponent):
             m[0] = np.asarray(hp.smoothing(m[0], fwhm=band.fwhm_rad), dtype=np.float32)
         return _select_pol(m, band.polarization)
 
+    def truth_map(self, nside: int) -> NDArray[np.floating]:
+        # At nu_ref the SED is unity, so the amplitude is just the bare (unsmoothed) source grid.
+        m = np.zeros((3, 12 * nside**2), dtype=np.float32)
+        m[0, self._source_pixels(nside)] = self.amplitude
+        return m
+
 
 _COMPONENT_BUILDERS: dict[str, type[SkyComponent]] = {
     "CMB": CMBComponent,
@@ -246,9 +282,43 @@ def build_components(params: Bunch) -> list[SkyComponent]:
     return components
 
 
-def build_band_sky_maps(params: Bunch, bands: list) -> dict[str, NDArray[np.floating]]:
-    """Build the summed (npol, npix_eval) sky map for every band. Call on one rank, then broadcast."""
+def write_component_truth_maps(output_dir: str, components: list[SkyComponent],
+                               nside: int, units: str) -> None:
+    """Write each component's input amplitude map to ``<output_dir>/truth_<name>.fits``.
+
+    The map is the component's *amplitude*, not its contribution to any band: the unsmoothed IQU
+    sky at the component's own reference frequency, in the run's sky unit. That is exactly what a
+    Commander4 ``DiffuseComponent`` holds in its alms, so the file can be handed straight back to
+    the matching component as ``init_from`` (start the chain at the truth) or as
+    ``amp_prior_mean_map`` (the mean mu of the Gaussian amplitude prior) -- and it is what a
+    recovered component map has to be compared against. Beams and the per-band SED scaling are
+    applied by Commander4's mixing operator, so neither is baked in here.
+
+    Commander4 infers a map's polarization content from its shape, not its column names, so all
+    three Stokes rows are always written; a component with no polarized emission simply gets zeros.
+    """
+    for comp in components:
+        path = os.path.join(output_dir, f"truth_{comp.name}.fits")
+        hp.write_map(path, comp.truth_map(nside), overwrite=True, dtype=np.float32,
+                     extra_header=[("NU_REF", comp.nu_ref, "Reference frequency [GHz]"),
+                                   ("BUNIT", units, "Amplitude unit"),
+                                   ("COMPCLS", comp.comp_cfg.component_class, "Component class")])
+        logger.info("Wrote input amplitude map for component %s (nu_ref = %g GHz, %s) to %s.",
+                    comp.name, comp.nu_ref, units, path)
+
+
+def build_band_sky_maps(params: Bunch, bands: list,
+                        truth_map_dir: str | None = None) -> dict[str, NDArray[np.floating]]:
+    """Build the summed (npol, npix_eval) sky map for every band. Call on one rank, then broadcast.
+
+    When ``truth_map_dir`` is given, each component's input amplitude map is also written there
+    (see ``write_component_truth_maps``); this happens here because it is where the constructed
+    components live, and rebuilding them would mean re-running PySM3/CAMB.
+    """
     components = build_components(params)
+    if truth_map_dir is not None:
+        write_component_truth_maps(truth_map_dir, components, params.general.nside,
+                                   bget(params.general, "units", "uK_RJ"))
     band_maps: dict[str, NDArray] = {}
     for band in bands:
         acc = np.zeros((band.npol, 12 * band.eval_nside**2), dtype=np.float32)

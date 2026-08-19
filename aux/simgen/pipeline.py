@@ -21,13 +21,13 @@ from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
-from simgen.config import load_params, bget
-from simgen.instrument import build_bands, Band
+from simgen.config import bget, load_params
+from simgen.diagnostics import hit_map, noise_map_rhs, white_noise_normal_matrix, write_band_diagnostics
+from simgen.instrument import Band, build_bands
+from simgen.modifiers import build_modifiers
+from simgen.noise import make_noise_model
 from simgen.pointing import make_pointing
 from simgen.sky import build_band_sky_maps, compute_orbital_dipole
-from simgen.noise import make_noise_model
-from simgen.modifiers import build_modifiers
-from simgen.diagnostics import hit_map, noise_map_rhs, white_noise_normal_matrix, write_band_diagnostics
 from simgen.writers import write_scan_file, write_filelist, DEFAULT_NPSI
 
 logger = logging.getLogger(__name__)
@@ -61,11 +61,11 @@ def _project_signal(skymap: NDArray, pix: NDArray, psi: NDArray, polarization: s
     return skymap[0][pix] + skymap[1][pix] * np.cos(2 * psi) + skymap[2][pix] * np.sin(2 * psi)
 
 
-def _broadcast_sky_maps(comm: MPI.Comm, bands: list[Band],
-                        params: Bunch) -> dict[str, NDArray[np.floating]]:
-    """Build all band sky maps on rank 0 and broadcast them to every rank."""
+def _broadcast_sky_maps(comm: MPI.Comm, bands: list[Band], params: Bunch,
+                        truth_map_dir: str | None = None) -> dict[str, NDArray[np.floating]]:
+    """Build all band sky maps on rank 0 (writing the truth maps there too) and broadcast them."""
     rank = comm.Get_rank()
-    band_maps = build_band_sky_maps(params, bands) if rank == 0 else {
+    band_maps = build_band_sky_maps(params, bands, truth_map_dir) if rank == 0 else {
         b.name: np.empty((b.npol, 12 * b.eval_nside**2), dtype=np.float32) for b in bands}
     for band in bands:
         comm.Bcast(band_maps[band.name], root=0)
@@ -170,7 +170,11 @@ def run(parameter_file: str) -> int:
             f.write(yaml.dump(params_dict, sort_keys=False))
     comm.Barrier()
 
-    band_maps = _broadcast_sky_maps(comm, bands, params)
+    # Per-component input amplitude maps: written alongside the other diagnostics, and usable as
+    # `init_from` / `amp_prior_mean_map` in the matching Commander4 parameter file.
+    write_truth = debug_output_dir and bool(bget(sim, "write_component_truth_maps", True))
+    band_maps = _broadcast_sky_maps(comm, bands, params,
+                                    debug_output_dir if write_truth else None)
     modifiers = build_modifiers(params)
 
     # Per-band shared pointing strategy (FilePointing opens its file once here).
@@ -201,10 +205,17 @@ def run(parameter_file: str) -> int:
         det_pix, det_psi, det_tod, det_noise, vsun = _simulate_scan(
             band, pointing[band.name], int(si) * ntod, band_maps[band.name], ntod, int(si), int(bi),
             noise_models[band.name], modifiers, seed, include_orbdip)
+        oof = band.noise.oof
+        fknee = float(bget(oof, "fknee", 0.0))
+        alpha = float(bget(oof, "alpha", 0.0))
+        det_scalars = {
+            det.name: np.array([det.gain * 1e6, det.sigma0, fknee, alpha], dtype=np.float64)
+            for det in band.detectors
+        }
         pid = int(si) + 1
         path = os.path.join(output_dir, band.name, f"scan_{pid:06d}.h5")
         write_scan_file(path, pid, band.data_nside, band.fsamp, npsi, ntod, vsun,
-                        band.det_names, det_pix, det_psi, det_tod, compress=compress)
+                        band.det_names, det_pix, det_psi, det_tod, det_scalars, compress=compress)
         if debug_output_dir:
             det_eval_pix = {
                 name: _remap_data_pix(pix, band.data_nside, band.eval_nside)

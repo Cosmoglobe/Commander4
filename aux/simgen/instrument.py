@@ -24,8 +24,8 @@ class Detector:
     idx: int                       # Position within the band (column index for cross-talk).
     psi_offset: float = 0.0        # Added to the band polarization angle [rad].
     fp_offset: tuple[float, float] = (0.0, 0.0)  # Focal-plane (xi, eta) offset [rad] (reserved).
-    sigma0: float = 0.0            # Per-sample white-noise RMS in the band's TOD unit.
-    gain: float = 1.0
+    sigma0: float = 0.0            # Per-sample white-noise RMS in stored TOD units.
+    gain: float = 1.0              # Conversion from the band's sky unit to stored TOD units.
     transfer: TransferFunction | None = None  # Bolometer time-response filter (None -> identity).
 
 

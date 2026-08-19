@@ -10,7 +10,7 @@
 
 general:
   nside: 64                 # Working HEALPix nside for sky-map construction.
-  units: "uK_RJ"            # TOD and sky unit (sigma0 is in this unit, per sample).
+  units: "uK_RJ"            # Sky unit before each detector's gain converts it to raw TOD units.
   float_precision: "single"   # Required by the reused Commander4 component constructors.
   seed: 1234                # Base RNG seed (CMB realization + per-(band,scan,det) noise).
   output_dir: "../cmdr4_sims/simgen_example/"
@@ -53,7 +53,7 @@ components:
       template: {source: "pysm3", preset: "s5"}
 
 simulation:
-  nscans: 100               # Number of scans per band (more -> better sky coverage).
+  nscans: 4500              # Number of scans per band (more -> better sky coverage).
   scan_duration_sec: 600    # Wall-clock length of one scan; sample count is round(dur*fsamp), per band.
   npsi: 4096                # psi digitization bins for Huffman storage (only used when compress: true).
   orbital_dipole: true      # Bake the relativistic orbital dipole into the TOD (uses pointing vsun).
@@ -63,10 +63,10 @@ simulation:
   pointing:
     strategy: "planck_scan"      # "planck_scan" (analytic) | "file" (load precomputed pointing H5)
     los_angle: 85.0
-    spin_angle_tilt: 7.5
-    spin_rate: 1.00165345964511  # rpm
-    anti_sun_period_days: 365.25  # Main sky sweep; full-sky coverage takes roughly half this period.
-    precession_period_days: 182.625  # Spin-axis wobble period around the anti-Sun direction.
+    spin_angle_tilt: 30.0
+    spin_rate: 1.00165345964511  # rpm; samples the nside=64 rings at 0.185 degrees.
+    anti_sun_period_days: 24.0  # 208-degree main sweep in this 13.9-day run, with coverage margin.
+    precession_period_days: 4.5  # Three spin-axis wobble cycles for cross-linking.
     mission_start: "2009-08-13T00:00:00"
     # For strategy "file":
     # file_path: "/path/to/pointing.h5"
@@ -77,15 +77,15 @@ simulation:
     oof: {enabled: true, fknee: 0.1, alpha: -1.0}
 
   modifiers:
-    crosstalk: {enabled: true}   # Per-band cross-talk matrices are defined on the bands below.
+    crosstalk: {enabled: false}   # Per-band cross-talk matrices are defined on the bands below.
 
   # Bolometer transfer function (per-detector time response). This run-wide block is the default for
   # every detector; a detector overrides it with its own `tau_ms`/`tau_sec` or a `transfer_function`
   # block (see the detectors below). H(f) is DC-normalized (H(0)=1), so it only changes the temporal
   # shape (scan-direction lag/smearing), not the calibration. Planck HFI time constants are ~10 ms.
   transfer_function:
-    enabled: true
-    tau_ms: 10.0               # single-pole default: H(f) = 1 / (1 + 2*pi*i*f*tau)
+    enabled: false
+    tau_ms: 0.0               # single-pole default: H(f) = 1 / (1 + 2*pi*i*f*tau)
 
 experiments:
   SimSat:
@@ -98,12 +98,32 @@ experiments:
         fsamp: 32.5         # Hz
         eval_nside: 64
         data_nside: 64
-        sigma0: 100.0       # per-sample white-noise RMS [uK_RJ] (band default; per-detector overridable)
+        # TODs are written in Planck-style raw detector units: gain * uK_RJ. Scale signal and
+        # noise together to preserve the simulated S/N while satisfying the Planck reader contract.
+        sigma0: 1.0e-7       # Per-sample raw-detector RMS; equals 100 uK_RJ at gain 1e-9.
         polarization: "IQU"
-        crosstalk: {enabled: true, coupling: 0.01}   # uniform off-diagonal leakage; or matrix: [[...]]
+        crosstalk: {enabled: false, coupling: 0.0}   # uniform off-diagonal leakage; or matrix: [[...]]
         detectors:          # inline dict (name -> per-detector params)
-          det30_a: {psi_offset_deg: 0.0, tau_ms: 12.0}   # override the run-wide time constant
-          det30_b: {psi_offset_deg: 45.0, transfer_function: {enabled: false}}  # no TF for this det
+          det30_a: {psi_offset_deg: 0.0, gain: 1.0e-9}
+          det30_b: {psi_offset_deg: 45.0, gain: 1.0e-9}
+          det30_c: {psi_offset_deg: 90.0, gain: 1.0e-9}
+          det30_d: {psi_offset_deg: 135.0, gain: 1.0e-9}
+
+      Band70GHz:
+        enabled: true
+        freq: 70.0
+        fwhm: 50.0
+        fsamp: 32.5
+        eval_nside: 64
+        data_nside: 64
+        sigma0: 8.0e-8
+        polarization: "IQU"
+        crosstalk: {enabled: false, coupling: 0.0}
+        detectors:
+          det70_a: {psi_offset_deg: 0.0, gain: 1.0e-9}
+          det70_b: {psi_offset_deg: 45.0, gain: 1.0e-9}
+          det70_c: {psi_offset_deg: 90.0, gain: 1.0e-9}
+          det70_d: {psi_offset_deg: 135.0, gain: 1.0e-9}
 
       Band100GHz:
         enabled: true
@@ -112,7 +132,27 @@ experiments:
         fsamp: 32.5
         eval_nside: 64
         data_nside: 64
-        sigma0: 80.0
+        sigma0: 8.0e-8
         polarization: "IQU"
-        crosstalk: {enabled: true, coupling: 0.02}
-        detectors: !inc detectors_example/band100.yml   # same !inc mechanism as the main param files
+        crosstalk: {enabled: false, coupling: 0.0}
+        detectors:
+          det100_a: {psi_offset_deg: 0.0, gain: 1.0e-9}
+          det100_b: {psi_offset_deg: 45.0, gain: 1.0e-9}
+          det100_c: {psi_offset_deg: 90.0, gain: 1.0e-9}
+          det100_d: {psi_offset_deg: 135.0, gain: 1.0e-9}
+
+      Band140GHz:
+        enabled: true
+        freq: 140.0
+        fwhm: 30.0
+        fsamp: 32.5
+        eval_nside: 64
+        data_nside: 64
+        sigma0: 8.0e-8
+        polarization: "IQU"
+        crosstalk: {enabled: false, coupling: 0.0}
+        detectors:
+          det140_a: {psi_offset_deg: 0.0, gain: 1.0e-9}
+          det140_b: {psi_offset_deg: 45.0, gain: 1.0e-9}
+          det140_c: {psi_offset_deg: 90.0, gain: 1.0e-9}
+          det140_d: {psi_offset_deg: 135.0, gain: 1.0e-9}

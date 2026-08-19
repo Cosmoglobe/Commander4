@@ -40,6 +40,7 @@ directory:
 <debug_output_dir>/<BandName>_hits.png
 <debug_output_dir>/<BandName>_rms_white_noise_{I,Q,U}.png
 <debug_output_dir>/<BandName>_noise_{I,Q,U}.png
+<debug_output_dir>/truth_<ComponentName>.fits
 ```
 
 Each diagnostic HDF5 file contains band metadata plus `maps/sky` (beam-smoothed input sky at the
@@ -52,17 +53,50 @@ intentionally not propagated into this diagnostic uncertainty. `maps/noise` is t
 noise realization binned with that same nominal normal matrix after TOD modifiers, including the
 configured cross-talk.
 
+### Component truth maps
+
+`truth_<ComponentName>.fits` is one HEALPix IQU map per enabled component holding that component's
+input **amplitude**: the *unsmoothed* sky at the component's own reference frequency, in the run's
+`general.units`, at `general.nside`. That is exactly the quantity a Commander4 `DiffuseComponent`
+carries in its alms — beams and the per-band SED are applied by Commander4's mixing operator, so
+neither is baked in — which makes the file usable, unchanged, as that component's
+
+- **`init_from`**: start the Gibbs chain at the truth, to isolate one sampler from component
+  separation converging at the same time;
+- **`amp_prior_mean_map`**: the mean μ of the Gaussian amplitude prior a ~ N(μ, S);
+- **reference for scoring**: what a recovered component map has to be compared against.
+
+Declare `units: "uK_RJ"` (or whatever `general.units` was) and the matching `nu_ref` on the
+Commander4 side; the reference frequency and unit are also recorded in the FITS header as `NU_REF`
+and `BUNIT`. All three Stokes rows are always written — Commander4 infers a map's polarization
+content from its shape, not its column names — so a component with no polarized emission gets
+zeros. Set `simulation.write_component_truth_maps: false` to skip them (they are one full-sky map
+per component, which is worth avoiding at large `nside`).
+
+The defining property, checked in `tests/test_simgen_truth_maps.py`, is
+`band_map(band) == beam(truth_map) * get_sed(band.freq)`, and it holds to float32 rounding when the
+beam is applied in the same space the component used.
+
+One caveat when *verifying* against a band map: going back through a map → alm step (which is what
+Commander4 does when it reads the file, and what applying a beam in alm space needs) costs about
+`1e-3` in relative RMS at `l` near `3*nside-1`, where the HEALPix analysis stops being invertible —
+measured at `2-6e-4` for these components through Commander4's own LSMR inverse SHT, and confined
+to `l > 100` (below `l = 50` it is `3e-7`). The amplitude in the file is exact; that error is the
+spherical-harmonic transform's, and Commander4 incurs the same on any `init_from` map.
+
 ## Parameter file
 
 A YAML file (see [params/example_param.yml](params/example_param.yml)) reusing the main program's conventions:
 
-- `general`: `nside`, `units` (TOD unit, `uK_RJ`), `CG_float_precision`, `seed`, `output_dir`.
+- `general`: `nside`, `units` (TOD unit, `uK_RJ`), `float_precision`, `seed`, `output_dir`.
 - `components`: **the same block shape as a Commander4 param file** — each enabled component is
   realized by the matching `commander4.sky_models.component` class for its SED. Diffuse foregrounds
   take a `template:` block (`{source: pysm3, preset: ...}` or `{source: fits, path: ...}`); the CMB
   is a CAMB realization (optional `solar_dipole`).
 - `simulation`: `nscans`, `scan_duration_sec`, `npsi`, `orbital_dipole`, `pointing`, `noise`,
-  `modifiers`, `compress` (default `true`), and optional `debug_output_dir`. With `compress: false`,
+  `modifiers`, `compress` (default `true`), optional `debug_output_dir`, and
+  `write_component_truth_maps` (default `true`, only acted on when `debug_output_dir` is set; see
+  [Component truth maps](#component-truth-maps)). With `compress: false`,
   `pix`/`psi` are written as plain `int32`/`float32` arrays instead of Huffman payloads
   (`tod_reader_litebird_sim` reads either transparently). `flag` is always Huffman-compressed because
   that reader unconditionally decodes it.
@@ -78,6 +112,31 @@ A YAML file (see [params/example_param.yml](params/example_param.yml)) reusing t
   DC-normalized (`H(0)=1`), so it changes only the temporal shape (scan-direction lag/smearing), not
   the calibration. A detector opts out with `transfer_function: {enabled: false}`. This is the
   time-domain convolution the Commander4 CG mapmaker's `T_omega` operator is built to deconvolve.
+
+## Feature-test parameter files
+
+Besides the two `example_*` files, `params/` holds a set of small simulations each built to exercise
+one part of the main program, together with a matching Commander4 parameter file in
+[`params/sims/`](../../params/sims/) that turns that feature on and starts it away from the injected
+truth. See [`params/sims/README.md`](../../params/sims/README.md) for how to run a pair.
+
+| simgen parameter file | Commander4 parameter file | Feature under test |
+|---|---|---|
+| `params/param_gain.yml`      | `params/sims/simparam_gain.yml`         | `abs_gain` / `rel_gain` calibration (orbital dipole + sky) |
+| `params/param_corrnoise.yml` | `params/sims/simparam_corrnoise.yml`    | `corr_noise`: n_corr, PSD parameters, sigma0 |
+| `params/param_compsep.yml`   | `params/sims/simparam_compsep_CG.yml`   | CG amplitude sampling, C(l) prior, fluctuations |
+| `params/param_compsep.yml`   | `params/sims/simparam_compsep_MCMC.yml` | MH spectral-index sampling |
+| `params/param_patch.yml`     | `params/sims/simparam_patch.yml`        | partial sky: `sparse_maps`, prior-driven unobserved pixels |
+
+Two simulation-side conventions these files depend on:
+
+- **Keep `orbital_dipole: true` for any satellite pointing strategy.** The main program always
+  subtracts an orbital dipole reconstructed from the `vsun` stored in the scan files, so a
+  simulation that stores a non-zero `vsun` but omits the dipole from the TOD is inconsistent with
+  its own analysis. `raster` stores `vsun = 0`, so there the flag is free.
+- **Gains and initial noise parameters must be repeated in the Commander4 file.**
+  `tod_reader_litebird_sim` does not read the per-detector `scalars`, so the parameter file is the
+  only source of the chain's starting values — which is what makes recovery testable.
 
 ## Built-in plugins
 
@@ -122,7 +181,9 @@ Each extension point is a base class + a name→class registry; add a class and 
   phi, psi, vsun)`. Set `per_detector_pointing = True` to have the pipeline call `compute` per
   detector with its `fp_offset` (for spatial detector offsets); otherwise the boresight is shared.
 - **Sky component**: implement `band_map(band) -> (npol, npix_eval)` in `uK_RJ`; reuse a C4 SED via
-  `get_sed`.
+  `get_sed`. Also implement `truth_map(nside) -> (3, npix)`, the unsmoothed amplitude at the
+  component's `nu_ref`, and expose that `nu_ref` as an attribute; the base class raises unless
+  `write_component_truth_maps` is off.
 - **Noise model**: implement `realize(ntod, fsamp, sigma0, rng) -> ndarray`.
 - **Transfer function**: implement `response(freqs_hz) -> complex ndarray` (the DC-normalized filter
   `H(f)`); the base class's `apply(signal, fsamp)` does the FFT convolution. Wire it into
@@ -151,7 +212,16 @@ FFT-times file content is irrelevant (the file must still load).
 
 ## Tests
 
-`tests/test_simgen.py` (run with `pytest`) covers the Huffman pointing round-trip through the writer,
-SED consistency with the C4 component classes, a small MPI end-to-end run, and reader integration via
-`tod_reader_litebird_sim`. The sky/reader tests need `ducc0`, `pysm3` and the compiled
-`commander4.cmdr4_support.utils` extension importable in the environment.
+Run with `pytest`:
+
+- `tests/test_simgen_pointing.py` — pointing strategies (pure numpy).
+- `tests/test_simgen_transfer.py` — the transfer-function filter math and its pipeline wiring.
+- `tests/test_simgen_diagnostics.py` — the binned diagnostic maps.
+- `tests/test_simgen_truth_maps.py` — the component amplitude convention, and the truth map's round
+  trip through Commander4's init-map reader.
+- `tests/test_simgen_pipeline_e2e.py` — a real end-to-end `pipeline.run`, written to HDF5 and read
+  back.
+
+The sky and end-to-end tests need `camb`, `pysm3`, `ducc0`, `astropy` and the compiled
+`commander4.cmdr4_support.utils` extension importable in the environment; each skips itself when
+its dependencies are missing.
