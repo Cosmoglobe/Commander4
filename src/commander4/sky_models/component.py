@@ -303,6 +303,11 @@ class DiffuseComponent(Component):
             comp_params.Cl_prior_FWHM if "Cl_prior_FWHM" in comp_params else 0.0)
         self.Cl_prior_l_pivot = (
             comp_params.Cl_prior_l_pivot if "Cl_prior_l_pivot" in comp_params else 50)
+        # C3's COMP_L_APOD: the multipole above which the prior is tapered towards zero. Defaults
+        # to this component's lmax, which makes the taper a no-op (C3's own parameter files almost
+        # always set it that way too).
+        self.Cl_prior_l_apod = self._per_pol(
+            comp_params.Cl_prior_l_apod if "Cl_prior_l_apod" in comp_params else self.lmax)
         # Unit of an init_from sky map for this component (None -> assume it is already in
         # `amplitude_unit`). Only used when reading FITS init maps, not compsep chains.
         self.units = comp_params.units if "units" in comp_params else None
@@ -408,12 +413,22 @@ class DiffuseComponent(Component):
         Defined in D_l space, where CMB-like spectra are roughly flat:
 
             D_l = amplitude * (l / l_pivot)^beta * max(exp(-l(l+1) sigma^2), 1e-10),
-            C_l = 2 pi D_l / (l(l+1)),
+            C_l = 2 pi D_l / (l(l+1)) * f_apod(l)^2,
 
         where sigma is the Gaussian width of Cl_prior_FWHM (arcmin; 0 disables the rolloff).
         A 1e-10 floor (relative to the power law) keeps C_l strictly positive so 1/C_l is safe
         for the preconditioners. Units are (uK_RJ @ nu_ref)^2, i.e. the units of the alms themselves
         (C3 instead defines the prior in the component's native unit and converts internally).
+
+        f_apod is C3's high-l apodization (`get_Cl_apod` in comm_cl_mod.f90, parameter COMP_L_APOD):
+
+            f_apod(l) = 1                                        for l <= l_apod,
+            f_apod(l) = exp(-ln(1000) (l-l_apod)^2 / (lmax-l_apod+1)^2)   above it,
+
+        i.e. an amplitude taper reaching 1e-3 (1e-6 in power) at the component's own lmax. Setting
+        l_apod at or below the highest band lmax is what keeps a component whose lmax exceeds what
+        the data can see from filling those multipoles with a full-strength prior draw. It defaults
+        to the component lmax, where the taper does nothing.
         """
         if self.Cl_prior_amplitude is None:
             return np.ones(self.lmax + 1)
@@ -426,7 +441,21 @@ class DiffuseComponent(Component):
         Cl = np.empty(self.lmax + 1)
         Cl[1:] = Dl[1:] * 2.0 * np.pi / (ells * (ells + 1))
         Cl[0] = Dl[0]
-        return Cl
+        return Cl * self.Cl_prior_apodization**2
+
+    @property
+    def Cl_prior_apodization(self) -> NDArray[np.floating]:
+        """C3's `get_Cl_apod` factor over l = 0..lmax, applied to the prior as f_apod^2.
+
+        Unity up to `Cl_prior_l_apod`, then a Gaussian taper falling to 1e-3 at the component lmax.
+        Only C3's positive-`l_apod` branch (the high-l taper) is implemented; C3's negative branch
+        suppresses the *low* multipoles instead, which is a separate feature.
+        """
+        ells = np.arange(self.lmax + 1)
+        l_apod = min(self.Cl_prior_l_apod, self.lmax)
+        f = np.exp(-np.log(1e3) * (ells - l_apod)**2 / (self.lmax - l_apod + 1)**2)
+        f[:l_apod + 1] = 1.0
+        return f
 
     @property
     def P_Cl_prior_inv(self) -> NDArray[np.floating]:
@@ -1266,7 +1295,10 @@ class CompList:
                 continue
             component_cls = getattr(component_lib, component.component_class)
             if "lmax" in component.params and component.params.lmax == "full":
-                component.params.lmax = (params.compsep.nside*5)//2
+                # "The most a map at the compsep resolution can carry", which is also the default
+                # band lmax (param_schema.resolve_band_lmax), so such a component is never solved
+                # for modes no band can see.
+                component.params.lmax = 3*params.compsep.nside - 1
             component_pol = component.params.polarization if "polarization" in component.params \
                 else "I"
             if component_pol not in EXECUTION_POLS:

@@ -6,7 +6,7 @@ import pysm3.units as pysm3_u
 from pixell.bunch import Bunch
 
 from commander4.output.log import logassert
-from commander4.param_schema import resolve_param
+from commander4.param_schema import resolve_param, resolve_band_lmax
 from commander4.data_models.detector_map import DetectorMap
 
 logger = logging.getLogger(__name__)
@@ -155,7 +155,9 @@ def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
         maps_sky.append(map_sky)
         maps_rms.append(map_rms)
 
-    detmap = DetectorMap(np.array(maps_sky), np.array(maps_rms), my_band.freq, my_band.fwhm, nside)
+    lmax = resolve_band_lmax(params, my_band._name, None, nside)
+    detmap = DetectorMap(np.array(maps_sky), np.array(maps_rms), my_band.freq, my_band.fwhm, nside,
+                         lmax=lmax)
     detmap.g0 = 0.0
     detmap.gain = 0.0
     # Smooth to the common analysis resolution on read; 0 leaves the band at its native beam.

@@ -452,6 +452,44 @@ def test_P_Cl_prior_resolves_per_pol_lists() -> None:
         == (8.0, -0.5, 10.0)
 
 
+def test_P_Cl_prior_l_apod_defaults_to_no_taper() -> None:
+    # C3's own parameter files nearly always set COMP_L_APOD equal to COMP_AMP_LMAX, which makes
+    # get_Cl_apod unity everywhere; that is our default too.
+    params = _dust_params(lmax=32, Cl_prior_amplitude=1.0)
+    comp = ThermalDust(params, _make_compsep(), eval_pol="I", comp_name="dust")
+
+    assert comp.Cl_prior_l_apod == 32
+    np.testing.assert_array_equal(comp.Cl_prior_apodization, np.ones(33))
+
+
+def test_P_Cl_prior_l_apod_tapers_to_1e_minus_6_in_power_at_lmax() -> None:
+    # get_Cl_apod (comm_cl_mod.f90): unity up to l_apod, then a Gaussian reaching exp(-ln(1000))
+    # in amplitude at lmax, i.e. 1e-6 in power. The prior enters as C_l * f^2.
+    params = _dust_params(lmax=100, Cl_prior_amplitude=1.0, Cl_prior_l_apod=50)
+    comp = ThermalDust(params, _make_compsep(), eval_pol="I", comp_name="dust")
+    unapodized = ThermalDust(_dust_params(lmax=100, Cl_prior_amplitude=1.0), _make_compsep(),
+                             eval_pol="I", comp_name="dust")
+
+    f = comp.Cl_prior_apodization
+    np.testing.assert_array_equal(f[:51], np.ones(51))
+    assert np.all(np.diff(f[50:]) < 0.0)                      # strictly falling above l_apod
+    assert np.isclose(f[100], np.exp(-np.log(1e3) * (100 - 50)**2 / (100 - 50 + 1)**2))
+    assert 1e-3 < f[100] < 1.5e-3                             # ~1e-3 amplitude, ~1e-6 in power
+    # Only the tail is touched, and it is suppressed by f^2.
+    np.testing.assert_allclose(comp.P_Cl_prior[:51], unapodized.P_Cl_prior[:51])
+    np.testing.assert_allclose(comp.P_Cl_prior[100], unapodized.P_Cl_prior[100] * f[100]**2)
+    assert np.all(comp.P_Cl_prior > 0)                        # 1/C_l stays finite
+
+
+def test_P_Cl_prior_l_apod_resolves_per_pol_like_the_other_prior_parameters() -> None:
+    def make(eval_pol):
+        params = _dust_params(lmax=16, Cl_prior_amplitude=1.0, Cl_prior_l_apod=[16, 8])
+        return ThermalDust(params, _make_compsep(), eval_pol=eval_pol, comp_name="dust")
+
+    assert make("I").Cl_prior_l_apod == 16
+    assert make("QU").Cl_prior_l_apod == 8
+
+
 def test_P_Cl_prior_none_amplitude_gives_identity() -> None:
     # Cl_prior_amplitude=None: C_l = 1, i.e. no S^{1/2} scaling in the CG reparameterization
     # (the C3 CL_TYPE 'none' analogue).

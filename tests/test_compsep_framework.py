@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 import numpy as np
 import pytest
 from mpi4py import MPI
@@ -14,6 +16,7 @@ from commander4.compsep_processing import (
     _sampling_group_selects_band,
     _validate_sampling_group_dependencies,
     _validate_sampling_group_references,
+    _validate_component_lmax,
     init_compsep_processing,
 )
 from commander4.communication import _get_compsep_sender_id_for_tod_band, _should_send_compsep_result
@@ -237,6 +240,33 @@ def _make_spectral_comp_list() -> CompList:
     return CompList.init_from_params(Bunch({"Synchrotron": sync, "ThermalDust": dust}), params)
 
 
+def test_gibbs_chains_have_independent_component_state() -> None:
+    chain_components = {1: _make_spectral_comp_list()}
+    chain_components[2] = deepcopy(chain_components[1])
+
+    chain_1_sync = [comp for comp in chain_components[1] if comp.comp_name == "Synchrotron"]
+    chain_2_sync = [comp for comp in chain_components[2] if comp.comp_name == "Synchrotron"]
+
+    # I and QU are two execution views of one component. They keep their shared configuration
+    # inside a chain, while the complete component objects are independent between chains.
+    assert chain_1_sync[0].comp_params is chain_1_sync[1].comp_params
+    assert chain_2_sync[0].comp_params is chain_2_sync[1].comp_params
+    assert chain_1_sync[0].comp_params is not chain_2_sync[0].comp_params
+    assert all(comp_1 is not comp_2 for comp_1, comp_2 in zip(chain_components[1],
+                                                              chain_components[2]))
+
+    sampler = SpectralIndexSamplingGroup.__new__(SpectralIndexSamplingGroup)
+    sampler._groups = _discover_spectral_index_groups(chain_components[1], ["Synchrotron"])
+    sampler.apply_state({"sync": -2.8})
+    chain_1_sync[0].alms[:] = 4.0 + 2.0j
+    chain_1_sync[0].amp_fwhm_rad = 0.25
+
+    assert all(comp.beta == -2.8 for comp in chain_1_sync)
+    assert all(comp.beta == -3.1 for comp in chain_2_sync)
+    assert np.all(chain_2_sync[0].alms == 0.0)
+    assert chain_2_sync[0].amp_fwhm_rad == 0.0
+
+
 def test_sampling_group_configs_reject_fields_owned_by_other_methods() -> None:
     with pytest.raises(ValueError, match="sample_class"):
         CGSamplingGroupConfig.from_block("cg", Bunch(sample_class="amplitude_sampler_CG"))
@@ -449,3 +479,47 @@ def test_init_compsep_processing_rejects_duplicate_component_names(monkeypatch, 
     with pytest.raises(AssertionError):
         init_compsep_processing(mpi_info, params)
     assert "Duplicate component names found in CompSep setup" in caplog.text
+
+
+# --- component lmax vs band lmax ------------------------------------------------------------
+# A component multipole above every band's lmax never meets the data, so the C(l) prior decides it
+# on its own. C3 leaves this to the user; we report it, either as a warning (the prior is at least
+# tapered there by Cl_prior_l_apod) or as an error (nothing suppresses it).
+
+def _lmax_check_params(comp_lmax: int, band_nside: int = 64, l_apod: int | None = None) -> Bunch:
+    """One enabled TOD band and one CMB component, with no band `lmax` set (so 3*nside-1)."""
+    comp = _make_component_cfg("I")
+    comp.params.lmax = comp_lmax
+    comp.params.Cl_prior_amplitude = 1.0e+8
+    if l_apod is not None:
+        comp.params.Cl_prior_l_apod = l_apod
+    object.__setattr__(comp, "_name", "CMB")
+    params = Bunch(
+        compsep=Bunch(nside=band_nside, float_precision="single",
+                      bands=Bunch(BandA=Bunch(enabled=True, get_from="EXP", polarization="I"))),
+        experiments=Bunch(EXP=Bunch(bands=Bunch(BandA=Bunch(eval_nside=band_nside)))),
+    )
+    return CompList.init_from_params(Bunch({"CMB": comp}), params), params
+
+
+def test_component_lmax_within_the_band_lmax_is_silent(caplog) -> None:
+    comp_list, params = _lmax_check_params(comp_lmax=191)   # nside 64 -> band lmax 191
+    with caplog.at_level("WARNING"):
+        _validate_component_lmax(comp_list, params)
+    assert caplog.text == ""
+
+
+def test_component_lmax_above_every_band_with_no_taper_is_an_error(caplog) -> None:
+    comp_list, params = _lmax_check_params(comp_lmax=250)
+    with caplog.at_level("WARNING"):
+        _validate_component_lmax(comp_list, params)
+    assert "ERROR" in caplog.text
+    assert "l = 192-250 is constrained by the C(l) prior alone" in caplog.text
+
+
+def test_component_lmax_above_every_band_but_tapered_is_only_a_warning(caplog) -> None:
+    comp_list, params = _lmax_check_params(comp_lmax=250, l_apod=191)
+    with caplog.at_level("WARNING"):
+        _validate_component_lmax(comp_list, params)
+    assert "WARNING" in caplog.text and "ERROR" not in caplog.text
+    assert "Cl_prior_l_apod = 191" in caplog.text

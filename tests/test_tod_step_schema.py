@@ -50,7 +50,7 @@ def _params(**steps) -> Bunch:
 
 
 EXPERIMENT = SimpleNamespace(
-    experiment_name="EXP", band_name="BAND", fsamp=20.0, nu=100.0,
+    experiment_name="EXP", band_name="BAND", fsamp=20.0, nu=100.0, nside=64,
 )
 
 
@@ -134,6 +134,16 @@ def test_mapmaking_config_resolves_resources_and_output_selection():
     assert config.include_orbital_dipole_maps
     assert not config.include_corr_noise_maps
     assert not config.include_sky_model_maps
+    assert config.band_lmax == 3*EXPERIMENT.nside - 1
+
+
+def test_mapmaking_config_takes_band_lmax_from_band_then_experiment():
+    params = _params()
+    assert MapmakingConfig.from_params(params, EXPERIMENT).band_lmax == 3*EXPERIMENT.nside - 1
+    params.experiments.EXP.lmax = 100
+    assert MapmakingConfig.from_params(params, EXPERIMENT).band_lmax == 100
+    params.experiments.EXP.bands.BAND.lmax = 150
+    assert MapmakingConfig.from_params(params, EXPERIMENT).band_lmax == 150
 
 
 def test_each_gain_step_owns_its_gap_fill_and_downsampling():

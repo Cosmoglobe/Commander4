@@ -11,7 +11,8 @@ import pytest
 from pixell.bunch import Bunch
 
 from commander4.param_schema import (TOP_LEVEL_BLOCKS, validate_param_schema, compsep_enabled,
-                                     derive_task_counts, task_count_breakdown, resolve_param)
+                                     derive_task_counts, task_count_breakdown, resolve_param,
+                                     resolve_band_lmax)
 
 
 def _band(num_tasks=1, enabled=True, **kw):
@@ -211,3 +212,39 @@ def test_where_the_value_came_from_is_logged(caplog):
     with caplog.at_level("DEBUG", logger="commander4.param_schema"):
         _mapmaker(global_mm="bin", exp_mm="CG")
     assert "mapmaker" in caplog.text and "experiments.EXP" in caplog.text
+
+
+# --- band lmax ------------------------------------------------------------------------------
+# A band's lmax is the ceiling on what any component can be fitted against; C3 states it per band
+# (BAND_LMAX) and so do we, with the full HEALPix bandlimit as the fallback.
+
+def _lmax_params(band_lmax=None, exp_lmax=None, file_lmax=None):
+    band = Bunch(enabled=True)
+    if band_lmax is not None:
+        band.lmax = band_lmax
+    experiment = Bunch(enabled=True, bands=Bunch(BandA=band))
+    if exp_lmax is not None:
+        experiment.lmax = exp_lmax
+    compsep_band = Bunch(enabled=True, get_from="file")
+    if file_lmax is not None:
+        compsep_band.lmax = file_lmax
+    return Bunch(experiments=Bunch(EXP=experiment),
+                 compsep=Bunch(bands=Bunch(BandA=compsep_band)))
+
+
+def test_band_lmax_defaults_to_the_full_healpix_bandlimit():
+    """3*nside-1 is everything a map at this resolution can carry, so nothing is left unconstrained
+    merely by the band's own lmax."""
+    assert resolve_band_lmax(_lmax_params(), "BandA", "EXP", 64) == 191
+    assert resolve_band_lmax(_lmax_params(), "BandA", "EXP", 512) == 1535
+
+
+def test_band_lmax_prefers_the_band_over_the_experiment():
+    assert resolve_band_lmax(_lmax_params(exp_lmax=100), "BandA", "EXP", 64) == 100
+    assert resolve_band_lmax(_lmax_params(band_lmax=150, exp_lmax=100), "BandA", "EXP", 64) == 150
+
+
+def test_a_file_band_takes_its_lmax_from_its_compsep_entry():
+    """`get_from: file` bands have no experiment block; freq/fwhm/nside already live here."""
+    assert resolve_band_lmax(_lmax_params(file_lmax=80), "BandA", None, 64) == 80
+    assert resolve_band_lmax(_lmax_params(), "BandA", None, 64) == 191

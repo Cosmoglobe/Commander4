@@ -11,13 +11,14 @@ from typing import Self
 
 from commander4.output.log import logassert
 from commander4.data_models.detector_map import DetectorMap
-from commander4.sky_models.component import CompList
+from commander4.sky_models.component import CompList, DiffuseComponent
 from commander4.sky_models.sky_model import SkyModel
 from commander4.solvers.CG_compsep_solver import CompSepSolver
 from commander4.solvers.perpix_compsep_solver import solve_compsep_perpix
 from commander4.solvers.spectral_index_sampler import SpectralIndexSamplingGroup
 from commander4.output.write_chains_files import write_compsep_chain_to_file
 from commander4.utils.execution_ids import get_execution_band_id, EXECUTION_POLS
+from commander4.param_schema import resolve_band_lmax
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +287,53 @@ def _validate_sampling_group_dependencies(
                   f"{sorted(amplitude_groups)}.", logger)
 
 
+def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
+    """Report component multipoles that no band can constrain.
+
+    `Component.project_comp_to_band` truncates a component to the band's lmax, so a component
+    multipole above *every* enabled band's lmax never meets the data. In a constrained realization
+    (`optimize: false`) the CG solver then draws it straight from the C(l) prior, which is usually
+    set orders of magnitude above the true signal -- the amplitudes come back dominated by prior
+    noise at high l, and the chi^2 diagnostic blows up with them.
+
+    C3 leaves this to the user (its BAND_LMAX and COMP_AMP_LMAX are unchecked), but its parameter
+    files pair the two deliberately, and its COMP_L_APOD tapers the prior away over exactly this
+    range. We check both here: apodization at or below the highest band lmax is a warning, since
+    the taper is still near unity where it starts and only suppresses the far tail; no protection
+    at all is an error. Both are logged rather than raised -- the run is still meaningful for the
+    multipoles the data do constrain, and a hard failure would be unhelpful mid-chain.
+    """
+    band_lmaxes = {}
+    for band_str in params.compsep.bands:
+        band = params.compsep.bands[band_str]
+        if not band.enabled:
+            continue
+        experiment = None if band.get_from == "file" else band.get_from
+        source = band if experiment is None else params.experiments[experiment].bands[band_str]
+        band_lmaxes[band_str] = resolve_band_lmax(params, band_str, experiment, source.eval_nside)
+    if not band_lmaxes:
+        return
+    highest_lmax = max(band_lmaxes.values())
+    at_highest = sorted(name for name in band_lmaxes if band_lmaxes[name] == highest_lmax)
+    highest_band = at_highest[0] if len(at_highest) == 1 else f"{len(at_highest)} bands"
+
+    for comp in comp_list.joined():
+        if not isinstance(comp, DiffuseComponent) or comp.lmax <= highest_lmax:
+            continue
+        unseen = f"l = {highest_lmax + 1}-{comp.lmax}"
+        context = (f"Component {comp.comp_name!r} has lmax = {comp.lmax}, above the highest band "
+                   f"lmax {highest_lmax} ({highest_band}), so {unseen} is constrained by the C(l) "
+                   f"prior alone.")
+        if comp.Cl_prior_l_apod <= highest_lmax:
+            logger.warning(f"{context} Only Cl_prior_l_apod = {comp.Cl_prior_l_apod} keeps those "
+                           "modes finite, and the taper barely suppresses the multipoles just "
+                           "above the band lmax. Lower the component lmax if you do not need it.")
+        else:
+            logger.error(f"{context} Nothing suppresses them: set the component lmax to "
+                         f"{highest_lmax} or below, raise the bands' lmax, or set "
+                         f"Cl_prior_l_apod <= {highest_lmax} to taper the prior away.")
+
+
 def _build_conditional_residual(detector_data: DetectorMap, comp_list: CompList, target_pol: str,
                                 active_sublist: CompList) -> DetectorMap:
     """Subtract the components held fixed by a sampling group from this band's map.
@@ -384,6 +432,8 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     _validate_sampling_group_references(amplitude_groups, comp_list, params)
     _validate_sampling_group_references(mcmc_groups, comp_list, params)
     _validate_sampling_group_dependencies(amplitude_groups, mcmc_groups)
+    if mpi_info.compsep.rank == mpi_info.compsep.master:  # One report, not one per band.
+        _validate_component_lmax(comp_list, params)
     if cg_groups:
         amplitude_method = "cg"
     elif per_pixel_groups:

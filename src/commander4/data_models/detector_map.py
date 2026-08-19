@@ -85,7 +85,9 @@ class DetectorMap:
             fwhm: Beam FWHM in arcminutes.
             nside: HEALPix nside of the maps.
             double_precision: If True, store ``inv_n_map`` in float64.
-            lmax: Maximum multipole. Defaults to ``int(2.5 * nside)``.
+            lmax: Maximum multipole. Defaults to ``3*nside - 1``, the full bandlimit of a
+                HEALPix map at this resolution (C3's ``BAND_LMAX``, which is likewise set per band
+                and typically sits between 2*nside and 3*nside).
         """
         #cast dimensions correctly to allow constructer with 1-d array for intensity maps.
         map_sky = map_sky.reshape((1,-1)) if map_sky.ndim == 1 else map_sky
@@ -101,8 +103,11 @@ class DetectorMap:
         self.nu = nu
         self.fwhm = fwhm #stored in arcmin
         self.nside = nside
-        # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
-        self.lmax = int(2.5*nside) if lmax is None else lmax
+        # The band's harmonic bandlimit. Components are truncated to this lmax on their way into
+        # the band (Component.project_comp_to_band), so any component multipole above it is
+        # invisible to the data and left to the C(l) prior alone; compsep_processing's
+        # _validate_component_lmax reports that at startup.
+        self.lmax = (3*nside - 1) if lmax is None else lmax
         self._beam_Cl = hp.gauss_beam(np.deg2rad(fwhm/60.0), self.lmax)
         self.double_precision = double_precision
         self.inv_n_map = (1./map_rms**2).astype(np.float64 if double_precision else np.float32, copy=False)

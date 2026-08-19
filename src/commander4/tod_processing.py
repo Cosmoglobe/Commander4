@@ -12,7 +12,7 @@ from contextlib import contextmanager
 
 from pixell.bunch import Bunch
 
-from commander4.param_schema import resolve_param
+from commander4.param_schema import resolve_param, resolve_band_lmax
 from commander4.output.log import logassert
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_TOD import DetGroupTOD
@@ -349,14 +349,16 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
         common_res_fwhm = mapmaking.common_res_fwhm
         if "I" in pols:
             detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
-                                experiment_data.fwhm, experiment_data.nside)
+                                experiment_data.fwhm, experiment_data.nside,
+                                lmax=mapmaking.band_lmax)
             detmap_I.g0 = tod_samples.abs_gain
             if common_res_fwhm:
                 detmap_I.smooth_to_resolution(common_res_fwhm)
             detmap_dict_out.update({"I": detmap_I})
         if "QU" in pols:
             detmap_QU = DetectorMap(map_signal[1:3,:], map_rms[1:3,:], experiment_data.nu,
-                                experiment_data.fwhm, experiment_data.nside)
+                                experiment_data.fwhm, experiment_data.nside,
+                                lmax=mapmaking.band_lmax)
             detmap_QU.g0 = tod_samples.abs_gain
             if common_res_fwhm:
                 detmap_QU.smooth_to_resolution(common_res_fwhm)
@@ -550,14 +552,16 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
         common_res_fwhm = mapmaking.common_res_fwhm
         if "I" in pols:
             detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
-                                experiment_data.fwhm, experiment_data.nside)
+                                experiment_data.fwhm, experiment_data.nside,
+                                lmax=mapmaking.band_lmax)
             detmap_I.g0 = tod_samples.abs_gain
             if common_res_fwhm:
                 detmap_I.smooth_to_resolution(common_res_fwhm)
             detmap_dict_out.update({"I": detmap_I})
         if "QU" in pols:
             detmap_QU = DetectorMap(map_signal[1:3,:], map_rms[1:3,:], experiment_data.nu,
-                                experiment_data.fwhm, experiment_data.nside)
+                                experiment_data.fwhm, experiment_data.nside,
+                                lmax=mapmaking.band_lmax)
             detmap_QU.g0 = tod_samples.abs_gain
             if common_res_fwhm:
                 detmap_QU.smooth_to_resolution(common_res_fwhm)
@@ -1401,6 +1405,7 @@ class MapmakingConfig:
     include_sky_model_maps: bool
     sparse_maps: bool = False
     common_res_fwhm: float = 0.0
+    band_lmax: int | None = None
     cg: CGConfig = field(default_factory=CGConfig)
 
     def __post_init__(self) -> None:
@@ -1436,6 +1441,7 @@ class MapmakingConfig:
                                               default=cls.sparse_maps)),
             "common_res_fwhm": float(resolve_param(params, "common_res_fwhm", ("compsep",),
                                                    default=cls.common_res_fwhm)),
+            "band_lmax": resolve_band_lmax(params, band_name, exp_name, experiment_data.nside),
             "num_threads": params.resources.tod.num_threads,
             "include_orbital_dipole_maps": bool(include.orbital_dipole_maps),
             "include_corr_noise_maps": bool(include.corr_noise_maps),

@@ -91,6 +91,29 @@ def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any =
     return checked(default, "the default")
 
 
+def resolve_band_lmax(params: Bunch, band_name: str, experiment: str | None, nside: int) -> int:
+    """The harmonic bandlimit of one band: its `lmax` parameter, or `3*nside - 1` if unset.
+
+    This is C4's equivalent of C3's `BAND_LMAX`, which is likewise stated per band. It is the lmax
+    of the band's `DetectorMap`, and thereby the highest multipole at which any component can be
+    compared against this band's data: `Component.project_comp_to_band` truncates the component
+    alms to it. `3*nside - 1` is the full bandlimit of a HEALPix map at this resolution, so the
+    default lets a band constrain everything its own pixelization can carry.
+
+    Args:
+        band_name: Key of the band under `compsep.bands` (and under its experiment, if it has one).
+        experiment: Name of the experiment providing the band, or None for a `get_from: file` band,
+            whose settings live in its `compsep.bands` entry rather than in an experiment block.
+        nside: The band's map resolution, i.e. its `eval_nside`.
+    """
+    if experiment is None:
+        scopes = (f"compsep.bands.{band_name}",)
+    else:
+        scopes = (f"experiments.{experiment}.bands.{band_name}", f"experiments.{experiment}")
+    lmax = resolve_param(params, "lmax", scopes, default=None)
+    return 3*nside - 1 if lmax is None else int(lmax)
+
+
 def validate_param_schema(params_dict: dict) -> None:
     """Reject the pre-restructure schema, and any top-level key outside `TOP_LEVEL_BLOCKS`.
 
