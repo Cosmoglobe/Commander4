@@ -5,6 +5,7 @@ import healpy as hp
 import datetime
 from pixell.bunch import Bunch
 
+from commander4.output import paths
 from commander4.sky_models.component import Component, CompList
 
 
@@ -17,10 +18,11 @@ def write_map_chain_to_file(params: Bunch, chain: int, iter: int, exp_name:str,
     multiplying by `band_unit_factor` D (=1 for uK_RJ). The multiply is out-of-place so the caller's
     arrays -- shared with the uK_RJ DetectorMap sent to compsep -- stay untouched.
     """
-    if chain not in params.general.chains_to_write or (iter-1)%params.general.chain_maps_interval != 0:
+    chains = params.output.chains
+    if chain not in chains.write or (iter-1) % chains.interval != 0:
         return
-    nside_out = params.general.chain_maps_nside
-    chain_dir = os.path.join(params.general.output_paths.chains, "datamaps")
+    nside_out = chains.maps_nside
+    chain_dir = paths.subdir(params, paths.CHAINS_DATAMAPS)
     filename = f"{exp_name}_{band_name}_chain{chain:02d}_iter{iter:04d}.h5"
     chain_file = os.path.join(chain_dir, filename)
 
@@ -44,7 +46,7 @@ def write_map_chain_to_file(params: Bunch, chain: int, iter: int, exp_name:str,
 
 def write_compsep_chain_to_file(comp_list: list[Component] | CompList, params: Bunch,
                                 chain: int, iter: int):
-    chain_dir = os.path.join(params.general.output_paths.chains, "compsep")
+    chain_dir = paths.subdir(params, paths.CHAINS_COMPSEP)
     chain_file = os.path.join(chain_dir, f"chain{chain:02d}_iter{iter:04d}.h5")
     components = comp_list.components if isinstance(comp_list, CompList) else comp_list
     with h5py.File(chain_file, "w") as file:

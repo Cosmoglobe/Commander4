@@ -15,7 +15,7 @@ import yaml
 from pixell.bunch import Bunch
 
 import commander4.sky_models.component as component_lib
-from commander4.output import plotting
+from commander4.output import paths, plotting
 from commander4.sky_models.component import Component
 
 
@@ -71,12 +71,12 @@ def _decode_h5_value(value):
     return value
 
 
-def _load_params_from_chain(chain_dir: str) -> Bunch | None:
+def _load_params_from_chain(run_dir: str) -> Bunch | None:
     patterns = [
-        os.path.join(chain_dir, "datamaps", "*.h5"),
-        os.path.join(chain_dir, "compsep", "*.h5"),
-        os.path.join(chain_dir, "tod", "*.h5"),
-        os.path.join(chain_dir, "*.h5"),
+        os.path.join(run_dir, paths.CHAINS_DATAMAPS, "*.h5"),
+        os.path.join(run_dir, paths.CHAINS_COMPSEP, "*.h5"),
+        os.path.join(run_dir, paths.CHAINS_TOD, "*.h5"),
+        os.path.join(run_dir, "*.h5"),
     ]
     for pattern in patterns:
         for path in sorted(glob.glob(pattern)):
@@ -116,7 +116,7 @@ def _build_component_list(params: Bunch) -> list[Component]:
         comp_longname = component.params.longname
         base_params = deepcopy(component.params)
         if base_params.lmax == "full":
-            base_params.lmax = (params.general.nside * 5) // 2
+            base_params.lmax = (params.compsep.nside * 5) // 2
 
         if "I" in base_params.polarization:
             params_i = deepcopy(base_params)
@@ -125,7 +125,7 @@ def _build_component_list(params: Bunch) -> list[Component]:
             params_i.polarization = "I"
             params_i.polarized = False
             comp_type = getattr(component_lib, component.component_class)
-            comp_list.append(comp_type(params_i, params.general))
+            comp_list.append(comp_type(params_i, params.compsep))
         if "QU" in base_params.polarization:
             params_qu = deepcopy(base_params)
             params_qu.longname = comp_longname + "_Polarization"
@@ -133,7 +133,7 @@ def _build_component_list(params: Bunch) -> list[Component]:
             params_qu.polarization = "QU"
             params_qu.polarized = True
             comp_type = getattr(component_lib, component.component_class)
-            comp_list.append(comp_type(params_qu, params.general))
+            comp_list.append(comp_type(params_qu, params.compsep))
 
     return comp_list
 
@@ -352,10 +352,10 @@ def _first_scalar(dataset) -> float | None:
         return None
 
 
-def _plot_tod_sampling(chain_dir: str, output_dir: str, chain_filter: set[int] | None) -> None:
-    tod_files = sorted(glob.glob(os.path.join(chain_dir, "tod", "*.h5")))
+def _plot_tod_sampling(run_dir: str, output_dir: str, chain_filter: set[int] | None) -> None:
+    tod_files = sorted(glob.glob(os.path.join(run_dir, paths.CHAINS_TOD, "*.h5")))
     if not tod_files:
-        LOGGER.info("No tod/*.h5 files found; skipping TOD sampling plots.")
+        LOGGER.info("No %s/*.h5 files found; skipping TOD sampling plots.", paths.CHAINS_TOD)
         return
 
     data: dict[str, dict[int, dict[int, dict[str, float]]]] = {}
@@ -494,13 +494,14 @@ def _plot_chain_maps(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Plot Commander4 chain outputs from disk.")
     parser.add_argument(
-        "chain_dir",
-        help="Path to a chain output directory (containing compsep/, datamaps/, tod/).",
+        "run_dir",
+        help=f"Path to a Commander4 run's output directory (its `output.dir`, containing "
+             f"{paths.CHAINS_COMPSEP}/, {paths.CHAINS_DATAMAPS}/, {paths.CHAINS_TOD}/).",
     )
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Directory for plots. Defaults to <chain_dir>/plots.",
+        help=f"Directory for plots. Defaults to <run_dir>/{paths.PLOTS}.",
     )
     parser.add_argument(
         "--chain",
@@ -551,14 +552,14 @@ def main() -> int:
     for noisy_name in ("matplotlib", "healpy", "h5py", "PIL"):
         noisy_logger = logging.getLogger(noisy_name)
         noisy_logger.setLevel(logging.WARNING)
-    chain_dir = os.path.abspath(args.chain_dir)
-    if not os.path.isdir(chain_dir):
-        LOGGER.error("Chain directory not found: %s", chain_dir)
+    run_dir = os.path.abspath(args.run_dir)
+    if not os.path.isdir(run_dir):
+        LOGGER.error("Run output directory not found: %s", run_dir)
         return 1
 
-    output_dir = args.output_dir or os.path.join(chain_dir, "plots")
+    output_dir = args.output_dir or os.path.join(run_dir, paths.PLOTS)
     os.makedirs(output_dir, exist_ok=True)
-    plot_params = Bunch(output_paths=Bunch(plots=output_dir))
+    plot_params = Bunch(plots_dir=output_dir)
 
     chain_filter = _parse_int_set(args.chain)
     iter_filter = _parse_int_set(args.iter)
@@ -568,27 +569,27 @@ def main() -> int:
     nside_target = None if args.nside.lower() == "native" else int(args.nside)
     LOGGER.info("Plotting at nside: %s", "native" if nside_target is None else nside_target)
 
-    params = _load_params_from_chain(chain_dir)
+    params = _load_params_from_chain(run_dir)
     if params is None:
         LOGGER.warning(
             "No parameter metadata found in chain outputs; component plots may be skipped."
         )
 
     compsep_files: dict[tuple[int, int], str] = {}
-    for path in glob.glob(os.path.join(chain_dir, "compsep", "*.h5")):
+    for path in glob.glob(os.path.join(run_dir, paths.CHAINS_COMPSEP, "*.h5")):
         chain, iteration = _extract_chain_iter(os.path.basename(path))
         if chain is None or iteration is None:
             continue
         compsep_files[(chain, iteration)] = path
 
-    maps_files = sorted(glob.glob(os.path.join(chain_dir, "datamaps", "*.h5")))
+    maps_files = sorted(glob.glob(os.path.join(run_dir, paths.CHAINS_DATAMAPS, "*.h5")))
     if not maps_files:
-        LOGGER.warning("No datamaps/*.h5 files found in %s", chain_dir)
+        LOGGER.warning("No %s/*.h5 files found in %s", paths.CHAINS_DATAMAPS, run_dir)
 
     comp_cache: dict[tuple[int, int], list[Component]] = {}
     LOGGER.info("Found %s map files and %s compsep files", len(maps_files), len(compsep_files))
 
-    _plot_tod_sampling(chain_dir, output_dir, chain_filter)
+    _plot_tod_sampling(run_dir, output_dir, chain_filter)
 
     selected_maps: list[tuple[str, int, int]] = []
     for map_path in maps_files:
@@ -672,7 +673,7 @@ def main() -> int:
                 "Found %d compsep-only (chain, iter) pairs without datamaps; plotting components.",
                 len(compsep_only_items),
             )
-            nside = nside_target or getattr(getattr(params, "general", None), "nside", 512)
+            nside = nside_target or getattr(getattr(params, "compsep", None), "nside", 512)
             npix = 12 * nside**2
 
             bands_info: list[tuple[str, float, float]] = []
@@ -699,7 +700,7 @@ def main() -> int:
                         except Exception:
                             pass
 
-            for attr in ("experiments", "CompSep_bands"):
+            for attr in ("experiments", "compsep"):
                 container = getattr(params, attr, None)
                 if container is None:
                     continue

@@ -4,7 +4,6 @@ import logging
 import numpy as np
 from mpi4py import MPI
 from pixell import curvedsky
-from pixell.bunch import Bunch
 
 from commander4.output.log import logassert
 from commander4.sky_models.component import Component
@@ -13,17 +12,18 @@ from commander4.data_models.detector_map import DetectorMap
 
 
 def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
-                         comp_list: list[Component], params: Bunch) -> list[Component]:
+                         comp_list: list[Component],
+                         double_precision: bool) -> list[Component]:
     """ A pixel-by-pixel solver for the component separation problem. Requires uniform nside and a
         common beam across all bands (smoothing to a common resolution is done at the data sources,
-        controlled by ``general.common_res_fwhm``); this solver ignores beams entirely, so mixed
+        controlled by ``compsep.common_res_fwhm``); this solver ignores beams entirely, so mixed
         resolutions silently mix resolutions and trigger a warning below.
     """
     # TODO: Add support for non-Diffuse components (point sources, templates).
     logger = logging.getLogger(__name__)
     if proc_comm.Get_rank() == 0:
         logger.info("Starting pixel-by-pixel component separation.")
-    if params.general.CG_float_precision == "double":  # FIXME: bad parameter name.
+    if double_precision:
         complex_dtype = np.complex128
         real_dtype = np.float64
     else:
@@ -47,11 +47,11 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     ]
 
     # This solver has no beam model, so all bands should already share one resolution (smoothed at
-    # ingest via general.common_res_fwhm); differing FWHMs silently mix resolutions, so warn.
+    # ingest via compsep.common_res_fwhm); differing FWHMs silently mix resolutions, so warn.
     all_fwhm = proc_comm.allgather(detector_data.fwhm)
     if not np.allclose(all_fwhm, all_fwhm[0]):
         logger.warning(f"Per-pixel solver received bands at differing resolutions {all_fwhm}; the "
-                       "result mixes resolutions. Set general.common_res_fwhm to a common beam.")
+                       "result mixes resolutions. Set compsep.common_res_fwhm to a common beam.")
 
     ncomp = len(comp_list)
     all_freq = proc_comm.gather(band_freq, root=0)

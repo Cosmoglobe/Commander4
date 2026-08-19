@@ -46,15 +46,24 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
     else:
         bad_PIDs = np.array([])
 
-    Fourier_times = np.load(my_experiment.Fourier_times_path)
+    Fourier_times = np.load(my_experiment.fourier_times_path)
 
     # Attempting to reduce fragmentation by allocating buffers.
     ntod_upper_bound = int(100*100*3600)  # 10 hour scan.
-    
+
+    # Drop detector-scans that are mostly flagged, before they reach the samplers. A detector-scan
+    # with too few *adjacent* unflagged samples has no measurable white-noise level: the sigma0
+    # estimator returns inf for it, which makes the correlated-noise CG divide by zero and yields a
+    # NaN n_corr, and since the gain solve reduces s^T N^-1 s across the whole band a few of those
+    # turn the band-wide sum into NaN. The default 0.0 keeps every detector-scan that has at least
+    # one good sample (the historical behaviour); the SO LAT reader uses the equivalent of 0.9.
+    min_unmasked_fraction = float(getattr(my_experiment, "min_unmasked_fraction", 0.0))
+    ndet = len(det_names)
+
     ntod_sum_original = 0
     ntod_sum_final = 0
     scan_list = []
-    num_included = 0
+    included_detector_scans = 0
     stop_bench("reader-startup")
     for i_pid in range(scan_idx_start, scan_idx_stop+1):
         pid = pids[i_pid]
@@ -128,13 +137,17 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                                        init_scalars=init_scalars,
                                        tod_is_compressed=my_experiment.tod_is_compressed,
                                        det_response=det_response)
-                if np.sum(detector.good_data_mask) == 0 or (detector.tod == 0).all():
+                # `<=` so the 0.0 default still drops fully-flagged detector-scans.
+                if np.mean(detector.good_data_mask) <= min_unmasked_fraction:
+                    continue
+                if (detector.tod == 0).all():
                     continue
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
                 idet_accepted += 1
 
+            included_detector_scans += idet_accepted
         stop_bench("fileread")
         if len(detector_list) == 0:
             good_scan = False
@@ -142,30 +155,34 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             scanID = int(pid)
             scan = ScanTOD(detector_list, 0., scanID)
             scan_list.append(scan)
-            num_included += 1
         if i_pid % 10 == 0:
             gc.collect()
 
-    ndet = len(det_names)
     noise_model = NoisePSDOof()
     band_tod = DetGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
 
-    ### Collect some info on master rank of each detector and print it ###
-    local_tot_scans = scan_idx_stop - scan_idx_start
-    local_stats = np.array([num_included, local_tot_scans, ntod_sum_final, ntod_sum_original])
+    ### Summarize detector-scan inclusion and Fourier-cut retention ###
+    # The scan loop is inclusive of scan_idx_stop, so the local count is stop+1-start; and the
+    # fraction is reported per detector-scan rather than per scan, since a scan survives as long as
+    # any one of its detectors does and would otherwise hide how many detectors were dropped.
+    local_tot_scans = (scan_idx_stop + 1) - scan_idx_start
+    local_tot_detector_scans = ndet * local_tot_scans
+    local_stats = np.array([included_detector_scans, local_tot_detector_scans,
+                            ntod_sum_final, ntod_sum_original], dtype=np.int64)
     global_stats = np.zeros_like(local_stats)
     band_comm.Reduce(local_stats, global_stats, op=MPI.SUM, root=0)
     if band_comm.Get_rank() == 0:
-        total_included, total_scans, total_ntod_final, total_ntod_original = global_stats
+        total_included, total_detector_scans, total_ntod_final, total_ntod_original = global_stats
         frac_included = 0.0
-        if total_scans > 0:
-            frac_included = total_included / total_scans * 100.0
+        if total_detector_scans > 0:
+            frac_included = total_included / total_detector_scans * 100.0
         avg_scan_remaining = 0.0
         if total_ntod_original > 0:
             avg_scan_remaining = total_ntod_final / total_ntod_original * 100.0
         logger.info(f"Band {bandname} finished reading TODs from file.")
-        logger.info(f"Fraction of scans included for {bandname}: {frac_included:.1f} %")
+        logger.info(f"Fraction of detector-scans included for {bandname}: {frac_included:.1f} % "
+                    f"({total_included}/{total_detector_scans})")
         logger.info(f"Fraction of TODs left after Fourier cut for {bandname}: "\
                     f"{avg_scan_remaining:.1f} %")
 

@@ -81,7 +81,7 @@ class Component:
         )
         self.eval_pol = self.defined_pol if eval_pol is None else eval_pol
         type(self)._assert_legal_pol(self.eval_pol, role="evaluation")
-        self.double_prec = False if global_params.CG_float_precision == "single" else True
+        self.double_prec = False if global_params.float_precision == "single" else True
         self._data = None
         # FWHM beam of the component. If the CG solver was used, this will be 0, as it solves for
         # deconvolved components. Only non-zero if the common-resolution per-pix solver was used.
@@ -1029,7 +1029,7 @@ class RadioSources(PointSourcesComponent):
 
         # the point-source correspondent of: M Y a
         ps_map = np.zeros((1,hp.nside2npix(band_nside)),   #empty band map
-            dtype=(np.float32 if self.global_params.CG_float_precision == "single" else np.float64))
+            dtype=(np.float32 if self.global_params.float_precision == "single" else np.float64))
         self._project_to_band_map(ps_map, band.nu)
 
         # Y^-1 M Y a
@@ -1266,14 +1266,14 @@ class CompList:
                 continue
             component_cls = getattr(component_lib, component.component_class)
             if "lmax" in component.params and component.params.lmax == "full":
-                component.params.lmax = (params.general.nside*5)//2
+                component.params.lmax = (params.compsep.nside*5)//2
             component_pol = component.params.polarization if "polarization" in component.params \
                 else "I"
             if component_pol not in EXECUTION_POLS:
                 raise ValueError(
                     f"Unrecognized polarization in parameter file for component {component_str}")
             for eval_pol in EXECUTION_POLS[component_pol]:
-                comp_list.append(component_cls(component.params, params.general, eval_pol=eval_pol,
+                comp_list.append(component_cls(component.params, params.compsep, eval_pol=eval_pol,
                                                comp_name=component._name, allocate_empty_alms=True))
         return cls(comp_list)
 
@@ -1281,13 +1281,13 @@ class CompList:
         """Populate each component's alms with an initial guess read from a file.
 
         For every component the source is its own ``init_from`` parameter (inside the component's
-        ``params`` block) if present, otherwise the global ``params.general.init_chain_path``. The
+        ``params`` block) if present, otherwise the global ``params.gibbs.init_from_chain``. The
         source may be a compsep chain (``.h5``/``.hd5``, alms read directly) or a FITS sky map
         (``.fits``, transformed to alms); the type is decided by the file extension. If neither path
         is set the alms are left at their allocated value (zeros). Only diffuse (alm-based)
         components are supported for now.
         """
-        global_path = params.general.init_chain_path if "init_chain_path" in params.general else None
+        global_path = params.gibbs.init_from_chain if "init_from_chain" in params.gibbs else None
         for comp in self.comp_list:
             has_explicit_path = "init_from" in comp.comp_params
             source_path = comp.comp_params.init_from if has_explicit_path else global_path

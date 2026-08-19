@@ -36,8 +36,8 @@ class TODView:
     # one of these reduces the calibration residual to (target gain term) * s_cal + noise.
     _CALIB_TARGET_SIGNALS = {
         "orbital_dipole": ("orbital_dipole",),
-        "sky": ("sky",),
-        "full_sky": ("sky", "orbital_dipole"),
+        "sky": ("sky", "orbital_dipole"),
+        "sky_no_dipole": ("sky",),
     }
 
     def __init__(
@@ -543,7 +543,7 @@ class TODView:
 
         Args:
             target_term: Gain term being sampled, one of ``_ALL_GAIN_TERMS`` ("abs", "rel", "temp").
-            calibrate_against: Calibrator, one of "orbital_dipole", "full_sky", or "sky".
+            calibrate_against: Calibrator, one of "orbital_dipole", "sky", or "sky_no_dipole".
             compsep_output: Optional sky-model override for the static-sky term.
             fill_masked: If True, fill masked samples with ``g_target * s_cal`` plus a noise draw.
             gap_fill_method: How masked samples are filled when ``fill_masked``: ``'wn'`` (white

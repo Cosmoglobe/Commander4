@@ -56,7 +56,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
     else:
         bad_PIDs = np.array([])
 
-    Fourier_times = np.load(my_experiment.Fourier_times_path)
+    Fourier_times = np.load(my_experiment.fourier_times_path)
 
     # Attempting to reduce fragmentation by allocating buffers.
     ntod_upper_bound = int(100*100*3600)  # 10 hour scan.

@@ -4,15 +4,17 @@ The cuts themselves are applied as per-scan vetoes inside the mapmaking scan loo
 tod_processing (accept/reject must be decided there, so a catastrophically bad detector-scan never
 enters the current iteration's map products); the diagnostics they judge (good_fraction, chisq_z)
 are recorded in the same loop and written to the chain. This module holds the rest: the chi-squared
-statistic, the config resolution, and the per-band summary logging. Rejection is sticky within a
-chain: rejected detector-scans are skipped by all accepted_only loops, so their samples and
-diagnostics stop refreshing and they are never re-judged.
+statistic and the per-band summary logging. `DataSelectionConfig` owns its parameter validation;
+the mapmaker receives that config directly. Rejection is sticky within a chain: rejected
+detector-scans are skipped by all accepted_only loops, so their samples and diagnostics stop
+refreshing and they are never re-judged.
 
 A population-relative (per-detector median/MAD) cut used to complement the absolute vetoes; it is
 parked as dead code at the bottom of this file for possible re-introduction.
 """
 
 import logging
+from typing import TYPE_CHECKING
 
 import numpy as np
 from mpi4py import MPI
@@ -20,6 +22,9 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.data_models.TOD_samples import TODSamples, _gather_scan_distributed_array
+
+if TYPE_CHECKING:
+    from commander4.tod_processing import DataSelectionConfig
 
 logger = logging.getLogger(__name__)
 
@@ -40,31 +45,8 @@ def masked_chisq_z(residual: NDArray, mask: NDArray, sigma0: float) -> float:
     return (chisq - n) / np.sqrt(2.0 * n)
 
 
-def build_dataselect_cfg(params: Bunch, iter: int, do_ncorr: bool,
-                         sample_corr_noise: bool) -> Bunch:
-    """Resolve this iteration's data-selection config from the parameter file.
-
-    ``enabled`` says whether the feature is on at all (diagnostics + summary logging); ``active``
-    whether the vetoes fire this iteration: within [from_iter_num, until_iter_num] (inclusive;
-    no upper limit when until_iter_num is absent), and -- since chisq_z needs the correlated-
-    noise-subtracted residual -- not before ncorr sampling starts when that is configured.
-    (from_iter_num=1, until_iter_num=1 reproduces C3's select-on-first-call-only behavior.)
-    """
-    dataselect = params.general.data_selection if "data_selection" in params.general else Bunch()
-    enabled = (bool(getattr(dataselect, "sample_data_selection", False))
-               and (do_ncorr or not sample_corr_noise))
-    until = getattr(dataselect, "until_iter_num", None)
-    return Bunch(
-        enabled=enabled,
-        active=(enabled and iter >= int(getattr(dataselect, "from_iter_num", 1))
-                and (until is None or iter <= int(until))),
-        chisq_abs_threshold=float(getattr(dataselect, "chisq_abs_threshold", 1.0e4)),
-        min_good_fraction=float(getattr(dataselect, "min_good_fraction", 0.1)),
-    )
-
-
 def log_dataselect_summary(band_comm: MPI.Comm, tod_samples: TODSamples,
-                           dataselect_cfg: Bunch) -> None:
+                           dataselect_cfg: "DataSelectionConfig", active: bool) -> None:
     """Log a single per-band summary of this iteration's data selection (reporting only).
 
     Re-derives the veto counts from the diagnostics recorded this iteration (finite good_fraction
@@ -74,7 +56,7 @@ def log_dataselect_summary(band_comm: MPI.Comm, tod_samples: TODSamples,
     """
     gf, z = tod_samples.good_fraction, tod_samples.chisq_z
     fresh = np.isfinite(gf)
-    if dataselect_cfg.active:
+    if active:
         bad_lowfrac = fresh & (gf < dataselect_cfg.min_good_fraction)
         bad_chisq = fresh & ~bad_lowfrac & ~(np.isfinite(z)
                                              & (np.abs(z) <= dataselect_cfg.chisq_abs_threshold))

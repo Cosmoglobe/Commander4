@@ -11,6 +11,7 @@ from pixell.bunch import Bunch
 import logging
 import typing
 
+from commander4.output import paths
 from commander4.data_models.jump_corrections import JumpCatalog
 from commander4.utils.unit_conversions import rj_to_band_unit_factor
 if typing.TYPE_CHECKING:
@@ -176,13 +177,13 @@ class TODSamples:
         # Optional DEBUG: the entire per-sample correlated-noise (n_corr) TODs, written to the chain
         # only when explicitly requested (the data is very large). Collected ragged as one float32
         # array per detector-scan; ``None`` disables collection.
-        if bool(getattr(params.general, "write_ncorr_tods_to_chain", False)):
+        if bool(getattr(params.output.chains.include, "ncorr_tods", False)):
             self.ncorr_tods: list[list[NDArray | None]] | None = \
                 [[None] * self.ndet for _ in range(self.nscans)]
         else:
             self.ncorr_tods = None
 
-        init_chain_path = getattr(params.general, "init_chain_path", False)
+        init_chain_path = getattr(params.gibbs, "init_from_chain", False)
         init_from_chain = bool(init_chain_path)
         # Gibbs-sampled quantities
         if not init_from_chain:
@@ -225,7 +226,8 @@ class TODSamples:
 
                 if "gain" in my_band.detectors[rep_det.name]:
                     for iscan, det in experiment_data.iter_detector_scans():
-                        all_det_gains[iscan, det.det_idx_fullband] = my_band[det.name].gain
+                        all_det_gains[iscan, det.det_idx_fullband] = \
+                            my_band.detectors[det.name].gain
                 elif rep_det.init_scalars is not None:
                     for iscan, det in experiment_data.iter_detector_scans():
                         all_det_gains[iscan, det.det_idx_fullband] = det.init_scalars[0]
@@ -251,7 +253,6 @@ class TODSamples:
             # Disk Initialization (Read from previous chain)
             # ---------------------------------------------------------
             # 1. Find the latest iteration for chain 01
-            # init_dir = params.general.init_chain_dir
             # pattern = f"tod/{self.experiment_name}_{self.band_name}_chain{self.chain:02d}_iter*.h5"
             # search_path = os.path.join(init_dir, pattern)
             # files = glob.glob(search_path)
@@ -434,7 +435,7 @@ class TODSamples:
         if band_comm.Get_rank() == 0:
             exp_name = self.experiment_name
             band_name = self.band_name
-            chain_dir = os.path.join(params.general.output_paths.chains, "tod")
+            chain_dir = paths.subdir(params, paths.CHAINS_TOD)
             filename = f"{exp_name}_{band_name}_chain{self.chain:02d}_iter{itr:04d}.h5"
             chain_file = os.path.join(chain_dir, filename)
 

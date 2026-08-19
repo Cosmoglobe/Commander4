@@ -3,9 +3,8 @@ import time
 import logging
 from mpi4py import MPI
 from numpy.typing import NDArray
-from typing import Callable
+from typing import Callable, TYPE_CHECKING
 from copy import deepcopy
-from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky_models.component import CompList
@@ -15,6 +14,9 @@ from commander4.solvers.dense_matrix_math import DenseMatrix
 from commander4.solvers.CG_driver import distributed_CG
 import commander4.solvers.preconditioners as preconditioners
 from commander4.data_models.band import Band
+
+if TYPE_CHECKING:
+    from commander4.compsep_processing import CGSamplingGroupConfig
 
 logger = logging.getLogger(__name__)
 
@@ -33,24 +35,33 @@ class CompSepSolver:
         where B is the beam smoothing, M is the mixing matrix, N is the noise covariance matrix,
         Y is alm->map spherical harmonic synthesis, d is the observed frequency maps (as alms),
         a is the component maps we want to solve for (as alms), and eta_1 and eta_2 are random
-        numbers drawn from N(0,1). Toggling `compsep.sample_amplitudes` switches between a full
-        constrained realization and just optimizing for MAP.
+        numbers drawn from N(0,1). The sampling group's `optimize` switches between a full
+        constrained realization (`optimize: false`, the default) and just optimizing for MAP.
         For numerical stability, we actually solve the equivalent
         (1 + S^{1/2} Y^T M^T Y^-1^T B^T N^-1 B Y^-1 M Y S^{1/2})[S^{-1/2} a]
             = S^{1/2} Y^T M^T {Y^{-1}}^T B^T N^{-1} d
             + S^{1/2}A^TN^{-1/2} eta_1 + S^{-1/2} mu + eta_2.
     """
-    def __init__(self, det_map: DetectorMap,
-                 params: Bunch, CompSep_comm: MPI.Comm):
-        
+    def __init__(self, det_map: DetectorMap, CompSep_comm: MPI.Comm,
+                 group: "CGSamplingGroupConfig", double_precision: bool,
+                 nthreads: int):
+        """
+        Args:
+            det_map: This rank's band data (the conditional residual for this sampling group).
+            CompSep_comm: The communicator of the ranks collaborating on this solve.
+            group: Validated solver settings for this CG sampling group.
+            double_precision: Whether maps and alms use double precision.
+            nthreads: Number of computational threads used on this rank.
+        """
         self.CompSep_comm = CompSep_comm
         self.my_rank = CompSep_comm.Get_rank()
         self.det_map = det_map
-        self.params = params
+        self.config = group
+        self.double_precision = double_precision
         self.my_band = Band.init_from_detector(det_map = det_map,
-                                   double_precision = params.general.CG_float_precision == "double")
+                                               double_precision = double_precision)
 
-        if params.general.CG_float_precision == "single":
+        if not double_precision:
             self.float_dtype = np.float32
             self.complex_dtype = np.complex64
         else:
@@ -65,15 +76,11 @@ class CompSepSolver:
         self.pol = det_map.pol
         self.spin = 2 if self.pol else 0
 
-        # num-threads is either an int, or a list of one value rank.
-        if isinstance(self.params.general.nthreads_compsep, int):
-            self.nthreads = self.params.general.nthreads_compsep
-        else:
-            self.nthreads = self.params.general.nthreads_compsep[self.CompSep_comm.Get_rank()]
+        self.nthreads = nthreads
 
-        # Whether to add the two fluctuation terms to the RHS, or just optimize for MAP.
-        self.sample_amplitudes = params.compsep.sample_amplitudes \
-            if "sample_amplitudes" in params.compsep else True
+        # Whether to add the two fluctuation terms to the RHS, or just optimize for MAP. Note the
+        # inverted polarity: `optimize: false` (the default) draws a constrained realization.
+        self.sample_amplitudes = not group.optimize
     
 
     def project_all_comps_to_band(self, comp_list_in: CompList,
@@ -209,8 +216,8 @@ class CompSepSolver:
             b_map += eta_1.astype(b_map.dtype, copy=False)
 
         # Y^T (N^-1 d + N^{-1/2} eta_1)
-        b_band = Band.init_from_detector(det_map = self.det_map,
-                              double_precision = self.params.general.CG_float_precision == "double")
+        b_band = Band.init_from_detector(det_map=self.det_map,
+                                         double_precision=self.double_precision)
         b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin,
                                    nthreads=self.nthreads)
         b_band.alms = b_alm.astype(b_band.alms.dtype, copy=False)
@@ -263,9 +270,9 @@ class CompSepSolver:
                                   rank, as a list of alm-vectors for each component.
         """
         if self.det_map.pol:
-            max_iter = self.params.general.CG_max_iter_pol
+            max_iter = self.config.max_iter_pol
         else:
-            max_iter = self.params.general.CG_max_iter
+            max_iter = self.config.max_iter
 
         checkpt_int = 10
         master = self.CompSep_comm.Get_rank() == 0
@@ -316,14 +323,14 @@ class CompSepSolver:
                 if master:
                     logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
                 stop_CG = True
-            if CG_solver.err < self.params.general.CG_err_tol:
+            if CG_solver.err < self.config.err_tol:
                 stop_CG = True
             stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
         self.CG_residuals = self.CG_residuals[:iter]
         if master:
             logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG finished after {iter} "\
                         f"iterations with a residual of {CG_solver.err:.3e} "\
-                        f"(err tol = {self.params.general.CG_err_tol})")
+                        f"(err tol = {self.config.err_tol})")
 
         complist_sol = CG_solver.x
         for comp in complist_sol:
@@ -352,12 +359,12 @@ class CompSepSolver:
         RHS = self.calc_RHS(comp_list)
 
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners",
-        # and has a name specified by self.params.compsep.preconditioner.
-        precond = getattr(preconditioners, self.params.compsep.preconditioner)(self, comp_list)
+        # and has the name specified by this sampling group's preconditioner setting.
+        precond = getattr(preconditioners, self.config.preconditioner)(self, comp_list)
 
         # For testing preconditioner with a true solution as reference,
         # first solving for exact solution with dense matrix math.
-        if self.params.compsep.dense_matrix_debug_mode:
+        if self.config.dense_matrix_debug_mode:
             M_A_matrix = lambda a : self.apply_LHS_matrix(precond(a))
 
             # Testing the initial LHS (A) matrix
@@ -381,6 +388,6 @@ class CompSepSolver:
             dense_matrix.print_matrix_diag()
 
         sol_list = self.solve_CG(self.apply_LHS_matrix, RHS, M=precond,
-                             x_true=x_true if self.params.compsep.dense_matrix_debug_mode else None)
+                             x_true=x_true if self.config.dense_matrix_debug_mode else None)
 
         return sol_list

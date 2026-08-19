@@ -7,6 +7,7 @@ from pixell.bunch import Bunch
 
 from commander4.output import log
 from commander4.output.log import logassert_np
+from commander4.param_schema import compsep_enabled, derive_task_counts, task_count_breakdown
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +45,11 @@ def init_mpi(params):
     world_comm = MPI.COMM_WORLD
     worldsize, worldrank = world_comm.Get_size(), world_comm.Get_rank()
     is_world_master = worldrank == 0
-    global_params = params.general
-    tot_num_CompSep_ranks = global_params.MPI_config.ntask_compsep_I\
-                          + global_params.MPI_config.ntask_compsep_QU
+    # The task counts are derived from the band configuration rather than stated in the parameter
+    # file: the TOD total is the sum of the per-band `num_tasks`, and CompSep takes one task per
+    # enabled band view (one for I, one for QU).
+    ntasks = derive_task_counts(params)
+    tot_num_CompSep_ranks = ntasks.compsep_I + ntasks.compsep_QU
     if is_world_master:
         mpi4py_version = tuple(map(int, mpi4py.__version__.split('.')))
         MPI_version = MPI.Get_version()
@@ -57,65 +60,62 @@ def init_mpi(params):
             logger.warning(f"mpi4py version ({mpi4py_version}) is below (4,0)!")
 
     if is_world_master:  # Every rank doesn't need to throw an error.
-        tot_num_Compsep_bands_I = 0
-        tot_num_Compsep_bands_QU = 0
-        bands = getattr(params, "CompSep_bands", [])  # Fallback to empty list if doesn't exist.
-        for band in bands:
-            if params.CompSep_bands[band].enabled and "I" in params.CompSep_bands[band].polarization:
-                tot_num_Compsep_bands_I += 1
-            if params.CompSep_bands[band].enabled and "QU" in params.CompSep_bands[band].polarization:
-                tot_num_Compsep_bands_QU += 1
-        tot_num_Compsep_bands = tot_num_Compsep_bands_I + tot_num_Compsep_bands_QU
-        if worldsize != (global_params.MPI_config.ntask_tod + tot_num_CompSep_ranks):
-            log.lograise(RuntimeError, f"Total number of MPI tasks ({worldsize}) must equal the sum "
-                                       f"of tasks for TOD ({global_params.MPI_config.ntask_tod}) + CompSep I + QU"
-                                       f"({global_params.MPI_config.ntask_compsep_I} + {global_params.MPI_config.ntask_compsep_QU}).", logger)
-        # With CompSep ranks allocated, there must be exactly one per enabled band view. With none
-        # allocated, CompSep is simply off (TOD-only) and any enabled CompSep_bands are ignored.
-        if tot_num_CompSep_ranks > 0 and tot_num_CompSep_ranks != tot_num_Compsep_bands:
-            log.lograise(RuntimeError, f"CompSep needs exactly as many MPI tasks "
-                                       f"({tot_num_CompSep_ranks}) as there are bands "
-                                       f"({tot_num_Compsep_bands}).", logger)
-        if tot_num_CompSep_ranks == 0 and tot_num_Compsep_bands > 0:
-            logger.info(f"No CompSep MPI ranks allocated; running TOD-only. The "
-                        f"{tot_num_Compsep_bands} enabled CompSep band view(s) are ignored, and TOD "
-                        f"ranks use the initial sky model built from the components.")
-        # Component separation is "on" iff CompSep ranks are allocated; enabled sampling groups
-        # (in either the CG or the MCMC tier) therefore require at least one CompSep rank to run on.
-        has_enabled_sampling_group = any(
-            "enabled" not in groups[group] or groups[group].enabled
-            for key in ("CG_sampling_groups_compsep", "MCMC_sampling_groups_compsep")
-            for groups in (params[key] if key in params else {},)
-            for group in groups)
+        if worldsize != ntasks.total:
+            log.lograise(RuntimeError, f"This run needs {task_count_breakdown(ntasks)} MPI tasks, "
+                         f"but was started with {worldsize}. The counts follow from the parameter "
+                         f"file (the per-band 'num_tasks' of every enabled band, and one CompSep "
+                         f"task per enabled 'compsep.bands' view); run with "
+                         f"'mpirun -n {ntasks.total}'.", logger)
+        # With CompSep disabled, CompSep is simply off (TOD-only) and compsep.bands is ignored.
+        if not compsep_enabled(params):
+            logger.warning("compsep.enabled is false; running TOD-only. Any 'compsep.bands' are "
+                        "ignored, and TOD ranks use the initial sky model built from the "
+                        "components.")
+        # Component separation is "on" iff CompSep ranks are allocated; any enabled method-specific
+        # sampling group therefore requires at least one CompSep rank to run on.
+        has_enabled_sampling_group = False
+        if "compsep" in params:
+            for key in ("cg_sampling_groups", "per_pixel_sampling_groups",
+                        "mcmc_sampling_groups"):
+                if key not in params.compsep:
+                    continue
+                groups = params.compsep[key]
+                for group_name in groups:
+                    group = groups[group_name]
+                    if "enabled" not in group or group.enabled:
+                        has_enabled_sampling_group = True
+                        break
+                if has_enabled_sampling_group:
+                    break
         if has_enabled_sampling_group and tot_num_CompSep_ranks == 0:
             log.lograise(RuntimeError, "Enabled compsep sampling groups are configured, but no "
-                         "CompSep MPI ranks are allocated (ntask_compsep_I = ntask_compsep_QU = 0).",
-                         logger)
+                         "CompSep MPI ranks are allocated (compsep.enabled is false, or no "
+                         "'compsep.bands' are enabled).", logger)
 
     # Split the world communicator into a communicator for compsep and one for TOD (with "color"
     # being the keyword for the split).
-    if worldrank < global_params.MPI_config.ntask_tod:
+    nthreads_compsep = params.resources.compsep.num_threads
+    if worldrank < ntasks.tod:
         color = 0
-        my_num_threads = global_params.nthreads_tod
-        my_num_threads_numba = global_params.nthreads_tod
+        my_num_threads = params.resources.tod.num_threads
+        my_num_threads_numba = my_num_threads
 
-    elif worldrank < global_params.MPI_config.ntask_tod + tot_num_CompSep_ranks:
+    elif worldrank < ntasks.tod + tot_num_CompSep_ranks:
         color = 1  # Compsep
-        # nthreads_compsep is either an int, or a list specifying nthreads for each rank.
-        if isinstance(global_params.nthreads_compsep, int):  # If int, all ranks have same nthreads.
-            my_num_threads = global_params.nthreads_compsep
+        # num_threads is either an int, or a list specifying nthreads for each rank.
+        if isinstance(nthreads_compsep, int):  # If int, all ranks have same nthreads.
+            my_num_threads = nthreads_compsep
         else:
-            logassert_np(len(global_params.nthreads_compsep) == tot_num_CompSep_ranks,
-                         f"Length of `nthreads_compsep` ({global_params.nthreads_compsep}) doesn't"\
+            logassert_np(len(nthreads_compsep) == tot_num_CompSep_ranks,
+                         f"Length of `resources.compsep.num_threads` ({nthreads_compsep}) doesn't"\
                          f"match number of compsep-ranks ({tot_num_CompSep_ranks}).", logger)
-            my_num_threads = global_params.nthreads_compsep[worldrank - global_params.MPI_config.ntask_tod]
+            my_num_threads = nthreads_compsep[worldrank - ntasks.tod]
         # Testing revealed 24 to be a good number (regardless of nside), but I tested this on the
         # new 384-core nodes, the optimal number is probably slightly lower on the older owls.
         my_num_threads_numba = min(24,my_num_threads)
     else:
-        raise ValueError("My rank ({worldrank}) exceeds the combined number of allocated tasks to"
-                         f"both TOD ({global_params.MPI_config.ntask_tod}) and compsep " \
-                         f"({tot_num_CompSep_ranks})")
+        raise ValueError(f"My rank ({worldrank}) exceeds the combined number of allocated tasks to"
+                         f"both TOD ({ntasks.tod}) and compsep ({tot_num_CompSep_ranks})")
 
     # It's important to set these environment variables before importing any package that might
     # use them, such as Numpy or Scipy, as they will not apply retroactively!
@@ -151,8 +151,8 @@ def init_mpi(params):
 
     # Determine the world ranks of the respective master tasks for compsep and TOD
     # We ensured that this works by the "key=worldrank" in the split command.
-    tod_master = 0 if global_params.MPI_config.ntask_tod > 0 else None
-    compsep_master = global_params.MPI_config.ntask_tod if tot_num_CompSep_ranks > 0 else None
+    tod_master = 0 if ntasks.tod > 0 else None
+    compsep_master = ntasks.tod if tot_num_CompSep_ranks > 0 else None
 
     world_comm.barrier()
     time.sleep(worldrank*1e-5)  # Small sleep to get prints in nice order.
@@ -189,7 +189,7 @@ def init_mpi(params):
         mpi_info['compsep']['is_master'] = mpi_info.compsep.rank == mpi_info.compsep.master
         
         #Split between I and QU
-        subcolor = 0 if proc_rank < global_params.MPI_config.ntask_compsep_I else 1
+        subcolor = 0 if proc_rank < ntasks.compsep_I else 1
         sub_comm = proc_comm.Split(subcolor, key=proc_rank)
         mpi_info['compsep']['subcomm'] = sub_comm
         mpi_info['compsep']['subcolor'] = subcolor
@@ -197,7 +197,7 @@ def init_mpi(params):
         mpi_info['compsep']['subrank'] = sub_comm.Get_rank()
         mpi_info['compsep']['I_master'] = 0  # in compsep_comm numbering
         mpi_info['compsep']['QU_master'] = mpi_info.compsep.size \
-            - global_params.MPI_config.ntask_compsep_QU   # in compsep_comm numbering
+            - ntasks.compsep_QU   # in compsep_comm numbering
         mpi_info['compsep']['is_I_master'] = subcolor == 0 and mpi_info.compsep.subrank == 0
         mpi_info['compsep']['is_QU_master'] = subcolor == 1 and mpi_info.compsep.subrank == 0
         mpi_info = init_mpi_compsep(mpi_info, params)
@@ -241,7 +241,7 @@ def init_mpi_tod(mpi_info, params):
             band = experiment.bands[band_name]
             if not band.enabled:
                 continue
-            this_band_TOD_ranks = np.arange(TOD_rank, TOD_rank + band.num_MPI_tasks)
+            this_band_TOD_ranks = np.arange(TOD_rank, TOD_rank + band.num_tasks)
             if MPIrank_tod in this_band_TOD_ranks:
                 # Splitting TOD ranks evenly among the detectors of this band.
                 TOD_ranks_per_detector = np.array_split(this_band_TOD_ranks, len(band.detectors))
@@ -258,7 +258,7 @@ def init_mpi_tod(mpi_info, params):
             else:
                 # Update detector counter for ranks not assigned to current band.
                 current_detector_id += len(band.detectors)
-            TOD_rank += band.num_MPI_tasks
+            TOD_rank += band.num_tasks
     if TOD_rank != MPIsize_tod:
         log.lograise(RuntimeError, f"Total number of ranks dedicated to the various experiments "
                      f"({TOD_rank}) differs from the total number of tasks dedicated to "
@@ -335,8 +335,8 @@ def init_mpi_compsep(mpi_info, params):
     ### Setting up info for each band, including where to get the data from ###
     ###(map from file, or receive from TOD processing) ###
     current_band_idx = 0
-    for band_str in params.CompSep_bands:
-        if params.CompSep_bands[band_str].enabled:
+    for band_str in params.compsep.bands:
+        if params.compsep.bands[band_str].enabled:
             current_band_idx += 1
     tot_num_bands = current_band_idx
     mpi_info['band'] = Bunch()

@@ -142,7 +142,7 @@ def plot_combo_maps(
     g0: float | None = None,
     fwhm_arcmin: float = np.nan,
 ) -> None:
-    out_folder = os.path.join(params.output_paths.plots, "combo_maps")
+    out_folder = os.path.join(params.plots_dir, "combo_maps")
     os.makedirs(out_folder, exist_ok=True)
 
     map_signal = _ensure_2d_map(map_signal)
@@ -365,7 +365,7 @@ def plot_data_maps(
     map_residual: np.ndarray | None = None,
     map_orbdipole: np.ndarray | None = None,
 ) -> None:
-    out_folder = os.path.join(params.output_paths.plots, "maps_data")
+    out_folder = os.path.join(params.plots_dir, "maps_data")
     os.makedirs(out_folder, exist_ok=True)
 
     maps = {
@@ -415,7 +415,7 @@ def plot_data_maps(
 
 
 def plot_cg_res(params: Bunch, chain: int, iteration: int, residual: np.ndarray) -> None:
-    out_folder = os.path.join(params.output_paths.plots, "CG_res")
+    out_folder = os.path.join(params.plots_dir, "CG_res")
     os.makedirs(out_folder, exist_ok=True)
     plt.figure()
     plt.loglog(np.arange(residual.shape[0]), residual)
@@ -437,9 +437,9 @@ def plot_components(
     nside: int,
     fwhm_arcmin: float = np.nan,
 ) -> None:
-    map_comp_out = os.path.join(params.output_paths.plots, "maps_comps")
-    dl_out = os.path.join(params.output_paths.plots, "spectra_comps_Dl")
-    cl_out = os.path.join(params.output_paths.plots, "spectra_comps_Cl")
+    map_comp_out = os.path.join(params.plots_dir, "maps_comps")
+    dl_out = os.path.join(params.plots_dir, "spectra_comps_Dl")
+    cl_out = os.path.join(params.plots_dir, "spectra_comps_Cl")
     os.makedirs(map_comp_out, exist_ok=True)
     os.makedirs(dl_out, exist_ok=True)
     os.makedirs(cl_out, exist_ok=True)

@@ -43,11 +43,11 @@ class ColorFormatter(C4Formatter):
     _COLORS = {
         logging.DEBUG:    '\033[2m',    # Dim / faint
         VERBOSE:          '\033[90m',   # Dark gray (bright-black)
-        logging.INFO:     '',           # Default – no color code
-        QUIET:            '',           # Default – no color code
-        logging.WARNING:  '\033[33m',   # Yellow
-        logging.ERROR:    '\033[31m',   # Red
-        logging.CRITICAL: '\033[1;31m', # Bold red
+        logging.INFO:     '',           # Default, no color code
+        QUIET:            '\033[1m',    # Default + bold
+        logging.WARNING:  '\033[1;33m', # Yellow + bold
+        logging.ERROR:    '\033[1;31m', # Red + bold
+        logging.CRITICAL: '\033[1;31m', # Red + bold
     }
 
     def format(self, record: logging.LogRecord) -> str:
@@ -56,7 +56,7 @@ class ColorFormatter(C4Formatter):
         return f'{color}{message}{self._RESET}' if color else message
 
 
-def init_loggers(logger_params): 
+def init_loggers(logger_params, log_file_path: str | None = None):
     """
     Intended usage: This function is called once at the very beginning of the
     program; after that, any function can call
@@ -70,8 +70,11 @@ def init_loggers(logger_params):
             the two entry names supported are
                 console: Needs a 'level' entry which can be one of the five
                     logging levels (in lower or upper case)
-                file: Needs a 'level' parameter like console, as well as a
-                    'filename' entry, giving the output file name.
+                file: Needs a 'level' parameter like console.
+        log_file_path (str): Where the file logger writes. The caller resolves it
+            (see output.paths.log_file_path, which places the configured bare file
+            name inside the run's logs directory), because the directory has to
+            exist before the file handler here opens it.
     """
 
     # --- ADDITIONAL VERBOSITY LAYERS ---
@@ -140,11 +143,13 @@ def init_loggers(logger_params):
         config_dict['loggers'][None]['handlers'].append('console')
 
     if 'file' in logger_params:
+        if log_file_path is None:
+            raise ValueError("A 'file' logger is configured but no log_file_path was given.")
         config_dict['handlers']['file'] = {
             'class': 'logging.FileHandler',
             'formatter': 'standard',
             'level': logger_params.file.level.upper(),
-            'filename': logger_params.file.filename,
+            'filename': log_file_path,
             'mode': 'a'
         }
         # Attach handler to root

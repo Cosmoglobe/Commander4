@@ -3,7 +3,7 @@
 Covers two new pieces introduced when the three gain-sampling procedures became nested
 parameter-file blocks with a per-term ``calibrate_against`` target:
 
-* ``_resolve_calib_target`` - resolves a gain term's calibrator, with a per-band override
+* the calibrator each gain term uses, with a per-band override (via `resolve_param`)
   taking precedence over the general-block value, which falls back to the term default.
 * ``TODView.get_calib_tod`` - builds the calibration residual for one gain term against a
   chosen calibrator signal, replacing the former per-term ``get_*_calib_tod`` methods.
@@ -16,20 +16,20 @@ import pytest
 from pixell.bunch import Bunch
 
 from commander4.data_models.tod_view import TODView
-from commander4.tod_processing import (_resolve_calib_target, _DEFAULT_CALIB_TARGETS,
-                                       _VALID_CALIB_TARGETS, _solve_relative_gain_system,
-                                       _resolve_gain_downsample_factor)
+from commander4.tod_processing import GainConfig, _VALID_CALIB_TARGETS, _solve_relative_gain_system
 
 
 # --------------------------------------------------------------------------------------
-# _resolve_calib_target
+# The calibrator a gain term ends up using
 # --------------------------------------------------------------------------------------
-def _make_params(general_blocks: dict, band_blocks: dict) -> Bunch:
-    """Build a params Bunch with the given general and per-band gain blocks."""
+def _make_params(global_blocks: dict, band_blocks: dict) -> Bunch:
+    """Build a params Bunch with the given tod_processing and per-band gain blocks."""
     return Bunch(
-        general=Bunch(**{name: Bunch(**vals) for name, vals in general_blocks.items()}),
+        tod_processing=Bunch(**{name: Bunch(**vals) if isinstance(vals, dict) else vals
+                                for name, vals in global_blocks.items()}),
         experiments=Bunch(EXP=Bunch(bands=Bunch(
             BAND=Bunch(**{name: Bunch(**vals) for name, vals in band_blocks.items()})))),
+        compsep=Bunch(common_res_fwhm=0.0),
     )
 
 
@@ -37,38 +37,89 @@ def _exp_data(band="BAND"):
     return SimpleNamespace(experiment_name="EXP", band_name=band)
 
 
-def test_defaults_when_calibrate_against_absent():
-    # No calibrate_against anywhere -> each term falls back to its documented default.
-    params = _make_params({"abs_gain": {}, "rel_gain": {}, "temporal_gain": {}}, {})
-    for block, default in _DEFAULT_CALIB_TARGETS.items():
-        assert _resolve_calib_target(params, _exp_data(), block) == default
-    assert _DEFAULT_CALIB_TARGETS["abs_gain"] == "orbital_dipole"
-    assert _DEFAULT_CALIB_TARGETS["rel_gain"] == "full_sky"
+def _inputs(band_blocks, passed="sky", gain_block="abs_gain", downsample_time=1.0,
+            gap_fill="wn", fsamp=200.0, nu=100.0, is_master=True):
+    """Resolve one step's calibrator, gap filling, and downsampling."""
+    global_blocks = {
+        gain_block: {
+            "enabled": True,
+            "calibrate_against": passed,
+            "gap_fill_method": gap_fill,
+            "downsample_time": downsample_time,
+        },
+    }
+    params = _make_params(global_blocks, band_blocks)
+    experiment = SimpleNamespace(experiment_name="EXP", band_name="BAND", fsamp=fsamp, nu=nu)
+    default = "orbital_dipole" if gain_block == "abs_gain" else "sky"
+    config = GainConfig.from_params(
+        params, experiment, gain_block, default, iteration=1, is_master=is_master,
+    )
+    return config.calibrate_against, config.downsample_factor, config.gap_fill_method
 
 
-def test_general_block_value_used():
-    params = _make_params({"abs_gain": {"calibrate_against": "full_sky"}}, {})
-    assert _resolve_calib_target(params, _exp_data(), "abs_gain") == "full_sky"
+def test_the_passed_in_calibrator_is_used_when_the_band_does_not_override():
+    assert _inputs({})[0] == "sky"
+    # A per-band block for a *different* gain term must not be picked up.
+    assert _inputs({"rel_gain": {"calibrate_against": "orbital_dipole"}})[0] == "sky"
 
 
-def test_band_override_beats_general_and_default():
-    # General says full_sky, band overrides to sky -> band wins.
-    params = _make_params({"abs_gain": {"calibrate_against": "full_sky"}},
-                          {"abs_gain": {"calibrate_against": "sky"}})
-    assert _resolve_calib_target(params, _exp_data(), "abs_gain") == "sky"
-    # A band with no override block falls back to the general value.
-    params2 = _make_params({"abs_gain": {"calibrate_against": "full_sky"}}, {})
-    assert _resolve_calib_target(params2, _exp_data(), "abs_gain") == "full_sky"
+def test_band_override_beats_the_passed_in_calibrator():
+    assert _inputs({"abs_gain": {"calibrate_against": "sky_no_dipole"}})[0] == "sky_no_dipole"
+    assert _inputs({"rel_gain": {"calibrate_against": "orbital_dipole"}},
+                   gain_block="rel_gain")[0] == "orbital_dipole"
 
 
 def test_invalid_target_raises():
-    params = _make_params({"abs_gain": {"calibrate_against": "bogus"}}, {})
     with pytest.raises(ValueError):
-        _resolve_calib_target(params, _exp_data(), "abs_gain")
+        _inputs({}, passed="bogus")
+    # ... including when it arrives via the per-band override.
+    with pytest.raises(ValueError):
+        _inputs({"abs_gain": {"calibrate_against": "bogus"}})
+
+
+def test_an_invalid_gap_fill_method_raises():
+    assert _inputs({}, gap_fill="full_cg")[2] == "full_cg"
+    with pytest.raises(ValueError):
+        _inputs({}, gap_fill="bogus")
+
+
+def test_orbital_dipole_calibration_warns_at_high_frequency(caplog):
+    """The dipole is a blackbody signal: in the sub-mm it is faint next to dust, so calibrating a
+    545 GHz channel on it is a configuration mistake worth flagging."""
+    with caplog.at_level("WARNING", logger="commander4.tod_processing"):
+        assert _inputs({}, passed="orbital_dipole", nu=545.0)[0] == "orbital_dipole"
+    assert "orbital dipole" in caplog.text and "545" in caplog.text
+    # Not at the frequencies where the dipole is the standard absolute calibrator ...
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="commander4.tod_processing"):
+        _inputs({}, passed="orbital_dipole", nu=100.0)
+        _inputs({}, passed="orbital_dipole", nu=353.0)
+        _inputs({}, passed="sky", nu=857.0)           # ... nor for the other calibrators,
+        _inputs({}, passed="orbital_dipole", nu=545.0, is_master=False)   # ... nor off-master.
+    assert caplog.text == ""
+
+
+def test_the_warning_follows_the_per_band_override(caplog):
+    """A band that overrides to the dipole must warn; one that overrides away from it must not."""
+    with caplog.at_level("WARNING", logger="commander4.tod_processing"):
+        _inputs({"abs_gain": {"calibrate_against": "orbital_dipole"}}, passed="sky", nu=545.0)
+    assert "orbital dipole" in caplog.text
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="commander4.tod_processing"):
+        _inputs({"abs_gain": {"calibrate_against": "sky"}}, passed="orbital_dipole", nu=545.0)
+    assert caplog.text == ""
+
+
+def test_the_downsample_factor_is_seconds_times_the_sampling_rate():
+    assert _inputs({}, downsample_time=1.0, fsamp=200.0)[1] == 200
+    assert _inputs({}, downsample_time=0.25, fsamp=200.0)[1] == 50
+    assert _inputs({}, downsample_time=0.0)[1] == 1      # 0 disables downsampling.
+    assert _inputs({}, downsample_time=0.001)[1] == 1    # clamped to at least 1.
+    assert _inputs({}, downsample_time=1.0, fsamp=32.51)[1] == 33
 
 
 def test_valid_targets_contents():
-    assert set(_VALID_CALIB_TARGETS) == {"orbital_dipole", "full_sky", "sky"}
+    assert set(_VALID_CALIB_TARGETS) == {"orbital_dipole", "sky", "sky_no_dipole"}
 
 
 # --------------------------------------------------------------------------------------
@@ -110,17 +161,17 @@ ALL = ("abs", "rel", "temp")
     # Absolute gain on the orbital dipole: sky removed entirely, dipole keeps the abs term.
     ("abs", "orbital_dipole",
      (("sky", ALL), ("orbital_dipole", ("rel", "temp"))), "orb"),
-    # Absolute gain on the full sky (clean target-gain-preserving form): both signals keep abs.
-    ("abs", "full_sky",
+    # Absolute gain on the whole sky (clean target-gain-preserving form): both signals keep abs.
+    ("abs", "sky",
      (("sky", ("rel", "temp")), ("orbital_dipole", ("rel", "temp"))), "sky+orb"),
-    # Relative gain on the full sky: both signals keep the rel term.
-    ("rel", "full_sky",
+    # Relative gain on the whole sky: both signals keep the rel term.
+    ("rel", "sky",
      (("sky", ("abs", "temp")), ("orbital_dipole", ("abs", "temp"))), "sky+orb"),
-    # Temporal gain on the full sky: both signals keep the temp term.
-    ("temp", "full_sky",
+    # Temporal gain on the whole sky: both signals keep the temp term.
+    ("temp", "sky",
      (("sky", ("abs", "rel")), ("orbital_dipole", ("abs", "rel"))), "sky+orb"),
     # Absolute gain on the static sky only: dipole removed entirely, sky keeps abs.
-    ("abs", "sky",
+    ("abs", "sky_no_dipole",
      (("sky", ("rel", "temp")), ("orbital_dipole", ALL)), "sky"),
 ])
 def test_get_calib_tod_builds_residual(target, calib, expected_subtract, scal):
@@ -135,7 +186,7 @@ def test_get_calib_tod_builds_residual(target, calib, expected_subtract, scal):
 def test_get_calib_tod_rejects_bad_arguments():
     view = _make_stub()
     with pytest.raises(ValueError):
-        view.get_calib_tod("bogus", "full_sky")
+        view.get_calib_tod("bogus", "sky")
     with pytest.raises(ValueError):
         view.get_calib_tod("abs", "bogus")
 
@@ -189,7 +240,7 @@ def test_gain_gap_fill_methods_replace_masked_samples():
         assert np.array_equal(filled[mask], resid[mask])         # valid samples untouched
         assert np.all(np.isfinite(filled))
         assert not np.allclose(filled[gap], 0.0)                 # gaps were filled
-        # Masked fill is centered on the target gain x calibrator (= 2.0), the noise being zero-mean.
+        # Masked fill is centered on target gain x calibrator (= 2.0); the noise is zero-mean.
         assert filled[gap].mean() == pytest.approx(2.0, abs=0.4)
         if method != "wn":
             assert method in view._gap_noise   # the shared realization was cached
@@ -276,16 +327,7 @@ def test_relgain_deterministic_with_seeded_rng():
 
 
 # --------------------------------------------------------------------------------------
-# _resolve_gain_downsample_factor (general.gain_calib_downsample_time, in seconds)
-# --------------------------------------------------------------------------------------
-def test_gain_downsample_factor_from_time():
-    make = lambda t: Bunch(general=Bunch(gain_calib_downsample_time=t))
-    exp = SimpleNamespace(fsamp=200.0)
-    assert _resolve_gain_downsample_factor(make(1.0), exp) == 200
-    assert _resolve_gain_downsample_factor(make(0.25), exp) == 50
-    assert _resolve_gain_downsample_factor(make(0.0), exp) == 1     # 0 disables downsampling.
-    assert _resolve_gain_downsample_factor(make(0.001), exp) == 1   # Clamped to at least 1.
-    assert _resolve_gain_downsample_factor(make(1.0), SimpleNamespace(fsamp=32.51)) == 33
+# GainConfig converts each step's downsample_time into a sampling-rate-specific factor.
 
 
 # --------------------------------------------------------------------------------------
@@ -358,7 +400,7 @@ def test_get_calib_tod_downsampled_end_to_end(monkeypatch):
     # with every term block-averaged with the same kernel.
     make_view, det, s_full = _make_real_view(monkeypatch)
     orb_full = make_view(1).get_orbital_dipole_tod()
-    out = make_view(FACTOR).get_calib_tod("abs", "sky", fill_masked=False)
+    out = make_view(FACTOR).get_calib_tod("abs", "sky_no_dipole", fill_masked=False)
     np.testing.assert_allclose(out.s_cal, _block_mean(s_full), rtol=2e-5, atol=1e-6)
     expected = _block_mean(det.tod) - 0.75*_block_mean(s_full) - 2.75*_block_mean(orb_full)
     np.testing.assert_allclose(out.tod, expected, rtol=2e-5, atol=1e-6)

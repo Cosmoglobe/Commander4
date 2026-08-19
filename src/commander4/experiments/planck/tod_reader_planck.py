@@ -45,7 +45,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
     else:
         bad_PIDs = np.array([])
 
-    Fourier_times = np.load(my_experiment.Fourier_times_path)
+    Fourier_times = np.load(my_experiment.fourier_times_path)
 
     scan_list = []
     nscans = scan_idx_stop - scan_idx_start

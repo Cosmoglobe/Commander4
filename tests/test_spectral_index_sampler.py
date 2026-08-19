@@ -57,6 +57,12 @@ class FakeDetectorMap:
         return self._map_rms.copy()
 
     @property
+    def inv_n_map(self):
+        # The real DetectorMap stores inv_n_map and derives map_rms from it; local_loglike whitens
+        # with sqrt(inv_n_map) so that zero-weight pixels do not become a division by infinity.
+        return 1.0/self._map_rms**2
+
+    @property
     def pol(self):
         return self.map_sky.shape[0] == 2
 
@@ -86,23 +92,36 @@ pixell_module = types.ModuleType("pixell")
 bunch_module = types.ModuleType("pixell.bunch")
 bunch_module.Bunch = AttrBunch
 pixell_module.bunch = bunch_module
-sys.modules["pixell"] = pixell_module
-sys.modules["pixell.bunch"] = bunch_module
 
 component_module = types.ModuleType("commander4.sky_models.component")
 component_module.Component = StubComponent
 component_module.CompList = FakeCompList
-sys.modules["commander4.sky_models.component"] = component_module
 
 detector_map_module = types.ModuleType("commander4.data_models.detector_map")
 detector_map_module.DetectorMap = FakeDetectorMap
-sys.modules["commander4.data_models.detector_map"] = detector_map_module
 
 sky_model_module = types.ModuleType("commander4.sky_models.sky_model")
 sky_model_module.SkyModel = FakeSkyModel
-sys.modules["commander4.sky_models.sky_model"] = sky_model_module
 
-spectral_index_sampler = importlib.import_module("commander4.solvers.spectral_index_sampler")
+# The sampler is imported against these lightweight stubs so this test does not need the compiled
+# extensions the real component/map classes pull in. The stubs are installed only for the duration
+# of that one import -- the sampler binds what it needs with `from ... import ...` at its own module
+# top -- and sys.modules is restored afterwards. Leaving them installed would poison every test
+# module collected after this one, and any runtime (in-function) import of the real classes.
+_stubs = {"pixell": pixell_module, "pixell.bunch": bunch_module,
+          "commander4.sky_models.component": component_module,
+          "commander4.sky_models.sky_model": sky_model_module,
+          "commander4.data_models.detector_map": detector_map_module}
+_saved = {name: sys.modules.get(name) for name in _stubs}
+sys.modules.update(_stubs)
+try:
+    spectral_index_sampler = importlib.import_module("commander4.solvers.spectral_index_sampler")
+finally:
+    for name, module in _saved.items():
+        if module is None:
+            del sys.modules[name]
+        else:
+            sys.modules[name] = module
 
 
 class FakeComponent:

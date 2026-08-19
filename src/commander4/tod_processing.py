@@ -5,15 +5,19 @@ from mpi4py import MPI
 import logging
 from scipy.fft import rfftfreq
 import time
+from dataclasses import dataclass, field, fields
+from typing import ClassVar, Self
 from numpy.typing import NDArray
+from contextlib import contextmanager
 
 from pixell.bunch import Bunch
 
+from commander4.param_schema import resolve_param
 from commander4.output.log import logassert
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_TOD import DetGroupTOD
 from commander4.data_models.TOD_samples import TODSamples
-from commander4.data_selection import masked_chisq_z, build_dataselect_cfg, log_dataselect_summary
+from commander4.data_selection import masked_chisq_z, log_dataselect_summary
 from commander4.data_models.jump_corrections import JumpCorrection
 from commander4.data_models.tod_view import TODView
 from commander4.utils.mapmaker import MapmakerIQU, WeightsMapmakerIQU, WeightsMapmaker, Mapmaker
@@ -31,17 +35,6 @@ from commander4.logging.performance_logger import benchmark, bench_summary, star
                                             stop_bench, log_memory, increment_count, bench_reset
 
 logger = logging.getLogger(__name__)
-
-
-def _read_sparse_maps_flag(params: Bunch, experiment_data: DetGroupTOD) -> bool:
-    """Whether sparse (per-rank local-pixel) map storage is enabled for this experiment.
-
-    ``sparse_maps`` is an experiment-level option: when set, each rank's map buffers *and* its slice
-    of the sky model hold only the pixels its scans observe, rather than a full sky map (the band
-    master still assembles full-sky maps). Defaults to the historical full-sky-per-rank layout.
-    """
-    exp_cfg = params.experiments[experiment_data.experiment_name]
-    return bool(exp_cfg["sparse_maps"]) if "sparse_maps" in exp_cfg else False
 
 
 def called_on_non_master(arr):
@@ -123,8 +116,10 @@ def _record_tod_diagnostics(tod_samples: TODSamples, iscan: int, idet: int, view
 
 
 def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output: NDArray,
-            tod_samples: TODSamples, params: Bunch, chain: int, iter: int,
-            ncorr_cfg: Bunch, dataselect_cfg: Bunch) -> dict[str, DetectorMap]:
+               tod_samples: TODSamples, iteration: int,
+               mapmaking: "MapmakingConfig", correlated_noise: "CorrelatedNoiseConfig",
+               data_selection: "DataSelectionConfig",
+               ) -> tuple[dict[str, DetectorMap], dict[str, NDArray]]:
     """ Commander4 CG mapmaking. All ranks on the provided MPI communicator collaborates on creating
         the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
     Args:
@@ -133,20 +128,17 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
         experiment_data (DetGroupTOD): TOD data class to be made into maps.
         compsep_output (NDArray): The sky model at our band. Not used, but written to chain file.
         tod_samples (TODSamples): Sampled TOD parameters, such as gain.
-        params (Bunch): Parameter file as 'Param' object.
-        chain (int): Current chain number.
-        iter (int): Current Gibbs iteration.
-        ncorr_cfg (Bunch): Correlated-noise sampling config (do_ncorr, do_param, cg_err_tol,
-            cg_max_iter).
-        dataselect_cfg (Bunch): Data-selection config (active, chisq_abs_threshold,
-            min_good_fraction); the cuts are applied as per-scan vetoes inside the scan loop here
-            (see data_selection.py).
+        iteration: Current Gibbs iteration.
+        mapmaking: Validated mapmaking settings.
+        correlated_noise: Validated correlated-noise settings.
+        data_selection: Validated detector-scan selection settings.
     Output:
-        dict[str, DetectorMap]: Dictionary containing the solved detector maps, keyed by
-            polarization component ('I', 'QU').
+        Detector maps for component separation and maps selected for chain output.
 
     """
     ismaster = band_comm.Get_rank() == 0
+    corr_noise_active = correlated_noise.is_active(iteration)
+    selection_active = data_selection.cuts_are_active(iteration, correlated_noise)
     ### CG MAPMAKER ###
     # Single fused scan loop (mirrors Commander3's process_TOD): each detector-scan samples
     # correlated noise / sigma0 *first*, then every sigma0-dependent quantity -- inverse-variance
@@ -158,8 +150,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
     # Optional per-experiment sparse map storage: each rank holds only its locally-observed pixels
     # rather than a full sky map. The band master still ends up with full-sky maps.
-    sparse_maps = _read_sparse_maps_flag(params, experiment_data)
-    domain = experiment_data.get_pixel_domain(scan_view, band_comm, sparse_maps)
+    domain = experiment_data.get_pixel_domain(scan_view, band_comm, mapmaking.sparse_maps)
     # The inverse-variance map (preconditioner + rms/cov) is accumulated inside the fused loop below,
     # so it -- and thus cg_mapmaker.M -- can only be finalized afterwards. cg_mapmaker is constructed
     # here with a placeholder preconditioner; M is unused until solve() and accum_to_RHS never reads
@@ -167,13 +158,13 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     if pols == "IQU":
         mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
         cg_mapmaker = CGMapmakerIQU(experiment_data, tod_samples, band_comm,
-                    preconditioner=called_on_non_master, nthreads=params.general.nthreads_tod,
-                    CG_maxiter=params.general.CG_mapmaker.maxiter, pixel_domain=domain)
+                    preconditioner=called_on_non_master, nthreads=mapmaking.num_threads,
+                    CG_maxiter=mapmaking.cg.max_iter, pixel_domain=domain)
     elif pols == "I":
         mapmaker_invvar = WeightsMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
         cg_mapmaker = CGMapmakerI(experiment_data, tod_samples, band_comm,
-                    preconditioner=called_on_non_master, nthreads=params.general.nthreads_tod,
-                    CG_maxiter=params.general.CG_mapmaker.maxiter, pixel_domain=domain)
+                    preconditioner=called_on_non_master, nthreads=mapmaking.num_threads,
+                    CG_maxiter=mapmaking.cg.max_iter, pixel_domain=domain)
     else:
         raise ValueError(f"specified polarizations {pols} is notsupported yet.")
 
@@ -181,7 +172,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     # mapmaker = BinMapmaker(band_comm, experiment_data.nside)
     mapmaker_orbdipole = BinMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
 
-    if ncorr_cfg.do_ncorr:
+    if corr_noise_active:
         mapmaker_ncorr = BinMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
         sampled_params = []
         residuals = []
@@ -203,13 +194,13 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
         ### DATA-SELECTION VETO 1 (too little unflagged data).
         good_frac = good_data_mask.mean()
         tod_samples.good_fraction[view.iscan, view.idet] = good_frac
-        if dataselect_cfg.active and good_frac < dataselect_cfg.min_good_fraction:
+        if selection_active and good_frac < data_selection.min_good_fraction:
             tod_samples.accept[view.iscan, view.idet] = False
             continue
 
         ### CORRELATED NOISE / SIGMA0 SAMPLING (first, so the weights below use the new sigma0) ###
         n_corr_est = None
-        if ncorr_cfg.do_ncorr:
+        if corr_noise_active:
             sky_subtracted_TOD = view.get_tod(
                 subtract=(("sky", TODView._ALL_GAIN_TERMS),
                           ("orbital_dipole", TODView._ALL_GAIN_TERMS)),
@@ -217,16 +208,20 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
             res = sample_correlated_noise(
                 sky_subtracted_TOD, view.get_mask(proc_mask_type="ncorr"),
                 np.array(view.noise_params, copy=True),
-                experiment_data.noise_model, view.fsamp, cg_err_tol=ncorr_cfg.cg_err_tol,
-                cg_max_iter=ncorr_cfg.cg_max_iter, sample_params=ncorr_cfg.do_param,
-                sample_sigma0=ncorr_cfg.sample_sigma0, sigma0_method=ncorr_cfg.sigma0_method,
-                nomono=ncorr_cfg.nomono,
-                onlymono=ncorr_cfg.onlymono,
-                sigma0_dec=ncorr_cfg.sigma0_dec, psd_fit_nu_min=ncorr_cfg.psd_fit_nu_min,
-                psd_fit_nu_max=ncorr_cfg.psd_fit_nu_max, psd_bin=ncorr_cfg.psd_bin)
+                experiment_data.noise_model, view.fsamp, cg_err_tol=correlated_noise.cg.err_tol,
+                cg_max_iter=correlated_noise.cg.max_iter,
+                sample_params=correlated_noise.sample_psd_params,
+                sample_sigma0=correlated_noise.sample_sigma0,
+                sigma0_method=correlated_noise.sigma0_method,
+                nomono=correlated_noise.nomono,
+                onlymono=correlated_noise.onlymono,
+                sigma0_dec=correlated_noise.sigma0_decimation,
+                psd_fit_nu_min=correlated_noise.psd_fit_nu_min,
+                psd_fit_nu_max=correlated_noise.psd_fit_nu_max,
+                psd_bin=correlated_noise.psd_bin)
             n_corr_est = res.n_corr
             tod_samples.noise_params[view.iscan, view.idet, :] = res.noise_params
-            if ncorr_cfg.do_param:
+            if correlated_noise.sample_psd_params:
                 sampled_params.append(np.array(res.noise_params, copy=True))
             if not res.converged:
                 num_failed_convergences_ncorr += 1
@@ -235,11 +230,11 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
             worst_residual_ncorr = max(worst_residual_ncorr, res.residual)
             residuals.append(res.residual)
             niters.append(res.niter)
-        elif ncorr_cfg.sample_sigma0:
+        elif correlated_noise.sample_sigma0:
             # No correlated noise this iteration: estimate sigma0 here, at the same point in the
             # chain (after gain) as the n_corr-coupled estimate, instead of a separate pre-gain pass.
             tod_samples.noise_params[view.iscan, view.idet, 0] = _estimate_standalone_sigma0(
-                view, ncorr_cfg.sigma0_method)
+                view, correlated_noise.sigma0_method)
 
         # Diagnostics (incl. chisq_z) before any accumulation, so a veto below leaves this
         # detector-scan out of every map product (the CG operator passes re-read `accept`).
@@ -247,9 +242,9 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
 
         ### DATA-SELECTION VETO 2 (catastrophic chi^2), applied in-loop so this iteration's maps
         ### already exclude the scan.
-        if dataselect_cfg.active:
+        if selection_active:
             z = tod_samples.chisq_z[view.iscan, view.idet]
-            if not (np.isfinite(z) and abs(z) <= dataselect_cfg.chisq_abs_threshold):
+            if not (np.isfinite(z) and abs(z) <= data_selection.chisq_abs_threshold):
                 tod_samples.accept[view.iscan, view.idet] = False
                 continue
 
@@ -273,7 +268,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
             mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
 
         ### CORRELATED-NOISE MAP ###
-        if ncorr_cfg.do_ncorr:
+        if corr_noise_active:
             if pols == "IQU":
                 mapmaker_ncorr.accumulate_to_map(
                     (n_corr_est/gain).astype(np.float32, copy=False),
@@ -301,7 +296,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
                     )
 
     ### PRINT NOISE SAMPLING STATS ###
-    if ncorr_cfg.do_ncorr:
+    if corr_noise_active:
         log_corr_noise_stats(band_comm, experiment_data.nu, experiment_data.noise_model,
                              sampled_params, residuals, niters, num_failed_convergences_ncorr,
                              num_too_high_var_ncorr, worst_residual_ncorr,
@@ -339,19 +334,19 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
     cg_mapmaker.solve()
     map_signal = cg_mapmaker.solved_map
 
-    if ncorr_cfg.do_ncorr:
+    if corr_noise_active:
         mapmaker_ncorr.gather_map()
         mapmaker_ncorr.normalize_map(map_cov)
         map_corrnoise = mapmaker_ncorr.final_map
 
     ### FINAL CLEANUP ON MASTER RANK ###
     detmap_dict_out = {}
+    maps_to_file = {}
     if band_comm.Get_rank() == 0:
         #Here we split here between I and QU
-        # Smooth maps to the common analysis resolution after mapmaking (single switch:
-        # general.common_res_fwhm; a missing or falsy value leaves bands at their native beam).
-        common_res_fwhm = (float(params.general.common_res_fwhm)
-                           if "common_res_fwhm" in params.general else 0.0)
+        # Smooth maps to the common analysis resolution after mapmaking; 0 leaves bands at their
+        # native beam.
+        common_res_fwhm = mapmaking.common_res_fwhm
         if "I" in pols:
             detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
                                 experiment_data.fwhm, experiment_data.nside)
@@ -367,26 +362,23 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output
                 detmap_QU.smooth_to_resolution(common_res_fwhm)
             detmap_dict_out.update({"QU": detmap_QU})
 
-        maps_to_file = {}
         maps_to_file["map_observed_sky"] = map_signal
         maps_to_file["map_rms"] = map_rms
-        if params.general.write_orb_dipole_maps_to_chain:
+        if mapmaking.include_orbital_dipole_maps:
             maps_to_file["map_orbdipole"] = map_orbdipole
-        if params.general.write_corr_noise_maps_to_chain and ncorr_cfg.do_ncorr:
+        if mapmaking.include_corr_noise_maps and corr_noise_active:
             maps_to_file["map_corrnoise"] = map_corrnoise
-        if params.general.write_sky_model_maps_to_chain:
+        if mapmaking.include_sky_model_maps:
             maps_to_file["map_skymodel"] = compsep_output
 
-        write_map_chain_to_file(params, chain, iter, experiment_data.experiment_name,
-                                experiment_data.band_name, maps_to_file,
-                                tod_samples.band_unit_factor, tod_samples.band_unit)
-
-    return detmap_dict_out #empty on non-master ranks
+    return detmap_dict_out, maps_to_file
 
 
 def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_output: NDArray,
-            tod_samples: TODSamples, params: Bunch, chain: int, iter: int,
-            ncorr_cfg: Bunch, dataselect_cfg: Bunch) -> dict[str, DetectorMap]:
+                tod_samples: TODSamples, iteration: int,
+                mapmaking: "MapmakingConfig", correlated_noise: "CorrelatedNoiseConfig",
+                data_selection: "DataSelectionConfig",
+                ) -> tuple[dict[str, DetectorMap], dict[str, NDArray]]:
     """ Commander4 bin mapmaking. All ranks on the provided MPI communicator collaborates on creating
         the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
     Args:
@@ -395,31 +387,28 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
         experiment_data (DetGroupTOD): TOD data class to be made into maps.
         compsep_output (NDArray): The sky model at our band. Not used, but written to chain file.
         tod_samples (TODSamples): Sampled TOD parameters, such as gain.
-        params (Bunch): Parameter file as 'Param' object.
-        chain (int): Current chain number.
-        iter (int): Current Gibbs iteration.
-        ncorr_cfg (Bunch): Correlated-noise sampling config (do_ncorr, do_param, cg_err_tol,
-            cg_max_iter).
-        dataselect_cfg (Bunch): Data-selection config the cuts are applied as per-scan vetoes
-            inside the scan loop here (see data_selection.py).
+        iteration: Current Gibbs iteration.
+        mapmaking: Validated mapmaking settings.
+        correlated_noise: Validated correlated-noise settings.
+        data_selection: Validated detector-scan selection settings.
     Output:
-        dict[str, DetectorMap]: Dictionary containing the solved detector maps, keyed by
-            polarization component ('I', 'QU').
+        Detector maps for component separation and maps selected for chain output.
 
     """
     start_bench("binned-mapmaker")
+    corr_noise_active = correlated_noise.is_active(iteration)
+    selection_active = data_selection.cuts_are_active(iteration, correlated_noise)
     pols = experiment_data.pols
     scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
     # Optional per-experiment sparse map storage: each rank holds only its locally-observed pixels
     # rather than a full sky map. The band master still ends up with full-sky maps.
-    sparse_maps = _read_sparse_maps_flag(params, experiment_data)
-    domain = experiment_data.get_pixel_domain(scan_view, band_comm, sparse_maps)
+    domain = experiment_data.get_pixel_domain(scan_view, band_comm, mapmaking.sparse_maps)
 
     # Set up various mapmakers.
     mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
     mapmaker = MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
     mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
-    if ncorr_cfg.do_ncorr:
+    if corr_noise_active:
         mapmaker_ncorr = MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
         sampled_params = []
         residuals = []
@@ -443,13 +432,13 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
         ### DATA-SELECTION VETO 1 (too little unflagged data).
         good_frac = good_data_mask.mean()
         tod_samples.good_fraction[view.iscan, view.idet] = good_frac
-        if dataselect_cfg.active and good_frac < dataselect_cfg.min_good_fraction:
+        if selection_active and good_frac < data_selection.min_good_fraction:
             tod_samples.accept[view.iscan, view.idet] = False
             continue
 
         ### CORRELATED NOISE / SIGMA0 SAMPLING (first, so the weights below use the new sigma0) ###
         n_corr_est = None
-        if ncorr_cfg.do_ncorr:
+        if corr_noise_active:
             start_bench("ncorr-sampling")
             sky_subtracted_TOD = view.get_tod(
                 subtract=(("sky", TODView._ALL_GAIN_TERMS),
@@ -458,16 +447,20 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
             res = sample_correlated_noise(
                 sky_subtracted_TOD, view.get_mask(proc_mask_type="ncorr"),
                 np.array(view.noise_params, copy=True),
-                experiment_data.noise_model, view.fsamp, cg_err_tol=ncorr_cfg.cg_err_tol,
-                cg_max_iter=ncorr_cfg.cg_max_iter, sample_params=ncorr_cfg.do_param,
-                sample_sigma0=ncorr_cfg.sample_sigma0, sigma0_method=ncorr_cfg.sigma0_method,
-                nomono=ncorr_cfg.nomono,
-                onlymono=ncorr_cfg.onlymono,
-                sigma0_dec=ncorr_cfg.sigma0_dec, psd_fit_nu_min=ncorr_cfg.psd_fit_nu_min,
-                psd_fit_nu_max=ncorr_cfg.psd_fit_nu_max, psd_bin=ncorr_cfg.psd_bin)
+                experiment_data.noise_model, view.fsamp, cg_err_tol=correlated_noise.cg.err_tol,
+                cg_max_iter=correlated_noise.cg.max_iter,
+                sample_params=correlated_noise.sample_psd_params,
+                sample_sigma0=correlated_noise.sample_sigma0,
+                sigma0_method=correlated_noise.sigma0_method,
+                nomono=correlated_noise.nomono,
+                onlymono=correlated_noise.onlymono,
+                sigma0_dec=correlated_noise.sigma0_decimation,
+                psd_fit_nu_min=correlated_noise.psd_fit_nu_min,
+                psd_fit_nu_max=correlated_noise.psd_fit_nu_max,
+                psd_bin=correlated_noise.psd_bin)
             n_corr_est = res.n_corr
             tod_samples.noise_params[view.iscan, view.idet, :] = res.noise_params
-            if ncorr_cfg.do_param:
+            if correlated_noise.sample_psd_params:
                 sampled_params.append(np.array(res.noise_params, copy=True))
             if not res.converged:
                 num_failed_convergences_ncorr += 1
@@ -477,18 +470,18 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
             residuals.append(res.residual)
             niters.append(res.niter)
             stop_bench("ncorr-sampling")
-        elif ncorr_cfg.sample_sigma0:
+        elif correlated_noise.sample_sigma0:
             # No correlated noise this iteration: estimate sigma0 here, at the same point in the
             # chain (after gain) as the n_corr-coupled estimate, instead of a separate pre-gain pass.
             tod_samples.noise_params[view.iscan, view.idet, 0] = _estimate_standalone_sigma0(
-                view, ncorr_cfg.sigma0_method)
+                view, correlated_noise.sigma0_method)
 
         _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view, n_corr_est)
 
         ### DATA-SELECTION VETO 2 (catastrophic chi^2)
-        if dataselect_cfg.active:
+        if selection_active:
             z = tod_samples.chisq_z[view.iscan, view.idet]
-            if not (np.isfinite(z) and abs(z) <= dataselect_cfg.chisq_abs_threshold):
+            if not (np.isfinite(z) and abs(z) <= data_selection.chisq_abs_threshold):
                 tod_samples.accept[view.iscan, view.idet] = False
                 continue
 
@@ -504,7 +497,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
         d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
 
         # If we're doing ncorr, accumulate to map and subtract from sky TOD.
-        if ncorr_cfg.do_ncorr:
+        if corr_noise_active:
             mapmaker_ncorr.accumulate_to_map(
                 (n_corr_est[good_data_mask]/gain).astype(np.float32, copy=False),
                 inv_var, pix_masked, psi_masked, response=response)
@@ -515,11 +508,11 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
         mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole[good_data_mask], inv_var,
                                              pix_masked, psi_masked, response=response)
         stop_bench("binned-mapmaker", increment_count=False)
-    if ncorr_cfg.do_ncorr:
+    if corr_noise_active:
         log_memory("ncorr-sampling")
 
     ### PRINT NOISE SAMPLING STATS ###
-    if ncorr_cfg.do_ncorr:
+    if corr_noise_active:
         log_corr_noise_stats(band_comm, experiment_data.nu, experiment_data.noise_model,
                              sampled_params, residuals, niters, num_failed_convergences_ncorr,
                              num_too_high_var_ncorr, worst_residual_ncorr,
@@ -540,7 +533,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
     map_signal = mapmaker.final_map
     mapmaker_orbdipole.normalize_map(map_cov)
     map_orbdipole = mapmaker_orbdipole.final_map
-    if ncorr_cfg.do_ncorr:
+    if corr_noise_active:
         mapmaker_ncorr.gather_map()
         mapmaker_ncorr.normalize_map(map_cov)
         map_corrnoise = mapmaker_ncorr.final_map
@@ -549,12 +542,12 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
 
     ### FINAL CLEANUP ON MASTER RANK ###
     detmap_dict_out = {}
+    maps_to_file = {}
     if band_comm.Get_rank() == 0:
         #Here we split here between I and QU
-        # Smooth maps to the common analysis resolution after mapmaking (single switch:
-        # general.common_res_fwhm; a missing or falsy value leaves bands at their native beam).
-        common_res_fwhm = (float(params.general.common_res_fwhm)
-                           if "common_res_fwhm" in params.general else 0.0)
+        # Smooth maps to the common analysis resolution after mapmaking; 0 leaves bands at their
+        # native beam.
+        common_res_fwhm = mapmaking.common_res_fwhm
         if "I" in pols:
             detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
                                 experiment_data.fwhm, experiment_data.nside)
@@ -570,23 +563,16 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetGroupTOD, compsep_outpu
                 detmap_QU.smooth_to_resolution(common_res_fwhm)
             detmap_dict_out.update({"QU": detmap_QU})
 
-        maps_to_file = {}
         maps_to_file["map_observed_sky"] = map_signal
         maps_to_file["map_rms"] = map_rms
-        if params.general.write_orb_dipole_maps_to_chain:
+        if mapmaking.include_orbital_dipole_maps:
             maps_to_file["map_orbdipole"] = map_orbdipole
-        if params.general.write_corr_noise_maps_to_chain and ncorr_cfg.do_ncorr:
+        if mapmaking.include_corr_noise_maps and corr_noise_active:
             maps_to_file["map_corrnoise"] = map_corrnoise
-        if params.general.write_sky_model_maps_to_chain:
+        if mapmaking.include_sky_model_maps:
             maps_to_file["map_skymodel"] = compsep_output
 
-        start_bench("filewrite-datamaps")
-        write_map_chain_to_file(params, chain, iter, experiment_data.experiment_name,
-                                experiment_data.band_name, maps_to_file,
-                                tod_samples.band_unit_factor, tod_samples.band_unit)
-        stop_bench("filewrite-datamaps")
-
-    return detmap_dict_out #empty on non-master ranks
+    return detmap_dict_out, maps_to_file
 
 
 def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, DetGroupTOD,
@@ -639,9 +625,9 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
                 # What is my rank number among the ranks processing this detector?
                 my_experiment = experiment
                 # Setting our unique detector id. Note that this is a global, not per band.
-                # A per-band ``num_scans`` (bands can hold different numbers of scans) takes
-                # precedence over the experiment-level value, which is the shared default.
-                tot_num_scans = band.num_scans if "num_scans" in band else experiment.num_scans
+                tot_num_scans = resolve_param(params, "num_scans",
+                                              (f"experiments.{exp_name}.bands.{band_name}",
+                                               f"experiments.{exp_name}"))
                 scans = np.arange(tot_num_scans)
                 my_scans = np.array_split(scans, mpi_info.band.size)[mpi_info.band.rank]
                 my_scans_start = my_scans[0]
@@ -670,7 +656,9 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
     # Build the band's map-distribution PixelDomain once now: the pointing is static, so it is
     # reused across Gibbs iterations by both the mapmakers and the sky-model distribution (which
     # needs it to give each rank only its local pixels). In full mode this is a cheap no-op.
-    sparse_maps = _read_sparse_maps_flag(params, experiment_data)
+    sparse_maps = resolve_param(params, "sparse_maps",
+                                (f"experiments.{experiment_data.experiment_name}",),
+                                default=MapmakingConfig.sparse_maps)
     experiment_data.get_pixel_domain(TODView(experiment_data, tod_samples_chain1), band_comm,
                                      sparse_maps)
 
@@ -725,26 +713,16 @@ def _estimate_standalone_sigma0(view: TODView, sigma0_method: str) -> float:
 
 
 def sample_jump_detection(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
-                          tod_samples: TODSamples, params: Bunch) -> TODSamples:
+                          tod_samples: TODSamples,
+                          config: "JumpDetectionConfig") -> TODSamples:
     """Detect jump discontinuities from the flag stream and store additive post-jump offsets.
 
     A jump is identified by a contiguous region with a non-zero
     ``flag & experiments.[experiment_name].jump_bitmask``. For each region, the offset is
-    estimated from the last ``N`` valid samples before the jump and the first ``N`` valid samples
-    after it, where validity is defined by ``full_mask``. The correction is then applied to all
-    later samples when a TOD is requested through ``TODView.get_tod()``.
+    estimated from the last ``window`` valid samples before the jump and the first ``window``
+    valid samples after it, where validity is defined by ``full_mask``. The correction is then
+    applied to all later samples when a TOD is requested through ``TODView.get_tod()``.
     """
-    n_window = int(getattr(params.general, "jump_detection_window", 10))
-    if n_window < 1:
-        raise ValueError("jump_detection_window must be >= 1.")
-    experiment_params = params.experiments[experiment_data.experiment_name]
-    if "jump_bitmask" not in experiment_params or experiment_params.jump_bitmask is None:
-        raise ValueError(
-            "Jump sampling is enabled, but "
-            f"experiments.{experiment_data.experiment_name}.jump_bitmask is not specified."
-        )
-    jump_bitmask = int(experiment_params.jump_bitmask)
-
     scan_view = TODView(experiment_data, tod_samples)
     num_applied_local = 0
     num_skipped_local = 0
@@ -762,8 +740,8 @@ def sample_jump_detection(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
             view.tod,
             view.flag,
             view.get_mask(proc_mask_type="jump"),
-            n_window,
-            jump_bitmask=jump_bitmask,
+            config.window,
+            jump_bitmask=config.jump_bitmask,
         )
         tod_samples.jumps.set(view.iscan, view.idet, jump)
         jump_counts_local.append(jump.size)
@@ -798,40 +776,21 @@ def sample_jump_detection(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
     return tod_samples
 
 
-# Valid calibration targets for gain sampling, and the per-term defaults used when a parameter file
-# leaves `calibrate_against` unspecified (preserving the historical low-frequency behavior).
-_VALID_CALIB_TARGETS = ("orbital_dipole", "full_sky", "sky")
-_DEFAULT_CALIB_TARGETS = {"abs_gain": "orbital_dipole",
-                          "rel_gain": "full_sky",
-                          "temporal_gain": "full_sky"}
+# Which signal a gain term is calibrated against -- i.e. what the calibration residual is reduced
+# to. `TODView.get_calib_tod` owns the actual signal bookkeeping; the three choices are:
+#   orbital_dipole -- the CMB dipole induced by the observer's motion, alone. It is known a priori
+#                     from the spacecraft velocity and the CMB monopole temperature, so it does not
+#                     depend on the sky model. That makes it the only *absolute* calibrator,
+#                     and the natural default for the absolute gain (the average across detectors).
+#   sky            -- the entire modelled signal, static sky and orbital dipole. The default for
+#                     the relative and temporal terms: those only have to track gain *differences*
+#                     between detectors or scans, so they can use every bit of signal available.
+#   sky_no_dipole  -- the static sky model from component separation, with the dipole left out.
+# Each term's default and any per-band override are resolved by ``GainConfig.from_params``.
+_VALID_CALIB_TARGETS = ("orbital_dipole", "sky", "sky_no_dipole")
 
-
-def _resolve_calib_target(params: Bunch, experiment_data: DetGroupTOD, gain_block: str) -> str:
-    """ Resolve which signal a gain term is calibrated against for the current band.
-
-        A per-band ``calibrate_against`` (under ``experiments.<exp>.bands.<band>.<gain_block>``)
-        overrides ``general.<gain_block>.calibrate_against``, which in turn falls back to the
-        term's default in ``_DEFAULT_CALIB_TARGETS``.
-    """
-    general_block = params.general[gain_block]
-    target = (general_block["calibrate_against"] if "calibrate_against" in general_block
-              else _DEFAULT_CALIB_TARGETS[gain_block])
-    band = params.experiments[experiment_data.experiment_name].bands[experiment_data.band_name]
-    if gain_block in band and "calibrate_against" in band[gain_block]:
-        target = band[gain_block]["calibrate_against"]
-    if target not in _VALID_CALIB_TARGETS:
-        raise ValueError(f"{gain_block}.calibrate_against='{target}' is invalid; must be one of "
-                         f"{_VALID_CALIB_TARGETS}.")
-    return target
-
-
-def _resolve_gain_downsample_factor(params: Bunch, experiment_data: DetGroupTOD) -> int:
-    """ Downsampling factor (in samples) used when building the gain-calibration TODs.
-
-        Derived from ``general.gain_calib_downsample_time`` (a duration in seconds, shared by all
-        gain terms) and the band's sampling rate. A duration of 0 disables downsampling.
-    """
-    return max(1, int(round(params.general.gain_calib_downsample_time * experiment_data.fsamp)))
+# Above this freq the orbital dipole is a poor calibrator, getting faint compared to foregrounds.
+_ORBITAL_DIPOLE_MAX_FREQ_GHZ = 400.0
 
 
 def _solve_relative_gain_system(s_weights: NDArray, r_weights: NDArray, prev_rel_gain: NDArray,
@@ -876,34 +835,30 @@ def _solve_relative_gain_system(s_weights: NDArray, r_weights: NDArray, prev_rel
     return out
 
 
-def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_samples: TODSamples,
-                         det_compsep_map: NDArray, calibrate_against: str, downsample_factor: int,
-                         gap_fill_method: str = "wn"):
+def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
+                         tod_samples: TODSamples, det_compsep_map: NDArray,
+                         config: "GainConfig") -> TODSamples:
     """ Draw a realization of the absolute gain term, g0, which is constant across all
-        detectors and all scans within a band, calibrated against ``calibrate_against``.
+        detectors and all scans within a band, using the calibrator selected by ``config``.
     Args:
         band_comm (MPI.Comm): The band-level MPI communicator.
         experiment_data (DetGroupTOD): The object holding all the scan data.
         tod_samples (TODSamples): Current sampled TOD parameters (updated in-place with g0).
         det_compsep_map (NDArray): The component-separation sky map for the detector.
-        calibrate_against (str): Calibrator signal, one of "orbital_dipole" | "full_sky" | "sky".
-        downsample_factor (int): Block-averaging factor for the calibration TODs.
-        gap_fill_method (str): Masked-sample fill for the calibration residual, one of "wn" |
-            "fallback" | "full_cg" (see TODView.get_calib_tod).
+        config: Validated absolute-gain settings.
     Returns:
         tod_samples (TODSamples): Updated TOD samples with the new g0 estimate.
-        wait_time (float): Time spent waiting at the MPI barrier.
     """
-
     sum_s_T_N_inv_d = 0  # Accumulators for the numerator and denominator of eqn 16.
     sum_s_T_N_inv_s = 0
 
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
-                        downsample_factor=downsample_factor)
+                        downsample_factor=config.downsample_factor)
 
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
     for view in scan_view.iter_focused(accepted_only=True):
-        calib = view.get_calib_tod("abs", calibrate_against, gap_fill_method=gap_fill_method,
+        calib = view.get_calib_tod("abs", config.calibrate_against,
+                                   gap_fill_method=config.gap_fill_method,
                                    proc_mask_type="gain")
         s_cal = calib.s_cal
         residual_tod = calib.tod
@@ -936,9 +891,8 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
             logger.info(f"Band {experiment_data.band_name} g0: {tod_samples.abs_gain:.4e} "\
                         f"-> {g_sampled:.4e} (+/- {g_std:.4e})")
 
-    t0 = time.time()
-    band_comm.Barrier()
-    wait_time = time.time() - t0
+    with benchmark("abs-gain-barrier"):   # reported across ranks by bench_summary
+        band_comm.Barrier()
     g_sampled = band_comm.bcast(g_sampled, root=0)
     log_memory("abs-gain")
 
@@ -946,12 +900,12 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD, tod_
     # otherwise have been a np.float64 type, potentially causing unexpected casting behavior later.
     tod_samples.abs_gain = float(g_sampled)
 
-    return tod_samples, wait_time
+    return tod_samples
 
 
 def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
-                         tod_samples: TODSamples, det_compsep_map: NDArray, calibrate_against: str,
-                         downsample_factor: int, gap_fill_method: str = "wn"):
+                         tod_samples: TODSamples, det_compsep_map: NDArray,
+                         config: "GainConfig") -> TODSamples:
     """ Samples the detector-dependent relative gain (Delta g_i). This function implements the
         logic from Sec. 3.4 of BP7.
     Args:
@@ -959,10 +913,7 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
         experiment_data (DetGroupTOD): The object holding scan data for the band.
         tod_samples (TODSamples): Current sampled TOD parameters.
         det_compsep_map (NDArray): The component-separation sky map for the detector.
-        calibrate_against (str): Calibrator signal, one of "orbital_dipole" | "full_sky" | "sky".
-        downsample_factor (int): Block-averaging factor for the calibration TODs.
-        gap_fill_method (str): Masked-sample fill for the calibration residual, one of "wn" |
-            "fallback" | "full_cg" (see TODView.get_calib_tod).
+        config: Validated relative-gain settings.
     Returns:
         tod_samples (TODSamples): Updated TOD samples with relative gain estimates.
     """
@@ -976,11 +927,12 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
     # local_r_T_N_inv_s = 0.0
     local_r_T_N_inv_s = np.zeros(ndet, dtype=np.float32)
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
-                        downsample_factor=downsample_factor)
+                        downsample_factor=config.downsample_factor)
 
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
     for view in scan_view.iter_focused(accepted_only=True):
-        calib = view.get_calib_tod("rel", calibrate_against, gap_fill_method=gap_fill_method,
+        calib = view.get_calib_tod("rel", config.calibrate_against,
+                                   gap_fill_method=config.gap_fill_method,
                                    proc_mask_type="gain")
         s_cal = calib.s_cal
         residual_tod = calib.tod
@@ -1035,15 +987,12 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
         logger.debug(f"Rel gains for band {experiment_data.band_name}: {delta_g_samples}\n"\
                      f"Average change = {np.mean(np.abs(prev_rel_gain - delta_g_samples))}")
 
-    wait_time = 0
-    return tod_samples, wait_time
-
+    return tod_samples
 
 
 def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGroupTOD,
                                     tod_samples: TODSamples, det_compsep_map: NDArray,
-                                    chain: int, iter: int, params: Bunch, calibrate_against: str,
-                                    downsample_factor: int, gap_fill_method: str = "wn"):
+                                    config: "GainConfig") -> TODSamples:
     """ Samples the time-dependent relative gain variations (delta g_qi). This function implements
         the logic from Sec. 3.5 of the BP7 paper, using a Wiener filter to smooth the gain solution
         over time (PIDs). It solves a global system for all scans of a given detector, which are
@@ -1054,13 +1003,9 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
         experiment_data (DetGroupTOD): The object holding scan data.
         tod_samples (TODSamples): The sampled TOD parameters.
         det_compsep_map (NDArray): The sky model at our band.
-        chain (int): Current chain number.
-        iter (int): Current Gibbs iteration.
-        params (Bunch): Parameters from the parameter file.
-        calibrate_against (str): Calibrator signal, one of "orbital_dipole" | "full_sky" | "sky".
-        downsample_factor (int): Block-averaging factor for the calibration TODs.
-        gap_fill_method (str): Masked-sample fill for the calibration residual, one of "wn" |
-            "fallback" | "full_cg" (see TODView.get_calib_tod).
+        config: Validated temporal-gain settings.
+    Returns:
+        tod_samples (TODSamples): Updated TOD samples with per-scan gain variations.
     """
     band_rank = band_comm.Get_rank()
     band_size = band_comm.Get_size()
@@ -1071,7 +1016,7 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
     A_qq_local = np.zeros((ndet, nscans_local), dtype=np.float64)
     b_q_local = np.zeros((ndet, nscans_local), dtype=np.float64)
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
-                        downsample_factor=downsample_factor)
+                        downsample_factor=config.downsample_factor)
 
     # I'm still not sure what way of dealing with the masked samples are best:
     # 1. Replace masked values with 0s before FFT.
@@ -1082,7 +1027,8 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
     # Rejected detector-scans (accepted_only) contribute zero weight (A_qq = b_q = 0); the Wiener
     # prior then fills their temporal gain from neighbors.
     for view in scan_view.iter_focused(accepted_only=True):
-        calib = view.get_calib_tod("temp", calibrate_against, gap_fill_method=gap_fill_method,
+        calib = view.get_calib_tod("temp", config.calibrate_against,
+                                   gap_fill_method=config.gap_fill_method,
                                    proc_mask_type="gain")
         s_cal = calib.s_cal
         residual_tod = calib.tod
@@ -1173,17 +1119,6 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
                 #             f"std={np.std(delta_g_sample)*1e9:14.4f} "\
                 #             f"max={np.max(delta_g_sample)*1e9:14.4f}")
 
-                if False: #debug stuff
-                    import matplotlib.pyplot as plt
-                    plt.figure(figsize=(10,8))
-                    other_gain = tod_samples.abs_gain + tod_samples.rel_gain[idet]
-                    plt.plot(1e9*(other_gain + delta_g_sample))
-                    plt.ylim(0, np.max(1e9*(other_gain + delta_g_sample)))
-                    plt.xlabel("PID")
-                    plt.ylabel("Gain [mV/K]")
-                    plt.savefig(f"{params.general.output_paths.plots}chain{chain}_iter{iter}_"
-                                f"det{idet}_{experiment_data.band_name}.png")
-                    plt.close()
             else:
                 delta_g_sample = np.zeros(n_scans_total)
 
@@ -1209,196 +1144,422 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetGro
     return tod_samples
 
 
+# Each config class owns the parameter names, defaults, and validation for one TOD operation.
+# ``process_tod`` still states the physical execution order explicitly. Correlated noise and data
+# selection stay inside the mapmaker scan loops because their position relative to sigma0,
+# diagnostics, vetoes, and map accumulation is part of the algorithm.
+@dataclass(frozen=True)
+class StepConfig:
+    """Common parameter construction and iteration gate for a TOD step."""
+
+    enabled: bool = False
+    from_iter: int = 1
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise ValueError("enabled must be true or false.")
+        if not isinstance(self.from_iter, int) or isinstance(self.from_iter, bool):
+            raise ValueError("from_iter must be an integer.")
+        if self.from_iter < 1:
+            raise ValueError("from_iter must be at least 1.")
+
+    def is_active(self, iteration: int) -> bool:
+        """Whether this step runs in the given Gibbs iteration."""
+        return self.enabled and iteration >= self.from_iter
+
+    @classmethod
+    def _from_block(cls, block_name: str, block: Bunch | dict, **resolved_values) -> Self:
+        """Construct this step config and reject fields it does not own."""
+        try:
+            values = dict(block)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"'{block_name}' must be a parameter block.") from error
+        constructor_fields = {item.name for item in fields(cls) if item.init}
+        parameter_fields = constructor_fields - set(resolved_values)
+        unknown = sorted(set(values) - parameter_fields)
+        if unknown:
+            raise ValueError(f"Unknown key(s) {unknown} in '{block_name}'. That block accepts "
+                             f"{sorted(parameter_fields)}.")
+        try:
+            return cls(**values, **resolved_values)
+        except TypeError as error:
+            raise ValueError(f"Invalid '{block_name}' configuration: {error}") from error
+
+
+@dataclass(frozen=True)
+class JumpDetectionConfig(StepConfig):
+    """Validated jump-detection parameters and experiment-specific flag bitmask."""
+
+    PARAMETER_NAME: ClassVar[str] = "jump_detection"
+
+    window: int = 10
+    jump_bitmask: int | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not isinstance(self.window, int) or isinstance(self.window, bool) or self.window < 1:
+            raise ValueError("jump_detection.window must be an integer of at least 1.")
+        if self.enabled and self.jump_bitmask is None:
+            raise ValueError("Jump detection is enabled, but the experiment has no jump_bitmask.")
+        if self.jump_bitmask is not None and not isinstance(self.jump_bitmask, int):
+            raise ValueError("The experiment jump_bitmask must be an integer.")
+
+    @classmethod
+    def from_params(cls, params: Bunch, experiment_data: DetGroupTOD) -> "JumpDetectionConfig":
+        """Build jump settings from their step block and the experiment flag bitmask."""
+        experiment = params.experiments[experiment_data.experiment_name]
+        jump_bitmask = experiment.jump_bitmask if "jump_bitmask" in experiment else None
+        block = (params.tod_processing[cls.PARAMETER_NAME]
+                 if cls.PARAMETER_NAME in params.tod_processing else Bunch())
+        return cls._from_block(f"tod_processing.{cls.PARAMETER_NAME}", block,
+                               jump_bitmask=jump_bitmask)
+
+
+@dataclass(frozen=True)
+class GainConfig(StepConfig):
+    """Validated settings needed to execute one gain-sampling step."""
+
+    calibrate_against: str = "sky"
+    gap_fill_method: str = "wn"
+    downsample_time: float = 1.0
+    sampling_rate: float = 1.0
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.calibrate_against not in _VALID_CALIB_TARGETS:
+            raise ValueError(f"calibrate_against must be one of {_VALID_CALIB_TARGETS}, got "
+                             f"{self.calibrate_against!r}.")
+        if self.gap_fill_method not in GAIN_GAP_FILL_METHODS:
+            raise ValueError(f"gap_fill_method must be one of {GAIN_GAP_FILL_METHODS}, got "
+                             f"{self.gap_fill_method!r}.")
+        if not np.isfinite(self.downsample_time) or self.downsample_time < 0:
+            raise ValueError("downsample_time must be a finite, non-negative number.")
+        if not np.isfinite(self.sampling_rate) or self.sampling_rate <= 0:
+            raise ValueError("The experiment sampling rate must be positive and finite.")
+
+    @property
+    def downsample_factor(self) -> int:
+        """Number of native samples averaged into one gain-calibration sample."""
+        return max(1, round(self.downsample_time * self.sampling_rate))
+
+    @classmethod
+    def from_params(cls, params: Bunch, experiment_data: DetGroupTOD, step_name: str,
+                    default_calibrator: str, iteration: int, is_master: bool) -> "GainConfig":
+        """Build one self-contained gain config, including a per-band calibrator override."""
+        block = dict(params.tod_processing[step_name]
+                     if step_name in params.tod_processing else Bunch())
+        configured_calibrator = block.get("calibrate_against", default_calibrator)
+        exp_name = experiment_data.experiment_name
+        band_name = experiment_data.band_name
+        block["calibrate_against"] = resolve_param(
+            params, "calibrate_against",
+            (f"experiments.{exp_name}.bands.{band_name}.{step_name}",),
+            default=configured_calibrator, raise_on_missing_scope=False,
+            legal_values=_VALID_CALIB_TARGETS,
+        )
+        config = cls._from_block(
+            f"tod_processing.{step_name}", block,
+            sampling_rate=float(experiment_data.fsamp),
+        )
+        if (config.is_active(iteration) and is_master
+                and config.calibrate_against == "orbital_dipole"
+                and experiment_data.nu > _ORBITAL_DIPOLE_MAX_FREQ_GHZ):
+            logger.warning(f"{step_name} for band {band_name} ({experiment_data.nu} GHz) is "
+                           f"calibrated against the orbital dipole, but above "
+                           f"{_ORBITAL_DIPOLE_MAX_FREQ_GHZ:.0f} GHz the dipole is faint compared "
+                           f"with the foregrounds and makes a poor calibrator; consider 'sky', "
+                           f"or an externally determined gain for this band.")
+        return config
+
+
+@dataclass(frozen=True)
+class CGConfig:
+    """Conjugate-gradient controls shared by the two CG uses in TOD processing."""
+
+    max_iter: int = 0
+    err_tol: float = 1.0e-4
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.max_iter, int) or isinstance(self.max_iter, bool):
+            raise ValueError("max_iter must be an integer.")
+        if self.max_iter < 0:
+            raise ValueError("max_iter cannot be negative.")
+        if not np.isfinite(self.err_tol) or self.err_tol < 0:
+            raise ValueError("err_tol must be a finite, non-negative number.")
+
+    @classmethod
+    def from_block(cls, block_name: str, block: Bunch | dict,
+                   require_all: bool = False) -> "CGConfig":
+        """Build CG controls and optionally require both fields to be stated."""
+        try:
+            values = dict(block)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"'{block_name}' must be a parameter block.") from error
+        if require_all:
+            missing = sorted({"max_iter", "err_tol"} - set(values))
+            if missing:
+                raise ValueError(f"Missing required key(s) {missing} in '{block_name}'.")
+        try:
+            return cls(**values)
+        except TypeError as error:
+            raise ValueError(f"Invalid '{block_name}' configuration: {error}") from error
+
+
+@dataclass(frozen=True)
+class CorrelatedNoiseConfig(StepConfig):
+    """Validated correlated-noise and sigma0 sampling settings."""
+
+    PARAMETER_NAME: ClassVar[str] = "corr_noise"
+
+    sample_psd_params: bool = False
+    sample_sigma0: bool = True
+    sigma0_method: str = "pairwise"
+    sigma0_decimation: int = 1
+    nomono: bool = False
+    onlymono: bool = False
+    psd_fit_nu_min: float = 0.0
+    psd_fit_nu_max: float = float("inf")
+    psd_bin: bool = False
+    cg: CGConfig = field(default_factory=CGConfig)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.sample_psd_params and not self.enabled:
+            raise ValueError("corr_noise.sample_psd_params requires enabled=True.")
+        if self.sigma0_method not in SIGMA0_METHODS:
+            raise ValueError(f"corr_noise.sigma0_method must be one of {SIGMA0_METHODS}, got "
+                             f"{self.sigma0_method!r}.")
+        if (not isinstance(self.sigma0_decimation, int)
+                or isinstance(self.sigma0_decimation, bool) or self.sigma0_decimation < 1):
+            raise ValueError("corr_noise.sigma0_decimation must be an integer of at least 1.")
+
+    @classmethod
+    def from_params(cls, params: Bunch, is_master: bool) -> "CorrelatedNoiseConfig":
+        """Build correlated-noise settings, including its nested CG block."""
+        block = dict(params.tod_processing[cls.PARAMETER_NAME]
+                     if cls.PARAMETER_NAME in params.tod_processing else Bunch())
+        cg = CGConfig.from_block(f"tod_processing.{cls.PARAMETER_NAME}.cg",
+                                 block.pop("cg", Bunch()))
+        config = cls._from_block(f"tod_processing.{cls.PARAMETER_NAME}", block, cg=cg)
+        if config.nomono and config.onlymono and is_master:
+            logger.error("tod_processing.corr_noise.nomono and onlymono are both True, which is "
+                         "contradictory; onlymono takes precedence.")
+        return config
+
+
+@dataclass(frozen=True)
+class DataSelectionConfig(StepConfig):
+    """Validated detector-scan selection thresholds and iteration range."""
+
+    PARAMETER_NAME: ClassVar[str] = "data_selection"
+
+    until_iter: int | None = None
+    chisq_abs_threshold: float = 1.0e4
+    min_good_fraction: float = 0.1
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.until_iter is not None:
+            if not isinstance(self.until_iter, int) or isinstance(self.until_iter, bool):
+                raise ValueError("data_selection.until_iter must be an integer or null.")
+            if self.until_iter < self.from_iter:
+                raise ValueError("data_selection.until_iter cannot be before from_iter.")
+        if not np.isfinite(self.chisq_abs_threshold) or self.chisq_abs_threshold <= 0:
+            raise ValueError("data_selection.chisq_abs_threshold must be positive and finite.")
+        if not 0.0 <= self.min_good_fraction <= 1.0:
+            raise ValueError("data_selection.min_good_fraction must be between 0 and 1.")
+
+    @classmethod
+    def from_params(cls, params: Bunch) -> "DataSelectionConfig":
+        """Build detector-scan selection settings from its parameter block."""
+        block = (params.tod_processing[cls.PARAMETER_NAME]
+                 if cls.PARAMETER_NAME in params.tod_processing else Bunch())
+        return cls._from_block(f"tod_processing.{cls.PARAMETER_NAME}", block)
+
+    def is_available(self, iteration: int,
+                     correlated_noise: CorrelatedNoiseConfig) -> bool:
+        """Whether diagnostics can be reported after waiting for configured n_corr sampling."""
+        return self.enabled and (correlated_noise.is_active(iteration)
+                                 or not correlated_noise.enabled)
+
+    def cuts_are_active(self, iteration: int,
+                        correlated_noise: CorrelatedNoiseConfig) -> bool:
+        """Whether this iteration applies detector-scan vetoes."""
+        before_end = self.until_iter is None or iteration <= self.until_iter
+        return (self.is_available(iteration, correlated_noise)
+                and super().is_active(iteration) and before_end)
+
+
+@dataclass(frozen=True)
+class MapmakingConfig:
+    """Validated mapmaking resources, algorithm controls, and map-output selection."""
+
+    mapmaker: str
+    num_threads: int
+    include_orbital_dipole_maps: bool
+    include_corr_noise_maps: bool
+    include_sky_model_maps: bool
+    sparse_maps: bool = False
+    common_res_fwhm: float = 0.0
+    cg: CGConfig = field(default_factory=CGConfig)
+
+    def __post_init__(self) -> None:
+        if self.mapmaker not in ("CG", "bin"):
+            raise ValueError(f"mapmaker must be 'CG' or 'bin', got {self.mapmaker!r}.")
+        if not isinstance(self.num_threads, int) or self.num_threads < 1:
+            raise ValueError("resources.tod.num_threads must be an integer of at least 1.")
+        if self.common_res_fwhm < 0:
+            raise ValueError("compsep.common_res_fwhm cannot be negative.")
+
+    @classmethod
+    def from_params(cls, params: Bunch,
+                    experiment_data: DetGroupTOD) -> "MapmakingConfig":
+        """Build mapmaking settings using band, experiment, and global precedence."""
+        exp_name = experiment_data.experiment_name
+        band_name = experiment_data.band_name
+        mapmaker = resolve_param(
+            params, "mapmaker",
+            (f"experiments.{exp_name}.bands.{band_name}", f"experiments.{exp_name}",
+             "tod_processing"),
+            legal_values=("CG", "bin"),
+        )
+        tod = params.tod_processing
+        if "cg_mapmaker" in tod:
+            cg = CGConfig.from_block("tod_processing.cg_mapmaker", tod.cg_mapmaker,
+                                     require_all=mapmaker == "CG")
+        elif mapmaker == "CG":
+            raise ValueError("tod_processing.cg_mapmaker is required for the CG mapmaker.")
+        include = params.output.chains.include
+        resolved = {
+            "mapmaker": mapmaker,
+            "sparse_maps": bool(resolve_param(params, "sparse_maps", (f"experiments.{exp_name}",),
+                                              default=cls.sparse_maps)),
+            "common_res_fwhm": float(resolve_param(params, "common_res_fwhm", ("compsep",),
+                                                   default=cls.common_res_fwhm)),
+            "num_threads": params.resources.tod.num_threads,
+            "include_orbital_dipole_maps": bool(include.orbital_dipole_maps),
+            "include_corr_noise_maps": bool(include.corr_noise_maps),
+            "include_sky_model_maps": bool(include.sky_model_maps),
+        }
+        if "cg_mapmaker" in tod:
+            resolved["cg"] = cg
+        return cls(**resolved)
+
+
 def process_tod(mpi_info: Bunch, experiment_data: DetGroupTOD,
                 tod_samples: TODSamples, compsep_output: NDArray,
                 params: Bunch, chain: int, iter: int) -> tuple[dict[str, DetectorMap], TODSamples]:
-    """ Performs a single TOD iteration.
+    """Run one TOD iteration for one band.
 
-    Input:
-        mpi_info (Bunch): The data structure containing all MPI relevant data.
-        experiment_data (DetGroupTOD): The input experiment TOD for the band
-            belonging to the current process.
-        tod_samples (TODSamples): Sampled TOD parameters (gain, noise, etc.).
-        compsep_output (NDArray): The current best estimate of the sky model
-            as seen by the band belonging to the current process.
-        params (Bunch): The parameters from the input parameter file.
-        chain (int): ID of the current chain.
-        iter (int): Iteration within the Gibbs chain.
+    The function states the scientific order directly. Correlated noise, sigma0, diagnostics, and
+    data-selection vetoes run inside the selected mapmaker because they operate on one focused
+    detector-scan and must occur at exact positions relative to map accumulation.
 
-    Output:
-        dict[str, DetectorMap]: Correlated-noise-subtracted TOD data projected into map
-            space for the band belonging to the current process.
-        tod_samples (TODSamples): Updated sampled TOD parameters.
+    Returns:
+        The detector maps for component separation and the updated TOD samples.
     """
-    # Steps:
-    # 1. Detect and store jump corrections from the flag stream.
-    # 2. Estimate white noise from the jump-corrected, sky-subtracted TOD.
-    # 3. Sample the gain from the jump-corrected, sky-subtracted TOD.
-    # 4. Sample correlated noise and PS parameters.
-    # 5. Mapmaking on TOD - corr_noise_TOD - orb_dipole_TOD.
-
     timing_dict = {}
     waittime_dict = {}
-
-    det_comm = mpi_info.det.comm
     band_comm = mpi_info.band.comm
-    TOD_comm = mpi_info.tod.comm
-    ### JUMP DETECTION ###
-    if getattr(params.general, "sample_jump_detection", False) and iter >= int(
-        getattr(params.general, "sample_jump_detection_from_iter_num", 1)
-    ):
-        t0 = time.time()
-        with benchmark("jump-detect"):
-            tod_samples = sample_jump_detection(band_comm, experiment_data, tod_samples, params)
-        timing_dict["jump-detect"] = time.time() - t0
-        if mpi_info.band.is_master:
-            logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished jump "
-                        f"detection in {timing_dict['jump-detect']:.1f}s.")
+    tod_comm = mpi_info.tod.comm
+    is_master = mpi_info.band.is_master
 
-    ### CORRELATED-NOISE SAMPLING CONFIG ###
-    # All correlated-noise settings live in the nested ``general.corr_noise`` block.
-    cn = params.general.corr_noise
-    sample_corr_noise = cn.sample_corr_noise
-    from_iter = cn.sample_corr_noise_from_iter_num
-    sample_noise_params = cn.sample_noise_params
-    # Parameter sampling consumes a correlated-noise realization, so it cannot run without it.
-    if sample_noise_params and not sample_corr_noise:
-        raise ValueError("general.corr_noise.sample_noise_params requires sample_corr_noise=True "
-                         "(parameter sampling needs a correlated-noise realization).")
-    do_ncorr = sample_corr_noise and iter >= from_iter
-    # Per-scan monopole handling mirrors the Fortran flags; both set at once is contradictory.
-    nomono = getattr(cn, "nomono", False)
-    onlymono = getattr(cn, "onlymono", False)
-    if nomono and onlymono and mpi_info.band.is_master:
-        logger.error("general.corr_noise.nomono and onlymono are both True, which is contradictory; "
-                     "onlymono takes precedence.")
-    sigma0_method = getattr(cn, "sigma0_method", "pairwise")
-    if sigma0_method not in SIGMA0_METHODS:
-        raise ValueError(f"general.corr_noise.sigma0_method must be one of {SIGMA0_METHODS}, got "
-                         f"{sigma0_method!r}.")
-    ncorr_cfg = Bunch(
-        do_ncorr=do_ncorr,
-        do_param=do_ncorr and sample_noise_params,
-        sample_sigma0=getattr(cn, "sample_sigma0", True),
-        sigma0_method=sigma0_method,
-        cg_err_tol=cn.CG_err_tol,
-        cg_max_iter=cn.CG_max_iter,
-        nomono=nomono,
-        onlymono=onlymono,
-        sigma0_dec=getattr(cn, "sigma0_decimation", 1),
-        psd_fit_nu_min=getattr(cn, "psd_fit_nu_min", 0.0),
-        psd_fit_nu_max=getattr(cn, "psd_fit_nu_max", float("inf")),
-        psd_bin=getattr(cn, "psd_bin", False),
+    # Resolve every config before executing any step, so invalid later settings fail before an
+    # earlier sampler changes the chain state. Each class owns its own unpacking and validation.
+    mapmaking = MapmakingConfig.from_params(params, experiment_data)
+    jump_detection = JumpDetectionConfig.from_params(params, experiment_data)
+    absolute_gain = GainConfig.from_params(
+        params, experiment_data, "abs_gain", "orbital_dipole", iter, is_master,
     )
+    relative_gain = GainConfig.from_params(
+        params, experiment_data, "rel_gain", "sky", iter, is_master,
+    )
+    temporal_gain = GainConfig.from_params(
+        params, experiment_data, "temporal_gain", "sky", iter, is_master,
+    )
+    correlated_noise = CorrelatedNoiseConfig.from_params(params, is_master)
+    data_selection = DataSelectionConfig.from_params(params)
 
-    ### DATA-SELECTION (accept-flag) CONFIG ###
-    # Flags obviously bad detector-scans (catastrophic-only chi^2/flagged-fraction cuts, applied
-    # as eager vetoes inside the mapmaking scan loop so they never enter any map product); see
-    # data_selection.py for the cut definitions, gating, and the per-band summary.
-    dataselect_cfg = build_dataselect_cfg(params, iter, do_ncorr, sample_corr_noise)
-
-    # Gap-fill method for the non-CG sampling steps (gain calibration). The correlated-noise step's
-    # own gap handling is fixed by CG_max_iter (masked CG, or stationary fallback when 0).
-    gain_gap_fill = getattr(params.general, "gap_fill_method", "wn")
-    if gain_gap_fill not in GAIN_GAP_FILL_METHODS:
-        raise ValueError(f"general.gap_fill_method must be one of {GAIN_GAP_FILL_METHODS}, got "
-                         f"{gain_gap_fill!r}.")
-
-    # NOTE: sigma0 is estimated inside the mapmaker scan loop (after gain), co-located with the
-    # n_corr-coupled estimate -- see the do_ncorr if/elif in tod2map_CG/tod2map_bin. This matches
-    # Commander3, where gain always runs on the previous iteration's sigma0.
-
-    ### ABSOLUTE GAIN CALIBRATION ###
-    if params.general.abs_gain.sample and iter >= params.general.abs_gain.sample_from_iter_num:
-        calib_target = _resolve_calib_target(params, experiment_data, "abs_gain")
-        downsample_factor = _resolve_gain_downsample_factor(params, experiment_data)
+    @contextmanager
+    def timed_step(label: str):
+        """Benchmark + wall-time + master log line around one TOD sampling step."""
         t0 = time.time()
-        with benchmark("abs-gain"):
-            tod_samples, wait_time = sample_absolute_gain(band_comm, experiment_data, tod_samples,
-                                                          compsep_output, calib_target,
-                                                          downsample_factor, gain_gap_fill)
-        timing_dict["abs-gain"] = time.time() - t0
-        waittime_dict["abs-gain"] = wait_time
+        with benchmark(label):
+            yield
+        timing_dict[label] = time.time() - t0
         if mpi_info.band.is_master:
-            logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished absolute "\
-                        f"gain estimation in {timing_dict['abs-gain']:.1f}s.")
+            logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished {label} "
+                        f"in {timing_dict[label]:.1f}s.")
 
-    ### RELATIVE GAIN CALIBRATION ###
-    if params.general.rel_gain.sample and iter >= params.general.rel_gain.sample_from_iter_num:
-        calib_target = _resolve_calib_target(params, experiment_data, "rel_gain")
-        downsample_factor = _resolve_gain_downsample_factor(params, experiment_data)
-        t0 = time.time()
-        with benchmark("rel-gain"):
-            tod_samples, wait_time = sample_relative_gain(band_comm, experiment_data, tod_samples,
-                                                          compsep_output, calib_target,
-                                                          downsample_factor, gain_gap_fill)
-        timing_dict["rel-gain"] = time.time() - t0
-        waittime_dict["rel-gain"] = wait_time
-        if mpi_info.band.is_master:
-            logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished relative "\
-                        f"gain estimation in {timing_dict['rel-gain']:.1f}s.")
+    # Jump corrections must be stored before any later step reads the TOD.
+    if jump_detection.is_active(iter):
+        with timed_step("jump-detect"):
+            tod_samples = sample_jump_detection(band_comm, experiment_data, tod_samples,
+                                                jump_detection)
 
+    # Gain uses the previous iteration's sigma0. The new sigma0 is estimated later, inside the
+    # mapmaker scan loop, matching Commander3's gain -> n_corr -> bin_TOD order.
+    if absolute_gain.is_active(iter):
+        with timed_step("abs-gain"):
+            tod_samples = sample_absolute_gain(band_comm, experiment_data, tod_samples,
+                                               compsep_output, absolute_gain)
 
-    ### TEMPORAL GAIN CALIBRATION ###
-    if params.general.temporal_gain.sample\
-    and iter >= params.general.temporal_gain.sample_from_iter_num:
-        calib_target = _resolve_calib_target(params, experiment_data, "temporal_gain")
-        downsample_factor = _resolve_gain_downsample_factor(params, experiment_data)
-        t0 = time.time()
-        with benchmark("temporal-gain"):
+    if relative_gain.is_active(iter):
+        with timed_step("rel-gain"):
+            tod_samples = sample_relative_gain(band_comm, experiment_data, tod_samples,
+                                               compsep_output, relative_gain)
+
+    if temporal_gain.is_active(iter):
+        with timed_step("temp-gain"):
             tod_samples = sample_temporal_gain_variations(band_comm, experiment_data, tod_samples,
-                                    compsep_output, chain, iter, params, calib_target,
-                                    downsample_factor, gain_gap_fill)
-        timing_dict["temp-gain"] = time.time() - t0
-        if mpi_info.band.is_master:
-            logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished temporal "\
-                        f"gain estimation in {timing_dict['temp-gain']:.1f}s.")
+                                                          compsep_output, temporal_gain)
 
-    ### MAPMAKING ###
     t0 = time.time()
-
-    if "mapmaker" in params.experiments[experiment_data.experiment_name].bands[experiment_data.band_name]:
-        mapmaker_str = params.experiments[experiment_data.experiment_name].bands[experiment_data.band_name].mapmaker
-    elif "mapmaker" in params.experiments[experiment_data.experiment_name]:
-        mapmaker_str = params.experiments[experiment_data.experiment_name].mapmaker
-    else:
-        raise ValueError(f"Unspecified mapmaker for experiment {experiment_data.experiment_name}," \
-                        f" band {experiment_data.band_name}.")
-
-    # Per-iteration data-selection diagnostics: NaN-reset so a finite entry always means "evaluated
-    # this iteration" -- detector-scans skipped by the accepted_only scan loops (rejected earlier,
-    # or absent) stay NaN and are never re-counted on stale values by log_dataselect_summary.
+    # A finite diagnostic means "evaluated this iteration". Previously rejected or absent scans
+    # remain NaN and are not counted again by the data-selection summary.
     tod_samples.chisq_z[:] = np.nan
     tod_samples.good_fraction[:] = np.nan
 
-    if mapmaker_str == "CG":
-        detmap_dict = tod2map_CG(band_comm, experiment_data, compsep_output, tod_samples, params, chain,
-                     iter, ncorr_cfg, dataselect_cfg)
-    elif mapmaker_str == "bin":
-        detmap_dict = tod2map_bin(band_comm, experiment_data, compsep_output, tod_samples, params,
-                            chain, iter, ncorr_cfg, dataselect_cfg)
+    if mapmaking.mapmaker == "CG":
+        detmap_dict, maps_to_file = tod2map_CG(
+            band_comm, experiment_data, compsep_output, tod_samples, iter, mapmaking,
+            correlated_noise, data_selection,
+        )
     else:
-        raise ValueError(f'Mapmaker must be either "CG" or "bin", but {mapmaker_str} was given for'\
-                         f' experiment {experiment_data.experiment_name}, band {experiment_data.band_name}')
+        detmap_dict, maps_to_file = tod2map_bin(
+            band_comm, experiment_data, compsep_output, tod_samples, iter, mapmaking,
+            correlated_noise, data_selection,
+        )
+
+    # Chain writers retain the full parameter tree because it is serialized into file metadata.
+    # The numerical mapmakers themselves only receive the values in their specific configs.
+    if is_master:
+        start_bench("filewrite-datamaps")
+        write_map_chain_to_file(params, chain, iter, experiment_data.experiment_name,
+                                experiment_data.band_name, maps_to_file,
+                                tod_samples.band_unit_factor, tod_samples.band_unit)
+        stop_bench("filewrite-datamaps")
     timing_dict["mapmaker"] = time.time() - t0
     if band_comm.Get_rank() == 0:
-        logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished mapmaking in "\
+        logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished mapmaking in "
                     f"{timing_dict['mapmaker']:.1f}s.")
 
-    ### DATA-SELECTION SUMMARY (reporting only; the cuts are the vetoes in the mapmaking loop) ###
-    if dataselect_cfg.enabled:
-        log_dataselect_summary(band_comm, tod_samples, dataselect_cfg)
+    # Report during data-selection warm-up as well as active-cut iterations.
+    if data_selection.is_available(iter, correlated_noise):
+        log_dataselect_summary(
+            band_comm, tod_samples, data_selection,
+            active=data_selection.cuts_are_active(iter, correlated_noise),
+        )
 
-    ### WRITE CHAIN TO FILE ###
     with benchmark("filewrite-tod"):
         tod_samples.write_chain_to_file(iter)
 
     t0 = time.time()
     with benchmark("end-barrier"):
-        TOD_comm.Barrier()
+        tod_comm.Barrier()
     waittime_dict["end-barrier"] = time.time() - t0
 
-    bench_summary(TOD_comm, label="All bands")
+    bench_summary(tod_comm, label="All bands")
     bench_summary(band_comm, label=f"Band {experiment_data.band_name}")
     bench_reset()
 

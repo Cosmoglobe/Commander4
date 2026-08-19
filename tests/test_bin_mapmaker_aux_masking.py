@@ -15,7 +15,6 @@ from types import SimpleNamespace
 
 import numpy as np
 from mpi4py import MPI
-from pixell.bunch import Bunch
 
 from commander4.data_models.detector_TOD import DetectorTOD
 from commander4.data_models.scan_TOD import ScanTOD
@@ -30,7 +29,7 @@ _NU = 30.0
 
 
 def _build_band(pix: np.ndarray, psi: np.ndarray, flag: np.ndarray, tod: np.ndarray) -> DetGroupTOD:
-    """Real one-detector, one-scan IQU band with `flag` marking bad samples (uncompressed pointing)."""
+    """Build an IQU band whose flag marks bad samples with uncompressed pointing."""
     ntod = pix.size
     pointing = PixelPointing(pix.astype(np.int64), psi.astype(np.float64), np.array([0], np.int64),
                              None, None, _NSIDE, _NSIDE, ntod, ntod)
@@ -56,22 +55,24 @@ def _fake_tod_samples(sigma0: float = 2.0) -> SimpleNamespace:
         tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None)
 
 
-def _run_bin_mapmaker(band: DetGroupTOD, monkeypatch) -> dict[str, np.ndarray]:
-    """Drive tod2map_bin (no ncorr, fixed sigma0) and capture the maps it hands to the chain writer."""
-    params = Bunch(general=Bunch(common_res_fwhm=0.0, write_orb_dipole_maps_to_chain=True,
-                                 write_corr_noise_maps_to_chain=False,
-                                 write_sky_model_maps_to_chain=False),
-                   experiments=Bunch(EXP=Bunch()))
-    ncorr_cfg = Bunch(do_ncorr=False, sample_sigma0=False, do_param=False, sigma0_method="pairwise")
-    dataselect_cfg = Bunch(enabled=False, active=False, chisq_abs_threshold=1.0e4,
-                           min_good_fraction=0.1)
-    captured: dict[str, np.ndarray] = {}
-    monkeypatch.setattr(tod_processing, "write_map_chain_to_file",
-                        lambda *a: captured.update({k: np.array(v, copy=True)
-                                                    for k, v in a[5].items()}))
-    tod_processing.tod2map_bin(MPI.COMM_SELF, band, np.zeros((3, _NPIX)), _fake_tod_samples(),
-                               params, 0, 0, ncorr_cfg, dataselect_cfg)
-    return captured
+def _run_bin_mapmaker(band: DetGroupTOD) -> dict[str, np.ndarray]:
+    """Run binned mapmaking and return the maps selected for chain output."""
+    mapmaking = tod_processing.MapmakingConfig(
+        mapmaker="bin",
+        num_threads=1,
+        include_orbital_dipole_maps=True,
+        include_corr_noise_maps=False,
+        include_sky_model_maps=False,
+        sparse_maps=False,
+        common_res_fwhm=0.0,
+    )
+    correlated_noise = tod_processing.CorrelatedNoiseConfig(sample_sigma0=False)
+    data_selection = tod_processing.DataSelectionConfig()
+    _, maps = tod_processing.tod2map_bin(
+        MPI.COMM_SELF, band, np.zeros((3, _NPIX)), _fake_tod_samples(), 1,
+        mapmaking, correlated_noise, data_selection,
+    )
+    return maps
 
 
 def test_bin_aux_maps_ignore_flagged_samples(monkeypatch):
@@ -82,7 +83,7 @@ def test_bin_aux_maps_ignore_flagged_samples(monkeypatch):
     pix = rng.integers(0, _NPIX, n).astype(np.int64)
     psi = rng.uniform(0.0, np.pi, n)
     tod = rng.normal(size=n)
-    good = _run_bin_mapmaker(_build_band(pix, psi, np.zeros(n), tod), monkeypatch)
+    good = _run_bin_mapmaker(_build_band(pix, psi, np.zeros(n), tod))
 
     # Same good samples, plus flagged samples carrying large garbage TOD at already-observed pixels.
     ne = 40
@@ -90,7 +91,7 @@ def test_bin_aux_maps_ignore_flagged_samples(monkeypatch):
     psi_b = np.concatenate([psi, rng.uniform(0.0, np.pi, ne)])
     tod_b = np.concatenate([tod, rng.normal(size=ne) * 500.0])
     flag_b = np.concatenate([np.zeros(n, np.int64), np.full(ne, _BITMASK, np.int64)])
-    with_flagged = _run_bin_mapmaker(_build_band(pix_b, psi_b, flag_b, tod_b), monkeypatch)
+    with_flagged = _run_bin_mapmaker(_build_band(pix_b, psi_b, flag_b, tod_b))
 
     # All three maps must be unchanged: the flagged samples are dropped everywhere. (Before the fix
     # the orbital-dipole and corr-noise maps binned flagged samples into the numerator only, biasing

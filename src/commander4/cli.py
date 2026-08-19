@@ -14,8 +14,9 @@ from copy import deepcopy
 from traceback import print_exc
 from pixell.bunch import Bunch
 
-from commander4.output import log
+from commander4.output import log, paths
 from commander4 import mpi_management
+from commander4.param_schema import validate_param_schema
 from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
                                             stop_bench, log_memory, increment_count, bench_reset
 
@@ -32,8 +33,6 @@ def run_commander4(params: Bunch, params_dict: dict):
         params_dict: The exact same parameter file, but as a dictionary.
     """
     logger = logging.getLogger(__name__)  # Access logger, used instead of print() in Commander4.
-
-    global_params = params.general
 
     # Perform initial MPI setup, assigning tasks to different MPI ranks and deciding master ranks.
     with benchmark("init-mpi"):
@@ -52,13 +51,7 @@ def run_commander4(params: Bunch, params_dict: dict):
         / /___/ /_/ / / / / / / / / / / / /_/ / / / / /_/ /  __/ /     /__  __/
         \____/\____/_/ /_/ /_/_/ /_/ /_/\__,_/_/ /_/\__,_/\___/_/        /_/""" + "\033[0m\n")
         logger.info(f"Starting Commander 4 with {mpi_info.world.size} total MPI tasks!")
-        # Create output directories if they do not already exist.
-        os.makedirs(global_params.output_paths.chains, exist_ok=True)
-        os.makedirs(global_params.output_paths.stats, exist_ok=True)
-        os.makedirs(os.path.dirname(global_params.logging.file.filename), exist_ok=True)
-        os.makedirs(os.path.join(params.general.output_paths.chains, "datamaps"), exist_ok=True)
-        os.makedirs(os.path.join(params.general.output_paths.chains, "tod"), exist_ok=True)
-        os.makedirs(os.path.join(params.general.output_paths.chains, "compsep"), exist_ok=True)
+        logger.info(f"Writing all output to {paths.resolve_output_dir(params.output)}")
 
     # Important to import Numpy *after* specifying number of threads per rank (happens in init_mpi),
     # as Numpy will not respect a change in thread count after it has been loaded.
@@ -80,6 +73,7 @@ def run_commander4(params: Bunch, params_dict: dict):
     # task for that band (on both the TOD and CompSep sides).
     world_compsep_band_masters_dict = None
     world_tod_band_masters_dict = None
+    compsep_state = None
     if mpi_info.world.color == 0:
         mpi_info, my_band_tod_id, experiment_data, tod_samples_chain1, tod_samples_chain2\
                                                             = init_tod_processing(mpi_info, params)
@@ -90,7 +84,8 @@ def run_commander4(params: Bunch, params_dict: dict):
         # tod_samples_chain1 = tod_samples
         # tod_samples_chain2 = deepcopy(tod_samples)
     elif mpi_info.world.color == 1:
-        components, mpi_info, my_band_compsep_id, my_band = init_compsep_processing(mpi_info, params)
+        components, mpi_info, my_band_compsep_id, my_band, compsep_state = \
+            init_compsep_processing(mpi_info, params)
 
     if mpi_info.world.tod_master is not None:
         # All processes, both compsep and tod, need the world-specific band master and pol dict
@@ -136,7 +131,7 @@ def run_commander4(params: Bunch, params_dict: dict):
 
     ###### Main loop ######
     # Iteration numbers are 1-indexed, and chain 1 iter 1 TOD step is already done pre-loop.
-    for i in range(1, 2 * global_params.niter_gibbs): # x2 because we have two chains
+    for i in range(1, 2 * params.gibbs.num_iterations): # x2 because we have two chains
         # execute the appropriate part of the code (MPMD)
         if mpi_info.world.color == 0:
             t0 = time.time()
@@ -188,8 +183,8 @@ def run_commander4(params: Bunch, params_dict: dict):
                 logger.info(f"Worldrank {mpi_info.world.rank}, subrank {mpi_info.compsep.rank} "\
                             f"going into compsep loop for chain {chain_num}, iter {iter_num}.")
             t0 = time.time()
-            curr_compsep_output = process_compsep(mpi_info, curr_tod_output, iter_num, chain_num,
-                                                  params, components)
+            curr_compsep_output = process_compsep(
+                mpi_info, compsep_state, curr_tod_output, iter_num, chain_num, params, components)
             if mpi_info.compsep.rank == 0:
                 logger.info(f"Compsep: Rank {mpi_info.compsep.rank} finished chain {chain_num}, "\
                             f"{iter_num} in {time.time()-t0:.2f}s. Sending compsep results.")
@@ -213,24 +208,32 @@ def run_commander4(params: Bunch, params_dict: dict):
 def main():
     # Parse parameter file
     from commander4.parse_params import params, params_dict
-    log.init_loggers(params.general.logging)
+    # Temporary check for old parameter files, so they fail quickly.
+    validate_param_schema(params_dict)
+
+    paths.resolve_output_dir(params.output)
+    log_file = paths.log_file_path(params.output) if "file" in params.output.logging else None
+    if MPI.COMM_WORLD.Get_rank() == 0:
+        paths.create_output_dirs(params.output)
+    MPI.COMM_WORLD.Barrier()
+    log.init_loggers(params.output.logging, log_file)
     logger = logging.getLogger(__name__)
     try:
-        if params.general.output_stats:
+        if params.output.profiling:
             profiler = cProfile.Profile()
             profiler.enable()
         ret = run_commander4(params, params_dict)
         logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} finished Commander 4 and is shutting down. "\
                     "Goodbye!")
-        if params.general.output_stats:
+        if params.output.profiling:
             profiler.disable()
             s = io.StringIO()
             stats = pstats.Stats(profiler, stream=s).sort_stats('tottime')
             if ret != -1:
                 stats.print_stats(10)
                 logger.info(f"Rank {MPI.COMM_WORLD.Get_rank()} cProfile stats: {s.getvalue()}")
-                stats.dump_stats(f"{params.general.output_paths.stats}/"\
-                                 f"stats-{MPI.COMM_WORLD.Get_rank()}")
+                stats.dump_stats(os.path.join(paths.subdir(params, paths.LOGS),
+                                              f"stats-{MPI.COMM_WORLD.Get_rank()}"))
 
     # First check for MPI-specific exceptions.
     except MPI.Exception as e:

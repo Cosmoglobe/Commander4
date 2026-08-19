@@ -34,7 +34,7 @@ def resolve_chisq_mask(mask_map: NDArray | None, nside: int) -> NDArray[np.bool_
 
 
 class MCMCSamplingGroup(ABC):
-    """General Metropolis-Hastings sampling group -- the non-linear tier of the compsep Gibbs step.
+    """General Metropolis-Hastings sampling group in the compsep Gibbs step.
 
     This base class owns everything that does *not* depend on which parameters are being sampled:
 

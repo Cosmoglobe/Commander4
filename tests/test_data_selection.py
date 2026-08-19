@@ -1,8 +1,8 @@
 """Tests for detector-scan data selection (the accept-flag machinery in data_selection.py).
 
-Covers the chi-squared z-score judged by the in-loop vetoes, the parameter-file gating
-(from/until iteration, ncorr wait), and the per-band summary logging (run single-rank on
-``MPI.COMM_SELF`` with a minimal TODSamples stand-in).
+Covers the chi-squared z-score judged by the in-loop vetoes and the per-band summary logging (run
+single-rank on ``MPI.COMM_SELF`` with a minimal TODSamples stand-in). Parameter gating is tested in
+``test_tod_step_schema.py``.
 """
 
 import logging
@@ -13,7 +13,7 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.data_selection import masked_chisq_z, build_dataselect_cfg, log_dataselect_summary
+from commander4.data_selection import masked_chisq_z, log_dataselect_summary
 
 
 def test_chisq_z_white_noise_is_standard_normal():
@@ -47,19 +47,7 @@ def test_chisq_z_undefined_cases_are_nan():
     assert np.isnan(masked_chisq_z(residual, mask, np.nan))  # non-finite sigma0
 
 
-def test_build_dataselect_cfg_gating():
-    params = Bunch(general=Bunch(data_selection=Bunch(
-        sample_data_selection=True, from_iter_num=2, until_iter_num=3)))
-    assert not build_dataselect_cfg(params, 1, True, True).active
-    assert build_dataselect_cfg(params, 2, True, True).active
-    assert build_dataselect_cfg(params, 3, True, True).active   # until_iter_num is inclusive
-    assert not build_dataselect_cfg(params, 4, True, True).active  # past it: cuts stop...
-    assert build_dataselect_cfg(params, 4, True, True).enabled     # ...but the summary keeps going
-    # chisq_z needs the ncorr-subtracted residual: wait for ncorr sampling when it is configured.
-    assert not build_dataselect_cfg(params, 2, False, True).enabled
-    assert build_dataselect_cfg(params, 2, False, False).enabled
-    # No data_selection block at all: fully off.
-    assert not build_dataselect_cfg(Bunch(general=Bunch()), 1, True, True).enabled
+# Configuration and iteration gating are tested separately in test_tod_step_schema.py.
 
 
 def _stub_samples(chisq_z, good_fraction):
@@ -72,7 +60,7 @@ def _stub_samples(chisq_z, good_fraction):
 
 
 def _cfg(**overrides):
-    cfg = dict(enabled=True, active=True, chisq_abs_threshold=1.0e4, min_good_fraction=0.1)
+    cfg = dict(enabled=True, chisq_abs_threshold=1.0e4, min_good_fraction=0.1)
     cfg.update(overrides)
     return SimpleNamespace(**cfg)
 
@@ -90,7 +78,7 @@ def test_log_dataselect_summary_counts_veto_rejections(caplog):
     stub.accept[3, 0] = False
 
     with caplog.at_level(logging.INFO, logger="commander4.data_selection"):
-        log_dataselect_summary(MPI.COMM_SELF, stub, _cfg())
+        log_dataselect_summary(MPI.COMM_SELF, stub, _cfg(), active=True)
     assert "rejected 2 detector-scans" in caplog.text
     assert "low-good-fraction: 1" in caplog.text
     assert "|chisq_z| > 1e+04: 1" in caplog.text
@@ -103,5 +91,5 @@ def test_log_dataselect_summary_inactive_counts_nothing(caplog):
     z = np.full((20, 1), 5e5)
     stub = _stub_samples(z, np.full((20, 1), 0.95))
     with caplog.at_level(logging.INFO, logger="commander4.data_selection"):
-        log_dataselect_summary(MPI.COMM_SELF, stub, _cfg(active=False))
+        log_dataselect_summary(MPI.COMM_SELF, stub, _cfg(), active=False)
     assert "rejected 0 detector-scans" in caplog.text

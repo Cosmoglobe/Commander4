@@ -182,13 +182,13 @@ class MixingMatrixPreconditioner:
             a_array = alm_real2complex(a_array, self.compsep.my_comp_lmax)
             a_map = np.empty((self.compsep.npix,), dtype=np.float64)
             curvedsky.alm2map_healpix(a_array, a_map, spin=0,
-                                      nthread=self.compsep.params.nthreads_compsep)
+                                      nthread=self.compsep.nthreads)
             a_map_all = self.CompSep_subcomm.allgather(a_map)
             a_map_all = np.array(a_map_all)
             a_map_all = np.matmul(self.MT_M_inv, a_map_all)
             a_map_me = a_map_all[self.my_comp]
             curvedsky.map2alm_healpix(a_map_me, a_array, niter=3, spin=0,
-                                      nthread=self.compsep.params.nthreads_compsep)
+                                      nthread=self.compsep.nthreads)
             a_array = alm_complex2real(a_array, self.compsep.my_comp_lmax)
         return a_array
 
