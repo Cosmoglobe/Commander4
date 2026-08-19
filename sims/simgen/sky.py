@@ -23,7 +23,7 @@ import healpy as hp
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
-import commander4.sky.component as c4comp
+import commander4.sky as c4comp
 from simgen.config import bget
 
 logger = logging.getLogger(__name__)

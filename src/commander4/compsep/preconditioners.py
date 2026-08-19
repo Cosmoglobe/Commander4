@@ -10,14 +10,16 @@ from numpy.typing import NDArray
 from pixell import curvedsky
 from copy import deepcopy
 import logging
-from commander4.math_utils.math_operations import alm_real2complex, alm_complex2real, inplace_arr_prod
+from commander4.math_utils.arithmetic import inplace_arr_prod
+from commander4.math_utils.alm import alm_real2complex, alm_complex2real
 from commander4.backend.ctypes_lib import load_cmdr4_ctypes_lib
 
 import typing
 # Only import when performing type checking, avoiding circular import during normal runtime.
 if typing.TYPE_CHECKING:
     from commander4.compsep.cg_solver import CompSepSolver
-    from commander4.sky.component import Component, CompList
+    from commander4.sky.comp_list import CompList
+    from commander4.sky.component import Component
     from commander4.tod.mapmaking.binned import WeightsMapmakerIQU
 
 logger = logging.getLogger(__name__)

@@ -3,7 +3,7 @@ from numpy.typing import NDArray
 
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.noise.psd import NoisePSD
-from commander4.math_utils.math_operations import forward_rfft_mirrored, backward_rfft_mirrored
+from commander4.math_utils.fft import forward_rfft_mirrored, backward_rfft_mirrored
 
 class DetectorGroupTOD:
     """Container for all scan TODs belonging to one detector group (experiment + band).
@@ -49,7 +49,7 @@ class DetectorGroupTOD:
         across Gibbs iterations. ``sparse=False`` gives the historical full-sky-per-rank layout;
         ``sparse=True`` restricts each rank's map buffers to its locally-observed pixels.
         """
-        from commander4.utils.pixel_domain import PixelDomain
+        from commander4.data_models.pixel_domain import PixelDomain
         mode = "sparse" if sparse else "full"
         if self._pixel_domain is None or self._pixel_domain.mode != mode:
             self._pixel_domain = PixelDomain.from_view(scan_view, comm, mode, self.nside)

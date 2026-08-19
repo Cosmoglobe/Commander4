@@ -14,11 +14,11 @@ import numpy as np
 import yaml
 from pixell.bunch import Bunch
 
-import commander4.sky.component as component_lib
 from commander4.file_io import paths
 from commander4.diagnostics import plotting
 from commander4.diagnostics.plotting import _ensure_2d_map
 from commander4.sky.component import Component
+import commander4.sky as component_lib
 
 
 CHAIN_ITER_RE = re.compile(r"chain(?P<chain>\d+)_iter(?P<iter>\d+)\.h5$")

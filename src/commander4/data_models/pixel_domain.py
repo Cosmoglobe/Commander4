@@ -2,7 +2,7 @@ import numpy as np
 from mpi4py import MPI
 from numpy.typing import NDArray
 
-from commander4.utils.general_algorithms import gallop_search_many
+from commander4.math_utils.search import gallop_search_many
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset
 

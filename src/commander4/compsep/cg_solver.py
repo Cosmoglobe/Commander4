@@ -7,10 +7,11 @@ from typing import Callable, TYPE_CHECKING
 from copy import deepcopy
 
 from commander4.data_models.detector_map import DetectorMap
-from commander4.sky.component import CompList
-from commander4.math_utils.math_operations import alm_to_map_adjoint, gaussian_random_alm,\
-    complist_dot, complist_norm
-from commander4.utils.dense_matrix_math import DenseMatrix
+from commander4.sky.comp_list import CompList
+from commander4.math_utils.alm import gaussian_random_alm
+from commander4.math_utils.sht import alm_to_map_adjoint
+from commander4.sky.comp_list import complist_dot, complist_norm
+from commander4.compsep.dense_matrix_debug import DenseMatrix
 from commander4.compsep.cg_driver import DistributedCG
 import commander4.compsep.preconditioners as preconditioners
 from commander4.data_models.band import Band

@@ -1,24 +1,29 @@
-import numpy as np
-import pysm3.units as pysm3_u
-from numpy.typing import NDArray
-import ducc0
+"""Evaluating the modelled signal along a detector-scan's pointing.
+
+Two signals are projected here: the static sky model (C3's `s_sky`) and the orbital dipole induced
+by the observer's motion (C3's `s_orb`). Both turn a sky-domain quantity into a TOD, and both are
+numba kernels because they run once per detector-scan per Gibbs iteration.
+"""
 import logging
 import os
-from numba import njit
 
-from commander4.data_models.scan_tod import ScanTOD
+import ducc0
+import numpy as np
+import pysm3.units as pysm3_u
+from numba import njit
+from numpy.typing import NDArray
+
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
-from commander4.diagnostics import log
 
 logger = logging.getLogger(__name__)
 
-POLS_DICT = {"I":1, "QU":2, "IQU":3} #more allowed in the future.
 T_CMB = 2.725 * 1e6  # CMB temperature in uK_CMB units.
 C = 299792458  # m/s (Speed of light)
 T_CMB_div_C = T_CMB / C
 # Precomputing the conversion factor from 1 uK_CMB to 1 uK_RJ
 uK_CMB_to_uK_RJ_dict = {}
+
 
 def get_static_sky_tod(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
                        psi: NDArray[np.floating]|None = None) -> NDArray[np.floating]:
@@ -95,46 +100,3 @@ def get_s_orb_tod(det: DetectorTOD, experiment: DetectorGroupTOD, pix: NDArray[n
     s_orb *= T_CMB_div_C
     s_orb *= uK_CMB_to_uK_RJ_dict[experiment.nu]  # Converting to uK_RJ units.
     return s_orb.astype(np.float32, copy=False)
-
-def fwhm2sigma(fwhm):
-    return fwhm/(2*np.sqrt(2*np.log(2)))
-
-def gauss_beam(x, fwhm):
-    """
-    Gaussian integral-normalized beam in map space.
-    Be CAREFUL giving `x` and `fwhm` in the same units of measure. 
-    """
-    sigma = fwhm2sigma(fwhm)
-    return 1/(2*np.pi*sigma**2)*np.exp(-(x)**2 / (2*sigma**2))
-
-def get_gauss_beam_radius(fwhm, frac=1e-4):
-    """
-    Finds the distance from the center of a gaussian beam corresponding to a fraction 'frac'
-    of the peak intensity.
-    """
-    sigma = fwhm2sigma(fwhm)
-    return sigma * np.sqrt( - 2* np.log(frac))
-
-def get_npol(pols:str):
-    """
-    Return the number of map polarizaiton components given the polarization string `pols`.
-    """
-    log.logassert(pols in POLS_DICT, "Unrecognised polarization string", logger)
-    return POLS_DICT[pols]
-    
-def is_pol_supported(pols:str):
-    """
-    Checks if the given polarization string `pols` is matching one of the supported pol configs.
-    """
-    if pols in POLS_DICT.keys():
-        return True
-    else:
-        return False
-
-def assert_pol_supported(pols:str):
-    """
-    Asserts if the given polarization string `pols` is matching one of the supported pol configs.
-    """
-    log.logassert(is_pol_supported(pols), 
-                  f"Unsupported polarization string {pols}", 
-                  logging.getLogger(__name__))

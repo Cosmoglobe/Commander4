@@ -10,7 +10,7 @@ from mpi4py import MPI
 from numpy.typing import NDArray
 
 from commander4.data_models.detector_map import DetectorMap
-from commander4.sky.component import CompList
+from commander4.sky.comp_list import CompList
 from commander4.sky.sky_model import SkyModel
 
 logger = logging.getLogger(__name__)

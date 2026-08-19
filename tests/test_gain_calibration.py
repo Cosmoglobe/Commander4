@@ -16,7 +16,7 @@ import pytest
 from pixell.bunch import Bunch
 
 from commander4.tod.view import TODView
-from commander4.tod.processing import GainConfig, _VALID_CALIB_TARGETS, _solve_relative_gain_system
+from commander4.tod.gain import GainConfig, _VALID_CALIB_TARGETS, _solve_relative_gain_system
 
 
 # --------------------------------------------------------------------------------------

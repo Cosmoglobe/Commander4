@@ -247,7 +247,8 @@ def test_truth_map_is_readable_as_a_commander4_init_map(tmp_path):
     simgen writes -- must make that conversion the identity.
     """
     pytest.importorskip("ducc0")
-    from commander4.sky.component import ThermalDust, _load_component_alms
+    from commander4.sky.comp_io import _load_component_alms
+    from commander4.sky.diffuse_components import ThermalDust
     from simgen.sky import build_components, write_component_truth_maps
 
     template_path = str(tmp_path / "dust_template.fits")

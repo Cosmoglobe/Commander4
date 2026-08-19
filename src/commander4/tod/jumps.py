@@ -1,205 +1,117 @@
+"""Jump detection: finding and correcting sudden baseline offsets in a detector-scan.
+
+C4 samples this every Gibbs iteration (C3 leaves the equivalent commented out). The correction
+itself is stored as a `JumpCatalog` on `TODSamples`, so it is applied to every later TOD request
+rather than modifying the data in place.
+"""
+import logging
 from dataclasses import dataclass
+from typing import ClassVar, TYPE_CHECKING
 
-import h5py
 import numpy as np
-from numpy.typing import NDArray
+from mpi4py import MPI
+from pixell.bunch import Bunch
+
+from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.data_models.jump_corrections import JumpCorrection
+from commander4.diagnostics.performance import log_memory
+from commander4.tod.step_config import StepConfig
+from commander4.tod.view import TODView
+
+if TYPE_CHECKING:
+    from commander4.data_models.tod_samples import TODSamples
+
+logger = logging.getLogger(__name__)
 
 
-@dataclass(slots=True)
-class JumpCorrection:
-    """Additive offsets that are applied after one or more detected jump locations."""
+def sample_jump_detection(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
+                          tod_samples: "TODSamples",
+                          config: "JumpDetectionConfig") -> "TODSamples":
+    """Detect jump discontinuities from the flag stream and store additive post-jump offsets.
 
-    locations: NDArray[np.int64]
-    offsets: NDArray[np.float32]
+    A jump is identified by a contiguous region with a non-zero
+    ``flag & experiments.[experiment_name].jump_bitmask``. For each region, the offset is
+    estimated from the last ``window`` valid samples before the jump and the first ``window``
+    valid samples after it, where validity is defined by ``full_mask``. The correction is then
+    applied to all later samples when a TOD is requested through ``TODView.get_tod()``.
+    """
+    scan_view = TODView(experiment_data, tod_samples)
+    num_applied_local = 0
+    num_skipped_local = 0
+    offsets_local = []
+    jump_counts_local = []
 
-    def __post_init__(self):
-        """Normalize storage and validate that the jump metadata is well-formed."""
-        self.locations = np.asarray(self.locations, dtype=np.int64)
-        self.offsets = np.asarray(self.offsets, dtype=np.float32)
-        if self.locations.ndim != 1 or self.offsets.ndim != 1:
-            raise ValueError("JumpCorrection expects 1-D locations and offsets arrays.")
-        if self.locations.size != self.offsets.size:
-            raise ValueError("jump locations and offsets must have the same length.")
-
-    @classmethod
-    def empty(cls) -> "JumpCorrection":
-        """Return an empty correction object for detectors without any detected jumps."""
-        return cls(np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float32))
-
-    @property
-    def size(self) -> int:
-        """Number of jump discontinuities represented by this correction."""
-        return int(self.locations.size)
-
-    def is_empty(self) -> bool:
-        """Return whether this correction contains any offsets."""
-        return self.size == 0
-
-    def apply(
-        self,
-        tod: NDArray[np.floating],
-        *,
-        inplace: bool = False,
-    ) -> NDArray[np.floating]:
-        """Apply the stored offsets to a TOD array in detector units."""
-        corrected_tod = tod if inplace else np.array(tod, copy=True)
-        for jump_location, jump_offset in zip(self.locations, self.offsets):
-            corrected_tod[jump_location:] += jump_offset
-        return corrected_tod
-
-    @classmethod
-    def detect(
-        cls,
-        tod: NDArray[np.floating],
-        flag: NDArray[np.integer],
-        valid_mask: NDArray[np.bool_],
-        n_window: int,
-        *,
-        jump_bitmask: int,
-    ) -> tuple["JumpCorrection", int]:
-        """Estimate jump offsets from flagged regions and neighboring valid samples.
-
-        Args:
-            tod: Raw detector TOD in detector units.
-            flag: Per-sample flag stream. Contiguous regions with a non-zero
-                ``flag & jump_bitmask`` mark jumps.
-            valid_mask: Boolean mask defining which samples are allowed in the pre/post windows.
-            n_window: Number of valid samples to average on each side of a jump.
-            jump_bitmask: Integer bitmask used to tag jumps in the flag stream.
-
-        Returns:
-            A ``JumpCorrection`` object plus the number of flagged jump regions that were skipped
-            because either side lacked enough valid samples.
-        """
-        if n_window < 1:
-            raise ValueError("n_window must be >= 1.")
-        if jump_bitmask < 1:
-            raise ValueError("jump_bitmask must be >= 1.")
-
-        jump_indices = np.flatnonzero((flag & jump_bitmask) != 0)
-        if jump_indices.size == 0:
-            return cls.empty(), 0
-
-        breaks = np.flatnonzero(np.diff(jump_indices) > 1)
-        jump_starts = np.concatenate(([jump_indices[0]], jump_indices[breaks + 1]))
-        jump_stops = np.concatenate((jump_indices[breaks] + 1, [jump_indices[-1] + 1]))
-        valid_indices = np.flatnonzero(valid_mask)
-        corrected_tod = np.array(tod, copy=True)
-        jump_locations = []
-        jump_offsets = []
-        num_skipped = 0
-
-        for jump_start, jump_stop in zip(jump_starts, jump_stops):
-            before_stop = np.searchsorted(valid_indices, jump_start, side="left")
-            after_start = np.searchsorted(valid_indices, jump_stop, side="left")
-            before_indices = valid_indices[max(0, before_stop - n_window):before_stop]
-            after_indices = valid_indices[after_start:after_start + n_window]
-            if before_indices.size < n_window or after_indices.size < n_window:
-                num_skipped += 1
-                continue
-
-            mean_before = np.mean(corrected_tod[before_indices], dtype=np.float64)
-            mean_after = np.mean(corrected_tod[after_indices], dtype=np.float64)
-            jump_offset = float(mean_before - mean_after)
-
-            # Later jumps should be estimated relative to the already corrected baseline.
-            corrected_tod[jump_stop:] += jump_offset
-            jump_locations.append(int(jump_stop))
-            jump_offsets.append(jump_offset)
-
-        return cls(jump_locations, jump_offsets), num_skipped
-
-
-class JumpCatalog:
-    """Per-scan and per-detector container for jump corrections."""
-
-    def __init__(self, entries: NDArray):
-        """Wrap a 2-D object array of ``JumpCorrection`` instances."""
-        if entries.ndim != 2:
-            raise ValueError("JumpCatalog expects a 2-D object array.")
-        self._entries = entries
-        self.nscans, self.ndet = entries.shape
-
-    @classmethod
-    def empty(cls, nscans: int, ndet: int) -> "JumpCatalog":
-        """Allocate an empty jump catalog for one MPI rank's local scans."""
-        entries = np.empty((nscans, ndet), dtype=object)
-        for iscan in range(nscans):
-            for idet in range(ndet):
-                entries[iscan, idet] = JumpCorrection.empty()
-        return cls(entries)
-
-    @classmethod
-    def from_hdf5(
-        cls,
-        file: h5py.File,
-        local_indices: list[int],
-        ndet: int,
-    ) -> "JumpCatalog":
-        """Reconstruct a local jump catalog from packed HDF5 datasets when present."""
-        catalog = cls.empty(len(local_indices), ndet)
-        dataset_names = {"jump_counts", "jump_locations", "jump_offsets"}
-        if not dataset_names.issubset(file.keys()):
-            return catalog
-
-        counts_global = file["jump_counts"][:]
-        locations_global = file["jump_locations"][:]
-        offsets_global = file["jump_offsets"][:]
-        counts_flat = counts_global.reshape(-1)
-        starts_flat = np.cumsum(counts_flat, dtype=np.int64) - counts_flat
-
-        for iscan_local, iscan_global in enumerate(local_indices):
-            row_start = iscan_global * ndet
-            for idet in range(ndet):
-                flat_index = row_start + idet
-                count = int(counts_flat[flat_index])
-                start = int(starts_flat[flat_index])
-                stop = start + count
-                catalog.set(
-                    iscan_local,
-                    idet,
-                    JumpCorrection(locations_global[start:stop], offsets_global[start:stop]),
-                )
-        return catalog
-
-    def get(self, iscan: int, idet: int) -> JumpCorrection:
-        """Return the correction object for one detector in one scan."""
-        jump = self._entries[iscan, idet]
-        return JumpCorrection.empty() if jump is None else jump
-
-    def set(self, iscan: int, idet: int, jump: JumpCorrection | None):
-        """Store one detector-local correction, replacing ``None`` by an empty correction."""
-        self._entries[iscan, idet] = JumpCorrection.empty() if jump is None else jump
-
-    def apply(
-        self,
-        tod: NDArray[np.floating],
-        iscan: int,
-        idet: int,
-        *,
-        inplace: bool = False,
-    ) -> NDArray[np.floating]:
-        """Apply the stored correction for one detector and scan to a TOD array."""
-        return self.get(iscan, idet).apply(tod, inplace=inplace)
-
-    def pack(self) -> tuple[NDArray[np.int64], NDArray[np.int64], NDArray[np.float32]]:
-        """Pack ragged corrections into counts plus flat arrays for MPI/HDF5 output."""
-        counts = np.zeros((self.nscans, self.ndet), dtype=np.int64)
-        flat_locations = []
-        flat_offsets = []
-
-        for iscan in range(self.nscans):
-            for idet in range(self.ndet):
-                jump = self.get(iscan, idet)
-                counts[iscan, idet] = jump.size
-                if not jump.is_empty():
-                    flat_locations.append(jump.locations)
-                    flat_offsets.append(jump.offsets)
-
-        packed_locations = (
-            np.concatenate(flat_locations) if flat_locations else np.empty(0, dtype=np.int64)
+    for view in scan_view.iter_focused():
+        # Jump detection needs the flag stream both to locate jumps (via jump_bitmask) and to
+        # define valid pre/post-jump samples; skip detector-scans without it.
+        if getattr(view.detector, "_flag_encoded", None) is None:
+            tod_samples.jumps.set(view.iscan, view.idet, None)
+            jump_counts_local.append(0)
+            continue
+        jump, num_skipped = JumpCorrection.detect(
+            view.tod,
+            view.flag,
+            view.get_mask(proc_mask_type="jump"),
+            config.window,
+            jump_bitmask=config.jump_bitmask,
         )
-        packed_offsets = (
-            np.concatenate(flat_offsets) if flat_offsets else np.empty(0, dtype=np.float32)
-        )
-        return counts, packed_locations, packed_offsets
+        tod_samples.jumps.set(view.iscan, view.idet, jump)
+        jump_counts_local.append(jump.size)
+        num_skipped_local += num_skipped
+        if not jump.is_empty():
+            offsets_local.extend(jump.offsets.astype(np.float64, copy=False))
+            num_applied_local += jump.size
+
+    num_applied = band_comm.reduce(num_applied_local, op=MPI.SUM, root=0)
+    num_skipped = band_comm.reduce(num_skipped_local, op=MPI.SUM, root=0)
+    gathered_offsets = band_comm.gather(np.asarray(offsets_local, dtype=np.float64), root=0)
+    gathered_jump_counts = band_comm.gather(np.asarray(jump_counts_local, dtype=np.int32), root=0)
+
+    if band_comm.Get_rank() == 0:
+        all_jump_counts = np.concatenate(gathered_jump_counts) if gathered_jump_counts else np.empty(0)
+        if all_jump_counts.size > 0:
+            logger.debug(
+                f"Band {experiment_data.band_name} jump counts per detector-scan: "
+                f"min={np.min(all_jump_counts)}, avg={np.mean(all_jump_counts):.2f}, "
+                f"max={np.max(all_jump_counts)} over {all_jump_counts.size} samples."
+            )
+        if num_applied > 0:
+            all_offsets = np.concatenate([arr for arr in gathered_offsets if arr.size > 0])
+            logger.info(f"Band {experiment_data.band_name} jump detection: applied {num_applied} "
+                        f"offsets, skipped {num_skipped}, median |offset| = "
+                        f"{np.median(np.abs(all_offsets)):.3e}.")
+        elif num_skipped > 0:
+            logger.info(f"Band {experiment_data.band_name} jump detection skipped {num_skipped} "
+                        f"flagged regions because there were not enough valid samples around them.")
+
+    log_memory("jump-detect")
+    return tod_samples
+
+
+@dataclass(frozen=True)
+class JumpDetectionConfig(StepConfig):
+    """Validated jump-detection parameters and experiment-specific flag bitmask."""
+
+    PARAMETER_NAME: ClassVar[str] = "jump_detection"
+
+    window: int = 10
+    jump_bitmask: int | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not isinstance(self.window, int) or isinstance(self.window, bool) or self.window < 1:
+            raise ValueError("jump_detection.window must be an integer of at least 1.")
+        if self.enabled and self.jump_bitmask is None:
+            raise ValueError("Jump detection is enabled, but the experiment has no jump_bitmask.")
+        if self.jump_bitmask is not None and not isinstance(self.jump_bitmask, int):
+            raise ValueError("The experiment jump_bitmask must be an integer.")
+
+    @classmethod
+    def from_params(cls, params: Bunch, experiment_data: DetectorGroupTOD) -> "JumpDetectionConfig":
+        """Build jump settings from their step block and the experiment flag bitmask."""
+        experiment = params.experiments[experiment_data.experiment_name]
+        jump_bitmask = experiment.jump_bitmask if "jump_bitmask" in experiment else None
+        block = (params.tod_processing[cls.PARAMETER_NAME]
+                 if cls.PARAMETER_NAME in params.tod_processing else Bunch())
+        return cls._from_block(f"tod_processing.{cls.PARAMETER_NAME}", block,
+                               jump_bitmask=jump_bitmask)

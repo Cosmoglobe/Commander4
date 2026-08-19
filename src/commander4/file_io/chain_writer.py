@@ -6,7 +6,8 @@ import datetime
 from pixell.bunch import Bunch
 
 from commander4.file_io import paths
-from commander4.sky.component import Component, CompList
+from commander4.sky.comp_list import CompList
+from commander4.sky.component import Component
 
 
 def write_map_chain_to_file(params: Bunch, chain: int, iter: int, exp_name:str,

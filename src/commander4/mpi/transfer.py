@@ -7,7 +7,7 @@ from pixell.bunch import Bunch
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.file_io.map_reader import read_data_map_from_file
-from commander4.utils.execution_ids import get_execution_band_id
+from commander4.polarization import get_execution_band_id
 from commander4.sky.sky_model import build_initial_sky_model
 
 logger = logging.getLogger(__name__)

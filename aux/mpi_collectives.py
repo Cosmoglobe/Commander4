@@ -11,7 +11,8 @@ import argparse
 import math
 from numpy.testing import assert_ as myassert
 
-from commander4.math_utils.math_operations import nalm, alm_to_map
+from commander4.math_utils.alm import nalm
+from commander4.math_utils.sht import alm_to_map
 
 
 def random_alm(lmax, mmax, spin, ncomp, rng):

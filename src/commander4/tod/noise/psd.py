@@ -4,7 +4,7 @@ import numpy as np
 import pixell
 from scipy.fft import rfftfreq
 from numpy.typing import NDArray
-from commander4.math_utils.math_operations import forward_rfft
+from commander4.math_utils.fft import forward_rfft
 
 logger = logging.getLogger(__name__)
 

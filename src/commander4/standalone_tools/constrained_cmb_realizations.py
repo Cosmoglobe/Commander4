@@ -14,7 +14,7 @@ from astropy.io import fits
 from pixell.bunch import Bunch
 
 from commander4.file_io import paths
-from commander4.sky.component import ThermalDust, FreeFree, Synchrotron
+from commander4.sky.diffuse_components import ThermalDust, FreeFree, Synchrotron
 from commander4.sky.sky_model import SkyModel
 
 logger = logging.getLogger("cmb_realizations")

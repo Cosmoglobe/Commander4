@@ -13,7 +13,8 @@ from mpi4py import MPI
 
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
-from commander4.sky.component import ThermalDust, Synchrotron, FreeFree, SpinningDust
+from commander4.sky.diffuse_components import ThermalDust, Synchrotron, FreeFree,\
+        SpinningDust
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset
 

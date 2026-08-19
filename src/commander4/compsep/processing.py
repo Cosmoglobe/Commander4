@@ -11,13 +11,14 @@ from typing import Self
 
 from commander4.diagnostics.log import logassert
 from commander4.data_models.detector_map import DetectorMap
-from commander4.sky.component import CompList, DiffuseComponent
+from commander4.sky.comp_list import CompList
+from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.sky.sky_model import SkyModel
 from commander4.compsep.cg_solver import CompSepSolver
 from commander4.compsep.perpix_solver import solve_compsep_perpix
 from commander4.compsep.spectral_index import SpectralIndexSamplingGroup
 from commander4.file_io.chain_writer import write_compsep_chain_to_file
-from commander4.utils.execution_ids import get_execution_band_id, EXECUTION_POLS
+from commander4.polarization import get_execution_band_id, EXECUTION_POLS
 from commander4.parameters.schema import resolve_band_lmax
 
 logger = logging.getLogger(__name__)

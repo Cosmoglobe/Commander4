@@ -1,4 +1,4 @@
-"""Tests for the sorted-array search helpers in commander4.utils.general_algorithms.
+"""Tests for the sorted-array search helpers in commander4.math_utils.search.
 
 `np.searchsorted(..., side='left')` is the reference implementation throughout: all four
 routines are documented to return the same leftmost insertion index, so property tests just
@@ -8,7 +8,7 @@ compare against it on randomized sorted arrays and query values.
 import numpy as np
 from numpy.testing import assert_array_equal
 
-from commander4.utils.general_algorithms import (
+from commander4.math_utils.search import (
     bisect_search, bisect_search_many, gallop_search, gallop_search_many,
 )
 

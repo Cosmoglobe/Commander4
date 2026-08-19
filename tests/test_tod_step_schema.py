@@ -6,19 +6,18 @@ from types import SimpleNamespace
 import pytest
 from pixell.bunch import Bunch
 
-from commander4.tod.processing import (
-    CorrelatedNoiseConfig,
-    DataSelectionConfig,
+from commander4.tod.data_selection import DataSelectionConfig
+from commander4.tod.gain import (
     GainConfig,
-    JumpDetectionConfig,
-    MapmakingConfig,
     sample_absolute_gain,
-    sample_jump_detection,
     sample_relative_gain,
     sample_temporal_gain_variations,
-    tod2map_CG,
-    tod2map_bin,
 )
+from commander4.tod.jumps import JumpDetectionConfig, sample_jump_detection
+from commander4.tod.mapmaking.binned import tod2map_bin
+from commander4.tod.mapmaking.cg import tod2map_CG
+from commander4.tod.mapmaking.config import MapmakingConfig
+from commander4.tod.noise.sample_ncorr import CorrelatedNoiseConfig
 
 
 def _params(**steps) -> Bunch:

@@ -5,8 +5,16 @@ import logging
 from numpy.typing import NDArray
 
 from commander4.diagnostics.log import logassert
+from commander4.diagnostics.performance import log_memory, start_bench, stop_bench
 from commander4.backend.ctypes_lib import load_cmdr4_ctypes_lib
-from commander4.utils.pixel_domain import PixelDomain
+from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.tod_samples import TODSamples
+from commander4.tod.noise.sample_ncorr import sample_correlated_noise, log_corr_noise_stats
+from commander4.tod.noise.sigma0 import _estimate_standalone_sigma0
+from commander4.tod.scan_diagnostics import _record_tod_diagnostics
+from commander4.tod.view import TODView
+from commander4.data_models.pixel_domain import PixelDomain
 
 logger = logging.getLogger(__name__)
 
@@ -411,3 +419,206 @@ class WeightsMapmakerIQU:
                 diag = np.diagonal(A_inv, axis1=1, axis2=2)
                 diag = np.where(diag >= 0, np.sqrt(diag), np.inf)
                 self._finalized_rms_map[:, mask] = diag.T.astype(self.dtype, copy=False)
+
+
+def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_output: NDArray,
+                tod_samples: TODSamples, iteration: int,
+                mapmaking: "MapmakingConfig", correlated_noise: "CorrelatedNoiseConfig",
+                data_selection: "DataSelectionConfig",
+                ) -> tuple[dict[str, DetectorMap], dict[str, NDArray]]:
+    """ Commander4 bin mapmaking. All ranks on the provided MPI communicator collaborates on creating
+        the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
+    Args:
+        band_comm (Comm): The communicator consisting of all MPI ranks which holds TOD data that
+                          should go into the same map.
+        experiment_data (DetectorGroupTOD): TOD data class to be made into maps.
+        compsep_output (NDArray): The sky model at our band. Not used, but written to chain file.
+        tod_samples (TODSamples): Sampled TOD parameters, such as gain.
+        iteration: Current Gibbs iteration.
+        mapmaking: Validated mapmaking settings.
+        correlated_noise: Validated correlated-noise settings.
+        data_selection: Validated detector-scan selection settings.
+    Output:
+        Detector maps for component separation and maps selected for chain output.
+
+    """
+    start_bench("binned-mapmaker")
+    corr_noise_active = correlated_noise.is_active(iteration)
+    selection_active = data_selection.cuts_are_active(iteration, correlated_noise)
+    pols = experiment_data.pols
+    scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
+    # Optional per-experiment sparse map storage: each rank holds only its locally-observed pixels
+    # rather than a full sky map. The band master still ends up with full-sky maps.
+    domain = experiment_data.get_pixel_domain(scan_view, band_comm, mapmaking.sparse_maps)
+
+    # Set up various mapmakers.
+    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
+    mapmaker = MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
+    mapmaker_orbdipole = MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
+    if corr_noise_active:
+        mapmaker_ncorr = MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
+        sampled_params = []
+        residuals = []
+        niters = []
+        num_failed_convergences_ncorr = 0
+        num_too_high_var_ncorr = 0
+        worst_residual_ncorr = 0
+    stop_bench("binned-mapmaker")
+
+    ### MAIN SCAN LOOP ###
+    for view in scan_view.iter_focused(accepted_only=True):
+        start_bench("binned-mapmaker")
+        good_data_mask = view.get_mask(proc_mask=False)
+        pix, psi = view.pix, view.psi
+        pix_masked = pix[good_data_mask]
+        psi_masked = psi[good_data_mask]
+        response = view.det_response
+        gain = view.get_gain()
+        stop_bench("binned-mapmaker", increment_count=False)
+
+        ### DATA-SELECTION VETO 1 (too little unflagged data).
+        good_frac = good_data_mask.mean()
+        tod_samples.good_fraction[view.iscan, view.idet] = good_frac
+        if selection_active and good_frac < data_selection.min_good_fraction:
+            tod_samples.accept[view.iscan, view.idet] = False
+            continue
+
+        ### CORRELATED NOISE / SIGMA0 SAMPLING (first, so the weights below use the new sigma0) ###
+        n_corr_est = None
+        if corr_noise_active:
+            start_bench("ncorr-sampling")
+            sky_subtracted_TOD = view.get_tod(
+                subtract=(("sky", TODView._ALL_GAIN_TERMS),
+                          ("orbital_dipole", TODView._ALL_GAIN_TERMS)),
+            )
+            res = sample_correlated_noise(
+                sky_subtracted_TOD, view.get_mask(proc_mask_type="ncorr"),
+                np.array(view.noise_params, copy=True),
+                experiment_data.noise_model, view.fsamp, cg_err_tol=correlated_noise.cg.err_tol,
+                cg_max_iter=correlated_noise.cg.max_iter,
+                sample_params=correlated_noise.sample_psd_params,
+                sample_sigma0=correlated_noise.sample_sigma0,
+                sigma0_method=correlated_noise.sigma0_method,
+                nomono=correlated_noise.nomono,
+                onlymono=correlated_noise.onlymono,
+                sigma0_dec=correlated_noise.sigma0_decimation,
+                psd_fit_nu_min=correlated_noise.psd_fit_nu_min,
+                psd_fit_nu_max=correlated_noise.psd_fit_nu_max,
+                psd_bin=correlated_noise.psd_bin)
+            n_corr_est = res.n_corr
+            tod_samples.noise_params[view.iscan, view.idet, :] = res.noise_params
+            if correlated_noise.sample_psd_params:
+                sampled_params.append(np.array(res.noise_params, copy=True))
+            if not res.converged:
+                num_failed_convergences_ncorr += 1
+            if res.high_var:
+                num_too_high_var_ncorr += 1
+            worst_residual_ncorr = max(worst_residual_ncorr, res.residual)
+            residuals.append(res.residual)
+            niters.append(res.niter)
+            stop_bench("ncorr-sampling")
+        elif correlated_noise.sample_sigma0:
+            # No correlated noise this iteration: estimate sigma0 here, at the same point in the
+            # chain (after gain) as the n_corr-coupled estimate, instead of a separate pre-gain pass.
+            tod_samples.noise_params[view.iscan, view.idet, 0] = _estimate_standalone_sigma0(
+                view, correlated_noise.sigma0_method)
+
+        _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view, n_corr_est)
+
+        ### DATA-SELECTION VETO 2 (catastrophic chi^2)
+        if selection_active:
+            z = tod_samples.chisq_z[view.iscan, view.idet]
+            if not (np.isfinite(z) and abs(z) <= data_selection.chisq_abs_threshold):
+                tod_samples.accept[view.iscan, view.idet] = False
+                continue
+
+        start_bench("binned-mapmaker")
+        # Retrieve the new sigma0 for this det-scan, sampled above.
+        sigma0 = view.sigma0
+        # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
+        inv_var = (gain/sigma0)**2
+        mapmaker_invvar.accumulate_to_map(inv_var, pix_masked, psi_masked, response=response)
+
+        ### ORBITAL DIPOLE ###
+        sky_orb_dipole = view.get_orbital_dipole_tod()
+        d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
+
+        # If we're doing ncorr, accumulate to map and subtract from sky TOD.
+        if corr_noise_active:
+            mapmaker_ncorr.accumulate_to_map(
+                (n_corr_est[good_data_mask]/gain).astype(np.float32, copy=False),
+                inv_var, pix_masked, psi_masked, response=response)
+            d_sky -= n_corr_est
+
+        d_sky_masked = d_sky[good_data_mask]
+        mapmaker.accumulate_to_map(d_sky_masked/gain, inv_var, pix_masked, psi_masked, response=response)
+        mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole[good_data_mask], inv_var,
+                                             pix_masked, psi_masked, response=response)
+        stop_bench("binned-mapmaker", increment_count=False)
+    if corr_noise_active:
+        log_memory("ncorr-sampling")
+
+    ### PRINT NOISE SAMPLING STATS ###
+    if corr_noise_active:
+        log_corr_noise_stats(band_comm, experiment_data.nu, experiment_data.noise_model,
+                             sampled_params, residuals, niters, num_failed_convergences_ncorr,
+                             num_too_high_var_ncorr, worst_residual_ncorr,
+                             sum(len(s.detectors) for s in experiment_data.scans))
+
+
+    start_bench("binned-mapmaker")
+    ### GATHER AND NORMALIZE MAPS ###
+    # Finalize the inverse-variance map (now accumulated with this iteration's sigma0) before reading
+    # its rms/cov, which normalize the signal, orbital-dipole, and corr-noise maps below.
+    mapmaker_invvar.gather_map()
+    mapmaker_invvar.normalize_map()
+    mapmaker.gather_map()
+    mapmaker_orbdipole.gather_map()
+    map_rms = mapmaker_invvar.final_rms_map
+    map_cov = mapmaker_invvar.final_cov_map
+    mapmaker.normalize_map(map_cov)
+    map_signal = mapmaker.final_map
+    mapmaker_orbdipole.normalize_map(map_cov)
+    map_orbdipole = mapmaker_orbdipole.final_map
+    if corr_noise_active:
+        mapmaker_ncorr.gather_map()
+        mapmaker_ncorr.normalize_map(map_cov)
+        map_corrnoise = mapmaker_ncorr.final_map
+    stop_bench("binned-mapmaker", increment_count=False)
+    log_memory("binned-mapmaker")
+
+    ### FINAL CLEANUP ON MASTER RANK ###
+    detmap_dict_out = {}
+    maps_to_file = {}
+    if band_comm.Get_rank() == 0:
+        #Here we split here between I and QU
+        # Smooth maps to the common analysis resolution after mapmaking; 0 leaves bands at their
+        # native beam.
+        common_res_fwhm = mapmaking.common_res_fwhm
+        if "I" in pols:
+            detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
+                                experiment_data.fwhm, experiment_data.nside,
+                                lmax=mapmaking.band_lmax)
+            detmap_I.g0 = tod_samples.abs_gain
+            if common_res_fwhm:
+                detmap_I.smooth_to_resolution(common_res_fwhm)
+            detmap_dict_out.update({"I": detmap_I})
+        if "QU" in pols:
+            detmap_QU = DetectorMap(map_signal[1:3,:], map_rms[1:3,:], experiment_data.nu,
+                                experiment_data.fwhm, experiment_data.nside,
+                                lmax=mapmaking.band_lmax)
+            detmap_QU.g0 = tod_samples.abs_gain
+            if common_res_fwhm:
+                detmap_QU.smooth_to_resolution(common_res_fwhm)
+            detmap_dict_out.update({"QU": detmap_QU})
+
+        maps_to_file["map_observed_sky"] = map_signal
+        maps_to_file["map_rms"] = map_rms
+        if mapmaking.include_orbital_dipole_maps:
+            maps_to_file["map_orbdipole"] = map_orbdipole
+        if mapmaking.include_corr_noise_maps and corr_noise_active:
+            maps_to_file["map_corrnoise"] = map_corrnoise
+        if mapmaking.include_sky_model_maps:
+            maps_to_file["map_skymodel"] = compsep_output
+
+    return detmap_dict_out, maps_to_file

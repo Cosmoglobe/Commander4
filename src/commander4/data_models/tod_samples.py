@@ -12,8 +12,8 @@ import logging
 import typing
 
 from commander4.file_io import paths
-from commander4.tod.jumps import JumpCatalog
-from commander4.utils.unit_conversions import rj_to_band_unit_factor
+from commander4.data_models.jump_corrections import JumpCatalog
+from commander4.units import rj_to_band_unit_factor
 if typing.TYPE_CHECKING:
     from commander4.data_models.detector_group_tod import DetectorGroupTOD
 

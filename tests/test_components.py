@@ -6,9 +6,13 @@ import numpy as np
 import pytest
 from pixell.bunch import Bunch
 
-from commander4.sky.component import CMB, CompList, PointSourcesComponent, ThermalDust
+from commander4.sky.comp_list import CompList
+from commander4.sky.diffuse_components import CMB, ThermalDust
+from commander4.sky.point_sources import PointSourcesComponent
 from commander4.sky.sky_model import build_initial_sky_model
-from commander4.math_utils.math_operations import complist_dot, map_to_alm
+from commander4.math_utils.alm import gaussian_random_alm
+from commander4.math_utils.sht import alm_to_map
+from commander4.sky.comp_list import complist_dot
 
 
 def _make_compsep(ntask_compsep_qu: int = 1, ntask_compsep_i: int = 1) -> Bunch:
@@ -271,19 +275,28 @@ def test_load_initial_alms_leaves_zeros_without_a_source() -> None:
 
 
 def test_load_initial_alms_from_fits_map(tmp_path) -> None:
-    nside = 2
+    """`init_from` a FITS map recovers that map's alms, per polarization view.
+
+    The map is built by synthesizing known alms, so it is band-limited at the component's lmax and
+    the expected result is those alms exactly. That keeps the test on the contract ("the loader
+    recovers the sky the map represents") rather than on which analysis transform is used: the
+    loader inverts the synthesis (`pseudo_alm_to_map_inverse`), which a quadrature `map_to_alm`
+    only approximates -- by ~1e-2 here.
+    """
+    nside = 8
     lmax = 3
-    npix = 12 * nside**2
-    iqu_map = np.zeros((3, npix), dtype=np.float64)
-    iqu_map[0] = 1.0 + np.arange(npix)  # Distinct I, Q, U so a wrong row would be detectable.
-    iqu_map[1] = 2.0
-    iqu_map[2] = 3.0
+    np.random.seed(0)
+    # Distinct I and QU alms, so a wrong row selection would be detectable.
+    alms_I = gaussian_random_alm(lmax, lmax, 0, 1).astype(np.complex128)
+    alms_QU = gaussian_random_alm(lmax, lmax, 2, 2).astype(np.complex128)
+    iqu_map = np.vstack([alm_to_map(alms_I, nside, lmax, spin=0),
+                         alm_to_map(alms_QU, nside, lmax, spin=2)])
     fits_path = tmp_path / "init_map.fits"
     hp.write_map(str(fits_path), iqu_map, overwrite=True, dtype=np.float64)
 
     compsep = _make_compsep()
     gibbs = Bunch()
-    compsep.float_precision = "double"  # So component alms match map_to_alm output exactly.
+    compsep.float_precision = "double"  # So component alms keep the map's precision.
     cmb = _make_named_component_cfg("cmb", "IQU")
     cmb.params.lmax = lmax
     object.__setattr__(cmb, "_name", "cmb")
@@ -294,10 +307,8 @@ def test_load_initial_alms_from_fits_map(tmp_path) -> None:
     comp_list.load_initial_alms(params)
 
     views = {(comp.comp_name, comp.eval_pol): comp for comp in comp_list}
-    expected_I = map_to_alm(np.ascontiguousarray(iqu_map[0:1]), nside, lmax, spin=0)
-    expected_QU = map_to_alm(np.ascontiguousarray(iqu_map[1:3]), nside, lmax, spin=2)
-    assert np.allclose(views[("cmb", "I")].alms, expected_I)
-    assert np.allclose(views[("cmb", "QU")].alms, expected_QU)
+    assert np.allclose(views[("cmb", "I")].alms, alms_I, rtol=1e-6, atol=1e-7)
+    assert np.allclose(views[("cmb", "QU")].alms, alms_QU, rtol=1e-6, atol=1e-7)
 
 
 def test_load_initial_alms_rejects_unknown_extension(tmp_path) -> None:

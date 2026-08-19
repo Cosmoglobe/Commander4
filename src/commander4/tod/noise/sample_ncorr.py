@@ -1,15 +1,19 @@
 import logging
+from dataclasses import dataclass, field
+from typing import ClassVar
+
 import numpy as np
 import pixell
 from scipy.fft import rfftfreq
 from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
-from commander4.math_utils.math_operations import forward_rfft, backward_rfft, forward_rfft_mirrored,\
-    backward_rfft_mirrored
+from commander4.math_utils.fft import forward_rfft, backward_rfft,\
+        forward_rfft_mirrored, backward_rfft_mirrored
 from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.psd import NoisePSD
 from commander4.tod.noise.sigma0 import calc_sigma0_robust, calc_sigma0_binned_psd
+from commander4.tod.step_config import StepConfig, CGConfig
 
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset
@@ -396,3 +400,45 @@ def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
         for j in range(1, arr.shape[1]):
             name = noise_model.param_names[j] if j < len(noise_model.param_names) else f"p{j}"
             _log_distribution(nu, name, arr[:, j], fmt=".4f")
+
+
+@dataclass(frozen=True)
+class CorrelatedNoiseConfig(StepConfig):
+    """Validated correlated-noise and sigma0 sampling settings."""
+
+    PARAMETER_NAME: ClassVar[str] = "corr_noise"
+
+    sample_psd_params: bool = False
+    sample_sigma0: bool = True
+    sigma0_method: str = "pairwise"
+    sigma0_decimation: int = 1
+    nomono: bool = False
+    onlymono: bool = False
+    psd_fit_nu_min: float = 0.0
+    psd_fit_nu_max: float = float("inf")
+    psd_bin: bool = False
+    cg: CGConfig = field(default_factory=CGConfig)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.sample_psd_params and not self.enabled:
+            raise ValueError("corr_noise.sample_psd_params requires enabled=True.")
+        if self.sigma0_method not in SIGMA0_METHODS:
+            raise ValueError(f"corr_noise.sigma0_method must be one of {SIGMA0_METHODS}, got "
+                             f"{self.sigma0_method!r}.")
+        if (not isinstance(self.sigma0_decimation, int)
+                or isinstance(self.sigma0_decimation, bool) or self.sigma0_decimation < 1):
+            raise ValueError("corr_noise.sigma0_decimation must be an integer of at least 1.")
+
+    @classmethod
+    def from_params(cls, params: Bunch, is_master: bool) -> "CorrelatedNoiseConfig":
+        """Build correlated-noise settings, including its nested CG block."""
+        block = dict(params.tod_processing[cls.PARAMETER_NAME]
+                     if cls.PARAMETER_NAME in params.tod_processing else Bunch())
+        cg = CGConfig.from_block(f"tod_processing.{cls.PARAMETER_NAME}.cg",
+                                 block.pop("cg", Bunch()))
+        config = cls._from_block(f"tod_processing.{cls.PARAMETER_NAME}", block, cg=cg)
+        if config.nomono and config.onlymono and is_master:
+            logger.error("tod_processing.corr_noise.nomono and onlymono are both True, which is "
+                         "contradictory; onlymono takes precedence.")
+        return config

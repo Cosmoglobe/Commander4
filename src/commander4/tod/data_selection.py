@@ -14,7 +14,8 @@ parked as dead code at the bottom of this file for possible re-introduction.
 """
 
 import logging
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import ClassVar
 
 import numpy as np
 from mpi4py import MPI
@@ -22,9 +23,8 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.data_models.tod_samples import TODSamples, _gather_scan_distributed_array
-
-if TYPE_CHECKING:
-    from commander4.tod.processing import DataSelectionConfig
+from commander4.tod.noise.sample_ncorr import CorrelatedNoiseConfig
+from commander4.tod.step_config import StepConfig
 
 logger = logging.getLogger(__name__)
 
@@ -186,3 +186,46 @@ def sample_data_selection(band_comm: MPI.Comm, tod_samples: TODSamples, ds_cfg: 
                                                        > ds_cfg.outlier_nmad * mad)
 
     tod_samples.accept[bad_lowfrac | bad_chisq | bad_mad] = False
+
+
+@dataclass(frozen=True)
+class DataSelectionConfig(StepConfig):
+    """Validated detector-scan selection thresholds and iteration range."""
+
+    PARAMETER_NAME: ClassVar[str] = "data_selection"
+
+    until_iter: int | None = None
+    chisq_abs_threshold: float = 1.0e4
+    min_good_fraction: float = 0.1
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.until_iter is not None:
+            if not isinstance(self.until_iter, int) or isinstance(self.until_iter, bool):
+                raise ValueError("data_selection.until_iter must be an integer or null.")
+            if self.until_iter < self.from_iter:
+                raise ValueError("data_selection.until_iter cannot be before from_iter.")
+        if not np.isfinite(self.chisq_abs_threshold) or self.chisq_abs_threshold <= 0:
+            raise ValueError("data_selection.chisq_abs_threshold must be positive and finite.")
+        if not 0.0 <= self.min_good_fraction <= 1.0:
+            raise ValueError("data_selection.min_good_fraction must be between 0 and 1.")
+
+    @classmethod
+    def from_params(cls, params: Bunch) -> "DataSelectionConfig":
+        """Build detector-scan selection settings from its parameter block."""
+        block = (params.tod_processing[cls.PARAMETER_NAME]
+                 if cls.PARAMETER_NAME in params.tod_processing else Bunch())
+        return cls._from_block(f"tod_processing.{cls.PARAMETER_NAME}", block)
+
+    def is_available(self, iteration: int,
+                     correlated_noise: CorrelatedNoiseConfig) -> bool:
+        """Whether diagnostics can be reported after waiting for configured n_corr sampling."""
+        return self.enabled and (correlated_noise.is_active(iteration)
+                                 or not correlated_noise.enabled)
+
+    def cuts_are_active(self, iteration: int,
+                        correlated_noise: CorrelatedNoiseConfig) -> bool:
+        """Whether this iteration applies detector-scan vetoes."""
+        before_end = self.until_iter is None or iteration <= self.until_iter
+        return (self.is_available(iteration, correlated_noise)
+                and super().is_active(iteration) and before_end)

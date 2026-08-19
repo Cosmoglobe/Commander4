@@ -4,7 +4,7 @@ import logging
 import healpy as hp
 from pixell import utils
 from mpi4py import MPI
-from commander4.math_utils.math_operations import alm_to_map, alm_to_map_adjoint
+from commander4.math_utils.sht import alm_to_map, alm_to_map_adjoint
 from commander4.diagnostics import plotting
 
 nthreads = 32  # Number of threads to use for ducc SHTs.

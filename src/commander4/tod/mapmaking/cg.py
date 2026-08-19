@@ -4,6 +4,7 @@ from mpi4py import MPI
 import logging
 from numpy.typing import NDArray
 import healpy as hp
+from pixell import utils
 from typing import Callable
 
 from commander4.diagnostics.log import logassert
@@ -12,9 +13,21 @@ from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.view import TODView
 from commander4.compsep.cg_driver import DistributedCGArray
+from commander4.compsep.preconditioners import InvNPreconditionerI, InvNPreconditionerIQU
+from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.tod_samples import TODSamples
+from commander4.tod.mapmaking.binned import Mapmaker, MapmakerIQU, WeightsMapmaker,    WeightsMapmakerIQU
+from commander4.tod.noise.gap_filling import fill_all_masked
+from commander4.tod.noise.sample_ncorr import sample_correlated_noise, log_corr_noise_stats
+from commander4.tod.noise.sigma0 import _estimate_standalone_sigma0
+from commander4.tod.scan_diagnostics import _record_tod_diagnostics
 from commander4.data_models.detector_samples import DetectorSamples
-from commander4.utils.pixel_domain import PixelDomain
-from commander4.math_utils.math_operations import inplace_scale, dot, norm, forward_rfft, backward_rfft
+from commander4.data_models.pixel_domain import PixelDomain
+from commander4.math_utils.arithmetic import inplace_scale, dot, norm
+from commander4.math_utils.fft import forward_rfft, backward_rfft
+
+logger = logging.getLogger(__name__)
 
 # I need to CG-solve P^T T^T N^−1 T P m = P^T T^T N^-1 d
 # Where:
@@ -527,3 +540,268 @@ class CGMapmakerIQU(CGMapmaker):
     def _zeros_map(self):
         """Allocate a zero local map buffer (full-sky in full mode, rank-local in sparse mode)."""
         return np.zeros((3, self._nloc), dtype=self.f_dtype)
+
+
+def called_on_non_master(arr):
+    logger.debug("Dummy precond has been called")
+    return np.copy(arr)
+
+def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_output: NDArray,
+               tod_samples: TODSamples, iteration: int,
+               mapmaking: "MapmakingConfig", correlated_noise: "CorrelatedNoiseConfig",
+               data_selection: "DataSelectionConfig",
+               ) -> tuple[dict[str, DetectorMap], dict[str, NDArray]]:
+    """ Commander4 CG mapmaking. All ranks on the provided MPI communicator collaborates on creating
+        the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
+    Args:
+        band_comm (Comm): The communicator consisting of all MPI ranks which holds TOD data that
+                          should go into the same map.
+        experiment_data (DetectorGroupTOD): TOD data class to be made into maps.
+        compsep_output (NDArray): The sky model at our band. Not used, but written to chain file.
+        tod_samples (TODSamples): Sampled TOD parameters, such as gain.
+        iteration: Current Gibbs iteration.
+        mapmaking: Validated mapmaking settings.
+        correlated_noise: Validated correlated-noise settings.
+        data_selection: Validated detector-scan selection settings.
+    Output:
+        Detector maps for component separation and maps selected for chain output.
+
+    """
+    ismaster = band_comm.Get_rank() == 0
+    corr_noise_active = correlated_noise.is_active(iteration)
+    selection_active = data_selection.cuts_are_active(iteration, correlated_noise)
+    ### CG MAPMAKER ###
+    # Single fused scan loop (mirrors Commander3's process_TOD): each detector-scan samples
+    # correlated noise / sigma0 *first*, then every sigma0-dependent quantity -- inverse-variance
+    # weights (preconditioner + rms/cov), orbital-dipole and corr-noise maps, and the CG RHS -- is
+    # accumulated with that freshly-sampled sigma0. Previously the inverse-variance map was built in a
+    # separate up-front pass on the previous iteration's sigma0, which (since the LHS operator and
+    # preconditioner read the live, updated sigma0) left the CG RHS inconsistent with its own A.
+    pols = experiment_data.pols
+    scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
+    # Optional per-experiment sparse map storage: each rank holds only its locally-observed pixels
+    # rather than a full sky map. The band master still ends up with full-sky maps.
+    domain = experiment_data.get_pixel_domain(scan_view, band_comm, mapmaking.sparse_maps)
+    # The inverse-variance map (preconditioner + rms/cov) is accumulated inside the fused loop below,
+    # so it -- and thus cg_mapmaker.M -- can only be finalized afterwards. cg_mapmaker is constructed
+    # here with a placeholder preconditioner; M is unused until solve() and accum_to_RHS never reads
+    # it, so it is reassigned to the real Jacobi preconditioner after the loop.
+    if pols == "IQU":
+        mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
+        cg_mapmaker = CGMapmakerIQU(experiment_data, tod_samples, band_comm,
+                    preconditioner=called_on_non_master, nthreads=mapmaking.num_threads,
+                    CG_maxiter=mapmaking.cg.max_iter, pixel_domain=domain)
+    elif pols == "I":
+        mapmaker_invvar = WeightsMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
+        cg_mapmaker = CGMapmakerI(experiment_data, tod_samples, band_comm,
+                    preconditioner=called_on_non_master, nthreads=mapmaking.num_threads,
+                    CG_maxiter=mapmaking.cg.max_iter, pixel_domain=domain)
+    else:
+        raise ValueError(f"specified polarizations {pols} is notsupported yet.")
+
+    BinMapmaker = MapmakerIQU if pols == "IQU" else Mapmaker #general bin mapmaker class object.
+    # mapmaker = BinMapmaker(band_comm, experiment_data.nside)
+    mapmaker_orbdipole = BinMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
+
+    if corr_noise_active:
+        mapmaker_ncorr = BinMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
+        sampled_params = []
+        residuals = []
+        niters = []
+        num_failed_convergences_ncorr = 0
+        num_too_high_var_ncorr = 0
+        worst_residual_ncorr = 0
+
+    ### MAIN SCAN LOOP ###
+    for view in scan_view.iter_focused(accepted_only=True):
+        # Full-length pointing (no good_data_mask compaction): the CG operator gap-fills flagged
+        # samples rather than removing them, so every sample carries weight (gain/sigma0)^2 and the
+        # inverse-variance / preconditioner must count them all to match the A operator.
+        pix, psi = view.pix, view.psi
+        good_data_mask = view.get_mask(proc_mask=False)
+        gain = view.get_gain()
+        response = view.det_response if pols == "IQU" else None
+
+        ### DATA-SELECTION VETO 1 (too little unflagged data).
+        good_frac = good_data_mask.mean()
+        tod_samples.good_fraction[view.iscan, view.idet] = good_frac
+        if selection_active and good_frac < data_selection.min_good_fraction:
+            tod_samples.accept[view.iscan, view.idet] = False
+            continue
+
+        ### CORRELATED NOISE / SIGMA0 SAMPLING (first, so the weights below use the new sigma0) ###
+        n_corr_est = None
+        if corr_noise_active:
+            sky_subtracted_TOD = view.get_tod(
+                subtract=(("sky", TODView._ALL_GAIN_TERMS),
+                          ("orbital_dipole", TODView._ALL_GAIN_TERMS)),
+            )
+            res = sample_correlated_noise(
+                sky_subtracted_TOD, view.get_mask(proc_mask_type="ncorr"),
+                np.array(view.noise_params, copy=True),
+                experiment_data.noise_model, view.fsamp, cg_err_tol=correlated_noise.cg.err_tol,
+                cg_max_iter=correlated_noise.cg.max_iter,
+                sample_params=correlated_noise.sample_psd_params,
+                sample_sigma0=correlated_noise.sample_sigma0,
+                sigma0_method=correlated_noise.sigma0_method,
+                nomono=correlated_noise.nomono,
+                onlymono=correlated_noise.onlymono,
+                sigma0_dec=correlated_noise.sigma0_decimation,
+                psd_fit_nu_min=correlated_noise.psd_fit_nu_min,
+                psd_fit_nu_max=correlated_noise.psd_fit_nu_max,
+                psd_bin=correlated_noise.psd_bin)
+            n_corr_est = res.n_corr
+            tod_samples.noise_params[view.iscan, view.idet, :] = res.noise_params
+            if correlated_noise.sample_psd_params:
+                sampled_params.append(np.array(res.noise_params, copy=True))
+            if not res.converged:
+                num_failed_convergences_ncorr += 1
+            if res.high_var:
+                num_too_high_var_ncorr += 1
+            worst_residual_ncorr = max(worst_residual_ncorr, res.residual)
+            residuals.append(res.residual)
+            niters.append(res.niter)
+        elif correlated_noise.sample_sigma0:
+            # No correlated noise this iteration: estimate sigma0 here, at the same point in the
+            # chain (after gain) as the n_corr-coupled estimate, instead of a separate pre-gain pass.
+            tod_samples.noise_params[view.iscan, view.idet, 0] = _estimate_standalone_sigma0(
+                view, correlated_noise.sigma0_method)
+
+        # Diagnostics (incl. chisq_z) before any accumulation, so a veto below leaves this
+        # detector-scan out of every map product (the CG operator passes re-read `accept`).
+        _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view, n_corr_est)
+
+        ### DATA-SELECTION VETO 2 (catastrophic chi^2), applied in-loop so this iteration's maps
+        ### already exclude the scan.
+        if selection_active:
+            z = tod_samples.chisq_z[view.iscan, view.idet]
+            if not (np.isfinite(z) and abs(z) <= data_selection.chisq_abs_threshold):
+                tod_samples.accept[view.iscan, view.idet] = False
+                continue
+
+        # sigma0 now reflects this iteration's estimate; every weight below is consistent with it.
+        sigma0 = view.sigma0
+        inv_var = (gain/sigma0)**2
+
+        ### INVERSE-VARIANCE WEIGHTS (preconditioner + rms/cov) ###
+        if pols == "IQU":
+            mapmaker_invvar.accumulate_to_map(inv_var, pix, psi, response=response)
+        else:
+            mapmaker_invvar.accumulate_to_map(inv_var, pix)
+
+        ### ORBITAL DIPOLE ###
+        sky_orb_dipole = view.get_orbital_dipole_tod()
+        d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
+        if pols == "IQU":
+            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi,
+                                                 response=response)
+        else:
+            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
+
+        ### CORRELATED-NOISE MAP ###
+        if corr_noise_active:
+            if pols == "IQU":
+                mapmaker_ncorr.accumulate_to_map(
+                    (n_corr_est/gain).astype(np.float32, copy=False),
+                    inv_var, pix, psi, response=response)
+            else:
+                mapmaker_ncorr.accumulate_to_map(
+                    (n_corr_est/gain).astype(np.float32, copy=False),
+                    inv_var, pix, psi)
+            d_sky -= n_corr_est
+
+        # Gap-fill flagged samples instead of compacting them away. The CG operator applies a
+        # Fourier transform (apply_T), which requires a continuous, full-length TOD: removing masked
+        # samples corrupts the FFT, and a single non-finite sample (or an empty compacted scan)
+        # otherwise poisons/crashes the whole solve. fill_all_masked (linear interpolation + white
+        # noise) is the same gap-filling used in correlated-noise sampling; the filled samples are
+        # noisy realizations carrying weight 1/sigma0^2, consistent with the full-length A operator.
+        fill_all_masked(d_sky, good_data_mask, sigma0)
+
+        cg_mapmaker.accum_to_RHS(
+                    scan_tod=view.detector,
+                    sigma0=sigma0,
+                    pix=pix,
+                    psi=psi,
+                    scan_tod_arr=d_sky/gain
+                    )
+
+    ### PRINT NOISE SAMPLING STATS ###
+    if corr_noise_active:
+        log_corr_noise_stats(band_comm, experiment_data.nu, experiment_data.noise_model,
+                             sampled_params, residuals, niters, num_failed_convergences_ncorr,
+                             num_too_high_var_ncorr, worst_residual_ncorr,
+                             sum(len(s.detectors) for s in experiment_data.scans))
+
+
+    ### FINALIZE INVERSE-VARIANCE MAP, BUILD PRECONDITIONER, GATHER/NORMALIZE ###
+    # The inverse-variance map is now complete (accumulated with this iteration's sigma0); finalize
+    # it and assign cg_mapmaker.M before solving, so the preconditioner matches the RHS and the LHS
+    # operator (which reads the live sigma0 too).
+    mapmaker_invvar.gather_map()
+    if pols == "IQU":
+        mapmaker_invvar.normalize_map()
+        if ismaster:
+            # Jacobi preconditioner M = 1/diag(A), where A is the accumulated inverse-noise matrix
+            # (final_cov_map holds its 6 unique elements; [0,3,5] are A_II, A_QQ, A_UU). The previous
+            # choice -- diag(A^-1) via rms**2 -- blows up at near-singular pixels (poor per-pixel
+            # polarization-angle coverage, where the 3x3 inverse is inflated by a vanishing
+            # determinant), wrecking the conditioning and making PCG diverge. 1/diag(A) stays bounded
+            # by the actual per-component inverse variance; without_nan zeros unobserved pixels.
+            A_diag = mapmaker_invvar.final_cov_map[(0, 3, 5), :]
+            cg_mapmaker.M = InvNPreconditionerIQU(utils.without_nan(1.0 / A_diag))
+        map_rms = mapmaker_invvar.final_rms_map
+        map_cov = mapmaker_invvar.final_cov_map
+    else:
+        if ismaster:
+            cg_mapmaker.M = InvNPreconditionerI(utils.without_nan(1./mapmaker_invvar.final_map))
+        map_cov = mapmaker_invvar.final_map
+        map_rms = 1./np.sqrt(map_cov)
+
+    mapmaker_orbdipole.gather_map()
+    mapmaker_orbdipole.normalize_map(map_cov)
+    map_orbdipole = mapmaker_orbdipole.final_map
+    cg_mapmaker.finalize_RHS()
+    cg_mapmaker.solve()
+    map_signal = cg_mapmaker.solved_map
+
+    if corr_noise_active:
+        mapmaker_ncorr.gather_map()
+        mapmaker_ncorr.normalize_map(map_cov)
+        map_corrnoise = mapmaker_ncorr.final_map
+
+    ### FINAL CLEANUP ON MASTER RANK ###
+    detmap_dict_out = {}
+    maps_to_file = {}
+    if band_comm.Get_rank() == 0:
+        #Here we split here between I and QU
+        # Smooth maps to the common analysis resolution after mapmaking; 0 leaves bands at their
+        # native beam.
+        common_res_fwhm = mapmaking.common_res_fwhm
+        if "I" in pols:
+            detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
+                                experiment_data.fwhm, experiment_data.nside,
+                                lmax=mapmaking.band_lmax)
+            detmap_I.g0 = tod_samples.abs_gain
+            if common_res_fwhm:
+                detmap_I.smooth_to_resolution(common_res_fwhm)
+            detmap_dict_out.update({"I": detmap_I})
+        if "QU" in pols:
+            detmap_QU = DetectorMap(map_signal[1:3,:], map_rms[1:3,:], experiment_data.nu,
+                                experiment_data.fwhm, experiment_data.nside,
+                                lmax=mapmaking.band_lmax)
+            detmap_QU.g0 = tod_samples.abs_gain
+            if common_res_fwhm:
+                detmap_QU.smooth_to_resolution(common_res_fwhm)
+            detmap_dict_out.update({"QU": detmap_QU})
+
+        maps_to_file["map_observed_sky"] = map_signal
+        maps_to_file["map_rms"] = map_rms
+        if mapmaking.include_orbital_dipole_maps:
+            maps_to_file["map_orbdipole"] = map_orbdipole
+        if mapmaking.include_corr_noise_maps and corr_noise_active:
+            maps_to_file["map_corrnoise"] = map_corrnoise
+        if mapmaking.include_sky_model_maps:
+            maps_to_file["map_skymodel"] = compsep_output
+
+    return detmap_dict_out, maps_to_file

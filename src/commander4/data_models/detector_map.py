@@ -3,7 +3,9 @@ import numpy as np
 import healpy as hp
 from copy import deepcopy
 from numpy.typing import NDArray
-from commander4.math_utils.math_operations import alm_to_map, alm_to_map_adjoint, inplace_arr_prod, almxfl
+from commander4.math_utils.arithmetic import inplace_arr_prod
+from commander4.math_utils.alm import almxfl
+from commander4.math_utils.sht import alm_to_map, alm_to_map_adjoint
 
 logger = logging.getLogger(__name__)
 

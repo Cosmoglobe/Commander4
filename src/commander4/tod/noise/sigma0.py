@@ -14,7 +14,18 @@ from math import sqrt
 from numba import njit
 from scipy.fft import rfftfreq
 
-from commander4.math_utils.math_operations import forward_rfft_mirrored
+import logging
+from typing import TYPE_CHECKING
+
+from commander4.diagnostics.log import logassert
+from commander4.math_utils.fft import forward_rfft_mirrored
+
+# `tod.view` imports the correlated-noise sampler, which imports this module, so TODView can only
+# be imported here for annotations.
+if TYPE_CHECKING:
+    from commander4.tod.view import TODView
+
+logger = logging.getLogger(__name__)
 
 
 @njit(fastmath=True)
@@ -198,3 +209,29 @@ def calc_sigma0_binned_psd(tod: NDArray, mask: NDArray[np.bool_], fsamp: float,
     if not np.any(populated):
         return np.inf
     return float(sqrt((bin_sum[populated] / bin_cnt[populated]).min()) * safety)
+
+
+def _estimate_standalone_sigma0(view: "TODView", sigma0_method: str) -> float:
+    """ White-noise sigma0 for one detector-scan when correlated noise is *not* being sampled.
+
+    Estimated from the sky- and orbital-dipole-subtracted residual (which still contains the 1/f
+    component; both estimators target the white floor). This mirrors the sigma0 estimate that
+    ``sample_correlated_noise`` performs when n_corr is sampled, so sigma0 is always (re)estimated at
+    the same point in the chain -- inside the mapmaker scan loop, after gain -- matching Commander3.
+
+    Args:
+        view: The focused TODView for one detector-scan.
+        sigma0_method: ``'pairwise'`` (first-difference) or ``'binned_psd'`` (bottom of binned PSD).
+    Returns:
+        The estimated white-noise level (float).
+    """
+    residual = view.get_tod(subtract=(("sky", TODView._ALL_GAIN_TERMS),
+                                      ("orbital_dipole", TODView._ALL_GAIN_TERMS)))
+    mask = view.get_mask(proc_mask_type="ncorr")
+    if sigma0_method == "binned_psd":
+        sigma0 = calc_sigma0_binned_psd(residual, mask, view.fsamp)
+    else:
+        sigma0 = calc_sigma0_robust(residual, mask)
+    logassert(sigma0 != 0, "sigma0 is 0, which should never happen.", logger)
+    logassert(sigma0 != np.inf, "sigma0 is inf, which should never happen.", logger)
+    return sigma0

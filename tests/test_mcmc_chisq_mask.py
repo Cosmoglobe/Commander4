@@ -12,7 +12,7 @@ from pixell.bunch import Bunch
 
 from commander4.compsep.processing import MCMCSamplingGroupConfig, _read_chisq_masks
 from commander4.data_models.detector_map import DetectorMap
-from commander4.sky.component import CompList
+from commander4.sky.comp_list import CompList
 from commander4.compsep.mcmc import MCMCSamplingGroup, resolve_chisq_mask
 
 NSIDE = 2

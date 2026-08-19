@@ -10,7 +10,7 @@ the identity/error branches need no pysm3.
 import numpy as np
 import pytest
 
-from commander4.utils.unit_conversions import rj_to_band_unit_factor, SUPPORTED_BAND_UNITS
+from commander4.units import rj_to_band_unit_factor, SUPPORTED_BAND_UNITS
 
 
 def _analytic_rj_in_cmb(nu_GHz: float) -> float:

@@ -1,6 +1,6 @@
 import numpy as np
 from pixell.bunch import Bunch
-from commander4.sky.component import CompList
+from commander4.sky.comp_list import CompList
 
 
 def build_initial_sky_model(params: Bunch) -> "SkyModel":
