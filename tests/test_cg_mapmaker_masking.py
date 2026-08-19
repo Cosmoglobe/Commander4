@@ -20,7 +20,7 @@ from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.tod_samples import TODSamples
-from commander4.tod.cg_mapmaker import CGMapmakerI, CGMapmakerIQU
+from commander4.tod.mapmaking.cg import CGMapmakerI, CGMapmakerIQU
 
 _BITMASK = 1  # one bad-data bit; a flagged sample has (flag & _BITMASK) != 0
 

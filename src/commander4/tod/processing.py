@@ -20,15 +20,15 @@ from commander4.data_models.tod_samples import TODSamples
 from commander4.tod.data_selection import masked_chisq_z, log_dataselect_summary
 from commander4.tod.jumps import JumpCorrection
 from commander4.tod.view import TODView
-from commander4.tod.mapmaker import MapmakerIQU, WeightsMapmakerIQU, WeightsMapmaker, Mapmaker
-from commander4.tod.cg_mapmaker import CGMapmakerI, CGMapmakerIQU
+from commander4.tod.mapmaking.binned import MapmakerIQU, WeightsMapmakerIQU, WeightsMapmaker, Mapmaker
+from commander4.tod.mapmaking.cg import CGMapmakerI, CGMapmakerIQU
 from commander4.compsep.preconditioners import InvNPreconditionerI, InvNPreconditionerIQU
-from commander4.noise.sample_ncorr import sample_correlated_noise, log_corr_noise_stats,\
+from commander4.tod.noise.sample_ncorr import sample_correlated_noise, log_corr_noise_stats,\
     SIGMA0_METHODS, GAIN_GAP_FILL_METHODS
-from commander4.noise.gap_filling import fill_all_masked
+from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.math_utils.math_operations import forward_rfft, backward_rfft
 from commander4.utils.execution_ids import get_execution_band_ids
-from commander4.noise.sigma0 import calc_sigma0_robust, calc_sigma0_binned_psd
+from commander4.tod.noise.sigma0 import calc_sigma0_robust, calc_sigma0_binned_psd
 from commander4.file_io.tod_reader import read_tods_from_file
 from commander4.file_io.chain_writer import write_map_chain_to_file
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\

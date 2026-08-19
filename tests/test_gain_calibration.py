@@ -224,7 +224,7 @@ class _FillStubView(TODView):
 
 def test_gain_gap_fill_methods_replace_masked_samples():
     """All three methods fill the masked residual with target gain x s_cal plus a noise draw."""
-    from commander4.noise.psd import NoisePSDOof
+    from commander4.tod.noise.psd import NoisePSDOof
     n = 4096
     mask = np.ones(n, dtype=bool)
     mask[1000:1400] = False
@@ -248,7 +248,7 @@ def test_gain_gap_fill_methods_replace_masked_samples():
 
 def test_gain_gap_fill_realization_is_shared_across_terms():
     """The cached 1/f gap draw is reused for every gain term (one realization per scan)."""
-    from commander4.noise.psd import NoisePSDOof
+    from commander4.tod.noise.psd import NoisePSDOof
     n = 2048
     mask = np.ones(n, dtype=bool)
     mask[800:1000] = False

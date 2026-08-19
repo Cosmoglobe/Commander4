@@ -13,7 +13,7 @@ from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
-from commander4.noise.psd import NoisePSD, NoisePSDOof
+from commander4.tod.noise.psd import NoisePSD, NoisePSDOof
 from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.diagnostics.log import logassert
 import commander4.compression.huffman as huffman

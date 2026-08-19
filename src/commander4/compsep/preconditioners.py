@@ -18,7 +18,7 @@ import typing
 if typing.TYPE_CHECKING:
     from commander4.compsep.cg_solver import CompSepSolver
     from commander4.sky.component import Component, CompList
-    from commander4.tod.mapmaker import WeightsMapmakerIQU
+    from commander4.tod.mapmaking.binned import WeightsMapmakerIQU
 
 logger = logging.getLogger(__name__)
 

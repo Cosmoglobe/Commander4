@@ -21,7 +21,8 @@ from commander4.math_utils.math_operations import inplace_scale, dot, norm, forw
 # - m is the final map [npix]
 # - P is the pointing matrix: [ntod, npix]
 # - T is the bolometer trnasfer function operator (check Artem's code)
-# - N^-1 is the inverse noise covariance matrix (inv_var in tod_processing.tod2map) which is diagonal in tod space [ntod]
+# - N^-1 is the inverse noise covariance matrix (inv_var in tod/processing.py::tod2map_*) which
+#   is diagonal in tod space [ntod]
 # - d is the calibrated TODs [ntod].
 # Notes: T is non-local so each rank must hold the whole scan, but only for one detector.
 

@@ -14,7 +14,7 @@ from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.diagnostics.log import logassert
-from commander4.noise.psd import NoisePSD, NoisePSDOof
+from commander4.tod.noise.psd import NoisePSD, NoisePSDOof
 from commander4.data_models.pointing import PixelPointing
 from commander4.experiments.read_utils import read_processing_masks, find_good_Fourier_time
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\

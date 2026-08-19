@@ -7,9 +7,9 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 from commander4.math_utils.math_operations import forward_rfft, backward_rfft, forward_rfft_mirrored,\
     backward_rfft_mirrored
-from commander4.noise.gap_filling import fill_all_masked
-from commander4.noise.psd import NoisePSD
-from commander4.noise.sigma0 import calc_sigma0_robust, calc_sigma0_binned_psd
+from commander4.tod.noise.gap_filling import fill_all_masked
+from commander4.tod.noise.psd import NoisePSD
+from commander4.tod.noise.sigma0 import calc_sigma0_robust, calc_sigma0_binned_psd
 
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset

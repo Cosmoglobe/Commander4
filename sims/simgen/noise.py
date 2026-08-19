@@ -5,7 +5,7 @@ A ``NoiseModel`` realizes a per-detector noise TOD given the detector's white le
     realize(ntod, fsamp, sigma0, rng) -> ndarray
 
 ``OofNoise`` produces white + 1/f noise whose PSD is ``sigma0^2 (1 + (f/fknee)^alpha)``, matching
-``commander4.noise.psd.NoisePSDOof`` (the model the TOD processing assumes). The
+``commander4.tod.noise.psd.NoisePSDOof`` (the model the TOD processing assumes). The
 realization shapes a white series of RMS ``sigma0`` in Fourier space, exactly as
 ``inplace_litebird_sim`` does, so the white floor is preserved at high frequency.
 """

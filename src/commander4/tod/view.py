@@ -8,7 +8,7 @@ from pixell.bunch import Bunch
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.tod_samples import TODSamples
-from commander4.noise.sample_ncorr import realize_noise_in_gaps
+from commander4.tod.noise.sample_ncorr import realize_noise_in_gaps
 from commander4.utils.map_utils import get_static_sky_tod, get_s_orb_tod
 
 logger = logging.getLogger(__name__)

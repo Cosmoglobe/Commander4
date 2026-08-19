@@ -2,7 +2,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from commander4.data_models.scan_tod import ScanTOD
-from commander4.noise.psd import NoisePSD
+from commander4.tod.noise.psd import NoisePSD
 from commander4.math_utils.math_operations import forward_rfft_mirrored, backward_rfft_mirrored
 
 class DetectorGroupTOD:

@@ -2,7 +2,7 @@ import numpy as np
 from numpy.typing import NDArray
 from mpi4py import MPI
 
-from commander4.tod.mapmaker import MapmakerIQU, WeightsMapmakerIQU
+from commander4.tod.mapmaking.binned import MapmakerIQU, WeightsMapmakerIQU
 
 
 def _build_norm_map_from_A(A: NDArray) -> NDArray:

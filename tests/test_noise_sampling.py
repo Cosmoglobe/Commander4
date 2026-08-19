@@ -3,11 +3,11 @@ import pytest
 from numba import njit
 from scipy.fft import rfftfreq
 
-from commander4.noise.sigma0 import (calc_sigma0_simple, calc_sigma0_robust,
+from commander4.tod.noise.sigma0 import (calc_sigma0_simple, calc_sigma0_robust,
                                               calc_sigma0_binned_psd)
-from commander4.noise.psd import NoisePSDOof
-from commander4.noise.gap_filling import fill_all_masked
-from commander4.noise.sample_ncorr import (sample_correlated_noise,
+from commander4.tod.noise.psd import NoisePSDOof
+from commander4.tod.noise.gap_filling import fill_all_masked
+from commander4.tod.noise.sample_ncorr import (sample_correlated_noise,
                                                     corr_noise_realization_with_gaps,
                                                     realize_noise_in_gaps)
 from commander4.data_models.detector_group_tod import DetectorGroupTOD

@@ -13,7 +13,7 @@ from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
-from commander4.noise.psd import NoisePSDOof
+from commander4.tod.noise.psd import NoisePSDOof
 from commander4.experiments.read_utils import read_processing_masks, find_good_Fourier_time
 
 def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_names: list[str],
