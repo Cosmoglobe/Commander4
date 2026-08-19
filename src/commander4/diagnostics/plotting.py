@@ -7,7 +7,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pixell.bunch import Bunch
 
-from commander4.sky.component import Component, split_complist
+from commander4.sky.component import Component
+
+def _components_for_pol(comp_list: list[Component], npol: int) -> list[Component]:
+    """The components whose polarization view matches the maps being plotted.
+
+    Maps are plotted one execution view at a time, so `npol` is 1 for an I map and 2 for a QU one,
+    and the components are filtered to the matching view. This is `CompList.components_for_eval_pol`
+    written out, because the chain plotter builds a plain list rather than a `CompList`.
+    """
+    target_pol = "QU" if npol > 1 else "I"
+    return [comp for comp in comp_list if comp.eval_pol == target_pol]
+
 
 def _ensure_2d_map(map_data: np.ndarray | None) -> np.ndarray | None:
     if map_data is None:
@@ -152,7 +163,7 @@ def plot_combo_maps(
     npix = 12 * nside**2
     pol_names = _stokes_labels(npol)
 
-    comp_sublist = split_complist(comp_list, 1 if npol > 1 else 0)
+    comp_sublist = _components_for_pol(comp_list, npol)
 
     for ipol in range(npol):
         signal = map_signal[ipol]
@@ -449,7 +460,7 @@ def plot_components(
 
     npol = map_signal.shape[0]
     pol_names = _stokes_labels(npol)
-    comp_sublist = split_complist(components_list, 1 if npol > 1 else 0)
+    comp_sublist = _components_for_pol(components_list, npol)
 
     ells = np.arange(3 * nside)
     Z = ells * (ells + 1) / (2 * np.pi)

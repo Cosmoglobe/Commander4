@@ -15,6 +15,8 @@ import yaml
 from pixell.bunch import Bunch
 
 from commander4.file_io import paths
+from commander4.parameters.bunch import as_bunch_recursive
+from commander4.sky.comp_io import _read_view_alms_from_chain
 from commander4.diagnostics import plotting
 from commander4.diagnostics.plotting import _ensure_2d_map
 from commander4.sky.component import Component
@@ -23,26 +25,6 @@ import commander4.sky as component_lib
 
 CHAIN_ITER_RE = re.compile(r"chain(?P<chain>\d+)_iter(?P<iter>\d+)\.h5$")
 LOGGER = logging.getLogger("plot_chain")
-
-
-# TODO: Figure out a way of not duplicating this. We can't import it, because that triggers the
-# reading of the parameter file, requiring it to be provided as a command-line argument.
-def as_bunch_recursive(dict_of_dicts, name=None):
-    res = Bunch()
-    
-    # 1. Inject the name into the instance, bypassing Bunch's data _dict
-    if name is not None:
-         object.__setattr__(res, "_name", name)
-         
-    # 2. Recursively populate the bunch
-    for key, val in dict_of_dicts.items():
-        if isinstance(val, dict):
-            # Pass the key down as the name for the child Bunch
-            res[key] = as_bunch_recursive(val, name=key)
-        else:
-            res[key] = val
-
-    return res
 
 
 def _decode_h5_value(value):
@@ -105,7 +87,7 @@ def _build_component_list(params: Bunch) -> list[Component]:
         if "I" in base_params.polarization:
             params_i = deepcopy(base_params)
             params_i.longname = comp_longname + "_Intensity"
-            params_i.shortname = comp_longname + "_I"
+            params_i.shortname = comp_shortname  # the key the compsep chain stores this under
             params_i.polarization = "I"
             params_i.polarized = False
             comp_type = getattr(component_lib, component.component_class)
@@ -113,7 +95,7 @@ def _build_component_list(params: Bunch) -> list[Component]:
         if "QU" in base_params.polarization:
             params_qu = deepcopy(base_params)
             params_qu.longname = comp_longname + "_Polarization"
-            params_qu.shortname = comp_longname + "_QU"
+            params_qu.shortname = comp_shortname
             params_qu.polarization = "QU"
             params_qu.polarized = True
             comp_type = getattr(component_lib, component.component_class)
@@ -132,18 +114,29 @@ def _load_compsep_components(params: Bunch, compsep_path: str) -> list[Component
             return []
         comps_group = handle["comps"]
         available = set(comps_group.keys())
-        filtered_list: list[Component] = []
-        for comp in comp_list:
-            if comp.shortname not in available:
-                continue
-            comp_group = comps_group[comp.shortname]
-            if "alms" not in comp_group:
-                continue
-            comp.alms = comp_group["alms"][()]
-            if "longname" in comp_group:
-                comp.longname = _decode_h5_value(comp_group["longname"][()])
-            filtered_list.append(comp)
-        return filtered_list
+        longnames = {name: _decode_h5_value(comps_group[name]["longname"][()])
+                     for name in available if "longname" in comps_group[name]}
+
+    filtered_list: list[Component] = []
+    for comp in comp_list:
+        if comp.shortname not in available:
+            continue
+        # A chain group holds every polarization the component was sampled in; each execution
+        # view takes only its own rows, which is what `_read_view_alms_from_chain` does.
+        view_alms = _read_view_alms_from_chain(comp, compsep_path)
+        if view_alms is None:
+            continue
+        comp.alms = view_alms
+        # `longname` is only for plot labels; older chains do not store one, so fall back to the
+        # per-view name the parameter file gives.
+        if comp.shortname in longnames:
+            comp.longname = longnames[comp.shortname]
+        elif "longname" in comp.comp_params:
+            comp.longname = comp.comp_params.longname
+        else:
+            comp.longname = comp.comp_name
+        filtered_list.append(comp)
+    return filtered_list
 
 
 def _match_band_info(

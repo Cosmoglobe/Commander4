@@ -2,6 +2,8 @@ import yaml
 import os
 from argparse import ArgumentParser
 from pixell.bunch import Bunch
+
+from commander4.parameters.bunch import as_bunch_recursive
 import yaml_include
 
 
@@ -85,23 +87,6 @@ import yaml_include
 
 #     return "unknown"
 
-
-def as_bunch_recursive(dict_of_dicts, name=None):
-    res = Bunch()
-    
-    # 1. Inject the name into the instance, bypassing Bunch's data _dict
-    if name is not None:
-         object.__setattr__(res, "_name", name)
-         
-    # 2. Recursively populate the bunch
-    for key, val in dict_of_dicts.items():
-        if isinstance(val, dict):
-            # Pass the key down as the name for the child Bunch
-            res[key] = as_bunch_recursive(val, name=key)
-        else:
-            res[key] = val
-
-    return res
 
 # ------------------------------------------------------------------------
 # Parse parameter file
