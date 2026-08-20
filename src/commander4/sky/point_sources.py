@@ -64,6 +64,10 @@ class PointSourcesComponent(Component):
 
 class RadioSources(PointSourcesComponent):
     default_shortname = "radsources"
+    # `alpha_arr` is deliberately absent from the sed parmaeter names: it is one spectral index per
+    # source, read from `template_path` alongside the source positions and amplitudes, so it belongs
+    # with the template rather than in every iteration of the chain.
+    sed_param_names = ("nu_ref",)
 
     def __init__(self, comp_params: Bunch, global_params: Bunch, *,
                  shortname: str | None = None, comp_name: str | None = None,

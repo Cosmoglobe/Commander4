@@ -41,7 +41,6 @@ def write_map_chain_to_file(params: Bunch, chain: int, iter: int, exp_name:str,
             # uK_RJ -> band_unit (out-of-place copy; D is a Python float, so dtype is preserved).
             if band_unit_factor != 1.0:
                 value = value * band_unit_factor
-            print("key", key, np.min(value), np.max(value), flush=True)
             file[key] = value
 
 
@@ -61,6 +60,11 @@ def write_compsep_chain_to_file(comp_list: list[Component] | CompList, params: B
             file[f"comps/{comp.shortname}/alms"] = comp.alms
             file[f"comps/{comp.shortname}/comp_name"] = comp.comp_name
             file[f"comps/{comp.shortname}/shortname"] = comp.shortname
+            # The SED parameters this component type declares (see `Component.sed_param_names`),
+            # so the chain records the sampled spectral indices and everything else needed to
+            # evaluate the SED. `nu_ref` may be a per-polarization array, hence no float() cast.
+            for param_name in comp.sed_param_names:
+                file[f"comps/{comp.shortname}/sed/{param_name}"] = getattr(comp, param_name)
             if comp.defined_pol is not None:
                 file[f"comps/{comp.shortname}/defined_pol"] = comp.defined_pol
             if comp.eval_pol is not None:

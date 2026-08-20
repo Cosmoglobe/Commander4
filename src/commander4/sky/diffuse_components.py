@@ -401,6 +401,7 @@ class DiffuseComponent(Component):
 # Third tier component classes
 class CMB(DiffuseComponent):
     default_shortname = "cmb"
+    sed_param_names = ("nu_ref",)
     # Like all diffuse components, the CMB amplitude is stored internally in uK_RJ, referenced to
     # `nu_ref` (default 1 GHz, where uK_RJ ~= uK_CMB). `get_sed` is therefore the *ratio* of the
     # thermodynamic-to-RJ conversion at `nu` relative to `nu_ref` (it inherits amplitude_unit=uK_RJ).
@@ -452,6 +453,7 @@ class CMB(DiffuseComponent):
 
 class ThermalDust(DiffuseComponent):
     default_shortname = "term-dust"
+    sed_param_names = ("beta", "T", "nu_ref")
 
     def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
                  shortname = None, eval_pol = None, comp_name: str | None = None):
@@ -484,6 +486,7 @@ class ThermalDust(DiffuseComponent):
 
 class Synchrotron(DiffuseComponent):
     default_shortname = "sync"
+    sed_param_names = ("beta", "nu_ref")
 
     def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
                  shortname = None, eval_pol = None, comp_name: str | None = None):
@@ -513,6 +516,7 @@ class Synchrotron(DiffuseComponent):
 
 class FreeFree(DiffuseComponent):
     default_shortname = "ff"
+    sed_param_names = ("T", "nu_ref")
 
     def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
                  shortname = None, eval_pol = None, comp_name: str | None = None):
@@ -557,6 +561,7 @@ class FreeFree(DiffuseComponent):
 
 class SpinningDust(DiffuseComponent):
     default_shortname = "spin-dust"
+    sed_param_names = ("nu_peak_eval", "nu_peak_ref", "nu_0")
 
     """
     Spinning Dust component spectral model, based on spinning dust.

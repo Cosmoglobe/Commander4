@@ -26,6 +26,15 @@ class Component:
     legal_pols: tuple[str, ...] = ("I", "QU", "IQU")
     requires_defined_pol = False
 
+    # Names of the instance attributes that define this component's SED, in the order a reader
+    # would want them. The compsep chain writer stores each one under `comps/<shortname>/sed/`, so
+    # a chain carries everything needed to rebuild the SED without re-parsing the parameter file.
+    # Both sampled parameters (a `beta` the MH sampler moves) and fixed ones (`nu_ref`, `T`) are
+    # listed: which are being sampled is a property of the run, not of the component, and a chain
+    # that recorded only the moving ones would not be self-describing. This mirrors the TOD chain,
+    # which writes the whole `noise_params` vector including an unsampled sigma0.
+    sed_param_names: tuple[str, ...] = ()
+
     @classmethod
     def _assert_legal_pol(cls, pol: str | None, *, role: str, required: bool = False) -> None:
         if pol is None:
@@ -143,6 +152,16 @@ class Component:
         joined = deepcopy(intensity_comp)
         joined.eval_pol = joined.defined_pol
         joined._data = np.concatenate((intensity_comp._data, pol_comp._data), axis=0)
+
+        # The joined view is deep-copied from the intensity view, so any SED parameter given per
+        # polarization (`nu_ref: [I, QU]` is common) would otherwise silently keep only the I value.
+        # Restore the [I, QU] pair, i.e. undo `_per_pol`, so the joined component still describes
+        # both views. Only output paths use joined components (chain writing, name and lmax
+        # reporting) never SED evaluation, which happens on the split views.
+        for param_name in intensity_comp.sed_param_names:
+            i_value, qu_value = getattr(intensity_comp, param_name), getattr(pol_comp, param_name)
+            if not np.array_equal(i_value, qu_value):
+                setattr(joined, param_name, np.array([i_value, qu_value]))
         return joined
 
     @property
