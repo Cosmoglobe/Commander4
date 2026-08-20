@@ -107,13 +107,18 @@ def _well_conditioned_normal_matrices(normal: NDArray[np.floating],
 def normal_matrix_rms(normal: NDArray[np.floating], polarization: str) -> NDArray[np.floating]:
     """Return white-noise RMS from a summed pointing normal matrix.
 
-    Polarized RMS values are the diagonal entries of the inverse IQU normal matrix. Singular or
+    The diagonal of the inverse IQU normal matrix holds per-pixel *variances*, so the RMS is its
+    square root. Taking the full 3x3 inverse (rather than 1/sqrt of the diagonal entries) is what
+    makes the polarized values account for each pixel's polarization-angle coverage. Singular or
     ill-conditioned pixels are marked as ``NaN`` because their Stokes parameters are unconstrained.
+
+    This matches Commander4's own map RMS (`WeightsMapmakerIQU.normalize_map`), so the two are
+    directly comparable when scoring a run against the simulation that produced it.
     """
     matrices, good = _well_conditioned_normal_matrices(normal, polarization)
     inverse = np.full_like(matrices, np.nan)
     inverse[good] = np.linalg.inv(matrices[good])
-    return np.diagonal(inverse, axis1=1, axis2=2).T
+    return np.sqrt(np.diagonal(inverse, axis1=1, axis2=2).T)
 
 
 def noise_map(normal: NDArray[np.floating], rhs: NDArray[np.floating],

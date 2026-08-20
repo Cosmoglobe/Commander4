@@ -46,8 +46,10 @@ directory:
 Each diagnostic HDF5 file contains band metadata plus `maps/sky` (beam-smoothed input sky at the
 band's evaluation `nside`), `maps/hits` (all detector samples), `maps/inv_white_noise` (the packed
 upper triangle of the per-pixel pointing normal matrix), `maps/rms_white_noise`, and `maps/noise`.
-The RMS is the diagonal of the inverse normal matrix, so it accounts for polarization-angle coverage
-and is `NaN` where a Stokes component is unconstrained. It includes only the configured detector
+The RMS is the square root of the diagonal of the inverse normal matrix, so it accounts for
+polarization-angle coverage and is `NaN` where a Stokes component is unconstrained. It is the same
+quantity as Commander4's own `map_rms`, and the two agree on a run's own simulation. It includes
+only the configured detector
 white-noise level: correlated noise, orbital dipole, transfer functions, and TOD modifiers are
 intentionally not propagated into this diagnostic uncertainty. `maps/noise` is the actual simulated
 noise realization binned with that same nominal normal matrix after TOD modifiers, including the
