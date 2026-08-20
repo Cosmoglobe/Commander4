@@ -16,7 +16,8 @@ from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.diagnostics.log import logassert
 from commander4.tod.noise.psd import NoisePSD, NoisePSDOof
 from commander4.data_models.pointing import PixelPointing
-from commander4.experiments.read_utils import read_processing_masks, find_good_Fourier_time
+from commander4.experiments.read_utils import (read_processing_masks, find_good_Fourier_time,
+                                              apply_noise_prior_bounds)
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset
 logger = logging.getLogger(__name__)
@@ -142,6 +143,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
                               P_active_rms = [np.nan, np.inf, np.inf],
                               P_uni = [[np.nan, np.nan], [0.03, 40.0], [-4.0, -2.0]],
                               nu_fit = [[np.nan, np.nan], [0, 10.0], [0, 10.0]])
+    apply_noise_prior_bounds(noise_model, params, expname, bandname)
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
 

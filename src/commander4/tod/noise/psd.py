@@ -162,7 +162,7 @@ class NoisePSDOof(NoisePSD):
     def __init__(self,
                  P_active_mean = [np.nan, 10.0, -2.7],
                  P_active_rms = [np.nan, np.inf, np.inf],
-                 P_uni = [[np.nan, np.nan], [1.0, 100.0], [-4.5, -1.0]],
+                 P_uni = [[np.nan, np.nan], [0.01, 100.0], [-4.5, -0.5]],
                  nu_fit = [[np.nan, np.nan], [0, 10.0], [0, 10.0]],
                  **kw):
         P_lognorm = np.array([False, True, False])  # sigma0, fknee, alpha

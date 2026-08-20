@@ -18,7 +18,8 @@ from commander4.tod.noise.psd import NoisePSD, NoisePSDOof
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset
 from commander4.data_models.pointing import DetectorBoresightPointing, ScanBoresightPointing
-from commander4.experiments.read_utils import read_processing_masks, find_good_Fourier_time
+from commander4.experiments.read_utils import (read_processing_masks, find_good_Fourier_time,
+                                              apply_noise_prior_bounds)
 logger = logging.getLogger(__name__)
 
 
@@ -159,6 +160,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             gc.collect()
 
     noise_model = NoisePSDOof()
+    apply_noise_prior_bounds(noise_model, params, expname, bandname)
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
 

@@ -1,8 +1,50 @@
+import logging
+
 from mpi4py import MPI
 from pixell.bunch import Bunch
 from numpy.typing import NDArray
 import healpy as hp
 import numpy as np
+
+from commander4.diagnostics.log import logassert
+from commander4.parameters.schema import resolve_param
+from commander4.tod.noise.psd import NoisePSD
+
+logger = logging.getLogger(__name__)
+
+
+def apply_noise_prior_bounds(noise_model: NoisePSD, params: Bunch, expname: str,
+                             bandname: str) -> None:
+    """Looks through the provided parameter file for specifications of what the noise model priors
+       should be. If it finds it, it overwrites the default in the provided `noise_model`.
+
+    Reads ``noise_prior_bounds``, a mapping from noise-parameter name to ``[lo, hi]``, taken from
+    the band block, else the experiment block, else ``tod_processing``. Only the named parameters
+    are changed; the rest keep the instrument-appropriate defaults the reader built the model with,
+    e.g.::
+        noise_prior_bounds:
+          fknee: [0.01, 100.0]
+          alpha: [-4.5, -0.5]
+    These bounds are the endpoints of the grid the PSD sampler draws on, so a true value outside
+    them cannot be recovered: the sample pins against the nearest edge instead.
+
+    Args:
+        noise_model: The model to modify in place.
+        expname, bandname: Keys of this band's experiment and band blocks in `params`.
+    """
+    bounds = resolve_param(params, "noise_prior_bounds",
+                           (f"experiments.{expname}.bands.{bandname}",
+                            f"experiments.{expname}", "tod_processing"), default=None)
+    if bounds is None:
+        return
+    for name, limits in bounds.items():
+        logassert(name in noise_model.param_names,
+                  f"'noise_prior_bounds' for band {bandname!r} names {name!r}, which is not a "
+                  f"parameter of {type(noise_model).__name__}: {list(noise_model.param_names)}.",
+                  logger)
+        noise_model.P_uni[noise_model.param_names.index(name)] = limits
+    logger.info(f"Band {bandname}: noise prior bounds overridden from the parameter file, "
+                f"P_uni is now {dict(zip(noise_model.param_names, noise_model.P_uni.tolist()))}.")
 
 
 def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
