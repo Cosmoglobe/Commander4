@@ -13,38 +13,70 @@ from commander4.tod.noise.psd import NoisePSD
 logger = logging.getLogger(__name__)
 
 
-def apply_noise_prior_bounds(noise_model: NoisePSD, params: Bunch, expname: str,
-                             bandname: str) -> None:
-    """Looks through the provided parameter file for specifications of what the noise model priors
-       should be. If it finds it, it overwrites the default in the provided `noise_model`.
+def _resolve_noise_prior_block(params: Bunch, key: str, expname: str, bandname: str,
+                               param_names: tuple[str, ...], model_name: str) -> dict | None:
+    """One noise-prior block from the band, else the experiment, else ``tod_processing``.
 
-    Reads ``noise_prior_bounds``, a mapping from noise-parameter name to ``[lo, hi]``, taken from
-    the band block, else the experiment block, else ``tod_processing``. Only the named parameters
-    are changed; the rest keep the instrument-appropriate defaults the reader built the model with,
-    e.g.::
-        noise_prior_bounds:
+    Returns None when no scope sets it. Every key is checked against the model's parameter names,
+    because a typo would otherwise silently leave the default in force -- the exact failure that
+    made an out-of-range fknee prior look like a working sampler pinned at 1.0 Hz.
+    """
+    block = resolve_param(params, key, (f"experiments.{expname}.bands.{bandname}",
+                                        f"experiments.{expname}", "tod_processing"), default=None)
+    if block is None:
+        return None
+    for name in block:
+        logassert(name in param_names,
+                  f"{key!r} for band {bandname!r} names {name!r}, which is not a parameter of "
+                  f"{model_name}: {list(param_names)}.", logger)
+    return block
+
+
+def apply_noise_priors(noise_model: NoisePSD, params: Bunch, expname: str, bandname: str) -> None:
+    """Looks through the provided parameter file for specifications of what the noise model priors
+       should be. If it finds them, it overwrites the defaults in the provided `noise_model`.
+
+    Two optional blocks, each a mapping from noise-parameter name to its setting, taken from the
+    band block, else the experiment block, else ``tod_processing``. Only the named parameters are
+    changed; the rest keep the instrument-appropriate defaults the reader built the model with::
+
+        noise_prior_bounds:          # hard [lo, hi] limits (C3's p_uni)
           fknee: [0.01, 100.0]
           alpha: [-4.5, -0.5]
-    These bounds are the endpoints of the grid the PSD sampler draws on, so a true value outside
-    them cannot be recovered: the sample pins against the nearest edge instead.
+        noise_prior:                 # informative [mean, rms] (C3's p_active); optional
+          fknee: [10.0, 0.5]         # rms in *decades* for log-normal parameters such as fknee
+          alpha: [-2.7, 0.3]
+
+    The bounds are the endpoints of the grid the PSD sampler draws on, so a true value outside them
+    cannot be recovered: the sample pins against the nearest edge instead. The informative prior
+    multiplies the likelihood along that grid (see `NoisePSD.log_prior`); an rms of ``.inf`` leaves
+    it uninformative, and an rms ``<= 0`` holds the parameter fixed at its current value entirely.
+
+    Naming mirrors the spectral-index sampler's ``spectral_index_bounds`` / ``spectral_index_prior``,
+    which carry the same two roles for compsep.
 
     Args:
         noise_model: The model to modify in place.
         expname, bandname: Keys of this band's experiment and band blocks in `params`.
     """
-    bounds = resolve_param(params, "noise_prior_bounds",
-                           (f"experiments.{expname}.bands.{bandname}",
-                            f"experiments.{expname}", "tod_processing"), default=None)
-    if bounds is None:
+    param_names = noise_model.param_names
+    model_name = type(noise_model).__name__
+    bounds = _resolve_noise_prior_block(params, "noise_prior_bounds", expname, bandname,
+                                        param_names, model_name)
+    prior = _resolve_noise_prior_block(params, "noise_prior", expname, bandname,
+                                       param_names, model_name)
+    if bounds is None and prior is None:
         return
-    for name, limits in bounds.items():
-        logassert(name in noise_model.param_names,
-                  f"'noise_prior_bounds' for band {bandname!r} names {name!r}, which is not a "
-                  f"parameter of {type(noise_model).__name__}: {list(noise_model.param_names)}.",
-                  logger)
-        noise_model.P_uni[noise_model.param_names.index(name)] = limits
-    logger.info(f"Band {bandname}: noise prior bounds overridden from the parameter file, "
-                f"P_uni is now {dict(zip(noise_model.param_names, noise_model.P_uni.tolist()))}.")
+    for name, limits in (bounds or {}).items():
+        noise_model.P_uni[param_names.index(name)] = limits
+    for name, (mean, rms) in (prior or {}).items():
+        noise_model.P_active[param_names.index(name)] = (mean, rms)
+    # `sampled` is spelled out because an rms of <= 0 switching a parameter off is easy to miss in
+    # the [mean, rms] pairs, and a silently unsampled parameter looks exactly like a converged one.
+    logger.info(f"Band {bandname}: noise priors overridden from the parameter file. "
+                f"bounds={dict(zip(param_names, noise_model.P_uni.tolist()))}, "
+                f"[mean, rms]={dict(zip(param_names, noise_model.P_active.tolist()))}, "
+                f"sampled={[n for i, n in enumerate(param_names) if noise_model.is_sampled(i)]}.")
 
 
 def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:

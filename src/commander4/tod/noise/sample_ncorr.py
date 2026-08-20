@@ -393,13 +393,31 @@ def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
     _log_distribution(nu, "residuals", residuals, fmt=".2e")
     _log_distribution(nu, "iterations", niters, fmt=".4f")
 
-    # Per-parameter distributions (model-agnostic; sigma0 at index 0 is reported elsewhere).
+    # Per-parameter distributions (model-agnostic; sigma0 at index 0 is reported elsewhere), plus
+    # how many detector-scans ended up sitting on a hard prior bound. A parameter whose true value
+    # lies outside `P_uni` cannot be recovered: every scan rails against the nearest edge and then
+    # reports a tight scatter around it, which reads as a converged answer in the chain. Railing is
+    # not itself an error -- a genuinely low-fknee detector will sit near the bound -- so this
+    # reports rather than warns, and a large fraction is the signal that the bound is wrong.
     flat = [p for sub in sampled_params for p in sub]
     if flat:
         arr = np.asarray(flat, dtype=np.float64)  # shape (n_sampled_scans, npar)
+        n_sampled = arr.shape[0]
         for j in range(1, arr.shape[1]):
             name = noise_model.param_names[j] if j < len(noise_model.param_names) else f"p{j}"
             _log_distribution(nu, name, arr[:, j], fmt=".4f")
+            lo, hi = float(noise_model.P_uni[j, 0]), float(noise_model.P_uni[j, 1])
+            if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+                continue
+            # Within 1% of the bounds' own span counts as "on" the bound, so a grid endpoint drawn
+            # through the inversion sampler's interpolation still registers.
+            tol = 0.01*(hi - lo)
+            n_lo = int(np.count_nonzero(arr[:, j] <= lo + tol))
+            n_hi = int(np.count_nonzero(arr[:, j] >= hi - tol))
+            if n_lo or n_hi:
+                logger.info(f"{nu}GHz: {name} on its prior bounds for {n_lo} ({n_lo/n_sampled:.1%}) "
+                            f"of {n_sampled} detector-scans at the lower bound {lo:.4g}, and "
+                            f"{n_hi} ({n_hi/n_sampled:.1%}) at the upper bound {hi:.4g}.")
 
 
 @dataclass(frozen=True)

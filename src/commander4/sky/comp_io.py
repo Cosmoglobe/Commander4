@@ -97,16 +97,45 @@ def _read_view_alms_from_fits(comp: "DiffuseComponent", fits_path: str) -> NDArr
     return project_alms(alm_temp, comp.lmax)
 
 
-def _load_component_alms(comp: "DiffuseComponent", source_path: str) -> None:
+def _restore_sampled_sed_params_from_chain(comp: DiffuseComponent, chain_path: str) -> None:
+    """Set `comp`'s *sampled* SED parameters from a chain's ``comps/<shortname>/sed/`` group.
+
+    Only parameters the run is configured to *sample* are restored. Fixed ones (``nu_ref``, ``T``)
+    stay under the parameter file's control, so changing one there is not silently overridden by an
+    older chain. Parameters absent from the chain (written before this group existed) are left as
+    the parameter file set them.
+    """
+    if "sample_spectral_index" not in comp.comp_params \
+            or not bool(comp.comp_params.sample_spectral_index):
+        return
+    with h5py.File(chain_path, "r") as f:
+        sed_group = f.get(f"comps/{comp.shortname}/sed")
+        if sed_group is None:
+            return
+        # `beta` is the only sampled SED parameter today; the loop keeps this correct if more of
+        # `sed_param_names` become sampleable without needing a second list to stay in sync.
+        for param_name in comp.sed_param_names:
+            if param_name != "beta" or param_name not in sed_group:
+                continue
+            value = sed_group[param_name][()]
+            logger.info(f"Component {comp.comp_name!r} ({comp.eval_pol}): restored sampled "
+                        f"{param_name} = {value} from {chain_path!r} (parameter file said "
+                        f"{getattr(comp, param_name)}).")
+            setattr(comp, param_name, float(value))
+
+
+def _load_component_alms(comp: DiffuseComponent, source_path: str) -> None:
     """Set `comp`'s initial alms from `source_path`, dispatching on its file type.
 
-    ``.h5``/``.hd5`` files are read as compsep chains (alms taken directly); ``.fits`` files are
-    read as sky maps and transformed to alms. If the source does not contain this component or its
-    polarization, the alms are left at their initial value (zeros).
+    ``.h5``/``.hd5`` files are read as compsep chains (alms *and* the sampled SED parameters taken
+    directly); ``.fits`` files are read as sky maps and transformed to alms, and carry no SED
+    information. If the source does not contain this component or its polarization, the alms are
+    left at their initial value (zeros).
     """
     lower_path = str(source_path).lower()
     if lower_path.endswith((".h5", ".hd5")):
         view_alms = _read_view_alms_from_chain(comp, source_path)
+        _restore_sampled_sed_params_from_chain(comp, source_path)
     elif lower_path.endswith(".fits"):
         view_alms = _read_view_alms_from_fits(comp, source_path)
     else:

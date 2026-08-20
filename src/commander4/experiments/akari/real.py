@@ -15,7 +15,7 @@ from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
 from commander4.tod.noise.psd import NoisePSDOof
 from commander4.experiments.read_utils import (read_processing_masks, find_good_Fourier_time,
-                                              apply_noise_prior_bounds)
+                                              apply_noise_priors)
 
 def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_names: list[str],
                params: Bunch, scan_idx_start: int,
@@ -110,7 +110,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
 
     ndet = len(det_names)
     noise_model = NoisePSDOof()
-    apply_noise_prior_bounds(noise_model, params, expname, bandname)
+    apply_noise_priors(noise_model, params, expname, bandname)
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
 

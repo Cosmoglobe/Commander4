@@ -123,22 +123,43 @@ class NoisePSD:
         raise NotImplementedError
 
     # ---- prior evaluation -------------------------------------------------
-    def log_prior(self, param_idx: int, x: float) -> float:
-        """Evaluate the log-prior for parameter *param_idx* at value *x*.
+    def is_sampled(self, param_idx: int) -> bool:
+        """Whether parameter *param_idx* should be sampled at all.
 
-        Returns ``-1e30`` if *x* is outside the uniform bounds ``P_uni``.
+        Mirrors C3's skip test (comm_tod_noise_mod.f90:771): a non-positive prior rms, or hard
+        bounds with no room between them, means "hold this parameter fixed". An rms of ``inf`` is
+        the flat-prior case and *is* sampled; only ``<= 0`` (or NaN, as sigma0 carries) switches
+        sampling off.
+        """
+        lo, hi = float(self.P_uni[param_idx, 0]), float(self.P_uni[param_idx, 1])
+        rms = float(self.P_active[param_idx, 1])
+        return bool(rms > 0.0) and hi > lo
+
+    def log_prior(self, param_idx: int, x: NDArray | float) -> NDArray | float:
+        """Log-prior for parameter *param_idx*, evaluated elementwise over *x*.
+
+        Ports C3's ``lnL_xi_n`` prior term (comm_tod_noise_mod.f90:854-862, where it sits commented
+        out): a Gaussian in the parameter, or a log-normal when ``P_lognorm`` is set, whose rms is
+        quoted in *decades* -- hence the ``log(10)`` -- with the ``-log(x)`` Jacobian that makes it
+        a density in x rather than in log(x). Values outside the hard bounds ``P_uni`` get
+        ``-1e30``, so an inversion sampler drawing on a grid never lands there.
+
+        An rms of ``inf`` leaves the Gaussian flat, but leaves the log-normal at ``-log(x)``: the
+        scale-invariant Jeffreys prior, which is the right non-informative choice for a positive
+        scale parameter such as fknee and is what C3's formula degenerates to.
         """
         lo, hi = self.P_uni[param_idx]
-        if x < lo or x > hi:
-            return -1e30
         mu = float(self.P_active[param_idx, 0])
         sigma = float(self.P_active[param_idx, 1])
-        if sigma <= 0:
-            return 0.0  # flat / non-informative
-        if self.P_lognorm[param_idx]:
-            return -0.5 * (np.log(x) - np.log(mu)) ** 2 / (sigma * np.log(10)) ** 2 - np.log(x)
+        x = np.asarray(x, dtype=np.float64)
+        if sigma <= 0 or not np.isfinite(mu):
+            log_p = np.zeros_like(x)  # flat / non-informative
+        elif self.P_lognorm[param_idx]:
+            log_p = -0.5*(np.log(x) - np.log(mu))**2 / (sigma*np.log(10))**2 - np.log(x)
         else:
-            return -0.5 * (x - mu) ** 2 / sigma ** 2
+            log_p = -0.5*(x - mu)**2 / sigma**2
+        log_p = np.where((x < lo) | (x > hi), -1e30, log_p)
+        return log_p if log_p.ndim else float(log_p)
 
     # ---- repr -------------------------------------------------------------
     def __repr__(self) -> str:
@@ -190,7 +211,10 @@ class NoisePSDOof(NoisePSD):
             P(f) = sigma0^2 (1 + (f/fknee)^alpha) to the periodogram of the sky-subtracted
             *residual* TOD, with sigma0 (= noise_params[0]) held fixed. Uses a short Gibbs loop
             that alternately inversion-samples fknee and alpha on grids spanning the model's
-            uniform priors (``P_uni``). See the base-class docstring for argument meaning.
+            hard bounds (``P_uni``), with each grid weighted by that parameter's ``log_prior`` --
+            the informative prior from ``P_active``/``P_lognorm``. A parameter that ``is_sampled``
+            rejects (non-positive prior rms, or bounds with no room) is held at its current value.
+            See the base-class docstring for argument meaning.
         Returns:
             A new [sigma0, fknee, alpha] array with updated fknee and alpha.
         """
@@ -216,24 +240,31 @@ class NoisePSDOof(NoisePSD):
         log_p = np.log(p)
         w = weight[:, np.newaxis]
 
-        # Grids span the uniform priors (single source of truth for the hard parameter bounds).
+        # Grids span the uniform priors (single source of truth for the hard parameter bounds), and
+        # each carries its parameter's log-prior, evaluated once because it does not depend on the
+        # other parameter's current value.
         fk_lo, fk_hi = float(self.P_uni[1, 0]), float(self.P_uni[1, 1])
         al_lo, al_hi = float(self.P_uni[2, 0]), float(self.P_uni[2, 1])
         fknee_grid = np.logspace(np.log10(fk_lo), np.log10(fk_hi), n_grid)
         alpha_grid = np.linspace(al_lo, al_hi, n_grid)
+        log_prior_fknee = self.log_prior(1, fknee_grid)
+        log_prior_alpha = self.log_prior(2, alpha_grid)
+        sample_fknee, sample_alpha = self.is_sampled(1), self.is_sampled(2)
 
         for _ in range(n_burnin + 1):
-            # Whittle log-likelihood sum_l w_l (log p_l - log S_l - p_l/S_l), with the full model
-            # S = sigma0^2 (1 + (f/fknee)^alpha). 1. Sample fknee given the current alpha.
-            S = sigma0_sq * (1.0 + (f[:, np.newaxis] / fknee_grid) ** alpha_current)
-            resid = log_p[:, np.newaxis] - np.log(S)
-            log_L_fknee = np.sum(w * (resid - np.exp(resid)), axis=0)
-            fknee_current = float(_inversion_sampler_1d(log_L_fknee, fknee_grid))
+            # Whittle log-posterior sum_l w_l (log p_l - log S_l - p_l/S_l) + log prior, with the
+            # full model S = sigma0^2 (1 + (f/fknee)^alpha). 1. fknee given the current alpha.
+            if sample_fknee:
+                S = sigma0_sq * (1.0 + (f[:, np.newaxis] / fknee_grid) ** alpha_current)
+                resid = log_p[:, np.newaxis] - np.log(S)
+                log_L_fknee = np.sum(w * (resid - np.exp(resid)), axis=0) + log_prior_fknee
+                fknee_current = float(_inversion_sampler_1d(log_L_fknee, fknee_grid))
             # 2. Sample alpha given the new fknee.
-            S = sigma0_sq * (1.0 + (f[:, np.newaxis] / fknee_current) ** alpha_grid)
-            resid = log_p[:, np.newaxis] - np.log(S)
-            log_L_alpha = np.sum(w * (resid - np.exp(resid)), axis=0)
-            alpha_current = float(_inversion_sampler_1d(log_L_alpha, alpha_grid))
+            if sample_alpha:
+                S = sigma0_sq * (1.0 + (f[:, np.newaxis] / fknee_current) ** alpha_grid)
+                resid = log_p[:, np.newaxis] - np.log(S)
+                log_L_alpha = np.sum(w * (resid - np.exp(resid)), axis=0) + log_prior_alpha
+                alpha_current = float(_inversion_sampler_1d(log_L_alpha, alpha_grid))
 
         out = np.array(noise_params, dtype=np.float64, copy=True)
         out[1] = fknee_current
