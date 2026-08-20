@@ -8,8 +8,38 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sims"))
 
-from simgen.diagnostics import (hit_map, noise_map, noise_map_rhs, white_noise_normal_matrix,
-                                write_band_diagnostics)
+from simgen.diagnostics import (hit_map, noise_map, noise_map_rhs, normal_matrix_rms,
+                                white_noise_normal_matrix, write_band_diagnostics)
+
+
+def test_normal_matrix_rms_is_an_rms_not_a_variance():
+    """N samples of white noise at sigma0 must give sigma0/sqrt(N), not its square."""
+    nhit, sigma0 = 16, 3.0
+    band = SimpleNamespace(name="B", eval_nside=1, polarization="I",
+                           detectors=[SimpleNamespace(name="det", sigma0=sigma0)])
+    det_pix = {"det": np.zeros(nhit, dtype=np.int64)}
+    det_psi = {"det": np.zeros(nhit)}
+    normal = white_noise_normal_matrix(band, det_pix, det_psi)
+
+    rms = normal_matrix_rms(normal, "I")
+    np.testing.assert_allclose(rms[0, 0], sigma0 / np.sqrt(nhit))
+
+
+def test_normal_matrix_rms_uses_the_full_iqu_inverse():
+    """Poor polarization-angle coverage must inflate the RMS above the naive 1/sqrt(diagonal)."""
+    sigma0 = 1.0
+    band = SimpleNamespace(name="B", eval_nside=1, polarization="IQU",
+                           detectors=[SimpleNamespace(name="det", sigma0=sigma0)])
+    # Three angles, but unevenly spread, so I, Q and U are correlated rather than independent.
+    psi = np.deg2rad(np.array([0.0, 30.0, 75.0]))
+    normal = white_noise_normal_matrix(band, {"det": np.zeros(3, dtype=np.int64)}, {"det": psi})
+
+    rms = normal_matrix_rms(normal, "IQU")[:, 0]
+    matrix = np.array([[normal[0, 0], normal[1, 0], normal[2, 0]],
+                       [normal[1, 0], normal[3, 0], normal[4, 0]],
+                       [normal[2, 0], normal[4, 0], normal[5, 0]]])
+    np.testing.assert_allclose(rms, np.sqrt(np.diagonal(np.linalg.inv(matrix))))
+    assert np.all(rms > 1.0 / np.sqrt(np.diagonal(matrix)))
 
 
 def test_realized_noise_diagnostic_map(tmp_path):

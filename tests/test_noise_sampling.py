@@ -110,9 +110,23 @@ class TestBinnedPSDSigma0:
         tod = rng.normal(0.0, sigma, n)
         mask = np.ones(n, dtype=bool)
         est = calc_sigma0_binned_psd(tod, mask, fsamp)
-        # Slightly biased low by the 0.95 safety factor and the min-over-bins; within ~15%.
-        assert est == pytest.approx(sigma, rel=0.15)
-        assert est < sigma  # the safety factor guarantees an under-estimate for pure white noise
+        assert est == pytest.approx(sigma, rel=0.02)
+
+    def test_floor_is_unbiased_at_realistic_scan_lengths(self):
+        """The estimator must be unbiased, not 6-19% low as C3's minimum-bin version was.
+
+        The single-minimum estimator this replaces reads low because the smallest of a noisy set
+        underestimates the set's floor, and worsens as scans shorten and bins hold fewer modes.
+        Both lengths here are short enough for that to have shown up clearly (-6% and -13%), and
+        C3's further 0.95 shrink -- aimed at its splined PSD model, and pointless for a parametric
+        one -- roughly doubled it.
+        """
+        rng = np.random.default_rng(17)
+        for ntod, fsamp in [(19500, 32.5), (9750, 32.5)]:
+            mask = np.ones(ntod, dtype=bool)
+            est = np.mean([calc_sigma0_binned_psd(rng.normal(0.0, 1.0, ntod), mask, fsamp)
+                           for _ in range(60)])
+            assert est == pytest.approx(1.0, abs=0.03), f"ntod={ntod}"
 
     def test_robust_to_1f_component(self):
         """Adding a strong 1/f component must not raise the estimated white floor (min picks it)."""
@@ -130,9 +144,10 @@ class TestBinnedPSDSigma0:
         sigma, n, fsamp = 1.0, 2**16, 10.0
         tod = rng.normal(0.0, sigma, n)
         mask = np.ones(n, dtype=bool)
-        # The two estimators target the same quantity; binned is a touch lower (0.95 guard).
+        # The two estimators target the same quantity, and both are unbiased, so they should now
+        # agree far more closely than the 12% the 0.95-shrunk version needed.
         assert calc_sigma0_binned_psd(tod, mask, fsamp) == pytest.approx(
-            calc_sigma0_robust(tod, mask), rel=0.12)
+            calc_sigma0_robust(tod, mask), rel=0.03)
 
 
 # ===================================================================

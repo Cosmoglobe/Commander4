@@ -13,6 +13,7 @@ from numpy.typing import NDArray
 from math import sqrt
 from numba import njit
 from scipy.fft import rfftfreq
+from scipy.special import ndtri
 
 import logging
 from typing import TYPE_CHECKING
@@ -165,32 +166,46 @@ def calc_sigma0_robust(tod: NDArray, mask: NDArray[np.bool_], down_factor: int =
     return float(_sigma_clip_pairs(res0, mask0, n_clip_iter, threshold, down_factor))
 
 
+def _lowest_bins_bias(n_lowest: int, n_bins: int, modes_per_bin: float) -> float:
+    """Expected mean of the `n_lowest` smallest of `n_bins` bin powers, in units of the true power,
+    used for correcting for the bias introduced when estimating sigma0 from PSD floor.
+
+    A bin averaging `modes_per_bin` Fourier modes scatters about the true power as Gamma(nu, 1/nu),
+    which for the mode counts that occur in practice (tens to thousands) is close to N(1, 1/sqrt
+    (nu)). Blom's approximation gives the expected standard-normal order statistics, so the mean of
+    the lowest few sits this factor below one. Dividing the measured value by it removes the
+    selection bias. Picking the smallest of a noisy set always reads low, worsening as scans
+    shorten and each bin therefore holds fewer modes.
+    """
+    ranks = np.arange(1, n_lowest + 1)
+    bias = 1.0 + ndtri((ranks - 0.375) / (n_bins + 0.25)).mean() / sqrt(modes_per_bin)
+    # Only reachable with a handful of modes per bin, where the Gaussian approximation has broken
+    # down anyway; clamping keeps a pathological scan from inflating sigma0 without limit.
+    return max(bias, 0.25)
+
+
 def calc_sigma0_binned_psd(tod: NDArray, mask: NDArray[np.bool_], fsamp: float,
-                           dnu: float = 0.5, safety: float = 0.95) -> float:
-    """ Estimate sigma0 as the "bottom of the binned PSD": sqrt of the minimum binned periodogram.
+                           dnu: float = 0.5, n_floor_bins: int = 10) -> float:
+    """ Estimate sigma0 as the "bottom of the binned PSD": sqrt of the lowest binned periodogram.
 
-    Faithful port of the Commander3 steady-state white-noise estimator
-    (comm_tod_noise_mod.f90:135-176): the mirrored-FFT periodogram of the (signal-subtracted) TOD
-    is averaged into ``dnu``-Hz bins, and the minimum bin -- the high-frequency white-noise floor,
-    where the 1/f component is negligible -- defines sigma0. A ``safety`` factor (<1) shrinks the
-    estimate slightly, mirroring C3's 0.95 guard against a singular correlated-noise covariance
-    when sigma0^2 is later subtracted from the total PSD.
+    Follows the Commander3 steady-state white-noise estimator (comm_tod_noise_mod.f90:135-176): the
+    mirrored-FFT periodogram of the (signal-subtracted) TOD is averaged into ``dnu``-Hz bins, and
+    the bottom of that spectrum defines sigma0.
 
-    The periodogram is normalized as ``|forward_rfft_mirrored(tod)|^2 / (2*ntod)`` so that its
-    white-noise floor equals sigma0^2 in C4's convention (the true white-noise variance, matching
-    ``calc_sigma0_robust`` and ``NoisePSD.eval_full``); this is C3's ``|dv|^2/ntod`` divided by an
-    extra 2 to undo the mirroring.
+    Reading off the *bottom* of the spectrum is intrinsically robust to glitch/spike power (spikes
+    only raise bins), so ``mask`` is accepted for signature parity with the other estimators but is
+    not applied.
 
-    Taking the *minimum* over bins is intrinsically robust to glitch/spike power (spikes only raise
-    bins), so ``mask`` is accepted for signature parity with the other estimators but is not applied
-    -- matching C3, which estimates on the raw residual before any gap-filling.
+    There is also an expected (low) bias in the estimated sigma0 this way, which is corrected for.
 
     Args:
         tod: Signal-subtracted residual TOD (1D); masked samples may still carry data.
-        mask: Boolean validity mask (unused; see above).
+        mask: Boolean validity mask (unused, kept for call consistency).
         fsamp: Sampling rate (Hz).
         dnu: Bin width (Hz) for averaging the periodogram.
-        safety: Multiplicative shrink factor on the final estimate.
+        n_floor_bins: How many of the lowest bins to average, capped at a third of the populated
+            bins. Larger values reduce the scatter but risk reaching up into the 1/f rise when the
+            knee sits high in the band.
     Returns:
         Estimated white-noise level (float), or ``np.inf`` if no bin is populated.
     """
@@ -208,10 +223,19 @@ def calc_sigma0_binned_psd(tod: NDArray, mask: NDArray[np.bool_], fsamp: float,
     populated = bin_cnt > 0
     if not np.any(populated):
         return np.inf
-    return float(sqrt((bin_sum[populated] / bin_cnt[populated]).min()) * safety)
+    bin_power = bin_sum[populated] / bin_cnt[populated]
+    bin_modes = bin_cnt[populated]
+    # Never average more than a third of the spectrum: with few bins (a low sampling rate against
+    # the 0.5 Hz bin width) the requested count would otherwise reach down into the 1/f rise and
+    # estimate the floor from bins that are nowhere near it.
+    n_lowest = max(1, min(n_floor_bins, bin_power.size // 3))
+    lowest = np.argsort(bin_power)[:n_lowest]
+    floor = bin_power[lowest].mean() / _lowest_bins_bias(n_lowest, bin_power.size,
+                                                         bin_modes[lowest].mean())
+    return float(sqrt(floor))
 
 
-def _estimate_standalone_sigma0(view: "TODView", sigma0_method: str) -> float:
+def _estimate_standalone_sigma0(view: TODView, sigma0_method: str) -> float:
     """ White-noise sigma0 for one detector-scan when correlated noise is *not* being sampled.
 
     Estimated from the sky- and orbital-dipole-subtracted residual (which still contains the 1/f
@@ -225,8 +249,10 @@ def _estimate_standalone_sigma0(view: "TODView", sigma0_method: str) -> float:
     Returns:
         The estimated white-noise level (float).
     """
-    residual = view.get_tod(subtract=(("sky", TODView._ALL_GAIN_TERMS),
-                                      ("orbital_dipole", TODView._ALL_GAIN_TERMS)))
+    # Read the gain-term list off the instance: TODView itself is a TYPE_CHECKING-only import here
+    # (importing it at runtime would close a cycle through the correlated-noise sampler).
+    residual = view.get_tod(subtract=(("sky", view._ALL_GAIN_TERMS),
+                                      ("orbital_dipole", view._ALL_GAIN_TERMS)))
     mask = view.get_mask(proc_mask_type="ncorr")
     if sigma0_method == "binned_psd":
         sigma0 = calc_sigma0_binned_psd(residual, mask, view.fsamp)

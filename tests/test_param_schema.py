@@ -10,6 +10,10 @@ the solver whose behaviour it actually changes.
 import pytest
 from pixell.bunch import Bunch
 
+import numpy as np
+
+from commander4.experiments.read_utils import apply_noise_prior_bounds
+from commander4.tod.noise.psd import NoisePSDOof
 from commander4.parameters.schema import (TOP_LEVEL_BLOCKS, validate_param_schema, compsep_enabled,
                                      derive_task_counts, task_count_breakdown, resolve_param,
                                      resolve_band_lmax)
@@ -248,3 +252,82 @@ def test_a_file_band_takes_its_lmax_from_its_compsep_entry():
     """`get_from: file` bands have no experiment block; freq/fwhm/nside already live here."""
     assert resolve_band_lmax(_lmax_params(file_lmax=80), "BandA", None, 64) == 80
     assert resolve_band_lmax(_lmax_params(), "BandA", None, 64) == 191
+
+
+# ===================================================================
+# Noise-PSD prior bounds (experiments/read_utils.apply_noise_prior_bounds)
+# ===================================================================
+
+def _noise_params(band=None, experiment=None, tod_processing=None):
+    """A parameter Bunch carrying `noise_prior_bounds` at zero or more of the three scopes."""
+    band_block = Bunch(enabled=True)
+    if band is not None:
+        band_block.noise_prior_bounds = Bunch(**band)
+    exp_block = Bunch(bands=Bunch(BandA=band_block))
+    if experiment is not None:
+        exp_block.noise_prior_bounds = Bunch(**experiment)
+    tod_block = Bunch()
+    if tod_processing is not None:
+        tod_block.noise_prior_bounds = Bunch(**tod_processing)
+    return Bunch(experiments=Bunch(EXP=exp_block), tod_processing=tod_block)
+
+
+def test_noise_prior_bounds_left_alone_when_the_parameter_file_is_silent():
+    """A reader's instrument-appropriate defaults must survive an unconfigured parameter file."""
+    model = NoisePSDOof(P_uni=[[np.nan, np.nan], [0.03, 40.0], [-4.0, -2.0]])
+    apply_noise_prior_bounds(model, _noise_params(), "EXP", "BandA")
+    np.testing.assert_allclose(model.P_uni[1], [0.03, 40.0])
+    np.testing.assert_allclose(model.P_uni[2], [-4.0, -2.0])
+
+
+def test_noise_prior_bounds_override_only_the_named_parameters():
+    model = NoisePSDOof(P_uni=[[np.nan, np.nan], [0.03, 40.0], [-4.0, -2.0]])
+    apply_noise_prior_bounds(model, _noise_params(band={"fknee": [0.001, 5.0]}), "EXP", "BandA")
+    np.testing.assert_allclose(model.P_uni[1], [0.001, 5.0])
+    np.testing.assert_allclose(model.P_uni[2], [-4.0, -2.0])  # untouched
+
+
+def test_noise_prior_bounds_prefer_the_band_over_wider_scopes():
+    model = NoisePSDOof()
+    apply_noise_prior_bounds(model, _noise_params(band={"fknee": [1.0, 2.0]},
+                                                  experiment={"fknee": [3.0, 4.0]},
+                                                  tod_processing={"fknee": [5.0, 6.0]}),
+                             "EXP", "BandA")
+    np.testing.assert_allclose(model.P_uni[1], [1.0, 2.0])
+
+    model = NoisePSDOof()
+    apply_noise_prior_bounds(model, _noise_params(experiment={"fknee": [3.0, 4.0]},
+                                                  tod_processing={"fknee": [5.0, 6.0]}),
+                             "EXP", "BandA")
+    np.testing.assert_allclose(model.P_uni[1], [3.0, 4.0])
+
+
+def test_noise_prior_bounds_reject_an_unknown_parameter_name(caplog):
+    """A typo here would otherwise leave the default bounds silently in force."""
+    model = NoisePSDOof()
+    # logassert reports through the logger and then raises a bare AssertionError.
+    with pytest.raises(AssertionError):
+        apply_noise_prior_bounds(model, _noise_params(band={"fkne": [0.1, 1.0]}), "EXP", "BandA")
+    assert "fkne" in caplog.text
+
+
+def test_prior_bounds_are_what_the_psd_sampler_draws_within():
+    """The bounds are grid endpoints, so a truth outside them pins the sample at the nearest edge."""
+    rng = np.random.default_rng(2)
+    fsamp, ntod, sigma0, fknee, alpha = 32.5, 9750, 80.0, 0.5, -1.5
+    freqs = np.fft.rfftfreq(ntod, 1.0/fsamp)
+    psd = np.full(freqs.size, sigma0**2)
+    psd[1:] = sigma0**2 * (1.0 + (freqs[1:]/fknee)**alpha)
+    coeff = (rng.normal(size=freqs.size) + 1j*rng.normal(size=freqs.size))*np.sqrt(psd*ntod/2)
+    coeff[0] = 0.0
+    residual = np.fft.irfft(coeff, ntod)
+
+    start = np.array([sigma0, 0.1, -1.0])
+    excluding = NoisePSDOof(P_uni=[[np.nan, np.nan], [1.0, 100.0], [-4.5, -1.0]])
+    containing = NoisePSDOof(P_uni=[[np.nan, np.nan], [0.01, 100.0], [-4.5, -0.5]])
+    pinned = np.mean([excluding.sample_params(residual, start, fsamp, nu_max=10.0)[1]
+                      for _ in range(15)])
+    free = np.mean([containing.sample_params(residual, start, fsamp, nu_max=10.0)[1]
+                    for _ in range(15)])
+    assert pinned == pytest.approx(1.0, abs=0.02)      # railed against the lower bound
+    assert free == pytest.approx(fknee, rel=0.25)      # recovered once the bound allows it
