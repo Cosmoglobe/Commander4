@@ -69,7 +69,6 @@ Note that Commander4 cannot be run as a standalone script (e.g. python src/comma
 ### 3.1 Parameter file
 A parameter file is seven top-level blocks, each named after the part of the program that reads them: `gibbs`, `resources`, `output`, `components`, `experiments`, `tod_processing` and `compsep`.
 
-[`notes/param_layout.yml`](notes/param_layout.yml) shows the whole layout with comments.
 
 The MPI task counts are **derived**, not stated: the TOD total is the sum of the per-band `num_tasks` over enabled bands of enabled experiments, and component separation takes one task per enabled `compsep.bands` view (one for I, one for QU). Commander4 reports the total it needs, and `mpirun -n` must match it. `compsep.enabled: false` runs TOD-only, allocating no compsep ranks.
 
@@ -83,10 +82,52 @@ A run writes everything below the single directory named by `output.dir`, which 
 <output_dir>/plots/             # figures
 ```
 
-`output.logging.file.filename` is a bare file name, not a path: it is always placed in the logs directory. The subdirectory names are defined in [`src/commander4/output/paths.py`](src/commander4/output/paths.py), which is also what the plotting and standalone tools read, so those take the same `<output_dir>` as their argument.
+`output.logging.file.filename` is a bare file name, not a path: it is always placed in the logs directory. The subdirectory names are defined in [`src/commander4/file_io/paths.py`](src/commander4/file_io/paths.py), which is also what the plotting and standalone tools read, so those take the same `<output_dir>` as their argument.
 
 # 4. Development / Contributing
-### 4.1 Git workflow
+### 4.1 Code layout
+An overview the most important directories and files. This is not exhaustive.
+
+```
+src/commander4/
+  cli.py               # Entry point. Splits MPI into a TOD side and a compsep side, runs the Gibbs loop.
+  units.py             # Brightness-unit conversions (uK_RJ / uK_CMB / MJy/sr).
+  polarization.py      # The I / QU / IQU vocabulary shared by both sides.
+
+  tod/                 # === TOD SIDE: one Gibbs iteration over time-ordered data ===
+    processing.py      #   Drives the iteration: gain, jumps, correlated noise, mapmaking, data selection.
+    view.py            #   TODView: the read interface to one detector-scan and every TOD derived from it.
+    gain.py            #   Gain sampling (absolute, relative, temporal).
+    noise/             #   Correlated-noise realizations, sigma0 estimation, PSD models and their priors.
+    mapmaking/         #   binned.py (per-pixel inversion) and cg.py (iterative, deconvolves a transfer function).
+
+  compsep/             # === COMPSEP SIDE: solving for component amplitudes and spectral parameters ===
+    processing.py      #   Drives the iteration and validates the sampling groups.
+    cg_solver.py       #   The global CG amplitude solve; perpix_solver.py is the common-resolution alternative.
+    mcmc.py            #   Metropolis-Hastings machinery; spectral_index.py is its one concrete user.
+    preconditioners.py #   Preconditioners for the compsep CG (the mapmaker's live in tod/mapmaking/).
+
+  sky/                 # The sky model that compsep solves for and the TOD side subtracts.
+    component.py       #   Component base class; diffuse_components.py and point_sources.py are the families.
+    comp_list.py       #   CompList: a list of components usable as a single vector by the CG driver.
+
+  data_models/         # The containers the two sides pass around (band TOD, band maps, pointing, samples).
+  file_io/             # Everything that touches disk: chain writing, map reading, and:
+    experiments/       #   One TOD reader per experiment, each module named after its `experiment_id`.
+  parameters/          # Parameter-file parsing (parse.py) and scoped lookup + validation (schema.py).
+  mpi/                 # Communicator setup, and the transfer of maps and sky models between the two sides.
+  math_utils/          # SHTs, alm helpers, FFTs, in-place array arithmetic.
+  diagnostics/         # Logging, performance profiling, and the plots written alongside a chain.
+  standalone_tools/    # Command-line tools installed alongside commander4 (e.g. c4-plot-chain).
+  backend/             # Loader for the compiled C/C++ backend built from src/lib_cpp/.
+
+sims/simgen/           # Standalone TOD simulator. Writes scan files read back with experiment_id: "general".
+params/                # Parameter files, grouped by instrument.
+tests/                 # pytest suite; run with `pytest` from the repository root.
+notes/                 # Design notes.
+```
+
+### 4.2 Git workflow
 1. Make sure you are on main (`git checkout main`) and up to date (`git pull`).
 2. Create a new local branch (`git checkout -b dev-compsep`).
 3. Make commits from small self-contained changes to the code. The individual commits should not break the code, but should otherwise be as limited in scope as possible.
@@ -96,7 +137,7 @@ A run writes everything below the single directory named by `output.dir`, which 
 7. If you are not immediately planning to keep developing the same features on the same branch, it is best to check out to main (`git checkout main`) and delete your local branch (`git branch -d dev-compsep`) (you can always re-branch with the exact same name later). The exception is if you intend to keep working on the same features in the code, that depends on the new changes you made.
 8. If you are the reviewer of a pull request, always delete the merged branch immediately after merging. There will be a prompt for this on GitHub.
 
-### 4.2 Python style guidelines
+### 4.3 Python style guidelines
 Commander 4 does not strictly adhere to a specific style guideline, and you are encouraged to use common sense. You are generally recommended to follow PEP8 (https://peps.python.org/pep-0008/) style guidelines, with the following clarifications and exceptions:
 
 #### Line length
