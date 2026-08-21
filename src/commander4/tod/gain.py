@@ -27,16 +27,16 @@ from commander4.tod.view import TODView
 logger = logging.getLogger(__name__)
 
 
-# Which signal a gain term is calibrated against -- i.e. what the calibration residual is reduced
+# Which signal a gain term is calibrated against, i.e. what the calibration residual is reduced
 # to. `TODView.get_calib_tod` owns the actual signal bookkeeping; the three choices are:
-#   orbital_dipole -- the CMB dipole induced by the observer's motion, alone. It is known a priori
-#                     from the spacecraft velocity and the CMB monopole temperature, so it does not
-#                     depend on the sky model. That makes it the only *absolute* calibrator,
-#                     and the natural default for the absolute gain (the average across detectors).
-#   sky            -- the entire modelled signal, static sky and orbital dipole. The default for
-#                     the relative and temporal terms: those only have to track gain *differences*
-#                     between detectors or scans, so they can use every bit of signal available.
-#   sky_no_dipole  -- the static sky model from component separation, with the dipole left out.
+#   orbital_dipole: the CMB dipole induced by the observer's motion, alone. It is known a priori
+#                   from the spacecraft velocity and the CMB monopole temperature, so it does not
+#                   depend on the sky model. That makes it the only *absolute* calibrator,
+#                   and the natural default for the absolute gain (the average across detectors).
+#   sky:            the entire modelled signal, static sky and orbital dipole. The default for
+#                   the relative and temporal terms: those only have to track gain *differences*
+#                   between detectors or scans, so they can use every bit of signal available.
+#   sky_no_dipole:  the static sky model from component separation, with the dipole left out.
 # Each term's default and any per-band override are resolved by ``GainConfig.from_params``.
 _VALID_CALIB_TARGETS = ("orbital_dipole", "sky", "sky_no_dipole")
 
@@ -49,7 +49,7 @@ def _solve_relative_gain_system(s_weights: NDArray, r_weights: NDArray, prev_rel
     """ Draw relative-gain deviations Delta g_i from the BP7 Sec. 3.4 constrained Gaussian.
 
         Solves the bordered linear system enforcing ``sum(Delta g_i) = 0`` over the *active*
-        detectors only -- those with nonzero calibration weight ``s_weights``. A detector rejected
+        detectors only, those with nonzero calibration weight ``s_weights``. A detector rejected
         on every scan (or with a vanishing calibrator) has ``s_weights == 0``; it would contribute
         an all-zero row/column and, if two or more are present, make the matrix singular. Such
         detectors are excluded from the solve (shrinking the system to the active set) and held at

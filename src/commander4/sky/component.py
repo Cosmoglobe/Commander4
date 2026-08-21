@@ -20,19 +20,21 @@ from commander4.math_utils.arithmetic import dot, inplace_arr_add,\
 logger = logging.getLogger(__name__)
 
 
-# First tier component classes
 class Component:
+    """Abstract base class for every sky component.
+
+    Holds the amplitude buffer and its arithmetic, the polarization view, and the interface the
+    samplers call. Concrete families are defined in `diffuse_components.py` and `point_sources.py`.
+    """
+
     default_shortname = "comp"
     legal_pols: tuple[str, ...] = ("I", "QU", "IQU")
     requires_defined_pol = False
 
-    # Names of the instance attributes that define this component's SED, in the order a reader
-    # would want them. The compsep chain writer stores each one under `comps/<shortname>/sed/`, so
-    # a chain carries everything needed to rebuild the SED without re-parsing the parameter file.
-    # Both sampled parameters (a `beta` the MH sampler moves) and fixed ones (`nu_ref`, `T`) are
-    # listed: which are being sampled is a property of the run, not of the component, and a chain
-    # that recorded only the moving ones would not be self-describing. This mirrors the TOD chain,
-    # which writes the whole `noise_params` vector including an unsampled sigma0.
+    # Names of the instance attributes defining this component's SED. The compsep chain writer
+    # stores each under `comps/<shortname>/sed/`, so a chain describes its own SED without the
+    # parameter file. Fixed parameters (`nu_ref`, `T`) are listed alongside sampled ones, since
+    # which are sampled is a property of the run rather than of the component.
     sed_param_names: tuple[str, ...] = ()
 
     @classmethod
@@ -156,8 +158,8 @@ class Component:
         # The joined view is deep-copied from the intensity view, so any SED parameter given per
         # polarization (`nu_ref: [I, QU]` is common) would otherwise silently keep only the I value.
         # Restore the [I, QU] pair, i.e. undo `_per_pol`, so the joined component still describes
-        # both views. Only output paths use joined components (chain writing, name and lmax
-        # reporting) never SED evaluation, which happens on the split views.
+        # both views. Joined components are only used on output paths (chain writing, name and lmax
+        # reporting), never for SED evaluation, which happens on the split views.
         for param_name in intensity_comp.sed_param_names:
             i_value, qu_value = getattr(intensity_comp, param_name), getattr(pol_comp, param_name)
             if not np.array_equal(i_value, qu_value):
@@ -209,36 +211,25 @@ class Component:
         return dot(self._data, other._data)
 
     def bcast_data_blocking(self, comm:MPI.Comm, root=0):
-        """
-        Broadcasts the data object of the component stored on the root MPI rank.
-        """
+        """Broadcast the component's data array from the root MPI rank."""
         log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
         comm.Bcast(self._data, root=root)
 
     def bcast_data_non_blocking(self, comm:MPI.Comm, root=0):
-        """
-        Broadcasts the data object of the component stored on the root MPI rank,
-        it only returns the request.
-        """
+        """As `bcast_data_blocking`, but returns the MPI request instead of waiting on it."""
         log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
         req = comm.Ibcast(self._data, root=root)
         return req
 
     def accum_data_blocking(self, comm:MPI.Comm, root=0):
-        """
-        Accumulates on the root rank the data object of the component through and
-        MPI reduce with a sum.
-        """
+        """Sum the component's data array across the communicator onto the root rank."""
         log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
         myrank=comm.Get_rank()
         send, recv = (MPI.IN_PLACE, self._data) if myrank == root else (self._data, None)
         comm.Reduce(send, recv, op=MPI.SUM, root=root)
 
     def accum_data_non_blocking(self, comm:MPI.Comm, root=0):
-        """
-        Accumulates on the root rank the data object of the component through and MPI reduce with
-        a sum, it only returns the request.
-        """
+        """As `accum_data_blocking`, but returns the MPI request instead of waiting on it."""
         log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
         myrank=comm.Get_rank()
         send, recv = (MPI.IN_PLACE, self._data) if myrank == root else (self._data, None)
@@ -246,7 +237,7 @@ class Component:
         return req
 
     def __array_function__(self, func, types, args, kwargs):
-        #for numpy func overloads
+        # Lets numpy functions such as np.zeros_like dispatch onto Component.
         if not all(issubclass(t, Component) for t in types):
             return NotImplemented
 
@@ -266,11 +257,3 @@ class Component:
         out = deepcopy(other)
         out._data = zeros
         return out
-
-
-class TemplateComponent(Component):
-    pass
-
-
-class CMBRelQuad(TemplateComponent):
-    pass

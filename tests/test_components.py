@@ -12,7 +12,7 @@ from commander4.sky.point_sources import PointSourcesComponent
 from commander4.sky.sky_model import build_initial_sky_model
 from commander4.math_utils.alm import gaussian_random_alm
 from commander4.math_utils.sht import alm_to_map
-from commander4.sky.comp_list import complist_dot
+from commander4.sky.comp_list import complist_dot, complist_norm
 
 
 def _make_compsep(ntask_compsep_qu: int = 1, ntask_compsep_i: int = 1) -> Bunch:
@@ -142,6 +142,32 @@ def test_complist_add_returns_full_complist() -> None:
     assert len(summed) == 2
     assert np.all(summed[0].alms == 2.0 + 0.0j)
     assert np.all(summed[1].alms == 4.0 + 0.0j)
+
+
+def test_complist_norm_is_the_square_root_of_the_self_dot_product() -> None:
+    """`complist_norm` must return |x|, not |x|^2, so a ratio of two is a relative L2 error."""
+    comp_list = _make_comp_list("IQU")
+    for idx, comp in enumerate(comp_list, start=1):
+        comp.alms[:] = idx + 0.0j
+
+    self_dot = complist_dot(comp_list, comp_list)
+
+    assert self_dot > 0.0
+    assert complist_norm(comp_list) == pytest.approx(np.sqrt(self_dot))
+
+
+def test_complist_norm_ratio_scales_linearly_with_the_perturbation() -> None:
+    """The CG diagnostic divides two norms and reports it as an L2 error, so it must be linear."""
+    truth = _make_comp_list("IQU")
+    for comp in truth:
+        comp.alms[:] = 1.0 + 0.0j
+    perturbed = deepcopy(truth)
+    for comp in perturbed:
+        comp.alms[:] = 1.1 + 0.0j  # a uniform 10% deviation
+
+    relative_error = complist_norm(perturbed - truth)/complist_norm(truth)
+
+    assert relative_error == pytest.approx(0.1, rel=1e-6)
 
 
 def test_complist_ops_require_matching_execution_views() -> None:
@@ -576,3 +602,165 @@ def test_cmb_get_sed_is_unity_at_nu_ref_and_ratio_elsewhere() -> None:
         return (1 * pysm3u.uK_CMB).to(
             pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(f * pysm3u.GHz)).value
     assert np.isclose(cmb.get_sed(353.0), g(353.0) / g(100.0))
+
+# ===================================================================
+# SED parameters in the compsep chain (Component.sed_param_names)
+# ===================================================================
+
+def _make_dust_cfg(nu_ref, polarization: str = "IQU") -> Bunch:
+    cfg = Bunch(
+        enabled=True,
+        component_class="ThermalDust",
+        params=Bunch(
+            lmax=1,
+            polarization=polarization,
+            shortname="dust",
+            spatially_varying_MM=False,
+            Cl_prior_amplitude=None,
+            beta=1.54,
+            T=20.0,
+            nu_ref=nu_ref,
+        ),
+    )
+    object.__setattr__(cfg, "_name", "dust")
+    return cfg
+
+
+def test_every_component_class_declares_its_sed_parameters() -> None:
+    """A component whose SED parameters are undeclared writes an empty `sed/` group to the chain."""
+    from commander4.sky import CMB, FreeFree, Synchrotron, ThermalDust, SpinningDust, RadioSources
+    expected = {CMB: ("nu_ref",), ThermalDust: ("beta", "T", "nu_ref"),
+                Synchrotron: ("beta", "nu_ref"), FreeFree: ("T", "nu_ref"),
+                SpinningDust: ("nu_peak_eval", "nu_peak_ref", "nu_0"), RadioSources: ("nu_ref",)}
+    for cls, names in expected.items():
+        assert cls.sed_param_names == names, cls.__name__
+
+
+def test_sed_parameters_are_readable_off_a_joined_component() -> None:
+    """The names the chain writer stores must all resolve on the component it is handed."""
+    params = Bunch(compsep=_make_compsep())
+    comp_list = CompList.init_from_params(Bunch({"dust": _make_dust_cfg(353.0)}), params)
+    dust = comp_list.joined()[0]
+
+    stored = {name: getattr(dust, name) for name in dust.sed_param_names}
+    assert stored == {"beta": 1.54, "T": 20.0, "nu_ref": 353.0}
+
+
+def test_joining_restores_a_per_polarization_nu_ref() -> None:
+    """`nu_ref: [I, QU]` is common; the joined view must not silently keep only the I value.
+
+    Joining deep-copies the intensity view, whose `nu_ref` has already been resolved by `_per_pol`,
+    so without care an Akari-style `[857, 353]` would be recorded in the chain as 857.
+    """
+    params = Bunch(compsep=_make_compsep())
+    comp_list = CompList.init_from_params(Bunch({"dust": _make_dust_cfg([857.0, 353.0])}), params)
+
+    assert [comp.nu_ref for comp in comp_list] == [857.0, 353.0]  # the split views
+    np.testing.assert_array_equal(comp_list.joined()[0].nu_ref, [857.0, 353.0])
+    # Parameters that are not per-polarization stay scalar rather than becoming a degenerate pair.
+    assert comp_list.joined()[0].beta == 1.54
+
+
+def test_restarting_from_a_chain_restores_a_sampled_spectral_index(tmp_path):
+    """Continuing a chain must continue its MH index walk, not reset beta to the start value."""
+    import h5py
+    from commander4.sky.comp_io import _restore_sampled_sed_params_from_chain
+
+    chain = tmp_path / "chain01_iter0007.h5"
+    with h5py.File(chain, "w") as f:
+        f["comps/dust/sed/beta"] = 1.5311
+        f["comps/dust/sed/T"] = 25.0        # not sampled -> must NOT be restored
+        f["comps/dust/sed/nu_ref"] = 217.0  # not sampled -> must NOT be restored
+
+    cfg = _make_dust_cfg(353.0)
+    cfg.params.sample_spectral_index = True
+    comp = CompList.init_from_params(Bunch({"dust": cfg}),
+                                     Bunch(compsep=_make_compsep()))[0]
+    assert comp.beta == 1.54
+    _restore_sampled_sed_params_from_chain(comp, str(chain))
+
+    assert comp.beta == pytest.approx(1.5311)   # sampled: taken from the chain
+    assert comp.T == 20.0                       # fixed: the parameter file still rules
+    assert comp.nu_ref == 353.0
+
+
+def test_a_fixed_spectral_index_is_not_restored_from_a_chain(tmp_path):
+    """Without `sample_spectral_index`, beta stays a parameter-file setting an old chain cannot
+    override."""
+    import h5py
+    from commander4.sky.comp_io import _restore_sampled_sed_params_from_chain
+
+    chain = tmp_path / "chain01_iter0007.h5"
+    with h5py.File(chain, "w") as f:
+        f["comps/dust/sed/beta"] = 1.20
+
+    comp = CompList.init_from_params(Bunch({"dust": _make_dust_cfg(353.0)}),
+                                     Bunch(compsep=_make_compsep()))[0]
+    _restore_sampled_sed_params_from_chain(comp, str(chain))
+    assert comp.beta == 1.54
+
+
+def test_restoring_tolerates_a_chain_written_before_sed_groups_existed(tmp_path):
+    """Older chains have no `sed/` group; restarting from one must still work."""
+    import h5py
+    from commander4.sky.comp_io import _restore_sampled_sed_params_from_chain
+
+    chain = tmp_path / "old_chain.h5"
+    with h5py.File(chain, "w") as f:
+        f["comps/dust/alms"] = np.zeros((1, 3), dtype=np.complex64)
+
+    cfg = _make_dust_cfg(353.0)
+    cfg.params.sample_spectral_index = True
+    comp = CompList.init_from_params(Bunch({"dust": cfg}), Bunch(compsep=_make_compsep()))[0]
+    _restore_sampled_sed_params_from_chain(comp, str(chain))
+    assert comp.beta == 1.54
+
+
+# ===================================================================
+# Point-source amplitude maps (RadioSources.get_component_map)
+# ===================================================================
+
+def _write_radio_source_table(path, glon=0.0, glat=0.0, flux_mjy=1000.0, alpha=-0.7) -> None:
+    """A minimal two-line RadioSources template: a header comment plus one source."""
+    with open(path, "w") as handle:
+        handle.write("# Glon(deg) Glat(deg) I(mJy) alpha_I\n")
+        handle.write(f"{glon} {glat} {flux_mjy} {alpha}\n")
+
+
+def _make_radio_sources(template_path, nu_ref=30.0):
+    from commander4.sky import RadioSources
+    cfg = Bunch(shortname="radsources", nu_0=nu_ref, template_path=str(template_path))
+    return RadioSources(cfg, _make_compsep(), comp_name="radsources")
+
+
+def test_radio_sources_component_map_is_frequency_independent(tmp_path) -> None:
+    """The amplitude map carries no SED, so it must not depend on any evaluation frequency.
+
+    It used to read an undefined ``self.nu``, which raised AttributeError; it now converts at the
+    component's own ``nu_ref``, matching how a DiffuseComponent stores its amplitudes.
+    """
+    template = tmp_path / "radio.dat"
+    _write_radio_source_table(template)
+    comp = _make_radio_sources(template, nu_ref=30.0)
+
+    # The beam must be resolved: `query_disc` returns no pixels for a beam below the pixel scale,
+    # and the source is then painted nowhere.
+    amp_map = comp.get_component_map(nside=64, fwhm=120.0)
+
+    assert amp_map.shape == (1, hp.nside2npix(64))
+    assert np.isfinite(amp_map).all()
+    assert amp_map.max() > 0.0
+    # Calling it twice must give the same answer: nothing frequency-dependent may leak in.
+    assert np.array_equal(amp_map, comp.get_component_map(nside=64, fwhm=120.0))
+
+
+def test_radio_sources_component_map_scales_with_the_reference_frequency(tmp_path) -> None:
+    """Converting mJy/sr to uK_RJ at nu_ref goes as nu_ref^-2, so a 2x nu_ref gives a 4x smaller map."""
+    template = tmp_path / "radio.dat"
+    _write_radio_source_table(template)
+
+    low = _make_radio_sources(template, nu_ref=30.0).get_component_map(nside=64, fwhm=120.0)
+    high = _make_radio_sources(template, nu_ref=60.0).get_component_map(nside=64, fwhm=120.0)
+
+    assert low.max() > 0.0
+    assert high.max() == pytest.approx(low.max()/4.0, rel=1e-5)

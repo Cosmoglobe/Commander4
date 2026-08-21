@@ -1,3 +1,9 @@
+"""The binned mapmaker: accumulate P^T N^-1 d and P^T N^-1 P per pixel, then invert per pixel.
+
+The simpler of the two mapmakers (see `mapmaking/cg.py` for the CG one). `Mapmaker`/`MapmakerIQU`
+build the signal map, `WeightsMapmaker`/`WeightsMapmakerIQU` the inverse-variance weights that both
+mapmakers need. `tod2map_bin` drives the whole per-band scan loop.
+"""
 import numpy as np
 import ctypes as ct
 from mpi4py import MPI

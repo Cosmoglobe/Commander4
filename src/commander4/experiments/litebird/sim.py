@@ -1,3 +1,7 @@
+"""TOD reader for ``litebird_sim`` simulated data (``experiment_id: litebird_sim``).
+
+This is also the format ``sims/simgen`` writes, so a simgen run is read back through this reader.
+"""
 import logging
 import numpy as np
 import healpy as hp
@@ -26,6 +30,22 @@ logger = logging.getLogger(__name__)
 def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_names: list[str],
                params: Bunch, scan_idx_start: int,
                scan_idx_stop: int) -> DetectorGroupTOD:
+    """Read this rank's scans for one LiteBIRD band from its litebird_sim HDF5 files.
+
+    Each file holds one scan with its own pointing per detector. Also the reader used for data
+    produced by ``sims/simgen``, which writes the same layout.
+
+    Args:
+        band_comm: The band's MPI communicator.
+        my_experiment, my_band: The experiment and band parameter blocks.
+        all_det_names: Ordered per-band detector names; a detector's position here is its
+            ``det_idx_fullband`` column in the dense per-detector sample arrays.
+        params: The full parameter file.
+        scan_idx_start, scan_idx_stop: This rank's slice of the band's scan list.
+
+    Returns:
+        The band's `DetectorGroupTOD`, holding only the scans and detectors this rank read.
+    """
     oids = []
     pids = []
     filepaths = []

@@ -1,5 +1,10 @@
+"""Noise PSD models and the sampling of their parameters.
+
+`NoisePSD` is the interface every model implements; `NoisePSDOof` is the 1/f model used in practice,
+P(f) = sigma0^2 (1 + (f/fknee)^alpha). A model owns both the PSD evaluation the correlated-noise
+sampler needs and the priors and grid sampling that draw its own parameters.
+"""
 import logging
-from typing import Optional
 import numpy as np
 import pixell
 from scipy.fft import rfftfreq
@@ -27,16 +32,12 @@ def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray) -> float:
     sample = np.interp(u, cdf, grid_points)  # Find the x-value that matches the y-value we drew.
     return sample
 
-# ===================================================================
-#  Base class
-# ===================================================================
 class NoisePSD:
     """Base class for noise PSD models.
 
-    Each subclass declares a ``param_names`` tuple listing parameter
-    names in order (e.g. ``('sigma0', 'fknee', 'alpha')``).  Values
-    are stored in a ``params`` array (float64), accessed by index
-    (e.g. ``params[0]`` for sigma0).
+    Each subclass declares a ``param_names`` tuple listing parameter names in order (e.g.
+    ``('sigma0', 'fknee', 'alpha')``). Values are stored in a ``params`` float64 array, accessed by
+    index (e.g. ``params[0]`` for sigma0).
 
     Attributes:
         param_names: Ordered tuple of parameter names (for repr / config parsing).
@@ -75,7 +76,6 @@ class NoisePSD:
         """Number of free parameters."""
         return len(self.params)
 
-    # ---- interface (override in subclasses) --------------------------------
     # All models receive the noise parameters explicitly (rather than reading ``self.params``)
     # because the live per-scan/per-detector values are stored in ``TODSamples.noise_params``,
     # while a single shared model instance is attached to each ``DetectorGroupTOD``.
@@ -122,7 +122,6 @@ class NoisePSD:
         """
         raise NotImplementedError
 
-    # ---- prior evaluation -------------------------------------------------
     def is_sampled(self, param_idx: int) -> bool:
         """Whether parameter *param_idx* should be sampled at all.
 
@@ -140,9 +139,9 @@ class NoisePSD:
 
         Ports C3's ``lnL_xi_n`` prior term (comm_tod_noise_mod.f90:854-862, where it sits commented
         out): a Gaussian in the parameter, or a log-normal when ``P_lognorm`` is set, whose rms is
-        quoted in *decades* -- hence the ``log(10)`` -- with the ``-log(x)`` Jacobian that makes it
-        a density in x rather than in log(x). Values outside the hard bounds ``P_uni`` get
-        ``-1e30``, so an inversion sampler drawing on a grid never lands there.
+        quoted in *decades* (hence the ``log(10)``), with the ``-log(x)`` Jacobian that makes it a
+        density in x rather than in log(x). Values outside the hard bounds ``P_uni`` get ``-1e30``,
+        so an inversion sampler drawing on a grid never lands there.
 
         An rms of ``inf`` leaves the Gaussian flat, but leaves the log-normal at ``-log(x)``: the
         scale-invariant Jeffreys prior, which is the right non-informative choice for a positive
@@ -161,7 +160,6 @@ class NoisePSD:
         log_p = np.where((x < lo) | (x > hi), -1e30, log_p)
         return log_p if log_p.ndim else float(log_p)
 
-    # ---- repr -------------------------------------------------------------
     def __repr__(self) -> str:
         cls = type(self).__name__
         pnames = type(self).param_names
@@ -172,9 +170,6 @@ class NoisePSD:
         return f"{cls}({', '.join(parts)})"
 
 
-# ===================================================================
-#  2. Standard 1/f  (oof)
-# ===================================================================
 class NoisePSDOof(NoisePSD):
     """P(f) = sigma0^2 (1 + (f / f_knee)^alpha)."""
 
@@ -210,9 +205,9 @@ class NoisePSDOof(NoisePSD):
         """ Draw a sample of (fknee, alpha) for the 1/f model by fitting the *full* PSD
             P(f) = sigma0^2 (1 + (f/fknee)^alpha) to the periodogram of the sky-subtracted
             *residual* TOD, with sigma0 (= noise_params[0]) held fixed. Uses a short Gibbs loop
-            that alternately inversion-samples fknee and alpha on grids spanning the model's
-            hard bounds (``P_uni``), with each grid weighted by that parameter's ``log_prior`` --
-            the informative prior from ``P_active``/``P_lognorm``. A parameter that ``is_sampled``
+            that alternately inversion-samples fknee and alpha on grids spanning the model's hard
+            bounds (``P_uni``), with each grid weighted by that parameter's ``log_prior`` (the
+            informative prior from ``P_active``/``P_lognorm``). A parameter that ``is_sampled``
             rejects (non-positive prior rms, or bounds with no room) is held at its current value.
             See the base-class docstring for argument meaning.
         Returns:

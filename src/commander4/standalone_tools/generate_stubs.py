@@ -1,3 +1,4 @@
+"""Command-line tool: generate type stubs for the compiled backend."""
 from __future__ import annotations
 
 import subprocess

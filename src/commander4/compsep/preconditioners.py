@@ -1,5 +1,11 @@
-# Solves NameError arising if performing early evaluation of type hints.
-# Needed together with below if-test, since we have a cirular import.
+"""Preconditioners M ~ A^-1 for the component-separation and mapmaking CG solves.
+
+A preconditioner is applied to the CG residual each iteration; the closer M is to A^-1, the fewer
+iterations are needed. The classes here trade accuracy against cost: `NoPreconditioner` (identity)
+up to `JointPreconditioner`, which inverts the full per-multipole component-component block.
+"""
+# `from __future__ import annotations` defers evaluation of type hints, which together with the
+# TYPE_CHECKING guard below breaks a circular import.
 from __future__ import annotations
 
 import numpy as np
@@ -500,14 +506,16 @@ class JointPreconditioner:
 
 
 class InvNPreconditionerIQU:
-    """ Standard diagonal preconditioner for CG mapmaker. It builds an estimate of the diagonal of the A matrix
-        by estimating the RMS of the i-th pixel as sigma_0/n_hit_i.
+    """ Jacobi (diagonal) preconditioner for the polarized CG mapmaker: M = 1/diag(A).
+
+        The caller supplies the reciprocal per-pixel diagonal of the accumulated inverse-noise
+        matrix, one row each for I, Q and U (see `tod2map_CG`). Using 1/diag(A) rather than
+        diag(A^-1) keeps M bounded at pixels with poor polarization-angle coverage, where the 3x3
+        inverse is inflated by a near-vanishing determinant.
     """
 
     def __init__(self, inv_N_IQU:NDArray, double_prec=True):
-        """
-        Initialize preconditioner starting from the RMS.
-        """
+        """ Initialize from the per-pixel 1/diag(A) rows, shape (3, npix). """
         assert inv_N_IQU.ndim == 2, "InvN_IQU must be 2-dimensional array."
         assert inv_N_IQU.shape[0] == 3, "InvN_IQU must be must have shape (3,npix)."
         self.npix = inv_N_IQU.shape[1]
@@ -522,15 +530,14 @@ class InvNPreconditionerIQU:
 
 
 class InvNPreconditionerI:
-    """ Standard diagonal preconditioner for temperature-only CG mapmaker. It builds an estimate of 
-    the diagonal of the A matrix by estimating the RMS of the i-th pixel as sigma_0/n_hit_i.
+    """ Jacobi (diagonal) preconditioner for the temperature-only CG mapmaker: M = 1/diag(A).
+
+        The intensity counterpart of `InvNPreconditionerIQU`; here A is diagonal per pixel, so
+        1/diag(A) is the exact inverse.
     """
 
     def __init__(self, inv_N_map:NDArray):
-        """
-        Initialize preconditioner starting from the mapmaker object it will be used in.
-        It precomputes the hitmap
-        """
+        """ Initialize from the per-pixel 1/diag(A) map, shape (npix,) or (1, npix). """
         self.inv_N_map = inv_N_map.reshape((1,-1)) if inv_N_map.ndim == 1 else inv_N_map
         self.npix = self.inv_N_map.shape[1]
 

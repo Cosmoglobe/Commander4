@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 class TODModifier(ABC):
+    """Base class for an effect applied to a band's TODs after the signal and noise are built."""
+
     @abstractmethod
     def apply(self, tod: NDArray[np.floating], band, ctx: Bunch) -> NDArray[np.floating]:
         ...

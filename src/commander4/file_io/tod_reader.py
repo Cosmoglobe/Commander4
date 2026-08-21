@@ -1,3 +1,10 @@
+"""Dispatch to the per-experiment TOD reader named by a band's ``experiment_id``.
+
+Each experiment ships its own reader under ``experiments/``, because the file layouts differ. They
+all return the same `DetectorGroupTOD`, so nothing downstream needs to know which one ran. Add a
+new experiment by writing a reader with the signature below and registering it in
+``experiment_tod_readers``.
+"""
 from mpi4py import MPI
 from pixell.bunch import Bunch
 import numpy as np
@@ -29,7 +36,18 @@ experiment_tod_readers = {
 def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, my_det: Bunch,
                         params: Bunch, my_scans_start: int,
                         my_scans_stop: int) -> DetectorGroupTOD:
-    
+    """Read this rank's share of one band's scans, using the reader its experiment registers.
+
+    Args:
+        band_comm: The band's MPI communicator; each rank reads a disjoint range of scans.
+        my_experiment, my_band, my_det: The experiment, band and detector parameter blocks.
+        my_scans_start, my_scans_stop: The requested global scan range for this rank.
+
+    Returns:
+        The band's `DetectorGroupTOD`, with its scan-index bookkeeping filled in. The reader may
+        discard scans (bad PIDs, empty data), so the actual per-rank ranges are only known
+        afterwards and are recomputed here rather than taken from the requested ones.
+    """
     # Confirm that the specified experiment type (e.g. "planck") is in dictionary.
     if my_experiment.experiment_id not in experiment_tod_readers.keys():
         raise ValueError("An experiment in the parameter file has experiment_id = "\

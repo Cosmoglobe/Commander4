@@ -1,3 +1,10 @@
+"""Constrained CMB realizations from multi-band maps, serial version.
+
+Solves the constrained-realization (Wiener filter plus fluctuation) system for the CMB alms given
+several band maps and their RMS. Not yet wired into the Gibbs loop; see
+``constrained_cmb_loop_mpi`` for the band-distributed variant and
+``standalone_tools/constrained_cmb_realizations`` for the offline tool built on the same solve.
+"""
 import numpy as np
 import ducc0
 import healpy as hp
@@ -8,7 +15,7 @@ import matplotlib.pyplot as plt
 import os
 from commander4.diagnostics import plotting
 
-nthreads = 32  # Number of threads to use for ducc S
+nthreads = 32  # Number of threads to use for ducc SHTs.
 VERBOSE = False
 
 
@@ -31,6 +38,8 @@ def alm2map_adjoint(map, nside, lmax):
 
 
 class ConstrainedCMB:
+    """The constrained-realization system for the CMB alms, with all bands held on one rank."""
+
     def __init__(self, map_sky, map_rms, iter):
         self.iter = iter
         self.map_sky = map_sky

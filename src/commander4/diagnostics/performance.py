@@ -1,3 +1,8 @@
+"""`PerfLogger`: wall-clock profiling of named code blocks, aggregated across MPI ranks.
+
+The module-level functions (`benchmark`, `start_bench`, `stop_bench`, `bench_summary`) wrap a
+single global instance, which is what callers should use.
+"""
 import math
 import time
 import logging
@@ -7,62 +12,39 @@ from contextlib import ContextDecorator
 logger = logging.getLogger(__name__)
 
 class PerfLogger:
-    """
-    A lightweight, MPI-aware performance profiling tool for HPC applications.
+    """A lightweight, MPI-aware wall-clock profiler with hierarchical reporting.
 
-    This logger is designed to track wall-clock time of various code blocks across
-    multiple MPI ranks with minimal overhead. It supports hierarchical reporting,
-    automatic unit scaling (ns/us/ms/s), and load imbalance detection.
+    Nesting is tracked automatically through call paths: each tag is keyed by the full tuple of
+    active benchmark tags at the moment it starts, e.g. ("outer", "inner"). The same tag name called
+    from different parents therefore produces separate entries, each reported under its own parent.
+    Active frames live on a single stack; `stop_bench` closes the matching frame and unwinds any
+    inner frame left open above it, so an unbalanced or non-LIFO start/stop pair cannot desync the
+    stack and corrupt later call paths.
 
-    Nesting is tracked automatically via call paths: each tag is keyed by the full
-    tuple of active benchmark tags at the moment it starts, e.g. ("outer", "inner").
-    The same tag name called from different parent contexts produces separate data
-    entries and appears under the correct parent in the report. Nesting is held on a
-    single stack of active frames; stop_bench closes the matching frame and unwinds any
-    inner frame left open above it, so an unbalanced or non-LIFO start/stop pair cannot
-    desync the stack and corrupt the call paths of subsequent measurements.
+    Four ways to record a measurement::
 
-    Modes of Operation:
-    -------------------
-    1. Context Manager (Recommended for blocks):
-       >>> with benchmark("io_write"):
-       >>>     write_data()
+        with benchmark("io_write"):             # a block
+            write_data()
 
-    2. Decorator (Recommended for functions):
-       >>> @benchmark("compute_step")
-       >>> def compute(): ...
+        @benchmark("compute_step")              # a whole function
+        def compute(): ...
 
-    3. Manual Start/Stop (Recommended for long, linear scripts):
-       >>> start_bench("initialization")
-       >>> ... setup code ...
-       >>> stop_bench("initialization")
+        start_bench("initialization")           # a long linear stretch
+        ...
+        stop_bench("initialization")
 
-    4. Inner-loop timing without inflating the call counter:
-       >>> for i in range(N):
-       >>>     with benchmark("scan/io",      increment_count=False): ...
-       >>>     with benchmark("scan/compute", increment_count=False): ...
-       >>> increment_count("scan/io")       # once per outer iteration
-       >>> increment_count("scan/compute")
-       Note: increment_count resolves the call path from the current active-benchmark
-       context, so it must be called in the same benchmark scope as the timed inner calls.
+        for i in range(N):                      # an inner loop, counted once per outer iteration
+            with benchmark("scan/io", increment_count=False): ...
+        increment_count("scan/io")
 
-    MPI Behavior:
-    -------------
-    - Recording is LOCAL: 'benchmark', 'start', and 'stop' only record data
-      to the local process memory. No MPI communication happens during profiling.
-    - Reporting is COLLECTIVE: 'bench_summary(comm)' must be called by all ranks
-      in the provided communicator. It gathers local stats to Rank 0 of that
-      communicator for printing.
+    `increment_count` resolves its call path from the currently active benchmark context, so it must
+    be called in the same benchmark scope as the inner calls it counts.
 
-    Import Warning:
-    ---------------
-    This module relies on a global singleton instance ('_bench').
-    To avoid "split brain" issues where data is recorded to one instance but
-    reported from another, ALWAYS import this module using the same absolute path
-    throughout your application.
+    Recording is purely local (no MPI communication). Reporting through `bench_summary(comm)` is
+    collective: every rank in `comm` must call it, and rank 0 prints the gathered stats.
 
-    BAD:  from .utils import benchmark
-    GOOD: from my_package.utils.profiling import benchmark
+    Because the module holds a global singleton (`_bench`), always import it by the same absolute
+    path, or data recorded through one import will be reported from another.
     """
 
     def __init__(self):
@@ -374,17 +356,11 @@ class PerfLogger:
         else:               return "ns", 1.0
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def _fmt3sig(value):
-    """
-    Format a float to 3 significant digits without scientific notation.
-    Values whose magnitude is below 0.01 are shown as '0.00' to avoid
-    runaway decimal places.  Examples:
-        1234 -> '1234', 111 -> '111', 11.1 -> '11.1', 1.11 -> '1.11',
-        0.111 -> '0.111', 0.00123 -> '0.00', 0 -> '0'.
+    """ Format a float to 3 significant digits without scientific notation.
+
+    Values whose magnitude is below 0.01 are shown as '0.00' to avoid runaway decimal places.
+    Examples: 1234 -> '1234', 11.1 -> '11.1', 0.111 -> '0.111', 0.00123 -> '0.00', 0 -> '0'.
     """
     if value == 0:
         return "0"
@@ -395,15 +371,11 @@ def _fmt3sig(value):
     return f"{value:.{decimals}f}"
 
 
-# ---------------------------------------------------------------------------
-# Helper: current RSS memory
-# ---------------------------------------------------------------------------
-
 def _get_current_memory_bytes():
-    """
-    Returns the current RSS (Resident Set Size) of this process in bytes.
-    Reads /proc/self/status on Linux for an accurate live snapshot;
-    falls back to resource.getrusage on other platforms.
+    """ Returns the current RSS (Resident Set Size) of this process in bytes.
+
+    Reads /proc/self/status on Linux for an accurate live snapshot, falling back to
+    resource.getrusage on other platforms.
     """
     try:
         with open('/proc/self/status') as fh:
@@ -414,16 +386,16 @@ def _get_current_memory_bytes():
         pass
     try:
         import resource
-        # ru_maxrss is in KB on Linux, bytes on macOS — Linux assumed here
+        # ru_maxrss is in KB on Linux, bytes on macOS; Linux is assumed here.
         return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
     except Exception:
         return 0
 
 
 class _BenchmarkContext(ContextDecorator):
-    """
-    Helper class to handle the context manager protocol.
-    Inherits from ContextDecorator to support usage as @decorator.
+    """ Handles the context manager protocol for a single benchmarked block.
+
+    Inherits from ContextDecorator so the same object also works as an @decorator.
     """
     __slots__ = ('parent', 'tag', '_increment_count', '_frame')
 
@@ -449,9 +421,7 @@ class _BenchmarkContext(ContextDecorator):
         return False
 
 
-# ---------------------------------------------------------------------------
-# Global Instance & Public API
-# ---------------------------------------------------------------------------
+# Global instance and the module-level API that wraps it.
 _bench = PerfLogger()
 
 benchmark       = _bench.benchmark       # Context Manager / Decorator

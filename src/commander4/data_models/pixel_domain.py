@@ -1,3 +1,9 @@
+"""`PixelDomain`: which sky pixels each rank owns when maps are stored sparsely.
+
+With `sparse_maps` enabled a rank holds only the pixels its own scans observe, rather than a full
+sky map. This class records that mapping and the gather/scatter it implies, so the mapmakers can be
+written against local pixel indices regardless of the mode.
+"""
 import numpy as np
 from mpi4py import MPI
 from numpy.typing import NDArray

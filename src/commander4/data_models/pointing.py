@@ -1,3 +1,9 @@
+"""Pointing containers: from a scan's boresight path to per-detector pixel and angle arrays.
+
+`ScanBoresightPointing` holds the shared boresight for one scan, `DetectorBoresightPointing` adds a
+detector's focal-plane and polarization-angle offsets, and `PixelPointing` is the resulting
+(pix, psi) pair the mapmakers consume.
+"""
 import numpy as np
 import logging
 from numpy.typing import NDArray

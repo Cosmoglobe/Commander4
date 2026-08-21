@@ -1,9 +1,9 @@
 """ White-noise level (sigma0) estimation routines.
 
     Top level functions:
-    - `calc_sigma0_simple` -- direct first-difference sigma0 estimation.
-    - `calc_sigma0_robust` -- same as above, but with iterative outlier-clipping
-    - `calc_sigma0_binned_psd` -- "bottom of the binned PSD" estimator (Commander3-style).
+    - `calc_sigma0_simple`: direct first-difference sigma0 estimation.
+    - `calc_sigma0_robust`: same as above, but with iterative outlier-clipping.
+    - `calc_sigma0_binned_psd`: "bottom of the binned PSD" estimator (Commander3-style).
 """
 
 from __future__ import annotations
@@ -49,7 +49,6 @@ def calc_sigma0_simple(tod: NDArray, mask: NDArray[np.bool_]) -> float:
         # Only calculate a difference if both adjacent samples are valid
         if mask[i] and mask[i - 1]:
             diff = tod[i] - tod[i - 1]
-            
             # Welford's online algorithm update
             count += 1
             delta = diff - mean
@@ -75,7 +74,7 @@ def _decimate_for_sigma0(tod, mask, dec_wn):
         dec_wn: Decimation factor (int > 1).
 
     Returns:
-        (res0, mask0) -- float64 and bool arrays of length ntod0.
+        (res0, mask0): float64 and bool arrays of length ntod0.
     """
     ntod0 = len(tod) // dec_wn - 1
     res0 = np.empty(ntod0, dtype=np.float64)
@@ -167,15 +166,13 @@ def calc_sigma0_robust(tod: NDArray, mask: NDArray[np.bool_], down_factor: int =
 
 
 def _lowest_bins_bias(n_lowest: int, n_bins: int, modes_per_bin: float) -> float:
-    """Expected mean of the `n_lowest` smallest of `n_bins` bin powers, in units of the true power,
-    used for correcting for the bias introduced when estimating sigma0 from PSD floor.
+    """Expected mean of the `n_lowest` smallest of `n_bins` bin powers, in units of the true power.
 
-    A bin averaging `modes_per_bin` Fourier modes scatters about the true power as Gamma(nu, 1/nu),
-    which for the mode counts that occur in practice (tens to thousands) is close to N(1, 1/sqrt
-    (nu)). Blom's approximation gives the expected standard-normal order statistics, so the mean of
-    the lowest few sits this factor below one. Dividing the measured value by it removes the
-    selection bias. Picking the smallest of a noisy set always reads low, worsening as scans
-    shorten and each bin therefore holds fewer modes.
+    Selecting the smallest values of a noisy set always reads low, so the PSD floor underestimates
+    sigma0^2 unless divided by this factor. A bin averaging `modes_per_bin` Fourier modes scatters
+    about the true power as Gamma(nu, 1/nu), which for the mode counts occurring in practice (tens
+    to thousands) is close to N(1, 1/sqrt(nu)); Blom's approximation then gives the expected
+    standard-normal order statistics whose mean sets how far below one the lowest bins sit.
     """
     ranks = np.arange(1, n_lowest + 1)
     bias = 1.0 + ndtri((ranks - 0.375) / (n_bins + 0.25)).mean() / sqrt(modes_per_bin)
@@ -194,9 +191,8 @@ def calc_sigma0_binned_psd(tod: NDArray, mask: NDArray[np.bool_], fsamp: float,
 
     Reading off the *bottom* of the spectrum is intrinsically robust to glitch/spike power (spikes
     only raise bins), so ``mask`` is accepted for signature parity with the other estimators but is
-    not applied.
-
-    There is also an expected (low) bias in the estimated sigma0 this way, which is corrected for.
+    not applied. Selecting the lowest bins biases the estimate low; ``_lowest_bins_bias`` corrects
+    for this.
 
     Args:
         tod: Signal-subtracted residual TOD (1D); masked samples may still carry data.
@@ -241,7 +237,7 @@ def _estimate_standalone_sigma0(view: TODView, sigma0_method: str) -> float:
     Estimated from the sky- and orbital-dipole-subtracted residual (which still contains the 1/f
     component; both estimators target the white floor). This mirrors the sigma0 estimate that
     ``sample_correlated_noise`` performs when n_corr is sampled, so sigma0 is always (re)estimated at
-    the same point in the chain -- inside the mapmaker scan loop, after gain -- matching Commander3.
+    the same point in the chain (inside the mapmaker scan loop, after gain), matching Commander3.
 
     Args:
         view: The focused TODView for one detector-scan.

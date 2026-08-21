@@ -1,3 +1,10 @@
+"""The CG amplitude solver: `CompSepSolver` builds and solves the component-amplitude system.
+
+One MPI rank per band, with the LHS operator and its right-hand side both assembled across ranks.
+Depending on the sampling group's `optimize` flag the solution is either the posterior maximum or a
+constrained realization drawn from the amplitude posterior. See the class docstring for the system
+being solved.
+"""
 import numpy as np
 import time
 import logging

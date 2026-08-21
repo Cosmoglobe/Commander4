@@ -1,3 +1,4 @@
+"""Locating and loading the compiled C backend (`src/lib_cpp`) through ctypes."""
 from __future__ import annotations
 
 import ctypes as ct

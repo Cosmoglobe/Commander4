@@ -1,5 +1,8 @@
-# WARNING: This script is currently unmaintained and should be considered depricated.
-# It will not run.
+"""TOD reader for an older Planck simulation format (``experiment_id: planck_sim``).
+
+WARNING: unmaintained and deprecated. It will not run: it is the only reader still built on the
+`ScanSamples`/`DetectorSamples` placeholders, which nothing else uses any more.
+"""
 import h5py
 import logging 
 import numpy as np

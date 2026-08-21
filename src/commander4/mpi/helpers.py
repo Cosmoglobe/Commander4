@@ -1,3 +1,4 @@
+"""Small MPI utilities shared by the setup and transfer code."""
 def identify_masters(global_comm, split_comm, split_id):
     """Identify and share which global ranks are masters of each split."""
     # Prepare data: only sub-masters (local rank 0) provide meaningful data

@@ -1,3 +1,9 @@
+"""`TODView`: the read interface to one detector-scan's data and every TOD derived from it.
+
+One view is focused on one detector at a time and rebuilt as the scan loop advances, so a band
+never holds more than one detector decoded. It also owns block-averaging, so a step that wants a
+coarser sample rate (gain calibration) asks for a view at that rate instead of downsampling by hand.
+"""
 import numpy as np
 import healpy as hp
 import logging
@@ -23,8 +29,8 @@ class TODView:
 
     Downsampling. The view carries a single ``downsample_factor`` fixed at construction (overridable
     per detector via ``focus``). The raw ``tod`` / ``corrected_tod`` and the *internal* full-rate
-    pointing stay at full resolution -- model TODs must be integrated over each block, not sampled at
-    its center -- but every quantity exposed for downstream use is returned at the active resolution:
+    pointing stay at full resolution, because model TODs must be integrated over each block rather
+    than sampled at its center. Every quantity exposed downstream is at the active resolution:
     ``pix`` / ``psi`` take block centers, the model and data getters (``get_tod``,
     ``get_static_sky_tod``, ``get_orbital_dipole_tod``, ``get_calib_tod``) are block-averaged, and
     ``get_mask`` is AND-reduced over each block. ``downsample_factor == 1`` (the default) is a no-op,
@@ -91,7 +97,7 @@ class TODView:
 
         Args:
             iscan: Scan index, local to this rank.
-            det: The detector to focus on -- an element of ``scans[iscan].detectors`` (which holds
+            det: The detector to focus on, an element of ``scans[iscan].detectors`` (which holds
                 only the detectors actually present in that scan). Its full-band index
                 ``det.det_idx_fullband`` is the column used to address every per-detector sample
                 array, so detectors absent from a scan are simply skipped rather than misaligning
@@ -333,7 +339,7 @@ class TODView:
         Args:
             good_data_mask: Whether to exclude samples flagged as bad by the bit-flag cut.
             proc_mask: Whether to apply a sky processing mask.
-            proc_mask_type: Which processing mask to apply -- a key under ``processing_masks:`` in
+            proc_mask_type: Which processing mask to apply: a key under ``processing_masks:`` in
                 the band's parameter section, or "" to use the default ``processing_mask:`` entry.
         """
         mask = np.ones(self.detector.ntod, dtype=bool)

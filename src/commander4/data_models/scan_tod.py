@@ -1,3 +1,4 @@
+"""`ScanTOD`: one scan (a contiguous stretch of time), holding the detectors present in it."""
 from commander4.data_models.detector_tod import DetectorTOD
 
 class ScanTOD:

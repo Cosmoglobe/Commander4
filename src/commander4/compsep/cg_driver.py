@@ -1,3 +1,10 @@
+"""The conjugate-gradient iteration itself, adapted from pixell for distributed operators.
+
+`DistributedCG` works on `CompList` vectors (component amplitudes spread over MPI ranks) and
+`DistributedCGArray` on plain arrays. Both differ from a textbook CG only in taking the dot product
+and the vector arithmetic as callables, so the collective reductions happen inside the caller's
+operator rather than here.
+"""
 import numpy as np
 import logging
 from copy import deepcopy, copy
@@ -7,11 +14,15 @@ from commander4.sky.comp_list import inplace_complist_add_scaled_array,\
 
 logger = logging.getLogger(__name__)
 
+
 def identity_preconditioner(x):     return np.copy(x)
 
+
 class DistributedCG:
-    """Preconditioner borrowed from pixell.utils, and modified to accomodate both the distributed
-    computations of Commander4 component separation, and overriding of certain Numpy operations.
+    """CG iteration on `CompList` vectors, used by the component-separation amplitude solver.
+
+    Borrowed from pixell.utils and modified for Commander4's distributed operators and for
+    CompList's overriding of certain NumPy operations.
     """
     def __init__(self, A, b, is_master, x0=None, M=identity_preconditioner, dot=complist_dot,
                  destroy_b=False):
@@ -76,10 +87,11 @@ class DistributedCG:
         self.i += 1
 
 
-#FIXME: only this one will be used once the CompList class will be in place
 class DistributedCGArray:
-    """Preconditioner borrowed from pixell.utils, and modified to accomodate both the distributed
-    computations of Commander4 component separation, and overriding of certain Numpy operations.
+    """CG iteration on plain NumPy arrays, used by the CG mapmaker.
+
+    Same algorithm as `DistributedCG`, but the vector arithmetic goes through NumPy directly rather
+    than through CompList's componentwise operations.
     """
     def __init__(self, A, b, is_master, x0=None, M=identity_preconditioner, dot=dot,
                  destroy_b=False):

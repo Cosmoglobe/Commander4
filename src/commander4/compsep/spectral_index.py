@@ -1,3 +1,9 @@
+"""Metropolis-Hastings sampling of scalar spectral indices (a component's `beta`).
+
+Supplies the parameter-specific hooks that `MCMCSamplingGroup` needs: which components carry a
+sampled `beta`, how to propose a new value, and its prior. One `SpectralIndexGroup` is discovered
+per (component, polarization) pair configured with ``sample_spectral_index: true``.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

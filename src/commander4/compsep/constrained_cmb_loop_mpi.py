@@ -1,3 +1,8 @@
+"""Constrained CMB realizations from multi-band maps, MPI version (one band per rank).
+
+Same solve as ``constrained_cmb_loop``, but each rank holds a single band's map and RMS and the
+band sum in the CG operator becomes an allreduce. Not yet wired into the Gibbs loop.
+"""
 import numpy as np
 import ducc0
 import logging
@@ -12,6 +17,8 @@ VERBOSE = False
 
 
 class ConstrainedCMB:
+    """The constrained-realization system for the CMB alms, with one band per MPI rank."""
+
     def __init__(self, map_sky, map_rms, iter, comm):
         self.comm = comm
         self.nprocs = comm.Get_size()

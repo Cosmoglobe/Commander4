@@ -1,3 +1,5 @@
+"""Writing the per-iteration chain files: band maps on the TOD side, components on the CompSep
+side."""
 import os
 import h5py
 import numpy as np
@@ -17,7 +19,7 @@ def write_map_chain_to_file(params: Bunch, chain: int, iter: int, exp_name:str,
 
     Maps in `maps_to_file` are uK_RJ brightnesses; they are written in the band's `band_unit` by
     multiplying by `band_unit_factor` D (=1 for uK_RJ). The multiply is out-of-place so the caller's
-    arrays -- shared with the uK_RJ DetectorMap sent to compsep -- stay untouched.
+    arrays (shared with the uK_RJ DetectorMap sent to compsep) stay untouched.
     """
     chains = params.output.chains
     if chain not in chains.write or (iter-1) % chains.interval != 0:

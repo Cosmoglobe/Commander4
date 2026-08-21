@@ -8,7 +8,7 @@ of the band's polarization) for a given band:
 Frequency scaling reuses Commander4's component SED classes
 (``commander4.sky.component``), so the simulated sky's spectral behaviour is *by
 construction* the model the main code assumes. Spatial templates come from PySM3 presets (or a FITS
-map) for foregrounds and a CAMB realization for the CMB -- the same pattern as
+map) for foregrounds and a CAMB realization for the CMB, the same pattern as
 ``commander4.simulations.inplace_litebird_sim``, generalized and de-hard-coded.
 
 Add a new component by mapping its ``component_class`` to a ``SkyComponent`` subclass in
@@ -70,6 +70,8 @@ def _select_pol(iqu_map: NDArray, polarization: str) -> NDArray:
 
 
 class SkyComponent(ABC):
+    """Base class for one simulated sky component: a spatial template plus a frequency scaling."""
+
     def __init__(self, comp_cfg: Bunch, global_params: Bunch):
         self.comp_cfg = comp_cfg
         self.global_params = global_params
@@ -84,7 +86,7 @@ class SkyComponent(ABC):
 
         Unsmoothed and in the run's sky unit, so that ``truth_map(nside) * get_sed(nu)``, smoothed
         by the band beam, reproduces ``band_map``. That is exactly the quantity a Commander4
-        ``DiffuseComponent`` carries in its alms -- see ``write_component_truth_maps``.
+        ``DiffuseComponent`` carries in its alms (see ``write_component_truth_maps``).
         """
         raise NotImplementedError(
             f"Sky component {type(self).__name__} does not define truth_map; either implement it "
@@ -196,7 +198,7 @@ class CMBComponent(SkyComponent):
 
     def truth_map(self, nside: int) -> NDArray[np.floating]:
         # Same realization as band_map, but converted at nu_ref rather than the band frequency and
-        # left unsmoothed -- so multiplying by the C4 CMB SED (the ratio of the two conversions)
+        # left unsmoothed, so multiplying by the C4 CMB SED (the ratio of the two conversions)
         # and smoothing reproduces band_map exactly.
         import pysm3.units as u
         cmb = hp.alm2map(self._build_alms(), nside, pixwin=False)   # uK_CMB
@@ -290,7 +292,7 @@ def write_component_truth_maps(output_dir: str, components: list[SkyComponent],
     sky at the component's own reference frequency, in the run's sky unit. That is exactly what a
     Commander4 ``DiffuseComponent`` holds in its alms, so the file can be handed straight back to
     the matching component as ``init_from`` (start the chain at the truth) or as
-    ``amp_prior_mean_map`` (the mean mu of the Gaussian amplitude prior) -- and it is what a
+    ``amp_prior_mean_map`` (the mean mu of the Gaussian amplitude prior). It is also what a
     recovered component map has to be compared against. Beams and the per-band SED scaling are
     applied by Commander4's mixing operator, so neither is baked in here.
 

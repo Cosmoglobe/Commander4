@@ -51,7 +51,7 @@ def log_dataselect_summary(band_comm: MPI.Comm, tod_samples: TODSamples,
 
     Re-derives the veto counts from the diagnostics recorded this iteration (finite good_fraction
     = "entered the scan loop"; the predicates match the vetoes exactly), and reports cumulative
-    acceptance plus chisq_z population quantiles -- a direct measure of noise-model quality.
+    acceptance plus chisq_z population quantiles, a direct measure of noise-model quality.
     Individual detector-scans are far too numerous to log.
     """
     gf, z = tod_samples.good_fraction, tod_samples.chisq_z
@@ -101,7 +101,7 @@ def log_dataselect_summary(band_comm: MPI.Comm, tod_samples: TODSamples,
 # DEAD CODE below: population-relative (per-detector median/MAD) data selection.
 #
 # Complemented the absolute vetoes with two-sided ``outlier_nmad`` MAD cuts on chisq_z and sigma0
-# around per-detector medians measured from the full band population -- catching detector-scans
+# around per-detector medians measured from the full band population, catching detector-scans
 # that are consistently mildly bad rather than catastrophically so (analogous to C3's
 # remove_tod_outliers, which C3 itself ships commented out at every call site). Removed from the
 # live path to keep data selection simple; kept here for possible re-introduction.
@@ -140,8 +140,8 @@ def sample_data_selection(band_comm: MPI.Comm, tod_samples: TODSamples, ds_cfg: 
     separately: absolute cuts (``min_good_fraction``, ``chisq_abs_threshold``; the in-loop veto in
     tod2map_* applies these same predicates eagerly so catastrophic scans never even enter the
     current iteration's maps) and population-relative cuts (two-sided ``outlier_nmad`` MAD cut on
-    chisq_z and sigma0 around per-detector medians -- a dead detector-scan is as suspect as a noisy
-    one). Only detector-scans with fresh diagnostics (processed this iteration) are evaluated;
+    chisq_z and sigma0 around per-detector medians, since a dead detector-scan is as suspect as a
+    noisy one). Only detector-scans with fresh diagnostics (processed this iteration) are evaluated;
     rejection is sticky within a chain.
     """
     if band_comm.Get_rank() == 0:

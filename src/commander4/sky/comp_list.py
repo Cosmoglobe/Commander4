@@ -29,6 +29,12 @@ logger = logging.getLogger(__name__)
 
 
 class CompList:
+    """A list of component execution views, usable as a single vector.
+
+    Supports the arithmetic the CG driver needs (add, scale, dot) by applying it componentwise, and
+    owns construction of the components named in the parameter file.
+    """
+
     def __init__(self, comp_list:list[Component]):
         self._validate_comp_list(comp_list)
         self.comp_list = comp_list
@@ -109,8 +115,8 @@ class CompList:
     def init_from_params(cls, components:Bunch, params:Bunch):
         # Build the full logical component list: every enabled component contributes one execution
         # view per polarization it defines (I, QU, or both for an IQU component). Construction is
-        # deliberately independent of the MPI/compsep layout -- a view whose polarization is not
-        # actually solved or used in a given run simply stays inert at its initial value.
+        # deliberately independent of the MPI/compsep layout: a view whose polarization is not
+        # actually solved or used in a given run stays inert at its initial value.
         comp_list = []
         for component_str in components:
             component = components[component_str]
@@ -162,10 +168,10 @@ class CompList:
         """Populate each component's prior mean mu from its ``amp_prior_mean_map`` parameter.
 
         This is C3's ``COMP_AMP_PRIOR_MAP``: a FITS sky map giving the mean of the Gaussian
-        amplitude prior a ~ N(mu, S). It goes through the same conversion as an ``init_from``
-        map -- unit conversion at the component's reference frequency, truncation to l = 3*nside-1,
-        and the iterative (LSMR) inverse SHT -- because mu and the amplitudes live in the same space
-        and must be treated identically; C3 instead uses a single non-iterative `YtW` analysis here,
+        amplitude prior a ~ N(mu, S). It goes through the same conversion as an ``init_from`` map
+        (unit conversion at the component's reference frequency, truncation to l = 3*nside-1, and
+        the iterative LSMR inverse SHT), because mu and the amplitudes live in the same space and
+        must be treated identically. C3 instead uses a single non-iterative `YtW` analysis here,
         which is the less accurate of the two on a HEALPix grid.
 
         Read once and cached on the component (C3 likewise transforms its mu once, at component
@@ -238,12 +244,11 @@ class CompList:
             comp.bcast_data_blocking(comm, root=source)
             # The amplitudes' resolution travels with them: the solving rank's value is authoritative.
             comp.amp_fwhm_rad = comm.bcast(comp.amp_fwhm_rad, root=source)
-            # FIXME: The above feels fragile: If we add more attributes that could change during
-            # amplitude solve, they would have to be added here. We could either introduce an 
+            # FIXME: The above feels fragile: if we add more attributes that could change during
+            # the amplitude solve, they would have to be added here. We could either introduce an
             # amplitude object that holds related information as well as the alms, or at least make
-            # things more visible by specfying things that must be transferred in __init__:
+            # things more visible by specifying what must be transferred in __init__:
             #     _amp_metadata_attrs: tuple[str, ...] = ("amp_fwhm_rad",)
-
 
     def joined(self) -> "CompList":
         """Collapse split execution views back to one logical component per `comp_name`."""
@@ -328,7 +333,7 @@ class CompList:
             yield item
 
     def __array_function__(self, func, types, args, kwargs):
-        #for numpy func overloads
+        # Lets numpy functions such as np.zeros_like dispatch onto CompList.
         if not all(issubclass(t, CompList) for t in types):
             return NotImplemented
 
@@ -348,7 +353,7 @@ class CompList:
             ]
         return out
 
-    #MPI functions
+    # MPI functions
     def bcast_data_blocking(self, comm:MPI.Comm, root:int=0):
         for comp in self.comp_list:
             comp.bcast_data_blocking(comm, root=root)
@@ -364,7 +369,7 @@ class CompList:
             requests.append(req)
         return requests
 
-    #CompSep solver functions
+    # CompSep solver functions
     def eval_comp_from_band(self, band_in:Band, nthreads:int=1):
         """ Evaluates the band_in's contribution to all the comp_list_out objects, and stores them
             in-place.
@@ -373,16 +378,14 @@ class CompList:
             comp.eval_comp_from_band(band_in, nthreads=nthreads)
     
     def project_comp_to_band(self, band_out:Band, nthreads:int=1) -> NDArray[np.complexfloating]:
-        """
-        Projects all the components in `comp_list_in`, overwriting the `band_out` object's alms. 
+        """ Projects all the components in this list, overwriting the `band_out` object's alms.
         """
         band_out.alms = np.zeros_like(band_out.alms)
         for comp in self.comp_list:
             comp.project_comp_to_band(band_out, nthreads=nthreads)
 
     def apply_Cl_prior_sqrt(self):
-        """
-        Applies per-component the corresponding C_l prior square root (S^{1/2}) to its own alms.
+        """ Applies to each component its own C_l prior square root (S^{1/2}), acting on its alms.
 
         Takes no target argument, unlike the per-component method: each component has its own C_l
         prior and its own alms, so there is no single array a list-level call could scale.
@@ -437,17 +440,14 @@ def complist_dot(comp_list1:CompList, comp_list2:CompList) -> float:
     """
     comp_list1._assert_consistent_comps(comp_list2)
     if len(comp_list1) == 0:
-        print("WARNING dot prod between empty comp list")
+        logger.warning("Dot product between empty component lists; result is 0.")
     res = 0.0
     for c1, c2 in zip(comp_list1, comp_list2):
         res += float(c1 @ c2)
     return res
 
 def complist_norm(comp_list:list[Component]) -> float:
-    """ `norm(comp_list1, comp_list2)`. Calculates the Euclidean norm of a lists of Component
-        objects, handling it as it was a single vectors of values.
+    """ `norm(comp_list)`. The Euclidean (L2) norm of a list of Component objects, treating it as a
+        single vector of values.
     """
-    return complist_dot(comp_list, comp_list)
-
-
-###### GENERAL MATH STUFF ######
+    return float(np.sqrt(complist_dot(comp_list, comp_list)))

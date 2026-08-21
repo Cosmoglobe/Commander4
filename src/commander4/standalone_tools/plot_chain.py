@@ -1,3 +1,4 @@
+"""Command-line tool: plot maps and components from a finished run's chain files."""
 # This program can be run as `c4-plot-chain <path-to-chain>`, as long as Commander4 installed.
 
 import argparse
@@ -247,6 +248,8 @@ def _optional_slice(arr: np.ndarray | None, s: slice) -> np.ndarray | None:
 
 @dataclass
 class MapBundle:
+    """The set of maps read from one datamaps chain file; every field but `signal` is optional."""
+
     signal: np.ndarray
     rms: np.ndarray | None
     corrnoise: np.ndarray | None
@@ -257,6 +260,7 @@ class MapBundle:
     npol: int
 
     def pol_slice(self, s: slice) -> "MapBundle":
+        """A new bundle holding only the polarization rows selected by `s`."""
         return MapBundle(
             signal=self.signal[s],
             rms=_optional_slice(self.rms, s),

@@ -1,8 +1,8 @@
 """Reading a component's initial amplitudes from a chain file or a FITS map.
 
-These helpers exist so that `DiffuseComponent` and `CompList` can be initialized from an earlier
-run (`init_chain_path`) or from an external map (`init_from`), and they own the fiddly part: which
-rows of a stored (npol, ...) array correspond to the polarization view being initialized.
+Used by `DiffuseComponent` and `CompList` to initialize from an earlier run (`init_chain_path`) or
+from an external map (`init_from`). The fiddly part these helpers own is deciding which rows of a
+stored (npol, ...) array correspond to the polarization view being initialized.
 """
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def _pol_row_indices(data: NDArray, eval_pol: str, shortname: str, source_path: 
     return [row_of[channel] for channel in _POL_CHANNELS[eval_pol]]
 
 
-def _read_view_alms_from_chain(comp: "DiffuseComponent", chain_path: str) -> NDArray | None:
+def _read_view_alms_from_chain(comp: DiffuseComponent, chain_path: str) -> NDArray | None:
     """This view's alms from a compsep chain (``comps/<shortname>/alms``), or None if not present.
 
     A missing component is logged as an error (but not fatal); a component present without this
@@ -69,15 +69,15 @@ def _read_view_alms_from_chain(comp: "DiffuseComponent", chain_path: str) -> NDA
     return project_alms(np.ascontiguousarray(stored_alms[rows]), comp.lmax)
 
 
-def _read_view_alms_from_fits(comp: "DiffuseComponent", fits_path: str) -> NDArray | None:
+def _read_view_alms_from_fits(comp: DiffuseComponent, fits_path: str) -> NDArray | None:
     """This view's alms from a FITS sky map (transformed), or None if its polarization isn't present.
 
     The map's polarization content is inferred purely from its shape (npol, npix), so the column
     names do not matter. The map is converted from its ``units`` to the component's amplitude unit
     (at the component's reference frequency) before being transformed to alms.
 
-    Shared by the ``init_from`` initial guess and the ``amp_prior_mean_map`` prior mean, which must
-    be read identically: both are sky maps living in the component's own amplitude space.
+    Shared by the ``init_from`` initial guess and the ``amp_prior_mean_map`` prior mean, since both
+    are sky maps living in the component's own amplitude space and must be read identically.
     """
     sky_map = np.atleast_2d(hp.read_map(fits_path, field=None))
     rows = _pol_row_indices(sky_map, comp.eval_pol, comp.shortname, fits_path)
@@ -112,8 +112,7 @@ def _restore_sampled_sed_params_from_chain(comp: DiffuseComponent, chain_path: s
         sed_group = f.get(f"comps/{comp.shortname}/sed")
         if sed_group is None:
             return
-        # `beta` is the only sampled SED parameter today; the loop keeps this correct if more of
-        # `sed_param_names` become sampleable without needing a second list to stay in sync.
+        # `beta` is currently the only sampled SED parameter, so it is the only one restored.
         for param_name in comp.sed_param_names:
             if param_name != "beta" or param_name not in sed_group:
                 continue

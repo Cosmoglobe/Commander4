@@ -1,3 +1,9 @@
+"""TOD reader that spawns many synthetic detectors from one simulated pointing.
+
+``experiment_id: litebird_sim_spawndetectors``. Reads a single detector's pointing from a
+``litebird_sim`` file and reuses it for every detector in the band, so a scaling test can be run
+with an arbitrary detector count without simulating each one's pointing.
+"""
 import logging
 import numpy as np
 import healpy as hp
@@ -29,6 +35,23 @@ logger = logging.getLogger(__name__)
 def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_names: list[str],
                params: Bunch, scan_idx_start: int,
                scan_idx_stop: int) -> DetectorGroupTOD:
+    """Read this rank's scans for one LiteBIRD band, spawning all detectors from one pointing.
+
+    The file's single pointing stream is shared by every detector in the band, which makes every
+    detector present in every scan. Intended for MPI scaling tests, where the detector count
+    matters and the exact focal-plane layout does not.
+
+    Args:
+        band_comm: The band's MPI communicator.
+        my_experiment, my_band: The experiment and band parameter blocks.
+        all_det_names: Ordered per-band detector names; a detector's position here is its
+            ``det_idx_fullband`` column in the dense per-detector sample arrays.
+        params: The full parameter file.
+        scan_idx_start, scan_idx_stop: This rank's slice of the band's scan list.
+
+    Returns:
+        The band's `DetectorGroupTOD`, holding only the scans this rank read.
+    """
     start_bench("reader-startup")
     ndet = len(det_names)
     oids = []

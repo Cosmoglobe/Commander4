@@ -1,3 +1,4 @@
+"""Reading band maps and their RMS from FITS files, for runs that skip TOD processing."""
 import numpy as np
 import healpy as hp
 from astropy.io import fits

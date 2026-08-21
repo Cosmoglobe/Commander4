@@ -1,3 +1,11 @@
+"""The component-separation side of one Gibbs iteration, and the settings that configure it.
+
+`init_compsep_processing` builds the component list and validates the `compsep` block of the
+parameter file once; `process_compsep` runs one iteration's sampling groups over the band maps
+received from TOD processing. A *sampling group* names a set of components and bands to be sampled
+together, by one of three solvers: CG (`cg_solver`), per-pixel (`perpix_solver`), or Metropolis-
+Hastings (`mcmc`). The `*Config` dataclasses here validate each group's parameter block.
+"""
 import numpy as np
 import healpy as hp
 import logging
@@ -191,7 +199,7 @@ def _read_chisq_masks(compsep_comm: MPI.Comm,
 
     This is C3's ``MCMC_SAMPLING_GROUP_CHISQ_MASK``: one mask per sampling group, applied to every
     band in that group's chi-squared, restricting which sky the accept/reject decision sees. It is
-    deliberately *not* a per-band data mask -- it does not enter the amplitude solve or the noise
+    deliberately *not* a per-band data mask: it does not enter the amplitude solve or the noise
     model, only the MCMC likelihood.
 
     Read at native resolution and kept as-is; `resolve_chisq_mask` ud_grades and thresholds it to
@@ -294,15 +302,15 @@ def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
     `Component.project_comp_to_band` truncates a component to the band's lmax, so a component
     multipole above *every* enabled band's lmax never meets the data. In a constrained realization
     (`optimize: false`) the CG solver then draws it straight from the C(l) prior, which is usually
-    set orders of magnitude above the true signal -- the amplitudes come back dominated by prior
-    noise at high l, and the chi^2 diagnostic blows up with them.
+    set orders of magnitude above the true signal, so the amplitudes come back dominated by prior
+    noise at high l and the chi^2 diagnostic blows up with them.
 
     C3 leaves this to the user (its BAND_LMAX and COMP_AMP_LMAX are unchecked), but its parameter
     files pair the two deliberately, and its COMP_L_APOD tapers the prior away over exactly this
     range. We check both here: apodization at or below the highest band lmax is a warning, since
     the taper is still near unity where it starts and only suppresses the far tail; no protection
-    at all is an error. Both are logged rather than raised -- the run is still meaningful for the
-    multipoles the data do constrain, and a hard failure would be unhelpful mid-chain.
+    at all is an error. Both are logged rather than raised, since the run is still meaningful for
+    the multipoles the data do constrain and a hard failure would be unhelpful mid-chain.
     """
     band_lmaxes = {}
     for band_str in params.compsep.bands:

@@ -1,3 +1,4 @@
+"""Parsing the YAML parameter file named on the command line, resolving `!include` directives."""
 import yaml
 import os
 from argparse import ArgumentParser
@@ -88,9 +89,7 @@ import yaml_include
 #     return "unknown"
 
 
-# ------------------------------------------------------------------------
-# Parse parameter file
-# ------------------------------------------------------------------------
+# Command-line parsing, executed at import time.
 parser = ArgumentParser()
 parser.add_argument("-p",
                     "--parameter_file",

@@ -1,3 +1,9 @@
+"""`TODSamples`: everything the Gibbs chain samples on the TOD side, for one band on one rank.
+
+Gains (absolute, relative, temporal), noise parameters, the accept flags and the per-detector-scan
+diagnostics, all held as dense `(nscans, ndet)` arrays indexed by scan and by the detector's
+full-band column. Also owns initialization (fresh or from a previous chain) and chain writing.
+"""
 from __future__ import annotations
 
 import os
@@ -187,9 +193,7 @@ class TODSamples:
         init_from_chain = bool(init_chain_path)
         # Gibbs-sampled quantities
         if not init_from_chain:
-            # ---------------------------------------------------------
-            # Standard Initialization (No file provided)
-            # ---------------------------------------------------------
+            # Standard initialization: no previous chain file provided.
             if self.band_comm.Get_rank() == 0:
                 logger.info("No previous chain provided. Starting fresh Gibbs chain.")
 
@@ -249,45 +253,27 @@ class TODSamples:
                                                    nan=0.0)
 
         else:
-            # ---------------------------------------------------------
-            # Disk Initialization (Read from previous chain)
-            # ---------------------------------------------------------
-            # 1. Find the latest iteration for chain 01
-            # pattern = f"tod/{self.experiment_name}_{self.band_name}_chain{self.chain:02d}_iter*.h5"
-            # search_path = os.path.join(init_dir, pattern)
-            # files = glob.glob(search_path)
-            
-            # if not files:
-            #     raise FileNotFoundError(f"No chain files found matching: {search_path}")
-            
-            # # Sorting alphabetically naturally sorts by the zero-padded iteration number
-            # files.sort()
-            # latest_file = files[-1]
-
+            # Disk initialization: read the state from a previous chain file.
             if self.band_comm.Get_rank() == 0:
                 logger.info(f"Band {self.band_name} initializing TOD samples from existing chain: "\
                             f"{init_chain_path}.")
 
-            # 2. Extract data mapping
             with h5py.File(init_chain_path, "r") as f:
-                # Read the global scan_ids saved by the Gatherv operation
+                # The chain stores scans in the global order the Gatherv wrote them, so map each
+                # local scan onto its row in that global array before slicing anything out.
                 global_scan_ids = f["scan_ids"][:]
-                
-                # Create an O(N) lookup dictionary mapping the ID to its row index in the HDF5 array
                 global_id_to_index = {sid: idx for idx, sid in enumerate(global_scan_ids)}
-                
-                # Verify and map the local scans to the global indices
                 try:
                     local_indices = [global_id_to_index[sid] for sid in self.scan_ids]
                 except KeyError as e:
                     raise ValueError(f"Local scan ID {e} not found in the global chain file "
                                      f"{init_chain_path}.") from e
 
-                # 3. Load Per-Band and Per-Detector arrays (Identical across ranks)
+                # Per-band and per-detector arrays, identical across ranks.
                 self.abs_gain = float(f["abs_gain"][...]) if "abs_gain" in f else None
                 self.rel_gain = f["detrel_gain"][:] if "detrel_gain" in f else None
 
-                # 4. Load and slice Per-Scan arrays (Distributed across ranks)
+                # Per-scan arrays, sliced down to this rank's scans.
                 self.temporal_gain = f["temporal_gain"][local_indices, :] if "temporal_gain" in f else None
                 self.noise_params = f["noise_params"][local_indices, ...] if "noise_params" in f else None
                 self.accept = f["accept"][local_indices, ...].astype(bool)

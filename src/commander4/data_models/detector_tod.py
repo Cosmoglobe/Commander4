@@ -1,3 +1,8 @@
+"""`DetectorTOD`: one detector's samples within one scan, decoded on demand.
+
+The TOD, pointing and flags are usually stored Huffman-compressed and are decompressed lazily on
+first access, so a band can hold many scans without materializing all of them at once.
+"""
 import numpy as np
 import healpy as hp
 import logging

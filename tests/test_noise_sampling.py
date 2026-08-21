@@ -448,3 +448,78 @@ class TestApplyNInv:
         expected = tod / sigma0**2
         expected -= np.mean(expected)
         assert np.allclose(out, expected)
+
+
+# ===================================================================
+# Noise-PSD priors (NoisePSD.log_prior / is_sampled, C3's p_uni + p_active)
+# ===================================================================
+
+class TestNoisePSDPriors:
+    @staticmethod
+    def _residual(seed, ntod=9750, fsamp=32.5, sigma0=80.0, fknee=0.5, alpha=-1.5):
+        rng = np.random.default_rng(seed)
+        freqs = np.fft.rfftfreq(ntod, 1.0/fsamp)
+        psd = np.full(freqs.size, sigma0**2)
+        psd[1:] = sigma0**2 * (1.0 + (freqs[1:]/fknee)**alpha)
+        coeff = (rng.normal(size=freqs.size)
+                 + 1j*rng.normal(size=freqs.size)) * np.sqrt(psd*ntod/2)
+        coeff[0] = 0.0
+        return np.fft.irfft(coeff, ntod)
+
+    def test_log_prior_is_elementwise_and_bounded(self):
+        """The sampler evaluates the prior over a grid; outside the bounds it must vanish."""
+        m = NoisePSDOof(P_active_mean=[np.nan, 1.0, -2.0], P_active_rms=[np.nan, np.inf, 0.5],
+                        P_uni=[[np.nan, np.nan], [0.1, 10.0], [-4.0, -1.0]])
+        grid = np.array([-5.0, -2.0, -1.5, 0.0])          # last two straddle the alpha upper bound
+        out = m.log_prior(2, grid)
+        assert out.shape == grid.shape
+        assert out[0] == -1e30 and out[3] == -1e30        # outside [-4, -1]
+        assert out[1] == pytest.approx(0.0)               # at the Gaussian mean
+        assert out[2] == pytest.approx(-0.5*(0.5/0.5)**2)  # one rms away
+
+    def test_lognormal_prior_matches_the_c3_formula(self):
+        """C3's commented prior term: -0.5 (log x - log mu)^2 / (rms log 10)^2 - log x."""
+        mu, rms = 2.0, 0.5
+        m = NoisePSDOof(P_active_mean=[np.nan, mu, -2.0], P_active_rms=[np.nan, rms, np.inf])
+        assert bool(m.P_lognorm[1])  # fknee is the log-normal parameter
+        x = 3.0
+        expected = -0.5*(np.log(x) - np.log(mu))**2 / (rms*np.log(10))**2 - np.log(x)
+        assert m.log_prior(1, x) == pytest.approx(expected)
+
+    def test_a_nonpositive_prior_rms_holds_the_parameter_fixed(self):
+        """C3 skips a parameter whose prior rms is <= 0; so must we, rather than sampling it."""
+        m = NoisePSDOof(P_active_rms=[np.nan, -1.0, np.inf])
+        assert not m.is_sampled(1) and m.is_sampled(2)
+        start = np.array([80.0, 0.1, -1.0])
+        out = m.sample_params(self._residual(1), start, 32.5, nu_max=10.0)
+        assert out[1] == start[1]      # fknee untouched
+        assert out[2] != start[2]      # alpha still sampled
+
+    def test_bounds_with_no_room_also_hold_the_parameter_fixed(self):
+        m = NoisePSDOof(P_uni=[[np.nan, np.nan], [5.0, 5.0], [-4.5, -0.5]])
+        assert not m.is_sampled(1)
+
+    def test_a_tight_prior_pulls_the_sample_toward_its_mean(self):
+        """The informative prior must actually enter the posterior, not sit unused as before."""
+        start = np.array([80.0, 0.1, -1.0])
+        flat = NoisePSDOof()
+        tight = NoisePSDOof(P_active_mean=[np.nan, 5.0, -2.7], P_active_rms=[np.nan, 0.02, np.inf])
+        flat_fknee = np.mean([flat.sample_params(self._residual(s), start, 32.5, nu_max=10.0)[1]
+                              for s in range(12)])
+        tight_fknee = np.mean([tight.sample_params(self._residual(s), start, 32.5, nu_max=10.0)[1]
+                               for s in range(12)])
+        assert flat_fknee == pytest.approx(0.5, rel=0.3)   # data wins under a flat prior
+        assert tight_fknee > 2.0                            # a 0.02-decade prior at 5 Hz dominates
+
+    def test_default_priors_leave_recovery_unbiased(self):
+        """Wiring the prior in must not perturb the default (uninformative) configuration.
+
+        The stock `P_active_rms = inf` leaves alpha flat and fknee at the scale-invariant -log(x),
+        which shifts fknee by far less than the scan-to-scan scatter.
+        """
+        start = np.array([80.0, 0.1, -1.0])
+        m = NoisePSDOof()
+        out = np.array([m.sample_params(self._residual(s), start, 32.5, nu_max=10.0)
+                        for s in range(25)])
+        assert out[:, 1].mean() == pytest.approx(0.5, rel=0.15)
+        assert out[:, 2].mean() == pytest.approx(-1.5, rel=0.15)

@@ -1,3 +1,4 @@
+"""Command-line tool: show the differences between two parameter files, resolving includes."""
 # This program can be run as `c4-diff-params <file1> <file2>`, as long as Commander4 is installed.
 #
 # It performs a *structural* diff of the Commander4 parameter files of two runs: both parameter

@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 class NoiseModel(ABC):
+    """Base class for drawing a detector's noise TOD."""
+
     @abstractmethod
     def realize(self, ntod: int, fsamp: float, sigma0: float,
                 rng: np.random.Generator) -> NDArray[np.floating]:
@@ -28,6 +30,8 @@ class NoiseModel(ABC):
 
 
 class WhiteNoise(NoiseModel):
+    """Uncorrelated Gaussian noise at level `sigma0`."""
+
     def realize(self, ntod, fsamp, sigma0, rng):
         return rng.normal(0.0, sigma0, ntod).astype(np.float32)
 

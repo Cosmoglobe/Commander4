@@ -37,17 +37,17 @@ def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any =
                   raise_on_missing_scope: bool = True):
     """The value of `key`, taken from the first of `scopes` that defines it.
 
-    Several settings may be given at more than one level, the narrower overriding the wider -- a
-    mapmaker on the band, the experiment, or globally, for instance. `scopes` are dotted paths
+    Several settings may be given at more than one level, the narrower overriding the wider (a
+    mapmaker on the band, the experiment, or globally, for instance). `scopes` are dotted paths
     into `params` listed most specific first, e.g.::
 
         resolve_param(params, "mapmaker", (f"experiments.{exp}.bands.{band}",
                                            f"experiments.{exp}", "tod_processing"))
 
     Presence decides, not truthiness: a scope setting ``0`` or ``false`` answers the lookup rather
-    than deferring to a wider one. Which scope supplied the value is logged at debug level -- an
-    overridden setting is otherwise invisible, and "why did this band use the CG mapmaker" is
-    worth being able to answer from a chain's log file.
+    than deferring to a wider one. Which scope supplied the value is logged at debug level, since an
+    overridden setting is otherwise invisible, and "why did this band use the CG mapmaker" is worth
+    being able to answer from a chain's log file.
 
     Args:
         default: Returned when no scope defines `key`. Omit it to make that an error instead.
@@ -55,8 +55,8 @@ def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any =
             the *value* is caught here rather than as strange behaviour later.
         raise_on_missing_scope: What to do about a scope that does not exist in `params` at all.
             There is usually no good reason to list one, so this is an error by default. Pass
-            False for a scope that is legitimately optional -- a per-band override block that most
-            bands do not carry, say -- and its absence is then logged at debug level instead.
+            False for a scope that is legitimately optional (a per-band override block that most
+            bands do not carry, say), and its absence is then logged at debug level instead.
 
     Raises:
         ValueError: if no scope defines `key` and no `default` was given, naming every scope that

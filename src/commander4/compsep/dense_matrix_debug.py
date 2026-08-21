@@ -1,8 +1,10 @@
-### This file contains dense matrix math for performing testing of CompSep systems for very low nsides (~16) ###
-### It is designed to work specifically with the CompSep system, including the specfic MPI setup ###
-### Ideally this class would support calculating e.g. the conditioning number without constructing the full matrix, ###
-### but that would need to be fine-tailored with the MPI implementation of the Ax application, which I haven't bothered. ###
+"""Dense-matrix debugging of the CompSep system, usable only at very low nside (~16).
 
+Builds the full A matrix column by column by applying the MPI-distributed operator to unit vectors,
+so eigenvalues and condition numbers can be inspected directly. Tied to the CompSep MPI setup
+(master plus helper ranks). Estimating the condition number without materializing A would need to be
+tailored to that same distributed apply, which has not been done.
+"""
 import logging
 import numpy as np
 from tqdm import trange
@@ -15,15 +17,16 @@ from collections.abc import Callable
 
 
 class DenseMatrix:
+    """Dense-matrix math on the CompSep system, matched to its MPI setup."""
+
     def __init__(self, CompSep, A_operator, matrix_name):
-                #  CompSep_comm: Comm, A_operator: Callable, alm_len_percomp: int,
-                #  float_dtype, matrix_name: str = ""):
-        """ Class for performing dense matrix math, specifically designed to work with the CompSep class (regarding MPI setup).
+        """ Initialize from a live CompSep solver and its distributed matrix-apply.
+
         Args:
-            CompSep_comm (MPI.Comm): MPI communicator for the component separation processes, which should contain one rank per band.
-            A_operator (Callable): Function to apply the matrix A to a vector, in an MPI-distributed fashion (master and helper tasks).
-            size (int): Size of the matrix.
-            alm_len_percomp (int): The size of the alms of each component (each held by one MPI rank). 
+            CompSep: The CompSepSolver instance, supplying the communicator (one rank per band),
+                the per-component alm length, and the float precision.
+            A_operator (Callable): Applies the matrix A to a vector in an MPI-distributed fashion
+                (master and helper tasks).
             matrix_name (str): Name used for printing.
         """
         self.logger = logging.getLogger(__name__)

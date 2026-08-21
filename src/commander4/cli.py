@@ -1,7 +1,11 @@
-# This file is the entry point for the Commander4 software, as specified in `pyproject.toml`.
-# After installing Commander4 using PIP, calling the command `commander4` will run this file.
-# Commander4 can only be installed as a package, and you cannot directly run this file as a script.
+"""Entry point for the Commander4 software, as specified in `pyproject.toml`.
 
+After installing Commander4 with PIP, the command `commander4` runs this file. Commander4 can only
+be installed as a package; this file cannot be run directly as a script.
+
+Splits the world communicator into TOD-processing and component-separation sides, then drives the
+Gibbs loop that alternates between them, with two chains always in flight.
+"""
 import os
 import yaml
 from mpi4py import MPI
@@ -83,8 +87,6 @@ def run_commander4(params: Bunch, params_dict: dict):
         # samples, as we can't "hot swap" them (both TOD processing and component separation would
         # have to send and receive from the same local buffer). However, perhaps it would be cleaner
         # to call these "current_chain" and "other chain" or something.
-        # tod_samples_chain1 = tod_samples
-        # tod_samples_chain2 = deepcopy(tod_samples)
     elif mpi_info.world.color == 1:
         initial_comp_list, mpi_info, my_band_compsep_id, my_band, compsep_state = \
             init_compsep_processing(mpi_info, params)
@@ -97,13 +99,10 @@ def run_commander4(params: Bunch, params_dict: dict):
         # are excluded, but their amplitudes are still needed to evaluate the relevant chi2.
 
     if mpi_info.world.tod_master is not None:
-        # All processes, both compsep and tod, need the world-specific band master and pol dict
+        # All processes, both compsep and tod, need the world-specific band master dict.
         world_tod_band_masters_dict = mpi_info.world.comm.bcast(mpi_info.world.tod_band_masters,
                                                                 root=mpi_info.world.tod_master)
-        # world_tod_band_pol_dict = mpi_info.world.comm.bcast(mpi_info.world.tod_band_pols,
-        #                                                         root=mpi_info.world.tod_master)
         mpi_info['world']['tod_band_masters'] = world_tod_band_masters_dict
-        # mpi_info['world']['tod_band_pols'] = world_tod_band_pol_dict
     if mpi_info.world.compsep_master is not None:
         world_compsep_band_masters_dict = mpi_info.world.comm.bcast(
             mpi_info.world.compsep_band_masters, root=mpi_info.world.compsep_master)

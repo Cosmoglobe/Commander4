@@ -1,3 +1,10 @@
+"""The per-pixel amplitude solver: an independent least-squares fit in each pixel.
+
+Alternative to the global CG solve for the case where every band has been brought to a common
+resolution. The mixing matrix is then the same at every multipole, so the amplitudes follow from a
+small (nband x ncomp) normal-equation solve per pixel, done in C through ctypes. Unlike the CG
+solver, the amplitudes it produces carry the common beam rather than being deconvolved.
+"""
 import time
 import ctypes
 import logging
@@ -16,8 +23,8 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
                          double_precision: bool) -> list[Component]:
     """ A pixel-by-pixel solver for the component separation problem. Requires uniform nside and a
         common beam across all bands (smoothing to a common resolution is done at the data sources,
-        controlled by ``compsep.common_res_fwhm``); this solver ignores beams entirely, so mixed
-        resolutions silently mix resolutions and trigger a warning below.
+        controlled by ``compsep.common_res_fwhm``). This solver ignores beams entirely, so bands
+        arriving at differing resolutions are silently mixed; a warning is logged below.
     """
     # TODO: Add support for non-Diffuse components (point sources, templates).
     logger = logging.getLogger(__name__)

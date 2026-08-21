@@ -1,3 +1,9 @@
+"""Sampling the correlated-noise realization n_corr, and with it sigma0 and the PSD parameters.
+
+The draw solves a constrained-realization system per detector-scan. Masked gaps make the system
+non-stationary, so it is split (arXiv:2011.06024) into a stationary Fourier-domain part plus a CG
+solve over the gap samples alone, which is far cheaper than a CG over the whole TOD.
+"""
 import logging
 from dataclasses import dataclass, field
 from typing import ClassVar
@@ -117,12 +123,11 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
 
     correction_gaps_only = np.zeros(Ntod, dtype=np.float64)
     correction_gaps_only[~mask] = x_small
-    
+
     # Now, apply M^-1 to get the full correction term
     full_correction = apply_filter(correction_gaps_only, M_inv)
     x_final = m_inv_b + full_correction
     return x_final.astype(out_dtype), CG_err, i, has_converged
-
 
 
 def inefficient_corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_],
@@ -173,7 +178,7 @@ def realize_noise_in_gaps(noise_resid: NDArray, mask: NDArray[np.bool_], noise_m
         noise draw (correlated 1/f from the constrained realization, plus white) at the gaps.
 
         The 1/f model is evaluated at *samprate* with ``sigma0`` rescaled by ``sqrt(samprate/fsamp)``
-        -- the same downsampling scaling ``apply_N_inv`` applies to the whole PSD -- so the draw is
+        (the same downsampling scaling ``apply_N_inv`` applies to the whole PSD), so the draw is
         statistically consistent with the noise weighting used in the gain solve.
 
     Args:
@@ -253,8 +258,8 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
         sample_sigma0: Whether to re-estimate sigma0 (noise_params[0]).
         sigma0_method: White-noise estimator: ``'pairwise'`` (first-difference of the
             n_corr-subtracted residual, after the draw) or ``'binned_psd'`` (bottom of the binned
-            PSD of the signal-subtracted residual, *before* the draw -- Commander3 ordering, so the
-            refreshed sigma0 feeds C_corr_inv and the CG).
+            PSD of the signal-subtracted residual, *before* the draw, following Commander3 ordering
+            so that the refreshed sigma0 feeds C_corr_inv and the CG).
         nomono: If True, project the per-scan monopole out of the residual and of n_corr (Fortran
             ``nomono``); otherwise the DC is left in n_corr.
         onlymono: If True, model the correlated noise as only the per-scan offset, skipping the CG
@@ -396,9 +401,9 @@ def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
     # Per-parameter distributions (model-agnostic; sigma0 at index 0 is reported elsewhere), plus
     # how many detector-scans ended up sitting on a hard prior bound. A parameter whose true value
     # lies outside `P_uni` cannot be recovered: every scan rails against the nearest edge and then
-    # reports a tight scatter around it, which reads as a converged answer in the chain. Railing is
-    # not itself an error -- a genuinely low-fknee detector will sit near the bound -- so this
-    # reports rather than warns, and a large fraction is the signal that the bound is wrong.
+    # reports a tight scatter around it, which reads as a converged answer in the chain. A genuinely
+    # low-fknee detector will also sit near the bound, so this reports rather than warns; it is the
+    # large railed fraction, not the railing itself, that says the bound is wrong.
     flat = [p for sub in sampled_params for p in sub]
     if flat:
         arr = np.asarray(flat, dtype=np.float64)  # shape (n_sampled_scans, npar)

@@ -2,7 +2,7 @@
 
 A ``Band`` groups the detectors that share a frequency, beam and pointing (the "shared boresight"
 model). Each ``Detector`` carries the small per-detector quantities that make detectors distinct
-within a band -- a polarization-angle offset, a focal-plane offset, its own white-noise level and a
+within a band: a polarization-angle offset, a focal-plane offset, its own white-noise level and a
 gain. Detector-detector cross-talk is represented by a per-band ``crosstalk`` matrix applied across
 the band's detector TODs (see ``modifiers.CrossTalk``).
 """
@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Detector:
+    """One detector within a band, holding only what makes it differ from its siblings."""
+
     name: str
     idx: int                       # Position within the band (column index for cross-talk).
     psi_offset: float = 0.0        # Added to the band polarization angle [rad].
@@ -31,6 +33,8 @@ class Detector:
 
 @dataclass
 class Band:
+    """A frequency band: the detectors sharing one frequency, beam, sampling rate and pointing."""
+
     name: str
     exp_name: str
     freq: float                    # [GHz]

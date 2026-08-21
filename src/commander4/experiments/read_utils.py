@@ -1,3 +1,4 @@
+"""Helpers shared by every experiment TOD reader: noise priors, processing masks, FFT sizing."""
 import logging
 
 from mpi4py import MPI
@@ -18,8 +19,8 @@ def _resolve_noise_prior_block(params: Bunch, key: str, expname: str, bandname: 
     """One noise-prior block from the band, else the experiment, else ``tod_processing``.
 
     Returns None when no scope sets it. Every key is checked against the model's parameter names,
-    because a typo would otherwise silently leave the default in force -- the exact failure that
-    made an out-of-range fknee prior look like a working sampler pinned at 1.0 Hz.
+    because a misspelled name would otherwise silently leave the default in force, and a parameter
+    stuck at a wrong default looks exactly like a converged one in the chain.
     """
     block = resolve_param(params, key, (f"experiments.{expname}.bands.{bandname}",
                                         f"experiments.{expname}", "tod_processing"), default=None)
@@ -33,8 +34,7 @@ def _resolve_noise_prior_block(params: Bunch, key: str, expname: str, bandname: 
 
 
 def apply_noise_priors(noise_model: NoisePSD, params: Bunch, expname: str, bandname: str) -> None:
-    """Looks through the provided parameter file for specifications of what the noise model priors
-       should be. If it finds them, it overwrites the defaults in the provided `noise_model`.
+    """Override the noise model's prior defaults with anything the parameter file specifies.
 
     Two optional blocks, each a mapping from noise-parameter name to its setting, taken from the
     band block, else the experiment block, else ``tod_processing``. Only the named parameters are
@@ -51,9 +51,6 @@ def apply_noise_priors(noise_model: NoisePSD, params: Bunch, expname: str, bandn
     cannot be recovered: the sample pins against the nearest edge instead. The informative prior
     multiplies the likelihood along that grid (see `NoisePSD.log_prior`); an rms of ``.inf`` leaves
     it uninformative, and an rms ``<= 0`` holds the parameter fixed at its current value entirely.
-
-    Naming mirrors the spectral-index sampler's ``spectral_index_bounds`` / ``spectral_index_prior``,
-    which carry the same two roles for compsep.
 
     Args:
         noise_model: The model to modify in place.
@@ -80,6 +77,21 @@ def apply_noise_priors(noise_model: NoisePSD, params: Bunch, expname: str, bandn
 
 
 def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
+    """Trim a scan to the nearby length with the cheapest FFT.
+
+    FFT cost depends strongly on the prime factorization of the transform length, so a scan whose
+    length happens to have a large prime factor can be far slower than one a few samples shorter.
+    Discarding up to 1% of the samples to reach a smooth length is a good trade.
+
+    Args:
+        Fourier_times: Measured FFT time (arbitrary units) indexed by transform length. Produced
+            once per machine and loaded from ``fourier_times_path``.
+        ntod: The scan's actual length.
+
+    Returns:
+        The best length in ``[0.99*ntod, ntod]``, or ``ntod`` itself outside the range where the
+        timing table applies (very short scans are cheap anyway; very long ones exceed the table).
+    """
     if ntod <= 10_000 or ntod >= 400_000:
         return ntod
     search_start = int(0.99*ntod)  # Consider sizes up to 1% smaller than ntod.

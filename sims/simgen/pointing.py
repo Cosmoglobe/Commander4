@@ -1,7 +1,7 @@
 """Pointing strategies (swappable).
 
-A pointing strategy maps a contiguous block of TOD samples -- identified by its absolute sample
-offset within the mission and its length -- to sky pointing for a band's shared boresight:
+A pointing strategy maps a contiguous block of TOD samples (identified by its absolute sample
+offset within the mission and its length) to sky pointing for a band's shared boresight:
 
     compute(sample_offset, ntod) -> PointingChunk(theta, phi, psi, vsun)
 
@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PointingChunk:
+    """Boresight pointing for one contiguous block of TOD samples."""
+
     theta: NDArray[np.floating]   # co-latitude [rad], Galactic
     phi: NDArray[np.floating]     # longitude [rad], Galactic
     psi: NDArray[np.floating]     # boresight polarization angle [rad]
@@ -52,6 +54,8 @@ def scan_bearing(theta: NDArray, phi: NDArray) -> NDArray:
 
 
 class PointingStrategy(ABC):
+    """Base class for a scan strategy: how the boresight moves across the sky over time."""
+
     # If True, the pipeline calls ``compute`` once per detector, passing that detector's focal-plane
     # offset as ``det_offset`` so the strategy can give detectors distinct *spatial* pointing (e.g.
     # RasterScan). The default False keeps the efficient shared-boresight path used by the satellite
@@ -218,7 +222,7 @@ class RasterScan(PointingStrategy):
     perpendicular ("cross-scan") latitude direction, and wraps back to the first row after the last,
     so the whole patch is covered. One scan is exactly one full fill of the patch
     (``n_rows * samples_per_row`` samples, overriding the duration-based scan length), and each
-    successive scan re-covers the patch from the first row -- so ``scan_duration_sec`` is ignored
+    successive scan re-covers the patch from the first row, so ``scan_duration_sec`` is ignored
     for this strategy. Sample ``i`` maps deterministically to a row and a fractional along-scan
     position, so scans distribute trivially across ranks.
 

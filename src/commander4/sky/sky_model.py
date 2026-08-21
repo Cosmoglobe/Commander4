@@ -1,3 +1,4 @@
+"""`SkyModel`: a component list plus the operations that realize it as a sky map at a frequency."""
 import numpy as np
 from pixell.bunch import Bunch
 from commander4.sky.comp_list import CompList
@@ -8,8 +9,8 @@ def build_initial_sky_model(params: Bunch) -> "SkyModel":
 
     Builds the full component list, loads each component's initial alms (from its ``init_from`` or
     the global ``init_chain_path``, else zeros), and wraps it in a SkyModel. This is rank-agnostic
-    and performs no MPI, so it is used both by CompSep ranks and -- when no CompSep ranks exist --
-    by the TOD band masters to construct the initial sky locally.
+    and performs no MPI, so it is used both by CompSep ranks and (when no CompSep ranks exist) by
+    the TOD band masters to construct the initial sky locally.
     """
     comp_list = CompList.init_from_params(params.components, params)
     comp_list.load_initial_alms(params)
@@ -17,8 +18,9 @@ def build_initial_sky_model(params: Bunch) -> "SkyModel":
 
 
 class SkyModel:
+    """A component list plus the operations that realize it as a sky map."""
+
     def __init__(self, components:CompList):
-        # components = list of Component objects
         self._components = components
 
     def get_sky(self, band):

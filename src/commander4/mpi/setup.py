@@ -1,3 +1,9 @@
+"""Splitting the world communicator into the TOD and CompSep sides, and into per-band groups.
+
+`init_mpi` performs the top-level split (color 0 = TOD processing, color 1 = component separation)
+and records, in the `mpi_info` Bunch every later stage reads, which rank masters each band on each
+side. `init_mpi_tod` and `init_mpi_compsep` then build the per-band communicators within a side.
+"""
 import os
 import time
 import logging

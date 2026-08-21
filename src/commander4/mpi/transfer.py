@@ -1,3 +1,9 @@
+"""Moving data between the TOD-processing and component-separation communicators each iteration.
+
+TOD processing sends `DetectorMap`s (one per band) and receives back a `SkyModel`. Both directions
+go band master to band master, since the two sides may split their bands over different numbers of
+ranks; the receiving master then distributes within its own band communicator.
+"""
 import numpy as np
 import logging
 from collections.abc import Mapping
@@ -87,7 +93,7 @@ def receive_compsep(mpi_info: Bunch, experiment_data: DetectorGroupTOD, todproc_
 
     The band master receives the ``SkyModel`` from the CompSep side and realizes it at the band
     frequency/resolution; the result is distributed to all band ranks (see
-    ``_realize_and_distribute_sky`` -- full-sky in non-sparse mode, per-rank local pixels in sparse
+    ``_realize_and_distribute_sky``: full-sky in non-sparse mode, per-rank local pixels in sparse
     mode).
 
     Args:

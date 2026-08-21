@@ -1,3 +1,4 @@
+"""TOD reader for the Simons Observatory Small Aperture Telescopes (``experiment_id: SO_SAT``)."""
 import logging
 import numpy as np
 import healpy as hp
@@ -26,6 +27,24 @@ logger = logging.getLogger(__name__)
 def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_names: list[str],
                params: Bunch, scan_idx_start: int,
                scan_idx_stop: int) -> DetectorGroupTOD:
+    """Read this rank's scans for one SO SAT band from its HDF5 scan files.
+
+    Differs from the LAT reader in how pointing arrives: the SAT files store the boresight path
+    plus per-detector focal-plane offsets and polarization angles, from which
+    `ScanBoresightPointing` reconstructs each detector's pixels and angles. The LAT files instead
+    carry each detector's pointing directly, Huffman-compressed.
+
+    Args:
+        band_comm: The band's MPI communicator.
+        my_experiment, my_band: The experiment and band parameter blocks.
+        all_det_names: Ordered per-band detector names; a detector's position here is its
+            ``det_idx_fullband`` column in the dense per-detector sample arrays.
+        params: The full parameter file.
+        scan_idx_start, scan_idx_stop: This rank's slice of the band's scan list.
+
+    Returns:
+        The band's `DetectorGroupTOD`, holding only the scans and detectors this rank read.
+    """
     start_bench("reader-startup")
     oids = []
     pids = []

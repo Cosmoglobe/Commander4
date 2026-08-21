@@ -9,17 +9,17 @@ detector's clean signal TOD:
 
 Two models are provided, using the Planck HFI bolometers as the baseline behaviour:
 
-* ``SinglePole`` -- a single thermal time constant ``tau``: ``H(f) = 1 / (1 + 2*pi*i*f*tau)``. This
+* ``SinglePole``: a single thermal time constant ``tau``, ``H(f) = 1 / (1 + 2*pi*i*f*tau)``. This
   is the common case and the one most sims want (one number per detector); HFI time constants are of
   order ~10 ms.
-* ``MultiPole`` -- a sum of single-pole responses ``H(f) = (sum_k a_k / (1 + 2*pi*i*f*tau_k)) / sum_k
+* ``MultiPole``: a sum of single-pole responses ``H(f) = (sum_k a_k / (1 + 2*pi*i*f*tau_k)) / sum_k
   a_k``, the "LFER"-style model HFI actually uses (a handful of time constants). DC-normalised so
   ``H(0) = 1``.
 
 Both are normalised to unit DC gain (``H(0) = 1``), so the mean/calibration of the signal is
-preserved -- only its temporal shape changes. The filter is applied on a **mirrored** (reflected)
-copy of the scan -- ``[x, x[::-1]]`` extended to length ``2*ntod``, filtered, first ``ntod`` samples
-kept -- i.e. exactly C4's ``forward_rfft_mirrored`` / ``backward_rfft_mirrored`` convention
+preserved and only its temporal shape changes. The filter is applied on a **mirrored** (reflected)
+copy of the scan (``[x, x[::-1]]`` extended to length ``2*ntod``, filtered, first ``ntod`` samples
+kept), i.e. exactly C4's ``forward_rfft_mirrored`` / ``backward_rfft_mirrored`` convention
 ([utils/math_operations.py]). The reflection makes the scan boundary value-continuous, so the causal
 kernel's tail does not wrap the scan's *end* onto its *start* (as plain circular convolution would).
 This is the operator (``T = R F^-1 H F E``, with reflect-extend ``E`` / restrict ``R``) the
@@ -28,7 +28,7 @@ Commander4 CG mapmaker's ``apply_T`` must match to deconvolve exactly this respo
 Frequency convention (for wiring the matching deconvolution later): ``H`` here is a function of
 *physical* frequency in Hz, evaluated on ``rfftfreq(2*ntod, d=1/fsamp)`` (the mirrored length). The
 mapmaker's ``T_omega`` receives the *normalised* grid ``rfftfreq(2*ntod)`` (cycles/sample), so the
-equivalent single-pole filter there is ``H(f_norm) = 1 / (1 + 2*pi*i*(f_norm*fsamp)*tau)`` -- the
+equivalent single-pole filter there is ``H(f_norm) = 1 / (1 + 2*pi*i*(f_norm*fsamp)*tau)``, the
 same ``H`` with ``tau`` in seconds and ``fsamp`` in Hz. Note the mapmaker's adjoint ``apply_T_adjoint``
 must conjugate the filter (``H*``), not flip the frequency array, to be the true transpose of ``T``.
 
@@ -47,6 +47,8 @@ logger = logging.getLogger(__name__)
 
 
 class TransferFunction(ABC):
+    """Base class for a detector's temporal response, applied as a filter H(f) along the scan."""
+
     @abstractmethod
     def response(self, freqs_hz: NDArray[np.floating]) -> NDArray[np.complexfloating]:
         """The complex filter ``H(f)`` sampled at the given physical frequencies [Hz]."""
@@ -55,7 +57,7 @@ class TransferFunction(ABC):
         """Filter ``signal`` with this transfer function via a mirrored FFT over the scan.
 
         The scan is reflected (``[x, x[::-1]]``, length ``2*ntod``), filtered with ``H`` on the
-        ``2*ntod`` frequency grid, and the first ``ntod`` samples are returned -- matching C4's
+        ``2*ntod`` frequency grid, and the first ``ntod`` samples are returned, matching C4's
         ``forward_rfft_mirrored``/``backward_rfft_mirrored`` so the CG mapmaker deconvolves the same
         operator. The reflection keeps the causal kernel from wrapping the scan's end onto its start.
 
@@ -113,8 +115,8 @@ def _tau_sec(spec: Bunch | dict) -> float | None:
     """Read a time constant from a param block, accepting ``tau_sec`` or ``tau_ms`` (None if absent).
 
     Uses ``bget`` (subscript) rather than attribute access so it works on both a ``Bunch`` and a
-    plain ``dict`` -- the ``poles`` list entries arrive as dicts (the loader does not bunch-ify list
-    elements).
+    plain ``dict``, since the ``poles`` list entries arrive as dicts (the loader does not bunch-ify
+    list elements).
     """
     if bget(spec, "tau_sec", None) is not None:
         return float(bget(spec, "tau_sec"))

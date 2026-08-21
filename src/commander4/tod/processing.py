@@ -1,3 +1,10 @@
+"""The TOD-processing side of one Gibbs iteration, and the settings that configure it.
+
+`init_tod_processing` sets up the per-band data and sample containers once; `process_tod` runs the
+sampling steps for a single iteration (gain, jumps, correlated noise, mapmaking, data selection) and
+hands the resulting band maps to component separation. The `*Config` dataclasses here validate the
+`tod_processing` block of the parameter file.
+"""
 import numpy as np
 import pixell
 from pixell import utils

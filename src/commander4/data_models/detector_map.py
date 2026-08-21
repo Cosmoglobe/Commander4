@@ -1,3 +1,9 @@
+"""`DetectorMap`: one band's maps as component separation sees them, plus common-beam smoothing.
+
+This is the object TOD processing sends across the communicator each iteration: the binned or
+CG-solved sky map, its RMS, and the band metadata (frequency, beam, nside) needed to build the
+mixing matrix. The two smoothing helpers bring a band to a coarser common beam.
+"""
 import logging
 import numpy as np
 import healpy as hp
@@ -15,7 +21,7 @@ def smooth_signal_map_noiseweighted(map_signal: NDArray, map_rms: NDArray,
     """Inverse-variance-weighted Gaussian smoothing of a signal map.
 
     Each pixel is weighted by 1/variance before smoothing (so noisy pixels contribute less) and the
-    result is renormalized by the smoothed weights -- used to bring a band to a coarser common beam.
+    result is renormalized by the smoothed weights. Used to bring a band to a coarser common beam.
 
     A band covering only part of the sky has zero weight outside its footprint, and far enough from
     it the smoothed weight is zero (or slightly negative, from beam ringing) as well. Those pixels

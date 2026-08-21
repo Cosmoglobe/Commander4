@@ -1,3 +1,8 @@
+"""Filling masked stretches of a TOD with a linear interpolation plus white noise.
+
+A seed for the correlated-noise CG and the fallback when that solve is skipped, so that a masked
+region carries something noise-like rather than a hole the FFT would ring on.
+"""
 import numpy as np
 from numba import njit
 from numpy.typing import NDArray

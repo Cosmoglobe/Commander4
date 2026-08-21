@@ -1,3 +1,8 @@
+"""Numba search kernels for locating values in sorted integer arrays.
+
+Used to map sample pixel indices onto a rank's local pixel list. `gallop_search` beats a plain
+bisection when successive lookups are close together, as they are along a scan path.
+"""
 import numpy as np
 from numba import get_num_threads, njit, prange
 

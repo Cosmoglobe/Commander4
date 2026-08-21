@@ -1,3 +1,9 @@
+"""The Metropolis-Hastings machinery shared by every non-Gaussian compsep parameter.
+
+`MCMCSamplingGroup` owns the MH loop, the chi-squared likelihood and the MPI lock-step; a subclass
+supplies only how to read, propose and write its own parameters. See `spectral_index.py` for the
+one concrete subclass today.
+"""
 from __future__ import annotations
 
 import logging
@@ -46,8 +52,8 @@ class MCMCSamplingGroup(ABC):
 
     A concrete subclass supplies *only* the parameter-specific behaviour through the abstract hooks
     (`has_parameters`, `capture_state`, `propose`, `apply_state`). This deliberately decouples the
-    machinery from the parameter set, so very different parameters -- scalar spectral indices,
-    tabulated-SED bins, template scalings, ... -- can all reuse one implementation instead of the
+    machinery from the parameter set, so very different parameters (scalar spectral indices,
+    tabulated-SED bins, template scalings) can all reuse one implementation instead of the
     near-duplicated routines C3 carries (`sample_specind_mh`, `sample_mbbtab_mh`,
     `sample_template_mh`).
 
@@ -91,9 +97,7 @@ class MCMCSamplingGroup(ABC):
         # Resolved once here rather than per MH step: the band's nside is fixed for the group's life.
         self.chisq_mask = resolve_chisq_mask(chisq_mask, detector_data.nside)
 
-    # ------------------------------------------------------------------ #
     # Parameter-specific hooks (must be implemented by subclasses).
-    # ------------------------------------------------------------------ #
     @abstractmethod
     def has_parameters(self) -> bool:
         """Whether this group has any parameters to sample (else ``run`` is a no-op)."""
@@ -129,9 +133,7 @@ class MCMCSamplingGroup(ABC):
         """
         return 0.0
 
-    # ------------------------------------------------------------------ #
     # General likelihood (override for ridge/marginal/... variants).
-    # ------------------------------------------------------------------ #
     def local_loglike(self) -> float:
         """Whitened-residual log-likelihood of this band against the *full* current sky model.
 
@@ -140,7 +142,7 @@ class MCMCSamplingGroup(ABC):
         RMS, giving ``-chi2/2``. Each component removes its own ``amp_fwhm_rad`` so deconvolved (CG)
         and data-resolution (per-pixel) amplitudes both land at the band resolution. Uses *all*
         components in this rank's polarization stream, so the components a group holds fixed still
-        enter the residual -- this is the conditional likelihood of the MH move.
+        enter the residual, making this the conditional likelihood of the MH move.
 
         When the group defines a ``chisq_mask``, only the kept pixels enter the sum.
         """
@@ -158,9 +160,7 @@ class MCMCSamplingGroup(ABC):
         local = self.local_loglike() if self.chisq_active else 0.0
         return float(self.comm.allreduce(local, op=MPI.SUM))
 
-    # ------------------------------------------------------------------ #
-    # Template method: the MH loop, identical for every parameter set.
-    # ------------------------------------------------------------------ #
+    # The MH loop itself, identical for every parameter set.
     def run(self, *, numstep: int, resolve_amplitudes: Callable[[], None]) -> None:
         """Take ``numstep`` joint MH steps, each coupled to an amplitude re-solve.
 

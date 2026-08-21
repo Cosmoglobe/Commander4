@@ -1,3 +1,4 @@
+"""Diagnostic plots written alongside the chain: band maps, components, TODs and CG residuals."""
 import os
 
 import healpy as hp

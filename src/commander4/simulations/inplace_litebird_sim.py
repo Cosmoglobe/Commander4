@@ -1,3 +1,10 @@
+"""Replacing TOD read from disk with a simulated sky, in place, at read time.
+
+Enabled by a band's ``replace_tod_with_sim``: the real pointing and flags are kept, but the TOD is
+regenerated from PySM3/CAMB skies plus noise. Useful for validating the pipeline against a known
+truth on a real scan strategy. The standalone ``sims/simgen`` package is the more general
+alternative, writing simulated scan files rather than patching them at read time.
+"""
 import numpy as np
 from copy import deepcopy
 import camb

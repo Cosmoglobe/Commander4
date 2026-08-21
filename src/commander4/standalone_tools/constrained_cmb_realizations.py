@@ -1,3 +1,9 @@
+"""Offline tool: draw constrained CMB realizations from a finished chain's band maps.
+
+Reads the datamaps written by a run, solves the constrained-realization system for the CMB alms
+with a supplied C_l prior, and writes the resulting maps. The in-process versions of the same solve
+live in ``compsep/constrained_cmb_loop`` and ``compsep/constrained_cmb_loop_mpi``.
+"""
 import numpy as np
 import ducc0
 import healpy as hp
@@ -62,6 +68,8 @@ def alm2map_adjoint(map, nside, lmax):
 
 
 class ConstrainedCMB:
+    """The constrained-realization system for the CMB alms, with an externally supplied C_l."""
+
     def __init__(self, map_sky, map_rms, cmb_Cell, maxiter=100):
         self.maxiter = maxiter
         self.map_sky = map_sky

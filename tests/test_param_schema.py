@@ -12,7 +12,7 @@ from pixell.bunch import Bunch
 
 import numpy as np
 
-from commander4.experiments.read_utils import apply_noise_prior_bounds
+from commander4.experiments.read_utils import apply_noise_priors
 from commander4.tod.noise.psd import NoisePSDOof
 from commander4.parameters.schema import (TOP_LEVEL_BLOCKS, validate_param_schema, compsep_enabled,
                                      derive_task_counts, task_count_breakdown, resolve_param,
@@ -255,7 +255,7 @@ def test_a_file_band_takes_its_lmax_from_its_compsep_entry():
 
 
 # ===================================================================
-# Noise-PSD prior bounds (experiments/read_utils.apply_noise_prior_bounds)
+# Noise-PSD prior bounds (experiments/read_utils.apply_noise_priors)
 # ===================================================================
 
 def _noise_params(band=None, experiment=None, tod_processing=None):
@@ -275,28 +275,28 @@ def _noise_params(band=None, experiment=None, tod_processing=None):
 def test_noise_prior_bounds_left_alone_when_the_parameter_file_is_silent():
     """A reader's instrument-appropriate defaults must survive an unconfigured parameter file."""
     model = NoisePSDOof(P_uni=[[np.nan, np.nan], [0.03, 40.0], [-4.0, -2.0]])
-    apply_noise_prior_bounds(model, _noise_params(), "EXP", "BandA")
+    apply_noise_priors(model, _noise_params(), "EXP", "BandA")
     np.testing.assert_allclose(model.P_uni[1], [0.03, 40.0])
     np.testing.assert_allclose(model.P_uni[2], [-4.0, -2.0])
 
 
 def test_noise_prior_bounds_override_only_the_named_parameters():
     model = NoisePSDOof(P_uni=[[np.nan, np.nan], [0.03, 40.0], [-4.0, -2.0]])
-    apply_noise_prior_bounds(model, _noise_params(band={"fknee": [0.001, 5.0]}), "EXP", "BandA")
+    apply_noise_priors(model, _noise_params(band={"fknee": [0.001, 5.0]}), "EXP", "BandA")
     np.testing.assert_allclose(model.P_uni[1], [0.001, 5.0])
     np.testing.assert_allclose(model.P_uni[2], [-4.0, -2.0])  # untouched
 
 
 def test_noise_prior_bounds_prefer_the_band_over_wider_scopes():
     model = NoisePSDOof()
-    apply_noise_prior_bounds(model, _noise_params(band={"fknee": [1.0, 2.0]},
+    apply_noise_priors(model, _noise_params(band={"fknee": [1.0, 2.0]},
                                                   experiment={"fknee": [3.0, 4.0]},
                                                   tod_processing={"fknee": [5.0, 6.0]}),
                              "EXP", "BandA")
     np.testing.assert_allclose(model.P_uni[1], [1.0, 2.0])
 
     model = NoisePSDOof()
-    apply_noise_prior_bounds(model, _noise_params(experiment={"fknee": [3.0, 4.0]},
+    apply_noise_priors(model, _noise_params(experiment={"fknee": [3.0, 4.0]},
                                                   tod_processing={"fknee": [5.0, 6.0]}),
                              "EXP", "BandA")
     np.testing.assert_allclose(model.P_uni[1], [3.0, 4.0])
@@ -307,7 +307,7 @@ def test_noise_prior_bounds_reject_an_unknown_parameter_name(caplog):
     model = NoisePSDOof()
     # logassert reports through the logger and then raises a bare AssertionError.
     with pytest.raises(AssertionError):
-        apply_noise_prior_bounds(model, _noise_params(band={"fkne": [0.1, 1.0]}), "EXP", "BandA")
+        apply_noise_priors(model, _noise_params(band={"fkne": [0.1, 1.0]}), "EXP", "BandA")
     assert "fkne" in caplog.text
 
 
@@ -331,3 +331,36 @@ def test_prior_bounds_are_what_the_psd_sampler_draws_within():
                     for _ in range(15)])
     assert pinned == pytest.approx(1.0, abs=0.02)      # railed against the lower bound
     assert free == pytest.approx(fknee, rel=0.25)      # recovered once the bound allows it
+
+
+def test_noise_prior_sets_the_informative_prior_from_the_parameter_file():
+    """`noise_prior: {name: [mean, rms]}` must land in P_active, which the sampler reads."""
+    model = NoisePSDOof()
+    params = _noise_params()
+    params.experiments.EXP.bands.BandA.noise_prior = Bunch(fknee=[5.0, 0.25], alpha=[-2.0, 0.4])
+    apply_noise_priors(model, params, "EXP", "BandA")
+
+    np.testing.assert_allclose(model.P_active[1], [5.0, 0.25])
+    np.testing.assert_allclose(model.P_active[2], [-2.0, 0.4])
+    # The prior is now actually consulted: at the mean it beats a value four rms away.
+    assert model.log_prior(2, -2.0) > model.log_prior(2, -3.6)
+
+
+def test_a_nonpositive_prior_rms_in_the_parameter_file_freezes_that_parameter():
+    """The parameter-file route must reach C3's "hold this one fixed" switch, not just the prior."""
+    model = NoisePSDOof()
+    params = _noise_params()
+    params.experiments.EXP.bands.BandA.noise_prior = Bunch(fknee=[10.0, -1.0])
+    apply_noise_priors(model, params, "EXP", "BandA")
+
+    assert not model.is_sampled(1)
+    assert model.is_sampled(2)
+
+
+def test_noise_prior_rejects_an_unknown_parameter_name(caplog):
+    model = NoisePSDOof()
+    params = _noise_params()
+    params.experiments.EXP.bands.BandA.noise_prior = Bunch(alfa=[1.0, 1.0])
+    with pytest.raises(AssertionError):
+        apply_noise_priors(model, params, "EXP", "BandA")
+    assert "alfa" in caplog.text

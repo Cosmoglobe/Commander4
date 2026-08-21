@@ -1,9 +1,15 @@
+"""`DetectorGroupTOD`: the static TOD data one band holds on one rank.
+
+Owns the scan list, the per-detector metadata, and the noise model. "Static" means it holds the
+data as read from disk; everything the Gibbs chain samples lives in `TODSamples` instead.
+"""
 import numpy as np
 from numpy.typing import NDArray
 
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.noise.psd import NoisePSD
 from commander4.math_utils.fft import forward_rfft_mirrored, backward_rfft_mirrored
+
 
 class DetectorGroupTOD:
     """Container for all scan TODs belonging to one detector group (experiment + band).
@@ -35,7 +41,7 @@ class DetectorGroupTOD:
         self.ndet = ndet
         self.pols = pols
         # The below values are not known until all ranks are finished reading in data, because some
-        # scans might be rejected. THey will be set after-the-fact.
+        # scans might be rejected. They are set after the fact.
         self.scan_idx_start: int = 0  # Index of my first scan in a compact indexing.
         self.scan_idx_stop: int = 0  # Index of my last scan.
         self.nscans_allranks: int = 0  # Total number of scans across all ranks (on this band).
@@ -63,8 +69,8 @@ class DetectorGroupTOD:
     def iter_detector_scans(self, accept: NDArray | None = None):
         """Iterate over present detector-scans, yielding ``(iscan, det)`` pairs.
 
-        ``ScanTOD.detectors`` is sparse -- each scan lists only the detectors actually present in it
-        -- so this nested walk is the canonical way to traverse detector-scans. The detector's
+        ``ScanTOD.detectors`` is sparse (each scan lists only the detectors actually present in it),
+        so this nested walk is the canonical way to traverse detector-scans. The detector's
         full-band column ``det.det_idx_fullband`` is the index into the dense ``(nscans, ndet)``
         per-detector sample arrays (gain, noise params, accept, ...); the per-scan enumerate position
         must never be used for that, and this iterator deliberately never exposes one.

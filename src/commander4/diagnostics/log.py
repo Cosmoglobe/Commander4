@@ -1,3 +1,9 @@
+"""Logging setup and the assert helpers that route failures through the logger.
+
+`init_loggers` configures per-rank console and file handlers. `logassert`/`lograise` exist so that a
+failed check is written to the log file (and identifies the rank) before the exception propagates,
+which a bare `assert` in an MPI run would not do.
+"""
 import logging
 import logging.config
 import sys
