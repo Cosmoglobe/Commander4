@@ -18,6 +18,7 @@ from commander4.data_models.detector_group_tod import DetectorGroupTOD
 
 logger = logging.getLogger(__name__)
 
+#TODO: Units should be handled in a more robust way.
 T_CMB = 2.725 * 1e6  # CMB temperature in uK_CMB units.
 C = 299792458  # m/s (Speed of light)
 T_CMB_div_C = T_CMB / C
@@ -30,7 +31,10 @@ def get_static_sky_tod(det_compsep_map: NDArray[np.floating], pix: NDArray[np.in
     """ Projects the current sky-model at our band frequency (in uK_RJ, without gain) into the
         specified scan pointing. The sky model does not include the orbital dipole.
     """
-    if psi is None:
+    # An I-only band's sky map has a single component, and psi is irrelevant to it. TODView always
+    # passes psi (it does not know the band's polarization), so the component count, not psi, is
+    # what selects the intensity-only kernel.
+    if psi is None or det_compsep_map.shape[0] == 1:
         return _get_static_sky_tod_I(det_compsep_map, pix)
     elif det_compsep_map.shape[0] == 2:
         return _get_static_sky_tod_QU(det_compsep_map, pix, psi)
