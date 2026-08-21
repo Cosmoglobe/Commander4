@@ -12,7 +12,7 @@ from pixell.bunch import Bunch
 
 import numpy as np
 
-from commander4.experiments.read_utils import apply_noise_priors
+from commander4.file_io.experiments.read_utils import apply_noise_priors
 from commander4.tod.noise.psd import NoisePSDOof
 from commander4.parameters.schema import (TOP_LEVEL_BLOCKS, validate_param_schema, compsep_enabled,
                                      derive_task_counts, task_count_breakdown, resolve_param,

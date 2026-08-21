@@ -4,8 +4,8 @@
 #     mpirun -n 4 python -m simgen -p simgen/params/example_param.yml
 #
 # It writes per-band directories of per-scan HDF5 files + a filelist.txt, in the format read by
-# `tod_reader_litebird_sim`. To ingest in Commander4, point a band's `filelist:` at the generated
-# filelist.txt and set the experiment's `experiment_id: "litebird_sim"`, `replace_tod_with_sim: false`,
+# the `general` TOD reader. To ingest in Commander4, point a band's `filelist:` at the generated
+# filelist.txt and set the experiment's `experiment_id: "general"`,
 # and `Fourier_times_path:` at an existing FFT-times .npy file.
 
 general:

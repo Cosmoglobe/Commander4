@@ -100,7 +100,7 @@ A YAML file (see [params/example_param.yml](params/example_param.yml)) reusing t
   `write_component_truth_maps` (default `true`, only acted on when `debug_output_dir` is set; see
   [Component truth maps](#component-truth-maps)). With `compress: false`,
   `pix`/`psi` are written as plain `int32`/`float32` arrays instead of Huffman payloads
-  (`tod_reader_litebird_sim` reads either transparently). `flag` is always Huffman-compressed because
+  (the `general` reader reads either transparently). `flag` is always Huffman-compressed because
   that reader unconditionally decodes it.
 - `experiments → bands → detectors`: per-band `freq`, `fwhm`, `fsamp`, `eval_nside`, `data_nside`,
   `sigma0`/`sigma0_rts`, `polarization`, optional `crosstalk`, and a `detectors` dict (inline or via
@@ -136,9 +136,11 @@ Two simulation-side conventions these files depend on:
   subtracts an orbital dipole reconstructed from the `vsun` stored in the scan files, so a
   simulation that stores a non-zero `vsun` but omits the dipole from the TOD is inconsistent with
   its own analysis. `raster` stores `vsun = 0`, so there the flag is free.
-- **Gains and initial noise parameters must be repeated in the Commander4 file.**
-  `tod_reader_litebird_sim` does not read the per-detector `scalars`, so the parameter file is the
-  only source of the chain's starting values — which is what makes recovery testable.
+- **Gains and initial noise parameters may come from either the file or the parameter file.**
+  The `general` reader reads the per-detector `scalars` (gain, sigma0, fknee, alpha), so a band whose
+  `detectors:` entries are empty starts the chain from the simulated truth. A `gain:` on a detector
+  or an `initial_noise_params:` on the band still takes priority, which is how a recovery test
+  starts the chain deliberately away from the truth.
 
 ## Built-in plugins
 
@@ -200,7 +202,7 @@ In a Commander4 parameter file, set the experiment to read the generated files:
 experiments:
   SimSat:
     is_sim: true
-    experiment_id: "litebird_sim"
+    experiment_id: "general"
     replace_tod_with_sim: false        # use the TODs in the files (do not overwrite with the in-place sim)
     Fourier_times_path: "<existing FFT_times .npy>"
     bands:

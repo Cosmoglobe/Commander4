@@ -26,7 +26,7 @@ import commander4.compression.huffman as huffman
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset
 
-from commander4.experiments.read_utils import (read_processing_masks, find_good_Fourier_time,
+from commander4.file_io.experiments.read_utils import (read_processing_masks, find_good_Fourier_time,
                                               apply_noise_priors)
 
 logger = logging.getLogger(__name__)

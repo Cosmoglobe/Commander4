@@ -1,37 +1,42 @@
 """Dispatch to the per-experiment TOD reader named by a band's ``experiment_id``.
 
-Each experiment ships its own reader under ``experiments/``, because the file layouts differ. They
-all return the same `DetectorGroupTOD`, so nothing downstream needs to know which one ran. Add a
-new experiment by writing a reader with the signature below and registering it in
-``experiment_tod_readers``.
+Each experiment needs its own reader because the file layouts differ, but they all return the same
+`DetectorGroupTOD`, so nothing downstream needs to know which one ran. Every reader lives in
+``file_io/experiments/`` in a module named after the ``experiment_id`` it registers, so a parameter
+file's ``experiment_id: "SO_LAT"`` is served by ``file_io/experiments/SO_LAT.py``.
+
+Add a new experiment by writing a reader with the signature below, in a module named after its id,
+and registering it in ``experiment_tod_readers``.
 """
 from mpi4py import MPI
 from pixell.bunch import Bunch
 import numpy as np
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
-from commander4.experiments.litebird.sim import tod_reader\
-    as tod_reader_litebird_sim
-from commander4.experiments.litebird.sim_spawndetectors import tod_reader\
+from commander4.file_io.experiments.akari import tod_reader as tod_reader_akari
+from commander4.file_io.experiments.litebird_sim import tod_reader as tod_reader_litebird_sim
+from commander4.file_io.experiments.litebird_sim_spawndetectors import tod_reader\
     as tod_reader_litebird_sim_spawndetectors
-from commander4.experiments.planck.real import tod_reader as tod_reader_planck
-from commander4.experiments.planck.sim import tod_reader as tod_reader_planck_sim
-from commander4.experiments.akari.real import tod_reader as tod_reader_akari
-from commander4.experiments.SO.lat import tod_reader as tod_reader_SO_LAT
-from commander4.experiments.SO.sat import tod_reader as tod_reader_SO_SAT
+from commander4.file_io.experiments.planck_lfi import tod_reader as tod_reader_planck_lfi
+from commander4.file_io.experiments.general import tod_reader as tod_reader_general
+from commander4.file_io.experiments.SO_LAT import tod_reader as tod_reader_SO_LAT
+from commander4.file_io.experiments.SO_SAT import tod_reader as tod_reader_SO_SAT
 
-# Dictionary containing known experiments and the location of their TOD reading scripts.
-# The `experiment_id`` field in the parameter file decides what TOD reader is used in this dict.
+# Known experiments and the reader each one uses. The parameter file's `experiment_id` selects the
+# entry, and every key matches the module name it is imported from.
 experiment_tod_readers = {
-    "planck" : tod_reader_planck,
-    "planck_sim" : tod_reader_planck_sim,
-    # "litebird" : tod_reader_litebird,
+    "akari" : tod_reader_akari,
     "litebird_sim" : tod_reader_litebird_sim,
     "litebird_sim_spawndetectors" : tod_reader_litebird_sim_spawndetectors,
-    "akari" : tod_reader_akari,
+    # Planck LFI only; HFI's bolometer data is not supported yet and will need its own reader.
+    "planck_lfi" : tod_reader_planck_lfi,
+    # The plain reader for the standard format, with no instrument-specific behaviour. Everything
+    # `sims/simgen` writes reads through this, as does any other dataset already in that layout.
+    "general" : tod_reader_general,
     "SO_LAT" : tod_reader_SO_LAT,
     "SO_SAT" : tod_reader_SO_SAT,
 }
+
 
 def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, my_det: Bunch,
                         params: Bunch, my_scans_start: int,

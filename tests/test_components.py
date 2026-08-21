@@ -717,7 +717,7 @@ def test_restoring_tolerates_a_chain_written_before_sed_groups_existed(tmp_path)
 
 
 # ===================================================================
-# Point-source amplitude maps (RadioSources.get_component_map)
+# Point sources (RadioSources): units, beam painting and flux
 # ===================================================================
 
 def _write_radio_source_table(path, glon=0.0, glat=0.0, flux_mjy=1000.0, alpha=-0.7) -> None:
@@ -733,29 +733,27 @@ def _make_radio_sources(template_path, nu_ref=30.0):
     return RadioSources(cfg, _make_compsep(), comp_name="radsources")
 
 
-def test_radio_sources_component_map_is_frequency_independent(tmp_path) -> None:
-    """The amplitude map carries no SED, so it must not depend on any evaluation frequency.
+def _map_integral(sky_map, nside):
+    """The map's integral over the sphere, which is the source's total flux in uK_RJ*sr."""
+    return float(sky_map.sum()*hp.nside2pixarea(nside))
 
-    It used to read an undefined ``self.nu``, which raised AttributeError; it now converts at the
-    component's own ``nu_ref``, matching how a DiffuseComponent stores its amplitudes.
-    """
+
+def test_radio_sources_component_map_is_frequency_independent(tmp_path) -> None:
+    """The amplitude map carries no SED, so no evaluation frequency may leak into it."""
     template = tmp_path / "radio.dat"
     _write_radio_source_table(template)
     comp = _make_radio_sources(template, nu_ref=30.0)
 
-    # The beam must be resolved: `query_disc` returns no pixels for a beam below the pixel scale,
-    # and the source is then painted nowhere.
     amp_map = comp.get_component_map(nside=64, fwhm=120.0)
 
     assert amp_map.shape == (1, hp.nside2npix(64))
     assert np.isfinite(amp_map).all()
     assert amp_map.max() > 0.0
-    # Calling it twice must give the same answer: nothing frequency-dependent may leak in.
     assert np.array_equal(amp_map, comp.get_component_map(nside=64, fwhm=120.0))
 
 
 def test_radio_sources_component_map_scales_with_the_reference_frequency(tmp_path) -> None:
-    """Converting mJy/sr to uK_RJ at nu_ref goes as nu_ref^-2, so a 2x nu_ref gives a 4x smaller map."""
+    """Flux to brightness temperature goes as nu_ref^-2, so 2x nu_ref gives a 4x smaller map."""
     template = tmp_path / "radio.dat"
     _write_radio_source_table(template)
 
@@ -764,3 +762,59 @@ def test_radio_sources_component_map_scales_with_the_reference_frequency(tmp_pat
 
     assert low.max() > 0.0
     assert high.max() == pytest.approx(low.max()/4.0, rel=1e-5)
+
+
+def test_radio_sources_sed_follows_the_commander3_radio_law(tmp_path) -> None:
+    """C3's evalSED_ptsrc for 'radio' is (nu/nu_ref)^(-2+alpha); C4 must agree."""
+    template = tmp_path / "radio.dat"
+    _write_radio_source_table(template, alpha=-0.7)
+    comp = _make_radio_sources(template, nu_ref=30.0)
+
+    assert comp.get_sed(30.0)[0] == pytest.approx(1.0)
+    assert comp.get_sed(120.0)[0] == pytest.approx((120.0/30.0)**(-2.0 - 0.7))
+
+
+def test_radio_sources_sky_equals_amplitude_times_sed(tmp_path) -> None:
+    """The flux conversion belongs at nu_ref only.
+
+    Applying it at the band frequency as well double-counts the nu^-2 already inside `get_sed`,
+    which made `get_sky(nu)` disagree with `get_component_map() * get_sed(nu)` by (nu_ref/nu)^2.
+    """
+    template = tmp_path / "radio.dat"
+    _write_radio_source_table(template)
+    comp = _make_radio_sources(template, nu_ref=30.0)
+
+    amplitude = comp.get_component_map(nside=64, fwhm=120.0)
+    for nu in (30.0, 100.0, 353.0):
+        sky = comp.get_sky(nu, nside=64, fwhm=120.0)
+        expected = amplitude*comp.get_sed(nu)[0]
+        assert sky == pytest.approx(expected, rel=1e-5)
+
+
+def test_radio_sources_conserve_flux_across_resolutions(tmp_path) -> None:
+    """The painted beam is normalized, so the source's total flux must not depend on nside."""
+    template = tmp_path / "radio.dat"
+    _write_radio_source_table(template)
+
+    integrals = [_map_integral(_make_radio_sources(template).get_component_map(nside=n, fwhm=60.0), n)
+                 for n in (16, 64, 256)]
+
+    assert integrals[0] > 0.0
+    for integral in integrals[1:]:
+        assert integral == pytest.approx(integrals[0], rel=1e-4)
+
+
+def test_radio_sources_beam_narrower_than_a_pixel_still_paints_the_source(tmp_path) -> None:
+    """A beam below the pixel scale used to select no pixels at all, silently dropping the source.
+
+    It now collapses to the single pixel containing the source, carrying the whole flux.
+    """
+    template = tmp_path / "radio.dat"
+    _write_radio_source_table(template)
+    comp = _make_radio_sources(template)
+
+    narrow = comp.get_component_map(nside=16, fwhm=1.0)
+    resolved = _make_radio_sources(template).get_component_map(nside=16, fwhm=60.0)
+
+    assert np.count_nonzero(narrow) == 1
+    assert _map_integral(narrow, 16) == pytest.approx(_map_integral(resolved, 16), rel=1e-4)
