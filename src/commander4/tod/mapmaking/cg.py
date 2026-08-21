@@ -297,8 +297,12 @@ class CGMapmaker:
         return self.domain.reduce_to_full(out_local)
 
     def solve(self, x_true=None):
-        """
-        Solves the CG to compute the target sky map.
+        """Solve the CG to compute the target sky map.
+
+        Args:
+            x_true: Optional known solution to report the error against, for testing. Only the
+                master's copy is used, but every rank must agree on whether one was passed, since
+                evaluating the error applies the (collective) LHS operator.
         """
         RHS_map = self.RHS_map
         ismaster = self.map_comm.Get_rank() == 0
@@ -310,15 +314,25 @@ class CGMapmaker:
                                        dot = dot,
                                        destroy_b=True)
 
+        # Every collective below has to be entered by all ranks, so the two conditions guarding one
+        # are made rank-independent up front: the iteration index already is, and whether a true
+        # solution was supplied is broadcast (the caller may only have one on the master).
+        check_x_true = self.map_comm.bcast(x_true is not None, root=0)
         if ismaster:
             self.logger.info("Mapmaker CG starting up!")
         for i in range(self.CG_maxiter):
             CG_solver.step()
-            if i % self.CG_check_interval == 0 and ismaster:
+            log_this_iter = i % self.CG_check_interval == 0
+            if log_this_iter and ismaster:
                 self.logger.info(f"Mapmaker CG iter {i:3d} - Residual {CG_solver.err:.6e}")
-                if x_true is not None:  # Optional error against a known solution (testing only).
-                    CG_L2_error = norm(CG_solver.x - x_true)/norm(x_true)
-                    CG_Anorm_error = dot(CG_solver.x - x_true, self.apply_LHS(CG_solver.x - x_true))
+            if log_this_iter and check_x_true:
+                # apply_LHS is collective, so it is called outside the master-only branch; it takes
+                # its input from, and returns its result to, the master alone.
+                error_map = CG_solver.x - x_true if ismaster else None
+                A_error_map = self.apply_LHS(error_map)
+                if ismaster:
+                    CG_L2_error = norm(error_map)/norm(x_true)
+                    CG_Anorm_error = dot(error_map, A_error_map)
                     self.logger.info(f"CG iter {i:3d} - True A-norm error: {CG_Anorm_error:.3e} "
                                      f"- True L2 error: {CG_L2_error:.3e}")
             # Only the master updates CG_solver.err, so the stopping decision has to be broadcast.
