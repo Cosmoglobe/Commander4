@@ -590,12 +590,14 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
         cg_mapmaker = CGMapmakerIQU(experiment_data, tod_samples, band_comm,
                     preconditioner=called_on_non_master, nthreads=mapmaking.num_threads,
-                    CG_maxiter=mapmaking.cg.max_iter, pixel_domain=domain)
+                    CG_maxiter=mapmaking.cg.max_iter, CG_tol=mapmaking.cg.err_tol,
+                    pixel_domain=domain)
     elif pols == "I":
         mapmaker_invvar = WeightsMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
         cg_mapmaker = CGMapmakerI(experiment_data, tod_samples, band_comm,
                     preconditioner=called_on_non_master, nthreads=mapmaking.num_threads,
-                    CG_maxiter=mapmaking.cg.max_iter, pixel_domain=domain)
+                    CG_maxiter=mapmaking.cg.max_iter, CG_tol=mapmaking.cg.err_tol,
+                    pixel_domain=domain)
     else:
         raise ValueError(f"specified polarizations {pols} is notsupported yet.")
 
