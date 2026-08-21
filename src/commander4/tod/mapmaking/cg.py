@@ -321,7 +321,8 @@ class CGMapmaker:
                     CG_Anorm_error = dot(CG_solver.x - x_true, self.apply_LHS(CG_solver.x - x_true))
                     self.logger.info(f"CG iter {i:3d} - True A-norm error: {CG_Anorm_error:.3e} "
                                      f"- True L2 error: {CG_L2_error:.3e}")
-            if CG_solver.err < self.CG_tol:
+            # Only the master updates CG_solver.err, so the stopping decision has to be broadcast.
+            if self.map_comm.bcast(CG_solver.err < self.CG_tol, root=0):
                 break
         self._map_signal = CG_solver.x
 
