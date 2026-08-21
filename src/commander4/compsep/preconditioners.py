@@ -509,9 +509,10 @@ class InvNPreconditionerIQU:
     """ Jacobi (diagonal) preconditioner for the polarized CG mapmaker: M = 1/diag(A).
 
         The caller supplies the reciprocal per-pixel diagonal of the accumulated inverse-noise
-        matrix, one row each for I, Q and U (see `tod2map_CG`). Using 1/diag(A) rather than
-        diag(A^-1) keeps M bounded at pixels with poor polarization-angle coverage, where the 3x3
-        inverse is inflated by a near-vanishing determinant.
+        matrix, one row each for I, Q and U. Superseded by `BlockInvNPreconditionerIQU`, which
+        inverts the whole 3x3 instead of its diagonal: a diagonal M cannot see a pixel whose I/Q/U
+        directions are degenerate, which is the normal state of affairs at a partial sky's coverage
+        edge.
     """
 
     def __init__(self, inv_N_IQU:NDArray, double_prec=True):
@@ -526,6 +527,64 @@ class InvNPreconditionerIQU:
         assert map.shape[0] == 3, "map should have 3 polarization components: I, Q and U."
         map_out = np.copy(map)
         inplace_arr_prod(map_out, self.inv_N_IQU)
+        return map_out
+
+
+class BlockInvNPreconditionerIQU:
+    """ Block-Jacobi preconditioner for the polarized CG mapmaker: M = A_pp^-1, pixel by pixel.
+
+        A_pp is the per-pixel 3x3 inverse-noise (I,Q,U) normal matrix the weights mapmaker
+        accumulates, given here as its 6 unique elements (`WeightsMapmakerIQU.final_cov_map`). With
+        an identity transfer function the mapmaking operator P^T N^-1 P is exactly block diagonal in
+        pixels, so this M is the exact inverse and the CG converges in one iteration; with a
+        non-trivial T it is the same operator with T dropped, still the dominant part.
+
+        Prefer this over the diagonal `InvNPreconditionerIQU`, which ignores the I/Q/U correlations
+        within a pixel. On a partial sky those correlations are the whole problem: the ragged
+        coverage edge is full of pixels seen over a narrow range of polarization angles, whose 3x3 is
+        near-singular even though its diagonal looks healthy, and no diagonal preconditioner can
+        bring that under control.
+
+        Pixels whose 3x3 is singular or ill-conditioned get a zero block, which projects them out of
+        the solve: the CG leaves them at zero, matching the +inf rms the binned mapmaker assigns
+        them (same criterion, see mapmaker.cpp::_invert_SPD_3x3).
+    """
+
+    def __init__(self, normal_matrix:NDArray):
+        """ Initialize by inverting the per-pixel normal matrix.
+
+        Args:
+            normal_matrix: (6, npix) unique elements (II, IQ, IU, QQ, QU, UU) of the accumulated
+                per-pixel inverse-noise matrix.
+        """
+        assert normal_matrix.shape[0] == 6, "Normal matrix must have shape (6,npix)."
+        a00, a01, a02, a11, a12, a22 = np.asarray(normal_matrix, dtype=np.float64)
+        # Cofactors of the symmetric 3x3, then Cramer's rule. A zero diagonal entry means the matrix
+        # is singular (or not positive definite); det <= 1e-12*diag_prod means it is too
+        # ill-conditioned to invert. Both leave the whole 3x3 block at zero.
+        c00, c01, c02 = a11*a22 - a12*a12, a02*a12 - a01*a22, a01*a12 - a02*a11
+        det = a00*c00 + a01*c01 + a02*c02
+        diag_prod = a00*a11*a22
+        solvable = (diag_prod > np.finfo(np.float64).tiny) & (det > 1e-12*diag_prod)
+        inv_det = np.zeros_like(det)
+        np.divide(1.0, det, out=inv_det, where=solvable)
+        self.inv_A = np.ascontiguousarray(
+            np.stack([c00, c01, c02, a00*a22 - a02*a02, a01*a02 - a00*a12, a00*a11 - a01*a01])
+            * inv_det)
+        self.npix = self.inv_A.shape[1]
+
+        self.maplib = load_cmdr4_ctypes_lib()
+        ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
+        self.maplib.apply_invN_to_map_IQU_f64.argtypes = [ct_f64_dim2,  # map_in
+                                                          ct_f64_dim2,  # map_out
+                                                          ct_f64_dim2,  # inv_N_map
+                                                          ct.c_int64]   # num_pix
+
+    def __call__(self, map: NDArray) -> NDArray:
+        assert map.shape == (3, self.npix), f"map should have shape (3,{self.npix}), has {map.shape}"
+        map_in = np.ascontiguousarray(map, dtype=np.float64)
+        map_out = np.empty_like(map_in)
+        self.maplib.apply_invN_to_map_IQU_f64(map_in, map_out, self.inv_A, self.npix)
         return map_out
 
 

@@ -19,7 +19,6 @@ from mpi4py import MPI
 import logging
 from numpy.typing import NDArray
 import healpy as hp
-from pixell import utils
 from typing import Callable
 
 from commander4.diagnostics.log import logassert
@@ -28,7 +27,7 @@ from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.view import TODView
 from commander4.compsep.cg_driver import DistributedCGArray
-from commander4.compsep.preconditioners import InvNPreconditionerI, InvNPreconditionerIQU
+from commander4.compsep.preconditioners import InvNPreconditionerI, BlockInvNPreconditionerIQU
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.tod_samples import TODSamples
@@ -742,22 +741,23 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
     mapmaker_invvar.gather_map()
     if pols == "IQU":
         mapmaker_invvar.normalize_map()
-        if ismaster:
-            # Jacobi preconditioner M = 1/diag(A), where A is the accumulated inverse-noise matrix
-            # (final_cov_map holds its 6 unique elements; [0,3,5] are A_II, A_QQ, A_UU). Using
-            # diag(A^-1) via rms**2 instead blows up at near-singular pixels (poor per-pixel
-            # polarization-angle coverage, where the 3x3 inverse is inflated by a vanishing
-            # determinant), wrecking the conditioning and making PCG diverge. 1/diag(A) stays bounded
-            # by the actual per-component inverse variance; without_nan zeros unobserved pixels.
-            A_diag = mapmaker_invvar.final_cov_map[(0, 3, 5), :]
-            cg_mapmaker.M = InvNPreconditionerIQU(utils.without_nan(1.0 / A_diag))
         map_rms = mapmaker_invvar.final_rms_map
         map_cov = mapmaker_invvar.final_cov_map
-    else:
         if ismaster:
-            cg_mapmaker.M = InvNPreconditionerI(utils.without_nan(1./mapmaker_invvar.final_map))
+            cg_mapmaker.M = BlockInvNPreconditionerIQU(map_cov)
+    else:
+        # A is diagonal for I-only, so an unobserved pixel is simply one with zero weight. map_cov
+        # stays 1-D (Mapmaker.normalize_map indexes it against a 1-D map), while map_rms gets a
+        # leading component axis to match the IQU case's (ncomp, npix) shape.
         map_cov = mapmaker_invvar.final_map
-        map_rms = 1./np.sqrt(map_cov)
+        map_rms = None  # Only the master holds the gathered weights, hence the rms.
+        if ismaster:
+            observed = map_cov > 0
+            M_diag = np.zeros_like(map_cov)
+            np.divide(1.0, map_cov, out=M_diag, where=observed)
+            cg_mapmaker.M = InvNPreconditionerI(M_diag)
+            map_rms = np.full((1, map_cov.size), np.inf)
+            map_rms[0, observed] = 1.0/np.sqrt(map_cov[observed])
 
     mapmaker_orbdipole.gather_map()
     mapmaker_orbdipole.normalize_map(map_cov)
