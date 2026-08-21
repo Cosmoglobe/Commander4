@@ -27,7 +27,8 @@ from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.view import TODView
 from commander4.compsep.cg_driver import DistributedCGArray
-from commander4.compsep.preconditioners import InvNPreconditionerI, BlockInvNPreconditionerIQU
+from commander4.tod.mapmaking.preconditioners import InvNPreconditionerI,\
+    BlockInvNPreconditionerIQU
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.tod_samples import TODSamples
@@ -752,10 +753,8 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         map_cov = mapmaker_invvar.final_map
         map_rms = None  # Only the master holds the gathered weights, hence the rms.
         if ismaster:
+            cg_mapmaker.M = InvNPreconditionerI(map_cov)
             observed = map_cov > 0
-            M_diag = np.zeros_like(map_cov)
-            np.divide(1.0, map_cov, out=M_diag, where=observed)
-            cg_mapmaker.M = InvNPreconditionerI(M_diag)
             map_rms = np.full((1, map_cov.size), np.inf)
             map_rms[0, observed] = 1.0/np.sqrt(map_cov[observed])
 
