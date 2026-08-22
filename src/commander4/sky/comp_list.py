@@ -16,7 +16,6 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.data_models.band import Band
-from commander4.diagnostics import log
 import commander4.sky as sky
 from commander4.sky.comp_io import _load_component_alms, _read_view_alms_from_fits
 from commander4.sky.component import Component
@@ -158,9 +157,10 @@ class CompList:
             if not source_path:
                 continue  # No initial guess requested; leave the allocated zeros.
             if not isinstance(comp, DiffuseComponent):
-                log.logassert(not has_explicit_path,
-                              f"Component {comp.comp_name!r}: 'init_from' is currently only "
-                              f"supported for diffuse (alm-based) components.", logger)
+                if has_explicit_path:
+                    raise ValueError(
+                        f"Component {comp.comp_name!r}: 'init_from' is currently only supported "
+                        "for diffuse (alm-based) components.")
                 continue
             _load_component_alms(comp, source_path)
 
@@ -183,12 +183,14 @@ class CompList:
                 if "amp_prior_mean_map" in comp.comp_params else None
             if not source_path:
                 continue  # Zero-mean prior.
-            log.logassert(isinstance(comp, DiffuseComponent),
-                          f"Component {comp.comp_name!r}: 'amp_prior_mean_map' is only supported "
-                          "for diffuse (alm-based) components.", logger)
-            log.logassert(str(source_path).lower().endswith(".fits"),
-                          f"Component {comp.comp_name!r}: 'amp_prior_mean_map' must be a .fits "
-                          f"sky map, but got {source_path!r}.", logger)
+            if not isinstance(comp, DiffuseComponent):
+                raise ValueError(
+                    f"Component {comp.comp_name!r}: 'amp_prior_mean_map' is only supported for "
+                    "diffuse (alm-based) components.")
+            if not str(source_path).lower().endswith(".fits"):
+                raise ValueError(
+                    f"Component {comp.comp_name!r}: 'amp_prior_mean_map' must be a .fits sky map, "
+                    f"but got {source_path!r}.")
             view_alms = _read_view_alms_from_fits(comp, source_path)
             if view_alms is not None:
                 comp.amp_prior_mean = view_alms.astype(comp.dtype, copy=False)

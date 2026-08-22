@@ -470,7 +470,6 @@ class CorrelatedNoiseConfig(StepConfig):
         cg = CGConfig.from_block(f"tod_processing.{cls.PARAMETER_NAME}.cg",
                                  block.pop("cg", Bunch()))
         config = cls._from_block(f"tod_processing.{cls.PARAMETER_NAME}", block, cg=cg)
-        if config.nomono and config.onlymono and is_master:
-            logger.error("tod_processing.corr_noise.nomono and onlymono are both True, which is "
-                         "contradictory; onlymono takes precedence.")
+        if config.nomono and config.onlymono:
+            raise ValueError("tod_processing.corr_noise.nomono and onlymono cannot both be true.")
         return config

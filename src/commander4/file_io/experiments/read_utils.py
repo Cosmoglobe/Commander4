@@ -7,7 +7,6 @@ from numpy.typing import NDArray
 import healpy as hp
 import numpy as np
 
-from commander4.diagnostics.log import logassert
 from commander4.parameters.schema import resolve_param
 from commander4.tod.noise.psd import NoisePSD
 
@@ -27,9 +26,9 @@ def _resolve_noise_prior_block(params: Bunch, key: str, expname: str, bandname: 
     if block is None:
         return None
     for name in block:
-        logassert(name in param_names,
-                  f"{key!r} for band {bandname!r} names {name!r}, which is not a parameter of "
-                  f"{model_name}: {list(param_names)}.", logger)
+        if name not in param_names:
+            raise ValueError(f"{key!r} for band {bandname!r} names {name!r}, which is not a "
+                             f"parameter of {model_name}: {list(param_names)}.")
     return block
 
 

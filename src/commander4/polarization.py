@@ -5,12 +5,6 @@ into execution views with stable identifiers (`030GHz_I`, `030GHz_QU`), which th
 parameter lookup and the component views all key on. Both halves of that vocabulary live here: the
 polarization strings themselves, and the identifiers built from them.
 """
-import logging
-
-from commander4.diagnostics import log
-
-logger = logging.getLogger(__name__)
-
 POLS_DICT = {"I": 1, "QU": 2, "IQU": 3}  # more allowed in the future.
 
 EXECUTION_POLS = {
@@ -39,7 +33,8 @@ def get_npol(pols:str):
     """
     Return the number of map polarizaiton components given the polarization string `pols`.
     """
-    log.logassert(pols in POLS_DICT, "Unrecognised polarization string", logger)
+    if pols not in POLS_DICT:
+        raise ValueError(f"Unrecognized polarization string {pols!r}.")
     return POLS_DICT[pols]
     
 def is_pol_supported(pols:str):
@@ -55,6 +50,5 @@ def assert_pol_supported(pols:str):
     """
     Asserts if the given polarization string `pols` is matching one of the supported pol configs.
     """
-    log.logassert(is_pol_supported(pols), 
-                  f"Unsupported polarization string {pols}", 
-                  logging.getLogger(__name__))
+    if not is_pol_supported(pols):
+        raise ValueError(f"Unsupported polarization string {pols!r}.")

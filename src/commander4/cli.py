@@ -8,6 +8,7 @@ Gibbs loop that alternates between them, with two chains always in flight.
 """
 import os
 import yaml
+import faulthandler
 from mpi4py import MPI
 import cProfile
 import pstats
@@ -15,7 +16,6 @@ import logging
 import time
 from copy import deepcopy
 from datetime import date
-from traceback import print_exc
 from pixell.bunch import Bunch
 
 from commander4.diagnostics import log
@@ -63,7 +63,6 @@ def run_commander4(params: Bunch, params_dict: dict):
     # Important to import Numpy *after* specifying number of threads per rank (happens in init_mpi),
     # as Numpy will not respect a change in thread count after it has been loaded.
     import numpy as np
-    import commander4.diagnostics.log as log
     from commander4.tod.processing import process_tod, init_tod_processing
     from commander4.compsep.processing import process_compsep, init_compsep_processing,\
         get_initial_sky_model
@@ -234,20 +233,42 @@ def run_commander4(params: Bunch, params_dict: dict):
 
     return 0
 
-def main():
-    # Parse parameter file
-    from commander4.parameters.parse import params, params_dict
-    # Temporary check for old parameter files, so they fail quickly.
-    validate_param_schema(params_dict)
-
-    paths.resolve_output_dir(params.output)
-    log_file = paths.log_file_path(params.output) if "file" in params.output.logging else None
-    if MPI.COMM_WORLD.Get_rank() == 0:
-        paths.create_output_dirs(params.output)
-    MPI.COMM_WORLD.Barrier()
-    log.init_loggers(params.output.logging, log_file, world_rank=MPI.COMM_WORLD.Get_rank())
+def main() -> None:
+    world_comm = MPI.COMM_WORLD
+    world_rank = world_comm.Get_rank()
     logger = logging.getLogger(__name__)
+    traceback_dir = None
+    run_id = None
     try:
+        # faulthandler is separate from normal exception handling. It asks Python's low-level C
+        # signal handlers to dump thread stacks to stderr for native crashes such as SIGSEGV,
+        # SIGBUS and SIGABRT, where no Python exception is available for the except blocks below.
+        # It is deliberately simple: it reports a crash but does not attempt recovery.
+        faulthandler.enable(all_threads=True)
+
+        # Every rank must use the same ID so they compete for the same fatal-report filename. Rank
+        # 0 creates it once; this startup broadcast happens while MPI is still healthy.
+        run_id = world_comm.bcast(log.make_run_id() if world_rank == 0 else None, root=0)
+
+        # Parameter parsing happens on every rank, but shared schema validation runs once. If rank 0
+        # rejects it, MPI Abort terminates ranks waiting at the barrier below.
+        from commander4.parameters.parse import params, params_dict
+        if world_rank == 0:
+            validate_param_schema(params_dict)
+        world_comm.Barrier()
+
+        output_dir = paths.resolve_output_dir(params.output)
+        traceback_dir = os.path.join(output_dir, paths.LOGS)
+        log_file = paths.log_file_path(params.output) if "file" in params.output.logging else None
+        if world_rank == 0:
+            paths.create_output_dirs(params.output)
+        world_comm.Barrier()
+        log.init_loggers(params.output.logging, log_file, world_rank=world_rank)
+        if world_rank == 0:
+            # SUMMARY is retained in normal production logs and lets users match a Slurm job's
+            # output to its fatal report without relying only on directory or job names.
+            logger.summary(f"Run ID: {run_id}.")
+
         if params.output.profiling:
             profiler = cProfile.Profile()
             profiler.enable()
@@ -257,25 +278,35 @@ def main():
             stats = pstats.Stats(profiler).sort_stats('tottime')
             if ret != -1:
                 stats.dump_stats(os.path.join(paths.subdir(params, paths.LOGS),
-                                              f"stats-{MPI.COMM_WORLD.Get_rank()}"))
-        logger.debug(f"Rank {MPI.COMM_WORLD.Get_rank()} finished Commander 4 and is shutting down.")
-        if MPI.COMM_WORLD.Get_rank() == 0:
+                                              f"stats-{world_rank}"))
+        logger.debug(f"Rank {world_rank} finished Commander 4 and is shutting down.")
+        if world_rank == 0:
             logger.summary("Commander 4 completed successfully. Goodbye!")
 
-    # First check for MPI-specific exceptions.
-    except MPI.Exception as e:
-        print_exc()
-        error_code = e.Get_error_code()
+    # mpi4py converts MPI errors that return control to Python into MPI.Exception. Catastrophic MPI
+    # failures may abort internally and instead rely on faulthandler or launcher diagnostics.
+    except MPI.Exception as error:
+        error_code = max(1, error.Get_error_code())
         error_string = MPI.Get_error_string(error_code)
-        logger.error(f">>>>>>>> MPI Error on rank {MPI.COMM_WORLD.Get_rank()}!"\
-                     f"Code: [{error_code}] - {error_string}")
-        MPI.COMM_WORLD.Abort(error_code)
-
-    # Then general exceptions.
-    except Exception:
-        print_exc()  # Print the full exception raise, including trace-back.
-        logger.error(f">>>>>>>> Error on rank {MPI.COMM_WORLD.Get_rank()}, calling MPI abort.")
-        MPI.COMM_WORLD.Abort(1)
+        log.report_fatal(error, logger, world_rank, error_code, traceback_dir,
+                         context=f"MPI error {error_code} ({error_string})", run_id=run_id)
+        # Some MPI implementations terminate a rank with SIGABRT. Disable faulthandler before our
+        # intentional abort so it does not print a second, misleading native-crash traceback.
+        faulthandler.disable()
+        world_comm.Abort(error_code)
+    except KeyboardInterrupt as error:
+        # Ctrl+C normally becomes KeyboardInterrupt when Python regains control. Treat it like any
+        # other fatal rank event so one report is completed before the whole MPI job is stopped.
+        log.report_fatal(error, logger, world_rank, 130, traceback_dir, run_id=run_id)
+        faulthandler.disable()
+        world_comm.Abort(130)
+    # All ordinary Commander4 validation and runtime failures arrive here as typed Python
+    # exceptions. report_fatal performs no MPI communication, which is important because peers may
+    # already be blocked in unrelated collectives when one rank fails.
+    except Exception as error:
+        log.report_fatal(error, logger, world_rank, 1, traceback_dir, run_id=run_id)
+        faulthandler.disable()
+        world_comm.Abort(1)
 
 if __name__ == "__main__":
     main()

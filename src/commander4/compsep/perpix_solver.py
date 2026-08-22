@@ -12,7 +12,6 @@ import numpy as np
 from mpi4py import MPI
 from pixell import curvedsky
 
-from commander4.diagnostics.log import logassert
 from commander4.sky.component import Component
 from commander4.backend.ctypes_lib import load_cmdr4_ctypes_lib
 from commander4.data_models.detector_map import DetectorMap
@@ -70,8 +69,9 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     comp_maps = [None, None] if pol else [None]
     if proc_comm.Get_rank() == 0:  # Unfortunately, only master rank does the work.
         map_shapes = np.array([_map.shape for _map in all_map_sky])
-        logassert(np.all(map_shapes == map_shapes[0]), "Per-pixel solver requires all maps to have"\
-                  f" the same nside, but received nsides: {map_shapes}", logger)
+        if not np.all(map_shapes == map_shapes[0]):
+            raise ValueError("Per-pixel solver requires all maps to have the same shape, but "
+                             f"received {map_shapes}.")
         for ipol in range(npol):
             t0 = time.time()
             freqs = []

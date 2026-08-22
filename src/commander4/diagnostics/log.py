@@ -1,11 +1,13 @@
-"""Logging setup and the assert helpers that route failures through the logger.
-
-`init_loggers` configures per-rank console and file handlers. `logassert`/`lograise` exist so that a
-failed check is written to the log file (and identifies the rank) before the exception propagates,
-which a bare `assert` in an MPI run would not do.
-"""
+"""Commander4 logging setup and fatal MPI-rank failure reporting."""
 import logging
 import logging.config
+import os
+import secrets
+import string
+import sys
+import time
+import traceback
+from datetime import datetime
 
 # A recommended user setup is SUMMARY or INFO on the console and VERBOSE in the log file, so the
 # file retains detailed sampling and performance diagnostics without overwhelming terminal output.
@@ -49,6 +51,14 @@ def _verbose(self, message, *args, **kwargs):
 
 logging.Logger.summary = _summary
 logging.Logger.verbose = _verbose
+
+
+def make_run_id() -> str:
+    """Return a readable, high-precision run identifier with a short random suffix."""
+    timestamp = datetime.now().astimezone().strftime("%Y%m%dT%H%M%S.%f%z")
+    alphabet = string.ascii_lowercase + string.digits
+    suffix = "".join(secrets.choice(alphabet) for _ in range(4))
+    return f"{timestamp}-{suffix}"
 
 
 class C4Formatter(logging.Formatter):
@@ -170,6 +180,9 @@ def init_loggers(logger_params, log_file_path: str | None = None,
         }
     }
     if 'console' in logger_params:
+        # StreamHandler defaults to sys.stderr. In batch jobs this is normally collected by Slurm
+        # together with stdout, but keeping it as stderr correctly marks logging as diagnostic
+        # output and leaves stdout available for explicit program output.
         config_dict['handlers']['console'] = {
             'class': 'logging.StreamHandler',
             'formatter': 'standard',
@@ -188,7 +201,8 @@ def init_loggers(logger_params, log_file_path: str | None = None,
             'filename': log_file_path,
             'mode': 'a'
         }
-        # Attach handler to root
+        # The ordinary run log is shared by the MPI ranks. Fatal tracebacks are additionally
+        # protected by the single-writer mechanism in report_fatal below.
         config_dict['loggers'][None]['handlers'].append('file')
 
     logging.config.dictConfig(config_dict)
@@ -216,25 +230,116 @@ def init_loggers(logger_params, log_file_path: str | None = None,
     logging.captureWarnings(True)
 
 
-def logassert(assertion, errmsg, logger):
-    "Asserts and prints to logger if false"
-    try:
-        assert assertion
-    except AssertionError as err:
-        lograise(err, errmsg, logger)
+def report_fatal(error: BaseException, logger: logging.Logger, world_rank: int,
+                 error_code: int, traceback_dir: str | None = None,
+                 context: str | None = None, run_id: str | None = None) -> str | None:
+    """Preserve the first fatal traceback for this run before MPI aborts.
 
+    A Python exception normally reaches this function on only the failing rank. Some shared errors
+    can reach many ranks at almost the same time, however, and printing every traceback would flood
+    both the terminal and the shared log. Ranks therefore compete to create one run-specific file.
+    The operating system guarantees that ``O_EXCL`` lets only one rank create it. That owner writes
+    the traceback and the only CRITICAL record; other ranks wait briefly and stay silent.
 
-def logassert_np(assertion, errmsg, logger):
-    "Asserts (using numpy.testing.assert_) and prints to logger if false"
-    from numpy.testing import assert_ as myassert
-    try:
-        myassert(assertion, '')
-    except AssertionError as err:
-        lograise(err, errmsg, logger)
+    ``stderr`` is the process's diagnostic text stream and is where the console logging handler
+    writes. If logging or the output directory is unavailable, stderr is the last-resort location
+    because Slurm normally captures it even when Commander4 cannot open its own files.
 
+    Returns:
+        The traceback path when one was written, otherwise ``None``.
+    """
+    error_name = type(error).__name__
+    error_text = str(error)
+    description = f"{error_name}: {error_text}" if error_text else error_name
+    if context:
+        description = f"{context}: {description}"
 
-def lograise(error, errmsg, logger):
-    "Prints to logger and raises an error"
+    # This marker tells non-owning ranks that both the traceback and normal log record were flushed.
+    # They may then call MPI_Abort without risking termination of the owner halfway through a write.
+    report_complete = "\n--- END FATAL REPORT ---\n"
+    traceback_path = None
+    traceback_write_error = None
+    if traceback_dir is not None:
+        report_name = f"fatal-{run_id}.log" if run_id else "fatal.log"
+        traceback_path = os.path.join(traceback_dir, report_name)
+        try:
+            os.makedirs(traceback_dir, exist_ok=True)
+            # O_EXCL makes creation atomic across ranks on the shared output filesystem: success
+            # means this rank owns reporting; FileExistsError means another rank got there first.
+            file_descriptor = os.open(
+                traceback_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            # The owning rank writes the CRITICAL record before the completion marker. Waiting for
+            # that marker prevents another rank's immediate MPI_Abort from killing it mid-write.
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                try:
+                    with open(traceback_path, "rb") as handle:
+                        if handle.read().endswith(report_complete.encode("ascii")):
+                            break
+                except OSError:
+                    pass
+                time.sleep(0.02)
+            logging.shutdown()
+            return traceback_path
+        except OSError as write_error:
+            # A missing or broken output filesystem must not conceal the original exception.
+            traceback_write_error = write_error
+            traceback_path = None
+        else:
+            try:
+                with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
+                    # First make the standalone traceback durable. This file remains readable even
+                    # if MPI termination prevents the normal shared log from closing cleanly.
+                    handle.write(f"\n{datetime.now().isoformat(timespec='seconds')} - world rank "
+                                 f"{world_rank} - run {run_id or '-'} - abort code {error_code}\n")
+                    handle.write(f"{description}\n")
+                    traceback.print_exception(type(error), error, error.__traceback__, file=handle)
+                    handle.flush()
+                    os.fsync(handle.fileno())
 
-    logger.exception(errmsg)
-    raise error
+                    # exc_info adds the standard Python traceback, including source file and line
+                    # numbers, to both the console handler (stderr) and the ordinary run log.
+                    message = (f"Fatal error on world rank {world_rank}: \n{description}; calling "
+                               f"MPI Abort({error_code}). Full traceback: {traceback_path}")
+                    if logging.root.handlers:
+                        logger.critical(
+                            message,
+                            exc_info=(type(error), error, error.__traceback__),
+                        )
+                    else:
+                        print(message, file=sys.stderr, flush=True)
+                        traceback.print_exception(
+                            type(error), error, error.__traceback__, file=sys.stderr)
+                    # MPI_Abort does not guarantee normal Python cleanup, so explicitly flush and
+                    # close logging handlers before allowing any rank to terminate the job.
+                    logging.shutdown()
+
+                    # Write the marker last. Non-owner ranks poll for it for at most two seconds;
+                    # the timeout prevents a deadlock if the owner itself dies while reporting.
+                    handle.write(report_complete)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except OSError as write_error:
+                traceback_write_error = write_error
+                traceback_path = None
+            else:
+                return traceback_path
+
+    # Early startup failures may occur before the output path or handlers exist. They cannot use
+    # atomic file election, so each affected rank falls back to stderr and preserves its traceback.
+    message = (f"Fatal error on world rank {world_rank}: \n{description}; calling MPI "
+               f"Abort({error_code})")
+    if traceback_write_error is not None:
+        message += f". Could not write the traceback file: {traceback_write_error}"
+    else:
+        message += ". Full traceback follows on stderr"
+
+    if logging.root.handlers:
+        logger.critical(message)
+    else:
+        print(message, file=sys.stderr, flush=True)
+    traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
+    sys.stderr.flush()
+    logging.shutdown()
+    return None

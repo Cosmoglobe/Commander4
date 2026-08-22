@@ -181,20 +181,18 @@ def test_complist_ops_require_matching_execution_views() -> None:
         _ = complist_dot(comp_list, other)
 
 
-def test_complist_split_for_eval_pol_rejects_invalid_polarization(caplog) -> None:
+def test_complist_split_for_eval_pol_rejects_invalid_polarization() -> None:
     comp_list = _make_comp_list("IQU")
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="Unsupported polarization string 'bad'"):
         comp_list.split_for_eval_pol("bad")
-    assert "Unsupported polarization string bad" in caplog.text
 
 
-def test_point_sources_component_rejects_non_intensity_eval_pol(caplog) -> None:
+def test_point_sources_component_rejects_non_intensity_eval_pol() -> None:
     params = Bunch(shortname="ps")
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="does not support evaluation polarization 'QU'"):
         PointSourcesComponent(params, _make_compsep(), comp_name="ps", eval_pol="QU")
-    assert "PointSourcesComponent does not support evaluation polarization 'QU'" in caplog.text
 
 
 def test_complist_split_for_eval_pol_returns_requested_execution_view() -> None:
@@ -346,7 +344,7 @@ def test_load_initial_alms_rejects_unknown_extension(tmp_path) -> None:
     params = Bunch(compsep=compsep, gibbs=gibbs, components=Bunch({"cmb": cmb}))
 
     comp_list = CompList.init_from_params(params.components, params)
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="expected a .h5/.hd5 chain or a .fits map"):
         comp_list.load_initial_alms(params)
 
 
@@ -538,7 +536,7 @@ def test_P_Cl_prior_none_amplitude_gives_identity() -> None:
 
 def test_old_smoothing_prior_params_are_rejected() -> None:
     # The old C_l-space 'smoothing_prior_*' parameters changed semantics; fail loudly on stale files.
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match=r"smoothing_prior_\*"):
         ThermalDust(_dust_params(smoothing_prior_amplitude=1.0e7), _make_compsep(),
                     eval_pol="I", comp_name="dust")
 

@@ -19,7 +19,6 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.parameters.schema import resolve_param, resolve_band_lmax
-from commander4.diagnostics.log import logassert
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.tod_samples import TODSamples
@@ -238,7 +237,6 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
             active=data_selection.cuts_are_active(iter, correlated_noise),
             iteration=iter,
         )
-
     with benchmark("filewrite-tod"):
         tod_samples.write_chain_to_file(iter)
 

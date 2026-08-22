@@ -5,7 +5,6 @@ detector's focal-plane and polarization-angle offsets, and `PixelPointing` is th
 (pix, psi) pair the mapmakers consume.
 """
 import numpy as np
-import logging
 from numpy.typing import NDArray
 import ducc0
 import os
@@ -13,9 +12,6 @@ import healpy as hp
 from pixell.bunch import Bunch
 from pixell import coordsys
 from commander4.backend import utils as cpp_utils
-import commander4.diagnostics.log as log
-
-logger = logging.getLogger(__name__)
 
 
 class ScanBoresightPointing:
@@ -50,14 +46,14 @@ class ScanBoresightPointing:
         self.ntod_original = ntod_original
         self.ntod = ntod_original if ntod is None else ntod
         self.ndet = self.detoffs.shape[0]
-        log.logassert_np(self.ntod <= self.ntod_original, "ntod cannot exceed ntod_original.", logger)
-        log.logassert_np(self.detoffs.ndim == 2, "detoffs must be a 2D array.", logger)
-        log.logassert_np(self.detoffs.shape[1] == 2, "detoffs must have shape (ndet, 2).", logger)
-        log.logassert_np(
-            self.polangs.size == self.ndet,
-            "polangs must contain one polarization angle per detector.",
-            logger,
-        )
+        if self.ntod > self.ntod_original:
+            raise ValueError("ntod cannot exceed ntod_original.")
+        if self.detoffs.ndim != 2:
+            raise ValueError("detoffs must be a 2D array.")
+        if self.detoffs.shape[1] != 2:
+            raise ValueError("detoffs must have shape (ndet, 2).")
+        if self.polangs.size != self.ndet:
+            raise ValueError("polangs must contain one polarization angle per detector.")
         # pixell's time-dependent coordinate transforms use Unix seconds.
         time_start_unix = (time_start_mjd - 40587.0) * 86400.0
         time_end_unix = (time_end_mjd - 40587.0) * 86400.0
@@ -85,7 +81,8 @@ class ScanBoresightPointing:
         self,
         idet: int,
     ) -> tuple[NDArray[np.floating], NDArray[np.floating], NDArray[np.floating]]:
-        log.logassert_np(0 <= idet < self.ndet, f"Detector index {idet} out of range.", logger)
+        if not 0 <= idet < self.ndet:
+            raise IndexError(f"Detector index {idet} out of range.")
         # By slicing instead of indexing we keep the 1-sized detector dimension.
         detoff = self.detoffs[idet:idet+1]
         polang = self.polangs[idet:idet+1]
@@ -136,11 +133,8 @@ class DetectorBoresightPointing:
     def __init__(self, scan_pointing: ScanBoresightPointing, idet: int):
         self.scan_pointing = scan_pointing
         self.idet = int(idet)
-        log.logassert_np(
-            0 <= self.idet < self.scan_pointing.ndet,
-            f"Detector index {self.idet} out of range.",
-            logger,
-        )
+        if not 0 <= self.idet < self.scan_pointing.ndet:
+            raise IndexError(f"Detector index {self.idet} out of range.")
         self.nside = scan_pointing.nside
         self.data_nside = scan_pointing.data_nside
         self.ntod_original = scan_pointing.ntod_original
@@ -198,57 +192,37 @@ class PixelPointing:
 
     
     def _test_input(self):
-        log.logassert_np(self.ntod <= self.ntod_original, "ntod cannot exceed ntod_original.", logger)
-        log.logassert_np(
-            self.pix_is_compressed or isinstance(self.pix_encoded, np.ndarray),
-            "'pix' must be provided as bytes, numpy.void, or a numpy array.",
-            logger,
-        )
-        log.logassert_np(
-            self.psi_is_compressed or isinstance(self.psi_encoded, np.ndarray),
-            "'psi' must be provided as bytes, numpy.void, or a numpy array.",
-            logger,
-        )
+        if self.ntod > self.ntod_original:
+            raise ValueError("ntod cannot exceed ntod_original.")
+        if not self.pix_is_compressed and not isinstance(self.pix_encoded, np.ndarray):
+            raise TypeError("'pix' must be provided as bytes, numpy.void, or a numpy array.")
+        if not self.psi_is_compressed and not isinstance(self.psi_encoded, np.ndarray):
+            raise TypeError("'psi' must be provided as bytes, numpy.void, or a numpy array.")
         if self.pix_is_compressed:
-            log.logassert_np(
-                self.huffman_tree is not None and self.huffman_symbols is not None,
-                "Compressed pix requires Huffman metadata.",
-                logger,
-            )
+            if self.huffman_tree is None or self.huffman_symbols is None:
+                raise ValueError("Compressed pix requires Huffman metadata.")
         if self.psi_is_compressed:
-            log.logassert_np(
-                self.huffman_tree is not None and self.huffman_symbols is not None,
-                "Compressed psi requires Huffman metadata.",
-                logger,
-            )
-            log.logassert_np(self.npsi is not None, "Compressed psi requires npsi.", logger)
+            if self.huffman_tree is None or self.huffman_symbols is None:
+                raise ValueError("Compressed psi requires Huffman metadata.")
+            if self.npsi is None:
+                raise ValueError("Compressed psi requires npsi.")
         if not self.pix_is_compressed:
             pix_array = np.asarray(self.pix_encoded)
-            log.logassert_np(pix_array.ndim == 1, "'pix' must be a 1D array", logger)
-            log.logassert_np(
-                np.issubdtype(pix_array.dtype, np.integer),
-                "'pix' array must have integer dtype.",
-                logger,
-            )
-            log.logassert_np(
-                pix_array.size >= self.ntod,
-                f"'pix' length {pix_array.size} is shorter than ntod {self.ntod}.",
-                logger,
-            )
+            if pix_array.ndim != 1:
+                raise ValueError("'pix' must be a 1D array.")
+            if not np.issubdtype(pix_array.dtype, np.integer):
+                raise TypeError("'pix' array must have integer dtype.")
+            if pix_array.size < self.ntod:
+                raise ValueError(f"'pix' length {pix_array.size} is shorter than ntod {self.ntod}.")
         if not self.psi_is_compressed:
             psi_array = np.asarray(self.psi_encoded)
-            log.logassert_np(psi_array.ndim == 1, "'psi' must be a 1D array", logger)
-            log.logassert_np(
-                np.issubdtype(psi_array.dtype, np.integer)
-                or np.issubdtype(psi_array.dtype, np.floating),
-                "'psi' array must have numeric dtype.",
-                logger,
-            )
-            log.logassert_np(
-                psi_array.size >= self.ntod,
-                f"'psi' length {psi_array.size} is shorter than ntod {self.ntod}.",
-                logger,
-            )
+            if psi_array.ndim != 1:
+                raise ValueError("'psi' must be a 1D array.")
+            if (not np.issubdtype(psi_array.dtype, np.integer)
+                    and not np.issubdtype(psi_array.dtype, np.floating)):
+                raise TypeError("'psi' array must have numeric dtype.")
+            if psi_array.size < self.ntod:
+                raise ValueError(f"'psi' length {psi_array.size} is shorter than ntod {self.ntod}.")
 
     def get_pix(self, nside: int | None = None) -> NDArray[np.integer]:
         """Return HEALPix pixel indices at the requested output nside."""
@@ -289,4 +263,3 @@ class PixelPointing:
 
     def get_pix_psi(self, nside: int | None = None) -> tuple[NDArray, NDArray]:
         return self.get_pix(nside), self.get_psi(nside)
-

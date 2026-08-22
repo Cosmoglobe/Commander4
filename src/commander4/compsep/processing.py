@@ -17,7 +17,6 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 from typing import Self
 
-from commander4.diagnostics.log import logassert
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
@@ -270,18 +269,20 @@ def _validate_sampling_group_references(sampling_groups: dict[str, SamplingGroup
         selected_comps = group.comps
         if selected_comps is not None:
             unknown = sorted(set(selected_comps) - known_comp_names)
-            logassert(not unknown,
-                      f"Sampling group {group_name!r} references unknown component(s) {unknown}. "
-                      f"Known components: {sorted(known_comp_names)}.", logger)
+            if unknown:
+                raise ValueError(
+                    f"Sampling group {group_name!r} references unknown component(s) {unknown}. "
+                    f"Known components: {sorted(known_comp_names)}.")
         if isinstance(group, (CGSamplingGroupConfig, PerPixelSamplingGroupConfig)):
             selected_bands = group.bands
         else:
             selected_bands = group.chisq_bands
         if selected_bands is not None:
             unknown = sorted(set(selected_bands) - known_band_names)
-            logassert(not unknown,
-                      f"Sampling group {group_name!r} references unknown band(s) {unknown}. "
-                      f"Known bands: {sorted(known_band_names)}.", logger)
+            if unknown:
+                raise ValueError(
+                    f"Sampling group {group_name!r} references unknown band(s) {unknown}. "
+                    f"Known bands: {sorted(known_band_names)}.")
 
 
 def _validate_sampling_group_dependencies(
@@ -290,10 +291,11 @@ def _validate_sampling_group_dependencies(
     """Ensure every MCMC amplitude update names an enabled amplitude group."""
     for group in mcmc_groups.values():
         unknown = sorted(set(group.update_amplitude_groups) - set(amplitude_groups))
-        logassert(not unknown,
-                  f"MCMC sampling group {group.name!r} update_amplitude_groups references unknown "
-                  f"or disabled amplitude group(s) {unknown}. Known enabled amplitude groups: "
-                  f"{sorted(amplitude_groups)}.", logger)
+        if unknown:
+            raise ValueError(
+                f"MCMC sampling group {group.name!r} update_amplitude_groups references unknown "
+                f"or disabled amplitude group(s) {unknown}. Known enabled amplitude groups: "
+                f"{sorted(amplitude_groups)}.")
 
 
 def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
@@ -395,8 +397,8 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
 
     comp_list = CompList.init_from_params(params.components, params)
     comp_names = [comp.comp_name for comp in comp_list.joined()]
-    logassert(len(comp_names) == len(set(comp_names)),
-              f"Duplicate component names found in CompSep setup: {comp_names}", logger)
+    if len(comp_names) != len(set(comp_names)):
+        raise ValueError(f"Duplicate component names found in CompSep setup: {comp_names}.")
 
     ### Match this rank to its band execution view. Intensity views fill the I-rank block in band
     ### order, QU views fill the QU-rank block; the two cursors track those contiguous layouts. ###
@@ -424,17 +426,19 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     # the QU cursor exactly the QU-rank block [QU_master, size).
     n_I_ranks = mpi_info.compsep.QU_master
     n_QU_ranks = mpi_info.compsep.size - mpi_info.compsep.QU_master
-    logassert(band_cursor["I"] == mpi_info.compsep.QU_master,
-              f"Number of enabled Intensity band views ({band_cursor['I']}) does not match the "
-              f"number of CompSep ranks assigned to Intensity ({n_I_ranks}).", logger)
-    logassert(band_cursor["QU"] == mpi_info.compsep.size,
-              f"Number of enabled QU band views ({band_cursor['QU'] - mpi_info.compsep.QU_master}) "
-              f"does not match the number of CompSep ranks assigned to QU ({n_QU_ranks}).", logger)
+    if band_cursor["I"] != mpi_info.compsep.QU_master:
+        raise RuntimeError(
+            f"Number of enabled Intensity band views ({band_cursor['I']}) does not match the "
+            f"number of CompSep ranks assigned to Intensity ({n_I_ranks}).")
+    if band_cursor["QU"] != mpi_info.compsep.size:
+        raise RuntimeError(
+            f"Number of enabled QU band views "
+            f"({band_cursor['QU'] - mpi_info.compsep.QU_master}) does not match the number of "
+            f"CompSep ranks assigned to QU ({n_QU_ranks}).")
     if my_band is None or band_identifier is None:
-        logassert(False,
-                  f"CompSep rank {mpi_info.compsep.rank} was not assigned to any enabled band. "
-                  "Check that compsep.bands matches the configured I/QU rank counts.",
-                  logger)
+        raise RuntimeError(
+            f"CompSep rank {mpi_info.compsep.rank} was not assigned to any enabled band. Check "
+            "that compsep.bands matches the configured I/QU rank counts.")
 
     cg_groups, per_pixel_groups, mcmc_groups = _resolve_sampling_groups(params)
     amplitude_groups = cg_groups if cg_groups else per_pixel_groups

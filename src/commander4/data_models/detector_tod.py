@@ -5,17 +5,13 @@ first access, so a band can hold many scans without materializing all of them at
 """
 import numpy as np
 import healpy as hp
-import logging
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.backend import utils as cpp_utils
 from commander4.data_models.pointing import PixelPointing, DetectorBoresightPointing
-import commander4.diagnostics.log as log
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset
-
-logger = logging.getLogger(__name__)
 
 
 class DetectorTOD:
@@ -85,65 +81,39 @@ class DetectorTOD:
             flag_bitmask: Bitmask applied to flags to identify excluded samples.
         """
         if tod_is_compressed:
-            log.logassert_np(
-                isinstance(tod, (bytes, np.void)),
-                "Compressed TOD must be provided as bytes or numpy.void.",
-                logger,
-            )
-            log.logassert_np(
-                huffman_tree2 is not None and huffman_symbols2 is not None,
-                "Compressed TOD requires Huffman metadata.",
-                logger,
-            )
+            if not isinstance(tod, (bytes, np.void)):
+                raise TypeError("Compressed TOD must be provided as bytes or numpy.void.")
+            if huffman_tree2 is None or huffman_symbols2 is None:
+                raise ValueError("Compressed TOD requires Huffman metadata.")
         else:
-            log.logassert_np(isinstance(tod, np.ndarray), "'tod' must be a numpy array.", logger)
-            log.logassert_np(tod.ndim==1, "'value' must be a 1D array", logger)
-            log.logassert_np(tod.dtype in [np.float64,np.float32], "TOD dtype must be floating "\
-                             f"type, is {tod.dtype}", logger)
-        log.logassert_np(
-            isinstance(pointing, (PixelPointing, DetectorBoresightPointing)),
-            "pointing must be a PixelPointing or DetectorBoresightPointing instance.",
-            logger,
-        )
-        log.logassert_np(
-            pointing.ntod_original == ntod_original,
-            "Pointing ntod_original does not match DetectorTOD ntod_original.",
-            logger,
-        )
-        log.logassert_np(
-            pointing.ntod == ntod_optimal,
-            "Pointing ntod does not match DetectorTOD ntod_optimal.",
-            logger,
-        )
+            if not isinstance(tod, np.ndarray):
+                raise TypeError("'tod' must be a numpy array.")
+            if tod.ndim != 1:
+                raise ValueError("'tod' must be a 1D array.")
+            if tod.dtype not in (np.float64, np.float32):
+                raise TypeError(f"TOD dtype must be float32 or float64, got {tod.dtype}.")
+        if not isinstance(pointing, (PixelPointing, DetectorBoresightPointing)):
+            raise TypeError("pointing must be a PixelPointing or DetectorBoresightPointing.")
+        if pointing.ntod_original != ntod_original:
+            raise ValueError("Pointing ntod_original does not match DetectorTOD ntod_original.")
+        if pointing.ntod != ntod_optimal:
+            raise ValueError("Pointing ntod does not match DetectorTOD ntod_optimal.")
         if flag_encoded is not None:
             if flag_is_compressed:
-                log.logassert_np(
-                    isinstance(flag_encoded, (bytes, np.void)),
-                    "Compressed flags must be provided as bytes or numpy.void.",
-                    logger,
-                )
-                log.logassert_np(
-                    huffman_tree is not None and huffman_symbols is not None,
-                    "Compressed flags require Huffman metadata.",
-                    logger,
-                )
+                if not isinstance(flag_encoded, (bytes, np.void)):
+                    raise TypeError("Compressed flags must be provided as bytes or numpy.void.")
+                if huffman_tree is None or huffman_symbols is None:
+                    raise ValueError("Compressed flags require Huffman metadata.")
             else:
-                log.logassert_np(
-                    isinstance(flag_encoded, np.ndarray),
-                    "Decoded flags must be provided as a numpy array.",
-                    logger,
-                )
-                log.logassert_np(flag_encoded.ndim == 1, "'flag' must be a 1D array.", logger)
-                log.logassert_np(
-                    np.issubdtype(flag_encoded.dtype, np.integer),
-                    "Decoded flags must have integer dtype.",
-                    logger,
-                )
-                log.logassert_np(
-                    flag_encoded.size >= ntod_optimal,
-                    f"'flag' length {flag_encoded.size} is shorter than ntod {ntod_optimal}.",
-                    logger,
-                )
+                if not isinstance(flag_encoded, np.ndarray):
+                    raise TypeError("Decoded flags must be provided as a numpy array.")
+                if flag_encoded.ndim != 1:
+                    raise ValueError("'flag' must be a 1D array.")
+                if not np.issubdtype(flag_encoded.dtype, np.integer):
+                    raise TypeError("Decoded flags must have integer dtype.")
+                if flag_encoded.size < ntod_optimal:
+                    raise ValueError(
+                        f"'flag' length {flag_encoded.size} is shorter than ntod {ntod_optimal}.")
         self.name = name
         self.det_idx_fullband = det_idx_fullband
         self.det_idx_local = det_idx_local
@@ -180,7 +150,8 @@ class DetectorTOD:
             good_data_mask = (self.flag & bad_data_bitmask) == 0
             self._good_data_mask = np.packbits(good_data_mask)
         if orb_dir_vec is not None:
-            log.logassert_np(orb_dir_vec.size == 3, "orb_dir_vec must be a vector of size 3.", logger)
+            if orb_dir_vec.size != 3:
+                raise ValueError("orb_dir_vec must be a vector of size 3.")
             self._orb_dir_vec = orb_dir_vec.astype(np.float32, copy=False)
         else:
             self._orb_dir_vec = None

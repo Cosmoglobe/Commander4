@@ -5,20 +5,15 @@ sky: the amplitude buffer and its arithmetic, the polarization view, the paramet
 the interface (`get_sed`, `realize_as_map`, ...) that the samplers call. The concrete families live
 next to this file: `diffuse_components.py` and `point_sources.py`.
 """
-import logging
 from copy import deepcopy
 
 import numpy as np
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.diagnostics import log
 from commander4.polarization import assert_pol_supported
 from commander4.math_utils.arithmetic import dot, inplace_arr_add,\
         inplace_arr_sub, inplace_arr_prod, inplace_arr_truediv
-
-logger = logging.getLogger(__name__)
-
 
 class Component:
     """Abstract base class for every sky component.
@@ -40,19 +35,13 @@ class Component:
     @classmethod
     def _assert_legal_pol(cls, pol: str | None, *, role: str, required: bool = False) -> None:
         if pol is None:
-            log.logassert(
-                not required,
-                f"{cls.__name__} requires a defined polarization mode.",
-                logger,
-            )
+            if required:
+                raise ValueError(f"{cls.__name__} requires a defined polarization mode.")
             return
         assert_pol_supported(pol)
-        log.logassert(
-            pol in cls.legal_pols,
-            f"{cls.__name__} does not support {role} polarization {pol!r}. "
-            f"Allowed polarizations: {cls.legal_pols!r}.",
-            logger,
-        )
+        if pol not in cls.legal_pols:
+            raise ValueError(f"{cls.__name__} does not support {role} polarization {pol!r}. "
+                             f"Allowed polarizations: {cls.legal_pols!r}.")
 
     def __init__(self, comp_params: Bunch, global_params: Bunch, *,
                  shortname: str | None = None, comp_name: str | None = None,
@@ -212,25 +201,29 @@ class Component:
 
     def bcast_data_blocking(self, comm:MPI.Comm, root=0):
         """Broadcast the component's data array from the root MPI rank."""
-        log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
+        if not isinstance(self._data, np.ndarray):
+            raise RuntimeError("Component data must be allocated as an array before broadcast.")
         comm.Bcast(self._data, root=root)
 
     def bcast_data_non_blocking(self, comm:MPI.Comm, root=0):
         """As `bcast_data_blocking`, but returns the MPI request instead of waiting on it."""
-        log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
+        if not isinstance(self._data, np.ndarray):
+            raise RuntimeError("Component data must be allocated as an array before broadcast.")
         req = comm.Ibcast(self._data, root=root)
         return req
 
     def accum_data_blocking(self, comm:MPI.Comm, root=0):
         """Sum the component's data array across the communicator onto the root rank."""
-        log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
+        if not isinstance(self._data, np.ndarray):
+            raise RuntimeError("Component data must be allocated as an array before accumulation.")
         myrank=comm.Get_rank()
         send, recv = (MPI.IN_PLACE, self._data) if myrank == root else (self._data, None)
         comm.Reduce(send, recv, op=MPI.SUM, root=root)
 
     def accum_data_non_blocking(self, comm:MPI.Comm, root=0):
         """As `accum_data_blocking`, but returns the MPI request instead of waiting on it."""
-        log.logassert(isinstance(self._data, np.ndarray), "data object must be an array", logger)
+        if not isinstance(self._data, np.ndarray):
+            raise RuntimeError("Component data must be allocated as an array before accumulation.")
         myrank=comm.Get_rank()
         send, recv = (MPI.IN_PLACE, self._data) if myrank == root else (self._data, None)
         req = comm.Ireduce(send, recv, op=MPI.SUM, root=root)

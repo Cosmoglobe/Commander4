@@ -302,13 +302,11 @@ def test_noise_prior_bounds_prefer_the_band_over_wider_scopes():
     np.testing.assert_allclose(model.P_uni[1], [3.0, 4.0])
 
 
-def test_noise_prior_bounds_reject_an_unknown_parameter_name(caplog):
+def test_noise_prior_bounds_reject_an_unknown_parameter_name():
     """A typo here would otherwise leave the default bounds silently in force."""
     model = NoisePSDOof()
-    # logassert reports through the logger and then raises a bare AssertionError.
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="fkne"):
         apply_noise_priors(model, _noise_params(band={"fkne": [0.1, 1.0]}), "EXP", "BandA")
-    assert "fkne" in caplog.text
 
 
 def test_prior_bounds_are_what_the_psd_sampler_draws_within():
@@ -357,10 +355,9 @@ def test_a_nonpositive_prior_rms_in_the_parameter_file_freezes_that_parameter():
     assert model.is_sampled(2)
 
 
-def test_noise_prior_rejects_an_unknown_parameter_name(caplog):
+def test_noise_prior_rejects_an_unknown_parameter_name():
     model = NoisePSDOof()
     params = _noise_params()
     params.experiments.EXP.bands.BandA.noise_prior = Bunch(alfa=[1.0, 1.0])
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="alfa"):
         apply_noise_priors(model, params, "EXP", "BandA")
-    assert "alfa" in caplog.text

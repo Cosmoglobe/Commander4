@@ -23,7 +23,6 @@ from commander4.tod.noise.psd import NoisePSD, NoisePSDOof
 from commander4.file_io.experiments.read_utils import (read_processing_masks, find_good_Fourier_time,
                                               apply_noise_priors)
 from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
-from commander4.diagnostics.log import logassert
 
 
 logger = logging.getLogger(__name__)

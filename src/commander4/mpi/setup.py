@@ -11,8 +11,6 @@ import mpi4py
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.diagnostics import log
-from commander4.diagnostics.log import logassert_np
 from commander4.parameters.schema import compsep_enabled, derive_task_counts, task_count_breakdown
 
 logger = logging.getLogger(__name__)
@@ -68,11 +66,11 @@ def init_mpi(params):
 
     if is_world_master:  # Every rank doesn't need to throw an error.
         if worldsize != ntasks.total:
-            log.lograise(RuntimeError, f"This run needs {task_count_breakdown(ntasks)} MPI tasks, "
-                         f"but was started with {worldsize}. The counts follow from the parameter "
-                         f"file (the per-band 'num_tasks' of every enabled band, and one CompSep "
-                         f"task per enabled 'compsep.bands' view); run with "
-                         f"'mpirun -n {ntasks.total}'.", logger)
+            raise RuntimeError(f"This run needs {task_count_breakdown(ntasks)} MPI tasks, "
+                               f"but was started with {worldsize}. The counts follow from the "
+                               "parameter file (the per-band 'num_tasks' of every enabled band, "
+                               "and one CompSep task per enabled 'compsep.bands' view); run with "
+                               f"'mpirun -n {ntasks.total}'.")
         # With CompSep disabled, CompSep is simply off (TOD-only) and compsep.bands is ignored.
         if not compsep_enabled(params):
             logger.info("compsep.enabled is false; running TOD-only. Any 'compsep.bands' are "
@@ -95,9 +93,9 @@ def init_mpi(params):
                 if has_enabled_sampling_group:
                     break
         if has_enabled_sampling_group and tot_num_CompSep_ranks == 0:
-            log.lograise(RuntimeError, "Enabled compsep sampling groups are configured, but no "
-                         "CompSep MPI ranks are allocated (compsep.enabled is false, or no "
-                         "'compsep.bands' are enabled).", logger)
+            raise RuntimeError("Enabled compsep sampling groups are configured, but no CompSep "
+                               "MPI ranks are allocated (compsep.enabled is false, or no "
+                               "'compsep.bands' are enabled).")
 
     # Split the world communicator into a communicator for compsep and one for TOD (with "color"
     # being the keyword for the split).
@@ -113,9 +111,10 @@ def init_mpi(params):
         if isinstance(nthreads_compsep, int):  # If int, all ranks have same nthreads.
             my_num_threads = nthreads_compsep
         else:
-            logassert_np(len(nthreads_compsep) == tot_num_CompSep_ranks,
-                         f"Length of `resources.compsep.num_threads` ({nthreads_compsep}) doesn't"\
-                         f"match number of compsep-ranks ({tot_num_CompSep_ranks}).", logger)
+            if len(nthreads_compsep) != tot_num_CompSep_ranks:
+                raise ValueError(
+                    f"Length of resources.compsep.num_threads ({len(nthreads_compsep)}) does not "
+                    f"match the number of CompSep ranks ({tot_num_CompSep_ranks}).")
             my_num_threads = nthreads_compsep[worldrank - ntasks.tod]
         # Testing revealed 24 to be a good number (regardless of nside), but I tested this on the
         # new 384-core nodes, the optimal number is probably slightly lower on the older owls.
@@ -141,10 +140,12 @@ def init_mpi(params):
 
         pool_info = threadpool_info()
         for pool in pool_info:
-            assert pool["num_threads"] == my_num_threads, f"Loaded library {pool} has was not spawned "\
-                f"with {my_num_threads} threads, but instead {pool['num_threads']}."
-        assert numba.get_num_threads() == my_num_threads_numba, f"Numba spawned with "\
-            f"{numba.get_num_threads()}, and no the specified {my_num_threads_numba} threads."
+            if pool["num_threads"] != my_num_threads:
+                raise RuntimeError(f"Loaded library {pool} has {pool['num_threads']} threads, "
+                                   f"expected {my_num_threads}.")
+        if numba.get_num_threads() != my_num_threads_numba:
+            raise RuntimeError(f"Numba has {numba.get_num_threads()} threads, expected "
+                               f"{my_num_threads_numba}.")
 
 
     proc_comm = world_comm.Split(color, key=worldrank)
@@ -267,18 +268,16 @@ def init_mpi_tod(mpi_info, params):
                 current_detector_id += len(band.detectors)
             TOD_rank += band.num_tasks
     if TOD_rank != MPIsize_tod:
-        log.lograise(RuntimeError, f"Total number of ranks dedicated to the various experiments "
-                     f"({TOD_rank}) differs from the total number of tasks dedicated to "
-                     f"TOD processing ({MPIsize_tod}).", logger)
+        raise RuntimeError(f"Total number of ranks dedicated to the various experiments "
+                           f"({TOD_rank}) differs from the total number of tasks dedicated to "
+                           f"TOD processing ({MPIsize_tod}).")
     if is_tod_master:
         logger.verbose(f"TOD: {MPIsize_tod} tasks successfully allocated to TOD processing.")
 
     if my_band_id is None or my_det_id is None or my_experiment_name is None:
-        log.lograise(
-            RuntimeError,
+        raise RuntimeError(
             f"TOD rank {MPIrank_tod} was not assigned to an enabled band/detector. "
-            "Check experiment enable flags and the TOD rank allocation in the parameter file.",
-            logger,
+            "Check experiment enable flags and the TOD rank allocation in the parameter file."
         )
 
     # Create communicators for each different band.
@@ -351,7 +350,7 @@ def init_mpi_compsep(mpi_info, params):
     mpi_info['band']['is_master'] = True
 
     if tot_num_bands > MPIsize_compsep:
-        log.lograise(RuntimeError, f"Total number of experiment bands {tot_num_bands} exceeds the "\
-                     f"number of Compsep MPI tasks {MPIsize_compsep}.", logger)
+        raise RuntimeError(f"Total number of experiment bands {tot_num_bands} exceeds the number "
+                           f"of CompSep MPI tasks {MPIsize_compsep}.")
 
     return mpi_info

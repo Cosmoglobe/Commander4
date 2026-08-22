@@ -15,19 +15,14 @@ from numba import njit
 from scipy.fft import rfftfreq
 from scipy.special import ndtri
 
-import logging
 from typing import TYPE_CHECKING
 
-from commander4.diagnostics.log import logassert
 from commander4.math_utils.fft import forward_rfft_mirrored
 
 # `tod.view` imports the correlated-noise sampler, which imports this module, so TODView can only
 # be imported here for annotations.
 if TYPE_CHECKING:
     from commander4.tod.view import TODView
-
-logger = logging.getLogger(__name__)
-
 
 @njit(fastmath=True)
 def calc_sigma0_simple(tod: NDArray, mask: NDArray[np.bool_]) -> float:
@@ -40,7 +35,8 @@ def calc_sigma0_simple(tod: NDArray, mask: NDArray[np.bool_]) -> float:
     Returns:
         The calculated sigma value, or `np.inf` if fewer than two valid data points exist.
     """
-    assert tod.shape == mask.shape, "Input shapes don't match"
+    if tod.shape != mask.shape:
+        raise ValueError("TOD and mask shapes must match.")
     count = 0
     mean = 0.0
     m2 = 0.0
@@ -254,6 +250,6 @@ def _estimate_standalone_sigma0(view: TODView, sigma0_method: str) -> float:
         sigma0 = calc_sigma0_binned_psd(residual, mask, view.fsamp)
     else:
         sigma0 = calc_sigma0_robust(residual, mask)
-    logassert(sigma0 != 0, "sigma0 is 0, which should never happen.", logger)
-    logassert(sigma0 != np.inf, "sigma0 is inf, which should never happen.", logger)
+    if not np.isfinite(sigma0) or sigma0 <= 0:
+        raise RuntimeError(f"sigma0 must be positive and finite, got {sigma0}.")
     return sigma0

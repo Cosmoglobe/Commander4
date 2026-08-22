@@ -236,7 +236,8 @@ class RadioSources(PointSourcesComponent):
 
         NB: this function does not include the beam smoothing.
         """
-        assert not band.is_pol, "Point sources component can only be projected to intensity band alms"
+        if band.is_pol:
+            raise ValueError("Point-source components can only be projected to intensity bands.")
         band_fwhm_r, band_nside = np.deg2rad(band.fwhm/60.0), band.nside
         self.compute_pix_beams(band_fwhm_r, band_nside)  # No-op unless the band has changed.
 
@@ -260,7 +261,8 @@ class RadioSources(PointSourcesComponent):
 
         NB: this function does not include the beam smoothing.
         """
-        assert not band.is_pol, "Point sources comps can only be evaluated from intensity band alms"
+        if band.is_pol:
+            raise ValueError("Point-source components can only be evaluated from intensity bands.")
         band_fwhm_r, band_nside = np.deg2rad(band.fwhm/60.0), band.nside
         self.compute_pix_beams(band_fwhm_r, band_nside)  # No-op unless the band has changed.
 

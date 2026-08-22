@@ -129,6 +129,12 @@ truth. See [`params/sims/README.md`](../../params/sims/README.md) for how to run
 | `params/param_compsep.yml`   | `params/sims/simparam_compsep_CG.yml`   | CG amplitude sampling, C(l) prior, fluctuations |
 | `params/param_compsep.yml`   | `params/sims/simparam_compsep_MCMC.yml` | MH spectral-index sampling |
 | `params/param_patch.yml`     | `params/sims/simparam_patch.yml`        | partial sky: `sparse_maps`, prior-driven unobserved pixels |
+| `params/param_transfunc.yml` | `params/sims/simparam_transfunc.yml`    | bolometer transfer function: the damage from *not* modelling it |
+
+The transfer-function pair is the odd one out: it is a copy of the `param_compsep.yml` pair with
+only the bolometer response switched on, so the two are run together and differenced. It measures a
+gap rather than a recovery — Commander4 never sets the CG mapmaker's `T_omega`, so nothing on the
+analysis side deconvolves the response. See the two files' headers.
 
 Two simulation-side conventions these files depend on:
 

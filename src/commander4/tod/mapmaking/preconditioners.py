@@ -41,7 +41,8 @@ def invert_normal_matrix_IQU(normal_matrix: NDArray) -> tuple[NDArray, NDArray]:
         zero wherever the 3x3 is singular or too ill-conditioned to invert. ``solvable`` is the
         (npix,) boolean mask of the pixels that were inverted.
     """
-    assert normal_matrix.shape[0] == 6, "Normal matrix must have shape (6,npix)."
+    if normal_matrix.ndim != 2 or normal_matrix.shape[0] != 6:
+        raise ValueError(f"Normal matrix must have shape (6, npix), got {normal_matrix.shape}.")
     a00, a01, a02, a11, a12, a22 = np.asarray(normal_matrix, dtype=np.float64)
     # Cofactors of the symmetric 3x3, then Cramer's rule. A zero diagonal entry means the matrix is
     # singular (or not positive definite); det <= _RCOND_FLOOR*diag_prod means it is too
@@ -86,7 +87,8 @@ class BlockInvNPreconditionerIQU:
                                                           ct.c_int64]   # num_pix
 
     def __call__(self, map: NDArray) -> NDArray:
-        assert map.shape == (3, self.npix), f"map should have shape (3,{self.npix}), has {map.shape}"
+        if map.shape != (3, self.npix):
+            raise ValueError(f"Map must have shape (3, {self.npix}), got {map.shape}.")
         map_in = np.ascontiguousarray(map, dtype=np.float64)
         map_out = np.empty_like(map_in)
         self.maplib.apply_invN_to_map_IQU_f64(map_in, map_out, self.inv_N_IQU, self.npix)
@@ -123,8 +125,8 @@ class InvNPreconditionerIQU:
         self.npix = self.inv_N_IQU.shape[1]
 
     def __call__(self, map: NDArray) -> NDArray:
-        assert map.shape[1] == self.npix, "map should have same npix as the preconditioner"
-        assert map.shape[0] == 3, "map should have 3 polarization components: I, Q and U."
+        if map.shape != (3, self.npix):
+            raise ValueError(f"Map must have shape (3, {self.npix}), got {map.shape}.")
         map_out = np.copy(map)
         inplace_arr_prod(map_out, self.inv_N_IQU)
         return map_out
@@ -149,7 +151,8 @@ class InvNPreconditionerI:
         self.inv_N_map = inv
 
     def __call__(self, map: NDArray) -> NDArray:
-        assert map.shape[1] == self.npix
+        if map.shape[-1] != self.npix:
+            raise ValueError(f"Map must have {self.npix} pixels, got shape {map.shape}.")
         map_out = np.copy(map)
         logger.debug(f"## Preconditioner called. map shape: {map.shape}, inv N shape: {self.inv_N_map.shape}")
         # this allows it to be applied to IQU maps as well

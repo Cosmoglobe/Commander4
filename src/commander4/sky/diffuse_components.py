@@ -4,8 +4,6 @@ A diffuse component stores its amplitudes as spherical-harmonic coefficients and
 spectral energy distribution (SED) per band. `DiffuseComponent` holds everything common to that
 representation; the classes after it differ only in their SED and its spectral parameters.
 """
-import logging
-
 import astropy.constants as c
 import astropy.units as u
 import healpy as hp
@@ -16,14 +14,11 @@ from pixell.bunch import Bunch
 from scipy.interpolate import interp1d
 
 from commander4.data_models.band import Band
-from commander4.diagnostics import log
 from commander4.sky.component import Component
 from commander4.polarization import get_npol
 from commander4.math_utils.arithmetic import inplace_scale, inplace_add_scaled_vec
 from commander4.math_utils.alm import project_alms, almxfl, _dot_complex_alm_1D_arrays
 from commander4.math_utils.sht import alm_to_map, map_to_alm, alm_to_map_adjoint, map_to_alm_adjoint
-
-logger = logging.getLogger(__name__)
 
 # Blackbody and thermodynamic-to-brightness conversions shared by the SEDs below.
 A = (2*c.h*u.GHz**3/c.c**2).to('MJy').value
@@ -65,12 +60,12 @@ class DiffuseComponent(Component):
         )
         self.spatially_varying_MM = comp_params.spatially_varying_MM
         self.lmax = comp_params.lmax
-        log.logassert("smoothing_prior_FWHM" not in comp_params
-                      and "smoothing_prior_amplitude" not in comp_params,
-                      f"Component {self.comp_name!r}: the 'smoothing_prior_*' parameters were "
-                      "replaced by the C3-equivalent 'Cl_prior_*' parameters, which are defined in "
-                      "D_l space (see DiffuseComponent.P_Cl_prior). Update the parameter file.",
-                      logger)
+        if ("smoothing_prior_FWHM" in comp_params
+                or "smoothing_prior_amplitude" in comp_params):
+            raise ValueError(
+                f"Component {self.comp_name!r}: the 'smoothing_prior_*' parameters were replaced "
+                "by the C3-equivalent 'Cl_prior_*' parameters, which are defined in D_l space "
+                "(see DiffuseComponent.P_Cl_prior). Update the parameter file.")
         # C(l) prior (C3 'power_law_gauss' equivalent, see P_Cl_prior). Each parameter may be a
         # scalar or an [I, QU] pair, resolved per execution view like nu_ref; amplitude None
         # disables the prior.
@@ -119,10 +114,10 @@ class DiffuseComponent(Component):
         if self.units is None or self.units == self.amplitude_unit:
             return sky_map
         ref_freq = getattr(self, "nu_ref", None)
-        log.logassert(ref_freq is not None,
-                      f"Component {self.comp_name!r}: converting an init map from {self.units!r} to "
-                      f"{self.amplitude_unit!r} requires a reference frequency, but none is defined.",
-                      logger)
+        if ref_freq is None:
+            raise ValueError(
+                f"Component {self.comp_name!r}: converting an init map from {self.units!r} to "
+                f"{self.amplitude_unit!r} requires a reference frequency, but none is defined.")
         factor = (1*pysm3u.Unit(self.units)).to(
             pysm3u.Unit(self.amplitude_unit),
             equivalencies=pysm3u.cmb_equivalencies(ref_freq*pysm3u.GHz)).value
@@ -323,7 +318,7 @@ class DiffuseComponent(Component):
         return self.get_component_map(nside, applied_fwhm)*self.get_sed(nu)
     
     def get_sed(self, nu):
-        log.lograise(NotImplementedError, "", logger)
+        raise NotImplementedError(f"{type(self).__name__}.get_sed() is not implemented.")
 
     # Overrides the base-class dot product: diffuse-component _data holds complex alms, whose inner
     # product must account for the m>0 coefficients each standing for two real degrees of freedom.
@@ -340,8 +335,8 @@ class DiffuseComponent(Component):
 
         NB: this function does not include the beam smoothing.
         """
-        log.logassert(self.is_pol == band.is_pol, "Band and component polarization must match",
-                      logger)
+        if self.is_pol != band.is_pol:
+            raise ValueError("Band and component polarization must match.")
 
         alm_in_band_space = project_alms(self.alms, band.lmax)
         if self.spatially_varying_MM:  # If this component's mixing matrix is pixel-dependent.
@@ -368,8 +363,8 @@ class DiffuseComponent(Component):
 
         NB: this function does not include the beam smoothing.
         """
-        log.logassert(self.is_pol == band.is_pol, "Band and component polarization must match",
-                      logger)
+        if self.is_pol != band.is_pol:
+            raise ValueError("Band and component polarization must match.")
 
         if self.spatially_varying_MM:  # If this component's mixing matrix is pixel-dependent.
             # Y^-1^T B^T a

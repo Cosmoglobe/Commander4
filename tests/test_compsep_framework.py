@@ -197,7 +197,7 @@ def test_sampling_group_band_filter_accepts_base_and_execution_ids() -> None:
     assert not _sampling_group_selects_band(["Planck44GHz"], "Planck30GHz", "Planck30GHz_I")
 
 
-def test_group_reference_validation_rejects_unknown_names(caplog) -> None:
+def test_group_reference_validation_rejects_unknown_names() -> None:
     comp_list = _make_multi_comp_list()  # CMB, ThermalDust, FreeFree
     params = Bunch(compsep=Bunch(bands=Bunch(
         {"Planck30GHz": Bunch(enabled=True, polarization="IQU")})))
@@ -207,15 +207,13 @@ def test_group_reference_validation_rejects_unknown_names(caplog) -> None:
         "g", Bunch(comps=["CMB"], bands=["Planck30GHz_QU"]))
     _validate_sampling_group_references({"g": valid}, comp_list, params)
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="unknown component"):
         invalid = CGSamplingGroupConfig.from_block("g", Bunch(comps=["DoesNotExist"]))
         _validate_sampling_group_references({"g": invalid}, comp_list, params)
-    assert "unknown component" in caplog.text
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="unknown band"):
         invalid = CGSamplingGroupConfig.from_block("g", Bunch(bands=["NoSuchBand"]))
         _validate_sampling_group_references({"g": invalid}, comp_list, params)
-    assert "unknown band" in caplog.text
 
 
 def test_group_configs_normalize_all_and_explicit_selections() -> None:
@@ -354,7 +352,7 @@ def test_validate_mcmc_amplitude_group_dependencies() -> None:
 
     invalid = {"beta": MCMCSamplingGroupConfig.from_block(
         "beta", Bunch(update_amplitude_groups=["does_not_exist"]))}
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="unknown or disabled amplitude group"):
         _validate_sampling_group_dependencies(amplitudes, invalid)
 
 
@@ -494,7 +492,7 @@ def test_spectral_index_gaussian_log_prior_matches_formula() -> None:
                                -0.5*((-3.4 + 3.0)/0.2)**2)
 
 
-def test_init_compsep_processing_rejects_duplicate_component_names(monkeypatch, caplog) -> None:
+def test_init_compsep_processing_rejects_duplicate_component_names(monkeypatch) -> None:
     class _FakeCompList:
         def joined(self):
             return [Bunch(comp_name="dup"), Bunch(comp_name="dup")]
@@ -519,9 +517,8 @@ def test_init_compsep_processing_rejects_duplicate_component_names(monkeypatch, 
         )),
     )
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="Duplicate component names found"):
         init_compsep_processing(mpi_info, params)
-    assert "Duplicate component names found in CompSep setup" in caplog.text
 
 
 # --- component lmax vs band lmax ------------------------------------------------------------

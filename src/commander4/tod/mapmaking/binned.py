@@ -10,7 +10,6 @@ from mpi4py import MPI
 import logging
 from numpy.typing import NDArray
 
-from commander4.diagnostics.log import logassert
 from commander4.diagnostics.performance import log_memory, start_bench, stop_bench
 from commander4.backend.ctypes_lib import load_cmdr4_ctypes_lib
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
@@ -60,14 +59,15 @@ class Mapmaker:
     @property
     def final_map(self):
         if self.map_comm.Get_rank() == 0:
-            logassert(self._finalized_map is not None, "Attempted to retrieve unfinished map.",
-                    logger)
+            if self._finalized_map is None:
+                raise RuntimeError("Attempted to retrieve an unfinished map.")
         return self._finalized_map
 
     def accumulate_to_map(self, tod:NDArray, weights:NDArray, pix:NDArray, psi=None):
         """Accumulate weighted TOD samples into the local map buffer."""
         # Check that we are still in business, and haven't already called "gather_map".
-        logassert(self._map_signal is not None, "Tried accumulating to finalized map", logger)
+        if self._map_signal is None:
+            raise RuntimeError("Cannot accumulate into a finalized map.")
         ntod = tod.shape[0]
         tod_f64 = np.ascontiguousarray(tod, dtype=np.float64)
         weight_f64 = float(weights)
@@ -120,14 +120,15 @@ class WeightsMapmaker:
     @property
     def final_map(self):
         if self.map_comm.Get_rank() == 0:
-            logassert(self._gathered_map is not None, "Attempted to retrieve unfinished map",
-                    logger)
+            if self._gathered_map is None:
+                raise RuntimeError("Attempted to retrieve an unfinished weights map.")
         return self._gathered_map
 
     def accumulate_to_map(self, weight:NDArray, pix:NDArray, psi=None):
         """Accumulate per-sample weights into the local map buffer."""
         # Check that we are still in business, and haven't already called "gather_map".
-        logassert(self._map_signal is not None, "Tried accumulating to finalized map", logger)
+        if self._map_signal is None:
+            raise RuntimeError("Cannot accumulate into a finalized weights map.")
         ntod = pix.shape[0]
         weight_f64 = float(weight)
         pix = self.domain.to_local(pix)
@@ -188,8 +189,8 @@ class MapmakerIQU:
     @property
     def final_map(self):
         if self.map_comm.Get_rank() == 0:
-            logassert(self._finalized_map is not None, "Attempted to read map before it was done.",
-                      logger)
+            if self._finalized_map is None:
+                raise RuntimeError("Attempted to read a map before it was finalized.")
         return self._finalized_map
 
 
@@ -197,7 +198,8 @@ class MapmakerIQU:
                           response: NDArray | None = None):
         """Accumulate I,Q,U signal into the local map buffer."""
         # Check that we are still in business, and haven't already called "gather_map".
-        logassert(self._map_signal is not None, "Tried accumulating to finalized map", logger)
+        if self._map_signal is None:
+            raise RuntimeError("Cannot accumulate into a finalized map.")
         ntod = tod.shape[0]
         tod_f64 = np.ascontiguousarray(tod, dtype=np.float64)
         weight_f64 = float(weights)
@@ -218,7 +220,8 @@ class MapmakerIQU:
                                  response: NDArray | None = None):
         """Reference accumulator matching the ctypes IQU implementation."""
         # Reference implementation matching the ctypes IQU accumulator.
-        logassert(self._map_signal is not None, "Tried accumulating to finalized map", logger)
+        if self._map_signal is None:
+            raise RuntimeError("Cannot accumulate into a finalized map.")
         pix_idx = self.domain.to_local(pix).astype(np.int64, copy=False)
         w_tod = np.ascontiguousarray(tod, dtype=np.float64) * float(weights)
         ang = 2.0 * np.ascontiguousarray(psi, dtype=np.float64)
@@ -242,10 +245,11 @@ class MapmakerIQU:
     def normalize_map(self, normalization_map):
         """Solve the per-pixel 3x3 system using the provided A matrix."""
         if self.map_comm.Get_rank() == 0:
-            logassert(normalization_map.ndim == 2 and normalization_map.shape[0] == 6,
-                    "Normalization map must have shape [6,NPIX] for IQU mapmaker,"
-                    f"has {normalization_map.shape}", logger)
-            logassert(self._has_gathered, "Tried normalizing non-gathered map", logger)
+            if normalization_map.ndim != 2 or normalization_map.shape[0] != 6:
+                raise ValueError("Normalization map must have shape (6, npix), got "
+                                 f"{normalization_map.shape}.")
+            if not self._has_gathered:
+                raise RuntimeError("Cannot normalize a map before it is gathered.")
             norm_map = np.ascontiguousarray(normalization_map, dtype=np.float64)
             rhs_map = np.ascontiguousarray(self._gathered_map, dtype=np.float64)
             solved = np.zeros((3, self.npix), dtype=np.float64)
@@ -256,10 +260,11 @@ class MapmakerIQU:
     def normalize_map_Python(self, normalization_map):
         """Reference solver using NumPy for per-pixel normalization."""
         if self.map_comm.Get_rank() == 0:
-            logassert(normalization_map.ndim == 2 and normalization_map.shape[0] == 6,
-                    "Normalization map must have shape [6,NPIX] for IQU mapmaker,"
-                    f"has {normalization_map.shape}", logger)
-            logassert(self._has_gathered, "Tried normalizing non-gathered map", logger)
+            if normalization_map.ndim != 2 or normalization_map.shape[0] != 6:
+                raise ValueError("Normalization map must have shape (6, npix), got "
+                                 f"{normalization_map.shape}.")
+            if not self._has_gathered:
+                raise RuntimeError("Cannot normalize a map before it is gathered.")
             self._finalized_map = np.zeros((3, self.npix), dtype=self.dtype)
             A = np.zeros((self.npix, 3, 3), dtype=np.float64)
             A[:, 0, 0] = normalization_map[0]
@@ -330,21 +335,22 @@ class WeightsMapmakerIQU:
     @property
     def final_rms_map(self):
         if self.map_comm.Get_rank() == 0:
-            logassert(self._finalized_rms_map is not None, "Attempted to read unfinished map.",
-                      logger)
+            if self._finalized_rms_map is None:
+                raise RuntimeError("Attempted to read an unfinished RMS map.")
         return self._finalized_rms_map
     
     @property
     def final_cov_map(self):
         if self.map_comm.Get_rank() == 0:
-            logassert(self._gathered_map is not None, "Attempted to read unfinished map.",
-                      logger)
+            if self._gathered_map is None:
+                raise RuntimeError("Attempted to read an unfinished covariance map.")
         return self._gathered_map
 
     def accumulate_to_map(self, weight:float, pix:NDArray, psi:NDArray, response:NDArray | None = None):
         """Accumulate IQU weight/covariance elements into the local buffer."""
         # Check that we are still in business, and haven't already called "gather_map".
-        logassert(self._map_signal is not None, "Tried accumulating to finalized map", logger)
+        if self._map_signal is None:
+            raise RuntimeError("Cannot accumulate into a finalized weights map.")
         ntod = pix.shape[0]
         weight_f64 = float(weight)
         psi_f64 = np.ascontiguousarray(psi, dtype=np.float64)
@@ -364,7 +370,8 @@ class WeightsMapmakerIQU:
                                  response: NDArray | None = None):
         """Reference accumulator matching the ctypes IQU weights implementation."""
         # Reference implementation matching the ctypes IQU weight accumulator.
-        logassert(self._map_signal is not None, "Tried accumulating to finalized map", logger)
+        if self._map_signal is None:
+            raise RuntimeError("Cannot accumulate into a finalized weights map.")
         pix_idx = self.domain.to_local(pix).astype(np.int64, copy=False)
         ang = 2.0 * np.ascontiguousarray(psi, dtype=np.float64)
         c2 = np.cos(ang)
@@ -391,7 +398,8 @@ class WeightsMapmakerIQU:
     def normalize_map(self):
         """Compute RMS maps from the per-pixel inverse covariance diagonals."""
         if self.map_comm.Get_rank() == 0:
-            logassert(self._has_gathered, "Tried normalizing non-gathered map", logger)
+            if not self._has_gathered:
+                raise RuntimeError("Cannot normalize a weights map before it is gathered.")
             norm_map = np.ascontiguousarray(self._gathered_map, dtype=np.float64)
             rms = np.zeros((3, self.npix), dtype=np.float64)
             self.maplib.map_invdiag_IQU_f64(rms, norm_map, self.npix)
@@ -400,7 +408,8 @@ class WeightsMapmakerIQU:
     def normalize_map_Python(self):
         """Reference RMS computation using NumPy inversion."""
         if self.map_comm.Get_rank() == 0:
-            logassert(self._has_gathered, "Tried normalizing non-gathered map", logger)
+            if not self._has_gathered:
+                raise RuntimeError("Cannot normalize a weights map before it is gathered.")
             # Pixels which cannot be inverted keep RMS = inf (zero weight), as in the C++ solver.
             self._finalized_rms_map = np.full((3, self.npix), np.inf, dtype=self.dtype)
  

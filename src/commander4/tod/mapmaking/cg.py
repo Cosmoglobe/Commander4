@@ -21,7 +21,6 @@ from numpy.typing import NDArray
 import healpy as hp
 from typing import Callable
 
-from commander4.diagnostics.log import logassert
 from commander4.backend.ctypes_lib import load_cmdr4_ctypes_lib
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
@@ -129,16 +128,16 @@ class CGMapmaker:
     def solved_map(self):
         """The solved sky map. Only valid on the master rank after ``solve()``."""
         if self.map_comm.Get_rank() == 0:
-            logassert(self._map_signal is not None, "Attempted to read solution map on master rank before it was solved.",
-                      self.logger)
+            if self._map_signal is None:
+                raise RuntimeError("Attempted to read the solution map before it was solved.")
         return self._map_signal
     
     @property
     def RHS_map(self):
         """The finalised RHS map. Only valid on master rank after ``finalize_RHS()``."""
         if self.map_comm.Get_rank() == 0:
-            logassert(self._rhs_finalized_map is not None, "Attempted to read RHS map on master rank before it was finalized.",
-                      self.logger)
+            if self._rhs_finalized_map is None:
+                raise RuntimeError("Attempted to read the RHS map before it was finalized.")
             return self._rhs_finalized_map
         else:
             return np.empty(())
@@ -230,13 +229,13 @@ class CGMapmaker:
         # and a single non-finite sample is spread across the whole scan by apply_T (and then across
         # every pixel that scan hits), making the CG residual NaN. Readers should discard these, but
         # not all of them do, so fail loudly here identifying the offending detector-scan.
-        logassert(scan_tod_arr.shape[-1] > 0,
-                  f"Empty TOD passed to CG RHS for detector {getattr(scan_tod, 'name', '?')}.",
-                  self.logger)
-        logassert(np.isfinite(scan_tod_arr).all(),
-                  f"Non-finite samples in CG RHS for detector {getattr(scan_tod, 'name', '?')} "
-                  "(check gain, sigma0, and that flagged/non-finite samples are gap-filled).",
-                  self.logger)
+        if scan_tod_arr.shape[-1] == 0:
+            raise ValueError(f"Empty TOD passed to CG RHS for detector "
+                             f"{getattr(scan_tod, 'name', '?')}.")
+        if not np.isfinite(scan_tod_arr).all():
+            raise ValueError(
+                f"Non-finite samples in CG RHS for detector {getattr(scan_tod, 'name', '?')} "
+                "(check gain, sigma0, and that flagged/non-finite samples are gap-filled).")
         # N^-1 d
         scan_tod_arr = self.apply_inv_N(scan_tod_arr, sigma0)
         # T^T N^-1 d
@@ -421,7 +420,8 @@ class CGMapmakerI(CGMapmaker):
         scan_tod_arr = out_scan.tod if scan_tod_arr is None else scan_tod_arr
         # in_map is indexed by pix, so its pixel axis defines the domain (full-sky or rank-local).
         pix = self.domain.to_local(out_scan.pix if pix is None else pix)
-        assert pix.shape == scan_tod_arr.shape, "pix shape must match scan_tod_arr."
+        if pix.shape != scan_tod_arr.shape:
+            raise ValueError(f"pix shape {pix.shape} must match TOD shape {scan_tod_arr.shape}.")
         # Use the passed array length, not the full detector ntod: apply_LHS masks pix/scan_tod_arr
         # down to good samples, so this must match (mirrors apply_P_adjoint).
         ntod = scan_tod_arr.shape[-1]
@@ -441,7 +441,8 @@ class CGMapmakerI(CGMapmaker):
         scan_tod_arr = in_scan.tod if scan_tod_arr is None else scan_tod_arr
         # out_map is indexed by pix, so its pixel axis defines the domain (full-sky or rank-local).
         pix = self.domain.to_local(in_scan.pix if pix is None else pix)
-        assert pix.shape == scan_tod_arr.shape, "pix shape must match scan_tod_arr."
+        if pix.shape != scan_tod_arr.shape:
+            raise ValueError(f"pix shape {pix.shape} must match TOD shape {scan_tod_arr.shape}.")
         ntod = scan_tod_arr.shape[-1]
         self.map_accumulator(out_map, scan_tod_arr, 1, pix.astype(np.int64, copy=False), ntod)
         return out_map

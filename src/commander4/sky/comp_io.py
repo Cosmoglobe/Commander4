@@ -14,7 +14,6 @@ import healpy as hp
 import numpy as np
 from numpy.typing import NDArray
 
-from commander4.diagnostics import log
 from commander4.math_utils.alm import project_alms
 from commander4.math_utils.sht import pseudo_alm_to_map_inverse
 
@@ -39,9 +38,10 @@ def _pol_row_indices(data: NDArray, eval_pol: str, shortname: str, source_path: 
     """
     nrows = data.shape[0]
     stored_pol = {1: "I", 2: "QU", 3: "IQU"}.get(nrows)
-    log.logassert(stored_pol is not None,
-                  f"Initial data for component {shortname!r} in {source_path!r} has an unexpected "
-                  f"first dimension ({nrows}); expected 1 (I), 2 (QU) or 3 (IQU).", logger)
+    if stored_pol is None:
+        raise ValueError(
+            f"Initial data for component {shortname!r} in {source_path!r} has an unexpected first "
+            f"dimension ({nrows}); expected 1 (I), 2 (QU) or 3 (IQU).")
     row_of = {channel: row for row, channel in enumerate(_POL_CHANNELS[stored_pol])}
     if any(channel not in row_of for channel in _POL_CHANNELS[eval_pol]):
         return None
@@ -138,8 +138,7 @@ def _load_component_alms(comp: DiffuseComponent, source_path: str) -> None:
     elif lower_path.endswith(".fits"):
         view_alms = _read_view_alms_from_fits(comp, source_path)
     else:
-        log.logassert(False,
-                      f"Unsupported init file {source_path!r} for component {comp.comp_name!r}: "
-                      f"expected a .h5/.hd5 chain or a .fits map.", logger)
+        raise ValueError(f"Unsupported init file {source_path!r} for component "
+                         f"{comp.comp_name!r}: expected a .h5/.hd5 chain or a .fits map.")
     if view_alms is not None:
         comp.alms = view_alms.astype(comp.dtype, copy=False)

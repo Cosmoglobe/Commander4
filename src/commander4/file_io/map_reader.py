@@ -6,7 +6,6 @@ import logging
 import pysm3.units as pysm3_u
 from pixell.bunch import Bunch
 
-from commander4.diagnostics.log import logassert
 from commander4.parameters.schema import resolve_param, resolve_band_lmax
 from commander4.data_models.detector_map import DetectorMap
 
@@ -121,7 +120,8 @@ def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
         detector_map (DetectorMap): Object holding signal map and other relevant data (rms, nu...)
     """
     pols = my_band.polarization
-    logassert(pols in ["I", "QU", "IQU"], f"Specified polarization {pols} not recognized.", logger)
+    if pols not in ("I", "QU", "IQU"):
+        raise ValueError(f"Specified polarization {pols!r} is not recognized.")
     maps_sky = []
     maps_rms = []
     rms_map_type = _get_map_info(my_band, "rms")[2]
@@ -142,8 +142,9 @@ def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
         # TODO: Figure out how to read covariance maps as opposed to RMS maps.
 
         nside = np.sqrt(map_sky.size//12)
-        logassert(nside.is_integer(), f"Npix dimension of map ({map_sky.size}) "
-                  f"resulting in a non-integer nside ({nside}).", logger)
+        if not nside.is_integer():
+            raise ValueError(f"Npix dimension of map ({map_sky.size}) results in a non-integer "
+                             f"nside ({nside}).")
         nside = int(nside)
 
         if "eval_nside" in my_band and nside != my_band.eval_nside:

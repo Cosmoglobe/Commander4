@@ -424,12 +424,10 @@ class TestPriorMeanMap:
 
         np.testing.assert_allclose(solution[0].alms, mu, rtol=1e-4, atol=1e-6)
 
-    def test_rejects_a_non_fits_prior_mean(self, tmp_path, caplog):
+    def test_rejects_a_non_fits_prior_mean(self, tmp_path):
         comp_list = self._comp_list(tmp_path, amp_prior_mean_map="/some/chain.h5")
-        # logassert logs the reason and raises a bare AssertionError, so match on the log.
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError, match="must be a .fits sky map"):
             comp_list.load_amp_prior_means()
-        assert "must be a .fits sky map" in caplog.text
 
     def test_setter_rejects_a_wrongly_shaped_mu(self, tmp_path):
         comp = self._comp_list(tmp_path)[0]

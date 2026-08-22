@@ -4,6 +4,8 @@ C4 samples this every Gibbs iteration (C3 leaves the equivalent commented out). 
 itself is stored as a `JumpCatalog` on `TODSamples`, so it is applied to every later TOD request
 rather than modifying the data in place.
 """
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 from typing import ClassVar, TYPE_CHECKING

@@ -127,7 +127,29 @@ tests/                 # pytest suite; run with `pytest` from the repository roo
 notes/                 # Design notes.
 ```
 
-### 4.2 Git workflow
+### 4.2 Output, logs and error handling
+
+Commander4 uses Python's logging system instead of `print`. A record has the form `time - rank - module - level - message`. Note that the `module` tells you what file the message came from. For example, the following message comes from `src/commander4/data_models/tod_samples.py` (the `src/commander4/` is implicit):
+```bash
+16:32:06 - rank   1 - data_models.tod_samples - INFO - Band Band44GHz, chain 2: starting fresh Gibbs chain.
+```
+
+The console handler writes to `stderr`, which the file handler writes to `<output_dir>/logs/<filename>`. Console and file levels are configured independently under `output.logging`. Each level also includes every level below it in this table:
+| Level | Contents |
+|---|---|
+| `DEBUG` | Developer and per-rank diagnostics. |
+| `VERBOSE` | Solver progress, per-band details and performance reports. |
+| `INFO` | Scientific results from individual sampling steps. |
+| `SUMMARY` | Startup information and one compact result per Gibbs iteration. |
+| `WARNING` | Suspicious conditions that should be checked. |
+| `ERROR` | An operation failed, but an explicit fallback lets the run continue. |
+| `CRITICAL` | The run cannot continue and will abort. |
+
+Commander4 raises explicit exceptions such as `ValueError` or `RuntimeError`, and never uses `assert` outside of tests. The errors are caught and hanled by the logging system: The top-level MPI boundary catches an unhandled exception and atomically selects one rank to report it. That rank prints one `CRITICAL` record with the full Python traceback, writes the same traceback to `logs/fatal-<run-id>.log`, flushes the handlers, and calls `MPI_Abort`. Other failing ranks stay silent, preventing thousands of duplicate messages and files. If the output directory is unavailable, the traceback falls back to `stderr`.
+
+Python's `faulthandler` is also enabled. It can print minimal thread stacks for native faults such as segmentation faults that cannot become Python exceptions. Forced termination such as `SIGKILL`, out-of-memory killing, or node loss cannot be reported reliably by the application; use the Slurm job state and launcher output for those failures.
+
+### 4.3 Git workflow
 1. Make sure you are on main (`git checkout main`) and up to date (`git pull`).
 2. Create a new local branch (`git checkout -b dev-compsep`).
 3. Make commits from small self-contained changes to the code. The individual commits should not break the code, but should otherwise be as limited in scope as possible.
@@ -137,7 +159,7 @@ notes/                 # Design notes.
 7. If you are not immediately planning to keep developing the same features on the same branch, it is best to check out to main (`git checkout main`) and delete your local branch (`git branch -d dev-compsep`) (you can always re-branch with the exact same name later). The exception is if you intend to keep working on the same features in the code, that depends on the new changes you made.
 8. If you are the reviewer of a pull request, always delete the merged branch immediately after merging. There will be a prompt for this on GitHub.
 
-### 4.3 Python style guidelines
+### 4.4 Python style guidelines
 Commander 4 does not strictly adhere to a specific style guideline, and you are encouraged to use common sense. You are generally recommended to follow PEP8 (https://peps.python.org/pep-0008/) style guidelines, with the following clarifications and exceptions:
 
 #### Line length
@@ -165,7 +187,7 @@ def my_very_long_function_name(argument1: NDArray, argument2: NDArray, argument3
 ```
 
 #### Name capitalization
-Classes should use PascalCase capitalization, while functions should be lower-case.
+Classes should use PascalCase capitalization, while functions and files should be lower-case.
 ```Python
 class MyClass:
     ...

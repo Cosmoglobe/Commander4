@@ -4,7 +4,6 @@ Everything here works on alm arrays directly: their inner product (which must co
 the alm count, random draws, multiplication by an l-dependent filter, resolution changes, and the
 complex<->real repacking the samplers need. Transforms between alms and maps live in `sht.py`.
 """
-import logging
 from math import sqrt
 
 import healpy as hp
@@ -13,10 +12,7 @@ from numba import njit
 from numpy.typing import NDArray
 from pixell import curvedsky
 
-from commander4.diagnostics.log import logassert
 from commander4.math_utils.arithmetic import dot, inplace_scale_add, inplace_add_scaled_vec
-
-logger = logging.getLogger(__name__)
 
 
 @njit(fastmath=True, parallel=True)
@@ -191,8 +187,8 @@ def alm_complex2real(alm: NDArray[np.complexfloating], lmax: int) -> NDArray[np.
         Returns:
             x (np.array): Real alm array where the last axis has length (lmax+1)^2.
     """
-    logassert(alm.dtype in [np.complex128, np.complex64], "Input alms are not of type np.complex128"
-             f" or np.complex64  (they are {alm.dtype})", logger)
+    if alm.dtype not in (np.complex128, np.complex64):
+        raise TypeError(f"Input alms must have dtype complex64 or complex128, got {alm.dtype}.")
     float_dtype = np.float64 if alm.dtype == np.complex128 else np.float32
     ainfo = curvedsky.alm_info(lmax=lmax)
     i = int(ainfo.mstart[1]+1)
@@ -209,8 +205,8 @@ def alm_real2complex(x: NDArray[np.floating], lmax: int) -> NDArray[np.complexfl
         Returns:
             oalm (np.array): Complex alm array where the last axis has length ((lmax+1)*(lmax+2))/2.
     """
-    logassert(x.dtype in [np.float32, np.float64], f"Input map is not of type np.float32 or "
-              f"np.float64 (it is {x.dtype})", logger)
+    if x.dtype not in (np.float32, np.float64):
+        raise TypeError(f"Input map must have dtype float32 or float64, got {x.dtype}.")
     complex_dtype = np.complex128 if x.dtype == np.float64 else np.complex64
     ainfo = curvedsky.alm_info(lmax=lmax)
     i    = int(ainfo.mstart[1]+1)
