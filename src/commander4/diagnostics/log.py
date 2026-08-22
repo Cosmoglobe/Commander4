@@ -6,19 +6,49 @@ which a bare `assert` in an MPI run would not do.
 """
 import logging
 import logging.config
-import sys
+
+# A recommended user setup is SUMMARY or INFO on the console and VERBOSE in the log file, so the
+# file retains detailed sampling and performance diagnostics without overwhelming terminal output.
 
 # --- Debug levels and their numeric values, including the Python defaults (commented out) ---
-# DEBUG (10)    # >100 per iter, intermediate processing steps and per-rank or per-detector details.
-VERBOSE = 15    # ~30 per iter, print per-band results and performance.
-# INFO (20)     # ~10 per iter, print high-level results and high-level runtime summary.
-QUIET = 25      # < 5 per iter, short iteration summary.
-# WARNING (30)
-# ERROR (40)
-# CRITICAL (50)
+# DEBUG (10)    # Developer-only diagnostics that may be useful while troubleshooting.
 
-logging.QUIET = QUIET
+VERBOSE = 15    # Detailed normal progress, including performance reports, solver checkpoints and
+                # per-band diagnostics that are useful when investigating a run.
+
+# INFO (20)     # Short scientific summary per sampling step; SUMMARY is once per Gibbs iteration.
+
+SUMMARY = 25    # One compact end-of-Gibbs-iteration summary. Long stable runs are expected to use
+                # this console level; WARNING and above suppresses all routine progress reporting.
+
+# WARNING (30)  # Something might be wrong and should be checked by the user.
+
+# ERROR (40)    # Things that should not happen. Note that this is still only a message, and will
+                # not on its own abort the run. This is intentional: If a sensible fallback is
+                # implemented, the run can continue even though something went wrong.
+
+# CRITICAL (50) # Not currently used in Commander4.
+
+# Introducing the two new levels of verbosity, along with the Python defaults.
+logging.SUMMARY = SUMMARY
 logging.VERBOSE = VERBOSE
+
+logging.addLevelName(SUMMARY, "SUMMARY")
+logging.addLevelName(VERBOSE, "VERBOSE")
+
+
+def _summary(self, message, *args, **kwargs):
+    if self.isEnabledFor(SUMMARY):
+        self._log(SUMMARY, message, args, **kwargs)
+
+
+def _verbose(self, message, *args, **kwargs):
+    if self.isEnabledFor(VERBOSE):
+        self._log(VERBOSE, message, args, **kwargs)
+
+
+logging.Logger.summary = _summary
+logging.Logger.verbose = _verbose
 
 
 class C4Formatter(logging.Formatter):
@@ -30,6 +60,18 @@ class C4Formatter(logging.Formatter):
         return super().format(record)
 
 
+class WorldRankFilter(logging.Filter):
+    """Attach the MPI world rank supplied during logger initialization to each record."""
+
+    def __init__(self, world_rank: int | None):
+        super().__init__()
+        self.world_rank = "-" if world_rank is None else world_rank
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.world_rank = self.world_rank
+        return True
+
+
 class ColorFormatter(C4Formatter):
     """
     Logging formatter that prepends ANSI color codes to console output based on
@@ -39,7 +81,7 @@ class ColorFormatter(C4Formatter):
         DEBUG    - dim/faint (subtle, lower visual weight)
         VERBOSE  - dark gray
         INFO     - default terminal color
-        QUIET    - default terminal color
+        SUMMARY  - default terminal color, bold
         WARNING  - yellow
         ERROR    - red
         CRITICAL - bold red
@@ -50,7 +92,7 @@ class ColorFormatter(C4Formatter):
         logging.DEBUG:    '\033[2m',    # Dim / faint
         VERBOSE:          '\033[90m',   # Dark gray (bright-black)
         logging.INFO:     '',           # Default, no color code
-        QUIET:            '\033[1m',    # Default + bold
+        SUMMARY:          '\033[1m',    # Default + bold
         logging.WARNING:  '\033[1;33m', # Yellow + bold
         logging.ERROR:    '\033[1;31m', # Red + bold
         logging.CRITICAL: '\033[1;31m', # Red + bold
@@ -62,41 +104,28 @@ class ColorFormatter(C4Formatter):
         return f'{color}{message}{self._RESET}' if color else message
 
 
-def init_loggers(logger_params, log_file_path: str | None = None):
+def init_loggers(logger_params, log_file_path: str | None = None,
+                 world_rank: int | None = None):
     """
     Intended usage: This function is called once at the very beginning of the
     program; after that, any function can call
     logger = logging.getLogger(__name__) to get a fully configured logger. This
-    logger has debug(), info(), warning(), error() and critical() logging
-    functions, to be used as appropriate.
+    logger has debug(), verbose(), info(), summary(), warning(), error() and
+    critical() logging functions, to be used as appropriate.
 
     Input arguments:
         logger_params (pixell.bunch): The part of the parameters that deal with
             logging. Each entry configures a separate logger, and currently,
             the two entry names supported are
-                console: Needs a 'level' entry which can be one of the five
+                console: Needs a 'level' entry which can be one of the seven
                     logging levels (in lower or upper case)
                 file: Needs a 'level' parameter like console.
         log_file_path (str): Where the file logger writes. The caller resolves it
             (see output.paths.log_file_path, which places the configured bare file
             name inside the run's logs directory), because the directory has to
             exist before the file handler here opens it.
+        world_rank: MPI world rank included in every record. ``None`` is used by non-MPI callers.
     """
-
-    # --- ADDITIONAL VERBOSITY LAYERS ---
-    # In addition to the default logging verbosity levels, add two more levels.
-    logging.addLevelName(QUIET, "QUIET")
-    logging.addLevelName(VERBOSE, "VERBOSE")
-
-    def quiet(self, message, *args, **kws):
-        if self.isEnabledFor(QUIET):
-            self._log(QUIET, message, args, **kws)
-    def verbose(self, message, *args, **kws):
-        if self.isEnabledFor(VERBOSE):
-            self._log(VERBOSE, message, args, **kws)
-
-    logging.Logger.verbose = verbose
-    logging.Logger.quiet = quiet
 
     # --- DETETERMINE LOWEST LOGGING LEVEL ---
     # Determine the most verbose logging level among the loggers, so that we capture all loggings
@@ -118,8 +147,9 @@ def init_loggers(logger_params, log_file_path: str | None = None):
         'formatters': {
             'standard': {
                 'style': '{',
-                'format': '{asctime} - {name} - {levelname} - {message}',
-                'datefmt': '%H:%M:%S'  # Time only; drops date and sub-second precision.
+                'format': ('{asctime} - rank {world_rank:>3} - {name} - {levelname} - '
+                           '{message}'),
+                'datefmt': '%H:%M:%S',
             },
         },
         'handlers': {},
@@ -170,9 +200,12 @@ def init_loggers(logger_params, log_file_path: str | None = None):
     # directly to the constructor, but logging.Formatter.__init__ uses 'fmt' not
     # 'format', so the factory path silently falls back to an unconfigured
     # formatter; setting the formatters here avoids that problem entirely.
-    _fmt = '{asctime} - {name} - {levelname} - {message}'
-    _datefmt = '%H:%M:%S'  # Time only; drops date and sub-second precision.
+    _fmt = ('{asctime} - rank {world_rank:>3} - {name} - {levelname} - '
+            '{message}')
+    _datefmt = '%H:%M:%S'
+    rank_filter = WorldRankFilter(world_rank)
     for _handler in logging.root.handlers:
+        _handler.addFilter(rank_filter)
         if isinstance(_handler, logging.FileHandler):
             _handler.setFormatter(C4Formatter(fmt=_fmt, datefmt=_datefmt, style='{'))
         elif isinstance(_handler, logging.StreamHandler):
