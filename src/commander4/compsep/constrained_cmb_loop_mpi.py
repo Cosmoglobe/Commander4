@@ -11,9 +11,9 @@ from pixell import utils
 from mpi4py import MPI
 from commander4.math_utils.sht import alm_to_map, alm_to_map_adjoint
 from commander4.diagnostics import plotting
+from commander4.diagnostics.log import VERBOSE
 
 nthreads = 32  # Number of threads to use for ducc SHTs.
-VERBOSE = False
 
 
 class ConstrainedCMB:
@@ -151,8 +151,8 @@ class ConstrainedCMB:
 
             CG_solver.step()
             self.iter += 1
-            if VERBOSE and self.iter%10 == 1:
-                logger.info(f"CG iter {self.iter:3d} - Residual {CG_solver.err:.3e}")
+            if self.iter % 10 == 1:
+                logger.log(VERBOSE, f"CG iter {self.iter:3d} - Residual {CG_solver.err:.3e}")
             if self.iter >= maxiter:
                 logger.warning(f"Maximum number of iterations ({maxiter}) reached in CG.")
                 break
@@ -174,15 +174,15 @@ def constrained_cmb_loop_MPI(comm, compsep_master: int, params: dict):
         stop = comm.bcast(stop, root=0)
         if stop:
             if master:
-                logger.warning("CMB: stop requested; exiting")
+                logger.log(VERBOSE, "CMB: stop requested; exiting.")
             return
         if master:
-            logger.info("CMB: new job obtained")
+            logger.log(VERBOSE, "CMB: new job obtained.")
 
         # data, iter, chain = MPI.COMM_WORLD.recv(source=compsep_master) if master else None
         data, iter, chain = MPI.COMM_WORLD.recv(source=compsep_master) 
         if master:
-            logger.info("CMB: successfully got data.")
+            logger.log(VERBOSE, "CMB: successfully received data.")
         # Broadcast te data to all tasks, or do anything else that's appropriate
         # data = comm.bcast(data, root=0)
 
@@ -192,7 +192,7 @@ def constrained_cmb_loop_MPI(comm, compsep_master: int, params: dict):
         RHS_fluct = constrained_cmb_solver.get_RHS_eqn_fluct()
 
         if master:
-            logger.info("CMB: Solving for mean-field map")
+            logger.log(VERBOSE, "CMB: solving for mean-field map.")
             CMB_mean_field_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.master_LHS_func, RHS_mean_field)
             CMB_mean_field_Cl = hp.alm2cl(CMB_mean_field_alms)
             CMB_mean_field_map = alm_to_map(CMB_mean_field_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax, nthreads=nthreads)
@@ -202,7 +202,7 @@ def constrained_cmb_loop_MPI(comm, compsep_master: int, params: dict):
 
         constrained_cmb_solver = ConstrainedCMB(signal_maps, rms_maps, iter, comm)
         if master:
-            logger.info("CMB: Solving for fluctuation map")
+            logger.log(VERBOSE, "CMB: solving for fluctuation map.")
             CMB_fluct_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.master_LHS_func, RHS_fluct)
             CMB_fluct_Cl = hp.alm2cl(CMB_fluct_alms)
             CMB_fluct_map = alm_to_map(CMB_fluct_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax, nthreads=nthreads)

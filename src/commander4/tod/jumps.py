@@ -24,9 +24,38 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class JumpDetectionConfig(StepConfig):
+    """Validated jump-detection parameters and experiment-specific flag bitmask."""
+
+    PARAMETER_NAME: ClassVar[str] = "jump_detection"
+
+    window: int = 10
+    jump_bitmask: int | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not isinstance(self.window, int) or isinstance(self.window, bool) or self.window < 1:
+            raise ValueError("jump_detection.window must be an integer of at least 1.")
+        if self.enabled and self.jump_bitmask is None:
+            raise ValueError("Jump detection is enabled, but the experiment has no jump_bitmask.")
+        if self.jump_bitmask is not None and not isinstance(self.jump_bitmask, int):
+            raise ValueError("The experiment jump_bitmask must be an integer.")
+
+    @classmethod
+    def from_params(cls, params: Bunch, experiment_data: DetectorGroupTOD):
+        """Build jump settings from their step block and the experiment flag bitmask."""
+        experiment = params.experiments[experiment_data.experiment_name]
+        jump_bitmask = experiment.jump_bitmask if "jump_bitmask" in experiment else None
+        block = (params.tod_processing[cls.PARAMETER_NAME]
+                 if cls.PARAMETER_NAME in params.tod_processing else Bunch())
+        return cls._from_block(f"tod_processing.{cls.PARAMETER_NAME}", block,
+                               jump_bitmask=jump_bitmask)
+
+
 def sample_jump_detection(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
-                          tod_samples: "TODSamples",
-                          config: "JumpDetectionConfig") -> "TODSamples":
+                          tod_samples: TODSamples,
+                          config: JumpDetectionConfig, iteration: int) -> TODSamples:
     """Detect jump discontinuities from the flag stream and store additive post-jump offsets.
 
     A jump is identified by a contiguous region with a non-zero
@@ -77,41 +106,14 @@ def sample_jump_detection(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD
             )
         if num_applied > 0:
             all_offsets = np.concatenate([arr for arr in gathered_offsets if arr.size > 0])
-            logger.info(f"Band {experiment_data.band_name} jump detection: applied {num_applied} "
+            logger.info(f"Chain {tod_samples.chain} iter{iteration} "
+                        f"{experiment_data.band_name} jump detection: applied {num_applied} "
                         f"offsets, skipped {num_skipped}, median |offset| = "
                         f"{np.median(np.abs(all_offsets)):.3e}.")
         elif num_skipped > 0:
-            logger.info(f"Band {experiment_data.band_name} jump detection skipped {num_skipped} "
-                        f"flagged regions because there were not enough valid samples around them.")
+            logger.info(f"Chain {tod_samples.chain} iter{iteration} "
+                        f"{experiment_data.band_name} jump detection skipped {num_skipped} flagged "
+                        "regions because there were not enough valid samples around them.")
 
     log_memory("jump-detect")
     return tod_samples
-
-
-@dataclass(frozen=True)
-class JumpDetectionConfig(StepConfig):
-    """Validated jump-detection parameters and experiment-specific flag bitmask."""
-
-    PARAMETER_NAME: ClassVar[str] = "jump_detection"
-
-    window: int = 10
-    jump_bitmask: int | None = None
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if not isinstance(self.window, int) or isinstance(self.window, bool) or self.window < 1:
-            raise ValueError("jump_detection.window must be an integer of at least 1.")
-        if self.enabled and self.jump_bitmask is None:
-            raise ValueError("Jump detection is enabled, but the experiment has no jump_bitmask.")
-        if self.jump_bitmask is not None and not isinstance(self.jump_bitmask, int):
-            raise ValueError("The experiment jump_bitmask must be an integer.")
-
-    @classmethod
-    def from_params(cls, params: Bunch, experiment_data: DetectorGroupTOD) -> "JumpDetectionConfig":
-        """Build jump settings from their step block and the experiment flag bitmask."""
-        experiment = params.experiments[experiment_data.experiment_name]
-        jump_bitmask = experiment.jump_bitmask if "jump_bitmask" in experiment else None
-        block = (params.tod_processing[cls.PARAMETER_NAME]
-                 if cls.PARAMETER_NAME in params.tod_processing else Bunch())
-        return cls._from_block(f"tod_processing.{cls.PARAMETER_NAME}", block,
-                               jump_bitmask=jump_bitmask)

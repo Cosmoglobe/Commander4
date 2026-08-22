@@ -56,7 +56,8 @@ def _stub_samples(chisq_z, good_fraction):
     return SimpleNamespace(nscans=nscans, ndet=ndet, chisq_z=chisq_z,
                            good_fraction=good_fraction,
                            present=np.ones((nscans, ndet), dtype=bool),
-                           accept=np.ones((nscans, ndet), dtype=bool), band_name="test-band")
+                           accept=np.ones((nscans, ndet), dtype=bool), band_name="test-band",
+                           chain=1)
 
 
 def _cfg(**overrides):
@@ -78,7 +79,7 @@ def test_log_dataselect_summary_counts_veto_rejections(caplog):
     stub.accept[3, 0] = False
 
     with caplog.at_level(logging.INFO, logger="commander4.tod.data_selection"):
-        log_dataselect_summary(MPI.COMM_SELF, stub, _cfg(), active=True)
+        log_dataselect_summary(MPI.COMM_SELF, stub, _cfg(), active=True, iteration=2)
     assert "rejected 2 detector-scans" in caplog.text
     assert "low-good-fraction: 1" in caplog.text
     assert "|chisq_z| > 1e+04: 1" in caplog.text
@@ -91,5 +92,5 @@ def test_log_dataselect_summary_inactive_counts_nothing(caplog):
     z = np.full((20, 1), 5e5)
     stub = _stub_samples(z, np.full((20, 1), 0.95))
     with caplog.at_level(logging.INFO, logger="commander4.tod.data_selection"):
-        log_dataselect_summary(MPI.COMM_SELF, stub, _cfg(), active=False)
+        log_dataselect_summary(MPI.COMM_SELF, stub, _cfg(), active=False, iteration=2)
     assert "rejected 0 detector-scans" in caplog.text

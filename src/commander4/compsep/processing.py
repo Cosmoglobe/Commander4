@@ -390,8 +390,8 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
         my_band (Bunch): The parameter-file subset for the band this rank is working on.
         compsep_state: Resolved component-separation settings for this rank.
     """
-    logger.info(f"CompSep: Hello from CompSep-rank {mpi_info.compsep.rank} (on machine "\
-                f"{mpi_info.processor_name}), dedicated to band {mpi_info.compsep.rank}.")
+    logger.debug(f"CompSep: Hello from CompSep-rank {mpi_info.compsep.rank} (on machine "
+                 f"{mpi_info.processor_name}), dedicated to band {mpi_info.compsep.rank}.")
 
     comp_list = CompList.init_from_params(params.components, params)
     comp_names = [comp.comp_name for comp in comp_list.joined()]
@@ -417,7 +417,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
                 band_identifier = get_execution_band_id(band_str, eval_pol)
                 my_band.identifier = band_identifier
                 my_band.polarization = eval_pol
-                logger.info(f"Rank {mpi_info.compsep.rank} matched band {band_identifier}")
+                logger.debug(f"Rank {mpi_info.compsep.rank} matched band {band_identifier}.")
             band_cursor[eval_pol] += 1
 
     # Sanity checks: the I cursor must have consumed exactly the I-rank block [0, QU_master), and
@@ -532,7 +532,7 @@ def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
     any_active = compsep.comm.allreduce(1 if should_solve else 0, op=MPI.SUM)
     if not any_active:
         if compsep.rank == compsep.master:
-            logger.info(f"Sampling group {group.name!r} had no active band/component overlap.")
+            logger.verbose(f"Sampling group {group.name!r} had no active band/component overlap.")
         return
 
     # The lowest-ranked solver for each polarization owns the authoritative result.
@@ -543,9 +543,9 @@ def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
             comp_list.broadcast_pol_views(compsep.comm, eval_pol=eval_pol, source=source)
 
 
-def _log_chi2(mpi_info: Bunch, detector_data: DetectorMap, sky_model: SkyModel,
-              label: str) -> None:
-    """Log per-band and global whitened-residual fit diagnostics."""
+def _evaluate_chi2(mpi_info: Bunch, detector_data: DetectorMap, sky_model: SkyModel,
+                   label: str | None = None) -> tuple[float, int]:
+    """Evaluate the all-band whitened residual, optionally logging detailed results."""
     compsep = mpi_info.compsep
     band_pol = "QU" if detector_data.pol else "I"
     sky_at_band = sky_model.get_sky_at_nu(
@@ -558,15 +558,17 @@ def _log_chi2(mpi_info: Bunch, detector_data: DetectorMap, sky_model: SkyModel,
              * np.sqrt(detector_data.inv_n_map[ipol][observed]))
         chi2_local += np.sum(z**2, dtype=np.float64)
         ndof_local += z.size
-        logger.info(f"Fit after {label} on rank {compsep.rank} for pol={pol_names[ipol]} "
-                    f"({detector_data.nu}GHz): mean|z|={np.mean(np.abs(z)):.3f}, "
-                    f"red.chi2={np.mean(z**2):.3f} (ndof={z.size}).")
+        if label is not None:
+            logger.verbose(f"Fit after {label} on rank {compsep.rank} for pol={pol_names[ipol]} "
+                           f"({detector_data.nu}GHz): mean|z|={np.mean(np.abs(z)):.3f}, "
+                           f"red.chi2={np.mean(z**2):.3f} (ndof={z.size}).")
 
     chi2_total = compsep.comm.allreduce(chi2_local, op=MPI.SUM)
     ndof_total = compsep.comm.allreduce(ndof_local, op=MPI.SUM)
-    if compsep.rank == compsep.master:
+    if label is not None and compsep.rank == compsep.master:
         logger.info(f"Fit after {label}, all bands: chi2={chi2_total:.6e}, ndof={ndof_total}, "
                     f"red.chi2={chi2_total/ndof_total:.4f}")
+    return float(chi2_total), int(ndof_total)
 
 
 def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
@@ -588,17 +590,20 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
         comp_list (CompList): The full execution-view component list, updated in place.
 
     Returns:
-        sky_model (SkyModel): The full sky realization, wrapping the updated `comp_list`.
+        The full sky realization, wrapping the updated `comp_list`.
     """
     compsep = mpi_info.compsep
     amplitude_groups = compsep_state.amplitude_groups
     mcmc_groups = compsep_state.mcmc_groups
     sky_model = SkyModel(comp_list)
+    final_chi2: float | None = None
+    final_ndof: int | None = None
 
     for group in amplitude_groups.values():
         _run_amplitude_group(mpi_info, compsep_state, detector_data, comp_list, group)
         method_label = "CG" if compsep_state.amplitude_method == "cg" else "per-pixel"
-        _log_chi2(mpi_info, detector_data, sky_model, f"{method_label} group {group.name!r}")
+        final_chi2, final_ndof = _evaluate_chi2(
+            mpi_info, detector_data, sky_model, f"{method_label} group {group.name!r}")
 
     for group in mcmc_groups.values():
         def resolve_amplitudes(group_names=group.update_amplitude_groups):
@@ -614,9 +619,20 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
             selected_comps=group.comps, chisq_active=chisq_active,
             chisq_mask=compsep_state.chisq_masks.get(group.name), root=compsep.master)
         sampler.run(numstep=group.numstep, resolve_amplitudes=resolve_amplitudes)
-        _log_chi2(mpi_info, detector_data, sky_model, f"MCMC group {group.name!r}")
+        final_chi2, final_ndof = _evaluate_chi2(
+            mpi_info, detector_data, sky_model, f"MCMC group {group.name!r}")
+
+    # C3 evaluates the final map-domain residual during chain output. Do the same even when no
+    # sampling group ran. Otherwise the last group's diagnostic already describes the final state.
+    if final_chi2 is None or final_ndof is None:
+        final_chi2, final_ndof = _evaluate_chi2(mpi_info, detector_data, sky_model)
 
     if compsep.rank == compsep.master:
         write_compsep_chain_to_file(comp_list.joined(), params, chain, iter)
+        red_chi2 = final_chi2 / final_ndof if final_ndof > 0 else float("nan")
+        z_chi2 = ((final_chi2 - final_ndof) / np.sqrt(2.0 * final_ndof)
+                  if final_ndof > 0 else float("nan"))
+        logger.summary(f"Chain {chain}, iteration {iter} complete: chi2={final_chi2:.6e}, "
+                       f"ndof={final_ndof}, red.chi2={red_chi2:.4f}, z={z_chi2:.3f}.")
 
-    return sky_model  # Return the full sky realization for my band.
+    return sky_model

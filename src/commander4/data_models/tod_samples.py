@@ -132,7 +132,7 @@ class TODSamples:
             band_unit = my_band.band_unit
         else:
             band_unit = "uK_RJ"
-            if self.band_comm.Get_rank() == 0:
+            if self.band_comm.Get_rank() == 0 and self.chain == 1:
                 logger.warning(f"Band {self.band_name} has no `band_unit`; assuming uK_RJ. Set it "
                                f"explicitly (e.g. uK_CMB for CMB-calibrated gains) to silence this.")
         self.band_unit = band_unit
@@ -195,7 +195,8 @@ class TODSamples:
         if not init_from_chain:
             # Standard initialization: no previous chain file provided.
             if self.band_comm.Get_rank() == 0:
-                logger.info("No previous chain provided. Starting fresh Gibbs chain.")
+                logger.info(f"Band {self.band_name}, chain {self.chain}: starting fresh Gibbs "
+                            "chain.")
 
             self.noise_params = np.zeros((self.nscans, self.ndet, self.npar)) + np.nan
             self.abs_gain = 0.0
@@ -221,8 +222,9 @@ class TODSamples:
                 else:
                     # Option 3: Fall back to the noise model's default parameters (ensuring a finite
                     # sigma0, which the model leaves as NaN to be estimated from the data).
-                    logger.warning("Did not find initial noise parameters, falling back to the "
-                                   "noise model's default parameters.")
+                    if self.band_comm.Get_rank() == 0 and self.chain == 1:
+                        logger.warning(f"Band {self.band_name}: initial noise parameters were not "
+                                       "found; using the noise model defaults.")
                     default_params = np.array(self.noise_model.params, dtype=np.float64)
                     if not np.isfinite(default_params[0]):
                         default_params[0] = 1.0
@@ -255,8 +257,8 @@ class TODSamples:
         else:
             # Disk initialization: read the state from a previous chain file.
             if self.band_comm.Get_rank() == 0:
-                logger.info(f"Band {self.band_name} initializing TOD samples from existing chain: "\
-                            f"{init_chain_path}.")
+                logger.info(f"Band {self.band_name}, chain {self.chain}: initializing TOD samples "
+                            f"from existing chain {init_chain_path}.")
 
             with h5py.File(init_chain_path, "r") as f:
                 # The chain stores scans in the global order the Gatherv wrote them, so map each

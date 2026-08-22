@@ -319,12 +319,15 @@ class CGMapmaker:
         # solution was supplied is broadcast (the caller may only have one on the master).
         check_x_true = self.map_comm.bcast(x_true is not None, root=0)
         if ismaster:
-            self.logger.info("Mapmaker CG starting up!")
+            self.logger.verbose("Mapmaker CG starting up.")
+        converged = False
+        niter = 0
         for i in range(self.CG_maxiter):
             CG_solver.step()
+            niter = i + 1
             log_this_iter = i % self.CG_check_interval == 0
             if log_this_iter and ismaster:
-                self.logger.info(f"Mapmaker CG iter {i:3d} - Residual {CG_solver.err:.6e}")
+                self.logger.verbose(f"Mapmaker CG iter {i:3d} - Residual {CG_solver.err:.6e}")
             if log_this_iter and check_x_true:
                 # apply_LHS is collective, so it is called outside the master-only branch; it takes
                 # its input from, and returns its result to, the master alone.
@@ -333,12 +336,20 @@ class CGMapmaker:
                 if ismaster:
                     CG_L2_error = norm(error_map)/norm(x_true)
                     CG_Anorm_error = dot(error_map, A_error_map)
-                    self.logger.info(f"CG iter {i:3d} - True A-norm error: {CG_Anorm_error:.3e} "
-                                     f"- True L2 error: {CG_L2_error:.3e}")
+                    self.logger.debug(f"CG iter {i:3d} - True A-norm error: {CG_Anorm_error:.3e} "
+                                      f"- True L2 error: {CG_L2_error:.3e}")
             # Only the master updates CG_solver.err, so the stopping decision has to be broadcast.
-            if self.map_comm.bcast(CG_solver.err < self.CG_tol, root=0):
+            converged = self.map_comm.bcast(CG_solver.err < self.CG_tol, root=0)
+            if converged:
                 break
         self._map_signal = CG_solver.x
+        if ismaster:
+            # CG_tol == 0 means running to max_iter was on purpose, and is not concerning.
+            if not converged and self.CG_tol > 0.0:
+                self.logger.warning(f"Mapmaker CG reached its maximum of {self.CG_maxiter} "
+                                    f"iterations with residual {CG_solver.err:.3e}.")
+            self.logger.info(f"Mapmaker CG finished after {niter} iterations with residual "
+                             f"{CG_solver.err:.3e} (tolerance {self.CG_tol:.3e}).")
 
     
 class CGMapmakerI(CGMapmaker):
@@ -746,7 +757,8 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         log_corr_noise_stats(band_comm, experiment_data.nu, experiment_data.noise_model,
                              sampled_params, residuals, niters, num_failed_convergences_ncorr,
                              num_too_high_var_ncorr, worst_residual_ncorr,
-                             sum(len(s.detectors) for s in experiment_data.scans))
+                             sum(len(s.detectors) for s in experiment_data.scans),
+                             tod_samples.chain, iteration)
 
 
     ### FINALIZE INVERSE-VARIANCE MAP, BUILD PRECONDITIONER, GATHER/NORMALIZE ###

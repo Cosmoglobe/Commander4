@@ -174,7 +174,7 @@ class MCMCSamplingGroup(ABC):
         """
         if not self.has_parameters():
             if self.is_root:
-                logger.info("MCMC group has nothing to sample; skipping.")
+                logger.verbose("MCMC group has nothing to sample; skipping.")
             return
 
         n_accept = 0
@@ -194,8 +194,8 @@ class MCMCSamplingGroup(ABC):
 
             if not in_bounds:
                 if self.is_root:
-                    logger.info(f"MCMC step {step+1}/{numstep}: proposal out of bounds, rejected "
-                                f"({proposed_state}).")
+                    logger.verbose(f"MCMC step {step+1}/{numstep}: proposal out of bounds, "
+                                   f"rejected ({proposed_state}).")
                 continue
 
             self.apply_state(proposed_state)
@@ -214,9 +214,9 @@ class MCMCSamplingGroup(ABC):
             accept = self.comm.bcast(accept, root=self.root)
 
             if self.is_root:
-                logger.info(f"MCMC step {step+1}/{numstep}: dloglike={delta_loglike:.3e} "\
-                            f"[{'ACCEPT' if accept else 'reject'}] ({current_state} -> "\
-                            f"{proposed_state}).")
+                logger.verbose(f"MCMC step {step+1}/{numstep}: dloglike={delta_loglike:.3e} "
+                               f"[{'ACCEPT' if accept else 'reject'}] ({current_state} -> "
+                               f"{proposed_state}).")
 
             if accept:
                 n_accept += 1

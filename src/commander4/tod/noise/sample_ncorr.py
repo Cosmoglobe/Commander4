@@ -345,15 +345,16 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
 def _log_distribution(nu: float, label: str, values: NDArray, fmt: str = ".4f") -> None:
     """Log the min / 1st-pct / mean / 99th-pct / max of *values* for one band."""
     values = np.asarray(values, dtype=np.float64)
-    logger.info(f"{nu}GHz: {label} {np.nanmin(values):{fmt}} {np.nanpercentile(values, 1):{fmt}} "
-                f"{np.nanmean(values):{fmt}} {np.nanpercentile(values, 99):{fmt}} "
-                f"{np.nanmax(values):{fmt}}")
+    logger.verbose(f"{nu}GHz: {label} {np.nanmin(values):{fmt}} "
+                   f"{np.nanpercentile(values, 1):{fmt}} {np.nanmean(values):{fmt}} "
+                   f"{np.nanpercentile(values, 99):{fmt}} {np.nanmax(values):{fmt}}")
 
 
 def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
                          sampled_params: list[NDArray], residuals: list[float],
                          niters: list[int], n_failed_conv: int, n_high_var: int,
-                         worst_residual: float, n_local_scans: int) -> None:
+                         worst_residual: float, n_local_scans: int,
+                         chain: int, iteration: int) -> None:
     """ Reduce per-detector-scan correlated-noise diagnostics across the band communicator and log
         a summary on the band master. Parameter distributions are reported per model parameter name
         (skipping sigma0), so the summary adapts to any NoisePSD model.
@@ -369,6 +370,8 @@ def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
         n_high_var: Local count of variance-sanity-check failures.
         worst_residual: Local worst CG residual.
         n_local_scans: Local number of detector-scans (for the "out of N" message).
+        chain: Gibbs chain number for log context.
+        iteration: Gibbs iteration number for log context.
     """
     n_failed_conv = band_comm.reduce(n_failed_conv, op=MPI.SUM)
     n_high_var = band_comm.reduce(n_high_var, op=MPI.SUM)
@@ -380,12 +383,14 @@ def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
     if band_comm.Get_rank() != 0:
         return
 
-    logger.debug(f"Worst corr-noise sampling residual (band {nu}GHz) = {worst_residual:.2e}.")
+    context = f"Chain {chain} iter{iteration} {nu}GHz"
+    logger.debug(f"{context}: worst correlated-noise sampling residual = "
+                 f"{worst_residual:.2e}.")
     if n_failed_conv > 0:
-        logger.warning(f"Band {nu}GHz failed noise CG for {n_failed_conv} out of {n_total} scans. "
+        logger.warning(f"{context}: noise CG failed for {n_failed_conv} out of {n_total} scans. "
                        f"Worst residual = {worst_residual:.3e}.")
     if n_high_var > 0:
-        logger.warning(f"Band {nu}GHz failed variance sanity check for {n_high_var} out of "
+        logger.warning(f"{context}: variance sanity check failed for {n_high_var} out of "
                        f"{n_total} scans.")
 
     residuals = np.concatenate([np.asarray(r, dtype=np.float64) for r in residuals])
@@ -395,6 +400,9 @@ def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
     niters = np.concatenate([np.asarray(n, dtype=np.float64) for n in niters])
     if niters.size == 0:
         niters = np.array([0.0])
+    logger.info(f"{context} correlated noise: {n_total} detector-scans, median residual "
+                f"{np.median(residuals):.2e}, median iterations {np.median(niters):.1f}, "
+                f"{n_failed_conv} non-converged, {n_high_var} failed variance check.")
     _log_distribution(nu, "residuals", residuals, fmt=".2e")
     _log_distribution(nu, "iterations", niters, fmt=".4f")
 
@@ -420,9 +428,10 @@ def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
             n_lo = int(np.count_nonzero(arr[:, j] <= lo + tol))
             n_hi = int(np.count_nonzero(arr[:, j] >= hi - tol))
             if n_lo or n_hi:
-                logger.info(f"{nu}GHz: {name} on its prior bounds for {n_lo} ({n_lo/n_sampled:.1%}) "
-                            f"of {n_sampled} detector-scans at the lower bound {lo:.4g}, and "
-                            f"{n_hi} ({n_hi/n_sampled:.1%}) at the upper bound {hi:.4g}.")
+                logger.verbose(
+                    f"{nu}GHz: {name} on its prior bounds for {n_lo} ({n_lo/n_sampled:.1%}) "
+                    f"of {n_sampled} detector-scans at the lower bound {lo:.4g}, and "
+                    f"{n_hi} ({n_hi/n_sampled:.1%}) at the upper bound {hi:.4g}.")
 
 
 @dataclass(frozen=True)

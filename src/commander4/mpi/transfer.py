@@ -149,15 +149,15 @@ def send_tod(mpi_info: Bunch, tod_map_dict: dict[DetectorMap], todproc_my_band_i
         receivers (Bunch): Maps a band identifier to the band master on the compsep side.
     """
     if mpi_info.tod.is_master:
-        logger.info(f"Compsep band masters: {mpi_info.world.compsep_band_masters}")
+        logger.debug(f"CompSep band masters: {mpi_info.world.compsep_band_masters}")
     if mpi_info.band.is_master:
         for pol, detector_map in tod_map_dict.items():
             target_band = get_execution_band_id(todproc_my_band_id, pol)
             if target_band in receivers.keys():
                 mpi_info.world.comm.send(detector_map, dest=receivers[target_band])
             else:
-                logger.info(f"Pol-{pol} TOD-processing result discarded, "\
-                            f"as band {todproc_my_band_id} does not require it on compsep side.")
+                logger.debug(f"Pol-{pol} TOD-processing result discarded because band "
+                             f"{todproc_my_band_id} does not require it on the CompSep side.")
 
 
 ###########################################################
@@ -189,10 +189,10 @@ def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep
             logger.info(f"CompSep: Rank {my_compsep_rank} reading static map data from file.")
             curr_tod_output = read_data_map_from_file(my_band, params)
         else:
-            logger.info(f"CompSep: Rank {my_compsep_rank} already has static map data. Continuing.")
+            logger.debug(f"CompSep: Rank {my_compsep_rank} already has static map data.")
     else:
-        logger.info(f"CompSep: Rank {my_compsep_rank} receiving TOD data for ({compsep_band_id}) "\
-                    f" from TOD process with global rank {senders[compsep_band_id]}")
+        logger.debug(f"CompSep: Rank {my_compsep_rank} receiving TOD data for "
+                     f"{compsep_band_id} from world rank {senders[compsep_band_id]}.")
         curr_tod_output = mpi_info.world.comm.recv(source=senders[compsep_band_id])
     
     

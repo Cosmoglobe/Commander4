@@ -46,13 +46,15 @@ def masked_chisq_z(residual: NDArray, mask: NDArray, sigma0: float) -> float:
 
 
 def log_dataselect_summary(band_comm: MPI.Comm, tod_samples: TODSamples,
-                           dataselect_cfg: "DataSelectionConfig", active: bool) -> None:
+                           dataselect_cfg: "DataSelectionConfig", active: bool,
+                           iteration: int) -> None:
     """Log a single per-band summary of this iteration's data selection (reporting only).
 
     Re-derives the veto counts from the diagnostics recorded this iteration (finite good_fraction
     = "entered the scan loop"; the predicates match the vetoes exactly), and reports cumulative
     acceptance plus chisq_z population quantiles, a direct measure of noise-model quality.
-    Individual detector-scans are far too numerous to log.
+    Individual detector-scans are far too numerous to log. ``iteration`` and
+    ``tod_samples.chain`` identify the repeated summary in interleaved two-chain runs.
     """
     gf, z = tod_samples.good_fraction, tod_samples.chisq_z
     fresh = np.isfinite(gf)
@@ -88,13 +90,15 @@ def log_dataselect_summary(band_comm: MPI.Comm, tod_samples: TODSamples,
         zq = np.percentile(z_pop, [5, 50, 95]) if z_pop.size else np.full(3, np.nan)
         z_all = chisq_glob[np.isfinite(chisq_glob)]
         z_worst = np.max(np.abs(z_all)) if z_all.size else np.nan
-        logger.info(f"Data selection ({tod_samples.band_name}): rejected {n_lowfrac + n_chisq} "
+        context = f"Chain {tod_samples.chain} iter{iteration} {tod_samples.band_name}"
+        logger.info(f"{context} data selection: rejected {n_lowfrac + n_chisq} "
                     f"detector-scans this iteration (low-good-fraction: {n_lowfrac}, |chisq_z| > "
                     f"{dataselect_cfg.chisq_abs_threshold:.4g}: {n_chisq}); {n_accept}/{n_present} "
-                    f"accepted ({frac:.2%}). chisq_z 5/50/95%: {zq[0]:.3g}/{zq[1]:.3g}/{zq[2]:.3g}, "
+                    f"accepted ({frac:.2%}). chisq_z 5/50/95%: "
+                    f"{zq[0]:.3g}/{zq[1]:.3g}/{zq[2]:.3g}, "
                     f"worst |chisq_z| = {z_worst:.3g}.")
         if frac < 0.9:
-            logger.warning(f"Data selection ({tod_samples.band_name}): over 10% of scans rejected.")
+            logger.warning(f"{context} data selection: over 10% of scans rejected.")
 
 
 # ============================================================================================== #

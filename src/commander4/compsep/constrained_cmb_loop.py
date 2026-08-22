@@ -14,9 +14,9 @@ from mpi4py import MPI
 import matplotlib.pyplot as plt
 import os
 from commander4.diagnostics import plotting
+from commander4.diagnostics.log import VERBOSE
 
 nthreads = 32  # Number of threads to use for ducc SHTs.
-VERBOSE = False
 
 
 def alm2map(alm, nside, lmax):
@@ -143,8 +143,8 @@ class ConstrainedCMB:
         while CG_solver.err > err_tol:
             CG_solver.step()
             self.iter += 1
-            if VERBOSE and self.iter%10 == 1:
-                logger.info(f"CG iter {self.iter:3d} - Residual {CG_solver.err:.3e}")
+            if self.iter % 10 == 1:
+                logger.log(VERBOSE, f"CG iter {self.iter:3d} - Residual {CG_solver.err:.3e}")
             if self.iter >= maxiter:
                 logger.warning(f"Maximum number of iterations ({maxiter}) reached in CG.")
                 break
@@ -164,29 +164,29 @@ def constrained_cmb_loop(comm, compsep_master: int, params: dict):
         stop = comm.bcast(stop, root=0)
         if stop:
             if master:
-                logger.warning("CMB: stop requested; exiting")
+                logger.log(VERBOSE, "CMB: stop requested; exiting.")
             return
         if master:
-            logger.info("CMB: new job obtained")
+            logger.log(VERBOSE, "CMB: new job obtained.")
 
         data, iter, chain = MPI.COMM_WORLD.recv(source=compsep_master) if master else None
         # Broadcast te data to all tasks, or do anything else that's appropriate
         data = comm.bcast(data, root=0)
         if master:
-            logger.info("CMB: successfully got data.")
+            logger.log(VERBOSE, "CMB: successfully received data.")
         if master:
             signal_maps, rms_maps = data
             signal_maps = signal_maps[:2]  # Ignore highest frequency band - very dust contaminated.
             rms_maps = rms_maps[:2]
             constrained_cmb_solver = ConstrainedCMB(signal_maps, rms_maps, iter)
-            logger.info("CMB: Solving for mean-field map")
+            logger.log(VERBOSE, "CMB: solving for mean-field map.")
             RHS_mean_field = constrained_cmb_solver.get_RHS_eqn_mean()
             CMB_mean_field_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.LHS_func, RHS_mean_field)
             CMB_mean_field_Cl = hp.alm2cl(CMB_mean_field_alms)
             CMB_mean_field_map = alm2map(CMB_mean_field_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax)
 
             constrained_cmb_solver = ConstrainedCMB(signal_maps, rms_maps, iter)
-            logger.info("CMB: Solving for fluctuation map")
+            logger.log(VERBOSE, "CMB: solving for fluctuation map.")
             RHS_fluct = constrained_cmb_solver.get_RHS_eqn_fluct()
             CMB_fluct_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.LHS_func, RHS_fluct)
             CMB_fluct_Cl = hp.alm2cl(CMB_fluct_alms)

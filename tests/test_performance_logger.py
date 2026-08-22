@@ -1,5 +1,6 @@
 import logging
 
+from commander4.diagnostics.log import VERBOSE
 from commander4.diagnostics.performance import PerfLogger
 
 
@@ -90,7 +91,7 @@ def test_report_nests_without_duplicate_top_level(caplog) -> None:
     with b.benchmark("outer"):
         with b.benchmark("inner"):
             pass
-    with caplog.at_level(logging.INFO, logger="commander4.diagnostics.performance"):
+    with caplog.at_level(VERBOSE, logger="commander4.diagnostics.performance"):
         b.bench_summary(_FakeComm(), label="test")
     body = [ln for ln in caplog.text.splitlines() if ln.startswith(("outer", "  inner"))]
     assert sum(ln.startswith("outer") for ln in body) == 1   # single top-level row

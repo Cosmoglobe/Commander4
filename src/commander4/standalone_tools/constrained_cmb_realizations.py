@@ -134,7 +134,7 @@ class ConstrainedCMB:
             diag += Cl * bl ** 2 * avg_inv_noise_var * pix_factor
 
         self._precond_ell = 1.0 / diag
-        logger.info(
+        logger.debug(
             "Preconditioner dynamic range: %.3e  (min/max of M_ell)",
             self._precond_ell.min() / self._precond_ell.max(),
         )
@@ -234,7 +234,7 @@ class ConstrainedCMB:
         while CG_solver.err > err_tol:
             CG_solver.step()
             iter += 1
-            logger.info(f"CG iter {iter:3d} - Residual {CG_solver.err:.3e}")
+            logger.debug(f"CG iter {iter:3d} - Residual {CG_solver.err:.3e}")
             if iter >= self.maxiter:
                 logger.warning(f"Maximum number of iterations ({self.maxiter}) reached in CG "
                                f"at residual {CG_solver.err:.3e} (tolerance {err_tol:.1e}).")

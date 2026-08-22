@@ -15,7 +15,6 @@ import time
 from dataclasses import dataclass, field, fields
 from typing import ClassVar, Self
 from numpy.typing import NDArray
-from contextlib import contextmanager
 
 from pixell.bunch import Bunch
 
@@ -36,8 +35,7 @@ from commander4.tod.noise.sample_ncorr import CorrelatedNoiseConfig
 from commander4.polarization import get_execution_band_ids
 from commander4.file_io.tod_reader import read_tods_from_file
 from commander4.file_io.chain_writer import write_map_chain_to_file
-from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
-                                               stop_bench, log_memory, increment_count, bench_reset
+from commander4.diagnostics.performance import benchmark, bench_summary, bench_reset
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +113,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
                                               my_scans_start, my_scans_stop)
     mpi_info.tod.comm.Barrier()
     if mpi_info.tod.is_master:
-        logger.info(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")
+        logger.summary(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")
 
     tod_samples_chain1 = TODSamples(experiment_data, params, my_band, band_comm, 1)
     tod_samples_chain2 = TODSamples(experiment_data, params, my_band, band_comm, 2)
@@ -165,7 +163,6 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     Returns:
         The detector maps for component separation and the updated TOD samples.
     """
-    timing_dict = {}
     band_comm = mpi_info.band.comm
     tod_comm = mpi_info.tod.comm
     is_master = mpi_info.band.is_master
@@ -186,75 +183,60 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     correlated_noise = CorrelatedNoiseConfig.from_params(params, is_master)
     data_selection = DataSelectionConfig.from_params(params)
 
-    @contextmanager
-    def timed_step(label: str):
-        """Benchmark + wall-time + master log line around one TOD sampling step."""
-        t0 = time.time()
-        with benchmark(label):
-            yield
-        timing_dict[label] = time.time() - t0
-        if mpi_info.band.is_master:
-            logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished {label} "
-                        f"in {timing_dict[label]:.1f}s.")
-
     # Jump corrections must be stored before any later step reads the TOD.
     if jump_detection.is_active(iter):
-        with timed_step("jump-detect"):
+        with benchmark("jump-detect"):
             tod_samples = sample_jump_detection(band_comm, experiment_data, tod_samples,
-                                                jump_detection)
+                                                jump_detection, iter)
 
     # Gain uses the previous iteration's sigma0. The new sigma0 is estimated later, inside the
     # mapmaker scan loop, matching Commander3's gain -> n_corr -> bin_TOD order.
     if absolute_gain.is_active(iter):
-        with timed_step("abs-gain"):
+        with benchmark("abs-gain"):
             tod_samples = sample_absolute_gain(band_comm, experiment_data, tod_samples,
-                                               compsep_output, absolute_gain)
+                                               compsep_output, absolute_gain, iter)
 
     if relative_gain.is_active(iter):
-        with timed_step("rel-gain"):
+        with benchmark("rel-gain"):
             tod_samples = sample_relative_gain(band_comm, experiment_data, tod_samples,
-                                               compsep_output, relative_gain)
+                                               compsep_output, relative_gain, iter)
 
     if temporal_gain.is_active(iter):
-        with timed_step("temp-gain"):
+        with benchmark("temp-gain"):
             tod_samples = sample_temporal_gain_variations(band_comm, experiment_data, tod_samples,
-                                                          compsep_output, temporal_gain)
+                                                          compsep_output, temporal_gain, iter)
 
-    t0 = time.time()
     # A finite diagnostic means "evaluated this iteration". Previously rejected or absent scans
     # remain NaN and are not counted again by the data-selection summary.
     tod_samples.chisq_z[:] = np.nan
     tod_samples.good_fraction[:] = np.nan
 
-    if mapmaking.mapmaker == "CG":
-        detmap_dict, maps_to_file = tod2map_CG(
-            band_comm, experiment_data, compsep_output, tod_samples, iter, mapmaking,
-            correlated_noise, data_selection,
-        )
-    else:
-        detmap_dict, maps_to_file = tod2map_bin(
-            band_comm, experiment_data, compsep_output, tod_samples, iter, mapmaking,
-            correlated_noise, data_selection,
-        )
+    with benchmark("mapmaker"):
+        if mapmaking.mapmaker == "CG":
+            detmap_dict, maps_to_file = tod2map_CG(
+                band_comm, experiment_data, compsep_output, tod_samples, iter, mapmaking,
+                correlated_noise, data_selection,
+            )
+        else:
+            detmap_dict, maps_to_file = tod2map_bin(
+                band_comm, experiment_data, compsep_output, tod_samples, iter, mapmaking,
+                correlated_noise, data_selection,
+            )
 
     # Chain writers retain the full parameter tree because it is serialized into file metadata.
     # The numerical mapmakers themselves only receive the values in their specific configs.
     if is_master:
-        start_bench("filewrite-datamaps")
-        write_map_chain_to_file(params, chain, iter, experiment_data.experiment_name,
-                                experiment_data.band_name, maps_to_file,
-                                tod_samples.band_unit_factor, tod_samples.band_unit)
-        stop_bench("filewrite-datamaps")
-    timing_dict["mapmaker"] = time.time() - t0
-    if band_comm.Get_rank() == 0:
-        logger.info(f"Chain {chain} iter{iter} {experiment_data.nu}GHz: Finished mapmaking in "
-                    f"{timing_dict['mapmaker']:.1f}s.")
+        with benchmark("filewrite-datamaps"):
+            write_map_chain_to_file(params, chain, iter, experiment_data.experiment_name,
+                                    experiment_data.band_name, maps_to_file,
+                                    tod_samples.band_unit_factor, tod_samples.band_unit)
 
     # Report during data-selection warm-up as well as active-cut iterations.
     if data_selection.is_available(iter, correlated_noise):
         log_dataselect_summary(
             band_comm, tod_samples, data_selection,
             active=data_selection.cuts_are_active(iter, correlated_noise),
+            iteration=iter,
         )
 
     with benchmark("filewrite-tod"):

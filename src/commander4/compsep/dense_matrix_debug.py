@@ -48,7 +48,7 @@ class DenseMatrix:
             The matrix is stored on all ranks.
         """
         if self.is_master:
-            self.logger.info(f"Starting construction of dense matrix {self.matrix_name}")
+            self.logger.debug(f"Starting construction of dense matrix {self.matrix_name}")
             self.A_matrix = np.zeros((self.full_size, self.full_size))
             a_in_zeros = [np.zeros((1,nalm), dtype=self.float_dtype) for nalm in self.alm_len_percomp]
             i = 0
@@ -78,7 +78,7 @@ class DenseMatrix:
                 x_bestfit: The resulting best-fit solution to x for the component owned by this rank.
         """
         if self.CompSep_comm.Get_rank() == 0:
-            self.logger.info("Solving LHS matrix by direct inversion.")
+            self.logger.debug("Solving LHS matrix by direct inversion.")
 
         if self.is_master:
             RHS = np.concatenate(RHS, axis=-1)
@@ -94,8 +94,12 @@ class DenseMatrix:
         """
         if self.is_master:
             sing_vals = scipy.linalg.svd(self.A_matrix, compute_uv=False)
-            self.logger.info(f"Condition number of matrix {self.matrix_name}: {sing_vals[0]/sing_vals[-1]:.3e}")
-            self.logger.info(f"Singular values of matrix {self.matrix_name}: {sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. {sing_vals[sing_vals.size//2]:.1e} .. {sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
+            self.logger.debug(f"Condition number of matrix {self.matrix_name}: "
+                              f"{sing_vals[0]/sing_vals[-1]:.3e}")
+            self.logger.debug(f"Singular values of matrix {self.matrix_name}: "
+                              f"{sing_vals[0]:.1e} .. {sing_vals[sing_vals.size//4]:.1e} .. "
+                              f"{sing_vals[sing_vals.size//2]:.1e} .. "
+                              f"{sing_vals[3*sing_vals.size//4]:.1e} .. {sing_vals[-1]:.1e}")
 
 
     def test_matrix_hermitian(self):
@@ -106,7 +110,8 @@ class DenseMatrix:
             diff = np.mean(np.abs(self.A_matrix - np.conjugate(self.A_matrix.T)))/np.std(self.A_matrix)
             is_hermitian = np.allclose(self.A_matrix, np.conjugate(self.A_matrix.T))
             if is_hermitian:
-                self.logger.info(f"Matrix {self.matrix_name} is Hermitian with mean(A^H - A)/std(A) = {diff:.2e}")
+                self.logger.debug(f"Matrix {self.matrix_name} is Hermitian with "
+                                  f"mean(A^H - A)/std(A) = {diff:.2e}")
             else:
                 self.logger.warning(f"Matrix {self.matrix_name} is NOT HERMITIAN with mean(A^H - A)/std(A) = {diff:.2e}")
 
@@ -118,7 +123,11 @@ class DenseMatrix:
         if self.is_master:
             diag = np.diag(self.A_matrix)
             size = diag.shape[0]
-            self.logger.info(f"Matrix {self.matrix_name} diag: {diag[0]:.1e} .. {diag[size//8]:.1e} .. {diag[(2*size)//8]:.1e} .. {diag[(3*size)//8]:.1e} .. {diag[(4*size)//8]:.1e} .. {diag[(5*size)//8]:.1e} .. {diag[(6*size)//8]:.1e} .. {diag[(7*size)//8]:.1e} .. {diag[-1]:.1e}")
+            self.logger.debug(f"Matrix {self.matrix_name} diag: {diag[0]:.1e} .. "
+                              f"{diag[size//8]:.1e} .. {diag[(2*size)//8]:.1e} .. "
+                              f"{diag[(3*size)//8]:.1e} .. {diag[(4*size)//8]:.1e} .. "
+                              f"{diag[(5*size)//8]:.1e} .. {diag[(6*size)//8]:.1e} .. "
+                              f"{diag[(7*size)//8]:.1e} .. {diag[-1]:.1e}")
 
 
     def test_matrix_eigenvalues(self):
@@ -132,4 +141,5 @@ class DenseMatrix:
             imag_max_eigval = np.max(eigvals.imag)
             if imag_max_eigval > 1e-10 or min_eigval < -1e-10:
                 self.logger.warning(f"Matrix {self.matrix_name} IS NOT symmetric positive-definite!")
-            self.logger.info(f"Eigvals: min={min_eigval:.1e}, max={max_eigval:.1e} highest imag={imag_max_eigval:.1e}")
+            self.logger.debug(f"Eigvals: min={min_eigval:.1e}, max={max_eigval:.1e}, "
+                              f"highest imag={imag_max_eigval:.1e}")

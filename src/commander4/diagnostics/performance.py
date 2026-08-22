@@ -9,6 +9,8 @@ import logging
 from collections import defaultdict
 from contextlib import ContextDecorator
 
+from commander4.diagnostics.log import VERBOSE
+
 logger = logging.getLogger(__name__)
 
 class PerfLogger:
@@ -108,8 +110,8 @@ class PerfLogger:
         stack = self._stack
         if idx != len(stack) - 1:
             stranded = [f[0] for f in stack[idx + 1:]]
-            logger.warning(f"Performance Warning: closing '{stack[idx][0]}' discarded un-stopped "
-                           f"inner tags {stranded}")
+            logger.error(f"Closing performance tag '{stack[idx][0]}' discarded un-stopped "
+                         f"inner tags {stranded}.")
         _, t_start, path = stack[idx]
         del stack[idx:]
         entry = self.data[path]
@@ -167,7 +169,7 @@ class PerfLogger:
         idx = next((i for i in range(len(self._stack) - 1, -1, -1) if self._stack[i][0] == tag),
                    None)
         if idx is None:
-            logger.warning(f"Performance Warning: stop('{tag}') called without start()")
+            logger.error(f"Performance stop('{tag}') called without start().")
             return
         self._close_frame(idx, increment_count, end)
 
@@ -347,7 +349,7 @@ class PerfLogger:
             lines.append(f"{tag_str} |{t_str}{m_str}")
 
         lines.append(sep)
-        logger.info("\n".join(lines))
+        logger.log(VERBOSE, "\n".join(lines))
 
     def _get_auto_unit(self, max_ns):
         if max_ns >= 1e9:   return "s",  1e9

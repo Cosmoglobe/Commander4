@@ -16,11 +16,14 @@ from commander4.backend.ctypes_lib import load_cmdr4_ctypes_lib
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.tod_samples import TODSamples
-from commander4.tod.noise.sample_ncorr import sample_correlated_noise, log_corr_noise_stats
+from commander4.tod.noise.sample_ncorr import sample_correlated_noise, log_corr_noise_stats,\
+    CorrelatedNoiseConfig
 from commander4.tod.noise.sigma0 import _estimate_standalone_sigma0
 from commander4.tod.scan_diagnostics import _record_tod_diagnostics
 from commander4.tod.view import TODView
 from commander4.data_models.pixel_domain import PixelDomain
+from commander4.tod.mapmaking.config import MapmakingConfig
+from commander4.tod.data_selection import DataSelectionConfig
 
 logger = logging.getLogger(__name__)
 
@@ -429,8 +432,8 @@ class WeightsMapmakerIQU:
 
 def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_output: NDArray,
                 tod_samples: TODSamples, iteration: int,
-                mapmaking: "MapmakingConfig", correlated_noise: "CorrelatedNoiseConfig",
-                data_selection: "DataSelectionConfig",
+                mapmaking: MapmakingConfig, correlated_noise: CorrelatedNoiseConfig,
+                data_selection: DataSelectionConfig,
                 ) -> tuple[dict[str, DetectorMap], dict[str, NDArray]]:
     """ Commander4 bin mapmaking. All ranks on the provided MPI communicator collaborates on creating
         the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
@@ -569,7 +572,8 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         log_corr_noise_stats(band_comm, experiment_data.nu, experiment_data.noise_model,
                              sampled_params, residuals, niters, num_failed_convergences_ncorr,
                              num_too_high_var_ncorr, worst_residual_ncorr,
-                             sum(len(s.detectors) for s in experiment_data.scans))
+                             sum(len(s.detectors) for s in experiment_data.scans),
+                             tod_samples.chain, iteration)
 
 
     start_bench("binned-mapmaker")

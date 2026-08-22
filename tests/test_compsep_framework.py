@@ -10,6 +10,7 @@ from commander4.compsep.processing import (
     MCMCSamplingGroupConfig,
     PerPixelSamplingGroupConfig,
     _build_conditional_residual,
+    _evaluate_chi2,
     _filter_sampling_group_components,
     _read_sampling_groups,
     _resolve_sampling_groups,
@@ -18,7 +19,9 @@ from commander4.compsep.processing import (
     _validate_sampling_group_references,
     _validate_component_lmax,
     init_compsep_processing,
+    process_compsep,
 )
+from commander4.diagnostics.log import SUMMARY
 from commander4.mpi.transfer import _get_compsep_sender_id_for_tod_band, _should_send_compsep_result
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
@@ -128,6 +131,46 @@ def test_joined_skymodel_realizes_iqu_components() -> None:
 
     assert sky.shape == (3, 48)
     assert np.all(np.isfinite(sky))
+
+
+def test_iteration_chi2_uses_all_observed_map_samples() -> None:
+    map_sky = np.arange(1.0, 13.0).reshape(1, -1)
+    map_rms = np.full_like(map_sky, 2.0)
+    map_rms[0, -1] = np.inf  # An unobserved pixel has zero inverse-noise weight.
+    detector_data = DetectorMap(map_sky, map_rms, nu=30.0, fwhm=60.0, nside=1)
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0))
+
+    class ZeroSky:
+        def get_sky_at_nu(self, nu: float, nside: int, pols_required: str,
+                          fwhm: float | None = None) -> np.ndarray:
+            return np.zeros_like(map_sky)
+
+    chi2, ndof = _evaluate_chi2(mpi_info, detector_data, ZeroSky())
+
+    assert chi2 == pytest.approx(np.sum((map_sky[0, :-1] / 2.0)**2))
+    assert ndof == 11
+
+
+def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
+    map_sky = np.arange(1.0, 13.0).reshape(1, -1)
+    map_rms = np.full_like(map_sky, 2.0)
+    detector_data = DetectorMap(map_sky, map_rms, nu=30.0, fwhm=60.0, nside=1)
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0))
+    compsep_state = Bunch(amplitude_groups={}, mcmc_groups={})
+    monkeypatch.setattr(
+        "commander4.compsep.processing.write_compsep_chain_to_file", lambda *args: None)
+
+    with caplog.at_level(SUMMARY, logger="commander4.compsep.processing"):
+        result = process_compsep(
+            mpi_info, compsep_state, detector_data, iter=4, chain=2,
+            params=Bunch(), comp_list=CompList([]))
+
+    chi2 = np.sum((map_sky / 2.0)**2)
+    z_chi2 = (chi2 - map_sky.size) / np.sqrt(2.0 * map_sky.size)
+    assert isinstance(result, SkyModel)
+    assert "Chain 2, iteration 4 complete" in caplog.text
+    assert f"chi2={chi2:.6e}" in caplog.text
+    assert f"z={z_chi2:.3f}" in caplog.text
 
 
 def test_sampling_group_component_filter_matches_comp_names_and_preserves_pol_split() -> None:

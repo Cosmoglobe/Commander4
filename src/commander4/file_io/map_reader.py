@@ -57,11 +57,11 @@ def retrieve_map_from_fits_file(band: Bunch, pol: str, maptype: str):
         if units_file is not None and units_file.lower() == "unknown":
             units_file = None
         if units_file is None and units_param is None:
-            logging.warning(f"No units specified for {band._name}. Assuming uK_CMB!")
+            logger.warning(f"No units specified for {band._name}. Assuming uK_CMB!")
             units = "uK_CMB"
         elif units_file is not None and units_param is not None:
             if units_file != units_param:
-                logging.warning(
+                logger.warning(
                     f"Both data-file ({units_file}) and param-file ({units_param}) specify "
                     f"map units for {band._name}; using param-file value."
                 )
@@ -81,12 +81,12 @@ def retrieve_map_from_fits_file(band: Bunch, pol: str, maptype: str):
         if ordering_file == "UNKNOWN":
             ordering_file = None
         if ordering_file is None and ordering_param is None:
-            logging.warning(f"No ordering specified for {band._name}. Assuming RING ordering!")
+            logger.warning(f"No ordering specified for {band._name}. Assuming RING ordering!")
             ordering = "RING"
         elif ordering_file is not None and ordering_param is not None:
             if ordering_file != ordering_param:
-                logging.warning(f"Both map-file ({ordering_file}) and param-file ({band.ordering}) "
-                                f"specify healpix ordering for {band._name}; using the latter.")
+                logger.warning(f"Both map-file ({ordering_file}) and param-file ({band.ordering}) "
+                               f"specify healpix ordering for {band._name}; using the latter.")
             ordering = ordering_param
         else:
             ordering = ordering_file or ordering_param

@@ -29,7 +29,7 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     # TODO: Add support for non-Diffuse components (point sources, templates).
     logger = logging.getLogger(__name__)
     if proc_comm.Get_rank() == 0:
-        logger.info("Starting pixel-by-pixel component separation.")
+        logger.verbose("Starting pixel-by-pixel component separation.")
     if double_precision:
         complex_dtype = np.complex128
         real_dtype = np.float64

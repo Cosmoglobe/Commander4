@@ -164,7 +164,8 @@ class CompSepSolver:
         biggest_size_bytes = np.max([comp._data.nbytes for comp in comp_list])
         use_blocking = biggest_size_bytes > MPI_LIMIT_32BIT
         if use_blocking:
-            print(f"Fallback to blocking comm (array size = {biggest_size_bytes:.2e}B)")
+            logger.debug(f"Using blocking CompSep communication for array size "
+                         f"{biggest_size_bytes:.2e} B.")
             comp_list.accum_data_blocking(self.CompSep_comm)
 
         else:
@@ -219,8 +220,8 @@ class CompSepSolver:
             # eta_1 is the white-noise realization of *this* band's data. Zero-weight pixels
             # (unobserved, inv_n_map = 0) get no fluctuation, matching their absence from the LHS.
             eta_1 = np.random.normal(0.0, 1.0, b_map.shape)*np.sqrt(self.det_map.inv_n_map)
-            logger.info(f"RHS |N^-1 d| = {np.mean(np.abs(b_map)):.2e}, "
-                        f"|N^-1/2 eta_1| = {np.mean(np.abs(eta_1)):.2e}")
+            logger.debug(f"RHS |N^-1 d| = {np.mean(np.abs(b_map)):.2e}, "
+                         f"|N^-1/2 eta_1| = {np.mean(np.abs(eta_1)):.2e}")
             b_map += eta_1.astype(b_map.dtype, copy=False)
 
         # Y^T (N^-1 d + N^{-1/2} eta_1)
@@ -257,7 +258,7 @@ class CompSepSolver:
                     for ipol in range(self.npol):
                         comp.alms[ipol] += gaussian_random_alm(comp.lmax, comp.lmax,
                                                                self.spin, 1)[0]
-                logger.info(f"RHS comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
+                logger.debug(f"RHS comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
 
         return comp_list
 
@@ -299,7 +300,7 @@ class CompSepSolver:
             else:
                 LHS(CompList([]))
         if master:
-            logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG starting up!")
+            logger.verbose(f"{'QU' if self.det_map.pol else 'Intensity'} CG starting up.")
         iter = 0
         t0 = time.time()
         stop_CG = False
@@ -309,9 +310,10 @@ class CompSepSolver:
             iter += 1
             if iter%checkpt_int == 0:
                 if master:
-                    logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG iter {iter:3d} - "\
-                                f"Residual {np.mean(self.CG_residuals[iter-checkpt_int:iter]):.6e}"\
-                                f" ({(time.time() - t0)/checkpt_int:.2f}s/iter)")
+                    logger.verbose(
+                        f"{'QU' if self.det_map.pol else 'Intensity'} CG iter {iter:3d} - "
+                        f"Residual {np.mean(self.CG_residuals[iter-checkpt_int:iter]):.6e} "
+                        f"({(time.time() - t0)/checkpt_int:.2f}s/iter)")
                     t0 = time.time()
                     if x_true is not None:
                         CG_errors_true = complist_norm(CG_solver.x - x_true)/complist_norm(x_true)
@@ -320,10 +322,11 @@ class CompSepSolver:
                         CG_Anorm_error = complist_dot([x - y for x,y in zip(CG_solver.x, x_true)],
                                                       A_residual)
                         # A-norm error is only defined for the full vector.
-                        logger.info(f"CG iter {iter:3d} - True A-norm error: {CG_Anorm_error:.3e}")
+                        logger.debug(f"CG iter {iter:3d} - True A-norm error: "
+                                     f"{CG_Anorm_error:.3e}")
                         # We can print the individual component L2 errors.
-                        logger.info(f"CG iter {iter:3d} - {self.comp_list[mycomp].comp_name} - "\
-                                    f"True L2 error: {CG_errors_true:.3e}")
+                        logger.debug(f"CG iter {iter:3d} - {self.comp_list[mycomp].comp_name} - "
+                                     f"True L2 error: {CG_errors_true:.3e}")
                 else:
                     if x_true is not None:
                         LHS(CompList([]))  # Matching LHS call for the calculation of LHS(CG_solver.x-x_true).

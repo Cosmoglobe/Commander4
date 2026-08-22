@@ -60,6 +60,7 @@ def init_mpi(params):
         mpi4py_version = tuple(map(int, mpi4py.__version__.split('.')))
         MPI_version = MPI.Get_version()
         logger.info(f"MPI version: {MPI_version}. mpi4py version: {mpi4py_version}.")
+        logger.summary(f"MPI task layout: {task_count_breakdown(ntasks)}.")
         if MPI_version < (4,0):
             logger.warning(f"MPI version ({MPI_version}) is below (4,0)!")
         if mpi4py_version < (4,0):
@@ -74,7 +75,7 @@ def init_mpi(params):
                          f"'mpirun -n {ntasks.total}'.", logger)
         # With CompSep disabled, CompSep is simply off (TOD-only) and compsep.bands is ignored.
         if not compsep_enabled(params):
-            logger.warning("compsep.enabled is false; running TOD-only. Any 'compsep.bands' are "
+            logger.info("compsep.enabled is false; running TOD-only. Any 'compsep.bands' are "
                         "ignored, and TOD ranks use the initial sky model built from the "
                         "components.")
         # Component separation is "on" iff CompSep ranks are allocated; any enabled method-specific
@@ -270,7 +271,7 @@ def init_mpi_tod(mpi_info, params):
                      f"({TOD_rank}) differs from the total number of tasks dedicated to "
                      f"TOD processing ({MPIsize_tod}).", logger)
     if is_tod_master:
-        logger.info(f"TOD: {MPIsize_tod} tasks successfully allocated to TOD proc.")
+        logger.verbose(f"TOD: {MPIsize_tod} tasks successfully allocated to TOD processing.")
 
     if my_band_id is None or my_det_id is None or my_experiment_name is None:
         log.lograise(
