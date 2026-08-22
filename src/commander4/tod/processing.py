@@ -166,7 +166,6 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
         The detector maps for component separation and the updated TOD samples.
     """
     timing_dict = {}
-    waittime_dict = {}
     band_comm = mpi_info.band.comm
     tod_comm = mpi_info.tod.comm
     is_master = mpi_info.band.is_master
@@ -261,29 +260,11 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     with benchmark("filewrite-tod"):
         tod_samples.write_chain_to_file(iter)
 
-    t0 = time.time()
     with benchmark("end-barrier"):
         tod_comm.Barrier()
-    waittime_dict["end-barrier"] = time.time() - t0
 
     bench_summary(tod_comm, label="All bands")
     bench_summary(band_comm, label=f"Band {experiment_data.band_name}")
     bench_reset()
-
-    for key in timing_dict:
-        timing_dict[key] = band_comm.reduce(timing_dict[key], op=MPI.SUM, root=0)
-    for key in waittime_dict:
-        waittime_dict[key] = band_comm.reduce(waittime_dict[key], op=MPI.SUM, root=0)
-    
-    if mpi_info.band.is_master:
-        for key in timing_dict:
-            timing_dict[key] /= band_comm.Get_size()
-            logger.info(f"Average time spent for {experiment_data.nu}GHz on {key} = "\
-                        f"{timing_dict[key]:.1f}s.")
-
-        for key in waittime_dict:
-            waittime_dict[key] /= band_comm.Get_size()
-            logger.info(f"Average wait overhead for {experiment_data.nu}GHz on {key} = "\
-                        f"{waittime_dict[key]:.1f}s.")
 
     return detmap_dict, tod_samples
