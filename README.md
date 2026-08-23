@@ -63,6 +63,7 @@ Commander4 has to be run with MPI, and a parameter file has to be indicated usin
 ```
 mpirun -n 15 commander4 -p params/param_default.yml
 ```
+To quickly check how many MPI ranks you must use for any given parameter file, you can run `c4-validate-params path/to/params.yml`.
 
 Note that Commander4 cannot be run as a standalone script (e.g. python src/commander4/cli.py). It must be installed, and is then run as a binary. Note also that the binary should be called directly, and running `python commander4` will not work.
 

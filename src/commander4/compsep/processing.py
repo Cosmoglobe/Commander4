@@ -177,7 +177,7 @@ def _read_sampling_groups(params: Bunch, key: str,
     return groups
 
 
-def _resolve_sampling_groups(params: Bunch) -> tuple[
+def resolve_sampling_groups(params: Bunch) -> tuple[
         dict[str, CGSamplingGroupConfig],
         dict[str, PerPixelSamplingGroupConfig],
         dict[str, MCMCSamplingGroupConfig]]:
@@ -409,7 +409,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     my_band.polarization = mpi_info.band.polarization
     logger.debug(f"Rank {mpi_info.compsep.rank} handles CompSep view {band_identifier}.")
 
-    cg_groups, per_pixel_groups, mcmc_groups = _resolve_sampling_groups(params)
+    cg_groups, per_pixel_groups, mcmc_groups = resolve_sampling_groups(params)
     amplitude_groups = cg_groups if cg_groups else per_pixel_groups
     _validate_sampling_group_references(amplitude_groups, comp_list, params)
     _validate_sampling_group_references(mcmc_groups, comp_list, params)

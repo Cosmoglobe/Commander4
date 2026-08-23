@@ -239,7 +239,11 @@ def validate_param_schema(params_dict: dict) -> None:
     if "general" in params_dict:
         raise ValueError(
             "The 'general' block was replaced by blocks named after the part of the program that "
-            f"reads them: {', '.join(TOP_LEVEL_BLOCKS)}.")
+            f"reads them: {', '.join(TOP_LEVEL_BLOCKS)}. Gibbs loop control moved to 'gibbs', "
+            "thread counts to 'resources', output paths and chain writing to 'output', TOD "
+            "sampling steps to 'tod_processing', and nside / float precision / CG settings to "
+            "'compsep'. See notes/proposed_param_layout.yml for the full layout."
+        )
     unknown = sorted(set(params_dict) - set(TOP_LEVEL_BLOCKS))
     if unknown:
         raise ValueError(f"Unknown top-level parameter block(s) {unknown}. The valid blocks are "

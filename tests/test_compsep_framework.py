@@ -13,7 +13,7 @@ from commander4.compsep.processing import (
     _evaluate_chi2,
     _filter_sampling_group_components,
     _read_sampling_groups,
-    _resolve_sampling_groups,
+    resolve_sampling_groups,
     _sampling_group_selects_band,
     _validate_sampling_group_dependencies,
     _validate_sampling_group_references,
@@ -323,7 +323,7 @@ def test_cg_and_per_pixel_groups_are_mutually_exclusive() -> None:
         per_pixel_sampling_groups=Bunch(pixels=Bunch()),
     ))
     with pytest.raises(ValueError, match="mutually exclusive"):
-        _resolve_sampling_groups(params)
+        resolve_sampling_groups(params)
 
 
 def test_per_pixel_solver_accepts_resolved_precision() -> None:
