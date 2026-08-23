@@ -2,25 +2,22 @@
 #
 #   cd sims && mpirun -n 8 python -m simgen -p simgen/params/param_corrnoise.yml
 #
-# Feature under test in the main code: `general.corr_noise` -- the n_corr Gibbs step
-# (noise_sampling.sample_ncorr.sample_correlated_noise), the noise-PSD parameter sampler
-# (`sample_noise_params`, i.e. fknee and alpha) and the white-noise estimator (`sample_sigma0`).
-# Matching main parameter file: `params/sims/simparam_corrnoise.yml`.
+# Analysed by `params/sims/simparam_corrnoise.yml`.
 #
-# What makes this simulation a correlated-noise test:
+# INJECTED TRUTH, what the analysis has to recover:
+#   * sigma0 = 80.0 (TOD units), fknee = 0.5 Hz, alpha = -1.5, per detector.
+#   * The noise realization itself, binned into `maps/noise` in the `debug_output_dir` HDF5.
+#
+# WHY THIS IS A CORRELATED-NOISE TEST:
 #   * The noise is drawn from exactly the PSD the main code assumes,
-#     P(f) = sigma0^2 (1 + (f/fknee)^alpha)  (simgen.noise.OofNoise <-> NoisePSDOof), with a knee
-#     high above the 1/300 Hz scan fundamental (fknee/f_min = 150) and a steep alpha, so the
-#     correlated component dominates the low-frequency TOD by orders of magnitude.  If the sampler
-#     is right, the recovered (sigma0, fknee, alpha) return the injected values.
-#   * The sky is CMB *only*.  The matching run fits a single CMB component to a single band, which
-#     is an exactly determined component separation with the correct SED -- so the sky model is not
-#     a source of residual power that the noise sampler could mistake for 1/f.
-#   * No gain offsets (every gain is 1.0) and no gain sampling in the matching run, so the noise
-#     step is isolated.
-#
-# The matching run starts from `initial_noise_params: [80.0, 0.1, -1.0]`, i.e. a knee 5x too low and
-# a slope too shallow, so the PSD sampler has to move.
+#     P(f) = sigma0^2 (1 + (f/fknee)^alpha) (simgen.noise.OofNoise <-> NoisePSDOof), with a knee
+#     far above the 1/300 Hz scan fundamental (fknee/f_min = 150) and a steep alpha, so the
+#     correlated component dominates the low-frequency TOD by orders of magnitude.
+#   * The sky is CMB *only*, and the analysis fits a single CMB component to a single band. That is
+#     an exactly determined component separation with the correct SED, so the sky model cannot be a
+#     source of residual power the noise sampler might mistake for 1/f.
+#   * No gain offsets (every gain is 1.0) and no gain sampling in the analysis, so the noise step is
+#     isolated.
 
 general:
   nside: 64

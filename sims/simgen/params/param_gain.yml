@@ -1,26 +1,31 @@
-# simgen: gain-calibration test simulation.
+# simgen: gain-calibration test simulation, in raw detector units.
 #
 #   cd sims && mpirun -n 8 python -m simgen -p simgen/params/param_gain.yml
 #
-# Feature under test in the main code: `general.abs_gain` and `general.rel_gain` sampling
-# (tod_processing.sample_absolute_gain / sample_relative_gain), calibrated against the orbital
-# dipole and the sky model respectively.  Matching main parameter file:
-# `params/sims/simparam_gain.yml`.
+# Analysed by `params/sims/simparam_gain.yml`.
 #
-# What makes this simulation a gain test:
+# INJECTED TRUTH, what the analysis has to recover:
+#   * abs_gain = 1.0e-9 in every band (the four detector gains average to exactly that).
+#   * rel_gain = 30 GHz  [-0.10, -0.03, +0.03, +0.10] x 1e-9
+#                100 GHz [-0.08, -0.02, +0.02, +0.08] x 1e-9
+#                217 GHz [-0.05, -0.01, +0.01, +0.05] x 1e-9
+#   * Per-component amplitude maps, written as `truth_<Component>.fits` in `debug_output_dir`.
+#
+# WHY THIS IS A GAIN TEST:
 #   * `orbital_dipole: true` with a satellite scan whose spin axis sweeps a full anti-Sun circle
 #     over the mission, so v_orb rotates through the sky and the orbital dipole is a *time-varying*
-#     calibrator rather than a static template.  This is the signal `calibrate_against:
-#     orbital_dipole` uses.
-#   * Detectors within each band are given deliberately unequal `gain`s with a per-band mean of
-#     exactly 1.0.  Commander4 decomposes the gain as g_ij = g0 + dg_i + dg_ij, so the truth here is
-#     abs_gain = 1.0 and rel_gain = the listed offsets (which sum to zero, as the sampler enforces).
-#   * White noise only (`oof.enabled: false`), so the recovered gains are not confounded by a
-#     simultaneously-sampled correlated-noise component.  The correlated-noise feature has its own
-#     pair, `param_corrnoise.yml`.
-#
-# The main parameter file starts every detector at gain 1.05, i.e. 5% high in the absolute gain and
-# wrong in every relative gain, so both samplers have something to recover.
+#     calibrator rather than a static template. This is the signal `calibrate_against:
+#     orbital_dipole` uses, and it is what makes absolute gain identifiable at all.
+#   * Detector gains differ within each band but average to the band gain, so the absolute and
+#     relative parts are separately identifiable: a sampler that gets only the mean right is
+#     visibly distinguishable from one that gets both right.
+#   * The gains are ~1e-9 and sigma0 is scaled to match, i.e. the TODs are in *raw detector units*
+#     rather than uK_RJ. That puts the unit and gain-scale bookkeeping (`band_unit`, the micro-gain
+#     convention in the `scalars` dataset, gain-weighted mapmaking) under test at values where a
+#     missing or doubled conversion factor is obvious. Every other simulation here uses gain 1.0 in
+#     uK_RJ and would not catch such an error.
+#   * The beams span 120' to 40', so the bands are at genuinely different resolutions.
+#   * White noise only, so the gain step is not competing with correlated-noise sampling.
 
 general:
   nside: 64                 # Working HEALPix nside for sky-map construction.
@@ -106,32 +111,32 @@ experiments:
       Band30GHz:
         enabled: true
         freq: 30.0          # GHz
-        fwhm: 70.0          # arcmin (>= the 55' nside=64 pixel)
+        fwhm: 120.0          # arcmin (>= the 55' nside=64 pixel)
         fsamp: 32.5         # Hz
         eval_nside: 64
         data_nside: 64
-        sigma0: 100.0       # Per-sample white-noise RMS [TOD units ~ uK_RJ at gain 1].
+        sigma0: 1.0e-7      # Per-sample RMS in raw detector units (= 100 uK_RJ at gain 1e-9).
         polarization: "IQU"
         detectors:          # rel_gain truth: [-0.10, -0.03, +0.03, +0.10]
-          det30_a: {psi_offset_deg: 0.0,   gain: 0.90}
-          det30_b: {psi_offset_deg: 45.0,  gain: 0.97}
-          det30_c: {psi_offset_deg: 90.0,  gain: 1.03}
-          det30_d: {psi_offset_deg: 135.0, gain: 1.10}
+          det30_a: {psi_offset_deg: 0.0,   gain: 0.90e-9}
+          det30_b: {psi_offset_deg: 45.0,  gain: 0.97e-9}
+          det30_c: {psi_offset_deg: 90.0,  gain: 1.03e-9}
+          det30_d: {psi_offset_deg: 135.0, gain: 1.10e-9}
 
       Band100GHz:
         enabled: true
         freq: 100.0
-        fwhm: 50.0
+        fwhm: 70.0
         fsamp: 32.5
         eval_nside: 64
         data_nside: 64
-        sigma0: 80.0
+        sigma0: 8.0e-8
         polarization: "IQU"
         detectors:          # rel_gain truth: [-0.08, -0.02, +0.02, +0.08]
-          det100_a: {psi_offset_deg: 0.0,   gain: 0.92}
-          det100_b: {psi_offset_deg: 45.0,  gain: 0.98}
-          det100_c: {psi_offset_deg: 90.0,  gain: 1.02}
-          det100_d: {psi_offset_deg: 135.0, gain: 1.08}
+          det100_a: {psi_offset_deg: 0.0,   gain: 0.92e-9}
+          det100_b: {psi_offset_deg: 45.0,  gain: 0.98e-9}
+          det100_c: {psi_offset_deg: 90.0,  gain: 1.02e-9}
+          det100_d: {psi_offset_deg: 135.0, gain: 1.08e-9}
 
       Band217GHz:
         enabled: true
@@ -140,10 +145,10 @@ experiments:
         fsamp: 32.5
         eval_nside: 64
         data_nside: 64
-        sigma0: 120.0
+        sigma0: 1.2e-7
         polarization: "IQU"
         detectors:          # rel_gain truth: [-0.05, -0.01, +0.01, +0.05]
-          det217_a: {psi_offset_deg: 0.0,   gain: 0.95}
-          det217_b: {psi_offset_deg: 45.0,  gain: 0.99}
-          det217_c: {psi_offset_deg: 90.0,  gain: 1.01}
-          det217_d: {psi_offset_deg: 135.0, gain: 1.05}
+          det217_a: {psi_offset_deg: 0.0,   gain: 0.95e-9}
+          det217_b: {psi_offset_deg: 45.0,  gain: 0.99e-9}
+          det217_c: {psi_offset_deg: 90.0,  gain: 1.01e-9}
+          det217_d: {psi_offset_deg: 135.0, gain: 1.05e-9}

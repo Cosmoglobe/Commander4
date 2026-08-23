@@ -1,38 +1,31 @@
-# simgen: component-separation test simulation.
+# simgen: bolometer transfer-function simulation (the "TF on" half of a two-run experiment).
 #
-#   cd sims && mpirun -n 12 python -m simgen -p simgen/params/param_compsep.yml
+#   cd sims && mpirun -n 12 python -m simgen -p simgen/params/param_transfunc.yml
 #
-# Analysed by `params/sims/simparam_compsep_CG.yml` (amplitudes) and
-# `params/sims/simparam_compsep_MCMC.yml` (spectral indices).
+# Analysed by `params/sims/simparam_transfunc.yml`.
 #
-# INJECTED TRUTH, what the analysis has to recover:
-#   * Per-component amplitude maps, written as `truth_<Component>.fits` in `debug_output_dir`.
-#   * beta_dust = 1.54 (at T = 20 K, nu_ref = 353 GHz)
-#   * beta_sync = -3.10 (at nu_ref = 30 GHz)
-#   Both indices are spatially constant, so each truth is a single number.
+# This file is a copy of `param_compsep.yml` (same seed, same sky, same scanning, same bands, same
+# noise) with the bolometer transfer function switched on and nothing else changed but the output
+# paths. There is no truth to recover here: Commander4 cannot model a transfer function, so the
+# pair is a controlled difference rather than a recovery test.
 #
-# WHY THIS IS A COMPONENT-SEPARATION TEST:
-#   * Six bands spanning 30-353 GHz: an over-determined system (6 bands, 3 components) with real
-#     spectral leverage. 30/44 GHz pin the synchrotron, 217/353 GHz pin the dust, 70/100 GHz are
-#     CMB-dominated.
-#   * Every component's frequency scaling comes from the *same* Commander4 SED class the main code
-#     fits with (simgen.sky reuses `commander4.sky.<class>.get_sed`), so the sky is exactly
-#     representable by the fitted model and any residual is an error, not a model mismatch.
-#   * The spectral indices are spatially constant (one template scaled by a scalar SED), which is
-#     what the global-index MH sampler assumes.
-#   * White noise only and unit gains, so no TOD-domain sampling competes with the compsep step.
+#   cd sims
+#   mpirun -n 12 python -m simgen -p simgen/params/param_compsep.yml     # TF off, the reference
+#   mpirun -n 12 python -m simgen -p simgen/params/param_transfunc.yml   # TF on
+#   cd ..
+#   mpirun -n 18 commander4 -p params/sims/simparam_compsep_CG.yml       # reference analysis
+#   mpirun -n 18 commander4 -p params/sims/simparam_transfunc.yml        # this analysis
 #
-# NOTE the reference frequencies: dust is referenced to 353 GHz and synchrotron to 30 GHz here
-# (rather than the 857/0.408 GHz of the Planck/BP parameter files), because the PySM template is
-# realized *at* nu_ref. The analysis files use the same nu_ref, and their C(l) prior amplitudes are
-# quoted in (uK_RJ @ nu_ref)^2 accordingly.
+# Identical sky, identical noise realization, identical analysis, so every difference between the
+# two runs is the bolometer response and nothing else. See `params/sims/README.md` for what the
+# difference costs, measured.
 
 general:
   nside: 64
   units: "uK_RJ"
   float_precision: "single"
   seed: 71
-  output_dir: "../../c4_sims/simgen_compsep/"
+  output_dir: "../../c4_sims/simgen_transfunc/"
 
 components:
   CMB:
@@ -75,7 +68,7 @@ simulation:
   npsi: 4096
   orbital_dipole: true
   compress: true
-  debug_output_dir: "../../c4_sims/simgen_compsep_debug/"
+  debug_output_dir: "../../c4_sims/simgen_transfunc_debug/"
 
   pointing:
     strategy: "planck_scan"
@@ -93,8 +86,12 @@ simulation:
   modifiers:
     crosstalk: {enabled: false}
 
+  # The feature under test.  Single-pole bolometer response H(f) = 1/(1 + 2*pi*i*f*tau),
+  # DC-normalised so it changes only the temporal shape, not the calibration.  See the
+  # header for why tau is 150 ms rather than HFI's physical ~10 ms.
   transfer_function:
-    enabled: false
+    enabled: true
+    tau_ms: 150.0
 
 experiments:
   SimSat:

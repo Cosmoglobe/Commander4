@@ -1,12 +1,14 @@
-# Example simgen parameter file.
+# simgen: minimal example, the file to copy when starting a new simulation.
 #
-# Run from the `sims` directory:
-#     mpirun -n 4 python -m simgen -p simgen/params/example_param.yml
+#   cd sims && mpirun -n 4 python -m simgen -p simgen/params/example_param.yml
 #
-# It writes per-band directories of per-scan HDF5 files + a filelist.txt, in the format read by
-# the `general` TOD reader. To ingest in Commander4, point a band's `filelist:` at the generated
-# filelist.txt and set the experiment's `experiment_id: "general"`,
-# and `Fourier_times_path:` at an existing FFT-times .npy file.
+# Not a feature test and not paired with a Commander4 parameter file. It is the annotated reference
+# for what every block does; the `param_*.yml` files here are all variations on it.
+#
+# It writes per-band directories of per-scan HDF5 files plus a `filelist.txt`, in the format read by
+# the `general` TOD reader. To analyse the result in Commander4, point a band's `filelist:` at the
+# generated filelist.txt, set the experiment's `experiment_id: "general"`, and point
+# `fourier_times_path:` at an existing FFT-times .npy file.
 
 general:
   nside: 64                 # Working HEALPix nside for sky-map construction.
@@ -17,7 +19,7 @@ general:
 
 # --- Sky components: the SAME block shape as a Commander4 param file. Each component adds an
 # optional `template:` block selecting the spatial template source (PySM3 preset or a FITS map);
-# frequency scaling reuses commander4.sky_models.component.<component_class>.get_sed.
+# frequency scaling reuses `commander4.sky.<component_class>.get_sed`.
 components:
   CMB:
     enabled: true
