@@ -26,6 +26,92 @@ from commander4.diagnostics.performance import benchmark, bench_summary, start_b
                                                stop_bench, log_memory, increment_count, bench_reset
 
 
+def gibbs_schedule(num_iterations: int) -> list[tuple[int, int]]:
+    """The `(chain, iteration)` steps of the run, in the order both sides walk them.
+    """
+    return [(chain, iteration)
+            for iteration in range(1, num_iterations + 1)
+            for chain in (1, 2)]
+
+
+def run_tod_side(mpi_info: Bunch, params: Bunch, experiment_data, my_band_tod_id: str,
+                 tod_samples_by_chain: dict, compsep_output, compsep_active: bool) -> None:
+    """Walk the TOD half of the Gibbs loop.
+    Args:
+        tod_samples_by_chain: Per-chain `TODSamples`, updated in place. Both chains are held at
+            once because a step cannot hot-swap them: the two sides send and receive independently.
+        compsep_output: The initial sky model, already realized for this band.
+        compsep_active: False in TOD-only mode, where there is nobody to exchange with.
+    """
+    from commander4.tod.processing import process_tod
+    from commander4.mpi.transfer import receive_compsep, send_tod
+
+    logger = logging.getLogger(__name__)
+    for step, (chain, iteration) in enumerate(gibbs_schedule(params.gibbs.num_iterations)):
+        if mpi_info.tod.rank == 0:
+            logger.verbose(f"Worldrank {mpi_info.world.rank}, subrank {mpi_info.tod.rank} "
+                           f"starting TOD chain {chain}, iteration {iteration}.")
+        t0 = time.time()
+        tod_output, tod_samples_by_chain[chain] = process_tod(
+            mpi_info, experiment_data, tod_samples_by_chain[chain], compsep_output, params,
+            chain, iteration)
+        if mpi_info.tod.is_master:
+            logger.summary(f"Chain {chain}, iteration {iteration} completed TOD-proc in "
+                           f"{time.time()-t0:.2f}s).")
+        if not compsep_active:
+            continue
+        if step > 0:
+            # Not on the first step: chain 2 has to run its first iteration against the same
+            # initial model chain 1 did, because nothing has been sampled for it yet.
+            t0 = time.time()
+            compsep_output = receive_compsep(mpi_info, experiment_data, my_band_tod_id,
+                                             mpi_info.world.compsep_band_masters)
+            if mpi_info.band.is_master:
+                logger.verbose(f"TOD: Rank {mpi_info.tod.rank} finished receiving results for "
+                               f"chain {chain}, iter {iteration} (time spent waiting+receiving = "
+                               f"{time.time()-t0:.1f}s).")
+        send_tod(mpi_info, tod_output, my_band_tod_id, mpi_info.world.compsep_band_masters)
+        if mpi_info.tod.is_master:
+            logger.verbose(f"TOD: Rank {mpi_info.tod.rank} finished sending results for chain "
+                           f"{chain}, iter {iteration}.")
+
+
+def run_compsep_side(mpi_info: Bunch, params: Bunch, compsep_state, my_band_compsep_id: str,
+                     my_band, comp_lists_by_chain: dict, tod_output) -> None:
+    """Walk the component-separation half of the Gibbs loop.
+    Args:
+        comp_lists_by_chain: Per-chain component lists, updated in place. Each chain needs its own,
+            since a `Component` carries the currently sampled amplitudes and spectral parameters.
+        tod_output: The first TOD sample, already received.
+    """
+    from commander4.compsep.processing import process_compsep
+    from commander4.mpi.transfer import receive_tod, send_compsep
+
+    logger = logging.getLogger(__name__)
+    schedule = gibbs_schedule(params.gibbs.num_iterations)
+    for step, (chain, iteration) in enumerate(schedule):
+        if mpi_info.compsep.rank == 0:
+            logger.verbose(f"Worldrank {mpi_info.world.rank}, subrank {mpi_info.compsep.rank} "
+                           f"starting CompSep chain {chain}, iteration {iteration}.")
+        t0 = time.time()
+        compsep_output = process_compsep(mpi_info, compsep_state, tod_output, iteration, chain,
+                                         params, comp_lists_by_chain[chain])
+        if mpi_info.compsep.rank == 0:
+            logger.verbose(f"CompSep: Rank {mpi_info.compsep.rank} finished chain {chain}, "
+                           f"iteration {iteration} in {time.time()-t0:.2f}s. Sending results.")
+        if step == len(schedule) - 1:
+            continue
+        send_compsep(mpi_info, my_band_compsep_id, compsep_output,
+                     mpi_info.world.tod_band_masters)
+        logger.debug(f"CompSep rank {mpi_info.compsep.rank} finished sending results for chain "
+                     f"{chain}, iter {iteration}. Waiting for TOD results.")
+        t0 = time.time()
+        tod_output = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
+                                 my_band_compsep_id, tod_output, params)
+        logger.debug(f"CompSep rank {mpi_info.compsep.rank} received TOD results for chain "
+                     f"{chain}, iter {iteration} (waiting+receiving = {time.time()-t0:.1f}s).")
+
+
 def run_commander4(params: Bunch, params_dict: dict):
     """
     Main loop function for Commander 4 Gibbs Sampling. Commander4 splits the Gibbs chain in two;
@@ -63,10 +149,9 @@ def run_commander4(params: Bunch, params_dict: dict):
     # Important to import Numpy *after* specifying number of threads per rank (happens in init_mpi),
     # as Numpy will not respect a change in thread count after it has been loaded.
     import numpy as np
-    from commander4.tod.processing import process_tod, init_tod_processing
-    from commander4.compsep.processing import process_compsep, init_compsep_processing,\
-        get_initial_sky_model
-    from commander4.mpi.transfer import receive_tod, send_tod, receive_compsep, send_compsep,\
+    from commander4.tod.processing import init_tod_processing
+    from commander4.compsep.processing import init_compsep_processing, get_initial_sky_model
+    from commander4.mpi.transfer import receive_tod, receive_compsep, send_compsep,\
         get_local_initial_sky
 
     # Unique seed per worldrank. Hash used for slightly improved entropy. Modulus because seed needs
@@ -138,15 +223,9 @@ def run_commander4(params: Bunch, params_dict: dict):
                                                   mpi_info.world.compsep_band_masters)
         else:
             curr_compsep_output = get_local_initial_sky(mpi_info, experiment_data, params)
-
-        t0 = time.time()
-        curr_tod_output, tod_samples = process_tod(mpi_info, experiment_data,
-                                                   tod_samples_chain1,
-                                                   curr_compsep_output, params, 1, 1)
-        if mpi_info.tod.is_master:
-            logger.summary(f"Chain 1, iteration 1 completed TOD-proc in {time.time()-t0:.2f}s).")
-        if compsep_active:
-            send_tod(mpi_info, curr_tod_output, my_band_tod_id, mpi_info.world.compsep_band_masters)
+        run_tod_side(mpi_info, params, experiment_data, my_band_tod_id,
+                     {1: tod_samples_chain1, 2: tod_samples_chain2}, curr_compsep_output,
+                     compsep_active)
 
     elif mpi_info.world.color == 1:
         # Send the initial sky model to TOD before receiving the first TOD output, mirroring the
@@ -155,77 +234,9 @@ def run_commander4(params: Bunch, params_dict: dict):
                      mpi_info.world.tod_band_masters)
         curr_tod_output = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
                                       my_band_compsep_id, curr_tod_output, params)
+        run_compsep_side(mpi_info, params, compsep_state, my_band_compsep_id, my_band,
+                         comp_lists_by_chain, curr_tod_output)
 
-    ###### Main loop ######
-    # Iteration numbers are 1-indexed, and chain 1 iter 1 TOD step is already done pre-loop.
-    for i in range(1, 2 * params.gibbs.num_iterations): # x2 because we have two chains
-        if mpi_info.world.color == 0:  # color == 0 means we are a TOD processing rank
-            t0 = time.time()
-            iter_num = (i + 2) // 2  # [1, 2, 2, 3, 3,...] -  Since TOD already did iteration 1 for
-                                     # chain 1, it is "half" done with iteration 1.
-            chain_num = i % 2 + 1  # [2, 1, 2, 1,...] - TOD has already been done for chain 1 iter 1
-                                   # pre-loop, so we start with TOD for chain 2.
-            if mpi_info.tod.rank == 0:
-                logger.verbose(f"Worldrank {mpi_info.world.rank}, subrank "
-                               f"{mpi_info.tod.rank} starting TOD chain {chain_num}, "
-                               f"iteration {iter_num}.")
-            # TODO: I think this ugly branching logic could be removed if we just renamed
-            # tod_samples_chain1 and 2 to "current" and "other" instead of 1 and 2.
-            if chain_num == 1:
-                curr_tod_output, tod_samples_chain1 = process_tod(mpi_info, experiment_data,
-                                                                       tod_samples_chain1,
-                                                                       curr_compsep_output, params,
-                                                                       chain_num, iter_num)
-            elif chain_num == 2:
-                curr_tod_output, tod_samples_chain2 = process_tod(mpi_info, experiment_data,
-                                                                       tod_samples_chain2,
-                                                                       curr_compsep_output, params,
-                                                                       chain_num, iter_num)
-            if mpi_info.tod.is_master:
-                logger.summary(f"Chain {chain_num}, iteration {iter_num} completed TOD-proc in "\
-                               f"{time.time()-t0:.2f}s).")
-            t0 = time.time()
-            if compsep_active:
-                curr_compsep_output = receive_compsep(mpi_info, experiment_data,
-                                                    my_band_tod_id,
-                                                    mpi_info.world.compsep_band_masters)
-            if mpi_info.band.is_master:
-                logger.verbose(f"TOD: Rank {mpi_info.tod.rank} finished receiving results for "
-                               f"chain {chain_num}, iter {iter_num} (time spent waiting+receiving "
-                               f"= {time.time()-t0:.1f}s).")
-            if compsep_active:
-                send_tod(mpi_info, curr_tod_output, my_band_tod_id,
-                        mpi_info.world.compsep_band_masters)
-            if mpi_info.tod.is_master:
-                logger.verbose(f"TOD: Rank {mpi_info.tod.rank} finished sending results for chain "
-                               f"{chain_num}, iter {iter_num}.")
-
-        elif mpi_info.world.color == 1:  # color == 1 means we are a component separation rank
-            iter_num = (i + 1) // 2  # [1, 1, 2, 2, 3,...] - Unlike TOD processing, comp-sep has not
-                                     # done iteration 1 for either chain yet.
-            chain_num = (i + 1) % 2 + 1  # [1, 2, 1, 2,...] - We start at chain 1, since that's the
-                                         # chain that has already done a TOD step pre-loop.
-            if mpi_info.compsep.rank == 0:
-                logger.verbose(f"Worldrank {mpi_info.world.rank}, subrank {mpi_info.compsep.rank} "
-                               f"starting CompSep chain {chain_num}, iteration {iter_num}.")
-            t0 = time.time()
-            curr_compsep_output = process_compsep(
-                mpi_info, compsep_state, curr_tod_output, iter_num, chain_num, params,
-                comp_lists_by_chain[chain_num])
-            if mpi_info.compsep.rank == 0:
-                compsep_elapsed = time.time() - t0
-                logger.verbose(f"CompSep: Rank {mpi_info.compsep.rank} finished chain {chain_num}, "
-                               f"iteration {iter_num} in {compsep_elapsed:.2f}s. Sending results.")
-            send_compsep(mpi_info, my_band_compsep_id, curr_compsep_output,
-                         mpi_info.world.tod_band_masters)
-            logger.debug(f"CompSep rank {mpi_info.compsep.rank} finished sending results for "
-                         f"chain {chain_num}, iter {iter_num}. Waiting for TOD results.")
-            t0 = time.time()
-            curr_tod_output = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
-                                          my_band_compsep_id, curr_tod_output, params)
-            logger.debug(f"CompSep rank {mpi_info.compsep.rank} received TOD results for chain "
-                         f"{chain_num}, iter {iter_num} (waiting+receiving = "
-                         f"{time.time()-t0:.1f}s).")
     # stop compsep machinery
     if mpi_info.world.is_master and compsep_active:
         logger.verbose("TOD: sending STOP signal to CompSep.")
