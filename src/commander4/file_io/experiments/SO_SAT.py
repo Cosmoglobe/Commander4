@@ -84,7 +84,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
     scan_list = []
     included_detector_scans = 0
     stop_bench("reader-startup")
-    for i_pid in range(scan_idx_start, scan_idx_stop+1):
+    for i_pid in range(scan_idx_start, scan_idx_stop):
         pid = pids[i_pid]
         filepath = filepaths[i_pid]
         if pid in bad_PIDs:
@@ -183,10 +183,9 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                            my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
 
     ### Summarize detector-scan inclusion and Fourier-cut retention ###
-    # The scan loop is inclusive of scan_idx_stop, so the local count is stop+1-start; and the
-    # fraction is reported per detector-scan rather than per scan, since a scan survives as long as
-    # any one of its detectors does and would otherwise hide how many detectors were dropped.
-    local_tot_scans = (scan_idx_stop + 1) - scan_idx_start
+    # The fraction is reported per detector-scan rather than per scan, since a scan survives as
+    # long as any one of its detectors does and would otherwise hide dropped detectors.
+    local_tot_scans = scan_idx_stop - scan_idx_start
     local_tot_detector_scans = ndet * local_tot_scans
     local_stats = np.array([included_detector_scans, local_tot_detector_scans,
                             ntod_sum_final, ntod_sum_original], dtype=np.int64)

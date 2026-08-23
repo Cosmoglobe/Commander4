@@ -18,7 +18,7 @@ from numpy.typing import NDArray
 
 from pixell.bunch import Bunch
 
-from commander4.parameters.schema import resolve_param, resolve_band_lmax
+from commander4.parameters.schema import resolve_param, resolve_band_lmax, split_integer_range
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.tod_samples import TODSamples
@@ -41,15 +41,12 @@ logger = logging.getLogger(__name__)
 
 def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, DetectorGroupTOD,
                                                                  TODSamples, TODSamples]:
-    """To be run once before starting TOD processing.
-
-    Determines whether the process is TOD master, creates the band communicator
-    and determines whether the process is the band master. Also reads the
-    experiment data.
+    """To be run once before starting TOD processing. Determines what data this rank is responsible
+    for, reads other relevant parameter file data, and allocates the TODSamples objects, 
 
     Input:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
-        params (Bunch): The parameters from the input parameter file.
+        params (Bunch): The full input parameter file.
 
     Output:
         mpi_info (Bunch): The data structure containing all MPI relevant data,
@@ -60,51 +57,26 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
         experiment_data (DetectorGroupTOD): The TOD data for the band of this process.
     """
 
-    # We now loop over all bands in all experiments, and allocate them to the first ranks of the
-    # TOD MPI communicator. These ranks will then become the "band masters" for those bands,
-    # handling all communication with CompSep.
-    # All the non-master ranks will have None values, and receive info from master further down.
-    det_names = []
-    my_band_name = None
-    my_experiment = None
-    my_band = None
-    my_band_id = None
-    my_band_pol = None #string identifying the polarization type, e.g. "IQU", "I", "QU"
-    my_scans_start = None
-    my_scans_stop = None
-    for exp_name in params.experiments:
-        experiment = params.experiments[exp_name]
-        if not experiment.enabled:
-            continue
-        for iband, band_name in enumerate(experiment.bands):
-            band = experiment.bands[band_name]
-            if not band.enabled:
-                continue
-            # Checking if our rank is allocated to this experiment + band.
-            if mpi_info.experiment.name == exp_name and mpi_info.band.name == band_name:
-                my_band_name = band_name
-                my_band = band
-                my_band_pol = band.polarization
-                my_band_id = iband
-                # What is my rank number among the ranks processing this detector?
-                my_experiment = experiment
-                # Setting our unique detector id. Note that this is a global, not per band.
-                tot_num_scans = resolve_param(params, "num_scans",
-                                              (f"experiments.{exp_name}.bands.{band_name}",
-                                               f"experiments.{exp_name}"))
-                scans = np.arange(tot_num_scans)
-                my_scans = np.array_split(scans, mpi_info.band.size)[mpi_info.band.rank]
-                my_scans_start = my_scans[0]
-                my_scans_stop = my_scans[-1]
-                det_names = [det for det in band.detectors]
+    experiment_name = mpi_info.experiment.name
+    my_band_name = mpi_info.band.name
+    my_experiment = params.experiments[experiment_name]
+    my_band = my_experiment.bands[my_band_name]
+    my_band_pol = my_band.polarization
+    det_names = list(my_band.detectors)
+
+    total_scans = int(resolve_param(params, "num_scans",
+                                    (f"experiments.{experiment_name}.bands.{my_band_name}",
+                                     f"experiments.{experiment_name}")))
+    my_scans_start, my_scans_stop = split_integer_range(total_scans, mpi_info.band.size,
+                                                        mpi_info.band.rank)
     mpi_info.tod.comm.Barrier()
 
     time.sleep(mpi_info.tod.rank*1e-5)  # Small sleep to get prints in nice order.
-    # MPIcolor_band = MPIrank_tod%tot_num_bands  # Spread the MPI tasks over the different bands.
     band_comm = mpi_info.band.comm
-    logger.debug(f"TOD-rank {mpi_info.tod.rank:4} (on machine {mpi_info.processor_name}), "\
-                 f"dedicated to band {my_band_id:4}, with local rank {mpi_info.band.rank:4} "\
-                 f"(local communicator size: {mpi_info.band.size:4}).")
+    logger.debug(
+        f"TOD-rank {mpi_info.tod.rank:4} (on machine {mpi_info.processor_name}) handles band "
+        f"{mpi_info.band.index:4}, local rank {mpi_info.band.rank:4}/{mpi_info.band.size:4}."
+    )
 
     t0 = time.time()
     with benchmark("fileread-tod"):
@@ -148,6 +120,8 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
     mpi_info['tod']['tod_band_masters'] = tod_band_masters_dict
 
     return mpi_info, todproc_my_band_id, experiment_data, tod_samples_chain1, tod_samples_chain2
+
+
 
 
 def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,

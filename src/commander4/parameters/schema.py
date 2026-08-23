@@ -17,19 +17,134 @@ MPI task counts the parameter file no longer states.
 """
 
 import logging
+from dataclasses import dataclass
 from typing import Any, Sequence
 
 from pixell.bunch import Bunch
 
+from commander4.polarization import EXECUTION_POLS, get_execution_band_id
+
 logger = logging.getLogger(__name__)
 
+# The legal top-level entries in the YAML parameter file. Explicitly stating them allows us to
+# catch misspelled entries
 TOP_LEVEL_BLOCKS = ("gibbs", "resources", "output", "components", "experiments", "tod_processing",
                     "compsep")
 
-_LAYOUT_REFERENCE = "See notes/proposed_param_layout.yml for the full layout."
+# Variable used to identify lack of default. Not using "None" because its a common default.
+_NO_DEFAULT = object()
 
 
-_NO_DEFAULT = object()   # Distinct from None, which is a perfectly good default value.
+@dataclass(frozen=True)
+class TODBandConfig:
+    """One enabled TOD band and its half-open rank interval on the TOD side."""
+
+    index: int
+    experiment_name: str
+    band_name: str
+    rank_start: int
+    rank_stop: int
+
+
+@dataclass(frozen=True)
+class CompSepViewConfig:
+    """One enabled CompSep execution view, handled by exactly one rank."""
+
+    rank: int
+    band_name: str
+    polarization: str
+    identifier: str
+
+
+def enabled_tod_bands(params: Bunch) -> tuple[TODBandConfig, ...]:
+    """Return the single ordered inventory used for all TOD rank allocation.
+
+    Band names are routing identifiers between the TOD and CompSep sides, so enabled TOD band
+    names must be unique across experiments. This explicit rule is clearer than silently merging
+    equal per-experiment band indices into one MPI communicator.
+    """
+    bands = []
+    seen_names: dict[str, str] = {}
+    next_rank = 0
+    if "experiments" not in params:
+        return ()
+
+    for experiment_name in params.experiments:
+        experiment = params.experiments[experiment_name]
+        if not experiment.enabled:
+            continue
+        for band_name in experiment.bands:
+            band = experiment.bands[band_name]
+            if not band.enabled:
+                continue
+            if band_name in seen_names:
+                first_experiment = seen_names[band_name]
+                raise ValueError(
+                    f"Enabled TOD band name {band_name!r} occurs in both {first_experiment!r} and "
+                    f"{experiment_name!r}. Band names route MPI messages and must be globally "
+                    "unique across enabled experiments."
+                )
+            num_tasks = int(band.num_tasks)
+            if num_tasks < 1:
+                raise ValueError(
+                    f"experiments.{experiment_name}.bands.{band_name}.num_tasks must be at least 1."
+                )
+            seen_names[band_name] = experiment_name
+            bands.append(TODBandConfig(
+                index=len(bands),
+                experiment_name=experiment_name,
+                band_name=band_name,
+                rank_start=next_rank,
+                rank_stop=next_rank + num_tasks,
+            ))
+            next_rank += num_tasks
+    return tuple(bands)
+
+
+def enabled_compsep_views(params: Bunch) -> tuple[CompSepViewConfig, ...]:
+    """Return CompSep views in rank order: all I views, followed by all QU views."""
+    if not compsep_enabled(params) or "bands" not in params.compsep:
+        return ()
+
+    views_by_pol: dict[str, list[tuple[str, str]]] = {"I": [], "QU": []}
+    for band_name in params.compsep.bands:
+        band = params.compsep.bands[band_name]
+        if not band.enabled:
+            continue
+        if band.polarization not in EXECUTION_POLS:
+            raise ValueError(
+                f"compsep.bands.{band_name}.polarization is {band.polarization!r}; expected "
+                f"one of {sorted(EXECUTION_POLS)}."
+            )
+        for polarization in EXECUTION_POLS[band.polarization]:
+            views_by_pol[polarization].append(
+                (band_name, get_execution_band_id(band_name, polarization))
+            )
+
+    views = []
+    for polarization in ("I", "QU"):
+        for band_name, identifier in views_by_pol[polarization]:
+            views.append(CompSepViewConfig(
+                rank=len(views),
+                band_name=band_name,
+                polarization=polarization,
+                identifier=identifier,
+            ))
+    return tuple(views)
+
+
+def split_integer_range(length: int, num_parts: int, part: int) -> tuple[int, int]:
+    """Split ``range(length)`` evenly and return one half-open ``[start, stop)`` interval."""
+    if length < 0:
+        raise ValueError("Range length cannot be negative.")
+    if num_parts < 1:
+        raise ValueError("Number of range parts must be at least 1.")
+    if part < 0 or part >= num_parts:
+        raise ValueError(f"Range part {part} is outside [0, {num_parts}).")
+    base_size, remainder = divmod(length, num_parts)
+    start = part * base_size + min(part, remainder)
+    stop = start + base_size + (1 if part < remainder else 0)
+    return start, stop
 
 
 def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any = _NO_DEFAULT,
@@ -124,14 +239,11 @@ def validate_param_schema(params_dict: dict) -> None:
     if "general" in params_dict:
         raise ValueError(
             "The 'general' block was replaced by blocks named after the part of the program that "
-            f"reads them: {', '.join(TOP_LEVEL_BLOCKS)}. Gibbs loop control moved to 'gibbs', "
-            "thread counts to 'resources', output paths and chain writing to 'output', TOD "
-            "sampling steps to 'tod_processing', and nside / float precision / CG settings to "
-            f"'compsep'. {_LAYOUT_REFERENCE}")
+            f"reads them: {', '.join(TOP_LEVEL_BLOCKS)}.")
     unknown = sorted(set(params_dict) - set(TOP_LEVEL_BLOCKS))
     if unknown:
         raise ValueError(f"Unknown top-level parameter block(s) {unknown}. The valid blocks are "
-                         f"{list(TOP_LEVEL_BLOCKS)}. {_LAYOUT_REFERENCE}")
+                         f"{list(TOP_LEVEL_BLOCKS)}.")
 
 
 def compsep_enabled(params: Bunch) -> bool:
@@ -156,24 +268,11 @@ def derive_task_counts(params: Bunch) -> Bunch:
     Returns:
         Bunch with `tod`, `compsep_I`, `compsep_QU` and their sum `total`.
     """
-    ntask_tod = 0
-    for exp_name in params.experiments if "experiments" in params else ():
-        experiment = params.experiments[exp_name]
-        if not experiment.enabled:
-            continue
-        for band_name in experiment.bands:
-            band = experiment.bands[band_name]
-            if band.enabled:
-                ntask_tod += int(band.num_tasks)
-
-    ntask_I = ntask_QU = 0
-    if compsep_enabled(params) and "bands" in params.compsep:
-        for band_name in params.compsep.bands:
-            band = params.compsep.bands[band_name]
-            if not band.enabled:
-                continue
-            ntask_I += "I" in band.polarization
-            ntask_QU += "QU" in band.polarization
+    tod_bands = enabled_tod_bands(params)
+    ntask_tod = tod_bands[-1].rank_stop if tod_bands else 0
+    compsep_views = enabled_compsep_views(params)
+    ntask_I = sum(view.polarization == "I" for view in compsep_views)
+    ntask_QU = sum(view.polarization == "QU" for view in compsep_views)
 
     return Bunch(tod=ntask_tod, compsep_I=ntask_I, compsep_QU=ntask_QU,
                  total=ntask_tod + ntask_I + ntask_QU)

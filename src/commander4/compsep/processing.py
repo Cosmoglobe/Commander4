@@ -400,45 +400,14 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     if len(comp_names) != len(set(comp_names)):
         raise ValueError(f"Duplicate component names found in CompSep setup: {comp_names}.")
 
-    ### Match this rank to its band execution view. Intensity views fill the I-rank block in band
-    ### order, QU views fill the QU-rank block; the two cursors track those contiguous layouts. ###
-    band_cursor = {"I": 0, "QU": mpi_info.compsep.QU_master}
-    band_identifier = None
-    band_name = None
-    my_band = None
-    for band_str in params.compsep.bands:
-        band = params.compsep.bands[band_str]
-        if not band.enabled:
-            continue
-        if band.polarization not in EXECUTION_POLS:
-            raise ValueError(f"Unrecognized polarization in parameter file for band {band_str}")
-        for eval_pol in EXECUTION_POLS[band.polarization]:
-            if band_cursor[eval_pol] == mpi_info.compsep.rank:
-                my_band = deepcopy(band)
-                band_name = band_str
-                band_identifier = get_execution_band_id(band_str, eval_pol)
-                my_band.identifier = band_identifier
-                my_band.polarization = eval_pol
-                logger.debug(f"Rank {mpi_info.compsep.rank} matched band {band_identifier}.")
-            band_cursor[eval_pol] += 1
-
-    # Sanity checks: the I cursor must have consumed exactly the I-rank block [0, QU_master), and
-    # the QU cursor exactly the QU-rank block [QU_master, size).
-    n_I_ranks = mpi_info.compsep.QU_master
-    n_QU_ranks = mpi_info.compsep.size - mpi_info.compsep.QU_master
-    if band_cursor["I"] != mpi_info.compsep.QU_master:
-        raise RuntimeError(
-            f"Number of enabled Intensity band views ({band_cursor['I']}) does not match the "
-            f"number of CompSep ranks assigned to Intensity ({n_I_ranks}).")
-    if band_cursor["QU"] != mpi_info.compsep.size:
-        raise RuntimeError(
-            f"Number of enabled QU band views "
-            f"({band_cursor['QU'] - mpi_info.compsep.QU_master}) does not match the number of "
-            f"CompSep ranks assigned to QU ({n_QU_ranks}).")
-    if my_band is None or band_identifier is None:
-        raise RuntimeError(
-            f"CompSep rank {mpi_info.compsep.rank} was not assigned to any enabled band. Check "
-            "that compsep.bands matches the configured I/QU rank counts.")
+    # MPI setup already selected this rank's execution view from the same inventory used to count
+    # tasks. Only the parameter block needs copying because its polarization is narrowed to I or QU.
+    band_name = mpi_info.band.name
+    band_identifier = mpi_info.band.identifier
+    my_band = deepcopy(params.compsep.bands[band_name])
+    my_band.identifier = band_identifier
+    my_band.polarization = mpi_info.band.polarization
+    logger.debug(f"Rank {mpi_info.compsep.rank} handles CompSep view {band_identifier}.")
 
     cg_groups, per_pixel_groups, mcmc_groups = _resolve_sampling_groups(params)
     amplitude_groups = cg_groups if cg_groups else per_pixel_groups
@@ -464,7 +433,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     compsep_state = CompSepState(
         band_name=band_name,
         band_identifier=band_identifier,
-        target_pol="I" if mpi_info.compsep.subcolor == 0 else "QU",
+        target_pol=mpi_info.compsep.polarization,
         amplitude_method=amplitude_method,
         amplitude_groups=amplitude_groups,
         mcmc_groups=mcmc_groups,

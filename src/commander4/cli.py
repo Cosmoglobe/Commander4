@@ -177,14 +177,14 @@ def run_commander4(params: Bunch, params_dict: dict):
     world_tod_band_masters_dict = None
     compsep_state = None
     comp_lists_by_chain = None
-    if mpi_info.world.color == 0:
+    if mpi_info.world.side == "tod":
         mpi_info, my_band_tod_id, experiment_data, tod_samples_chain1, tod_samples_chain2\
                                                             = init_tod_processing(mpi_info, params)
         # Even though we're always only working on one of the two chains we still need two sets of
         # samples, as we can't "hot swap" them (both TOD processing and component separation would
         # have to send and receive from the same local buffer). However, perhaps it would be cleaner
         # to call these "current_chain" and "other chain" or something.
-    elif mpi_info.world.color == 1:
+    elif mpi_info.world.side == "compsep":
         initial_comp_list, mpi_info, my_band_compsep_id, my_band, compsep_state = \
             init_compsep_processing(mpi_info, params)
         # A Component contains the current sampled amplitudes and spectral parameters, so each
@@ -225,7 +225,7 @@ def run_commander4(params: Bunch, params_dict: dict):
             if "enabled" not in component or component.enabled:
                 component_names.append(component_name)
         logger.summary(f"Enabled sky components: {', '.join(component_names)}.")
-    if mpi_info.world.color == 0:
+    if mpi_info.world.side == "tod":
         # The initial sky model is built from each component's init_from / init_chain_path (else
         # zeros). If CompSep ranks exist they build and send it (as for every later iteration);
         # otherwise we build it locally so a sensible fixed sky is available with no CompSep ranks.
@@ -238,7 +238,7 @@ def run_commander4(params: Bunch, params_dict: dict):
                      {1: tod_samples_chain1, 2: tod_samples_chain2}, curr_compsep_output,
                      compsep_active)
 
-    elif mpi_info.world.color == 1:
+    elif mpi_info.world.side == "compsep":
         # Send the initial sky model to TOD before receiving the first TOD output, mirroring the
         # process_compsep -> send_compsep -> receive_tod order used inside the main loop.
         send_compsep(mpi_info, my_band_compsep_id, get_initial_sky_model(comp_lists_by_chain[1]),

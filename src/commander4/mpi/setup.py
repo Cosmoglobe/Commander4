@@ -1,9 +1,4 @@
-"""Splitting the world communicator into the TOD and CompSep sides, and into per-band groups.
-
-`init_mpi` performs the top-level split (color 0 = TOD processing, color 1 = component separation)
-and records, in the `mpi_info` Bunch every later stage reads, which rank masters each band on each
-side. `init_mpi_tod` and `init_mpi_compsep` then build the per-band communicators within a side.
-"""
+"""Split MPI ranks between the TOD and CompSep sides and the enabled bands."""
 import os
 import time
 import logging
@@ -11,39 +6,22 @@ import mpi4py
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.parameters.schema import compsep_enabled, derive_task_counts, task_count_breakdown
+from commander4.parameters.schema import (
+    compsep_enabled,
+    derive_task_counts,
+    enabled_compsep_views,
+    enabled_tod_bands,
+    task_count_breakdown,
+)
 
 logger = logging.getLogger(__name__)
 
-def init_mpi(params):
-    """ To be run before anything else to set up the MPI environment.
+def init_mpi(params: Bunch) -> Bunch:
+    """Validate the task count and build this rank's world, side, and band contexts.
 
-    Creates a Bunch data structure, mpi_info, which contains all data relevant to the MPI layout of
-    the program.  Structured as a hierarchy where the top level are the names of the MPI contexts
-    that we operate in (for now, 'world', 'tod', 'compsep', and 'band'). The only exception to this
-    is the 'processor_name' entry, which is independent of context and thus does not belong under
-    any of the contexts.
-        Below the context names are typically the following keys:
-            - 'rank' : The MPI rank of the process in the context.
-            - 'is_master': whether the process is a master process in the context.
-            - 'master': The rank of the master process in the context.
-            - 'size': The number of total processes in the context.
-            - 'color': If the context is subdivided into further contexts, the color indicates which
-                of the sub-contexts this process is part of.
-            - 'comm': The communicator of the context.
-    In addition to these, some contexts have further keys that give information relevant to that
-    context. For example, the 'world' context contains the 'tod_master' and 'compsep_master' keys,
-    which indicates which ranks in the world contexts are the masters in the tod and compsep
-    contexts. After complete initialization (i.e. after init_tod_processing and
-    init_compsep_processing is called), it will also have two dicts, 'tod_band_masters' and
-    'compsep_band_masters', which contains a mapping of a band identifier to the world rank of the
-    master of that band, where the bands are subcontexts of the TOD and compsep contexts,
-    respectively (needed for passing data between TOD and compsep processes).
-
-    Input:
-        params (Bunch): The parameters from the input parameter file.
-    Output:
-        mpi_info (Bunch): The data structure containing all MPI relevant data, as explained above.
+    The returned ``Bunch`` contains the common ``world`` context, one named ``tod`` or ``compsep``
+    context, and the selected ``band``. Every context uses the same direct fields: communicator,
+    rank, size, master, and ``is_master`` where applicable.
     """
     mpi_info = Bunch()
     world_comm = MPI.COMM_WORLD
@@ -102,11 +80,13 @@ def init_mpi(params):
     nthreads_compsep = params.resources.compsep.num_threads
     if worldrank < ntasks.tod:
         color = 0
+        side = "tod"
         my_num_threads = params.resources.tod.num_threads
         my_num_threads_numba = my_num_threads
 
     elif worldrank < ntasks.tod + tot_num_CompSep_ranks:
         color = 1  # Compsep
+        side = "compsep"
         # num_threads is either an int, or a list specifying nthreads for each rank.
         if isinstance(nthreads_compsep, int):  # If int, all ranks have same nthreads.
             my_num_threads = nthreads_compsep
@@ -170,7 +150,7 @@ def init_mpi(params):
     mpi_info['world']['master'] = 0
     mpi_info['world']['size'] = worldsize
     mpi_info['world']['rank'] = worldrank
-    mpi_info['world']['color'] = color
+    mpi_info['world']['side'] = side
     mpi_info['world']['tod_master'] = tod_master
     mpi_info['world']['compsep_master'] = compsep_master
     mpi_info['world']['is_master'] = is_world_master
@@ -196,11 +176,13 @@ def init_mpi(params):
         mpi_info['compsep']['rank'] = proc_rank
         mpi_info['compsep']['is_master'] = mpi_info.compsep.rank == mpi_info.compsep.master
         
-        #Split between I and QU
-        subcolor = 0 if proc_rank < ntasks.compsep_I else 1
+        # Split between I and QU. Numeric colors remain private to MPI setup; scientific code sees
+        # the named polarization below.
+        polarization = enabled_compsep_views(params)[proc_rank].polarization
+        subcolor = 0 if polarization == "I" else 1
         sub_comm = proc_comm.Split(subcolor, key=proc_rank)
         mpi_info['compsep']['subcomm'] = sub_comm
-        mpi_info['compsep']['subcolor'] = subcolor
+        mpi_info['compsep']['polarization'] = polarization
         mpi_info['compsep']['subsize'] = sub_comm.Get_size()
         mpi_info['compsep']['subrank'] = sub_comm.Get_rank()
         mpi_info['compsep']['I_master'] = 0  # in compsep_comm numbering
@@ -212,145 +194,65 @@ def init_mpi(params):
     return mpi_info
     
 
-def init_mpi_tod(mpi_info, params):
-    """ Add the tod-specific information to the mpi_info structure.
-
-    This function is called by init_mpi.
-
-    Input:
-        mpi_info (Bunch): The data structure containing all MPI relevant data.
-        params (Bunch): The parameters from the input parameter file.
-
-    Output:
-        mpi_info (Bunch): The data structure containing all MPI relevant data, now including info
-            for the 'tod' context.
-    """
-    import numpy as np  # Can't be loaded at top-level because it must be loaded after init_mpi().
-
-    MPIsize_tod, MPIrank_tod = mpi_info.tod.size, mpi_info.tod.rank
-    is_tod_master = mpi_info.tod.is_master
-    tod_comm = mpi_info.tod.comm
-
-    # We now loop over all bands in all experiments, and allocate them to the first ranks of the
-    # TOD MPI communicator. These ranks will then become the "band masters" for those bands,
-    # handling all communication with CompSep.
-    TOD_rank = 0
-    current_detector_id = 0  # A unique number identifying every detector of every band.
-    my_band_name = None
-    my_band_id = None
-    my_experiment_name = None
-    my_det_id = None
-    my_detector_name = None
-    for exp_name in params.experiments:
-        experiment = params.experiments[exp_name]
-        if not experiment.enabled:
-            continue
-        for iband, band_name in enumerate(experiment.bands):
-            band = experiment.bands[band_name]
-            if not band.enabled:
-                continue
-            this_band_TOD_ranks = np.arange(TOD_rank, TOD_rank + band.num_tasks)
-            if MPIrank_tod in this_band_TOD_ranks:
-                # Splitting TOD ranks evenly among the detectors of this band.
-                TOD_ranks_per_detector = np.array_split(this_band_TOD_ranks, len(band.detectors))
-                my_band_name = band_name
-                my_band_id = iband
-                my_experiment_name = exp_name
-                for idet, det_name in enumerate(band.detectors):
-                    # Check if our rank belongs to this detector
-                    if MPIrank_tod in TOD_ranks_per_detector[idet]:
-                        # What is my rank number among the ranks processing this detector?
-                        my_det_id = idet
-                        my_detector_name = det_name
-                    current_detector_id += 1  # Update detector counter.
-            else:
-                # Update detector counter for ranks not assigned to current band.
-                current_detector_id += len(band.detectors)
-            TOD_rank += band.num_tasks
-    if TOD_rank != MPIsize_tod:
-        raise RuntimeError(f"Total number of ranks dedicated to the various experiments "
-                           f"({TOD_rank}) differs from the total number of tasks dedicated to "
-                           f"TOD processing ({MPIsize_tod}).")
-    if is_tod_master:
-        logger.verbose(f"TOD: {MPIsize_tod} tasks successfully allocated to TOD processing.")
-
-    if my_band_id is None or my_det_id is None or my_experiment_name is None:
+def init_mpi_tod(mpi_info: Bunch, params: Bunch) -> Bunch:
+    """Assign this TOD rank from the shared band inventory and create its band communicator."""
+    tod_rank = mpi_info.tod.rank
+    tod_bands = enabled_tod_bands(params)
+    my_band = next(
+        (band for band in tod_bands if band.rank_start <= tod_rank < band.rank_stop),
+        None,
+    )
+    if my_band is None:
+        raise RuntimeError(f"TOD rank {tod_rank} was not assigned to an enabled band.")
+    if tod_bands[-1].rank_stop != mpi_info.tod.size:
         raise RuntimeError(
-            f"TOD rank {MPIrank_tod} was not assigned to an enabled band/detector. "
-            "Check experiment enable flags and the TOD rank allocation in the parameter file."
+            f"Enabled TOD bands require {tod_bands[-1].rank_stop} ranks, but the TOD side has "
+            f"{mpi_info.tod.size}."
         )
 
-    # Create communicators for each different band.
-    band_comm = mpi_info.tod.comm.Split(my_band_id, key=MPIrank_tod)
-    # Get my local rank, and the total size of, the band-communicator IvsQU'm on.
-    MPIsize_band, MPIrank_band = band_comm.Get_size(), band_comm.Get_rank()  
-    det_comm = band_comm.Split(my_det_id, key=MPIrank_band)  # Create communicators for each,
-                                                                 # using the local IDs
-    MPIsize_det, MPIrank_det = det_comm.Get_size(), det_comm.Get_rank()  
-    is_band_master = MPIrank_band == 0  # Am I the master of my local band.
-    is_det_master = MPIrank_det == 0
+    # The global inventory index is the communicator color. Unlike the old per-experiment index,
+    # it cannot merge bands from different experiments.
+    band_comm = mpi_info.tod.comm.Split(my_band.index, key=tod_rank)
+    band_rank = band_comm.Get_rank()
+    band_size = band_comm.Get_size()
 
-    tod_comm.Barrier()
-    time.sleep(MPIrank_tod*1e-5)  # Small sleep to get prints in nice order.
-    
-    logger.debug(f"TOD: Hello from TOD-rank {MPIrank_tod} (on machine {MPI.Get_processor_name()}) "\
-                 f"dedicated to band {my_band_id}, with local rank {MPIrank_band} (local "\
-                 f"communicator size: {MPIsize_band}), and detector "\
-                 f"{my_det_id} with local rank {MPIrank_det} and size {MPIsize_det}")
+    if mpi_info.tod.is_master:
+        logger.verbose(f"TOD: {mpi_info.tod.size} tasks allocated across {len(tod_bands)} bands.")
+    logger.debug(
+        f"TOD rank {tod_rank} (on {MPI.Get_processor_name()}) handles "
+        f"{my_band.experiment_name}/{my_band.band_name}, band rank {band_rank}/{band_size}."
+    )
 
-    mpi_info['experiment'] = Bunch()
-    mpi_info['experiment']['name'] = my_experiment_name
-    mpi_info['tod']['band_id'] = my_band_id
-    mpi_info['band'] = Bunch()
-    mpi_info['band']['master'] = 0
-    mpi_info['band']['comm'] = band_comm
-    mpi_info['band']['size'] = MPIsize_band
-    mpi_info['band']['rank'] = MPIrank_band
-    mpi_info['band']['is_master'] = is_band_master
-    mpi_info['band']['name'] = my_band_name
-    mpi_info['band']['det_id'] = my_det_id
-    mpi_info['det'] = Bunch()
-    mpi_info['det']['master'] = 0
-    mpi_info['det']['comm'] = det_comm
-    mpi_info['det']['size'] = MPIsize_det
-    mpi_info['det']['rank'] = MPIrank_det
-    mpi_info['det']['is_master'] = is_det_master
-    mpi_info['det']['name'] = my_detector_name
-
+    mpi_info.experiment = Bunch(name=my_band.experiment_name)
+    mpi_info.band = Bunch(
+        index=my_band.index,
+        name=my_band.band_name,
+        master=0,
+        comm=band_comm,
+        size=band_size,
+        rank=band_rank,
+        is_master=band_rank == 0,
+    )
     return mpi_info
 
 
-def init_mpi_compsep(mpi_info, params):
-    """ Add the compsep-specific information to the mpi_info structure.
-
-    The only thing this does currently is check whether we have enough MPI compsep processes (i.e.
-    one per band), and fill in some trivial information in the mpi_info dict. This function is
-    called by init_mpi.
-
-    Input:
-        mpi_info (Bunch): The data structure containing all MPI relevant data.
-        params (Bunch): The parameters from the input parameter file.
-
-    Output:
-        mpi_info (Bunch): The data structure containing all MPI relevant data, now including info
-            for the 'compsep' context.
-    """
-
-    MPIsize_compsep = mpi_info.compsep.size
-
-    ### Setting up info for each band, including where to get the data from ###
-    ###(map from file, or receive from TOD processing) ###
-    current_band_idx = 0
-    for band_str in params.compsep.bands:
-        if params.compsep.bands[band_str].enabled:
-            current_band_idx += 1
-    tot_num_bands = current_band_idx
-    mpi_info['band'] = Bunch()
-    mpi_info['band']['size'] = 1
-    mpi_info['band']['is_master'] = True
-
-    if tot_num_bands > MPIsize_compsep:
-        raise RuntimeError(f"Total number of experiment bands {tot_num_bands} exceeds the number "
-                           f"of CompSep MPI tasks {MPIsize_compsep}.")
-
+def init_mpi_compsep(mpi_info: Bunch, params: Bunch) -> Bunch:
+    """Attach the CompSep view assigned to this rank from the shared ordered inventory."""
+    views = enabled_compsep_views(params)
+    if len(views) != mpi_info.compsep.size:
+        raise RuntimeError(
+            f"Enabled CompSep views require {len(views)} ranks, but the CompSep side has "
+            f"{mpi_info.compsep.size}."
+        )
+    view = views[mpi_info.compsep.rank]
+    mpi_info.band = Bunch(
+        name=view.band_name,
+        identifier=view.identifier,
+        polarization=view.polarization,
+        comm=MPI.COMM_SELF,
+        size=1,
+        rank=0,
+        master=0,
+        is_master=True,
+    )
     return mpi_info
