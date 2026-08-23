@@ -184,12 +184,14 @@ class RadioSources(PointSourcesComponent):
 
     def get_sky(self, nu:float, nside:int, fwhm:float=0.0):
         """ Returns the sky at frequency `nu` (GHz) from the point sources, at a certain `nside`,
-            observed through a Gaussian beam of `fwhm` arcmin.
+            observed through a Gaussian beam of `fwhm` **radians**.
 
         The beam is applied by painting each source through it, so unlike a `DiffuseComponent` there
-        is no separate smoothing step: `fwhm` selects the beam the sources are painted with.
+        is no separate smoothing step: `fwhm` selects the beam the sources are painted with. The
+        unit matches `DiffuseComponent.get_sky`, because `SkyModel.get_sky_at_nu` calls both through
+        the same interface and passes the band's `fwhm_rad`.
         """
-        self.compute_pix_beams(np.deg2rad(fwhm/60), nside)
+        self.compute_pix_beams(fwhm, nside)
         map = np.zeros((1, hp.nside2npix(nside)),
                        dtype=np.float64 if self.double_prec else np.float32)
         _numba_proj2map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
@@ -198,14 +200,15 @@ class RadioSources(PointSourcesComponent):
         return map
 
     def get_component_map(self, nside:int, fwhm:float=0.0):
-        """ This component's *amplitude* map at a certain `nside` and `fwhm`, in uK_RJ at `nu_ref`.
+        """ This component's *amplitude* map at a certain `nside` and `fwhm` (radians), in uK_RJ at
+            `nu_ref`.
 
         No SED is applied, so the result is frequency-independent, which is why the mJy/sr to uK_RJ
         conversion is evaluated at the component's own reference frequency. That matches what a
         `DiffuseComponent` returns here: its alms are likewise stored in uK_RJ referenced to
         `nu_ref`, with `get_sed(nu)` carrying the amplitude to any other frequency.
         """
-        self.compute_pix_beams(np.deg2rad(fwhm/60), nside)
+        self.compute_pix_beams(fwhm, nside)
         map = np.zeros((1, hp.nside2npix(nside)),
                        dtype=np.float64 if self.double_prec else np.float32)
         _numba_proj2map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list, self._data[0,:])

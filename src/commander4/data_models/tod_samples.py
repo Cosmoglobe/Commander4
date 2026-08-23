@@ -18,6 +18,7 @@ import logging
 import typing
 
 from commander4.file_io import paths
+from commander4.file_io.chain_writer import should_write_chain
 from commander4.data_models.jump_corrections import JumpCatalog
 from commander4.units import rj_to_band_unit_factor
 if typing.TYPE_CHECKING:
@@ -345,6 +346,11 @@ class TODSamples:
     def write_chain_to_file(self, itr: int):
         band_comm = self.band_comm
         params = self.params
+
+        # Skipped iterations return before the gathers below, which are collective: every rank in
+        # band_comm evaluates this on the same params and itr, so they all leave together.
+        if not should_write_chain(params, "tod", itr):
+            return
 
         ####################################################################
         # Gather nscan info.
