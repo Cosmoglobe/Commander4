@@ -258,6 +258,40 @@ class GriddedPointSources(SkyComponent):
         m[0, self._source_pixels(nside)] = self.amplitude
         return m
 
+    def catalogue_table(self, nside: int) -> tuple[list[str], NDArray[np.floating]]:
+        """The source list as a Commander4 `RadioSources` catalogue: column names and their values.
+
+        `RadioSources` describes a source by a flux density in mJy, while this component paints a
+        pixel value in uK_RJ, so the two differ by the pixel solid angle and the flux-to-brightness
+        conversion at `nu_ref`. Both descriptions integrate to the same total brightness:
+
+            I[mJy] * (mJy/sr -> uK_RJ) = amplitude[uK_RJ] * pixel_area[sr]
+
+        The pixel area is that of `nside`, since a source here *is* one pixel of the simulation
+        grid; a catalogue written for one nside therefore does not describe the same sky at
+        another. Spectral indices follow `RadioSources.get_sed`, which uses `alpha - 2` to go from
+        a flux-density index to brightness temperature, so `alpha = beta + 2`.
+
+        Args:
+            nside: The simulation grid the sources were painted on.
+
+        Returns:
+            `(column_names, table)`, `table` having one row per source.
+        """
+        import pysm3.units as pysm3u
+
+        mjysr_to_ukrj = (pysm3u.mJy / pysm3u.steradian).to(
+            pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(self.nu_ref * pysm3u.GHz))
+        pix = self._source_pixels(nside)
+        lon, lat = hp.pix2ang(nside, pix, lonlat=True)
+        flux_mjy = self.amplitude * hp.nside2pixarea(nside) / float(mjysr_to_ukrj)
+        table = np.zeros((pix.size, 4))
+        table[:, 0] = lon
+        table[:, 1] = lat
+        table[:, 2] = flux_mjy
+        table[:, 3] = self.beta + 2.0
+        return ["Glon(deg)", "Glat(deg)", "I(mJy)", "alpha_I"], table
+
 
 _COMPONENT_BUILDERS: dict[str, type[SkyComponent]] = {
     "CMB": CMBComponent,
@@ -307,6 +341,32 @@ def write_component_truth_maps(output_dir: str, components: list[SkyComponent],
                                    ("COMPCLS", comp.comp_cfg.component_class, "Component class")])
         logger.info("Wrote input amplitude map for component %s (nu_ref = %g GHz, %s) to %s.",
                     comp.name, comp.nu_ref, units, path)
+        # Point-source components additionally get a catalogue, which is what Commander4's
+        # `RadioSources` reads: a truth *map* cannot be handed to it, because it models sources as
+        # a source list painted through the band beam rather than as pixels.
+        if hasattr(comp, "catalogue_table"):
+            write_source_catalogue(output_dir, comp, nside)
+
+
+def write_source_catalogue(output_dir: str, comp: SkyComponent, nside: int) -> None:
+    """Write a point-source component's source list to ``<output_dir>/catalogue_<name>.dat``.
+
+    The format is the whitespace-separated table Commander4's `RadioSources.read_dat_to_bunch`
+    expects: comment lines, of which the last one before the data names the columns. Point it at
+    with `template_path` and set the component's `nu_0` to the `nu_ref` recorded in the header.
+    """
+    columns, table = comp.catalogue_table(nside)
+    path = os.path.join(output_dir, f"catalogue_{comp.name}.dat")
+    with open(path, "w") as f:
+        f.write(f"# Point-source catalogue written by simgen for component {comp.name}.\n")
+        f.write("# SED model type      = radio\n")
+        f.write(f"# Reference frequency = {comp.nu_ref:10.2f} GHz\n")
+        f.write(f"# Painted on an nside = {nside} grid; fluxes assume that pixel area.\n")
+        f.write("# " + " ".join(f"{name:>14s}" for name in columns) + "\n")
+        for row in table:
+            f.write("  " + " ".join(f"{value:14.6f}" for value in row) + "\n")
+    logger.info("Wrote %d-source catalogue for component %s (nu_ref = %g GHz) to %s.",
+                table.shape[0], comp.name, comp.nu_ref, path)
 
 
 def build_band_sky_maps(params: Bunch, bands: list,
