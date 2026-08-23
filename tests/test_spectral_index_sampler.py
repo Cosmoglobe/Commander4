@@ -130,6 +130,9 @@ class FakeComponent:
         self.eval_pol = eval_pol
         self.shortname = shortname
         self.longname = shortname
+        # Every real Component sets this (see `Component.__init__`); zero means the amplitudes are
+        # deconvolved, which is what the CG solver this test stands in for produces.
+        self.amp_fwhm_rad = 0.0
         if comp_params is None:
             comp_params = AttrBunch({"shortname": shortname, "beta": beta})
             if sample:
