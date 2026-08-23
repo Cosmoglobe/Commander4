@@ -101,9 +101,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
             detector_list = []
-            # idet is the detector's full-band column (its position in ``all_det_names``);
-            # idet_accepted (det_idx_local) advances only when a detector survives the cuts below.
-            idet_accepted = 0
             for idet, det_name in enumerate(all_det_names):
                 tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32, copy=False)
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
@@ -123,12 +120,21 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
                                              huffman_symbols, npsi, my_band.eval_nside, data_nside,
                                              ntod, ntod_optimal)
 
-                detector = DetectorTOD(det_name, idet, idet_accepted, tod, det_pointing, fsamp,
-                                       vsun, huffman_tree, huffman_symbols, default_mask,
-                                       specific_masks, ntod, ntod_optimal,
-                                       flag_encoded=flag_encoded,
-                                       bad_data_bitmask = 6111232,
-                                       init_scalars = init_scalars)
+                detector = DetectorTOD(
+                    name=det_name,
+                    det_idx_fullband=idet,
+                    tod=tod,
+                    pointing=det_pointing,
+                    sampling_rate_hz=fsamp,
+                    orbital_velocity_m_per_s=vsun,
+                    huffman_tree=huffman_tree,
+                    huffman_symbols=huffman_symbols,
+                    default_proc_mask=default_mask,
+                    specific_proc_masks=specific_masks,
+                    flag_encoded=flag_encoded,
+                    bad_data_bitmask=6111232,
+                    init_scalars=init_scalars,
+                )
                 if (detector.tod == 0).all():
                     continue
                 if np.mean(np.abs(detector.tod)) > 0.001 or np.std(detector.tod) > 0.001:
@@ -140,7 +146,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
-                idet_accepted += 1
         if len(detector_list) == 0:
             good_scan = False
         if good_scan:

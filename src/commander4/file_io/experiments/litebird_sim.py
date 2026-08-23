@@ -100,9 +100,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                 raise ValueError(f"{ntod_upper_bound} {ntod}")
 
             detector_list = []
-            # All detectors are kept (whole-scan rejection via the flag check below), so the
-            # full-band column idet and the per-scan column idet_accepted advance together here.
-            idet_accepted = 0
             for idet, det_name in enumerate(det_names):
                 tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32, copy=False)
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
@@ -127,13 +124,21 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                 det_pointing = PixelPointing(pix_encoded, psi_encoded, huffman_tree,
                                              huffman_symbols, npsi, my_band.eval_nside, data_nside,
                                              ntod, ntod_optimal)
-                detector = DetectorTOD(det_name, idet, idet_accepted, tod, det_pointing, fsamp,
-                                       vsun, huffman_tree, huffman_symbols, default_mask,
-                                       specific_masks, ntod, ntod_optimal)
+                detector = DetectorTOD(
+                    name=det_name,
+                    det_idx_fullband=idet,
+                    tod=tod,
+                    pointing=det_pointing,
+                    sampling_rate_hz=fsamp,
+                    orbital_velocity_m_per_s=vsun,
+                    huffman_tree=huffman_tree,
+                    huffman_symbols=huffman_symbols,
+                    default_proc_mask=default_mask,
+                    specific_proc_masks=specific_masks,
+                )
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
-                idet_accepted += 1
         if good_scan:
             scanID = int(pid)
             scan = ScanTOD(detector_list, 0., scanID)

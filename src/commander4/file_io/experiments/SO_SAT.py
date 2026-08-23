@@ -128,10 +128,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                                             my_band.eval_nside, ntod_optimal)
 
             detector_list = []
-            # idet is the detector's full-band column (its position in ``det_names``); idet_accepted
-            # is its position among the detectors actually kept in this scan (det_idx_local), and is
-            # only advanced when a detector passes the cuts below.
-            idet_accepted = 0
             for idet, det_name in enumerate(det_names):
                 # Find the index of the current detector in the file order of detectors.
                 det_file_idx = det_names_file.index(det_name)
@@ -148,16 +144,25 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                 # gain_init, sigma0_init, fknee_init, alpha_init:
                 init_scalars = f[f"/{pid}/{det_name}/scalars"][()]
 
-                detector = DetectorTOD(det_name, idet, idet_accepted, tod, pointing, fsamp,
-                                       np.zeros(3), huffman_tree, huffman_symbols,
-                                       default_mask, specific_masks, ntod, ntod_optimal,
-                                       huffman_tree2=huffman_tree2,
-                                       huffman_symbols2=huffman_symbols2,
-                                       flag_encoded=flag_encoded,
-                                       bad_data_bitmask=my_experiment.bad_data_bitmask,
-                                       init_scalars=init_scalars,
-                                       tod_is_compressed=my_experiment.tod_is_compressed,
-                                       det_response=det_response)
+                detector = DetectorTOD(
+                    name=det_name,
+                    det_idx_fullband=idet,
+                    tod=tod,
+                    pointing=pointing,
+                    sampling_rate_hz=fsamp,
+                    orbital_velocity_m_per_s=np.zeros(3),
+                    huffman_tree=huffman_tree,
+                    huffman_symbols=huffman_symbols,
+                    default_proc_mask=default_mask,
+                    specific_proc_masks=specific_masks,
+                    huffman_tree2=huffman_tree2,
+                    huffman_symbols2=huffman_symbols2,
+                    flag_encoded=flag_encoded,
+                    bad_data_bitmask=my_experiment.bad_data_bitmask,
+                    init_scalars=init_scalars,
+                    tod_is_compressed=my_experiment.tod_is_compressed,
+                    det_response=det_response,
+                )
                 # `<=` so the 0.0 default still drops fully-flagged detector-scans.
                 if np.mean(detector.good_data_mask) <= min_unmasked_fraction:
                     continue
@@ -166,9 +171,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
-                idet_accepted += 1
-
-            included_detector_scans += idet_accepted
+            included_detector_scans += len(detector_list)
         stop_bench("fileread")
         if len(detector_list) == 0:
             good_scan = False

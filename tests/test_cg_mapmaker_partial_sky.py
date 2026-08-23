@@ -54,10 +54,13 @@ def _build_band(pix: np.ndarray, psi: np.ndarray, tod: np.ndarray, pols: str,
     ntod = pix.size
     pointing = PixelPointing(pix.astype(np.int64), psi.astype(np.float64), np.array([0], np.int64),
                              None, None, _NSIDE, _NSIDE, ntod, ntod)
-    orb_dir_vec = np.array(velocity, dtype=np.float32)
-    det = DetectorTOD("d0", 0, 0, tod.astype(np.float32), pointing, 1.0, orb_dir_vec, None, None,
-                      np.ones(_NPIX, bool), {}, ntod, ntod, flag_encoded=np.zeros(ntod, np.int64),
-                      bad_data_bitmask=1, flag_is_compressed=False)
+    orbital_velocity = np.array(velocity, dtype=np.float32)
+    det = DetectorTOD(
+        name="d0", det_idx_fullband=0, tod=tod.astype(np.float32), pointing=pointing,
+        sampling_rate_hz=1.0, orbital_velocity_m_per_s=orbital_velocity, huffman_tree=None,
+        huffman_symbols=None, default_proc_mask=np.ones(_NPIX, bool), specific_proc_masks={},
+        flag_encoded=np.zeros(ntod, np.int64), bad_data_bitmask=1, flag_is_compressed=False,
+    )
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
     return DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=30.0, fwhm=0.0,
                             fsamp=1.0, ndet=1, pols=pols, noise_model=noise_model)

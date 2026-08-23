@@ -175,7 +175,9 @@ def generate_spdust(freq, fwhm, units, nside, params):
 T_CMB = 2.72548  # K_CMB
 C_LIGHT = 299792458.0  # m/s
 def get_orbital_dipole(det: DetectorTOD, pix: NDArray[np.integer], freq: float, units) -> NDArray:
-    orb_vel_vec = det.orb_dir_vec  # Satellite velocity vector relative to sun.
+    orb_vel_vec = det.orbital_velocity_m_per_s
+    if orb_vel_vec is None:
+        raise ValueError("Read-time orbital-dipole simulation requires an orbital velocity.")
     # pointing_vec = hp.pix2vec(det.nside, pix)
     geom = ducc0.healpix.Healpix_Base(det.nside, "RING")
     pointing_vec = geom.pix2vec(pix)

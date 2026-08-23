@@ -138,15 +138,22 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             pix_encoded = huffman.huffman_compress_array(pix, sym_codes, sym_lengths)
 
             # Detectors are spawned from one shared pointing, so every detector is present in every
-            # scan: det_idx_fullband == det_idx_local == idet. pix/psi were just compressed to bytes
-            # (PixelPointing auto-detects the compression) at the optimal length, so for this reader
-            # ntod_original == ntod == ntod_optimal.
+            # scan. PixelPointing auto-detects the compressed bytes at the optimal length.
             det_pointing = PixelPointing(pix_encoded, psi_encoded, huffman_tree, huffman_symbols,
                                          npsi, my_band.eval_nside, data_nside, ntod_optimal,
                                          ntod_optimal)
-            detector = DetectorTOD(det_name, idet, idet, tod, det_pointing, fsamp, vsun,
-                                   huffman_tree, huffman_symbols, default_mask, specific_masks,
-                                   ntod_optimal, ntod_optimal)
+            detector = DetectorTOD(
+                name=det_name,
+                det_idx_fullband=idet,
+                tod=tod,
+                pointing=det_pointing,
+                sampling_rate_hz=fsamp,
+                orbital_velocity_m_per_s=vsun,
+                huffman_tree=huffman_tree,
+                huffman_symbols=huffman_symbols,
+                default_proc_mask=default_mask,
+                specific_proc_masks=specific_masks,
+            )
             detector_list.append(detector)
             ntod_sum_original += ntod
             ntod_sum_final += ntod_optimal

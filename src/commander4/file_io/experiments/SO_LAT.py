@@ -108,7 +108,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
 
             detector_list = []
             detector_names = []
-            idet_accepted = 0
             for idet, det_name in enumerate(all_det_names):
                 if my_experiment.tod_is_compressed:
                     tod = f[f"/{pid}/{det_name}/ztod/"][()]
@@ -127,15 +126,24 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
                                              huffman_symbols, npsi, my_band.eval_nside, data_nside,
                                              ntod, ntod_optimal)
 
-                detector = DetectorTOD(det_name, idet, idet_accepted, tod, det_pointing, fsamp, vsun, huffman_tree,
-                                       huffman_symbols, default_mask, specific_masks, ntod,
-                                       ntod_optimal,
-                                       huffman_tree2=huffman_tree2,
-                                       huffman_symbols2=huffman_symbols2,
-                                       flag_encoded=flag_encoded,
-                                       bad_data_bitmask=my_experiment.bad_data_bitmask,
-                                       init_scalars=init_scalars,
-                                       tod_is_compressed=my_experiment.tod_is_compressed)
+                detector = DetectorTOD(
+                    name=det_name,
+                    det_idx_fullband=idet,
+                    tod=tod,
+                    pointing=det_pointing,
+                    sampling_rate_hz=fsamp,
+                    orbital_velocity_m_per_s=vsun,
+                    huffman_tree=huffman_tree,
+                    huffman_symbols=huffman_symbols,
+                    default_proc_mask=default_mask,
+                    specific_proc_masks=specific_masks,
+                    huffman_tree2=huffman_tree2,
+                    huffman_symbols2=huffman_symbols2,
+                    flag_encoded=flag_encoded,
+                    bad_data_bitmask=my_experiment.bad_data_bitmask,
+                    init_scalars=init_scalars,
+                    tod_is_compressed=my_experiment.tod_is_compressed,
+                )
                 unmasked_fraction = np.sum(detector.good_data_mask)/detector.good_data_mask.size
                 if unmasked_fraction < 0.9:
                     continue
@@ -146,9 +154,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
                 detector_names.append(det_name)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
-                idet_accepted += 1
-
-            included_detector_scans += idet_accepted
+            included_detector_scans += len(detector_list)
         stop_bench("fileread")
         if len(detector_list) == 0:
             good_scan = False

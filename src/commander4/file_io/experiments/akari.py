@@ -88,9 +88,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             # the right length (psi is unused by I-only mapmaking, but PixelPointing requires one).
             psi_zeros = np.zeros(ntod_optimal, dtype=np.float32)
             detector_list = []
-            # All detectors are kept, so the full-band column idet and the per-scan column
-            # idet_accepted advance together here.
-            idet_accepted = 0
             for idet, det_name in enumerate(det_names):
                 tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32)
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
@@ -100,12 +97,21 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                 det_pointing = PixelPointing(pix_encoded, psi_zeros, huffman_tree, huffman_symbols,
                                              npsi, my_band.eval_nside, my_band.data_nside, ntod,
                                              ntod_optimal)
-                detector = DetectorTOD(det_name, idet, idet_accepted, tod, det_pointing, fsamp,
-                                       vsun, huffman_tree, huffman_symbols, default_mask,
-                                       specific_masks, ntod, ntod_optimal,
-                                       flag_encoded=flag_encoded,
-                                       bad_data_bitmask=my_experiment.bad_data_bitmask,
-                                       init_scalars=init_scalars)
+                detector = DetectorTOD(
+                    name=det_name,
+                    det_idx_fullband=idet,
+                    tod=tod,
+                    pointing=det_pointing,
+                    sampling_rate_hz=fsamp,
+                    orbital_velocity_m_per_s=vsun,
+                    huffman_tree=huffman_tree,
+                    huffman_symbols=huffman_symbols,
+                    default_proc_mask=default_mask,
+                    specific_proc_masks=specific_masks,
+                    flag_encoded=flag_encoded,
+                    bad_data_bitmask=my_experiment.bad_data_bitmask,
+                    init_scalars=init_scalars,
+                )
                 if (detector.tod == 0).all():
                     continue
                 if not np.isfinite(detector.tod).all():
@@ -115,7 +121,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
-                idet_accepted += 1
         if len(detector_list) > 0:
             scanID = int(pid)
             scan = ScanTOD(detector_list, 0., scanID)

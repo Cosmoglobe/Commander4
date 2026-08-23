@@ -34,19 +34,17 @@ class DetectorTOD:
     """
     def __init__(
         self,
+        *,
         name: str,
         det_idx_fullband: int,
-        det_idx_local: int,
         tod: NDArray[np.floating] | bytes | np.void,
         pointing: PixelPointing | DetectorBoresightPointing,
-        fsamp: float,
-        orb_dir_vec: NDArray[np.floating] | None,
+        sampling_rate_hz: float,
+        orbital_velocity_m_per_s: NDArray[np.floating] | None,
         huffman_tree: NDArray | None,
         huffman_symbols: NDArray | None,
         default_proc_mask: NDArray[np.bool_] | None,
         specific_proc_masks: dict,
-        ntod_original: int,
-        ntod_optimal: int,
         huffman_tree2: NDArray | None = None,
         huffman_symbols2: NDArray | None = None,
         flag_encoded: NDArray[np.integer] | bytes | np.void | None = None,
@@ -61,22 +59,18 @@ class DetectorTOD:
         Args:
             name: Unique name of the current detector.
             det_idx_fullband: Unique detector-index among all the detectors on the relevant band.
-            det_idx_local: Unique detector-index among all detectors in the current scan, where
-                some detectors might be missing from the full set of detectors on the band.
             tod: Calibrated time samples, either as a decoded 1-D floating-point
                 array or as a compressed binary payload.
             pointing: Pointing representation for this detector. Must be a
                 ``PixelPointing`` or ``DetectorBoresightPointing`` instance.
-            fsamp: Sampling frequency in Hz.
-            orb_dir_vec: Unit vector of the spacecraft orbital velocity (size 3),
-                or None if orbital dipole is not used.
+            sampling_rate_hz: Sampling frequency in Hz.
+            orbital_velocity_m_per_s: Spacecraft orbital velocity in metres per second, or None.
             huffman_tree: Huffman decoding tree for the flag stream, or None.
             huffman_symbols: Huffman symbol table for the flag stream, or None.
             default_proc_mask: Default processing-mask HEALPix map (boolean), or None if the band
                 defines none. Used unless a sampling step requests a name in specific_proc_masks.
             specific_proc_masks: Mapping of operation name -> processing-mask HEALPix map for bands
                 that define per-operation masks (empty dict if none).
-            ntod_original: Original TOD length before Fourier-length cropping.
             flag_encoded: Flag samples, either decoded or Huffman-encoded, or None.
             flag_bitmask: Bitmask applied to flags to identify excluded samples.
         """
@@ -94,10 +88,8 @@ class DetectorTOD:
                 raise TypeError(f"TOD dtype must be float32 or float64, got {tod.dtype}.")
         if not isinstance(pointing, (PixelPointing, DetectorBoresightPointing)):
             raise TypeError("pointing must be a PixelPointing or DetectorBoresightPointing.")
-        if pointing.ntod_original != ntod_original:
-            raise ValueError("Pointing ntod_original does not match DetectorTOD ntod_original.")
-        if pointing.ntod != ntod_optimal:
-            raise ValueError("Pointing ntod does not match DetectorTOD ntod_optimal.")
+        ntod_original = pointing.ntod_original
+        ntod = pointing.ntod
         if flag_encoded is not None:
             if flag_is_compressed:
                 if not isinstance(flag_encoded, (bytes, np.void)):
@@ -111,18 +103,17 @@ class DetectorTOD:
                     raise ValueError("'flag' must be a 1D array.")
                 if not np.issubdtype(flag_encoded.dtype, np.integer):
                     raise TypeError("Decoded flags must have integer dtype.")
-                if flag_encoded.size < ntod_optimal:
+                if flag_encoded.size < ntod:
                     raise ValueError(
-                        f"'flag' length {flag_encoded.size} is shorter than ntod {ntod_optimal}.")
+                        f"'flag' length {flag_encoded.size} is shorter than ntod {ntod}.")
         self.name = name
         self.det_idx_fullband = det_idx_fullband
-        self.det_idx_local = det_idx_local
         self._tod = np.frombuffer(tod, dtype=np.uint8) if tod_is_compressed else tod
         self.ntod_original = ntod_original
-        self.ntod = ntod_optimal
+        self.ntod = ntod
         self.nside = pointing.nside
         self.data_nside = pointing.data_nside
-        self.fsamp = fsamp
+        self.fsamp = sampling_rate_hz
         self.init_scalars = init_scalars
         self._flag_encoded = (
             np.frombuffer(flag_encoded, dtype=np.uint8)
@@ -149,12 +140,14 @@ class DetectorTOD:
         if flag_encoded is not None and bad_data_bitmask is not None:
             good_data_mask = (self.flag & bad_data_bitmask) == 0
             self._good_data_mask = np.packbits(good_data_mask)
-        if orb_dir_vec is not None:
-            if orb_dir_vec.size != 3:
-                raise ValueError("orb_dir_vec must be a vector of size 3.")
-            self._orb_dir_vec = orb_dir_vec.astype(np.float32, copy=False)
+        if orbital_velocity_m_per_s is not None:
+            if orbital_velocity_m_per_s.size != 3:
+                raise ValueError("orbital_velocity_m_per_s must be a vector of size 3.")
+            self.orbital_velocity_m_per_s = orbital_velocity_m_per_s.astype(
+                np.float32, copy=False,
+            )
         else:
-            self._orb_dir_vec = None
+            self.orbital_velocity_m_per_s = None
         # Band-level processing-mask HEALPix maps (shared references across the band's detectors;
         # TODView projects them onto this detector's pointing on demand). The default mask is used
         # unless a sampling step requests a name present in specific_proc_masks.
@@ -219,19 +212,6 @@ class DetectorTOD:
         if mask.size > self.tod.size + 7 or mask.size < self.tod.size:
             raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.tod.size}.")
         return mask[:self.tod.size]
-
-
-    @property
-    def orb_dir_vec(self) -> NDArray[np.floating]:
-        """Unit vector of the spacecraft orbital velocity (size 3).
-
-        Raises:
-            ValueError: If the orbital direction vector was not set at construction.
-        """
-        if self._orb_dir_vec is not None:
-            return self._orb_dir_vec
-        else:
-            raise ValueError("Attempted to access self.orb_dir_vec, which is not set.")
 
 
     def IQU_response(self, psi: NDArray | None = None):

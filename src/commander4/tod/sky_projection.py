@@ -81,7 +81,7 @@ def get_s_orb_tod(det: DetectorTOD, experiment: DetectorGroupTOD, pix: NDArray[n
     detector pointing, returning a TOD-length array in uK_RJ units.
 
     Args:
-        det (DetectorTOD): Single-detector TOD data (provides orbital velocity direction).
+        det (DetectorTOD): Single-detector TOD data (provides orbital velocity in metres/second).
         experiment (DetectorGroupTOD): Experiment-level data (provides nu and nside).
         pix (NDArray[np.integer]): Decompressed pixel indices for this detector.
         nthreads (int, optional): Number of threads for HEALPix operations.
@@ -90,6 +90,10 @@ def get_s_orb_tod(det: DetectorTOD, experiment: DetectorGroupTOD, pix: NDArray[n
     Returns:
         NDArray: Orbital dipole signal in uK_RJ, shape ``(npix,)``.
     """
+    orbital_velocity = det.orbital_velocity_m_per_s
+    if orbital_velocity is None:
+        return np.zeros(pix.shape, dtype=np.float32)
+
     # If nthreads is not set, put it to how many threads OMP has.
     nthreads = int(os.environ["OMP_NUM_THREADS"]) if nthreads is None else nthreads
     if experiment.nu not in uK_CMB_to_uK_RJ_dict:
@@ -97,8 +101,7 @@ def get_s_orb_tod(det: DetectorTOD, experiment: DetectorGroupTOD, pix: NDArray[n
                         equivalencies=pysm3_u.cmb_equivalencies(experiment.nu*pysm3_u.GHz)).value
     geom = ducc0.healpix.Healpix_Base(experiment.nside, "RING")
     LOS_vec = geom.pix2vec(pix, nthreads=nthreads)
-    if det.orb_dir_vec is not None:
-        LOS_vec *= det.orb_dir_vec
+    LOS_vec *= orbital_velocity
     # How much do the LOS and orbital velocity align?
     s_orb = np.sum(LOS_vec, axis=-1, dtype=np.float32)
     s_orb *= T_CMB_div_C

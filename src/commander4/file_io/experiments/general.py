@@ -101,10 +101,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                                  f"{ntod_upper_bound}-sample ceiling this reader allocates for.")
 
             detector_list = []
-            # No detector-scan is rejected here, so the full-band column idet and the per-scan
-            # column idet_accepted advance together. A reader that does cut detectors (see
-            # `planck_lfi.py`) must advance idet_accepted only for the ones it keeps.
-            idet_accepted = 0
             for idet, det_name in enumerate(det_names):
                 tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32, copy=False)
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
@@ -127,16 +123,24 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                                              ntod, ntod_optimal)
                 # Flags are kept per sample rather than used to reject the whole scan, so a
                 # partly flagged scan still contributes its good samples.
-                detector = DetectorTOD(det_name, idet, idet_accepted, tod, det_pointing, fsamp,
-                                       vsun, huffman_tree, huffman_symbols, default_mask,
-                                       specific_masks, ntod, ntod_optimal,
-                                       flag_encoded=flag_encoded,
-                                       bad_data_bitmask=GOOD_DATA_BITMASK,
-                                       init_scalars=init_scalars)
+                detector = DetectorTOD(
+                    name=det_name,
+                    det_idx_fullband=idet,
+                    tod=tod,
+                    pointing=det_pointing,
+                    sampling_rate_hz=fsamp,
+                    orbital_velocity_m_per_s=vsun,
+                    huffman_tree=huffman_tree,
+                    huffman_symbols=huffman_symbols,
+                    default_proc_mask=default_mask,
+                    specific_proc_masks=specific_masks,
+                    flag_encoded=flag_encoded,
+                    bad_data_bitmask=GOOD_DATA_BITMASK,
+                    init_scalars=init_scalars,
+                )
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
-                idet_accepted += 1
         scan_list.append(ScanTOD(detector_list, 0., int(pid)))
         num_included += 1
         if i_pid % 10 == 0:
