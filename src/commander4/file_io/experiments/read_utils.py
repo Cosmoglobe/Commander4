@@ -1,6 +1,7 @@
 """Helpers shared by every experiment TOD reader: noise priors, processing masks, FFT sizing."""
 import logging
 
+import ducc0.fft
 from mpi4py import MPI
 from pixell.bunch import Bunch
 from numpy.typing import NDArray
@@ -75,29 +76,20 @@ def apply_noise_priors(noise_model: NoisePSD, params: Bunch, expname: str, bandn
                 f"sampled={[n for i, n in enumerate(param_names) if noise_model.is_sampled(i)]}.")
 
 
-def find_good_Fourier_time(Fourier_times:NDArray, ntod:int) -> int:
-    """Trim a scan to the nearby length with the cheapest FFT.
+def find_good_fourier_size(ntod: int) -> int:
+    """Return the largest fast real-FFT size strictly smaller than ``ntod``.
 
-    FFT cost depends strongly on the prime factorization of the transform length, so a scan whose
-    length happens to have a large prime factor can be far slower than one a few samples shorter.
-    Discarding up to 1% of the samples to reach a smooth length is a good trade.
-
-    Args:
-        Fourier_times: Measured FFT time (arbitrary units) indexed by transform length. Produced
-            once per machine and loaded from ``fourier_times_path``.
-        ntod: The scan's actual length.
-
-    Returns:
-        The best length in ``[0.99*ntod, ntod]``, or ``ntod`` itself outside the range where the
-        timing table applies (very short scans are cheap anyway; very long ones exceed the table).
+    ``ducc0.fft.good_size(n, True)`` returns the first fast real-FFT size at or above ``n``. Walking
+    downward until it returns the candidate itself finds the closest fast size below the scan
+    length without a machine-specific timing table.
     """
-    if ntod <= 10_000 or ntod >= 400_000:
-        return ntod
-    search_start = int(0.99*ntod)  # Consider sizes up to 1% smaller than ntod.
-    best_ntod = np.argmin(Fourier_times[search_start:ntod+1])
-    best_ntod += search_start
-    assert(best_ntod <= ntod)
-    return best_ntod
+    if ntod < 2:
+        raise ValueError("TOD length must be at least 2 to select a smaller FFT size.")
+
+    candidate = ntod - 1
+    while ducc0.fft.good_size(candidate, True) != candidate:
+        candidate -= 1
+    return candidate
 
 
 def read_processing_masks(band_comm: MPI.Comm,

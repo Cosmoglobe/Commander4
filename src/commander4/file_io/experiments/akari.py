@@ -15,8 +15,11 @@ from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
 from commander4.tod.noise.psd import NoisePSDOof
-from commander4.file_io.experiments.read_utils import (read_processing_masks, find_good_Fourier_time,
-                                              apply_noise_priors)
+from commander4.file_io.experiments.read_utils import (
+    apply_noise_priors,
+    find_good_fourier_size,
+    read_processing_masks,
+)
 
 def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_names: list[str],
                params: Bunch, scan_idx_start: int,
@@ -55,7 +58,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
     else:
         bad_PIDs = np.array([])
 
-    Fourier_times = np.load(my_experiment.fourier_times_path)
 
     # Attempting to reduce fragmentation by allocating buffers.
     ntod_upper_bound = int(my_band.fsamp*100*3600)  # 10 hour scan.
@@ -74,7 +76,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
         filepath = filenames[i_pid]
         with h5py.File(filepath, "r") as f:
             ntod = int(f[f"/{pid}/common/ntod"][()].item())
-            ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
+            ntod_optimal = find_good_fourier_size(ntod)
             huffman_tree = f[f"/{pid}/common/hufftree"][()]
             huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
             fsamp = float(f["/common/fsamp/"][()].item())

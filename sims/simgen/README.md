@@ -210,15 +210,15 @@ experiments:
     is_sim: true
     experiment_id: "general"
     replace_tod_with_sim: false        # use the TODs in the files (do not overwrite with the in-place sim)
-    Fourier_times_path: "<existing FFT_times .npy>"
     bands:
       Band30GHz:
         filelist: "<output_dir>/Band30GHz/filelist.txt"
         ...
 ```
 
-Scans of length ≤ 10 000 or ≥ 400 000 samples make `find_good_Fourier_time` a no-op, so the
-FFT-times file content is irrelevant (the file must still load).
+Commander4 automatically trims each scan to the closest smaller size that
+`ducc0.fft.good_size(..., True)` identifies as fast. No machine-specific FFT timing file is
+needed.
 
 ## Tests
 

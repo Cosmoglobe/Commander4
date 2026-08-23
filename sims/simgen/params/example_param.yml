@@ -7,8 +7,8 @@
 #
 # It writes per-band directories of per-scan HDF5 files plus a `filelist.txt`, in the format read by
 # the `general` TOD reader. To analyse the result in Commander4, point a band's `filelist:` at the
-# generated filelist.txt, set the experiment's `experiment_id: "general"`, and point
-# `fourier_times_path:` at an existing FFT-times .npy file.
+# generated filelist.txt and set the experiment's `experiment_id: "general"`. Commander4 selects
+# a fast FFT length with `ducc0.fft.good_size`; no timing table is required.
 
 general:
   nside: 64                 # Working HEALPix nside for sky-map construction.

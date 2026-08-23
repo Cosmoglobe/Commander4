@@ -16,8 +16,11 @@ from commander4.data_models.scan_tod import ScanTOD
 from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.tod.noise.psd import NoisePSD, NoisePSDOof
 from commander4.data_models.pointing import PixelPointing
-from commander4.file_io.experiments.read_utils import (read_processing_masks, find_good_Fourier_time,
-                                              apply_noise_priors)
+from commander4.file_io.experiments.read_utils import (
+    apply_noise_priors,
+    find_good_fourier_size,
+    read_processing_masks,
+)
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset
 logger = logging.getLogger(__name__)
@@ -31,7 +34,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
     The band's ``filelist`` names one file per observation, each holding every detector's TOD,
     pointing and flags Huffman-compressed (unlike the SAT files, which store a shared boresight
     path). Scans listed in ``bad_PIDs_path`` are skipped, and each kept scan is trimmed to a length
-    with a cheap FFT (`find_good_Fourier_time`).
+    with a cheap FFT (`find_good_fourier_size`).
 
     Args:
         band_comm: The band's MPI communicator.
@@ -65,7 +68,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
     else:
         bad_PIDs = np.array([])
 
-    Fourier_times = np.load(my_experiment.fourier_times_path)
 
     # Attempting to reduce fragmentation by allocating buffers.
     ntod_upper_bound = int(100*100*3600)  # 10 hour scan.
@@ -87,7 +89,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_
         with h5py.File(filepath, "r") as f:
             data_nside = int(f["common/nside"][()].item())
             ntod = int(f[f"/{pid}/common/ntod"][()].item())
-            ntod_optimal = find_good_Fourier_time(Fourier_times, ntod)
+            ntod_optimal = find_good_fourier_size(ntod)
             huffman_tree = f[f"/{pid}/common/hufftree"][()]
             huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
             # Second Huffman set might not exist: .get() returns None if dataset is absent.

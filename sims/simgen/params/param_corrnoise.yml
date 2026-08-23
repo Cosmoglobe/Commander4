@@ -37,9 +37,8 @@ components:
       solar_dipole: false    # A clean CAMB realization; no l=1 monopole/dipole to fight the 1/f.
 
 simulation:
-  # 600 x 300 s = 2.1 days.  300 s at 32.5 Hz is 9750 samples, just under the 10 000-sample
-  # threshold below which `find_good_Fourier_time` is a no-op, so every scan is analysed at its full
-  # length and the Fourier grid the PSD is fit on is exactly the one simulated here.
+  # 600 x 300 s = 2.1 days. Each 9750-sample scan is trimmed slightly to the closest smaller fast
+  # real-FFT size selected by `ducc0.fft.good_size` when Commander4 reads it.
   nscans: 600
   scan_duration_sec: 300
   npsi: 4096
