@@ -1,11 +1,12 @@
-"""Parsing the YAML parameter file named on the command line, resolving `!include` directives."""
-import yaml
+"""Loading of Commander4 YAML parameter files."""
+
 import os
-from argparse import ArgumentParser
+
+import yaml
+import yaml_include
 from pixell.bunch import Bunch
 
 from commander4.parameters.bunch import as_bunch_recursive
-import yaml_include
 
 
 # TODO: Below is code for finding either the Commander4 PIP version number, or the git hash in case
@@ -88,37 +89,42 @@ import yaml_include
 
 #     return "unknown"
 
+def params_from_dict(params_dict: dict) -> Bunch:
+    """Build the parameter ``Bunch`` used by Commander4 from an already-resolved dictionary."""
+    params = as_bunch_recursive(params_dict)
+    params.parameter_file_as_string = yaml.dump(params_dict, sort_keys=False)
+    return params
 
-# Command-line parsing, executed at import time.
-parser = ArgumentParser()
-parser.add_argument("-p",
-                    "--parameter_file",
-                    required=True,
-                    help="Path to YAML-formatted parameter file. See the 'params/' directory.")
 
-commandline_params = parser.parse_args()
+def load_params(parameter_file: str) -> tuple[Bunch, dict, str]:
+    """Load one YAML parameter file and resolve its ``!inc`` directives.
 
-if not os.path.isfile(commandline_params.parameter_file):
-    raise FileExistsError(f"Could not find parameter file {commandline_params.parameter_file}")
+    Args:
+        parameter_file: Path to the main YAML file. Include paths are relative to this file.
 
-# Register the !inc constructor so that YAML files can include other YAML files via
-# e.g.  detectors: !inc detectors/LiteBIRD40GHz_L1.yml
-# Paths in !inc directives are resolved relative to the parameter file's directory.
-param_file_dir = os.path.dirname(os.path.abspath(commandline_params.parameter_file))
-yaml.add_constructor(
-    "!inc",
-    yaml_include.Constructor(base_dir=param_file_dir),
-)
+    Returns:
+        The parameter ``Bunch``, resolved dictionary, and resolved YAML text.
+    """
+    if not os.path.isfile(parameter_file):
+        raise FileNotFoundError(f"Could not find parameter file {parameter_file}")
 
-with open(commandline_params.parameter_file, "r") as f:
-    binary_yaml_data = f.read()
-params_dict = yaml.full_load(binary_yaml_data)
+    parameter_file = os.path.abspath(parameter_file)
+    parameter_dir = os.path.dirname(parameter_file)
 
-params = as_bunch_recursive(params_dict)
+    # Keep the include base directory local to this load. Registering the constructor globally
+    # lets one parameter file's directory leak into the next file loaded by an offline tool.
+    class ParameterLoader(yaml.FullLoader):
+        pass
 
-# For reproducability, create custom entries in the parameter object which holds the entire
-# parameter file as a fully resolved YAML string (with any !inc directives expanded).
-params.parameter_file_as_string = yaml.dump(params_dict, sort_keys=False)
+    ParameterLoader.add_constructor(
+        "!inc", yaml_include.Constructor(base_dir=parameter_dir),
+    )
+    with open(parameter_file, encoding="utf-8") as handle:
+        params_dict = yaml.load(handle, Loader=ParameterLoader)
 
-# Storing Commander4 version number or git commit.
-# params.metadata.version_number = # print(get_version_info("commander4", __file__))
+    if not isinstance(params_dict, dict):
+        raise ValueError(f"Parameter file {parameter_file} must contain a YAML mapping at its root")
+
+    resolved_yaml = yaml.dump(params_dict, sort_keys=False)
+    params = params_from_dict(params_dict)
+    return params, params_dict, resolved_yaml

@@ -9,6 +9,7 @@ Gibbs loop that alternates between them, with two chains always in flight.
 import os
 import yaml
 import faulthandler
+from argparse import ArgumentParser
 from mpi4py import MPI
 import cProfile
 import pstats
@@ -24,6 +25,16 @@ from commander4.mpi import setup as mpi_setup
 from commander4.parameters.schema import validate_param_schema
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset
+
+
+def parse_command_line() -> str:
+    """Return the parameter-file path selected on the command line."""
+    parser = ArgumentParser(prog="commander4")
+    parser.add_argument(
+        "-p", "--parameter-file", "--parameter_file", required=True,
+        help="Path to a Commander4 YAML parameter file.",
+    )
+    return parser.parse_args().parameter_file
 
 
 def gibbs_schedule(num_iterations: int) -> list[tuple[int, int]]:
@@ -261,12 +272,16 @@ def main() -> None:
         # 0 creates it once; this startup broadcast happens while MPI is still healthy.
         run_id = world_comm.bcast(log.make_run_id() if world_rank == 0 else None, root=0)
 
-        # Parameter parsing happens on every rank, but shared schema validation runs once. If rank 0
-        # rejects it, MPI Abort terminates ranks waiting at the barrier below.
-        from commander4.parameters.parse import params, params_dict
+        # Rank 0 reads the parameter file and broadcasts the resolved dictionary.
+        from commander4.parameters.parse import load_params, params_from_dict
+        parameter_file = parse_command_line()
         if world_rank == 0:
+            params, params_dict, _ = load_params(parameter_file)
             validate_param_schema(params_dict)
-        world_comm.Barrier()
+        else:
+            params_dict = None
+        params_dict = world_comm.bcast(params_dict, root=0)
+        params = params_from_dict(params_dict)
 
         output_dir = paths.resolve_output_dir(params.output)
         traceback_dir = os.path.join(output_dir, paths.LOGS)

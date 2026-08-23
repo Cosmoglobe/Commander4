@@ -8,12 +8,12 @@
 # parameter file; the two kinds may be mixed freely.
 
 import argparse
-import os
 import sys
 
 import h5py
 import yaml
-import yaml_include
+
+from commander4.parameters.parse import load_params as load_yaml_params
 
 PARAM_DATASET = "metadata/parameter_file_as_string"
 
@@ -41,10 +41,8 @@ def load_params(path: str) -> dict:
             if PARAM_DATASET not in f:
                 raise ValueError(f"'{path}' is an HDF5 file but has no '{PARAM_DATASET}' dataset.")
             return yaml.full_load(_decode(f[PARAM_DATASET][()])) or {}
-    base_dir = os.path.dirname(os.path.abspath(path))
-    yaml.add_constructor("!inc", yaml_include.Constructor(base_dir=base_dir))
-    with open(path) as f:
-        return yaml.full_load(f.read()) or {}
+    _, params_dict, _ = load_yaml_params(path)
+    return params_dict
 
 
 def _fmt(value) -> str:
