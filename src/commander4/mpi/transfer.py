@@ -73,8 +73,11 @@ def _realize_and_distribute_sky(sky_model, experiment_data: DetectorGroupTOD,
     pols = experiment_data.pols
     ncomp = {"I": 1, "QU": 2, "IQU": 3}[pols]
     if is_band_master:
-        full_map = sky_model.get_sky_at_nu(experiment_data.nu, experiment_data.nside, pols,
-                                           fwhm=np.deg2rad(experiment_data.fwhm / 60.0))
+        # This detectors FWHM is used to realize the sky model, unless the per-pixel solver was
+        # used with common-resolution smoothing, in which case the sky carries an intrinsic
+        # resolution `amp_fwhm_rad`, and we simply have to use that, even though it's wrong.
+        fwhm = max(np.deg2rad(experiment_data.fwhm / 60.0), sky_model.amp_fwhm_rad)
+        full_map = sky_model.get_sky_at_nu(experiment_data.nu, experiment_data.nside, pols, fwhm)
     else:
         full_map = None
     domain = experiment_data.pixel_domain

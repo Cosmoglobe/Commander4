@@ -22,6 +22,7 @@ from commander4.tod.scan_diagnostics import _record_tod_diagnostics
 from commander4.tod.view import TODView
 from commander4.data_models.pixel_domain import PixelDomain
 from commander4.tod.mapmaking.config import MapmakingConfig
+from commander4.tod.mapmaking.output import finalize_band_maps
 from commander4.tod.data_selection import DataSelectionConfig
 
 logger = logging.getLogger(__name__)
@@ -599,6 +600,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
     map_signal = mapmaker.final_map
     mapmaker_orbdipole.normalize_map(map_cov)
     map_orbdipole = mapmaker_orbdipole.final_map
+    map_corrnoise = None
     if corr_noise_active:
         mapmaker_ncorr.gather_map()
         mapmaker_ncorr.normalize_map(map_cov)
@@ -610,34 +612,9 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
     detmap_dict_out = {}
     maps_to_file = {}
     if band_comm.Get_rank() == 0:
-        #Here we split here between I and QU
-        # Smooth maps to the common analysis resolution after mapmaking; 0 leaves bands at their
-        # native beam.
-        common_res_fwhm = mapmaking.common_res_fwhm
-        if "I" in pols:
-            detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
-                                experiment_data.fwhm, experiment_data.nside,
-                                lmax=mapmaking.band_lmax)
-            detmap_I.g0 = tod_samples.abs_gain
-            if common_res_fwhm:
-                detmap_I.smooth_to_resolution(common_res_fwhm)
-            detmap_dict_out.update({"I": detmap_I})
-        if "QU" in pols:
-            detmap_QU = DetectorMap(map_signal[1:3,:], map_rms[1:3,:], experiment_data.nu,
-                                experiment_data.fwhm, experiment_data.nside,
-                                lmax=mapmaking.band_lmax)
-            detmap_QU.g0 = tod_samples.abs_gain
-            if common_res_fwhm:
-                detmap_QU.smooth_to_resolution(common_res_fwhm)
-            detmap_dict_out.update({"QU": detmap_QU})
-
-        maps_to_file["map_observed_sky"] = map_signal
-        maps_to_file["map_rms"] = map_rms
-        if mapmaking.include_orbital_dipole_maps:
-            maps_to_file["map_orbdipole"] = map_orbdipole
-        if mapmaking.include_corr_noise_maps and corr_noise_active:
-            maps_to_file["map_corrnoise"] = map_corrnoise
-        if mapmaking.include_sky_model_maps:
-            maps_to_file["map_skymodel"] = compsep_output
+        detmap_dict_out, maps_to_file = finalize_band_maps(
+            map_signal, map_rms, pols, experiment_data, mapmaking, tod_samples, compsep_output,
+            map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
+            corr_noise_active=corr_noise_active)
 
     return detmap_dict_out, maps_to_file

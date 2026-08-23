@@ -28,12 +28,37 @@ class SkyModel:
         """
         raise NotImplementedError
 
+    @property
+    def amp_fwhm_rad(self) -> float:
+        """The beam this model's amplitudes carry, in radians: the coarsest of its components.
+
+        This is normally 0.0, as the CG solver produces a deconvolved sky.
+        The per-pixel solver instead returns amplitudes at `compsep.common_res_fwhm`.
+        """
+        return max((comp.amp_fwhm_rad for comp in self._components), default=0.0)
+
     def get_sky_at_nu(self, nu, nside, pols_required, fwhm=None):
-        """Get the realized sky at one frequency.
+        """Get the realized sky at some frequency and fwhm resolution.
 
         The component list may be either the split execution list used during CompSep (`I` and
         `QU` views) or a joined logical list containing `IQU` components.
+
+        Args:
+            fwhm: Beam to realize the sky through, in radians. `None` asks for the sharpest this
+                model can give, which is `amp_fwhm_rad` (normally 0.0).
+
+        Raises:
+            ValueError: If `fwhm` is finer than `amp_fwhm_rad`.
         """
+        amp_fwhm = self.amp_fwhm_rad
+        if fwhm is None:
+            fwhm = amp_fwhm
+        elif fwhm < amp_fwhm and not np.isclose(fwhm, amp_fwhm):
+            raise ValueError(
+                f"Asked for the sky at a beam of {np.degrees(fwhm)*60:.4g} arcmin, but these "
+                f"amplitudes already carry {np.degrees(amp_fwhm)*60:.4g} arcmin of smoothing and "
+                f"cannot be realized any sharper. Pass fwhm=None for the sharpest available, or "
+                f"max(wanted, model.amp_fwhm_rad) if a coarser sky is acceptable.")
         npix = 12*nside**2
 
         if pols_required == "I":
