@@ -32,6 +32,11 @@ class Component:
     # which are sampled is a property of the run rather than of the component.
     sed_param_names: tuple[str, ...] = ()
 
+    # Names of the instance attributes defining this component's C(l) prior, stored under
+    # `comps/<shortname>/Cl_prior/`. Commander3's `Dl_amp`/`Dl_beta`/`Dl_theta` analogue: the model
+    # parameters, not the evaluated spectrum. Empty for components that carry no such prior.
+    Cl_prior_param_names: tuple[str, ...] = ()
+
     @classmethod
     def _assert_legal_pol(cls, pol: str | None, *, role: str, required: bool = False) -> None:
         if pol is None:
@@ -144,12 +149,12 @@ class Component:
         joined.eval_pol = joined.defined_pol
         joined._data = np.concatenate((intensity_comp._data, pol_comp._data), axis=0)
 
-        # The joined view is deep-copied from the intensity view, so any SED parameter given per
-        # polarization (`nu_ref: [I, QU]` is common) would otherwise silently keep only the I value.
-        # Restore the [I, QU] pair, i.e. undo `_per_pol`, so the joined component still describes
-        # both views. Joined components are only used on output paths (chain writing, name and lmax
-        # reporting), never for SED evaluation, which happens on the split views.
-        for param_name in intensity_comp.sed_param_names:
+        # The joined view is deep-copied from the intensity view, so any SED or C(l)-prior parameter
+        # given per polarization (`nu_ref: [I, QU]` is common) would otherwise silently keep only
+        # the I value. Restore the [I, QU] pair, i.e. undo `_per_pol`, so the joined component still
+        # describes both views. Joined components are only used on output paths (chain writing, name
+        # and lmax reporting), never for SED or prior evaluation, which happen on the split views.
+        for param_name in intensity_comp.sed_param_names + intensity_comp.Cl_prior_param_names:
             i_value, qu_value = getattr(intensity_comp, param_name), getattr(pol_comp, param_name)
             if not np.array_equal(i_value, qu_value):
                 setattr(joined, param_name, np.array([i_value, qu_value]))

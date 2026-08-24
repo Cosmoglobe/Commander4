@@ -43,7 +43,7 @@ def _binned_tod_power_spectrum(tod: NDArray, fsamp: float, nbin: int) -> tuple[N
 
 
 def _record_tod_diagnostics(tod_samples: TODSamples, iscan: int, idet: int, view: TODView,
-                            n_corr: NDArray | None) -> None:
+                            n_corr: NDArray | None) -> NDArray:
     """ Record per-detector-scan TOD diagnostics into the chain arrays.
 
         Stores the low-resolution log-binned power spectra (sharing one binned frequency axis) of
@@ -57,6 +57,10 @@ def _record_tod_diagnostics(tod_samples: TODSamples, iscan: int, idet: int, view
         ``ncorrsub`` and ``residual`` use the jump-corrected stream (matching mapmaking and n_corr
         sampling). When the off-by-default DEBUG full-``n_corr`` collection is enabled, also stores
         the entire ``n_corr`` TOD for this detector-scan.
+
+        Returns:
+            The full-length ``residual`` TOD, in detector units, so the caller can bin it into the
+            residual map (Commander3's `tod_<freq>_res`) without rebuilding it.
     """
     nbin = tod_samples.TOD_PS_NBIN
     freqs_binned, raw_binned = _binned_tod_power_spectrum(view.tod, view.fsamp, nbin)
@@ -86,3 +90,5 @@ def _record_tod_diagnostics(tod_samples: TODSamples, iscan: int, idet: int, view
     # stored to the chain and consumed by the data-selection (accept) cuts.
     tod_samples.chisq_z[iscan, idet] = masked_chisq_z(
         residual_tod, view.get_mask(proc_mask=False), view.sigma0)
+
+    return residual_tod

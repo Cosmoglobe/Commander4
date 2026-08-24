@@ -683,7 +683,7 @@ def test_restarting_from_a_chain_restores_a_sampled_spectral_index(tmp_path):
 
 
 def test_a_fixed_spectral_index_is_not_restored_from_a_chain(tmp_path):
-    """Without `sample_spectral_index`, beta stays a parameter-file setting an old chain cannot
+    """Without `sample_spectral_index`, beta stays a parameter-file setting the chain cannot
     override."""
     import h5py
     from commander4.sky.comp_io import _restore_sampled_sed_params_from_chain
@@ -694,22 +694,6 @@ def test_a_fixed_spectral_index_is_not_restored_from_a_chain(tmp_path):
 
     comp = CompList.init_from_params(Bunch({"dust": _make_dust_cfg(353.0)}),
                                      Bunch(compsep=_make_compsep()))[0]
-    _restore_sampled_sed_params_from_chain(comp, str(chain))
-    assert comp.beta == 1.54
-
-
-def test_restoring_tolerates_a_chain_written_before_sed_groups_existed(tmp_path):
-    """Older chains have no `sed/` group; restarting from one must still work."""
-    import h5py
-    from commander4.sky.comp_io import _restore_sampled_sed_params_from_chain
-
-    chain = tmp_path / "old_chain.h5"
-    with h5py.File(chain, "w") as f:
-        f["comps/dust/alms"] = np.zeros((1, 3), dtype=np.complex64)
-
-    cfg = _make_dust_cfg(353.0)
-    cfg.params.sample_spectral_index = True
-    comp = CompList.init_from_params(Bunch({"dust": cfg}), Bunch(compsep=_make_compsep()))[0]
     _restore_sampled_sed_params_from_chain(comp, str(chain))
     assert comp.beta == 1.54
 

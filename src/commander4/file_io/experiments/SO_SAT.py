@@ -177,7 +177,9 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
             good_scan = False
         if good_scan:
             scanID = int(pid)
-            scan = ScanTOD(detector_list, 0., scanID)
+            # This reader has a real absolute time, so pass it on as the scan's start time; it is
+            # written to the chain as `scan_start_time` (Commander3's `MJD`).
+            scan = ScanTOD(detector_list, float(time_start_mjd), scanID)
             scan_list.append(scan)
         if i_pid % 10 == 0:
             gc.collect()

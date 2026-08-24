@@ -22,6 +22,7 @@ from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.sky.sky_model import SkyModel
 from commander4.compsep.cg_solver import CompSepSolver
+from commander4.compsep.chisq import ChisqResult, collect_fit_diagnostics, evaluate_chi2
 from commander4.compsep.perpix_solver import solve_compsep_perpix
 from commander4.compsep.spectral_index import SpectralIndexSamplingGroup
 from commander4.file_io.chain_writer import write_compsep_chain_to_file
@@ -162,6 +163,10 @@ class CompSepState:
     double_precision: bool
     num_threads: int
     chisq_masks: dict[str, NDArray]
+    # Chain-output settings, resolved once here rather than re-read every iteration.
+    nside_chisq: int  # Resolution of the chi-squared map (C3's NSIDE_CHISQ).
+    include_chisq_map: bool
+    include_residual_maps: bool
 
 
 def _read_sampling_groups(params: Bunch, key: str,
@@ -430,6 +435,10 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     # Read the MCMC groups' chi-squared masks once here, rather than on every Gibbs iteration when
     # the sampling groups are rebuilt.
     chisq_masks = _read_chisq_masks(mpi_info.compsep.comm, mcmc_groups)
+    # Chain-output settings. The chi-squared map resolution is C3's NSIDE_CHISQ; it should be at or
+    # below the coarsest band nside, since the map only ever sums z^2 into its pixels.
+    chains = params.output.chains
+    include = chains.include
     compsep_state = CompSepState(
         band_name=band_name,
         band_identifier=band_identifier,
@@ -440,6 +449,9 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
         double_precision=double_precision,
         num_threads=nthreads,
         chisq_masks=chisq_masks,
+        nside_chisq=int(getattr(chains, "nside_chisq", 256)),
+        include_chisq_map=bool(getattr(include, "chisq_map", False)),
+        include_residual_maps=bool(getattr(include, "compsep_residual_maps", False)),
     )
 
     # Load the initial component alms (from each component's init_from / init_chain_path, else
@@ -472,8 +484,14 @@ def get_initial_sky_model(comp_list: CompList) -> SkyModel:
 
 def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
                          detector_data: DetectorMap, comp_list: CompList,
-                         group: CGSamplingGroupConfig | PerPixelSamplingGroupConfig) -> None:
-    """Run one amplitude group and broadcast its result to every CompSep rank."""
+                         group: CGSamplingGroupConfig | PerPixelSamplingGroupConfig) -> dict:
+    """Run one amplitude group and broadcast its result to every CompSep rank.
+
+    Returns:
+        On the CompSep master, the CG convergence history of each polarization that was solved,
+        as ``{"I": {...}, "QU": {...}}``. Empty on every other rank, and empty for the per-pixel
+        method, which is a direct solve with no history to report.
+    """
     compsep = mpi_info.compsep
     band_is_active = _sampling_group_selects_band(
         group.bands, compsep_state.band_name, compsep_state.band_identifier)
@@ -481,16 +499,23 @@ def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
         comp_list.split_for_eval_pol(compsep_state.target_pol), group.comps)
     should_solve = band_is_active and len(active_sublist) > 0
 
+    cg_stats: dict = {}
     solver_comm = compsep.subcomm.Split(0 if should_solve else MPI.UNDEFINED, key=compsep.rank)
     if should_solve:
         residual_data = _build_conditional_residual(
             detector_data, comp_list, compsep_state.target_pol, active_sublist)
         if compsep_state.amplitude_method == "cg":
-            solved_sublist = CompSepSolver(
+            solver = CompSepSolver(
                 residual_data, solver_comm, group,
                 double_precision=compsep_state.double_precision,
                 nthreads=compsep_state.num_threads,
-            ).solve(active_sublist)
+            )
+            solved_sublist = solver.solve(active_sublist)
+            # The CG runs its scalar recurrence on rank 0 of `solver_comm` and only broadcasts the
+            # stopping decision, so that rank alone holds meaningful residuals.
+            if solver_comm.Get_rank() == 0:
+                cg_stats = {"cg_residuals": np.asarray(solver.CG_residuals),
+                            "n_iter": len(solver.CG_residuals)}
         elif compsep_state.amplitude_method == "per_pixel":
             solved_sublist = solve_compsep_perpix(
                 solver_comm, residual_data, active_sublist,
@@ -506,7 +531,7 @@ def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
     if not any_active:
         if compsep.rank == compsep.master:
             logger.verbose(f"Sampling group {group.name!r} had no active band/component overlap.")
-        return
+        return {}
 
     # The lowest-ranked solver for each polarization owns the authoritative result.
     for eval_pol in ("I", "QU"):
@@ -515,33 +540,13 @@ def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
         if source < compsep.size:
             comp_list.broadcast_pol_views(compsep.comm, eval_pol=eval_pol, source=source)
 
-
-def _evaluate_chi2(mpi_info: Bunch, detector_data: DetectorMap, sky_model: SkyModel,
-                   label: str | None = None) -> tuple[float, int]:
-    """Evaluate the all-band whitened residual, optionally logging detailed results."""
-    compsep = mpi_info.compsep
-    band_pol = "QU" if detector_data.pol else "I"
-    sky_at_band = sky_model.get_sky_at_nu(
-        detector_data.nu, detector_data.nside, band_pol, fwhm=detector_data.fwhm_rad)
-    pol_names = ["Q", "U"] if detector_data.pol else ["I"]
-    chi2_local, ndof_local = 0.0, 0
-    for ipol in range(detector_data.npol):
-        observed = detector_data.inv_n_map[ipol] > 0
-        z = ((detector_data.map_sky[ipol] - sky_at_band[ipol])[observed]
-             * np.sqrt(detector_data.inv_n_map[ipol][observed]))
-        chi2_local += np.sum(z**2, dtype=np.float64)
-        ndof_local += z.size
-        if label is not None:
-            logger.verbose(f"Fit after {label} on rank {compsep.rank} for pol={pol_names[ipol]} "
-                           f"({detector_data.nu}GHz): mean|z|={np.mean(np.abs(z)):.3f}, "
-                           f"red.chi2={np.mean(z**2):.3f} (ndof={z.size}).")
-
-    chi2_total = compsep.comm.allreduce(chi2_local, op=MPI.SUM)
-    ndof_total = compsep.comm.allreduce(ndof_local, op=MPI.SUM)
-    if label is not None and compsep.rank == compsep.master:
-        logger.info(f"Fit after {label}, all bands: chi2={chi2_total:.6e}, ndof={ndof_total}, "
-                    f"red.chi2={chi2_total/ndof_total:.4f}")
-    return float(chi2_total), int(ndof_total)
+    # `solver_comm` never spans more than one polarization, so exactly one rank per polarization
+    # filled `cg_stats` above and the rest are empty. I and QU are separate solves that converge
+    # differently, so they are reported separately.
+    all_stats = compsep.comm.gather((compsep_state.target_pol, cg_stats), root=compsep.master)
+    if compsep.rank != compsep.master:
+        return {}
+    return {pol: stats for pol, stats in all_stats if stats}
 
 
 def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
@@ -569,14 +574,26 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
     amplitude_groups = compsep_state.amplitude_groups
     mcmc_groups = compsep_state.mcmc_groups
     sky_model = SkyModel(comp_list)
-    final_chi2: float | None = None
-    final_ndof: int | None = None
+    # Sampler bookkeeping for the chain: C3's nonlin-samples_*.dat and its CG residual logging. A
+    # tier that sampled nothing adds no key, so this mirrors the file it ends up in.
+    sampler_stats: dict = {}
+    # The fit after the most recent sampling step. Each step's evaluation both logs its own
+    # diagnostic and, being the state after that step, doubles as the final fit once the last one
+    # has run, so the chain costs no extra sky realization. This function (`process_compsep`) is
+    # only called if one of the two loops below execute, so `fit` is guaranteed to be defined later.
+    fit: ChisqResult
+
+    def evaluate(label: str | None = None) -> ChisqResult:
+        return evaluate_chi2(compsep, detector_data, sky_model, compsep_state.band_name,
+                             compsep_state.target_pol, compsep_state.nside_chisq, label=label,
+                             keep_residual=compsep_state.include_residual_maps)
 
     for group in amplitude_groups.values():
-        _run_amplitude_group(mpi_info, compsep_state, detector_data, comp_list, group)
+        cg_stats = _run_amplitude_group(mpi_info, compsep_state, detector_data, comp_list, group)
+        if cg_stats:
+            sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
         method_label = "CG" if compsep_state.amplitude_method == "cg" else "per-pixel"
-        final_chi2, final_ndof = _evaluate_chi2(
-            mpi_info, detector_data, sky_model, f"{method_label} group {group.name!r}")
+        fit = evaluate(f"{method_label} group {group.name!r}")
 
     for group in mcmc_groups.values():
         def resolve_amplitudes(group_names=group.update_amplitude_groups):
@@ -591,21 +608,19 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
             compsep.comm, detector_data, comp_list, target_pol=compsep_state.target_pol,
             selected_comps=group.comps, chisq_active=chisq_active,
             chisq_mask=compsep_state.chisq_masks.get(group.name), root=compsep.master)
-        sampler.run(numstep=group.numstep, resolve_amplitudes=resolve_amplitudes)
-        final_chi2, final_ndof = _evaluate_chi2(
-            mpi_info, detector_data, sky_model, f"MCMC group {group.name!r}")
+        mcmc_stats = sampler.run(numstep=group.numstep, resolve_amplitudes=resolve_amplitudes)
+        if mcmc_stats:
+            sampler_stats.setdefault("mcmc", {})[group.name] = mcmc_stats
+        fit = evaluate(f"MCMC group {group.name!r}")
 
-    # C3 evaluates the final map-domain residual during chain output. Do the same even when no
-    # sampling group ran. Otherwise the last group's diagnostic already describes the final state.
-    if final_chi2 is None or final_ndof is None:
-        final_chi2, final_ndof = _evaluate_chi2(mpi_info, detector_data, sky_model)
-
+    fit_tree, band_frequencies = collect_fit_diagnostics(compsep, fit,
+                                                         compsep_state.include_chisq_map)
     if compsep.rank == compsep.master:
-        write_compsep_chain_to_file(comp_list.joined(), params, chain, iter)
-        red_chi2 = final_chi2 / final_ndof if final_ndof > 0 else float("nan")
-        z_chi2 = ((final_chi2 - final_ndof) / np.sqrt(2.0 * final_ndof)
-                  if final_ndof > 0 else float("nan"))
-        logger.summary(f"Chain {chain}, iteration {iter} complete: chi2={final_chi2:.6e}, "
-                       f"ndof={final_ndof}, red.chi2={red_chi2:.4f}, z={z_chi2:.3f}.")
+        diagnostics = {**fit_tree, **sampler_stats}
+        write_compsep_chain_to_file(comp_list.joined(), params, chain, iter, diagnostics,
+                                    band_frequencies)
+        chi2 = fit_tree["chi2"]
+        logger.summary(f"Chain {chain}, iteration {iter} complete: chi2={chi2['total']:.6e}, "
+                       f"ndof={chi2['ndof']}, red.chi2={chi2['reduced']:.4f}, z={chi2['z']:.3f}.")
 
     return sky_model

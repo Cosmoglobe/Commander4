@@ -21,6 +21,9 @@ class MapmakingConfig:
     include_orbital_dipole_maps: bool
     include_corr_noise_maps: bool
     include_sky_model_maps: bool
+    include_residual_maps: bool = False
+    include_hit_maps: bool = False
+    include_cov_maps: bool = False
     sparse_maps: bool = False
     common_res_fwhm: float = 0.0
     band_lmax: int | None = None
@@ -64,6 +67,12 @@ class MapmakingConfig:
             "include_orbital_dipole_maps": bool(include.orbital_dipole_maps),
             "include_corr_noise_maps": bool(include.corr_noise_maps),
             "include_sky_model_maps": bool(include.sky_model_maps),
+            # Off by default: the residual and hit maps each cost an extra map accumulator, and the
+            # covariance is six full-sky float64 maps.
+            "include_residual_maps": bool(getattr(include, "residual_maps",
+                                                  cls.include_residual_maps)),
+            "include_hit_maps": bool(getattr(include, "hit_maps", cls.include_hit_maps)),
+            "include_cov_maps": bool(getattr(include, "cov_maps", cls.include_cov_maps)),
         }
         if "cg_mapmaker" in tod:
             resolved["cg"] = cg

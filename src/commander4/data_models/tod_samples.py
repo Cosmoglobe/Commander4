@@ -2,22 +2,19 @@
 
 Gains (absolute, relative, temporal), noise parameters, the accept flags and the per-detector-scan
 diagnostics, all held as dense `(nscans, ndet)` arrays indexed by scan and by the detector's
-full-band column. Also owns initialization (fresh or from a previous chain) and chain writing.
+full-band column. Also owns initialization (fresh or from a previous chain) and the MPI gather that
+collects these arrays onto the band master for `chain_writer.write_band_chain_to_file`.
 """
 from __future__ import annotations
 
-import os
 import numpy as np
 import h5py
-import datetime
-import glob
 from numpy.typing import NDArray
 from mpi4py import MPI
 from pixell.bunch import Bunch
 import logging
 import typing
 
-from commander4.file_io import paths
 from commander4.file_io.chain_writer import should_write_chain
 from commander4.data_models.jump_corrections import JumpCatalog
 from commander4.units import rj_to_band_unit_factor
@@ -154,9 +151,20 @@ class TODSamples:
         #   * accept: data-quality flag for present data that is *not* flagged as bad. Defaults to
         #     all True; a chain-tracked quantity so bad-data rejection can become a sampled step.
         self.present = np.zeros((self.nscans, self.ndet), dtype=bool)
+        # Spacecraft velocity the orbital dipole is built from, in m/s. Static (it comes from the
+        # data files, not the sampler) but written to the chain because it is what anchors the
+        # absolute calibration, so a gain surprise can be checked against it.
+        self.orbital_velocity = np.zeros((self.nscans, self.ndet, 3), dtype=np.float32)
         for iscan, det in experiment_data.iter_detector_scans():
             self.present[iscan, det.det_idx_fullband] = True
+            self.orbital_velocity[iscan, det.det_idx_fullband] = det.orbital_velocity_m_per_s
         self.accept = np.ones((self.nscans, self.ndet), dtype=bool)
+        # Per-scan start time, Commander3's `MJD`. The epoch is whatever the experiment reader put
+        # in `ScanTOD.start_time`, so this is MJD only for readers whose files carry one. Today
+        # that is SO_SAT alone; every other reader passes 0.0, which is the "no absolute time
+        # available" value here.
+        self.scan_start_time = np.array([scan.start_time for scan in experiment_data.scans],
+                                        dtype=np.float64)
 
         # Low-resolution (log-binned) TOD power spectra, written to the chain by default: a shared
         # binned frequency axis plus the binned periodograms of several per-detector-scan TOD views
@@ -179,6 +187,19 @@ class TODSamples:
         # log_dataselect_summary reports them.
         self.chisq_z = np.full((self.nscans, self.ndet), np.nan)
         self.good_fraction = np.full((self.nscans, self.ndet), np.nan)
+
+        # Per-detector-scan correlated-noise CG diagnostics, written to the chain: the final
+        # relative CG residual, the iteration count, and whether the draw was accepted (converged
+        # and not variance-capped; -1 = no n_corr drawn this iteration). log_corr_noise_stats
+        # reports only the band-wide counts of these, so this is what says *which* scans failed.
+        self.ncorr_cg_residual = np.full((self.nscans, self.ndet), np.nan)
+        self.ncorr_cg_niter = np.full((self.nscans, self.ndet), -1, dtype=np.int32)
+        self.ncorr_converged = np.full((self.nscans, self.ndet), -1, dtype=np.int8)
+
+        # The temporal-gain Wiener prior each detector was actually sampled under, as
+        # (ndet, 3) = (sigma0, fknee, alpha), Commander3's gain_sigma_0/gain_fknee/gain_alpha.
+        # Commander3 samples this prior, while C4 hard-codes it in sample_temporal_gain_variations.
+        self.gain_prior = np.full((self.ndet, 3), np.nan)
 
 
         # Optional DEBUG: the entire per-sample correlated-noise (n_corr) TODs, written to the chain
@@ -272,28 +293,26 @@ class TODSamples:
                     raise ValueError(f"Local scan ID {e} not found in the global chain file "
                                      f"{init_chain_path}.") from e
 
+                # `gather_chain_arrays` writes all of these on every chain iteration, so all of
+                # them are read unconditionally: a KeyError here names the missing dataset, which
+                # is far clearer than a silently half-initialized sampler.
                 # Per-band and per-detector arrays, identical across ranks.
-                self.abs_gain = float(f["abs_gain"][...]) if "abs_gain" in f else None
-                self.rel_gain = f["detrel_gain"][:] if "detrel_gain" in f else None
+                self.abs_gain = float(f["abs_gain"][...])
+                self.rel_gain = f["detrel_gain"][:]
 
                 # Per-scan arrays, sliced down to this rank's scans.
-                self.temporal_gain = f["temporal_gain"][local_indices, :] if "temporal_gain" in f else None
-                self.noise_params = f["noise_params"][local_indices, ...] if "noise_params" in f else None
+                self.temporal_gain = f["temporal_gain"][local_indices, :]
+                self.noise_params = f["noise_params"][local_indices, ...]
                 self.accept = f["accept"][local_indices, ...].astype(bool)
-                if "chisq_z" in f:  # Optional (older chains lack it).
-                    self.chisq_z = f["chisq_z"][local_indices, ...]
-                if "good_fraction" in f:
-                    self.good_fraction = f["good_fraction"][local_indices, ...]
+                self.chisq_z = f["chisq_z"][local_indices, ...]
+                self.good_fraction = f["good_fraction"][local_indices, ...]
                 self.jumps = JumpCatalog.from_hdf5(f, local_indices, self.ndet)
 
             # Chain gains are stored in band_unit; convert back to internal [det units]/uK_RJ.
             if self.band_unit_factor != 1.0:
-                if self.abs_gain is not None:
-                    self.abs_gain *= self.band_unit_factor
-                if self.rel_gain is not None:
-                    self.rel_gain = self.rel_gain * self.band_unit_factor
-                if self.temporal_gain is not None:
-                    self.temporal_gain = self.temporal_gain * self.band_unit_factor
+                self.abs_gain *= self.band_unit_factor
+                self.rel_gain = self.rel_gain * self.band_unit_factor
+                self.temporal_gain = self.temporal_gain * self.band_unit_factor
 
         if self.band_comm.Get_rank() == 0:
             logger.debug(f"Initial absolute gain estimate for {self.band_name}: {self.abs_gain:.3e}.")
@@ -303,12 +322,7 @@ class TODSamples:
     def gain(self, iscan: int, idet: int) -> float:
         """ Returns the scalar gain for a single detector+scan combination.
         """
-        gain = self.abs_gain
-        if self.rel_gain is not None:
-            gain += self.rel_gain[idet]
-        if self.temporal_gain is not None:
-            gain += self.temporal_gain[iscan,idet]
-        return gain
+        return self.abs_gain + self.rel_gain[idet] + self.temporal_gain[iscan, idet]
 
 
     def gain_all(self) -> NDArray[np.floating]:
@@ -316,10 +330,8 @@ class TODSamples:
         """
         gain = np.zeros((self.nscans, self.ndet), dtype=np.float64)
         gain[:] += self.abs_gain
-        if self.rel_gain is not None:
-            gain[:] += self.rel_gain
-        if self.temporal_gain is not None:
-            gain[:] += self.temporal_gain
+        gain[:] += self.rel_gain
+        gain[:] += self.temporal_gain
         return gain
 
 
@@ -343,15 +355,23 @@ class TODSamples:
         return lengths, flat
 
 
-    def write_chain_to_file(self, itr: int):
+    def gather_chain_arrays(self, itr: int) -> dict[str, NDArray] | None:
+        """Collect every per-band chain array onto the band master, keyed by dataset name.
+
+        Called collectively by all ranks of `band_comm` (the gathers below are collective). Returns
+        the datasets the band master writes to the top level of the band chain file, or ``None``
+        both on the other ranks and on every iteration this chain output is skipped. This owns the
+        file-level write gate, because the gate has to be applied before the gathers so that all
+        ranks leave together; `write_band_chain_to_file` then only decides about the maps.
+        """
         band_comm = self.band_comm
         params = self.params
 
         # Skipped iterations return before the gathers below, which are collective: every rank in
         # band_comm evaluates this on the same params and itr, so they all leave together.
         writes_chain = self.chain in params.output.chains.write
-        if not writes_chain or not should_write_chain(params, "tod", itr):
-            return
+        if not writes_chain or not should_write_chain(params, "bands", itr):
+            return None
 
         ####################################################################
         # Gather nscan info.
@@ -377,16 +397,12 @@ class TODSamples:
         rel_gain_global = self.rel_gain  # Copies held on each rank, no communication required.
 
         # 3. Temporal gain (per-scan per-detector quantity)
-        temporal_gain_global = None
-        if self.temporal_gain is not None:
-            temporal_gain_global = _gather_scan_distributed_array(band_comm, self.temporal_gain,
-                                                                  scans_per_rank)
+        temporal_gain_global = _gather_scan_distributed_array(band_comm, self.temporal_gain,
+                                                              scans_per_rank)
 
         # 4. Noise params (per-scan per-detector per-parameter quantity)
-        noise_params_global = None
-        if self.noise_params is not None:
-            noise_params_global = _gather_scan_distributed_array(band_comm, self.noise_params,
-                                                                 scans_per_rank)
+        noise_params_global = _gather_scan_distributed_array(band_comm, self.noise_params,
+                                                             scans_per_rank)
 
         # 4b. Presence and acceptance flags (per-scan per-detector; int8 for MPI/HDF compatibility).
         # `present` marks real vs. absent (dummy) detector-scans; `accept` marks good vs. bad data.
@@ -397,6 +413,19 @@ class TODSamples:
         chisq_z_global = _gather_scan_distributed_array(band_comm, self.chisq_z, scans_per_rank)
         good_fraction_global = _gather_scan_distributed_array(band_comm, self.good_fraction,
                                                               scans_per_rank)
+
+        # 4b2. Per-scan time and velocity (static), and the per-detector-scan n_corr CG diagnostics.
+        scan_start_time_global = _gather_scan_distributed_array(band_comm, self.scan_start_time,
+                                                                scans_per_rank)
+        orbital_velocity_global = _gather_scan_distributed_array(band_comm, self.orbital_velocity,
+                                                                 scans_per_rank)
+        ncorr_cg_residual_global = _gather_scan_distributed_array(band_comm,
+                                                                  self.ncorr_cg_residual,
+                                                                  scans_per_rank)
+        ncorr_cg_niter_global = _gather_scan_distributed_array(band_comm, self.ncorr_cg_niter,
+                                                               scans_per_rank)
+        ncorr_converged_global = _gather_scan_distributed_array(band_comm, self.ncorr_converged,
+                                                                scans_per_rank)
 
         # 4c. Low-resolution TOD power spectra (per-scan per-detector per-bin).
         tod_ps_freqs_global = _gather_scan_distributed_array(band_comm, self.tod_ps_freqs,
@@ -425,55 +454,49 @@ class TODSamples:
         jump_locations_global = _gather_variable_length_1d_array(band_comm, jump_locations_local)
         jump_offsets_global = _gather_variable_length_1d_array(band_comm, jump_offsets_local)
         ####################################################################
-        # Write results to file.
+        # Assemble the datasets, on the band master only.
         ####################################################################
-        if band_comm.Get_rank() == 0:
-            exp_name = self.experiment_name
-            band_name = self.band_name
-            chain_dir = paths.subdir(params, paths.CHAINS_TOD)
-            filename = f"{exp_name}_{band_name}_chain{self.chain:02d}_iter{itr:04d}.h5"
-            chain_file = os.path.join(chain_dir, filename)
+        if band_comm.Get_rank() != 0:
+            return None
 
-            # Write gains in band_unit: gain has brightness in its denominator, so divide by D
-            # (output maps instead multiply by D). Division makes copies, so self.* stays uK_RJ.
-            if abs_gain_global is not None:
-                abs_gain_global = abs_gain_global / self.band_unit_factor
-            if rel_gain_global is not None:
-                rel_gain_global = rel_gain_global / self.band_unit_factor
-            if temporal_gain_global is not None:
-                temporal_gain_global = temporal_gain_global / self.band_unit_factor
+        # Gains go out in band_unit: gain has brightness in its denominator, so divide by D
+        # (output maps instead multiply by D). Division makes copies, so self.* stays uK_RJ.
+        # Only the gain prior's sigma0 column is a gain amplitude; fknee and alpha are unit-free.
+        gain_prior_out = self.gain_prior.copy()
+        gain_prior_out[:, 0] /= self.band_unit_factor
 
-            with h5py.File(chain_file, "w") as file:
-                file["metadata/datetime"] = datetime.datetime.now().isoformat()
-                file["metadata/parameter_file_as_string"] = params.parameter_file_as_string
-                # Thermodynamic unit the written gains are expressed in (gain is [det units]/band_unit).
-                file["metadata/band_unit"] = self.band_unit
-                file["scan_ids"] = scan_ids_global
-                # Detector names (per-band, identical across ranks): the `idet` axis of every
-                # per-detector array below. Variable-length UTF-8 for a clean string round-trip.
-                file.create_dataset("det_names",
-                                    data=np.array(self.det_names, dtype=h5py.string_dtype()))
-                if abs_gain_global is not None:
-                    file["abs_gain"] = abs_gain_global
-                if rel_gain_global is not None:
-                    file["detrel_gain"] = rel_gain_global
-                if temporal_gain_global is not None:
-                    file["temporal_gain"] = temporal_gain_global
-                if noise_params_global is not None:
-                    file["noise_params"] = noise_params_global
-                file["present"] = present_global
-                file["accept"] = accept_global
-                file["chisq_z"] = chisq_z_global
-                file["good_fraction"] = good_fraction_global
-                file["tod_ps_freqs"] = tod_ps_freqs_global
-                file["tod_ps_ncorr"] = tod_ps_ncorr_global
-                file["tod_ps_raw"] = tod_ps_raw_global
-                file["tod_ps_ncorrsub"] = tod_ps_ncorrsub_global
-                file["tod_ps_residual"] = tod_ps_residual_global
-                if ncorr_lengths_global is not None:
-                    file["ncorr_tod_lengths"] = ncorr_lengths_global
-                    file["ncorr_tod_flat"] = ncorr_flat_global
-                if jump_counts_global is not None:
-                    file["jump_counts"] = jump_counts_global
-                    file["jump_locations"] = jump_locations_global
-                    file["jump_offsets"] = jump_offsets_global
+        # The top level of the band chain file, dataset name by dataset name. All of it is written
+        # on every chain iteration, which is what lets the reader in `__init__` read it back
+        # unconditionally. `det_names` is variable-length UTF-8 for a clean string round-trip; its
+        # order is the `idet` axis shared by every per-detector array here.
+        arrays: dict[str, NDArray] = {
+            "scan_ids": scan_ids_global,
+            "det_names": np.array(self.det_names, dtype=h5py.string_dtype()),
+            "abs_gain": abs_gain_global/self.band_unit_factor,
+            "detrel_gain": rel_gain_global/self.band_unit_factor,
+            "temporal_gain": temporal_gain_global/self.band_unit_factor,
+            "noise_params": noise_params_global,
+            "gain_prior": gain_prior_out,
+            "present": present_global,
+            "accept": accept_global,
+            "chisq_z": chisq_z_global,
+            "good_fraction": good_fraction_global,
+            "scan_start_time": scan_start_time_global,
+            "orbital_velocity": orbital_velocity_global,
+            "ncorr_cg_residual": ncorr_cg_residual_global,
+            "ncorr_cg_niter": ncorr_cg_niter_global,
+            "ncorr_converged": ncorr_converged_global,
+            "tod_ps_freqs": tod_ps_freqs_global,
+            "tod_ps_ncorr": tod_ps_ncorr_global,
+            "tod_ps_raw": tod_ps_raw_global,
+            "tod_ps_ncorrsub": tod_ps_ncorrsub_global,
+            "tod_ps_residual": tod_ps_residual_global,
+            "jump_counts": jump_counts_global,
+            "jump_locations": jump_locations_global,
+            "jump_offsets": jump_offsets_global,
+        }
+        # The only genuinely optional datasets: the DEBUG full-n_corr TODs, off unless asked for.
+        if ncorr_lengths_global is not None:
+            arrays["ncorr_tod_lengths"] = ncorr_lengths_global
+            arrays["ncorr_tod_flat"] = ncorr_flat_global
+        return arrays

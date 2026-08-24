@@ -172,9 +172,25 @@ class DiffuseComponent(Component):
     def dtype(self):
         return self._data.dtype
 
+    Cl_prior_param_names = ("Cl_prior_amplitude", "Cl_prior_beta", "Cl_prior_FWHM",
+                            "Cl_prior_l_pivot", "Cl_prior_l_apod")
+
     @property
     def alm_len_complex(self):
         return ((self.lmax+1)*(self.lmax+2))//2
+
+    @property
+    def sigma_l(self) -> NDArray[np.floating]:
+        """Realized angular power spectrum of this component's own amplitudes, per polarization.
+
+        Commander3's `sigma_l` (comm_diffuse_comp_smod.f90). Shape `(npol, lmax+1)`, one auto
+        spectrum per stored alm row: T for an intensity view, E and B for a QU one, T/E/B for a
+        joined IQU component. Cheap -- the alms are already in memory, so this is no transform.
+        """
+        # healpy's alm2cl only accepts complex128, while the alms are complex64 whenever
+        # `compsep.float_precision` is single.
+        alms = np.ascontiguousarray(self.alms, dtype=np.complex128)
+        return np.array([hp.alm2cl(alms[ipol], lmax=self.lmax) for ipol in range(alms.shape[0])])
 
     @property
     def P_Cl_prior(self) -> NDArray[np.floating]:

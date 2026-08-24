@@ -33,7 +33,7 @@ from commander4.tod.mapmaking.config import MapmakingConfig
 from commander4.tod.noise.sample_ncorr import CorrelatedNoiseConfig
 from commander4.polarization import get_execution_band_ids
 from commander4.file_io.tod_reader import read_tods_from_file
-from commander4.file_io.chain_writer import write_map_chain_to_file
+from commander4.file_io.chain_writer import write_band_chain_to_file
 from commander4.diagnostics.performance import benchmark, bench_summary, bench_reset
 
 logger = logging.getLogger(__name__)
@@ -196,14 +196,6 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
                 correlated_noise, data_selection,
             )
 
-    # Chain writers retain the full parameter tree because it is serialized into file metadata.
-    # The numerical mapmakers themselves only receive the values in their specific configs.
-    if is_master:
-        with benchmark("filewrite-datamaps"):
-            write_map_chain_to_file(params, chain, iter, experiment_data.experiment_name,
-                                    experiment_data.band_name, maps_to_file,
-                                    tod_samples.band_unit_factor, tod_samples.band_unit)
-
     # Report during data-selection warm-up as well as active-cut iterations.
     if data_selection.is_available(iter, correlated_noise):
         log_dataselect_summary(
@@ -211,8 +203,18 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
             active=data_selection.cuts_are_active(iter, correlated_noise),
             iteration=iter,
         )
-    with benchmark("filewrite-tod"):
-        tod_samples.write_chain_to_file(iter)
+
+    # The per-scan samples and the output maps go into one band file, written last so it records
+    # the final `accept` flags. The gather is collective over band_comm and also owns the write
+    # gate; the writer retains the full parameter tree because it is serialized into file metadata,
+    # while the numerical mapmakers only receive the values in their specific configs.
+    with benchmark("chain-gather"):
+        tod_arrays = tod_samples.gather_chain_arrays(iter)
+    if is_master and tod_arrays is not None:
+        with benchmark("filewrite-band"):
+            write_band_chain_to_file(params, chain, iter, experiment_data.experiment_name,
+                                     experiment_data.band_name, tod_arrays, maps_to_file,
+                                     tod_samples.band_unit_factor, tod_samples.band_unit)
 
     with benchmark("end-barrier"):
         tod_comm.Barrier()

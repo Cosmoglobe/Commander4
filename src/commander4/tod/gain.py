@@ -336,6 +336,9 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
     # Local calculations on each rank
     A_qq_local = np.zeros((ndet, nscans_local), dtype=np.float64)
     b_q_local = np.zeros((ndet, nscans_local), dtype=np.float64)
+    # (sigma0, fknee, alpha) of the Wiener prior, filled below by whichever rank solves a detector
+    # and summed across the band afterwards, so the chain records the prior actually used.
+    gain_prior_local = np.zeros((ndet, 3), dtype=np.float64)
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
                         downsample_factor=config.downsample_factor)
 
@@ -396,6 +399,9 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
                 mean_gain = tod_samples.abs_gain + tod_samples.rel_gain[idet]
                 sigma0_gain = 1e-4*mean_gain
                 sigma0_sq_gain = sigma0_gain**2
+                # Record the prior this detector was actually sampled under, for the chain file.
+                # Only the solving rank knows it, hence the Allreduce after the detector loop.
+                gain_prior_local[idet] = (sigma0_gain, fknee_gain, alpha_gain)
 
                 gain_freqs = rfftfreq(n_scans_total, d=1.0)
                 prior_ps = np.zeros_like(gain_freqs)
@@ -461,6 +467,10 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
         else:
             logger.warning(f"Rank {band_rank} received mismatched number of gain samples "\
                            f"for det {idet}. Expected {nscans_local}, got {delta_g_local.size}.")
+
+    # Each detector's prior was written by exactly one rank, so summing collects them all.
+    band_comm.Allreduce(MPI.IN_PLACE, gain_prior_local, op=MPI.SUM)
+    tod_samples.gain_prior = gain_prior_local
 
     if logger.isEnabledFor(logging.INFO):  # Only do all this work if logger.INFO is turned on.
         local_values_list: list[float] = []

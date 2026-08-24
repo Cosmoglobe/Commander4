@@ -101,20 +101,17 @@ def _restore_sampled_sed_params_from_chain(comp: DiffuseComponent, chain_path: s
     """Set `comp`'s *sampled* SED parameters from a chain's ``comps/<shortname>/sed/`` group.
 
     Only parameters the run is configured to *sample* are restored. Fixed ones (``nu_ref``, ``T``)
-    stay under the parameter file's control, so changing one there is not silently overridden by an
-    older chain. Parameters absent from the chain (written before this group existed) are left as
-    the parameter file set them.
+    stay under the parameter file's control, so changing one there is not silently overridden by
+    the chain.
     """
     if "sample_spectral_index" not in comp.comp_params \
             or not bool(comp.comp_params.sample_spectral_index):
         return
     with h5py.File(chain_path, "r") as f:
-        sed_group = f.get(f"comps/{comp.shortname}/sed")
-        if sed_group is None:
-            return
+        sed_group = f[f"comps/{comp.shortname}/sed"]
         # `beta` is currently the only sampled SED parameter, so it is the only one restored.
         for param_name in comp.sed_param_names:
-            if param_name != "beta" or param_name not in sed_group:
+            if param_name != "beta":
                 continue
             value = sed_group[param_name][()]
             logger.info(f"Component {comp.comp_name!r} ({comp.eval_pol}): restored sampled "

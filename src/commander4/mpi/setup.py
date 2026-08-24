@@ -11,6 +11,7 @@ from commander4.parameters.schema import (
     derive_task_counts,
     enabled_compsep_views,
     enabled_tod_bands,
+    has_enabled_sampling_group,
     task_count_breakdown,
 )
 
@@ -43,37 +44,27 @@ def init_mpi(params: Bunch) -> Bunch:
             logger.warning(f"mpi4py version ({mpi4py_version}) is below (4,0)!")
 
     if is_world_master:  # Every rank doesn't need to throw an error.
+        # Check if compsep.enabled is False (if the compsep group exist at all).
+        turned_off = "compsep" in params and "enabled" in params.compsep \
+            and not params.compsep.enabled
+        # If compsep is turned off, there can't be sampling groups enabled, that's be an error.
+        if has_enabled_sampling_group(params) and turned_off:
+            raise RuntimeError("Enabled compsep sampling groups are configured, but "
+                               "'compsep.enabled' is false, so no CompSep MPI ranks are "
+                               "allocated to run them. Enable compsep, or disable the groups.")
         if worldsize != ntasks.total:
             raise RuntimeError(f"This run needs {task_count_breakdown(ntasks)} MPI tasks, "
                                f"but was started with {worldsize}. The counts follow from the "
                                "parameter file (the per-band 'num_tasks' of every enabled band, "
                                "and one CompSep task per enabled 'compsep.bands' view); run with "
                                f"'mpirun -n {ntasks.total}'.")
-        # With CompSep disabled, CompSep is simply off (TOD-only) and compsep.bands is ignored.
+        # Otherwise CompSep is simply off (TOD-only) and compsep.bands is ignored.
         if not compsep_enabled(params):
-            logger.info("compsep.enabled is false; running TOD-only. Any 'compsep.bands' are "
-                        "ignored, and TOD ranks use the initial sky model built from the "
-                        "components.")
-        # Component separation is "on" iff CompSep ranks are allocated; any enabled method-specific
-        # sampling group therefore requires at least one CompSep rank to run on.
-        has_enabled_sampling_group = False
-        if "compsep" in params:
-            for key in ("cg_sampling_groups", "per_pixel_sampling_groups",
-                        "mcmc_sampling_groups"):
-                if key not in params.compsep:
-                    continue
-                groups = params.compsep[key]
-                for group_name in groups:
-                    group = groups[group_name]
-                    if "enabled" not in group or group.enabled:
-                        has_enabled_sampling_group = True
-                        break
-                if has_enabled_sampling_group:
-                    break
-        if has_enabled_sampling_group and tot_num_CompSep_ranks == 0:
-            raise RuntimeError("Enabled compsep sampling groups are configured, but no CompSep "
-                               "MPI ranks are allocated (compsep.enabled is false, or no "
-                               "'compsep.bands' are enabled).")
+            reason = ("compsep.enabled is false" if turned_off
+                      else "no compsep sampling group is enabled, so compsep ranks would have "
+                           "nothing to sample")
+            logger.info(f"Running TOD-only: {reason}. Any 'compsep.bands' are ignored, and TOD "
+                        "ranks use the initial sky model built from the components.")
 
     # Split the world communicator into a communicator for compsep and one for TOD (with "color"
     # being the keyword for the split).

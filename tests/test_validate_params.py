@@ -99,6 +99,14 @@ def test_removed_component_fields_have_migration_errors(
         validate_parameter_file(_write_params(tmp_path, params))
 
 
+def test_unused_component_parameter_is_rejected(tmp_path) -> None:
+    params = _valid_params()
+    params["components"]["CMB"]["params"]["unused_setting"] = 1
+
+    with pytest.raises(ValueError, match="unused_setting"):
+        validate_parameter_file(_write_params(tmp_path, params))
+
+
 def test_unknown_reader_is_rejected_before_data_access(tmp_path) -> None:
     params = _valid_params()
     params["experiments"]["Example"]["experiment_id"] = "misspelled_reader"

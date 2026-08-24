@@ -161,7 +161,7 @@ class MCMCSamplingGroup(ABC):
         return float(self.comm.allreduce(local, op=MPI.SUM))
 
     # The MH loop itself, identical for every parameter set.
-    def run(self, *, numstep: int, resolve_amplitudes: Callable[[], None]) -> None:
+    def run(self, *, numstep: int, resolve_amplitudes: Callable[[], None]) -> dict:
         """Take ``numstep`` joint MH steps, each coupled to an amplitude re-solve.
 
         Called collectively by *all* CompSep ranks. ``resolve_amplitudes`` is a collective callback
@@ -171,11 +171,15 @@ class MCMCSamplingGroup(ABC):
         component amplitudes (which ``resolve_amplitudes`` may have changed) are reverted.
         NB: It's currently assumed that the `resolve_amplitudes` callback ONLY touches the component
         amplitudes, which are stored in `comp._data`.
+
+        Returns the acceptance record for the chain file (C3's ``nonlin-samples_*.dat``): the number
+        of steps taken and accepted, and the final state of each sampled parameter. Empty when this
+        group had nothing to sample.
         """
         if not self.has_parameters():
             if self.is_root:
                 logger.verbose("MCMC group has nothing to sample; skipping.")
-            return
+            return {}
 
         n_accept = 0
         for step in range(numstep):
@@ -228,3 +232,6 @@ class MCMCSamplingGroup(ABC):
 
         if self.is_root:
             logger.info(f"MCMC group finished: {n_accept}/{numstep} proposals accepted.")
+        return {"numstep": numstep, "n_accept": n_accept,
+                "accept_rate": n_accept/numstep if numstep > 0 else float("nan"),
+                "params": self.capture_state()}

@@ -629,10 +629,23 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         raise ValueError(f"specified polarizations {pols} is notsupported yet.")
 
     BinMapmaker = MapmakerIQU if pols == "IQU" else Mapmaker  # General bin mapmaker class.
-    mapmaker_orbdipole = BinMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
+
+    # Each aux map costs a full-sky map and a per-detector-scan accumulation, so one is built only
+    # when the chain is going to hold it; `None` means "not wanted this iteration" all the way
+    # through the scan loop and the finalization below.
+    mapmaker_orbdipole = (BinMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
+                          if mapmaking.include_orbital_dipole_maps else None)
+    mapmaker_res = (BinMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
+                    if mapmaking.include_residual_maps else None)
+    mapmaker_ncorr = (BinMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
+                      if corr_noise_active and mapmaking.include_corr_noise_maps else None)
+    # Hit counts are a plain per-pixel sample count, so they skip the IQU response/weighting the
+    # mapmakers apply and are just accumulated with np.bincount into the local pixel buffer. Only
+    # the unflagged samples are counted, even though the CG weights every (gap-filled) sample: a
+    # hit map is meant to say how much real data a pixel has.
+    nhit_local = np.zeros(domain.n_local) if mapmaking.include_hit_maps else None
 
     if corr_noise_active:
-        mapmaker_ncorr = BinMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
         sampled_params = []
         residuals = []
         niters = []
@@ -680,6 +693,9 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
                 psd_bin=correlated_noise.psd_bin)
             n_corr_est = res.n_corr
             tod_samples.noise_params[view.iscan, view.idet, :] = res.noise_params
+            tod_samples.ncorr_cg_residual[view.iscan, view.idet] = res.residual
+            tod_samples.ncorr_cg_niter[view.iscan, view.idet] = res.niter
+            tod_samples.ncorr_converged[view.iscan, view.idet] = res.converged and not res.high_var
             if correlated_noise.sample_psd_params:
                 sampled_params.append(np.array(res.noise_params, copy=True))
             if not res.converged:
@@ -697,7 +713,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
 
         # Diagnostics (incl. chisq_z) before any accumulation, so a veto below leaves this
         # detector-scan out of every map product (the CG operator passes re-read `accept`).
-        _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view, n_corr_est)
+        residual_tod = _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view, n_corr_est)
 
         ### DATA-SELECTION VETO 2 (catastrophic chi^2), applied in-loop so this iteration's maps
         ### already exclude the scan.
@@ -718,25 +734,41 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
             mapmaker_invvar.accumulate_to_map(inv_var, pix)
 
         ### ORBITAL DIPOLE ###
-        sky_orb_dipole = view.get_orbital_dipole_tod()
         d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
-        if pols == "IQU":
-            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi,
-                                                 response=response)
-        else:
-            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
+        if mapmaker_orbdipole is not None:
+            # The dipole TOD is cached on the view, so `get_tod` above already paid for it.
+            sky_orb_dipole = view.get_orbital_dipole_tod()
+            if pols == "IQU":
+                mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi,
+                                                     response=response)
+            else:
+                mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
 
         ### CORRELATED-NOISE MAP ###
-        if corr_noise_active:
+        if mapmaker_ncorr is not None:
+            n_corr_uKRJ = (n_corr_est/gain).astype(np.float32, copy=False)
             if pols == "IQU":
-                mapmaker_ncorr.accumulate_to_map(
-                    (n_corr_est/gain).astype(np.float32, copy=False),
-                    inv_var, pix, psi, response=response)
+                mapmaker_ncorr.accumulate_to_map(n_corr_uKRJ, inv_var, pix, psi, response=response)
             else:
-                mapmaker_ncorr.accumulate_to_map(
-                    (n_corr_est/gain).astype(np.float32, copy=False),
-                    inv_var, pix, psi)
+                mapmaker_ncorr.accumulate_to_map(n_corr_uKRJ, inv_var, pix, psi)
+        if corr_noise_active:
             d_sky -= n_corr_est
+
+        ### RESIDUAL AND HIT MAPS ###
+        # `residual_tod` is the detector-unit noise residual `_record_tod_diagnostics` already
+        # built (sky model, orbital dipole and n_corr all subtracted); dividing by the gain puts it
+        # in uK_RJ, like the signal map. It is gap-filled and binned full-length, matching this
+        # mapmaker's full-length inverse-variance denominator (the bin mapmaker instead masks both).
+        if mapmaker_res is not None:
+            fill_all_masked(residual_tod, good_data_mask, sigma0)
+            if pols == "IQU":
+                mapmaker_res.accumulate_to_map(residual_tod/gain, inv_var, pix, psi,
+                                               response=response)
+            else:
+                mapmaker_res.accumulate_to_map(residual_tod/gain, inv_var, pix, psi)
+        if nhit_local is not None:
+            nhit_local += np.bincount(domain.to_local(pix[good_data_mask]),
+                                      minlength=domain.n_local)
 
         # Gap-fill flagged samples instead of compacting them away. The CG operator applies a
         # Fourier transform (apply_T), which requires a continuous, full-length TOD: removing masked
@@ -786,18 +818,26 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
             map_rms = np.full((1, map_cov.size), np.inf)
             map_rms[0, observed] = 1.0/np.sqrt(map_cov[observed])
 
-    mapmaker_orbdipole.gather_map()
-    mapmaker_orbdipole.normalize_map(map_cov)
-    map_orbdipole = mapmaker_orbdipole.final_map
+    def finalize_aux(aux_mapmaker):
+        """Gather and normalize one aux map against the shared cov; `None` if it was not built."""
+        if aux_mapmaker is None:
+            return None
+        aux_mapmaker.gather_map()
+        aux_mapmaker.normalize_map(map_cov)
+        return aux_mapmaker.final_map
+
+    map_orbdipole = finalize_aux(mapmaker_orbdipole)
     cg_mapmaker.finalize_RHS()
     cg_mapmaker.solve()
     map_signal = cg_mapmaker.solved_map
 
-    map_corrnoise = None
-    if corr_noise_active:
-        mapmaker_ncorr.gather_map()
-        mapmaker_ncorr.normalize_map(map_cov)
-        map_corrnoise = mapmaker_ncorr.final_map
+    map_corrnoise = finalize_aux(mapmaker_ncorr)
+    map_residual = finalize_aux(mapmaker_res)
+    map_nhit = None
+    if nhit_local is not None:
+        nhit_full = domain.reduce_to_full(nhit_local)
+        if nhit_full is not None:
+            map_nhit = np.round(nhit_full).astype(np.int64)
 
     ### FINAL CLEANUP ON MASTER RANK ###
     detmap_dict_out = {}
@@ -806,6 +846,6 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         detmap_dict_out, maps_to_file = finalize_band_maps(
             map_signal, map_rms, pols, experiment_data, mapmaking, tod_samples, compsep_output,
             map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
-            corr_noise_active=corr_noise_active)
+            map_residual=map_residual, map_nhit=map_nhit, map_cov=map_cov)
 
     return detmap_dict_out, maps_to_file

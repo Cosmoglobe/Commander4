@@ -97,9 +97,9 @@ def test_bin_aux_maps_ignore_flagged_samples(monkeypatch):
     flag_b = np.concatenate([np.zeros(n, np.int64), np.full(ne, _BITMASK, np.int64)])
     with_flagged = _run_bin_mapmaker(_build_band(pix_b, psi_b, flag_b, tod_b))
 
-    # All three maps must be unchanged: the flagged samples are dropped everywhere. (Before the fix
-    # the orbital-dipole and corr-noise maps binned flagged samples into the numerator only, biasing
-    # them against the good-sample cov used to normalize them.)
-    for key in ("map_observed_sky", "map_rms", "map_orbdipole"):
+    # All three maps must be unchanged: the flagged samples are dropped everywhere. An aux map that
+    # binned them into its numerator alone would be biased against the good-sample cov that
+    # normalizes it.
+    for key in ("observed_sky", "rms", "orbdipole"):
         np.testing.assert_allclose(with_flagged[key], good[key], rtol=0, atol=1e-9,
                                    err_msg=f"{key} changed when flagged samples were added")

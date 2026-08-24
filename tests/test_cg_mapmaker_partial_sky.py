@@ -107,17 +107,17 @@ def test_cg_patch_matches_binned_and_zeroes_unsolvable_pixels(monkeypatch):
     cg = _run_mapmaker(band, "CG")
     binned = _run_mapmaker(_build_band(pix, psi, tod, "IQU"), "bin")
 
-    assert np.isfinite(cg["map_observed_sky"]).all()
+    assert np.isfinite(cg["observed_sky"]).all()
     # The edge pixel's 3x3 is singular (single psi), so both mapmakers must give up on it, and the
     # 161 unhit pixels have no data at all.
-    solvable = np.isfinite(cg["map_rms"])
+    solvable = np.isfinite(cg["rms"])
     assert solvable[0].sum() == _N_GOOD_PIX
     assert not solvable[:, _EDGE_PIX].any()
-    np.testing.assert_array_equal(cg["map_observed_sky"][~solvable], 0.0)
+    np.testing.assert_array_equal(cg["observed_sky"][~solvable], 0.0)
     # With T = identity the CG solves exactly the binned normal equations.
-    np.testing.assert_allclose(cg["map_observed_sky"][solvable], binned["map_observed_sky"][solvable],
+    np.testing.assert_allclose(cg["observed_sky"][solvable], binned["observed_sky"][solvable],
                                rtol=1e-5, atol=1e-4)
-    np.testing.assert_array_equal(cg["map_rms"], binned["map_rms"])
+    np.testing.assert_array_equal(cg["rms"], binned["rms"])
 
 
 def test_cg_patch_intensity_only(monkeypatch):
@@ -132,7 +132,7 @@ def test_cg_patch_intensity_only(monkeypatch):
     # the solution is just the binned TOD.
     maps = _run_mapmaker(_build_band(pix, psi, tod, "I", velocity=(0.0, 0.0, 0.0)), "CG")
 
-    signal, map_rms = maps["map_observed_sky"], maps["map_rms"]
+    signal, map_rms = maps["observed_sky"], maps["rms"]
     assert signal.shape == map_rms.shape == (1, _NPIX)
     observed = np.zeros(_NPIX, dtype=bool)
     observed[:_N_GOOD_PIX] = True

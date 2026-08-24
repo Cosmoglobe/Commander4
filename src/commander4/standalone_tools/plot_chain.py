@@ -39,10 +39,8 @@ def _decode_h5_value(value):
 
 def _load_params_from_chain(run_dir: str) -> Bunch | None:
     patterns = [
-        os.path.join(run_dir, paths.CHAINS_DATAMAPS, "*.h5"),
+        os.path.join(run_dir, paths.CHAINS_BANDS, "*.h5"),
         os.path.join(run_dir, paths.CHAINS_COMPSEP, "*.h5"),
-        os.path.join(run_dir, paths.CHAINS_TOD, "*.h5"),
-        os.path.join(run_dir, "*.h5"),
     ]
     for pattern in patterns:
         for path in sorted(glob.glob(pattern)):
@@ -85,10 +83,7 @@ def _load_compsep_components(params: Bunch, compsep_path: str) -> list[Component
     with h5py.File(compsep_path, "r") as handle:
         if "comps" not in handle:
             return []
-        comps_group = handle["comps"]
-        available = set(comps_group.keys())
-        longnames = {name: _decode_h5_value(comps_group[name]["longname"][()])
-                     for name in available if "longname" in comps_group[name]}
+        available = set(handle["comps"].keys())
 
     filtered_list: list[Component] = []
     for comp in comp_list:
@@ -100,14 +95,10 @@ def _load_compsep_components(params: Bunch, compsep_path: str) -> list[Component
         if view_alms is None:
             continue
         comp.alms = view_alms
-        # `longname` is only for plot labels; older chains do not store one, so fall back to the
-        # per-view name the parameter file gives.
-        if comp.shortname in longnames:
-            comp.longname = longnames[comp.shortname]
-        elif "longname" in comp.comp_params:
-            comp.longname = comp.comp_params.longname
-        else:
-            comp.longname = comp.comp_name
+        # `longname` is only for plot labels, and the chain does not store one; take it from the
+        # parameter file, else fall back to the component's class name.
+        comp.longname = (comp.comp_params.longname if "longname" in comp.comp_params
+                         else comp.comp_name)
         filtered_list.append(comp)
     return filtered_list
 
@@ -248,19 +239,19 @@ class MapBundle:
 def _load_and_prepare_maps(map_path: str, nside_target: int | None) -> MapBundle | None:
     try:
         with h5py.File(map_path, "r") as f:
-            raw = {k: f[k][()] if k in f else None for k in (
-                "map_observed_sky", "map_rms", "map_orbdipole", "map_corrnoise", "map_skymodel",
+            raw = {k: f[f"maps/{k}"][()] if f"maps/{k}" in f else None for k in (
+                "observed_sky", "rms", "orbdipole", "corrnoise", "skymodel", "res",
             )}
     except OSError:
         return None
 
-    signal = _ud_grade_map(raw["map_observed_sky"], nside_target)
+    signal = _ud_grade_map(raw["observed_sky"], nside_target)
     if signal is None:
         return None
-    rms = _ud_grade_map(raw["map_rms"], nside_target)
-    corrnoise = _ud_grade_map(raw["map_corrnoise"], nside_target)
-    orbdipole = _ud_grade_map(raw["map_orbdipole"], nside_target)
-    skymodel = _ud_grade_map(raw["map_skymodel"], nside_target)
+    rms = _ud_grade_map(raw["rms"], nside_target)
+    corrnoise = _ud_grade_map(raw["corrnoise"], nside_target)
+    orbdipole = _ud_grade_map(raw["orbdipole"], nside_target)
+    skymodel = _ud_grade_map(raw["skymodel"], nside_target)
 
     npix = signal.shape[-1]
     nside = hp.npix2nside(npix)
@@ -271,8 +262,10 @@ def _load_and_prepare_maps(map_path: str, nside_target: int | None) -> MapBundle
     orbdipole = _align_map_rows(orbdipole, npol, npix)
     skymodel = _align_map_rows(skymodel, npol, npix)
 
-    residual = None
-    if skymodel is not None:
+    # Prefer the residual the mapmaker binned straight from the TODs; fall back to differencing the
+    # written maps when `output.chains.include.residual_maps` was off.
+    residual = _align_map_rows(_ud_grade_map(raw["res"], nside_target), npol, npix)
+    if residual is None and skymodel is not None:
         residual = signal.copy()
         residual -= skymodel
 
@@ -297,9 +290,9 @@ def _first_scalar(dataset) -> float | None:
 
 
 def _plot_tod_sampling(run_dir: str, output_dir: str, chain_filter: set[int] | None) -> None:
-    tod_files = sorted(glob.glob(os.path.join(run_dir, paths.CHAINS_TOD, "*.h5")))
+    tod_files = sorted(glob.glob(os.path.join(run_dir, paths.CHAINS_BANDS, "*.h5")))
     if not tod_files:
-        LOGGER.info("No %s/*.h5 files found; skipping TOD sampling plots.", paths.CHAINS_TOD)
+        LOGGER.info("No %s/*.h5 files found; skipping TOD sampling plots.", paths.CHAINS_BANDS)
         return
 
     data: dict[str, dict[int, dict[int, dict[str, float]]]] = {}
@@ -314,7 +307,8 @@ def _plot_tod_sampling(run_dir: str, output_dir: str, chain_filter: set[int] | N
         try:
             with h5py.File(path, "r") as handle:
                 for key in handle.keys():
-                    if key in {"scanID", "metadata"}:
+                    # `maps` is the band file's map group, not a per-scan sampled quantity.
+                    if key in {"scanID", "metadata", "maps"}:
                         continue
                     scalar = _first_scalar(handle[key])
                     if scalar is None:
@@ -440,7 +434,7 @@ def main() -> int:
     parser.add_argument(
         "run_dir",
         help=f"Path to a Commander4 run's output directory (its `output.dir`, containing "
-             f"{paths.CHAINS_COMPSEP}/, {paths.CHAINS_DATAMAPS}/, {paths.CHAINS_TOD}/).",
+             f"{paths.CHAINS_BANDS}/ and {paths.CHAINS_COMPSEP}/).",
     )
     parser.add_argument(
         "--output-dir",
@@ -526,9 +520,9 @@ def main() -> int:
             continue
         compsep_files[(chain, iteration)] = path
 
-    maps_files = sorted(glob.glob(os.path.join(run_dir, paths.CHAINS_DATAMAPS, "*.h5")))
+    maps_files = sorted(glob.glob(os.path.join(run_dir, paths.CHAINS_BANDS, "*.h5")))
     if not maps_files:
-        LOGGER.warning("No %s/*.h5 files found in %s", paths.CHAINS_DATAMAPS, run_dir)
+        LOGGER.warning("No %s/*.h5 files found in %s", paths.CHAINS_BANDS, run_dir)
 
     comp_cache: dict[tuple[int, int], list[Component]] = {}
     LOGGER.info("Found %s map files and %s compsep files", len(maps_files), len(compsep_files))

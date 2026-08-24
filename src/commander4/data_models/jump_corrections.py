@@ -142,12 +142,11 @@ class JumpCatalog:
         local_indices: list[int],
         ndet: int,
     ) -> "JumpCatalog":
-        """Reconstruct a local jump catalog from packed HDF5 datasets when present."""
-        catalog = cls.empty(len(local_indices), ndet)
-        dataset_names = {"jump_counts", "jump_locations", "jump_offsets"}
-        if not dataset_names.issubset(file.keys()):
-            return catalog
+        """Reconstruct a local jump catalog from the packed HDF5 datasets `pack` produces.
 
+        The three datasets always appear together, so all three are read unconditionally.
+        """
+        catalog = cls.empty(len(local_indices), ndet)
         counts_global = file["jump_counts"][:]
         locations_global = file["jump_locations"][:]
         offsets_global = file["jump_offsets"][:]

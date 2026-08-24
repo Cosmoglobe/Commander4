@@ -3,23 +3,24 @@
 A run writes everything below the single ``output.dir``:
 
     <output_dir>/logs/              log file and cProfile dumps
-    <output_dir>/chains_tod/        per-band TOD sample chains
+    <output_dir>/chains_bands/      per-band TOD samples and output maps
     <output_dir>/chains_compsep/    component amplitude chains
-    <output_dir>/chains_datamaps/   per-band output maps
     <output_dir>/plots/             figures
 
 The subdirectory names live here so that the run, the plotting tool and the standalone tools all
 agree on them, and so that reading a run's output needs only the one path the user configured.
+
+The band chain holds both halves of what the TOD side knows about one band at one Gibbs sample:
+the per-scan samples at the top level and the output maps under ``maps/``.
 """
 import os
 
 LOGS = "logs"
-CHAINS_TOD = "chains_tod"
+CHAINS_BANDS = "chains_bands"
 CHAINS_COMPSEP = "chains_compsep"
-CHAINS_DATAMAPS = "chains_datamaps"
 PLOTS = "plots"
 
-SUBDIRS = (LOGS, CHAINS_TOD, CHAINS_COMPSEP, CHAINS_DATAMAPS, PLOTS)
+SUBDIRS = (LOGS, CHAINS_BANDS, CHAINS_COMPSEP, PLOTS)
 
 
 def resolve_output_dir(output_params) -> str:

@@ -10,7 +10,6 @@ from commander4.compsep.processing import (
     MCMCSamplingGroupConfig,
     PerPixelSamplingGroupConfig,
     _build_conditional_residual,
-    _evaluate_chi2,
     _filter_sampling_group_components,
     _read_sampling_groups,
     resolve_sampling_groups,
@@ -21,6 +20,7 @@ from commander4.compsep.processing import (
     init_compsep_processing,
     process_compsep,
 )
+from commander4.compsep.chisq import evaluate_chi2
 from commander4.diagnostics.log import SUMMARY
 from commander4.mpi.transfer import _get_compsep_sender_id_for_tod_band, _should_send_compsep_result
 from commander4.data_models.detector_map import DetectorMap
@@ -133,6 +133,14 @@ def test_joined_skymodel_realizes_iqu_components() -> None:
     assert np.all(np.isfinite(sky))
 
 
+def _chain_output_state(**overrides) -> Bunch:
+    """The chain-output fields of `CompSepState` that the chi-squared path reads."""
+    state = Bunch(band_name="Planck30GHz", target_pol="I", nside_chisq=1,
+                  include_chisq_map=True, include_residual_maps=False)
+    state.update(overrides)
+    return state
+
+
 def test_iteration_chi2_uses_all_observed_map_samples() -> None:
     map_sky = np.arange(1.0, 13.0).reshape(1, -1)
     map_rms = np.full_like(map_sky, 2.0)
@@ -145,10 +153,16 @@ def test_iteration_chi2_uses_all_observed_map_samples() -> None:
                           fwhm: float | None = None) -> np.ndarray:
             return np.zeros_like(map_sky)
 
-    chi2, ndof = _evaluate_chi2(mpi_info, detector_data, ZeroSky())
+    fit = evaluate_chi2(mpi_info.compsep, detector_data, ZeroSky(), band_name="Planck30GHz",
+                        pol="I", nside_chisq=1)
 
-    assert chi2 == pytest.approx(np.sum((map_sky[0, :-1] / 2.0)**2))
-    assert ndof == 11
+    assert fit.total == pytest.approx(np.sum((map_sky[0, :-1] / 2.0)**2))
+    assert fit.ndof == 11
+    # The band's own contribution is the whole chi-squared here (one band), and the chi-squared map
+    # only redistributes z^2 over pixels, so it must carry exactly the same total.
+    assert fit.band.chi2 == pytest.approx(fit.total)
+    assert fit.band.chi2_map.sum() == pytest.approx(fit.total)
+    assert fit.band.chi2_map[1:].sum() == 0.0  # An intensity view fills row 0 only.
 
 
 def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
@@ -156,7 +170,11 @@ def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
     map_rms = np.full_like(map_sky, 2.0)
     detector_data = DetectorMap(map_sky, map_rms, nu=30.0, fwhm=60.0, nside=1)
     mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0))
-    compsep_state = Bunch(amplitude_groups={}, mcmc_groups={})
+    # Compsep only runs with at least one enabled group, so use one that samples nothing (its
+    # component list is empty): the group loop still runs, and its evaluation is the final fit.
+    compsep_state = _chain_output_state(
+        amplitude_groups={}, mcmc_groups={"noop": MCMCSamplingGroupConfig(name="noop")},
+        band_identifier="Planck30GHz_I", chisq_masks={})
     monkeypatch.setattr(
         "commander4.compsep.processing.write_compsep_chain_to_file", lambda *args: None)
 

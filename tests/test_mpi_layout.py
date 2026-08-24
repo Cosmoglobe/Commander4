@@ -27,11 +27,15 @@ def _params() -> Bunch:
             )),
             Second=Bunch(enabled=True, bands=Bunch(BandB=_tod_band(3))),
         ),
-        compsep=Bunch(bands=Bunch(
-            BandA=Bunch(enabled=True, polarization="IQU"),
-            BandB=Bunch(enabled=True, polarization="QU"),
-            FileBand=Bunch(enabled=True, polarization="I"),
-        )),
+        # Compsep ranks are only allocated when there is a sampling group to run on them.
+        compsep=Bunch(
+            bands=Bunch(
+                BandA=Bunch(enabled=True, polarization="IQU"),
+                BandB=Bunch(enabled=True, polarization="QU"),
+                FileBand=Bunch(enabled=True, polarization="I"),
+            ),
+            cg_sampling_groups=Bunch(amps=Bunch(enabled=True)),
+        ),
     )
 
 
@@ -137,7 +141,8 @@ def test_tod_context_has_no_detector_hierarchy() -> None:
 def test_compsep_context_uses_the_inventory_view() -> None:
     params = Bunch(
         experiments=Bunch(),
-        compsep=Bunch(bands=Bunch(Band=Bunch(enabled=True, polarization="QU"))),
+        compsep=Bunch(bands=Bunch(Band=Bunch(enabled=True, polarization="QU")),
+                      cg_sampling_groups=Bunch(amps=Bunch(enabled=True))),
     )
     mpi_info = Bunch(compsep=Bunch(rank=0, size=1))
 

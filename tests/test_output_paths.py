@@ -36,7 +36,7 @@ def test_subdirectory_names_are_flat():
     The names are part of the on-disk contract that `plot_chain` and the standalone tools read, so
     a rename has to be a deliberate edit here rather than a silent drift.
     """
-    assert paths.SUBDIRS == ("logs", "chains_tod", "chains_compsep", "chains_datamaps", "plots")
+    assert paths.SUBDIRS == ("logs", "chains_bands", "chains_compsep", "plots")
     assert not any(os.sep in name for name in paths.SUBDIRS)
 
 
@@ -50,9 +50,9 @@ def test_create_output_dirs_is_idempotent(tmp_path):
     """Every rank may call it, and a resumed run must not trip over an existing tree."""
     output = _output(str(tmp_path / "run"))
     paths.create_output_dirs(output)
-    open(os.path.join(tmp_path, "run", paths.CHAINS_TOD, "keep.h5"), "w").close()
+    open(os.path.join(tmp_path, "run", paths.CHAINS_BANDS, "keep.h5"), "w").close()
     paths.create_output_dirs(output)
-    assert os.path.exists(os.path.join(tmp_path, "run", paths.CHAINS_TOD, "keep.h5"))
+    assert os.path.exists(os.path.join(tmp_path, "run", paths.CHAINS_BANDS, "keep.h5"))
 
 
 def test_a_missing_output_dir_is_refused():
@@ -76,8 +76,8 @@ def test_a_log_file_name_carrying_a_path_is_refused(tmp_path, name):
 def test_the_log_directory_must_exist_before_the_loggers_open_the_file(tmp_path):
     """`init_loggers` opens its file immediately, so `create_output_dirs` has to run first.
 
-    This is why `cli.main` builds the tree before configuring logging; with the old split layout
-    the directory was created afterwards, so a fresh log directory could not be logged into at all.
+    This is why `cli.main` builds the tree before configuring logging: otherwise a fresh log
+    directory could not be logged into at all.
     """
     import logging
 

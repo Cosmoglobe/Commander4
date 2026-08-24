@@ -23,13 +23,20 @@ def _band(num_tasks=1, enabled=True, **kw):
     return Bunch(enabled=enabled, num_tasks=num_tasks, **kw)
 
 
-def _params(compsep_bands=(), tod_bands=(("BandA", 4), ("BandB", 2)), **compsep_kw):
-    """A minimal params Bunch: one enabled experiment, plus whatever compsep config is asked for."""
+def _params(compsep_bands=(), tod_bands=(("BandA", 4), ("BandB", 2)), groups=True, **compsep_kw):
+    """A minimal params Bunch: one enabled experiment, plus whatever compsep config is asked for.
+
+    `groups` adds one enabled CG sampling group, since compsep ranks are only allocated when there
+    is something to sample. Pass `groups=False` for the "nothing enabled" case.
+    """
+    compsep = Bunch(bands=Bunch({name: Bunch(enabled=en, polarization=pol)
+                                 for name, pol, en in compsep_bands}), **compsep_kw)
+    if groups:
+        compsep.cg_sampling_groups = Bunch(amps=Bunch(enabled=True))
     return Bunch(
         experiments=Bunch(EXP=Bunch(enabled=True, bands=Bunch(
             {name: _band(n) for name, n in tod_bands}))),
-        compsep=Bunch(bands=Bunch({name: Bunch(enabled=en, polarization=pol)
-                                   for name, pol, en in compsep_bands}), **compsep_kw),
+        compsep=compsep,
     )
 
 
@@ -98,6 +105,38 @@ def test_tod_only_mode_allocates_no_compsep_ranks():
     assert (counts.compsep_I, counts.compsep_QU, counts.total) == (0, 0, 6)
     assert compsep_enabled(_params(compsep_bands=bands)) is True       # defaults to on
     assert compsep_enabled(_params(compsep_bands=bands, enabled=False)) is False
+
+
+def test_no_enabled_sampling_group_allocates_no_compsep_ranks():
+    """Compsep ranks exist to run sampling groups; with none enabled they would sample nothing.
+
+    Allocating them anyway reserves nodes and memory just to forward maps and evaluate a
+    chi-squared, when TOD-only reaches the same fixed sky model on its own.
+    """
+    bands = (("BandA", "IQU", True), ("BandB", "IQU", True))
+    assert derive_task_counts(_params(compsep_bands=bands)).total == 6 + 4
+
+    counts = derive_task_counts(_params(compsep_bands=bands, groups=False))
+    assert (counts.compsep_I, counts.compsep_QU, counts.total) == (0, 0, 6)
+    assert compsep_enabled(_params(compsep_bands=bands, groups=False)) is False
+
+    # A group present but switched off counts as none enabled.
+    params = _params(compsep_bands=bands, groups=False)
+    params.compsep.mcmc_sampling_groups = Bunch(specind=Bunch(enabled=False))
+    assert compsep_enabled(params) is False
+    params.compsep.mcmc_sampling_groups.specind.enabled = True
+    assert compsep_enabled(params) is True
+
+
+def test_a_sampling_group_with_compsep_switched_off_is_refused():
+    """`compsep.enabled: false` plus an enabled group is contradictory, and must not run silently."""
+    import commander4.diagnostics.log  # noqa: F401  -- registers the SUMMARY/VERBOSE levels.
+    from commander4.mpi.setup import init_mpi
+
+    params = _params(compsep_bands=(("BandA", "IQU", True),), enabled=False)
+    params.resources = Bunch(tod=Bunch(num_threads=1), compsep=Bunch(num_threads=1))
+    with pytest.raises(RuntimeError, match="compsep.enabled' is false"):
+        init_mpi(params)
 
 
 def test_the_breakdown_names_every_term():

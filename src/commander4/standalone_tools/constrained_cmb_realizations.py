@@ -303,7 +303,7 @@ def _load_params_from_chain(run_dir: str) -> Bunch | None:
     them. Returns None if no chain file in `run_dir` carries it.
     """
     patterns = [os.path.join(run_dir, paths.CHAINS_COMPSEP, "*.h5"),
-                os.path.join(run_dir, paths.CHAINS_DATAMAPS, "*.h5")]
+                os.path.join(run_dir, paths.CHAINS_BANDS, "*.h5")]
     for pattern in patterns:
         for path in sorted(glob.glob(pattern)):
             try:
@@ -369,7 +369,7 @@ def main() -> int:
     parser.add_argument(
         "run_dir",
         help=f"Path to a Commander4 run's output directory (its `output.dir`, containing "
-             f"{paths.CHAINS_COMPSEP}/ and {paths.CHAINS_DATAMAPS}/).")
+             f"{paths.CHAINS_COMPSEP}/ and {paths.CHAINS_BANDS}/).")
     parser.add_argument("--output-dir", default=None,
                         help="Directory for outputs. Defaults to <run_dir>/cmb_realizations.")
     parser.add_argument("--iter", type=int, default=None, dest="only_iter",
@@ -395,9 +395,9 @@ def main() -> int:
 
     run_dir = os.path.abspath(args.run_dir)
     compsep_dir = os.path.join(run_dir, paths.CHAINS_COMPSEP)
-    datamaps_dir = os.path.join(run_dir, paths.CHAINS_DATAMAPS)
-    if not os.path.isdir(compsep_dir) or not os.path.isdir(datamaps_dir):
-        logger.error(f"Run output directory not found: {compsep_dir} or {datamaps_dir}")
+    bands_dir = os.path.join(run_dir, paths.CHAINS_BANDS)
+    if not os.path.isdir(compsep_dir) or not os.path.isdir(bands_dir):
+        logger.error(f"Run output directory not found: {compsep_dir} or {bands_dir}")
         return 1
 
     params = _load_params_from_chain(run_dir)
@@ -410,18 +410,22 @@ def main() -> int:
     output_dir = args.output_dir or os.path.join(run_dir, "cmb_realizations")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Which (band, iteration) pairs the run actually wrote maps for.
+    # Which (band, iteration) pairs the run actually wrote maps for. A band file exists on every
+    # written iteration, but its `maps/` group is thinned separately, so check for the group too.
     bands_by_iter = {}
-    for filename in sorted(os.listdir(datamaps_dir)):
+    for filename in sorted(os.listdir(bands_dir)):
         band, chain, iteration = _extract_band_chain_iter(filename)
         if band is None or chain != args.chain:
             continue
+        with h5py.File(os.path.join(bands_dir, filename), "r") as f:
+            if "maps/observed_sky" not in f:
+                continue
         bands_by_iter.setdefault(iteration, []).append((band, filename))
     iterations = sorted(bands_by_iter)
     if args.only_iter is not None:
         iterations = [it for it in iterations if it == args.only_iter]
     if not iterations:
-        logger.error(f"No datamaps found in {datamaps_dir} for chain {args.chain}.")
+        logger.error(f"No band maps found in {bands_dir} for chain {args.chain}.")
         return 1
 
     for iteration in iterations:
@@ -447,10 +451,10 @@ def main() -> int:
                 logger.warning(f"Band {band_name!r} is not in the parameter file; skipping.")
                 continue
             nu = band_freqs[band_name]
-            with h5py.File(os.path.join(datamaps_dir, filename), "r") as f:
-                map_observed_sky = f["map_observed_sky"][0].astype(np.float64)
-                map_rms = f["map_rms"][0].astype(np.float64)
-                stored_unit = f["metadata/band_unit"][()] if "metadata/band_unit" in f else b"uK_RJ"
+            with h5py.File(os.path.join(bands_dir, filename), "r") as f:
+                map_observed_sky = f["maps/observed_sky"][0].astype(np.float64)
+                map_rms = f["maps/rms"][0].astype(np.float64)
+                stored_unit = f["metadata/band_unit"][()]
             if isinstance(stored_unit, bytes):
                 stored_unit = stored_unit.decode("utf-8")
             nside = hp.npix2nside(map_rms.shape[-1])

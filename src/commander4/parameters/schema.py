@@ -250,15 +250,43 @@ def validate_param_schema(params_dict: dict) -> None:
                          f"{list(TOP_LEVEL_BLOCKS)}.")
 
 
+# The three method-specific sections a sampling group can live in. Compsep exists to run these, so
+# with none of them enabled there is nothing for a compsep rank to do.
+SAMPLING_GROUP_SECTIONS = ("cg_sampling_groups", "per_pixel_sampling_groups", "mcmc_sampling_groups")
+
+
+def has_enabled_sampling_group(params: Bunch) -> bool:
+    """Whether any sampling group in any of the three method sections is enabled."""
+    if "compsep" not in params:
+        return False
+    for section in SAMPLING_GROUP_SECTIONS:
+        if section not in params.compsep:
+            continue
+        groups = params.compsep[section]
+        for group_name in groups:
+            group = groups[group_name]
+            if "enabled" not in group or group.enabled:
+                return True
+    return False
+
+
 def compsep_enabled(params: Bunch) -> bool:
     """Whether component separation runs at all (default true).
 
-    `compsep.enabled: false` is TOD-only mode: no compsep ranks are allocated and `compsep.bands`
-    is ignored, so the TOD side runs against the fixed initial sky model built from `components`.
+    False means TOD-only mode: no compsep ranks are allocated and `compsep.bands` is ignored, so the
+    TOD side runs against the fixed initial sky model it builds itself from `components`. There are
+    two ways to get there, and they mean the same thing operationally:
+
+    * `compsep.enabled: false`, stated outright.
+    * No enabled sampling group. Compsep ranks exist only to run those groups, so allocating ranks
+      that would sample nothing just reserves nodes and memory to forward maps and evaluate a
+      chi-squared. TOD-only reaches the same fixed sky far more cheaply.
     """
     if "compsep" not in params:
         return False
-    return bool(params.compsep.enabled) if "enabled" in params.compsep else True
+    if "enabled" in params.compsep and not params.compsep.enabled:
+        return False
+    return has_enabled_sampling_group(params)
 
 
 def derive_task_counts(params: Bunch) -> Bunch:
