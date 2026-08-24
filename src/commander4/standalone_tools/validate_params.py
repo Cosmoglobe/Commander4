@@ -37,8 +37,6 @@ def _validate_components(params) -> None:
         raise ValueError("The top-level 'components' block is required.")
     for component_name in params.components:
         component = params.components[component_name]
-        if "enabled" in component and not component.enabled:
-            continue
         if "component_class" not in component or "params" not in component:
             raise ValueError(
                 f"components.{component_name} requires 'component_class' and 'params'."

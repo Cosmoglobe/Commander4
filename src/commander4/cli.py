@@ -45,6 +45,19 @@ def gibbs_schedule(num_iterations: int) -> list[tuple[int, int]]:
             for chain in (1, 2)]
 
 
+def seed_iteration_rng(params: Bunch, mpi_info: Bunch, chain: int, iteration: int):
+    """Sets unique seed per chain+rank+iteration for numpy's RNG.
+    """
+    import numpy as np
+
+    root_seed = int(params.gibbs.seed) if "seed" in params.gibbs else 1995
+    side = 0 if mpi_info.world.side == "tod" else 1
+    seed = int(np.random.SeedSequence(
+        [root_seed, chain, iteration, mpi_info.world.rank, side]
+    ).generate_state(1)[0])
+    np.random.seed(seed)
+
+
 def run_tod_side(mpi_info: Bunch, params: Bunch, experiment_data, my_band_tod_id: str,
                  tod_samples_by_chain: dict, compsep_output, compsep_active: bool) -> None:
     """Walk the TOD half of the Gibbs loop.
@@ -62,6 +75,7 @@ def run_tod_side(mpi_info: Bunch, params: Bunch, experiment_data, my_band_tod_id
         if mpi_info.tod.rank == 0:
             logger.verbose(f"Worldrank {mpi_info.world.rank}, subrank {mpi_info.tod.rank} "
                            f"starting TOD chain {chain}, iteration {iteration}.")
+        seed_iteration_rng(params, mpi_info, chain, iteration)
         t0 = time.time()
         tod_output, tod_samples_by_chain[chain] = process_tod(
             mpi_info, experiment_data, tod_samples_by_chain[chain], compsep_output, params,
@@ -104,6 +118,7 @@ def run_compsep_side(mpi_info: Bunch, params: Bunch, compsep_state, my_band_comp
         if mpi_info.compsep.rank == 0:
             logger.verbose(f"Worldrank {mpi_info.world.rank}, subrank {mpi_info.compsep.rank} "
                            f"starting CompSep chain {chain}, iteration {iteration}.")
+        seed_iteration_rng(params, mpi_info, chain, iteration)
         t0 = time.time()
         compsep_output = process_compsep(mpi_info, compsep_state, tod_output, iteration, chain,
                                          params, comp_lists_by_chain[chain])
@@ -157,18 +172,15 @@ def run_commander4(params: Bunch, params_dict: dict):
         \____/\____/_/ /_/ /_/_/ /_/ /_/\__,_/_/ /_/\__,_/\___/_/        /_/""" + "\033[0m\n")
         logger.summary(f"Writing all output to {paths.resolve_output_dir(params.output)}")
 
-    # Important to import Numpy *after* specifying number of threads per rank (happens in init_mpi),
-    # as Numpy will not respect a change in thread count after it has been loaded.
-    import numpy as np
+    # Import the numerical pipeline after init_mpi has configured this rank's thread counts.
     from commander4.tod.processing import init_tod_processing
     from commander4.compsep.processing import init_compsep_processing, get_initial_sky_model
     from commander4.mpi.transfer import receive_tod, receive_compsep, send_compsep,\
         get_local_initial_sky
 
-    # Unique seed per worldrank. Hash used for slightly improved entropy. Modulus because seed needs
-    # to be 32 bit. Numpy recommends instead carrying around an instance of 'np.random.default_rng',
-    # but we don't currently do that (see https://numpy.org/doc/2.2/reference/random/parallel.html).
-    np.random.seed(hash((1995, mpi_info['world']['rank']))%(2**32))
+    # Give initialization its own stream. Every chain iteration is reseeded at the orchestration
+    # boundary in run_tod_side or run_compsep_side.
+    seed_iteration_rng(params, mpi_info, chain=0, iteration=0)
 
     ###### Initizatization ######
     # Setting up dictionaries mapping each experiment+band combo to the world rank of the master
