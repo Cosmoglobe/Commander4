@@ -15,6 +15,7 @@ import cProfile
 import pstats
 import logging
 import time
+import getpass
 from copy import deepcopy
 from datetime import date
 from pixell.bunch import Bunch
@@ -163,8 +164,8 @@ def run_commander4(params: Bunch, params_dict: dict):
         if logger.isEnabledFor(logging.DEBUG):  # Just to avoid the yaml.dump if debug is off.
             logger.debug("### PARAMETERS ###\n%s", yaml.dump(
                 params_dict, allow_unicode=True, default_flow_style=False))
-        # Print a randomly colored Commander4 text.
-        logger.summary(f"\033[{random.randint(91, 96)}m" + r"""
+        # Print Commander4 text. Color chosen from hashed username.
+        logger.summary(f"\033[{(6 + sum(ord(char) for char in getpass.getuser()) % 6) + 91}m" + r"""
            ______                                          __             __ __
           / ____/___  ____ ___  ____ ___  ____ _____  ____/ /__  _____   / // /
          / /   / __ \/ __ `__ \/ __ `__ \/ __ `/ __ \/ __  / _ \/ ___/  / // /_
