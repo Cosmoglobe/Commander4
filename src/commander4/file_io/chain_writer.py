@@ -81,7 +81,9 @@ def write_map_chain_to_file(params: Bunch, chain: int, iter: int, exp_name:str,
         for key, value, in maps_to_file.items():
             if nside_out != "native" and hp.npix2nside(value.shape[-1]) != nside_out:
                 if "rms" in key:
-                    value = 1.0/hp.ud_grade(1.0/value**2, nside_out, dtype=np.float32)**2
+                    value = 1.0 / np.sqrt(
+                        hp.ud_grade(1.0 / value**2, nside_out, dtype=np.float32)
+                    )
                 else:
                     value = hp.ud_grade(value, nside_out, dtype=np.float32)
             # uK_RJ -> band_unit (out-of-place copy; D is a Python float, so dtype is preserved).
@@ -92,7 +94,7 @@ def write_map_chain_to_file(params: Bunch, chain: int, iter: int, exp_name:str,
 
 def write_compsep_chain_to_file(comp_list: list[Component] | CompList, params: Bunch,
                                 chain: int, iter: int):
-    if not should_write_chain(params, "compsep", iter):
+    if chain not in params.output.chains.write or not should_write_chain(params, "compsep", iter):
         return
     chain_dir = paths.subdir(params, paths.CHAINS_COMPSEP)
     chain_file = os.path.join(chain_dir, f"chain{chain:02d}_iter{iter:04d}.h5")

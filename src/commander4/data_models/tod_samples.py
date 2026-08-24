@@ -349,7 +349,8 @@ class TODSamples:
 
         # Skipped iterations return before the gathers below, which are collective: every rank in
         # band_comm evaluates this on the same params and itr, so they all leave together.
-        if not should_write_chain(params, "tod", itr):
+        writes_chain = self.chain in params.output.chains.write
+        if not writes_chain or not should_write_chain(params, "tod", itr):
             return
 
         ####################################################################

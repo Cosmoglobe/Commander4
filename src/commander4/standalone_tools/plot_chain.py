@@ -6,7 +6,6 @@ import glob
 import logging
 import os
 import re
-from copy import deepcopy
 from dataclasses import dataclass
 import time
 import h5py
@@ -18,10 +17,10 @@ from pixell.bunch import Bunch
 from commander4.file_io import paths
 from commander4.parameters.bunch import as_bunch_recursive
 from commander4.sky.comp_io import _read_view_alms_from_chain
+from commander4.sky.comp_list import CompList
 from commander4.diagnostics import plotting
 from commander4.diagnostics.plotting import _ensure_2d_map
 from commander4.sky.component import Component
-import commander4.sky as component_lib
 
 
 CHAIN_ITER_RE = re.compile(r"chain(?P<chain>\d+)_iter(?P<iter>\d+)\.h5$")
@@ -74,35 +73,8 @@ def _extract_chain_iter(filename: str) -> tuple[int | None, int | None]:
 
 
 def _build_component_list(params: Bunch) -> list[Component]:
-    comp_list: list[Component] = []
-    for component_str in params.components:
-        component = params.components[component_str]
-        if not component.enabled:
-            continue
-        comp_shortname = component.params.shortname
-        comp_longname = component.params.longname
-        base_params = deepcopy(component.params)
-        if base_params.lmax == "full":
-            base_params.lmax = (params.compsep.nside * 5) // 2
-
-        if "I" in base_params.polarization:
-            params_i = deepcopy(base_params)
-            params_i.longname = comp_longname + "_Intensity"
-            params_i.shortname = comp_shortname  # the key the compsep chain stores this under
-            params_i.polarization = "I"
-            params_i.polarized = False
-            comp_type = getattr(component_lib, component.component_class)
-            comp_list.append(comp_type(params_i, params.compsep))
-        if "QU" in base_params.polarization:
-            params_qu = deepcopy(base_params)
-            params_qu.longname = comp_longname + "_Polarization"
-            params_qu.shortname = comp_shortname
-            params_qu.polarization = "QU"
-            params_qu.polarized = True
-            comp_type = getattr(component_lib, component.component_class)
-            comp_list.append(comp_type(params_qu, params.compsep))
-
-    return comp_list
+    """Build the same component execution views used by the live CompSep pipeline."""
+    return list(CompList.init_from_params(params.components, params))
 
 
 def _load_compsep_components(params: Bunch, compsep_path: str) -> list[Component]:
