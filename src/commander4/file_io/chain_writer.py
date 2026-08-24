@@ -220,7 +220,7 @@ def write_compsep_chain_to_file(comp_list: list[Component] | CompList, params: B
             # The mixing "matrix", C3's mixmat_<comp>_<band>. C4 indices are scalar, so a
             # component's whole mixing matrix at a band is the single number `get_sed(nu)`.
             for band_name, nu in (band_frequencies or {}).items():
-                file[f"comps/{comp.shortname}/mixing/{band_name}"] = float(comp.get_sed(nu))
+                file[f"comps/{comp.shortname}/mixing/{band_name}"] = comp.get_sed(nu)
             if comp.defined_pol is not None:
                 file[f"comps/{comp.shortname}/defined_pol"] = comp.defined_pol
             if comp.eval_pol is not None:
