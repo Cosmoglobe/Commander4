@@ -16,7 +16,7 @@ requires = [
 name = "commander4"
 version = "0.1.0"
 description = "Commander4: A Gibbs sampling framework for cosmological data analysis"
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "scipy",
@@ -29,14 +29,13 @@ dependencies = [
     "healpy",
     "tqdm",
     "camb",
+    "astropy",
+    "numba",
+    "pysm3",
+    "matplotlib",
     "numpy-quaternion",
     "qpoint",
     ]  # Add new Python runtime dependencies here.
-
-[project.optional-dependencies]
-# Optional, for building with nanobind:
-#   CMDR4_USE_NANOBIND=1 pip install -e . --no-build-isolation
-nanobind = ["nanobind"]
 
 # Adds the `commander4` command to PATH, executing `bin/commander4`
 # Everything in `commander4/standalone_tools/` is callable as a script and imported by nothing;

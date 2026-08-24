@@ -217,18 +217,16 @@ def my_pow_func(array: NDArray, pow: float) -> NDArray:
 
 # 5. Misc
 
-### 5.1 Nanobind backend
-If you want to build the extension with nanobind instead of pybind11:
+### 5.1 Standalone tools
+Commander4 comes with some tools that all follow the `c4-[tool-name]` pattern. These are:
 ```bash
-pip install -e ".[nanobind]" --no-build-isolation
-CMDR4_USE_NANOBIND=1 pip install -e . --no-build-isolation
-```
+c4-validate-params path/to/param.yml  # Gives you some info about the param-file, including how many MPI ranks it needs.
 
-### 5.2 Regenerate type stubs
-The repository includes checked-in `.pyi` files for the compiled extension. If you change the C++ API and want to regenerate stubs:
-Stub files are generated automatically during the build (mirroring the previous Meson setup).
+c4-diff-params path/to/param1.yml path/to/param2.yml  # Prints the difference between two parameter files.
 
-If you want to regenerate stubs manually:
-```bash
-commander4-generate-stubs
+c4-plot-chain path/to/chain-dir/  # Creates plots from the data in a provided chain directory.
+
+c4-cmb-realizations  path/to/chain-dir/  # Generate constrained CMB realizations from chain (non yet fully functional).
+
+c4-generate-stubs  # Manually re-generate the stubs that are automatically during a build (very niche).
 ```

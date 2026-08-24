@@ -28,7 +28,7 @@ endif()
 set(PKGNAME _cmdr4_backend)
 set(PKGVERSION ${PROJECT_VERSION})
 
-find_package(Python 3.8 REQUIRED COMPONENTS Interpreter Development.Module)
+find_package(Python 3.11 REQUIRED COMPONENTS Interpreter Development.Module)
 
 # --- Sanity checks (match previous Meson behavior) ---
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/ducc0/src/ducc0/infra/mav.cc")
@@ -57,21 +57,8 @@ set_target_properties(cmdr4_ctypes PROPERTIES
   PREFIX ""
 )
 
-if(DEFINED ENV{CMDR4_USE_NANOBIND})
-  execute_process(
-    COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    OUTPUT_VARIABLE NB_DIR
-  )
-  list(APPEND CMAKE_PREFIX_PATH "${NB_DIR}")
-  find_package(nanobind CONFIG REQUIRED)
-
-  nanobind_add_module(${PKGNAME} NB_SUPPRESS_WARNINGS NOMINSIZE ${CXX_SOURCES})
-  target_compile_definitions(${PKGNAME} PRIVATE CMDR4_USE_NANOBIND)
-else()
-  find_package(pybind11 CONFIG REQUIRED)
-  pybind11_add_module(${PKGNAME} MODULE ${CXX_SOURCES})
-endif()
+find_package(pybind11 CONFIG REQUIRED)
+pybind11_add_module(${PKGNAME} MODULE ${CXX_SOURCES})
 
 target_include_directories(${PKGNAME} PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_cpp
@@ -168,23 +155,21 @@ install(TARGETS cmdr4_ctypes LIBRARY DESTINATION commander4/_libs)
 option(CMDR4_GENERATE_STUBS "Generate .pyi stubs during install" ON)
 
 if(CMDR4_GENERATE_STUBS)
-  if(DEFINED ENV{CMDR4_USE_NANOBIND})
-    message(STATUS "CMDR4_USE_NANOBIND set; skipping pybind11-stubgen")
-  else()
-    install(CODE "
-      message(STATUS \"Generating stubs for commander4._cmdr4_backend...\")
-      execute_process(
-        COMMAND \"${CMAKE_COMMAND}\" -E env
-                \"PYTHONPATH=${CMAKE_INSTALL_PREFIX}\"
-                \"${Python_EXECUTABLE}\" -m pybind11_stubgen
-                commander4._cmdr4_backend
-                --output-dir \"${CMAKE_CURRENT_SOURCE_DIR}/src\"
-                --root-suffix \"\"
-        RESULT_VARIABLE _cmdr4_stubgen_res
+  install(CODE "
+    message(STATUS \"Generating stubs for commander4._cmdr4_backend...\")
+    execute_process(
+      COMMAND \"${CMAKE_COMMAND}\" -E env
+              \"PYTHONPATH=${CMAKE_INSTALL_PREFIX}\"
+              \"${Python_EXECUTABLE}\" -m pybind11_stubgen
+              commander4._cmdr4_backend
+              --output-dir \"${CMAKE_CURRENT_SOURCE_DIR}/src\"
+              --root-suffix \"\"
+      RESULT_VARIABLE _cmdr4_stubgen_res
+    )
+    if(NOT _cmdr4_stubgen_res EQUAL 0)
+      message(WARNING
+        \"pybind11_stubgen failed with exit code ${_cmdr4_stubgen_res}; continuing without stubs\"
       )
-      if(NOT _cmdr4_stubgen_res EQUAL 0)
-        message(WARNING \"pybind11_stubgen failed with exit code: ${_cmdr4_stubgen_res} (continuing without regenerated stubs)\")
-      endif()
-    ")
-  endif()
+    endif()
+  ")
 endif()
