@@ -77,13 +77,92 @@ The MPI task counts are **derived**, not stated: the TOD total is the sum of the
 A run writes everything below the single directory named by `output.dir`, which it creates:
 ```YAML
 <output_dir>/logs/              # log file (output.logging.file.filename) and cProfile dumps
-<output_dir>/chains_tod/        # per-band TOD sample chains
-<output_dir>/chains_compsep/    # component amplitude chains
-<output_dir>/chains_datamaps/   # per-band output maps
+<output_dir>/chains_bands/      # per-band TOD samples and output maps
+<output_dir>/chains_compsep/    # sky components and the fit against the band maps
 <output_dir>/plots/             # figures
 ```
 
 `output.logging.file.filename` is a bare file name, not a path: it is always placed in the logs directory. The subdirectory names are defined in [`src/commander4/file_io/paths.py`](src/commander4/file_io/paths.py), which is also what the plotting and standalone tools read, so those take the same `<output_dir>` as their argument.
+
+#### Why two chains
+Everything is HDF5, one file per Gibbs sample, named `..._chain<CC>_iter<NNNN>.h5`. There are two chains rather than one because the two halves of the program are **disjoint MPI rank sets** (see §4.1): the band chain is written by each band's master on the TOD side, and the compsep chain by the master on the component-separation side, one schedule step later. Merging them would need parallel HDF5 and a barrier between two sides that otherwise only exchange maps. The band chain is per band, the compsep chain per run, and matching `(chain, iter)` labels describe the same Gibbs sample.
+
+Both carry `metadata/datetime` and `metadata/parameter_file_as_string`, the verbatim parameter file, which is what lets the standalone tools rebuild a run's configuration from its output alone.
+
+Which iterations are written is set by `output.chains.write` (a list of chain numbers) and `output.chains.interval`, one entry per output: `bands` and `compsep` thin a whole file, while `maps` thins only the `maps/` group inside the band file, since those maps are far larger than anything beside them. Datasets marked *(opt)* below appear only when the matching `output.chains.include` flag is set.
+
+#### `chains_bands/<experiment>_<band>_chain<CC>_iter<NNNN>.h5`
+Per-scan sampled quantities at the top level, output maps under `maps/`. `NSC` is the band's total scan count, `ND` its detector count, `NPAR` its noise-model parameter count. Gains are written in the band's `band_unit`; maps are brightnesses in the same unit.
+```YAML
+metadata/band_unit             # thermodynamic unit of the gains and maps below
+metadata/map_fwhm_arcmin       # beam of maps/observed_sky and maps/rms
+scan_ids           (NSC,)      # int64 scan IDs; the row order of every per-scan array
+det_names          (ND,)       # detector names; the column order of every per-detector array
+scan_start_time    (NSC,)      # scan start time (C3 'MJD'); 0.0 if the reader supplies no time
+orbital_velocity   (NSC,ND,3)  # spacecraft velocity [m/s], what anchors the absolute calibration
+abs_gain           scalar      # absolute gain, one per band
+detrel_gain        (ND,)       # relative gain offset, one per detector (zero-sum)
+temporal_gain      (NSC,ND)    # per-scan gain variation about abs+rel
+gain_prior         (ND,3)      # (sigma0, fknee, alpha) of the temporal-gain Wiener prior
+noise_params       (NSC,ND,NPAR)  # noise PSD parameters, sigma0 first (sigma0,fknee,alpha for normal oof model).
+present            (NSC,ND)    # int8: this detector has data in this scan
+accept             (NSC,ND)    # int8: data-quality flag (present data that is not rejected)
+good_fraction      (NSC,ND)    # unflagged fraction of samples
+chisq_z            (NSC,ND)    # white-noise chi^2 z-score; ~N(0,1) for clean data, NaN if unevaluated
+ncorr_cg_residual  (NSC,ND)    # final relative CG residual of the correlated-noise draw
+ncorr_cg_niter     (NSC,ND)    # int32 CG iterations; 0 when the stationary fallback was used
+ncorr_converged    (NSC,ND)    # int8: 1 accepted, 0 failed, -1 no n_corr drawn
+tod_ps_freqs       (NSC,ND,100)   # log-binned frequency axis shared by the four spectra below
+tod_ps_raw         (NSC,ND,100)   # binned PSD of the raw TOD
+tod_ps_ncorr       (NSC,ND,100)   # ... of the correlated-noise realization
+tod_ps_ncorrsub    (NSC,ND,100)   # ... of the TOD with only the correlated noise removed
+tod_ps_residual    (NSC,ND,100)   # ... of the residual (sky, dipole and n_corr all removed)
+jump_counts        (NSC,ND)    # jumps found per detector-scan; indexes the two ragged arrays below
+jump_locations     (M,)        # sample index of each jump, concatenated scan-major
+jump_offsets       (M,)        # amplitude of each jump
+ncorr_tod_lengths  (NSC,ND)    # (opt, DEBUG) length of each full n_corr TOD in the flat array below
+ncorr_tod_flat     (sum,)      # (opt, DEBUG) every n_corr TOD concatenated; very large
+
+maps/observed_sky  (3,npix)    # the solved sky map (I, Q, U)
+maps/rms           (3,npix)    # per-pixel white-noise rms; inf where unobserved
+maps/skymodel      (3,npix)    # (opt) sky model this iteration was processed against
+maps/res           (3,npix)    # (opt) binned residual: data minus sky, dipole and n_corr
+maps/orbdipole     (3,npix)    # (opt) binned orbital dipole
+maps/corrnoise     (3,npix)    # (opt) binned correlated noise
+maps/nhit          (npix,)     # (opt) int64 count of unflagged samples per pixel
+maps/cov           (6,npix)    # (opt) the 6 unique elements of P^T N^-1 P (II,IQ,IU,QQ,QU,UU)
+```
+
+#### `chains_compsep/chain<CC>_iter<NNNN>.h5`
+One file per iteration holding every component, plus how well they fit the band maps. `<sn>` is a component's `shortname`, `<view>` a `<band>_<I|QU>` pair.
+```YAML
+comps/<sn>/alms          (npol,nalm)  # complex amplitudes in uK_RJ at nu_ref (T/E/B rows)
+comps/<sn>/source_amps   (1,nsrc)     # point-source components carry this instead of alms
+comps/<sn>/sigma_l       (npol,lmax+1)  # realized power spectrum of those alms
+comps/<sn>/lmax          scalar       # band limit of the alms
+comps/<sn>/comp_name     str          # class name, e.g. ThermalDust
+comps/<sn>/shortname     str          # the <sn> used above
+comps/<sn>/defined_pol   str          # polarization the component is defined in
+comps/<sn>/eval_pol      str          # polarization it was evaluated in
+comps/<sn>/amp_fwhm_arcmin  scalar    # beam already in the amplitudes; 0 for the CG solver
+comps/<sn>/sed/<param>                # each SED parameter, including sampled ones (beta)
+comps/<sn>/Cl_prior/<param>           # the C(l) prior's model parameters; absent if the prior is off
+comps/<sn>/mixing/<band> scalar       # this component's SED evaluated at that band
+
+chi2/total               scalar       # all-band sum of the whitened residual squared
+chi2/ndof                scalar       # observed pixels summed over all bands and polarizations
+chi2/reduced             scalar       # total / ndof
+chi2/z                   scalar       # (total - ndof) / sqrt(2 ndof); ~N(0,1) for a good fit
+chi2/bands/<view>/{chi2,ndof,reduced,nu}   # the same, per band and polarization
+chi2/map                 (3,npix)     # (opt) z^2 summed into output.chains.nside_chisq pixels
+residuals/<view>         (npol,npix)  # (opt) full-resolution data minus model
+amplitude_groups/<group>/<I|QU>/{n_iter,cg_residuals}   # CG convergence, per polarization
+mcmc/<group>/{numstep,n_accept,accept_rate}             # Metropolis-Hastings acceptance
+mcmc/<group>/params/<comp>            # the accepted parameter value per component
+```
+
+`gibbs.init_from_chain` restarts from a chain: the TOD side reads the per-scan quantities out of a `chains_bands/` file, and each component's `init_from` reads its alms out of a `chains_compsep/` one.
+
 
 # 4. Development / Contributing
 ### 4.1 Code layout
