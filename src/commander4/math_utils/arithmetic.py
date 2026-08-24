@@ -27,9 +27,10 @@ def inplace_axpy(inplace_array, add_array, multiply_value):
     NB: Seems to fail for arrays larger than 2**32, which is a bit of an issue...
     """
     if inplace_array.size == 0: return
-    assert(inplace_array.shape == add_array.shape)
-    assert(inplace_array.dtype == add_array.dtype)
-    assert(inplace_array.ndim == add_array.ndim)
+    if inplace_array.shape != add_array.shape:
+        raise ValueError("AXPY input arrays must have matching shapes.")
+    if inplace_array.dtype != add_array.dtype:
+        raise TypeError("AXPY input arrays must have matching dtypes.")
     # Select the Correct BLAS Routine
     axpy_func = AXPY_ROUTINES[inplace_array.dtype]
     axpy_func(x=add_array, y=inplace_array, n=inplace_array.size, a=multiply_value)
@@ -37,7 +38,8 @@ def inplace_axpy(inplace_array, add_array, multiply_value):
 
 @njit(fastmath=True, parallel=True)
 def inplace_scale_add(arr_main, arr_add, float_mult):
-    assert(arr_main.shape==arr_add.shape)
+    if arr_main.shape != arr_add.shape:
+        raise ValueError("Input arrays must have matching shapes.")
     flat1 = arr_main.ravel()
     flat2 = arr_add.ravel()
     for i in prange(arr_main.size):
@@ -45,7 +47,8 @@ def inplace_scale_add(arr_main, arr_add, float_mult):
 
 @njit(fastmath=True)
 def inplace_add_scaled_vec_serial(arr_main, arr_add, float_mult):
-    assert(arr_main.shape==arr_add.shape)
+    if arr_main.shape != arr_add.shape:
+        raise ValueError("Input arrays must have matching shapes.")
     flat1 = arr_main.ravel()
     flat2 = arr_add.ravel()
     for i in range(arr_main.size):
@@ -53,7 +56,8 @@ def inplace_add_scaled_vec_serial(arr_main, arr_add, float_mult):
 
 @njit(fastmath=True, parallel=True)
 def inplace_add_scaled_vec(arr_main, arr_add, float_mult):
-    assert(arr_main.shape==arr_add.shape)
+    if arr_main.shape != arr_add.shape:
+        raise ValueError("Input arrays must have matching shapes.")
     flat1 = arr_main.ravel()
     flat2 = arr_add.ravel()
     for i in prange(arr_main.size):
@@ -61,7 +65,8 @@ def inplace_add_scaled_vec(arr_main, arr_add, float_mult):
 
 @njit(fastmath=True, parallel=True)
 def inplace_arr_add(arr_main, arr_add):
-    assert(arr_main.shape==arr_add.shape)
+    if arr_main.shape != arr_add.shape:
+        raise ValueError("Input arrays must have matching shapes.")
     flat1 = arr_main.ravel()
     flat2 = arr_add.ravel()
     for i in prange(arr_main.size):
@@ -69,7 +74,8 @@ def inplace_arr_add(arr_main, arr_add):
 
 @njit(fastmath=True, parallel=True)
 def inplace_arr_sub(arr_main, arr_add):
-    assert(arr_main.shape==arr_add.shape)
+    if arr_main.shape != arr_add.shape:
+        raise ValueError("Input arrays must have matching shapes.")
     flat1 = arr_main.ravel()
     flat2 = arr_add.ravel()
     for i in prange(arr_main.size):
@@ -78,7 +84,8 @@ def inplace_arr_sub(arr_main, arr_add):
 @njit(fastmath=True, parallel=True)
 def inplace_arr_prod(arr_main, arr_prod):
     len = arr_main.size
-    assert(arr_main.shape==arr_prod.shape)
+    if arr_main.shape != arr_prod.shape:
+        raise ValueError("Input arrays must have matching shapes.")
     flat1 = arr_main.ravel()
     flat2 = arr_prod.ravel()
     for i in prange(len):
@@ -87,7 +94,8 @@ def inplace_arr_prod(arr_main, arr_prod):
 @njit(fastmath=True, parallel=True)
 def inplace_arr_truediv(arr_main, arr_prod):
     len = arr_main.size
-    assert(arr_main.shape==arr_prod.shape)
+    if arr_main.shape != arr_prod.shape:
+        raise ValueError("Input arrays must have matching shapes.")
     flat1 = arr_main.ravel()
     flat2 = arr_prod.ravel()
     for i in prange(len):
@@ -111,7 +119,8 @@ def dot(arr1, arr2):
     return res
 
 def norm(arr):
-    return dot(arr, arr)
+    """Return the Euclidean norm of an array flattened over all axes."""
+    return np.sqrt(dot(arr, arr))
 
 def MPI_dot(arr1, arr2, comm:MPI.Comm, double_prec:bool = False):
     """
