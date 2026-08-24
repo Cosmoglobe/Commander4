@@ -7,7 +7,7 @@ at the top do that painting and its adjoint.
 import healpy as hp
 import numpy as np
 import pysm3.units as pysm3u
-from numba import njit, prange
+from numba import njit
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
@@ -17,14 +17,12 @@ from commander4.sky.beams import gauss_beam, get_gauss_beam_radius
 from commander4.math_utils.sht import map_to_alm, map_to_alm_adjoint
 
 
-# Painting source amplitudes onto a map, and its adjoint. Numba because both loop over every
-# source's beam disc; `prange` parallelizes the projection across sources.
-@njit(fastmath=True, parallel=True)
-def _numba_proj2map(map, pix_disc_idx_list, beam_disc_val_list, amps, sed_s=None):
-    for src_i in prange(len(pix_disc_idx_list)):
-        map[pix_disc_idx_list[src_i]] += beam_disc_val_list[src_i] * amps[src_i]\
+@njit(fastmath=True)
+def _numba_proj2map(skymap, pix_disc_idx_list, beam_disc_val_list, amps, sed_s=None):
+    for src_i in range(len(pix_disc_idx_list)):
+        skymap[pix_disc_idx_list[src_i]] += beam_disc_val_list[src_i] * amps[src_i]\
             * (sed_s[src_i] if sed_s is not None else 1)
-    return map
+    return skymap
 
 @njit(fastmath=True, parallel=True)
 def _numba_eval_from_map(map, pix_disc_idx_list, beam_disc_val_list, amps, sed_s=None):
