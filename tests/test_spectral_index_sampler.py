@@ -141,6 +141,7 @@ class FakeComponent:
             if bounds is not None:
                 comp_params["spectral_index_bounds"] = bounds
         self.comp_params = comp_params
+        self.comp_name = comp_params["shortname"]
         self.beta = beta
         self.alms = self._make_alms(amplitude)
 

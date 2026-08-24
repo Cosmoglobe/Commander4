@@ -317,6 +317,37 @@ def test_sampling_group_configs_reject_fields_owned_by_other_methods() -> None:
         MCMCSamplingGroupConfig.from_block("mcmc", Bunch(parameters="gain"))
 
 
+@pytest.mark.parametrize(
+    "preconditioner",
+    ["BeamOnlyPreconditioner", "NoiseOnlyPreconditioner", "MixingMatrixPreconditioner"],
+)
+def test_broken_compsep_preconditioners_cannot_be_selected(preconditioner: str) -> None:
+    with pytest.raises(ValueError, match="supported values"):
+        CGSamplingGroupConfig.from_block("cg", Bunch(preconditioner=preconditioner))
+
+
+def test_broken_dense_matrix_debug_path_cannot_be_selected() -> None:
+    with pytest.raises(ValueError, match="unsupported dense-matrix"):
+        CGSamplingGroupConfig.from_block("cg", Bunch(dense_matrix_debug_mode=True))
+
+
+def test_per_pixel_solver_rejects_non_diffuse_components_before_mpi_work() -> None:
+    with pytest.raises(ValueError, match="does not support object"):
+        solve_compsep_perpix(None, None, [object()], double_precision=False)
+
+
+def test_unimplemented_component_classes_are_rejected_during_construction() -> None:
+    component = Bunch(
+        enabled=True,
+        component_class="TemplateComponent",
+        params=Bunch(polarization="I"),
+    )
+    object.__setattr__(component, "_name", "Template")
+
+    with pytest.raises(ValueError, match="not implemented"):
+        CompList.init_from_params(Bunch(Template=component), Bunch())
+
+
 def test_cg_and_per_pixel_groups_are_mutually_exclusive() -> None:
     params = Bunch(compsep=Bunch(
         cg_sampling_groups=Bunch(cg=Bunch()),
@@ -470,6 +501,17 @@ def test_discover_spectral_index_groups_groups_iqu_views_and_respects_selection(
     # Restricting to one component yields only that component's group.
     only_sync = _discover_spectral_index_groups(comp_list, ["Synchrotron"])
     assert [g.name for g in only_sync] == ["sync"]
+
+
+def test_spectral_groups_do_not_depend_on_shared_parameter_object_identity() -> None:
+    comp_list = _make_spectral_comp_list()
+    sync_views = [comp for comp in comp_list if comp.comp_name == "Synchrotron"]
+    sync_views[1].comp_params = deepcopy(sync_views[1].comp_params)
+
+    groups = _discover_spectral_index_groups(comp_list, ["Synchrotron"])
+
+    assert len(groups) == 1
+    assert {component.eval_pol for component in groups[0].components} == {"I", "QU"}
 
 
 def test_discover_spectral_index_groups_reads_gaussian_prior() -> None:

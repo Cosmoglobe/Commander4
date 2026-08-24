@@ -74,6 +74,14 @@ def test_unknown_component_class_is_rejected(tmp_path) -> None:
         validate_parameter_file(_write_params(tmp_path, params))
 
 
+def test_unimplemented_component_class_is_rejected(tmp_path) -> None:
+    params = _valid_params()
+    params["components"]["CMB"]["component_class"] = "TemplateComponent"
+
+    with pytest.raises(ValueError, match="not implemented"):
+        validate_parameter_file(_write_params(tmp_path, params))
+
+
 @pytest.mark.parametrize(
     ("field", "message"),
     [
