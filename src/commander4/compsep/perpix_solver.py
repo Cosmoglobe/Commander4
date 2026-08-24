@@ -13,6 +13,7 @@ from mpi4py import MPI
 from pixell import curvedsky
 
 from commander4.sky.component import Component
+from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.backend.ctypes_lib import load_cmdr4_ctypes_lib
 from commander4.data_models.detector_map import DetectorMap
 
@@ -25,7 +26,12 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
         controlled by ``compsep.common_res_fwhm``). This solver ignores beams entirely, so bands
         arriving at differing resolutions are silently mixed; a warning is logged below.
     """
-    # TODO: Add support for non-Diffuse components (point sources, templates).
+    for component in comp_list:
+        if not isinstance(component, DiffuseComponent):
+            raise ValueError(
+                f"Per-pixel component separation does not support "
+                f"{type(component).__name__} components."
+            )
     logger = logging.getLogger(__name__)
     if proc_comm.Get_rank() == 0:
         logger.verbose("Starting pixel-by-pixel component separation.")

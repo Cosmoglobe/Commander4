@@ -23,8 +23,8 @@ class SpectralIndexGroup:
     """Metadata for one jointly proposed spectral-index parameter.
 
     A single logical component defined as ``IQU`` is represented by two execution views (its ``I``
-    and ``QU`` views) that share one ``comp_params`` object; both are grouped here so the proposal
-    updates them together. ``bounds`` are hard uniform limits (proposals outside are rejected before
+    and ``QU`` views) with one logical component key; both are grouped here so the proposal updates
+    them together. ``bounds`` are hard uniform limits (proposals outside are rejected before
     the amplitude re-solve, C3's ``p_uni``); ``prior`` is an optional soft Gaussian ``(mean, rms)``
     added to the log-acceptance ratio (C3's ``p_gauss``). Either is None when unset.
     """
@@ -101,11 +101,11 @@ def _discover_spectral_index_groups(comp_list: CompList,
 
     A component contributes a parameter iff it exposes a ``beta`` attribute, has
     ``sample_spectral_index: true`` in its params, and (when ``selected_comps`` is not None) its
-    ``comp_name`` is selected. Execution views that share a ``comp_params`` object (the ``I``/``QU``
-    views of an IQU component) are grouped into a single parameter.
+    ``comp_name`` is selected. Execution views with the same stable logical component key are
+    grouped into a single parameter.
     """
     selected = None if selected_comps is None else set(selected_comps)
-    group_info: dict[int, dict[str, object]] = {}
+    group_info: dict[tuple[type[Component], str], dict[str, object]] = {}
     seen_name_counts: dict[str, int] = {}
 
     for comp in comp_list:
@@ -116,7 +116,7 @@ def _discover_spectral_index_groups(comp_list: CompList,
         if not bool(_read_param(comp.comp_params, "sample_spectral_index", False)):
             continue
 
-        group_id = id(comp.comp_params)
+        group_id = (type(comp), comp.comp_name)
         if group_id in group_info:
             group_info[group_id]["components"].append(comp)
             continue
