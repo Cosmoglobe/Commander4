@@ -99,8 +99,8 @@ class ColorFormatter(C4Formatter):
 
     _RESET  = '\033[0m'
     _COLORS = {
-        logging.DEBUG:    '\033[2m',    # Dim / faint
-        VERBOSE:          '\033[90m',   # Dark gray (bright-black)
+        logging.DEBUG:    '\033[90m',   # Dark gray (bright-black)
+        VERBOSE:          '\033[2m',    # Dim / faint
         logging.INFO:     '',           # Default, no color code
         SUMMARY:          '\033[1m',    # Default + bold
         logging.WARNING:  '\033[1;33m', # Yellow + bold
