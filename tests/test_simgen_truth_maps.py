@@ -13,14 +13,11 @@ tests below check that identity for each component class in a configuration wher
 Commander4's own init-map reader.
 """
 import os
-import sys
 
 import healpy as hp
 import numpy as np
 import pytest
 from pixell.bunch import Bunch
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sims"))
 
 
 NSIDE = 32

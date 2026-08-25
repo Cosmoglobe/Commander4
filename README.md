@@ -195,7 +195,7 @@ src/commander4/
   standalone_tools/    # Command-line tools installed alongside commander4 (e.g. c4-plot-chain).
   backend/             # Loader for the compiled C/C++ backend built from src/lib_cpp/.
 
-sims/simgen/           # Standalone TOD simulator. Writes scan files read back with experiment_id: "general".
+simgen/                # Standalone TOD simulator installed as c4-simgen; kept outside standalone_tools/.
 params/                # Parameter files, grouped by instrument.
 tests/                 # pytest suite; run with `pytest` from the repository root.
 notes/                 # Design notes.

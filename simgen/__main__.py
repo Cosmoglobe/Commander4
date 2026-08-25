@@ -1,10 +1,8 @@
 """Command-line entry point.
 
-Run (from the ``sims`` directory, so the ``simgen`` package is importable):
+Run after installing Commander4:
 
-    mpirun -n N python -m simgen -p path/to/param.yml
-
-Requires Commander4 to be importable (``import commander4``) for the SED classes and Huffman codec.
+    mpirun -n N c4-simgen -p path/to/param.yml
 """
 import sys
 import logging
@@ -25,8 +23,8 @@ def configure_logging(rank: int, verbose: bool) -> None:
 
 
 def main() -> None:
-    parser = ArgumentParser(description="Modular TOD simulator for Commander4 (litebird format).")
-    parser.add_argument("-p", "--parameter_file", required=True,
+    parser = ArgumentParser(description="Modular TOD simulator for Commander4's standard format.")
+    parser.add_argument("-p", "--parameter-file", "--parameter_file", required=True,
                         help="Path to the YAML simgen parameter file (see example_param.yml).")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging.")
     args = parser.parse_args()

@@ -37,9 +37,7 @@ dependencies = [
     "qpoint",
     ]  # Add new Python runtime dependencies here.
 
-# Adds the `commander4` command to PATH, executing `bin/commander4`
-# Everything in `commander4/standalone_tools/` is callable as a script and imported by nothing;
-# each one gets an entry point here.
+# Install Commander4 and its standalone tools as commands on PATH.
 [project.scripts]
 commander4 = "commander4.cli:main"
 c4-plot-chain = "commander4.standalone_tools.plot_chain:main"
@@ -47,6 +45,7 @@ c4-diff-params = "commander4.standalone_tools.diff_params:main"
 c4-validate-params = "commander4.standalone_tools.validate_params:main"
 c4-generate-stubs = "commander4.standalone_tools.generate_stubs:main"
 c4-cmb-realizations = "commander4.standalone_tools.constrained_cmb_realizations:main"
+c4-simgen = "simgen.__main__:main"
 
 # Test configuration. `testpaths` keeps a bare `pytest` run pointed at the test directory, and the
 # default `python_files` glob (test_*.py) is what makes the file naming there matter.
@@ -69,7 +68,7 @@ editable.mode = "redirect"
 editable.rebuild = false
 
 [tool.scikit-build.wheel]
-packages = ["src/commander4"]
+packages = ["src/commander4", "simgen"]
 
 exclude = [
     "**/__pycache__",
@@ -90,6 +89,7 @@ include = [
     "README.md",
     "LICENSE",
     "src/commander4/**",
+    "simgen/**",
 ]
 
 exclude = [

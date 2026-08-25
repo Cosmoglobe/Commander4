@@ -1,12 +1,8 @@
 """Tests for lightweight simgen diagnostic map products."""
-import os
-import sys
 from types import SimpleNamespace
 
 import h5py
 import numpy as np
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sims"))
 
 from simgen.diagnostics import (hit_map, noise_map, noise_map_rhs, normal_matrix_rms,
                                 white_noise_normal_matrix, write_band_diagnostics)

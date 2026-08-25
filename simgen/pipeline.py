@@ -21,6 +21,7 @@ from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
+from commander4.tod.sky_projection import get_static_sky_tod
 from simgen.config import bget, load_params
 from simgen.diagnostics import hit_map, noise_map_rhs, white_noise_normal_matrix, write_band_diagnostics
 from simgen.instrument import Band, build_bands
@@ -52,15 +53,6 @@ def _remap_data_pix(pix_data: NDArray, data_nside: int, eval_nside: int) -> NDAr
     return hp.ang2pix(eval_nside, th, ph)
 
 
-def _project_signal(skymap: NDArray, pix: NDArray, psi: NDArray, polarization: str) -> NDArray:
-    """Sky signal seen by a detector: I + Q cos2psi + U sin2psi (rows present per polarization)."""
-    if polarization == "I":
-        return skymap[0][pix]
-    if polarization == "QU":
-        return skymap[0][pix] * np.cos(2 * psi) + skymap[1][pix] * np.sin(2 * psi)
-    return skymap[0][pix] + skymap[1][pix] * np.cos(2 * psi) + skymap[2][pix] * np.sin(2 * psi)
-
-
 def _broadcast_sky_maps(comm: MPI.Comm, bands: list[Band], params: Bunch,
                         truth_map_dir: str | None = None) -> dict[str, NDArray[np.floating]]:
     """Build all band sky maps on rank 0 (writing the truth maps there too) and broadcast them."""
@@ -77,7 +69,7 @@ def _det_signal(band: Band, chunk, det, skymap: NDArray,
     """Sky signal (+ orbital dipole) plus the pixel and psi arrays for one detector's pointing."""
     pix_data, pix_eval = _eval_and_data_pix(chunk.theta, chunk.phi, band.data_nside, band.eval_nside)
     psi = chunk.psi + det.psi_offset
-    signal = _project_signal(skymap, pix_eval, psi, band.polarization)
+    signal = get_static_sky_tod(skymap, pix_eval, psi)
     if include_orbdip and np.any(chunk.vsun != 0.0):
         signal = signal + compute_orbital_dipole(chunk.vsun, pix_eval, band.eval_nside,
                                                  band.freq, band.units)
@@ -108,7 +100,7 @@ def _simulate_scan(band: Band, strategy, sample_offset: int, skymap: NDArray, nt
             shared_orbdip, pix_data, shared_pix_eval = shared
             psi = bore.psi + det.psi_offset
             # Shared boresight: same pixels for every detector, signal differs only via psi.
-            signal = _project_signal(skymap, shared_pix_eval, psi, band.polarization)
+            signal = get_static_sky_tod(skymap, shared_pix_eval, psi)
             if shared_orbdip is not None:  # add the (shared) orbital dipole, computed once
                 signal = signal + shared_orbdip
         rng = np.random.default_rng([seed, band_idx, scan_idx, det.idx])

@@ -1,6 +1,6 @@
 # simgen: common-resolution / wide-beam-spread test simulation.
 #
-#   cd sims && mpirun -n 8 python -m simgen -p simgen/params/param_common_res.yml
+#   mpirun -n 8 c4-simgen -p simgen/params/param_common_res.yml
 #
 # Analysed by `params/sims/simparam_compsep_perpix.yml`.
 #
@@ -37,7 +37,7 @@ general:
   units: "uK_RJ"
   float_precision: "single"
   seed: 71
-  output_dir: "../../c4_sims/simgen_common_res/"
+  output_dir: "../c4_sims/simgen_common_res/"
 
 components:
   CMB:
@@ -89,20 +89,22 @@ components:
       nu_ref: 100.0
 
 simulation:
-  nscans: 400
+  # 2400 x 600 s = 16.7 days. The accelerated 18-day anti-Sun period sweeps 333 deg, while the
+  # Planck-like 7.5 deg tilt and half-year precession ratio give dense, cross-linked scan rings.
+  nscans: 2400
   scan_duration_sec: 600
   npsi: 4096
   orbital_dipole: true
   compress: true
-  debug_output_dir: "../../c4_sims/simgen_common_res_debug/"
+  debug_output_dir: "../c4_sims/simgen_common_res_debug/"
 
   pointing:
     strategy: "planck_scan"
     los_angle: 85.0
-    spin_angle_tilt: 30.0
+    spin_angle_tilt: 7.5
     spin_rate: 1.00165345964511
-    anti_sun_period_days: 3.0
-    precession_period_days: 0.8
+    anti_sun_period_days: 18.0
+    precession_period_days: 9.0
     mission_start: "2009-08-13T00:00:00"
 
   noise:

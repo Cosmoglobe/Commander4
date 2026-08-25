@@ -8,13 +8,14 @@ registry of swappable classes.
 
 ## Running
 
-Commander4 must be importable (`import commander4`) for the component SED classes and the Huffman
-codec. Run from the `sims/` directory so the `simgen` package is on the path:
+Install Commander4 first, then run the simulator from any directory. From the repository root:
 
 ```bash
-cd sims
-mpirun -n 4 python -m simgen -p simgen/params/example_param.yml
+mpirun -n 4 c4-simgen -p simgen/params/example_param.yml
 ```
+
+`python -m simgen` remains available as a development interface, but `c4-simgen` is the installed
+standalone tool.
 
 Work (`band × scan`) is split across MPI ranks; rank 0 builds the sky maps and broadcasts them, each
 rank writes its own scan files, and rank 0 writes a per-band `filelist.txt`.
@@ -119,7 +120,7 @@ A YAML file (see [params/example_param.yml](params/example_param.yml)) reusing t
 
 Besides the two `example_*` files, `params/` holds a set of small simulations each built to exercise
 one part of the main program, together with a matching Commander4 parameter file in
-[`params/sims/`](../../params/sims/) that turns that feature on and starts it away from the injected
+[`params/sims/`](../params/sims/) that turns that feature on and starts it away from the injected
 truth. See [`params/sims/README.md`](../../params/sims/README.md) for how to run a pair.
 
 | simgen parameter file | Commander4 parameter file | Feature under test |

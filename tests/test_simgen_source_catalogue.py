@@ -4,14 +4,9 @@ simgen paints sources as pixel values in uK_RJ; `RadioSources` describes them as
 mJy. The catalogue is the bridge, and it is only useful if the same sources come back out, so what
 is pinned here is that the total brightness survives the round trip.
 """
-import os
-import sys
-
 import numpy as np
 import pytest
 from pixell.bunch import Bunch
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sims"))
 
 from simgen.sky import GriddedPointSources, write_source_catalogue
 from commander4.sky.point_sources import RadioSources

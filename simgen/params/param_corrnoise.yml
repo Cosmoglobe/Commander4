@@ -1,6 +1,6 @@
 # simgen: correlated-noise / noise-PSD test simulation.
 #
-#   cd sims && mpirun -n 8 python -m simgen -p simgen/params/param_corrnoise.yml
+#   mpirun -n 8 c4-simgen -p simgen/params/param_corrnoise.yml
 #
 # Analysed by `params/sims/simparam_corrnoise.yml`.
 #
@@ -11,7 +11,7 @@
 # WHY THIS IS A CORRELATED-NOISE TEST:
 #   * The noise is drawn from exactly the PSD the main code assumes,
 #     P(f) = sigma0^2 (1 + (f/fknee)^alpha) (simgen.noise.OofNoise <-> NoisePSDOof), with a knee
-#     far above the 1/300 Hz scan fundamental (fknee/f_min = 150) and a steep alpha, so the
+#     far above the 1/600 Hz scan fundamental (fknee/f_min = 300) and a steep alpha, so the
 #     correlated component dominates the low-frequency TOD by orders of magnitude.
 #   * The sky is CMB *only*, and the analysis fits a single CMB component to a single band. That is
 #     an exactly determined component separation with the correct SED, so the sky model cannot be a
@@ -24,7 +24,7 @@ general:
   units: "uK_RJ"
   float_precision: "single"
   seed: 909
-  output_dir: "../../c4_sims/simgen_corrnoise/"
+  output_dir: "../c4_sims/simgen_corrnoise/"
 
 components:
   CMB:
@@ -37,28 +37,28 @@ components:
       solar_dipole: false    # A clean CAMB realization; no l=1 monopole/dipole to fight the 1/f.
 
 simulation:
-  # 600 x 300 s = 2.1 days. Each 9750-sample scan is trimmed slightly to the closest smaller fast
+  # 2400 x 600 s = 16.7 days. Each 19500-sample scan is trimmed slightly to the closest smaller fast
   # real-FFT size selected by `ducc0.fft.good_size` when Commander4 reads it.
-  nscans: 600
-  scan_duration_sec: 300
+  nscans: 2400
+  scan_duration_sec: 600
   npsi: 4096
   orbital_dipole: true      # Kept on for consistency with the analysis (see param_gain.yml).
   compress: true
-  debug_output_dir: "../../c4_sims/simgen_corrnoise_debug/"
+  debug_output_dir: "../c4_sims/simgen_corrnoise_debug/"
 
   pointing:
     strategy: "planck_scan"
     los_angle: 85.0
-    spin_angle_tilt: 30.0
+    spin_angle_tilt: 7.5
     spin_rate: 1.00165345964511
-    anti_sun_period_days: 2.5   # ~300 deg sweep over the 2.1-day run -> full-sky coverage.
-    precession_period_days: 0.7
+    anti_sun_period_days: 18.0
+    precession_period_days: 9.0
     mission_start: "2009-08-13T00:00:00"
 
   noise:
     white: true
     # The injected truth.  fknee = 0.5 Hz sits well inside the band (Nyquist 16.25 Hz) and far above
-    # the 0.0033 Hz scan fundamental; alpha = -1.5 is steep enough that the low-f modes are strongly
+    # the 0.0017 Hz scan fundamental; alpha = -1.5 is steep enough that the low-f modes are strongly
     # correlated-noise dominated.
     oof: {enabled: true, fknee: 0.5, alpha: -1.5}
 

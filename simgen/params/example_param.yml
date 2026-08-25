@@ -1,6 +1,6 @@
 # simgen: minimal example, the file to copy when starting a new simulation.
 #
-#   cd sims && mpirun -n 4 python -m simgen -p simgen/params/example_param.yml
+#   mpirun -n 4 c4-simgen -p simgen/params/example_param.yml
 #
 # Not a feature test and not paired with a Commander4 parameter file. It is the annotated reference
 # for what every block does; the `param_*.yml` files here are all variations on it.
@@ -15,7 +15,7 @@ general:
   units: "uK_RJ"            # TOD and sky unit (sigma0 is in this unit, per sample).
   float_precision: "single"   # Required by the reused Commander4 component constructors.
   seed: 1234                # Base RNG seed (CMB realization + per-(band,scan,det) noise).
-  output_dir: "../cmdr4_sims/simgen_example/"
+  output_dir: "cmdr4_sims/simgen_example/"
 
 # --- Sky components: the SAME block shape as a Commander4 param file. Each component adds an
 # optional `template:` block selecting the spatial template source (PySM3 preset or a FITS map);
@@ -55,20 +55,22 @@ components:
       template: {source: "pysm3", preset: "s5"}
 
 simulation:
-  nscans: 100               # Number of scans per band (more -> better sky coverage).
+  # 2400 x 600 s = 16.7 days. The accelerated 18-day anti-Sun period sweeps 333 deg, while the
+  # Planck-like 7.5 deg tilt and half-year precession ratio give dense, cross-linked scan rings.
+  nscans: 2400              # Number of scans per band (more -> better sky coverage).
   scan_duration_sec: 600    # Wall-clock length of one scan; sample count is round(dur*fsamp), per band.
   npsi: 4096                # psi digitization bins for Huffman storage (only used when compress: true).
   orbital_dipole: true      # Bake the relativistic orbital dipole into the TOD (uses pointing vsun).
   compress: true            # Huffman-compress pix/psi (false -> plain int32/float32 arrays). flag is always compressed.
-  debug_output_dir: "../cmdr4_sims/simgen_example_debug/"  # Optional per-band HDF5 maps + PNG previews.
+  debug_output_dir: "cmdr4_sims/simgen_example_debug/"  # Optional per-band HDF5 maps + PNG previews.
 
   pointing:
     strategy: "planck_scan"      # "planck_scan" (analytic) | "file" (load precomputed pointing H5)
     los_angle: 85.0
     spin_angle_tilt: 7.5
     spin_rate: 1.00165345964511  # rpm
-    anti_sun_period_days: 365.25  # Main sky sweep; full-sky coverage takes roughly half this period.
-    precession_period_days: 182.625  # Spin-axis wobble period around the anti-Sun direction.
+    anti_sun_period_days: 18.0   # Accelerated main sky sweep; full-sky coverage takes about half.
+    precession_period_days: 9.0  # Preserve Planck's approximately 2:1 annual/precession ratio.
     mission_start: "2009-08-13T00:00:00"
     # For strategy "file":
     # file_path: "/path/to/pointing.h5"

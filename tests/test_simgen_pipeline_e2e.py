@@ -10,12 +10,9 @@ zero noise: ``det_tf`` carries a single-pole time constant, ``det_id`` opts out.
 detector's written TOD must equal the plain detector's TOD passed through the same ``SinglePole``.
 """
 import os
-import sys
 
 import numpy as np
 import pytest
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sims"))
 
 
 @pytest.mark.parametrize("compress", [False, True])

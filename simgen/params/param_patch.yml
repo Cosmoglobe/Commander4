@@ -1,6 +1,6 @@
 # simgen: partial-sky (small-patch) test simulation.
 #
-#   cd sims && mpirun -n 12 python -m simgen -p simgen/params/param_patch.yml
+#   mpirun -n 12 c4-simgen -p simgen/params/param_patch.yml
 #
 # Analysed by `params/sims/simparam_patch.yml`.
 #
@@ -28,7 +28,7 @@ general:
   units: "uK_RJ"
   float_precision: "single"
   seed: 5150
-  output_dir: "../../c4_sims/simgen_patch/"
+  output_dir: "../c4_sims/simgen_patch/"
 
 components:
   CMB:
@@ -71,7 +71,7 @@ simulation:
   npsi: 4096
   orbital_dipole: false     # A raster has no orbital motion; vsun is zero either way.
   compress: true
-  debug_output_dir: "../../c4_sims/simgen_patch_debug/"
+  debug_output_dir: "../c4_sims/simgen_patch_debug/"
 
   pointing:
     strategy: "raster"

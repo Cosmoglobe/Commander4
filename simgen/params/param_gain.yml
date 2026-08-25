@@ -1,6 +1,6 @@
 # simgen: gain-calibration test simulation, in raw detector units.
 #
-#   cd sims && mpirun -n 8 python -m simgen -p simgen/params/param_gain.yml
+#   mpirun -n 8 c4-simgen -p simgen/params/param_gain.yml
 #
 # Analysed by `params/sims/simparam_gain.yml`.
 #
@@ -32,7 +32,7 @@ general:
   units: "uK_RJ"            # Sky unit; detector `gain` converts it to stored TOD units.
   float_precision: "single"   # Required by the reused Commander4 component constructors.
   seed: 4242                # Base RNG seed (CMB realization + per-(band,scan,det) noise).
-  output_dir: "../../c4_sims/simgen_gain/"
+  output_dir: "../c4_sims/simgen_gain/"
 
 # Three components over three well-separated frequencies: enough for the matching run to do a
 # determined (3 bands, 3 components) component separation, so `rel_gain`'s `full_sky` calibrator is
@@ -71,25 +71,26 @@ components:
       template: {source: "pysm3", preset: "s5"}
 
 simulation:
-  # 800 x 600 s = 5.6 days of mission time.  With `anti_sun_period_days: 6.0` the anti-Sun direction
-  # sweeps ~330 deg over the run: full-sky coverage, and an orbital-dipole axis that rotates almost
-  # all the way round, which is what breaks the gain/monopole degeneracy.
-  nscans: 800
+  # 2400 x 600 s = 16.7 days. The accelerated 18-day anti-Sun period sweeps 333 deg, while the
+  # Planck-like 7.5 deg tilt and half-year precession ratio give dense, cross-linked scan rings.
+  # The orbital-dipole axis still rotates almost fully around the sky, breaking the gain/monopole
+  # degeneracy.
+  nscans: 2400
   scan_duration_sec: 600    # -> 19500 samples/scan at 32.5 Hz.
   npsi: 4096
   orbital_dipole: true      # MUST stay true: the main code always subtracts a dipole built from the
                             # `vsun` stored in the files, so satellite pointing without it
                             # would be inconsistent with the analysis.
   compress: true
-  debug_output_dir: "../../c4_sims/simgen_gain_debug/"
+  debug_output_dir: "../c4_sims/simgen_gain_debug/"
 
   pointing:
     strategy: "planck_scan"
     los_angle: 85.0
-    spin_angle_tilt: 30.0
+    spin_angle_tilt: 7.5
     spin_rate: 1.00165345964511  # rpm
-    anti_sun_period_days: 6.0    # Accelerated sky sweep; v_orb keeps its physical 30 km/s.
-    precession_period_days: 1.5  # ~3.7 spin-axis wobbles over the run -> good cross-linking.
+    anti_sun_period_days: 18.0  # Accelerated sky sweep; v_orb keeps its physical 30 km/s.
+    precession_period_days: 9.0 # Preserve Planck's approximately 2:1 annual/precession ratio.
     mission_start: "2009-08-13T00:00:00"
 
   noise:
