@@ -310,7 +310,7 @@ class CompSepSolver:
             iter += 1
             if iter%checkpt_int == 0:
                 if master:
-                    logger.verbose(
+                    logger.debug(
                         f"{'QU' if self.det_map.pol else 'Intensity'} CG iter {iter:3d} - "
                         f"Residual {np.mean(self.CG_residuals[iter-checkpt_int:iter]):.6e} "
                         f"({(time.time() - t0)/checkpt_int:.2f}s/iter)")
