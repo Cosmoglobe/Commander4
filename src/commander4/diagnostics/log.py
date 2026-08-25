@@ -131,9 +131,9 @@ def init_loggers(logger_params, log_file_path: str | None = None,
                     logging levels (in lower or upper case)
                 file: Needs a 'level' parameter like console.
         log_file_path (str): Where the file logger writes. The caller resolves it
-            (see output.paths.log_file_path, which places the configured bare file
-            name inside the run's logs directory), because the directory has to
-            exist before the file handler here opens it.
+            (see file_io.paths.log_file_path, which names it from the run ID and places it inside
+            the run's logs directory), because the directory has to exist before the file handler
+            here opens it.
         world_rank: MPI world rank included in every record. ``None`` is used by non-MPI callers.
     """
 

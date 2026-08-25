@@ -7,12 +7,33 @@ from collections.abc import Iterator
 from commander4.file_io.experiments import EXPERIMENT_READER_MODULES
 from commander4.parameters.parse import load_params
 from commander4.parameters.schema import (
+    TOP_LEVEL_BLOCKS,
     derive_task_counts,
     enabled_compsep_views,
     enabled_tod_bands,
     task_count_breakdown,
     validate_param_schema,
 )
+
+
+def _validate_structure(params_dict: dict) -> None:
+    """Validate blocks that every Commander4 startup reads before accessing data."""
+    missing = [name for name in TOP_LEVEL_BLOCKS if name not in params_dict]
+    if missing:
+        raise ValueError(f"Missing required top-level parameter block(s) {missing}.")
+
+    for name in TOP_LEVEL_BLOCKS:
+        if not isinstance(params_dict[name], dict):
+            raise ValueError(
+                f"Top-level parameter block {name!r} must be a YAML mapping, not "
+                f"{type(params_dict[name]).__name__}. Use '{{}}' for an empty block."
+            )
+
+    chains = params_dict["output"].get("chains")
+    if not isinstance(chains, dict):
+        raise ValueError("output.chains is required and must be a YAML mapping.")
+    if "write" not in chains:
+        raise ValueError("output.chains.write is required.")
 
 
 def _iter_enabled_groups(params) -> Iterator[str]:
@@ -32,6 +53,16 @@ def _iter_enabled_groups(params) -> Iterator[str]:
 def _validate_components(params) -> None:
     import commander4.sky as sky
     from commander4.sky.component import Component
+    from commander4.sky.diffuse_components import (
+        CMB,
+        DiffuseComponent,
+        FreeFree,
+        SpinningDust,
+        Synchrotron,
+        ThermalDust,
+    )
+    from commander4.sky.point_sources import RadioSources
+    from commander4.sky.template_component import TemplateComponent
 
     if "components" not in params:
         raise ValueError("The top-level 'components' block is required.")
@@ -47,6 +78,17 @@ def _validate_components(params) -> None:
                 f"components.{component_name}.component_class is {component.component_class!r}; "
                 "that class is not supported."
             )
+        if issubclass(component_class, TemplateComponent):
+            raise ValueError(
+                f"components.{component_name}.component_class is {component.component_class!r}, "
+                "which is not implemented."
+            )
+        supported_classes = (CMB, ThermalDust, Synchrotron, FreeFree, SpinningDust, RadioSources)
+        if component_class not in supported_classes:
+            raise ValueError(
+                f"components.{component_name}.component_class is {component.component_class!r}, "
+                "which is not implemented as a concrete parameter-file component."
+            )
         component_params = component.params
         if "polarization" not in component_params:
             raise ValueError(f"components.{component_name}.params.polarization is required.")
@@ -61,6 +103,34 @@ def _validate_components(params) -> None:
             raise ValueError(
                 f"components.{component_name}.params uses removed keys {removed}; use the "
                 "corresponding 'Cl_prior_*' settings."
+            )
+
+        common_fields = {"polarization", "longname", "shortname"}
+        diffuse_fields = {
+            "lmax", "spatially_varying_MM", "Cl_prior_amplitude", "Cl_prior_beta",
+            "Cl_prior_FWHM", "Cl_prior_l_pivot", "Cl_prior_l_apod", "units", "init_from",
+            "amp_prior_mean_map",
+        }
+        spectral_index_fields = {
+            "sample_spectral_index", "spectral_index_bounds", "spectral_index_prior",
+            "spectral_index_proposal_sigma",
+        }
+        class_fields = {
+            CMB: {"nu_ref"},
+            ThermalDust: {"beta", "T", "nu_ref"} | spectral_index_fields,
+            Synchrotron: {"beta", "nu_ref"} | spectral_index_fields,
+            FreeFree: {"T", "nu_ref"},
+            SpinningDust: {"template_path", "nu_peak", "nu_0"},
+            RadioSources: {"template_path", "nu_0"},
+        }
+        allowed_fields = common_fields | class_fields[component_class]
+        if issubclass(component_class, DiffuseComponent):
+            allowed_fields |= diffuse_fields
+        unknown = sorted(set(component_params) - allowed_fields)
+        if unknown:
+            raise ValueError(
+                f"components.{component_name}.params has unused field(s) {unknown}. "
+                f"{component.component_class} accepts {sorted(allowed_fields)}."
             )
 
 
@@ -102,6 +172,7 @@ def validate_parameter_file(
     """Validate one file and return its MPI count summary and enabled sampling groups."""
     params, params_dict, _ = load_params(parameter_file)
     validate_param_schema(params_dict)
+    _validate_structure(params_dict)
     _validate_components(params)
     _validate_experiments(params)
     enabled_compsep_views(params)

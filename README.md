@@ -70,13 +70,13 @@ The MPI task counts are **derived**, not stated: the TOD total is the sum of the
 ### 3.2 Output
 A run writes everything below the single directory named by `output.dir`, which it creates:
 ```YAML
-<output_dir>/logs/              # log file (output.logging.file.filename) and cProfile dumps
+<output_dir>/logs/              # run and fatal logs, named by run ID, and cProfile dumps
 <output_dir>/chains_bands/      # per-band TOD samples and output maps
 <output_dir>/chains_compsep/    # sky components and the fit against the band maps
 <output_dir>/plots/             # figures
 ```
 
-`output.logging.file.filename` is a bare file name, not a path: it is always placed in the logs directory. The subdirectory names are defined in [`src/commander4/file_io/paths.py`](src/commander4/file_io/paths.py), which is also what the plotting and standalone tools read, so those take the same `<output_dir>` as their argument.
+The normal log is named `logs/run-<run-id>.log`. The subdirectory names are defined in [`src/commander4/file_io/paths.py`](src/commander4/file_io/paths.py), which is also what the plotting and standalone tools read, so those take the same `<output_dir>` as their argument.
 
 #### Why two chains
 Everything is HDF5, one file per Gibbs sample, named `..._chain<CC>_iter<NNNN>.h5`. There are two chains rather than one because the two halves of the program are **disjoint MPI rank sets** (see §4.1): the band chain is written by each band's master on the TOD side, and the compsep chain by the master on the component-separation side, one schedule step later. Merging them would need parallel HDF5 and a barrier between two sides that otherwise only exchange maps. The band chain is per band, the compsep chain per run, and matching `(chain, iter)` labels describe the same Gibbs sample.
@@ -208,7 +208,7 @@ Commander4 uses Python's logging system instead of `print`. A record has the for
 16:32:06 - rank   1 - data_models.tod_samples - INFO - Band Band44GHz, chain 2: starting fresh Gibbs chain.
 ```
 
-The console handler writes to `stderr`, which the file handler writes to `<output_dir>/logs/<filename>`. Console and file levels are configured independently under `output.logging`. Each level also includes every level below it in this table:
+The console handler writes to `stderr`, while the file handler writes to `<output_dir>/logs/run-<run-id>.log`. Console and file levels are configured independently under `output.logging`. Each level also includes every level below it in this table:
 | Level | Contents |
 |---|---|
 | `DEBUG` | Developer and per-rank diagnostics. |
@@ -297,7 +297,7 @@ c4-validate-params path/to/param.yml  # Gives you some info about the param-file
 
 c4-diff-params path/to/param1.yml path/to/param2.yml  # Prints the difference between two parameter files.
 
-c4-plot-chain path/to/chain-dir/  # Creates plots from the data in a provided chain directory.
+c4-plot-chain path/to/output-dir/  # Plots both chain directories in a run output directory.
 
 c4-cmb-realizations  path/to/chain-dir/  # Generate constrained CMB realizations from chain (non yet fully functional).
 

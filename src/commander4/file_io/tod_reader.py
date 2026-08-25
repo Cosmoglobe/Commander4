@@ -31,7 +31,7 @@ experiment_tod_readers = {
     # Planck LFI only; HFI's bolometer data is not supported yet and will need its own reader.
     "planck_lfi" : tod_reader_planck_lfi,
     # The plain reader for the standard format, with no instrument-specific behaviour. Everything
-    # `sims/simgen` writes reads through this, as does any other dataset already in that layout.
+    # `simgen` output reads through this, as does any other dataset already in that layout.
     "general" : tod_reader_general,
     "SO_LAT" : tod_reader_SO_LAT,
     "SO_SAT" : tod_reader_SO_SAT,

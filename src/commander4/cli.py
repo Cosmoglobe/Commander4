@@ -165,7 +165,7 @@ def run_commander4(params: Bunch, params_dict: dict):
             logger.debug("### PARAMETERS ###\n%s", yaml.dump(
                 params_dict, allow_unicode=True, default_flow_style=False))
         # Print Commander4 text. Color chosen from hashed username.
-        logger.summary(f"\033[{(6 + sum(ord(char) for char in getpass.getuser()) % 6) + 91}m" + r"""
+        logger.summary(f"\033[{((5+sum(ord(char) for char in getpass.getuser()))%6) + 91}m" + r"""
            ______                                          __             __ __
           / ____/___  ____ ___  ____ ___  ____ _____  ____/ /__  _____   / // /
          / /   / __ \/ __ `__ \/ __ `__ \/ __ `/ __ \/ __  / _ \/ ___/  / // /_
@@ -298,7 +298,9 @@ def main() -> None:
 
         output_dir = paths.resolve_output_dir(params.output)
         traceback_dir = os.path.join(output_dir, paths.LOGS)
-        log_file = paths.log_file_path(params.output) if "file" in params.output.logging else None
+        log_file = None
+        if "file" in params.output.logging:
+            log_file = paths.log_file_path(params.output, run_id)
         if world_rank == 0:
             paths.create_output_dirs(params.output)
         world_comm.Barrier()

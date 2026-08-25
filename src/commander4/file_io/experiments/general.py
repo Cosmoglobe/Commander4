@@ -4,7 +4,7 @@ Reads the format and applies no instrument policy of its own: no data-quality cu
 priors, no format quirks. Everything it needs comes from the file (pointing, flags, and the
 per-detector ``scalars`` that seed gain and noise) or from the parameter file.
 
-Use this for any dataset already in the standard layout, including everything ``sims/simgen``
+Use this for any dataset already in the standard layout, including everything ``simgen``
 writes. An instrument only needs its own reader once it needs behaviour this one deliberately has
 none of, which in practice means detector-scan quality cuts in the instrument's own units, or noise
 priors tuned to it (compare ``planck_lfi.py``, which is this reader plus exactly those two things).
@@ -32,7 +32,7 @@ from commander4.file_io.experiments.read_utils import (
 logger = logging.getLogger(__name__)
 
 # Bits marking unusable samples in the cumulative flag stream. Matches `GOOD_SCAN_BITMASK` in
-# sims/simgen/writers.py, which documents the contract a writer of this format must satisfy.
+# simgen/writers.py, which documents the contract a writer of this format must satisfy.
 GOOD_DATA_BITMASK = 6111232
 
 

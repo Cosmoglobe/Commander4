@@ -230,7 +230,7 @@ def resolve_band_lmax(params: Bunch, band_name: str, experiment: str | None, nsi
 
 
 def validate_param_schema(params_dict: dict) -> None:
-    """Reject the pre-restructure schema, and any top-level key outside `TOP_LEVEL_BLOCKS`.
+    """Reject any top-level key outside `TOP_LEVEL_BLOCKS`.
 
     Takes the raw parameter dictionary rather than the parsed Bunch, since `parse_params` injects
     `parameter_file_as_string` onto the latter. Called on every rank before anything else, so a

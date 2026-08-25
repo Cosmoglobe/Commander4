@@ -1,8 +1,8 @@
 """TOD reader for ``litebird_sim`` simulated data (``experiment_id: litebird_sim``).
 
 Keeps the in-place-simulation hook (``replace_tod_with_sim``), which regenerates the TOD from a
-sky model while reusing the file's pointing. Data written by ``sims/simgen`` shares this HDF5
-layout but should be read with ``simgen.py`` instead, which has no such hook.
+sky model while reusing the file's pointing. Data written by ``simgen`` shares this HDF5
+layout but should be read with ``experiment_id: general``, which has no such hook.
 """
 import logging
 import numpy as np
@@ -36,8 +36,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
                scan_idx_stop: int) -> DetectorGroupTOD:
     """Read this rank's scans for one LiteBIRD band from its litebird_sim HDF5 files.
 
-    Each file holds one scan with its own pointing per detector. Also the reader used for data
-    produced by ``sims/simgen``, which writes the same layout.
+    Each file holds one scan with its own pointing per detector.
 
     Args:
         band_comm: The band's MPI communicator.

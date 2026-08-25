@@ -36,17 +36,9 @@ def subdir(params, name: str) -> str:
     return os.path.join(resolve_output_dir(params.output), name)
 
 
-def log_file_path(output_params) -> str:
-    """Full path of the run's log file: ``logging.file.filename`` inside the logs subdirectory.
-
-    A file name carrying a directory is refused rather than quietly ignored: a run that silently
-    writes somewhere other than where the parameter file says would be discovered far too late.
-    """
-    filename = output_params.logging.file.filename
-    if os.path.basename(filename) != filename:
-        raise ValueError(f"'output.logging.file.filename' must be a bare file name, not a path "
-                         f"(got {filename!r}); it is always placed in <output_dir>/{LOGS}.")
-    return os.path.join(resolve_output_dir(output_params), LOGS, filename)
+def log_file_path(output_params, run_id: str) -> str:
+    """Full path of the run's standard ``run-<run-id>.log`` file."""
+    return os.path.join(resolve_output_dir(output_params), LOGS, f"run-{run_id}.log")
 
 
 def create_output_dirs(output_params) -> str:
