@@ -605,7 +605,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
 
     ### PRINT NOISE SAMPLING STATS ###
     if corr_noise_active:
-        log_corr_noise_stats(band_comm, experiment_data.nu, experiment_data.noise_model,
+        log_corr_noise_stats(band_comm, experiment_data,
                              sampled_params, residuals, niters, num_failed_convergences_ncorr,
                              num_too_high_var_ncorr, worst_residual_ncorr,
                              sum(len(s.detectors) for s in experiment_data.scans),

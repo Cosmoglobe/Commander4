@@ -16,6 +16,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 from commander4.math_utils.fft import forward_rfft, backward_rfft,\
         forward_rfft_mirrored, backward_rfft_mirrored
+from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.psd import NoisePSD
 from commander4.tod.noise.sigma0 import calc_sigma0_robust, calc_sigma0_binned_psd
@@ -342,15 +343,7 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
                  niter=int(niter), converged=bool(converged), high_var=high_var)
 
 
-def _log_distribution(nu: float, label: str, values: NDArray, fmt: str = ".4f") -> None:
-    """Log the min / 1st-pct / mean / 99th-pct / max of *values* for one band."""
-    values = np.asarray(values, dtype=np.float64)
-    logger.verbose(f"{nu}GHz: {label} {np.nanmin(values):{fmt}} "
-                   f"{np.nanpercentile(values, 1):{fmt}} {np.nanmean(values):{fmt}} "
-                   f"{np.nanpercentile(values, 99):{fmt}} {np.nanmax(values):{fmt}}")
-
-
-def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
+def log_corr_noise_stats(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
                          sampled_params: list[NDArray], residuals: list[float],
                          niters: list[int], n_failed_conv: int, n_high_var: int,
                          worst_residual: float, n_local_scans: int,
@@ -361,8 +354,8 @@ def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
 
     Args:
         band_comm: Band-level MPI communicator.
-        nu: Band centre frequency (GHz), for labelling.
-        noise_model: The band's NoisePSD model (used for ``param_names``).
+        experiment_data: The detector group being summarized; provides the NoisePSD model
+            (``param_names``, ``P_uni``) and the experiment/band names used to label the log lines.
         sampled_params: Locally sampled ``noise_params`` arrays (empty if params were not sampled).
         residuals: Local CG residuals (0 entries are excluded from the summary).
         niters: Local CG iteration counts.
@@ -383,20 +376,19 @@ def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
     if band_comm.Get_rank() != 0:
         return
 
+    noise_model = experiment_data.noise_model
+    # Bands from different experiments can share a centre frequency, and one experiment can hold
+    # several detector groups, so the log context names the experiment and band, not the frequency.
+    context = (f"Chain {chain} iter{iteration} {experiment_data.experiment_name} "
+               f"{experiment_data.band_name}")
+
     # Print CG and variance sanity check failure rates (as warnings if >3% of scans).
-    context = f"Chain {chain} iter{iteration} {nu}GHz"
-    if n_failed_conv/n_total > 0.03:
-        logger.warning(f"{context}: noise CG failed for {n_failed_conv/n_total:.1f}% of "\
-                       f"scans ({n_failed_conv}/{n_total} Worst residual = {worst_residual:.3e}).")
-    else:
-        logger.verbose(f"{context}: noise CG failed for {n_failed_conv/n_total:.1f}% of "\
-                       f"scans ({n_failed_conv}/{n_total} Worst residual = {worst_residual:.3e}).")
-    if n_high_var/n_total > 0.03:
-        logger.warning(f"{context}: variance sanity check failed for {n_high_var/n_total:.1f}% of "\
-                       f"scans ({n_high_var}/{n_total}).")
-    else:
-        logger.verbose(f"{context}: variance sanity check failed for {n_high_var/n_total:.1f}% of "\
-                       f"scans ({n_high_var}/{n_total}).")
+    log_failures = logger.warning if n_failed_conv/n_total > 0.03 else logger.verbose
+    log_failures(f"{context}: noise CG failed for {n_failed_conv/n_total:.1%} of scans "
+                 f"({n_failed_conv}/{n_total}, worst residual = {worst_residual:.3e}).")
+    log_high_var = logger.warning if n_high_var/n_total > 0.03 else logger.verbose
+    log_high_var(f"{context}: variance sanity check failed for {n_high_var/n_total:.1%} of scans "
+                 f"({n_high_var}/{n_total}).")
 
     residuals = np.concatenate([np.asarray(r, dtype=np.float64) for r in residuals])
     residuals = residuals[residuals != 0]
@@ -405,11 +397,11 @@ def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
     niters = np.concatenate([np.asarray(n, dtype=np.float64) for n in niters])
     if niters.size == 0:
         niters = np.array([0.0])
-    logger.info(f"{context} correlated noise: {n_total} detector-scans, median residual "
-                f"{np.median(residuals):.2e}, median iterations {np.median(niters):.1f}, "
-                f"{n_failed_conv} non-converged, {n_high_var} failed variance check.")
-    _log_distribution(nu, "residuals", residuals, fmt=".2e")
-    _log_distribution(nu, "iterations", niters, fmt=".4f")
+    # The worst residual and the failure counts are already in the two lines above, so this line
+    # only adds the typical CG behaviour.
+    logger.info(f"{context}: correlated noise for {n_total} detector-scans, median residual "
+                f"{np.median(residuals):.2e}, median iterations {np.median(niters):.1f} "
+                f"(max {np.max(niters):.0f}).")
 
     # Per-parameter distributions (model-agnostic; sigma0 at index 0 is reported elsewhere), plus
     # how many detector-scans ended up sitting on a hard prior bound. A parameter whose true value
@@ -423,7 +415,10 @@ def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
         n_sampled = arr.shape[0]
         for j in range(1, arr.shape[1]):
             name = noise_model.param_names[j] if j < len(noise_model.param_names) else f"p{j}"
-            _log_distribution(nu, name, arr[:, j], fmt=".4f")
+            values = arr[:, j]
+            logger.verbose(f"{context}: {name} min {np.nanmin(values):.4f}, 1% "
+                           f"{np.nanpercentile(values, 1):.4f}, mean {np.nanmean(values):.4f}, "
+                           f"99% {np.nanpercentile(values, 99):.4f}, max {np.nanmax(values):.4f}")
             lo, hi = float(noise_model.P_uni[j, 0]), float(noise_model.P_uni[j, 1])
             if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
                 continue
@@ -434,7 +429,7 @@ def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
             n_hi = int(np.count_nonzero(arr[:, j] >= hi - tol))
             if n_lo or n_hi:
                 logger.verbose(
-                    f"{nu}GHz: {name} on its prior bounds for {n_lo} ({n_lo/n_sampled:.1%}) "
+                    f"{context}: {name} on its prior bounds for {n_lo} ({n_lo/n_sampled:.1%}) "
                     f"of {n_sampled} detector-scans at the lower bound {lo:.4g}, and "
                     f"{n_hi} ({n_hi/n_sampled:.1%}) at the upper bound {hi:.4g}.")
 
