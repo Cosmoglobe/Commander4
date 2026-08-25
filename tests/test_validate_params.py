@@ -10,6 +10,17 @@ from commander4.standalone_tools.validate_params import main, validate_parameter
 
 def _valid_params() -> dict:
     return {
+        "gibbs": {"num_iterations": 1},
+        "resources": {
+            "tod": {"num_threads": 1},
+            "compsep": {"num_threads": 1},
+        },
+        "output": {
+            "dir": "output",
+            "logging": {},
+            "profiling": False,
+            "chains": {"write": [1], "include": {}},
+        },
         "components": {
             "CMB": {
                 "enabled": True,
@@ -30,6 +41,7 @@ def _valid_params() -> dict:
                 },
             },
         },
+        "tod_processing": {},
         "compsep": {"enabled": False},
     }
 
@@ -124,6 +136,30 @@ def test_sampling_group_unknown_keys_are_rejected(tmp_path) -> None:
     }
 
     with pytest.raises(ValueError, match="not_a_setting"):
+        validate_parameter_file(_write_params(tmp_path, params))
+
+
+def test_missing_required_top_level_block_is_rejected(tmp_path) -> None:
+    params = _valid_params()
+    del params["tod_processing"]
+
+    with pytest.raises(ValueError, match="tod_processing"):
+        validate_parameter_file(_write_params(tmp_path, params))
+
+
+def test_empty_top_level_block_must_be_a_mapping(tmp_path) -> None:
+    params = _valid_params()
+    params["experiments"] = []
+
+    with pytest.raises(ValueError, match="experiments.*mapping"):
+        validate_parameter_file(_write_params(tmp_path, params))
+
+
+def test_chain_selection_is_required(tmp_path) -> None:
+    params = _valid_params()
+    del params["output"]["chains"]["write"]
+
+    with pytest.raises(ValueError, match="output.chains.write"):
         validate_parameter_file(_write_params(tmp_path, params))
 
 

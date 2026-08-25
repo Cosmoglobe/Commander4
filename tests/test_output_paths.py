@@ -14,10 +14,8 @@ from pixell.bunch import Bunch
 from commander4.file_io import paths
 
 
-def _output(output_dir: str, log_name: str | None = "run.log") -> Bunch:
-    logging = Bunch(console=Bunch(level="info"))
-    if log_name is not None:
-        logging.file = Bunch(level="info", filename=log_name)
+def _output(output_dir: str) -> Bunch:
+    logging = Bunch(console=Bunch(level="info"), file=Bunch(level="info"))
     return Bunch(dir=output_dir, logging=logging)
 
 
@@ -62,15 +60,10 @@ def test_a_missing_output_dir_is_refused():
 
 
 def test_log_file_goes_in_the_logs_subdirectory(tmp_path):
-    output = _output(str(tmp_path / "run"), log_name="mychain.log")
-    assert paths.log_file_path(output) == str(tmp_path / "run" / paths.LOGS / "mychain.log")
-
-
-@pytest.mark.parametrize("name", ["../outside.log", "sub/run.log", "/abs/run.log"])
-def test_a_log_file_name_carrying_a_path_is_refused(tmp_path, name):
-    """`filename` is a bare name; a path would put logs outside the run's output tree."""
-    with pytest.raises(ValueError, match="bare file name"):
-        paths.log_file_path(_output(str(tmp_path / "run"), log_name=name))
+    output = _output(str(tmp_path / "run"))
+    assert "filename" not in output.logging.file
+    assert paths.log_file_path(output, "test-run") == str(
+        tmp_path / "run" / paths.LOGS / "run-test-run.log")
 
 
 def test_the_log_directory_must_exist_before_the_loggers_open_the_file(tmp_path):
@@ -83,8 +76,8 @@ def test_the_log_directory_must_exist_before_the_loggers_open_the_file(tmp_path)
 
     from commander4.diagnostics import log
 
-    output = _output(str(tmp_path / "run"), log_name="ordering.log")
-    log_path = paths.log_file_path(output)
+    output = _output(str(tmp_path / "run"))
+    log_path = paths.log_file_path(output, "ordering-test")
     assert not os.path.exists(os.path.dirname(log_path))
     with pytest.raises(Exception):          # the FileHandler cannot create its own directory
         log.init_loggers(output.logging, log_path)
@@ -107,6 +100,6 @@ def test_the_log_directory_must_exist_before_the_loggers_open_the_file(tmp_path)
 def test_init_loggers_needs_a_path_for_a_configured_file_logger():
     from commander4.diagnostics import log
 
-    output = _output("unused", log_name="run.log")
+    output = _output("unused")
     with pytest.raises(ValueError, match="log_file_path"):
         log.init_loggers(output.logging, None)

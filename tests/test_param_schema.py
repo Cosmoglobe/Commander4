@@ -71,6 +71,18 @@ def test_the_seven_blocks_are_accepted():
     validate_param_schema({"gibbs": {}})   # a partial file is a different problem, not this one
 
 
+def test_the_removed_log_filename_is_refused():
+    params = {
+        "output": {
+            "logging": {
+                "file": {"level": "info", "filename": "custom.log"},
+            },
+        },
+    }
+    with pytest.raises(ValueError, match="run-<run-id>.log"):
+        validate_param_schema(params)
+
+
 def test_the_block_list_is_the_documented_one():
     """Pinned as a literal so adding or removing a block has to be a deliberate edit."""
     assert TOP_LEVEL_BLOCKS == ("gibbs", "resources", "output", "components", "experiments",
