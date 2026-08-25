@@ -1,8 +1,7 @@
 """Turning a parsed parameter file (nested dicts) into the nested Bunch the code reads.
 
-This lives apart from `parse.py` because that module parses the command line at import time: any
-tool that only wants the conversion (the chain plotter, the constrained-CMB tool) can import from
-here without being handed an argument parser it did not ask for.
+This lives apart from `parse.py` so tools that already have a resolved dictionary can reuse the
+conversion without coupling themselves to YAML file loading.
 """
 from pixell.bunch import Bunch
 
