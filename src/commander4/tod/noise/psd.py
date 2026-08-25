@@ -265,3 +265,40 @@ class NoisePSDOof(NoisePSD):
         out[1] = fknee_current
         out[2] = alpha_current
         return out
+
+
+class NoisePSD2Oof(NoisePSD):
+    # TODO: Implement.
+    """P(f) = sigma0^2 (1 + (f / f_knee)^alpha + (f / f_knee2)^alpha2)."""
+
+    param_names = ('sigma0', 'fknee', 'alpha', 'fknee2', 'alpha2')
+
+
+class NoisePSDOofGauss(NoisePSD):
+    # TODO: Implement.
+    """P(f) = sigma0^2 (1 + (f / f_knee)^alpha
+              + amp / f exp(-0.5 ((log10(f) - log10(loc)) / sigma)^2)).
+    """
+
+    param_names = ('sigma0', 'fknee', 'alpha', 'amp', 'loc', 'sigma')
+
+
+class NoisePSDOofQuad(NoisePSD):
+    # TODO: Implement.
+    """P(f) = sigma0^2 (1 + (f / f_knee)^alpha) + slope f + quadratic f^2."""
+
+    param_names = ('sigma0', 'fknee', 'alpha', 'slope', 'quadratic')
+
+
+class NoisePSDSpline(NoisePSD):
+    # TODO: Implement.
+    """P(f) = spline(f; node_freqs, node_powers), with white floor sigma0^2."""
+
+    param_names = ('sigma0', 'node_freqs', 'node_powers')
+
+
+class NoisePSDWhite(NoisePSD):
+    # TODO: Implement.
+    """P(f) = sigma0^2."""
+
+    param_names = ('sigma0',)
