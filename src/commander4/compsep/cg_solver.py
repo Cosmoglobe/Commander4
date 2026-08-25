@@ -331,7 +331,8 @@ class CompSepSolver:
                     if x_true is not None:
                         LHS(CompList([]))  # Matching LHS call for the calculation of LHS(CG_solver.x-x_true).
             if iter >= max_iter:
-                if master:
+                # Only log warning if err_tol != 0, as this means user wants to do max_iter.
+                if master and self.config.err_tol > 0.0:
                     logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
                 stop_CG = True
             if CG_solver.err < self.config.err_tol:
