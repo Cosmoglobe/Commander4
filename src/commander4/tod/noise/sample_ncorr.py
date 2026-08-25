@@ -384,11 +384,11 @@ def log_corr_noise_stats(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
 
     # Print CG and variance sanity check failure rates (as warnings if >3% of scans).
     log_failures = logger.warning if n_failed_conv/n_total > 0.03 else logger.verbose
-    log_failures(f"{context}: noise CG failed for {n_failed_conv/n_total:.1%} of scans "
+    log_failures(f"{context}: noise CG failed for {100*n_failed_conv/n_total:.1f}% of scans "
                  f"({n_failed_conv}/{n_total}, worst residual = {worst_residual:.3e}).")
     log_high_var = logger.warning if n_high_var/n_total > 0.03 else logger.verbose
-    log_high_var(f"{context}: variance sanity check failed for {n_high_var/n_total:.1%} of scans "
-                 f"({n_high_var}/{n_total}).")
+    log_high_var(f"{context}: variance sanity check failed for {100*n_high_var/n_total:.1f}% of "
+                 f"scans ({n_high_var}/{n_total}).")
 
     residuals = np.concatenate([np.asarray(r, dtype=np.float64) for r in residuals])
     residuals = residuals[residuals != 0]
