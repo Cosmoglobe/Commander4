@@ -33,18 +33,23 @@ def _degrade_map(value: NDArray, kind: str, nside_out: int) -> NDArray:
     """Bring one `maps/` dataset to `nside_out`, in whatever quantity it is additive in.
 
     `hp.ud_grade` averages the sub-pixels it merges, which is right for a brightness but wrong for
-    the other kinds: an rms has to average in inverse variance, and a weight or a count has to add.
+    the other kinds: a weight, a count, and an rms (through its inverse variance) all add.
     """
     if kind == "brightness":
         return hp.ud_grade(value, nside_out, dtype=np.float32)
-    if kind == "rms":
-        return 1.0/np.sqrt(hp.ud_grade(1.0/value**2, nside_out, dtype=np.float32))
-    # Turn the average back into a sum by scaling with how many sub-pixels fell in each new pixel.
+    # The rest are additive, so turn ud_grade's average back into a sum by scaling with how many
+    # sub-pixels fell in each new pixel. An rms adds as its inverse variance, 1/sigma^2.
+    additive = 1.0/value**2 if kind == "rms" else value
     subpixels = value.shape[-1] // hp.nside2npix(nside_out)
-    summed = hp.ud_grade(value.astype(np.float64), nside_out)*subpixels
-    if kind == "count":
+    summed = hp.ud_grade(additive.astype(np.float64), nside_out)*subpixels
+    if kind == "rms":
+        return (1.0/np.sqrt(summed)).astype(np.float32)
+    elif kind == "count":
         return np.round(summed).astype(np.int64)
-    return summed
+    elif kind == "weight":  # A summed inverse variance, left as float64.
+        return summed
+    else:
+        raise ValueError(f"Unknown map kind '{kind}' in _degrade_map.")
 
 
 def _to_band_unit(value: NDArray, kind: str, band_unit_factor: float) -> NDArray:
