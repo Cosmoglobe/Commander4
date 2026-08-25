@@ -1,9 +1,20 @@
+"""Huffman coding of TOD, pointing and flag arrays, as stored in the experiment scan files.
+
+The compression is not ours: the reader has to decode what the file already contains. Decoding is
+numba-compiled because it runs once per detector-scan over the full sample count.
+"""
 import numpy as np
 import heapq
 from numba import njit, types
 from numba.typed import Dict
 
 class LeafNode:
+    """A node in the Huffman tree, ordered by weight with `node_number` breaking ties.
+
+    The tie-break keeps tree construction deterministic, so the same symbol table always yields the
+    same codes (needed to decode data written by another process or run).
+    """
+
     def __init__(self, symbol, weight, node_number):
         self.node_number = node_number
         self.symbol = symbol

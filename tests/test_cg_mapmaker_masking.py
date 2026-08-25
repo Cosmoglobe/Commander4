@@ -15,12 +15,12 @@ import numpy as np
 import pytest
 from mpi4py import MPI
 
-from commander4.data_models.detector_TOD import DetectorTOD
-from commander4.data_models.scan_TOD import ScanTOD
-from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.data_models.detector_tod import DetectorTOD
+from commander4.data_models.scan_tod import ScanTOD
+from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
-from commander4.data_models.TOD_samples import TODSamples
-from commander4.utils.CG_mapmaker import CGMapmakerI, CGMapmakerIQU
+from commander4.data_models.tod_samples import TODSamples
+from commander4.tod.mapmaking.cg import CGMapmakerI, CGMapmakerIQU
 
 _BITMASK = 1  # one bad-data bit; a flagged sample has (flag & _BITMASK) != 0
 
@@ -38,11 +38,14 @@ def _build_band(pix: np.ndarray, bad_idx, nside: int, sigma0: float, pols: str,
     pointing = PixelPointing(pix.astype(np.int64), psi.astype(np.float64), dummy_tree, None, None,
                              nside, nside, ntod, ntod)
     proc_mask = np.ones(npix, dtype=bool)  # all-sky processing mask -> full_mask == good_data_mask
-    det = DetectorTOD("d0", 0, 0, np.zeros(ntod, dtype=np.float32), pointing, 1.0, None, None, None,
-                      proc_mask, {}, ntod, ntod, flag_encoded=flag, bad_data_bitmask=_BITMASK,
-                      flag_is_compressed=False)
+    det = DetectorTOD(
+        name="d0", det_idx_fullband=0, tod=np.zeros(ntod, dtype=np.float32), pointing=pointing,
+        sampling_rate_hz=1.0, orbital_velocity_m_per_s=None, huffman_tree=None,
+        huffman_symbols=None, default_proc_mask=proc_mask, specific_proc_masks={},
+        flag_encoded=flag, bad_data_bitmask=_BITMASK, flag_is_compressed=False,
+    )
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
-    band = DetGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=nside, nu=0.0, fwhm=0.0,
+    band = DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=nside, nu=0.0, fwhm=0.0,
                        fsamp=fsamp, ndet=1, pols=pols, noise_model=noise_model)
     ts = TODSamples.__new__(TODSamples)
     ts.accept = np.ones((1, 1), dtype=bool)

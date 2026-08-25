@@ -1,3 +1,9 @@
+"""Offline tool: draw constrained CMB realizations from a finished chain's band maps.
+
+Reads the datamaps written by a run, solves the constrained-realization system for the CMB alms
+with a supplied C_l prior, and writes the resulting maps. The in-process versions of the same solve
+live in ``compsep/constrained_cmb_loop`` and ``compsep/constrained_cmb_loop_mpi``.
+"""
 import numpy as np
 import ducc0
 import healpy as hp
@@ -9,12 +15,19 @@ import matplotlib.pyplot as plt
 import h5py
 import os
 import argparse
+import glob
 import re
+import yaml
 from astropy.io import fits
 from pixell.bunch import Bunch
 
-from commander4.sky_models.component import ThermalDust, FreeFree, Synchrotron
-from commander4.sky_models.sky_model import SkyModel
+from commander4.file_io import paths
+from commander4.parameters.bunch import as_bunch_recursive
+from commander4.sky.comp_io import _read_view_alms_from_chain
+from commander4.sky.comp_list import CompList
+from commander4.sky.diffuse_components import CMB
+from commander4.sky.sky_model import SkyModel
+from commander4.units import rj_to_band_unit_factor
 
 logger = logging.getLogger("cmb_realizations")
 
@@ -55,6 +68,8 @@ def alm2map_adjoint(map, nside, lmax):
 
 
 class ConstrainedCMB:
+    """The constrained-realization system for the CMB alms, with an externally supplied C_l."""
+
     def __init__(self, map_sky, map_rms, cmb_Cell, maxiter=100):
         self.maxiter = maxiter
         self.map_sky = map_sky
@@ -119,7 +134,7 @@ class ConstrainedCMB:
             diag += Cl * bl ** 2 * avg_inv_noise_var * pix_factor
 
         self._precond_ell = 1.0 / diag
-        logger.info(
+        logger.debug(
             "Preconditioner dynamic range: %.3e  (min/max of M_ell)",
             self._precond_ell.min() / self._precond_ell.max(),
         )
@@ -203,29 +218,30 @@ class ConstrainedCMB:
         return RHS_sum
 
 
-    def solve_CG(self, LHS, RHS):
+    def solve_CG(self, LHS, RHS, err_tol: float = 1e-6):
         """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG from the pixell package.
             Assumes that both x and b are in alm space.
 
             Args:
                 LHS: A callable taking x as argument and returning Ax.
                 RHS: A Numpy array representing b, in alm space.
+                err_tol: Residual below which CG stops; `maxiter` caps it either way.
             Returns:
                 m_bestfit: The resulting best-fit solution, in alm space.
         """
-        # logger = logging.getLogger(__name__)
         CG_solver = utils.CG(LHS, RHS, dot=self.dot_alm, M=self.preconditioner)
-        err_tol = 1e-100
         iter = 0
         while CG_solver.err > err_tol:
             CG_solver.step()
             iter += 1
-            logger.info(f"CG iter {iter:3d} - Residual {CG_solver.err:.3e}")
-            print(f"CG iter {iter:3d} - Residual {CG_solver.err:.3e}")
+            logger.debug(f"CG iter {iter:3d} - Residual {CG_solver.err:.3e}")
             if iter >= self.maxiter:
-                logger.warning(f"Maximum number of iterations ({self.maxiter}) reached in CG.")
+                logger.warning(f"Maximum number of iterations ({self.maxiter}) reached in CG "
+                               f"at residual {CG_solver.err:.3e} (tolerance {err_tol:.1e}).")
                 break
-        print(f"CG finished after {iter} iterations with a residual of {CG_solver.err:.3e} (err tol = {err_tol})")
+        else:
+            logger.info(f"CG converged after {iter} iterations "
+                        f"(residual {CG_solver.err:.3e} < {err_tol:.1e}).")
 
         # Recover physical solution: x = C^{1/2} x_tilde
         s_bestfit = hp.almxfl(CG_solver.x, self.Cl_sqrt)
@@ -271,7 +287,7 @@ class ConstrainedCMB:
 #             CMB_fluct_Cl = hp.alm2cl(CMB_fluct_alms)
 #             CMB_fluct_map = alm2map(CMB_fluct_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax)
 
-#             if params.general.make_plots:
+#             if params.output.plots.enabled:
 #                 plotting.plot_constrained_cmb_results(
 #                     master, params, detector, chain, iter,
 #                     constrained_cmb_solver.ell, CMB_mean_field_map,
@@ -279,221 +295,225 @@ class ConstrainedCMB:
 #                     constrained_cmb_solver.Cl_true)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Plot Commander4 chain outputs from disk.")
-    parser.add_argument(
-        "cmb_dir",
-        help="Path to a cmb chain output directory (by default called compsep/).",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default=None,
-        help="Directory for plots. Defaults to <cmb_dir>/cmb_realizations.",
-    )
-    parser.add_argument(
-        "--verbose",
-        "-v",
-        action="store_true",
-        help="Verbose printing/logging during run.",
-    )
+def _load_params_from_chain(run_dir: str) -> Bunch | None:
+    """The parameter file the run was launched with, read back out of its chain files.
 
+    Every chain file stores the parameter file verbatim under `metadata/parameter_file_as_string`,
+    which is what lets this tool rebuild the run's components without being told anything about
+    them. Returns None if no chain file in `run_dir` carries it.
+    """
+    patterns = [os.path.join(run_dir, paths.CHAINS_COMPSEP, "*.h5"),
+                os.path.join(run_dir, paths.CHAINS_BANDS, "*.h5")]
+    for pattern in patterns:
+        for path in sorted(glob.glob(pattern)):
+            try:
+                with h5py.File(path, "r") as f:
+                    if "metadata/parameter_file_as_string" not in f:
+                        continue
+                    raw_yaml = f["metadata/parameter_file_as_string"][()]
+            except OSError:
+                continue
+            if isinstance(raw_yaml, bytes):
+                raw_yaml = raw_yaml.decode("utf-8")
+            return as_bunch_recursive(yaml.safe_load(raw_yaml))
+    return None
+
+
+def _band_frequencies(params: Bunch) -> dict[str, float]:
+    """Map every band name in the parameter file onto its centre frequency in GHz."""
+    freqs = {}
+    for experiment_name in params.experiments:
+        experiment = params.experiments[experiment_name]
+        if "bands" not in experiment:
+            continue
+        for band_name in experiment.bands:
+            freqs[band_name] = float(experiment.bands[band_name].freq)
+    return freqs
+
+
+def _build_intensity_components(params: Bunch, compsep_path: str) -> list:
+    """The run's components, with their intensity amplitudes read from one compsep chain file.
+
+    The components are constructed by the same code the main program uses, so their SEDs and
+    reference frequencies come from the run's own parameter file rather than being restated here.
+    """
+    comp_list = CompList.init_from_params(params.components, params)
+    intensity_comps = comp_list.components_for_eval_pol("I")
+    for comp in intensity_comps:
+        alms = _read_view_alms_from_chain(comp, compsep_path)
+        if alms is None:
+            raise ValueError(f"Component {comp.comp_name!r} has no intensity alms in "
+                             f"{compsep_path!r}.")
+        comp.alms = alms
+    return intensity_comps
+
+
+def _read_mask(mask_path: str, nside: int, smoothing_fwhm_deg: float) -> np.ndarray:
+    """A smoothed apodization mask at `nside`, from a binary mask in a FITS file.
+
+    The mask divides the RMS, so masked pixels get a large (eventually infinite) RMS and are
+    effectively excluded from the solve.
+    """
+    with fits.open(mask_path) as hdul:
+        binary_mask = hdul[1].data["TEMPERATURE"].flatten().astype(bool)
+    binary_mask = hp.ud_grade(binary_mask, nside)
+    smoothed_mask = hp.smoothing(binary_mask.astype(np.float64),
+                                 fwhm=np.radians(smoothing_fwhm_deg))
+    smoothed_mask[smoothed_mask < 0.0] = 0.0
+    return smoothed_mask
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Draw constrained CMB realizations from a finished Commander4 run.")
+    parser.add_argument(
+        "run_dir",
+        help=f"Path to a Commander4 run's output directory (its `output.dir`, containing "
+             f"{paths.CHAINS_COMPSEP}/ and {paths.CHAINS_BANDS}/).")
+    parser.add_argument("--output-dir", default=None,
+                        help="Directory for outputs. Defaults to <run_dir>/cmb_realizations.")
+    parser.add_argument("--iter", type=int, default=None, dest="only_iter",
+                        help="Process only this Gibbs iteration (default: all found).")
+    parser.add_argument("--chain", type=int, default=1, help="Chain number to read (default 1).")
+    parser.add_argument("--maxiter", type=int, default=100,
+                        help="Maximum CG iterations (default 100).")
+    parser.add_argument("--err-tol", type=float, default=1e-6,
+                        help="CG residual to stop at (default 1e-6).")
+    parser.add_argument("--mask", default=None,
+                        help="FITS binary mask (TEMPERATURE column) dividing the RMS. Optional.")
+    parser.add_argument("--mask-fwhm-deg", type=float, default=3.0,
+                        help="FWHM in degrees the mask is smoothed by (default 3).")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Debug-level logging.")
     args = parser.parse_args()
 
-    level = logging.DEBUG if args.verbose else logging.INFO
     logger.handlers.clear()
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(logging.Formatter("[cmb_real] %(levelname)s: %(message)s"))
     logger.addHandler(stream_handler)
-    logger.setLevel(level)
+    logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
     logger.propagate = False
 
-    chain_dir = os.path.abspath(args.cmb_dir)
-    compsep_dir = os.path.join(chain_dir, "compsep")
-    datamaps_dir = os.path.join(chain_dir, "datamaps")
-
-    if not os.path.isdir(compsep_dir) or not os.path.isdir(datamaps_dir):
-        logger.error(f"Chain directory not found: {compsep_dir} or {datamaps_dir}")
+    run_dir = os.path.abspath(args.run_dir)
+    compsep_dir = os.path.join(run_dir, paths.CHAINS_COMPSEP)
+    bands_dir = os.path.join(run_dir, paths.CHAINS_BANDS)
+    if not os.path.isdir(compsep_dir) or not os.path.isdir(bands_dir):
+        logger.error(f"Run output directory not found: {compsep_dir} or {bands_dir}")
         return 1
 
-    compsep_files = sorted(os.listdir(compsep_dir))
-    datamaps_files = sorted(os.listdir(datamaps_dir))
+    params = _load_params_from_chain(run_dir)
+    if params is None:
+        logger.error(f"No chain file in {run_dir} carries the parameter file, so the run's "
+                     f"components cannot be reconstructed.")
+        return 1
+    band_freqs = _band_frequencies(params)
 
-    bands = []
-    iters = []
-    for datamaps_file in datamaps_files:
-        band, chain, iter = _extract_band_chain_iter(datamaps_file)
-        bands.append(band)
-        iters.append(iter)
-    iters = np.unique(iters)
-    bands = np.unique(bands)
+    output_dir = args.output_dir or os.path.join(run_dir, "cmb_realizations")
+    os.makedirs(output_dir, exist_ok=True)
 
-    chain = 1
-    for iter in iters:
+    # Which (band, iteration) pairs the run actually wrote maps for. A band file exists on every
+    # written iteration, but its `maps/` group is thinned separately, so check for the group too.
+    bands_by_iter = {}
+    for filename in sorted(os.listdir(bands_dir)):
+        band, chain, iteration = _extract_band_chain_iter(filename)
+        if band is None or chain != args.chain:
+            continue
+        with h5py.File(os.path.join(bands_dir, filename), "r") as f:
+            if "maps/observed_sky" not in f:
+                continue
+        bands_by_iter.setdefault(iteration, []).append((band, filename))
+    iterations = sorted(bands_by_iter)
+    if args.only_iter is not None:
+        iterations = [it for it in iterations if it == args.only_iter]
+    if not iterations:
+        logger.error(f"No band maps found in {bands_dir} for chain {args.chain}.")
+        return 1
+
+    for iteration in iterations:
+        compsep_path = os.path.join(compsep_dir, f"chain{args.chain:02d}_iter{iteration:04d}.h5")
+        if not os.path.isfile(compsep_path):
+            logger.warning(f"No compsep chain for iteration {iteration}; skipping.")
+            continue
+
+        components = _build_intensity_components(params, compsep_path)
+        cmb_comps = [comp for comp in components if isinstance(comp, CMB)]
+        foreground_comps = [comp for comp in components if not isinstance(comp, CMB)]
+        if len(cmb_comps) != 1:
+            logger.error(f"Expected exactly one CMB component, found {len(cmb_comps)}.")
+            return 1
+        foreground_sky = SkyModel(foreground_comps)
+
         signal_maps = []
         rms_maps = []
-        foreground_maps = []
-        for band in bands:
-            compsep_filename = f"chain01_iter{iter:04d}.h5"
-            compsep_filepath = os.path.join(compsep_dir, compsep_filename)
-            datamaps_filename = f"{band}_chain01_iter{iter:04d}.h5"
-            datamaps_filepath = os.path.join(datamaps_dir, datamaps_filename)
+        used_bands = []
+        for band, filename in bands_by_iter[iteration]:
+            band_name = band.split("_")[-1]
+            if band_name not in band_freqs:
+                logger.warning(f"Band {band_name!r} is not in the parameter file; skipping.")
+                continue
+            nu = band_freqs[band_name]
+            with h5py.File(os.path.join(bands_dir, filename), "r") as f:
+                map_observed_sky = f["maps/observed_sky"][0].astype(np.float64)
+                map_rms = f["maps/rms"][0].astype(np.float64)
+                stored_unit = f["metadata/band_unit"][()]
+            if isinstance(stored_unit, bytes):
+                stored_unit = stored_unit.decode("utf-8")
+            nside = hp.npix2nside(map_rms.shape[-1])
 
-            band_freq = float(datamaps_filename.split("GHz")[0].split("LiteBIRD")[-1])
-
-            print(compsep_filepath, datamaps_filename, chain, iter, band_freq)
-
-            with h5py.File(datamaps_filepath, "r") as f:
-                map_observed_sky = f["map_observed_sky"][0]
-                map_rms = f["map_rms"][0]
-            map_nside = hp.npix2nside(map_rms.shape[-1])
-            print(f"map_nside: {map_nside}")
-
-            with h5py.File(compsep_filepath, "r") as f:
-                cmb_alm = f["/comps/cmb_I/alms"][()]
-                dust_alm = f["/comps/dust_I/alms"][()]
-                ff_alm = f["/comps/ff_I/alms"][()]
-                sync_alm = f["/comps/sync_I/alms"][()]
-
-            global_params = Bunch()
-            global_params.CG_float_precision = -3.1
-            dust_params = Bunch()
-            dust_params.beta = 1.56
-            dust_params.T = 20
-            dust_params.nu0 = 545
-            dust_params.lmax = 1024
-            dust_params.spatially_varying_MM = False
-            dust_params.smoothing_prior_FWHM = 0
-            dust_params.smoothing_prior_amplitude = 1.0
-            dust_params.polarized = False 
-            dust_params.longname = "Thermal Dust"
-            dust_params.shortname = "dust"
-            dust = ThermalDust(dust_params, global_params)
-            dust.alms = dust_alm
-            ff_params = Bunch()
-            ff_params.T = 7000
-            ff_params.nu0 = 0.408
-            ff_params.lmax = 1024
-            ff_params.spatially_varying_MM = False
-            ff_params.smoothing_prior_FWHM = 0
-            ff_params.smoothing_prior_amplitude = 1.0
-            ff_params.polarized = False 
-            ff_params.longname = "Free Free"
-            ff_params.shortname = "ff"
-            ff = FreeFree(ff_params, global_params)
-            ff.alms = ff_alm
-            sync_params = Bunch()
-            sync_params.beta = -3.1
-            sync_params.nu0 = 30
-            sync_params.lmax = 1024
-            sync_params.spatially_varying_MM = False
-            sync_params.smoothing_prior_FWHM = 0
-            sync_params.smoothing_prior_amplitude = 1.0
-            sync_params.polarized = False 
-            sync_params.longname = "Synchrotron"
-            sync_params.shortname = "sync"
-            sync = Synchrotron(sync_params, global_params)
-            sync.alms = sync_alm
-
-            components = [dust,ff,sync]
-            sky = SkyModel(components)
-            foreground_map = sky.get_sky_at_nu(band_freq, map_nside, "IQU", fwhm=0)[0]
-
-            # lmax = hp.Alm.getlmax(cmb_alm.shape[0])
-            # for idx in [hp.Alm.getidx(lmax, 0, 0),
-            #             hp.Alm.getidx(lmax, 1, 0),
-            #             hp.Alm.getidx(lmax, 1, 1)]:
-            #     cmb_alm[:,idx] = 0.0
-            cmb_map = hp.alm2map(cmb_alm[0], map_nside)
-            # foreground_map = hp.alm2map(dust_alm, map_nside)
+            # The foreground model is evaluated at this band's frequency and subtracted, leaving
+            # CMB + noise for the solver.
+            foreground_map = foreground_sky.get_sky_at_nu(nu, nside, "I", fwhm=0)[0]
             map_observed_sky -= foreground_map
 
-            cmb_Cell = hp.alm2cl(cmb_alm[0].astype(np.complex128))
-            # Loose prior on monopole/dipole: large enough that data dominates,
-            # small enough to avoid floating-point issues with C^{1/2} renormalization.
-            cmb_Cell[:2] = 1000*np.max(cmb_Cell[2:])
+            # The solver works in thermodynamic units, the maps are written in the band's own unit.
+            to_uK_CMB = (rj_to_band_unit_factor(nu, "uK_CMB")
+                         / rj_to_band_unit_factor(nu, stored_unit))
+            map_observed_sky *= to_uK_CMB
+            map_rms *= to_uK_CMB
 
-            hdul = fits.open("/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits")
-            binary_mask = hdul[1].data["TEMPERATURE"].flatten().astype(bool)
-            binary_mask = hp.ud_grade(binary_mask, map_nside)
-            fwhm_rad = np.radians(3.0)
-            smoothed_mask = hp.smoothing(binary_mask, fwhm=fwhm_rad)
-            smoothed_mask[smoothed_mask < 0.0] = 0.0
-
-            # inv_var = np.ones_like(cmb_map)*1e-10
-            # name = "1e-10"
-
-            # rms[:,~mask] = np.inf
-            # inv_var *= smoothed_mask
-            # rms = 1.0/np.sqrt(inv_var)
-            map_rms /= smoothed_mask
-
-            # Convert data and RMS from RJ uK to CMB uK before feeding
-            # into the solver, so the solver stays unit-agnostic.
-            import pysm3.units as pysm3u
-            from astropy import units as u
-            g_nu = (1.0 * pysm3u.uK_CMB).to(
-                pysm3u.uK_RJ,
-                equivalencies=pysm3u.cmb_equivalencies(band_freq * u.GHz)
-            ).value  # CMB -> RJ factor
-            # Divide by g to go from RJ -> CMB:  T_CMB = T_RJ / g
-            map_observed_sky /= g_nu
-            map_rms /= g_nu
+            if args.mask is not None:
+                map_rms = map_rms / _read_mask(args.mask, nside, args.mask_fwhm_deg)
 
             signal_maps.append(map_observed_sky)
             rms_maps.append(map_rms)
-            foreground_maps.append(foreground_map)
-        
-        signal_maps = np.array(signal_maps)
-        rms_maps = np.array(rms_maps)
-        dir = "plots/precond_v2/"
-        os.makedirs(dir, exist_ok=True)
-        plt.figure()
-        hp.mollview(signal_maps[5] + foreground_maps[5])
-        plt.savefig(f"{dir}map_observed_sky.png")
-        plt.close()
-        plt.figure()
-        hp.mollview(foreground_maps[5])
-        plt.savefig(f"{dir}foreground_map.png")
-        plt.close()
-        for i in range(len(signal_maps)):
-            plt.figure()
-            hp.mollview(signal_maps[5])
-            plt.savefig(f"{dir}signal_map{i}.png")
-        plt.close()
-        plt.figure()
-        hp.mollview(signal_maps[5]/rms_maps[5])
-        plt.savefig(f"{dir}signal_map_norm.png")
-        plt.close()
+            used_bands.append((band_name, nu))
+            logger.info(f"iter {iteration}: read {band_name} ({nu:g} GHz, {stored_unit}) "
+                        f"at nside {nside}.")
 
-        CMB = ConstrainedCMB(signal_maps, rms_maps, cmb_Cell, maxiter=100)
-        rhs = CMB.get_RHS_eqn_mean()
-        rhs += CMB.get_RHS_eqn_fluct()
+        if not signal_maps:
+            logger.warning(f"No usable bands for iteration {iteration}; skipping.")
+            continue
 
-        cmb_alms_bestfit = CMB.solve_CG(CMB.LHS_func, rhs)
-        cmb_map_bestfit = hp.alm2map(cmb_alms_bestfit, 512)
+        cmb_alms_in = np.ascontiguousarray(cmb_comps[0].alms[0]).astype(np.complex128)
+        cmb_Cell = hp.alm2cl(cmb_alms_in)
+        # Loose prior on monopole/dipole: large enough that the data dominates, small enough to
+        # avoid floating-point trouble in the C^{1/2} renormalization.
+        cmb_Cell[:2] = 1000 * np.max(cmb_Cell[2:])
 
-        print(cmb_alm.shape, cmb_alms_bestfit.shape)
+        solver = ConstrainedCMB(np.array(signal_maps), np.array(rms_maps), cmb_Cell,
+                                maxiter=args.maxiter)
+        rhs = solver.get_RHS_eqn_mean() + solver.get_RHS_eqn_fluct()
+        cmb_alms_bestfit = solver.solve_CG(solver.LHS_func, rhs, err_tol=args.err_tol)
+
+        nside = hp.npix2nside(signal_maps[0].shape[-1])
+        cmb_map_bestfit = hp.alm2map(cmb_alms_bestfit, nside)
+        out_base = os.path.join(output_dir, f"chain{args.chain:02d}_iter{iteration:04d}")
+        hp.write_map(f"{out_base}_cmb_realization.fits", cmb_map_bestfit, overwrite=True)
 
         plt.figure()
-        plt.loglog(hp.alm2cl(cmb_alm[0].astype(np.complex128)), label="prior")
-        plt.loglog(hp.alm2cl(cmb_alms_bestfit), label="bestfit")
+        plt.loglog(hp.alm2cl(cmb_alms_in), label="compsep CMB")
+        plt.loglog(hp.alm2cl(cmb_alms_bestfit), label="constrained realization")
+        plt.xlabel("multipole $\\ell$")
+        plt.ylabel("$C_\\ell$")
         plt.legend()
-        plt.savefig(f"{dir}Cell_cmb.png")
-        plt.close()
-        plt.figure()
-        hp.mollview(cmb_map_bestfit, cmap="RdBu_r")
-        plt.savefig(f"{dir}test_cmb.png")
-        plt.close()
-        plt.figure()
-        hp.mollview(cmb_map, cmap="RdBu_r")
-        plt.savefig(f"{dir}initial_cmb.png")
-        plt.close()
-        plt.figure()
-        hp.mollview(rms_maps[0])
-        plt.savefig(f"{dir}rms_cmb.png")
+        plt.savefig(f"{out_base}_Cell.png", dpi=120, bbox_inches="tight")
         plt.close()
 
-        return 0
+        plt.figure()
+        hp.mollview(cmb_map_bestfit, cmap="RdBu_r", title=f"Constrained CMB, iter {iteration}")
+        plt.savefig(f"{out_base}_cmb_realization.png", dpi=120, bbox_inches="tight")
+        plt.close()
+        logger.info(f"iter {iteration}: wrote {out_base}_cmb_realization.fits (+ 2 figures) from "
+                    f"{len(used_bands)} bands.")
 
     return 0
 

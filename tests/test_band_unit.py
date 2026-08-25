@@ -10,7 +10,7 @@ the identity/error branches need no pysm3.
 import numpy as np
 import pytest
 
-from commander4.utils.unit_conversions import rj_to_band_unit_factor, SUPPORTED_BAND_UNITS
+from commander4.units import rj_to_band_unit_factor, SUPPORTED_BAND_UNITS
 
 
 def _analytic_rj_in_cmb(nu_GHz: float) -> float:
@@ -66,6 +66,6 @@ def test_map_and_gain_convert_in_opposite_directions(band_unit):
     D = rj_to_band_unit_factor(143.0, band_unit)
     assert D != 1.0  # non-trivial factor for these CMB/metric units
     sky_uKRJ, gain_uKRJ = 250.0, 78.0e-9
-    map_written = sky_uKRJ * D          # brightness -> band_unit (write_map_chain_to_file)
+    map_written = sky_uKRJ * D          # brightness -> band_unit (write_band_chain_to_file)
     gain_written = gain_uKRJ / D        # [det]/uK_RJ -> [det]/band_unit (write_chain_to_file)
     assert map_written * gain_written == pytest.approx(sky_uKRJ * gain_uKRJ, rel=1e-12)

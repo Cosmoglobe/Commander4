@@ -15,13 +15,12 @@ from types import SimpleNamespace
 
 import numpy as np
 from mpi4py import MPI
-from pixell.bunch import Bunch
 
-from commander4.data_models.detector_TOD import DetectorTOD
-from commander4.data_models.scan_TOD import ScanTOD
-from commander4.data_models.detector_group_TOD import DetGroupTOD
+from commander4.data_models.detector_tod import DetectorTOD
+from commander4.data_models.scan_tod import ScanTOD
+from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
-import commander4.tod_processing as tod_processing
+import commander4.tod.processing as tod_processing
 
 _BITMASK = 1        # one bad-data bit; a flagged sample has (flag & _BITMASK) != 0
 _NSIDE = 1
@@ -29,17 +28,21 @@ _NPIX = 12 * _NSIDE**2
 _NU = 30.0
 
 
-def _build_band(pix: np.ndarray, psi: np.ndarray, flag: np.ndarray, tod: np.ndarray) -> DetGroupTOD:
-    """Real one-detector, one-scan IQU band with `flag` marking bad samples (uncompressed pointing)."""
+def _build_band(pix: np.ndarray, psi: np.ndarray, flag: np.ndarray, tod: np.ndarray) -> DetectorGroupTOD:
+    """Build an IQU band whose flag marks bad samples with uncompressed pointing."""
     ntod = pix.size
     pointing = PixelPointing(pix.astype(np.int64), psi.astype(np.float64), np.array([0], np.int64),
                              None, None, _NSIDE, _NSIDE, ntod, ntod)
-    orb_dir_vec = np.array([1.0, 0.2, -0.3], dtype=np.float32)  # arbitrary spacecraft velocity
-    det = DetectorTOD("d0", 0, 0, tod.astype(np.float32), pointing, 1.0, orb_dir_vec, None, None,
-                      np.ones(_NPIX, bool), {}, ntod, ntod, flag_encoded=flag.astype(np.int64),
-                      bad_data_bitmask=_BITMASK, flag_is_compressed=False)
+    orbital_velocity = np.array([1.0, 0.2, -0.3], dtype=np.float32)
+    det = DetectorTOD(
+        name="d0", det_idx_fullband=0, tod=tod.astype(np.float32), pointing=pointing,
+        sampling_rate_hz=1.0, orbital_velocity_m_per_s=orbital_velocity, huffman_tree=None,
+        huffman_symbols=None, default_proc_mask=np.ones(_NPIX, bool), specific_proc_masks={},
+        flag_encoded=flag.astype(np.int64), bad_data_bitmask=_BITMASK,
+        flag_is_compressed=False,
+    )
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
-    return DetGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=_NU, fwhm=0.0,
+    return DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=_NU, fwhm=0.0,
                        fsamp=1.0, ndet=1, pols="IQU", noise_model=noise_model)
 
 
@@ -56,33 +59,35 @@ def _fake_tod_samples(sigma0: float = 2.0) -> SimpleNamespace:
         tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None)
 
 
-def _run_bin_mapmaker(band: DetGroupTOD, monkeypatch) -> dict[str, np.ndarray]:
-    """Drive tod2map_bin (no ncorr, fixed sigma0) and capture the maps it hands to the chain writer."""
-    params = Bunch(general=Bunch(common_res_fwhm=0.0, write_orb_dipole_maps_to_chain=True,
-                                 write_corr_noise_maps_to_chain=False,
-                                 write_sky_model_maps_to_chain=False),
-                   experiments=Bunch(EXP=Bunch()))
-    ncorr_cfg = Bunch(do_ncorr=False, sample_sigma0=False, do_param=False, sigma0_method="pairwise")
-    dataselect_cfg = Bunch(enabled=False, active=False, chisq_abs_threshold=1.0e4,
-                           min_good_fraction=0.1)
-    captured: dict[str, np.ndarray] = {}
-    monkeypatch.setattr(tod_processing, "write_map_chain_to_file",
-                        lambda *a: captured.update({k: np.array(v, copy=True)
-                                                    for k, v in a[5].items()}))
-    tod_processing.tod2map_bin(MPI.COMM_SELF, band, np.zeros((3, _NPIX)), _fake_tod_samples(),
-                               params, 0, 0, ncorr_cfg, dataselect_cfg)
-    return captured
+def _run_bin_mapmaker(band: DetectorGroupTOD) -> dict[str, np.ndarray]:
+    """Run binned mapmaking and return the maps selected for chain output."""
+    mapmaking = tod_processing.MapmakingConfig(
+        mapmaker="bin",
+        num_threads=1,
+        include_orbital_dipole_maps=True,
+        include_corr_noise_maps=False,
+        include_sky_model_maps=False,
+        sparse_maps=False,
+        common_res_fwhm=0.0,
+    )
+    correlated_noise = tod_processing.CorrelatedNoiseConfig(sample_sigma0=False)
+    data_selection = tod_processing.DataSelectionConfig()
+    _, maps = tod_processing.tod2map_bin(
+        MPI.COMM_SELF, band, np.zeros((3, _NPIX)), _fake_tod_samples(), 1,
+        mapmaking, correlated_noise, data_selection,
+    )
+    return maps
 
 
 def test_bin_aux_maps_ignore_flagged_samples(monkeypatch):
-    monkeypatch.setenv("OMP_NUM_THREADS", "1")  # get_s_orb_TOD reads this.
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")  # get_s_orb_tod reads this.
     rng = np.random.default_rng(1)
     # Long enough for the log-binned diagnostic PSD and to condition the per-pixel IQU (3x3) solve.
     n = 256
     pix = rng.integers(0, _NPIX, n).astype(np.int64)
     psi = rng.uniform(0.0, np.pi, n)
     tod = rng.normal(size=n)
-    good = _run_bin_mapmaker(_build_band(pix, psi, np.zeros(n), tod), monkeypatch)
+    good = _run_bin_mapmaker(_build_band(pix, psi, np.zeros(n), tod))
 
     # Same good samples, plus flagged samples carrying large garbage TOD at already-observed pixels.
     ne = 40
@@ -90,11 +95,11 @@ def test_bin_aux_maps_ignore_flagged_samples(monkeypatch):
     psi_b = np.concatenate([psi, rng.uniform(0.0, np.pi, ne)])
     tod_b = np.concatenate([tod, rng.normal(size=ne) * 500.0])
     flag_b = np.concatenate([np.zeros(n, np.int64), np.full(ne, _BITMASK, np.int64)])
-    with_flagged = _run_bin_mapmaker(_build_band(pix_b, psi_b, flag_b, tod_b), monkeypatch)
+    with_flagged = _run_bin_mapmaker(_build_band(pix_b, psi_b, flag_b, tod_b))
 
-    # All three maps must be unchanged: the flagged samples are dropped everywhere. (Before the fix
-    # the orbital-dipole and corr-noise maps binned flagged samples into the numerator only, biasing
-    # them against the good-sample cov used to normalize them.)
-    for key in ("map_observed_sky", "map_rms", "map_orbdipole"):
+    # All three maps must be unchanged: the flagged samples are dropped everywhere. An aux map that
+    # binned them into its numerator alone would be biased against the good-sample cov that
+    # normalizes it.
+    for key in ("observed_sky", "rms", "orbdipole"):
         np.testing.assert_allclose(with_flagged[key], good[key], rtol=0, atol=1e-9,
                                    err_msg=f"{key} changed when flagged samples were added")

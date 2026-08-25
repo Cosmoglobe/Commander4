@@ -1,9 +1,17 @@
+"""`DetectorMap`: one band's maps as component separation sees them, plus common-beam smoothing.
+
+This is the object TOD processing sends across the communicator each iteration: the binned or
+CG-solved sky map, its RMS, and the band metadata (frequency, beam, nside) needed to build the
+mixing matrix. The two smoothing helpers bring a band to a coarser common beam.
+"""
 import logging
 import numpy as np
 import healpy as hp
 from copy import deepcopy
 from numpy.typing import NDArray
-from commander4.utils.math_operations import alm_to_map, alm_to_map_adjoint, inplace_arr_prod, almxfl
+from commander4.math_utils.arithmetic import inplace_arr_prod
+from commander4.math_utils.alm import almxfl
+from commander4.math_utils.sht import alm_to_map, alm_to_map_adjoint
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +21,7 @@ def smooth_signal_map_noiseweighted(map_signal: NDArray, map_rms: NDArray,
     """Inverse-variance-weighted Gaussian smoothing of a signal map.
 
     Each pixel is weighted by 1/variance before smoothing (so noisy pixels contribute less) and the
-    result is renormalized by the smoothed weights -- used to bring a band to a coarser common beam.
+    result is renormalized by the smoothed weights. Used to bring a band to a coarser common beam.
 
     A band covering only part of the sky has zero weight outside its footprint, and far enough from
     it the smoothed weight is zero (or slightly negative, from beam ringing) as well. Those pixels
@@ -85,7 +93,9 @@ class DetectorMap:
             fwhm: Beam FWHM in arcminutes.
             nside: HEALPix nside of the maps.
             double_precision: If True, store ``inv_n_map`` in float64.
-            lmax: Maximum multipole. Defaults to ``int(2.5 * nside)``.
+            lmax: Maximum multipole. Defaults to ``3*nside - 1``, the full bandlimit of a
+                HEALPix map at this resolution (C3's ``BAND_LMAX``, which is likewise set per band
+                and typically sits between 2*nside and 3*nside).
         """
         #cast dimensions correctly to allow constructer with 1-d array for intensity maps.
         map_sky = map_sky.reshape((1,-1)) if map_sky.ndim == 1 else map_sky
@@ -101,8 +111,11 @@ class DetectorMap:
         self.nu = nu
         self.fwhm = fwhm #stored in arcmin
         self.nside = nside
-        # Slightly higher than 2*NSIDE to avoid accumulation of numeric junk.
-        self.lmax = int(2.5*nside) if lmax is None else lmax
+        # The band's harmonic bandlimit. Components are truncated to this lmax on their way into
+        # the band (Component.project_comp_to_band), so any component multipole above it is
+        # invisible to the data and left to the C(l) prior alone; compsep_processing's
+        # _validate_component_lmax reports that at startup.
+        self.lmax = (3*nside - 1) if lmax is None else lmax
         self._beam_Cl = hp.gauss_beam(np.deg2rad(fwhm/60.0), self.lmax)
         self.double_precision = double_precision
         self.inv_n_map = (1./map_rms**2).astype(np.float64 if double_precision else np.float32, copy=False)

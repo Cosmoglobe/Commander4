@@ -1,0 +1,88 @@
+# simgen: correlated-noise / noise-PSD test simulation.
+#
+#   mpirun -n 8 c4-simgen -p simgen/params/param_corrnoise.yml
+#
+# Analysed by `params/sims/simparam_corrnoise.yml`.
+#
+# INJECTED TRUTH, what the analysis has to recover:
+#   * sigma0 = 80.0 (TOD units), fknee = 0.5 Hz, alpha = -1.5, per detector.
+#   * The noise realization itself, binned into `maps/noise` in the `debug_output_dir` HDF5.
+#
+# WHY THIS IS A CORRELATED-NOISE TEST:
+#   * The noise is drawn from exactly the PSD the main code assumes,
+#     P(f) = sigma0^2 (1 + (f/fknee)^alpha) (simgen.noise.OofNoise <-> NoisePSDOof), with a knee
+#     far above the 1/600 Hz scan fundamental (fknee/f_min = 300) and a steep alpha, so the
+#     correlated component dominates the low-frequency TOD by orders of magnitude.
+#   * The sky is CMB *only*, and the analysis fits a single CMB component to a single band. That is
+#     an exactly determined component separation with the correct SED, so the sky model cannot be a
+#     source of residual power the noise sampler might mistake for 1/f.
+#   * No gain offsets (every gain is 1.0) and no gain sampling in the analysis, so the noise step is
+#     isolated.
+
+general:
+  nside: 64
+  units: "uK_RJ"
+  float_precision: "single"
+  seed: 909
+  output_dir: "../c4_sims/simgen_corrnoise/"
+
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      shortname: "cmb"
+      lmax: 191
+      solar_dipole: false    # A clean CAMB realization; no l=1 monopole/dipole to fight the 1/f.
+
+simulation:
+  # 2400 x 600 s = 16.7 days. Each 19500-sample scan is trimmed slightly to the closest smaller fast
+  # real-FFT size selected by `ducc0.fft.good_size` when Commander4 reads it.
+  nscans: 2400
+  scan_duration_sec: 600
+  npsi: 4096
+  orbital_dipole: true      # Kept on for consistency with the analysis (see param_gain.yml).
+  compress: true
+  debug_output_dir: "../c4_sims/simgen_corrnoise_debug/"
+
+  pointing:
+    strategy: "planck_scan"
+    los_angle: 85.0
+    spin_angle_tilt: 7.5
+    spin_rate: 1.00165345964511
+    anti_sun_period_days: 18.0
+    precession_period_days: 9.0
+    mission_start: "2009-08-13T00:00:00"
+
+  noise:
+    white: true
+    # The injected truth.  fknee = 0.5 Hz sits well inside the band (Nyquist 16.25 Hz) and far above
+    # the 0.0017 Hz scan fundamental; alpha = -1.5 is steep enough that the low-f modes are strongly
+    # correlated-noise dominated.
+    oof: {enabled: true, fknee: 0.5, alpha: -1.5}
+
+  modifiers:
+    crosstalk: {enabled: false}
+
+  transfer_function:
+    enabled: false
+
+experiments:
+  SimSat:
+    enabled: true
+    bands:
+      Band100GHz:
+        enabled: true
+        freq: 100.0
+        fwhm: 50.0
+        fsamp: 32.5
+        eval_nside: 64
+        data_nside: 64
+        sigma0: 80.0        # Injected white-noise floor [TOD units ~ uK_RJ at gain 1].
+        polarization: "IQU"
+        detectors:
+          det100_a: {psi_offset_deg: 0.0,   gain: 1.0}
+          det100_b: {psi_offset_deg: 45.0,  gain: 1.0}
+          det100_c: {psi_offset_deg: 90.0,  gain: 1.0}
+          det100_d: {psi_offset_deg: 135.0, gain: 1.0}

@@ -5,8 +5,8 @@ from mpi4py import MPI
 from numpy.testing import assert_allclose
 
 from commander4.data_models.detector_map import DetectorMap
-from commander4.solvers.preconditioners import JointPreconditioner
-from commander4.utils.math_operations import alm_dot_product
+from commander4.compsep.preconditioners import JointPreconditioner
+from commander4.math_utils.alm import alm_dot_product
 
 
 def _spin2_cross_channel_leakage(q_rms: float, u_rms: float, nside: int, lmax: int) -> float:

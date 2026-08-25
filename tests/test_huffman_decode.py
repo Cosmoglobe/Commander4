@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_array_equal
 
-from commander4.cmdr4_support import utils as cpp_utils
+from commander4.backend import utils as cpp_utils
 from commander4.compression import huffman
 
 

@@ -1,3 +1,4 @@
+"""`Band`: one frequency band's alms, plus the metadata compsep needs to project onto it."""
 import numpy as np
 from numpy.typing import NDArray
 from commander4.data_models.detector_map import DetectorMap

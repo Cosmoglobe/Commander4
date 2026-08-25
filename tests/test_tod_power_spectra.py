@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from commander4.tod_processing import _binned_tod_power_spectrum, _record_tod_diagnostics
-from commander4.data_models.TOD_samples import TODSamples
+from commander4.tod.scan_diagnostics import _binned_tod_power_spectrum, _record_tod_diagnostics
+from commander4.data_models.tod_samples import TODSamples
 
 
 def test_shape_and_nan_padding():
@@ -96,6 +96,7 @@ class _DiagStubView:
         self._raw = raw
         self._sky_orb_subtracted = sky_orb_subtracted
         self.fsamp = fsamp
+        self.sigma0 = 1.0  # Read (with get_mask) by the chisq_z diagnostic.
 
     @property
     def tod(self):
@@ -105,6 +106,9 @@ class _DiagStubView:
         base = self._raw if subtract is None else self._sky_orb_subtracted
         return np.array(base, copy=True)
 
+    def get_mask(self, **kwargs):
+        return np.ones(len(self._raw), dtype=bool)
+
 
 def _diag_tod_samples():
     ts = TODSamples.__new__(TODSamples)          # bypass __init__ (no MPI / data needed)
@@ -112,6 +116,7 @@ def _diag_tod_samples():
     for name in ("tod_ps_freqs", "tod_ps_raw", "tod_ps_ncorr", "tod_ps_ncorrsub",
                  "tod_ps_residual"):
         setattr(ts, name, np.full(shape, np.nan, dtype=np.float32))
+    ts.chisq_z = np.full((1, 1), np.nan)
     ts.ncorr_tods = None
     return ts
 

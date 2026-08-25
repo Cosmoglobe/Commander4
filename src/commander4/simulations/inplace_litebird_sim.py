@@ -1,3 +1,10 @@
+"""Replacing TOD read from disk with a simulated sky, in place, at read time.
+
+Enabled by a band's ``replace_tod_with_sim``: the real pointing and flags are kept, but the TOD is
+regenerated from PySM3/CAMB skies plus noise. Useful for validating the pipeline against a known
+truth on a real scan strategy. The standalone ``simgen`` package is the more general
+alternative, writing simulated scan files rather than patching them at read time.
+"""
 import numpy as np
 from copy import deepcopy
 import camb
@@ -11,11 +18,12 @@ from scipy.fft import rfftfreq, rfft, irfft
 import gc
 from mpi4py import MPI
 
-from commander4.data_models.detector_TOD import DetectorTOD
-from commander4.data_models.detector_group_TOD import DetGroupTOD
-from commander4.sky_models.component import ThermalDust, Synchrotron, FreeFree, SpinningDust
-from commander4.logging.performance_logger import benchmark, bench_summary, start_bench,\
-                                            stop_bench, log_memory, increment_count, bench_reset
+from commander4.data_models.detector_tod import DetectorTOD
+from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.sky.diffuse_components import ThermalDust, Synchrotron, FreeFree,\
+        SpinningDust
+from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
+                                               stop_bench, log_memory, increment_count, bench_reset
 
 
 def _scalar_nu_ref(comp_params):
@@ -167,7 +175,9 @@ def generate_spdust(freq, fwhm, units, nside, params):
 T_CMB = 2.72548  # K_CMB
 C_LIGHT = 299792458.0  # m/s
 def get_orbital_dipole(det: DetectorTOD, pix: NDArray[np.integer], freq: float, units) -> NDArray:
-    orb_vel_vec = det.orb_dir_vec  # Satellite velocity vector relative to sun.
+    orb_vel_vec = det.orbital_velocity_m_per_s
+    if orb_vel_vec is None:
+        raise ValueError("Read-time orbital-dipole simulation requires an orbital velocity.")
     # pointing_vec = hp.pix2vec(det.nside, pix)
     geom = ducc0.healpix.Healpix_Base(det.nside, "RING")
     pointing_vec = geom.pix2vec(pix)
@@ -188,8 +198,8 @@ def get_orbital_dipole(det: DetectorTOD, pix: NDArray[np.integer], freq: float, 
 
 
 
-def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetGroupTOD, band_params: Bunch,
-                         params: Bunch, sim_params: Bunch) -> DetGroupTOD:
+def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetectorGroupTOD, band_params: Bunch,
+                         params: Bunch, sim_params: Bunch) -> DetectorGroupTOD:
     nside = detector_data.nside
     npix = 12*nside**2
     fwhm = np.deg2rad(detector_data.fwhm/60.0)

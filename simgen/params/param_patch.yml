@@ -1,0 +1,143 @@
+# simgen: partial-sky (small-patch) test simulation.
+#
+#   mpirun -n 12 c4-simgen -p simgen/params/param_patch.yml
+#
+# Analysed by `params/sims/simparam_patch.yml`.
+#
+# INJECTED TRUTH, what the analysis has to recover:
+#   * Per-component amplitude maps, written as `truth_<Component>.fits` in `debug_output_dir`.
+#     Only the ~1.5% of the sky inside the patch is constrained by data; everything outside it is
+#     a prior draw and cannot be scored against the truth.
+#   * sigma0, fknee and alpha per detector, as in the correlated-noise simulation.
+#
+# WHY THIS IS A PARTIAL-SKY TEST:
+#   * A raster scan covers ~1.5% of the sky with deep repeat coverage (~2000 hits/pixel), which is
+#     the regime `sparse_maps` exists for: each rank stores only the pixels its own scans touch, so
+#     the sparse and full-sky layouts differ by nearly two orders of magnitude in memory and any
+#     indexing error between them is loud.
+#   * Outside the patch the inverse-noise weight is exactly zero, so the CG solution there is set
+#     entirely by the C(l) prior. This is where the prior amplitude stops being cosmetic: too loose
+#     and the unconstrained modes ring, too tight and the prior leaks into the patch.
+#   * The coverage edge is ragged. About 2% of the observed pixels are hit too few times, or over
+#     too narrow a range of polarization angle, to constrain IQU. The mapmaker leaves those
+#     singular pixels at zero, and the compsep solve has to treat them as unobserved rather than as
+#     a measurement of zero.
+
+general:
+  nside: 128
+  units: "uK_RJ"
+  float_precision: "single"
+  seed: 5150
+  output_dir: "../c4_sims/simgen_patch/"
+
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      shortname: "cmb"
+      lmax: 383
+      solar_dipole: false
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      shortname: "dust"
+      beta: 1.54
+      T: 20
+      nu_ref: 353
+      lmax: 383
+      template: {source: "pysm3", preset: "d0"}
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      shortname: "sync"
+      beta: -3.1
+      nu_ref: 30
+      lmax: 383
+      template: {source: "pysm3", preset: "s5"}
+
+simulation:
+  # For the raster strategy one scan = n_rows * samples_per_row = 30000 samples and
+  # `scan_duration_sec` is ignored.  60 scans = 60 full passes over the patch.
+  nscans: 60
+  scan_duration_sec: 1000   # ignored by the raster strategy; kept for documentation
+  npsi: 4096
+  orbital_dipole: false     # A raster has no orbital motion; vsun is zero either way.
+  compress: true
+  debug_output_dir: "../c4_sims/simgen_patch_debug/"
+
+  pointing:
+    strategy: "raster"
+    patch_center_deg: [40.0, -50.0]   # Galactic (lon, lat): off the plane, low foregrounds.
+    patch_size_deg: [25.0, 25.0]
+    n_rows: 150               # cross-scan rows -> 10' row spacing, oversampling the 27' pixel
+    samples_per_row: 200      # along-scan samples -> 7.5' sample spacing
+
+  noise:
+    white: true
+    oof: {enabled: true, fknee: 0.2, alpha: -1.2}
+
+  modifiers:
+    crosstalk: {enabled: false}
+
+  transfer_function:
+    enabled: false
+
+experiments:
+  PatchTel:
+    enabled: true
+    bands:
+      # Three SO-like frequencies: 90/150 straddle the CMB minimum, 220 pins the dust.  The
+      # focal-plane offsets stagger the detectors across the patch; the polarization-angle offsets
+      # make each pixel's Q/U solvable.
+      Band90GHz:
+        enabled: true
+        freq: 90.0
+        fwhm: 70.0
+        fsamp: 30.0
+        eval_nside: 128
+        data_nside: 128
+        sigma0: 200.0
+        polarization: "IQU"
+        detectors:
+          det90_a: {psi_offset_deg: 0.0,   fp_offset_deg: [0.0, 0.0], gain: 1.0}
+          det90_b: {psi_offset_deg: 45.0,  fp_offset_deg: [0.0, 1.5], gain: 1.0}
+          det90_c: {psi_offset_deg: 90.0,  fp_offset_deg: [1.5, 0.0], gain: 1.0}
+          det90_d: {psi_offset_deg: 135.0, fp_offset_deg: [1.5, 1.5], gain: 1.0}
+
+      Band150GHz:
+        enabled: true
+        freq: 150.0
+        fwhm: 45.0
+        fsamp: 30.0
+        eval_nside: 128
+        data_nside: 128
+        sigma0: 200.0
+        polarization: "IQU"
+        detectors:
+          det150_a: {psi_offset_deg: 0.0,   fp_offset_deg: [0.0, 0.0], gain: 1.0}
+          det150_b: {psi_offset_deg: 45.0,  fp_offset_deg: [0.0, 1.5], gain: 1.0}
+          det150_c: {psi_offset_deg: 90.0,  fp_offset_deg: [1.5, 0.0], gain: 1.0}
+          det150_d: {psi_offset_deg: 135.0, fp_offset_deg: [1.5, 1.5], gain: 1.0}
+
+      Band220GHz:
+        enabled: true
+        freq: 220.0
+        fwhm: 30.0
+        fsamp: 30.0
+        eval_nside: 128
+        data_nside: 128
+        sigma0: 400.0
+        polarization: "IQU"
+        detectors:
+          det220_a: {psi_offset_deg: 0.0,   fp_offset_deg: [0.0, 0.0], gain: 1.0}
+          det220_b: {psi_offset_deg: 45.0,  fp_offset_deg: [0.0, 1.5], gain: 1.0}
+          det220_c: {psi_offset_deg: 90.0,  fp_offset_deg: [1.5, 0.0], gain: 1.0}
+          det220_d: {psi_offset_deg: 135.0, fp_offset_deg: [1.5, 1.5], gain: 1.0}

@@ -29,11 +29,13 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
+from commander4.compsep.processing import CGSamplingGroupConfig
 from commander4.data_models.detector_map import DetectorMap
-from commander4.sky_models.component import CompList
-from commander4.solvers.CG_compsep_solver import CompSepSolver
-from commander4.utils.math_operations import (alm_to_map, complist_dot, gaussian_random_alm,
-                                              _dot_complex_alm_1D_arrays)
+from commander4.sky.comp_list import CompList
+from commander4.compsep.cg_solver import CompSepSolver
+from commander4.math_utils.alm import gaussian_random_alm, _dot_complex_alm_1D_arrays
+from commander4.math_utils.sht import alm_to_map
+from commander4.sky.comp_list import complist_dot
 
 LMAX = 4
 NSIDE = 4
@@ -42,12 +44,23 @@ NSAMP = 200
 
 def _make_params(sample_amplitudes: bool = True) -> Bunch:
     return Bunch(
-        general=Bunch(nside=NSIDE, CG_float_precision="double", nthreads_compsep=1,
-                      CG_max_iter=300, CG_max_iter_pol=300, CG_err_tol=1e-14,
-                      MPI_config=Bunch(ntask_compsep_I=1, ntask_compsep_QU=1)),
-        compsep=Bunch(preconditioner="NoPreconditioner", dense_matrix_debug_mode=False,
-                      sample_amplitudes=sample_amplitudes),
+        resources=Bunch(compsep=Bunch(num_threads=1)),
+        compsep=Bunch(nside=NSIDE, float_precision="double"),
     )
+
+
+def _make_group(sample_amplitudes: bool = True) -> CGSamplingGroupConfig:
+    """A CG sampling group. `optimize` is `sample_amplitudes` inverted."""
+    return CGSamplingGroupConfig(
+        name="test", optimize=not sample_amplitudes,
+        max_iter=300, max_iter_pol=300, err_tol=1e-14,
+        preconditioner="NoPreconditioner", dense_matrix_debug_mode=False,
+    )
+
+
+def _make_solver(det_map: DetectorMap, group: CGSamplingGroupConfig,
+                 comm: MPI.Comm = MPI.COMM_SELF) -> CompSepSolver:
+    return CompSepSolver(det_map, comm, group, double_precision=True, nthreads=1)
 
 
 def _make_comp_list(params: Bunch) -> CompList:
@@ -75,12 +88,12 @@ def realizations():
     det_map = _make_det_map()
     comm = MPI.COMM_SELF
 
-    map_params = _make_params(sample_amplitudes=False)
-    map_solver = CompSepSolver(det_map, map_params, comm)
+    map_params = _make_params()
+    map_solver = _make_solver(det_map, _make_group(False), comm)
     x_map = map_solver.solve(_make_comp_list(map_params), seed=0)
 
-    params = _make_params(sample_amplitudes=True)
-    solver = CompSepSolver(det_map, params, comm)
+    params = _make_params()
+    solver = _make_solver(det_map, _make_group(True), comm)
     samples = [solver.solve(_make_comp_list(params), seed=1000 + i) for i in range(NSAMP)]
     return solver, x_map, samples
 
@@ -143,19 +156,19 @@ def test_constrained_realization_mean_is_the_MAP_solution(realizations):
 
 
 def test_sample_amplitudes_toggle_controls_randomness():
-    """sample_amplitudes=False is deterministic; True gives a different answer every call."""
+    """optimize=True is deterministic; optimize=False gives a different answer every call."""
     det_map = _make_det_map()
     comm = MPI.COMM_SELF
 
-    map_params = _make_params(sample_amplitudes=False)
-    map_solver = CompSepSolver(det_map, map_params, comm)
+    map_params = _make_params()
+    map_solver = _make_solver(det_map, _make_group(False), comm)
     first = map_solver.solve(_make_comp_list(map_params), seed=1)
     second = map_solver.solve(_make_comp_list(map_params), seed=2)
     for comp_a, comp_b in zip(first, second):
         np.testing.assert_allclose(comp_a.alms, comp_b.alms, rtol=1e-10, atol=1e-12)
 
-    params = _make_params(sample_amplitudes=True)
-    solver = CompSepSolver(det_map, params, comm)
+    params = _make_params()
+    solver = _make_solver(det_map, _make_group(True), comm)
     sampled_a = solver.solve(_make_comp_list(params), seed=1)
     sampled_b = solver.solve(_make_comp_list(params), seed=2)
     assert not np.allclose(sampled_a[0].alms, sampled_b[0].alms)
@@ -163,12 +176,24 @@ def test_sample_amplitudes_toggle_controls_randomness():
     assert not np.allclose(sampled_a[0].alms, first[0].alms)
 
 
-def test_sample_amplitudes_defaults_to_on_when_unset():
-    """A parameter file with no compsep.sample_amplitudes entry samples (C3 behaviour)."""
-    params = _make_params()
-    del params.compsep["sample_amplitudes"]
-    solver = CompSepSolver(_make_det_map(), params, MPI.COMM_SELF)
+def test_optimize_defaults_to_off_so_the_solver_samples():
+    """A group with no `optimize` entry draws a constrained realization (C3 behaviour)."""
+    solver = _make_solver(_make_det_map(), CGSamplingGroupConfig(name="default"))
     assert solver.sample_amplitudes is True
+
+
+def test_optimize_inverts_the_old_sample_amplitudes_flag():
+    """Pins the polarity: `optimize: false` samples, `optimize: true` returns the MAP mean.
+
+    Getting this backwards fails no other test but silently replaces every amplitude draw with a
+    Wiener/MAP mean, destroying the statistical correctness of the chain.
+    """
+    det_map = _make_det_map()
+    sampling = _make_solver(det_map, _make_group(sample_amplitudes=True))
+    assert sampling.sample_amplitudes is True
+    assert sampling.config.preconditioner == "NoPreconditioner"
+    optimizing = _make_solver(det_map, _make_group(sample_amplitudes=False))
+    assert optimizing.sample_amplitudes is False
 
 
 class TestPriorScalingContract:
@@ -251,7 +276,7 @@ class TestPriorMean:
                             property(lambda self: mu.astype(self.dtype, copy=True)))
 
     def test_uninformative_data_returns_the_prior_mean(self, monkeypatch):
-        params = _make_params(sample_amplitudes=False)
+        params = _make_params()
         comp_list = self._comp_list_with_prior(params)
         rng = np.random.default_rng(3)
         mu = rng.normal(0.0, 1.0, comp_list[0].alms.shape) \
@@ -263,36 +288,36 @@ class TestPriorMean:
         npix = 12*NSIDE**2
         det_map = DetectorMap(np.full((1, npix), 5.0), np.full((1, npix), 1e8),
                               nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
-        solution = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(comp_list)
+        solution = _make_solver(det_map, _make_group(False)).solve(comp_list)
 
         np.testing.assert_allclose(solution[0].alms, mu, rtol=1e-4, atol=1e-6)
 
     def test_zero_prior_mean_leaves_the_solution_unchanged(self):
         """The default mu = 0 must be an exact no-op, not merely a small perturbation."""
-        params = _make_params(sample_amplitudes=False)
+        params = _make_params()
         det_map = _make_det_map()
-        baseline = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(_make_comp_list(params))
+        baseline = _make_solver(det_map, _make_group(False)).solve(_make_comp_list(params))
 
         comp = _make_comp_list(params)[0]
         assert comp.amp_prior_mean is None
-        again = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(_make_comp_list(params))
+        again = _make_solver(det_map, _make_group(False)).solve(_make_comp_list(params))
         np.testing.assert_array_equal(baseline[0].alms, again[0].alms)
 
     def test_prior_mean_enters_the_sampled_solve_too(self, monkeypatch):
         """mu shifts the constrained realization as well, not just the MAP solve."""
-        params = _make_params(sample_amplitudes=True)
+        params = _make_params()
         det_map = DetectorMap(np.zeros((1, 12*NSIDE**2)), np.full((1, 12*NSIDE**2), 1e8),
                               nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
 
         # `amp_prior_mean` is a property, so it can only be patched on the class -- which every
         # component instance shares. The unpatched control therefore has to run first.
-        unshifted = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(
+        unshifted = _make_solver(det_map, _make_group(True)).solve(
             self._comp_list_with_prior(params), seed=5)
 
         comp_list = self._comp_list_with_prior(params)
         mu = np.full(comp_list[0].alms.shape, 50.0 + 0j)
         self._patch_prior_mean(monkeypatch, comp_list[0], mu)
-        shifted = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(comp_list, seed=5)
+        shifted = _make_solver(det_map, _make_group(True)).solve(comp_list, seed=5)
 
         # Same seed, so the eta draws are identical and the difference is exactly the mu term.
         np.testing.assert_allclose(shifted[0].alms - unshifted[0].alms, mu, rtol=1e-4, atol=1e-6)
@@ -343,8 +368,7 @@ class TestPriorMeanMap:
             raise AssertionError("apply_Cl_prior_inv_sqrt called for a zero-mean prior")
         monkeypatch.setattr(type(comp_list[0]), "apply_Cl_prior_inv_sqrt", fail)
 
-        params = _make_params(sample_amplitudes=False)
-        CompSepSolver(_make_det_map(), params, MPI.COMM_SELF).solve(comp_list)
+        _make_solver(_make_det_map(), _make_group(False)).solve(comp_list)
 
     def test_map_round_trips_through_the_transform(self, tmp_path):
         """mu synthesized back to a map must reproduce the input map."""
@@ -373,10 +397,10 @@ class TestPriorMeanMap:
         mu_before = comp_list[0].amp_prior_mean.copy()
 
         # Solve the *same* component objects twice, as the Gibbs loop does across iterations.
-        params = _make_params(sample_amplitudes=False)
+        params = _make_params()
         det_map = _make_det_map()
-        first = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(comp_list)
-        second = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(comp_list)
+        first = _make_solver(det_map, _make_group(False)).solve(comp_list)
+        second = _make_solver(det_map, _make_group(False)).solve(comp_list)
 
         np.testing.assert_array_equal(comp_list[0].amp_prior_mean, mu_before)
         np.testing.assert_allclose(first[0].alms, second[0].alms, rtol=1e-10, atol=1e-12)
@@ -392,20 +416,18 @@ class TestPriorMeanMap:
         comp_list.load_amp_prior_means()
         mu = comp_list[0].amp_prior_mean
 
-        params = _make_params(sample_amplitudes=False)
+        params = _make_params()
         npix = 12*NSIDE**2
         det_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1e8),
                               nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
-        solution = CompSepSolver(det_map, params, MPI.COMM_SELF).solve(comp_list)
+        solution = _make_solver(det_map, _make_group(False)).solve(comp_list)
 
         np.testing.assert_allclose(solution[0].alms, mu, rtol=1e-4, atol=1e-6)
 
-    def test_rejects_a_non_fits_prior_mean(self, tmp_path, caplog):
+    def test_rejects_a_non_fits_prior_mean(self, tmp_path):
         comp_list = self._comp_list(tmp_path, amp_prior_mean_map="/some/chain.h5")
-        # logassert logs the reason and raises a bare AssertionError, so match on the log.
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError, match="must be a .fits sky map"):
             comp_list.load_amp_prior_means()
-        assert "must be a .fits sky map" in caplog.text
 
     def test_setter_rejects_a_wrongly_shaped_mu(self, tmp_path):
         comp = self._comp_list(tmp_path)[0]
