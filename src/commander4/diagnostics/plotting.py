@@ -1,14 +1,374 @@
 """Diagnostic plots written alongside the chain: band maps, components, TODs and CG residuals."""
 import os
+import warnings
+from dataclasses import dataclass
 
 import healpy as hp
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib import colors
 import numpy as np
 from pixell.bunch import Bunch
 
 from commander4.sky.component import Component
+
+
+@dataclass
+class ChainLinePanel:
+    """One axis in a multi-panel chain trace figure."""
+
+    title: str
+    ylabel: str
+    series: list[tuple[str, np.ndarray, np.ndarray]]
+    xscale: str = "linear"
+    yscale: str = "linear"
+    horizontal_lines: tuple[float, ...] = ()
+
+
+def _ensure_plot_parent(filename: str) -> None:
+    """Create the destination directory only when a plot is actually written."""
+    parent = os.path.dirname(filename)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+
+def plot_chain_map(
+    filename: str,
+    map_data: np.ndarray,
+    title: str,
+    *,
+    unit: str = "",
+    symmetric: bool = True,
+) -> None:
+    """Write one full-sky chain map as a single Mollweide panel."""
+    values = np.asarray(map_data, dtype=float)
+    invalid = ~np.isfinite(values) | np.isclose(values, hp.UNSEEN, rtol=0.0, atol=1e20)
+    plotted = np.ma.array(values, mask=invalid)
+    finite = values[~invalid]
+    if finite.size == 0 or not np.any(finite != 0.0):
+        return
+    _ensure_plot_parent(filename)
+
+    if symmetric:
+        lower, upper = _sym_limits(finite)
+        cmap = "RdBu_r"
+    else:
+        lower = _safe_percentile(finite, 1.0, fallback=0.0)
+        upper = _safe_percentile(finite, 99.0, fallback=1.0)
+        if lower >= 0.0:
+            lower = 0.0
+        if upper <= lower:
+            upper = lower + 1.0
+        cmap = "viridis"
+
+    hp.mollview(
+        plotted,
+        cmap=cmap,
+        title=title,
+        unit=unit,
+        min=lower,
+        max=upper,
+    )
+    fig = plt.gcf()
+    fig.savefig(filename, bbox_inches="tight", dpi=140)
+    plt.close(fig)
+
+
+def plot_chain_map_grid(
+    filename: str,
+    title: str,
+    map_rows: np.ndarray,
+    row_labels: list[str],
+    *,
+    unit: str = "",
+    symmetric: list[bool] | None = None,
+) -> None:
+    """Write all rows of one map quantity in a compact Mollweide grid."""
+    rows = np.asarray(map_rows, dtype=float)
+    if rows.ndim == 1:
+        rows = rows.reshape(1, -1)
+    valid = np.isfinite(rows) & ~np.isclose(rows, hp.UNSEEN, rtol=0.0, atol=1e20)
+    if not np.any(valid) or not np.any(rows[valid] != 0.0):
+        return
+    _ensure_plot_parent(filename)
+
+    if symmetric is None:
+        symmetric = [True] * rows.shape[0]
+    ncols = min(3, rows.shape[0])
+    nrows = int(np.ceil(rows.shape[0] / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4.2 * nrows), squeeze=False)
+    flat_axes = axes.reshape(-1)
+    for index, (row, label, use_symmetric) in enumerate(
+        zip(rows, row_labels, symmetric)
+    ):
+        invalid = ~np.isfinite(row) | np.isclose(row, hp.UNSEEN, rtol=0.0, atol=1e20)
+        plotted = np.ma.array(row, mask=invalid)
+        finite = row[~invalid]
+        if finite.size == 0:
+            finite = np.array([0.0])
+        if use_symmetric:
+            lower, upper = _sym_limits(finite)
+            cmap = "RdBu_r"
+        else:
+            lower = min(_safe_percentile(finite, 1.0, fallback=0.0), 0.0)
+            upper = _safe_percentile(finite, 99.0, fallback=1.0)
+            if upper <= lower:
+                upper = lower + 1.0
+            cmap = "viridis"
+        plt.sca(flat_axes[index])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=PendingDeprecationWarning)
+            hp.mollview(
+                plotted,
+                hold=True,
+                cmap=cmap,
+                title=label,
+                unit=unit,
+                min=lower,
+                max=upper,
+            )
+    for axis in flat_axes[rows.shape[0]:]:
+        axis.axis("off")
+    fig.suptitle(title, fontsize=16)
+    fig.savefig(filename, bbox_inches="tight", dpi=140)
+    plt.close(fig)
+
+
+def plot_chain_lines(
+    filename: str,
+    title: str,
+    xlabel: str,
+    ylabel: str,
+    series: list[tuple[str, np.ndarray, np.ndarray]],
+    *,
+    xscale: str = "linear",
+    yscale: str = "linear",
+    horizontal_lines: tuple[float, ...] = (),
+) -> None:
+    """Write several related line series to one chain-diagnostic panel."""
+    usable = []
+    for label, x_values, y_values in series:
+        x_array = np.asarray(x_values)
+        y_array = np.asarray(y_values, dtype=float)
+        finite = np.isfinite(x_array) & np.isfinite(y_array)
+        if xscale == "log":
+            finite &= x_array > 0
+        if yscale == "log":
+            finite &= y_array > 0
+        if np.any(finite):
+            usable.append((label, x_array[finite], y_array[finite]))
+    if not usable:
+        return
+    if not any(np.any(y_values != 0.0) for _, _, y_values in usable):
+        return
+    _ensure_plot_parent(filename)
+
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    many_iterations = len(usable) > 12 and all(label.startswith("iter ") for label, _, _ in usable)
+    if many_iterations:
+        iterations = np.array([int(label.split()[-1]) for label, _, _ in usable])
+        norm = colors.Normalize(vmin=float(np.min(iterations)), vmax=float(np.max(iterations)))
+        cmap = plt.get_cmap("viridis")
+        for iteration, (_, x_values, y_values) in zip(iterations, usable):
+            ax.plot(x_values, y_values, color=cmap(norm(iteration)), linewidth=0.8, alpha=0.8)
+        colorbar = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax)
+        colorbar.set_label("Gibbs iteration")
+    else:
+        for label, x_values, y_values in usable:
+            ax.plot(x_values, y_values, linewidth=1.0, marker="." if x_values.size < 200 else None,
+                    markersize=3, label=label)
+        if len(usable) > 1 or usable[0][0]:
+            ax.legend(loc="best", fontsize="small")
+
+    for value in horizontal_lines:
+        ax.axhline(value, color="0.4", linestyle="--", linewidth=0.8)
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_xscale(xscale)
+    ax.set_yscale(yscale)
+    ax.grid(alpha=0.2)
+    fig.tight_layout()
+    fig.savefig(filename, dpi=140)
+    plt.close(fig)
+
+
+def plot_chain_line_panels(
+    filename: str,
+    title: str,
+    xlabel: str,
+    panels: list[ChainLinePanel],
+) -> None:
+    """Write related chain traces as vertically stacked axes in one figure."""
+    usable_panels = []
+    for panel in panels:
+        usable_series = []
+        for label, x_values, y_values in panel.series:
+            x_array = np.asarray(x_values)
+            y_array = np.asarray(y_values, dtype=float)
+            finite = np.isfinite(x_array) & np.isfinite(y_array)
+            if panel.xscale == "log":
+                finite &= x_array > 0
+            if panel.yscale == "log":
+                finite &= y_array > 0
+            if np.any(finite):
+                usable_series.append((label, x_array[finite], y_array[finite]))
+        if usable_series and any(np.any(values != 0.0) for _, _, values in usable_series):
+            usable_panels.append((panel, usable_series))
+    if not usable_panels:
+        return
+    _ensure_plot_parent(filename)
+
+    fig, axes = plt.subplots(
+        len(usable_panels), 1, figsize=(10, 3.3 * len(usable_panels)), squeeze=False
+    )
+    axes = axes[:, 0]
+    labels = []
+    for _, series in usable_panels:
+        for label, _, _ in series:
+            if label not in labels:
+                labels.append(label)
+    many_iterations = len(labels) > 12 and all(label.startswith("iter ") for label in labels)
+    if many_iterations:
+        iterations = np.array([int(label.split()[-1]) for label in labels])
+        norm = colors.Normalize(vmin=float(np.min(iterations)), vmax=float(np.max(iterations)))
+        cmap = plt.get_cmap("viridis")
+        line_colors = {label: cmap(norm(iteration)) for label, iteration in zip(labels, iterations)}
+    else:
+        cycle_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+        line_colors = {
+            label: cycle_colors[index % len(cycle_colors)] for index, label in enumerate(labels)
+        }
+
+    for axis, (panel, series) in zip(axes, usable_panels):
+        for label, x_values, y_values in series:
+            axis.plot(
+                x_values,
+                y_values,
+                color=line_colors[label],
+                linewidth=1.0,
+                marker="." if x_values.size < 200 else None,
+                markersize=3,
+                label=label,
+            )
+        for value in panel.horizontal_lines:
+            axis.axhline(value, color="0.4", linestyle="--", linewidth=0.8)
+        axis.set_title(panel.title)
+        axis.set_ylabel(panel.ylabel)
+        axis.set_xscale(panel.xscale)
+        axis.set_yscale(panel.yscale)
+        axis.grid(alpha=0.2)
+        if not many_iterations and len(series) > 1:
+            axis.legend(loc="best", fontsize="small", ncol=min(4, len(series)))
+    axes[-1].set_xlabel(xlabel)
+    if many_iterations:
+        colorbar = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax=axes.tolist())
+        colorbar.set_label("Gibbs iteration")
+    fig.suptitle(title, fontsize=16)
+    fig.tight_layout()
+    fig.savefig(filename, dpi=140)
+    plt.close(fig)
+
+
+def plot_chain_spectra(
+    filename: str,
+    title: str,
+    spectra: list[tuple[str, np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
+) -> None:
+    """Write median power spectra with their 16--84 percentile scan range."""
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    plotted = False
+    for label, freqs, median, lower, upper in spectra:
+        freqs = np.asarray(freqs)
+        median = np.asarray(median)
+        lower = np.asarray(lower)
+        upper = np.asarray(upper)
+        valid = np.isfinite(freqs) & np.isfinite(median) & (freqs > 0) & (median > 0)
+        if not np.any(valid):
+            continue
+        plotted = True
+        line, = ax.loglog(freqs[valid], median[valid], label=label, linewidth=1.3)
+        band_valid = valid & np.isfinite(lower) & np.isfinite(upper) & (lower > 0) & (upper > 0)
+        ax.fill_between(freqs[band_valid], lower[band_valid], upper[band_valid],
+                        color=line.get_color(), alpha=0.12, linewidth=0)
+    if not plotted:
+        plt.close(fig)
+        return
+    _ensure_plot_parent(filename)
+    ax.set_title(title)
+    ax.set_xlabel("frequency [Hz]")
+    ax.set_ylabel("power spectral density")
+    ax.grid(alpha=0.2, which="both")
+    ax.legend(loc="best", fontsize="small")
+    fig.tight_layout()
+    fig.savefig(filename, dpi=140)
+    plt.close(fig)
+
+
+def plot_noise_parameter_density(
+    filename: str,
+    title: str,
+    fknee: np.ndarray,
+    alpha: np.ndarray,
+    accepted: np.ndarray,
+) -> None:
+    """Plot the joint scan distribution of the 1/f knee frequency and slope."""
+    fknee = np.asarray(fknee, dtype=float)
+    alpha = np.asarray(alpha, dtype=float)
+    accepted = np.asarray(accepted, dtype=bool)
+    valid = np.isfinite(fknee) & np.isfinite(alpha) & (fknee > 0)
+    if not np.any(valid) or not np.any(alpha[valid] != 0.0):
+        return
+    _ensure_plot_parent(filename)
+
+    accepted &= valid
+    rejected = valid & ~accepted
+    fig, ax = plt.subplots(figsize=(8, 6))
+    if np.any(accepted):
+        density = ax.hexbin(
+            fknee[accepted],
+            alpha[accepted],
+            gridsize=60,
+            mincnt=1,
+            bins="log",
+            xscale="log",
+            cmap="viridis",
+        )
+        colorbar = fig.colorbar(density, ax=ax)
+        colorbar.set_label("accepted detector-scans per hexagon")
+        accepted_indices = np.flatnonzero(accepted)
+        if accepted_indices.size > 5000:
+            keep = np.linspace(0, accepted_indices.size - 1, 5000, dtype=int)
+            accepted_indices = accepted_indices[keep]
+        ax.scatter(
+            fknee[accepted_indices],
+            alpha[accepted_indices],
+            s=2,
+            color="black",
+            alpha=0.08,
+            linewidths=0,
+        )
+    if np.any(rejected):
+        ax.scatter(
+            fknee[rejected],
+            alpha[rejected],
+            s=12,
+            marker="x",
+            color="tab:red",
+            linewidths=0.7,
+            label="rejected",
+        )
+        ax.legend(loc="best")
+    ax.set_title(title)
+    ax.set_xlabel(r"$f_\mathrm{knee}$ [Hz]")
+    ax.set_ylabel(r"$\alpha$")
+    ax.set_xscale("log")
+    ax.grid(alpha=0.2)
+    fig.tight_layout()
+    fig.savefig(filename, dpi=140)
+    plt.close(fig)
+
 
 def _components_for_pol(comp_list: list[Component], npol: int) -> list[Component]:
     """The components whose polarization view matches the maps being plotted.
