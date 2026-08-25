@@ -290,7 +290,11 @@ def my_pow_func(array: NDArray, pow: float) -> NDArray:
 
 # 5. Misc
 
-### 5.1 Standalone tools
+### 5.1 Simulations
+
+See [`simgen/README.md`](simgen/README.md) for the simulator's parameter format and output layout.
+
+### 5.2 Other standalone tools
 Commander4 comes with some tools that all follow the `c4-[tool-name]` pattern. These are:
 ```bash
 c4-validate-params path/to/param.yml  # Gives you some info about the param-file, including how many MPI ranks it needs.
@@ -302,4 +306,6 @@ c4-plot-chain path/to/output-dir/  # Plots both chain directories in a run outpu
 c4-cmb-realizations  path/to/chain-dir/  # Generate constrained CMB realizations from chain (non yet fully functional).
 
 c4-generate-stubs  # Manually re-generate the stubs that are automatically during a build (very niche).
+
+mpirun -n 4 c4-simgen -p simgen/params/example_param.yml  # Generate simulated TOD scan files.
 ```
