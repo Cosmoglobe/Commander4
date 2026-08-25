@@ -31,7 +31,7 @@ def get_execution_band_ids(base_band_id: str, defined_pol: str) -> tuple[str, ..
 
 def get_npol(pols:str):
     """
-    Return the number of map polarizaiton components given the polarization string `pols`.
+    Return the number of map polarization components given the polarization string `pols`.
     """
     if pols not in POLS_DICT:
         raise ValueError(f"Unrecognized polarization string {pols!r}.")
