@@ -383,15 +383,20 @@ def log_corr_noise_stats(band_comm: MPI.Comm, nu: float, noise_model: NoisePSD,
     if band_comm.Get_rank() != 0:
         return
 
+    # Print CG and variance sanity check failure rates (as warnings if >3% of scans).
     context = f"Chain {chain} iter{iteration} {nu}GHz"
-    logger.debug(f"{context}: worst correlated-noise sampling residual = "
-                 f"{worst_residual:.2e}.")
-    if n_failed_conv > 0:
-        logger.warning(f"{context}: noise CG failed for {n_failed_conv} out of {n_total} scans. "
-                       f"Worst residual = {worst_residual:.3e}.")
-    if n_high_var > 0:
-        logger.warning(f"{context}: variance sanity check failed for {n_high_var} out of "
-                       f"{n_total} scans.")
+    if n_failed_conv/n_total > 0.03:
+        logger.warning(f"{context}: noise CG failed for {n_failed_conv/n_total:.1f}% of "\
+                       f"scans ({n_failed_conv}/{n_total} Worst residual = {worst_residual:.3e}).")
+    else:
+        logger.verbose(f"{context}: noise CG failed for {n_failed_conv/n_total:.1f}% of "\
+                       f"scans ({n_failed_conv}/{n_total} Worst residual = {worst_residual:.3e}).")
+    if n_high_var/n_total > 0.03:
+        logger.warning(f"{context}: variance sanity check failed for {n_high_var/n_total:.1f}% of "\
+                       f"scans ({n_high_var}/{n_total}).")
+    else:
+        logger.verbose(f"{context}: variance sanity check failed for {n_high_var/n_total:.1f}% of "\
+                       f"scans ({n_high_var}/{n_total}).")
 
     residuals = np.concatenate([np.asarray(r, dtype=np.float64) for r in residuals])
     residuals = residuals[residuals != 0]
