@@ -1,0 +1,273 @@
+# Commander4: bolometer transfer-function impact test.
+# Analyses `simgen/params/param_transfunc.yml`.
+# 
+# 18 tasks = 6 TOD + 6 CompSep-I + 6 CompSep-QU.
+#
+# This file is a copy of `simparam_compsep_only.yml` with only the paths changed (the six TOD
+# filelists, the output directory and the log file), so the two analyses are identical.
+#
+# Includes CG component separation (CMB+Dust+Sync) of 6 Planck-like bands at nside 64.
+# TOD sampling is enabled, but all TOD steps are disabled (i.e. only mapmaking).
+
+
+# ----------------------------------------
+# GENERAL
+# ----------------------------------------
+gibbs:
+  num_iterations: 10
+  seed: 1995
+
+
+resources:
+  tod:
+    num_threads: 1
+  compsep:
+    num_threads: 16
+
+output:
+  # All output goes here, in the subdirectories logs/, chains_bands/,
+  # chains_compsep/ and plots/.
+  dir: "../c4_chains/simgen_compsep_only/"
+
+  logging:
+    console:
+      level: 'verbose'
+    file:
+      level: 'info'
+
+  profiling: False
+  chains:
+    write: [1,]
+    interval:
+      bands: 1
+      compsep: 1
+      maps: 1
+    maps_nside: 64
+    include:
+      orbital_dipole_maps: False
+      corr_noise_maps: False
+      sky_model_maps: True
+
+
+# ----------------------------------------
+# COMPONENTS
+# ----------------------------------------
+# All spectral parameters equal the simulated truth.
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      longname: "CMB"
+      shortname: "cmb"
+      Cl_prior_amplitude: [1.0e+6, 1.0e+4]  # D_l at l_pivot [I, QU]; uK_RJ^2 (~uK_CMB^2 at 1 GHz)
+      Cl_prior_beta: [0.0, -0.5]
+      Cl_prior_l_pivot: 20
+      units: "uK_RJ"
+      lmax: 191
+      spatially_varying_MM: False
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
+      Cl_prior_l_pivot: 50
+      beta: 1.54
+      T: 20
+      nu_ref: 353
+      units: "uK_RJ"
+      lmax: 191
+      spatially_varying_MM: False
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      longname: "Synchrotron"
+      shortname: "sync"
+      Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
+      Cl_prior_l_pivot: 50
+      Cl_prior_FWHM: 30.0                   # arcmin
+      beta: -3.1                            # simulated truth
+      nu_ref: 30
+      units: "uK_RJ"
+      lmax: 191
+      spatially_varying_MM: False
+
+
+# ----------------------------------------
+# EXPERIMENTS
+# ----------------------------------------
+experiments:
+  SimSat:
+    enabled: true
+    experiment_id: "general"
+    mapmaker: "bin"
+    num_scans: 2400
+    bands:
+      Band30GHz:
+        enabled: true
+        num_tasks: 1
+        eval_nside: 64
+        data_nside: 64
+        fwhm: 120.0
+        freq: 30.0
+        fsamp: 32.5
+        band_unit: "uK_RJ"
+        polarization: "IQU"
+        initial_noise_params: [60.0, 0.1, -1.0]
+        filelist: "../c4_sims/simgen_compsep/Band30GHz/filelist.txt"
+        detectors:
+          det30_a: {gain: 1.0}
+          det30_b: {gain: 1.0}
+          det30_c: {gain: 1.0}
+          det30_d: {gain: 1.0}
+
+      Band44GHz:
+        enabled: true
+        num_tasks: 1
+        eval_nside: 64
+        data_nside: 64
+        fwhm: 100.0
+        freq: 44.0
+        fsamp: 32.5
+        band_unit: "uK_RJ"
+        polarization: "IQU"
+        initial_noise_params: [60.0, 0.1, -1.0]
+        filelist: "../c4_sims/simgen_compsep/Band44GHz/filelist.txt"
+        detectors:
+          det44_a: {gain: 1.0}
+          det44_b: {gain: 1.0}
+          det44_c: {gain: 1.0}
+          det44_d: {gain: 1.0}
+
+      Band70GHz:
+        enabled: true
+        num_tasks: 1
+        eval_nside: 64
+        data_nside: 64
+        fwhm: 80.0
+        freq: 70.0
+        fsamp: 32.5
+        band_unit: "uK_RJ"
+        polarization: "IQU"
+        initial_noise_params: [60.0, 0.1, -1.0]
+        filelist: "../c4_sims/simgen_compsep/Band70GHz/filelist.txt"
+        detectors:
+          det70_a: {gain: 1.0}
+          det70_b: {gain: 1.0}
+          det70_c: {gain: 1.0}
+          det70_d: {gain: 1.0}
+
+      Band100GHz:
+        enabled: true
+        num_tasks: 1
+        eval_nside: 64
+        data_nside: 64
+        fwhm: 65.0
+        freq: 100.0
+        fsamp: 32.5
+        band_unit: "uK_RJ"
+        polarization: "IQU"
+        initial_noise_params: [60.0, 0.1, -1.0]
+        filelist: "../c4_sims/simgen_compsep/Band100GHz/filelist.txt"
+        detectors:
+          det100_a: {gain: 1.0}
+          det100_b: {gain: 1.0}
+          det100_c: {gain: 1.0}
+          det100_d: {gain: 1.0}
+
+      Band217GHz:
+        enabled: true
+        num_tasks: 1
+        eval_nside: 64
+        data_nside: 64
+        fwhm: 50.0
+        freq: 217.0
+        fsamp: 32.5
+        band_unit: "uK_RJ"
+        polarization: "IQU"
+        initial_noise_params: [60.0, 0.1, -1.0]
+        filelist: "../c4_sims/simgen_compsep/Band217GHz/filelist.txt"
+        detectors:
+          det217_a: {gain: 1.0}
+          det217_b: {gain: 1.0}
+          det217_c: {gain: 1.0}
+          det217_d: {gain: 1.0}
+
+      Band353GHz:
+        enabled: true
+        num_tasks: 1
+        eval_nside: 64
+        data_nside: 64
+        fwhm: 40.0
+        freq: 353.0
+        fsamp: 32.5
+        band_unit: "uK_RJ"
+        polarization: "IQU"
+        initial_noise_params: [60.0, 0.1, -1.0]
+        filelist: "../c4_sims/simgen_compsep/Band353GHz/filelist.txt"
+        detectors:
+          det353_a: {gain: 1.0}
+          det353_b: {gain: 1.0}
+          det353_c: {gain: 1.0}
+          det353_d: {gain: 1.0}
+
+
+# ----------------------------------------
+# TOD PROCESSING
+# ----------------------------------------
+tod_processing: {}
+
+# ----------------------------------------
+# COMPONENT SEPARATION
+# ----------------------------------------
+compsep:
+  nside: 64
+  float_precision: "single"
+
+  cg_sampling_groups:
+    sample_amps_CG:
+      enabled: true
+      comps: [CMB, Synchrotron, ThermalDust]
+      bands: [Band30GHz, Band44GHz, Band70GHz, Band100GHz, Band217GHz, Band353GHz]
+      optimize: false   # was compsep.sample_amplitudes: true
+      max_iter: 300
+      max_iter_pol: 300
+      err_tol: 0.0
+      preconditioner: JointPreconditioner
+      dense_matrix_debug_mode: false
+
+  mcmc_sampling_groups: {}
+
+  bands:
+    Band30GHz:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
+    Band44GHz:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
+    Band70GHz:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
+    Band100GHz:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
+    Band217GHz:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
+    Band353GHz:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
