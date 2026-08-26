@@ -1,0 +1,293 @@
+# simgen parameter reference: every implemented simulation option is documented here.
+#
+#   mpirun -n 4 c4-simgen -p simgen/params/param_default.yml
+#
+# This file is primarily documentation and a source to copy from. It is also runnable as written.
+# Options that cannot be active together, such as pointing strategies, are shown as commented
+# replacement blocks. Optional component and band examples remain disabled when they need external
+# data or would duplicate an active example.
+#
+# Output is one HDF5 file per band and scan, plus a filelist consumed by Commander4's `general`
+# reader. Paths are interpreted relative to the directory where c4-simgen is invoked.
+
+general:
+  nside: 64                 # HEALPix nside used to construct component truth maps.
+  units: "uK_RJ"            # Sky and TOD unit; any unit understood by pysm3 is accepted.
+  float_precision: "single" # Passed to the reused Commander4 component constructors.
+  seed: 1234                # CMB seed and root of per-(band, scan, detector) noise seeds.
+  output_dir: "cmdr4_sims/simgen_default/"
+
+# Every component has `enabled`, `component_class`, and `params`. The diffuse components use a
+# Commander4 SED and a spatial template. A PySM3 template uses `source: pysm3` and `preset`; a FITS
+# template instead uses `{source: fits, path: /path/to/template.fits}`. FITS input may contain I,
+# QU, or IQU rows; missing rows are padded with zeros. `nu_ref` may be scalar or [I, QU], although
+# simgen realizes its one spatial template at the I reference frequency.
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      shortname: "cmb"
+      lmax: 191              # Integer, or "full" for 5*nside/2.
+      nu_ref: 1.0            # GHz; amplitude-map reference, nearly uK_CMB at this frequency.
+      solar_dipole: true     # Add the static BeyondPlanck solar dipole to the CMB realization.
+      cosmology:             # Optional CAMB overrides; these are simgen's defaults.
+        H0: 67.5
+        ombh2: 0.022
+        omch2: 0.122
+        mnu: 0.06
+        omk: 0.0
+        tau: 0.06
+        As: 2.0e-9
+        ns: 0.965
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      shortname: "dust"
+      beta: 1.54
+      T: 20.0                # Modified-blackbody temperature [K].
+      nu_ref: 353.0          # GHz.
+      lmax: 191
+      template:
+        source: "pysm3"      # Alternative: source: "fits", path: "/path/to/dust.fits".
+        preset: "d0"
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      shortname: "sync"
+      beta: -3.1
+      nu_ref: 30.0           # GHz.
+      lmax: 191
+      template:
+        source: "pysm3"      # Alternative: source: "fits", path: "/path/to/sync.fits".
+        preset: "s5"
+
+  FreeFree:
+    enabled: true
+    component_class: "FreeFree"
+    params:
+      polarization: "I"
+      shortname: "ff"
+      T: 7000.0              # Electron temperature [K].
+      nu_ref: 40.0           # GHz.
+      lmax: 191
+      template:
+        source: "pysm3"      # Alternative: source: "fits", path: "/path/to/freefree.fits".
+        preset: "f1"
+
+  # Spinning dust additionally needs the two-column SpDust2 SED table used by Commander4. It is
+  # disabled so this reference remains portable; provide the path and enable it to include AME.
+  SpinningDust:
+    enabled: false
+    component_class: "SpinningDust"
+    params:
+      polarization: "I"
+      shortname: "ame"
+      nu_ref: 22.8           # Template-map reference used by simgen; keep equal to nu_0.
+      nu_0: 22.8             # GHz; amplitude normalization used by the Commander4 SED.
+      nu_peak: 25.3          # GHz; desired peak of the shifted SpDust2 spectrum.
+      template_path: "/path/to/spdust2_cnm.dat"
+      lmax: 191
+      template:
+        source: "pysm3"      # Alternative: source: "fits", path: "/path/to/ame.fits".
+        preset: "a1"
+
+  # A synthetic point-source grid. The truth output includes both a HEALPix map and a Commander4
+  # RadioSources catalogue. The power-law SED is (nu/nu_ref)^beta; beta=0 is frequency-flat.
+  PointSources:
+    enabled: true
+    component_class: "GriddedPointSources"
+    params:
+      polarization: "I"
+      shortname: "ptsrc"
+      amplitude: 1000.0      # Per-source pixel amplitude at nu_ref in `general.units`.
+      nlon: 12
+      nlat: 6
+      lon_range_deg: [0.0, 360.0]
+      lat_range_deg: [-70.0, 70.0]
+      beta: 0.0
+      nu_ref: 100.0          # GHz.
+
+simulation:
+  # For planck_scan and file pointing, one scan has round(scan_duration_sec*fsamp) samples, rounded
+  # down to an even number. Raster pointing instead defines one scan as one complete patch fill.
+  nscans: 2400
+  scan_duration_sec: 600
+  npsi: 4096                # Polarization-angle bins when Huffman compression is enabled.
+  orbital_dipole: true      # Add the relativistic dipole derived from the pointing's velocity.
+  compress: true            # Huffman-compress pix/psi; false writes plain int32/float32 arrays.
+
+  # Diagnostics are optional. Omit `debug_output_dir` to skip all diagnostic maps and plots.
+  debug_output_dir: "cmdr4_sims/simgen_default_debug/"
+  write_component_truth_maps: true # Only acted on when debug_output_dir is set.
+
+  # Active pointing strategy: analytic Planck-like scan. The accelerated periods preserve the
+  # physical 2:1 annual/precession ratio while producing nearly full-sky coverage in 16.7 days.
+  pointing:
+    strategy: "planck_scan"
+    los_angle: 85.0                 # Boresight angle from the spin axis [deg].
+    spin_angle_tilt: 7.5            # Spin-axis precession-cone radius [deg].
+    spin_rate: 1.00165345964511     # Revolutions per minute.
+    anti_sun_period_days: 18.0      # Accelerated anti-Sun sweep period.
+    precession_period_days: 9.0     # Spin-axis wobble period.
+    mission_start: "2009-08-13T00:00:00"
+
+  # Mutually exclusive replacement: pointing loaded from flat HDF5 datasets. `theta` and `phi` are
+  # required radians. Missing psi is derived from scan bearing; missing velocity disables the
+  # orbital dipole. The velocity dataset has shape (nsample, 3) in m/s, Galactic coordinates.
+  # pointing:
+  #   strategy: "file"
+  #   file_path: "/path/to/pointing.h5"
+  #   theta_key: "theta"
+  #   phi_key: "phi"
+  #   psi_key: "psi"
+  #   vsun_key: "orbital_dir_vec"
+
+  # Mutually exclusive replacement: repeated raster fills of a Galactic lon/lat patch. Here
+  # scan_duration_sec is ignored, orbital velocity is zero, and detector fp_offset_deg is applied.
+  # pointing:
+  #   strategy: "raster"
+  #   patch_center_deg: [40.0, -50.0]
+  #   patch_size_deg: [25.0, 25.0]
+  #   n_rows: 150
+  #   samples_per_row: 200
+
+  # Global noise defaults, overridable per band. With 1/f enabled, `white` selects whether its
+  # realization also contains the white floor. Disable white to draw correlated noise alone.
+  noise:
+    white: true
+    oof:
+      enabled: true
+      fknee: 0.1             # Knee frequency [Hz].
+      alpha: -1.0            # Low-frequency power-law index.
+
+  # A modifier runs only when enabled globally and configured on the band. Cross-talk acts on the
+  # full detector vector after signal and noise have been generated.
+  modifiers:
+    crosstalk:
+      enabled: true
+
+  # Run-wide detector transfer-function default. A single tau_ms or tau_sec gives a single pole.
+  # `enabled: false` selects the identity. A detector may override this block; examples are below.
+  transfer_function:
+    enabled: true
+    tau_ms: 10.0
+    # Multi-pole alternative (replace tau_ms above):
+    # poles:
+    #   - {amp: 0.6, tau_ms: 10.0}
+    #   - {amp: 0.4, tau_sec: 0.05}
+
+experiments:
+  # Multiple experiment blocks may be supplied. `enabled` defaults to true. Every enabled band in
+  # every enabled experiment becomes an independent band x scan work stream.
+  SimSat:
+    enabled: true
+    bands:
+      Band30GHz:
+        enabled: true
+        freq: 30.0            # Band-centre frequency [GHz].
+        fwhm: 60.0            # Symmetric Gaussian beam FWHM [arcmin].
+        fsamp: 32.5            # Sampling rate [Hz].
+        eval_nside: 64         # Resolution used to evaluate the sky.
+        data_nside: 64         # Pixel resolution stored in the scan files; defaults to eval_nside.
+        sigma0: 100.0          # Per-sample white-noise RMS in `general.units`.
+        # sigma0_rts: 17.54    # Mutually exclusive RMS per root second; multiplied by sqrt(fsamp).
+        polarization: "IQU"    # One of "I", "QU", or "IQU".
+
+        # Uniform off-diagonal cross-talk: X = I + coupling*(1-I).
+        crosstalk:
+          enabled: true
+          coupling: 0.01
+        # Explicit-matrix alternative for these four detectors:
+        # crosstalk:
+        #   enabled: true
+        #   matrix: [[1.0, 0.01, 0.00, 0.00], [0.01, 1.0, 0.01, 0.00],
+        #            [0.00, 0.01, 1.0, 0.01], [0.00, 0.00, 0.01, 1.0]]
+
+        # Detector blocks may be empty. psi_offset rotates polarization; fp_offset changes spatial
+        # pointing only for strategies such as raster with per-detector pointing. A detector may
+        # override sigma0, sigma0_rts, gain, and the run-wide transfer function.
+        detectors:
+          det30_a:
+            psi_offset_deg: 0.0
+            fp_offset_deg: [0.0, 0.0]
+            sigma0: 95.0
+            gain: 1.0
+            tau_ms: 12.0      # Single-pole shorthand; highest transfer-function precedence.
+          det30_b:
+            psi_offset_deg: 45.0
+            fp_offset_deg: [0.5, 0.0]
+            sigma0_rts: 17.54
+            gain: 0.99
+            transfer_function: {enabled: false} # Explicitly opt out of the global response.
+          det30_c:
+            psi_offset_deg: 90.0
+            fp_offset_deg: [0.0, 0.5]
+            transfer_function: {enabled: true, tau_sec: 0.015}
+          det30_d:
+            psi_offset_deg: 135.0
+            fp_offset_deg: [0.5, 0.5]
+            transfer_function:
+              enabled: true
+              poles:
+                - {amp: 0.39, tau_ms: 10.5}
+                - {amp: 0.53, tau_ms: 50.0}
+                - {amp: 0.08, tau_ms: 1.0}
+
+      # Detector dictionaries can be included from a YAML file with the same !inc mechanism used
+      # by Commander4 parameter files. This band also demonstrates a band-level noise override.
+      Band100GHz:
+        enabled: true
+        freq: 100.0
+        fwhm: 40.0
+        fsamp: 32.5
+        eval_nside: 64
+        data_nside: 64
+        sigma0: 80.0
+        polarization: "IQU"
+        noise:
+          white: true
+          oof: {enabled: false}
+        crosstalk: {enabled: true, coupling: 0.02}
+        detectors: !inc detectors_example/band100.yml
+
+      # Disabled but valid examples of the other polarization modes and an explicit cross-talk
+      # matrix. Enabling either creates another simulated band.
+      IntensityOnly:
+        enabled: false
+        freq: 143.0
+        fwhm: 30.0
+        fsamp: 50.0
+        eval_nside: 64
+        sigma0_rts: 10.0
+        polarization: "I"
+        crosstalk:
+          enabled: true
+          matrix: [[1.0, 0.01], [0.02, 1.0]]
+        detectors:
+          detI_a: {}
+          detI_b: {gain: 1.02}
+
+      PolarizationOnly:
+        enabled: false
+        freq: 217.0
+        fwhm: 25.0
+        fsamp: 50.0
+        eval_nside: 128
+        data_nside: 64
+        sigma0: 120.0
+        polarization: "QU"
+        noise:
+          white: false
+          oof: {enabled: true, fknee: 0.2, alpha: -1.2}
+        crosstalk: {enabled: false}
+        detectors:
+          detQU_a: {psi_offset_deg: 0.0}
+          detQU_b: {psi_offset_deg: 45.0}

@@ -25,7 +25,7 @@ def configure_logging(rank: int, verbose: bool) -> None:
 def main() -> None:
     parser = ArgumentParser(description="Modular TOD simulator for Commander4's standard format.")
     parser.add_argument("-p", "--parameter-file", "--parameter_file", required=True,
-                        help="Path to the YAML simgen parameter file (see example_param.yml).")
+                        help="Path to a YAML simgen parameter file (see params/param_default.yml).")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging.")
     args = parser.parse_args()
 

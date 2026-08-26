@@ -1,7 +1,7 @@
 # Detector definitions for Band100GHz, included via `!inc detectors_example/band100.yml`.
 # Each entry is a detector name mapped to optional per-detector parameters:
 #   psi_offset_deg : polarization-angle offset added to the boresight psi [deg]
-#   fp_offset_deg  : [xi, eta] focal-plane offset [deg] (reserved; currently unused in projection)
+#   fp_offset_deg  : [xi, eta] focal-plane offset [deg] (used by per-detector strategies like raster)
 #   sigma0         : per-sample white-noise RMS [band unit] (overrides the band default)
 #   gain           : multiplicative gain applied to the sky signal (default 1.0)
 #   tau_ms/tau_sec : bolometer single-pole time constant (overrides simulation.transfer_function),

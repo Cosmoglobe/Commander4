@@ -11,7 +11,7 @@ registry of swappable classes.
 Install Commander4 first, then run the simulator from any directory. From the repository root:
 
 ```bash
-mpirun -n 4 c4-simgen -p simgen/params/example_param.yml
+mpirun -n 4 c4-simgen -p simgen/params/param_default.yml
 ```
 
 `python -m simgen` remains available as a development interface, but `c4-simgen` is the installed
@@ -89,7 +89,9 @@ spherical-harmonic transform's, and Commander4 incurs the same on any `init_from
 
 ## Parameter file
 
-A YAML file (see [params/example_param.yml](params/example_param.yml)) reusing the main program's conventions:
+A YAML file reusing the main program's conventions. The fully annotated
+[params/param_default.yml](params/param_default.yml) documents every implemented option and is
+also runnable as written:
 
 - `general`: `nside`, `units` (TOD unit, `uK_RJ`), `float_precision`, `seed`, `output_dir`.
 - `components`: **the same block shape as a Commander4 param file** — each enabled component is
@@ -118,10 +120,10 @@ A YAML file (see [params/example_param.yml](params/example_param.yml)) reusing t
 
 ## Feature-test parameter files
 
-Besides the two `example_*` files, `params/` holds a set of small simulations each built to exercise
-one part of the main program, together with a matching Commander4 parameter file in
+Besides `param_default.yml`, `params/` holds simulations built to exercise one part of the main
+program, together with a matching Commander4 parameter file in
 [`params/sims/`](../params/sims/) that turns that feature on and starts it away from the injected
-truth. See [`params/sims/README.md`](../../params/sims/README.md) for how to run a pair.
+truth. See [`params/sims/README.md`](../params/sims/README.md) for how to run a pair.
 
 | simgen parameter file | Commander4 parameter file | Feature under test |
 |---|---|---|
@@ -164,8 +166,9 @@ Two simulation-side conventions these files depend on:
   fill of the patch** (`n_rows * samples_per_row` samples; `scan_duration_sec` is ignored), and each
   subsequent scan repeats the coverage. Params: `patch_center_deg`, `patch_size_deg`, `n_rows`,
   `samples_per_row`. The raster uses **per-detector pointing**, so each detector is pointed at the
-  patch shifted by its `fp_offset_deg` and the band's detectors trace mutually offset tracks. See
-  [params/example_raster_param.yml](params/example_raster_param.yml).
+  patch shifted by its `fp_offset_deg` and the band's detectors trace mutually offset tracks. The
+  complete replacement block is commented in
+  [params/param_default.yml](params/param_default.yml).
 
 The satellite strategies (`planck_scan`, `file`) use a shared boresight: detectors differ only by
 `psi_offset_deg` (`fp_offset_deg` is applied only by strategies with `per_detector_pointing = True`).
