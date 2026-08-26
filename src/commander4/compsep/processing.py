@@ -28,6 +28,7 @@ from commander4.compsep.spectral_index import SpectralIndexSamplingGroup
 from commander4.file_io.chain_writer import write_compsep_chain_to_file
 from commander4.polarization import get_execution_band_id, EXECUTION_POLS
 from commander4.parameters.schema import resolve_band_lmax
+from commander4.diagnostics.performance import benchmark, bench_summary, bench_reset, log_memory
 
 logger = logging.getLogger(__name__)
 
@@ -456,10 +457,11 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
 
     # Load the initial component alms (from each component's init_from / init_chain_path, else
     # zeros). Done identically on every CompSep rank so comp_list starts globally consistent.
-    comp_list.load_initial_alms(params)
     # Likewise for the Gaussian amplitude prior's mean mu (each component's amp_prior_mean_map,
     # else a zero-mean prior). Read once here; the CG applies S^{-1/2} on every solve.
-    comp_list.load_amp_prior_means()
+    with benchmark("fileread-compsep"):
+        comp_list.load_initial_alms(params)
+        comp_list.load_amp_prior_means()
 
     data_world = (band_identifier, mpi_info.world.rank)
     data_compsep = (band_identifier, mpi_info.compsep.rank)
@@ -589,7 +591,9 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
                              keep_residual=compsep_state.include_residual_maps)
 
     for group in amplitude_groups.values():
-        cg_stats = _run_amplitude_group(mpi_info, compsep_state, detector_data, comp_list, group)
+        with benchmark(f"amp-{group.name}"):
+            cg_stats = _run_amplitude_group(mpi_info, compsep_state, detector_data, comp_list,
+                                            group)
         if cg_stats:
             sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
         method_label = "CG" if compsep_state.amplitude_method == "cg" else "per-pixel"
@@ -608,19 +612,28 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
             compsep.comm, detector_data, comp_list, target_pol=compsep_state.target_pol,
             selected_comps=group.comps, chisq_active=chisq_active,
             chisq_mask=compsep_state.chisq_masks.get(group.name), root=compsep.master)
-        mcmc_stats = sampler.run(numstep=group.numstep, resolve_amplitudes=resolve_amplitudes)
+        with benchmark(f"mcmc-{group.name}"):
+            mcmc_stats = sampler.run(numstep=group.numstep, resolve_amplitudes=resolve_amplitudes)
         if mcmc_stats:
             sampler_stats.setdefault("mcmc", {})[group.name] = mcmc_stats
         fit = evaluate(f"MCMC group {group.name!r}")
 
-    fit_tree, band_frequencies = collect_fit_diagnostics(compsep, fit,
-                                                         compsep_state.include_chisq_map)
+    with benchmark("chain-gather"):
+        fit_tree, band_frequencies = collect_fit_diagnostics(compsep, fit,
+                                                             compsep_state.include_chisq_map)
     if compsep.rank == compsep.master:
         diagnostics = {**fit_tree, **sampler_stats}
-        write_compsep_chain_to_file(comp_list.joined(), params, chain, iter, diagnostics,
-                                    band_frequencies)
+        with benchmark("filewrite-compsep"):
+            write_compsep_chain_to_file(comp_list.joined(), params, chain, iter, diagnostics,
+                                        band_frequencies)
         chi2 = fit_tree["chi2"]
         logger.summary(f"Chain {chain}, iteration {iter} complete: chi2={chi2['total']:.6e}, "
                        f"ndof={chi2['ndof']}, red.chi2={chi2['reduced']:.4f}, z={chi2['z']:.3f}.")
+
+    with benchmark("end-barrier"):
+        compsep.comm.Barrier()
+
+    bench_summary(compsep.comm, label="CompSep")
+    bench_reset()
 
     return sky_model

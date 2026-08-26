@@ -16,6 +16,7 @@ from commander4.sky.component import Component
 from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.backend.ctypes_lib import load_cmdr4_ctypes_lib
 from commander4.data_models.detector_map import DetectorMap
+from commander4.diagnostics.performance import benchmark
 
 
 def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
@@ -66,9 +67,10 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
                        "result mixes resolutions. Set compsep.common_res_fwhm to a common beam.")
 
     ncomp = len(comp_list)
-    all_freq = proc_comm.gather(band_freq, root=0)
-    all_map_sky = proc_comm.gather(map_sky, root=0)
-    all_map_rms = proc_comm.gather(map_rms, root=0)
+    with benchmark("perpix-gather"):
+        all_freq = proc_comm.gather(band_freq, root=0)
+        all_map_sky = proc_comm.gather(map_sky, root=0)
+        all_map_rms = proc_comm.gather(map_rms, root=0)
 
     nside = detector_data.nside
     npix = 12*nside**2
@@ -100,22 +102,26 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
             # TODO: Write unit tests that confirm Python and C gives same answers.
             # TODO: Should scale M to make solution more well-conditioned, and then adjust
             # solution with the scaling factor used.
-            ctypes_lib.solve_compsep(npix, nband, ncomp, maps_sky.astype(np.float64, copy=False),
-                                  maps_rms.astype(np.float64, copy=False), M, rand, comp_maps[ipol])
+            with benchmark("perpix-solve"):
+                ctypes_lib.solve_compsep(npix, nband, ncomp,
+                                         maps_sky.astype(np.float64, copy=False),
+                                         maps_rms.astype(np.float64, copy=False), M, rand,
+                                         comp_maps[ipol])
             logger.info(f"Finished pixel-by-pixel component separation in {time.time()-t0:.2f}s "\
                         f"for polarization {ipol+1} of {npol}.")
 
     comp_maps = proc_comm.bcast(comp_maps, root=0)
-    for icomp in range(ncomp):
-        if pol:
-            input_map = np.array([comp_maps[0][icomp], comp_maps[1][icomp]], dtype=real_dtype)
-        else:
-            input_map = np.array([comp_maps[0][icomp]], dtype=real_dtype)
-        comp_alms = curvedsky.map2alm_healpix(input_map, niter=3, spin=spin,
-                                              lmax=comp_list[icomp].lmax)
-        comp_list[icomp].alms = comp_alms.astype(complex_dtype, copy=False)
-        # These amplitudes are component maps at the data resolution; record that beam so the
-        # forward model applies no extra smoothing when predicting a band at this resolution.
-        comp_list[icomp].amp_fwhm_rad = detector_data.fwhm_rad
+    with benchmark("perpix-alm"):
+        for icomp in range(ncomp):
+            if pol:
+                input_map = np.array([comp_maps[0][icomp], comp_maps[1][icomp]], dtype=real_dtype)
+            else:
+                input_map = np.array([comp_maps[0][icomp]], dtype=real_dtype)
+            comp_alms = curvedsky.map2alm_healpix(input_map, niter=3, spin=spin,
+                                                  lmax=comp_list[icomp].lmax)
+            comp_list[icomp].alms = comp_alms.astype(complex_dtype, copy=False)
+            # These amplitudes are component maps at the data resolution; record that beam so the
+            # forward model applies no extra smoothing when predicting a band at this resolution.
+            comp_list[icomp].amp_fwhm_rad = detector_data.fwhm_rad
 
     return comp_list

@@ -18,6 +18,7 @@ from numpy.typing import NDArray
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
 from commander4.sky.sky_model import SkyModel
+from commander4.diagnostics.performance import benchmark
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +188,8 @@ class MCMCSamplingGroup(ABC):
             # undone even though `resolve_amplitudes` re-solves an arbitrary subset of them.
             amp_buffer = [comp._data.copy() for comp in self.comp_list]
             current_state = self.capture_state()
-            loglike_current = self.global_loglike()
+            with benchmark("mcmc-loglike"):
+                loglike_current = self.global_loglike()
 
             if self.is_root:
                 proposed_state, in_bounds = self.propose(current_state)
@@ -203,8 +205,10 @@ class MCMCSamplingGroup(ABC):
                 continue
 
             self.apply_state(proposed_state)
-            resolve_amplitudes()  # Collective: re-solve the coupled CG amplitude groups.
-            loglike_proposed = self.global_loglike()
+            with benchmark("mcmc-amp-resolve"):
+                resolve_amplitudes()  # Collective: re-solve the coupled CG amplitude groups.
+            with benchmark("mcmc-loglike"):
+                loglike_proposed = self.global_loglike()
             delta_loglike = loglike_proposed - loglike_current
 
             # Symmetric proposal, so the log acceptance ratio is the likelihood ratio plus the prior

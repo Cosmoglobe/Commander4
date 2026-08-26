@@ -36,12 +36,12 @@ class CompList:
 
     def __init__(self, comp_list:list[Component]):
         self._validate_comp_list(comp_list)
-        self.comp_list = comp_list
+        self.comp_list:list[Component] = comp_list
 
     @staticmethod
     def _group_by_logical_key(
         comp_list: list[Component],
-    ) -> list[tuple[tuple[type["Component"], str], list[Component]]]:
+    ) -> list[tuple[tuple[type[Component], str], list[Component]]]:
         grouped_components = {}
         logical_order = []
         for comp in comp_list:

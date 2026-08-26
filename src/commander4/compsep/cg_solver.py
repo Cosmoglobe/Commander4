@@ -22,6 +22,7 @@ from commander4.compsep.dense_matrix_debug import DenseMatrix
 from commander4.compsep.cg_driver import DistributedCG
 import commander4.compsep.preconditioners as preconditioners
 from commander4.data_models.band import Band
+from commander4.diagnostics.performance import benchmark, log_memory
 
 if TYPE_CHECKING:
     from commander4.compsep.processing import CGSamplingGroupConfig
@@ -149,45 +150,51 @@ class CompSepSolver:
         # and are therefore limited to <2GB arrays... We have to fallback to blocking communication
         # for >2GB arrays. In the future we should probably implement chunking instead.
 
-        comp_list.bcast_data_blocking(self.CompSep_comm)
+        with benchmark("lhs-bcast"):
+            comp_list.bcast_data_blocking(self.CompSep_comm)
 
         # B Y^-1 M Y S^{1/2} a
-        self.project_all_comps_to_band(comp_list, self.my_band)
+        with benchmark("lhs-project"):
+            self.project_all_comps_to_band(comp_list, self.my_band)
 
         # Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
-        self.my_band.alms = self.det_map.apply_inv_N_alm(self.my_band.alms, nthreads=self.nthreads)
+        with benchmark("lhs-inv-N"):
+            self.my_band.alms = self.det_map.apply_inv_N_alm(self.my_band.alms,
+                                                             nthreads=self.nthreads)
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
-        self.eval_all_comps_from_band(self.my_band, comp_list)
+        with benchmark("lhs-eval"):
+            self.eval_all_comps_from_band(self.my_band, comp_list)
 
         # Accumulate solution on master
-        biggest_size_bytes = np.max([comp._data.nbytes for comp in comp_list])
-        use_blocking = biggest_size_bytes > MPI_LIMIT_32BIT
-        if use_blocking:
-            logger.debug(f"Using blocking CompSep communication for array size "
-                         f"{biggest_size_bytes:.2e} B.")
-            comp_list.accum_data_blocking(self.CompSep_comm)
+        with benchmark("lhs-accum"):
+            biggest_size_bytes = np.max([comp._data.nbytes for comp in comp_list])
+            use_blocking = biggest_size_bytes > MPI_LIMIT_32BIT
+            if use_blocking:
+                logger.debug(f"Using blocking CompSep communication for array size "
+                             f"{biggest_size_bytes:.2e} B.")
+                comp_list.accum_data_blocking(self.CompSep_comm)
 
-        else:
-            requests = comp_list.accum_data_non_blocking(self.CompSep_comm)
+            else:
+                requests = comp_list.accum_data_non_blocking(self.CompSep_comm)
 
-        if myrank == 0:
-            for icomp in range(len(comp_list)):
-                # Since we used non-blocking reduce, master rank can start working on components
-                # as they are received instead of waiting for all to be received.
-                if not use_blocking:
-                    # Wait until all data for component icomp has been received.
-                    MPI.Request.Wait(requests[icomp])
-                # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
-                comp = comp_list.components[icomp]
-                comp.apply_Cl_prior_sqrt(comp.alms)
-                # Adds input vector to output, since (1 + S^{1/2}...)a = a + (S^{1/2}...)a
-                comp += comp_list_in.components[icomp]
-        else: # Worker ranks just wait for all their sends to complete.
-            if not use_blocking:
+            if myrank == 0:
                 for icomp in range(len(comp_list)):
-                    MPI.Request.Wait(requests[icomp])
-            comp_list = CompList([])
+                    # Since we used non-blocking reduce, master rank can start working on components
+                    # as they are received instead of waiting for all to be received.
+                    if not use_blocking:
+                        # Wait until all data for component icomp has been received.
+                        MPI.Request.Wait(requests[icomp])
+                    # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
+                    comp = comp_list.components[icomp]
+                    comp.apply_Cl_prior_sqrt(comp.alms)
+                    # Adds input vector to output, since (1 + S^{1/2}...)a = a + (S^{1/2}...)a
+                    comp += comp_list_in.components[icomp]
+            else: # Worker ranks just wait for all their sends to complete.
+                if not use_blocking:
+                    for icomp in range(len(comp_list)):
+                        MPI.Request.Wait(requests[icomp])
+                comp_list = CompList([])
 
         return comp_list
 
@@ -305,7 +312,10 @@ class CompSepSolver:
         t0 = time.time()
         stop_CG = False
         while not stop_CG:
-            CG_solver.step()
+            # Counted per step, so the report's N column is the number of CG iterations taken.
+            with benchmark("cg-iter"):
+                CG_solver.step()
+            log_memory("cg-iter")
             self.CG_residuals[iter] = CG_solver.err
             iter += 1
             if iter%checkpt_int == 0:
@@ -368,11 +378,13 @@ class CompSepSolver:
 
         # `calc_RHS` overwrites the CompList it is handed, so comp_list doubles as the RHS buffer
         # (the preconditioner below reads only its metadata, never its alms).
-        RHS = self.calc_RHS(comp_list)
+        with benchmark("cg-rhs"):
+            RHS = self.calc_RHS(comp_list)
 
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners",
         # and has the name specified by this sampling group's preconditioner setting.
-        precond = getattr(preconditioners, self.config.preconditioner)(self, comp_list)
+        with benchmark("cg-precond-init"):
+            precond = getattr(preconditioners, self.config.preconditioner)(self, comp_list)
 
         # For testing preconditioner with a true solution as reference,
         # first solving for exact solution with dense matrix math.

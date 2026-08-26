@@ -11,6 +11,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from commander4.math_utils.arithmetic import inplace_arr_add
+from commander4.diagnostics.performance import benchmark
 
 
 
@@ -36,35 +37,37 @@ def _prep_input(arr_in, arr_out, nside, spin):
 
 def alm_to_map(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
                nthreads: int|None=None, out=None, acc: bool=False) -> NDArray:
-    nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
-    use_theta_interpol = nside >= 2048
-    alm, out, ndim_in = _prep_input(alm, out, nside, spin)
-    if acc:
-        if out is None:
-            raise RuntimeError("Can not accumulate to None output")
-        tmp_out = np.copy(out)
-    out = ducc0.sht.synthesis(alm=alm, map=out, lmax=lmax, spin=spin,
-                              nthreads=nthreads, **hp_geominfos[nside],
-                              theta_interpol=use_theta_interpol)
-    if acc:
-        inplace_arr_add(out, tmp_out)
+    with benchmark("alm2map"):
+        nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
+        use_theta_interpol = nside >= 2048
+        alm, out, ndim_in = _prep_input(alm, out, nside, spin)
+        if acc:
+            if out is None:
+                raise RuntimeError("Can not accumulate to None output")
+            tmp_out = np.copy(out)
+        out = ducc0.sht.synthesis(alm=alm, map=out, lmax=lmax, spin=spin,
+                                nthreads=nthreads, **hp_geominfos[nside],
+                                theta_interpol=use_theta_interpol)
+        if acc:
+            inplace_arr_add(out, tmp_out)
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
 def alm_to_map_adjoint(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
                        nthreads: int|None=None, out=None, acc: bool=False) -> NDArray:
-    nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
-    use_theta_interpol = nside >= 2048
-    mp, out, ndim_in = _prep_input(mp, out, nside, spin)
-    if acc:
-        if out is None:
-            raise RuntimeError("Can not accumulate to None output")
-        tmp_out = np.copy(out)
-    out = ducc0.sht.adjoint_synthesis(map=mp, alm=out, lmax=lmax, spin=spin,
-                                      nthreads=nthreads, **hp_geominfos[nside],
-                                      theta_interpol=use_theta_interpol)
-    if acc:
-        inplace_arr_add(out, tmp_out)
+    with benchmark("alm2map_adj"):
+        nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
+        use_theta_interpol = nside >= 2048
+        mp, out, ndim_in = _prep_input(mp, out, nside, spin)
+        if acc:
+            if out is None:
+                raise RuntimeError("Can not accumulate to None output")
+            tmp_out = np.copy(out)
+        out = ducc0.sht.adjoint_synthesis(map=mp, alm=out, lmax=lmax, spin=spin,
+                                        nthreads=nthreads, **hp_geominfos[nside],
+                                        theta_interpol=use_theta_interpol)
+        if acc:
+            inplace_arr_add(out, tmp_out)
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
@@ -74,37 +77,39 @@ def map_to_alm(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
         factor 4pi/npix, not any further processing.
         See `pseudo_alm_to_map_inverse` for an equivalent to healpys iterative map2alm.
     """
-    nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
-    use_theta_interpol = nside >= 2048
-    mp, out, ndim_in = _prep_input(mp, out, nside, spin)
-    if acc:
-        if out is None:
-            raise RuntimeError("Can not accumulate to None output")
-        tmp_out = np.copy(out)
-    out = ducc0.sht.adjoint_synthesis(map=mp, alm=out, lmax=lmax, spin=spin,
-                                      nthreads=nthreads, **hp_geominfos[nside],
-                                      theta_interpol=use_theta_interpol)
-    out *= 4*np.pi/(12*nside**2)
-    if acc:
-        inplace_arr_add(out, tmp_out)
+    with benchmark("map2alm"):
+        nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
+        use_theta_interpol = nside >= 2048
+        mp, out, ndim_in = _prep_input(mp, out, nside, spin)
+        if acc:
+            if out is None:
+                raise RuntimeError("Can not accumulate to None output")
+            tmp_out = np.copy(out)
+        out = ducc0.sht.adjoint_synthesis(map=mp, alm=out, lmax=lmax, spin=spin,
+                                        nthreads=nthreads, **hp_geominfos[nside],
+                                        theta_interpol=use_theta_interpol)
+        out *= 4*np.pi/(12*nside**2)
+        if acc:
+            inplace_arr_add(out, tmp_out)
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
 def map_to_alm_adjoint(alm: NDArray, nside: int, lmax: int, *, spin: int=0,
                nthreads: int|None=None, out=None, acc: bool=False) -> NDArray:
-    nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
-    use_theta_interpol = nside >= 2048
-    alm, out, ndim_in = _prep_input(alm, out, nside, spin)
-    if acc:
-        if out is None:
-            raise RuntimeError("Can not accumulate to None output")
-        tmp_out = np.copy(out)
-    out = ducc0.sht.synthesis(alm=alm, map=out, lmax=lmax, spin=spin,
-                              nthreads=nthreads, **hp_geominfos[nside],
-                              theta_interpol=use_theta_interpol)
-    out *= 4*np.pi/(12*nside**2)
-    if acc:
-        inplace_arr_add(out, tmp_out)
+    with benchmark("map2alm_adj"):
+        nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
+        use_theta_interpol = nside >= 2048
+        alm, out, ndim_in = _prep_input(alm, out, nside, spin)
+        if acc:
+            if out is None:
+                raise RuntimeError("Can not accumulate to None output")
+            tmp_out = np.copy(out)
+        out = ducc0.sht.synthesis(alm=alm, map=out, lmax=lmax, spin=spin,
+                                nthreads=nthreads, **hp_geominfos[nside],
+                                theta_interpol=use_theta_interpol)
+        out *= 4*np.pi/(12*nside**2)
+        if acc:
+            inplace_arr_add(out, tmp_out)
     return out if ndim_in == 2 else out.reshape((-1,))
 
 
@@ -159,12 +164,13 @@ def pseudo_alm_to_map_inverse(map: NDArray, nside: int, lmax: int, *, spin: int=
         float:
             the quality of the least-squares solution
     """
-    nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
-    map, out, ndim_in = _prep_input(map, out, nside, spin)
-    res = ducc0.sht.pseudo_analysis(map=map, alm=out, lmax=lmax, spin=spin,
-                                    nthreads=nthreads, **hp_geominfos[nside],
-                                    epsilon=epsilon, maxiter=maxiter)
-    out = res[0] if ndim_in == 2 else res[0].reshape((-1,))
+    with benchmark("alm_to_map_inv"):
+        nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
+        map, out, ndim_in = _prep_input(map, out, nside, spin)
+        res = ducc0.sht.pseudo_analysis(map=map, alm=out, lmax=lmax, spin=spin,
+                                        nthreads=nthreads, **hp_geominfos[nside],
+                                        epsilon=epsilon, maxiter=maxiter)
+        out = res[0] if ndim_in == 2 else res[0].reshape((-1,))
     if return_info:
         return out, res
     else:
