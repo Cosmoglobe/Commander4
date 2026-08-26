@@ -61,6 +61,8 @@ To quickly check how many MPI ranks you must use for any given parameter file, y
 
 Note that Commander4 cannot be run as a standalone script (e.g. python src/commander4/cli.py). It must be installed, and is then run as a binary. Note also that the binary should be called directly, and running `python commander4` will not work.
 
+There exist several standalone helper modules in Commander4 that can be useful for simulations, plotting, parameter file parsing. See [5. Standalone Tools](#5-standalone-tools).
+
 ### 3.1 Parameter file
 A parameter file is seven top-level blocks, each named after the part of the program that reads them: `gibbs`, `resources`, `output`, `components`, `experiments`, `tod_processing` and `compsep`.
 
@@ -288,24 +290,33 @@ def my_pow_func(array: NDArray, pow: float) -> NDArray:
     return array**pow
 ```
 
-# 5. Misc
-
-### 5.1 Simulations
-
-See [`simgen/README.md`](simgen/README.md) for the simulator's parameter format and output layout.
-
-### 5.2 Other standalone tools
-Commander4 comes with some tools that all follow the `c4-[tool-name]` pattern. These are:
+# 5. Standalone tools
+### 5.1 List of standalone tools
+Commander4 comes with some tools that all follow the `c4-[tool-name]` pattern. They are explained in more detail below, and summarized here (in order of usefulness):
 ```bash
+mpirun -n 4 c4-simgen -p simgen/params/param_default.yml  # Generate simulated TOD scan files.
+
 c4-validate-params path/to/param.yml  # Gives you some info about the param-file, including how many MPI ranks it needs.
 
-c4-diff-params path/to/param1.yml path/to/param2.yml  # Prints the difference between two parameter files.
+c4-plot-chain path/to/output-dir/  # Produces a ton of plots from a given chain.
 
-c4-plot-chain path/to/output-dir/  # Plots both chain directories in a run output directory.
+c4-diff-params path/to/param1.yml path/to/param2.yml  # Prints the difference between two parameter files.
 
 c4-cmb-realizations  path/to/chain-dir/  # Generate constrained CMB realizations from chain (non yet fully functional).
 
 c4-generate-stubs  # Manually re-generate the stubs that are automatically during a build (very niche).
-
-mpirun -n 4 c4-simgen -p simgen/params/example_param.yml  # Generate simulated TOD scan files.
 ```
+
+### 5.2 Simulations
+
+See [`simgen/README.md`](simgen/README.md) for the simulator's parameter format and output layout.
+
+### 5.3 Parameter file validation
+Run `c4-validate-params path/to/param.yml` to get:
+- Info about how many MPI ranks the file is currently configered with, such that you know how many to use with `mpirun -n ...`
+- Info about what distribution of threads is optimal for the component separation. If you know how many nodes and cores per node you plan to dedicate to component separation, you can run `c4-validate-params params.yml --compsep-threads-per-node 384 --compsep-nodes 2` to get a proposed distribution, which can be pasted directly into the parameter file.
+
+### 5.4 Chain plotting
+`c4-plot-chain` creates a whole bunch of plots, both sky maps and various TOD plots, and places them in the chains folder.
+- For experimenst like SO, where per-detector plots are unfeasible, you should add the flag `--detector-plots summary`.
+- The amount of plots can get excessive, so it's recommended to use the flags to plot only specific subsets, such as `--chain`, `--iter`, `--band`.

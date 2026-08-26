@@ -4,8 +4,15 @@ import sys
 
 import pytest
 import yaml
+from pixell.bunch import Bunch
 
-from commander4.standalone_tools.validate_params import main, validate_parameter_file
+from commander4.parameters.parse import params_from_dict
+from commander4.standalone_tools.validate_params import (
+    estimate_compsep_sht_work,
+    main,
+    suggest_compsep_thread_counts,
+    validate_parameter_file,
+)
 
 
 def _valid_params() -> dict:
@@ -52,6 +59,33 @@ def _write_params(tmp_path, params: dict, filename: str = "params.yml") -> str:
     return str(parameter_file)
 
 
+def _thread_suggestion_params(num_threads: int | list[int] = 4) -> Bunch:
+    params = _valid_params()
+    params["resources"]["compsep"]["num_threads"] = num_threads
+    params["experiments"]["Example"]["bands"] = {
+        "Low": {
+            "enabled": True,
+            "num_tasks": 1,
+            "eval_nside": 128,
+            "detectors": {"detector": {}},
+        },
+        "High": {
+            "enabled": True,
+            "num_tasks": 1,
+            "eval_nside": 1024,
+            "detectors": {"detector": {}},
+        },
+    }
+    params["compsep"] = {
+        "bands": {
+            "Low": {"enabled": True, "polarization": "IQU", "get_from": "Example"},
+            "High": {"enabled": True, "polarization": "I", "get_from": "Example"},
+        },
+        "cg_sampling_groups": {"amplitudes": {"enabled": True}},
+    }
+    return params_from_dict(params)
+
+
 def test_valid_file_reports_task_count_and_sampling_groups(tmp_path) -> None:
     params = _valid_params()
     params["compsep"] = {
@@ -76,6 +110,68 @@ def test_command_prints_a_submission_ready_summary(tmp_path, monkeypatch, capsys
     assert f"Valid parameter file: {parameter_file}" in output
     assert "MPI tasks: 2 = 2 TOD + 0 CompSep-I + 0 CompSep-QU" in output
     assert "Enabled sampling groups: none" in output
+
+
+def test_sht_work_uses_power_law_floor_and_spin_factor() -> None:
+    assert estimate_compsep_sht_work(128, "I") == 1.0
+    assert estimate_compsep_sht_work(512, "I") == 1.0
+    assert estimate_compsep_sht_work(512, "QU") == 2.0
+    assert estimate_compsep_sht_work(1024, "I") == pytest.approx(2.0**2.7)
+
+
+def test_thread_suggestion_preserves_scalar_total_and_compsep_rank_order() -> None:
+    suggestion = suggest_compsep_thread_counts(_thread_suggestion_params(num_threads=4))
+
+    # Rank order is Low_I, High_I, Low_QU. The current scalar allocation totals 4 * 3 threads.
+    assert suggestion == [1, 8, 3]
+    assert sum(suggestion) == 12
+
+
+def test_thread_suggestion_uses_sum_of_existing_list_as_default() -> None:
+    suggestion = suggest_compsep_thread_counts(_thread_suggestion_params(num_threads=[2, 3, 7]))
+
+    assert suggestion == [1, 8, 3]
+
+
+def test_explicit_node_budget_caps_each_rank_at_one_node() -> None:
+    suggestion = suggest_compsep_thread_counts(
+        _thread_suggestion_params(), threads_per_node=4, num_nodes=2,
+    )
+
+    assert suggestion == [1, 4, 3]
+    assert sum(suggestion) == 8
+    assert max(suggestion) == 4
+
+
+def test_thread_suggestion_rejects_budget_smaller_than_rank_count() -> None:
+    with pytest.raises(ValueError, match="at least one thread per rank"):
+        suggest_compsep_thread_counts(
+            _thread_suggestion_params(), threads_per_node=1, num_nodes=1,
+        )
+
+
+def test_command_prints_thread_suggestion(tmp_path, monkeypatch, capsys) -> None:
+    params = _valid_params()
+    params["resources"]["compsep"]["num_threads"] = 2
+    params["components"]["CMB"]["params"]["polarization"] = "IQU"
+    params["experiments"]["Example"]["bands"]["Band"]["eval_nside"] = 512
+    params["compsep"] = {
+        "bands": {
+            "Band": {"enabled": True, "polarization": "IQU", "get_from": "Example"},
+        },
+        "cg_sampling_groups": {"amplitudes": {"enabled": True}},
+    }
+    parameter_file = _write_params(tmp_path, params)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["c4-validate-params", parameter_file, "--compsep-threads-per-node", "4"],
+    )
+
+    assert main() == 0
+
+    output = capsys.readouterr().out
+    assert "CompSep SHT scaling:" in output
+    assert "Suggested resources.compsep.num_threads: [1, 3]" in output
 
 
 def test_unknown_component_class_is_rejected(tmp_path) -> None:

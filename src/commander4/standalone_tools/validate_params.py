@@ -4,6 +4,8 @@ import argparse
 import os
 from collections.abc import Iterator
 
+from pixell.bunch import Bunch
+
 from commander4.file_io.experiments import EXPERIMENT_READER_MODULES
 from commander4.parameters.parse import load_params
 from commander4.parameters.schema import (
@@ -14,6 +16,11 @@ from commander4.parameters.schema import (
     task_count_breakdown,
     validate_param_schema,
 )
+
+
+SHT_NSIDE_FLOOR = 512
+SHT_NSIDE_EXPONENT = 2.7
+SHT_SPIN2_FACTOR = 2.0
 
 
 def _validate_structure(params_dict: dict) -> None:
@@ -166,6 +173,174 @@ def _check_referenced_paths(value, source_dir: str, location: str = "") -> None:
                 raise FileNotFoundError(f"{child_location} points to missing path {child!r}.")
 
 
+def estimate_compsep_sht_work(nside: int, polarization: str) -> float:
+    """Estimate SHT work relative to an intensity transform at nside 512.
+
+    The supplied benchmark is described well by a power law in nside. Resolutions below 512 use
+    the nside-512 cost because other CompSep operations dominate there. Polarization performs a
+    spin-2 transform and is assigned twice the intensity cost.
+    """
+    if isinstance(nside, bool) or not isinstance(nside, int) or nside < 1:
+        raise ValueError("nside must be an integer of at least 1.")
+    if polarization not in {"I", "QU"}:
+        raise ValueError(f"Unknown CompSep execution polarization {polarization!r}.")
+    effective_nside = max(nside, SHT_NSIDE_FLOOR)
+    spin_factor = SHT_SPIN2_FACTOR if polarization == "QU" else 1.0
+    return spin_factor * (effective_nside / SHT_NSIDE_FLOOR)**SHT_NSIDE_EXPONENT
+
+
+def _compsep_view_nside(params: Bunch, band_name: str) -> int:
+    """Return the resolution known from parameters before any map is read."""
+    band = params.compsep.bands[band_name]
+    if "get_from" not in band:
+        raise ValueError(
+            f"compsep.bands.{band_name}.get_from is required to suggest a thread allocation."
+        )
+
+    if band.get_from == "file":
+        source = band
+        source_name = f"compsep.bands.{band_name}"
+    else:
+        experiment_name = band.get_from
+        if experiment_name not in params.experiments:
+            raise ValueError(
+                f"compsep.bands.{band_name}.get_from names unknown experiment "
+                f"{experiment_name!r}."
+            )
+        experiment = params.experiments[experiment_name]
+        if band_name not in experiment.bands:
+            raise ValueError(
+                f"Experiment {experiment_name!r} has no band {band_name!r}, referenced by "
+                f"compsep.bands.{band_name}.get_from."
+            )
+        source = experiment.bands[band_name]
+        source_name = f"experiments.{experiment_name}.bands.{band_name}"
+
+    if "eval_nside" not in source:
+        raise ValueError(
+            f"{source_name}.eval_nside is required to suggest a thread allocation."
+        )
+    nside = source.eval_nside
+    if isinstance(nside, bool) or not isinstance(nside, int) or nside < 1:
+        raise ValueError(f"{source_name}.eval_nside must be an integer of at least 1.")
+    return nside
+
+
+def _default_compsep_threads(params: Bunch, num_ranks: int) -> int:
+    """Return the current total CompSep thread allocation from scalar or list syntax."""
+    if "resources" not in params or "compsep" not in params.resources:
+        raise ValueError("resources.compsep is required to suggest a thread allocation.")
+    resources = params.resources.compsep
+    if "num_threads" not in resources:
+        raise ValueError(
+            "resources.compsep.num_threads is required to suggest a thread allocation."
+        )
+
+    configured = resources.num_threads
+    if isinstance(configured, int) and not isinstance(configured, bool):
+        if configured < 1:
+            raise ValueError("resources.compsep.num_threads must be at least 1.")
+        return configured * num_ranks
+    if not isinstance(configured, list):
+        raise ValueError("resources.compsep.num_threads must be an integer or list of integers.")
+    if len(configured) != num_ranks:
+        raise ValueError(
+            f"Length of resources.compsep.num_threads ({len(configured)}) does not match the "
+            f"number of CompSep ranks ({num_ranks})."
+        )
+    for value in configured:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(
+                "Every resources.compsep.num_threads entry must be an integer of at least 1."
+            )
+    return sum(configured)
+
+
+def _allocate_threads(weights: list[float], total_threads: int,
+                      threads_per_node: int) -> list[int]:
+    """Allocate a thread budget proportionally, bounded to one node's threads per rank."""
+    num_ranks = len(weights)
+    if total_threads < num_ranks:
+        raise ValueError(
+            f"The CompSep budget is {total_threads} threads for {num_ranks} ranks; at least "
+            "one thread per rank is required."
+        )
+    if total_threads > num_ranks * threads_per_node:
+        raise ValueError(
+            f"The CompSep budget is {total_threads} threads, but {num_ranks} ranks capped at "
+            f"{threads_per_node} threads can use at most {num_ranks * threads_per_node}."
+        )
+
+    # Find the common scale giving the requested total after clipping every proportional share to
+    # [1, threads_per_node]. The clipped sum increases continuously with the scale.
+    scale_low = 0.0
+    scale_high = threads_per_node / min(weights)
+    for _ in range(60):
+        scale = (scale_low + scale_high) / 2.0
+        scaled_total = 0.0
+        for weight in weights:
+            scaled_total += min(threads_per_node, max(1.0, scale * weight))
+        if scaled_total < total_threads:
+            scale_low = scale
+        else:
+            scale_high = scale
+
+    quotas = []
+    for weight in weights:
+        quotas.append(min(threads_per_node, max(1.0, scale_high * weight)))
+    allocation = []
+    for quota in quotas:
+        allocation.append(int(quota))
+
+    # Largest-remainder rounding preserves the exact total and resolves ties by rank order.
+    threads_left = total_threads - sum(allocation)
+    remainder_order = sorted(
+        range(num_ranks), key=lambda rank: (-(quotas[rank] - allocation[rank]), rank)
+    )
+    for rank in remainder_order:
+        if threads_left == 0:
+            break
+        if allocation[rank] < threads_per_node:
+            allocation[rank] += 1
+            threads_left -= 1
+    if threads_left != 0:
+        raise RuntimeError("Could not round the CompSep thread recommendation to its budget.")
+    return allocation
+
+
+def suggest_compsep_thread_counts(
+    params: Bunch, threads_per_node: int | None = None, num_nodes: int = 1,
+) -> list[int]:
+    """Suggest one thread count per CompSep rank from its SHT workload.
+
+    Args:
+        params: Parsed Commander4 parameters.
+        threads_per_node: Threads on each node dedicated to CompSep. When omitted, the current
+            total is used: scalar ``num_threads`` times rank count, or the sum of a list.
+        num_nodes: Nodes dedicated to CompSep.
+
+    Returns:
+        Thread counts in CompSep rank order, ready for ``resources.compsep.num_threads``.
+    """
+    views = enabled_compsep_views(params)
+    if not views:
+        return []
+    if isinstance(num_nodes, bool) or not isinstance(num_nodes, int) or num_nodes < 1:
+        raise ValueError("num_nodes must be an integer of at least 1.")
+    if threads_per_node is None:
+        threads_per_node = _default_compsep_threads(params, len(views))
+    if (isinstance(threads_per_node, bool) or not isinstance(threads_per_node, int)
+            or threads_per_node < 1):
+        raise ValueError("threads_per_node must be an integer of at least 1.")
+
+    weights = []
+    for view in views:
+        nside = _compsep_view_nside(params, view.band_name)
+        weights.append(estimate_compsep_sht_work(nside, view.polarization))
+    total_threads = threads_per_node * num_nodes
+    return _allocate_threads(weights, total_threads, threads_per_node)
+
+
 def validate_parameter_file(
     parameter_file: str, check_paths: bool = False,
 ) -> tuple[str, list[str]]:
@@ -198,12 +373,30 @@ def main() -> int:
         "--check-paths", action="store_true",
         help="Also require referenced input files to exist on this machine.",
     )
+    parser.add_argument(
+        "--compsep-threads-per-node", type=int,
+        help=("Threads per node dedicated to CompSep. By default, use the current total CompSep "
+              "allocation from resources.compsep.num_threads."),
+    )
+    parser.add_argument(
+        "--compsep-nodes", type=int, default=1,
+        help="Nodes dedicated to CompSep (default: 1).",
+    )
     args = parser.parse_args()
 
     task_summary, groups = validate_parameter_file(args.parameter_file, args.check_paths)
     print(f"Valid parameter file: {args.parameter_file}")
     print(f"MPI tasks: {task_summary}")
     print(f"Enabled sampling groups: {', '.join(groups) if groups else 'none'}")
+    params, _, _ = load_params(args.parameter_file)
+    suggestion = suggest_compsep_thread_counts(
+        params, threads_per_node=args.compsep_threads_per_node, num_nodes=args.compsep_nodes,
+    )
+    if suggestion:
+        print("CompSep SHT scaling: (max(nside, 512) / 512)^2.7, with spin-2 weighted by 2.")
+        print(f"Suggested resources.compsep.num_threads: {suggestion}")
+    else:
+        print("Suggested resources.compsep.num_threads: none (CompSep is disabled)")
     return 0
 
 
