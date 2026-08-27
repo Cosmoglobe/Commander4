@@ -31,7 +31,7 @@ dependencies = [
     "camb",
     "astropy",
     "numba",
-    "pysm3>=3.4.6",
+    "pysm3>=3.4.4",
     "matplotlib",
     "numpy-quaternion",
     "qpoint",
