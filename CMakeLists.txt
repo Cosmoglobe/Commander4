@@ -154,12 +154,21 @@ install(TARGETS cmdr4_ctypes LIBRARY DESTINATION commander4/_libs)
 # Output is written into the source tree (src-layout) to keep IDE support for editable installs.
 option(CMDR4_GENERATE_STUBS "Generate .pyi stubs during install" ON)
 
+# The stub step imports the freshly installed module, so it needs CMAKE_INSTALL_PREFIX on the
+# path. Prepend rather than replace: under pip's build isolation the build requirements
+# (pybind11-stubgen, and numpy for the ndarray annotations) are reachable only through the
+# inherited PYTHONPATH, and overwriting it would silently leave the stubs ungenerated.
+set(CMDR4_STUB_PYTHONPATH "${CMAKE_INSTALL_PREFIX}")
+if(NOT "$ENV{PYTHONPATH}" STREQUAL "")
+  set(CMDR4_STUB_PYTHONPATH "${CMAKE_INSTALL_PREFIX}:$ENV{PYTHONPATH}")
+endif()
+
 if(CMDR4_GENERATE_STUBS)
   install(CODE "
     message(STATUS \"Generating stubs for commander4._cmdr4_backend...\")
     execute_process(
       COMMAND \"${CMAKE_COMMAND}\" -E env
-              \"PYTHONPATH=${CMAKE_INSTALL_PREFIX}\"
+              \"PYTHONPATH=${CMDR4_STUB_PYTHONPATH}\"
               \"${Python_EXECUTABLE}\" -m pybind11_stubgen
               commander4._cmdr4_backend
               --output-dir \"${CMAKE_CURRENT_SOURCE_DIR}/src\"
@@ -168,7 +177,7 @@ if(CMDR4_GENERATE_STUBS)
     )
     if(NOT _cmdr4_stubgen_res EQUAL 0)
       message(WARNING
-        \"pybind11_stubgen failed with exit code ${_cmdr4_stubgen_res}; continuing without stubs\"
+        \"pybind11_stubgen failed with exit code \${_cmdr4_stubgen_res}; continuing without stubs\"
       )
     endif()
   ")

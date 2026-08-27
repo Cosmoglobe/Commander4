@@ -1,16 +1,24 @@
-# 1. Setup before use (at the ITA clusters)
-If you are at the ITA cluster (the "owls") load the following modules before installing or running Commander4:
+# 0. Setup if you are at the ITA/Oslo/owl cluster
+If you are at the ITA cluster (the "owls") load the following modules before installing or running Commander4 (adding these lines to your ´~/.bashrc´ or ´~/.profile´ is a good idea.):
 ```bash
 module load intel/oneapi
 module load mpi/latest
 module load compiler/latest  # Only necessary for developers.
 ```
-Then, make sure you have a sensible Python setup. At ITA, I recommend using the interpreter located at `/astro/local/mamba/envs/py313/bin/python`. You can hijack the interpreter without tying yourself to the Mamba ecosystem by simply calling it directly (e.g. put `alias python313="/astro/local/mamba/envs/py313/bin/python"` in your `~/.profile`).
+Then, make sure you have a sensible Python setup. **The default Python 3.9 installation is not sufficient.**
 
-If not using the Mamba environment, you should set up a Python virtual environment. This can be done as
+I recommend using the interpreter located at `/astro/local/mamba/envs/py313/bin/python`. You can hijack the interpreter without tying yourself to the Mamba ecosystem by simply calling it directly. I recommend putting the following line in your ´~/.bashrc´ or `~/.profile`:
 ```bash
-python313 -m venv ../.com4_venv  # or just `python`, depending on your setup.
-source ../.com4_venv/bin/activate
+alias python3="/astro/local/mamba/envs/py313/bin/python"
+```
+Now calling `python3` will point to this binary instead of the default 3.9 installation.
+
+# 1. Installation
+### 1.1 Pre-installation
+Set up a Python virtual environment (if you prefer anaconda or similar this should work, but hasn't been tested).
+```bash
+python3 -m venv .venv_c4  # .venv_c4 is the name of the venv and can be changed.
+source .venv_c4/bin/activate
 ```
 
 **Optional:** Commander4 heavily utilizes `ducc0`, which will be installed automatically, but if you want maximum performance from `ducc0` install `ducc0` from source yourself, e.g.:
@@ -18,39 +26,18 @@ source ../.com4_venv/bin/activate
 pip install --no-binary ducc0 ducc0
 ```
 
-# 2. Installation
-### 2.1 Installation for users
+### 1.2 Clone and build
 If you are not intending to edit Commander4, you can install it by cloning the repository, and doing a pip install.
 ```bash
 git clone --recurse-submodules git@github.com:Cosmoglobe/Commander4.git
 cd Commander4
-pip install .
+pip install -v -e .  # -v for verbose, -e for editable install
 ```
+The editable install (`-e`) will make the installation point back to the source location, meaning that **you can edit Python files and run Commander4 without re-installing**. Changes to C/C++ files must be re-built. If you are not indending to edit Commander4, the `-e` can be skipped.
+
+If you have already cloned the repo and forgot to add the `--recursive-submodules`, you can run `git submodule init && git submodule update`.
+
 You are now ready to run Commander4 (see further down).
-
-If you have already cloned the repo and forgot to add the `--recursive-submodules`, you can run
-```bash
-git submodule init
-git submodule update
-```
-
-### 2.2 Installation for developers
-If you intend to edit Commander4, you must first have the build tools installed:
-```bash
-pip install scikit-build-core cmake pybind11 pybind11-stubgen numpy
-```
-Then, clone the repo (and submodules), and perform a so-called *editable* PIP install:
-```bash
-git clone --recurse-submodules git@github.com:Cosmoglobe/Commander4.git
-cd Commander4
-pip install -v -e . --no-build-isolation
-```
-The editable install (`-e`) will tell PIP and scikit-build-core/CMake that the installation should point back to the source location, meaning that **you can edit Python files and run Commander4 without re-installing**. The `--no-build-isolation` helps ensure the build uses your environment (useful on HPC systems), which is why you have to manually pip install build dependencies first. The verbose install (`-v`) will show the more specific build steps, as well as compilation warnings, which would otherwise be hidden.
-
-Note that if you edit non-Python files (C/C++) you must re-install for changes to take effect.
-
-Native (ctypes) helper code is built into a single shared library installed as `commander4/_libs/cmdr4_ctypes.so`.
-To add new ctypes-exposed C/C++ code, add a new `.cpp` file under `src/lib_cpp/ctypes/` and re-install.
 
 # 3. Running Commander4
 Commander4 has to be run with MPI, and a parameter file has to be indicated using the `-p` argument. Example usage:
