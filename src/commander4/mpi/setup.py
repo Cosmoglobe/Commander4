@@ -126,7 +126,7 @@ def init_mpi(params: Bunch) -> Bunch:
     time.sleep(worldrank*1e-5)  # Small sleep to get prints in nice order.
     logger.debug(f"MPI split performed, hi from worldrank {worldrank} (on machine "\
                 f"{MPI.Get_processor_name()}) subcomrank {proc_comm.Get_rank()} from color "\
-                f"{color} of size {proc_comm.Get_size()}.")
+                f"{color} of size {proc_comm.Get_size()}. Threads = {my_num_threads}.")
 
     # Determine the world ranks of the respective master tasks for compsep and TOD
     # We ensured that this works by the "key=worldrank" in the split command.

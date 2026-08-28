@@ -290,7 +290,7 @@ class CompSepSolver:
         else:
             max_iter = self.config.max_iter
 
-        checkpt_int = 10
+        checkpt_int = 30
         master = self.CompSep_comm.Get_rank() == 0
         mycomp = self.CompSep_comm.Get_rank()
 
@@ -320,7 +320,7 @@ class CompSepSolver:
             iter += 1
             if iter%checkpt_int == 0:
                 if master:
-                    logger.debug(
+                    logger.verbose(
                         f"{'QU' if self.det_map.pol else 'Intensity'} CG iter {iter:3d} - "
                         f"Residual {np.mean(self.CG_residuals[iter-checkpt_int:iter]):.6e} "
                         f"({(time.time() - t0)/checkpt_int:.2f}s/iter)")
@@ -332,10 +332,10 @@ class CompSepSolver:
                         CG_Anorm_error = complist_dot([x - y for x,y in zip(CG_solver.x, x_true)],
                                                       A_residual)
                         # A-norm error is only defined for the full vector.
-                        logger.debug(f"CG iter {iter:3d} - True A-norm error: "
+                        logger.verbose(f"CG iter {iter:3d} - True A-norm error: "
                                      f"{CG_Anorm_error:.3e}")
                         # We can print the individual component L2 errors.
-                        logger.debug(f"CG iter {iter:3d} - {self.comp_list[mycomp].comp_name} - "
+                        logger.verbose(f"CG iter {iter:3d} - {self.comp_list[mycomp].comp_name} - "
                                      f"True L2 error: {CG_errors_true:.3e}")
                 else:
                     if x_true is not None:
