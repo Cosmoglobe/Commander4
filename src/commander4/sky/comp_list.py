@@ -125,11 +125,6 @@ class CompList:
             if not isinstance(component_cls, type) or not issubclass(component_cls, Component):
                 raise ValueError(f"Unknown component_class {component.component_class!r} for "
                                  f"component {component._name!r}.")
-            if "lmax" in component.params and component.params.lmax == "full":
-                # "The most a map at the compsep resolution can carry", which is also the default
-                # band lmax (param_schema.resolve_band_lmax), so such a component is never solved
-                # for modes no band can see.
-                component.params.lmax = 3*params.compsep.nside - 1
             component_pol = component.params.polarization if "polarization" in component.params \
                 else "I"
             if component_pol not in EXECUTION_POLS:
