@@ -70,10 +70,10 @@ def test_load_params_from_yaml_file(tmp_path):
     assert load_params(str(p)) == {"general": {"nside": 512, "flag": True}}
 
 
-def test_load_params_resolves_inc_directives(tmp_path):
+def test_load_params_resolves_import_directives(tmp_path):
     (tmp_path / "sub.yml").write_text("det: [a, b]\n")
     main = tmp_path / "params.yml"
-    main.write_text("bands: !inc sub.yml\n")
+    main.write_text("bands:\n  !import sub.yml\n")
     assert load_params(str(main)) == {"bands": {"det": ["a", "b"]}}
 
 

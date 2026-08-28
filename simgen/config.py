@@ -14,7 +14,7 @@ def bget(bunch, key: str, default=None):
 
 
 def load_params(parameter_file: str) -> tuple[Bunch, dict]:
-    """Load simgen parameters with Commander4's normal YAML and ``!inc`` handling."""
+    """Load simgen parameters with Commander4's normal YAML and ``!import`` handling."""
     params, params_dict, _ = load_commander_params(parameter_file)
     return params, params_dict
 

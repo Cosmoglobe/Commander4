@@ -107,7 +107,7 @@ also runnable as written:
   that reader unconditionally decodes it.
 - `experiments → bands → detectors`: per-band `freq`, `fwhm`, `fsamp`, `eval_nside`, `data_nside`,
   `sigma0`/`sigma0_rts`, `polarization`, optional `crosstalk`, and a `detectors` dict (inline or via
-  `!inc <file>.yml`, exactly as the main param files do). Each detector may set `psi_offset_deg`
+  `!import <file>.yml`, exactly as the main param files do). Each detector may set `psi_offset_deg`
   (polarization-angle offset), `fp_offset_deg: [xi, eta]` (focal-plane offset), `gain`, and a
   bolometer time constant `tau_ms`/`tau_sec` (or a `transfer_function` block; see below).
 - `simulation.transfer_function`: run-wide default **bolometer transfer function** applied to every

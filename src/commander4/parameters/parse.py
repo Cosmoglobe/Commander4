@@ -1,12 +1,16 @@
 """Loading of Commander4 YAML parameter files."""
 
 import os
+import re
 
 import yaml
-import yaml_include
 from pixell.bunch import Bunch
 
 from commander4.parameters.bunch import as_bunch_recursive
+
+# A line containing nothing but `!import <path>` (plus an optional trailing comment) is replaced by
+# the text of that file. Paths may be quoted.
+INCLUDE_PATTERN = re.compile(r"^(\s*)!import\s+(.+?)(?:\s+#.*)?$")
 
 
 # TODO: Below is code for finding either the Commander4 PIP version number, or the git hash in case
@@ -96,8 +100,53 @@ def params_from_dict(params_dict: dict) -> Bunch:
     return params
 
 
+def expand_includes(parameter_file: str, include_stack: tuple[str, ...] = ()) -> list[str]:
+    """Read one YAML file and splice in the files named by its ``!import`` lines.
+
+    The splice is textual: the included file's lines are indented to the column of the ``!import``
+    that pulled them in. An ``!import`` written as the value of a key therefore becomes that key's
+    value, and one written among the entries of a mapping adds its keys to that mapping. Include
+    paths are relative to the directory of the file containing the ``!import`` line.
+
+    Args:
+        parameter_file: Absolute path of the file to read.
+        include_stack: Files currently being expanded, used to detect circular includes.
+
+    Returns:
+        The lines of the file, with every ``!import`` line replaced by the expanded lines of the
+        included file.
+    """
+    if parameter_file in include_stack:
+        chain = " -> ".join(include_stack + (parameter_file,))
+        raise ValueError(f"Circular !import chain in parameter files: {chain}")
+
+    expanded_lines = []
+    with open(parameter_file, encoding="utf-8") as handle:
+        for line in handle.read().splitlines():
+            match = INCLUDE_PATTERN.match(line)
+            if match is None:
+                if "!inc " in line and not line.lstrip().startswith("#"):
+                    raise ValueError(f"In {parameter_file}: the include directive '!inc' has been "
+                                     f"renamed to '!import', and must sit alone on its own line. "
+                                     f"Offending line: {line}")
+                if "!import" in line and not line.lstrip().startswith("#"):
+                    raise ValueError(f"In {parameter_file}: an !import must sit alone on its own "
+                                     f"line, written as '!import <path>'. Offending line: {line}")
+                expanded_lines.append(line)
+                continue
+            indent, include_name = match.group(1), match.group(2).strip("\"'")
+            include_file = os.path.join(os.path.dirname(parameter_file), include_name)
+            if not os.path.isfile(include_file):
+                raise FileNotFoundError(f"Could not find !import file {include_file}, imported "
+                                        f"from {parameter_file}")
+            for included_line in expand_includes(include_file, include_stack + (parameter_file,)):
+                # Blank lines are left blank rather than filled with trailing whitespace.
+                expanded_lines.append(indent + included_line if included_line.strip() else "")
+    return expanded_lines
+
+
 def load_params(parameter_file: str) -> tuple[Bunch, dict, str]:
-    """Load one YAML parameter file and resolve its ``!inc`` directives.
+    """Load one YAML parameter file and resolve its ``!import`` directives.
 
     Args:
         parameter_file: Path to the main YAML file. Include paths are relative to this file.
@@ -109,18 +158,7 @@ def load_params(parameter_file: str) -> tuple[Bunch, dict, str]:
         raise FileNotFoundError(f"Could not find parameter file {parameter_file}")
 
     parameter_file = os.path.abspath(parameter_file)
-    parameter_dir = os.path.dirname(parameter_file)
-
-    # Keep the include base directory local to this load. Registering the constructor globally
-    # lets one parameter file's directory leak into the next file loaded by an offline tool.
-    class ParameterLoader(yaml.FullLoader):
-        pass
-
-    ParameterLoader.add_constructor(
-        "!inc", yaml_include.Constructor(base_dir=parameter_dir),
-    )
-    with open(parameter_file, encoding="utf-8") as handle:
-        params_dict = yaml.load(handle, Loader=ParameterLoader)
+    params_dict = yaml.safe_load("\n".join(expand_includes(parameter_file)))
 
     if not isinstance(params_dict, dict):
         raise ValueError(f"Parameter file {parameter_file} must contain a YAML mapping at its root")

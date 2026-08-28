@@ -25,7 +25,6 @@ dependencies = [
     "scipy",
     "h5py",
     "pyyaml",
-    "pyyaml-include",
     "mpi4py",
     "ducc0",
     "pixell",

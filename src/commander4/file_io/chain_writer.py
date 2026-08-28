@@ -119,7 +119,7 @@ def write_band_chain_to_file(params: Bunch, chain: int, iter: int, exp_name: str
     which is the beam `skymodel` is always at.
     """
     chains = params.output.chains
-    nside_out = chains.maps_nside
+    nside_out = getattr(chains, "maps_nside", "native")
     chain_dir = paths.subdir(params, paths.CHAINS_BANDS)
     filename = f"{exp_name}_{band_name}_chain{chain:02d}_iter{iter:04d}.h5"
     chain_file = os.path.join(chain_dir, filename)

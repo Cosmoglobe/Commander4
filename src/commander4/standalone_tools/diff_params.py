@@ -33,7 +33,7 @@ def load_params(path: str) -> dict:
 
     HDF5 inputs are detected by content (not extension) and read from the already fully-resolved
     `metadata/parameter_file_as_string` dataset. Any other file is read as a raw YAML parameter
-    file, with `!inc` include directives resolved relative to its directory exactly as Commander4's
+    file, with `!import` include directives resolved relative to its directory exactly as Commander4's
     own parser does.
     """
     if h5py.is_hdf5(path):
