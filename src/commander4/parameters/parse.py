@@ -100,29 +100,33 @@ def params_from_dict(params_dict: dict) -> Bunch:
     return params
 
 
-def expand_includes(parameter_file: str, include_stack: tuple[str, ...] = ()) -> list[str]:
+def expand_includes(parameter_file: str,
+                    include_stack: tuple[str, ...] = ()) -> list[tuple[str, str, int]]:
     """Read one YAML file and splice in the files named by its ``!import`` lines.
 
     The splice is textual: the included file's lines are indented to the column of the ``!import``
     that pulled them in. An ``!import`` written as the value of a key therefore becomes that key's
     value, and one written among the entries of a mapping adds its keys to that mapping. Include
-    paths are relative to the directory of the file containing the ``!import`` line.
+    paths are relative to the directory of the file containing the ``!import`` line, so ``..`` and
+    subdirectories both work.
 
     Args:
-        parameter_file: Absolute path of the file to read.
+        parameter_file: Path of the file to read.
         include_stack: Files currently being expanded, used to detect circular includes.
 
     Returns:
-        The lines of the file, with every ``!import`` line replaced by the expanded lines of the
-        included file.
+        One ``(line, source file, line number within that file)`` triple per line of the expanded
+        document. The source information is what lets a YAML error be reported against the file the
+        offending line actually came from, since the expanded document matches no file on disk.
     """
+    parameter_file = os.path.abspath(parameter_file)
     if parameter_file in include_stack:
         chain = " -> ".join(include_stack + (parameter_file,))
         raise ValueError(f"Circular !import chain in parameter files: {chain}")
 
     expanded_lines = []
     with open(parameter_file, encoding="utf-8") as handle:
-        for line in handle.read().splitlines():
+        for line_number, line in enumerate(handle.read().splitlines(), start=1):
             match = INCLUDE_PATTERN.match(line)
             if match is None:
                 if "!inc " in line and not line.lstrip().startswith("#"):
@@ -132,16 +136,18 @@ def expand_includes(parameter_file: str, include_stack: tuple[str, ...] = ()) ->
                 if "!import" in line and not line.lstrip().startswith("#"):
                     raise ValueError(f"In {parameter_file}: an !import must sit alone on its own "
                                      f"line, written as '!import <path>'. Offending line: {line}")
-                expanded_lines.append(line)
+                expanded_lines.append((line, parameter_file, line_number))
                 continue
             indent, include_name = match.group(1), match.group(2).strip("\"'")
             include_file = os.path.join(os.path.dirname(parameter_file), include_name)
             if not os.path.isfile(include_file):
                 raise FileNotFoundError(f"Could not find !import file {include_file}, imported "
-                                        f"from {parameter_file}")
-            for included_line in expand_includes(include_file, include_stack + (parameter_file,)):
+                                        f"from {parameter_file} line {line_number}")
+            included = expand_includes(include_file, include_stack + (parameter_file,))
+            for included_line, source_file, source_number in included:
                 # Blank lines are left blank rather than filled with trailing whitespace.
-                expanded_lines.append(indent + included_line if included_line.strip() else "")
+                indented = indent + included_line if included_line.strip() else ""
+                expanded_lines.append((indented, source_file, source_number))
     return expanded_lines
 
 
@@ -158,7 +164,31 @@ def load_params(parameter_file: str) -> tuple[Bunch, dict, str]:
         raise FileNotFoundError(f"Could not find parameter file {parameter_file}")
 
     parameter_file = os.path.abspath(parameter_file)
-    params_dict = yaml.safe_load("\n".join(expand_includes(parameter_file)))
+    expanded_lines = expand_includes(parameter_file)
+    try:
+        params_dict = yaml.safe_load("\n".join(line for line, _, _ in expanded_lines))
+    except yaml.MarkedYAMLError as err:
+        # Because of our custom "!import" syntax we need some custom error handling.
+        # By default PyYAML would point to line numbers in a constructed parameter file.
+        # This error handling points to the correct imported file when applicable.
+        if err.problem_mark is None or not 0 <= err.problem_mark.line < len(expanded_lines):
+            raise
+        # Both of PyYAML's positions are reported, because either one can hold the actual mistake:
+        # the context mark is where the construct that failed began, the problem mark is where the
+        # parser gave up on it. Columns are not translated, since an imported line is shifted right
+        # by the indent of the !import that pulled it in.
+        marks = []
+        if err.context_mark is not None:
+            marks.append((err.context or "block starting", err.context_mark))
+        marks.append((err.problem or "parse error", err.problem_mark))
+
+        message = f"YAML error while reading {parameter_file}:"
+        for description, mark in marks:
+            if 0 <= mark.line < len(expanded_lines):
+                line, source_file, source_number = expanded_lines[mark.line]
+                message += (f"\n  {description}, in {source_file} line {source_number}:"
+                            f"\n    {line.strip()}")
+        raise ValueError(message) from err
 
     if not isinstance(params_dict, dict):
         raise ValueError(f"Parameter file {parameter_file} must contain a YAML mapping at its root")

@@ -58,15 +58,33 @@ def test_import_adds_its_keys_to_the_surrounding_mapping(tmp_path) -> None:
 def test_nested_imports_resolve_relative_to_their_own_file(tmp_path) -> None:
     """A file pulled in by !import may itself !import, using paths relative to its own directory."""
     (tmp_path / "sub").mkdir()
-    (tmp_path / "sub" / "detectors.yml").write_text("det_1:\n  gain: 1.0\n", encoding="utf-8")
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / "detectors.yml").write_text("det_1:\n  gain: 1.0\n", encoding="utf-8")
     (tmp_path / "sub" / "band.yml").write_text(
-        "freq: 30.0\ndetectors:\n  !import detectors.yml\n", encoding="utf-8",
+        'freq: 30.0\ndetectors:\n  !import "../shared/detectors.yml"\n', encoding="utf-8",
     )
-    (tmp_path / "params.yml").write_text("band:\n  !import sub/band.yml\n", encoding="utf-8")
+    (tmp_path / "params.yml").write_text('band:\n  !import "sub/band.yml"\n', encoding="utf-8")
 
     _, params_dict, _ = load_params(str(tmp_path / "params.yml"))
 
     assert params_dict == {"band": {"freq": 30.0, "detectors": {"det_1": {"gain": 1.0}}}}
+
+
+def test_yaml_errors_are_reported_against_the_file_the_line_came_from(tmp_path) -> None:
+    """A syntax error inside an imported file must name that file and its line, not the main one."""
+    (tmp_path / "bands.yml").write_text(
+        "# Two bands.\nWMAPKa:\n  freq: 33.0\n   fwhm: 39.6\n", encoding="utf-8",
+    )
+    (tmp_path / "params.yml").write_text(
+        "general:\n  nside: 512\nbands:\n  !import \"bands.yml\"\n", encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as err:
+        load_params(str(tmp_path / "params.yml"))
+
+    # Line 4 of bands.yml is the over-indented `fwhm`, which sits on line 6 of the expanded text.
+    assert f"in {tmp_path / 'bands.yml'} line 4" in str(err.value)
+    assert "fwhm: 39.6" in str(err.value)
 
 
 def test_load_params_rejects_inline_import_and_import_cycles(tmp_path) -> None:
