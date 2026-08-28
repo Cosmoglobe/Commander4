@@ -53,8 +53,9 @@ There exist several standalone helper modules in Commander4 that can be useful f
 ### 3.1 Parameter file
 A parameter file is seven top-level blocks, each named after the part of the program that reads them: `gibbs`, `resources`, `output`, `components`, `experiments`, `tod_processing` and `compsep`.
 
+The MPI task counts are **derived**, not stated: the TOD total is the sum of the per-band `num_tasks` over enabled bands of enabled experiments, and component separation takes one task per enabled `compsep.bands` view (one for I, one for QU). Commander4 reports the total it needs, and `mpirun -n` must match it.
 
-The MPI task counts are **derived**, not stated: the TOD total is the sum of the per-band `num_tasks` over enabled bands of enabled experiments, and component separation takes one task per enabled `compsep.bands` view (one for I, one for QU). Commander4 reports the total it needs, and `mpirun -n` must match it. `compsep.enabled: false` runs TOD-only, allocating no compsep ranks.
+Parameter files can include other parameter files using `!include 'path/to/file.yml'`. The path is relative to the relevant file. Note that the exact content of the imported file is inserted at the exact location of the import, and at the relevant indendation level.
 
 ### 3.2 Output
 A run writes everything below the single directory named by `output.dir`, which it creates:
@@ -65,14 +66,9 @@ A run writes everything below the single directory named by `output.dir`, which 
 <output_dir>/plots/             # figures
 ```
 
-The normal log is named `logs/run-<run-id>.log`. The subdirectory names are defined in [`src/commander4/file_io/paths.py`](src/commander4/file_io/paths.py), which is also what the plotting and standalone tools read, so those take the same `<output_dir>` as their argument.
+A log with the name `logs/run-<run-id>.log` is placed in the logs directory each run, where `<rund-id>` is a unique string starting with the current date-time. A similar failure log is also written if the program crashes.
 
-#### Why two chains
-Everything is HDF5, one file per Gibbs sample, named `..._chain<CC>_iter<NNNN>.h5`. There are two chains rather than one because the two halves of the program are **disjoint MPI rank sets** (see §4.1): the band chain is written by each band's master on the TOD side, and the compsep chain by the master on the component-separation side, one schedule step later. Merging them would need parallel HDF5 and a barrier between two sides that otherwise only exchange maps. The band chain is per band, the compsep chain per run, and matching `(chain, iter)` labels describe the same Gibbs sample.
-
-Both carry `metadata/datetime` and `metadata/parameter_file_as_string`, the verbatim parameter file, which is what lets the standalone tools rebuild a run's configuration from its output alone.
-
-Which iterations are written is set by `output.chains.write` (a list of chain numbers) and `output.chains.interval`, one entry per output: `bands` and `compsep` thin a whole file, while `maps` thins only the `maps/` group inside the band file, since those maps are far larger than anything beside them. Datasets marked *(opt)* below appear only when the matching `output.chains.include` flag is set.
+Which chain and iterations are written is set by `output.chains.write` and `output.chains.interval`, one entry per output: `bands` and `compsep` thin a whole file, while `maps` thins only the `maps/` group inside the band file, since those maps are far larger than anything beside them. Datasets marked *(opt)* below appear only when the matching `output.chains.include` flag is set.
 
 #### `chains_bands/<experiment>_<band>_chain<CC>_iter<NNNN>.h5`
 Per-scan sampled quantities at the top level, output maps under `maps/`. `NSC` is the band's total scan count, `ND` its detector count, `NPAR` its noise-model parameter count. Gains are written in the band's `band_unit`; maps are brightnesses in the same unit.
