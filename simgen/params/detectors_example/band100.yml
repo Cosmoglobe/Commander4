@@ -1,4 +1,4 @@
-# Detector definitions for Band100GHz, included via `!inc detectors_example/band100.yml`.
+# Detector definitions for Band100GHz, included via `!import detectors_example/band100.yml`.
 # Each entry is a detector name mapped to optional per-detector parameters:
 #   psi_offset_deg : polarization-angle offset added to the boresight psi [deg]
 #   fp_offset_deg  : [xi, eta] focal-plane offset [deg] (used by per-detector strategies like raster)

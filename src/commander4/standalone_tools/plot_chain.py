@@ -1,6 +1,7 @@
 """Plot the band and component-separation products in a Commander4 run directory."""
 
 import argparse
+import csv
 import glob
 import logging
 import os
@@ -25,6 +26,9 @@ from commander4.sky.component import Component
 CHAIN_ITER_RE = re.compile(r"chain(?P<chain>\d+)_iter(?P<iter>\d+)\.h5$")
 LOGGER = logging.getLogger("plot_chain")
 PLOT_TYPES = {"maps", "tod", "compsep", "components"}
+DETECTOR_PLOT_MODES = {"individual", "summary", "both", "none"}
+DETECTOR_SUMMARY_CHUNK_SIZE = 128
+SPECTRUM_SUMMARY_CHUNK_SIZE = 16
 POWER_SPECTRA = {
     "tod_ps_raw": "raw TOD",
     "tod_ps_ncorr": "correlated noise",
@@ -54,6 +58,31 @@ MAP_TITLES = {
     "corrnoise": "Correlated noise",
     "nhit": "Hit count",
     "cov": "Inverse-noise covariance",
+}
+DETECTOR_SUMMARY_GROUPS = {
+    "gain": (
+        ("detrel_gain", "relative gain", "linear", (0.0,)),
+        ("temporal_gain", "median temporal gain", "linear", (0.0,)),
+    ),
+    "noise": (
+        ("noise_sigma0", "median sigma0", "log", ()),
+        ("noise_fknee", "median fknee", "log", ()),
+        ("noise_alpha", "median alpha", "linear", ()),
+    ),
+    "data_quality": (
+        ("present_fraction", "present fraction", "linear", (1.0,)),
+        ("accept_fraction", "accepted fraction when present", "linear", (1.0,)),
+        ("good_fraction", "median good fraction", "linear", (1.0,)),
+        ("chisq_abs", "median absolute chi-squared z-score", "linear", (0.0,)),
+    ),
+    "ncorr_solver": (
+        ("ncorr_residual", "median relative CG residual", "log", ()),
+        ("ncorr_niter", "median CG iterations", "linear", ()),
+        ("ncorr_failure_fraction", "CG failure fraction", "linear", (0.0,)),
+    ),
+    "jumps": (
+        ("jump_count", "mean jumps per scan", "linear", (0.0,)),
+    ),
 }
 
 
@@ -453,9 +482,12 @@ def _plot_tod_scalar_traces(
     entries: list[ChainFile],
     output_dir: str,
     detector_filter: set[str] | None,
+    include_detectors: bool = True,
 ) -> int:
     plot_count = 0
     for dataset_name in ("abs_gain", "detrel_gain"):
+        if dataset_name == "detrel_gain" and not include_detectors:
+            continue
         out_folder = _category_folder(output_dir, "tod_traces", dataset_name)
         records = []
         for entry in entries:
@@ -559,6 +591,7 @@ def _plot_tod_scan_series(
         if not records:
             continue
         detector_names = sorted({name for _, _, names, _, _ in records for name in names})
+        max_points_per_line = max(2, max_points // max(1, len(records)))
         for detector_name in detector_names:
             if detector_filter is not None and detector_name not in detector_filter:
                 continue
@@ -583,7 +616,9 @@ def _plot_tod_scan_series(
                         continue
                     if present is not None and dataset_name != "present":
                         y_values[~present[:, detector_index].astype(bool)] = np.nan
-                    x_values, y_values = _thin_xy(scan_ids, y_values, max_points)
+                    x_values, y_values = _thin_xy(
+                        scan_ids, y_values, max_points_per_line
+                    )
                     series.append((f"iter {iteration}", x_values, y_values))
                 filename = os.path.join(
                     out_folder,
@@ -614,6 +649,7 @@ def _scan_panel_series(
 ) -> list[tuple[str, np.ndarray, np.ndarray]]:
     """Build per-iteration scan lines for one detector and dataset column."""
     series = []
+    max_points_per_line = max(2, max_points // max(1, len(records)))
     for iteration, scan_ids, names, present, values in records:
         if detector_name not in names:
             continue
@@ -624,7 +660,7 @@ def _scan_panel_series(
             y_values = np.asarray(values[:, detector_index, parameter_index], dtype=float)
         if present is not None and dataset_name != "present":
             y_values[~present[:, detector_index].astype(bool)] = np.nan
-        x_values, y_values = _thin_xy(scan_ids, y_values, max_points)
+        x_values, y_values = _thin_xy(scan_ids, y_values, max_points_per_line)
         series.append((f"iter {iteration}", x_values, y_values))
     return series
 
@@ -644,6 +680,271 @@ def _detector_scan_values(records, detector_name: str, dataset_name: str) -> np.
         return np.array([])
     values = np.concatenate(collected)
     return values[np.isfinite(values)]
+
+
+def _masked_detector_reduce(
+    values: np.ndarray,
+    present: np.ndarray | None,
+    reduction: str = "median",
+) -> np.ndarray:
+    """Reduce scans to one value per detector, excluding absent and non-finite samples."""
+    numeric = np.asarray(values, dtype=float)
+    valid = np.isfinite(numeric)
+    if present is not None:
+        presence = present
+        if numeric.ndim == 3:
+            presence = presence[..., None]
+        valid &= presence
+    masked = np.where(valid, numeric, np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        if reduction == "mean":
+            return np.nanmean(masked, axis=0)
+        return np.nanmedian(masked, axis=0)
+
+
+def _read_detector_summary(
+    entry: ChainFile,
+    detector_filter: set[str] | None,
+) -> tuple[list[str], dict[str, np.ndarray]]:
+    """Read one band-chain file into equal-weight, per-detector diagnostic summaries."""
+    with h5py.File(entry.path, "r") as handle:
+        detector_names = _read_detector_names(handle)
+        detector_count = len(detector_names)
+        metrics: dict[str, np.ndarray] = {}
+        if "detrel_gain" in handle:
+            values = np.asarray(handle["detrel_gain"][()], dtype=float).reshape(-1)
+            if values.size == detector_count:
+                metrics["detrel_gain"] = values
+
+        two_dimensional = {
+            "temporal_gain": ("temporal_gain", "median", False),
+            "good_fraction": ("good_fraction", "median", False),
+            "chisq_z": ("chisq_abs", "median", True),
+            "ncorr_cg_residual": ("ncorr_residual", "median", False),
+            "ncorr_cg_niter": ("ncorr_niter", "median", False),
+            "jump_counts": ("jump_count", "mean", False),
+        }
+        for dataset_name, (metric_name, _, _) in two_dimensional.items():
+            if dataset_name in handle:
+                metrics[metric_name] = np.full(detector_count, np.nan)
+        if "present" in handle:
+            metrics["present_fraction"] = np.full(detector_count, np.nan)
+        if "accept" in handle:
+            metrics["accept_fraction"] = np.full(detector_count, np.nan)
+        if "ncorr_converged" in handle:
+            metrics["ncorr_failure_fraction"] = np.full(detector_count, np.nan)
+        noise_metric_names = ("noise_sigma0", "noise_fknee", "noise_alpha")
+        noise_parameter_count = 0
+        if "noise_params" in handle and handle["noise_params"].ndim == 3:
+            noise_parameter_count = min(
+                len(noise_metric_names), handle["noise_params"].shape[2]
+            )
+            for metric_name in noise_metric_names[:noise_parameter_count]:
+                metrics[metric_name] = np.full(detector_count, np.nan)
+
+        for start in range(0, detector_count, DETECTOR_SUMMARY_CHUNK_SIZE):
+            stop = min(start + DETECTOR_SUMMARY_CHUNK_SIZE, detector_count)
+            present = None
+            if "present" in handle:
+                present = np.asarray(handle["present"][:, start:stop], dtype=bool)
+                metrics["present_fraction"][start:stop] = np.mean(present, axis=0)
+
+            if "accept" in handle:
+                accepted = np.asarray(handle["accept"][:, start:stop], dtype=bool)
+                valid = present if present is not None else np.ones_like(accepted, dtype=bool)
+                denominator = np.sum(valid, axis=0)
+                numerator = np.sum(accepted & valid, axis=0)
+                metrics["accept_fraction"][start:stop] = np.divide(
+                    numerator,
+                    denominator,
+                    out=np.full(stop - start, np.nan),
+                    where=denominator > 0,
+                )
+
+            for dataset_name, (metric_name, reduction, absolute) in two_dimensional.items():
+                if dataset_name not in handle:
+                    continue
+                values = np.asarray(handle[dataset_name][:, start:stop])
+                if absolute:
+                    values = np.abs(values)
+                metrics[metric_name][start:stop] = _masked_detector_reduce(
+                    values, present, reduction
+                )
+
+            if noise_parameter_count:
+                noise_values = np.asarray(handle["noise_params"][:, start:stop, :])
+                reduced = _masked_detector_reduce(noise_values, present)
+                for parameter_index, metric_name in enumerate(
+                    noise_metric_names[:noise_parameter_count]
+                ):
+                    metrics[metric_name][start:stop] = reduced[:, parameter_index]
+
+            if "ncorr_converged" in handle:
+                convergence = np.asarray(handle["ncorr_converged"][:, start:stop])
+                valid = convergence >= 0
+                if present is not None:
+                    valid &= present
+                denominator = np.sum(valid, axis=0)
+                failures = np.sum((convergence == 0) & valid, axis=0)
+                metrics["ncorr_failure_fraction"][start:stop] = np.divide(
+                    failures,
+                    denominator,
+                    out=np.full(stop - start, np.nan),
+                    where=denominator > 0,
+                )
+
+    if detector_filter is None:
+        return detector_names, metrics
+    selected = np.array([name in detector_filter for name in detector_names], dtype=bool)
+    filtered_metrics = {name: values[selected] for name, values in metrics.items()}
+    return [name for name, keep in zip(detector_names, selected) if keep], filtered_metrics
+
+
+def _detector_population_quantiles(values: np.ndarray) -> np.ndarray:
+    """Return 2.5, 16, 50, 84 and 97.5 percentiles across equally weighted detectors."""
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return np.full(5, np.nan)
+    return np.percentile(finite, [2.5, 16.0, 50.0, 84.0, 97.5])
+
+
+def _write_detector_summary_csv(
+    band: str,
+    chain: int,
+    iteration: int,
+    detector_names: list[str],
+    metrics: dict[str, np.ndarray],
+    output_dir: str,
+) -> None:
+    """Write the latest per-detector metrics, ordered with likely outliers first."""
+    if not detector_names or not metrics:
+        return
+    metric_names = sorted(metrics)
+
+    def finite_value(metric_name: str, index: int, fallback: float) -> float:
+        if metric_name not in metrics or not np.isfinite(metrics[metric_name][index]):
+            return fallback
+        return float(metrics[metric_name][index])
+
+    indices = list(range(len(detector_names)))
+    indices.sort(key=lambda index: (
+        finite_value("accept_fraction", index, 1.0),
+        finite_value("present_fraction", index, 1.0),
+        -finite_value("ncorr_failure_fraction", index, 0.0),
+        -finite_value("chisq_abs", index, 0.0),
+    ))
+    folder = _category_folder(output_dir, "tod_summaries", "detector_tables")
+    os.makedirs(folder, exist_ok=True)
+    filename = os.path.join(
+        folder,
+        f"chain{chain:02d}_{_safe_name(band)}_iter{iteration:04d}.csv",
+    )
+    with open(filename, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["detector", *metric_names])
+        for detector_index in indices:
+            writer.writerow([
+                detector_names[detector_index],
+                *[metrics[name][detector_index] for name in metric_names],
+            ])
+
+
+def _plot_detector_summaries(
+    entries: list[ChainFile],
+    per_iteration_entries: list[ChainFile],
+    output_dir: str,
+    detector_filter: set[str] | None,
+) -> int:
+    """Plot detector-population quantiles and write latest per-detector metric tables."""
+    plot_count = 0
+    per_iteration_paths = {entry.path for entry in per_iteration_entries}
+    for (band, chain), group_entries in _group_band_entries(entries).items():
+        records: dict[str, list[tuple[int, np.ndarray]]] = {}
+        latest: tuple[int, list[str], dict[str, np.ndarray]] | None = None
+        for entry in group_entries:
+            try:
+                detector_names, metrics = _read_detector_summary(entry, detector_filter)
+            except OSError as error:
+                LOGGER.warning("Could not summarize detectors from %s: %s", entry.path, error)
+                continue
+            for metric_name, values in metrics.items():
+                records.setdefault(metric_name, []).append((
+                    entry.iteration, _detector_population_quantiles(values)
+                ))
+            if (
+                entry.path in per_iteration_paths
+                and "noise_fknee" in metrics
+                and "noise_alpha" in metrics
+            ):
+                accepted_fraction = metrics.get(
+                    "accept_fraction", np.ones(len(detector_names))
+                )
+                fully_accepted = np.isfinite(accepted_fraction) & np.isclose(
+                    accepted_fraction, 1.0
+                )
+                folder = _category_folder(
+                    output_dir, "tod_summaries", "noise_params_fknee_alpha"
+                )
+                filename = os.path.join(
+                    folder,
+                    f"chain{chain:02d}_{_safe_name(band)}_"
+                    f"iter{entry.iteration:04d}.png",
+                )
+                plotting.plot_noise_parameter_density(
+                    filename,
+                    f"{band}; chain {chain}, iteration {entry.iteration}: "
+                    "per-detector median noise parameters",
+                    metrics["noise_fknee"],
+                    metrics["noise_alpha"],
+                    fully_accepted,
+                    density_label="detectors per hexagon",
+                    rejected_label="detector has rejected scans",
+                )
+                plot_count += int(os.path.isfile(filename))
+            latest = (entry.iteration, detector_names, metrics)
+
+        percentile_labels = ("2.5%", "16%", "median", "84%", "97.5%")
+        for group_name, metric_specs in DETECTOR_SUMMARY_GROUPS.items():
+            panels = []
+            for metric_name, title, yscale, reference_lines in metric_specs:
+                metric_records = records.get(metric_name, [])
+                if not metric_records:
+                    continue
+                iterations = np.array([iteration for iteration, _ in metric_records])
+                quantiles = np.asarray([values for _, values in metric_records])
+                series = [
+                    (label, iterations, quantiles[:, index])
+                    for index, label in enumerate(percentile_labels)
+                ]
+                panels.append(plotting.ChainLinePanel(
+                    title=title,
+                    ylabel=title,
+                    series=series,
+                    yscale=yscale,
+                    horizontal_lines=reference_lines,
+                ))
+            if not panels:
+                continue
+            folder = _category_folder(output_dir, "tod_summaries", group_name)
+            filename = os.path.join(
+                folder, f"chain{chain:02d}_{_safe_name(band)}.png"
+            )
+            plotting.plot_chain_line_panels(
+                filename,
+                f"{band}, chain {chain}: detector population",
+                "Gibbs iteration",
+                panels,
+            )
+            plot_count += int(os.path.isfile(filename))
+
+        if latest is not None:
+            iteration, detector_names, metrics = latest
+            _write_detector_summary_csv(
+                band, chain, iteration, detector_names, metrics, output_dir
+            )
+    return plot_count
 
 
 def _plot_noise_parameter_dashboard(
@@ -925,39 +1226,139 @@ def _plot_tod_power_spectra(
     return plot_count
 
 
+def _plot_tod_power_spectra_summary(
+    entries: list[ChainFile],
+    output_dir: str,
+    detector_filter: set[str] | None,
+) -> int:
+    """Plot one equally detector-weighted TOD-spectrum summary per band and iteration."""
+    output_folder = _category_folder(output_dir, "tod_summaries", "power_spectra")
+    plot_count = 0
+    for entry in entries:
+        try:
+            with h5py.File(entry.path, "r") as handle:
+                if "tod_ps_freqs" not in handle:
+                    continue
+                detector_names = _read_detector_names(handle)
+                detector_count = len(detector_names)
+                selected = np.array([
+                    detector_filter is None or name in detector_filter
+                    for name in detector_names
+                ], dtype=bool)
+                if not np.any(selected):
+                    continue
+
+                frequency_summaries = []
+                spectra_by_dataset: dict[str, list[np.ndarray]] = {
+                    dataset_name: []
+                    for dataset_name in POWER_SPECTRA if dataset_name in handle
+                }
+                for start in range(0, detector_count, SPECTRUM_SUMMARY_CHUNK_SIZE):
+                    stop = min(start + SPECTRUM_SUMMARY_CHUNK_SIZE, detector_count)
+                    keep = selected[start:stop]
+                    if not np.any(keep):
+                        continue
+                    scan_count = handle["tod_ps_freqs"].shape[0]
+                    valid = np.ones((scan_count, stop - start), dtype=bool)
+                    if "present" in handle:
+                        valid &= np.asarray(handle["present"][:, start:stop], dtype=bool)
+                    if "accept" in handle:
+                        valid &= np.asarray(handle["accept"][:, start:stop], dtype=bool)
+                    valid = valid[:, keep]
+                    frequencies = np.asarray(
+                        handle["tod_ps_freqs"][:, start:stop, :]
+                    )[:, keep, :]
+                    frequency_summaries.append(
+                        _masked_detector_reduce(frequencies, valid)
+                    )
+                    for dataset_name in spectra_by_dataset:
+                        values = np.asarray(handle[dataset_name][:, start:stop, :])[:, keep, :]
+                        spectra_by_dataset[dataset_name].append(
+                            _masked_detector_reduce(values, valid)
+                        )
+
+                if not frequency_summaries:
+                    continue
+                detector_frequencies = np.concatenate(frequency_summaries, axis=0)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
+                    median_frequencies = np.nanmedian(detector_frequencies, axis=0)
+                spectra = []
+                for dataset_name, chunks in spectra_by_dataset.items():
+                    if not chunks:
+                        continue
+                    detector_spectra = np.concatenate(chunks, axis=0)
+                    median, lower, upper = _spectrum_summary(detector_spectra)
+                    spectra.append((
+                        POWER_SPECTRA[dataset_name],
+                        median_frequencies,
+                        median,
+                        lower,
+                        upper,
+                    ))
+                filename = os.path.join(
+                    output_folder,
+                    f"chain{entry.chain:02d}_{_safe_name(entry.band or 'band')}_"
+                    f"iter{entry.iteration:04d}.png",
+                )
+                plotting.plot_chain_spectra(
+                    filename,
+                    f"{entry.band}, chain {entry.chain}, iteration {entry.iteration}: "
+                    "detector-population TOD spectra",
+                    spectra,
+                )
+                plot_count += int(os.path.isfile(filename))
+        except OSError as error:
+            LOGGER.warning("Could not summarize TOD spectra from %s: %s", entry.path, error)
+    return plot_count
+
+
 def _plot_tod_outputs(
     entries: list[ChainFile],
     per_iteration_entries: list[ChainFile],
     output_dir: str,
     detector_filter: set[str] | None,
     max_points: int,
+    *,
+    include_scalar_traces: bool = True,
+    include_detector_dashboards: bool = True,
+    include_per_iteration: bool = True,
+    include_individual_detectors: bool = True,
 ) -> int:
     plot_count = 0
     # These figures contain every Gibbs iteration and deliberately ignore --iter.
     for (band, chain), group_entries in _group_band_entries(entries).items():
-        plot_count += _plot_tod_scalar_traces(
-            band, chain, group_entries, output_dir, detector_filter
-        )
-        plot_count += _plot_tod_scan_series(
-            band, chain, group_entries, output_dir, detector_filter, max_points
-        )
-        plot_count += _plot_noise_parameter_dashboard(
-            band, chain, group_entries, output_dir, detector_filter, max_points
-        )
-        plot_count += _plot_data_quality_dashboard(
-            band, chain, group_entries, output_dir, detector_filter, max_points
-        )
-        plot_count += _plot_ncorr_solver_dashboard(
-            band, chain, group_entries, output_dir, detector_filter, max_points
-        )
+        if include_scalar_traces:
+            plot_count += _plot_tod_scalar_traces(
+                band,
+                chain,
+                group_entries,
+                output_dir,
+                detector_filter,
+                include_detectors=include_individual_detectors,
+            )
+        if include_detector_dashboards and include_individual_detectors:
+            plot_count += _plot_tod_scan_series(
+                band, chain, group_entries, output_dir, detector_filter, max_points
+            )
+            plot_count += _plot_noise_parameter_dashboard(
+                band, chain, group_entries, output_dir, detector_filter, max_points
+            )
+            plot_count += _plot_data_quality_dashboard(
+                band, chain, group_entries, output_dir, detector_filter, max_points
+            )
+            plot_count += _plot_ncorr_solver_dashboard(
+                band, chain, group_entries, output_dir, detector_filter, max_points
+            )
     # These figures produce one file per iteration, so --iter limits their output volume.
-    for (band, chain), group_entries in _group_band_entries(per_iteration_entries).items():
-        plot_count += _plot_noise_parameter_density(
-            band, chain, group_entries, output_dir, detector_filter
-        )
-        plot_count += _plot_tod_power_spectra(
-            band, chain, group_entries, output_dir, detector_filter
-        )
+    if include_per_iteration and include_individual_detectors:
+        for (band, chain), group_entries in _group_band_entries(per_iteration_entries).items():
+            plot_count += _plot_noise_parameter_density(
+                band, chain, group_entries, output_dir, detector_filter
+            )
+            plot_count += _plot_tod_power_spectra(
+                band, chain, group_entries, output_dir, detector_filter
+            )
     return plot_count
 
 
@@ -1208,11 +1609,11 @@ def _plot_compsep_maps(
     return plot_count
 
 
-def _component_map_nside(params: Bunch | None, lmax: int, nside_out: int | None) -> int:
+def _component_map_nside(lmax: int, nside_out: int | None) -> int:
+    """Grid to render a component's alms on: `--nside` if given, else the smallest nside that
+    carries `lmax`. Components live in alm space, so this is purely a display choice."""
     if nside_out is not None:
         return nside_out
-    if params is not None and "compsep" in params and "nside" in params.compsep:
-        return int(params.compsep.nside)
     minimum = max(1, int(np.ceil((lmax + 1) / 3)))
     return 2 ** int(np.ceil(np.log2(minimum)))
 
@@ -1291,7 +1692,6 @@ def _component_names(entries: list[ChainFile]) -> set[str]:
 
 def _plot_component_maps(
     entries: list[ChainFile],
-    params: Bunch | None,
     output_dir: str,
     nside_out: int | None,
 ) -> int:
@@ -1313,7 +1713,7 @@ def _plot_component_maps(
                         lmax = int(handle[f"{component_path}/lmax"][()])
                     else:
                         lmax = hp.Alm.getlmax(alms.shape[-1])
-                    nside = _component_map_nside(params, lmax, nside_out)
+                    nside = _component_map_nside(lmax, nside_out)
                     component_maps, row_labels = _alms_to_maps(alms, lmax, nside)
                     beam = 0.0
                     if f"{component_path}/amp_fwhm_arcmin" in handle:
@@ -1404,7 +1804,6 @@ def _plot_component_spectra(entries: list[ChainFile], output_dir: str) -> int:
 
 def _plot_cmb_galactic_cut_spectra(
     entries: list[ChainFile],
-    params: Bunch | None,
     output_dir: str,
     nside_out: int | None,
     cut_degrees: float,
@@ -1436,7 +1835,7 @@ def _plot_cmb_galactic_cut_spectra(
                             lmax = int(handle[f"{component_path}/lmax"][()])
                         else:
                             lmax = hp.Alm.getlmax(alms.shape[-1])
-                        nside = _component_map_nside(params, lmax, nside_out)
+                        nside = _component_map_nside(lmax, nside_out)
                         spectra = _galactic_cut_spectra(
                             alms, lmax, nside, cut_degrees
                         )
@@ -1575,28 +1974,6 @@ def _plot_component_traces(
     return plot_count
 
 
-def _plot_component_outputs(
-    entries: list[ChainFile],
-    per_iteration_entries: list[ChainFile],
-    params: Bunch | None,
-    output_dir: str,
-    nside_out: int | None,
-    band_filter: set[str] | None,
-    cmb_galactic_cut_degrees: float,
-) -> int:
-    # Component maps are one file per iteration; every other figure below combines iterations.
-    plot_count = _plot_component_maps(
-        per_iteration_entries, params, output_dir, nside_out
-    )
-    plot_count += _plot_component_spectra(entries, output_dir)
-    plot_count += _plot_cmb_galactic_cut_spectra(
-        entries, params, output_dir, nside_out, cmb_galactic_cut_degrees
-    )
-    plot_count += _plot_source_amplitudes(entries, output_dir)
-    plot_count += _plot_component_traces(entries, output_dir, band_filter)
-    return plot_count
-
-
 def _configure_logging(verbose: bool) -> None:
     LOGGER.handlers.clear()
     handler = logging.StreamHandler()
@@ -1650,7 +2027,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--detector",
         default="all",
-        help="Detector names to include in TOD plots.",
+        help="Detector names included in individual plots or detector summaries.",
+    )
+    parser.add_argument(
+        "--detector-plots",
+        choices=sorted(DETECTOR_PLOT_MODES),
+        default="individual",
+        help=(
+            "Detector output mode: individual (current plots), summary (band-level population "
+            "summaries), both, or none (default: individual)."
+        ),
     )
     parser.add_argument(
         "--nside",
@@ -1670,7 +2056,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--max-points",
         type=int,
         default=50_000,
-        help="Maximum plotted scan samples per line; evenly thin longer series (default: 50000).",
+        help="Maximum scan samples per panel, shared across iteration lines (default: 50000).",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     return parser
@@ -1744,9 +2130,11 @@ def main(argv: list[str] | None = None) -> int:
 
     started = time.time()
     plot_count = 0
-    if "maps" in plot_types:
-        plot_count += _plot_band_maps(band_entries, output_dir, nside_out)
-        plot_count += _plot_compsep_maps(compsep_entries, output_dir, nside_out, band_filter)
+    individual_detectors = args.detector_plots in {"individual", "both"}
+    summarize_detectors = args.detector_plots in {"summary", "both"}
+
+    # Quick-look phase: small datasets and already-computed spectra, with no map transforms.
+    LOGGER.info("Starting fast plotting phase.")
     if "tod" in plot_types:
         plot_count += _plot_tod_outputs(
             all_band_entries,
@@ -1754,20 +2142,68 @@ def main(argv: list[str] | None = None) -> int:
             output_dir,
             detector_filter,
             args.max_points,
+            include_scalar_traces=True,
+            include_detector_dashboards=False,
+            include_per_iteration=False,
+            include_individual_detectors=individual_detectors,
         )
     if "compsep" in plot_types:
         plot_count += _plot_compsep_diagnostics(
             all_compsep_entries, compsep_entries, output_dir, band_filter
         )
     if "components" in plot_types:
-        plot_count += _plot_component_outputs(
-            all_compsep_entries,
-            compsep_entries,
-            params,
+        plot_count += _plot_component_spectra(all_compsep_entries, output_dir)
+        plot_count += _plot_source_amplitudes(all_compsep_entries, output_dir)
+        plot_count += _plot_component_traces(
+            all_compsep_entries, output_dir, band_filter
+        )
+
+    if "tod" in plot_types and summarize_detectors:
+        LOGGER.info("Writing detector-population summaries.")
+        plot_count += _plot_detector_summaries(
+            all_band_entries, band_entries, output_dir, detector_filter
+        )
+
+    # Detailed detector dashboards combine all iterations but avoid per-iteration plot explosion.
+    if "tod" in plot_types and individual_detectors:
+        LOGGER.info("Writing individual detector dashboards.")
+        plot_count += _plot_tod_outputs(
+            all_band_entries,
+            band_entries,
             output_dir,
-            nside_out,
-            band_filter,
-            args.cmb_galactic_cut_deg,
+            detector_filter,
+            args.max_points,
+            include_scalar_traces=False,
+            include_detector_dashboards=True,
+            include_per_iteration=False,
+            include_individual_detectors=True,
+        )
+
+    # Expensive phase: full maps, per-iteration detector figures, and spherical transforms.
+    LOGGER.info("Starting map and per-iteration plotting phase.")
+    if "maps" in plot_types:
+        plot_count += _plot_band_maps(band_entries, output_dir, nside_out)
+        plot_count += _plot_compsep_maps(compsep_entries, output_dir, nside_out, band_filter)
+    if "tod" in plot_types and individual_detectors:
+        plot_count += _plot_tod_outputs(
+            all_band_entries,
+            band_entries,
+            output_dir,
+            detector_filter,
+            args.max_points,
+            include_scalar_traces=False,
+            include_detector_dashboards=False,
+            include_per_iteration=True,
+            include_individual_detectors=True,
+        )
+    if "tod" in plot_types and summarize_detectors:
+        plot_count += _plot_tod_power_spectra_summary(
+            band_entries, output_dir, detector_filter
+        )
+    if "components" in plot_types:
+        plot_count += _plot_component_maps(compsep_entries, output_dir, nside_out)
+        plot_count += _plot_cmb_galactic_cut_spectra(
+            all_compsep_entries, output_dir, nside_out, args.cmb_galactic_cut_deg
         )
 
     LOGGER.info(

@@ -241,8 +241,9 @@ experiments:
                 - {amp: 0.53, tau_ms: 50.0}
                 - {amp: 0.08, tau_ms: 1.0}
 
-      # Detector dictionaries can be included from a YAML file with the same !inc mechanism used
-      # by Commander4 parameter files. This band also demonstrates a band-level noise override.
+      # Detector dictionaries can be included from a YAML file with the same !import mechanism
+      # used by Commander4 parameter files. This band also demonstrates a band-level noise
+      # override.
       Band100GHz:
         enabled: true
         freq: 100.0
@@ -256,7 +257,8 @@ experiments:
           white: true
           oof: {enabled: false}
         crosstalk: {enabled: true, coupling: 0.02}
-        detectors: !inc detectors_example/band100.yml
+        detectors:
+          !import "detectors_example/band100.yml"
 
       # Disabled but valid examples of the other polarization modes and an explicit cross-talk
       # matrix. Enabling either creates another simulated band.

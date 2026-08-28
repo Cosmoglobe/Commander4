@@ -45,7 +45,7 @@ NSAMP = 200
 def _make_params(sample_amplitudes: bool = True) -> Bunch:
     return Bunch(
         resources=Bunch(compsep=Bunch(num_threads=1)),
-        compsep=Bunch(nside=NSIDE, float_precision="double"),
+        compsep=Bunch(float_precision="double"),
     )
 
 

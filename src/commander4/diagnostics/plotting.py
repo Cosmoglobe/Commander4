@@ -312,6 +312,9 @@ def plot_noise_parameter_density(
     fknee: np.ndarray,
     alpha: np.ndarray,
     accepted: np.ndarray,
+    *,
+    density_label: str = "accepted detector-scans per hexagon",
+    rejected_label: str = "rejected",
 ) -> None:
     """Plot the joint scan distribution of the 1/f knee frequency and slope."""
     fknee = np.asarray(fknee, dtype=float)
@@ -336,7 +339,7 @@ def plot_noise_parameter_density(
             cmap="viridis",
         )
         colorbar = fig.colorbar(density, ax=ax)
-        colorbar.set_label("accepted detector-scans per hexagon")
+        colorbar.set_label(density_label)
         accepted_indices = np.flatnonzero(accepted)
         if accepted_indices.size > 5000:
             keep = np.linspace(0, accepted_indices.size - 1, 5000, dtype=int)
@@ -350,14 +353,18 @@ def plot_noise_parameter_density(
             linewidths=0,
         )
     if np.any(rejected):
+        rejected_indices = np.flatnonzero(rejected)
+        if rejected_indices.size > 5000:
+            keep = np.linspace(0, rejected_indices.size - 1, 5000, dtype=int)
+            rejected_indices = rejected_indices[keep]
         ax.scatter(
-            fknee[rejected],
-            alpha[rejected],
+            fknee[rejected_indices],
+            alpha[rejected_indices],
             s=12,
             marker="x",
             color="tab:red",
             linewidths=0.7,
-            label="rejected",
+            label=rejected_label,
         )
         ax.legend(loc="best")
     ax.set_title(title)
