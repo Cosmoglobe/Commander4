@@ -1,13 +1,12 @@
 """Point-source components: amplitudes living on discrete sky positions rather than in alms.
 
 A point-source component stores one amplitude per source and paints it onto the sky through the
-band beam, so its map/alm operations are unrelated to the diffuse machinery. The two numba kernels
-at the top do that painting and its adjoint.
+band beam, so its map/alm operations are unrelated to the diffuse machinery. The helpers at the top
+do that painting and its adjoint over the cached per-source beam discs.
 """
 import healpy as hp
 import numpy as np
 import pysm3.units as pysm3u
-from numba import njit
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
@@ -17,18 +16,24 @@ from commander4.sky.beams import gauss_beam, get_gauss_beam_radius
 from commander4.math_utils.sht import map_to_alm, map_to_alm_adjoint
 
 
-@njit(fastmath=True)
-def _numba_proj2map(skymap, pix_disc_idx_list, beam_disc_val_list, amps, sed_s=None):
-    for src_i in range(len(pix_disc_idx_list)):
-        skymap[pix_disc_idx_list[src_i]] += beam_disc_val_list[src_i] * amps[src_i]\
-            * (sed_s[src_i] if sed_s is not None else 1)
+def _project_sources_to_map(skymap: NDArray, pixel_discs: list[NDArray],
+                            beam_discs: list[NDArray], amps: NDArray,
+                            sed_s: NDArray | None = None) -> NDArray:
+    """Add each beam-painted source to ``skymap``; source discs may overlap."""
+    scales = amps if sed_s is None else amps*sed_s
+    for pixels, beam, scale in zip(pixel_discs, beam_discs, scales):
+        # query_disc returns unique pixels within one source. The outer loop is sequential, so
+        # sources whose discs overlap accumulate rather than overwrite one another.
+        skymap[pixels] += beam*scale
     return skymap
 
-@njit(fastmath=True, parallel=True)
-def _numba_eval_from_map(map, pix_disc_idx_list, beam_disc_val_list, amps, sed_s=None):
-    for src_i in range(len(pix_disc_idx_list)):
-            amps[src_i] = np.sum(map[pix_disc_idx_list[src_i]] * beam_disc_val_list[src_i])\
-                * (sed_s[src_i] if sed_s is not None else 1)
+def _evaluate_sources_from_map(skymap: NDArray, pixel_discs: list[NDArray],
+                               beam_discs: list[NDArray], amps: NDArray,
+                               sed_s: NDArray | None = None) -> NDArray:
+    """Evaluate the adjoint beam projection for every source into ``amps``."""
+    sed = np.ones(amps.size) if sed_s is None else sed_s
+    for src_i, (pixels, beam) in enumerate(zip(pixel_discs, beam_discs)):
+        amps[src_i] = np.dot(skymap[pixels], beam)*sed[src_i]
     return amps
 
 
@@ -103,11 +108,12 @@ class RadioSources(PointSourcesComponent):
         or self.alpha_arr.shape[0] != self._data.shape[1]:
             raise RuntimeError("Point Source tabulated data must be uniform in length.")
 
-        # Beam discs, filled lazily by `compute_pix_beams` since they depend on the band.
-        self.pix_disc_idx_list = None   # Per-source pixel indices of the disc around the source
-        self.beam_disc_val_list = None  # Per-source beam values, one per pixel in that disc
-        self.band_eval_nside = None     # nside the discs above were computed at
-        self.band_fwhm_r = None         # Beam FWHM (radians) the discs above were computed at
+        # Ragged per-source beam discs, cached because they depend only on the band resolution and
+        # beam. Keeping one array per source matches the natural representation from query_disc.
+        self.pix_disc_idx_list = None
+        self.beam_disc_val_list = None
+        self.band_eval_nside = None  # nside the cached discs were computed at.
+        self.band_fwhm_r = None      # Beam FWHM (radians) used for the cached discs.
 
     def read_dat_to_bunch(self, file_path):
         """ Reads a .dat point source raw table and stores it in a Bunch object which is returned.
@@ -128,7 +134,7 @@ class RadioSources(PointSourcesComponent):
 
     def compute_pix_beams(self, band_fwhm_r, band_nside, recompute=False):
         """ Computes the map-space beam values around every point source, for the given band nside
-            and FWHM, updating pix_disc_idx_list, beam_disc_val_list and the band members in place.
+            and FWHM, updating the per-source beam arrays and the band members in place.
 
         Each source's beam is normalized so that it integrates to unity over the pixels it covers,
         which keeps the source's total flux right at any resolution. Without it a beam narrower than
@@ -143,11 +149,11 @@ class RadioSources(PointSourcesComponent):
         or self.pix_disc_idx_list is None \
         or self.beam_disc_val_list is None \
         or recompute:
-            self.pix_disc_idx_list = []
-            self.beam_disc_val_list = []
             self.band_fwhm_r = band_fwhm_r
             self.band_eval_nside = band_nside
             pixel_area = hp.nside2pixarea(band_nside)
+            self.pix_disc_idx_list = []
+            self.beam_disc_val_list = []
             # Compute the beam disc for each source; these stay fixed until the band changes.
             for i in range(self.lonlat_arr.shape[0]):
                 # `inclusive` keeps every pixel the disc touches, so a disc smaller than a pixel
@@ -167,8 +173,8 @@ class RadioSources(PointSourcesComponent):
                     disc_pix_i_s = np.array([hp.ang2pix(self.band_eval_nside,
                             self.lonlat_arr[i,0], self.lonlat_arr[i,1], lonlat=True)])
                     beam_disc = np.array([1.0/pixel_area])
-                self.pix_disc_idx_list.append(disc_pix_i_s)
-                self.beam_disc_val_list.append(beam_disc)
+                self.pix_disc_idx_list.append(np.asarray(disc_pix_i_s, dtype=np.int64))
+                self.beam_disc_val_list.append(np.asarray(beam_disc, dtype=np.float64))
             return True
         else:
             return False
@@ -192,8 +198,8 @@ class RadioSources(PointSourcesComponent):
         self.compute_pix_beams(fwhm, nside)
         map = np.zeros((1, hp.nside2npix(nside)),
                        dtype=np.float64 if self.double_prec else np.float32)
-        _numba_proj2map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                        self._data[0,:], self.get_sed(nu))
+        _project_sources_to_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
+                                self._data[0,:], self.get_sed(nu))
         map *= self.mJysr_to_uKRJ
         return map
 
@@ -209,7 +215,8 @@ class RadioSources(PointSourcesComponent):
         self.compute_pix_beams(fwhm, nside)
         map = np.zeros((1, hp.nside2npix(nside)),
                        dtype=np.float64 if self.double_prec else np.float32)
-        _numba_proj2map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list, self._data[0,:])
+        _project_sources_to_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
+                                self._data[0,:])
         map *= self.mJysr_to_uKRJ
         return map
     
@@ -217,8 +224,8 @@ class RadioSources(PointSourcesComponent):
         """ Computes the point source contribution in uK_RJ for the band's frequency and beam, and
             sums it into `map`, which must have shape [1, npix].
         """
-        _numba_proj2map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                        self._data[0,:], sed_s = self.get_sed(nu))
+        _project_sources_to_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
+                                self._data[0,:], sed_s=self.get_sed(nu))
         map *= self.mJysr_to_uKRJ
     
     def _eval_from_band_map(self, map, nu):
@@ -227,8 +234,8 @@ class RadioSources(PointSourcesComponent):
 
         All the contributions will be summed to the total proper amplitudes by the master node.
         """
-        _numba_eval_from_map(map[0,:], self.pix_disc_idx_list,
-                             self.beam_disc_val_list, self._data[0,:], sed_s = self.get_sed(nu))
+        _evaluate_sources_from_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
+                                   self._data[0,:], sed_s=self.get_sed(nu))
         self._data *= self.mJysr_to_uKRJ
 
     def project_comp_to_band(self, band:Band, nthreads: int = 1):
