@@ -26,7 +26,7 @@ output:
     console:
       level: 'verbose'
     file:
-      level: 'info'
+      level: 'debug'
 
   profiling: True
 

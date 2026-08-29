@@ -1,0 +1,461 @@
+# Commander4: SO SAT (satp3) deep patch, CG component separation.
+#
+# Data: /mn/stornext/d5/data/sigurdkn/cosmoglobe/so/out_sat3_deep/, 1357 scan files covering
+# seven wafers (ws0-ws6) x two frequencies (f090, f150). Detector names carry a per-wafer prefix
+# (Mv5, Mv27, Mv35, Mv12, Mv23, Mv33, Mv17) and the frequency, so no band can span either: every
+# (wafer, frequency) pair is its own band, with its own gains and noise parameters.
+#
+# MPI: 1357 TOD ranks (one scan each) + 24 CompSep-I + 22 CompSep-QU = 1403 in total.
+#   mpirun -n 1403 commander4 -p params/SO_SAT/param_SO_SAT_CG.yml
+#
+# The detector lists (`detectors_SAT/detectors_<ws>_<freq>.yml`) and the filelists were generated
+# from the files themselves. Each list holds the detectors that are live (non-zero response) in at
+# least one scan of that band and present in every scan of it (roughly half the entries in the
+# files are dead detectors whose TOD is identically zero and whose flags are all-bad, and listing
+# them would only mean reading and discarding them on every scan). (ws1.f150 is the one band whose
+# detector list is not identical across scans: 12 of its 51 scans carry 9 extra detectors, which
+# are excluded because the reader looks every configured detector up in every file.)
+
+# ----------------------------------------
+# GIBBS
+# ----------------------------------------
+gibbs:
+  num_iterations: 20
+
+  seed: 1995
+
+# ----------------------------------------
+# RESOURCES
+# ----------------------------------------
+resources:
+  tod:
+    num_threads: 2
+
+  compsep:
+    num_threads: 1
+
+# ----------------------------------------
+# OUTPUT
+# ----------------------------------------
+output:
+  # All output goes here, in the subdirectories logs/, chains_bands/,
+  # chains_compsep/ and plots/.
+  dir: "../c4_chains/SO_SAT/sat3_nside1024_f090+f150_nocompsep_only-ncorr-fallback/"
+
+  logging:
+    console:
+      level: 'verbose'
+    file:
+      level: 'debug'
+
+  profiling: True
+
+  chains:
+    write: [1,]
+    interval:
+      bands: 1
+      compsep: 1
+      maps: 1
+    maps_nside: "native"
+    include:
+      ncorr_tods: False
+      orbital_dipole_maps: False
+      corr_noise_maps: True
+      sky_model_maps: True
+      residual_maps: true
+      compsep_residual_maps: true
+      chisq_map: true
+
+# ----------------------------------------
+# TOD PROCESSING
+# ----------------------------------------
+tod_processing:
+  jump_detection:  # Unsure if SAT has a gain flag.
+    enabled: false
+
+  abs_gain:
+    enabled: false
+    from_iter: 3
+    calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
+    gap_fill_method: fallback         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
+    downsample_time: 0.1   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+
+  rel_gain:
+    enabled: false
+    from_iter: 3
+    calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
+    gap_fill_method: fallback         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
+    downsample_time: 0.1   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+
+  temporal_gain:
+    enabled: false
+    from_iter: 3
+    calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
+    gap_fill_method: fallback         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
+    downsample_time: 0.1   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+
+  corr_noise:
+    enabled: True
+    from_iter: 1
+    sample_psd_params: True     # Resample the noise-model parameters (needs corr_noise.enabled).
+    sample_sigma0: True           # Re-estimate sigma0 from the n_corr-subtracted residual.
+    nomono: False                 # Project the per-scan monopole out of n_corr (Fortran "nomono").
+    onlymono: False               # Model the correlated noise as only the per-scan offset.
+    sigma0_decimation: 1          # Block-average factor for the sigma0 estimator.
+    psd_fit_nu_min: 0.02          # Min frequency (Hz) for noise-PSD parameter fitting.
+    psd_fit_nu_max: 2.0           # Max frequency (Hz). These files are sampled at ~4.2 Hz, so
+                                  # Nyquist is ~2.1 Hz and the LAT's 10 Hz would be out of band.
+    psd_bin: true                 # Fit every Fourier mode (False) or a mode-weighted binned PSD.
+    sigma0_method: pairwise     # White-noise estimator: 'pairwise' (first-difference) or 'binned_psd'.
+    cg:
+      max_iter: 0  # = use fallback
+      err_tol: 1.0e-5            # Correlated-noise CG convergence tolerance.
+
+  # The SO reader keeps a detector-scan that has as little as one unflagged sample, and some of
+  # these scans are ~99.5% flagged. The sigma0 estimator returns inf when it cannot find two
+  # adjacent valid samples (sigma0.py), and an infinite sigma0 makes the correlated-noise CG divide
+  # by zero and produce a NaN n_corr; because
+  # the gain solve sums s^T N^-1 s over the whole band with MPI, a handful of such detector-scans
+  # turn the band-wide sum into NaN and the absolute gain is silently not updated. Vetoing them on
+  # good_fraction before the noise sampler ever sees them removes the problem at the source.
+  # Measured on ws4_f090: 9 of 7545 detector-scans had sigma0 = inf at good_fraction ~ 0.005.
+  data_selection:
+    enabled: true
+    from_iter: 1
+    chisq_abs_threshold: 1.0e+4   # catastrophic-only; the real cut here is min_good_fraction
+    min_good_fraction: 0.1
+
+
+# ----------------------------------------
+# COMPONENT SEPARATION
+# ----------------------------------------
+compsep:
+  enabled: false
+  double_precision: false
+
+
+
+# ----------------------------------------
+# COMPONENTS
+# ----------------------------------------
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      longname: "CMB"
+      shortname: "cmb"
+      init_from: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_100-1_npipe_02048_fullres_full_T.fits"
+      units: "uK_CMB"
+      # C(l) prior, C3-equivalent 'power_law_gauss' defined in D_l space (see P_Cl_prior):
+      #   D_l = amplitude*(l/l_pivot)^beta * max(exp(-l(l+1)sigma^2), 1e-10),  C_l = 2pi*D_l/(l(l+1)).
+      # Each entry may be a scalar or an [I, QU] pair. BP8.1 CMB values: a flat D_l roof of
+      # 1e6 uK^2 in T (>~1e4 x the real CMB everywhere, so negligible shrinkage where data
+      # constrain) which falls as l^-2 in C_l — this tames the high-l modes that only the SO patch
+      # constrains: outside the patch they are pulled towards zero instead of blowing up. QU
+      # amplitude raised 10x over BP's 1e3 (which was tuned for lmax=2000) to keep the EE Wiener
+      # weight ~1 out to l~4000 given SO's noise.
+      Cl_prior_amplitude: [1.0e+6, 1.0e+4]  # D_l at l_pivot [I, QU]; uK_RJ^2 (~uK_CMB^2 at 1 GHz)
+      Cl_prior_beta: [0.0, -0.5]
+      Cl_prior_l_pivot: 20
+      Cl_prior_FWHM: 2.0  # arcmin; optional Gaussian rolloff of D_l, 0 = off
+      lmax: 1500
+      spatially_varying_MM: False
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1.fits"
+      # BP8.1 dust ('gauss' Cl model): T roof 1e7 uK_RJ^2 at BP's 545 GHz reference, scaled by the
+      # MBB SED^2 (~1.6) to this file's 857 GHz reference; QU 5e2 at 353 GHz (same reference).
+      Cl_prior_amplitude: [1.6e+7, 5.0e+2]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
+      Cl_prior_l_pivot: 50
+      Cl_prior_FWHM: [5.0, 10.0]  # arcmin; Gaussian rolloff of D_l
+      beta: 1.56
+      T: 20
+      nu_ref: [857, 353]  # [I, QU]
+      units: "uK_RJ"
+      lmax: 1500
+      spatially_varying_MM: False
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      longname: "Synchrotron"
+      shortname: "sync"
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1.fits"
+      # BP8.1 synch ('gauss' Cl model): the T roof is effectively off (1e20; the Haslam-scale
+      # signal at 408 MHz is only ~1e14 uK_RJ^2), so in T just the 60' rolloff acts; QU roof
+      # 2e2 at 30 GHz with a 30' rolloff.
+      Cl_prior_amplitude: [1.0e+20, 2.0e+2]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
+      Cl_prior_l_pivot: 100
+      Cl_prior_FWHM: [60.0, 30.0]  # arcmin; Gaussian rolloff of D_l
+      beta: -3.1
+      nu_ref: [0.408, 30]  # [I, QU]
+      units: "uK_RJ"
+      lmax: 1000
+      spatially_varying_MM: False
+
+  FreeFree:
+    enabled: true
+    component_class: "FreeFree"
+    params:
+      polarization: "IQU"
+      longname: "Free-Free"
+      shortname: "ff"
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_ff_amp_BP8.1_v1.fits"
+      # BP8.1 free-free ('power_law_gauss' Cl model): rising D_l ~ l^2 roof (1e3 at l=50, 40 GHz)
+      # with a 30' Gaussian rolloff.
+      Cl_prior_amplitude: 1.0e+3  # D_l at l_pivot; uK_RJ^2 at nu_ref
+      Cl_prior_beta: 2.0
+      Cl_prior_l_pivot: 50
+      Cl_prior_FWHM: 30.0  # arcmin; Gaussian rolloff of D_l
+      T: 7000
+      nu_ref: 40
+      units: "uK_RJ"
+      lmax: 1000
+      spatially_varying_MM: False
+
+# ----------------------------------------
+# EXPERIMENTS
+# ----------------------------------------
+experiments:
+  SO_SAT:
+    enabled: true
+    experiment_id: "SO_SAT"
+    tod_is_compressed: false   # these files store a plain `tod`, not `ztod`
+    mapmaker: "bin"
+    sparse_maps: true
+    bad_data_bitmask: 0b11111111111111111111111111111111  # Treat all flags as "bad". Is this correct?
+    min_unmasked_fraction: 0.1
+    bands:
+      SO_SAT_ws0_f090:
+        enabled: true
+        num_scans: 120          # scans in this band's filelist
+        num_tasks: 12
+        eval_nside: 512
+        fwhm: 30.0 # [arcmin]
+        freq: 90.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_SAT_sat3_deep/filelist_SO_SAT_ws0_f090.txt"
+        processing_masks:
+          ncorr: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+          gain: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+        detectors:
+          !import "detectors_SAT/detectors_ws0_f090.yml"
+
+      SO_SAT_ws0_f150:
+        enabled: true
+        num_scans: 112          # scans in this band's filelist
+        num_tasks: 12
+        eval_nside: 1024
+        fwhm: 17.0 # [arcmin]
+        freq: 150.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_SAT_sat3_deep/filelist_SO_SAT_ws0_f150.txt"
+        processing_masks:
+          ncorr: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+          gain: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+        detectors:
+          !import "detectors_SAT/detectors_ws0_f150.yml"
+
+      SO_SAT_ws1_f090:
+        enabled: true
+        num_scans: 56          # scans in this band's filelist
+        num_tasks: 12
+        eval_nside: 512
+        fwhm: 30.0 # [arcmin]
+        freq: 90.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_SAT_sat3_deep/filelist_SO_SAT_ws1_f090.txt"
+        processing_masks:
+          ncorr: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+          gain: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+        detectors:
+          !import "detectors_SAT/detectors_ws1_f090.yml"
+
+      SO_SAT_ws1_f150:
+        enabled: true
+        num_scans: 51          # scans in this band's filelist
+        num_tasks: 12
+        eval_nside: 1024
+        fwhm: 17.0 # [arcmin]
+        freq: 150.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_SAT_sat3_deep/filelist_SO_SAT_ws1_f150.txt"
+        processing_masks:
+          ncorr: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+          gain: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+        detectors:
+          !import "detectors_SAT/detectors_ws1_f150.yml"
+
+      SO_SAT_ws2_f090:
+        enabled: true
+        num_scans: 80          # scans in this band's filelist
+        num_tasks: 12
+        eval_nside: 512
+        fwhm: 30.0 # [arcmin]
+        freq: 90.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_SAT_sat3_deep/filelist_SO_SAT_ws2_f090.txt"
+        processing_masks:
+          ncorr: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+          gain: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+        detectors:
+          !import "detectors_SAT/detectors_ws2_f090.yml"
+
+      SO_SAT_ws2_f150:
+        enabled: true
+        num_scans: 76          # scans in this band's filelist
+        num_tasks: 12
+        eval_nside: 1024
+        fwhm: 17.0 # [arcmin]
+        freq: 150.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_SAT_sat3_deep/filelist_SO_SAT_ws2_f150.txt"
+        processing_masks:
+          ncorr: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+          gain: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+        detectors:
+          !import "detectors_SAT/detectors_ws2_f150.yml"
+
+      SO_SAT_ws3_f090:
+        enabled: true
+        num_scans: 111          # scans in this band's filelist
+        num_tasks: 12
+        eval_nside: 512
+        fwhm: 30.0 # [arcmin]
+        freq: 90.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_SAT_sat3_deep/filelist_SO_SAT_ws3_f090.txt"
+        processing_masks:
+          ncorr: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+          gain: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+        detectors:
+          !import "detectors_SAT/detectors_ws3_f090.yml"
+
+      SO_SAT_ws3_f150:
+        enabled: true
+        num_scans: 98          # scans in this band's filelist
+        num_tasks: 12
+        eval_nside: 1024
+        fwhm: 17.0 # [arcmin]
+        freq: 150.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_SAT_sat3_deep/filelist_SO_SAT_ws3_f150.txt"
+        processing_masks:
+          ncorr: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+          gain: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+        detectors:
+          !import "detectors_SAT/detectors_ws3_f150.yml"
+
+      SO_SAT_ws4_f090:
+        enabled: true
+        num_scans: 104          # scans in this band's filelist
+        num_tasks: 12
+        eval_nside: 512
+        fwhm: 30.0 # [arcmin]
+        freq: 90.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_SAT_sat3_deep/filelist_SO_SAT_ws4_f090.txt"
+        processing_masks:
+          ncorr: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+          gain: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+        detectors:
+          !import "detectors_SAT/detectors_ws4_f090.yml"
+
+      SO_SAT_ws4_f150:
+        enabled: true
+        num_scans: 101          # scans in this band's filelist
+        num_tasks: 12
+        eval_nside: 1024
+        fwhm: 17.0 # [arcmin]
+        freq: 150.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_SAT_sat3_deep/filelist_SO_SAT_ws4_f150.txt"
+        processing_masks:
+          ncorr: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+          gain: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+        detectors:
+          !import "detectors_SAT/detectors_ws4_f150.yml"
+
+      SO_SAT_ws5_f090:
+        enabled: true
+        num_scans: 118          # scans in this band's filelist
+        num_tasks: 12
+        eval_nside: 512
+        fwhm: 30.0 # [arcmin]
+        freq: 90.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_SAT_sat3_deep/filelist_SO_SAT_ws5_f090.txt"
+        processing_masks:
+          ncorr: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+          gain: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+        detectors:
+          !import "detectors_SAT/detectors_ws5_f090.yml"
+
+      SO_SAT_ws5_f150:
+        enabled: true
+        num_scans: 114          # scans in this band's filelist
+        num_tasks: 12
+        eval_nside: 1024
+        fwhm: 17.0 # [arcmin]
+        freq: 150.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_SAT_sat3_deep/filelist_SO_SAT_ws5_f150.txt"
+        processing_masks:
+          ncorr: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+          gain: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+        detectors:
+          !import "detectors_SAT/detectors_ws5_f150.yml"
+
+      SO_SAT_ws6_f090:
+        enabled: true
+        num_scans: 112          # scans in this band's filelist
+        num_tasks: 12
+        eval_nside: 512
+        fwhm: 30.0 # [arcmin]
+        freq: 90.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_SAT_sat3_deep/filelist_SO_SAT_ws6_f090.txt"
+        processing_masks:
+          ncorr: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+          gain: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+        detectors:
+          !import "detectors_SAT/detectors_ws6_f090.yml"
+
+      SO_SAT_ws6_f150:
+        enabled: true
+        num_scans: 104          # scans in this band's filelist
+        num_tasks: 12
+        eval_nside: 1024
+        fwhm: 17.0 # [arcmin]
+        freq: 150.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_SAT_sat3_deep/filelist_SO_SAT_ws6_f150.txt"
+        processing_masks:
+          ncorr: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+          gain: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+        detectors:
+          !import "detectors_SAT/detectors_ws6_f150.yml"
