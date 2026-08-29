@@ -6,7 +6,7 @@ from collections.abc import Iterator
 
 from pixell.bunch import Bunch
 
-from commander4.file_io.experiments import EXPERIMENT_READER_MODULES
+from commander4.file_io.tod_reader import experiment_tod_readers
 from commander4.parameters.parse import load_params
 from commander4.parameters.schema import (
     TOP_LEVEL_BLOCKS,
@@ -144,11 +144,11 @@ def _validate_components(params) -> None:
 def _validate_experiments(params) -> None:
     for band_info in enabled_tod_bands(params):
         experiment = params.experiments[band_info.experiment_name]
-        if experiment.experiment_id not in EXPERIMENT_READER_MODULES:
+        if experiment.experiment_id not in experiment_tod_readers:
             raise ValueError(
                 f"experiments.{band_info.experiment_name}.experiment_id is "
                 f"{experiment.experiment_id!r}; known readers are "
-                f"{sorted(EXPERIMENT_READER_MODULES)}."
+                f"{sorted(experiment_tod_readers)}."
             )
         band = experiment.bands[band_info.band_name]
         if "detectors" not in band or len(band.detectors) == 0:
