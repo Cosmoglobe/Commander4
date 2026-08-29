@@ -24,6 +24,7 @@ from commander4.sky.sky_model import SkyModel
 from commander4.compsep.cg_solver import CompSepSolver
 from commander4.compsep.chisq import ChisqResult, collect_fit_diagnostics, evaluate_chi2
 from commander4.compsep.perpix_solver import solve_compsep_perpix
+from commander4.compsep.preconditioners import SUPPORTED_PRECONDITIONERS
 from commander4.compsep.spectral_index import SpectralIndexSamplingGroup
 from commander4.file_io.chain_writer import write_compsep_chain_to_file
 from commander4.polarization import get_execution_band_id, EXECUTION_POLS
@@ -108,8 +109,16 @@ class CGSamplingGroupConfig(SamplingGroupConfig):
                 or not isinstance(self.dense_matrix_debug_mode, bool)):
             raise ValueError(
                 f"CG sampling group {self.name!r} boolean options must be true or false.")
-        if not isinstance(self.preconditioner, str) or not self.preconditioner:
-            raise ValueError(f"CG sampling group {self.name!r} preconditioner must be a name.")
+        if self.dense_matrix_debug_mode:
+            raise ValueError(
+                f"CG sampling group {self.name!r} selects the unsupported dense-matrix debug mode: "
+                "commander4.compsep.dense_matrix_debug predates the CompList-based CG driver and "
+                "builds its unit vectors as plain arrays, so the solve crashes as soon as the "
+                "operator is applied. Leave dense_matrix_debug_mode off until it is ported.")
+        if self.preconditioner not in SUPPORTED_PRECONDITIONERS:
+            raise ValueError(f"CG sampling group {self.name!r} selects preconditioner "
+                             f"{self.preconditioner!r}; supported values are "
+                             f"{list(SUPPORTED_PRECONDITIONERS)}.")
 
 @dataclass(frozen=True)
 class PerPixelSamplingGroupConfig(SamplingGroupConfig):
@@ -304,6 +313,31 @@ def _validate_sampling_group_dependencies(
                 f"{sorted(amplitude_groups)}.")
 
 
+def _validate_mcmc_sampled_components(mcmc_groups: dict[str, MCMCSamplingGroupConfig],
+                                      comp_list: CompList) -> None:
+    """Report components an MCMC group names that have spectral-index sampling switched off.
+    """
+    sampling_off = set()
+    for comp in comp_list.joined():
+        if "sample_spectral_index" not in comp.comp_params \
+                or not bool(comp.comp_params.sample_spectral_index):
+            sampling_off.add(comp.comp_name)
+
+    for group in mcmc_groups.values():
+        if group.comps is None:
+            continue
+        ignored = sorted(set(group.comps) & sampling_off)
+        if ignored:
+            logger.error(
+                f"MCMC sampling group {group.name!r} names component(s) {ignored}, but they do not "
+                "set 'sample_spectral_index: true' in their own params block, so their spectral "
+                "indices are held fixed and the group ignores them. Set the flag on each component "
+                "you want sampled, or drop it from the group's 'comps'.")
+            if not set(group.comps) - sampling_off:
+                logger.error(f"MCMC sampling group {group.name!r} has no component left to sample "
+                             "and will do nothing.")
+
+
 def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
     """Report component multipoles that no band can constrain.
 
@@ -421,6 +455,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     _validate_sampling_group_references(mcmc_groups, comp_list, params)
     _validate_sampling_group_dependencies(amplitude_groups, mcmc_groups)
     if mpi_info.compsep.rank == mpi_info.compsep.master:  # One report, not one per band.
+        _validate_mcmc_sampled_components(mcmc_groups, comp_list)
         _validate_component_lmax(comp_list, params)
     if cg_groups:
         amplitude_method = "cg"

@@ -16,6 +16,7 @@ from commander4.compsep.processing import (
     _sampling_group_selects_band,
     _validate_sampling_group_dependencies,
     _validate_sampling_group_references,
+    _validate_mcmc_sampled_components,
     _validate_component_lmax,
     init_compsep_processing,
     process_compsep,
@@ -403,6 +404,55 @@ def test_validate_mcmc_amplitude_group_dependencies() -> None:
         "beta", Bunch(update_amplitude_groups=["does_not_exist"]))}
     with pytest.raises(ValueError, match="unknown or disabled amplitude group"):
         _validate_sampling_group_dependencies(amplitudes, invalid)
+
+
+def _disable_spectral_index_sampling(comp_list: CompList, comp_name: str) -> None:
+    """Turn `sample_spectral_index` off on every execution view of one component."""
+    for comp in comp_list:
+        if comp.comp_name == comp_name:
+            comp.comp_params.sample_spectral_index = False
+
+
+def test_mcmc_group_naming_only_sampled_components_is_silent(caplog) -> None:
+    comp_list = _make_spectral_comp_list()  # Synchrotron and ThermalDust, both flag on
+    groups = {"beta": MCMCSamplingGroupConfig.from_block(
+        "beta", Bunch(comps=["Synchrotron", "ThermalDust"]))}
+    with caplog.at_level("WARNING"):
+        _validate_mcmc_sampled_components(groups, comp_list)
+    assert caplog.text == ""
+
+
+def test_mcmc_group_naming_a_fixed_component_is_an_error(caplog) -> None:
+    comp_list = _make_spectral_comp_list()
+    _disable_spectral_index_sampling(comp_list, "ThermalDust")
+    groups = {"beta": MCMCSamplingGroupConfig.from_block(
+        "beta", Bunch(comps=["Synchrotron", "ThermalDust"]))}
+    with caplog.at_level("WARNING"):
+        _validate_mcmc_sampled_components(groups, comp_list)
+    assert "ERROR" in caplog.text and "'ThermalDust'" in caplog.text
+    assert "Synchrotron" not in caplog.text  # It is sampled, so it is not reported.
+    assert "no component left to sample" not in caplog.text
+
+
+def test_mcmc_group_with_every_component_fixed_reports_the_empty_group(caplog) -> None:
+    comp_list = _make_spectral_comp_list()
+    _disable_spectral_index_sampling(comp_list, "Synchrotron")
+    _disable_spectral_index_sampling(comp_list, "ThermalDust")
+    groups = {"beta": MCMCSamplingGroupConfig.from_block(
+        "beta", Bunch(comps=["Synchrotron", "ThermalDust"]))}
+    with caplog.at_level("WARNING"):
+        _validate_mcmc_sampled_components(groups, comp_list)
+    assert "no component left to sample" in caplog.text
+
+
+def test_mcmc_group_selecting_all_components_ignores_fixed_ones_silently(caplog) -> None:
+    # `comps: all` means "every sampleable component", so skipping a fixed one is intended.
+    comp_list = _make_spectral_comp_list()
+    _disable_spectral_index_sampling(comp_list, "ThermalDust")
+    groups = {"beta": MCMCSamplingGroupConfig.from_block("beta", Bunch(comps="all"))}
+    with caplog.at_level("WARNING"):
+        _validate_mcmc_sampled_components(groups, comp_list)
+    assert caplog.text == ""
 
 
 def test_build_conditional_residual_subtracts_only_fixed_components() -> None:
