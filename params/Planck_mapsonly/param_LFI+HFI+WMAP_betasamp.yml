@@ -1,0 +1,196 @@
+# ----------------------------------------
+# GIBBS
+# ----------------------------------------
+gibbs:
+  num_iterations: 20
+
+  seed: 1995
+
+# ----------------------------------------
+# RESOURCES
+# ----------------------------------------
+resources:
+  tod:
+    num_threads: 1
+
+  compsep:
+    # Assumes a 384-core node. Adjust with `c4-validate-params` if on a smaller node.
+    num_threads: [1, 1, 1, 1, 1, 1, 1, 1, 4, 26, 26, 25, 25, 25, 25, 1, 1, 1, 1, 1, 1, 1, 1, 8, 51, 51, 51, 51]
+
+# ----------------------------------------
+# OUTPUT
+# ----------------------------------------
+    # Use this config if you're on a 128-core node:
+    # num_threads: [1, 1, 1, 1, 1, 1, 1, 1, 1, 8, 8, 8, 8, 8, 8, 1, 1, 1, 1, 1, 1, 1, 1, 2, 16, 15, 15, 15]
+
+
+output:
+  # All output goes here, in the subdirectories logs/, chains_bands/,
+  # chains_compsep/ and plots/.
+  dir: "../c4_chains/mapsonly/LFI+HFI+WMAP_betasamp/"
+
+  logging:
+    console:
+      level: 'verbose'
+    file:
+      level: 'debug'
+
+  profiling: False
+
+  chains:
+    write: [1,]
+    interval:
+      bands: 1
+      compsep: 1
+      maps: 1
+    maps_nside: "native"
+    include:
+      orbital_dipole_maps: True
+      corr_noise_maps: True
+      sky_model_maps: True
+
+# ----------------------------------------
+# TOD PROCESSING
+# ----------------------------------------
+tod_processing: {}  # No TOD processing
+
+# ----------------------------------------
+# COMPONENT SEPARATION
+# ----------------------------------------
+compsep:
+  double_precision: false
+
+  # Amplitude sampling group: the constrained realization of every component's amplitudes, solved
+  # jointly over every band. `all` is also the default for both keys; stated so the file says what
+  # it solves for. The solver controls (max_iter, err_tol, preconditioner) keep their defaults.
+  cg_sampling_groups:
+    sample_amps_CG:
+      enabled: true
+      optimize: false
+      max_iter: 100
+      max_iter_pol: 100
+      err_tol: 0.0
+      preconditioner: JointPreconditioner
+      comps: all
+      bands: all
+
+  # MCMC sampling groups: Metropolis-Hastings over the spectral indices of the selected
+  # components. After each in-bounds proposal the CG groups named in `update_amplitude_groups` are re-solved,
+  # the chi2 over `chisq_bands` (all bands here) drives the accept/reject, and a rejected step reverts
+  # both the indices and all amplitudes. `numstep` MH steps are taken per Gibbs sweep.
+  mcmc_sampling_groups:
+    sample_spectral_indices:
+      enabled: true
+      parameters: spectral_indices
+      comps: [Synchrotron, ThermalDust]
+      update_amplitude_groups: [sample_amps_CG]
+      numstep: 1
+
+      # chisq_bands: [Planck30GHz, WMAPKa, WMAPQ1, WMAPQ2, WMAPV1, WMAPV2, Planck857GHz, Planck353GHz]
+      # Optional: restrict the accept/reject chi2 to part of the sky (C3's
+      # MCMC_SAMPLING_GROUP_CHISQ_MASK). One HEALPix file per group, applied to every band in the
+      # group; ud_graded to each band's nside and thresholded at 0.5, with >0.5 meaning "keep".
+      # This is a parameter-domain mask only -- it never enters the noise model or the amplitude
+      # solve -- and it is the right place for a Galactic-plane or bright-source cut, which would
+      # otherwise let the plane dominate the index likelihood.
+      # chisq_mask: "/path/to/mask_synch_beta_10deg.fits"
+
+
+  bands:
+    ###### HASLAM MAPS ######
+    Haslam408MHz:
+      enabled: true
+      get_from: "file"
+      eval_nside: 512
+      signal_map:
+        path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      rms_map:
+        type: "rms"
+        path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      fwhm: 60.0  # [arcmin]
+      freq: 0.408 # [GHz]
+      polarization: "IQU"
+      units: "uK_CMB"
+
+    ###### WMAP MAPS ######
+    !import "maps_WMAP.yml"
+
+    ###### LFI MAPS ######
+    !import "maps_LFI.yml"
+
+    ###### HFI MAPS ######
+    !import "maps_HFI.yml"
+
+# ----------------------------------------
+# COMPONENTS
+# ----------------------------------------
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      longname: "CMB"
+      shortname: "cmb"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      lmax: 2048
+      spatially_varying_MM: False
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      beta: 1.56
+      T: 20
+      nu_ref: 545.0
+      lmax: 4096
+      spatially_varying_MM: False
+      # Spectral index samplign stuff.
+      sample_spectral_index: True
+      spectral_index_proposal_sigma: 0.01
+      spectral_index_bounds: [1.0, 2.5]  # hard uniform limits (rejected outside)
+      spectral_index_prior:              # optional soft Gaussian prior (omit for a flat prior)
+        type: "gaussian"
+        mean: 1.56
+        rms: 0.1
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      longname: "Synchrotron"
+      shortname: "sync"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      beta: -3.1
+      nu_ref: 30
+      lmax: 1024
+      spatially_varying_MM: False
+      # Spectral index samplign stuff.
+      sample_spectral_index: True
+      spectral_index_proposal_sigma: 0.01
+      spectral_index_bounds: [-4.0, -2.0]
+
+  FreeFree:
+    enabled: false
+    component_class: "FreeFree"
+    params:
+      polarization: "I"
+      longname: "Free-Free"
+      shortname: "ff"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      T: 7000
+      nu_ref: 40
+      lmax: 1024
+      spatially_varying_MM: False
+
+# ----------------------------------------
+# EXPERIMENTS
+# ----------------------------------------
+experiments: {}  # No experiments (tod datasets)

@@ -1,0 +1,79 @@
+WMAPKa:
+  enabled: true
+  get_from: "file"
+  eval_nside: 512
+  signal_map:
+    path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_map_v4.fits"
+    dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
+  rms_map:
+    type: "rms"
+    path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_030-WMAP_Ka_N_v4.fits"
+    dataset_names: ["II_Stokes", "Q_Stokes", "U_Stokes"]
+  fwhm: 39.6 # [arcmin]
+  freq: 33.0 # [GHz]
+  polarization: "IQU"
+  units: "mK_CMB"
+
+WMAPQ1:
+  enabled: true
+  get_from: "file"
+  eval_nside: 512
+  signal_map:
+    path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_map_v4.fits"
+    dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
+  rms_map:
+    type: "rms"
+    path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q1_N_v4.fits"
+    dataset_names: ["II_Stokes", "Q_Stokes", "U_Stokes"]
+  fwhm: 30.6 # [arcmin]
+  freq: 40.6 # [GHz]
+  polarization: "IQU"
+  units: "mK_CMB"
+
+WMAPQ2:
+  enabled: true
+  get_from: "file"
+  eval_nside: 512
+  signal_map:
+    path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_map_v4.fits"
+    dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
+  rms_map:
+    type: "rms"
+    path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_040-WMAP_Q2_N_v4.fits"
+    dataset_names: ["II_Stokes", "Q_Stokes", "U_Stokes"]
+  fwhm: 30.6 # [arcmin]
+  freq: 40.6 # [GHz]
+  polarization: "IQU"
+  units: "mK_CMB"
+
+WMAPV1:
+  enabled: true
+  get_from: "file"
+  eval_nside: 512
+  signal_map:
+    path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_map_v4.fits"
+    dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
+  rms_map:
+    type: "rms"
+    path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V1_N_v4.fits"
+    dataset_names: ["II_Stokes", "Q_Stokes", "U_Stokes"]
+  fwhm: 21.0 # [arcmin]
+  freq: 60.8 # [GHz]
+  polarization: "IQU"
+  units: "mK_CMB"
+
+WMAPV2:
+  enabled: true
+  get_from: "file"
+  eval_nside: 512
+  signal_map:
+    path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_map_v4.fits"
+    dataset_names: ["I_Stokes", "Q_Stokes", "U_Stokes"]
+  rms_map:
+    type: "rms"
+    path: "/mn/stornext/d5/data/duncanwa/WMAP/data/CG_060-WMAP_V2_N_v4.fits"
+    dataset_names: ["II_Stokes", "Q_Stokes", "U_Stokes"]
+  fwhm: 21.0 # [arcmin]
+  freq: 60.8 # [GHz]
+  polarization: "IQU"
+  units: "mK_CMB"

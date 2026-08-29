@@ -1,0 +1,47 @@
+Planck30GHz:
+  enabled: true
+  get_from: "file"
+  eval_nside: 512
+  signal_map:
+    path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_030_IQU_n0512_HM2.fits"
+    dataset_names: ["I_MEAN", "Q_MEAN", "U_MEAN"]
+  rms_map:
+    type: "rms"
+    path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_030_IQU_n0512_HM2.fits"
+    dataset_names: ["I_RMS", "Q_RMS", "U_RMS"]
+  fwhm: 32.3 # [arcmin]
+  freq: 28.4 # [GHz]  Effective band centre, matching the TOD band in params/PlanckLFI/.
+  polarization: "IQU"
+  units: "uK_CMB"
+
+Planck44GHz:
+  enabled: true
+  get_from: "file"
+  eval_nside: 512
+  signal_map:
+    path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_044_IQU_n0512_HM2.fits"
+    dataset_names: ["I_MEAN", "Q_MEAN", "U_MEAN"]
+  rms_map:
+    type: "rms"
+    path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_044_IQU_n0512_HM2.fits"
+    dataset_names: ["I_RMS", "Q_RMS", "U_RMS"]
+  fwhm: 27.0 # [arcmin]
+  freq: 44.1 # [GHz]  Effective band centre, matching the TOD band in params/PlanckLFI/.
+  polarization: "IQU"
+  units: "uK_CMB"
+
+Planck70GHz:
+  enabled: true
+  get_from: "file"
+  eval_nside: 512
+  signal_map:
+    path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_070_IQU_n1024_HM2.fits"
+    dataset_names: ["I_MEAN", "Q_MEAN", "U_MEAN"]
+  rms_map:
+    type: "rms"
+    path: "/mn/stornext/d23/cmbco/globe/releases/dr1/wmap_lfi/v1_HM2/CG_070_IQU_n1024_HM2.fits"
+    dataset_names: ["I_RMS", "Q_RMS", "U_RMS"]
+  fwhm: 13.2 # [arcmin]
+  freq: 70.1 # [GHz]  Effective band centre, matching the TOD band in params/PlanckLFI/.
+  polarization: "IQU"
+  units: "uK_CMB"

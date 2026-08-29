@@ -1,0 +1,222 @@
+# param_LFI+HFI+WMAP_perpix.yml plus Metropolis-Hastings sampling of the synchrotron and dust
+# spectral indices. Maps-only: `experiments` is empty and every band is read from file, smoothed to
+# `compsep.common_res_fwhm` (60', set by Haslam) and read at nside 512 for the per-pixel solver.
+# Each accepted index proposal re-solves the amplitudes, so this is the slowest of the four
+# Planck_mapsonly files.
+
+# ----------------------------------------
+# GIBBS
+# ----------------------------------------
+gibbs:
+  num_iterations: 20
+
+  seed: 1995
+
+# ----------------------------------------
+# RESOURCES
+# ----------------------------------------
+resources:
+  tod:
+    num_threads: 1
+
+  compsep:
+    num_threads: 4
+
+# ----------------------------------------
+# OUTPUT
+# ----------------------------------------
+output:
+  # All output goes here, in the subdirectories logs/, chains_bands/,
+  # chains_compsep/ and plots/.
+  dir: "../c4_chains/mapsonly/LFI+HFI+WMAP_perpix_betasamp/"
+
+  logging:
+    console:
+      level: 'verbose'
+    file:
+      level: 'info'
+
+  profiling: False
+
+  chains:
+    write: [1,]
+    interval:
+      bands: 1
+      compsep: 1
+      maps: 1
+    maps_nside: "native"
+    include:
+      orbital_dipole_maps: True
+      corr_noise_maps: True
+      sky_model_maps: True
+
+# ----------------------------------------
+# TOD PROCESSING
+# ----------------------------------------
+tod_processing: {}
+
+# ----------------------------------------
+# COMPONENT SEPARATION
+# ----------------------------------------
+compsep:
+  double_precision: false
+
+  common_res_fwhm: 60.0  # arcmin; must be >= every band's beam (here Haslam at 60').
+
+  # Per-pixel amplitude sampling groups. The MCMC groups below re-solve the named group(s) after
+  # each spectral-index proposal.
+  per_pixel_sampling_groups:
+    sample_amps_perpix:
+      enabled: true
+
+      # comps: [CMB, Synchrotron, ThermalDust, FreeFree]
+      # comps: [CMB, Synchrotron, ThermalDust]
+      # bands: [Planck30GHz, Haslam408MHz, WMAPKa, WMAPQ1, WMAPQ2, WMAPV1, WMAPV2, Planck857GHz, Planck353GHz]
+
+  # MCMC sampling groups: Metropolis-Hastings over the spectral indices of the selected
+  # components. After each in-bounds proposal the CG groups named in `update_amplitude_groups` are re-solved,
+  # the chi2 over `chisq_bands` (all bands here) drives the accept/reject, and a rejected step reverts
+  # both the indices and all amplitudes. `numstep` MH steps are taken per Gibbs sweep.
+  mcmc_sampling_groups:
+    sample_spectral_indices:
+      enabled: true
+      parameters: spectral_indices
+      comps: [Synchrotron, ThermalDust]
+      update_amplitude_groups: [sample_amps_perpix]
+      numstep: 1
+
+      # chisq_bands: [Planck30GHz, WMAPKa, WMAPQ1, WMAPQ2, WMAPV1, WMAPV2, Planck857GHz, Planck353GHz]
+      # Optional: restrict the accept/reject chi2 to part of the sky (C3's
+      # MCMC_SAMPLING_GROUP_CHISQ_MASK). One HEALPix file per group, applied to every band in the
+      # group; ud_graded to each band's nside and thresholded at 0.5, with >0.5 meaning "keep".
+      # This is a parameter-domain mask only -- it never enters the noise model or the amplitude
+      # solve -- and it is the right place for a Galactic-plane or bright-source cut, which would
+      # otherwise let the plane dominate the index likelihood.
+      # chisq_mask: "/path/to/mask_synch_beta_10deg.fits"
+
+
+  bands:
+    ###### HASLAM MAPS ######
+    Haslam408MHz:
+      enabled: true
+      get_from: "file"
+      eval_nside: 512
+      signal_map:
+        path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      rms_map:
+        type: "rms"
+        path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      fwhm: 60.0  # [arcmin]
+      freq: 0.408 # [GHz]
+      polarization: "IQU"
+      units: "uK_CMB"
+
+    ###### WMAP MAPS ######
+    !import "maps_WMAP.yml"
+
+    ###### LFI MAPS ######
+    !import "maps_LFI_nside512.yml"
+
+    ###### HFI MAPS ######
+    !import "maps_HFI_nside512.yml"
+
+# ----------------------------------------
+# COMPONENTS
+# ----------------------------------------
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      longname: "CMB"
+      shortname: "cmb"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      # Optional mean mu of the Gaussian amplitude prior a ~ N(mu, S), as a FITS sky map (C3's
+      # COMP_AMP_PRIOR_MAP). Read once at startup and converted exactly like an `init_from` map --
+      # same `units` conversion at nu_ref, same l = 3*nside-1 truncation, same iterative inverse
+      # SHT -- then enters the CG right-hand side as S^{-1/2} mu. Omitted means a zero-mean prior.
+      # amp_prior_mean_map: "/path/to/cmb_prior_mean.fits"
+      lmax: 1024
+      spatially_varying_MM: False
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      beta: 1.56
+      T: 20
+      nu_ref: 545
+      lmax: 1024
+      spatially_varying_MM: False
+      sample_spectral_index: True
+      spectral_index_proposal_sigma: 0.02
+      spectral_index_bounds: [1.0, 2.5]  # hard uniform limits (rejected outside)
+      spectral_index_prior:              # optional soft Gaussian prior (omit for a flat prior)
+        type: "gaussian"
+        mean: 1.56
+        rms: 0.1
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      longname: "Synchrotron"
+      shortname: "sync"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      beta: -3.1
+      nu_ref: 30
+      lmax: 512
+      spatially_varying_MM: False
+      sample_spectral_index: True
+      spectral_index_proposal_sigma: 0.01
+      spectral_index_bounds: [-4.0, -2.0]
+
+  FreeFree:
+    enabled: true
+    component_class: "FreeFree"
+    params:
+      polarization: "I"
+      longname: "Free-Free"
+      shortname: "ff"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      T: 7000
+      nu_ref: 40
+      lmax: 512
+      spatially_varying_MM: False
+
+  RadioSources:
+    enabled: False
+    component_class: "RadioSources"
+    params:
+      polarization: "I"
+      longname: "RadioSources"
+      shortname: "radsources"
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
+      nu_0: 30.0  # Ghz
+
+  SpinningDust:
+    enabled: False
+    component_class: "SpinningDust"
+    params:
+      polarization: "I"
+      longname: "SpinningDust"
+      shortname: "sdust"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
+      nu_peak: 25.3  # Ghz
+      nu_0: 22.0  # Ghz
+      lmax: 1000
+      spatially_varying_MM: False
+
+# ----------------------------------------
+# EXPERIMENTS
+# ----------------------------------------
+experiments: {}

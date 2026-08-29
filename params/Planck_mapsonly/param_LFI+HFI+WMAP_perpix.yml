@@ -1,0 +1,160 @@
+# Maps-only per-pixel component separation on the LFI, HFI and WMAP frequency maps.
+# There is no TOD side: `experiments` is empty, so every band is read from file. The per-pixel
+# solver needs one common resolution, so every band is smoothed to `compsep.common_res_fwhm` (60',
+# set by Haslam, the broadest beam) and read at nside 512. This is the cheap alternative to the CG
+# solver in param_LFI+HFI+WMAP.yml, which runs the same data at each band's native resolution.
+
+# ----------------------------------------
+# GIBBS
+# ----------------------------------------
+gibbs:
+  num_iterations: 5
+
+  seed: 1995
+
+# ----------------------------------------
+# RESOURCES
+# ----------------------------------------
+resources:
+  tod:
+    num_threads: 1
+
+  compsep:
+    num_threads: 4
+
+# ----------------------------------------
+# OUTPUT
+# ----------------------------------------
+output:
+  # All output goes here, in the subdirectories logs/, chains_bands/,
+  # chains_compsep/ and plots/.
+  dir: "../c4_chains/mapsonly/LFI+HFI+WMAP_perpix/"
+
+  logging:
+    console:
+      level: 'verbose'
+    file:
+      level: 'debug'
+
+  profiling: False
+
+  chains:
+    write: [1,]
+    interval:
+      bands: 1
+      compsep: 1
+      maps: 1
+    maps_nside: "native"
+    include:
+      orbital_dipole_maps: True
+      corr_noise_maps: True
+      sky_model_maps: True
+
+# ----------------------------------------
+# TOD PROCESSING
+# ----------------------------------------
+tod_processing: {}  # No TOD processing
+
+# ----------------------------------------
+# COMPONENT SEPARATION
+# ----------------------------------------
+compsep:
+  double_precision: false
+
+  common_res_fwhm: 60.0  # arcmin; must be >= every band's beam (here Haslam at 60').
+
+  # Amplitude sampling group: the constrained realization of every component's amplitudes, solved
+  # jointly over every band. `all` is also the default for both keys; stated so the file says what
+  # it solves for. The solver controls (max_iter, err_tol, preconditioner) keep their defaults.
+  per_pixel_sampling_groups:
+    sample_amps_perpix:
+      enabled: true
+      comps: all
+      bands: all
+
+  bands:
+    ###### HASLAM MAPS ######
+    Haslam408MHz:
+      enabled: true
+      get_from: "file"
+      eval_nside: 512
+      signal_map:
+        path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      rms_map:
+        type: "rms"
+        path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      fwhm: 60.0  # [arcmin]
+      freq: 0.408 # [GHz]
+      polarization: "IQU"
+      units: "uK_CMB"
+
+    ###### WMAP MAPS ######
+    !import "maps_WMAP.yml"
+
+    ###### LFI MAPS ######
+    !import "maps_LFI_nside512.yml"
+
+    ###### HFI MAPS ######
+    !import "maps_HFI_nside512.yml"
+
+# ----------------------------------------
+# COMPONENTS
+# ----------------------------------------
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      longname: "CMB"
+      shortname: "cmb"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      lmax: 2048
+      spatially_varying_MM: False
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      beta: 1.56
+      T: 20
+      nu_ref: 545.0
+      lmax: 4096
+      spatially_varying_MM: False
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      longname: "Synchrotron"
+      shortname: "sync"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      beta: -3.1
+      nu_ref: 30
+      lmax: 1024
+      spatially_varying_MM: False
+
+  FreeFree:
+    enabled: false
+    component_class: "FreeFree"
+    params:
+      polarization: "I"
+      longname: "Free-Free"
+      shortname: "ff"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      T: 7000
+      nu_ref: 40
+      lmax: 1024
+      spatially_varying_MM: False
+
+# ----------------------------------------
+# EXPERIMENTS
+# ----------------------------------------
+experiments: {}  # No experiments (tod datasets)
