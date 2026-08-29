@@ -93,7 +93,7 @@ A YAML file reusing the main program's conventions. The fully annotated
 [params/param_default.yml](params/param_default.yml) documents every implemented option and is
 also runnable as written:
 
-- `general`: `nside`, `units` (TOD unit, `uK_RJ`), `float_precision`, `seed`, `output_dir`.
+- `general`: `nside`, `units` (TOD unit, `uK_RJ`), `double_precision`, `seed`, `output_dir`.
 - `components`: **the same block shape as a Commander4 param file** — each enabled component is
   realized by the matching `commander4.sky.component` class for its SED. Diffuse foregrounds
   take a `template:` block (`{source: pysm3, preset: ...}` or `{source: fits, path: ...}`); the CMB
@@ -129,7 +129,7 @@ truth. See [`params/sims/README.md`](../params/sims/README.md) for how to run a 
 |---|---|---|
 | `params/param_gain.yml`      | `params/sims/simparam_gain.yml`         | `abs_gain` / `rel_gain` calibration (orbital dipole + sky) |
 | `params/param_corrnoise.yml` | `params/sims/simparam_corrnoise.yml`    | `corr_noise`: n_corr, PSD parameters, sigma0 |
-| `params/param_compsep.yml`   | `params/sims/simparam_compsep_CG.yml`   | CG amplitude sampling, C(l) prior, fluctuations |
+| `params/param_compsep.yml`   | `params/sims/simparam_compsep_only.yml`   | CG amplitude sampling, C(l) prior, fluctuations |
 | `params/param_compsep.yml`   | `params/sims/simparam_compsep_MCMC.yml` | MH spectral-index sampling |
 | `params/param_patch.yml`     | `params/sims/simparam_patch.yml`        | partial sky: `sparse_maps`, prior-driven unobserved pixels |
 | `params/param_transfunc.yml` | `params/sims/simparam_transfunc.yml`    | bolometer transfer function: the damage from *not* modelling it |

@@ -30,7 +30,7 @@
 general:
   nside: 64                 # Working HEALPix nside for sky-map construction.
   units: "uK_RJ"            # Sky unit; detector `gain` converts it to stored TOD units.
-  float_precision: "single"   # Required by the reused Commander4 component constructors.
+  double_precision: false   # Required by the reused Commander4 component constructors.
   seed: 4242                # Base RNG seed (CMB realization + per-(band,scan,det) noise).
   output_dir: "../c4_sims/simgen_gain/"
 

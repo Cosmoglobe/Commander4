@@ -26,7 +26,7 @@
 general:
   nside: 128
   units: "uK_RJ"
-  float_precision: "single"
+  double_precision: false
   seed: 5150
   output_dir: "../c4_sims/simgen_patch/"
 

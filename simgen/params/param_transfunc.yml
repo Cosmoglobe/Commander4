@@ -17,7 +17,7 @@
 general:
   nside: 64
   units: "uK_RJ"
-  float_precision: "single"
+  double_precision: false
   seed: 71
   output_dir: "../c4_sims/simgen_transfunc/"
 

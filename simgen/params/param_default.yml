@@ -13,7 +13,7 @@
 general:
   nside: 64                 # HEALPix nside used to construct component truth maps.
   units: "uK_RJ"            # Sky and TOD unit; any unit understood by pysm3 is accepted.
-  float_precision: "single" # Passed to the reused Commander4 component constructors.
+  double_precision: false
   seed: 1234                # CMB seed and root of per-(band, scan, detector) noise seeds.
   output_dir: "cmdr4_sims/simgen_default/"
 
