@@ -230,20 +230,8 @@ def resolve_band_lmax(params: Bunch, band_name: str, experiment: str | None, nsi
 
 
 def validate_param_schema(params_dict: dict) -> None:
-    """Reject any top-level key outside `TOP_LEVEL_BLOCKS`.
-
-    Takes the raw parameter dictionary rather than the parsed Bunch, since `parse_params` injects
-    `parameter_file_as_string` onto the latter. Called on every rank before anything else, so a
-    stale parameter file fails immediately and everywhere rather than at the first stale read.
+    """Reject any top-level key outside `TOP_LEVEL_BLOCKS`
     """
-    if "general" in params_dict:
-        raise ValueError(
-            "The 'general' block was replaced by blocks named after the part of the program that "
-            f"reads them: {', '.join(TOP_LEVEL_BLOCKS)}. Gibbs loop control moved to 'gibbs', "
-            "thread counts to 'resources', output paths and chain writing to 'output', TOD "
-            "sampling steps to 'tod_processing', and nside / float precision / CG settings to "
-            "'compsep'. See notes/proposed_param_layout.yml for the full layout."
-        )
     unknown = sorted(set(params_dict) - set(TOP_LEVEL_BLOCKS))
     if unknown:
         raise ValueError(f"Unknown top-level parameter block(s) {unknown}. The valid blocks are "

@@ -222,7 +222,7 @@ class MCMCSamplingGroup(ABC):
             accept = self.comm.bcast(accept, root=self.root)
 
             if self.is_root:
-                logger.verbose(f"MCMC step {step+1}/{numstep}: dloglike={delta_loglike:.3e} "
+                logger.info(f"MCMC step {step+1}/{numstep}: dloglike={delta_loglike:.3e} "
                                f"[{'ACCEPT' if accept else 'reject'}] ({current_state} -> "
                                f"{proposed_state}).")
 

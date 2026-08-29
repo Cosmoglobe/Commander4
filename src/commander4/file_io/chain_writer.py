@@ -30,10 +30,14 @@ _MAP_KINDS = {"rms": "rms", "cov": "weight", "nhit": "count"}
 
 
 def _degrade_map(value: NDArray, kind: str, nside_out: int) -> NDArray:
-    """Bring one `maps/` dataset to `nside_out`, in whatever quantity it is additive in.
+    """Bring one `maps/` dataset down to `nside_out`, in whatever quantity it is additive in.
 
     `hp.ud_grade` averages the sub-pixels it merges, which is right for a brightness but wrong for
     the other kinds: a weight, a count, and an rms (through its inverse variance) all add.
+
+    Only downgrading is defined here: the sub-pixel count below is what turns the average back
+    into a sum, and it is zero (silently collapsing rms to inf and the counts to zero) for a finer
+    `nside_out`. The caller is responsible for not asking for one.
     """
     if kind == "brightness":
         return hp.ud_grade(value, nside_out, dtype=np.float32)
@@ -41,6 +45,8 @@ def _degrade_map(value: NDArray, kind: str, nside_out: int) -> NDArray:
     # sub-pixels fell in each new pixel. An rms adds as its inverse variance, 1/sigma^2.
     additive = 1.0/value**2 if kind == "rms" else value
     subpixels = value.shape[-1] // hp.nside2npix(nside_out)
+    if subpixels < 1:
+        raise ValueError(f"_degrade_map cannot upgrade a '{kind}' map to nside {nside_out}.")
     summed = hp.ud_grade(additive.astype(np.float64), nside_out)*subpixels
     if kind == "rms":
         return (1.0/np.sqrt(summed)).astype(np.float32)
@@ -142,7 +148,9 @@ def write_band_chain_to_file(params: Bunch, chain: int, iter: int, exp_name: str
             return
         for key, value in maps_to_file.items():
             kind = _MAP_KINDS.get(key, "brightness")
-            if nside_out != "native" and hp.npix2nside(value.shape[-1]) != nside_out:
+            # `maps_nside` is a cap: it thins maps that are finer than it, and leaves anything
+            # already coarser alone.
+            if nside_out != "native" and nside_out < hp.npix2nside(value.shape[-1]):
                 value = _degrade_map(value, kind, nside_out)
             if band_unit_factor != 1.0:
                 value = _to_band_unit(value, kind, band_unit_factor)
