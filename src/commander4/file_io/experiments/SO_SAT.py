@@ -26,7 +26,7 @@ from commander4.file_io.experiments.read_utils import (
 logger = logging.getLogger(__name__)
 
 
-def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_names: list[str],
+def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_names: list[str],
                params: Bunch, scan_idx_start: int,
                scan_idx_stop: int) -> DetectorGroupTOD:
     """Read this rank's scans for one SO SAT band from its HDF5 scan files.
@@ -184,7 +184,9 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_name
         if i_pid % 10 == 0:
             gc.collect()
 
-    noise_model = NoisePSDOof()
+    noise_model = NoisePSDOof(P_uni=[[np.nan, np.nan],  # sigma0
+                                     [0.01  ,    100],  # fknee
+                                     [-4.5  ,    0.0]]) # alpha
     apply_noise_priors(noise_model, params, expname, bandname)
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)

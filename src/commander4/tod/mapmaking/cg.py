@@ -79,7 +79,7 @@ class CGMapmaker:
             nthreads: Number of threads for FFT and HEALPix operations.
             double_prec: If True, use float64 for internal maps.
             CG_maxiter: Maximum number of CG iterations.
-            CG_tol: Convergence tolerance on the CG residual.
+            CG_tol: Convergence tolerance on the squared relative preconditioned residual.
             CG_check_interval: Check convergence every this many iterations.
             pixel_domain: Pixel-distribution domain. When ``None`` a full-sky domain is built, in
                 which case every rank holds full-sky local maps (the historical behaviour). In
@@ -327,7 +327,8 @@ class CGMapmaker:
             niter = i + 1
             log_this_iter = i % self.CG_check_interval == 0
             if log_this_iter and ismaster:
-                self.logger.verbose(f"Mapmaker CG iter {i:3d} - Residual {CG_solver.err:.6e}")
+                self.logger.verbose(
+                    f"Mapmaker CG iter {i:3d} - squared residual {CG_solver.err:.6e}")
             if log_this_iter and check_x_true:
                 # apply_LHS is collective, so it is called outside the master-only branch; it takes
                 # its input from, and returns its result to, the master alone.
@@ -347,8 +348,8 @@ class CGMapmaker:
             # CG_tol == 0 means running to max_iter was on purpose, and is not concerning.
             if not converged and self.CG_tol > 0.0:
                 self.logger.warning(f"Mapmaker CG reached its maximum of {self.CG_maxiter} "
-                                    f"iterations with residual {CG_solver.err:.3e}.")
-            self.logger.info(f"Mapmaker CG finished after {niter} iterations with residual "
+                                    f"iterations with squared residual {CG_solver.err:.3e}.")
+            self.logger.info(f"Mapmaker CG finished after {niter} iterations with squared residual "
                              f"{CG_solver.err:.3e} (tolerance {self.CG_tol:.3e}).")
 
     

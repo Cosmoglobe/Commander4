@@ -38,14 +38,16 @@ experiment_tod_readers = {
 }
 
 
-def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, my_det: Bunch,
+def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
+                        det_names: list[str],
                         params: Bunch, my_scans_start: int,
                         my_scans_stop: int) -> DetectorGroupTOD:
     """Read this rank's share of one band's scans, using the reader its experiment registers.
 
     Args:
         band_comm: The band's MPI communicator; each rank reads a disjoint range of scans.
-        my_experiment, my_band, my_det: The experiment, band and detector parameter blocks.
+        my_experiment, my_band: The experiment and band parameter blocks.
+        det_names: Detector names in full-band index order.
         my_scans_start, my_scans_stop: The requested global scan range for this rank.
 
     Returns:
@@ -62,8 +64,8 @@ def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunc
 
     # Load and execute TOD loader script for this specific experiment.
     my_tod_reader = experiment_tod_readers[my_experiment.experiment_id]
-    experiment_data: DetectorGroupTOD = my_tod_reader(band_comm, my_experiment, my_band, my_det, params,
-                                                 my_scans_start, my_scans_stop)
+    experiment_data: DetectorGroupTOD = my_tod_reader(
+        band_comm, my_experiment, my_band, det_names, params, my_scans_start, my_scans_stop)
 
     # Because some scans might have been discarded during read-in, we can only now figure out what
     # the scan start and stop index each rank holds.

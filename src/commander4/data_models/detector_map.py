@@ -106,6 +106,10 @@ class DetectorMap:
         if map_sky.shape[0] not in [1,2]:
             raise ValueError("Trying to set sky map with wrong first axis length "
                              f"{map_sky.shape[0]} != 1 or 2")
+        expected_npix = hp.nside2npix(nside)
+        if map_sky.shape[-1] != expected_npix:
+            raise ValueError(f"Map pixel count {map_sky.shape[-1]} does not match nside {nside} "
+                             f"({expected_npix} pixels).")
 
         self.map_sky = map_sky
         self.nu = nu

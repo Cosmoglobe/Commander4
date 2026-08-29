@@ -31,7 +31,7 @@ from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 logger = logging.getLogger(__name__)
 
 
-def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_names: list[str],
+def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_names: list[str],
                params: Bunch, scan_idx_start: int,
                scan_idx_stop: int) -> DetectorGroupTOD:
     """Read this rank's scans for one LiteBIRD band from its litebird_sim HDF5 files.

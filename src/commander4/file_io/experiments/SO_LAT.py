@@ -26,7 +26,8 @@ from commander4.diagnostics.performance import benchmark, bench_summary, start_b
 logger = logging.getLogger(__name__)
 
 
-def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, all_det_names: list[str],
+def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
+               all_det_names: list[str],
                params: Bunch, scan_idx_start: int,
                scan_idx_stop: int) -> DetectorGroupTOD:
     """Read this rank's scans for one SO LAT band from its HDF5 scan files.

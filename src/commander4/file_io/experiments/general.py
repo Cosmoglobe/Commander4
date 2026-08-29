@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 GOOD_DATA_BITMASK = 6111232
 
 
-def tod_reader(band_comm: MPI.Comm, my_experiment: str, my_band: Bunch, det_names: list[str],
+def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_names: list[str],
                params: Bunch, scan_idx_start: int,
                scan_idx_stop: int) -> DetectorGroupTOD:
     """Read this rank's scans for one band from its HDF5 scan files.
