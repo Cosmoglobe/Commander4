@@ -157,9 +157,11 @@ def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any =
     mapmaker on the band, the experiment, or globally, for instance). `scopes` are dotted paths
     into `params` listed most specific first, e.g.::
 
-        resolve_param(params, "mapmaker", (f"experiments.{exp}.bands.{band}",
+        resolve_param(params, "mapmaker", ("", f"experiments.{exp}.bands.{band}",
                                            f"experiments.{exp}", "tod_processing"))
 
+    Scopes can include "", which just means to look for the key at the root node of `params`.
+                                           
     Presence decides, not truthiness: a scope setting ``0`` or ``false`` answers the lookup rather
     than deferring to a wider one. Which scope supplied the value is logged at debug level, since an
     overridden setting is otherwise invisible, and "why did this band use the CG mapmaker" is worth
@@ -193,7 +195,9 @@ def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any =
 
     for scope in scopes:
         block = params
-        for part in scope.split("."):
+        # An empty scope addresses `params` itself, for callers that were handed one block rather
+        # than the whole parameter file.
+        for part in (scope.split(".") if scope else ()):
             if part not in block:
                 message = (f"Parameter scope '{scope}' does not exist (no '{part}'), so '{key}' "
                            f"cannot be looked up there; check the parameter file.")
@@ -204,12 +208,14 @@ def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any =
             block = block[part]
         else:
             if key in block:
-                logger.debug(f"Resolved '{key}' = {block[key]!r} from '{scope}'.")
-                return checked(block[key], f"from '{scope}'")
+                source = f"'{scope}'" if scope else "the given parameter block"
+                logger.debug(f"Resolved '{key}' = {block[key]!r} from {source}.")
+                return checked(block[key], f"from {source}")
+    searched = [scope if scope else "the given parameter block" for scope in scopes]
     if default is _NO_DEFAULT:
-        raise ValueError(f"'{key}' is not set in any of {list(scopes)}, and has no default. Set "
+        raise ValueError(f"'{key}' is not set in any of {searched}, and has no default. Set "
                          f"it in one of them; the first that defines it wins.")
-    logger.debug(f"'{key}' is not set in any of {list(scopes)}; using default {default!r}.")
+    logger.debug(f"'{key}' is not set in any of {searched}; using default {default!r}.")
     return checked(default, "the default")
 
 

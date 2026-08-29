@@ -69,7 +69,8 @@ class Component:
         )
         self.eval_pol = self.defined_pol if eval_pol is None else eval_pol
         type(self)._assert_legal_pol(self.eval_pol, role="evaluation")
-        self.double_prec = resolve_param(global_params, "double_precision", ("compsep",),
+        # Look for "double_precision" in the parameter Bunch given.
+        self.double_prec = resolve_param(global_params, "double_precision", ("",),
                                          default=False, legal_types=bool)
         self._data = None
         # FWHM beam of the component. If the CG solver was used, this will be 0, as it solves for
