@@ -46,8 +46,8 @@ def gibbs_schedule(num_iterations: int) -> list[tuple[int, int]]:
             for chain in (1, 2)]
 
 
-def seed_iteration_rng(params: Bunch, mpi_info: Bunch, chain: int, iteration: int):
-    """Sets unique seed per chain+rank+iteration for numpy's RNG.
+def seed_iteration_rng(params: Bunch, mpi_info: Bunch, chain: int, iteration: int) -> int:
+    """Sets unique seed per chain+rank+iteration for numpy's RNG, and returns it.
     """
     import numpy as np
 
@@ -57,6 +57,7 @@ def seed_iteration_rng(params: Bunch, mpi_info: Bunch, chain: int, iteration: in
         [root_seed, chain, iteration, mpi_info.world.rank, side]
     ).generate_state(1)[0])
     np.random.seed(seed)
+    return seed
 
 
 def run_tod_side(mpi_info: Bunch, params: Bunch, experiment_data, my_band_tod_id: str,
