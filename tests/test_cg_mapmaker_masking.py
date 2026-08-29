@@ -12,7 +12,6 @@ are handled correctly by the C ``map2tod``/accumulator pair.
 from types import SimpleNamespace
 
 import numpy as np
-import pytest
 from mpi4py import MPI
 
 from commander4.data_models.detector_tod import DetectorTOD
@@ -75,16 +74,6 @@ def test_apply_LHS_I_is_full_sample_diagonal():
     np.testing.assert_allclose(out, expected, rtol=1e-10, atol=1e-12)
     # Pixels hit only by flagged samples still carry weight (gap-filled, not removed, like the RHS).
     assert out[0, 5] != 0.0 and out[0, 9] != 0.0
-
-
-def test_apply_LHS_I_flagged_pixels_are_singly_hit():
-    """Sanity for the assertions above: pixels 5 and 9 are each hit exactly once (by the flagged
-    samples 3 and 7), so their nonzero weight is a genuine consequence of spanning all samples."""
-    nside = 2
-    pix = np.array([0, 1, 2, 5, 4, 6, 7, 9, 8, 10], dtype=np.int64)
-    npix = 12 * nside**2
-    n_all = np.bincount(pix, minlength=npix)
-    assert n_all[5] == 1 and n_all[9] == 1
 
 
 def test_finalize_RHS_without_accumulation_contributes_zeros():

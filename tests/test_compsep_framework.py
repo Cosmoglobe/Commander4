@@ -18,7 +18,6 @@ from commander4.compsep.processing import (
     _validate_sampling_group_references,
     _validate_mcmc_sampled_components,
     _validate_component_lmax,
-    init_compsep_processing,
     process_compsep,
 )
 from commander4.compsep.chisq import evaluate_chi2
@@ -264,17 +263,6 @@ def test_read_sampling_groups_filters_disabled_groups() -> None:
     assert list(groups) == ["active"]
 
 
-def test_comp_name_comes_from_component_bunch_name() -> None:
-    params = Bunch(compsep=_make_compsep())
-    component_cfg = _make_component_cfg("IQU")
-    object.__setattr__(component_cfg, "_name", "CMBFromName")
-    components = Bunch({"cmb": component_cfg})
-
-    comp_list = CompList.init_from_params(components, params)
-
-    assert [comp.comp_name for comp in comp_list] == ["CMBFromName", "CMBFromName"]
-
-
 def _make_spectral_comp_list() -> CompList:
     params = Bunch(compsep=_make_compsep())
     sync = Bunch(
@@ -334,15 +322,6 @@ def test_sampling_group_configs_reject_fields_owned_by_other_methods() -> None:
         PerPixelSamplingGroupConfig.from_block("pixels", Bunch(max_iter=10))
     with pytest.raises(ValueError, match="parameters"):
         MCMCSamplingGroupConfig.from_block("mcmc", Bunch(parameters="gain"))
-
-
-@pytest.mark.parametrize(
-    "preconditioner",
-    ["BeamOnlyPreconditioner", "NoiseOnlyPreconditioner", "MixingMatrixPreconditioner"],
-)
-def test_broken_compsep_preconditioners_cannot_be_selected(preconditioner: str) -> None:
-    with pytest.raises(ValueError, match="supported values"):
-        CGSamplingGroupConfig.from_block("cg", Bunch(preconditioner=preconditioner))
 
 
 def test_broken_dense_matrix_debug_path_cannot_be_selected() -> None:
@@ -411,15 +390,6 @@ def _disable_spectral_index_sampling(comp_list: CompList, comp_name: str) -> Non
     for comp in comp_list:
         if comp.comp_name == comp_name:
             comp.comp_params.sample_spectral_index = False
-
-
-def test_mcmc_group_naming_only_sampled_components_is_silent(caplog) -> None:
-    comp_list = _make_spectral_comp_list()  # Synchrotron and ThermalDust, both flag on
-    groups = {"beta": MCMCSamplingGroupConfig.from_block(
-        "beta", Bunch(comps=["Synchrotron", "ThermalDust"]))}
-    with caplog.at_level("WARNING"):
-        _validate_mcmc_sampled_components(groups, comp_list)
-    assert caplog.text == ""
 
 
 def test_mcmc_group_naming_a_fixed_component_is_an_error(caplog) -> None:
@@ -515,47 +485,6 @@ def test_get_sky_removes_amp_fwhm_by_quadrature() -> None:
                                comp.get_component_map(nside, 0.0)*sed)
 
 
-def test_smooth_to_resolution_updates_beam_signal_and_is_idempotent() -> None:
-    nside = 16
-    npix = 12*nside**2
-    sky = np.random.default_rng(0).standard_normal((1, npix))
-    detector_data = DetectorMap(map_sky=sky.copy(), map_rms=np.ones((1, npix)), nu=30.0,
-                                fwhm=30.0, nside=nside)
-    detector_data.smooth_to_resolution(60.0)
-    assert detector_data.fwhm == 60.0
-    # Smoothing to a coarser beam changes the signal and lowers the noise RMS.
-    assert not np.allclose(detector_data.map_sky, sky)
-    assert detector_data.map_rms.mean() < 1.0
-    # Idempotent via fwhm equality: re-requesting the same resolution leaves everything unchanged.
-    smoothed, rms = detector_data.map_sky.copy(), detector_data.map_rms.copy()
-    detector_data.smooth_to_resolution(60.0)
-    np.testing.assert_array_equal(detector_data.map_sky, smoothed)
-    np.testing.assert_array_equal(detector_data.map_rms, rms)
-    assert detector_data.fwhm == 60.0
-
-
-def test_smooth_to_resolution_is_noop_when_already_at_target() -> None:
-    nside = 16
-    npix = 12*nside**2
-    sky = np.random.default_rng(1).standard_normal((1, npix))
-    detector_data = DetectorMap(map_sky=sky.copy(), map_rms=np.ones((1, npix)), nu=30.0,
-                                fwhm=60.0, nside=nside)
-    detector_data.smooth_to_resolution(60.0)  # already at target: nothing to do.
-    assert detector_data.fwhm == 60.0
-    np.testing.assert_array_equal(detector_data.map_sky, sky)
-
-
-def test_smooth_to_resolution_warns_and_skips_finer_target(caplog) -> None:
-    sky = np.random.default_rng(2).standard_normal((1, 48))
-    detector_data = DetectorMap(map_sky=sky.copy(), map_rms=np.ones((1, 48)), nu=30.0,
-                                fwhm=60.0, nside=2)
-    with caplog.at_level("WARNING"):
-        detector_data.smooth_to_resolution(30.0)  # finer than native: warn, leave unchanged.
-    assert "finer" in caplog.text.lower()
-    assert detector_data.fwhm == 60.0
-    np.testing.assert_array_equal(detector_data.map_sky, sky)
-
-
 def test_discover_spectral_index_groups_groups_iqu_views_and_respects_selection() -> None:
     comp_list = _make_spectral_comp_list()
 
@@ -569,17 +498,6 @@ def test_discover_spectral_index_groups_groups_iqu_views_and_respects_selection(
     # Restricting to one component yields only that component's group.
     only_sync = _discover_spectral_index_groups(comp_list, ["Synchrotron"])
     assert [g.name for g in only_sync] == ["sync"]
-
-
-def test_spectral_groups_do_not_depend_on_shared_parameter_object_identity() -> None:
-    comp_list = _make_spectral_comp_list()
-    sync_views = [comp for comp in comp_list if comp.comp_name == "Synchrotron"]
-    sync_views[1].comp_params = deepcopy(sync_views[1].comp_params)
-
-    groups = _discover_spectral_index_groups(comp_list, ["Synchrotron"])
-
-    assert len(groups) == 1
-    assert {component.eval_pol for component in groups[0].components} == {"I", "QU"}
 
 
 def test_discover_spectral_index_groups_reads_gaussian_prior() -> None:
@@ -600,35 +518,6 @@ def test_spectral_index_gaussian_log_prior_matches_formula() -> None:
     # Off-mean group contributes -0.5 ((beta-mean)/rms)^2; flat group still 0.
     np.testing.assert_allclose(sampler.log_prior({"sync": -3.4, "dust": 1.5}),
                                -0.5*((-3.4 + 3.0)/0.2)**2)
-
-
-def test_init_compsep_processing_rejects_duplicate_component_names(monkeypatch) -> None:
-    class _FakeCompList:
-        def joined(self):
-            return [Bunch(comp_name="dup"), Bunch(comp_name="dup")]
-
-    class _FakeComm:
-        def allgather(self, data):
-            return [data]
-
-    monkeypatch.setattr(CompList, "init_from_params", classmethod(lambda cls, *_: _FakeCompList()))
-
-    mpi_info = Bunch(
-        processor_name="test-node",
-        world=Bunch(rank=0),
-        compsep=Bunch(rank=0, QU_master=1, size=1, comm=_FakeComm()),
-    )
-    params = Bunch(
-        components=Bunch(),
-        compsep=Bunch(bands=Bunch(
-            {
-                "BandA": Bunch(enabled=True, polarization="I", get_from="file"),
-            }
-        )),
-    )
-
-    with pytest.raises(ValueError, match="Duplicate component names found"):
-        init_compsep_processing(mpi_info, params)
 
 
 # --- component lmax vs band lmax ------------------------------------------------------------

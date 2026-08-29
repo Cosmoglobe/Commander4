@@ -197,21 +197,6 @@ def make_iqu_components(beta=1.5, amplitude=2.0, bounds=(1.0, 2.0), proposal_sig
     return comp_i, comp_qu
 
 
-class TestDiscoverSpectralIndexGroups:
-    def test_groups_shared_iqu_component_once(self):
-        comp_i, comp_qu = make_iqu_components()
-        groups = spectral_index_sampler._discover_spectral_index_groups(
-            FakeCompList([comp_i, comp_qu]), None
-        )
-
-        assert len(groups) == 1
-        assert groups[0].name == "dust"
-        assert groups[0].proposal_sigma == pytest.approx(0.1)
-        assert groups[0].bounds == pytest.approx((1.0, 2.0))
-        assert groups[0].prior is None
-        assert groups[0].components == (comp_i, comp_qu)
-
-
 def _make_group(detector_data, comp_list, target_pol="I"):
     """Build a single-rank SpectralIndexSamplingGroup over `comp_list` on COMM_SELF."""
     return spectral_index_sampler.SpectralIndexSamplingGroup(

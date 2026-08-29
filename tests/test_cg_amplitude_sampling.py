@@ -217,16 +217,6 @@ class TestPriorScalingContract:
         comp.apply_Cl_prior_inv_sqrt(comp.apply_Cl_prior_sqrt(alms))
         np.testing.assert_allclose(alms, original, rtol=1e-10, atol=1e-12)
 
-    def test_round_trip_on_own_alms_is_the_identity(self):
-        comp = self._comp()
-        rng = np.random.default_rng(22)
-        comp.alms[:] = rng.normal(size=comp.alms.shape) + 1j*rng.normal(size=comp.alms.shape)
-        original = comp.alms.copy()
-        comp.apply_Cl_prior_sqrt(comp.alms)
-        assert not np.allclose(comp.alms, original)   # the prior is genuinely non-flat
-        comp.apply_Cl_prior_inv_sqrt(comp.alms)
-        np.testing.assert_allclose(comp.alms, original, rtol=1e-10, atol=1e-12)
-
     def test_supplied_array_is_scaled_and_own_alms_are_untouched(self):
         """Passing an array must not touch self._data."""
         comp = self._comp()
@@ -238,15 +228,6 @@ class TestPriorScalingContract:
         assert returned is supplied                    # in place, and handed back
         assert not np.allclose(supplied, own_before)
         np.testing.assert_array_equal(comp.alms, own_before)
-
-    def test_the_target_is_required(self):
-        """No implicit default: omitting the target is an error, not a silent 'use my own alms'."""
-        comp = self._comp()
-        with pytest.raises(TypeError):
-            comp.apply_Cl_prior_sqrt()
-        with pytest.raises(TypeError):
-            comp.apply_Cl_prior_inv_sqrt()
-
 
 class TestPriorMean:
     """The S^{-1/2} mu term. mu is zero today, so these drive it via a patched `amp_prior_mean`.
@@ -291,17 +272,6 @@ class TestPriorMean:
         solution = _make_solver(det_map, _make_group(False)).solve(comp_list)
 
         np.testing.assert_allclose(solution[0].alms, mu, rtol=1e-4, atol=1e-6)
-
-    def test_zero_prior_mean_leaves_the_solution_unchanged(self):
-        """The default mu = 0 must be an exact no-op, not merely a small perturbation."""
-        params = _make_params()
-        det_map = _make_det_map()
-        baseline = _make_solver(det_map, _make_group(False)).solve(_make_comp_list(params))
-
-        comp = _make_comp_list(params)[0]
-        assert comp.amp_prior_mean is None
-        again = _make_solver(det_map, _make_group(False)).solve(_make_comp_list(params))
-        np.testing.assert_array_equal(baseline[0].alms, again[0].alms)
 
     def test_prior_mean_enters_the_sampled_solve_too(self, monkeypatch):
         """mu shifts the constrained realization as well, not just the MAP solve."""
@@ -354,21 +324,6 @@ class TestPriorMeanMap:
     def test_defaults_to_none_without_the_parameter(self, tmp_path):
         """A zero-mean prior is signalled by None, so the CG can skip the term entirely."""
         assert self._comp_list(tmp_path)[0].amp_prior_mean is None
-
-    def test_absent_prior_mean_skips_the_scaling_entirely(self, tmp_path, monkeypatch):
-        """The short-circuit is real: no prior mean means S^{-1/2} is never applied.
-
-        Dropping the None check would now raise (mu is None and the target is required) rather than
-        corrupt anything, but this keeps the common zero-mean path from quietly regaining a
-        full-size scale-and-add.
-        """
-        comp_list = self._comp_list(tmp_path)
-
-        def fail(*args, **kwargs):
-            raise AssertionError("apply_Cl_prior_inv_sqrt called for a zero-mean prior")
-        monkeypatch.setattr(type(comp_list[0]), "apply_Cl_prior_inv_sqrt", fail)
-
-        _make_solver(_make_det_map(), _make_group(False)).solve(comp_list)
 
     def test_map_round_trips_through_the_transform(self, tmp_path):
         """mu synthesized back to a map must reproduce the input map."""

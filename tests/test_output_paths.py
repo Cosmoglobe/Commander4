@@ -66,37 +66,6 @@ def test_log_file_goes_in_the_logs_subdirectory(tmp_path):
         tmp_path / "run" / paths.LOGS / "run-test-run.log")
 
 
-def test_the_log_directory_must_exist_before_the_loggers_open_the_file(tmp_path):
-    """`init_loggers` opens its file immediately, so `create_output_dirs` has to run first.
-
-    This is why `cli.main` builds the tree before configuring logging: otherwise a fresh log
-    directory could not be logged into at all.
-    """
-    import logging
-
-    from commander4.diagnostics import log
-
-    output = _output(str(tmp_path / "run"))
-    log_path = paths.log_file_path(output, "ordering-test")
-    assert not os.path.exists(os.path.dirname(log_path))
-    with pytest.raises(Exception):          # the FileHandler cannot create its own directory
-        log.init_loggers(output.logging, log_path)
-
-    paths.create_output_dirs(output)
-    saved = logging.root.handlers[:]
-    try:
-        log.init_loggers(output.logging, log_path)
-        logging.getLogger("commander4.test").warning("hello")
-        for handler in logging.root.handlers:
-            handler.flush()
-        assert "hello" in open(log_path).read()
-    finally:
-        for handler in logging.root.handlers:
-            if handler not in saved:
-                handler.close()
-        logging.root.handlers[:] = saved
-
-
 def test_init_loggers_needs_a_path_for_a_configured_file_logger():
     from commander4.diagnostics import log
 

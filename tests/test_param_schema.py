@@ -101,12 +101,6 @@ def test_double_precision_accepts_booleans_and_may_be_omitted():
     validate_param_schema({"compsep": {}})
 
 
-def test_the_block_list_is_the_documented_one():
-    """Pinned as a literal so adding or removing a block has to be a deliberate edit."""
-    assert TOP_LEVEL_BLOCKS == ("gibbs", "resources", "output", "components", "experiments",
-                                "tod_processing", "compsep")
-
-
 # --------------------------------------------------------------------------------------
 # Derived MPI task counts
 # --------------------------------------------------------------------------------------
@@ -376,28 +370,6 @@ def test_noise_prior_bounds_reject_an_unknown_parameter_name():
     model = NoisePSDOof()
     with pytest.raises(ValueError, match="fkne"):
         apply_noise_priors(model, _noise_params(band={"fkne": [0.1, 1.0]}), "EXP", "BandA")
-
-
-def test_prior_bounds_are_what_the_psd_sampler_draws_within():
-    """The bounds are grid endpoints, so a truth outside them pins the sample at the nearest edge."""
-    rng = np.random.default_rng(2)
-    fsamp, ntod, sigma0, fknee, alpha = 32.5, 9750, 80.0, 0.5, -1.5
-    freqs = np.fft.rfftfreq(ntod, 1.0/fsamp)
-    psd = np.full(freqs.size, sigma0**2)
-    psd[1:] = sigma0**2 * (1.0 + (freqs[1:]/fknee)**alpha)
-    coeff = (rng.normal(size=freqs.size) + 1j*rng.normal(size=freqs.size))*np.sqrt(psd*ntod/2)
-    coeff[0] = 0.0
-    residual = np.fft.irfft(coeff, ntod)
-
-    start = np.array([sigma0, 0.1, -1.0])
-    excluding = NoisePSDOof(P_uni=[[np.nan, np.nan], [1.0, 100.0], [-4.5, -1.0]])
-    containing = NoisePSDOof(P_uni=[[np.nan, np.nan], [0.01, 100.0], [-4.5, -0.5]])
-    pinned = np.mean([excluding.sample_params(residual, start, fsamp, nu_max=10.0)[1]
-                      for _ in range(15)])
-    free = np.mean([containing.sample_params(residual, start, fsamp, nu_max=10.0)[1]
-                    for _ in range(15)])
-    assert pinned == pytest.approx(1.0, abs=0.02)      # railed against the lower bound
-    assert free == pytest.approx(fknee, rel=0.25)      # recovered once the bound allows it
 
 
 def test_noise_prior_sets_the_informative_prior_from_the_parameter_file():

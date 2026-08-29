@@ -1,7 +1,6 @@
 """Tests for the low-resolution (log-binned) TOD power spectra written to the chain."""
 
 import numpy as np
-import pytest
 
 from commander4.tod.scan_diagnostics import _binned_tod_power_spectrum, _record_tod_diagnostics
 from commander4.data_models.tod_samples import TODSamples

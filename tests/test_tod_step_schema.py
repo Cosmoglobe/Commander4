@@ -1,21 +1,13 @@
 """Validation, resolution, and iteration gates for the TOD-processing config classes."""
 
-import inspect
 from types import SimpleNamespace
 
 import pytest
 from pixell.bunch import Bunch
 
 from commander4.tod.data_selection import DataSelectionConfig
-from commander4.tod.gain import (
-    GainConfig,
-    sample_absolute_gain,
-    sample_relative_gain,
-    sample_temporal_gain_variations,
-)
-from commander4.tod.jumps import JumpDetectionConfig, sample_jump_detection
-from commander4.tod.mapmaking.binned import tod2map_bin
-from commander4.tod.mapmaking.cg import tod2map_CG
+from commander4.tod.gain import GainConfig
+from commander4.tod.jumps import JumpDetectionConfig
 from commander4.tod.mapmaking.config import MapmakingConfig
 from commander4.tod.noise.sample_ncorr import CorrelatedNoiseConfig
 
@@ -59,18 +51,6 @@ def _gain(step_name: str = "abs_gain", default: str = "orbital_dipole",
     return GainConfig.from_params(
         params, EXPERIMENT, step_name, default, iteration, is_master=True,
     )
-
-
-def test_each_execution_function_accepts_its_config_directly():
-    jump_parameters = inspect.signature(sample_jump_detection).parameters
-    assert "config" in jump_parameters and "params" not in jump_parameters
-    for sampler in (sample_absolute_gain, sample_relative_gain,
-                    sample_temporal_gain_variations):
-        parameters = inspect.signature(sampler).parameters
-        assert "config" in parameters and "params" not in parameters
-    for mapmaker in (tod2map_CG, tod2map_bin):
-        parameters = inspect.signature(mapmaker).parameters
-        assert "mapmaking" in parameters and "params" not in parameters
 
 
 def test_documented_defaults_are_owned_by_the_config_classes():

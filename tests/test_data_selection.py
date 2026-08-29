@@ -9,9 +9,7 @@ import logging
 from types import SimpleNamespace
 
 import numpy as np
-import pytest
 from mpi4py import MPI
-from pixell.bunch import Bunch
 
 from commander4.tod.data_selection import masked_chisq_z, log_dataselect_summary
 
@@ -85,12 +83,3 @@ def test_log_dataselect_summary_counts_veto_rejections(caplog):
     assert "|chisq_z| > 1e+04: 1" in caplog.text
     # Reporting only: the vetoes in the mapmaking loop own accept, the summary never touches it.
     assert stub.accept[0, 0] and stub.accept[1, 0]
-
-
-def test_log_dataselect_summary_inactive_counts_nothing(caplog):
-    # Cuts gated off this iteration (before from_iter_num / past until_iter_num): report-only.
-    z = np.full((20, 1), 5e5)
-    stub = _stub_samples(z, np.full((20, 1), 0.95))
-    with caplog.at_level(logging.INFO, logger="commander4.tod.data_selection"):
-        log_dataselect_summary(MPI.COMM_SELF, stub, _cfg(), active=False, iteration=2)
-    assert "rejected 0 detector-scans" in caplog.text

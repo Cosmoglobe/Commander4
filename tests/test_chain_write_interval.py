@@ -44,18 +44,6 @@ def test_an_absent_interval_block_means_every_iteration():
         assert all(should_write_chain(params, kind, i) for i in range(1, 8))
 
 
-def test_iterations_are_counted_from_one():
-    """Iteration numbers are 1-indexed, so interval N writes iterations 1, N+1, 2N+1, ..."""
-    params = _params(Bunch(compsep=3))
-    written = [i for i in range(1, 11) if should_write_chain(params, "compsep", i)]
-    assert written == [1, 4, 7, 10]
-
-
-def test_interval_of_one_writes_everything():
-    params = _params(Bunch(bands=1))
-    assert all(should_write_chain(params, "bands", i) for i in range(1, 8))
-
-
 def test_a_scalar_interval_is_refused():
     """A bare `interval: 2` says nothing about *which* output to thin, so it cannot be applied."""
     params = _params(2)

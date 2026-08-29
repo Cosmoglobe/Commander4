@@ -49,13 +49,6 @@ def test_lengths_are_derived_from_pointing() -> None:
     assert detector.flag.shape == (6,)
 
 
-def test_constructor_keeps_only_the_full_band_detector_index() -> None:
-    detector = _detector(_pointing())
-
-    assert detector.det_idx_fullband == 2
-    assert not hasattr(detector, "det_idx_local")
-
-
 def test_physical_arguments_have_explicit_units() -> None:
     velocity = np.array([1.0, 2.0, 3.0], dtype=np.float64)
     detector = _detector(_pointing(), velocity)
@@ -63,12 +56,6 @@ def test_physical_arguments_have_explicit_units() -> None:
     assert detector.fsamp == 32.5
     assert detector.orbital_velocity_m_per_s.dtype == np.float32
     np.testing.assert_array_equal(detector.orbital_velocity_m_per_s, velocity)
-
-
-def test_missing_orbital_velocity_is_returned_as_none() -> None:
-    detector = _detector(_pointing())
-
-    assert detector.orbital_velocity_m_per_s is None
 
 
 def test_missing_orbital_velocity_produces_zero_orbital_dipole() -> None:

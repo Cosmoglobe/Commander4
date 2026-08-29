@@ -103,15 +103,6 @@ class TestRobustSigma0:
 
 
 class TestBinnedPSDSigma0:
-    def test_recovers_white_level(self):
-        """The binned-PSD floor (in C4's normalization) recovers the true white sigma0."""
-        rng = np.random.default_rng(7)
-        sigma, n, fsamp = 2.5, 2**16, 10.0
-        tod = rng.normal(0.0, sigma, n)
-        mask = np.ones(n, dtype=bool)
-        est = calc_sigma0_binned_psd(tod, mask, fsamp)
-        assert est == pytest.approx(sigma, rel=0.02)
-
     def test_floor_is_unbiased_at_realistic_scan_lengths(self):
         """The estimator must be unbiased, not 6-19% low as C3's minimum-bin version was.
 

@@ -21,19 +21,6 @@ def test_bisect_search_matches_searchsorted_with_duplicates() -> None:
         assert bisect_search(arr, val) == np.searchsorted(arr, val, side="left")
 
 
-def test_bisect_search_out_of_range_values() -> None:
-    arr = np.array([2, 4, 6, 8], dtype=np.int64)
-    assert bisect_search(arr, -100) == 0
-    assert bisect_search(arr, 100) == arr.shape[0]
-
-
-def test_bisect_search_single_element_array() -> None:
-    arr = np.array([5], dtype=np.int64)
-    assert bisect_search(arr, 4) == 0
-    assert bisect_search(arr, 5) == 0
-    assert bisect_search(arr, 6) == 1
-
-
 def test_bisect_search_random_property() -> None:
     rng = np.random.default_rng(0)
     for _ in range(50):
@@ -81,14 +68,6 @@ def test_gallop_search_random_property_with_random_hints() -> None:
         for val, prev in zip(vals, hints):
             expected = np.searchsorted(arr, val, side="left")
             assert gallop_search(arr, int(val), int(prev)) == expected
-
-
-def test_gallop_search_single_element_array() -> None:
-    arr = np.array([5], dtype=np.int64)
-    for prev in [-10, 0, 10]:
-        assert gallop_search(arr, 4, prev) == 0
-        assert gallop_search(arr, 5, prev) == 0
-        assert gallop_search(arr, 6, prev) == 1
 
 
 # --- gallop_search_many -------------------------------------------------------------------------

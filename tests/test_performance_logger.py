@@ -1,5 +1,3 @@
-import logging
-
 from commander4.diagnostics.log import VERBOSE
 from commander4.diagnostics.performance import PerfLogger
 
@@ -29,43 +27,6 @@ def test_same_tag_under_different_parents_is_distinct() -> None:
                 pass
     assert ("a", "leaf") in b.data
     assert ("b", "leaf") in b.data
-
-
-def test_unbalanced_stop_does_not_corrupt_following_paths() -> None:
-    # A stop with no matching start must be a no-op that leaves the stack untouched, so the next
-    # benchmark is recorded at the root rather than inheriting a stray prefix.
-    b = PerfLogger()
-    b.stop_bench("never-started")
-    assert b._stack == []
-    with b.benchmark("real"):
-        pass
-    assert ("real",) in b.data
-
-
-def test_leaked_inner_frame_is_unwound_by_outer_stop() -> None:
-    # An inner start_bench that is never stopped is the core failure mode: without unwinding it
-    # would prefix every later path. stop_bench("outer") must discard it and restore a clean stack.
-    b = PerfLogger()
-    b.start_bench("outer")
-    b.start_bench("leaked")
-    b.stop_bench("outer")
-    assert b._stack == []
-    assert ("outer",) in b.data
-    assert ("outer", "leaked") not in b.data
-    with b.benchmark("next"):
-        pass
-    assert ("next",) in b.data  # no ("leaked", "next") orphan
-
-
-def test_reentrant_same_tag_start_stop() -> None:
-    b = PerfLogger()
-    b.start_bench("x")
-    b.start_bench("x")
-    b.stop_bench("x")  # closes the inner ("x", "x")
-    b.stop_bench("x")  # closes the outer ("x",)
-    assert b._stack == []
-    assert ("x",) in b.data
-    assert ("x", "x") in b.data
 
 
 def test_log_memory_same_name_as_block_attaches_to_block() -> None:

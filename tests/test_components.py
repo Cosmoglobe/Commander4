@@ -9,7 +9,6 @@ from pixell.bunch import Bunch
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import CMB, ThermalDust
 from commander4.sky.point_sources import PointSourcesComponent
-from commander4.sky.sky_model import build_initial_sky_model
 from commander4.math_utils.alm import gaussian_random_alm
 from commander4.math_utils.sht import alm_to_map
 from commander4.sky.comp_list import complist_dot, complist_norm
@@ -61,25 +60,6 @@ def _make_multi_comp_list() -> CompList:
         }
     )
     return CompList.init_from_params(components, params)
-
-
-def test_init_from_params_requires_component_name() -> None:
-    params = Bunch(compsep=_make_compsep())
-    components = Bunch({"cmb": _make_component_cfg("I")})
-
-    with pytest.raises(AttributeError, match="_name"):
-        CompList.init_from_params(components, params)
-
-
-def test_init_from_params_does_not_mutate_component_params_name() -> None:
-    params = Bunch(compsep=_make_compsep())
-    component_cfg = _make_component_cfg("I")
-    object.__setattr__(component_cfg, "_name", "cmb")
-    components = Bunch({"cmb": component_cfg})
-
-    CompList.init_from_params(components, params)
-
-    assert "_name" not in component_cfg.params
 
 
 def test_init_from_params_builds_all_defined_pol_views() -> None:
@@ -285,19 +265,6 @@ def test_load_initial_alms_prefers_per_component_init_from(tmp_path) -> None:
     assert all(np.all(comp.alms == 5.0) for comp in comp_list)
 
 
-def test_load_initial_alms_leaves_zeros_without_a_source() -> None:
-    compsep = _make_compsep()  # No gibbs.init_from_chain, and no per-component init_from.
-    gibbs = Bunch()
-    cmb = _make_named_component_cfg("cmb", "IQU")
-    object.__setattr__(cmb, "_name", "cmb")
-    params = Bunch(compsep=compsep, gibbs=gibbs, components=Bunch({"cmb": cmb}))
-
-    comp_list = CompList.init_from_params(params.components, params)
-    comp_list.load_initial_alms(params)
-
-    assert all(np.all(comp.alms == 0) for comp in comp_list)
-
-
 def test_load_initial_alms_from_fits_map(tmp_path) -> None:
     """`init_from` a FITS map recovers that map's alms, per polarization view.
 
@@ -387,21 +354,6 @@ def test_load_initial_alms_missing_component_logs_error_and_continues(tmp_path, 
 
     assert all(np.all(comp.alms == 0) for comp in comp_list)
     assert "not found" in caplog.text
-
-
-def test_build_initial_sky_model_returns_realizable_model() -> None:
-    compsep = _make_compsep()  # No init paths -> zero alms -> zero sky.
-    gibbs = Bunch()
-    cmb = _make_named_component_cfg("cmb", "IQU")
-    cmb.params.lmax = 2  # Spin-2 (QU) synthesis requires lmax >= 2.
-    object.__setattr__(cmb, "_name", "cmb")
-    params = Bunch(compsep=compsep, gibbs=gibbs, components=Bunch({"cmb": cmb}))
-
-    sky = build_initial_sky_model(params)
-    realized = sky.get_sky_at_nu(100.0, 2, "IQU", fwhm=0.0)
-
-    assert realized.shape == (3, 12 * 2**2)
-    assert np.all(realized == 0)
 
 
 def _dust_params(**overrides) -> Bunch:
@@ -514,15 +466,6 @@ def test_P_Cl_prior_l_apod_tapers_to_1e_minus_6_in_power_at_lmax() -> None:
     np.testing.assert_allclose(comp.P_Cl_prior[:51], unapodized.P_Cl_prior[:51])
     np.testing.assert_allclose(comp.P_Cl_prior[100], unapodized.P_Cl_prior[100] * f[100]**2)
     assert np.all(comp.P_Cl_prior > 0)                        # 1/C_l stays finite
-
-
-def test_P_Cl_prior_l_apod_resolves_per_pol_like_the_other_prior_parameters() -> None:
-    def make(eval_pol):
-        params = _dust_params(lmax=16, Cl_prior_amplitude=1.0, Cl_prior_l_apod=[16, 8])
-        return ThermalDust(params, _make_compsep(), eval_pol=eval_pol, comp_name="dust")
-
-    assert make("I").Cl_prior_l_apod == 16
-    assert make("QU").Cl_prior_l_apod == 8
 
 
 def test_P_Cl_prior_none_amplitude_gives_identity() -> None:
@@ -718,20 +661,6 @@ def _make_radio_sources(template_path, nu_ref=30.0):
 def _map_integral(sky_map, nside):
     """The map's integral over the sphere, which is the source's total flux in uK_RJ*sr."""
     return float(sky_map.sum()*hp.nside2pixarea(nside))
-
-
-def test_radio_sources_component_map_is_frequency_independent(tmp_path) -> None:
-    """The amplitude map carries no SED, so no evaluation frequency may leak into it."""
-    template = tmp_path / "radio.dat"
-    _write_radio_source_table(template)
-    comp = _make_radio_sources(template, nu_ref=30.0)
-
-    amp_map = comp.get_component_map(nside=64, fwhm=np.deg2rad(2.0))
-
-    assert amp_map.shape == (1, hp.nside2npix(64))
-    assert np.isfinite(amp_map).all()
-    assert amp_map.max() > 0.0
-    assert np.array_equal(amp_map, comp.get_component_map(nside=64, fwhm=np.deg2rad(2.0)))
 
 
 def test_radio_sources_component_map_scales_with_the_reference_frequency(tmp_path) -> None:

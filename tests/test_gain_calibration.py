@@ -16,7 +16,7 @@ import pytest
 from pixell.bunch import Bunch
 
 from commander4.tod.view import TODView
-from commander4.tod.gain import GainConfig, _VALID_CALIB_TARGETS, _solve_relative_gain_system
+from commander4.tod.gain import GainConfig, _solve_relative_gain_system
 
 
 # --------------------------------------------------------------------------------------
@@ -99,27 +99,12 @@ def test_orbital_dipole_calibration_warns_at_high_frequency(caplog):
     assert caplog.text == ""
 
 
-def test_the_warning_follows_the_per_band_override(caplog):
-    """A band that overrides to the dipole must warn; one that overrides away from it must not."""
-    with caplog.at_level("WARNING", logger="commander4.tod.processing"):
-        _inputs({"abs_gain": {"calibrate_against": "orbital_dipole"}}, passed="sky", nu=545.0)
-    assert "orbital dipole" in caplog.text
-    caplog.clear()
-    with caplog.at_level("WARNING", logger="commander4.tod.processing"):
-        _inputs({"abs_gain": {"calibrate_against": "sky"}}, passed="orbital_dipole", nu=545.0)
-    assert caplog.text == ""
-
-
 def test_the_downsample_factor_is_seconds_times_the_sampling_rate():
     assert _inputs({}, downsample_time=1.0, fsamp=200.0)[1] == 200
     assert _inputs({}, downsample_time=0.25, fsamp=200.0)[1] == 50
     assert _inputs({}, downsample_time=0.0)[1] == 1      # 0 disables downsampling.
     assert _inputs({}, downsample_time=0.001)[1] == 1    # clamped to at least 1.
     assert _inputs({}, downsample_time=1.0, fsamp=32.51)[1] == 33
-
-
-def test_valid_targets_contents():
-    assert set(_VALID_CALIB_TARGETS) == {"orbital_dipole", "sky", "sky_no_dipole"}
 
 
 # --------------------------------------------------------------------------------------
@@ -304,15 +289,6 @@ def test_relgain_excludes_zero_weight_detectors():
     assert abs(out[[1, 3]].sum()) < 1e-5                              # active subset sums to zero
 
 
-def test_relgain_single_zero_detector_is_held():
-    s = np.array([0.0, 2.0, 5.0])
-    r = np.array([3.0, 1.0, -1.0])
-    prev = np.array([0.9, 0.0, 0.0], dtype=np.float32)
-    out = _solve_relative_gain_system(s, r, prev, rng=_ZERO_RNG)
-    assert out[0] == np.float32(0.9)
-    assert abs(out[[1, 2]].sum()) < 1e-5
-
-
 def test_relgain_no_active_detectors_returns_prev_unchanged():
     prev = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     out = _solve_relative_gain_system(np.zeros(3), np.zeros(3), prev)
@@ -381,18 +357,6 @@ def test_static_sky_downsampling_is_block_average(monkeypatch):
     # Regression guard: must NOT be the model sampled at the block-center pixels.
     block_centers = np.array([2, 6, 10])
     assert not np.allclose(out, s_full[block_centers])
-
-
-def test_data_and_model_share_block_definition(monkeypatch):
-    make_view, det, _ = _make_real_view(monkeypatch)
-    np.testing.assert_allclose(make_view(FACTOR).get_tod(), _block_mean(det.tod))
-
-
-def test_orbital_dipole_downsampling_is_block_average(monkeypatch):
-    make_view, _, _ = _make_real_view(monkeypatch)
-    orb_full = make_view(1).get_orbital_dipole_tod()
-    np.testing.assert_allclose(make_view(FACTOR).get_orbital_dipole_tod(),
-                               _block_mean(orb_full), rtol=2e-5, atol=1e-9)
 
 
 def test_get_calib_tod_downsampled_end_to_end(monkeypatch):

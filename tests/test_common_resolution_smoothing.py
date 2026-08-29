@@ -8,7 +8,6 @@ Unobserved pixels have to stay unobserved: zero signal, zero weight.
 """
 import healpy as hp
 import numpy as np
-import pytest
 
 from commander4.data_models.detector_map import (DetectorMap, smooth_rms_map_noiseweighted,
                                                  smooth_signal_map_noiseweighted)
