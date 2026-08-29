@@ -1,0 +1,702 @@
+# =====================================================================================
+# REFERENCE PARAMETER FILE
+# =====================================================================================
+#
+# This file exists as a reference for all parameters, not to be run.
+# Reading conventions used below:
+#   * Each parameter is explained once, at its first appearance.
+#   * Some parameters are commented out because of e.g. being exclusive with others.
+#   * "C3 <NAME>" points at the equivalent Commander3 parameter, where one exists.
+#
+# A parameter file has seven top-level blocks, each named after the part of the
+# program that reads it:
+#   * gibbs:          High-level information about the Gibbs chain.
+#   * resources:      CPU threads allocation information.
+#   * output:         Logging and file-write config.
+#   * tod_processing: TOD sampling (inc. mapmaking) steps and their configurations.
+#   * compsep:        Map-domain (compsep) sampling, including where to get band data from.
+#   * components:     The sky components going into te component separation.
+#   * experiments:    Config for experiments which are read from file as TODs.
+
+
+# ----------------------------------------
+# GIBBS
+# ----------------------------------------
+# Commander4 always runs TWO Gibbs chains in parallel, because the TOD and CompSep sides live on
+# disjoint MPI ranks.
+gibbs:
+  num_iterations: 10          # Number of Gibbs iterations to perform.
+
+  seed: 1995                  # Master RNG seed. Re-running with the same seed and the
+                              # same parameters reproduces the chain.
+
+  # Restart from a previous run's chain. Should be equivalent to having run the chain for longer.
+  # init_from_chain: "../c4_chains/some_previous_run/"
+
+# ----------------------------------------
+# RESOURCES
+# ----------------------------------------
+# Thread counts only. The MPI *task* counts are derived from entries in `experiments`.
+resources:
+  tod:
+    num_threads: 1            # OpenMP/numba threads per TOD rank.
+
+  compsep:
+    # Either one integer for every CompSep rank, or a list with one entry per CompSep
+    # rank (useful for compsep CG with varying nsides). # For a suggested thread distribution,
+    # run `c4-validate-params path/to/param --compsep-threads-per-node N --compsep-nodes M`
+    num_threads: 1
+
+# ----------------------------------------
+# OUTPUT
+# ----------------------------------------
+# Everything the run writes, to disk or to console/log.
+output:
+  dir: "../c4_chains/param_explanation/"  # Output dir: created if missing.
+
+  # Console and file log levels are set independently. Levels, each including everything
+  # below it: DEBUG < VERBOSE < INFO < SUMMARY < WARNING < ERROR < CRITICAL.
+  # INFO is a good default. Increase to VERBOSE if you want more details.
+  # The log file is always <dir>/logs/run-<run-id>.log.
+  logging:
+    console:
+      level: 'info'
+    file:
+      level: 'debug'
+
+  profiling: False            # Run cProfile on every rank and dump the results into logs/.
+
+  plots:
+    enabled: False            # Write diagnostic figures into plots/ during the run.
+
+  chains:
+    write: [1,]               # Which of the two in-flight chains to write. [1,] writes
+                              # only chain 1; [1, 2] writes both and doubles the output.
+
+    # How often to write various output to chains. Increase from 1 to save disk space.
+    # `bands` and `compsep` thin a whole file; `maps` thins only the maps/ group inside the band
+    # file, which is by far the largest thing written.
+    interval:
+      bands: 1
+      compsep: 1
+      maps: 2
+
+    maps_nside: "native"      # Resolution the maps/ group is written at. "native" keeps
+                              # each band's own eval_nside; an integer downgrades to it.
+    nside_chisq: 128          # Resolution of the CompSep chi^2 map (C3 NSIDE_CHISQ).
+                              # Default 256. Only used if chisq_map is on, below.
+
+    # Optional datasets. Each costs memory, disk, or both, so each is opt-in.
+    include:
+      orbital_dipole_maps: True   # maps/orbdipole: the binned orbital dipole.
+      corr_noise_maps: True       # maps/corrnoise: the binned correlated-noise draw.
+      sky_model_maps: True        # maps/skymodel: the sky this iteration was fit against.
+      residual_maps: True         # maps/res: binned TOD residual, i.e. data minus sky, dipole and
+                                  # n_corr (C3 tod_<freq>_res).
+      hit_maps: True              # maps/nhit: per-pixel count of unflagged samples.
+      cov_maps: False             # maps/cov: the 6 unique elements of P^T N^-1 P, of
+                                  # which only the inverse diagonal survives as maps/rms.
+                                  # Six full-sky maps per band.
+      chisq_map: True             # chi2/map in the CompSep chain, at nside_chisq above
+                                  # (C3 chisq_<postfix>.fits).
+      compsep_residual_maps: False  # residuals/<band>_<pol>: full-resolution per-band
+                                  # residuals (C3 res_<band>_<postfix>.fits). Gathers
+                                  # every band map onto the CompSep master: memory-heavy.
+      ncorr_tods: False           # DEBUG ONLY: every correlated-noise TOD, per sample,
+                                  # concatenated. Enormous. Use on one band, one scan.
+
+# ----------------------------------------
+# TOD PROCESSING
+# ----------------------------------------
+# What the TOD side does to the data. Mapmaking always runs, everything else is an optional step.
+#
+# Every step takes at least two keys:
+#     enabled:    run this step at all
+#     from_iter:  first Gibbs iteration it acts on (data selection also takes until_iter)
+# and then its own scientific options. The execution ORDER is fixed in the code, not by this file.
+tod_processing:
+  mapmaker: "bin"             # "bin" (binned mapmaker) or "CG" Overridable per experiment and band.
+
+  # Only read when the resolved mapmaker is "CG"; both keys are required in that case.
+  cg_mapmaker:
+    max_iter: 40              # Max CG iterations per band map solve.
+    err_tol: 1.0e-6           # Squared relative preconditioned residual at which the solve stops.
+
+  # Jump detection: find and remove sudden offset steps in the TOD. C4 does this by.
+  # Requires the experiment to declare a `jump_bitmask`.
+  jump_detection:
+    enabled: false
+    from_iter: 1
+
+  # --- Gain, in three terms, sampled in this order -------------------------------------
+  # The total gain of a detector-scan is abs_gain + detrel_gain[det] + temporal_gain.
+  #   abs_gain      one scalar per band, the absolute calibration.
+  #   rel_gain      one offset per detector, constrained to sum to zero (BP7 3.4).
+  #   temporal_gain a per-scan variation about the two above, drawn through a Wiener
+  #                 filter with a 1/f prior (BP7 3.5).
+  # All three take the same four options, so they are explained once, here.
+  abs_gain:
+    enabled: true
+    from_iter: 2              # Not 1: iteration 1 has no sky model worth calibrating on.
+    calibrate_against: orbital_dipole
+                              # Which signal is the calibrator:
+                              #   orbital_dipole  the analytic dipole from the spacecraft
+                              #                   velocity. Independent of the sky model,
+                              #                   which is what anchors absolute
+                              #                   calibration. The C3 default for abscal.
+                              #   sky             the current sky model, dipole included.
+                              #   sky_no_dipole   the sky model with the dipole removed.
+                              # Overridable per band; see the band block below.
+    gap_fill_method: wn       # How flagged samples are filled before the calibration fit:
+                              #   wn        a white-noise draw (cheap, the default)
+                              #   fallback  a stationary 1/f Wiener draw
+                              #   full_cg   a masked CG solve (most correct, most costly)
+    downsample_time: 1.0      # [s] Averaging chunk for the calibration TODs; 0 disables
+                              # downsampling. Larger chunks are cheaper but blur the
+                              # calibrator, so keep it well inside the dipole timescale.
+
+  rel_gain:
+    enabled: true
+    from_iter: 2
+    calibrate_against: sky    # Relative gain needs a sky, not the dipole: the dipole is
+                              # common to all detectors and cannot separate them.
+    gap_fill_method: wn
+    downsample_time: 1.0
+
+  temporal_gain:
+    enabled: true
+    from_iter: 2
+    calibrate_against: sky
+    gap_fill_method: wn
+    downsample_time: 1.0
+
+  # --- Correlated noise, sigma0, and the noise PSD -------------------------------------
+  # This step runs inside the mapmaker's scan loop. It draws a correlated-noise
+  # realization n_corr per detector-scan (arXiv:2011.06024), re-estimates the white-noise
+  # level sigma0 from the residual, and samples the 1/f PSD parameters.
+  corr_noise:
+    enabled: True
+    from_iter: 2
+    sample_psd_params: True   # Resample (fknee, alpha). Needs corr_noise.enabled.
+    sample_sigma0: True       # Re-estimate sigma0 from the n_corr-subtracted residual.
+                              # Independent of the two flags above: sigma0 is estimated
+                              # even when n_corr is not drawn.
+    sigma0_method: pairwise   # 'pairwise'   robust first-difference estimator
+                              # 'binned_psd' the bottom of the binned power spectrum
+    sigma0_decimation: 1      # Block-average the TOD by this factor before estimating
+                              # sigma0. >1 trades precision for speed on long scans.
+    nomono: False             # Project the per-scan monopole out of n_corr (C3 "nomono").
+    onlymono: False           # Model the correlated noise as nothing but a per-scan
+                              # offset. A debugging mode, not a physical model.
+    psd_fit_nu_min: 0.0       # [Hz] Frequency window used when fitting the PSD
+    psd_fit_nu_max: 2.0       # [Hz] parameters. nu_max must stay below the band's
+                              # Nyquist frequency, fsamp/2.
+    psd_bin: False            # Fit every Fourier mode (False), or a mode-weighted binned
+                              # PSD (True). Binning is much faster on long scans.
+    cg:
+      max_iter: 60            # Max CG iterations for the n_corr draw. 0 skips the CG
+                              # entirely and falls back to a stationary draw -- much
+                              # cheaper, and much less correct near flagged stretches.
+      err_tol: 1.0e-4         # Relative residual at which that CG stops.
+
+  # Data selection: turn this iteration's diagnostics into per-detector-scan accept flags.
+  data_selection:
+    enabled: false
+    from_iter: 1              # First iteration the cut is applied on.
+    # until_iter: 5           # Last iteration it is applied on. Absent = forever. C3
+                              # selects once, on the first call, which is `until_iter: 1`.
+    chisq_abs_threshold: 1.0e+4   # Reject a detector-scan whose white-noise chi^2 z-score
+                                  # exceeds this.
+    min_good_fraction: 0.1        # Reject a detector-scan with less than this fraction of
+                                  # unflagged samples.
+
+# ----------------------------------------
+# COMPONENT SEPARATION
+# ----------------------------------------
+# What the CompSep side does with the band maps. There is deliberately no CompSep `nside`:
+# resolution is per band (`eval_nside`) and per component (`lmax`).
+compsep:
+  enabled: true               # false = TOD-only mode: no CompSep ranks are allocated, and the
+                              # TOD side runs against a static sky model.
+
+  double_precision: false     # Work in float64/complex128 rather than float32/complex64.
+                              # Optional, false by default. It covers the component alms, the
+                              # band alms, DetectorMap.inv_n_map (and so map_rms, which is
+                              # derived from it), the per-pixel solver's maps, and the
+                              # point-source amplitudes. Map precision is NOT separately
+                              # settable: the SHT returns a map in the precision of the alms it
+                              # was given, so alm and map space always match. False halves the
+                              # memory and is enough in practice.
+
+  common_res_fwhm: 0          # [arcmin] Smooth every band -- signal AND rms, through the
+                              # same kernel -- to one common resolution before solving,
+                              # i.e. redefine the data as "what we would have seen at this
+                              # resolution". 0 or absent disables it. Required by the
+                              # per-pixel solver, which cannot handle mixed beams; the CG
+                              # solver does not need it and is better without it. Must be
+                              # at least as wide as the broadest beam in the run.
+
+  # --- Amplitude sampling ---------------------------------------------------------------
+  # CG and per-pixel groups are mutually exclusive alternatives: enabling groups in both
+  # sections is a startup error. Within a section you may have several groups, each
+  # solving a subset of the components against a subset of the bands; the components a
+  # group holds fixed are subtracted from the band maps first, so each group is fit to the
+  # residual rather than to the full sky.
+  cg_sampling_groups:
+    sample_amps_CG:
+      enabled: true
+      comps: "all"            # List of component names, or "all", or omitted for all.
+      bands: "all"            # Likewise for bands.
+      optimize: false         # false = draw a full constrained realization (Wiener mean
+                              # plus both fluctuation terms) -- this is a *sample*.
+                              # true  = return the posterior maximum instead. Use false
+                              # unless you specifically want the mean map.
+      max_iter: 100           # CG iteration cap for the intensity solve,
+      max_iter_pol: 100       # and for the polarization solve, which usually needs fewer.
+      err_tol: 0.0            # Squared relative preconditioned residual for early stopping. 0.0
+                              # means "no stopping criterion": always run max_iter. That
+                              # is what every real-data file here uses, because the CG
+                              # residual is not a reliable convergence measure for a
+                              # constrained realization.
+      preconditioner: JointPreconditioner
+                              # Working choices: JointPreconditioner (best),
+                              # DiagonalJointPreconditioner (cheaper), NoPreconditioner.
+                              # BeamOnly / NoiseOnly / MixingMatrix are unimplemented and
+                              # crash mid-solve; do not select them.
+      dense_matrix_debug_mode: false
+                              # Build and invert the dense system as a cross-check. Only
+                              # feasible below nside 32, and currently broken.
+
+  # The per-pixel solver: solves each pixel independently, using a C backend. Needs a
+  # single nside and a single beam across all bands, i.e. `common_res_fwhm` set above.
+  # Much cheaper than CG, and it cannot deconvolve beams.
+  per_pixel_sampling_groups:
+    sample_amps_perpix:
+      enabled: false          # Must stay false while a CG group is enabled.
+      comps: "all"
+      bands: "all"
+
+  # --- Non-linear sampling --------------------------------------------------------------
+  # Metropolis-Hastings over spectral indices. Each proposal re-solves the amplitude
+  # groups named below, then accepts or rejects on the resulting chi^2; a rejected step
+  # reverts both the indices and every amplitude. Amplitude groups always run first.
+  mcmc_sampling_groups:
+    sample_spectral_indices:
+      enabled: false          # Off here: it multiplies the runtime by `numstep` CG solves
+                              # per iteration. Set true, plus `sample_spectral_index` on
+                              # each component below, to sample indices.
+      parameters: spectral_indices
+      comps: [ThermalDust, Synchrotron]
+                              # Components whose index is proposed. Each MUST also set
+                              # `sample_spectral_index: True` in its own block, or startup
+                              # fails.
+      update_amplitude_groups: [sample_amps_CG]
+                              # Amplitude groups re-solved inside each accept/reject.
+                              # Empty list = propose indices against fixed amplitudes.
+      numstep: 1              # MH steps taken per Gibbs iteration.
+      # chisq_bands: [Planck30GHz, WMAPKa, WMAPQ1]
+                              # Restrict the accept/reject chi^2 to these bands. Absent or
+                              # null = every band in the run.
+      # chisq_mask: "/path/to/mask.fits"
+                              # Restrict it to part of the sky (C3
+                              # MCMC_SAMPLING_GROUP_CHISQ_MASK). One HEALPix file per
+                              # group, ud_graded to each band's nside and thresholded at
+                              # 0.5, where >0.5 means "keep". This is a parameter-domain
+                              # mask only: it does not enter the amplitude solve or the
+                              # noise model.
+
+  # --- The bands CompSep sees -----------------------------------------------------------
+  # Two kinds. `get_from: <experiment>` takes the map that TOD processing just produced.
+  # `get_from: file` reads a map from disk and must describe it fully, as no experiment block does.
+  bands:
+    ### TOD BANDS ###
+    Planck30GHz:
+      get_from: PlanckLFI     # Name of the experiment under `experiments`, below.
+      enabled: true
+      polarization: "IQU"     # "I", "QU" or "IQU". For example, you can set an experiment with
+                              # polarization to "I" and it will only output intensity bands.
+
+    ### MAP BANDS, WRITTEN OUT ###
+    # Haslam 408 MHz. This is what anchors the synchrotron intensity amplitude: it is the
+    # only band far enough below the CMB bands to see synchrotron on its own.
+    Haslam408MHz:
+      enabled: true
+      get_from: "file"
+      eval_nside: 512         # Resolution CompSep evaluates this band at. The map is
+                              # ud_graded to it on read if it differs.
+      # lmax: 1023            # C3's BAND_LMAX: the highest multipole at which any
+                              # component is compared against this band. Components are
+                              # truncated to it on the way in. Absent = 3*eval_nside - 1,
+                              # the full bandlimit of the pixelization. No file in params/
+                              # currently sets this.
+      signal_map:
+        path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+                              # FITS column names for I, Q and U. Exactly three entries
+                              # are required even when the band is intensity-only; use
+                              # null or "" for the ones that do not exist.
+      rms_map:
+        type: "rms"           # How to read the noise map:
+                              #   "rms"           the file holds a per-pixel standard
+                              #                   deviation, one column per Stokes.
+                              #   "debug_uniform" no file at all: the rms is set to the
+                              #                   mean absolute signal, uniformly. For
+                              #                   debugging only, and it warns loudly.
+                              # Pixel-pixel and QU covariance matrices are not supported.
+        path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      # add_signal_fraction_to_rms: 0.01
+                              # Add this fraction of the map's mean absolute signal to the
+                              # rms in quadrature. A blunt way to stop a band with
+                              # unrealistically small quoted errors from dominating the
+                              # fit, and a stand-in for the regularization noise C3 adds
+                              # at the TOD-to-map handoff.
+      fwhm: 60.0              # [arcmin] Gaussian beam of this map. CompSep models the
+                              # data as B*Y*a with this beam and NO pixel window.
+      freq: 0.408             # [GHz] Band centre. Every SED is evaluated at this single
+                              # frequency: C4 has no bandpass integration yet.
+      polarization: "IQU"
+      units: "uK_CMB"         # Unit the FILE is in. Converted to uK_RJ on read, which is
+                              # what CompSep works in internally. Supported: uK_RJ, mK_RJ,
+                              # K_RJ, uK_CMB, mK_CMB, K_CMB, MJy/sr.
+
+    # Planck 857 GHz. The dust intensity anchor, and an example of an intensity-only band:
+    # `polarization: "I"` costs one CompSep rank instead of two.
+    Planck857GHz:
+      enabled: true
+      get_from: "file"
+      eval_nside: 2048
+      signal_map:
+        path: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_857_npipe_02048_fullres_full_T.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      rms_map:
+        type: "rms"
+        path: "/mn/stornext/d23/cmbco/globe/planck/rms/rms_planck_857_npipe_02048_fullres_full_T.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      fwhm: 4.6
+      freq: 857.0
+      polarization: "I"
+      units: "uK_CMB"
+
+    ### MAP BANDS, IMPORTED ###
+    # `!import <path>` splices the named file's text in at exactly this point and at this
+    # indentation, so the five band definitions inside maps_WMAP.yml become five more
+    # entries of this `bands:` mapping. The path is relative to THIS file's directory.
+    # An !import must sit alone on its own line. Sharing one file across parameter files
+    # is why the WMAP, LFI and HFI map sets are defined once and imported everywhere.
+    !import "Planck_mapsonly/maps_WMAP.yml"
+
+# ----------------------------------------
+# COMPONENTS
+# ----------------------------------------
+# The sky model. Deliberately not nested under `compsep`: with CompSep disabled the TOD
+# side still builds its sky model from these, so they outlive component separation.
+#
+# Diffuse component amplitudes are stored internally as spherical-harmonic coefficients in
+# uK_RJ referenced to `nu_ref`; each component's `get_sed(nu)` is the dimensionless
+# Rayleigh-Jeans ratio between nu and nu_ref.
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"    # Selects the class, and thereby the SED. Implemented: CMB,
+                              # ThermalDust, Synchrotron, FreeFree, SpinningDust,
+                              # RadioSources.
+    params:
+      polarization: "IQU"     # Which Stokes parameters this component is defined in.
+      longname: "CMB"         # Human-readable name, used in logs and plots.
+      shortname: "cmb"        # Short name, used as the group key in the chain file.
+      lmax: 1024              # Required. Band limit of this component's alms. Keep it at
+                              # or below the largest band `lmax` in the run: a multipole
+                              # above every band's limit meets no data at all, and a
+                              # constrained realization then draws it from the C(l) prior
+                              # alone, which with a loose prior means junk.
+      spatially_varying_MM: False
+                              # Whether the mixing matrix varies across the sky. No
+                              # component returns a map-valued SED yet, so this is False
+                              # everywhere.
+
+      # --- The C(l) prior, S ---
+      # Fixed, not sampled. C3's `power_law_gauss` model written in D_l space:
+      #     D_l = amplitude * (l/l_pivot)^beta * max(exp(-l(l+1)sigma^2), 1e-10)
+      #     C_l = 2*pi*D_l / (l(l+1))
+      # with sigma from Cl_prior_FWHM. It subsumes C3's `power_law` (FWHM = 0) and
+      # `gauss` (beta = 0) types. Setting Cl_prior_amplitude to null switches the prior
+      # off entirely (S = identity), which is what most files here do.
+      # Each entry is a scalar, or an [I, QU] pair.
+      Cl_prior_amplitude: [1.0e+6, 1.0e+4]   # D_l at l_pivot, in uK_RJ^2 at nu_ref.
+      Cl_prior_beta: [0.0, -0.5]             # Power-law slope of D_l.
+      Cl_prior_l_pivot: 20                   # Multipole the amplitude is quoted at.
+      Cl_prior_FWHM: 0.0                     # [arcmin] Gaussian rolloff of D_l; 0 = off.
+      # Cl_prior_l_apod: 1024                # C3's COMP_L_APOD. Above it the prior C_l is
+                                             # tapered to 1e-6 in power by `lmax`, so the
+                                             # prior stops deciding modes on its own.
+                                             # Default = this component's lmax, where the
+                                             # taper does nothing.
+
+      # Initialise the amplitudes from a map instead of from zero. A FITS map is read at
+      # its own nside and converted from `units` at `nu_ref`; a chains_compsep/ file is
+      # read as alms, already in uK_RJ. Starting from a sensible sky lets the gain steps,
+      # which calibrate against the sky model, work from iteration one.
+      # init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_cmb_amp_BP8.1_v1.fits"
+      # units: "uK_CMB"       # Unit of that init file. Only read alongside init_from.
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      lmax: 1024
+      spatially_varying_MM: False
+      Cl_prior_amplitude: null   # No C(l) prior: S is the identity for this component.
+
+      # --- SED parameters (modified blackbody) ---
+      beta: 1.56              # Emissivity index.
+      T: 20                   # [K] Dust temperature.
+      nu_ref: [857, 353]      # [GHz] Reference frequency the amplitudes are quoted at,
+                              # as an [I, QU] pair here: intensity is anchored by the
+                              # 857 GHz map, polarization by 353 GHz. A scalar applies to
+                              # both.
+      units: "uK_RJ"
+
+      # --- Spectral-index sampling (used by mcmc_sampling_groups above) ---
+      # sample_spectral_index: True   # Required for this component to appear in an MCMC
+                                      # group. Without it, naming it there is an error.
+      # spectral_index_proposal_sigma: 0.01   # Gaussian MH step length in beta.
+      # spectral_index_bounds: [1.0, 2.5]     # Hard uniform bounds. A proposal outside
+                                              # them is rejected without a solve.
+      # A soft Gaussian prior on beta, added to the log posterior. Omit it for a flat
+      # prior inside the hard bounds above.
+      # spectral_index_prior:
+      #   type: gaussian
+      #   mean: 1.56
+      #   rms: 0.1
+
+      # Mean mu of the Gaussian amplitude prior (C3 COMP_AMP_PRIOR_MAP). Where the data
+      # constrain nothing -- outside a survey patch, say -- the solution is pulled to this
+      # map instead of to zero.
+      # amp_prior_mean_map: "/path/to/dust_prior_mean.fits"
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      longname: "Synchrotron"
+      shortname: "sync"
+      lmax: 512
+      spatially_varying_MM: False
+      Cl_prior_amplitude: null
+      beta: -3.1              # Power-law index in RJ units.
+      nu_ref: [0.408, 30]     # Intensity anchored at Haslam's 408 MHz, polarization at
+                              # 30 GHz where Haslam has no polarization information.
+      units: "uK_RJ"
+
+  FreeFree:
+    enabled: true
+    component_class: "FreeFree"
+    params:
+      polarization: "I"       # Free-free emission is essentially unpolarized, so solving
+                              # it in QU would add a component the data cannot constrain.
+      longname: "Free-Free"
+      shortname: "ff"
+      lmax: 512
+      spatially_varying_MM: False
+      Cl_prior_amplitude: null
+      T: 7000                 # [K] Electron temperature.
+      nu_ref: 40              # [GHz] Scalar reference: one value for every polarization.
+      units: "uK_RJ"
+
+  # Anomalous microwave emission, from a tabulated spinning-dust spectrum.
+  SpinningDust:
+    enabled: False
+    component_class: "SpinningDust"
+    params:
+      polarization: "I"
+      longname: "SpinningDust"
+      shortname: "sdust"
+      lmax: 1000
+      spatially_varying_MM: False
+      Cl_prior_amplitude: null
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
+                              # The tabulated SED shape, as a two-column text file.
+      nu_peak: 25.3           # [GHz] Frequency the tabulated spectrum peaks at; the table
+                              # is shifted so its peak lands here.
+      nu_0: 22.0              # [GHz] Reference frequency of the amplitudes.
+
+  # Point sources. Not a diffuse component: it carries per-source amplitudes rather than
+  # alms, and is excluded from both solvers' preconditioners. Only partially supported --
+  # there is no amplitude, position or spectral-index sampling for sources yet.
+  RadioSources:
+    enabled: False
+    component_class: "RadioSources"
+    params:
+      polarization: "I"
+      longname: "RadioSources"
+      shortname: "radsources"
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
+                              # The source catalogue: position and flux per source.
+      nu_0: 30.0              # [GHz] Reference frequency of the catalogue fluxes.
+
+# ----------------------------------------
+# EXPERIMENTS
+# ----------------------------------------
+# The instrument and its data: what exists on disk and how to read it. Nothing here says
+# what will be DONE with it -- that is tod_processing and compsep, above.
+experiments:
+  PlanckLFI:
+    enabled: true
+    experiment_id: "planck_lfi"
+                              # Selects the TOD reader: one module per experiment in
+                              # file_io/experiments/, named after this value. Known
+                              # readers: planck_lfi, akari, SO_LAT, SO_SAT, litebird_sim,
+                              # litebird_sim_spawndetectors, general.
+    num_scans: 45860          # Total scans to read across the whole experiment. Also
+                              # settable per band, which overrides this.
+    mapmaker: "bin"           # Overrides tod_processing.mapmaker for this experiment.
+
+    sparse_maps: false        # true = each rank's map buffers and sky-model slice hold
+                              # only the pixels its own scans observe. Essential for a
+                              # small survey patch at high nside; wasteful for a full-sky
+                              # experiment, where the default full-sky broadcast is
+                              # cheaper.
+
+    # tod_is_compressed: true # The TOD itself is Huffman-compressed in the HDF5 files.
+    # pix_is_compressed: true # Likewise for the pixel index stream,
+    # psi_is_compressed: true # and for the polarization angle stream. Each defaults to
+                              # whatever the reader expects for that data format.
+
+    # bad_data_bitmask: 0b11111111111111111111111111111111
+                              # Flag bits that mark a sample unusable: a sample is kept
+                              # only where (flag & bad_data_bitmask) == 0. Honoured by the
+                              # SO_LAT, SO_SAT and akari readers; planck_lfi hard-codes
+                              # its own value, so setting it here would do nothing.
+    # jump_bitmask: 0b10      # Flag bit that marks a detected jump. Required whenever
+                              # tod_processing.jump_detection is enabled.
+    # bad_PIDs_path: "/path/to/badPIDs.npy"
+                              # NumPy array of scan IDs to skip entirely at read time.
+    # min_unmasked_fraction: 0.0
+                              # Drop a detector-scan with less than this fraction of
+                              # unflagged samples at READ time, before it ever reaches the
+                              # samplers. Read by the SO_SAT reader only. Distinct from
+                              # data_selection.min_good_fraction, which flags rather than
+                              # drops, and does so every iteration.
+
+    # Replace the TOD read from disk with a synthetic sky plus noise realization, once at
+    # load. Used by the SO and LiteBIRD readers to test the samplers against a known
+    # truth while keeping the real pointing and flags.
+    # replace_tod_with_sim: true
+    # sim_params:
+    #   include_CMB: True
+    #   include_ThermalDust: True
+    #   include_Synchrotron: True
+    #   include_FreeFree: False
+    #   include_SpinningDust: False
+    #   include_OrbitalDipole: True
+    #   include_corr_noise: True
+    #   corr_noise_fknee: 0.1     # [Hz]
+    #   corr_noise_alpha: -1.0
+
+    bands:
+      Planck30GHz:
+        enabled: true
+        num_tasks: 4          # MPI ranks assigned to this band. The scans are split
+                              # across them. These sum to the TOD task total.
+        eval_nside: 512       # Resolution the band map is made at, and the resolution
+                              # CompSep then sees.
+        # data_nside: 512     # Resolution the pixel indices are stored at on disk. Read
+                              # by the akari reader only; every other reader takes it from
+                              # common/nside in the HDF5 file.
+        fwhm: 32.4            # [arcmin] Gaussian beam.
+        freq: 28.4            # [GHz] Effective band centre. Note this is not the nominal
+                              # 30.0: the SED is evaluated here, so use the effective
+                              # value.
+        # fsamp: 32.5         # [Hz] Sample rate. The planck_lfi reader takes it from the
+                              # data file; readers that do not require it here.
+        polarization: "IQU"
+
+        # Thermodynamic unit the gain -- and the maps written to the band chain -- are
+        # expressed in. C4 works internally in uK_RJ, so the gain is internally
+        # [detector units]/uK_RJ; one factor converts at the file boundary, multiplying
+        # the gain on read and dividing it on write, and multiplying the output maps on
+        # write. Planck calibrates against the CMB, so LFI gains are naturally per uK_CMB.
+        # Absent = uK_RJ, i.e. no conversion, which is what this file uses.
+        # band_unit: "uK_CMB"
+
+        # A processing mask gates the SAMPLING steps -- gain, correlated noise, jump
+        # detection -- and nothing else. Mapmaking deliberately bins with the flag cut
+        # alone, matching C3, where procmask does not gate bin_TOD.
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        # Or name a different mask per operation, in which case `processing_mask` above
+        # is the fallback for any operation not named here:
+        # processing_masks:
+        #   gain: "/path/to/gain_mask.fits"
+        #   ncorr: "/path/to/ncorr_mask.fits"
+
+        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
+                              # Text file listing this band's scan files, one per line.
+
+        # lmax: 1535          # C3 BAND_LMAX, as under compsep.bands above. Settable here
+                              # or on the experiment. Absent = 3*eval_nside - 1.
+        # mapmaker: "CG"      # Per-band override of the mapmaker. Band beats experiment
+                              # beats tod_processing, for this and several other keys.
+        # num_scans: 45860    # Per-band override of the experiment's scan count.
+
+        # initial_noise_params: [100.0, 0.1, -1.0]
+                              # [sigma0, fknee, alpha] to start the noise model at, in
+                              # detector units. Omitted here because the planck_lfi reader
+                              # supplies them from the data files.
+
+        # Hard [lo, hi] limits on the sampled PSD parameters, overriding the reader's
+        # instrument defaults. These are the endpoints of the sampler's grid, so a true
+        # value outside them cannot be recovered: the sample pins against the edge.
+        # noise_prior_bounds:
+        #   fknee: [0.01, 100.0]
+        #   alpha: [-4.5, -0.5]
+        # And an informative [mean, rms] prior along that grid. rms is in DECADES for
+        # log-normal parameters such as fknee. Leave rms at .inf for uninformative, or set
+        # it <= 0 to hold the parameter fixed at its initial value.
+        # noise_prior:
+        #   fknee: [0.1, 0.5]
+        #   alpha: [-1.0, 0.3]
+
+        # Any gain step may be reconfigured per band. Only the keys given are overridden;
+        # the rest come from tod_processing.
+        # abs_gain:
+        #   calibrate_against: "sky"
+
+        # At least one detector is required. The key is the detector name, and it must
+        # match the name in the data files -- that name, and its position in this
+        # mapping, is the column order of every per-detector array in the chain. The only
+        # sub-key the code reads is `gain`, an initial gain in `band_unit`; without it the
+        # reader takes the initial gain from the data file.
+        detectors:
+          27M:
+            bandpass_shift: 0.28  # [GHz] Measured bandpass shift. Nothing reads this
+                                  # yet -- C4 has no bandpass model -- but the values are
+                                  # kept here for when one lands.
+          27S:
+            bandpass_shift: 0.47
+          28M:
+            bandpass_shift: 0.08
+          28S:
+            bandpass_shift: 0.13
+
+      # A disabled band still has to be described. Disabling it here removes its TOD ranks;
+      # its entry under compsep.bands must be disabled too, or startup fails on a band
+      # CompSep expects and no experiment produces.
+      Planck44GHz:
+        enabled: false
+        num_tasks: 40
+        eval_nside: 512
+        fwhm: 27.1
+        freq: 44.1
+        polarization: "IQU"
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
+        detectors:
+          24M:
+            bandpass_shift: -0.55
+          25M:
+            bandpass_shift: 0.28

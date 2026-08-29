@@ -61,6 +61,12 @@ def test_the_seven_blocks_are_accepted():
     validate_param_schema({"gibbs": {}})   # a partial file is a different problem, not this one
 
 
+def test_boolean_parameters_require_boolean_values():
+    params = {"experiments": {"EXP": {"enabled": "false"}}}
+    with pytest.raises(ValueError, match="experiments.EXP.enabled.*type bool"):
+        validate_param_schema(params)
+
+
 @pytest.mark.parametrize("value", ["false", "single", 0, 1])
 def test_a_non_boolean_double_precision_is_refused(value):
     params = Bunch(compsep=Bunch(double_precision=value))

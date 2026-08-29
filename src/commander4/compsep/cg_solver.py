@@ -322,7 +322,7 @@ class CompSepSolver:
                 if master:
                     logger.verbose(
                         f"{'QU' if self.det_map.pol else 'Intensity'} CG iter {iter:3d} - "
-                        f"Residual {np.mean(self.CG_residuals[iter-checkpt_int:iter]):.6e} "
+                        f"Squared residual {np.mean(self.CG_residuals[iter-checkpt_int:iter]):.6e} "
                         f"({(time.time() - t0)/checkpt_int:.2f}s/iter)")
                     t0 = time.time()
                     if x_true is not None:
@@ -351,7 +351,7 @@ class CompSepSolver:
         self.CG_residuals = self.CG_residuals[:iter]
         if master:
             logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG finished after {iter} "\
-                        f"iterations with a residual of {CG_solver.err:.3e} "\
+                        f"iterations with a squared residual of {CG_solver.err:.3e} "\
                         f"(err tol = {self.config.err_tol})")
 
         complist_sol = CG_solver.x

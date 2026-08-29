@@ -22,7 +22,8 @@ class DistributedCG:
     """CG iteration on `CompList` vectors, used by the component-separation amplitude solver.
 
     Borrowed from pixell.utils and modified for Commander4's distributed operators and for
-    CompList's overriding of certain NumPy operations.
+    CompList's overriding of certain NumPy operations. ``err`` is the squared relative
+    preconditioned residual, ``(r^T M r) / (r_0^T M r_0)``, matching Commander3.
     """
     def __init__(self, A, b, is_master, x0=None, M=identity_preconditioner, dot=complist_dot,
                  destroy_b=False):
@@ -90,8 +91,8 @@ class DistributedCG:
 class DistributedCGArray:
     """CG iteration on plain NumPy arrays, used by the CG mapmaker.
 
-    Same algorithm as `DistributedCG`, but the vector arithmetic goes through NumPy directly rather
-    than through CompList's componentwise operations.
+    Same algorithm and squared-residual convention as `DistributedCG`, but the vector arithmetic
+    goes through NumPy directly rather than through CompList's componentwise operations.
     """
     def __init__(self, A, b, is_master, x0=None, M=identity_preconditioner, dot=dot,
                  destroy_b=False):
