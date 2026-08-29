@@ -42,7 +42,7 @@ You are now ready to run Commander4 (see further down).
 # 3. Running Commander4
 Commander4 has to be run with MPI, and a parameter file has to be indicated using the `-p` argument. Example usage:
 ```
-mpirun -n 15 commander4 -p params/param_default.yml
+mpirun -n 28 commander4 -p params/PlanckLFI/param_PlanckLFI30GHz.yml
 ```
 To quickly check how many MPI ranks you must use for any given parameter file, you can run `c4-validate-params path/to/params.yml`.
 
@@ -51,6 +51,8 @@ Note that Commander4 cannot be run as a standalone script (e.g. python src/comma
 There exist several standalone helper modules in Commander4 that can be useful for simulations, plotting, parameter file parsing. See [5. Standalone Tools](#5-standalone-tools).
 
 ### 3.1 Parameter file
+See `params/param_explanation.yml` for an exhaustive overview of the parameter file layout.
+
 A parameter file is seven top-level blocks, each named after the part of the program that reads them: `gibbs`, `resources`, `output`, `components`, `experiments`, `tod_processing` and `compsep`.
 
 The MPI task counts are **derived**, not stated: the TOD total is the sum of the per-band `num_tasks` over enabled bands of enabled experiments, and component separation takes one task per enabled `compsep.bands` view (one for I, one for QU). Commander4 reports the total it needs, and `mpirun -n` must match it.

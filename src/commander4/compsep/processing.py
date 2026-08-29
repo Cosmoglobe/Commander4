@@ -464,7 +464,8 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     else:
         amplitude_method = None
 
-    double_precision = params.compsep.float_precision == "double"
+    double_precision = bool(params.compsep.double_precision) \
+        if "double_precision" in params.compsep else False
     nthreads = params.resources.compsep.num_threads
     if not isinstance(nthreads, int):
         nthreads = nthreads[mpi_info.compsep.rank]

@@ -187,8 +187,8 @@ class DiffuseComponent(Component):
         spectrum per stored alm row: T for an intensity view, E and B for a QU one, T/E/B for a
         joined IQU component. Cheap -- the alms are already in memory, so this is no transform.
         """
-        # healpy's alm2cl only accepts complex128, while the alms are complex64 whenever
-        # `compsep.float_precision` is single.
+        # healpy's alm2cl only accepts complex128, while the alms are complex64 unless
+        # `compsep.double_precision` is set.
         alms = np.ascontiguousarray(self.alms, dtype=np.complex128)
         return np.array([hp.alm2cl(alms[ipol], lmax=self.lmax) for ipol in range(alms.shape[0])])
 

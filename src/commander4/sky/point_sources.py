@@ -244,7 +244,7 @@ class RadioSources(PointSourcesComponent):
 
         # The point-source equivalent of: M Y a
         ps_map = np.zeros((1,hp.nside2npix(band_nside)),   # Empty band map
-            dtype=(np.float32 if self.global_params.float_precision == "single" else np.float64))
+                          dtype=np.float64 if self.double_prec else np.float32)
         self._project_to_band_map(ps_map, band.nu)
 
         # Y^-1 M Y a
