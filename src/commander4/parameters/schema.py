@@ -157,7 +157,7 @@ def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any =
     mapmaker on the band, the experiment, or globally, for instance). `scopes` are dotted paths
     into `params` listed most specific first, e.g.::
 
-        resolve_param(params, "mapmaker", ("", f"experiments.{exp}.bands.{band}",
+        resolve_param(params, "mapmaker", (f"experiments.{exp}.bands.{band}",
                                            f"experiments.{exp}", "tod_processing"))
 
     Scopes can include "", which just means to look for the key at the root node of `params`.
@@ -243,8 +243,7 @@ def resolve_band_lmax(params: Bunch, band_name: str, experiment: str | None, nsi
 
 
 def validate_param_schema(params_dict: dict) -> None:
-    """Reject any top-level key outside `TOP_LEVEL_BLOCKS`
-    """
+    """Reject any top-level key outside `TOP_LEVEL_BLOCKS`."""
     unknown = sorted(set(params_dict) - set(TOP_LEVEL_BLOCKS))
     if unknown:
         raise ValueError(f"Unknown top-level parameter block(s) {unknown}. The valid blocks are "

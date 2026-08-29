@@ -205,9 +205,14 @@ def send_compsep(mpi_info: Bunch, compsep_my_band_id: str, sky_model,
                  destinations: dict[str, int]|None) -> None:
     """Send the CompSep sky model back to TOD when this execution view owns the return path.
 
-    For split IQU bands, the QU master first transfers its alms to the I master inside the CompSep
-    communicator. Only the matching `_I` execution view then sends the fully reassembled sky model
-    back to TOD. Pure QU bands send directly from their `_QU` execution view.
+    Before this boundary, ``process_compsep`` broadcasts every polarization view solved by a
+    sampling group across the CompSep communicator. Every rank therefore holds the same complete
+    component list, and the supplied ``sky_model`` already contains both I and QU amplitudes; this
+    function performs no additional QU-to-I transfer.
+
+    An IQU TOD band needs only one copy of that complete model. Its `_I` execution view is chosen as
+    the sender and the paired `_QU` view is suppressed. A QU-only band has no intensity sender, so
+    its `_QU` execution view sends directly.
 
     Args:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
