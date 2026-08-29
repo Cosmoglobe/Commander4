@@ -80,20 +80,34 @@ class GainConfig(StepConfig):
     @classmethod
     def from_params(cls, params: Bunch, experiment_data: DetectorGroupTOD, step_name: str,
                     default_calibrator: str, iteration: int, is_master: bool) -> "GainConfig":
-        """Build one self-contained gain config, including a per-band calibrator override."""
-        block = dict(params.tod_processing[step_name]
-                     if step_name in params.tod_processing else Bunch())
-        configured_calibrator = block.get("calibrate_against", default_calibrator)
+        """Build one gain config, applying the band's partial override to the global block."""
         exp_name = experiment_data.experiment_name
         band_name = experiment_data.band_name
-        block["calibrate_against"] = resolve_param(
-            params, "calibrate_against",
-            (f"experiments.{exp_name}.bands.{band_name}.{step_name}",),
-            default=configured_calibrator, raise_on_missing_scope=False,
-            legal_values=_VALID_CALIB_TARGETS,
+
+        # The global step block is the complete base configuration. It may be absent, in which
+        # case the GainConfig dataclass supplies its defaults below.
+        global_block = params.tod_processing[step_name] \
+            if step_name in params.tod_processing else Bunch()
+        config_values = dict(global_block)
+
+        # A band may carry a block with the same step name. It is a *partial* override: for example,
+        # a band can change only downsample_time while inheriting enabled/from_iter/calibrator from
+        # tod_processing. Resolve the block here for consistent lookup logging and type checking,
+        # then merge only the keys it actually contains.
+        band_overrides = resolve_param(
+            params, step_name, (f"experiments.{exp_name}.bands.{band_name}",),
+            default=Bunch(), legal_types=(Bunch, dict),
         )
+        config_values.update(dict(band_overrides))
+
+        # Absolute gain defaults to the orbital dipole; the other terms default to the sky. The
+        # caller supplies that term-specific default, but either parameter block may override it.
+        config_values.setdefault("calibrate_against", default_calibrator)
+
+        # sampling_rate is measured data, not a parameter-file option, so inject it as a resolved
+        # value. _from_block consequently rejects attempts to set it in either parameter block.
         config = cls._from_block(
-            f"tod_processing.{step_name}", block,
+            f"tod_processing.{step_name}", config_values,
             sampling_rate=float(experiment_data.fsamp),
         )
         if (config.is_active(iteration) and is_master
