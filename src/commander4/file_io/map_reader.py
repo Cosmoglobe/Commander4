@@ -14,6 +14,14 @@ logger = logging.getLogger(__name__)
 POLARIZATION_INDEX = {"I": 0, "Q": 1, "U": 2}
 
 
+def _resample_rms_map(map_rms: np.ndarray, nside_out: int) -> np.ndarray:
+    """Resample an RMS map while preserving its total inverse-variance weight."""
+    inv_var = 1.0 / np.asarray(map_rms, dtype=np.float64)**2
+    inv_var_out = hp.ud_grade(inv_var, nside_out, power=-2)
+    return np.divide(1.0, np.sqrt(inv_var_out), out=np.full_like(inv_var_out, np.inf),
+                     where=inv_var_out > 0.0)
+
+
 def _get_map_info(band: Bunch, maptype: str):
     if maptype not in {"signal", "rms"}:
         raise ValueError(f"Unknown maptype {maptype}.")
@@ -141,17 +149,17 @@ def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
                               + (my_band.add_signal_fraction_to_rms*np.nanmean(np.abs(map_sky)))**2)
         # TODO: Figure out how to read covariance maps as opposed to RMS maps.
 
-        nside = np.sqrt(map_sky.size//12)
-        if not nside.is_integer():
-            raise ValueError(f"Npix dimension of map ({map_sky.size}) results in a non-integer "
-                             f"nside ({nside}).")
-        nside = int(nside)
+        try:
+            nside = hp.npix2nside(map_sky.size)
+        except ValueError as error:
+            raise ValueError(f"Map for band {my_band._name} has invalid HEALPix pixel count "
+                             f"{map_sky.size}.") from error
 
         if "eval_nside" in my_band and nside != my_band.eval_nside:
             logger.info(f"Converting map {my_band._name} from nside {nside} to "\
                         f"{my_band.eval_nside}.")
             map_sky = hp.ud_grade(map_sky, my_band.eval_nside)
-            map_rms = 1.0/np.sqrt(hp.ud_grade(1.0/map_rms**2, my_band.eval_nside))
+            map_rms = _resample_rms_map(map_rms, my_band.eval_nside)
             nside = my_band.eval_nside
 
         maps_sky.append(map_sky)
