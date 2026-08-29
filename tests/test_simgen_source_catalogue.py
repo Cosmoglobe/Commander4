@@ -21,14 +21,14 @@ def _simgen_sources(beta=0.0):
                 params=Bunch(polarization="I", shortname="ptsrc", amplitude=AMPLITUDE,
                              nlon=12, nlat=6, lat_range_deg=[-70.0, 70.0], beta=beta,
                              nu_ref=NU_REF))
-    return GriddedPointSources(cfg, Bunch(nside=NSIDE, units="uK_RJ", float_precision="double"))
+    return GriddedPointSources(cfg, Bunch(nside=NSIDE, units="uK_RJ", double_precision=True))
 
 
 def _radio_sources(catalogue_path):
     cfg = Bunch(_name="RadioSources", polarization="I", longname="RadioSources",
                 shortname="radsources", template_path=str(catalogue_path), nu_0=NU_REF,
                 lmax="full", smoothing_scale=0, sample_alphas=False)
-    return RadioSources(cfg, Bunch(nside=NSIDE, float_precision="double", lmax=3*NSIDE-1,
+    return RadioSources(cfg, Bunch(nside=NSIDE, double_precision=True, lmax=3*NSIDE-1,
                                    polarization="I"))
 
 

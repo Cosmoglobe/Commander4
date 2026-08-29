@@ -17,7 +17,7 @@ from commander4.sky.comp_list import complist_dot, complist_norm
 
 def _make_compsep(ntask_compsep_qu: int = 1, ntask_compsep_i: int = 1) -> Bunch:
     """The `compsep` block components read: its nside and float precision."""
-    return Bunch(nside=2, float_precision="single")
+    return Bunch(nside=2, double_precision=False)
 
 
 def _make_component_cfg(polarization: str = "IQU") -> Bunch:
@@ -320,7 +320,7 @@ def test_load_initial_alms_from_fits_map(tmp_path) -> None:
 
     compsep = _make_compsep()
     gibbs = Bunch()
-    compsep.float_precision = "double"  # So component alms keep the map's precision.
+    compsep.double_precision = True  # So component alms keep the map's precision.
     cmb = _make_named_component_cfg("cmb", "IQU")
     cmb.params.lmax = lmax
     object.__setattr__(cmb, "_name", "cmb")

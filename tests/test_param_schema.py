@@ -83,6 +83,24 @@ def test_the_removed_log_filename_is_refused():
         validate_param_schema(params)
 
 
+def test_the_renamed_float_precision_is_refused():
+    """A stale 'single' would be truthy under the new name, i.e. silently select double."""
+    with pytest.raises(ValueError, match="double_precision"):
+        validate_param_schema({"compsep": {"float_precision": "single"}})
+
+
+@pytest.mark.parametrize("value", ["false", "single", 0, 1])
+def test_a_non_boolean_double_precision_is_refused(value):
+    with pytest.raises(ValueError, match="must be true or false"):
+        validate_param_schema({"compsep": {"double_precision": value}})
+
+
+def test_double_precision_accepts_booleans_and_may_be_omitted():
+    validate_param_schema({"compsep": {"double_precision": True}})
+    validate_param_schema({"compsep": {"double_precision": False}})
+    validate_param_schema({"compsep": {}})
+
+
 def test_the_block_list_is_the_documented_one():
     """Pinned as a literal so adding or removing a block has to be a deliberate edit."""
     assert TOP_LEVEL_BLOCKS == ("gibbs", "resources", "output", "components", "experiments",

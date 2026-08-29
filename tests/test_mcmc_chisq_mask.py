@@ -37,7 +37,7 @@ class _TrivialGroup(MCMCSamplingGroup):
 
 def _zero_comp_list() -> CompList:
     """A single CMB component with zero alms, so the realized sky model is identically zero."""
-    params = Bunch(compsep=Bunch(nside=NSIDE, float_precision="double",
+    params = Bunch(compsep=Bunch(nside=NSIDE, double_precision=True,
                                  MPI_config=Bunch(ntask_compsep_I=1, ntask_compsep_QU=1)))
     cmb = Bunch(enabled=True, component_class="CMB",
                 params=Bunch(lmax=2, polarization="I", shortname="cmb",

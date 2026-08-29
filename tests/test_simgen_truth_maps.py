@@ -38,7 +38,7 @@ def _write_smooth_iqu_template(path: str, seed: int = 7) -> np.ndarray:
 def _params(components: dict, bands: dict, nside: int = NSIDE) -> Bunch:
     from simgen.config import as_bunch_recursive
     return as_bunch_recursive({
-        "general": {"nside": nside, "units": "uK_RJ", "float_precision": "single",
+        "general": {"nside": nside, "units": "uK_RJ", "double_precision": False,
                     "seed": 11, "output_dir": "unused"},
         "components": components,
         "simulation": {"nscans": 1, "scan_duration_sec": 1,
@@ -186,7 +186,7 @@ def _pipeline_params(tmp_path, template_path, write_truth=None) -> tuple[str, st
     if write_truth is not None:
         sim["write_component_truth_maps"] = write_truth
     params = {
-        "general": {"nside": NSIDE, "units": "uK_RJ", "float_precision": "single",
+        "general": {"nside": NSIDE, "units": "uK_RJ", "double_precision": False,
                     "seed": 3, "output_dir": out_dir},
         "components": {"ThermalDust": _dust_cfg(template_path)},
         "simulation": sim,
@@ -255,7 +255,7 @@ def test_truth_map_is_readable_as_a_commander4_init_map(tmp_path):
     write_component_truth_maps(str(tmp_path), [comp], NSIDE, "uK_RJ")
     truth_path = str(tmp_path / "truth_ThermalDust.fits")
 
-    global_params = Bunch(nside=NSIDE, float_precision="single",
+    global_params = Bunch(nside=NSIDE, double_precision=False,
                           MPI_config=Bunch(ntask_compsep_I=1, ntask_compsep_QU=1))
     comp_params = Bunch(polarization="IQU", shortname="dust", lmax=3 * NSIDE - 1,
                         spatially_varying_MM=False, Cl_prior_amplitude=None,

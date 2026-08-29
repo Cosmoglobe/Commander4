@@ -31,7 +31,7 @@ def test_end_to_end_transfer_function(tmp_path, compress):
     tau_ms, fsamp, nside = 15.0, 12.0, 16
     out_dir = str(tmp_path / "sim")
     params = {
-        "general": {"nside": nside, "units": "uK_RJ", "float_precision": "single",
+        "general": {"nside": nside, "units": "uK_RJ", "double_precision": False,
                     "seed": 3, "output_dir": out_dir},
         "components": {
             "CMB": {"enabled": True, "component_class": "CMB",

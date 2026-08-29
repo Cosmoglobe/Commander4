@@ -35,7 +35,7 @@ from commander4.polarization import get_execution_band_id, get_execution_band_id
 
 def _make_compsep(ntask_compsep_qu: int = 1, ntask_compsep_i: int = 1) -> Bunch:
     """The `compsep` block components read: its nside and float precision."""
-    return Bunch(nside=2, float_precision="single")
+    return Bunch(nside=2, double_precision=False)
 
 
 def _make_component_cfg(polarization: str = "IQU") -> Bunch:
@@ -645,7 +645,7 @@ def _lmax_check_params(comp_lmax: int, band_nside: int = 64, l_apod: int | None 
         comp.params.Cl_prior_l_apod = l_apod
     object.__setattr__(comp, "_name", "CMB")
     params = Bunch(
-        compsep=Bunch(nside=band_nside, float_precision="single",
+        compsep=Bunch(nside=band_nside, double_precision=False,
                       bands=Bunch(BandA=Bunch(enabled=True, get_from="EXP", polarization="I"))),
         experiments=Bunch(EXP=Bunch(bands=Bunch(BandA=Bunch(eval_nside=band_nside)))),
     )
