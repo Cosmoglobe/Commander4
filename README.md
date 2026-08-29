@@ -15,7 +15,7 @@ Now calling `python3` will point to this binary instead of the default 3.9 insta
 
 # 1. Installation
 ### 1.1 Pre-installation
-Set up a Python virtual environment (if you prefer anaconda or similar this should work, but hasn't been tested).
+It is now assumed that you have a functionaly Python >= 3.11 installation. Set up a Python virtual environment (if you prefer anaconda or similar this should work, but hasn't been tested).
 ```bash
 python3 -m venv .venv_c4  # .venv_c4 is the name of the venv and can be changed.
 source .venv_c4/bin/activate
@@ -27,31 +27,31 @@ pip install --no-binary ducc0 ducc0
 ```
 
 ### 1.2 Clone and build
-If you are not intending to edit Commander4, you can install it by cloning the repository, and doing a pip install.
+Clone the repository and pip install it.
 ```bash
 git clone --recurse-submodules git@github.com:Cosmoglobe/Commander4.git
 cd Commander4
 pip install -v -e .  # -v for verbose, -e for editable install
 ```
-The editable install (`-e`) will make the installation point back to the source location, meaning that **you can edit Python files and run Commander4 without re-installing**. Changes to C/C++ files must be re-built. If you are not indending to edit Commander4, the `-e` can be skipped.
+The editable install (`-e`) will make the installation point back to the source location, meaning that **you can edit Python files and run Commander4 without re-installing**. Changes to C/C++ files must be re-built. If you are not indending to edit Commander4, the `-e` can be skipped (but it also does no harm).
 
 If you have already cloned the repo and forgot to add the `--recursive-submodules`, you can run `git submodule init && git submodule update`.
 
 You are now ready to run Commander4 (see further down).
 
-# 3. Running Commander4
+# 2. Running Commander4
 Commander4 has to be run with MPI, and a parameter file has to be indicated using the `-p` argument. Example usage:
 ```
-mpirun -n 28 commander4 -p params/PlanckLFI/param_PlanckLFI30GHz.yml
+mpirun -n 28 commander4 -p params/Planck_mapsonly/param_LFI+HFI+WMAP.yml
 ```
-To quickly check how many MPI ranks you must use for any given parameter file, you can run `c4-validate-params path/to/params.yml`.
+The number of MPI ranks **must match the parameter file**. To quickly check how many MPI ranks you must use for any given parameter file, you can run `c4-validate-params path/to/params.yml`. The number of ranks needed is split among component separation (which always requires 1 rank per I- and QU-band specified in the `compsep` section of the parameter file) and TOD processing (where any number of ranks can be allocated in the `experiments` section of the parameter file).
 
 Note that Commander4 cannot be run as a standalone script (e.g. python src/commander4/cli.py). It must be installed, and is then run as a binary. Note also that the binary should be called directly, and running `python commander4` will not work.
 
 There exist several standalone helper modules in Commander4 that can be useful for simulations, plotting, parameter file parsing. See [5. Standalone Tools](#5-standalone-tools).
 
-### 3.1 Parameter file
-See `params/param_explanation.yml` for an exhaustive overview of the parameter file layout.
+### 2.1 Parameter file
+See [params/param_explanation.yml](params/param_explanation.yml) for an exhaustive overview of the parameter file layout.
 
 A parameter file is seven top-level blocks, each named after the part of the program that reads them: `gibbs`, `resources`, `output`, `components`, `experiments`, `tod_processing` and `compsep`.
 
@@ -59,7 +59,7 @@ The MPI task counts are **derived**, not stated: the TOD total is the sum of the
 
 Parameter files can include other parameter files using `!include 'path/to/file.yml'`. The path is relative to the relevant file. Note that the exact content of the imported file is inserted at the exact location of the import, and at the relevant indendation level.
 
-### 3.2 Output
+### 2.2 Output
 A run writes everything below the single directory named by `output.dir`, which it creates:
 ```YAML
 <output_dir>/logs/              # run and fatal logs, named by run ID, and cProfile dumps
@@ -145,8 +145,8 @@ mcmc/<group>/params/<comp>            # the accepted parameter value per compone
 `gibbs.init_from_chain` restarts from a chain: the TOD side reads the per-scan quantities out of a `chains_bands/` file, and each component's `init_from` reads its alms out of a `chains_compsep/` one.
 
 
-# 4. Development / Contributing
-### 4.1 Code layout
+# 3. Development / Contributing
+### 3.1 Code layout
 An overview the most important directories and files. This is not exhaustive.
 
 ```
@@ -188,7 +188,7 @@ tests/                 # pytest suite; run with `pytest` from the repository roo
 notes/                 # Design notes.
 ```
 
-### 4.2 Output, logs and error handling
+### 3.2 Output, logs and error handling
 
 Commander4 uses Python's logging system instead of `print`. A record has the form `time - rank - module - level - message`. Note that the `module` tells you what file the message came from. For example, the following message comes from `src/commander4/data_models/tod_samples.py` (the `src/commander4/` is implicit):
 ```bash
@@ -210,7 +210,7 @@ Commander4 raises explicit exceptions such as `ValueError` or `RuntimeError`, an
 
 Python's `faulthandler` is also enabled. It can print minimal thread stacks for native faults such as segmentation faults that cannot become Python exceptions. Forced termination such as `SIGKILL`, out-of-memory killing, or node loss cannot be reported reliably by the application; use the Slurm job state and launcher output for those failures.
 
-### 4.3 Git workflow
+### 3.3 Git workflow
 1. Make sure you are on main (`git checkout main`) and up to date (`git pull`).
 2. Create a new local branch (`git checkout -b dev-compsep`).
 3. Make commits from small self-contained changes to the code. The individual commits should not break the code, but should otherwise be as limited in scope as possible.
@@ -220,7 +220,7 @@ Python's `faulthandler` is also enabled. It can print minimal thread stacks for 
 7. If you are not immediately planning to keep developing the same features on the same branch, it is best to check out to main (`git checkout main`) and delete your local branch (`git branch -d dev-compsep`) (you can always re-branch with the exact same name later). The exception is if you intend to keep working on the same features in the code, that depends on the new changes you made.
 8. If you are the reviewer of a pull request, always delete the merged branch immediately after merging. There will be a prompt for this on GitHub.
 
-### 4.4 Python style guidelines
+### 3.4 Python style guidelines
 Commander 4 does not strictly adhere to a specific style guideline, and you are encouraged to use common sense. You are generally recommended to follow PEP8 (https://peps.python.org/pep-0008/) style guidelines, with the following clarifications and exceptions:
 
 #### Line length
@@ -275,8 +275,8 @@ def my_pow_func(array: NDArray, pow: float) -> NDArray:
     return array**pow
 ```
 
-# 5. Standalone tools
-### 5.1 List of standalone tools
+# 4. Standalone tools
+### 4.1 List of standalone tools
 Commander4 comes with some tools that all follow the `c4-[tool-name]` pattern. They are explained in more detail below, and summarized here (in order of usefulness):
 ```bash
 mpirun -n 4 c4-simgen -p simgen/params/param_default.yml  # Generate simulated TOD scan files.
@@ -292,16 +292,16 @@ c4-cmb-realizations  path/to/chain-dir/  # Generate constrained CMB realizations
 c4-generate-stubs  # Manually re-generate the stubs that are automatically during a build (very niche).
 ```
 
-### 5.2 Simulations
+### 4.2 Simulations
 
 See [`simgen/README.md`](simgen/README.md) for the simulator's parameter format and output layout.
 
-### 5.3 Parameter file validation
+### 4.3 Parameter file validation
 Run `c4-validate-params path/to/param.yml` to get:
 - Info about how many MPI ranks the file is currently configered with, such that you know how many to use with `mpirun -n ...`
 - Info about what distribution of threads is optimal for the component separation. If you know how many nodes and cores per node you plan to dedicate to component separation, you can run `c4-validate-params params.yml --compsep-threads-per-node 384 --compsep-nodes 2` to get a proposed distribution, which can be pasted directly into the parameter file.
 
-### 5.4 Chain plotting
+### 4.4 Chain plotting
 `c4-plot-chain` creates a whole bunch of plots, both sky maps and various TOD plots, and places them in the chains folder.
 - For experimenst like SO, where per-detector plots are unfeasible, you should add the flag `--detector-plots summary`.
 - The amount of plots can get excessive, so it's recommended to use the flags to plot only specific subsets, such as `--chain`, `--iter`, `--band`.
