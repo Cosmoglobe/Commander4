@@ -1,43 +1,38 @@
-# Commander4: bolometer transfer-function impact test.
-# Analyses `simgen/params/param_transfunc.yml`.
-# 
 # 18 tasks = 6 TOD + 6 CompSep-I + 6 CompSep-QU.
 #
-# This file is a copy of `simparam_compsep_only.yml` with only the paths changed (the six TOD
-# filelists, the output directory and the log file), so the two analyses are identical.
-#
-# Includes CG component separation (CMB+Dust+Sync) of 6 Planck-like bands at nside 64.
-# TOD sampling is enabled, but all TOD steps are disabled (i.e. only mapmaking).
+# Tests the MCMC spectral index sampling (not per-pix, common across the sky).
+# Analyses `simgen/params/param_compsep.yml`, the same simulation as `simparam_compsep_CG.yml`.
+# Starts away from the truth at beta_dust 1.45 (truth 1.54), beta_sync -3.25 (truth -3.10).
 
 # ----------------------------------------
 # GIBBS
 # ----------------------------------------
 gibbs:
-  num_iterations: 10
+  num_iterations: 100           # Each iteration advances the index chain by `numstep` MH steps; the
 
   seed: 1995
 
 # ----------------------------------------
 # RESOURCES
 # ----------------------------------------
+                            # chain needs enough of them to burn in and then mix.
+
 resources:
   tod:
     num_threads: 1
 
   compsep:
-    num_threads: 16
+    num_threads: 24
 
 # ----------------------------------------
 # OUTPUT
 # ----------------------------------------
 output:
-  # All output goes here, in the subdirectories logs/, chains_bands/,
-  # chains_compsep/ and plots/.
-  dir: "../c4_chains/simgen_transfunc/"
+  dir: "../c4_chains/simgen_compsep_MCMC/"
 
   logging:
     console:
-      level: 'verbose'
+      level: 'info'
     file:
       level: 'info'
 
@@ -48,7 +43,7 @@ output:
     interval:
       bands: 1
       compsep: 1
-      maps: 1
+      maps: 2
     maps_nside: 64
     include:
       orbital_dipole_maps: False
@@ -58,7 +53,47 @@ output:
 # ----------------------------------------
 # TOD PROCESSING
 # ----------------------------------------
-tod_processing: {}
+tod_processing:
+  cg_mapmaker:
+    max_iter: 10
+    err_tol: 1.0e-10
+
+  abs_gain:
+    enabled: false
+    from_iter: 2
+    gap_fill_method: wn
+    downsample_time: 1.0
+
+  rel_gain:
+    enabled: false
+    from_iter: 3
+    gap_fill_method: wn
+    downsample_time: 1.0
+
+  temporal_gain:
+    enabled: false
+    from_iter: 4
+    gap_fill_method: wn
+    downsample_time: 1.0
+
+  corr_noise:
+    enabled: False
+    from_iter: 1
+    sample_psd_params: False
+    sample_sigma0: True
+    nomono: False
+    onlymono: False
+    sigma0_decimation: 1
+    psd_fit_nu_min: 0.0
+    psd_fit_nu_max: 2.0
+    psd_bin: False
+    sigma0_method: pairwise
+    cg:
+      max_iter: 60
+      err_tol: 1.0e-4
+
+  data_selection:
+    enabled: false
 
 # ----------------------------------------
 # COMPONENT SEPARATION
@@ -66,6 +101,7 @@ tod_processing: {}
 compsep:
   double_precision: false
 
+  # The amplitude group the MCMC group conditions on and re-solves for every proposal.
   cg_sampling_groups:
     sample_amps_CG:
       enabled: true
@@ -78,7 +114,23 @@ compsep:
       preconditioner: JointPreconditioner
       dense_matrix_debug_mode: false
 
-  mcmc_sampling_groups: {}
+  # Dust and synchrotron beta are proposed jointly (one group, one Metropolis accept/reject on the
+  # joint chi^2), with the amplitude group re-solved between proposal and decision.
+  mcmc_sampling_groups:
+    sample_spectral_indices:
+      enabled: true
+      parameters: spectral_indices
+      comps: [Synchrotron, ThermalDust]
+      update_amplitude_groups: [sample_amps_CG]
+      numstep: 1
+      # Optional: restrict the accept/reject chi^2 to a subset of the bands.
+      # chisq_bands: [Band30GHz, Band44GHz, Band217GHz, Band353GHz]
+      # Optional: restrict it to part of the sky (C3's MCMC_SAMPLING_GROUP_CHISQ_MASK).  One HEALPix
+      # file per group, applied to every band in the group; ud_graded to each band's nside and
+      # thresholded at 0.5, with >0.5 meaning "keep".  This is a parameter-domain mask only -- it
+      # never enters the noise model or the amplitude solve -- and it is the right place for a
+      # Galactic-plane cut, which would otherwise let the plane dominate the index likelihood.
+      # chisq_mask: "/path/to/mask_10deg.fits"
 
   bands:
     Band30GHz:
@@ -109,7 +161,6 @@ compsep:
 # ----------------------------------------
 # COMPONENTS
 # ----------------------------------------
-# All spectral parameters equal the simulated truth.
 components:
   CMB:
     enabled: true
@@ -134,7 +185,14 @@ components:
       shortname: "dust"
       Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
       Cl_prior_l_pivot: 50
-      beta: 1.54
+      beta: 1.45                            # start value; simulated truth is 1.54
+      sample_spectral_index: true
+      spectral_index_proposal_sigma: 0.01   # MH step in beta
+      spectral_index_bounds: [1.0, 2.2]     # hard (uniform-prior) limits
+      spectral_index_prior:                 # optional soft prior (C3's p_gauss); wide enough to
+        type: gaussian                      # be non-informative relative to the data here
+        mean: 1.55
+        rms: 0.3
       T: 20
       nu_ref: 353
       units: "uK_RJ"
@@ -151,7 +209,14 @@ components:
       Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
       Cl_prior_l_pivot: 50
       Cl_prior_FWHM: 30.0                   # arcmin
-      beta: -3.1                            # simulated truth
+      beta: -3.25                           # start value; simulated truth is -3.10
+      sample_spectral_index: true
+      spectral_index_proposal_sigma: 0.01
+      spectral_index_bounds: [-4.0, -2.2]
+      spectral_index_prior:
+        type: gaussian
+        mean: -3.1
+        rms: 0.3
       nu_ref: 30
       units: "uK_RJ"
       lmax: 191
@@ -177,7 +242,7 @@ experiments:
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
-        filelist: "../c4_sims/simgen_transfunc/Band30GHz/filelist.txt"
+        filelist: "../c4_sims/simgen_compsep/Band30GHz/filelist.txt"
         detectors:
           det30_a: {gain: 1.0}
           det30_b: {gain: 1.0}
@@ -194,7 +259,7 @@ experiments:
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
-        filelist: "../c4_sims/simgen_transfunc/Band44GHz/filelist.txt"
+        filelist: "../c4_sims/simgen_compsep/Band44GHz/filelist.txt"
         detectors:
           det44_a: {gain: 1.0}
           det44_b: {gain: 1.0}
@@ -211,7 +276,7 @@ experiments:
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
-        filelist: "../c4_sims/simgen_transfunc/Band70GHz/filelist.txt"
+        filelist: "../c4_sims/simgen_compsep/Band70GHz/filelist.txt"
         detectors:
           det70_a: {gain: 1.0}
           det70_b: {gain: 1.0}
@@ -228,7 +293,7 @@ experiments:
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
-        filelist: "../c4_sims/simgen_transfunc/Band100GHz/filelist.txt"
+        filelist: "../c4_sims/simgen_compsep/Band100GHz/filelist.txt"
         detectors:
           det100_a: {gain: 1.0}
           det100_b: {gain: 1.0}
@@ -245,7 +310,7 @@ experiments:
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
-        filelist: "../c4_sims/simgen_transfunc/Band217GHz/filelist.txt"
+        filelist: "../c4_sims/simgen_compsep/Band217GHz/filelist.txt"
         detectors:
           det217_a: {gain: 1.0}
           det217_b: {gain: 1.0}
@@ -262,7 +327,7 @@ experiments:
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
-        filelist: "../c4_sims/simgen_transfunc/Band353GHz/filelist.txt"
+        filelist: "../c4_sims/simgen_compsep/Band353GHz/filelist.txt"
         detectors:
           det353_a: {gain: 1.0}
           det353_b: {gain: 1.0}

@@ -1,0 +1,252 @@
+# Commander4: gain-calibration + raw-detector-units feature test.
+#
+# Analyses `simgen/params/param_gain.yml`, which describes the simulation.
+
+# ----------------------------------------
+# GIBBS
+# ----------------------------------------
+gibbs:
+  num_iterations: 10
+
+  seed: 1995
+
+# ----------------------------------------
+# RESOURCES
+# ----------------------------------------
+resources:
+  tod:
+    num_threads: 1
+
+  compsep:
+    num_threads: 1
+
+# ----------------------------------------
+# OUTPUT
+# ----------------------------------------
+output:
+  # All output goes here, in the subdirectories logs/, chains_bands/,
+  # chains_compsep/ and plots/.
+  dir: "../c4_chains/simgen_gain/"
+
+  logging:
+    console:
+      level: 'info'
+    file:
+      level: 'info'
+
+  profiling: False
+
+  chains:
+    write: [1,]
+    interval:
+      bands: 1
+      compsep: 1
+      maps: 2
+    maps_nside: 64
+    include:
+      orbital_dipole_maps: True    # The abs-gain calibrator, worth eyeballing.
+      corr_noise_maps: False
+      sky_model_maps: True     # The rel-gain calibrator.
+
+# ----------------------------------------
+# TOD PROCESSING
+# ----------------------------------------
+tod_processing:
+  cg_mapmaker:
+    max_iter: 10
+    err_tol: 1.0e-10
+
+  abs_gain:
+    enabled: true
+    from_iter: 2
+    calibrate_against: orbital_dipole
+    gap_fill_method: wn
+    downsample_time: 1.0  # [s] Averaging chunk for the gain-calibration TODs (0 = off).
+
+  rel_gain:
+    enabled: true
+    from_iter: 3
+    calibrate_against: sky
+    gap_fill_method: wn
+    downsample_time: 1.0  # [s] Averaging chunk for the gain-calibration TODs (0 = off).
+
+  temporal_gain:
+    enabled: false                  # the missing simgen feature.
+    from_iter: 4
+    gap_fill_method: wn
+    downsample_time: 1.0  # [s] Averaging chunk for the gain-calibration TODs (0 = off).
+
+  corr_noise:
+    enabled: False       # White-noise simulation: nothing for n_corr to find.
+    from_iter: 1
+    sample_psd_params: False
+    sample_sigma0: True            # Still re-estimate the white-noise level each iteration.
+    nomono: False
+    onlymono: False
+    sigma0_decimation: 1
+    psd_fit_nu_min: 0.0
+    psd_fit_nu_max: 2.0
+    psd_bin: False
+    sigma0_method: pairwise
+    cg:
+      max_iter: 60
+      err_tol: 1.0e-4
+
+  data_selection:
+    enabled: false
+
+# ----------------------------------------
+# COMPONENT SEPARATION
+# ----------------------------------------
+compsep:
+  double_precision: false
+
+  # One joint amplitude group over all three components and all three bands.  Component separation is
+  # on because `rel_gain`'s `sky` calibrator is the current sky model; without it the relative
+  # gains would be calibrated against zeros.
+  cg_sampling_groups:
+    sample_amps_CG:
+      enabled: true
+      comps: [CMB, Synchrotron, ThermalDust]
+      bands: [Band30GHz, Band100GHz, Band217GHz]
+      optimize: false   # was compsep.sample_amplitudes: true
+      max_iter: 200
+      max_iter_pol: 200
+      err_tol: 0.0
+      preconditioner: JointPreconditioner
+      dense_matrix_debug_mode: false
+
+  mcmc_sampling_groups: {}
+
+  bands:
+    Band30GHz:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
+    Band100GHz:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
+    Band217GHz:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
+
+# ----------------------------------------
+# COMPONENTS
+# ----------------------------------------
+# Spectral parameters match the simulation exactly (this run tests gain, not spectral recovery).
+# The C(l) prior amplitudes are deliberately loose roofs -- orders of magnitude above the true
+# signal power at the quoted nu_ref -- so the prior only regularizes the modes the data leave
+# unconstrained and never shrinks the solution.
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      longname: "CMB"
+      shortname: "cmb"
+      Cl_prior_amplitude: [1.0e+6, 1.0e+4]  # D_l at l_pivot [I, QU]; uK_RJ^2 (~uK_CMB^2 at 1 GHz)
+      Cl_prior_beta: [0.0, -0.5]
+      Cl_prior_l_pivot: 20
+      lmax: 191
+      spatially_varying_MM: False
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
+      Cl_prior_l_pivot: 50
+      beta: 1.54
+      T: 20
+      nu_ref: 353
+      units: "uK_RJ"
+      lmax: 191
+      spatially_varying_MM: False
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      longname: "Synchrotron"
+      shortname: "sync"
+      # Synchrotron is constrained almost entirely by the 30 GHz band, whose 70' beam has little
+      # power left at l ~ 190; the Gaussian rolloff keeps those prior-dominated modes finite.
+      Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
+      Cl_prior_l_pivot: 50
+      Cl_prior_FWHM: 30.0                   # arcmin
+      beta: -3.1
+      nu_ref: 30
+      units: "uK_RJ"
+      lmax: 191
+      spatially_varying_MM: False
+
+# ----------------------------------------
+# EXPERIMENTS
+# ----------------------------------------
+experiments:
+  SimSat:
+    enabled: true
+    experiment_id: "general"
+    mapmaker: "bin"
+    num_scans: 2400
+    bands:
+      # `gain` and `initial_noise_params` are stated here so the chain starts away from the truth.
+      # They override the values simgen wrote into each scan's `scalars` dataset, which is what
+      # `simparam_compsep_CG.yml` reads from instead.
+      Band30GHz:
+        enabled: true
+        num_tasks: 2
+        eval_nside: 64
+        fwhm: 120.0
+        freq: 30.0
+        fsamp: 32.5
+        band_unit: "uK_RJ"
+        polarization: "IQU"
+        initial_noise_params: [1.0e-7, 0.1, -1.0]   # [sigma0, fknee, alpha]; sigma0 is the truth.
+        filelist: "../c4_sims/simgen_gain/Band30GHz/filelist.txt"
+        detectors:
+          det30_a: {gain: 1.05e-9}
+          det30_b: {gain: 1.05e-9}
+          det30_c: {gain: 1.05e-9}
+          det30_d: {gain: 1.05e-9}
+
+      Band100GHz:
+        enabled: true
+        num_tasks: 2
+        eval_nside: 64
+        fwhm: 70.0
+        freq: 100.0
+        fsamp: 32.5
+        band_unit: "uK_RJ"
+        polarization: "IQU"
+        initial_noise_params: [8.0e-8, 0.1, -1.0]
+        filelist: "../c4_sims/simgen_gain/Band100GHz/filelist.txt"
+        detectors:
+          det100_a: {gain: 1.05e-9}
+          det100_b: {gain: 1.05e-9}
+          det100_c: {gain: 1.05e-9}
+          det100_d: {gain: 1.05e-9}
+
+      Band217GHz:
+        enabled: true
+        num_tasks: 2
+        eval_nside: 64
+        fwhm: 40.0
+        freq: 217.0
+        fsamp: 32.5
+        band_unit: "uK_RJ"
+        polarization: "IQU"
+        initial_noise_params: [1.2e-7, 0.1, -1.0]
+        filelist: "../c4_sims/simgen_gain/Band217GHz/filelist.txt"
+        detectors:
+          det217_a: {gain: 1.05e-9}
+          det217_b: {gain: 1.05e-9}
+          det217_c: {gain: 1.05e-9}
+          det217_d: {gain: 1.05e-9}

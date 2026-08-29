@@ -250,6 +250,20 @@ def test_falsy_values_still_count_as_defined():
     assert resolve_param(params, "x", ("a", "b")) is False
 
 
+def test_an_empty_scope_addresses_the_given_block_itself():
+    """Scopes are relative to whatever is passed as `params`, which is not always the file root.
+
+    `Component` is handed one block -- `params.compsep` by Commander4, `general` by simgen -- so it
+    can name neither, and looks the key up in the block directly. Naming a scope there instead
+    searches one level too deep and raises "scope does not exist".
+    """
+    assert resolve_param(Bunch(double_precision=True), "double_precision", ("",)) is True
+    assert resolve_param(Bunch(), "double_precision", ("",), default=False) is False
+    # The narrower named scope still wins when both are given.
+    params = Bunch(x=1, inner=Bunch(x=2))
+    assert resolve_param(params, "x", ("inner", "")) == 2
+
+
 def test_where_the_value_came_from_is_logged(caplog):
     """An overridden setting is otherwise invisible in a chain's log."""
     with caplog.at_level("DEBUG", logger="commander4.parameters.schema"):

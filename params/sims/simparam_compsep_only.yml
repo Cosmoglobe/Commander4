@@ -9,21 +9,27 @@
 # Includes CG component separation (CMB+Dust+Sync) of 6 Planck-like bands at nside 64.
 # TOD sampling is enabled, but all TOD steps are disabled (i.e. only mapmaking).
 
-
 # ----------------------------------------
-# GENERAL
+# GIBBS
 # ----------------------------------------
 gibbs:
   num_iterations: 10
+
   seed: 1995
 
-
+# ----------------------------------------
+# RESOURCES
+# ----------------------------------------
 resources:
   tod:
     num_threads: 1
+
   compsep:
     num_threads: 16
 
+# ----------------------------------------
+# OUTPUT
+# ----------------------------------------
 output:
   # All output goes here, in the subdirectories logs/, chains_bands/,
   # chains_compsep/ and plots/.
@@ -36,6 +42,7 @@ output:
       level: 'info'
 
   profiling: False
+
   chains:
     write: [1,]
     interval:
@@ -48,6 +55,56 @@ output:
       corr_noise_maps: False
       sky_model_maps: True
 
+# ----------------------------------------
+# TOD PROCESSING
+# ----------------------------------------
+tod_processing: {}
+
+# ----------------------------------------
+# COMPONENT SEPARATION
+# ----------------------------------------
+compsep:
+  double_precision: false
+
+  cg_sampling_groups:
+    sample_amps_CG:
+      enabled: true
+      comps: [CMB, Synchrotron, ThermalDust]
+      bands: [Band30GHz, Band44GHz, Band70GHz, Band100GHz, Band217GHz, Band353GHz]
+      optimize: false   # was compsep.sample_amplitudes: true
+      max_iter: 300
+      max_iter_pol: 300
+      err_tol: 0.0
+      preconditioner: JointPreconditioner
+      dense_matrix_debug_mode: false
+
+  mcmc_sampling_groups: {}
+
+  bands:
+    Band30GHz:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
+    Band44GHz:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
+    Band70GHz:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
+    Band100GHz:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
+    Band217GHz:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
+    Band353GHz:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
 
 # ----------------------------------------
 # COMPONENTS
@@ -100,7 +157,6 @@ components:
       lmax: 191
       spatially_varying_MM: False
 
-
 # ----------------------------------------
 # EXPERIMENTS
 # ----------------------------------------
@@ -115,7 +171,6 @@ experiments:
         enabled: true
         num_tasks: 1
         eval_nside: 64
-        data_nside: 64
         fwhm: 120.0
         freq: 30.0
         fsamp: 32.5
@@ -133,7 +188,6 @@ experiments:
         enabled: true
         num_tasks: 1
         eval_nside: 64
-        data_nside: 64
         fwhm: 100.0
         freq: 44.0
         fsamp: 32.5
@@ -151,7 +205,6 @@ experiments:
         enabled: true
         num_tasks: 1
         eval_nside: 64
-        data_nside: 64
         fwhm: 80.0
         freq: 70.0
         fsamp: 32.5
@@ -169,7 +222,6 @@ experiments:
         enabled: true
         num_tasks: 1
         eval_nside: 64
-        data_nside: 64
         fwhm: 65.0
         freq: 100.0
         fsamp: 32.5
@@ -187,7 +239,6 @@ experiments:
         enabled: true
         num_tasks: 1
         eval_nside: 64
-        data_nside: 64
         fwhm: 50.0
         freq: 217.0
         fsamp: 32.5
@@ -205,7 +256,6 @@ experiments:
         enabled: true
         num_tasks: 1
         eval_nside: 64
-        data_nside: 64
         fwhm: 40.0
         freq: 353.0
         fsamp: 32.5
@@ -218,56 +268,3 @@ experiments:
           det353_b: {gain: 1.0}
           det353_c: {gain: 1.0}
           det353_d: {gain: 1.0}
-
-
-# ----------------------------------------
-# TOD PROCESSING
-# ----------------------------------------
-tod_processing: {}
-
-# ----------------------------------------
-# COMPONENT SEPARATION
-# ----------------------------------------
-compsep:
-  nside: 64
-  float_precision: "single"
-
-  cg_sampling_groups:
-    sample_amps_CG:
-      enabled: true
-      comps: [CMB, Synchrotron, ThermalDust]
-      bands: [Band30GHz, Band44GHz, Band70GHz, Band100GHz, Band217GHz, Band353GHz]
-      optimize: false   # was compsep.sample_amplitudes: true
-      max_iter: 300
-      max_iter_pol: 300
-      err_tol: 0.0
-      preconditioner: JointPreconditioner
-      dense_matrix_debug_mode: false
-
-  mcmc_sampling_groups: {}
-
-  bands:
-    Band30GHz:
-      get_from: SimSat
-      enabled: true
-      polarization: "IQU"
-    Band44GHz:
-      get_from: SimSat
-      enabled: true
-      polarization: "IQU"
-    Band70GHz:
-      get_from: SimSat
-      enabled: true
-      polarization: "IQU"
-    Band100GHz:
-      get_from: SimSat
-      enabled: true
-      polarization: "IQU"
-    Band217GHz:
-      get_from: SimSat
-      enabled: true
-      polarization: "IQU"
-    Band353GHz:
-      get_from: SimSat
-      enabled: true
-      polarization: "IQU"
