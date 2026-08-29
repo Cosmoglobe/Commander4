@@ -4,6 +4,16 @@ A preconditioner is applied to the CG residual each iteration; the closer M is t
 iterations are needed. The classes here trade accuracy against cost: `NoPreconditioner` (identity)
 up to `JointPreconditioner`, which inverts the full per-multipole component-component block.
 
+`JointPreconditioner` keeps three factors of the left-hand side -- the beam, the inverse-noise
+weight and the mixing matrix. `BeamOnlyPreconditioner` and `MixingMatrixPreconditioner` are the
+same construction with the other two set to unity, so they are subclasses rather than separate
+implementations. `NoiseOnlyPreconditioner` is kept commented out at the bottom of this file: it
+needs `py3nj`, which is not a dependency, and its author recorded that it never reproduced the
+noise diagonal in testing.
+
+A sampling group names its preconditioner as a string and it is looked up here by name, so a name
+that is not a class in this module fails when the solver builds it.
+
 (The CG *mapmaker* has its own family, in `tod/mapmaking/preconditioners.py`.)
 """
 # `from __future__ import annotations` defers evaluation of type hints, which together with the
@@ -12,21 +22,13 @@ from __future__ import annotations
 
 import numpy as np
 import healpy as hp
-from mpi4py import MPI
-from numpy.typing import NDArray
-from pixell import curvedsky
 from copy import deepcopy
-import logging
-from commander4.math_utils.alm import alm_real2complex, alm_complex2real
 
 import typing
 # Only import when performing type checking, avoiding circular import during normal runtime.
 if typing.TYPE_CHECKING:
     from commander4.compsep.cg_solver import CompSepSolver
     from commander4.sky.comp_list import CompList
-    from commander4.sky.component import Component
-
-logger = logging.getLogger(__name__)
 
 
 class NoPreconditioner:
@@ -38,165 +40,6 @@ class NoPreconditioner:
 
     def __call__(self, complist: CompList):
         return deepcopy(complist)
-
-
-
-class BeamOnlyPreconditioner:
-    """ Preconditioner for the beam-smoothing only case: A = B^TB.
-        Calculates the A^-1 operator for this case, which is exact, as B is diagonal in alm space.
-    """
-    def __init__(self, compsep: CompSepSolver, single_fwhm_value=None):
-        """
-        Args:
-            compsep (CompSepSolver): The CompSepSolver object from which this class is initialized.
-            single_fwhm_value (float): If provided, use this fwhm instead of the "correct"
-            sum of all beams.
-        """
-        self.compsep = compsep
-        compsep = self.compsep
-        mycomp = compsep.CompSep_comm.Get_rank()
-        all_fwhm = np.array(compsep.CompSep_comm.allgather(self.compsep.my_band_fwhm_rad))
-
-        if mycomp >= compsep.ncomp:  # nothing to do
-            return
-        
-        lmax = compsep.lmax_per_comp[mycomp]
-        self.beam_window_squared_sum = np.zeros(lmax + 1)
-
-        for fwhm in all_fwhm:
-            # Create beam window function. Square the beam window since it appears twice in the system matrix
-            beam_window_squared = hp.gauss_beam(fwhm, lmax=lmax)**2
-                
-            # Add regularization to avoid division by very small values
-            min_beam = 1e-10
-            beam_window_squared = np.maximum(beam_window_squared, min_beam)
-
-            # Add up the individual contributions to the beam from each frequency.                
-            self.beam_window_squared_sum += beam_window_squared
-
-
-    def __call__(self, a_array: NDArray):
-        # Apply inverse squared beam (divide by beam window squared)
-        a_array_out = alm_real2complex(a_array, self.compsep.my_comp_lmax)
-        a_array_out = hp.almxfl(a_array_out, 1.0/self.beam_window_squared_sum, inplace=True)
-        a_array_out = alm_complex2real(a_array_out, self.compsep.my_comp_lmax)
-        return a_array_out
-
-
-
-class NoiseOnlyPreconditioner:
-    """ Preconditioner accounting only for the diagonal of the noise covariance
-        matrix: A = Y^T N^-1 Y. Calculates the A^-1 operator for this case, which is only the
-        l- m-diagonal of A. NB: I don't think this preconditioner is correct, I'm unable to get it
-        to reproduce the diagonal when testing.
-    """
-    def __init__(self, compsep: CompSepSolver):
-        """
-        Arguments:
-            compsep (CompSepSolver): The CompSepSolver object from which this class is initialized.
-        """
-        import py3nj
-        self.compsep = compsep
-        mycomp = compsep.CompSep_comm.Get_rank()
-
-        # Since the noise-map has no component-dependence (while the A-matrix does), we simply
-        # have the same weights per component, and use the average of the band-weights.
-        w = compsep.map_inv_var
-        w_alm = None
-        # The different components have different lmax, so we loop over each.
-        for icomp in range(compsep.ncomp):
-            lmax = compsep.lmax_per_comp[icomp]
-            # Create alms at the specific lmax used by this component.
-            temp_w_alm = hp.map2alm(w, lmax=lmax)
-            if mycomp == icomp:
-                # Reduce to the rank holding this component.
-                w_alm = compsep.CompSep_comm.reduce(temp_w_alm, op=MPI.SUM, root=icomp)
-                w_alm /= compsep.CompSep_comm.Get_size()
-            else:
-                # Reduce to the rank holding this component.
-                compsep.CompSep_comm.reduce(temp_w_alm, op=MPI.SUM, root=icomp)
-
-        if mycomp >= compsep.ncomp:
-            return
-
-        self.my_comp_lmax = compsep.my_comp_lmax
-        # Not the same as the real-valued alms.
-        my_alm_len_complex = ((self.my_comp_lmax+1)*(self.my_comp_lmax+2))//2
-        self.YTNY = np.zeros(my_alm_len_complex, dtype=np.complex128)
-        w_alm_only_m0 = np.zeros(self.my_comp_lmax + 1, dtype=np.complex128)
-        for l in range(self.my_comp_lmax + 1):
-            idx = hp.Alm.getidx(self.my_comp_lmax, l, 0)
-            w_alm_only_m0[l] = w_alm[idx]
-
-        inv_sqrt_4pi = 1.0/np.sqrt(4*np.pi)
-        for l in range(self.my_comp_lmax + 1):
-            l3_max = min(self.my_comp_lmax, 2 * l)
-            for m in range(0, l + 1):
-                l3_arr = np.arange(0, l3_max + 1)
-                l_arr = np.full_like(l3_arr, l)
-                m_arr = np.full_like(l3_arr, m)
-
-                value = (-1)**m*py3nj.wigner3j(2*l_arr, 2*l_arr, 2*l3_arr, 2*m_arr, -2*m_arr, 0) * \
-                    py3nj.wigner3j(2*l_arr, 2*l_arr, 2*l3_arr, 0, 0, 0) * w_alm_only_m0[l3_arr] * \
-                    np.sqrt((2*l_arr + 1)**2*(2*l3_arr + 1))*inv_sqrt_4pi
-                idx = hp.Alm.getidx(self.my_comp_lmax, l, m)
-                self.YTNY[idx] += np.sum(value)
-        # alm_plotter(self.YTNY[icomp], lmax, filename=f"YTNY_{icomp}.png")
-
-
-    def __call__(self, a_array: NDArray):
-        compsep = self.compsep
-        mycomp = compsep.CompSep_comm.Get_rank()
-
-        if mycomp >= compsep.ncomp:  # nothing to do
-            return a_array
-        # Convert from real to complex alms, apply the Y^T N^-1 Y matrix, and then convert back.
-        a_array_out = alm_real2complex(a_array, self.my_comp_lmax)
-        a_array_out /= self.YTNY
-        a_array_out = alm_complex2real(a_array_out, self.my_comp_lmax)
-        return a_array_out
-
-
-class MixingMatrixPreconditioner:
-    """ Preconditioner accounting only for the mixing matrix.
-        Calculates the A^-1 operator for this case, which, since it's both pixel-independent and
-        l-m-independent, is only a small matrix depending on frequency and components.
-        This small matrix can be inverted directly.
-    """
-    def __init__(self, compsep: CompSepSolver):
-        self.compsep = compsep
-        M = np.empty((compsep.nband, compsep.ncomp), dtype=np.float64)
-        for icomp in range(compsep.ncomp):
-            comp = compsep.comp_list[icomp]
-            M[:,icomp] = comp.get_sed(compsep.freqs)
-        MT_M = np.matmul(M.T, M)
-        self.MT_M_inv = np.linalg.inv(MT_M)
-        self.my_comp = compsep.CompSep_comm.Get_rank()
-        self.is_holding_comp = self.my_comp < compsep.ncomp
-        self.full_size = np.sum(compsep.alm_len_percomp)
-        if self.is_holding_comp:
-            self.my_size = compsep.alm_len_percomp[self.my_comp]
-            color = 0
-        else:
-            self.my_size = 0
-            color = MPI.UNDEFINED
-        self.CompSep_subcomm = self.compsep.CompSep_comm.Split(color, key=self.my_comp)
-        
-
-    def __call__(self, a_array: NDArray):
-        if self.is_holding_comp:
-            a_array = alm_real2complex(a_array, self.compsep.my_comp_lmax)
-            a_map = np.empty((self.compsep.npix,), dtype=np.float64)
-            curvedsky.alm2map_healpix(a_array, a_map, spin=0,
-                                      nthread=self.compsep.nthreads)
-            a_map_all = self.CompSep_subcomm.allgather(a_map)
-            a_map_all = np.array(a_map_all)
-            a_map_all = np.matmul(self.MT_M_inv, a_map_all)
-            a_map_me = a_map_all[self.my_comp]
-            curvedsky.map2alm_healpix(a_map_me, a_array, niter=3, spin=0,
-                                      nthread=self.compsep.nthreads)
-            a_array = alm_complex2real(a_array, self.compsep.my_comp_lmax)
-        return a_array
 
 
 
@@ -331,7 +174,19 @@ class JointPreconditioner:
     - Bands only contribute up to their own ``lmax``.
     - This is a preconditioner for the isotropic part of the operator, not an exact inverse of the
       full discrete polarized system.
+    - The three ``include_*`` flags below select which factors are kept. All three subclasses at
+      the bottom of this module are this same construction with two of them switched off.
     """
+
+    # Which factors of the left-hand side this preconditioner models. A factor that is switched
+    # off is replaced by unity: no beam is ``B_b(ell) = 1``, no noise is ``W_b = I_pol``, and no
+    # mixing is ``m_b m_b^T -> I_comp``. Note that dropping the mixing must give the *identity*
+    # rather than an all-ones matrix: setting every mixing coefficient to 1 would instead declare
+    # every component perfectly degenerate with every other, making the block singular.
+    include_beam = True
+    include_noise = True
+    include_mixing = True
+
     def __init__(self, compsep: CompSepSolver, comp_list:CompList):
         self.compsep = compsep
         self.is_master = compsep.CompSep_comm.Get_rank() == 0
@@ -369,6 +224,9 @@ class JointPreconditioner:
         # weight matrix so that the approximation acts sensibly on the two spin-2 harmonic channels.
         band_pol_matrices = []
         for inv_n_map in all_map_inv_var:
+            if not self.include_noise:
+                band_pol_matrices.append(np.eye(self.npol, dtype=np.float64))
+                continue
             npix = inv_n_map.shape[-1]
             stokes_weights = np.mean(inv_n_map, axis=-1).astype(np.float64, copy=False)
             stokes_weights *= npix/(4*np.pi)
@@ -391,7 +249,8 @@ class JointPreconditioner:
 
         # Precompute the per-band beam transfer functions and the diagonal prior factors.
         beam_windows_squared = [
-            hp.gauss_beam(fwhm_rad, lmax=band_lmax)**2
+            hp.gauss_beam(fwhm_rad, lmax=band_lmax)**2 if self.include_beam
+            else np.ones(band_lmax + 1, dtype=np.float64)
             for fwhm_rad, band_lmax in zip(all_fwhm_rad, all_band_lmax)
         ]
         prior_inv = [
@@ -435,12 +294,15 @@ class JointPreconditioner:
                 if not np.any(pol_block):
                     continue
                 # The isotropic band contribution factorizes into a polarization block and a
-                # component-mixing outer product, scaled by the beam window at this ell.
-                scaled_mixing = mixing_matrix[iband, active_local]
-                system_block += beam_windows_squared[iband][ell] * np.kron(
-                    pol_block,
-                    np.outer(scaled_mixing, scaled_mixing),
-                )
+                # component block, scaled by the beam window at this ell. With the mixing kept, the
+                # component block is the mixing outer product, which is what couples the components
+                # to each other; without it, each component gets the band's weight on its own.
+                if self.include_mixing:
+                    scaled_mixing = mixing_matrix[iband, active_local]
+                    comp_block = np.outer(scaled_mixing, scaled_mixing)
+                else:
+                    comp_block = np.eye(active_local.size, dtype=np.float64)
+                system_block += beam_windows_squared[iband][ell] * np.kron(pol_block, comp_block)
             # Enforce exact symmetry before diagonalization to suppress tiny roundoff asymmetries.
             system_block = 0.5 * (system_block + system_block.T)
             eigvals, eigvecs = np.linalg.eigh(system_block)
@@ -501,3 +363,104 @@ class JointPreconditioner:
                     ]
  
         return a_complist_out
+
+
+class BeamOnlyPreconditioner(JointPreconditioner):
+    """`JointPreconditioner` keeping the beam alone: A ~ 1 + S^(1/2) B^T B S^(1/2).
+
+    Exact for a single band with no noise weighting and no mixing, since the beam is diagonal in
+    harmonic space. Useful when the bands differ mostly in resolution, and as a cheap reference
+    point for how much of `JointPreconditioner`'s benefit comes from the beam term alone.
+    """
+
+    include_noise = False
+    include_mixing = False
+
+
+class MixingMatrixPreconditioner(JointPreconditioner):
+    """`JointPreconditioner` keeping the mixing matrix alone: A ~ 1 + S^(1/2) M^T M S^(1/2).
+
+    This is the one variant that is not diagonal in the components: M^T M is what couples them to
+    each other, so this captures the component degeneracy that makes the system ill-conditioned in
+    the first place, while ignoring the beam and the noise weighting. Since neither of those is
+    kept, every band contributes the same block and the only ell dependence is through the C_l
+    prior.
+    """
+
+    include_beam = False
+    include_noise = False
+
+
+# `NoiseOnlyPreconditioner` -- a preconditioner accounting only for the diagonal of the noise
+# covariance, A = Y^T N^-1 Y. Left here as a starting point rather than ported, for two reasons:
+# its author noted it never reproduced the diagonal in testing, and it needs `py3nj` for the
+# Wigner 3j symbols, which is neither installed nor a declared dependency. The body below is the
+# original, written against the pre-CompList solver: it takes one component per rank, reads
+# `CompSepSolver` attributes that no longer exist (`map_inv_var`, `ncomp`, `lmax_per_comp`,
+# `my_comp_lmax`), and its `__call__` takes a plain alm array rather than a CompList.
+#
+# Note that the isotropic (ell_3 = 0) term of the sum below is exactly the constant weight
+# `mean(inv_n_map) * npix/(4*pi)` that `JointPreconditioner` already uses, so a noise-only variant
+# under that approximation is `JointPreconditioner` with `include_beam` and `include_mixing` off --
+# no Wigner symbols needed. The value of the version below is the ell-dependence beyond that.
+#
+# class NoiseOnlyPreconditioner:
+#     def __init__(self, compsep: CompSepSolver):
+#         import py3nj
+#         self.compsep = compsep
+#         mycomp = compsep.CompSep_comm.Get_rank()
+#
+#         # Since the noise-map has no component-dependence (while the A-matrix does), we simply
+#         # have the same weights per component, and use the average of the band-weights.
+#         w = compsep.map_inv_var
+#         w_alm = None
+#         # The different components have different lmax, so we loop over each.
+#         for icomp in range(compsep.ncomp):
+#             lmax = compsep.lmax_per_comp[icomp]
+#             # Create alms at the specific lmax used by this component.
+#             temp_w_alm = hp.map2alm(w, lmax=lmax)
+#             if mycomp == icomp:
+#                 # Reduce to the rank holding this component.
+#                 w_alm = compsep.CompSep_comm.reduce(temp_w_alm, op=MPI.SUM, root=icomp)
+#                 w_alm /= compsep.CompSep_comm.Get_size()
+#             else:
+#                 # Reduce to the rank holding this component.
+#                 compsep.CompSep_comm.reduce(temp_w_alm, op=MPI.SUM, root=icomp)
+#
+#         if mycomp >= compsep.ncomp:
+#             return
+#
+#         self.my_comp_lmax = compsep.my_comp_lmax
+#         # Not the same as the real-valued alms.
+#         my_alm_len_complex = ((self.my_comp_lmax+1)*(self.my_comp_lmax+2))//2
+#         self.YTNY = np.zeros(my_alm_len_complex, dtype=np.complex128)
+#         w_alm_only_m0 = np.zeros(self.my_comp_lmax + 1, dtype=np.complex128)
+#         for l in range(self.my_comp_lmax + 1):
+#             idx = hp.Alm.getidx(self.my_comp_lmax, l, 0)
+#             w_alm_only_m0[l] = w_alm[idx]
+#
+#         inv_sqrt_4pi = 1.0/np.sqrt(4*np.pi)
+#         for l in range(self.my_comp_lmax + 1):
+#             l3_max = min(self.my_comp_lmax, 2 * l)
+#             for m in range(0, l + 1):
+#                 l3_arr = np.arange(0, l3_max + 1)
+#                 l_arr = np.full_like(l3_arr, l)
+#                 m_arr = np.full_like(l3_arr, m)
+#
+#                 value = (-1)**m*py3nj.wigner3j(2*l_arr, 2*l_arr, 2*l3_arr, 2*m_arr, -2*m_arr, 0) * \
+#                     py3nj.wigner3j(2*l_arr, 2*l_arr, 2*l3_arr, 0, 0, 0) * w_alm_only_m0[l3_arr] * \
+#                     np.sqrt((2*l_arr + 1)**2*(2*l3_arr + 1))*inv_sqrt_4pi
+#                 idx = hp.Alm.getidx(self.my_comp_lmax, l, m)
+#                 self.YTNY[idx] += np.sum(value)
+#
+#     def __call__(self, a_array: NDArray):
+#         compsep = self.compsep
+#         mycomp = compsep.CompSep_comm.Get_rank()
+#
+#         if mycomp >= compsep.ncomp:  # nothing to do
+#             return a_array
+#         # Convert from real to complex alms, apply the Y^T N^-1 Y matrix, and then convert back.
+#         a_array_out = alm_real2complex(a_array, self.my_comp_lmax)
+#         a_array_out /= self.YTNY
+#         a_array_out = alm_complex2real(a_array_out, self.my_comp_lmax)
+#         return a_array_out
