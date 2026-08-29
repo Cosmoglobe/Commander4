@@ -1,0 +1,224 @@
+# ----------------------------------------
+# GIBBS
+# ----------------------------------------
+gibbs:
+  num_iterations: 16
+
+  seed: 1995
+
+# ----------------------------------------
+# RESOURCES
+# ----------------------------------------
+resources:
+  tod:
+    num_threads: 2
+
+  compsep:
+    num_threads: 1
+
+# ----------------------------------------
+# OUTPUT
+# ----------------------------------------
+output:
+  dir: "../c4_chains/SO_LAT/nside8192_90GHz_nocompsep/"
+
+  logging:
+    console:
+      level: 'debug'
+    file:
+      level: 'info'
+
+  profiling: True
+
+  chains:
+    write: [1,]
+    interval:
+      bands: 1
+      compsep: 1
+      maps: 1
+    maps_nside: "native"
+    include:
+      ncorr_tods: False
+      orbital_dipole_maps: False
+      corr_noise_maps: True
+      sky_model_maps: True
+      residual_maps: true
+      compsep_residual_maps: true
+      chisq_map: true
+
+# ----------------------------------------
+# TOD PROCESSING
+# ----------------------------------------
+tod_processing:
+  jump_detection:
+    enabled: false
+    from_iter: 1
+
+  abs_gain:
+    enabled: true
+    from_iter: 2
+    # calibrate_against: orbital_dipole # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
+    calibrate_against: sky # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
+    gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
+    downsample_time: 0.1   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+
+  rel_gain:
+    enabled: true
+    from_iter: 2
+    calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
+    gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
+    downsample_time: 0.1   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+
+  temporal_gain:
+    enabled: false
+    from_iter: 2
+    calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
+    gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
+    downsample_time: 0.1   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+
+  corr_noise:
+    enabled: True
+    from_iter: 1
+    sample_psd_params: True     # Resample the noise-model parameters (needs corr_noise.enabled).
+    sample_sigma0: True           # Re-estimate sigma0 from the n_corr-subtracted residual.
+    nomono: False                 # Project the per-scan monopole out of n_corr (Fortran "nomono").
+    onlymono: False               # Model the correlated noise as only the per-scan offset.
+    sigma0_decimation: 1          # Block-average factor for the sigma0 estimator.
+    psd_fit_nu_min: 0.02          # Min frequency (Hz) for noise-PSD parameter fitting.
+    psd_fit_nu_max: 10.0          # Max frequency (Hz) for noise-PSD parameter fitting.
+    psd_bin: true                 # Fit every Fourier mode (False) or a mode-weighted binned PSD.
+    sigma0_method: pairwise     # White-noise estimator: 'pairwise' (first-difference) or 'binned_psd'.
+    cg:
+      max_iter: 50               # Max CG iterations; 0 -> skip CG and use the stationary fallback.
+      err_tol: 1.0e-5            # Correlated-noise CG convergence tolerance.
+
+# ----------------------------------------
+# COMPONENT SEPARATION
+# ----------------------------------------
+compsep:
+  enabled: false                      # TOD-only: no CompSep ranks are allocated.
+
+  double_precision: false
+
+# ----------------------------------------
+# COMPONENTS
+# ----------------------------------------
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      longname: "CMB"
+      shortname: "cmb"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_cmb_amp_BP8.1_v1.fits"
+      units: "uK_CMB"
+      lmax: 1024
+      spatially_varying_MM: False
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1.fits"
+      beta: 1.56
+      T: 20
+      nu_ref: [857, 353]  # [I, QU]
+      units: "uK_RJ"
+      lmax: 1024
+      spatially_varying_MM: False
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      longname: "Synchrotron"
+      shortname: "sync"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1.fits"
+      beta: -3.1
+      nu_ref: [0.408, 30]  # [I, QU]
+      units: "uK_RJ"
+      lmax: 512
+      spatially_varying_MM: False
+
+  FreeFree:
+    enabled: true
+    component_class: "FreeFree"
+    params:
+      polarization: "I"
+      longname: "Free-Free"
+      shortname: "ff"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_ff_amp_BP8.1_v1.fits"
+      T: 7000
+      nu_ref: 40
+      units: "uK_RJ"
+      lmax: 512
+      spatially_varying_MM: False
+
+  RadioSources:
+    enabled: False
+    component_class: "RadioSources"
+    params:
+      polarization: "I"
+      longname: "RadioSources"
+      shortname: "radsources"
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
+      nu_0: 30.0  # Ghz
+
+  SpinningDust:
+    enabled: False
+    component_class: "SpinningDust"
+    params:
+      polarization: "I"
+      longname: "SpinningDust"
+      shortname: "sdust"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
+      nu_peak: 25.3  # Ghz
+      nu_0: 22.0  # Ghz
+      lmax: 1000
+      spatially_varying_MM: False
+
+# ----------------------------------------
+# EXPERIMENTS
+# ----------------------------------------
+experiments:
+  SO_LAT:
+    enabled: true
+    experiment_id: "SO_LAT"
+    tod_is_compressed: true
+    mapmaker: "bin"
+    sparse_maps: true
+    num_scans: 233
+    bad_data_bitmask: 0b11111111111111111111111111111111  # Entries in the 32-bit bitmask corresponding to bad data.
+    jump_bitmask: 0b00000000000000000000000000000010
+    bands:
+      SO_LAT_i1ws0_f090:
+        enabled: true
+        num_tasks: 233
+        num_scans: 233
+        eval_nside: 8192
+        fwhm: 2.2 # [arcmin]
+        freq: 90.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4_SO/filelists/SO_LAT_v2/filelist_SO_LAT_i1ws0_f090.txt"
+        processing_masks:
+          ncorr: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+          gain: /mn/stornext/d23/cmbco/globe/so_lat/mask/mask_proc_070_res_v5_wpointsources-small.fits
+        detectors:
+          !import "detectors/detectors_i1ws0_f090.yml"
+        abs_gain:
+          calibrate_against: "sky"
+        rel_gain:
+          calibrate_against: "sky"
+        temporal_gain:
+          calibrate_against: "sky"

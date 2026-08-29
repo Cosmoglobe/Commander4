@@ -1,0 +1,188 @@
+# ----------------------------------------
+# GIBBS
+# ----------------------------------------
+gibbs:
+  num_iterations: 5
+
+  seed: 1995
+
+# ----------------------------------------
+# RESOURCES
+# ----------------------------------------
+resources:
+  tod:
+    num_threads: 2
+
+  compsep:
+    num_threads: [8,8,8,8,8,8,8,8, 16, 32,32,32,32,32,32, 8,8,8,8,8,8,8,8, 16, 32,32,32,32]
+
+# ----------------------------------------
+# OUTPUT
+# ----------------------------------------
+output:
+  dir: "../c4_chains/SO_LAT/nside8192_noSO/"
+
+  logging:
+    console:
+      level: 'verbose'
+    file:
+      level: 'info'
+
+  profiling: True
+
+  chains:
+    write: [1,]
+    interval:
+      bands: 1
+      compsep: 1
+      maps: 1
+    maps_nside: "native"
+    include:
+      ncorr_tods: False
+      orbital_dipole_maps: False
+      corr_noise_maps: True
+      sky_model_maps: True
+      residual_maps: true
+      compsep_residual_maps: true
+      chisq_map: true
+
+# ----------------------------------------
+# TOD PROCESSING
+# ----------------------------------------
+tod_processing: {}
+
+# ----------------------------------------
+# COMPONENT SEPARATION
+# ----------------------------------------
+compsep:
+  double_precision: false
+
+  cg_sampling_groups:
+    sample_amps_CG:
+      enabled: true
+      optimize: false   # constrained realization (was the sample_amplitudes default)
+      max_iter: 160
+      max_iter_pol: 160
+      err_tol: 0.0
+      preconditioner: JointPreconditioner #NoiseOnlyPreconditioner #FullPreconditioner #MixingMatrixPreconditioner #BeamOnlyPreconditioner #
+      dense_matrix_debug_mode: false  # Solve system first with dense matrix math, for debugging CG. Very slow for nside>32.
+
+  bands:
+    ###### HASLAM MAPS ######
+    Haslam408MHz:
+      enabled: true
+      get_from: "file"
+      eval_nside: 512
+      signal_map:
+        path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      rms_map:
+        type: "rms"
+        path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      fwhm: 60.0  # [arcmin]
+      freq: 0.408 # [GHz]
+      polarization: "IQU"
+      units: "uK_CMB"
+
+    ###### WMAP MAPS ######
+    !import "../Planck_mapsonly/maps_WMAP.yml"
+
+    ###### LFI MAPS ######
+    !import "../Planck_mapsonly/maps_LFI.yml"
+
+    ###### HFI MAPS ######
+    !import "../Planck_mapsonly/maps_HFI.yml"
+
+# ----------------------------------------
+# COMPONENTS
+# ----------------------------------------
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      longname: "CMB"
+      shortname: "cmb"
+      init_from: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_100-1_npipe_02048_fullres_full_T.fits"
+      units: "uK_CMB"
+      # C(l) prior, C3-equivalent 'power_law_gauss' defined in D_l space (see P_Cl_prior):
+      #   D_l = amplitude*(l/l_pivot)^beta * max(exp(-l(l+1)sigma^2), 1e-10),  C_l = 2pi*D_l/(l(l+1)).
+      # Each entry may be a scalar or an [I, QU] pair. BP8.1 CMB values: a flat D_l roof of
+      # 1e6 uK^2 in T (>~1e4 x the real CMB everywhere, so negligible shrinkage where data
+      # constrain) which falls as l^-2 in C_l — this tames the high-l modes that only the SO patch
+      # constrains: outside the patch they are pulled towards zero instead of blowing up. QU
+      # amplitude raised 10x over BP's 1e3 (which was tuned for lmax=2000) to keep the EE Wiener
+      # weight ~1 out to l~4000 given SO's noise.
+      Cl_prior_amplitude: [1.0e+6, 1.0e+4] #[1.0e+6, 1.0e+4]  # D_l at l_pivot [I, QU]; uK_RJ^2 (~uK_CMB^2 at 1 GHz)
+      Cl_prior_beta: [0.0, -0.5]
+      Cl_prior_l_pivot: 20
+      Cl_prior_FWHM: 1.5  # arcmin; optional Gaussian rolloff of D_l, 0 = off
+      lmax: 2500
+      spatially_varying_MM: False
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1.fits"
+      # BP8.1 dust ('gauss' Cl model): T roof 1e7 uK_RJ^2 at BP's 545 GHz reference, scaled by the
+      # MBB SED^2 (~1.6) to this file's 857 GHz reference; QU 5e2 at 353 GHz (same reference).
+      Cl_prior_amplitude: [1.6e+7, 5.0e+2]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
+      Cl_prior_l_pivot: 50
+      Cl_prior_FWHM: [5.0, 10.0]  # arcmin; Gaussian rolloff of D_l
+      beta: 1.56
+      T: 20
+      nu_ref: [857, 353]  # [I, QU]
+      units: "uK_RJ"
+      lmax: 3000
+      spatially_varying_MM: False
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      longname: "Synchrotron"
+      shortname: "sync"
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1.fits"
+      # BP8.1 synch ('gauss' Cl model): the T roof is effectively off (1e20; the Haslam-scale
+      # signal at 408 MHz is only ~1e14 uK_RJ^2), so in T just the 60' rolloff acts; QU roof
+      # 2e2 at 30 GHz with a 30' rolloff.
+      Cl_prior_amplitude: [1.0e+20, 2.0e+2]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
+      Cl_prior_l_pivot: 100
+      Cl_prior_FWHM: [60.0, 30.0]  # arcmin; Gaussian rolloff of D_l
+      beta: -3.1
+      nu_ref: [0.408, 30]  # [I, QU]
+      units: "uK_RJ"
+      lmax: 1500
+      spatially_varying_MM: False
+
+  FreeFree:
+    enabled: true
+    component_class: "FreeFree"
+    params:
+      polarization: "IQU"
+      longname: "Free-Free"
+      shortname: "ff"
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_ff_amp_BP8.1_v1.fits"
+      # BP8.1 free-free ('power_law_gauss' Cl model): rising D_l ~ l^2 roof (1e3 at l=50, 40 GHz)
+      # with a 30' Gaussian rolloff.
+      Cl_prior_amplitude: 1.0e+3  # D_l at l_pivot; uK_RJ^2 at nu_ref
+      Cl_prior_beta: 2.0
+      Cl_prior_l_pivot: 50
+      Cl_prior_FWHM: 30.0  # arcmin; Gaussian rolloff of D_l
+      T: 7000
+      nu_ref: 40
+      units: "uK_RJ"
+      lmax: 1500
+      spatially_varying_MM: False
+
+# ----------------------------------------
+# EXPERIMENTS
+# ----------------------------------------
+experiments: {}
