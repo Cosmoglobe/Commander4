@@ -14,6 +14,7 @@ from pixell.bunch import Bunch
 from commander4.polarization import assert_pol_supported
 from commander4.math_utils.arithmetic import dot, inplace_arr_add,\
         inplace_arr_sub, inplace_arr_prod, inplace_arr_truediv
+from commander4.parameters.schema import resolve_param
 
 class Component:
     """Abstract base class for every sky component.
@@ -68,10 +69,8 @@ class Component:
         )
         self.eval_pol = self.defined_pol if eval_pol is None else eval_pol
         type(self)._assert_legal_pol(self.eval_pol, role="evaluation")
-        # Optional, and False (single precision) when absent. `global_params` is `params.compsep`
-        # in Commander4 and simgen's `general` block, so both spell the key the same way.
-        self.double_prec = bool(global_params.double_precision) \
-            if "double_precision" in global_params else False
+        self.double_prec = resolve_param(global_params, "double_precision", ("compsep",),
+                                         default=False, legal_types=bool)
         self._data = None
         # FWHM beam of the component. If the CG solver was used, this will be 0, as it solves for
         # deconvolved components. Only non-zero if the common-resolution per-pix solver was used.

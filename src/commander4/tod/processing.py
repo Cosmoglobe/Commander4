@@ -94,7 +94,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
     # needs it to give each rank only its local pixels). In full mode this is a cheap no-op.
     sparse_maps = resolve_param(params, "sparse_maps",
                                 (f"experiments.{experiment_data.experiment_name}",),
-                                default=MapmakingConfig.sparse_maps)
+                                default=MapmakingConfig.sparse_maps, legal_types=bool)
     experiment_data.get_pixel_domain(TODView(experiment_data, tod_samples_chain1), band_comm,
                                      sparse_maps)
 

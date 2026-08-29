@@ -342,8 +342,8 @@ def test_unimplemented_component_classes_are_rejected_during_construction() -> N
     )
     object.__setattr__(component, "_name", "Template")
 
-    with pytest.raises(ValueError, match="not implemented"):
-        CompList.init_from_params(Bunch(Template=component), Bunch())
+    with pytest.raises(NotImplementedError, match="not implemented"):
+        CompList.init_from_params(Bunch(Template=component), Bunch(compsep=Bunch()))
 
 
 def test_cg_and_per_pixel_groups_are_mutually_exclusive() -> None:

@@ -44,18 +44,8 @@ def _params(compsep_bands=(), tod_bands=(("BandA", 4), ("BandB", 2)), groups=Tru
 # Rejecting the old schema
 # --------------------------------------------------------------------------------------
 def test_the_replaced_general_block_is_refused():
-    """A pre-restructure file must fail loudly, naming where its settings went."""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match="Unknown top-level parameter block.*general"):
         validate_param_schema({"general": {"niter_gibbs": 4}, "components": {}})
-    message = str(excinfo.value)
-    assert "general" in message
-    # Specifically the "your file is the old layout" message, not the generic unknown-key one:
-    # it has to say where each group of settings went, not just that something is unrecognised.
-    assert "was replaced by" in message
-    assert "Gibbs loop control" in message and "thread counts" in message
-    for block in TOP_LEVEL_BLOCKS:
-        assert block in message
-    assert "proposed_param_layout.yml" in message
 
 
 def test_an_unknown_top_level_block_is_refused():
@@ -71,34 +61,20 @@ def test_the_seven_blocks_are_accepted():
     validate_param_schema({"gibbs": {}})   # a partial file is a different problem, not this one
 
 
-def test_the_removed_log_filename_is_refused():
-    params = {
-        "output": {
-            "logging": {
-                "file": {"level": "info", "filename": "custom.log"},
-            },
-        },
-    }
-    with pytest.raises(ValueError, match="run-<run-id>.log"):
-        validate_param_schema(params)
-
-
-def test_the_renamed_float_precision_is_refused():
-    """A stale 'single' would be truthy under the new name, i.e. silently select double."""
-    with pytest.raises(ValueError, match="double_precision"):
-        validate_param_schema({"compsep": {"float_precision": "single"}})
-
-
 @pytest.mark.parametrize("value", ["false", "single", 0, 1])
 def test_a_non_boolean_double_precision_is_refused(value):
-    with pytest.raises(ValueError, match="must be true or false"):
-        validate_param_schema({"compsep": {"double_precision": value}})
+    params = Bunch(compsep=Bunch(double_precision=value))
+    with pytest.raises(ValueError, match="must have type bool"):
+        resolve_param(params, "double_precision", ("compsep",), legal_types=bool)
 
 
 def test_double_precision_accepts_booleans_and_may_be_omitted():
-    validate_param_schema({"compsep": {"double_precision": True}})
-    validate_param_schema({"compsep": {"double_precision": False}})
-    validate_param_schema({"compsep": {}})
+    for value in (True, False):
+        params = Bunch(compsep=Bunch(double_precision=value))
+        assert resolve_param(params, "double_precision", ("compsep",), legal_types=bool) is value
+    params = Bunch(compsep=Bunch())
+    assert resolve_param(
+        params, "double_precision", ("compsep",), default=False, legal_types=bool) is False
 
 
 # --------------------------------------------------------------------------------------

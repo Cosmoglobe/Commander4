@@ -23,6 +23,7 @@ from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.polarization import EXECUTION_POLS
 from commander4.polarization import assert_pol_supported
 from commander4.math_utils.arithmetic import inplace_scale_add, inplace_add_scaled_vec
+from commander4.parameters.schema import resolve_param
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,7 @@ class CompList:
         # view per polarization it defines (I, QU, or both for an IQU component). Construction is
         # deliberately independent of the MPI/compsep layout: a view whose polarization is not
         # actually solved or used in a given run stays inert at its initial value.
+        resolve_param(params, "double_precision", ("compsep",), default=False, legal_types=bool)
         comp_list = []
         for component_str in components:
             component = components[component_str]

@@ -34,7 +34,7 @@ def _make_params(global_blocks: dict, band_blocks: dict) -> Bunch:
 
 
 def _exp_data(band="BAND"):
-    return SimpleNamespace(experiment_name="EXP", band_name=band)
+    return SimpleNamespace(experiment_name="EXP", band_name=band, fsamp=200.0, nu=100.0)
 
 
 def _inputs(band_blocks, passed="sky", gain_block="abs_gain", downsample_time=1.0,
@@ -67,6 +67,36 @@ def test_band_override_beats_the_passed_in_calibrator():
     assert _inputs({"abs_gain": {"calibrate_against": "sky_no_dipole"}})[0] == "sky_no_dipole"
     assert _inputs({"rel_gain": {"calibrate_against": "orbital_dipole"}},
                    gain_block="rel_gain")[0] == "orbital_dipole"
+
+
+def test_band_override_can_change_every_gain_option():
+    global_blocks = {
+        "abs_gain": {
+            "enabled": True,
+            "from_iter": 2,
+            "calibrate_against": "sky",
+            "gap_fill_method": "wn",
+            "downsample_time": 1.0,
+        },
+    }
+    band_blocks = {
+        "abs_gain": {
+            "enabled": False,
+            "from_iter": 4,
+            "gap_fill_method": "fallback",
+            "downsample_time": 0.25,
+        },
+    }
+    config = GainConfig.from_params(
+        _make_params(global_blocks, band_blocks), _exp_data(), "abs_gain", "orbital_dipole",
+        iteration=1, is_master=False,
+    )
+
+    assert not config.enabled
+    assert config.from_iter == 4
+    assert config.calibrate_against == "sky"
+    assert config.gap_fill_method == "fallback"
+    assert config.downsample_factor == 50
 
 
 def test_invalid_target_raises():

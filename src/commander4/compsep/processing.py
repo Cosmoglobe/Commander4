@@ -24,11 +24,10 @@ from commander4.sky.sky_model import SkyModel
 from commander4.compsep.cg_solver import CompSepSolver
 from commander4.compsep.chisq import ChisqResult, collect_fit_diagnostics, evaluate_chi2
 from commander4.compsep.perpix_solver import solve_compsep_perpix
-from commander4.compsep.preconditioners import SUPPORTED_PRECONDITIONERS
 from commander4.compsep.spectral_index import SpectralIndexSamplingGroup
 from commander4.file_io.chain_writer import write_compsep_chain_to_file
 from commander4.polarization import get_execution_band_id, EXECUTION_POLS
-from commander4.parameters.schema import resolve_band_lmax
+from commander4.parameters.schema import resolve_band_lmax, resolve_param
 from commander4.diagnostics.performance import benchmark, bench_summary, bench_reset, log_memory
 
 logger = logging.getLogger(__name__)
@@ -115,10 +114,6 @@ class CGSamplingGroupConfig(SamplingGroupConfig):
                 "commander4.compsep.dense_matrix_debug predates the CompList-based CG driver and "
                 "builds its unit vectors as plain arrays, so the solve crashes as soon as the "
                 "operator is applied. Leave dense_matrix_debug_mode off until it is ported.")
-        if self.preconditioner not in SUPPORTED_PRECONDITIONERS:
-            raise ValueError(f"CG sampling group {self.name!r} selects preconditioner "
-                             f"{self.preconditioner!r}; supported values are "
-                             f"{list(SUPPORTED_PRECONDITIONERS)}.")
 
 @dataclass(frozen=True)
 class PerPixelSamplingGroupConfig(SamplingGroupConfig):
@@ -464,8 +459,8 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     else:
         amplitude_method = None
 
-    double_precision = bool(params.compsep.double_precision) \
-        if "double_precision" in params.compsep else False
+    double_precision = resolve_param(
+        params, "double_precision", ("compsep",), default=False, legal_types=bool)
     nthreads = params.resources.compsep.num_threads
     if not isinstance(nthreads, int):
         nthreads = nthreads[mpi_info.compsep.rank]

@@ -149,6 +149,7 @@ def split_integer_range(length: int, num_parts: int, part: int) -> tuple[int, in
 
 def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any = _NO_DEFAULT,
                   legal_values: Sequence[Any] | None = None,
+                  legal_types: type | tuple[type, ...] | None = None,
                   raise_on_missing_scope: bool = True):
     """The value of `key`, taken from the first of `scopes` that defines it.
 
@@ -168,6 +169,7 @@ def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any =
         default: Returned when no scope defines `key`. Omit it to make that an error instead.
         legal_values: If given, the resolved value (or default) must be one of these, so a typo in
             the *value* is caught here rather than as strange behaviour later.
+        legal_types: If given, the resolved value (or default) must have one of these types.
         raise_on_missing_scope: What to do about a scope that does not exist in `params` at all.
             There is usually no good reason to list one, so this is an error by default. Pass
             False for a scope that is legitimately optional (a per-band override block that most
@@ -179,6 +181,11 @@ def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any =
             exist and `raise_on_missing_scope` is set.
     """
     def checked(value, source):
+        if legal_types is not None and not isinstance(value, legal_types):
+            allowed = legal_types if isinstance(legal_types, tuple) else (legal_types,)
+            type_names = [allowed_type.__name__ for allowed_type in allowed]
+            raise ValueError(f"'{key}' is {value!r} ({source}), but must have type "
+                             f"{' or '.join(type_names)}.")
         if legal_values is not None and value not in legal_values:
             raise ValueError(f"'{key}' is {value!r} ({source}), which is not one of "
                              f"{list(legal_values)}.")
