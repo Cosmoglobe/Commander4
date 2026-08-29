@@ -1,0 +1,321 @@
+# Parameter file for performing a full TOD processing + CG compsep on the Planck LFI TOD data with
+# auxiliary maps (Haslam + WMAP + HFI). Analysis performed at native resolutions.
+# By default not all detectors are included, but they are just commented out.
+
+# ----------------------------------------
+# GIBBS
+# ----------------------------------------
+gibbs:
+  num_iterations: 10
+
+  seed: 1995
+
+# ----------------------------------------
+# RESOURCES
+# ----------------------------------------
+resources:
+  tod:
+    num_threads: 1
+
+  compsep:
+    num_threads: [1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 2, 12, 12, 12, 12, 12, 12, 1, 1, 4, 1, 1, 1, 1, 1, 1, 1, 4, 24, 24, 24, 24]
+
+# ----------------------------------------
+# OUTPUT
+# ----------------------------------------
+output:
+  # All output goes here, in the subdirectories logs/, chains_bands/,
+  # chains_compsep/ and plots/.
+  dir: "../c4_chains/LFI_30GHz_ncorr+abs-rel-temp-gain/"
+
+  logging:
+    console:
+      level: 'verbose'
+    file:
+      level: 'debug'
+
+  profiling: False
+
+  chains:
+    write: [1,]  # Write only chain 1 to disk.
+    interval:  # Write all data every iteration.
+      bands: 1
+      compsep: 1
+      maps: 1
+    maps_nside: "native"
+    nside_chisq: 128
+
+    include:
+      orbital_dipole_maps: True
+      corr_noise_maps: True
+      sky_model_maps: True
+      residual_maps: True   # maps/res: binned TOD residual (C3 tod_<freq>_res). One extra
+                            # map accumulator per mapmaker.
+      hit_maps: True        # maps/nhit: per-pixel count of unflagged samples.
+      cov_maps: False       # maps/cov: the 6 unique elements of P^T N^-1 P, of which only the
+                            # inverse diagonal survives as maps/rms. Six full-sky float64 maps.
+      chisq_map: True       # chi2/map in the compsep chain (C3 chisq_<postfix>.fits).
+      compsep_residual_maps: False  # residuals/<band>_<pol>: full-resolution per-band residuals
+                            # (C3 res_<band>_<postfix>.fits). Gathers every band map onto the
+                            # compsep master, so it is memory-heavy.
+      ncorr_tods: False   # DEBUG ONLY: full per-sample n_corr TODs (very large data).
+
+# ----------------------------------------
+# TOD PROCESSING
+# ----------------------------------------
+tod_processing:
+  abs_gain:
+    enabled: true
+    from_iter: 2
+    calibrate_against: orbital_dipole # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
+    gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
+    downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+
+  rel_gain:
+    enabled: true
+    from_iter: 2
+    calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
+    gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
+    downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+
+  temporal_gain:
+    enabled: true
+    from_iter: 2
+    calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
+    gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
+    downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+
+  corr_noise:
+    enabled: True
+    from_iter: 2
+    sample_psd_params: True     # Resample noise-model params (needs corr_noise.enabled).
+    sample_sigma0: True            # Re-estimate sigma0 from the n_corr-subtracted residual.
+    nomono: False                 # Project the per-scan monopole out of n_corr (Fortran "nomono").
+    onlymono: False               # Model the correlated noise as only the per-scan offset.
+    sigma0_decimation: 1          # Block-average factor for the sigma0 estimator.
+    psd_fit_nu_min: 0.0           # Min frequency (Hz) for noise-PSD parameter fitting.
+    psd_fit_nu_max: 2.0           # Max frequency (Hz) for noise-PSD parameter fitting.
+    psd_bin: False                # Fit every Fourier mode (False) or mode-weighted binned PSD.
+    sigma0_method: pairwise     # White-noise estimator: 'pairwise' (first-difference) or 'binned_psd'.
+    cg:
+      max_iter: 60                # Max CG iterations; 0 -> skip CG, use stationary fallback.
+      err_tol: 1.0e-4             # Correlated-noise CG convergence tolerance.
+
+# ----------------------------------------
+# COMPONENT SEPARATION
+# ----------------------------------------
+compsep:
+  double_precision: false
+
+  # CG amplitude sampling groups: each is a conditional constrained realization of its
+  # components' amplitudes, conditioning on the components it does not list.
+  cg_sampling_groups:
+    sample_amps_CG:
+      enabled: true
+      comps: "all"
+      bands: "all"
+      optimize: false   # constrained realization (was the sample_amplitudes default)
+      max_iter: 100
+      max_iter_pol: 100
+      err_tol: 0.0  # No stopping criterium.
+      preconditioner: JointPreconditioner #NoiseOnlyPreconditioner #FullPreconditioner #MixingMatrixPreconditioner #BeamOnlyPreconditioner #
+      dense_matrix_debug_mode: false
+
+  mcmc_sampling_groups: {}
+
+  bands:
+    ### TOD BANDS ###
+    # These are bands received from the TOD processing, and listed under `experiments`.
+    Planck30GHz:
+      get_from: PlanckLFI
+      enabled: true
+      polarization: "IQU"
+    Planck44GHz:
+      get_from: PlanckLFI
+      enabled: true
+      polarization: "IQU"
+    Planck70GHz:
+      get_from: PlanckLFI
+      enabled: true
+      polarization: "IQU"
+
+    ### MAP BANDS ###
+    # These are map-only bands, read directly from file.
+    ###### WMAP MAPS ######
+    !import "../Planck_mapsonly/maps_WMAP.yml"
+
+    ###### HFI MAPS ######
+    !import "../Planck_mapsonly/maps_HFI.yml"
+
+# ----------------------------------------
+# COMPONENTS
+# ----------------------------------------
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      longname: "CMB"
+      shortname: "cmb"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      lmax: 1024
+      spatially_varying_MM: False
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      beta: 1.56
+      T: 20
+      nu_ref: [857, 353]  # [I, QU]
+      units: "uK_RJ"
+      lmax: 1024
+      spatially_varying_MM: False
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      longname: "Synchrotron"
+      shortname: "sync"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      beta: -3.1
+      nu_ref: [0.408, 30]  # [I, QU]
+      units: "uK_RJ"
+      lmax: 512
+      spatially_varying_MM: False
+
+  FreeFree:
+    enabled: true
+    component_class: "FreeFree"
+    params:
+      polarization: "I"
+      longname: "Free-Free"
+      shortname: "ff"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      T: 7000
+      nu_ref: 40
+      units: "uK_RJ"
+      lmax: 512
+      spatially_varying_MM: False
+
+  RadioSources:
+    enabled: False
+    component_class: "RadioSources"
+    params:
+      polarization: "I"
+      longname: "RadioSources"
+      shortname: "radsources"
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
+      nu_0: 30.0  # Ghz
+
+  SpinningDust:
+    enabled: False
+    component_class: "SpinningDust"
+    params:
+      polarization: "I"
+      longname: "SpinningDust"
+      shortname: "sdust"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
+      nu_peak: 25.3  # Ghz
+      nu_0: 22.0  # Ghz
+      lmax: 1000
+      spatially_varying_MM: False
+
+# ----------------------------------------
+# EXPERIMENTS
+# ----------------------------------------
+experiments:
+  PlanckLFI:
+    enabled: true
+    mapmaker: "bin"
+    experiment_id: "planck_lfi"  # Decides expected data format, what TOD reader is used, etc.
+    num_scans: 45860
+    bands:
+      Planck30GHz:
+        enabled: true
+        num_tasks: 24
+        eval_nside: 512
+        fwhm: 32.4 # [arcmin]
+        freq: 28.4 # [GHz]
+        polarization: "IQU"
+        # Thermodynamic unit the gain (and any file-supplied initial gain) is expressed in. C4's
+        # sky model is uK_RJ, so the gain is internally [detector units]/uK_RJ; band_unit converts
+        # it at read/write. Planck calibrates against the CMB, so LFI gains are naturally per uK_CMB
+        # (after the reader's metric-prefix fixup). Uncomment to apply the CMB<->RJ conversion that
+        # C4 otherwise omits. Default (absent) = uK_RJ, i.e. no conversion.
+        # band_unit: "uK_CMB"
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
+        detectors:
+          27M:
+            bandpass_shift: 0.28  # Ghz
+          27S:
+            bandpass_shift: 0.47
+          28M:
+            bandpass_shift: 0.08
+          28S:
+            bandpass_shift: 0.13
+      Planck44GHz:
+        enabled: true
+        num_tasks: 42
+        eval_nside: 512
+        fwhm: 27.1 # [arcmin]
+        freq: 44.1 # [GHz]
+        polarization: "IQU"
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
+        detectors:
+          24M:
+            bandpass_shift: -0.55  # Ghz
+          24S:
+            bandpass_shift: 0.16
+          25M:
+            bandpass_shift: 0.28
+          25S:
+            bandpass_shift: 0.07
+          26M:
+            bandpass_shift: 0.09
+          26S:
+            bandpass_shift: -0.05
+      Planck70GHz:
+        enabled: true
+        num_tasks: 120
+        eval_nside: 1024
+        fwhm: 13.3 # [arcmin]
+        freq: 70.1 # [GHz]
+        polarization: "IQU"
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
+        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_70.txt"
+        detectors:
+          18M:
+            bandpass_shift: -0.87
+          18S:
+            bandpass_shift: 0.14
+          19M:
+            bandpass_shift: 0.73
+          19S:
+            bandpass_shift: 0.59
+          20M:
+            bandpass_shift: -0.27
+          20S:
+            bandpass_shift: 0.20
+          21M:
+            bandpass_shift: 0.06
+          21S:
+            bandpass_shift: -0.71
+          22M:
+            bandpass_shift: 0.36
+          22S:
+            bandpass_shift: -0.32
+          23M:
+            bandpass_shift: 0.13
+          23S:
+            bandpass_shift: -0.05
