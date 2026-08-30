@@ -26,7 +26,7 @@ output:
     console:
       level: 'verbose'
     file:
-      level: 'info'
+      level: 'debug'
 
   profiling: True
 
@@ -92,13 +92,14 @@ tod_processing:
       max_iter: 50               # Max CG iterations; 0 -> skip CG and use the stationary fallback.
       err_tol: 1.0e-5            # Correlated-noise CG convergence tolerance.
 
+
 # ----------------------------------------
 # COMPONENT SEPARATION
 # ----------------------------------------
 compsep:
   enabled: false                      # TOD-only: no CompSep ranks are allocated.
-
   double_precision: false
+
 
 # ----------------------------------------
 # COMPONENTS
@@ -111,10 +112,21 @@ components:
       polarization: "IQU"
       longname: "CMB"
       shortname: "cmb"
-      Cl_prior_amplitude: null  # No amplitude prior.
-      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_cmb_amp_BP8.1_v1.fits"
+      init_from: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_100-1_npipe_02048_fullres_full_T.fits"
       units: "uK_CMB"
-      lmax: 1024
+      # C(l) prior, C3-equivalent 'power_law_gauss' defined in D_l space (see P_Cl_prior):
+      #   D_l = amplitude*(l/l_pivot)^beta * max(exp(-l(l+1)sigma^2), 1e-10),  C_l = 2pi*D_l/(l(l+1)).
+      # Each entry may be a scalar or an [I, QU] pair. BP8.1 CMB values: a flat D_l roof of
+      # 1e6 uK^2 in T (>~1e4 x the real CMB everywhere, so negligible shrinkage where data
+      # constrain) which falls as l^-2 in C_l — this tames the high-l modes that only the SO patch
+      # constrains: outside the patch they are pulled towards zero instead of blowing up. QU
+      # amplitude raised 10x over BP's 1e3 (which was tuned for lmax=2000) to keep the EE Wiener
+      # weight ~1 out to l~4000 given SO's noise.
+      Cl_prior_amplitude: [1.0e+6, 1.0e+4]  # D_l at l_pivot [I, QU]; uK_RJ^2 (~uK_CMB^2 at 1 GHz)
+      Cl_prior_beta: [0.0, -0.5]
+      Cl_prior_l_pivot: 20
+      Cl_prior_FWHM: 2.0  # arcmin; optional Gaussian rolloff of D_l, 0 = off
+      lmax: 8000
       spatially_varying_MM: False
 
   ThermalDust:
@@ -124,13 +136,17 @@ components:
       polarization: "IQU"
       longname: "Thermal-Dust"
       shortname: "dust"
-      Cl_prior_amplitude: null  # No amplitude prior.
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1.fits"
+      # BP8.1 dust ('gauss' Cl model): T roof 1e7 uK_RJ^2 at BP's 545 GHz reference, scaled by the
+      # MBB SED^2 (~1.6) to this file's 857 GHz reference; QU 5e2 at 353 GHz (same reference).
+      Cl_prior_amplitude: [1.6e+7, 5.0e+2]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
+      Cl_prior_l_pivot: 50
+      Cl_prior_FWHM: [5.0, 10.0]  # arcmin; Gaussian rolloff of D_l
       beta: 1.56
       T: 20
       nu_ref: [857, 353]  # [I, QU]
       units: "uK_RJ"
-      lmax: 1024
+      lmax: 3000
       spatially_varying_MM: False
 
   Synchrotron:
@@ -140,12 +156,17 @@ components:
       polarization: "IQU"
       longname: "Synchrotron"
       shortname: "sync"
-      Cl_prior_amplitude: null  # No amplitude prior.
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1.fits"
+      # BP8.1 synch ('gauss' Cl model): the T roof is effectively off (1e20; the Haslam-scale
+      # signal at 408 MHz is only ~1e14 uK_RJ^2), so in T just the 60' rolloff acts; QU roof
+      # 2e2 at 30 GHz with a 30' rolloff.
+      Cl_prior_amplitude: [1.0e+20, 2.0e+2]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
+      Cl_prior_l_pivot: 100
+      Cl_prior_FWHM: [60.0, 30.0]  # arcmin; Gaussian rolloff of D_l
       beta: -3.1
       nu_ref: [0.408, 30]  # [I, QU]
       units: "uK_RJ"
-      lmax: 512
+      lmax: 1500
       spatially_varying_MM: False
 
   FreeFree:
@@ -155,37 +176,19 @@ components:
       polarization: "I"
       longname: "Free-Free"
       shortname: "ff"
-      Cl_prior_amplitude: null  # No amplitude prior.
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_ff_amp_BP8.1_v1.fits"
+      # BP8.1 free-free ('power_law_gauss' Cl model): rising D_l ~ l^2 roof (1e3 at l=50, 40 GHz)
+      # with a 30' Gaussian rolloff.
+      Cl_prior_amplitude: 1.0e+3  # D_l at l_pivot; uK_RJ^2 at nu_ref
+      Cl_prior_beta: 2.0
+      Cl_prior_l_pivot: 50
+      Cl_prior_FWHM: 30.0  # arcmin; Gaussian rolloff of D_l
       T: 7000
       nu_ref: 40
       units: "uK_RJ"
-      lmax: 512
+      lmax: 1500
       spatially_varying_MM: False
 
-  RadioSources:
-    enabled: False
-    component_class: "RadioSources"
-    params:
-      polarization: "I"
-      longname: "RadioSources"
-      shortname: "radsources"
-      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
-      nu_0: 30.0  # Ghz
-
-  SpinningDust:
-    enabled: False
-    component_class: "SpinningDust"
-    params:
-      polarization: "I"
-      longname: "SpinningDust"
-      shortname: "sdust"
-      Cl_prior_amplitude: null  # No amplitude prior.
-      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
-      nu_peak: 25.3  # Ghz
-      nu_0: 22.0  # Ghz
-      lmax: 1000
-      spatially_varying_MM: False
 
 # ----------------------------------------
 # EXPERIMENTS

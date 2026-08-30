@@ -1,21 +1,3 @@
-# Commander4: SO SAT (satp3) deep patch, CG component separation.
-#
-# Data: /mn/stornext/d5/data/sigurdkn/cosmoglobe/so/out_sat3_deep/, 1357 scan files covering
-# seven wafers (ws0-ws6) x two frequencies (f090, f150). Detector names carry a per-wafer prefix
-# (Mv5, Mv27, Mv35, Mv12, Mv23, Mv33, Mv17) and the frequency, so no band can span either: every
-# (wafer, frequency) pair is its own band, with its own gains and noise parameters.
-#
-# MPI: 1357 TOD ranks (one scan each) + 24 CompSep-I + 22 CompSep-QU = 1403 in total.
-#   mpirun -n 1403 commander4 -p params/SO_SAT/param_SO_SAT_CG.yml
-#
-# The detector lists (`detectors_SAT/detectors_<ws>_<freq>.yml`) and the filelists were generated
-# from the files themselves. Each list holds the detectors that are live (non-zero response) in at
-# least one scan of that band and present in every scan of it (roughly half the entries in the
-# files are dead detectors whose TOD is identically zero and whose flags are all-bad, and listing
-# them would only mean reading and discarding them on every scan). (ws1.f150 is the one band whose
-# detector list is not identical across scans: 12 of its 51 scans carry 9 extra detectors, which
-# are excluded because the reader looks every configured detector up in every file.)
-
 # ----------------------------------------
 # GIBBS
 # ----------------------------------------

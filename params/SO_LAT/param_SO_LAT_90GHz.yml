@@ -14,7 +14,7 @@ resources:
     num_threads: 2
 
   compsep:
-    num_threads: [110, 1, 1, 1, 1, 1, 1, 1, 1, 1, 3, 3, 3, 3, 2, 2, 220, 1, 1, 1, 1, 1, 1, 1, 1, 1, 5, 5, 5, 5]
+    num_threads: [128, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 256, 1, 1, 1, 1, 1, 1, 1, 1, 1, 4, 4, 4, 4]
 
 # ----------------------------------------
 # OUTPUT
@@ -26,7 +26,7 @@ output:
     console:
       level: 'verbose'
     file:
-      level: 'info'
+      level: 'debug'
 
   profiling: True
 
@@ -216,7 +216,7 @@ components:
     enabled: true
     component_class: "FreeFree"
     params:
-      polarization: "IQU"
+      polarization: "I"
       longname: "Free-Free"
       shortname: "ff"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_ff_amp_BP8.1_v1.fits"

@@ -5,9 +5,6 @@
 # (Mv5, Mv27, Mv35, Mv12, Mv23, Mv33, Mv17) and the frequency, so no band can span either: every
 # (wafer, frequency) pair is its own band, with its own gains and noise parameters.
 #
-# MPI: 1357 TOD ranks (one scan each) + 24 CompSep-I + 22 CompSep-QU = 1403 in total.
-#   mpirun -n 1403 commander4 -p params/SO_SAT/param_SO_SAT_CG.yml
-#
 # The detector lists (`detectors_SAT/detectors_<ws>_<freq>.yml`) and the filelists were generated
 # from the files themselves. Each list holds the detectors that are live (non-zero response) in at
 # least one scan of that band and present in every scan of it (roughly half the entries in the

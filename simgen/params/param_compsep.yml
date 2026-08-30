@@ -2,7 +2,8 @@
 #
 #   mpirun -n 12 c4-simgen -p simgen/params/param_compsep.yml
 #
-# Analysed by `params/sims/simparam_compsep_CG.yml` (amplitudes) and
+# Analysed by `params/sims/simparam_compsep_only.yml` (CG amplitudes),
+# `params/sims/simparam_compsep_only_perpix.yml` (per-pixel amplitudes at a common beam), and
 # `params/sims/simparam_compsep_MCMC.yml` (spectral indices).
 #
 # INJECTED TRUTH, what the analysis has to recover:

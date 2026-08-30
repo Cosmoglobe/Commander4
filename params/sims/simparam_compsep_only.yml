@@ -1,13 +1,3 @@
-# Commander4: bolometer transfer-function impact test.
-# Analyses `simgen/params/param_transfunc.yml`.
-# 
-# 18 tasks = 6 TOD + 6 CompSep-I + 6 CompSep-QU.
-#
-# This file is a copy of `simparam_compsep_only.yml` with only the paths changed (the six TOD
-# filelists, the output directory and the log file), so the two analyses are identical.
-#
-# Includes CG component separation (CMB+Dust+Sync) of 6 Planck-like bands at nside 64.
-# TOD sampling is enabled, but all TOD steps are disabled (i.e. only mapmaking).
 
 # ----------------------------------------
 # GIBBS
@@ -51,9 +41,17 @@ output:
       maps: 1
     maps_nside: 64
     include:
-      orbital_dipole_maps: False
-      corr_noise_maps: False
+      orbital_dipole_maps: True
+      corr_noise_maps: True
       sky_model_maps: True
+      residual_maps: True
+      hit_maps: True
+      cov_maps: True
+      chisq_map: True
+      compsep_residual_maps: True
+      ncorr_tods: False
+
+      
 
 # ----------------------------------------
 # TOD PROCESSING

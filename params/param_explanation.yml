@@ -614,6 +614,7 @@ experiments:
                               # value.
         # fsamp: 32.5         # [Hz] Sample rate. The planck_lfi reader takes it from the
                               # data file; readers that do not require it here.
+        band_unit: "uK_CMB"  # LFI's file-supplied gains are calibrated per uK_CMB.
         polarization: "IQU"
 
         # Thermodynamic unit the gain -- and the maps written to the band chain -- are
@@ -621,8 +622,7 @@ experiments:
         # [detector units]/uK_RJ; one factor converts at the file boundary, multiplying
         # the gain on read and dividing it on write, and multiplying the output maps on
         # write. Planck calibrates against the CMB, so LFI gains are naturally per uK_CMB.
-        # Absent = uK_RJ, i.e. no conversion, which is what this file uses.
-        # band_unit: "uK_CMB"
+        # Absent = uK_RJ, which is appropriate only when the supplied gains use that convention.
 
         # A processing mask gates the SAMPLING steps -- gain, correlated noise, jump
         # detection -- and nothing else. Mapmaking deliberately bins with the flag cut
