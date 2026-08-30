@@ -46,9 +46,16 @@ class JumpDetectionConfig(StepConfig):
 
     @classmethod
     def from_params(cls, params: Bunch, experiment_data: DetectorGroupTOD):
-        """Build jump settings from their step block and the experiment flag bitmask."""
+        """Build jump settings from their step block and the experiment flag bitmask.
+
+        The parameter block owns scheduling and detection settings. The experiment owns the flag
+        meaning, so ``jump_bitmask`` is injected as a resolved value rather than read from the
+        parameter block.
+        """
         experiment = params.experiments[experiment_data.experiment_name]
         jump_bitmask = experiment.jump_bitmask if "jump_bitmask" in experiment else None
+
+        # An absent block is valid and produces the disabled StepConfig defaults.
         block = (params.tod_processing[cls.PARAMETER_NAME]
                  if cls.PARAMETER_NAME in params.tod_processing else Bunch())
         return cls._from_block(f"tod_processing.{cls.PARAMETER_NAME}", block,

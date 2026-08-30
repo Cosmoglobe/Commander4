@@ -1,9 +1,13 @@
 """Base classes for the TOD step configurations.
 
 Every TOD operation owns an immutable config object that unpacks its parameter block, applies its
-defaults, validates them, and answers whether the step runs on a given iteration. `StepConfig` is
-what they share; `CGConfig` is the conjugate-gradient block that both the correlated-noise step and
-the CG mapmaker embed. The step configs themselves live with their steps.
+defaults, validates them, and answers whether the step runs on a given iteration. Each concrete
+config implements ``from_params`` because it knows where its inputs come from. Those methods call
+``StepConfig._from_block`` for the common final field check and dataclass construction.
+
+`StepConfig` is what the optional steps share; `CGConfig` is the conjugate-gradient block that both
+the correlated-noise step and the CG mapmaker embed. The concrete step configs live with their
+steps.
 """
 from dataclasses import dataclass, fields
 from typing import Self
@@ -18,7 +22,13 @@ from pixell.bunch import Bunch
 # diagnostics, vetoes, and map accumulation is part of the algorithm.
 @dataclass(frozen=True)
 class StepConfig:
-    """Common parameter construction and iteration gate for a TOD step."""
+    """Common parameter construction and iteration gate for an optional TOD step.
+
+    Subclasses add the scientific settings for one operation. Their public ``from_params`` methods
+    first select and resolve values from the full parameter tree, then pass the resulting parameter
+    block to ``_from_block``. Keeping that resolution in each subclass allows, for example, gain to
+    apply band overrides while jump detection obtains its bitmask from experiment metadata.
+    """
 
     enabled: bool = False
     from_iter: int = 1
@@ -37,11 +47,28 @@ class StepConfig:
 
     @classmethod
     def _from_block(cls, block_name: str, block: Bunch | dict, **resolved_values) -> Self:
-        """Construct this step config and reject fields it does not own."""
+        """Construct the concrete step config from one resolved parameter block.
+
+        Args:
+            block_name: Dotted parameter path used to identify the block in error messages, such as
+                ``"tod_processing.jump_detection"``. It is not used to look up the block.
+            block: The already selected parameter block. Its keys are user-configurable dataclass
+                fields; omitted fields retain their dataclass defaults.
+            **resolved_values: Constructor fields obtained outside ``block``, such as an experiment
+                sampling rate or flag bitmask. These fields are deliberately not accepted from the
+                parameter block, so users cannot override runtime or experiment metadata.
+
+        Returns:
+            An instance of ``cls`` containing the block values, resolved values, and defaults.
+        """
         try:
             values = dict(block)
         except (TypeError, ValueError) as error:
             raise ValueError(f"'{block_name}' must be a parameter block.") from error
+
+        # ``cls`` is the concrete subclass, so fields(cls) includes both the StepConfig fields and
+        # fields such as GainConfig.downsample_time. Resolved fields belong in the constructor but
+        # not in the set of keys that the user may state in this parameter block.
         constructor_fields = {item.name for item in fields(cls) if item.init}
         parameter_fields = constructor_fields - set(resolved_values)
         unknown = sorted(set(values) - parameter_fields)
@@ -49,6 +76,8 @@ class StepConfig:
             raise ValueError(f"Unknown key(s) {unknown} in '{block_name}'. That block accepts "
                              f"{sorted(parameter_fields)}.")
         try:
+            # Dataclass construction supplies omitted defaults and then calls the concrete class's
+            # __post_init__, which also calls StepConfig.__post_init__ for the shared validation.
             return cls(**values, **resolved_values)
         except TypeError as error:
             raise ValueError(f"Invalid '{block_name}' configuration: {error}") from error
@@ -72,7 +101,16 @@ class CGConfig:
     @classmethod
     def from_block(cls, block_name: str, block: Bunch | dict,
                    require_all: bool = False) -> "CGConfig":
-        """Build CG controls and optionally require both fields to be stated."""
+        """Build CG controls from a nested parameter block.
+
+        Args:
+            block_name: Dotted parameter path used only to give validation errors useful context.
+            block: The selected block containing ``max_iter`` and/or ``err_tol``.
+            require_all: Whether both fields must be present instead of using dataclass defaults.
+
+        Returns:
+            Validated conjugate-gradient controls.
+        """
         try:
             values = dict(block)
         except (TypeError, ValueError) as error:

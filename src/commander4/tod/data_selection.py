@@ -216,7 +216,13 @@ class DataSelectionConfig(StepConfig):
 
     @classmethod
     def from_params(cls, params: Bunch) -> "DataSelectionConfig":
-        """Build detector-scan selection settings from its parameter block."""
+        """Build detector-scan selection settings from its parameter block.
+
+        Unlike the other step configs, data selection needs no experiment metadata, band override,
+        or nested config. Its ``from_params`` method therefore only selects the block before the
+        shared ``_from_block`` validation and construction.
+        """
+        # An absent block is valid and produces the disabled StepConfig defaults.
         block = (params.tod_processing[cls.PARAMETER_NAME]
                  if cls.PARAMETER_NAME in params.tod_processing else Bunch())
         return cls._from_block(f"tod_processing.{cls.PARAMETER_NAME}", block)

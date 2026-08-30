@@ -464,9 +464,16 @@ class CorrelatedNoiseConfig(StepConfig):
 
     @classmethod
     def from_params(cls, params: Bunch, is_master: bool) -> "CorrelatedNoiseConfig":
-        """Build correlated-noise settings, including its nested CG block."""
+        """Build correlated-noise settings, including its nested CG block.
+
+        The nested ``cg`` block has its own schema and defaults. It is therefore constructed as a
+        ``CGConfig`` first, then injected into the outer config as a resolved value.
+        """
         block = dict(params.tod_processing[cls.PARAMETER_NAME]
                      if cls.PARAMETER_NAME in params.tod_processing else Bunch())
+
+        # Remove ``cg`` before validating the outer fields. CGConfig reports errors against the
+        # nested path, while _from_block validates the remaining correlated-noise fields.
         cg = CGConfig.from_block(f"tod_processing.{cls.PARAMETER_NAME}.cg",
                                  block.pop("cg", Bunch()))
         config = cls._from_block(f"tod_processing.{cls.PARAMETER_NAME}", block, cg=cg)
