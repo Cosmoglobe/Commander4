@@ -86,6 +86,8 @@ detrel_gain        (ND,)       # relative gain offset, one per detector (zero-su
 temporal_gain      (NSC,ND)    # per-scan gain variation about abs+rel
 gain_prior         (ND,3)      # (sigma0, fknee, alpha) of the temporal-gain Wiener prior
 noise_params       (NSC,ND,NPAR)  # noise PSD parameters, sigma0 first (sigma0,fknee,alpha for normal oof model).
+modulation_phase   (NSC,ND)    # (HFI only) +1/-1 sign of the first stored sample parity
+baselines          (NSC,ND,2)  # (HFI only) sampled first/second-parity modulation baselines
 present            (NSC,ND)    # int8: this detector has data in this scan
 accept             (NSC,ND)    # int8: data-quality flag (present data that is not rejected)
 good_fraction      (NSC,ND)    # unflagged fraction of samples

@@ -1,9 +1,9 @@
 """The TOD-processing side of one Gibbs iteration, and the settings that configure it.
 
 `init_tod_processing` sets up the per-band data and sample containers once; `process_tod` runs the
-sampling steps for a single iteration (gain, jumps, correlated noise, mapmaking, data selection) and
-hands the resulting band maps to component separation. The `*Config` dataclasses here validate the
-`tod_processing` block of the parameter file.
+sampling steps for a single iteration (jumps, HFI baselines, gain, correlated noise, mapmaking, data
+selection) and hands the resulting band maps to component separation. The `*Config` dataclasses
+here validate the `tod_processing` block of the parameter file.
 """
 import numpy as np
 import pixell
@@ -26,6 +26,7 @@ from commander4.tod.data_selection import log_dataselect_summary, DataSelectionC
 from commander4.tod.gain import sample_absolute_gain, sample_relative_gain,\
     sample_temporal_gain_variations, GainConfig
 from commander4.tod.jumps import sample_jump_detection, JumpDetectionConfig
+from commander4.tod.hfi_demodulation import sample_hfi_baselines
 from commander4.tod.view import TODView
 from commander4.tod.mapmaking.binned import tod2map_bin
 from commander4.tod.mapmaking.cg import tod2map_CG
@@ -161,6 +162,12 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
         with benchmark("jump-detect"):
             tod_samples = sample_jump_detection(band_comm, experiment_data, tod_samples,
                                                 jump_detection, iter)
+
+    # HFI baselines use the previous iteration's gain and sigma0, like Commander3. The first pass
+    # also determines whether Python's even or odd sample indices carry the positive half-cycle.
+    if tod_samples.hfi_demodulation:
+        with benchmark("hfi-baselines"):
+            tod_samples = sample_hfi_baselines(experiment_data, tod_samples, compsep_output)
 
     # Gain uses the previous iteration's sigma0. The new sigma0 is estimated later, inside the
     # mapmaker scan loop, matching Commander3's gain -> n_corr -> bin_TOD order.
