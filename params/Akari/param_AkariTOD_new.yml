@@ -65,30 +65,30 @@ output:
 # ----------------------------------------
 tod_processing:
   abs_gain:
-    enabled: False
+    enabled: True
     from_iter: 2
     calibrate_against: orbital_dipole # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   rel_gain:
-    enabled: False
+    enabled: True
     from_iter: 2
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   temporal_gain:
-    enabled: False
+    enabled: True
     from_iter: 2
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   corr_noise:
-    enabled: False
+    enabled: True
     from_iter: 2
-    sample_psd_params: True     # Resample noise-model params (needs corr_noise.enabled).
+    sample_psd_params: False     # Resample noise-model params (needs corr_noise.enabled).
     sample_sigma0: True            # Re-estimate sigma0 from the n_corr-subtracted residual.
     nomono: False                 # Project the per-scan monopole out of n_corr (Fortran "nomono").
     onlymono: False               # Model the correlated noise as only the per-scan offset.
@@ -126,18 +126,10 @@ compsep:
   bands:
     ### TOD BANDS ###
     # These are bands received from the TOD processing, and listed under `experiments`.
-    Planck30GHz:
-      get_from: PlanckLFI
+    AKARIN65:
+      get_from: Akari
       enabled: true
-      polarization: "IQU"
-    Planck44GHz:
-      get_from: PlanckLFI
-      enabled: false
-      polarization: "IQU"
-    Planck70GHz:
-      get_from: PlanckLFI
-      enabled: false
-      polarization: "IQU"
+      polarization: "I"
 
     ### MAP BANDS ###
     # These are map-only bands, read directly from file.
@@ -233,28 +225,26 @@ components:
 # EXPERIMENTS
 # ----------------------------------------
 experiments:
-  PlanckLFI:
+  Akari:
     enabled: true
     mapmaker: "bin"
-    experiment_id: "planck_lfi"  # Decides expected data format, what TOD reader is used, etc.
-    num_scans: 45860
+    experiment_id: "akari"  # Decides expected data format, what TOD reader is used, etc.
+    num_scans: 11395
+    bad_data_bitmask: 0b1111111111111111111111111111101
     bands:
-      Planck30GHz:
+      AKARIN65:
         enabled: true
-        num_tasks: 192
+        num_tasks: 64
         eval_nside: 512
-        fwhm: 32.4 # [arcmin]
-        freq: 28.4 # [GHz]
-        band_unit: "uK_CMB"
-        polarization: "IQU"
-        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
+        fwhm: 0.6166 # [arcmin]
+        freq: 4996 # [GHz]
+        band_unit: "MJy/sr"
+        polarization: "I"
+        processing_mask: "/mn/stornext/d23/cmbco/globe/akari/mask/bitmask_akari_065_v1_n4096.fits"
+        filelist: "/mn/stornext/d23/cmbco/globe/akari/tod/eirik_newhdf/v7/n4096/filelist_065.txt"
         detectors:
-          27M:
-            bandpass_shift: 0.28  # Ghz
-          27S:
-            bandpass_shift: 0.47
-          28M:
-            bandpass_shift: 0.08
-          28S:
-            bandpass_shift: 0.13
+          AKARI_N60_01: {}
+          AKARI_N60_02: {}
+          AKARI_N60_03: {}
+          AKARI_N60_04: {}
+            #bandpass_shift: 0.28  # Ghz
