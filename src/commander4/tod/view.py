@@ -387,10 +387,12 @@ class TODView:
         sky_pix = self._sky_map_pix(sky_model)
         if compsep_output is None:
             if self._static_sky is None:
-                full = get_static_sky_tod(sky_model, sky_pix, psi=self._fullres_psi)
+                full = get_static_sky_tod(sky_model, sky_pix,
+                        psi=self._fullres_psi, response=self.det_response)
                 self._static_sky = self._downsample_mean(full)
             return self._static_sky
-        full = get_static_sky_tod(sky_model, sky_pix, psi=self._fullres_psi)
+        full = get_static_sky_tod(sky_model, sky_pix, psi=self._fullres_psi,
+                response=self.det_response)
         return self._downsample_mean(full)
 
 

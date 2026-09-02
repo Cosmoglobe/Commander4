@@ -27,7 +27,8 @@ uK_CMB_to_uK_RJ_dict = {}
 
 
 def get_static_sky_tod(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
-                       psi: NDArray[np.floating]|None = None) -> NDArray[np.floating]:
+                       psi: NDArray[np.floating],
+                       response: NDArray[np.floating]|None = None) -> NDArray[np.floating]:
     """ Projects the current sky-model at our band frequency (in uK_RJ, without gain) into the
         specified scan pointing. The sky model does not include the orbital dipole.
     """
@@ -35,41 +36,44 @@ def get_static_sky_tod(det_compsep_map: NDArray[np.floating], pix: NDArray[np.in
     # passes psi (it does not know the band's polarization), so the component count, not psi, is
     # what selects the intensity-only kernel.
     if psi is None or det_compsep_map.shape[0] == 1:
-        return _get_static_sky_tod_I(det_compsep_map, pix)
+        return _get_static_sky_tod_I(det_compsep_map, pix, response)
     elif det_compsep_map.shape[0] == 2:
-        return _get_static_sky_tod_QU(det_compsep_map, pix, psi)
+        return _get_static_sky_tod_QU(det_compsep_map, pix, psi, response)
     elif det_compsep_map.shape[0] == 3:
-        return _get_static_sky_tod_IQU(det_compsep_map, pix, psi)
+        return _get_static_sky_tod_IQU(det_compsep_map, pix, psi, response)
     else:
         raise ValueError("Input compsep map has mismatching dimensions.")
 
 @njit(fastmath=True)
 def _get_static_sky_tod_IQU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
-                       psi: NDArray[np.floating]) -> NDArray[np.float32]:
+                       psi: NDArray[np.floating],
+                       response: NDArray[np.floating]) -> NDArray[np.float32]:
     sky = np.empty(pix.shape[0], dtype=np.float32)
     for i in range(pix.shape[0]):
         p = pix[i]
         angle = 2.0 * psi[i]
-        sky[i] = det_compsep_map[0, p] + np.cos(angle)*det_compsep_map[1, p]\
-               + np.sin(angle)*det_compsep_map[2, p]                 
+        sky[i] = response[0] * det_compsep_map[0, p] + response[1] * ( np.cos(angle)*det_compsep_map[1, p]\
+               + np.sin(angle)*det_compsep_map[2, p])
     return sky
 
 @njit(fastmath=True)
 def _get_static_sky_tod_QU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
-                       psi: NDArray[np.floating]) -> NDArray[np.float32]:
+                       psi: NDArray[np.floating],
+                       response: NDArray[np.floating]) -> NDArray[np.float32]:
     sky = np.empty(pix.shape[0], dtype=np.float32)
     for i in range(pix.shape[0]):
         p = pix[i]
         angle = 2.0 * psi[i]
-        sky[i] = np.cos(angle)*det_compsep_map[0, p] + np.sin(angle)*det_compsep_map[1, p]                 
+        sky[i] = response[1] * (np.cos(angle)*det_compsep_map[0, p] + np.sin(angle)*det_compsep_map[1, p])
     return sky
 
 @njit(fastmath=True)
-def _get_static_sky_tod_I(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer]
+def _get_static_sky_tod_I(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer], 
+        response: NDArray[np.floating]
                           ) -> NDArray[np.float32]:
     sky = np.empty(pix.shape[0], dtype=np.float32)
     for i in range(pix.shape[0]):
-        sky[i] = det_compsep_map[0, pix[i]]
+        sky[i] = response[0] * det_compsep_map[0, pix[i]]
     return sky
 
 
