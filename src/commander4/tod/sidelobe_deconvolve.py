@@ -15,6 +15,7 @@ from numpy.typing import NDArray
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.math_utils.alm import alm_real2complex_commander3
+from commander4.mpi.shared_memory import SharedArray
 
 
 if TYPE_CHECKING:
@@ -36,8 +37,9 @@ _BEAM_COMPONENTS = ("T", "E", "B")
 class FarBeamProjector:
     """Precompute one polarized sidelobe-convolution cube per detector and project it to TOD."""
 
-    def __init__(self, band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
-                 tod_samples: TODSamples, compsep_output: NDArray):
+    def __init__(self, band_comm: MPI.Comm, node_comm: MPI.Comm,
+                 experiment_data: DetectorGroupTOD, tod_samples: TODSamples,
+                 compsep_output: NDArray):
         self.nside = experiment_data.nside
         self.nthreads = int(os.environ.get("OMP_NUM_THREADS", "1"))
         self.instrument_file = experiment_data.instrument_filepath
@@ -49,10 +51,11 @@ class FarBeamProjector:
         for _, det in experiment_data.iter_detector_scans():
             self.polangs[det.det_idx_fullband] = det.polang
 
-        self.construct_model(band_comm, compsep_output)
+        self.construct_model(band_comm, node_comm, compsep_output)
 
 
-    def construct_model(self, band_comm: MPI.Comm, compsep_output: NDArray) -> None:
+    def construct_model(self, band_comm: MPI.Comm, node_comm: MPI.Comm,
+                        compsep_output: NDArray) -> None:
         """Build one ducc0 convolution cube for each detector's T/E/B sidelobe beam."""
         # Each LFI detector has its own beam. Commander3 forms one signal by summing the matching
         # sky/beam component pairs: T_sky*T_beam + E_sky*E_beam + B_sky*B_beam.
@@ -95,27 +98,38 @@ class FarBeamProjector:
         if band_comm.Get_rank() == 0:
             gib = len(blms)*np.prod(cube_shape)*8/1024**3
             logger.verbose(f"Far beam: {len(blms)} cubes of shape {cube_shape} ({gib:.1f} GiB) "
-                           "per MPI rank.")
-        self.cubes = []
-        for blm in blms:
-            # Before prepPsi, the first axis holds packed Fourier coefficients in the beam-rotation
-            # angle: m=0, then real/imaginary planes for every m>0. prepPsi zero-pads and transforms
-            # these 2*mmax+1 coefficient planes into Npsi angular samples used by interpol().
-            cube = np.empty(cube_shape, dtype=np.float64)
-            for mbeam in range(mmax+1):
-                start = 0 if mbeam == 0 else 2*mbeam - 1
-                stop = 1 if mbeam == 0 else 2*mbeam + 1
-                planes = cube[start:stop]
-                self.plan.getPlane(slm[0], blm[0], mbeam, planes)
-                # This ducc0 Python wrapper accepts only one component per getPlane call. Add E and
-                # B explicitly. The following prepPsi transform is linear, so summing here gives the
-                # same result as transforming and then summing three separate component cubes.
-                contribution = np.empty_like(planes)
-                for component in range(1, len(_BEAM_COMPONENTS)):
-                    self.plan.getPlane(slm[component], blm[component], mbeam, contribution)
-                    planes += contribution
-            self.plan.prepPsi(cube)
-            self.cubes.append(cube)
+                           f"per node, shared by {node_comm.Get_size()} ranks.")
+
+        # The cubes are identical for every rank of the band, and far too large to hold per rank,
+        # so one rank per node builds them and the rest read the same memory. Every rank of
+        # node_comm must reach both this allocation and the matching free() below.
+        self.shared = SharedArray(node_comm, (len(blms), *cube_shape),
+                                  name="far-sidelobe convolution cubes")
+        if self.shared.is_owner:
+            for idet, blm in enumerate(blms):
+                cube = self.shared.array[idet]
+                # Before prepPsi, the first axis holds packed Fourier coefficients in the beam-
+                # rotation angle: m=0, then real/imaginary planes for every m>0. prepPsi zero-pads
+                # and transforms these 2*mmax+1 coefficient planes into Npsi angular samples used
+                # by interpol().
+                for mbeam in range(mmax+1):
+                    start = 0 if mbeam == 0 else 2*mbeam - 1
+                    stop = 1 if mbeam == 0 else 2*mbeam + 1
+                    planes = cube[start:stop]
+                    self.plan.getPlane(slm[0], blm[0], mbeam, planes)
+                    # This ducc0 Python wrapper accepts only one component per getPlane call. Add E
+                    # and B explicitly. The following prepPsi transform is linear, so summing here
+                    # gives the same result as transforming and then summing three separate
+                    # component cubes.
+                    contribution = np.empty_like(planes)
+                    for component in range(1, len(_BEAM_COMPONENTS)):
+                        self.plan.getPlane(slm[component], blm[component], mbeam, contribution)
+                        planes += contribution
+                self.plan.prepPsi(cube)
+        self.shared.wait_until_filled()
+        # Per-detector views into the shared buffer. Each is contiguous, and read-only on every
+        # rank but the node owner. They are dropped by free(), which invalidates the memory.
+        self.cubes = [self.shared.array[idet] for idet in range(len(blms))]
 
 
     def get_projection(self, pix: NDArray, psi: NDArray, idet: int) -> NDArray:
@@ -142,9 +156,23 @@ class FarBeamProjector:
         return res
 
 
+    def free(self) -> None:
+        """Release the shared cubes. Collective over the node communicator.
 
-def make_far_beam_model(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
-                        tod_samples: TODSamples, compsep_output: NDArray, iteration: int
-                        ) -> FarBeamProjector:
-    """Construct the far-sidelobe projector for one TOD iteration."""
-    return FarBeamProjector(band_comm, experiment_data, tod_samples, compsep_output)
+        Must be called once per constructed projector: mpi4py leaves an unfreed MPI window in
+        place until `MPI_Finalize`, so letting the projector go out of scope instead leaks the
+        whole allocation every Gibbs iteration. `get_projection` cannot be used afterwards.
+        """
+        self.cubes = []
+        self.shared.free()
+
+
+
+def make_far_beam_model(band_comm: MPI.Comm, node_comm: MPI.Comm,
+                        experiment_data: DetectorGroupTOD, tod_samples: TODSamples,
+                        compsep_output: NDArray, iteration: int) -> FarBeamProjector:
+    """Construct the far-sidelobe projector for one TOD iteration.
+
+    The caller owns the returned projector's memory and must call `free()` on it.
+    """
+    return FarBeamProjector(band_comm, node_comm, experiment_data, tod_samples, compsep_output)

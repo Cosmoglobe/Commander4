@@ -110,6 +110,7 @@ maps/skymodel      (3,npix)    # (opt) sky model this iteration was processed ag
 maps/res           (3,npix)    # (opt) binned residual: data minus sky, dipole and n_corr
 maps/orbdipole     (3,npix)    # (opt) binned orbital dipole
 maps/corrnoise     (3,npix)    # (opt) binned correlated noise
+maps/sidelobe      (3,npix)    # (opt) binned far-sidelobe pickup, removed from the TOD
 maps/nhit          (npix,)     # (opt) int64 count of unflagged samples per pixel
 maps/cov           (6,npix)    # (opt) the 6 unique elements of P^T N^-1 P (II,IQ,IU,QQ,QU,UU)
 ```

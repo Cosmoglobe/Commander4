@@ -138,6 +138,31 @@ def test_tod_context_has_no_detector_hierarchy() -> None:
     assert "det_id" not in result.band
 
 
+def test_band_carries_a_single_node_communicator() -> None:
+    """The node communicator is a split of the band, not of the world.
+
+    Two bands sharing a node must not share a node communicator, since anything they put in
+    shared memory (the far-sidelobe cubes) is band-specific.
+    """
+    params = Bunch(
+        experiments=Bunch(Experiment=Bunch(
+            enabled=True, bands=Bunch(Band=_tod_band(1)),
+        )),
+        compsep=Bunch(enabled=False),
+    )
+    mpi_info = Bunch(tod=Bunch(rank=0, size=1, is_master=False, comm=MPI.COMM_SELF))
+
+    result = init_mpi_tod(mpi_info, params)
+
+    # Serially the band holds one rank, so its node communicator holds exactly that rank.
+    assert result.band.node_comm.Get_size() == 1
+    assert result.band.node_size == 1
+    assert result.band.node_rank == 0
+    assert result.band.is_node_master
+    # A node communicator can never be larger than the band it was split from.
+    assert result.band.node_size <= result.band.size
+
+
 def test_compsep_context_uses_the_inventory_view() -> None:
     params = Bunch(
         experiments=Bunch(),

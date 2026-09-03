@@ -181,8 +181,10 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
                                                           compsep_output, temporal_gain, iter)
 
 
-    far_beam_model = make_far_beam_model(band_comm, experiment_data, tod_samples,
-                                            compsep_output, iter)
+    # Holds one set of sidelobe cubes per node, shared by every band rank on it. Freed explicitly
+    # at the end of this function; going out of scope does not release an MPI window.
+    far_beam_model = make_far_beam_model(band_comm, mpi_info.band.node_comm, experiment_data,
+                                         tod_samples, compsep_output, iter)
 
 
     # A finite diagnostic means "evaluated this iteration". Previously rejected or absent scans
@@ -224,6 +226,9 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
 
     with benchmark("end-barrier"):
         tod_comm.Barrier()
+
+    # Free shared memory allocated during far beam construction.
+    far_beam_model.free()
 
     bench_summary(tod_comm, label="All bands")
     bench_summary(band_comm, label=f"Band {experiment_data.band_name}")

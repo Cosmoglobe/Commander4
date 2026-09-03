@@ -73,8 +73,8 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
     else:
         bad_PIDs = np.array([])
 
-    if "instrument_filepath" in my_experiment:
-        instrument_filepath = my_experiment.instrument_filepath
+    if "instrument_file" in my_experiment:
+        instrument_filepath = my_experiment.instrument_file
     else:
         instrument_filepath = None
 
