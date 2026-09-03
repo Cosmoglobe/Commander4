@@ -247,16 +247,16 @@ class PixelPointing:
         return pix
 
     def get_psi(self, nside: int | None = None) -> NDArray[np.floating]:
-        """Return polarization angles, cropped to the active TOD length."""
+        """Return polarization angles, converting compressed one-based bins to their centers."""
         if self.psi_is_compressed:
             psi = np.zeros(self.ntod_original, dtype=self.huffman_symbols.dtype)
             psi = cpp_utils.huffman_decode(self.psi_compressed_u8, self.huffman_tree,
                                            self.huffman_symbols, psi)
-            # psi is compressed as differences of digitized angle bins; first
-            # recover the bin index stream, then convert bins back to radians.
-            psi = np.cumsum(psi)
-            psi = psi[:self.ntod]
-            psi = 2 * np.pi * psi.astype(np.float32, copy=False) / self.npsi
+            # Commander scan files store first differences of one-based bin numbers. Bin i covers
+            # [(i-1)*width, i*width), so its representative angle is the center (i-0.5)*width.
+            psi_bins = np.cumsum(psi)[:self.ntod]
+            bin_width = np.float32(2*np.pi/self.npsi)
+            psi = (psi_bins.astype(np.float32, copy=False) - np.float32(0.5))*bin_width
         else:
             psi = self.psi_encoded
         return psi[:self.ntod]
