@@ -71,6 +71,28 @@ def nalm(lmax: int, mmax: int) -> int:
     return ((mmax+1)*(mmax+2))//2 + (mmax+1)*(lmax-mmax)
 
 
+def get_mmax(alm: NDArray, lmax: int) -> int:
+    """ Finds the mmax of an alm array from the length of its last axis, given the lmax.
+
+        Alms are stored m-major, so the length is the sum of the block lengths (lmax+1-m) over
+        m = 0..mmax. That sum grows with mmax, so the first mmax reaching the length is the answer.
+        Args:
+            alm (np.array): Alm array in the complex convention, with the alms on the last axis.
+            lmax (int): The lmax of the alm array.
+        Returns:
+            mmax (int): The mmax of the alm array.
+    """
+    if alm.dtype not in (np.complex128, np.complex64):
+        raise TypeError(f"Alms must be complex64 or complex128, got {alm.dtype}. A real-convention "
+                        f"alm array has a different length, and can silently give a wrong mmax.")
+    length = 0
+    for mmax in range(lmax+1):
+        length += lmax + 1 - mmax
+        if length == alm.shape[-1]:
+            return mmax
+    raise ValueError(f"Alms of length {alm.shape[-1]} do not match any mmax for lmax={lmax}.")
+
+
 def gaussian_random_alm(lmax, mmax, spin, ncomp):
     """Draw unit-variance white-noise alms in the Healpy complex convention (m<0 dropped).
 

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from commander4.math_utils.alm import (alm_complex2real, alm_real2complex, alm_dot_product,
-                                       project_alms_mmax, nalm)
+                                       project_alms_mmax, get_mmax, nalm)
 
 
 def random_complex_alms(lmax: int, mmax: int, seed: int = 0) -> np.ndarray:
@@ -61,6 +61,26 @@ def test_mmax_truncation_keeps_the_low_m_modes_and_padding_undoes_it() -> None:
     assert back.shape == alm.shape
     assert np.array_equal(back[:, :nalm(lmax, mmax)], cut)
     assert np.all(back[:, nalm(lmax, mmax):] == 0.0)
+
+
+@pytest.mark.parametrize("lmax, mmax", [(8, 8), (8, 3), (8, 0), (512, 100), (512, 512)])
+def test_get_mmax_inverts_nalm(lmax: int, mmax: int) -> None:
+    assert get_mmax(np.zeros((2, nalm(lmax, mmax)), dtype=np.complex128), lmax) == mmax
+
+
+def test_get_mmax_rejects_lengths_that_are_not_alm_arrays() -> None:
+    with pytest.raises(ValueError, match="do not match any mmax"):
+        get_mmax(np.zeros(nalm(8, 3) + 1, dtype=np.complex128), 8)
+    with pytest.raises(ValueError, match="do not match any mmax"):
+        get_mmax(np.zeros(nalm(9, 9), dtype=np.complex128), 8)
+
+
+def test_get_mmax_rejects_real_convention_alms() -> None:
+    """A real array of lmax=8, mmax=2 has length nalm(8, 5), so it would give a wrong mmax."""
+    x = alm_complex2real(random_complex_alms(8, 2), 8, 2)
+    assert x.shape[-1] == nalm(8, 5)
+    with pytest.raises(TypeError, match="complex64 or complex128"):
+        get_mmax(x, 8)
 
 
 @pytest.mark.parametrize("mmax_in, mmax_out", [(8, 3), (3, 8), (8, 0), (5, 5)])
