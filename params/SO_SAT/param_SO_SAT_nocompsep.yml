@@ -84,8 +84,8 @@ tod_processing:
     nomono: False                 # Project the per-scan monopole out of n_corr (Fortran "nomono").
     onlymono: False               # Model the correlated noise as only the per-scan offset.
     sigma0_decimation: 1          # Block-average factor for the sigma0 estimator.
-    psd_fit_nu_min: 0.005         # Min frequency (Hz) for noise-PSD parameter fitting.
-    psd_fit_nu_max: 0.5           # Max frequency (Hz). These files are sampled at ~4.2 Hz, so
+    psd_fit_nu_min: 0.001         # Min frequency (Hz) for noise-PSD parameter fitting.
+    psd_fit_nu_max: 1.5           # Max frequency (Hz). These files are sampled at ~4.2 Hz, so
                                   # Nyquist is ~2.1 Hz and the LAT's 10 Hz would be out of band.
     psd_bin: true                 # Fit every Fourier mode (False) or a mode-weighted binned PSD.
     sigma0_method: pairwise     # White-noise estimator: 'pairwise' (first-difference) or 'binned_psd'.

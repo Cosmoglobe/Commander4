@@ -184,8 +184,9 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
         if i_pid % 10 == 0:
             gc.collect()
 
-    noise_model = NoisePSDOof(P_uni=[[np.nan, np.nan],  # sigma0
-                                     [0.01  ,    100],  # fknee
+    noise_model = NoisePSDOof(P_active_mean = [np.nan, 0.01, -2.7], #sigma0, fknee, alpha
+                                    P_uni=[[np.nan, np.nan],  # sigma0
+                                     [0.001  ,    2],  # fknee
                                      [-4.5  ,    0.0]]) # alpha
     apply_noise_priors(noise_model, params, expname, bandname)
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
