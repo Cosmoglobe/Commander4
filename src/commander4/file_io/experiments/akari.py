@@ -107,7 +107,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                 flag_encoded = f[f"/{pid}/{det_name}/flag/"][()]
                 init_scalars = f[f"/{pid}/{det_name}/scalars"][()]
                                 # Data format has this weird thing were gain seems to be in "micro-gain"...
-                init_scalars[0] *= 1e-6
+                # init_scalars[0] *= 1e-6
 
                 det_init_scalars[idet] = init_scalars
                 det_pointing = PixelPointing(pix_encoded, psi_zeros, huffman_tree, huffman_symbols,
@@ -134,9 +134,9 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                 if not np.isfinite(detector.tod).all():
                     logger.warning(f"Detector {detector.name} has non-finite TOD for scan {pid}. Skipping.")
                     continue
-                if detector.good_data_mask.mean() < 0.50:
+                if detector.good_data_mask.mean() < 0.05:
                     logger.warning(f" Flag: {detector.flag} ")
-                    logger.warning(f"Detector {detector.name} has less than 50% good data for scan {pid}. Skipping.")
+                    logger.warning(f"Detector {detector.name} has less than 5% good data for scan {pid}. Skipping.")
                     continue
                 detector_list.append(detector)
                 ntod_sum_original += ntod

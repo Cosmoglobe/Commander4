@@ -67,19 +67,19 @@ tod_processing:
   abs_gain:
     enabled: True
     from_iter: 2
-    calibrate_against: orbital_dipole # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
+    calibrate_against: sky # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   rel_gain:
-    enabled: True
+    enabled: False
     from_iter: 2
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   temporal_gain:
-    enabled: True
+    enabled: False
     from_iter: 2
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
@@ -101,6 +101,9 @@ tod_processing:
       max_iter: 60                # Max CG iterations; 0 -> skip CG, use stationary fallback.
       err_tol: 1.0e-4             # Correlated-noise CG convergence tolerance.
 
+  cg_mapmaker:
+    max_iter: 60
+    err_tol: 1.0e-10
 # ----------------------------------------
 # COMPONENT SEPARATION
 # ----------------------------------------
@@ -128,6 +131,11 @@ compsep:
     # These are bands received from the TOD processing, and listed under `experiments`.
     AKARI065:
       get_from: Akari
+      enabled: false
+      polarization: "I"
+
+    AKARI090:
+      get_from: Akari
       enabled: true
       polarization: "I"
 
@@ -147,9 +155,10 @@ components:
     enabled: true
     component_class: "CMB"
     params:
-      polarization: "IQU"
+      polarization: "I"
       longname: "CMB"
       shortname: "cmb"
+      init_from: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_100-1_npipe_02048_fullres_full_T.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
       lmax: 1024
       spatially_varying_MM: False
@@ -158,9 +167,10 @@ components:
     enabled: true
     component_class: "ThermalDust"
     params:
-      polarization: "IQU"
+      polarization: "I"
       longname: "Thermal-Dust"
       shortname: "dust"
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: 1.56
       T: 20
@@ -173,9 +183,10 @@ components:
     enabled: true
     component_class: "Synchrotron"
     params:
-      polarization: "IQU"
+      polarization: "I"
       longname: "Synchrotron"
       shortname: "sync"
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: -3.1
       nu_ref: [0.408, 30]  # [I, QU]
@@ -190,6 +201,7 @@ components:
       polarization: "I"
       longname: "Free-Free"
       shortname: "ff"
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_ff_amp_BP8.1_v1.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
       T: 7000
       nu_ref: 40
@@ -227,13 +239,13 @@ components:
 experiments:
   Akari:
     enabled: true
-    mapmaker: "bin"
+    mapmaker: "CG"
     experiment_id: "akari"  # Decides expected data format, what TOD reader is used, etc.
     num_scans: 11395
-    bad_data_bitmask: 0b0000000000000000000000000000010 #opposite of 0b1111111111111111111111111111101
+    bad_data_bitmask: 2097149 #0b1111111111111111111111111111101
     bands:
       AKARI065:
-        enabled: true
+        enabled: false
         num_tasks: 64
         eval_nside: 512
         fwhm: 0.6166 # [arcmin]
@@ -247,4 +259,111 @@ experiments:
           AKARI_065-02: {}
           AKARI_065-03: {}
           AKARI_065-04: {}
+          AKARI_065-05: {}
+          AKARI_065-06: {}
+          AKARI_065-07: {}
+          AKARI_065-08: {}
+          AKARI_065-09: {}
+          AKARI_065-10: {}
+          AKARI_065-11: {}
+          AKARI_065-12: {}
+          AKARI_065-13: {}
+          AKARI_065-14: {}
+          AKARI_065-15: {}
+          AKARI_065-16: {}
+          AKARI_065-17: {}
+          AKARI_065-18: {}
+          AKARI_065-19: {}
+          AKARI_065-20: {}
+          AKARI_065-21: {}
+          AKARI_065-22: {}
+          AKARI_065-23: {}
+          AKARI_065-24: {}
+          AKARI_065-25: {}
+          AKARI_065-26: {}
+          AKARI_065-27: {}
+          AKARI_065-28: {}
+          AKARI_065-29: {}
+          AKARI_065-30: {}
+          AKARI_065-31: {}
+          AKARI_065-32: {}
+          AKARI_065-33: {}
+          AKARI_065-34: {}
+          AKARI_065-35: {}
+          AKARI_065-36: {}
+          AKARI_065-37: {}
+          AKARI_065-38: {}
+          AKARI_065-39: {}
+          AKARI_065-40: {}
             #bandpass_shift: 0.28  # Ghz
+      AKARI090:
+        enabled: true
+        num_tasks: 64
+        eval_nside: 512
+        fwhm: 1 # [arcmin]
+        freq: 2141 # [GHz]
+        band_unit: "MJy/sr"
+        polarization: "I"
+        processing_mask: "/mn/stornext/d23/cmbco/globe/akari/mask/bitmask_akari_090_v1_n4096.fits"
+        filelist: "/mn/stornext/d23/cmbco/globe/akari/tod/eirik_newhdf/v7/n4096/filelist_090.txt"
+        detectors:
+          AKARI_090-01: {}
+          AKARI_090-02: {}
+          AKARI_090-03: {}
+          AKARI_090-04: {}
+          AKARI_090-05: {}
+          AKARI_090-06: {}
+          AKARI_090-07: {}
+          AKARI_090-08: {}
+          AKARI_090-09: {}
+          AKARI_090-10: {}
+          AKARI_090-11: {}
+          AKARI_090-12: {}
+          AKARI_090-13: {}
+          AKARI_090-14: {}
+          AKARI_090-15: {}
+          AKARI_090-16: {}
+          AKARI_090-17: {}
+          AKARI_090-18: {}
+          AKARI_090-19: {}
+          AKARI_090-20: {}
+          # AKARI_090-21: {}
+          # AKARI_090-22: {}
+          # AKARI_090-23: {}
+          # AKARI_090-24: {}
+          # AKARI_090-25: {}
+          # AKARI_090-26: {}
+          # AKARI_090-27: {}
+          # AKARI_090-28: {}
+          # AKARI_090-29: {}
+          # AKARI_090-30: {}
+          # AKARI_090-31: {}
+          # AKARI_090-32: {}
+          # AKARI_090-33: {}
+          # AKARI_090-34: {}
+          # AKARI_090-35: {}
+          # AKARI_090-36: {}
+          # AKARI_090-37: {}
+          # AKARI_090-38: {}
+          # AKARI_090-39: {}
+          # AKARI_090-40: {}
+          # AKARI_090-41: {}
+          # AKARI_090-42: {}
+          # AKARI_090-43: {}
+          # AKARI_090-44: {}
+          # AKARI_090-45: {}
+          # AKARI_090-46: {}
+          # AKARI_090-47: {}
+          # AKARI_090-48: {}
+          # AKARI_090-49: {}
+          # AKARI_090-50: {}
+          # AKARI_090-51: {}
+          # AKARI_090-52: {}
+          # AKARI_090-53: {}
+          # AKARI_090-54: {}
+          # AKARI_090-55: {}
+          # AKARI_090-56: {}
+          # AKARI_090-57: {}
+          # AKARI_090-58: {}
+          # AKARI_090-59: {}
+          # AKARI_090-60: {}

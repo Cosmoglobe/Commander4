@@ -469,6 +469,9 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
     # Optional per-experiment sparse map storage: each rank holds only its locally-observed pixels
     # rather than a full sky map. The band master still ends up with full-sky maps.
     domain = experiment_data.get_pixel_domain(scan_view, band_comm, mapmaking.sparse_maps)
+    pols = experiment_data.pols
+
+    #TODO: split here mapmaker for I or IQU. probably we should wait for merging the CG and bin mapmaking scripts.
 
     # Set up various mapmakers. Each aux map costs a full-sky map and a per-detector-scan
     # accumulation, so one is built only when the chain is going to hold it; `None` means "not
@@ -567,6 +570,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         # Retrieve the new sigma0 for this det-scan, sampled above.
         sigma0 = view.sigma0
         # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
+        logger.warning(f"gain {gain}, sigma0 {sigma0}, gain/sigma0 {gain/sigma0}")
         inv_var = (gain/sigma0)**2
         mapmaker_invvar.accumulate_to_map(inv_var, pix_masked, psi_masked, response=response)
 
