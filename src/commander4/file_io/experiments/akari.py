@@ -93,14 +93,15 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
             detector_list = []
-            if ntod > ntod_upper_bound:
-                raise ValueError(f"{ntod_upper_bound} {ntod}")
+            # if ntod > ntod_upper_bound:
+            #     raise ValueError(f"{ntod_upper_bound} {ntod}")
             vsun = np.ones(3)  # dummy, we don't have that in Akari.
             # Akari is intensity-only: the files carry no psi, so we hand PixelPointing a zero psi of
             # the right length (psi is unused by I-only mapmaking, but PixelPointing requires one).
             psi_zeros = np.zeros(ntod_optimal, dtype=np.float32)
             detector_list = []
             for idet, det_name in enumerate(all_det_names):
+                # logger.warning(f"Reading detector {det_name} for scan {pid} from file {filepath}")
                 tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32)
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
                 flag_encoded = f[f"/{pid}/{det_name}/flag/"][()]
@@ -128,10 +129,14 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                     init_scalars=init_scalars,
                 )
                 if (detector.tod == 0).all():
+                    logger.warning(f"Detector {detector.name} has all-zero TOD for scan {pid}. Skipping.")
                     continue
                 if not np.isfinite(detector.tod).all():
+                    logger.warning(f"Detector {detector.name} has non-finite TOD for scan {pid}. Skipping.")
                     continue
-                if detector.good_data_mask.mean() < 0.75:
+                if detector.good_data_mask.mean() < 0.50:
+                    logger.warning(f" Flag: {detector.flag} ")
+                    logger.warning(f"Detector {detector.name} has less than 50% good data for scan {pid}. Skipping.")
                     continue
                 detector_list.append(detector)
                 ntod_sum_original += ntod

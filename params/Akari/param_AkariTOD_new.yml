@@ -47,11 +47,11 @@ output:
 
     include:
       orbital_dipole_maps: False
-      corr_noise_maps: False
-      sky_model_maps: False
-      residual_maps: False   # maps/res: binned TOD residual (C3 tod_<freq>_res). One extra
+      corr_noise_maps: True
+      sky_model_maps: True
+      residual_maps: True   # maps/res: binned TOD residual (C3 tod_<freq>_res). One extra
                             # map accumulator per mapmaker.
-      hit_maps: False        # maps/nhit: per-pixel count of unflagged samples.
+      hit_maps: True        # maps/nhit: per-pixel count of unflagged samples.
       cov_maps: False       # maps/cov: the 6 unique elements of P^T N^-1 P, of which only the
                             # inverse diagonal survives as maps/rms. Six full-sky float64 maps.
       chisq_map: False       # chi2/map in the compsep chain (C3 chisq_<postfix>.fits).
@@ -86,10 +86,10 @@ tod_processing:
     downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   corr_noise:
-    enabled: True
+    enabled: False
     from_iter: 2
     sample_psd_params: False     # Resample noise-model params (needs corr_noise.enabled).
-    sample_sigma0: True            # Re-estimate sigma0 from the n_corr-subtracted residual.
+    sample_sigma0: False            # Re-estimate sigma0 from the n_corr-subtracted residual.
     nomono: False                 # Project the per-scan monopole out of n_corr (Fortran "nomono").
     onlymono: False               # Model the correlated noise as only the per-scan offset.
     sigma0_decimation: 1          # Block-average factor for the sigma0 estimator.
@@ -111,7 +111,7 @@ compsep:
   # components' amplitudes, conditioning on the components it does not list.
   cg_sampling_groups:
     sample_amps_CG:
-      enabled: true
+      enabled: false
       comps: "all"
       bands: "all"
       optimize: false   # constrained realization (was the sample_amplitudes default)
@@ -126,7 +126,7 @@ compsep:
   bands:
     ### TOD BANDS ###
     # These are bands received from the TOD processing, and listed under `experiments`.
-    AKARIN65:
+    AKARI065:
       get_from: Akari
       enabled: true
       polarization: "I"
@@ -230,9 +230,9 @@ experiments:
     mapmaker: "bin"
     experiment_id: "akari"  # Decides expected data format, what TOD reader is used, etc.
     num_scans: 11395
-    bad_data_bitmask: 0b1111111111111111111111111111101
+    bad_data_bitmask: 0b0000000000000000000000000000010 #opposite of 0b1111111111111111111111111111101
     bands:
-      AKARIN65:
+      AKARI065:
         enabled: true
         num_tasks: 64
         eval_nside: 512
@@ -243,8 +243,8 @@ experiments:
         processing_mask: "/mn/stornext/d23/cmbco/globe/akari/mask/bitmask_akari_065_v1_n4096.fits"
         filelist: "/mn/stornext/d23/cmbco/globe/akari/tod/eirik_newhdf/v7/n4096/filelist_065.txt"
         detectors:
-          AKARI_N60_01: {}
-          AKARI_N60_02: {}
-          AKARI_N60_03: {}
-          AKARI_N60_04: {}
+          AKARI_065-01: {}
+          AKARI_065-02: {}
+          AKARI_065-03: {}
+          AKARI_065-04: {}
             #bandpass_shift: 0.28  # Ghz
