@@ -128,7 +128,7 @@ components:
       polarization: "IQU"
       longname: "CMB"
       shortname: "cmb"
-      init_from: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_100-1_npipe_02048_fullres_full_T.fits"
+      init_from: "/mn/stornext/d5/data/duncanwa/WMAP/data/COM_CMB_IQU-smica_2048_R3.00_full_uK_14amin_dip.fits"
       units: "uK_CMB"
       # C(l) prior, C3-equivalent 'power_law_gauss' defined in D_l space (see P_Cl_prior):
       #   D_l = amplitude*(l/l_pivot)^beta * max(exp(-l(l+1)sigma^2), 1e-10),  C_l = 2pi*D_l/(l(l+1)).
