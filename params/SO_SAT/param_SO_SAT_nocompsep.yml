@@ -128,7 +128,8 @@ components:
       polarization: "IQU"
       longname: "CMB"
       shortname: "cmb"
-      init_from: "/mn/stornext/d5/data/duncanwa/WMAP/data/COM_CMB_IQU-smica_2048_R3.00_full_uK_14amin_dip.fits"
+      #init_from: "/mn/stornext/d5/data/duncanwa/WMAP/data/COM_CMB_IQU-smica_2048_R3.00_full_uK_14amin_dip.fits"
+      init_from: "/mn/stornext/d5/data/duncanwa/WMAP/data/COM_CMB_IQU-smica_2048_R3.00_full_uK_14amin_dip_rotated.fits"
       units: "uK_CMB"
       # C(l) prior, C3-equivalent 'power_law_gauss' defined in D_l space (see P_Cl_prior):
       #   D_l = amplitude*(l/l_pivot)^beta * max(exp(-l(l+1)sigma^2), 1e-10),  C_l = 2pi*D_l/(l(l+1)).
@@ -152,7 +153,8 @@ components:
       polarization: "IQU"
       longname: "Thermal-Dust"
       shortname: "dust"
-      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1.fits"
+        #init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1.fits"
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1_rotated.fits"
       # BP8.1 dust ('gauss' Cl model): T roof 1e7 uK_RJ^2 at BP's 545 GHz reference, scaled by the
       # MBB SED^2 (~1.6) to this file's 857 GHz reference; QU 5e2 at 353 GHz (same reference).
       Cl_prior_amplitude: [1.6e+7, 5.0e+2]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
@@ -172,7 +174,8 @@ components:
       polarization: "IQU"
       longname: "Synchrotron"
       shortname: "sync"
-      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1.fits"
+        #init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1.fits"
+      init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1_rotated.fits"
       # BP8.1 synch ('gauss' Cl model): the T roof is effectively off (1e20; the Haslam-scale
       # signal at 408 MHz is only ~1e14 uK_RJ^2), so in T just the 60' rolloff acts; QU roof
       # 2e2 at 30 GHz with a 30' rolloff.
