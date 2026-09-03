@@ -53,6 +53,7 @@ class DetectorTOD:
         tod_is_compressed: bool = False,
         flag_is_compressed: bool = True,
         det_response: NDArray | None = None,
+        polang: float | None = None,
     ):
         """Construct a DetectorTOD.
 
@@ -73,6 +74,7 @@ class DetectorTOD:
                 that define per-operation masks (empty dict if none).
             flag_encoded: Flag samples, either decoded or Huffman-encoded, or None.
             flag_bitmask: Bitmask applied to flags to identify excluded samples.
+            polang: The polarization angle of this detector relative to the boresight.
         """
         if tod_is_compressed:
             if not isinstance(tod, (bytes, np.void)):
@@ -153,6 +155,7 @@ class DetectorTOD:
         # unless a sampling step requests a name present in specific_proc_masks.
         self.default_proc_mask = default_proc_mask
         self.specific_proc_masks = specific_proc_masks
+        self.polang = polang
 
 
     @property

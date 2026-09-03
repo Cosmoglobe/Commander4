@@ -73,6 +73,10 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
     else:
         bad_PIDs = np.array([])
 
+    if "instrument_filepath" in my_experiment:
+        instrument_filepath = my_experiment.instrument_filepath
+    else:
+        instrument_filepath = None
 
     scan_list = []
     nscans = scan_idx_stop - scan_idx_start
@@ -101,6 +105,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
             vsun = f[f"/{pid}/common/vsun/"][()]
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
+            polang = f["common/polang"][()]
             detector_list = []
             for idet, det_name in enumerate(all_det_names):
                 tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32, copy=False)
@@ -135,6 +140,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                     flag_encoded=flag_encoded,
                     bad_data_bitmask=6111232,
                     init_scalars=init_scalars,
+                    polang=polang[idet]
                 )
                 if (detector.tod == 0).all():
                     continue
@@ -167,7 +173,8 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
     apply_noise_priors(noise_model, params, expname, bandname)
 
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
+                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model,
+                           instrument_filepath=instrument_filepath)
     # my_det_central_freq = my_band.freq
 
     # TODO: Re-implement bandpass shift.

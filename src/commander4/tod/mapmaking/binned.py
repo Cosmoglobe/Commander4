@@ -24,6 +24,7 @@ from commander4.data_models.pixel_domain import PixelDomain
 from commander4.tod.mapmaking.config import MapmakingConfig
 from commander4.tod.mapmaking.output import finalize_band_maps
 from commander4.tod.data_selection import DataSelectionConfig
+from commander4.tod.sidelobe_deconvolve import FarBeamProjector
 
 logger = logging.getLogger(__name__)
 
@@ -455,7 +456,7 @@ class WeightsMapmakerIQU:
 def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_output: NDArray,
                 tod_samples: TODSamples, iteration: int,
                 mapmaking: MapmakingConfig, correlated_noise: CorrelatedNoiseConfig,
-                data_selection: DataSelectionConfig,
+                data_selection: DataSelectionConfig, far_beam_model: FarBeamProjector|None = None,
                 ) -> tuple[dict[str, DetectorMap], dict[str, NDArray]]:
     """ Commander4 bin mapmaking. All ranks on the provided MPI communicator collaborates on creating
         the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
@@ -476,6 +477,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
     start_bench("binned-mapmaker")
     corr_noise_active = correlated_noise.is_active(iteration)
     selection_active = data_selection.cuts_are_active(iteration, correlated_noise)
+    sidelobe_active = far_beam_model is not None
     pols = experiment_data.pols
     scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
     # Optional per-experiment sparse map storage: each rank holds only its locally-observed pixels
@@ -493,6 +495,8 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
                     if mapmaking.include_residual_maps else None)
     mapmaker_ncorr = (MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
                       if corr_noise_active and mapmaking.include_corr_noise_maps else None)
+    mapmaker_sidelobe = (MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
+                         if sidelobe_active and mapmaking.include_sidelobe_maps else None)
     # Hit counts are a plain per-pixel sample count, so they skip the IQU response/weighting the
     # mapmakers apply and are just accumulated with np.bincount into the local pixel buffer.
     nhit_local = np.zeros(domain.n_local) if mapmaking.include_hit_maps else None
@@ -593,6 +597,16 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         if corr_noise_active:
             d_sky -= n_corr_est
 
+        ### FAR SIDELOBE ###
+        # The projection comes back in uK_RJ, like the sky and orbital-dipole model TODs, so the
+        # map accumulates it as it is while the detector-unit TOD has it removed at the full gain.
+        if sidelobe_active:
+            sl_tod = far_beam_model.get_projection(pix, psi, view.idet)
+            if mapmaker_sidelobe is not None:
+                mapmaker_sidelobe.accumulate_to_map(sl_tod[good_data_mask], inv_var,
+                                                    pix_masked, psi_masked, response=response)
+            d_sky -= gain * sl_tod
+
         d_sky_masked = d_sky[good_data_mask]
         mapmaker.accumulate_to_map(d_sky_masked/gain, inv_var, pix_masked, psi_masked, response=response)
         if mapmaker_orbdipole is not None:
@@ -646,6 +660,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
 
     map_orbdipole = finalize_aux(mapmaker_orbdipole)
     map_corrnoise = finalize_aux(mapmaker_ncorr)
+    map_sidelobe = finalize_aux(mapmaker_sidelobe)
     map_residual = finalize_aux(mapmaker_res)
     map_nhit = None
     if nhit_local is not None:
@@ -662,6 +677,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         detmap_dict_out, maps_to_file = finalize_band_maps(
             map_signal, map_rms, pols, experiment_data, mapmaking, tod_samples, compsep_output,
             map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
-            map_residual=map_residual, map_nhit=map_nhit, map_cov=map_cov)
+            map_sidelobe=map_sidelobe, map_residual=map_residual, map_nhit=map_nhit,
+            map_cov=map_cov)
 
     return detmap_dict_out, maps_to_file

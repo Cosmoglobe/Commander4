@@ -29,7 +29,8 @@ class DetectorGroupTOD:
         pols (str): Polarisation configuration string (``'I'``, ``'QU'``, or ``'IQU'``).
     """
     def __init__(self, scans: list[ScanTOD], experiment_name: str, band_name: str, nside: int,
-                 nu: float, fwhm: float, fsamp: float, ndet: int, pols: str, noise_model: NoisePSD):
+                 nu: float, fwhm: float, fsamp: float, ndet: int, pols: str, noise_model: NoisePSD,
+                 instrument_filepath: str|None = None):
         self.scans = scans
         self.nscans = len(scans)
         self.experiment_name = experiment_name
@@ -47,6 +48,7 @@ class DetectorGroupTOD:
         self.nscans_allranks: int = 0  # Total number of scans across all ranks (on this band).
         self.noise_model = noise_model
         self._pixel_domain = None  # Cached PixelDomain (built lazily; pointing is static).
+        self.instrument_filepath = instrument_filepath
 
     def get_pixel_domain(self, scan_view, comm, sparse: bool):
         """Return the band's map-distribution :class:`PixelDomain`, building and caching it once.
