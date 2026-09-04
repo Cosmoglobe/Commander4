@@ -18,6 +18,7 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
                        tod_samples: TODSamples, compsep_output: NDArray | None,
                        map_orbdipole: NDArray | None = None,
                        map_corrnoise: NDArray | None = None,
+                       map_sidelobe: NDArray | None = None,
                        map_residual: NDArray | None = None,
                        map_nhit: NDArray | None = None,
                        map_cov: NDArray | None = None) -> tuple[dict, dict]:
@@ -28,6 +29,7 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
         map_rms: Per-pixel white-noise rms, same shape.
         pols: Which polarizations this band carries, e.g. "I", "QU" or "IQU".
         compsep_output: The current sky model for this band, written as `skymodel`.
+        map_sidelobe: Binned far-sidelobe pickup, in uK_RJ. Commander3's `tod_<freq>_sl` map.
         map_residual: Binned noise residual (data minus sky model, orbital dipole and correlated
             noise), in uK_RJ. Commander3's `tod_<freq>_res` map.
         map_nhit: Per-pixel count of accumulated good samples, shape (npix,).
@@ -84,7 +86,8 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
     # when the two above are smoothed. The mapmaker only builds one the run asked for, so being
     # present is the whole gate; the two below come from elsewhere and are gated here instead.
     for name, aux_map in (("orbdipole", map_orbdipole), ("corrnoise", map_corrnoise),
-                          ("res", map_residual), ("nhit", map_nhit)):
+                          ("sidelobe", map_sidelobe), ("res", map_residual),
+                          ("nhit", map_nhit)):
         if aux_map is not None:
             maps_to_file[name] = aux_map
     if mapmaking.include_sky_model_maps:
