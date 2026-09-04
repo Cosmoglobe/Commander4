@@ -87,7 +87,7 @@ def sample_jump_detection(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD
             jump_counts_local.append(0)
             continue
         jump, num_skipped = JumpCorrection.detect(
-            view.tod,
+            view.raw_tod,
             view.flag,
             view.get_mask(proc_mask_type="jump"),
             config.window,

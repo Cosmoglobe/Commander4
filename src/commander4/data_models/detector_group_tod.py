@@ -27,10 +27,11 @@ class DetectorGroupTOD:
         fwhm (float): Beam FWHM in arcminutes.
         ndet (int): Number of detectors per scan.
         pols (str): Polarisation configuration string (``'I'``, ``'QU'``, or ``'IQU'``).
+        hfi_demodulation (bool): Whether this band contains alternating Planck HFI half-cycles.
     """
     def __init__(self, scans: list[ScanTOD], experiment_name: str, band_name: str, nside: int,
                  nu: float, fwhm: float, fsamp: float, ndet: int, pols: str, noise_model: NoisePSD,
-                 instrument_filepath: str|None = None):
+                 instrument_filepath: str|None = None, hfi_demodulation: bool = False):
         self.scans = scans
         self.nscans = len(scans)
         self.experiment_name = experiment_name
@@ -41,6 +42,9 @@ class DetectorGroupTOD:
         self.fsamp = fsamp
         self.ndet = ndet
         self.pols = pols
+        # Whether the TOD needs demodulation to be read (Planck HFI stores alternating
+        # positive/negative modulation half-cycles.)
+        self.hfi_demodulation = hfi_demodulation
         # The below values are not known until all ranks are finished reading in data, because some
         # scans might be rejected. They are set after the fact.
         self.scan_idx_start: int = 0  # Index of my first scan in a compact indexing.

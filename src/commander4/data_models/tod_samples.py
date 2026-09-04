@@ -1,7 +1,7 @@
 """`TODSamples`: everything the Gibbs chain samples on the TOD side, for one band on one rank.
 
-Gains (absolute, relative, temporal), noise parameters, the accept flags and the per-detector-scan
-diagnostics, all held as dense `(nscans, ndet)` arrays indexed by scan and by the detector's
+Gains (absolute, relative, temporal), HFI modulation state, noise parameters, accept flags and
+per-detector-scan diagnostics, all held as dense arrays indexed by scan and by the detector's
 full-band column. Also owns initialization (fresh or from a previous chain) and the MPI gather that
 collects these arrays onto the band master for `chain_writer.write_band_chain_to_file`.
 """
@@ -159,6 +159,17 @@ class TODSamples:
             self.present[iscan, det.det_idx_fullband] = True
             self.orbital_velocity[iscan, det.det_idx_fullband] = det.orbital_velocity_m_per_s
         self.accept = np.ones((self.nscans, self.ndet), dtype=bool)
+        # Planck HFI-specific modulation state. Each raw detector scan alternates positive and
+        # negative half-cycles. The phase is identified on the first Gibbs pass, while the two
+        # parity baselines are sampled every pass. Keeping both here gives the two interleaved
+        # chains independent baseline samples and makes restart files self-contained.
+        self.hfi_demodulation = experiment_data.hfi_demodulation
+        self.modulation_phase = None
+        self.baselines = None
+        if self.hfi_demodulation:
+            self.modulation_phase = np.ones((self.nscans, self.ndet), dtype=np.int8)
+            self.baselines = np.zeros((self.nscans, self.ndet, 2), dtype=np.float64)
+        self.modulation_phase_initialized = False
         # Per-scan start time, Commander3's `MJD`. The epoch is whatever the experiment reader put
         # in `ScanTOD.start_time`, so this is MJD only for readers whose files carry one. Today
         # that is SO_SAT alone; every other reader passes 0.0, which is the "no absolute time
@@ -307,6 +318,11 @@ class TODSamples:
                 self.chisq_z = f["chisq_z"][local_indices, ...]
                 self.good_fraction = f["good_fraction"][local_indices, ...]
                 self.jumps = JumpCatalog.from_hdf5(f, local_indices, self.ndet)
+                if self.hfi_demodulation:
+                    phase = f["modulation_phase"][local_indices, ...]
+                    self.modulation_phase = phase.astype(np.int8)
+                    self.baselines = f["baselines"][local_indices, ...]
+                    self.modulation_phase_initialized = True
 
             # Chain gains are stored in band_unit; convert back to internal [det units]/uK_RJ.
             if self.band_unit_factor != 1.0:
@@ -427,6 +443,15 @@ class TODSamples:
         ncorr_converged_global = _gather_scan_distributed_array(band_comm, self.ncorr_converged,
                                                                 scans_per_rank)
 
+        # 4b3. Planck HFI alternating-modulation state. Other experiments do not write empty
+        # instrument-specific datasets.
+        modulation_phase_global = baselines_global = None
+        if getattr(self, "hfi_demodulation", False):
+            modulation_phase_global = _gather_scan_distributed_array(
+                band_comm, self.modulation_phase, scans_per_rank)
+            baselines_global = _gather_scan_distributed_array(
+                band_comm, self.baselines, scans_per_rank)
+
         # 4c. Low-resolution TOD power spectra (per-scan per-detector per-bin).
         tod_ps_freqs_global = _gather_scan_distributed_array(band_comm, self.tod_ps_freqs,
                                                             scans_per_rank)
@@ -495,6 +520,9 @@ class TODSamples:
             "jump_locations": jump_locations_global,
             "jump_offsets": jump_offsets_global,
         }
+        if modulation_phase_global is not None:
+            arrays["modulation_phase"] = modulation_phase_global
+            arrays["baselines"] = baselines_global
         # The only genuinely optional datasets: the DEBUG full-n_corr TODs, off unless asked for.
         if ncorr_lengths_global is not None:
             arrays["ncorr_tod_lengths"] = ncorr_lengths_global

@@ -25,7 +25,8 @@ _NPIX = 12*_NSIDE**2
 _GAIN = 1.5   # abs_gain below; rel and temporal gain are zero, so this is the whole gain.
 
 
-def _build_band(pix, psi, tod, flag=None) -> DetectorGroupTOD:
+def _build_band(pix, psi, tod, flag=None,
+                response: np.ndarray | None = None) -> DetectorGroupTOD:
     """One IQU detector-scan with uncompressed pointing and no orbital motion.
 
     The zero orbital velocity is what makes the expected residual exactly the noise: with no
@@ -42,21 +43,22 @@ def _build_band(pix, psi, tod, flag=None) -> DetectorGroupTOD:
         specific_proc_masks={},
         flag_encoded=(np.zeros(ntod) if flag is None else flag).astype(np.int64),
         bad_data_bitmask=_BITMASK, flag_is_compressed=False,
+        det_response=response,
     )
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
     return DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=30.0, fwhm=0.0,
                             fsamp=1.0, ndet=1, pols="IQU", noise_model=noise_model)
 
 
-def _fake_tod_samples(sigma0: float = 2.0) -> SimpleNamespace:
+def _fake_tod_samples(sigma0: float = 2.0, ndet: int = 1) -> SimpleNamespace:
     """Minimal stand-in exposing exactly the fields tod2map_bin / TODView / the diagnostics read."""
     no_jump = SimpleNamespace(is_empty=lambda: True)
-    empty_ps = lambda: np.full((1, 1, 100), np.nan, dtype=np.float32)
+    empty_ps = lambda: np.full((1, ndet, 100), np.nan, dtype=np.float32)
     return SimpleNamespace(
-        noise_params=np.full((1, 1, 1), sigma0), abs_gain=_GAIN, rel_gain=np.zeros(1),
-        temporal_gain=np.zeros((1, 1)), jumps=SimpleNamespace(get=lambda iscan, idet: no_jump),
-        accept=np.ones((1, 1), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
-        chisq_z=np.full((1, 1), np.nan), good_fraction=np.full((1, 1), np.nan),
+        noise_params=np.full((1, ndet, 1), sigma0), abs_gain=_GAIN, rel_gain=np.zeros(ndet),
+        temporal_gain=np.zeros((1, ndet)), jumps=SimpleNamespace(get=lambda iscan, idet: no_jump),
+        accept=np.ones((1, ndet), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
+        chisq_z=np.full((1, ndet), np.nan), good_fraction=np.full((1, ndet), np.nan),
         TOD_PS_NBIN=100, tod_ps_freqs=empty_ps(), tod_ps_raw=empty_ps(), tod_ps_residual=empty_ps(),
         tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None)
 
@@ -69,7 +71,7 @@ def _run(band: DetectorGroupTOD, sky_model: np.ndarray) -> dict[str, np.ndarray]
         sparse_maps=False, common_res_fwhm=0.0,
     )
     _, maps = tod_processing.tod2map_bin(
-        MPI.COMM_SELF, band, sky_model, _fake_tod_samples(), 1, mapmaking,
+        MPI.COMM_SELF, band, sky_model, _fake_tod_samples(ndet=band.ndet), 1, mapmaking,
         tod_processing.CorrelatedNoiseConfig(sample_sigma0=False),
         tod_processing.DataSelectionConfig(),
     )
@@ -93,6 +95,42 @@ def test_residual_map_is_zero_for_a_perfect_noiseless_model(monkeypatch):
     maps = _run(_build_band(pix, psi, _GAIN*_project(sky, pix, psi)), sky)
 
     # float32 TODs at this signal amplitude, so compare at single precision.
+    np.testing.assert_allclose(maps["res"], 0.0, atol=1e-3)
+    np.testing.assert_allclose(maps["observed_sky"], sky, rtol=0, atol=1e-3)
+
+
+def test_response_split_detectors_recover_sky_and_zero_residual(monkeypatch):
+    """Separate intensity and polarization streams use their own sky-model response."""
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    rng = np.random.default_rng(17)
+    n = 4096
+    pix = rng.integers(0, _NPIX, n).astype(np.int64)
+    psi = rng.uniform(0.0, np.pi, n)
+    sky = rng.normal(size=(3, _NPIX))
+    sky[0] *= 500.0
+    sky[1:3] *= 5.0
+
+    intensity_tod = _GAIN * sky[0, pix]
+    polarization_tod = _GAIN * (
+        sky[1, pix] * np.cos(2 * psi) + sky[2, pix] * np.sin(2 * psi)
+    )
+    intensity = _build_band(
+        pix, psi, intensity_tod, response=np.array([1.0, 0.0]),
+    ).scans[0].detectors[0]
+    polarization = _build_band(
+        pix, psi, polarization_tod, response=np.array([0.0, 1.0]),
+    ).scans[0].detectors[0]
+    intensity.name = "intensity"
+    polarization.name = "polarization"
+    polarization.det_idx_fullband = 1
+    band = DetectorGroupTOD(
+        [ScanTOD([intensity, polarization], 0.0, 0)], "EXP", "B", nside=_NSIDE,
+        nu=30.0, fwhm=0.0, fsamp=1.0, ndet=2, pols="IQU",
+        noise_model=SimpleNamespace(npar=1, params=np.array([np.nan])),
+    )
+
+    maps = _run(band, sky)
+
     np.testing.assert_allclose(maps["res"], 0.0, atol=1e-3)
     np.testing.assert_allclose(maps["observed_sky"], sky, rtol=0, atol=1e-3)
 
