@@ -1,5 +1,5 @@
-# Parameter file for performing a full TOD processing + CG compsep on the Planck LFI TOD data with
-# auxiliary maps (Haslam + WMAP + HFI). Analysis performed at native resolutions.
+# Parameter file for full TOD processing and CG component separation on Planck HFI TOD data at
+# native resolution.
 # By default not all detectors are included, but they are just commented out.
 
 # ----------------------------------------
