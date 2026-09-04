@@ -38,3 +38,14 @@ def test_huffman_decode_requires_out_dtype_to_match_symb() -> None:
 
     with pytest.raises(RuntimeError, match="'out' must have the same dtype as 'symb'"):
         cpp_utils.huffman_decode(encoded, tree, symb, out)
+
+
+def test_psi_digitization_uses_one_based_circular_bins() -> None:
+    npsi = 8
+    width = 2*np.pi/npsi
+    angles = np.array([0.0, 0.9*width, width, 2*np.pi - 0.1*width, 2*np.pi, -0.1*width])
+
+    differences = huffman.preproc_digitize_and_diff(angles, npsi)
+    bins = np.cumsum(differences)
+
+    assert_array_equal(bins, [1, 1, 2, 8, 1, 8])

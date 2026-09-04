@@ -93,6 +93,8 @@ output:
       sky_model_maps: True        # maps/skymodel: the sky this iteration was fit against.
       residual_maps: True         # maps/res: binned TOD residual, i.e. data minus sky, dipole and
                                   # n_corr (C3 tod_<freq>_res).
+      sidelobe_maps: True         # maps/sidelobe: the binned far-sidelobe pickup subtracted from
+                                  # the TOD (C3 tod_<freq>_sl). Needs far-beam deconvolution on.
       hit_maps: True              # maps/nhit: per-pixel count of unflagged samples.
       cov_maps: False             # maps/cov: the 6 unique elements of P^T N^-1 P, of
                                   # which only the inverse diagonal survives as maps/rms.

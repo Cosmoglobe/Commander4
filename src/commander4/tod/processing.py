@@ -26,6 +26,7 @@ from commander4.tod.data_selection import log_dataselect_summary, DataSelectionC
 from commander4.tod.gain import sample_absolute_gain, sample_relative_gain,\
     sample_temporal_gain_variations, GainConfig
 from commander4.tod.jumps import sample_jump_detection, JumpDetectionConfig
+from commander4.tod.sidelobe_deconvolve import make_far_beam_model
 from commander4.tod.view import TODView
 from commander4.tod.mapmaking.binned import tod2map_bin
 from commander4.tod.mapmaking.cg import tod2map_CG
@@ -179,6 +180,13 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
             tod_samples = sample_temporal_gain_variations(band_comm, experiment_data, tod_samples,
                                                           compsep_output, temporal_gain, iter)
 
+
+    # Holds one set of sidelobe cubes per node, shared by every band rank on it. Freed explicitly
+    # at the end of this function; going out of scope does not release an MPI window.
+    far_beam_model = make_far_beam_model(band_comm, mpi_info.band.node_comm, experiment_data,
+                                         tod_samples, compsep_output, iter)
+
+
     # A finite diagnostic means "evaluated this iteration". Previously rejected or absent scans
     # remain NaN and are not counted again by the data-selection summary.
     tod_samples.chisq_z[:] = np.nan
@@ -193,7 +201,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
         else:
             detmap_dict, maps_to_file = tod2map_bin(
                 band_comm, experiment_data, compsep_output, tod_samples, iter, mapmaking,
-                correlated_noise, data_selection,
+                correlated_noise, data_selection, far_beam_model,
             )
 
     # Report during data-selection warm-up as well as active-cut iterations.
@@ -218,6 +226,9 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
 
     with benchmark("end-barrier"):
         tod_comm.Barrier()
+
+    # Free shared memory allocated during far beam construction.
+    far_beam_model.free()
 
     bench_summary(tod_comm, label="All bands")
     bench_summary(band_comm, label=f"Band {experiment_data.band_name}")
