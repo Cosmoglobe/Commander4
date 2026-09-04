@@ -90,6 +90,19 @@ def test_the_band_file_carries_every_dataset_a_restart_reads_back() -> None:
     assert read_back <= written, f"a restart would fail on {sorted(read_back - written)}"
 
 
+def test_hfi_chain_carries_modulation_phase_and_baselines() -> None:
+    samples = _minimal_tod_samples()
+    samples.hfi_demodulation = True
+    samples.modulation_phase = np.ones((samples.nscans, samples.ndet), dtype=np.int8)
+    samples.baselines = np.arange(samples.nscans * samples.ndet * 2, dtype=np.float64).reshape(
+        samples.nscans, samples.ndet, 2)
+
+    written = samples.gather_chain_arrays(1)
+
+    np.testing.assert_array_equal(written["modulation_phase"], samples.modulation_phase)
+    np.testing.assert_array_equal(written["baselines"], samples.baselines)
+
+
 def test_disabled_tod_chain_returns_before_collective_gathers() -> None:
     samples = TODSamples.__new__(TODSamples)
     samples.params = _params()
