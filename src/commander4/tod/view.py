@@ -263,11 +263,12 @@ class TODView:
 
     @property
     def corrected_tod(self) -> NDArray[np.floating]:
-        """The canonical instrument-corrected TOD at full resolution, in detector units.
+        """TOD (in detector units) after low-level corrections, such as jumps or demodulation.
 
-        Corrections are applied in their physical order. The sequence is deliberately explicit so
-        future deterministic corrections have one home and downstream code never needs to know
-        which experiment-specific steps produced the usable TOD.
+        Figures out what low-level corrections are active and applies those to `self.raw_tod`.
+        Currently implemented adjustments include:
+            - Jump corrections, requiring the jump-finding sampling step.
+            - HFI demodulation, requiring the demodulation phase and the baseline sampling steps.
         """
         if self._corrected_tod is None:
             jump = self.tod_samples.jumps.get(self.iscan, self.idet)
