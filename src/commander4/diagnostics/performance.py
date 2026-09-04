@@ -297,8 +297,8 @@ class PerfLogger:
 
         # --- Column widths ---
         W_TAG = max((len("  " * d + p[-1]) for p, d in ordered_with_depth), default=18)
-        W_N   = 4
-        W_VAL = 7
+        W_N   = 6
+        W_VAL = 9
         W_IMB = 5
 
         def _v(x):   return f"{_fmt3sig(x):>{W_VAL}}"
