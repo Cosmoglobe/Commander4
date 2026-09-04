@@ -88,6 +88,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
             continue
         good_scan = True
         with h5py.File(filepath, "r") as f:
+            # Hacky fixes to missing entries. #TODO: Need to figure out how to handle this.
             try:
                 data_nside = int(f["common/nside"][()].item())
             except:
@@ -95,7 +96,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
             try:
                 ntod = int(f[f"/{pid}/common/ntod"][()].item())
             except:
-                print(pid, flush=True)
                 continue
             ntod_optimal = find_good_fourier_size(ntod)
             huffman_tree = f[f"/{pid}/common/hufftree"][()]
@@ -107,10 +107,10 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
             npsi = int(f["/common/npsi/"][()].item())
             detector_list = []
             for idet, det_name in enumerate(all_det_names):
+                # Hacky fixes to missing entries. #TODO: Need to figure out how to handle this.
                 try:
                     ztod = f[f"/{pid}/{det_name}/ztod/"][()]
                 except:
-                    print(filepath, f"/{pid}/{det_name}/ztod/", flush=True)
                     continue
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
                 # Intensity-only bands have no psi in the files; feed a zero psi (unused by I-only
@@ -176,16 +176,15 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                               P_uni = [[np.nan, np.nan], [0.01, 0.5], [-2.5, -0.25]],
                               nu_fit = [[np.nan, np.nan], [0, 3.0], [0, 3.0]])
     apply_noise_priors(noise_model, params, expname, bandname)
+    # Hacky fixe to no scans on this rank. #TODO: Need to figure out how to handle this.
     try:
         fsamp
     except:
         fsamp = 1.0
-        print(f"{scan_idx_start} - {scan_idx_stop}, {pids[scan_idx_start]} - {pids[scan_idx_stop-1]}", flush=True)
     
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model,
                            hfi_demodulation=True)
-    # my_det_central_freq = my_band.freq
 
     # TODO: Re-implement bandpass shift.
     # if "bandpass_shift" in my_det:
