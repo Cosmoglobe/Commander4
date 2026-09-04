@@ -308,3 +308,21 @@ Run `c4-validate-params path/to/param.yml` to get:
 `c4-plot-chain` creates a whole bunch of plots, both sky maps and various TOD plots, and places them in the chains folder.
 - For experimenst like SO, where per-detector plots are unfeasible, you should add the flag `--detector-plots summary`.
 - The amount of plots can get excessive, so it's recommended to use the flags to plot only specific subsets, such as `--chain`, `--iter`, `--band`.
+
+
+# 5. Benchmarking and optimization
+### 5.1 cProfile
+Setting `output.profile = True` in the parameter file will place a `cProfile` wrapper around the main Commander4 call.
+This will dump one stats file per rank to `[output.dir]/stats/` at the end of the entire run.
+
+### 5.2 The internal benchmarking tool
+The script `src/commander4/diagnostics/performance.py` exposes a couple of benchmarking functions the code uses internally.
+Its usage is explained in the file itself. It prints an averaged runtime-summary across MPI-ranks, including minimum and maximum time per rank.
+
+### 5.3 Py-spy
+There exists a lot of profiling tools for Python, but a lot of them break down when combined with MPI.
+I find that `py-spy` works well. You install it with pip, and then just attach it to a single rank while you code is running:
+```bash
+py-spy record --pid 911510 -o my_run.svg
+```
+When you abort it, it will produce a nice file showing what this rank was doing at all times.
