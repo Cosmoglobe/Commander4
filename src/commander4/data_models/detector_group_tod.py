@@ -31,7 +31,7 @@ class DetectorGroupTOD:
     """
     def __init__(self, scans: list[ScanTOD], experiment_name: str, band_name: str, nside: int,
                  nu: float, fwhm: float, fsamp: float, ndet: int, pols: str, noise_model: NoisePSD,
-                 hfi_demodulation: bool = False, instrument_filepath: str|None = None):
+                 instrument_filepath: str|None = None, hfi_demodulation: bool = False):
         self.scans = scans
         self.nscans = len(scans)
         self.experiment_name = experiment_name
