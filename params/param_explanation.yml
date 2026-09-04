@@ -201,6 +201,28 @@ tod_processing:
                               # cheaper, and much less correct near flagged stretches.
       err_tol: 1.0e-4         # Relative residual at which that CG stops.
 
+  # Far-sidelobe deconvolution: convolve the current sky model with each detector's 4-pi
+  # sidelobe beam, bin the result into maps/sidelobe, and subtract it from the TOD.
+  # Needs per-detector sl/T, sl/E, sl/B alms in the experiment's instrument_file, and works
+  # with the binned mapmaker only. One convolution cube per detector is built per Gibbs
+  # iteration and shared across the band's ranks on each node; it is the largest single
+  # allocation in TOD processing, so watch the "Far beam:" line in the log.
+  far_beam_deconvolution:
+    enabled: false
+    from_iter: 2
+    lmax: 100                 # Sky and beam are both truncated here before convolving.
+                              # Capped by the file's own sllmax. C3 uses 100.
+    mmax: 100                 # Azimuthal limit of the beam, capped by slmmax and by lmax.
+                              # This drives the cube size hardest: cost grows with both,
+                              # but the psi axis is 2*mmax+1 planes.
+    epsilon: 1.0e-4           # ducc0 interpolation accuracy. Not a monotonic memory knob:
+                              # 1e-3 gives a *larger* cube than 1e-4, since ducc0 picks
+                              # kernel and oversampling together.
+    beam_norm: 2.0            # Scale factor on the sidelobe beams. C3 multiplies its
+                              # finished sidelobe TOD by 2 "by comparison with LevelS";
+                              # the convolution is linear, so this is the same thing.
+                              # Set to 1.0 for the unscaled beam as stored in the file.
+
   # Data selection: turn this iteration's diagnostics into per-detector-scan accept flags.
   data_selection:
     enabled: false

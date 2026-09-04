@@ -25,6 +25,7 @@ from commander4.tod.mapmaking.config import MapmakingConfig
 from commander4.tod.mapmaking.output import finalize_band_maps
 from commander4.tod.data_selection import DataSelectionConfig
 from commander4.tod.sidelobe_deconvolve import FarBeamProjector
+from commander4.diagnostics.performance import benchmark, log_memory
 
 logger = logging.getLogger(__name__)
 
@@ -601,7 +602,8 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         # The projection comes back in uK_RJ, like the sky and orbital-dipole model TODs, so the
         # map accumulates it as it is while the detector-unit TOD has it removed at the full gain.
         if sidelobe_active:
-            sl_tod = far_beam_model.get_projection(pix, psi, view.idet)
+            with benchmark("far-beam-proj"):
+                sl_tod = far_beam_model.get_projection(pix, psi, view.idet)
             if mapmaker_sidelobe is not None:
                 mapmaker_sidelobe.accumulate_to_map(sl_tod[good_data_mask], inv_var,
                                                     pix_masked, psi_masked, response=response)

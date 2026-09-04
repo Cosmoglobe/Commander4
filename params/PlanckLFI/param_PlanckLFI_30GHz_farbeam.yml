@@ -26,7 +26,7 @@ resources:
 output:
   # All output goes here, in the subdirectories logs/, chains_bands/,
   # chains_compsep/ and plots/.
-  dir: "../c4_chains/LFI_30GHz_farbeam_alldet_sharedmem/"
+  dir: "../c4_chains/LFI_30GHz_farbeam512_alldet_sharedmem/"
 
   logging:
     console:
@@ -104,8 +104,11 @@ tod_processing:
 
   far_beam_deconvolution:
     enabled: True
-    from_iter: 2
-    npoints: [100, 80, 30]  # Theta, phi, psi
+    from_iter: 1
+    lmax: 512         # Sky and beam are truncated here before convolving (C3 uses 100).
+    mmax: 100         # Beam azimuthal limit; drives the cube size hardest.
+    epsilon: 1.0e-4   # ducc0 interpolation accuracy.
+    beam_norm: 2.0    # C3's LevelS-comparison factor on the sidelobe beams.
 
 
 # ----------------------------------------

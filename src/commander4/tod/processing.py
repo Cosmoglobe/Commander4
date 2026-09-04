@@ -26,7 +26,7 @@ from commander4.tod.data_selection import log_dataselect_summary, DataSelectionC
 from commander4.tod.gain import sample_absolute_gain, sample_relative_gain,\
     sample_temporal_gain_variations, GainConfig
 from commander4.tod.jumps import sample_jump_detection, JumpDetectionConfig
-from commander4.tod.sidelobe_deconvolve import make_far_beam_model
+from commander4.tod.sidelobe_deconvolve import FarBeamProjector, FarBeamConfig
 from commander4.tod.view import TODView
 from commander4.tod.mapmaking.binned import tod2map_bin
 from commander4.tod.mapmaking.cg import tod2map_CG
@@ -145,6 +145,11 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     # earlier sampler changes the chain state. Each class owns its own unpacking and validation.
     mapmaking = MapmakingConfig.from_params(params, experiment_data)
     jump_detection = JumpDetectionConfig.from_params(params, experiment_data)
+    far_beam_cfg = FarBeamConfig.from_params(params, experiment_data)
+    if far_beam_cfg.is_active(iter) and mapmaking.mapmaker == "CG":
+        raise ValueError("Far-beam deconvolution is only implemented for the binned mapmaker; the "
+                         "CG mapmaker would silently leave the sidelobe pickup in the data.")
+
     absolute_gain = GainConfig.from_params(
         params, experiment_data, "abs_gain", "orbital_dipole", iter, is_master,
     )
@@ -183,8 +188,11 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
 
     # Holds one set of sidelobe cubes per node, shared by every band rank on it. Freed explicitly
     # at the end of this function; going out of scope does not release an MPI window.
-    far_beam_model = make_far_beam_model(band_comm, mpi_info.band.node_comm, experiment_data,
-                                         tod_samples, compsep_output, iter)
+    far_beam_model = None
+    if far_beam_cfg.is_active(iter):
+        with benchmark("far-beam"):
+            far_beam_model = FarBeamProjector(band_comm, mpi_info.band.node_comm, experiment_data,
+                                              tod_samples, compsep_output, far_beam_cfg)
 
 
     # A finite diagnostic means "evaluated this iteration". Previously rejected or absent scans
@@ -227,8 +235,11 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     with benchmark("end-barrier"):
         tod_comm.Barrier()
 
-    # Free shared memory allocated during far beam construction.
-    far_beam_model.free()
+    # Free shared memory allocated during far beam construction. The far-beam step is gated on
+    # `far_beam_cfg.is_active`, which every rank of the band evaluates identically, so this
+    # collective is either taken by all of them or by none.
+    if far_beam_model is not None:
+        far_beam_model.free()
 
     bench_summary(tod_comm, label="All bands")
     bench_summary(band_comm, label=f"Band {experiment_data.band_name}")
