@@ -13,6 +13,7 @@ from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_tod import DetectorTOD
+from commander4.data_models.pointing import remap_pix_nside
 from commander4.data_models.tod_samples import TODSamples
 from commander4.tod.noise.sample_ncorr import realize_noise_in_gaps
 from commander4.tod.sky_projection import get_static_sky_tod, get_s_orb_tod
@@ -340,10 +341,8 @@ class TODView:
         else:
             return None
 
-        pix = self._fullres_pix
-        map_nside = hp.npix2nside(mask_map.size)
-        if map_nside != self.detector.nside:
-            pix = hp.ang2pix(map_nside, *hp.pix2ang(self.detector.nside, pix))
+        pix = remap_pix_nside(self._fullres_pix, self.detector.nside,
+                              hp.npix2nside(mask_map.size))
         return mask_map[pix]
 
 
