@@ -2,7 +2,9 @@
 
 Two signals are projected here: the static sky model (C3's `s_sky`) and the orbital dipole induced
 by the observer's motion (C3's `s_orb`). Both turn a sky-domain quantity into a TOD, and both are
-numba kernels because they run once per detector-scan per Gibbs iteration.
+numba kernels because they run once per detector-scan per Gibbs iteration. The sky-projection
+kernels are threaded over samples (`prange`): the map is read-only, so each sample is independent,
+and every gain step plus the mapmaker re-evaluates them for every detector-scan.
 """
 import logging
 import os
@@ -10,7 +12,7 @@ import os
 import ducc0
 import numpy as np
 import pysm3.units as pysm3_u
-from numba import njit
+from numba import njit, prange
 from numpy.typing import NDArray
 
 from commander4.data_models.detector_tod import DetectorTOD
@@ -62,19 +64,19 @@ def get_static_sky_tod(det_compsep_map: NDArray[np.floating], pix: NDArray[np.in
     else:
         raise ValueError("Input compsep map has mismatching dimensions.")
 
-@njit(fastmath=True)
+@njit(fastmath=True, parallel=True)
 def _get_static_sky_tod_IQU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
                             psi: NDArray[np.floating],
                             response_I: float, response_QU: float) -> NDArray[np.float32]:
     sky = np.empty(pix.shape[0], dtype=np.float32)
     if response_I == 1.0 and response_QU == 1.0:
-        for i in range(pix.shape[0]):
+        for i in prange(pix.shape[0]):
             p = pix[i]
             angle = 2.0 * psi[i]
             sky[i] = (det_compsep_map[0, p] + np.cos(angle) * det_compsep_map[1, p]
                       + np.sin(angle) * det_compsep_map[2, p])
     else:
-        for i in range(pix.shape[0]):
+        for i in prange(pix.shape[0]):
             p = pix[i]
             angle = 2.0 * psi[i]
             sky[i] = response_I * det_compsep_map[0, p] + response_QU * (
@@ -82,7 +84,7 @@ def _get_static_sky_tod_IQU(det_compsep_map: NDArray[np.floating], pix: NDArray[
             )
     return sky
 
-@njit(fastmath=True)
+@njit(fastmath=True, parallel=True)
 def _get_static_sky_tod_QU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
                            psi: NDArray[np.floating],
                            response_QU: float) -> NDArray[np.float32]:
@@ -90,13 +92,13 @@ def _get_static_sky_tod_QU(det_compsep_map: NDArray[np.floating], pix: NDArray[n
     if response_QU == 0.0:
         sky[:] = 0.0
     elif response_QU == 1.0:
-        for i in range(pix.shape[0]):
+        for i in prange(pix.shape[0]):
             p = pix[i]
             angle = 2.0 * psi[i]
             sky[i] = (np.cos(angle) * det_compsep_map[0, p]
                       + np.sin(angle) * det_compsep_map[1, p])
     else:
-        for i in range(pix.shape[0]):
+        for i in prange(pix.shape[0]):
             p = pix[i]
             angle = 2.0 * psi[i]
             sky[i] = response_QU * (
@@ -104,17 +106,17 @@ def _get_static_sky_tod_QU(det_compsep_map: NDArray[np.floating], pix: NDArray[n
             )
     return sky
 
-@njit(fastmath=True)
+@njit(fastmath=True, parallel=True)
 def _get_static_sky_tod_I(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
                           response_I: float) -> NDArray[np.float32]:
     sky = np.empty(pix.shape[0], dtype=np.float32)
     if response_I == 0.0:
         sky[:] = 0.0
     elif response_I == 1.0:
-        for i in range(pix.shape[0]):
+        for i in prange(pix.shape[0]):
             sky[i] = det_compsep_map[0, pix[i]]
     else:
-        for i in range(pix.shape[0]):
+        for i in prange(pix.shape[0]):
             sky[i] = response_I * det_compsep_map[0, pix[i]]
     return sky
 
