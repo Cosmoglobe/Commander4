@@ -1,4 +1,5 @@
 import numpy as np
+import pixell.utils
 import pytest
 from numba import njit
 from scipy.fft import rfftfreq
@@ -316,6 +317,59 @@ class TestSampleCorrelatedNoise:
         assert np.all(np.isfinite(res.n_corr))
         assert res.converged          # an easy, well-conditioned system should converge
         assert res.niter > 0          # the masked CG actually ran (unlike cg_max_iter=0)
+
+    def test_cg_recurrence_runs_in_double_precision(self, monkeypatch):
+        """The Fourier filter runs in single precision; the CG recurrence must not.
+
+        Commander3 makes the same split (`apply_fourier_mat` transforms real(sp) buffers inside a
+        real(dp) CG). An all-float32 CG underflows its recursive residual after a few tens of
+        iterations, and since `nan > target` is False the loop would then break, report
+        convergence, and hand back a NaN n_corr. This pins the dtypes so that cannot creep in.
+        """
+        seen = {}
+        real_cg = pixell.utils.CG
+
+        def spy(A, b, **kwargs):
+            solver = real_cg(A, b, **kwargs)
+            seen["rhs"] = b.dtype
+            seen["residual"] = solver.r.dtype
+            seen["operator_out"] = np.asarray(A(solver.x)).dtype
+            return solver
+
+        monkeypatch.setattr(pixell.utils, "CG", spy)
+        m = NoisePSDOof()
+        tod, mask, params, fsamp = self._setup()
+        C = m.compute_inv_corr_spectrum(rfftfreq(2*tod.size, d=1.0/fsamp), params)
+        # `sample_correlated_noise` passes a Python float here. That matters: a numpy float64
+        # sigma0 would promote the RHS back to float64 on its own and hide a single-precision CG.
+        n_corr, _, _, _ = corr_noise_realization_with_gaps(tod.copy(), mask, float(params[0]), C,
+                                                           err_tol=1e-5, max_iter=50, rnd_seed=3)
+        assert seen["rhs"] == np.float64
+        assert seen["residual"] == np.float64
+        assert seen["operator_out"] == np.float64
+        assert np.all(np.isfinite(n_corr))
+
+    def test_single_precision_filter_matches_a_double_precision_solve(self):
+        """The float32 filter must not move the answer by more than the CG's own stopping error.
+
+        Compared against the same system solved to a far tighter tolerance, the production-
+        tolerance result carries an error set by where the CG stopped. The single-precision
+        transform adds roughly float32 epsilon on top, which is orders of magnitude smaller.
+        """
+        m = NoisePSDOof()
+        tod, mask, params, fsamp = self._setup()
+        C = m.compute_inv_corr_spectrum(rfftfreq(2*tod.size, d=1.0/fsamp), params)
+        _seed_all_rng(7)
+        loose, _, _, _ = corr_noise_realization_with_gaps(tod.copy(), mask, params[0], C,
+                                                          err_tol=1e-5, max_iter=50, rnd_seed=3)
+        _seed_all_rng(7)
+        tight, _, _, _ = corr_noise_realization_with_gaps(tod.copy(), mask, params[0], C,
+                                                          err_tol=1e-9, max_iter=200, rnd_seed=3)
+        # Both solve the same system with the same random draws, so they may differ only by the
+        # accuracy the looser stop allows, and never by the ~1e-3 level that a broken operator
+        # or a wrongly-scaled filter would produce.
+        assert np.all(np.isfinite(loose)) and np.all(np.isfinite(tight))
+        assert np.sqrt(np.mean((loose - tight)**2)) < 1e-4*np.std(tight)
 
     def test_param_sampling_toggle(self):
         m = NoisePSDOof()
