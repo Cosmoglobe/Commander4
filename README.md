@@ -57,7 +57,7 @@ A parameter file is seven top-level blocks, each named after the part of the pro
 
 The MPI task counts are **derived**, not stated: the TOD total is the sum of the per-band `num_tasks` over enabled bands of enabled experiments, and component separation takes one task per enabled `compsep.bands` view (one for I, one for QU). Commander4 reports the total it needs, and `mpirun -n` must match it.
 
-Parameter files can include other parameter files using `!include 'path/to/file.yml'`. The path is relative to the relevant file. Note that the exact content of the imported file is inserted at the exact location of the import, and at the relevant indendation level.
+Parameter files can include other parameter files using `!import 'path/to/file.yml'`. The path is relative to the relevant file. Note that the exact content of the imported file is inserted at the exact location of the import, and at the relevant indendation level.
 
 ### 2.2 Output
 A run writes everything below the single directory named by `output.dir`, which it creates:
@@ -323,6 +323,7 @@ Its usage is explained in the file itself. It prints an averaged runtime-summary
 There exists a lot of profiling tools for Python, but a lot of them break down when combined with MPI.
 I find that `py-spy` works well. You install it with pip, and then just attach it to a single rank while you code is running:
 ```bash
-py-spy record --pid 911510 -o my_run.svg
+py-spy record -f speedscope --rate 1 --nonblocking --pid 911510 -o my_run.json 
 ```
-When you abort it, it will produce a nice file showing what this rank was doing at all times.
+When you abort it, it will produce a nice file that can either be uploaded to [https://www.speedscope.app/](https://www.speedscope.app/) to show what this rank was doing at all times. Running it on the master rank of some process is typically most informative.
+**Flag explaination:** `--rate` is number of samples per second. `-f speedscope` is the output format. `--nonblocking` means the monitored process will not be briefly stopped during the sampling (without this flag I actually frequently got a mysterious Bus Error).
