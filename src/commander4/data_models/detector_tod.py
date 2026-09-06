@@ -212,9 +212,9 @@ class DetectorTOD:
     def good_data_mask(self) -> NDArray[np.bool_]:
         """Boolean mask keeping samples that pass the bad-data flag cut."""
         mask = np.unpackbits(self._good_data_mask).view(bool)
-        if mask.size > self.tod.size + 7 or mask.size < self.tod.size:
-            raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.tod.size}.")
-        return mask[:self.tod.size]
+        if mask.size > self.ntod + 7 or mask.size < self.ntod:
+            raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.ntod}.")
+        return mask[:self.ntod]
 
 
     def IQU_response(self, psi: NDArray | None = None):
