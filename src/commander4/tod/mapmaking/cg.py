@@ -41,6 +41,7 @@ from commander4.tod.scan_diagnostics import _record_tod_diagnostics
 from commander4.data_models.pixel_domain import PixelDomain
 from commander4.math_utils.arithmetic import inplace_scale, dot, norm
 from commander4.math_utils.fft import forward_rfft, backward_rfft
+from commander4.math_utils.transfer_func import SinglePole
 from commander4.tod.mapmaking.config import MapmakingConfig
 from commander4.tod.mapmaking.output import finalize_band_maps
 from commander4.tod.data_selection import DataSelectionConfig
@@ -58,7 +59,7 @@ class CGMapmaker:
                 detector_samples:TODSamples,
                 map_comm:MPI.Comm,
                 #optionals:
-                T_omega:Callable = np.ones_like, 
+                T_omega:Callable|None = None, 
                 preconditioner:Callable = np.copy,
                 nthreads:int=1, 
                 double_prec:bool = True,
@@ -178,6 +179,8 @@ class CGMapmaker:
         directions as this exact adjoint pair keeps the mapmaking operator ``P^T T^T N^-1 T P``
         symmetric, so the CG solve stays well-posed. At ``T_omega = 1`` both reduce to the identity.
         """
+        if self.T_omega is None:
+            return np.ascontiguousarray(scan_tod_arr, dtype=np.float64)
         n = scan_tod_arr.shape[-1]
         freqs = np.fft.rfftfreq(2 * n, d=1.0 / self.fsamp)  # physical frequency grid [Hz]
         if adjoint:
@@ -241,6 +244,7 @@ class CGMapmaker:
         scan_tod_arr = self.apply_inv_N(scan_tod_arr, sigma0)
         # T^T N^-1 d
         scan_tod_arr = self.apply_T_adjoint(scan_tod_arr)
+        # logger.warning(f"scan type: {scan_tod_arr.dtype}")
         # P^T T^T N^-1 d
         self._rhs_loca_map = self.apply_P_adjoint(scan_tod, self._rhs_loca_map,
                                                   pix=pix, psi=psi, scan_tod_arr=scan_tod_arr)
@@ -284,7 +288,8 @@ class CGMapmaker:
             sigma0 = view.sigma0
             scan_tod_arr_aux = np.zeros(pix.shape[0], dtype=self.f_dtype)  # full-length, as RHS
             #P m
-            scan_tod_arr_aux = self.apply_P(local_in, view.detector, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
+            scan_tod_arr_aux = self.apply_P(local_in, view.detector, 
+                                            pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
             #T P m
             scan_tod_arr_aux = self.apply_T(scan_tod_arr_aux)
             #N^-1 T P m
@@ -292,7 +297,8 @@ class CGMapmaker:
             #T^T N^-1 T P m
             scan_tod_arr_aux = self.apply_T_adjoint(scan_tod_arr_aux)
             #P^T T^T N^-1 T P
-            out_local = self.apply_P_adjoint(view.detector, out_local, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
+            out_local = self.apply_P_adjoint(view.detector, out_local, 
+                                             pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
         # Sum the local contributions back to the full-sky map on the master (None on other ranks).
         return self.domain.reduce_to_full(out_local)
 
@@ -361,15 +367,16 @@ class CGMapmakerI(CGMapmaker):
     """
 
     def __init__(self, 
-                 detector_tod, 
-                 detector_samples,
-                 map_comm, T_omega = np.ones_like, 
-                 preconditioner = np.copy, 
-                 nthreads = 1,
-                 double_prec = True,
-                 CG_maxiter = 200,
-                 CG_tol = 1e-10,
-                 CG_check_interval = 1,
+                 detector_tod:DetectorGroupTOD, 
+                 detector_samples:TODSamples,
+                 map_comm:MPI.Comm, 
+                 T_omega:Callable|None = None, 
+                 preconditioner:Callable = np.copy, 
+                 nthreads:int = 1,
+                 double_prec:bool = True,
+                 CG_maxiter:int = 200,
+                 CG_tol:float = 1e-10,
+                 CG_check_interval:int = 1,
                  pixel_domain = None):
 
         super().__init__(detector_tod, detector_samples, map_comm, T_omega, preconditioner,
@@ -462,16 +469,16 @@ class CGMapmakerIQU(CGMapmaker):
     """
 
     def __init__(self, 
-                 detector_tod, 
-                 detector_samples, 
-                 map_comm, 
-                 T_omega = np.ones_like, 
-                 preconditioner = np.copy, 
-                 nthreads = 1,
-                 double_prec = True,
-                 CG_maxiter = 200,
-                 CG_tol = 1e-10,
-                 CG_check_interval = 1,
+                 detector_tod:DetectorGroupTOD, 
+                 detector_samples:TODSamples, 
+                 map_comm:MPI.Comm, 
+                 T_omega:Callable|None = None, 
+                 preconditioner:Callable = np.copy, 
+                 nthreads:int = 1,
+                 double_prec:bool = True,
+                 CG_maxiter:int = 200,
+                 CG_tol:float = 1e-10,
+                 CG_check_interval:int = 1,
                  pixel_domain = None):
 
         super().__init__(detector_tod, detector_samples, map_comm, T_omega, preconditioner,
@@ -610,19 +617,25 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
     # Optional per-experiment sparse map storage: each rank holds only its locally-observed pixels
     # rather than a full sky map. The band master still ends up with full-sky maps.
     domain = experiment_data.get_pixel_domain(scan_view, band_comm, mapmaking.sparse_maps)
+    #Transfer function operator:
+    if experiment_data.tf_tau_sec is not None:
+        TF_model = SinglePole(experiment_data.tf_tau_sec)
+        T_omega = TF_model.response
+    else:
+        T_omega = None
     # The inverse-variance map (preconditioner + rms/cov) is accumulated inside the fused loop below,
     # so neither it nor cg_mapmaker.M can be finalized until afterwards. cg_mapmaker is constructed
     # here with a placeholder preconditioner; M is unused until solve() and accum_to_RHS never reads
     # it, so it is reassigned to the real Jacobi preconditioner after the loop.
     if pols == "IQU":
         mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
-        cg_mapmaker = CGMapmakerIQU(experiment_data, tod_samples, band_comm,
+        cg_mapmaker = CGMapmakerIQU(experiment_data, tod_samples, band_comm, T_omega=T_omega,
                     preconditioner=called_on_non_master, nthreads=mapmaking.num_threads,
                     CG_maxiter=mapmaking.cg.max_iter, CG_tol=mapmaking.cg.err_tol,
                     pixel_domain=domain)
     elif pols == "I":
         mapmaker_invvar = WeightsMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
-        cg_mapmaker = CGMapmakerI(experiment_data, tod_samples, band_comm,
+        cg_mapmaker = CGMapmakerI(experiment_data, tod_samples, band_comm, T_omega=T_omega,
                     preconditioner=called_on_non_master, nthreads=mapmaking.num_threads,
                     CG_maxiter=mapmaking.cg.max_iter, CG_tol=mapmaking.cg.err_tol,
                     pixel_domain=domain)

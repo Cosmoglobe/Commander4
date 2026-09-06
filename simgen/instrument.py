@@ -13,7 +13,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from simgen.config import bget
-from simgen.transfer import TransferFunction, make_detector_transfer
+from commander4.math_utils.transfer_func import TransferFunction, make_detector_transfer
 
 logger = logging.getLogger(__name__)
 
