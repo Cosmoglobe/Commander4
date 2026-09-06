@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from simgen.config import as_bunch_recursive
-from simgen.transfer import SinglePole, MultiPole, make_detector_transfer
+from commander4.math_utils.transfer_func import SinglePole, MultiPole, make_detector_transfer
 
 
 def _rms(x):
