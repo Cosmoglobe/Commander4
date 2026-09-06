@@ -17,7 +17,7 @@ from scipy.fft import rfftfreq
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.tod_samples import TODSamples
-from commander4.diagnostics.performance import benchmark, log_memory
+from commander4.diagnostics.performance import benchmark, log_memory, start_bench, stop_bench
 from commander4.math_utils.fft import forward_rfft, backward_rfft
 from commander4.parameters.schema import resolve_param
 from commander4.tod.noise.sample_ncorr import GAIN_GAP_FILL_METHODS
@@ -178,6 +178,7 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
     Returns:
         tod_samples (TODSamples): Updated TOD samples with the new g0 estimate.
     """
+    start_bench("eqn-setup")
     sum_s_T_N_inv_d = 0  # Accumulators for the numerator and denominator of eqn 16.
     sum_s_T_N_inv_s = 0
 
@@ -201,12 +202,17 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
         # Add to the numerator and denominator.
         sum_s_T_N_inv_d += np.dot(s_cal, N_inv_d)
         sum_s_T_N_inv_s += np.dot(s_cal, N_inv_s)
+    stop_bench("eqn-setup")
 
+    start_bench("MPI-comm")
     # The g0 term is fully global, so we reduce across both all scans and all bands:
     sum_s_T_N_inv_d = band_comm.reduce(sum_s_T_N_inv_d, op=MPI.SUM, root=0)
     sum_s_T_N_inv_s = band_comm.reduce(sum_s_T_N_inv_s, op=MPI.SUM, root=0)
     # Default to the current value so a skipped or ill-posed solve leaves the gain unchanged.
     g_sampled = tod_samples.abs_gain
+    stop_bench("MPI-comm")
+
+    start_bench("eqn-solve")
     # Rank 0 draws a sample of g0 from eq (16) from BP6, and bcasts it to the other ranks.
     if band_comm.Get_rank() == 0:
         if not np.isfinite(sum_s_T_N_inv_s) or sum_s_T_N_inv_s <= 0.0:
@@ -220,6 +226,7 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
             logger.info(f"Chain {tod_samples.chain} iter{iteration} "
                         f"{experiment_data.band_name} g0: {tod_samples.abs_gain:.4e} -> "
                         f"{g_sampled:.4e} (+/- {g_std:.4e}).")
+    stop_bench("eqn-solve")
 
     with benchmark("abs-gain-barrier"):   # reported across ranks by bench_summary
         band_comm.Barrier()
@@ -248,6 +255,7 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
     Returns:
         tod_samples (TODSamples): Updated TOD samples with relative gain estimates.
     """
+    start_bench("eqn-setup")
     ndet = experiment_data.ndet
 
     #### 1. Local Calculation (on each rank) ###
@@ -278,17 +286,21 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
         # Add the contribution from this scan to the local sum (full-band detector column).
         local_s_T_N_inv_s[view.idet] += s_T_N_inv_s_scan
         local_r_T_N_inv_s[view.idet] += r_T_N_inv_s_scan
+    stop_bench("eqn-setup")
 
     ### 2. Intra-Detector Reduction ###
     # Sum the local values across all ranks that share the same detector using det_comm.
     # After this, every rank in the det_comm will have the total sum for their detector.
+    start_bench("MPI-comm")
     band_comm.Allreduce(MPI.IN_PLACE, local_s_T_N_inv_s, op=MPI.SUM)
     band_comm.Allreduce(MPI.IN_PLACE, local_r_T_N_inv_s, op=MPI.SUM)
+    stop_bench("MPI-comm")
 
     ### 3. Solve Global System ###
     # Solve the constrained system (sum of Delta g_i = 0) over the active detectors only; detectors
     # rejected on every scan or with a vanishing calibrator carry zero weight, are held at their
     # current value, and are excluded so the bordered matrix stays non-singular.
+    start_bench("eqn-solve")
     delta_g_samples = np.array(tod_samples.rel_gain, dtype=np.float32)  # default: leave unchanged
     if band_comm.Get_rank() == 0:
         n_active = int(np.count_nonzero(local_s_T_N_inv_s > 0.0))
@@ -308,8 +320,11 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
                 logger.verbose(msg + ".")
             except np.linalg.LinAlgError:
                 logger.error("Failed to solve linear system for relative gain: Not updating.")
+    stop_bench("eqn-solve")
     # Broadcast and apply on every rank, so all band ranks hold the identical relative-gain vector.
     prev_rel_gain = np.array(tod_samples.rel_gain)
+    with benchmark("abs-gain-barrier"):   # reported across ranks by bench_summary
+        band_comm.Barrier()
     band_comm.Bcast(delta_g_samples, root=0)
     tod_samples.rel_gain[:] = delta_g_samples
     log_memory("rel-gain")

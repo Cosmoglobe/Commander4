@@ -475,7 +475,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         Detector maps for component separation and maps selected for chain output.
 
     """
-    start_bench("binned-mapmaker")
+    start_bench("setup")
     corr_noise_active = correlated_noise.is_active(iteration)
     selection_active = data_selection.cuts_are_active(iteration, correlated_noise)
     sidelobe_active = far_beam_model is not None
@@ -508,30 +508,33 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         num_failed_convergences_ncorr = 0
         num_too_high_var_ncorr = 0
         worst_residual_ncorr = 0
-    stop_bench("binned-mapmaker")
+    stop_bench("setup")
 
     ### MAIN SCAN LOOP ###
     for view in scan_view.iter_focused(accepted_only=True):
-        start_bench("binned-mapmaker")
+        start_bench("pix-psi")
         good_data_mask = view.get_mask(proc_mask=False)
         pix, psi = view.pix, view.psi
         pix_masked = pix[good_data_mask]
         psi_masked = psi[good_data_mask]
         response = view.det_response
         gain = view.get_gain()
-        stop_bench("binned-mapmaker", increment_count=False)
+        stop_bench("pix-psi")
 
         ### DATA-SELECTION VETO 1 (too little unflagged data).
+        start_bench("data-select-1")
         good_frac = good_data_mask.mean()
         tod_samples.good_fraction[view.iscan, view.idet] = good_frac
         if selection_active and good_frac < data_selection.min_good_fraction:
             tod_samples.accept[view.iscan, view.idet] = False
+            stop_bench("data-select-1")
             continue
+        stop_bench("data-select-1")
 
         ### CORRELATED NOISE / SIGMA0 SAMPLING (first, so the weights below use the new sigma0) ###
         n_corr_est = None
         if corr_noise_active:
-            start_bench("ncorr-sampling")
+            start_bench("ncorr")
             sky_subtracted_TOD = view.get_tod(
                 subtract=(("sky", TODView._ALL_GAIN_TERMS),
                           ("orbital_dipole", TODView._ALL_GAIN_TERMS)),
@@ -565,37 +568,44 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
             worst_residual_ncorr = max(worst_residual_ncorr, res.residual)
             residuals.append(res.residual)
             niters.append(res.niter)
-            stop_bench("ncorr-sampling")
+            stop_bench("ncorr")
         elif correlated_noise.sample_sigma0:
             # No correlated noise this iteration: estimate sigma0 here, at the same point in the
             # chain (after gain) as the n_corr-coupled estimate, instead of a separate pre-gain pass.
-            tod_samples.noise_params[view.iscan, view.idet, 0] = _estimate_standalone_sigma0(
-                view, correlated_noise.sigma0_method)
+            with benchmark("sigma0-samp"):
+                tod_samples.noise_params[view.iscan, view.idet, 0] = _estimate_standalone_sigma0(
+                    view, correlated_noise.sigma0_method)
 
-        residual_tod = _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view, n_corr_est)
+        with benchmark("tod-diagnostics"):
+            residual_tod = _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view, n_corr_est)
 
         ### DATA-SELECTION VETO 2 (catastrophic chi^2)
+        start_bench("data-select-2")
         if selection_active:
             z = tod_samples.chisq_z[view.iscan, view.idet]
             if not (np.isfinite(z) and abs(z) <= data_selection.chisq_abs_threshold):
                 tod_samples.accept[view.iscan, view.idet] = False
+                stop_bench("data-select-2")
                 continue
+        stop_bench("data-select-2")
 
-        start_bench("binned-mapmaker")
-        # Retrieve the new sigma0 for this det-scan, sampled above.
-        sigma0 = view.sigma0
-        # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
-        inv_var = (gain/sigma0)**2
-        mapmaker_invvar.accumulate_to_map(inv_var, pix_masked, psi_masked, response=response)
+        with benchmark("map-binning"):
+            # Retrieve the new sigma0 for this det-scan, sampled above.
+            sigma0 = view.sigma0
+            # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
+            inv_var = (gain/sigma0)**2
+            mapmaker_invvar.accumulate_to_map(inv_var, pix_masked, psi_masked, response=response)
 
         ### ORBITAL DIPOLE ###
-        d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
+        with benchmark("misc"):
+            d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
 
         # If we're doing ncorr, accumulate to map and subtract from sky TOD.
         if mapmaker_ncorr is not None:
-            mapmaker_ncorr.accumulate_to_map(
-                (n_corr_est[good_data_mask]/gain).astype(np.float32, copy=False),
-                inv_var, pix_masked, psi_masked, response=response)
+            with benchmark("map-binning"):
+                mapmaker_ncorr.accumulate_to_map(
+                    (n_corr_est[good_data_mask]/gain).astype(np.float32, copy=False),
+                    inv_var, pix_masked, psi_masked, response=response)
         if corr_noise_active:
             d_sky -= n_corr_est
 
@@ -611,12 +621,14 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
             d_sky -= gain * sl_tod
 
         d_sky_masked = d_sky[good_data_mask]
-        mapmaker.accumulate_to_map(d_sky_masked/gain, inv_var, pix_masked, psi_masked, response=response)
+        with benchmark("map-binning"):
+            mapmaker.accumulate_to_map(d_sky_masked/gain, inv_var, pix_masked, psi_masked, response=response)
         if mapmaker_orbdipole is not None:
             # The dipole TOD is cached on the view, so `get_tod` above already paid for it.
             sky_orb_dipole = view.get_orbital_dipole_tod()
-            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole[good_data_mask], inv_var,
-                                                 pix_masked, psi_masked, response=response)
+            with benchmark("map-binning"):
+                mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole[good_data_mask], inv_var,
+                                                     pix_masked, psi_masked, response=response)
 
         ### RESIDUAL AND HIT MAPS ###
         # `residual_tod` is the detector-unit noise residual `_record_tod_diagnostics` already
@@ -624,24 +636,24 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         # in uK_RJ, like the signal map. Masked like the signal map, so its numerator counts the
         # same good samples as the shared `map_cov` denominator.
         if mapmaker_res is not None:
-            mapmaker_res.accumulate_to_map(residual_tod[good_data_mask]/gain, inv_var,
-                                           pix_masked, psi_masked, response=response)
+            with benchmark("map-binning"):
+                mapmaker_res.accumulate_to_map(residual_tod[good_data_mask]/gain, inv_var,
+                                            pix_masked, psi_masked, response=response)
         if nhit_local is not None:
-            nhit_local += np.bincount(domain.to_local(pix_masked), minlength=domain.n_local)
-        stop_bench("binned-mapmaker", increment_count=False)
-    if corr_noise_active:
-        log_memory("ncorr-sampling")
+            with benchmark("nhit-local"):
+                nhit_local += np.bincount(domain.to_local(pix_masked), minlength=domain.n_local)
 
     ### PRINT NOISE SAMPLING STATS ###
     if corr_noise_active:
-        log_corr_noise_stats(band_comm, experiment_data,
-                             sampled_params, residuals, niters, num_failed_convergences_ncorr,
-                             num_too_high_var_ncorr, worst_residual_ncorr,
-                             sum(len(s.detectors) for s in experiment_data.scans),
-                             tod_samples.chain, iteration)
+        with benchmark("log-corr-noise-stats"):
+            log_corr_noise_stats(band_comm, experiment_data,
+                                sampled_params, residuals, niters, num_failed_convergences_ncorr,
+                                num_too_high_var_ncorr, worst_residual_ncorr,
+                                sum(len(s.detectors) for s in experiment_data.scans),
+                                tod_samples.chain, iteration)
 
 
-    start_bench("binned-mapmaker")
+    start_bench("map-gather")
     ### GATHER AND NORMALIZE MAPS ###
     # Finalize the inverse-variance map (now accumulated with this iteration's sigma0) before reading
     # its rms/cov, which normalize the signal and every aux map below.
@@ -670,17 +682,18 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         nhit_full = domain.reduce_to_full(nhit_local)
         if nhit_full is not None:
             map_nhit = np.round(nhit_full).astype(np.int64)
-    stop_bench("binned-mapmaker", increment_count=False)
-    log_memory("binned-mapmaker")
+    stop_bench("map-binning")
+    log_memory("map-binning")
 
     ### FINAL CLEANUP ON MASTER RANK ###
     detmap_dict_out = {}
     maps_to_file = {}
-    if band_comm.Get_rank() == 0:
-        detmap_dict_out, maps_to_file = finalize_band_maps(
-            map_signal, map_rms, pols, experiment_data, mapmaking, tod_samples, compsep_output,
-            map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
-            map_sidelobe=map_sidelobe, map_residual=map_residual, map_nhit=map_nhit,
-            map_cov=map_cov)
+    with benchmark("finalize"):
+        if band_comm.Get_rank() == 0:
+            detmap_dict_out, maps_to_file = finalize_band_maps(
+                map_signal, map_rms, pols, experiment_data, mapmaking, tod_samples, compsep_output,
+                map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
+                map_sidelobe=map_sidelobe, map_residual=map_residual, map_nhit=map_nhit,
+                map_cov=map_cov)
 
     return detmap_dict_out, maps_to_file
