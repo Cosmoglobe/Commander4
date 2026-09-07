@@ -11,6 +11,7 @@ them weighted by `(gain/sigma0)^2`, so it cannot be inverted back into a sample 
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from mpi4py import MPI
 
 from commander4.data_models.detector_tod import DetectorTOD
@@ -26,7 +27,7 @@ _GAIN = 1.5   # abs_gain below; rel and temporal gain are zero, so this is the w
 
 
 def _build_band(pix, psi, tod, flag=None,
-                response: np.ndarray | None = None) -> DetectorGroupTOD:
+                response_I_P: tuple[float, float] | None = None) -> DetectorGroupTOD:
     """One IQU detector-scan with uncompressed pointing and no orbital motion.
 
     The zero orbital velocity is what makes the expected residual exactly the noise: with no
@@ -43,7 +44,7 @@ def _build_band(pix, psi, tod, flag=None,
         specific_proc_masks={},
         flag_encoded=(np.zeros(ntod) if flag is None else flag).astype(np.int64),
         bad_data_bitmask=_BITMASK, flag_is_compressed=False,
-        det_response=response,
+        response_I_P=response_I_P,
     )
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
     return DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=30.0, fwhm=0.0,
@@ -63,12 +64,13 @@ def _fake_tod_samples(sigma0: float = 2.0, ndet: int = 1) -> SimpleNamespace:
         tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None)
 
 
-def _run(band: DetectorGroupTOD, sky_model: np.ndarray) -> dict[str, np.ndarray]:
+def _run(band: DetectorGroupTOD, sky_model: np.ndarray,
+         sparse_maps: bool = False) -> dict[str, np.ndarray]:
     mapmaking = tod_processing.MapmakingConfig(
         mapmaker="bin", num_threads=1,
         include_orbital_dipole_maps=False, include_corr_noise_maps=False,
         include_sky_model_maps=False, include_residual_maps=True, include_hit_maps=True,
-        sparse_maps=False, common_res_fwhm=0.0,
+        sparse_maps=sparse_maps, common_res_fwhm=0.0,
     )
     _, maps = tod_processing.tod2map_bin(
         MPI.COMM_SELF, band, sky_model, _fake_tod_samples(ndet=band.ndet), 1, mapmaking,
@@ -115,10 +117,10 @@ def test_response_split_detectors_recover_sky_and_zero_residual(monkeypatch):
         sky[1, pix] * np.cos(2 * psi) + sky[2, pix] * np.sin(2 * psi)
     )
     intensity = _build_band(
-        pix, psi, intensity_tod, response=np.array([1.0, 0.0]),
+        pix, psi, intensity_tod, response_I_P=(1.0, 0.0),
     ).scans[0].detectors[0]
     polarization = _build_band(
-        pix, psi, polarization_tod, response=np.array([0.0, 1.0]),
+        pix, psi, polarization_tod, response_I_P=(0.0, 1.0),
     ).scans[0].detectors[0]
     intensity.name = "intensity"
     polarization.name = "polarization"
@@ -133,6 +135,11 @@ def test_response_split_detectors_recover_sky_and_zero_residual(monkeypatch):
 
     np.testing.assert_allclose(maps["res"], 0.0, atol=1e-3)
     np.testing.assert_allclose(maps["observed_sky"], sky, rtol=0, atol=1e-3)
+
+    # Hits count both streams independently, regardless of their intensity/polarization response.
+    expected_hits = np.zeros(_NPIX, dtype=np.int64)
+    np.add.at(expected_hits, pix, 2)
+    np.testing.assert_array_equal(maps["nhit"], expected_hits)
 
 
 def test_residual_map_recovers_an_injected_offset(monkeypatch):
@@ -152,17 +159,28 @@ def test_residual_map_recovers_an_injected_offset(monkeypatch):
     np.testing.assert_allclose(maps["observed_sky"][0], sky[0] + offset, rtol=1e-3)
 
 
-def test_hit_map_counts_unflagged_samples_only(monkeypatch):
+@pytest.mark.parametrize("sparse_maps", [False, True])
+@pytest.mark.parametrize("n_good", [0, 256])
+def test_hit_map_counts_unflagged_samples_only(
+    monkeypatch: pytest.MonkeyPatch, sparse_maps: bool, n_good: int,
+) -> None:
+    """Accumulate repeated hits without a dense per-scan temporary, even for empty masks."""
     monkeypatch.setenv("OMP_NUM_THREADS", "1")
     rng = np.random.default_rng(6)
-    n, n_flagged = 256, 40
-    pix = rng.integers(0, _NPIX, n + n_flagged).astype(np.int64)
+    n, n_flagged = n_good, 40
+    pix = rng.choice(np.array([2, 5, 11], dtype=np.int64), n + n_flagged)
     psi = rng.uniform(0.0, np.pi, n + n_flagged)
     flag = np.concatenate([np.zeros(n, np.int64), np.full(n_flagged, _BITMASK, np.int64)])
     sky = np.zeros((3, _NPIX))
 
-    maps = _run(_build_band(pix, psi, np.zeros(n + n_flagged), flag=flag), sky)
+    def unexpected_bincount(*args, **kwargs) -> np.ndarray:
+        pytest.fail("Hit accumulation must not allocate a dense bincount array for each scan.")
 
-    expected = np.bincount(pix[:n], minlength=_NPIX)
+    monkeypatch.setattr(np, "bincount", unexpected_bincount)
+    maps = _run(_build_band(pix, psi, np.zeros(n + n_flagged), flag=flag), sky, sparse_maps)
+
+    expected = np.zeros(_NPIX, dtype=np.int64)
+    np.add.at(expected, pix[:n], 1)
     np.testing.assert_array_equal(maps["nhit"], expected)
+    assert maps["nhit"].dtype == np.int64
     assert maps["nhit"].sum() == n

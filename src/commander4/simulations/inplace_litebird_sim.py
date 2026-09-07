@@ -180,8 +180,8 @@ def get_orbital_dipole(det: DetectorTOD, pix: NDArray[np.integer], freq: float, 
     if orb_vel_vec is None:
         raise ValueError("Read-time orbital-dipole simulation requires an orbital velocity.")
     # The orbital dipole is unpolarized, so only the intensity response of the detector matters.
-    response_I = 1.0 if det.det_response is None else float(det.det_response[0])
-    if response_I == 0.0:
+    resp_I, _ = det.response_I_P
+    if resp_I == 0.0:
         return np.zeros(pix.shape, dtype=np.float32)
     # pointing_vec = hp.pix2vec(det.nside, pix)
     geom = ducc0.healpix.Healpix_Base(det.nside, "RING")
@@ -199,7 +199,7 @@ def get_orbital_dipole(det: DetectorTOD, pix: NDArray[np.integer], freq: float, 
     # Find the conversion factor from K_CMB to the units expected by the code (typically uK_RJ).
     KCMB_to_uKRJ = (1.0 * u.K_CMB).to(units, equivalencies=u.cmb_equivalencies(freq * u.GHz)).value
 
-    return orbital_dipole_amplitude * KCMB_to_uKRJ * response_I
+    return orbital_dipole_amplitude * KCMB_to_uKRJ * resp_I
 
 
 
@@ -245,7 +245,7 @@ def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetectorGroupTOD, b
             start_bench("orbdip")
             pix, psi = det.get_pix_psi()
             ntod = det.tod.size
-            det.tod[:] = get_static_sky_tod(comps_sum_smoothed, pix, psi, det.det_response)
+            det.tod[:] = get_static_sky_tod(comps_sum_smoothed, pix, psi, det.response_I_P)
             if sim_params.include_OrbitalDipole:
                 det.tod[:] += get_orbital_dipole(det, pix, freq, units)
             stop_bench("orbdip")

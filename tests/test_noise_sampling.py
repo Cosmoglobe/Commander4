@@ -1,5 +1,6 @@
 import numpy as np
 import pixell.utils
+from pixell.bunch import Bunch
 import pytest
 from numba import njit
 from scipy.fft import rfftfreq
@@ -10,7 +11,8 @@ from commander4.tod.noise.psd import NoisePSDOof
 from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.sample_ncorr import (sample_correlated_noise,
                                                     corr_noise_realization_with_gaps,
-                                                    realize_noise_in_gaps)
+                                                    realize_noise_in_gaps,
+                                                    CorrelatedNoiseConfig)
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 
 
@@ -370,6 +372,40 @@ class TestSampleCorrelatedNoise:
         # or a wrongly-scaled filter would produce.
         assert np.all(np.isfinite(loose)) and np.all(np.isfinite(tight))
         assert np.sqrt(np.mean((loose - tight)**2)) < 1e-4*np.std(tight)
+
+    def test_dct_and_mirrored_fft_agree(self):
+        """`use_dct` must be an exact reformulation, not an approximation.
+
+        The mirrored array [v, reverse(v)] has DCT-II symmetry and its Nyquist coefficient is
+        identically zero, so filtering through a length-nsamp DCT and through the length-2*nsamp
+        mirrored FFT are the same operator. With the same random draws the two must therefore
+        agree to the single precision the transform itself carries.
+        """
+        m = NoisePSDOof()
+        tod, mask, params, fsamp = self._setup()
+        C = m.compute_inv_corr_spectrum(rfftfreq(2*tod.size, d=1.0/fsamp), params)
+        fft, _, n_fft, c_fft = corr_noise_realization_with_gaps(
+            tod.copy(), mask, float(params[0]), C, err_tol=1e-5, max_iter=50, rnd_seed=3)
+        dct, _, n_dct, c_dct = corr_noise_realization_with_gaps(
+            tod.copy(), mask, float(params[0]), C, err_tol=1e-5, max_iter=50, rnd_seed=3,
+            use_dct=True)
+        assert (n_dct, c_dct) == (n_fft, c_fft)          # same CG path, not just a similar answer
+        assert np.sqrt(np.mean((dct - fft)**2)) < 1e-5*np.std(fft)
+
+    def test_use_dct_reaches_the_sampler_from_the_config(self):
+        """The toggle is wired from `tod_processing.corr_noise.use_dct` down to the realization."""
+        assert CorrelatedNoiseConfig.from_params(Bunch(tod_processing=Bunch()), False).use_dct \
+            is False
+        block = Bunch(tod_processing=Bunch(corr_noise=Bunch(enabled=True, use_dct=True)))
+        assert CorrelatedNoiseConfig.from_params(block, False).use_dct is True
+
+        m = NoisePSDOof()
+        tod, mask, params, fsamp = self._setup()
+        _seed_all_rng(0)
+        res = sample_correlated_noise(tod.copy(), mask, params.copy(), m, fsamp, cg_err_tol=1e-6,
+                                      cg_max_iter=50, sample_params=False, use_dct=True)
+        assert np.all(np.isfinite(res.n_corr))
+        assert res.n_corr.shape == tod.shape
 
     def test_param_sampling_toggle(self):
         m = NoisePSDOof()

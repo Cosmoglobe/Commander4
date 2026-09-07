@@ -359,6 +359,7 @@ def _make_real_view(monkeypatch):
     psi = rng.uniform(0.0, np.pi, size=NTOD)
     det = SimpleNamespace(tod=rng.normal(size=NTOD), ntod=NTOD, fsamp=float(FACTOR), nside=1,
                           det_idx_fullband=0, get_pix_psi=lambda: (pix, psi),
+                          response_I_P=(1.0, 1.0),
                           orbital_velocity_m_per_s=np.array([1.0, 0.0, 0.0], dtype=np.float32))
     experiment_data = SimpleNamespace(scans=[SimpleNamespace(detectors=[det])], nside=1, nu=30.0)
     no_jump = SimpleNamespace(is_empty=lambda: True)

@@ -168,8 +168,8 @@ class TODView:
         return self._downsample_factor
 
     @property
-    def det_response(self) -> NDArray | None:
-        return getattr(self.detector, "det_response", None)
+    def response_I_P(self) -> tuple[float, float]:
+        return self.detector.response_I_P
 
     @property
     def noise_params(self) -> NDArray:
@@ -405,11 +405,11 @@ class TODView:
         if compsep_output is None:
             if self._static_sky is None:
                 full = get_static_sky_tod(sky_model, sky_pix, psi=self._fullres_psi,
-                                          response=self.det_response)
+                                          response_I_P=self.response_I_P)
                 self._static_sky = self._downsample_mean(full)
             return self._static_sky
-        full = get_static_sky_tod( sky_model, sky_pix, psi=self._fullres_psi,
-                                  response=self.det_response)
+        full = get_static_sky_tod(sky_model, sky_pix, psi=self._fullres_psi,
+                                  response_I_P=self.response_I_P)
         return self._downsample_mean(full)
 
 

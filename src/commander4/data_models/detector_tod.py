@@ -52,7 +52,7 @@ class DetectorTOD:
         init_scalars: NDArray | None = None,
         tod_is_compressed: bool = False,
         flag_is_compressed: bool = True,
-        det_response: NDArray | None = None,
+        response_I_P: NDArray | None = None,
         polang: float | None = None,
     ):
         """Construct a DetectorTOD.
@@ -75,6 +75,10 @@ class DetectorTOD:
             flag_encoded: Flag samples, either decoded or Huffman-encoded, or None.
             flag_bitmask: Bitmask applied to flags to identify excluded samples.
             polang: The polarization angle of this detector relative to the boresight.
+            response_I_P: How sensitive this detector is to intensity and to polarization, as a
+                two-element [I, QU] sequence. Only experiments whose files carry a per-detector
+                response pass one; None means an ordinary [1, 1] detector. Stored as a plain pair
+                of floats either way, so consumers never have to resolve the None case.
         """
         if tod_is_compressed:
             if not isinstance(tod, (bytes, np.void)):
@@ -138,7 +142,11 @@ class DetectorTOD:
         # numpy.void payloads the internal storage is rewritten as a zero-copy
         # uint8 view once at construction.
         self.pointing = pointing
-        self.det_response = det_response
+        # Resolved once here, so no consumer downstream has to handle a missing response.
+        if response_I_P is None:
+            self.response_I_P = (1.0, 1.0)
+        else:
+            response_I_P = (float(response_I_P[0]), float(response_I_P[1]))
         if flag_encoded is not None and bad_data_bitmask is not None:
             good_data_mask = (self.flag & bad_data_bitmask) == 0
             self._good_data_mask = np.packbits(good_data_mask)
@@ -215,19 +223,3 @@ class DetectorTOD:
         if mask.size > self.ntod + 7 or mask.size < self.ntod:
             raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.ntod}.")
         return mask[:self.ntod]
-
-
-    def IQU_response(self, psi: NDArray | None = None):
-        # psi can be passed as an argument to avoid re-calculating it if already available.
-        if psi is None:
-            psi = self.get_psi()
-        # "None" means standard detector with [1, 1] response for intensity and polarization.
-        resp_I, resp_QU = (1.0, 1.0) if self.det_response is None \
-            else (self.det_response[0], self.det_response[1])
-        response = np.zeros((3, psi.shape[-1]))
-        if resp_I != 0:
-            response[0,:] = resp_I
-        if resp_QU != 0:
-            response[1,:] = np.cos(2.0*psi)*resp_QU
-            response[2,:] = np.sin(2.0*psi)*resp_QU
-        return response

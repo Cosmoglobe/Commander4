@@ -159,7 +159,7 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
         # solution is already the answer. This is the path taken by the CG-free mode
         # (cg.max_iter = 0) and by the non-convergence fallback.
         x_final = m_inv_b
-    log_memory("ncorr-sampling")
+    log_memory("ncorr-tod-samp")
     return x_final.astype(out_dtype, copy=False), CG_err, i, has_converged
 
 
