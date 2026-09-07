@@ -200,14 +200,12 @@ experiments:
     tod_is_compressed: true
     mapmaker: "bin"
     sparse_maps: true
-    num_scans: 233
     bad_data_bitmask: 0b11111111111111111111111111111111  # Entries in the 32-bit bitmask corresponding to bad data.
     jump_bitmask: 0b00000000000000000000000000000010
     bands:
       SO_LAT_i1ws0_f090:
         enabled: true
         num_tasks: 233
-        num_scans: 233
         eval_nside: 8192
         fwhm: 2.2 # [arcmin]
         freq: 90.0 # [GHz]

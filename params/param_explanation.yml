@@ -195,11 +195,24 @@ tod_processing:
                               # Nyquist frequency, fsamp/2.
     psd_bin: False            # Fit every Fourier mode (False), or a mode-weighted binned
                               # PSD (True). Binning is much faster on long scans.
+    use_dct: False            # Evaluate the n_corr Fourier filters as a length-nsamp DCT
+                              # instead of the length-2*nsamp mirrored FFT. The mirrored
+                              # array has exactly DCT-II symmetry, so this is the same
+                              # operator, not an approximation -- it just costs about half
+                              # as much. Roughly 1.5x on the whole n_corr step. Only the
+                              # correlated-noise sampler uses it; the gain steps and the
+                              # mapmakers keep the mirrored FFT.
     cg:
       max_iter: 60            # Max CG iterations for the n_corr draw. 0 skips the CG
                               # entirely and falls back to a stationary draw -- much
                               # cheaper, and much less correct near flagged stretches.
-      err_tol: 1.0e-4         # Relative residual at which that CG stops.
+      err_tol: 1.0e-4         # Stop once the residual norm drops below err_tol times the
+                              # right-hand side scatter times the flagged-sample count,
+                              # i.e. once the average error per flagged sample is that
+                              # small (Commander3's criterion). Absolute, not relative: in
+                              # relative terms it works out as err_tol * sqrt(n_flagged),
+                              # so the same value is a tighter stop on a scan with less
+                              # flagged data.
 
   # Far-sidelobe deconvolution: convolve the current sky model with each detector's 4-pi
   # sidelobe beam, bin the result into maps/sidelobe, and subtract it from the TOD.
@@ -576,8 +589,13 @@ experiments:
                               # file_io/experiments/, named after this value. Known
                               # readers: planck_lfi, akari, SO_LAT, SO_SAT, litebird_sim,
                               # litebird_sim_spawndetectors, general.
-    num_scans: 45860          # Total scans to read across the whole experiment. Also
-                              # settable per band, which overrides this.
+    filelist_idx_start: null  # Optional Python slice bounds on each band's filelist rows,
+    filelist_idx_stop: null   # excluding the header. Zero-based; start included, stop excluded.
+                              # Omitted/null = beginning/end. Negative indices count from the end;
+                              # bounds beyond the filelist are clipped. The slice must be nonempty.
+                              # These are row positions, not the scan IDs in the first column.
+                              # Each bound can be overridden per band. The selected rows are
+                              # split evenly across MPI ranks before reading any TOD files.
     mapmaker: "bin"           # Overrides tod_processing.mapmaker for this experiment.
 
     sparse_maps: false        # true = each rank's map buffers and sky-model slice hold
@@ -585,6 +603,11 @@ experiments:
                               # small survey patch at high nside; wasteful for a full-sky
                               # experiment, where the default full-sky broadcast is
                               # cheaper.
+
+    # instrument_file: "/path/to/instrument.h5"
+                              # Required for planck_hfi: reads <detector>/polEff in
+                              # percent and sets response_I_P to (1, polEff/100).
+                              # Also supplies beam data when far-beam sampling is enabled.
 
     # tod_is_compressed: true # The TOD itself is Huffman-compressed in the HDF5 files.
     # pix_is_compressed: true # Likewise for the pixel index stream,
@@ -665,7 +688,8 @@ experiments:
                               # or on the experiment. Absent = 3*eval_nside - 1.
         # mapmaker: "CG"      # Per-band override of the mapmaker. Band beats experiment
                               # beats tod_processing, for this and several other keys.
-        # num_scans: 45860    # Per-band override of the experiment's scan count.
+        # filelist_idx_start: 0  # Per-band overrides of either filelist slice bound.
+        # filelist_idx_stop: 45860
 
         # initial_noise_params: [100.0, 0.1, -1.0]
                               # [sigma0, fknee, alpha] to start the noise model at, in

@@ -22,7 +22,7 @@ resources:
 output:
   # All output goes here, in the subdirectories logs/, chains_bands/,
   # chains_compsep/ and plots/.
-  dir: "../c4_chains/SO_SAT/sat3_nside1024_f090+f150_nocompsep_only-ncorr-fallback/"
+  dir: "../c4_chains/SO_SAT/sat3_nside1024_f090+f150_nocompsep_noncorr-fallback-test/"
 
   logging:
     console:
@@ -42,11 +42,11 @@ output:
     include:
       ncorr_tods: False
       orbital_dipole_maps: False
-      corr_noise_maps: True
-      sky_model_maps: True
-      residual_maps: true
-      compsep_residual_maps: true
-      chisq_map: true
+      corr_noise_maps: False
+      sky_model_maps: False
+      residual_maps: False
+      compsep_residual_maps: False
+      chisq_map: False
 
 # ----------------------------------------
 # TOD PROCESSING
@@ -77,9 +77,9 @@ tod_processing:
     downsample_time: 0.1   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   corr_noise:
-    enabled: True
+    enabled: False
     from_iter: 1
-    sample_psd_params: True     # Resample the noise-model parameters (needs corr_noise.enabled).
+    sample_psd_params: False     # Resample the noise-model parameters (needs corr_noise.enabled).
     sample_sigma0: True           # Re-estimate sigma0 from the n_corr-subtracted residual.
     nomono: False                 # Project the per-scan monopole out of n_corr (Fortran "nomono").
     onlymono: False               # Model the correlated noise as only the per-scan offset.
@@ -128,7 +128,7 @@ components:
       polarization: "IQU"
       longname: "CMB"
       shortname: "cmb"
-      init_from: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_100-1_npipe_02048_fullres_full_T.fits"
+      init_from: "/mn/stornext/d5/data/duncanwa/WMAP/data/COM_CMB_IQU-smica_2048_R3.00_full_uK_14amin_dip.fits"
       units: "uK_CMB"
       # C(l) prior, C3-equivalent 'power_law_gauss' defined in D_l space (see P_Cl_prior):
       #   D_l = amplitude*(l/l_pivot)^beta * max(exp(-l(l+1)sigma^2), 1e-10),  C_l = 2pi*D_l/(l(l+1)).
@@ -220,7 +220,7 @@ experiments:
     bands:
       SO_SAT_ws0_f090:
         enabled: true
-        num_scans: 120          # scans in this band's filelist
+        filelist_idx_stop: 120          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
@@ -236,7 +236,7 @@ experiments:
 
       SO_SAT_ws0_f150:
         enabled: true
-        num_scans: 112          # scans in this band's filelist
+        filelist_idx_stop: 112          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
@@ -252,7 +252,6 @@ experiments:
 
       SO_SAT_ws1_f090:
         enabled: true
-        num_scans: 56          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
@@ -268,7 +267,6 @@ experiments:
 
       SO_SAT_ws1_f150:
         enabled: true
-        num_scans: 51          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
@@ -284,7 +282,6 @@ experiments:
 
       SO_SAT_ws2_f090:
         enabled: true
-        num_scans: 80          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
@@ -300,7 +297,6 @@ experiments:
 
       SO_SAT_ws2_f150:
         enabled: true
-        num_scans: 76          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
@@ -316,7 +312,6 @@ experiments:
 
       SO_SAT_ws3_f090:
         enabled: true
-        num_scans: 111          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
@@ -332,7 +327,6 @@ experiments:
 
       SO_SAT_ws3_f150:
         enabled: true
-        num_scans: 98          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
@@ -348,7 +342,6 @@ experiments:
 
       SO_SAT_ws4_f090:
         enabled: true
-        num_scans: 104          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
@@ -364,7 +357,6 @@ experiments:
 
       SO_SAT_ws4_f150:
         enabled: true
-        num_scans: 101          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
@@ -380,7 +372,6 @@ experiments:
 
       SO_SAT_ws5_f090:
         enabled: true
-        num_scans: 118          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
@@ -396,7 +387,6 @@ experiments:
 
       SO_SAT_ws5_f150:
         enabled: true
-        num_scans: 114          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
@@ -412,7 +402,6 @@ experiments:
 
       SO_SAT_ws6_f090:
         enabled: true
-        num_scans: 112          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
@@ -428,7 +417,6 @@ experiments:
 
       SO_SAT_ws6_f150:
         enabled: true
-        num_scans: 104          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]

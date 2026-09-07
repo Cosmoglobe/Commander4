@@ -18,7 +18,7 @@ from numpy.typing import NDArray
 
 from pixell.bunch import Bunch
 
-from commander4.parameters.schema import resolve_param, resolve_band_lmax, split_integer_range
+from commander4.parameters.schema import resolve_param
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.tod_samples import TODSamples
@@ -66,11 +66,6 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
     my_band_pol = my_band.polarization
     det_names = list(my_band.detectors)
 
-    total_scans = int(resolve_param(params, "num_scans",
-                                    (f"experiments.{experiment_name}.bands.{my_band_name}",
-                                     f"experiments.{experiment_name}")))
-    my_scans_start, my_scans_stop = split_integer_range(total_scans, mpi_info.band.size,
-                                                        mpi_info.band.rank)
     mpi_info.tod.comm.Barrier()
 
     time.sleep(mpi_info.tod.rank*1e-5)  # Small sleep to get prints in nice order.
@@ -82,8 +77,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
 
     t0 = time.time()
     with benchmark("fileread-tod"):
-        experiment_data = read_tods_from_file(band_comm, my_experiment, my_band, det_names, params,
-                                              my_scans_start, my_scans_stop)
+        experiment_data = read_tods_from_file(band_comm, my_experiment, my_band, det_names, params)
     mpi_info.tod.comm.Barrier()
     if mpi_info.tod.is_master:
         logger.summary(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")

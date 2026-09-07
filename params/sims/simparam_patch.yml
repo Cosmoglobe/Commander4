@@ -202,7 +202,6 @@ experiments:
     experiment_id: "general"
     mapmaker: "bin"
     sparse_maps: true              # The feature under test; flip to false for the comparison run.
-    num_scans: 60
     bands:
       Band90GHz:
         enabled: true
