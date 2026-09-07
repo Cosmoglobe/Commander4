@@ -251,5 +251,6 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     bench_summary(tod_comm, label="All bands")
     bench_summary(band_comm, label=f"Band {experiment_data.band_name}")
     bench_reset()
+    tod_comm.Barrier()
 
     return detmap_dict, tod_samples
