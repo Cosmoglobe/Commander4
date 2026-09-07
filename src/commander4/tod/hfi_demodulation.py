@@ -10,6 +10,7 @@ import logging
 import healpy as hp
 import numpy as np
 from numpy.typing import NDArray
+from mpi4py import MPI
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.tod_samples import TODSamples
@@ -122,6 +123,7 @@ def _set_modulation_phase(experiment_data: DetectorGroupTOD, tod_samples: TODSam
 
 
 def sample_hfi_baselines(
+    band_comm: MPI.Comm,
     experiment_data: DetectorGroupTOD,
     tod_samples: TODSamples,
     compsep_output: NDArray,
@@ -137,10 +139,36 @@ def sample_hfi_baselines(
     if not tod_samples.hfi_demodulation:
         return tod_samples
 
+    ### 1. STORING PREVIOUS ITERATION FOR LOGGING PURPOSES ###
+    nscans = np.sum(tod_samples.accept)  # Sum over accepted scans.
+    baseline_sum = np.sum(tod_samples.baselines*tod_samples.accept[:,:,None], axis=(0,1))
+    all_nscans = band_comm.reduce(nscans, op=MPI.SUM)
+    all_baseline_sum = band_comm.reduce(baseline_sum, op=MPI.SUM)
+    if band_comm.Get_rank() == 0:
+        all_baseline_mean_0_old, all_baseline_mean_1_old = all_baseline_sum / all_nscans
+
+    ### 2. ACTUAL CALCULATIONS ###
     # The first pass is a two-step bootstrap: fit raw DC levels, then determine phase. Subsequent
     # passes keep that phase and resample only the baselines conditional on the latest Gibbs state.
     first_pass = not tod_samples.modulation_phase_initialized
     _sample_baselines(experiment_data, tod_samples, compsep_output, not first_pass, rng)
     if first_pass:
+        if band_comm.Get_rank() == 0:
+            logger.info(f"{experiment_data.band_name}: First time doing HFI baseline fitting: "\
+                        "Finding modulation phase.")
         _set_modulation_phase(experiment_data, tod_samples)
+
+    ### 3. LOGGING THE RESULTS ###
+    nscans = np.sum(tod_samples.accept)  # Sum over accepted scans.
+    baseline_sum = np.sum(tod_samples.baselines*tod_samples.accept[:,:,None], axis=(0,1))
+    all_nscans = band_comm.reduce(nscans, op=MPI.SUM)
+    all_baseline_sum = band_comm.reduce(baseline_sum, op=MPI.SUM)
+    if band_comm.Get_rank() == 0:
+        all_baseline_mean_0, all_baseline_mean_1 = all_baseline_sum / all_nscans
+
+        logger.info(f"Even parity baseline mean ({experiment_data.band_name}):\
+                    {all_baseline_mean_0_old:.3e} -> {all_baseline_mean_0:.3e}")
+        logger.info(f"Odd parity baseline mean ({experiment_data.band_name}):\
+                    {all_baseline_mean_1_old:.3e} -> {all_baseline_mean_1:.3e}")
+
     return tod_samples
