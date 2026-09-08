@@ -1,21 +1,23 @@
 # Parameter file for full TOD processing and CG component separation on Planck HFI TOD data at
 # native resolution.
-# By default not all detectors are included, but they are just commented out.
+# Includes all six HFI bands and all detectors present in the TOD files.
 
 # ----------------------------------------
 # GIBBS
 # ----------------------------------------
 gibbs:
-  num_iterations: 2
+  num_iterations: 20
 
   seed: 1995
+
+  # init_from_chain: "../c4_chains/HFI_test/"
 
 # ----------------------------------------
 # RESOURCES
 # ----------------------------------------
 resources:
   tod:
-    num_threads: 1
+    num_threads: 4
 
   compsep:
     num_threads: 4
@@ -26,11 +28,12 @@ resources:
 output:
   # All output goes here, in the subdirectories logs/, chains_bands/,
   # chains_compsep/ and plots/.
-  dir: "../c4_chains/HFI_gainsamp/"
+  # dir: "../c4_chains/HFI_gain-abs-rel_ncorr_psd_use-dct_2/"
+  dir: "../c4_chains/HFI_test3/"
 
   logging:
     console:
-      level: 'debug'
+      level: 'verbose'
     file:
       level: 'debug'
 
@@ -68,40 +71,43 @@ tod_processing:
 
   abs_gain:
     enabled: true
-    from_iter: 2
+    from_iter: 1
     calibrate_against: orbital_dipole # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   rel_gain:
-    enabled: false
-    from_iter: 2
+    enabled: true
+    from_iter: 1
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   temporal_gain:
     enabled: false
-    from_iter: 2
+    from_iter: 1
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   corr_noise:
-    enabled: False
-    from_iter: 2
-    sample_psd_params: False     # Resample noise-model params (needs corr_noise.enabled).
+    enabled: true
+    from_iter: 10
+    sample_psd_params: true     # Resample noise-model params (needs corr_noise.enabled).
     sample_sigma0: True            # Re-estimate sigma0 from the n_corr-subtracted residual.
     nomono: False                 # Project the per-scan monopole out of n_corr (Fortran "nomono").
     onlymono: False               # Model the correlated noise as only the per-scan offset.
     sigma0_decimation: 1          # Block-average factor for the sigma0 estimator.
     psd_fit_nu_min: 0.0           # Min frequency (Hz) for noise-PSD parameter fitting.
     psd_fit_nu_max: 2.0           # Max frequency (Hz) for noise-PSD parameter fitting.
-    psd_bin: False                # Fit every Fourier mode (False) or mode-weighted binned PSD.
+    psd_bin: true                 # Fit every Fourier mode (False) or mode-weighted binned PSD.
     sigma0_method: pairwise     # White-noise estimator: 'pairwise' (first-difference) or 'binned_psd'.
+    use_dct: true                 # Evaluate the n_corr Fourier filters as a length-nsamp DCT
+                                  # rather than the length-2*nsamp mirrored FFT. Same operator,
+                                  # about half the transform cost.
     cg:
-      max_iter: 60                # Max CG iterations; 0 -> skip CG, use stationary fallback.
-      err_tol: 1.0e-4             # Correlated-noise CG convergence tolerance.
+      max_iter: 50                # Max CG iterations; 0 -> skip CG, use stationary fallback.
+      err_tol: 1.0e-5             # Correlated-noise CG convergence tolerance.
 
 # ----------------------------------------
 # COMPONENT SEPARATION
@@ -171,29 +177,6 @@ components:
       lmax: 512
       spatially_varying_MM: False
 
-  RadioSources:
-    enabled: False
-    component_class: "RadioSources"
-    params:
-      polarization: "I"
-      longname: "RadioSources"
-      shortname: "radsources"
-      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
-      nu_0: 30.0  # Ghz
-
-  SpinningDust:
-    enabled: False
-    component_class: "SpinningDust"
-    params:
-      polarization: "I"
-      longname: "SpinningDust"
-      shortname: "sdust"
-      Cl_prior_amplitude: null  # No amplitude prior.
-      template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
-      nu_peak: 25.3  # Ghz
-      nu_0: 22.0  # Ghz
-      lmax: 1000
-      spatially_varying_MM: False
 
 # ----------------------------------------
 # EXPERIMENTS
@@ -203,18 +186,20 @@ experiments:
     enabled: true
     mapmaker: "bin"
     experiment_id: "planck_hfi"  # Decides expected data format, what TOD reader is used, etc.
-    num_scans: 33985
+    instrument_file: "/mn/stornext/d23/cmbco/globe/planck/rimo/HFI_instrument_v6.h5"
+    filelist_idx_start: 0
+    filelist_idx_stop: 26424  # Only cold-phase scans (OD 91-974), drop warm-phase scans.
     bands:
       Planck100GHz:
         enabled: true
-        num_tasks: 192
-        eval_nside: 512
-        fwhm: 10.0 # [arcmin]
+        num_tasks: 88
+        eval_nside: 1024
+        fwhm: 9.68 # [arcmin]
         freq: 100.0 # [GHz]
         band_unit: "uK_CMB"
         polarization: "IQU"
-        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
-        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/filelists/hfi/filelist_100.txt"
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
+        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/tod_v2/filelist_100.txt"
         detectors:
           100-1a: {}
           100-1b: {}
@@ -224,3 +209,109 @@ experiments:
           100-3b: {}
           100-4a: {}
           100-4b: {}
+
+      Planck143GHz:
+        enabled: true
+        num_tasks: 153
+        eval_nside: 2048
+        fwhm: 7.30 # [arcmin]
+        freq: 143.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
+        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/tod_v2/filelist_143.txt"
+        detectors:
+          143-1a: {}
+          143-1b: {}
+          143-2a: {}
+          143-2b: {}
+          143-3a: {}
+          143-3b: {}
+          143-4a: {}
+          143-4b: {}
+          143-5: {}
+          143-6: {}
+          143-7: {}
+
+      Planck217GHz:
+        enabled: true
+        num_tasks: 182
+        eval_nside: 2048
+        fwhm: 5.01 # [arcmin]
+        freq: 217.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
+        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/tod_v2/filelist_217.txt"
+        detectors:
+          217-1: {}
+          217-2: {}
+          217-3: {}
+          217-4: {}
+          217-5a: {}
+          217-5b: {}
+          217-6a: {}
+          217-6b: {}
+          217-7a: {}
+          217-7b: {}
+          217-8a: {}
+          217-8b: {}
+
+      Planck353GHz:
+        enabled: true
+        num_tasks: 176
+        eval_nside: 2048
+        fwhm: 4.9 # [arcmin]
+        freq: 353.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
+        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/tod_v2/filelist_353.txt"
+        detectors:
+          353-1: {}
+          353-2: {}
+          353-3a: {}
+          353-3b: {}
+          353-4a: {}
+          353-4b: {}
+          353-5a: {}
+          353-5b: {}
+          353-6a: {}
+          353-6b: {}
+          353-7: {}
+          353-8: {}
+
+      Planck545GHz:
+        enabled: true
+        num_tasks: 31
+        eval_nside: 2048
+        fwhm: 4.8 # [arcmin]
+        freq: 545.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "I"
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
+        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/tod_v2/filelist_545.txt"
+        detectors:
+          545-1: {}
+          545-2: {}
+          545-4: {}
+        abs_gain:
+          calibrate_against: "sky"
+
+      Planck857GHz:
+        enabled: true
+        num_tasks: 42
+        eval_nside: 2048
+        fwhm: 4.6 # [arcmin]
+        freq: 857.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "I"
+        processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
+        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/tod_v2/filelist_857.txt"
+        detectors:
+          857-1: {}
+          857-2: {}
+          857-3: {}
+          857-4: {}
+        abs_gain:
+          calibrate_against: "sky"
