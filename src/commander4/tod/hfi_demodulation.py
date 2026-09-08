@@ -25,7 +25,7 @@ def _sample_baselines(
     compsep_output: NDArray | None,
     subtract_sky: bool,
     rng: np.random.Generator | None,
-) -> None:
+) -> NDArray:
     """Draw the two per-parity constant baselines from their white-noise posteriors.
 
     Before demodulation, one detector-scan follows
@@ -35,9 +35,15 @@ def _sample_baselines(
     where the signs are ``(+phase, -phase)`` for Python's even/odd indices. With independent white
     noise, each constant baseline has posterior mean equal to the masked residual mean and posterior
     standard deviation ``sigma0/sqrt(number of samples)``.
+
+    Returns:
+        Running sums over this rank's accepted detector-scans, for the log line in
+        `sample_hfi_baselines`: the common mode, the modulation half-depth, the step taken in units
+        of the posterior standard deviation, and the number of detector-scans summed over.
     """
     scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
     normal = np.random.normal if rng is None else rng.normal
+    stats = np.zeros(4)
 
     for view in scan_view.iter_focused(accepted_only=True):
         # Baselines are instrument parameters, so fit the un-demodulated stream rather than
@@ -57,6 +63,8 @@ def _sample_baselines(
         else:
             sky_tod = np.zeros(raw_tod.size, dtype=raw_tod.dtype)
 
+        previous = tod_samples.baselines[view.iscan, view.idet].copy()
+        step = 0.0
         for parity in range(2):
             parity_mask = mask[parity::2]
             count = int(np.count_nonzero(parity_mask))
@@ -72,9 +80,16 @@ def _sample_baselines(
             modulation_sign = phase if parity == 0 else -phase
             residual = raw_tod[parity::2] - modulation_sign * gain * sky_tod[parity::2]
             posterior_mean = float(np.mean(residual[parity_mask]))
-            fluctuation = float(normal()) * view.sigma0 / np.sqrt(count)
-            tod_samples.baselines[view.iscan, view.idet, parity] = \
-                posterior_mean + fluctuation
+            posterior_sd = view.sigma0 / np.sqrt(count)
+            baseline = posterior_mean + float(normal()) * posterior_sd
+            tod_samples.baselines[view.iscan, view.idet, parity] = baseline
+            step += abs(baseline - previous[parity]) / posterior_sd / 2
+
+        if tod_samples.accept[view.iscan, view.idet]:
+            b0, b1 = tod_samples.baselines[view.iscan, view.idet]
+            stats += [(b0 + b1)/2, abs(b0 - b1)/2, step, 1.0]
+
+    return stats
 
 
 def _set_modulation_phase(experiment_data: DetectorGroupTOD, tod_samples: TODSamples) -> None:
@@ -139,36 +154,26 @@ def sample_hfi_baselines(
     if not tod_samples.hfi_demodulation:
         return tod_samples
 
-    ### 1. STORING PREVIOUS ITERATION FOR LOGGING PURPOSES ###
-    nscans = np.sum(tod_samples.accept)  # Sum over accepted scans.
-    baseline_sum = np.sum(tod_samples.baselines*tod_samples.accept[:,:,None], axis=(0,1))
-    all_nscans = band_comm.reduce(nscans, op=MPI.SUM)
-    all_baseline_sum = band_comm.reduce(baseline_sum, op=MPI.SUM)
-    if band_comm.Get_rank() == 0:
-        all_baseline_mean_0_old, all_baseline_mean_1_old = all_baseline_sum / all_nscans
-
-    ### 2. ACTUAL CALCULATIONS ###
     # The first pass is a two-step bootstrap: fit raw DC levels, then determine phase. Subsequent
     # passes keep that phase and resample only the baselines conditional on the latest Gibbs state.
     first_pass = not tod_samples.modulation_phase_initialized
-    _sample_baselines(experiment_data, tod_samples, compsep_output, not first_pass, rng)
+    stats = _sample_baselines(experiment_data, tod_samples, compsep_output, not first_pass, rng)
     if first_pass:
         if band_comm.Get_rank() == 0:
             logger.info(f"{experiment_data.band_name}: First time doing HFI baseline fitting: "\
                         "Finding modulation phase.")
         _set_modulation_phase(experiment_data, tod_samples)
 
-    ### 3. LOGGING THE RESULTS ###
-    nscans = np.sum(tod_samples.accept)  # Sum over accepted scans.
-    baseline_sum = np.sum(tod_samples.baselines*tod_samples.accept[:,:,None], axis=(0,1))
-    all_nscans = band_comm.reduce(nscans, op=MPI.SUM)
-    all_baseline_sum = band_comm.reduce(baseline_sum, op=MPI.SUM)
-    if band_comm.Get_rank() == 0:
-        all_baseline_mean_0, all_baseline_mean_1 = all_baseline_sum / all_nscans
-
-        logger.info(f"Even parity baseline mean ({experiment_data.band_name}):\
-                    {all_baseline_mean_0_old:.3e} -> {all_baseline_mean_0:.3e}")
-        logger.info(f"Odd parity baseline mean ({experiment_data.band_name}):\
-                    {all_baseline_mean_1_old:.3e} -> {all_baseline_mean_1:.3e}")
+    # Report some stats on the baseline fit.
+    totals = band_comm.reduce(stats, op=MPI.SUM)  # None on every rank but the root.
+    if band_comm.Get_rank() == 0 and totals[3] > 0:
+        common_mode, half_depth, step, nscans = totals
+        message = (f"HFI baselines ({experiment_data.band_name}): common mode "
+                   f"{common_mode/nscans:.5e}, modulation half-depth {half_depth/nscans:.4e}")
+        # If only baselines were sampled they should move by about 1 sigma, but as other things
+        # are moving in the chain it will move by much more in practice.
+        if not first_pass:
+            message += f", moved {step/nscans:.2f} posterior sigma"
+        logger.info(message)
 
     return tod_samples
