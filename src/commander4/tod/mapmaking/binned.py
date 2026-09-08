@@ -104,7 +104,7 @@ class WeightsMapmaker:
     """Scalar (temperature-only) weights mapmaker.
 
     Accumulates per-sample weights into a map, reduces across MPI ranks,
-    and exposes the gathered weights map for normalization of Mapmaker.
+    and exposes the gathered weights and RMS maps, like WeightsMapmakerIQU.
     """
     def __init__(self, map_comm:MPI.Comm, nside:int, dtype=np.float32,
                  pixel_domain:PixelDomain|None=None):
@@ -116,6 +116,7 @@ class WeightsMapmaker:
         self._nloc = self.domain.n_local
         self._map_signal = np.zeros(self._nloc, dtype=np.float64)
         self._gathered_map = None
+        self._finalized_rms_map = None
 
         # Setting up Ctypes mapmaker
         self.maplib = load_cmdr4_ctypes_lib()
@@ -130,6 +131,18 @@ class WeightsMapmaker:
             if self._gathered_map is None:
                 raise RuntimeError("Attempted to retrieve an unfinished weights map.")
         return self._gathered_map
+
+    @property
+    def final_cov_map(self) -> NDArray | None:
+        """Gathered scalar normal-matrix weights on the root, or None on other ranks."""
+        return self.final_map
+
+    @property
+    def final_rms_map(self) -> NDArray | None:
+        """Normalized RMS on the root, or None on other ranks."""
+        if self.map_comm.Get_rank() == 0 and self._finalized_rms_map is None:
+            raise RuntimeError("Attempted to read an unfinished RMS map.")
+        return self._finalized_rms_map
 
     def accumulate_to_map(self, weight:NDArray, pix:NDArray, psi=None,
                           response_I_P: tuple[float, float] = (1.0, 1.0)):
@@ -150,6 +163,16 @@ class WeightsMapmaker:
         """Reduce the local weights buffers across MPI ranks into the full-sky root map."""
         self._gathered_map = self.domain.reduce_to_full(self._map_signal)
         self._map_signal = None  # Free memory and indicate that accumulation is done.
+
+    def normalize_map(self) -> None:
+        """Compute RMS = 1/sqrt(weight), leaving unobserved pixels at infinity."""
+        if self.map_comm.Get_rank() == 0:
+            if self._gathered_map is None:
+                raise RuntimeError("Cannot normalize a weights map before it is gathered.")
+            rms = np.full(self.npix, np.inf, dtype=self.dtype)
+            observed = self._gathered_map > 0
+            rms[observed] = 1.0 / np.sqrt(self._gathered_map[observed])
+            self._finalized_rms_map = rms
 
 
 
@@ -473,15 +496,17 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
     # Set up various mapmakers. Each aux map costs a full-sky map and a per-detector-scan
     # accumulation, so one is built only when the chain is going to hold it; `None` means "not
     # wanted this iteration" all the way through the scan loop and the finalization below.
-    mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
-    mapmaker = MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
-    mapmaker_orbdipole = (MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
+    signal_class = Mapmaker if pols == "I" else MapmakerIQU
+    weights_class = WeightsMapmaker if pols == "I" else WeightsMapmakerIQU
+    mapmaker_invvar = weights_class(band_comm, experiment_data.nside, pixel_domain=domain)
+    mapmaker = signal_class(band_comm, experiment_data.nside, pixel_domain=domain)
+    mapmaker_orbdipole = (signal_class(band_comm, experiment_data.nside, pixel_domain=domain)
                           if mapmaking.include_orbital_dipole_maps else None)
-    mapmaker_res = (MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
+    mapmaker_res = (signal_class(band_comm, experiment_data.nside, pixel_domain=domain)
                     if mapmaking.include_residual_maps else None)
-    mapmaker_ncorr = (MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
+    mapmaker_ncorr = (signal_class(band_comm, experiment_data.nside, pixel_domain=domain)
                       if corr_noise_active and mapmaking.include_corr_noise_maps else None)
-    mapmaker_sidelobe = (MapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
+    mapmaker_sidelobe = (signal_class(band_comm, experiment_data.nside, pixel_domain=domain)
                          if sidelobe_active and mapmaking.include_sidelobe_maps else None)
     # Unit scalar weights count hits directly at observed pixels in the C++ accumulator, without
     # a full-map temporary per detector-scan or any gain/polarization weighting.
@@ -632,6 +657,9 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
             with benchmark("nhit-local"):
                 mapmaker_nhit.accumulate_to_map(1.0, pix_masked)
 
+    with benchmark("MPI-sync"):
+        band_comm.Barrier()
+
     ### PRINT NOISE SAMPLING STATS ###
     if corr_noise_active:
         with benchmark("log-corr-noise-stats"):
@@ -648,13 +676,13 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
     # its rms/cov, which normalize the signal and every aux map below.
     mapmaker_invvar.gather_map()
     mapmaker_invvar.normalize_map()
-    mapmaker.gather_map()
     map_rms = mapmaker_invvar.final_rms_map
     map_cov = mapmaker_invvar.final_cov_map
+    mapmaker.gather_map()
     mapmaker.normalize_map(map_cov)
     map_signal = mapmaker.final_map
 
-    def finalize_aux(aux_mapmaker: MapmakerIQU | None) -> NDArray | None:
+    def finalize_aux(aux_mapmaker: Mapmaker | MapmakerIQU | None) -> NDArray | None:
         """Gather and normalize one aux map against the shared cov; `None` if it was not built."""
         if aux_mapmaker is None:
             return None
