@@ -167,7 +167,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     # also determines whether Python's even or odd sample indices carry the positive half-cycle.
     if tod_samples.hfi_demodulation:
         with benchmark("hfi-baselines"):
-            tod_samples = sample_hfi_baselines(experiment_data, tod_samples, compsep_output)
+            tod_samples = sample_hfi_baselines(band_comm, experiment_data, tod_samples,
+                                               compsep_output)
 
     # Gain uses the previous iteration's sigma0. The new sigma0 is estimated later, inside the
     # mapmaker scan loop, matching Commander3's gain -> n_corr -> bin_TOD order.
