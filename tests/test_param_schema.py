@@ -190,16 +190,12 @@ def test_a_scope_that_does_not_exist_is_an_error_by_default():
 
 def test_an_optional_scope_may_be_absent_without_complaint(caplog):
     """A per-band override block most bands do not carry is not a mistake, so opting out of the
-    error must not just move the noise to the log: it drops to debug."""
+    error must not just move the noise to the log: the missing scope is skipped silently."""
     params = Bunch(tod_processing=Bunch(mapmaker="bin"))
-    with caplog.at_level("ERROR", logger="commander4.parameters.schema"):
+    with caplog.at_level("DEBUG", logger="commander4.parameters.schema"):
         assert resolve_param(params, "mapmaker", ("no.such.scope", "tod_processing"),
                              raise_on_missing_scope=False) == "bin"
     assert caplog.text == ""
-    with caplog.at_level("DEBUG", logger="commander4.parameters.schema"):
-        resolve_param(params, "mapmaker", ("no.such.scope", "tod_processing"),
-                      raise_on_missing_scope=False)
-    assert "no.such.scope" in caplog.text
 
 
 def test_legal_values_rejects_a_mistyped_value():
@@ -264,11 +260,9 @@ def test_an_empty_scope_addresses_the_given_block_itself():
     assert resolve_param(params, "x", ("inner", "")) == 2
 
 
-def test_where_the_value_came_from_is_logged(caplog):
-    """An overridden setting is otherwise invisible in a chain's log."""
-    with caplog.at_level("DEBUG", logger="commander4.parameters.schema"):
-        _mapmaker(global_mm="bin", exp_mm="CG")
-    assert "mapmaker" in caplog.text and "experiments.EXP" in caplog.text
+# There used to be a test here that `resolve_param` logs where each value came from. Those debug
+# lines were removed in 680431d for being too verbose even at 'verbose'; the precedence they
+# reported on is covered by `test_the_first_scope_that_defines_the_key_wins`.
 
 
 # --- band lmax ------------------------------------------------------------------------------

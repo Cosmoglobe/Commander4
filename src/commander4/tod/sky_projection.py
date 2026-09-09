@@ -28,7 +28,7 @@ T_CMB_div_C = T_CMB / C
 uK_CMB_to_uK_RJ_dict = {}
 
 
-def get_static_sky_tod(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
+def project_sky_to_tod(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
                        psi: NDArray[np.floating] | None = None,
                        response_I_P: tuple[float, float] = (1.0, 1.0)) -> NDArray[np.floating]:
     """Project the current sky model into one detector's pointing.
@@ -47,20 +47,20 @@ def get_static_sky_tod(det_compsep_map: NDArray[np.floating], pix: NDArray[np.in
     # passes psi (it does not know the band's polarization), so the component count, not psi, is
     # what selects the intensity-only kernel.
     if psi is None or det_compsep_map.shape[0] == 1:
-        return _get_static_sky_tod_I(det_compsep_map, pix, resp_I)
+        return _project_sky_to_tod_I(det_compsep_map, pix, resp_I)
     elif det_compsep_map.shape[0] == 2:
-        return _get_static_sky_tod_QU(det_compsep_map, pix, psi, resp_P)
+        return _project_sky_to_tod_QU(det_compsep_map, pix, psi, resp_P)
     elif det_compsep_map.shape[0] == 3:
         if resp_I == 0.0:
-            return _get_static_sky_tod_QU(det_compsep_map[1:3], pix, psi, resp_P)
+            return _project_sky_to_tod_QU(det_compsep_map[1:3], pix, psi, resp_P)
         if resp_P == 0.0:
-            return _get_static_sky_tod_I(det_compsep_map, pix, resp_I)
-        return _get_static_sky_tod_IQU(det_compsep_map, pix, psi, resp_I, resp_P)
+            return _project_sky_to_tod_I(det_compsep_map, pix, resp_I)
+        return _project_sky_to_tod_IQU(det_compsep_map, pix, psi, resp_I, resp_P)
     else:
         raise ValueError("Input compsep map has mismatching dimensions.")
 
 @njit(fastmath=True, parallel=True)
-def _get_static_sky_tod_IQU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
+def _project_sky_to_tod_IQU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
                             psi: NDArray[np.floating],
                             resp_I: float, resp_P: float) -> NDArray[np.float32]:
     sky = np.empty(pix.shape[0], dtype=np.float32)
@@ -79,7 +79,7 @@ def _get_static_sky_tod_IQU(det_compsep_map: NDArray[np.floating], pix: NDArray[
     return sky
 
 @njit(fastmath=True, parallel=True)
-def _get_static_sky_tod_QU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
+def _project_sky_to_tod_QU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
                            psi: NDArray[np.floating],
                            resp_P: float) -> NDArray[np.float32]:
     sky = np.empty(pix.shape[0], dtype=np.float32)
@@ -101,7 +101,7 @@ def _get_static_sky_tod_QU(det_compsep_map: NDArray[np.floating], pix: NDArray[n
     return sky
 
 @njit(fastmath=True, parallel=True)
-def _get_static_sky_tod_I(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
+def _project_sky_to_tod_I(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
                           resp_I: float) -> NDArray[np.float32]:
     sky = np.empty(pix.shape[0], dtype=np.float32)
     if resp_I == 0.0:

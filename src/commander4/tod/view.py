@@ -16,7 +16,7 @@ from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.pointing import remap_pix_nside
 from commander4.data_models.tod_samples import TODSamples
 from commander4.tod.noise.sample_ncorr import realize_noise_in_gaps
-from commander4.tod.sky_projection import get_static_sky_tod, get_s_orb_tod
+from commander4.tod.sky_projection import project_sky_to_tod, get_s_orb_tod
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +28,11 @@ class TODView:
     always discards the previous detector's cached arrays, which matches the one-detector-at-a-time
     TOD-processing architecture.
 
-    Downsampling. The view carries a single ``downsample_factor`` fixed at construction (overridable
-    per detector via ``focus``). The ``raw_tod`` / ``corrected_tod`` and the *internal* full-rate
-    pointing stay at full resolution, because model TODs must be integrated over each block rather
-    than sampled at its center. Every quantity exposed downstream is at the active resolution:
+    Downsampling. The view carries a single ``downsample_factor``, fixed at construction: a step
+    that wants a coarser rate builds its own view at that rate. The ``raw_tod`` / ``corrected_tod``
+    and the *internal* full-rate pointing stay at full resolution, because model TODs must be
+    integrated over each block rather than sampled at its center. Every quantity exposed
+    downstream is at the active resolution:
     ``pix`` / ``psi`` take block centers, the model and data getters (``get_tod``,
     ``get_static_sky_tod``, ``get_orbital_dipole_tod``, ``get_calib_tod``) are block-averaged over
     the block's good samples, and ``get_mask`` keeps a block when more than ``mask_threshold`` of
@@ -76,22 +77,17 @@ class TODView:
         self.experiment_data = experiment_data
         self.tod_samples = tod_samples
         self.compsep_output = compsep_output
-        self._downsample_factor = self._validate_factor(downsample_factor)
-        self._proc_mask_type = proc_mask_type
+        if downsample_factor < 1:
+            raise ValueError(f"downsample_factor must be >= 1, got {downsample_factor}.")
         if not 0.0 <= mask_threshold < 1.0:
             raise ValueError(f"mask_threshold must be in [0, 1), got {mask_threshold}.")
+        self._downsample_factor = int(downsample_factor)
+        self._proc_mask_type = proc_mask_type
         self._mask_threshold = float(mask_threshold)
         self._iscan: int | None = None
         self._idet: int | None = None
         self._det = None
         self._clear_cache()
-
-    @staticmethod
-    def _validate_factor(downsample_factor: int) -> int:
-        factor = 1 if downsample_factor is None else int(downsample_factor)
-        if factor < 1:
-            raise ValueError("downsample_factor must be >= 1.")
-        return factor
 
     def _clear_cache(self):
         """Drop all arrays materialized for the current detector."""
@@ -106,8 +102,7 @@ class TODView:
         self._orbital_dipole = None
         self._gap_noise: dict[str, NDArray] = {}
 
-    def focus(self, iscan: int, det: DetectorTOD,
-              downsample_factor: int | None = None) -> "TODView":
+    def focus(self, iscan: int, det: DetectorTOD) -> "TODView":
         """Focus the view on one present detector and discard any previous materialization.
 
         Args:
@@ -117,14 +112,10 @@ class TODView:
                 ``det.det_idx_fullband`` is the column used to address every per-detector sample
                 array, so detectors absent from a scan are simply skipped rather than misaligning
                 the dense ``(nscans, ndet)`` arrays.
-            downsample_factor: Optional per-detector override of the view's downsample factor; the
-                construction-time factor is kept when omitted.
         """
         self._det = det
         self._iscan = iscan
         self._idet = det.det_idx_fullband  # full-band column in the (nscans, ndet) sample arrays
-        if downsample_factor is not None:
-            self._downsample_factor = self._validate_factor(downsample_factor)
         self._clear_cache()
         return self
 
@@ -201,13 +192,8 @@ class TODView:
         self._require_focus()
         return bool(self.tod_samples.accept[self._iscan, self._idet])
 
-    def get_gain(self, gain_terms: tuple[str, ...] | None = _ALL_GAIN_TERMS) -> float:
-        """Return the selected subset of the current detector gain model."""
-        if gain_terms is None:
-            gain_terms = ()
-        elif "all" in gain_terms:
-            gain_terms = self._ALL_GAIN_TERMS
-
+    def get_gain(self, gain_terms: tuple[str, ...] = _ALL_GAIN_TERMS) -> float:
+        """Return the sum of the selected gain terms; an empty tuple gives zero."""
         gain = 0.0
         for term in gain_terms:
             if term == "abs":
@@ -242,11 +228,6 @@ class TODView:
         return self._ds_indices
 
     @property
-    def ntod(self) -> int:
-        """Number of samples at the active (downsampled) resolution."""
-        return self._block_indices.size
-
-    @property
     def _block_good(self) -> NDArray[np.bool_]:
         """Full-rate mask of the samples block-averaging is allowed to use. Cached per detector.
 
@@ -270,7 +251,7 @@ class TODView:
         factor = self._downsample_factor
         if factor == 1:
             return arr
-        n = self._block_indices.size
+        n = self.detector.ntod // factor        # complete blocks; a trailing partial one is dropped
         blocks = arr[:n * factor].reshape(n, factor)
         good = self._block_good[:n * factor].reshape(n, factor)
         # A block with no good samples never survives _downsample_keep, so its value is unused;
@@ -289,7 +270,7 @@ class TODView:
         factor = self._downsample_factor
         if factor == 1:
             return mask
-        n = self._block_indices.size
+        n = self.detector.ntod // factor
         return mask[:n * factor].reshape(n, factor).mean(axis=-1) > self._mask_threshold
 
     # ------------------------------------------------------------------ raw / pointing accessors
@@ -415,27 +396,6 @@ class TODView:
 
 
     # ------------------------------------------------------------------ model TODs
-    def _require_compsep_output(self, compsep_output: NDArray | None) -> NDArray:
-        """Resolve the sky model to use for static-sky subtraction."""
-        sky_model = self.compsep_output if compsep_output is None else compsep_output
-        if sky_model is None:
-            raise ValueError("A component-separation sky map must be provided for sky subtraction.")
-        return sky_model
-
-
-    def _sky_map_pix(self, sky_model: NDArray) -> NDArray[np.integer]:
-        """Full-rate pixel indices into a sky map that may be full-sky or restricted to this rank.
-
-        The realized sky model is full-sky ``(ncomp, npix)`` on the band master and in non-sparse
-        map mode, but only ``(ncomp, n_local)`` on workers in sparse mode (see
-        ``communication._realize_and_distribute_sky``). Distinguish the two by the map's column
-        count and return either global HEALPix indices or compact local-buffer indices.
-        """
-        if sky_model.shape[-1] == 12 * self.experiment_data.nside**2:
-            return self._fullres_pix
-        return self.experiment_data.pixel_domain.to_local(self._fullres_pix)
-
-
     def get_static_sky_tod(self, compsep_output: NDArray | None = None) -> NDArray[np.floating]:
         """Evaluate the static sky model along the focused detector pointing.
 
@@ -443,18 +403,29 @@ class TODView:
         resolution, integrating the model over the scan path within each block rather than sampling
         it at the block-center pixel. Model and data thereby see the same downsampling transfer
         function, which keeps e.g. gain estimates unbiased.
+
+        Args:
+            compsep_output: Sky model to use instead of the view's own. Only the view's own model
+                is cached, since an override is a one-off.
         """
-        sky_model = self._require_compsep_output(compsep_output)
-        sky_pix = self._sky_map_pix(sky_model)
-        if compsep_output is None:
-            if self._static_sky is None:
-                full = get_static_sky_tod(sky_model, sky_pix, psi=self._fullres_psi,
-                                          response_I_P=self.response_I_P)
-                self._static_sky = self._downsample_mean(full)
+        if compsep_output is None and self._static_sky is not None:
             return self._static_sky
-        full = get_static_sky_tod(sky_model, sky_pix, psi=self._fullres_psi,
-                                  response_I_P=self.response_I_P)
-        return self._downsample_mean(full)
+        sky_model = self.compsep_output if compsep_output is None else compsep_output
+        if sky_model is None:
+            raise ValueError("A component-separation sky map must be provided for sky subtraction.")
+
+        # The realized sky model is full-sky (ncomp, npix) on the band master and in non-sparse map
+        # mode, but only (ncomp, n_local) on workers in sparse mode (see
+        # communication._realize_and_distribute_sky). The column count is what tells the two apart.
+        if sky_model.shape[-1] == 12 * self.experiment_data.nside**2:
+            sky_pix = self._fullres_pix
+        else:
+            sky_pix = self.experiment_data.pixel_domain.to_local(self._fullres_pix)
+        sky = self._downsample_mean(project_sky_to_tod(sky_model, sky_pix, psi=self._fullres_psi,
+                                                       response_I_P=self.response_I_P))
+        if compsep_output is None:
+            self._static_sky = sky
+        return sky
 
 
     def get_orbital_dipole_tod(self) -> NDArray[np.floating]:
@@ -468,31 +439,6 @@ class TODView:
         return self._orbital_dipole
 
 
-    def _normalize_signal_name(self, signal_name: str) -> str:
-        """Map user-facing TOD component names onto internal canonical names."""
-        normalized = signal_name.lower()
-        aliases = {
-            "sky": "static_sky",
-            "static_sky": "static_sky",
-            "orb": "orbital_dipole",
-            "orbital_dipole": "orbital_dipole",
-        }
-        if normalized not in aliases:
-            raise ValueError(f"Unknown TOD signal '{signal_name}'.")
-        return aliases[normalized]
-
-
-    def _get_signal_tod(self, signal_name: str,
-                        compsep_output: NDArray | None = None) -> NDArray[np.floating]:
-        """Return one named model TOD evaluated for the focused detector at the active resolution."""
-        normalized = self._normalize_signal_name(signal_name)
-        if normalized == "static_sky":
-            return self.get_static_sky_tod(compsep_output=compsep_output)
-        if normalized == "orbital_dipole":
-            return self.get_orbital_dipole_tod()
-        raise ValueError(f"Unhandled TOD signal '{signal_name}'.")
-
-
     def get_tod(
         self,
         *,
@@ -504,17 +450,23 @@ class TODView:
         last-minute corrections like jump offsets and HFI demodulation.
 
         Args:
-            subtract: Sequence of ``(signal_name, gain_terms)`` pairs. Each signal is evaluated
-                and subtracted after multiplying it by the selected gain subset.
+            subtract: Sequence of ``(signal_name, gain_terms)`` pairs, where the signal is
+                ``"sky"`` or ``"orbital_dipole"``. Each signal is evaluated and subtracted after
+                multiplying it by the selected gain subset.
             divide_by_gain: Gain terms to divide the final TOD by, or ``None``.
             compsep_output: Optional sky model override for static-sky subtraction.
         """
         tod = np.array(self._downsample_mean(self.corrected_tod), copy=True)
 
         if subtract is not None:
+            # Every residual this class supports is a linear combination of the two model TODs.
             for signal_name, gain_terms in subtract:
-                # All supported residuals in this class are linear combinations of named model TODs.
-                signal = self._get_signal_tod(signal_name, compsep_output=compsep_output)
+                if signal_name == "sky":
+                    signal = self.get_static_sky_tod(compsep_output=compsep_output)
+                elif signal_name == "orbital_dipole":
+                    signal = self.get_orbital_dipole_tod()
+                else:
+                    raise ValueError(f"Unknown TOD signal '{signal_name}'.")
                 tod -= self.get_gain(gain_terms) * signal
 
         if divide_by_gain is not None:

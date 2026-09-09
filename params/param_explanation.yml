@@ -156,6 +156,12 @@ tod_processing:
     downsample_time: 1.0      # [s] Averaging chunk for the calibration TODs; 0 disables
                               # downsampling. Larger chunks are cheaper but blur the
                               # calibrator, so keep it well inside the dipole timescale.
+    mask_threshold: 0.5       # Fraction of a chunk's samples that must survive the flag cut
+                              # and the gain processing mask for the chunk to be used; the
+                              # chunk average itself only ever uses those samples. C3's
+                              # `downsample_tod` threshold, and the same default. Raising it
+                              # towards 1 demands ever cleaner chunks, which for glitchy data
+                              # (HFI cosmic rays) throws away nearly everything.
 
   rel_gain:
     enabled: true
@@ -617,8 +623,9 @@ experiments:
     # bad_data_bitmask: 0b11111111111111111111111111111111
                               # Flag bits that mark a sample unusable: a sample is kept
                               # only where (flag & bad_data_bitmask) == 0. Honoured by the
-                              # SO_LAT, SO_SAT and akari readers; planck_lfi hard-codes
-                              # its own value, so setting it here would do nothing.
+                              # SO_LAT, SO_SAT, akari and planck_hfi readers (planck_hfi
+                              # defaults to 515 when unset); planck_lfi hard-codes its own
+                              # value, so setting it here would do nothing.
     # jump_bitmask: 0b10      # Flag bit that marks a detected jump. Required whenever
                               # tod_processing.jump_detection is enabled.
     # bad_PIDs_path: "/path/to/badPIDs.npy"

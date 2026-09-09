@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from mpi4py import MPI
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_tod import DetectorTOD
@@ -85,12 +86,12 @@ def test_first_pass_finds_phase_then_next_pass_fits_and_demodulates(
     band, samples, sky_map, raw_tod, sky_tod = _build_hfi_case(phase=phase)
 
     # C3's first pass fits raw parity means and uses them to determine the modulation phase.
-    sample_hfi_baselines(band, samples, sky_map, rng=_ZeroRNG())
+    sample_hfi_baselines(MPI.COMM_SELF, band, samples, sky_map, rng=_ZeroRNG())
     assert samples.modulation_phase_initialized
     assert samples.modulation_phase[0, 0] == phase
 
     # Every later Gibbs pass conditions the baseline draw on the current gain-scaled sky model.
-    sample_hfi_baselines(band, samples, sky_map, rng=_ZeroRNG())
+    sample_hfi_baselines(MPI.COMM_SELF, band, samples, sky_map, rng=_ZeroRNG())
     np.testing.assert_allclose(samples.baselines[0, 0], _BASELINES)
 
     view = TODView(band, samples, compsep_output=sky_map).focus(0, band.scans[0].detectors[0])
@@ -104,7 +105,7 @@ def test_baseline_sample_includes_c3_white_noise_fluctuation(monkeypatch) -> Non
     samples.modulation_phase[0, 0] = -1
     samples.modulation_phase_initialized = True
 
-    sample_hfi_baselines(band, samples, sky_map, rng=_SequenceRNG([1.5, -2.0]))
+    sample_hfi_baselines(MPI.COMM_SELF, band, samples, sky_map, rng=_SequenceRNG([1.5, -2.0]))
 
     expected = _BASELINES + np.array([1.5, -2.0]) * _SIGMA0 / np.sqrt(_NPAIR)
     np.testing.assert_allclose(samples.baselines[0, 0], expected)

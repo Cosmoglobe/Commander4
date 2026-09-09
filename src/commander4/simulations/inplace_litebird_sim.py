@@ -24,7 +24,7 @@ from commander4.sky.diffuse_components import ThermalDust, Synchrotron, FreeFree
         SpinningDust
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset
-from commander4.tod.sky_projection import get_static_sky_tod
+from commander4.tod.sky_projection import project_sky_to_tod
 
 
 def _scalar_nu_ref(comp_params):
@@ -245,7 +245,7 @@ def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetectorGroupTOD, b
             start_bench("orbdip")
             pix, psi = det.get_pix_psi()
             ntod = det.tod.size
-            det.tod[:] = get_static_sky_tod(comps_sum_smoothed, pix, psi, det.response_I_P)
+            det.tod[:] = project_sky_to_tod(comps_sum_smoothed, pix, psi, det.response_I_P)
             if sim_params.include_OrbitalDipole:
                 det.tod[:] += get_orbital_dipole(det, pix, freq, units)
             stop_bench("orbdip")

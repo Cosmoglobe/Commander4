@@ -512,6 +512,29 @@ class TestApplyNInv:
         return DetectorGroupTOD(scans=[], experiment_name="x", band_name="b", nside=64, nu=100.0,
                            fwhm=30.0, fsamp=fsamp, ndet=1, pols="IQU", noise_model=noise_model)
 
+    @pytest.mark.parametrize("dtype", [np.float32, np.float64])
+    @pytest.mark.parametrize("white_noise", [False, True])
+    @pytest.mark.parametrize("samprate", [None, 1.0])
+    def test_symmetry_contract(self, dtype: type, white_noise: bool, samprate: float | None):
+        """All gain samplers require x^T N^-1 y = (N^-1 x)^T y, including DC projection."""
+        model = NoisePSDOof()
+        model.is_white = white_noise
+        band = self._detgroup(model)
+        rng = np.random.default_rng(17)
+        for size in (997, 1024):
+            x = (rng.normal(size=size) + 2.0).astype(dtype)
+            y = (rng.normal(size=size) - 3.0).astype(dtype)
+            nx = band.apply_N_inv(x, np.array([2.0, 0.2, -1.7]), samprate=samprate)
+            ny = band.apply_N_inv(y, np.array([2.0, 0.2, -1.7]), samprate=samprate)
+            lhs = np.dot(x.astype(np.float64), ny.astype(np.float64))
+            rhs = np.dot(nx.astype(np.float64), y.astype(np.float64))
+            # Both dot products cancel heavily (|lhs| is orders of magnitude below the size of
+            # the terms summed), so their own value is the wrong yardstick for rounding error.
+            # Scale the tolerance by the natural size of the bilinear form instead.
+            scale = np.linalg.norm(x.astype(np.float64)) * np.linalg.norm(ny.astype(np.float64))
+            tolerance = 5e-6 if dtype == np.float32 else 1e-12
+            np.testing.assert_allclose(lhs, rhs, rtol=0.0, atol=tolerance*scale)
+
     def test_projects_out_dc(self):
         """apply_N_inv must remove the DC (mean) mode, matching Commander multiply_inv_N."""
         dg = self._detgroup(NoisePSDOof())
