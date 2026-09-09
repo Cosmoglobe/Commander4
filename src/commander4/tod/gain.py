@@ -57,6 +57,7 @@ class GainConfig(StepConfig):
     calibrate_against: str = "sky"
     gap_fill_method: str = "wn"
     downsample_time: float = 1.0
+    mask_threshold: float = 0.5
     sampling_rate: float = 1.0
 
     def __post_init__(self) -> None:
@@ -69,6 +70,8 @@ class GainConfig(StepConfig):
                              f"{self.gap_fill_method!r}.")
         if not np.isfinite(self.downsample_time) or self.downsample_time < 0:
             raise ValueError("downsample_time must be a finite, non-negative number.")
+        if not 0.0 <= self.mask_threshold < 1.0:
+            raise ValueError(f"mask_threshold must be in [0, 1), got {self.mask_threshold}.")
         if not np.isfinite(self.sampling_rate) or self.sampling_rate <= 0:
             raise ValueError("The experiment sampling rate must be positive and finite.")
 
@@ -183,13 +186,14 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
     sum_s_T_N_inv_s = 0
 
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
-                        downsample_factor=config.downsample_factor)
+                        downsample_factor=config.downsample_factor,
+                        proc_mask_type="gain",
+                        mask_threshold=config.mask_threshold)
 
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
     for view in scan_view.iter_focused(accepted_only=True):
         calib = view.get_calib_tod("abs", config.calibrate_against,
-                                   gap_fill_method=config.gap_fill_method,
-                                   proc_mask_type="gain")
+                                   gap_fill_method=config.gap_fill_method)
         s_cal = calib.s_cal
         residual_tod = calib.tod
 
@@ -265,13 +269,14 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
     # local_r_T_N_inv_s = 0.0
     local_r_T_N_inv_s = np.zeros(ndet, dtype=np.float32)
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
-                        downsample_factor=config.downsample_factor)
+                        downsample_factor=config.downsample_factor,
+                        proc_mask_type="gain",
+                        mask_threshold=config.mask_threshold)
 
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
     for view in scan_view.iter_focused(accepted_only=True):
         calib = view.get_calib_tod("rel", config.calibrate_against,
-                                   gap_fill_method=config.gap_fill_method,
-                                   proc_mask_type="gain")
+                                   gap_fill_method=config.gap_fill_method)
         s_cal = calib.s_cal
         residual_tod = calib.tod
         # Calibration TODs are block-averaged, so their true rate is fsamp/downsample_factor;
@@ -368,7 +373,9 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
     # and summed across the band afterwards, so the chain records the prior actually used.
     gain_prior_local = np.zeros((ndet, 3), dtype=np.float64)
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
-                        downsample_factor=config.downsample_factor)
+                        downsample_factor=config.downsample_factor,
+                        proc_mask_type="gain",
+                        mask_threshold=config.mask_threshold)
 
     # I'm still not sure what way of dealing with the masked samples are best:
     # 1. Replace masked values with 0s before FFT.
@@ -380,8 +387,7 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
     # prior then fills their temporal gain from neighbors.
     for view in scan_view.iter_focused(accepted_only=True):
         calib = view.get_calib_tod("temp", config.calibrate_against,
-                                   gap_fill_method=config.gap_fill_method,
-                                   proc_mask_type="gain")
+                                   gap_fill_method=config.gap_fill_method)
         s_cal = calib.s_cal
         residual_tod = calib.tod
 

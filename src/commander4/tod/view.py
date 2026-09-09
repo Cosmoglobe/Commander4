@@ -33,9 +33,10 @@ class TODView:
     pointing stay at full resolution, because model TODs must be integrated over each block rather
     than sampled at its center. Every quantity exposed downstream is at the active resolution:
     ``pix`` / ``psi`` take block centers, the model and data getters (``get_tod``,
-    ``get_static_sky_tod``, ``get_orbital_dipole_tod``, ``get_calib_tod``) are block-averaged, and
-    ``get_mask`` is AND-reduced over each block. ``downsample_factor == 1`` (the default) is a no-op,
-    so callers that never downsample see the full-rate arrays unchanged.
+    ``get_static_sky_tod``, ``get_orbital_dipole_tod``, ``get_calib_tod``) are block-averaged over
+    the block's good samples, and ``get_mask`` keeps a block when more than ``mask_threshold`` of
+    its samples pass. ``downsample_factor == 1`` (the default) is a no-op, so callers that never
+    downsample see the full-rate arrays unchanged.
     """
 
     _ALL_GAIN_TERMS = ("abs", "rel", "temp")
@@ -53,6 +54,8 @@ class TODView:
         tod_samples: TODSamples,
         compsep_output: NDArray | None = None,
         downsample_factor: int = 1,
+        proc_mask_type: str = "",
+        mask_threshold: float = 0.5,
     ):
         """Initialize a detector-local view over one band's TOD data.
 
@@ -63,11 +66,21 @@ class TODView:
             downsample_factor: Block-averaging factor applied to every derived TOD/mask the view
                 returns (1 = full resolution). Each operation that needs a coarser rate (e.g. gain
                 calibration) constructs its own view at the desired factor.
+            proc_mask_type: Processing mask this view works under, in ``get_mask``'s vocabulary.
+                It is what ``get_calib_tod`` cuts on and what block-averaging averages over, so the
+                block average and the surviving-block count are taken over the same samples. Only
+                the calibration path reads it; ``get_mask`` callers still name their own mask.
+            mask_threshold: Fraction of a block's samples that must pass the mask for the block to
+                survive downsampling. Unused at ``downsample_factor == 1``.
         """
         self.experiment_data = experiment_data
         self.tod_samples = tod_samples
         self.compsep_output = compsep_output
         self._downsample_factor = self._validate_factor(downsample_factor)
+        self._proc_mask_type = proc_mask_type
+        if not 0.0 <= mask_threshold < 1.0:
+            raise ValueError(f"mask_threshold must be in [0, 1), got {mask_threshold}.")
+        self._mask_threshold = float(mask_threshold)
         self._iscan: int | None = None
         self._idet: int | None = None
         self._det = None
@@ -88,6 +101,7 @@ class TODView:
         self._psi = None
         self._flag = None
         self._ds_indices = None
+        self._ds_good = None
         self._static_sky = None
         self._orbital_dipole = None
         self._gap_noise: dict[str, NDArray] = {}
@@ -232,26 +246,51 @@ class TODView:
         """Number of samples at the active (downsampled) resolution."""
         return self._block_indices.size
 
+    @property
+    def _block_good(self) -> NDArray[np.bool_]:
+        """Full-rate mask of the samples block-averaging is allowed to use. Cached per detector.
+
+        Flagged samples still hold the raw glitch (HFI cosmic rays reach thousands of sigma), and
+        processing-masked samples are exactly the sky the calibration must not fit, so both are kept
+        out of the block average as well as out of the count that decides whether a block survives.
+        """
+        if self._ds_good is None:
+            self._ds_good = self._fullres_mask(proc_mask_type=self._proc_mask_type)
+        return self._ds_good
+
     def _downsample_mean(self, arr: NDArray[np.floating]) -> NDArray[np.floating]:
-        """Block-average a full-rate array onto the active resolution (identity when factor == 1)."""
+        """Block-average a full-rate array over its good samples (identity when factor == 1).
+
+        Averaging over the good samples alone, rather than over the whole block, is what makes the
+        fractional keep threshold in ``_downsample_keep`` safe: a surviving block may still contain
+        flagged samples, and including those would move its mean by many sigma. Model TODs go
+        through here too, so model and data are averaged over the same samples -- Planck sweeps more
+        than a degree during a 0.2 s block, so averaging them over different subsets would not cancel.
+        """
         factor = self._downsample_factor
         if factor == 1:
             return arr
         n = self._block_indices.size
-        return arr[:n * factor].reshape(n, factor).mean(axis=-1)
+        blocks = arr[:n * factor].reshape(n, factor)
+        good = self._block_good[:n * factor].reshape(n, factor)
+        # A block with no good samples never survives _downsample_keep, so its value is unused;
+        # dividing by 1 there just avoids a NaN propagating through later arithmetic.
+        return np.where(good, blocks, 0.0).sum(axis=-1) / np.maximum(good.sum(axis=-1), 1)
 
-    def _downsample_all(self, mask: NDArray[np.bool_]) -> NDArray[np.bool_]:
-        """AND-reduce a full-rate boolean mask onto the active resolution.
+    def _downsample_keep(self, mask: NDArray[np.bool_]) -> NDArray[np.bool_]:
+        """Reduce a full-rate boolean mask onto the active resolution by its kept fraction.
 
-        A downsampled sample is valid only if *every* high-res sample in its block is valid:
-        block-averaging smears a single masked sample (e.g. a point source) across the whole averaged
-        value, so masks are AND-reduced over each block rather than sampled at its center.
+        A block survives when more than ``mask_threshold`` of its samples pass. [C3:
+        `comm_tod_mod.f90::downsample_tod`, whose `threshold` argument defaults to the same 0.5.]
+        Requiring *every* sample instead is far too strict for HFI, where cosmic-ray glitches leave
+        short flagged stretches all over the TOD: at 857 GHz that rejects 78% of the one-second
+        calibration blocks, against 3% for the fractional rule.
         """
         factor = self._downsample_factor
         if factor == 1:
             return mask
         n = self._block_indices.size
-        return mask[:n * factor].reshape(n, factor).all(axis=-1)
+        return mask[:n * factor].reshape(n, factor).mean(axis=-1) > self._mask_threshold
 
     # ------------------------------------------------------------------ raw / pointing accessors
     @property
@@ -346,19 +385,9 @@ class TODView:
         return mask_map[pix]
 
 
-    def get_mask(self, good_data_mask: bool = True, proc_mask: bool = True,
-                 proc_mask_type: str = "") -> NDArray[np.bool_]:
-        """Return a boolean keep-mask for the focused TOD at the active resolution.
-
-        Combines the bad-data flag cut and a sky processing mask; either can be switched off. The
-        full-rate cut is AND-reduced onto the active downsample resolution.
-
-        Args:
-            good_data_mask: Whether to exclude samples flagged as bad by the bit-flag cut.
-            proc_mask: Whether to apply a sky processing mask.
-            proc_mask_type: Which processing mask to apply: a key under ``processing_masks:`` in
-                the band's parameter section, or "" to use the default ``processing_mask:`` entry.
-        """
+    def _fullres_mask(self, good_data_mask: bool = True, proc_mask: bool = True,
+                      proc_mask_type: str = "") -> NDArray[np.bool_]:
+        """Combine the bad-data flag cut and a sky processing mask, at the full sampling rate."""
         mask = np.ones(self.detector.ntod, dtype=bool)
         # Datasets without an explicit flag cut behave as if all samples pass it.
         if good_data_mask and getattr(self.detector, "_good_data_mask", None) is not None:
@@ -367,7 +396,22 @@ class TODView:
             proc = self._project_processing_mask(proc_mask_type)
             if proc is not None:
                 mask &= proc
-        return self._downsample_all(mask)
+        return mask
+
+    def get_mask(self, good_data_mask: bool = True, proc_mask: bool = True,
+                 proc_mask_type: str = "") -> NDArray[np.bool_]:
+        """Return a boolean keep-mask for the focused TOD at the active resolution.
+
+        Combines the bad-data flag cut and a sky processing mask; either can be switched off. When
+        the view is downsampled, the full-rate cut is reduced by ``_downsample_keep``.
+
+        Args:
+            good_data_mask: Whether to exclude samples flagged as bad by the bit-flag cut.
+            proc_mask: Whether to apply a sky processing mask.
+            proc_mask_type: Which processing mask to apply: a key under ``processing_masks:`` in
+                the band's parameter section, or "" to use the default ``processing_mask:`` entry.
+        """
+        return self._downsample_keep(self._fullres_mask(good_data_mask, proc_mask, proc_mask_type))
 
 
     # ------------------------------------------------------------------ model TODs
@@ -483,19 +527,19 @@ class TODView:
 
 
     # ------------------------------------------------------------------ gain calibration
-    def _gap_noise_draw(self, method: str, compsep_output: NDArray | None = None,
-                        proc_mask_type: str = "") -> NDArray[np.floating]:
+    def _gap_noise_draw(self, method: str,
+                        compsep_output: NDArray | None = None) -> NDArray[np.floating]:
         """Constrained noise realization at the masked samples of the calibration TOD.
 
         The noise residual ``d - g*(s_sky + s_orb)`` (full gain) is identical for every gain term, so
         the 1/f + white gap draw is computed once and shared across the abs/rel/temporal solves
         (cached per method, at the view's active resolution). ``method`` is ``'fallback'`` or
-        ``'full_cg'``. ``proc_mask_type`` selects which processing mask defines the gaps.
+        ``'full_cg'``.
         """
         cached = self._gap_noise.get(method)
         if cached is not None:
             return cached
-        mask = self.get_mask(proc_mask_type=proc_mask_type)
+        mask = self.get_mask(proc_mask_type=self._proc_mask_type)
         s_sky = self.get_static_sky_tod(compsep_output=compsep_output)
         s_orb = self.get_orbital_dipole_tod()
         data = self._downsample_mean(self.corrected_tod)
@@ -518,7 +562,6 @@ class TODView:
         rng: np.random.Generator | None,
         method: str = "wn",
         compsep_output: NDArray | None = None,
-        proc_mask_type: str = "",
     ) -> NDArray[np.floating]:
         """Fill masked calibration samples with the target signal plus a noise realization.
 
@@ -526,7 +569,6 @@ class TODView:
         noise draw: white (``method='wn'``, sigma0/sqrt(factor)) or a constrained correlated 1/f +
         white draw (``'fallback'``/``'full_cg'``) shared across gain terms via ``_gap_noise_draw``,
         so the masked residual carries the same 1/f structure as the surrounding valid data.
-        ``proc_mask_type`` is forwarded to the 1/f gap draw so it sees the same gaps as ``mask``.
         """
         filled = np.array(tod, copy=True)
         gap = ~mask
@@ -538,8 +580,7 @@ class TODView:
             normal = np.random.normal if rng is None else rng.normal
             filled[gap] = target + normal(0.0, sigma0_effective, target.shape)
         else:
-            draw = self._gap_noise_draw(method, compsep_output=compsep_output,
-                                        proc_mask_type=proc_mask_type)
+            draw = self._gap_noise_draw(method, compsep_output=compsep_output)
             filled[gap] = target + draw[gap]
         return filled
 
@@ -553,7 +594,6 @@ class TODView:
         fill_masked: bool = True,
         gap_fill_method: str = "wn",
         rng: np.random.Generator | None = None,
-        proc_mask_type: str = "",
     ) -> Bunch:
         """Return the residual, calibrator signal, and mask used to sample one gain term.
 
@@ -575,8 +615,6 @@ class TODView:
                 noise), ``'fallback'`` (stationary 1/f Wiener draw), or ``'full_cg'`` (masked
                 constrained-CG 1/f draw). See ``_fill_masked_calibration_samples``.
             rng: Optional NumPy generator for the masked-sample white noise (``'wn'`` only).
-            proc_mask_type: Which processing mask defines the calibration gaps (a key under
-                ``processing_masks:``; "" uses the default ``processing_mask:``).
 
         Returns:
             Bunch with ``tod`` (residual), ``s_cal``, and ``mask``.
@@ -588,7 +626,7 @@ class TODView:
             raise ValueError(f"Unknown calibrate_against '{calibrate_against}'; expected one of "
                              f"{tuple(self._CALIB_TARGET_SIGNALS)}.")
 
-        mask = self.get_mask(proc_mask_type=proc_mask_type)
+        mask = self.get_mask(proc_mask_type=self._proc_mask_type)
         s_sky = self.get_static_sky_tod(compsep_output=compsep_output)
         s_orb = self.get_orbital_dipole_tod()
 
@@ -608,6 +646,5 @@ class TODView:
         if fill_masked:
             tod = self._fill_masked_calibration_samples(tod, mask, s_cal, (target_term,), rng,
                                                         method=gap_fill_method,
-                                                        compsep_output=compsep_output,
-                                                        proc_mask_type=proc_mask_type)
+                                                        compsep_output=compsep_output)
         return Bunch(tod=tod, s_cal=s_cal, mask=mask)

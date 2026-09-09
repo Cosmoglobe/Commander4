@@ -52,7 +52,7 @@ class DetectorTOD:
         init_scalars: NDArray | None = None,
         tod_is_compressed: bool = False,
         flag_is_compressed: bool = True,
-        response_I_P: NDArray | None = None,
+        response_I_P: tuple[float, float] | NDArray | None = None,
         polang: float | None = None,
     ):
         """Construct a DetectorTOD.
@@ -146,7 +146,7 @@ class DetectorTOD:
         if response_I_P is None:
             self.response_I_P = (1.0, 1.0)
         else:
-            response_I_P = (float(response_I_P[0]), float(response_I_P[1]))
+            self.response_I_P = (float(response_I_P[0]), float(response_I_P[1]))
         if flag_encoded is not None and bad_data_bitmask is not None:
             good_data_mask = (self.flag & bad_data_bitmask) == 0
             self._good_data_mask = np.packbits(good_data_mask)

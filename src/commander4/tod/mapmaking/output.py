@@ -25,7 +25,7 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
     """Split the solved band maps into `DetectorMap`s, and collect what goes to the chain file.
 
     Args:
-        map_signal: Solved sky map, shape (3, npix), rows I, Q, U.
+        map_signal: Solved sky map, shape (3, npix), rows I, Q, U; a scalar I map may be 1-D.
         map_rms: Per-pixel white-noise rms, same shape.
         pols: Which polarizations this band carries, e.g. "I", "QU" or "IQU".
         compsep_output: The current sky model for this band, written as `skymodel`.
@@ -43,6 +43,25 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
         `mapmaking.common_res_fwhm` is set, `observed_sky` and `rms` are the smoothed maps that
         compsep actually used, and `map_fwhm_arcmin` records the beam they are at.
     """
+    # Keep scalar accumulation buffers small until output. The chain format uses I,Q,U rows and
+    # six covariance rows even for I-only bands; absent polarization has zero signal and no weight.
+    if pols == "I" and map_signal.ndim == 1:
+        expanded_maps: list[NDArray | None] = []
+        for values, fill in ((map_signal, 0.0), (map_rms, np.inf), (map_orbdipole, 0.0),
+                              (map_corrnoise, 0.0), (map_sidelobe, 0.0), (map_residual, 0.0)):
+            if values is None:
+                expanded_maps.append(None)
+                continue
+            expanded = np.full((3, values.size), fill, dtype=values.dtype)
+            expanded[0] = values
+            expanded_maps.append(expanded)
+        (map_signal, map_rms, map_orbdipole, map_corrnoise,
+         map_sidelobe, map_residual) = expanded_maps
+        if mapmaking.include_cov_maps and map_cov is not None:
+            expanded_cov = np.zeros((6, map_cov.size), dtype=map_cov.dtype)
+            expanded_cov[0] = map_cov
+            map_cov = expanded_cov
+
     detmap_dict_out = {}
     # Degrading to a common analysis resolution happens after mapmaking; 0 leaves the native beam.
     common_res_fwhm = mapmaking.common_res_fwhm
@@ -68,7 +87,7 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
         # Reuse the smoothing compsep already paid for rather than repeating it, filling the
         # (3, npix) layout back in so the written datasets keep their shape.
         sky_out = np.zeros_like(map_signal)
-        rms_out = np.zeros_like(map_rms)
+        rms_out = np.full_like(map_rms, np.inf) if pols == "I" else np.zeros_like(map_rms)
         if "I" in pols:
             sky_out[0,:] = detmap_dict_out["I"].map_sky[0]
             rms_out[0,:] = detmap_dict_out["I"].map_rms[0]
