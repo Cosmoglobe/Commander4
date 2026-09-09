@@ -467,6 +467,8 @@ def main() -> int:
 
             if args.mask is not None:
                 mask = _read_mask(args.mask, nside, args.mask_fwhm_deg)
+            else:
+                mask = np.ones_like(map_rms)
 
             map_ivar = np.zeros_like(map_rms)
             b_mask = (map_rms > 0.)
@@ -474,6 +476,7 @@ def main() -> int:
 
             signal_maps.append(map_observed_sky)
             ivar_maps.append(map_ivar)
+            masks.append(mask)
             used_bands.append((band_name, nu))
             beam_sizes.append(beam_fwhm)
             logger.info(f"iter {iteration}: read {band_name} ({nu:g} GHz, {stored_unit}) "
@@ -493,12 +496,12 @@ def main() -> int:
         import camb
         pars = camb.set_params(ombh2=0.022, omch2=0.122, H0=67.5, ns=0.96, As=2e-9, tau=0.06, omk=0, mnu=0.06, lmax=lmax+100)
         res = camb.get_results(pars)
-        spec = results.get_cmb_power_spectra(pars, CMB_unit="muK", raw_cl=True)["total"]
+        spec = res.get_cmb_power_spectra(pars, CMB_unit="muK", raw_cl=True)["total"]
         cmb_cell_prior = spec[:lmax,0]
         cmb_cell_prior[:2] = 1e6
 
         solver = ConstrainedCMB(np.array(signal_maps), np.array(ivar_maps), cmb_cell_prior,
-                                mask=mask, maxiter=args.maxiter, beam_fwhm=beam_sizes)
+                                masks=np.array(masks), maxiter=args.maxiter, beam_fwhm=beam_sizes)
         rhs = solver.get_RHS_eqn_mean() + solver.get_RHS_eqn_fluct()
         cmb_alms_bestfit = solver.solve_CG(solver.LHS_func, rhs, err_tol=args.err_tol)
         cmb_cell_bestfit = hp.alm2cl(cmb_alms_bestfit)
