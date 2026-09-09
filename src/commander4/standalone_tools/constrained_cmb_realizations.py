@@ -369,10 +369,10 @@ def main() -> int:
     parser.add_argument("--iter", type=int, default=None, dest="only_iter",
                         help="Process only this Gibbs iteration (default: all found).")
     parser.add_argument("--chain", type=int, default=1, help="Chain number to read (default 1).")
-    parser.add_argument("--maxiter", type=int, default=100,
-                        help="Maximum CG iterations (default 100).")
-    parser.add_argument("--err-tol", type=float, default=1e-6,
-                        help="CG residual to stop at (default 1e-6).")
+    parser.add_argument("--maxiter", type=int, default=1000,
+                        help="Maximum CG iterations (default 1000).")
+    parser.add_argument("--err-tol", type=float, default=1e-10,
+                        help="CG residual to stop at (default 1e-10).")
     parser.add_argument("--mask", default=None,
                         help="FITS binary mask (TEMPERATURE column) dividing the RMS. Optional.")
     parser.add_argument("--mask-fwhm-deg", type=float, default=3.0,
