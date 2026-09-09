@@ -70,11 +70,13 @@ def alm2map_adjoint(map, nside, lmax):
 class ConstrainedCMB:
     """The constrained-realization system for the CMB alms, with an externally supplied C_l."""
 
-    def __init__(self, map_sky, map_ivar, cmb_Cell, mask=None, beam_fwhm=None, maxiter=100):
+    def __init__(self, map_sky, map_ivar, cmb_Cell, masks=None, beam_fwhm=None, maxiter=100):
         self.maxiter = maxiter
         self.map_sky = map_sky
         self.map_ivar = map_ivar
-        self.mask = np.ones_like(self.map_sky[0]) if mask is None else mask
+        self.masks = masks
+        if self.masks is None:
+            self.masks = np.array([ np.ones_like(m) for m in self.map_sky ])
         self.nband, self.npix = map_sky.shape
         self.fwhm = 1.0/60.0*np.pi/180.0*np.ones(self.nband) if beam_fwhm is None else beam_fwhm
         self.nside = hp.npix2nside(self.npix)
@@ -119,7 +121,7 @@ class ConstrainedCMB:
             bl = hp.gauss_beam(self.fwhm[iband], lmax=self.lmax)
             self.beams.append(bl)
 
-            inv_noise_var = self.map_ivar[iband] * self.mask
+            inv_noise_var = self.map_ivar[iband] * self.masks[iband]
             inv_noise_var = np.where(np.isfinite(inv_noise_var), inv_noise_var, 0.0)
             avg_inv_noise_var = np.mean(inv_noise_var[inv_noise_var > 0])
 
@@ -162,7 +164,7 @@ class ConstrainedCMB:
             # Y B C^{1/2} x_tilde
             YBCx = alm2map(BCx, self.nside, self.lmax)
             # N^{-1} Y B C^{1/2} x_tilde
-            NYBCx = YBCx * self.map_ivar[iband] * self.mask
+            NYBCx = YBCx * self.map_ivar[iband] * self.masks[iband]
             # Y^T N^{-1} Y B C^{1/2} x_tilde
             YTNYBCx = alm2map_adjoint(NYBCx, self.nside, self.lmax)
             # B^T Y^T N^{-1} Y B C^{1/2} x_tilde
@@ -180,7 +182,7 @@ class ConstrainedCMB:
         """
         RHS_sum = np.zeros(self.alm_len, dtype=np.complex128)
         for iband in range(self.nband):
-            Nd = self.map_sky[iband] * self.map_ivar[iband] * self.mask
+            Nd = self.map_sky[iband] * self.map_ivar[iband] * self.masks[iband]
             YTNd = alm2map_adjoint(Nd, self.nside, self.lmax)
             BTYTNd = hp.almxfl(YTNd, self.beams[iband])
             RHS_sum += BTYTNd
@@ -203,7 +205,7 @@ class ConstrainedCMB:
 
         for iband in range(self.nband):
             omega1 = np.random.normal(0, 1, self.npix)
-            Nomega1 = omega1 * np.sqrt(self.map_ivar[iband] * self.mask)  # N^{-1/2} omega_1
+            Nomega1 = omega1 * np.sqrt(self.map_ivar[iband] * self.masks[iband])  # N^{-1/2} omega_1
             YTNomega1 = alm2map_adjoint(Nomega1, self.nside, self.lmax)
             BTYTNomega1 = hp.almxfl(YTNomega1, self.beams[iband])
             RHS_sum += hp.almxfl(BTYTNomega1, self.Cl_sqrt)  # C^{1/2} B^T Y^T N^{-1/2} omega_1
