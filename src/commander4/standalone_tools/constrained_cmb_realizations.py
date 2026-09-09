@@ -484,15 +484,24 @@ def main() -> int:
             continue
 
         cmb_alms_in = np.ascontiguousarray(cmb_comps[0].alms[0]).astype(np.complex128)
-        cmb_Cell = hp.alm2cl(cmb_alms_in)
-        # Loose prior on monopole/dipole: large enough that the data dominates, small enough to
-        # avoid floating-point trouble in the C^{1/2} renormalization.
-        cmb_Cell[:2] = 1000 * np.max(cmb_Cell[2:])
+        cmb_cell_in = hp.alm2cl(cmb_alms_in)
+        lmax = len(cmb_cell_in)
 
-        solver = ConstrainedCMB(np.array(signal_maps), np.array(rms_maps), cmb_Cell,
+        # This prior could be improved (best would be to replace the prior with
+        # sampled C_ells in the full chain), but for now a nice smooth theory
+        # prior is okay.
+        import camb
+        pars = camb.set_params(ombh2=0.022, omch2=0.122, H0=67.5, ns=0.96, As=2e-9, tau=0.06, omk=0, mnu=0.06, lmax=lmax+100)
+        res = camb.get_results(pars)
+        spec = results.get_cmb_power_spectra(pars, CMB_unit="muK", raw_cl=True)["total"]
+        cmb_cell_prior = spec[:lmax,0]
+        cmb_cell_prior[:2] = 1e6
+
+        solver = ConstrainedCMB(np.array(signal_maps), np.array(rms_maps), cmb_cell_prior,
                                 maxiter=args.maxiter)
         rhs = solver.get_RHS_eqn_mean() + solver.get_RHS_eqn_fluct()
         cmb_alms_bestfit = solver.solve_CG(solver.LHS_func, rhs, err_tol=args.err_tol)
+        cmb_cell_bestfit = hp.alm2cl(cmb_alms_bestfit)
 
         nside = hp.npix2nside(signal_maps[0].shape[-1])
         cmb_map_bestfit = hp.alm2map(cmb_alms_bestfit, nside)
@@ -500,10 +509,15 @@ def main() -> int:
         hp.write_map(f"{out_base}_cmb_realization.fits", cmb_map_bestfit, overwrite=True)
 
         plt.figure()
-        plt.loglog(hp.alm2cl(cmb_alms_in), label="compsep CMB")
-        plt.loglog(hp.alm2cl(cmb_alms_bestfit), label="constrained realization")
+
+        ls = np.arange(len(cmb_cell_in))
+        plt.loglog(ls, cmb_cell_in * ls * (ls + 1.) / 2. / np.pi, label="compsep CMB")
+        ls = np.arange(len(cmb_cell_bestfit))
+        plt.loglog(ls, cmb_cell_bestfit * ls * (ls + 1.) / 2. / np.pi, label="constrained realization")
+        ls = np.arange(len(cmb_cell_prior))
+        plt.loglog(ls, cmb_cell_prior * ls * (ls + 1.) / 2. / np.pi, label="Prior")
         plt.xlabel("multipole $\\ell$")
-        plt.ylabel("$C_\\ell$")
+        plt.ylabel("$\\mathcal{D}_\\ell$ [$\\mu K^2$]")
         plt.legend()
         plt.savefig(f"{out_base}_Cell.png", dpi=120, bbox_inches="tight")
         plt.close()
