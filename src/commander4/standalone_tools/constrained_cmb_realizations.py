@@ -70,12 +70,15 @@ def alm2map_adjoint(map, nside, lmax):
 class ConstrainedCMB:
     """The constrained-realization system for the CMB alms, with an externally supplied C_l."""
 
-    def __init__(self, map_sky, map_rms, cmb_Cell, maxiter=100):
+    def __init__(self, map_sky, map_ivar, cmb_Cell, masks=None, beam_fwhm=None, maxiter=100):
         self.maxiter = maxiter
         self.map_sky = map_sky
-        self.map_rms = map_rms
+        self.map_ivar = map_ivar
+        self.masks = masks
+        if self.masks is None:
+            self.masks = np.array([ np.ones_like(m) for m in self.map_sky ])
         self.nband, self.npix = map_sky.shape
-        self.fwhm = 1.0/60.0*np.pi/180.0*np.ones(self.nband)
+        self.fwhm = 1.0/60.0*np.pi/180.0*np.ones(self.nband) if beam_fwhm is None else beam_fwhm
         self.nside = hp.npix2nside(self.npix)
         self.lmax = 2*self.nside
         self.alm_len = ((self.lmax+1)*(self.lmax+2))//2
@@ -89,20 +92,6 @@ class ConstrainedCMB:
 
         # Build diagonal preconditioner in harmonic space
         self._build_preconditioner()
-
-        # # TEMPORARY. Set Cl prior to true CMB Cls.
-        # import camb
-        # pars = camb.set_params(H0=67.5, ombh2=0.022, omch2=0.122, mnu=0.06, omk=0, tau=0.06, As=2e-9, ns=0.965, halofit_version='mead', lmax=self.lmax)
-        # results = camb.get_results(pars)
-        # powers =results.get_cmb_power_spectra(pars, CMB_unit='muK', raw_cl=True)
-        # totCL=powers['total']
-        # self.ell = np.arange(self.lmax+1)
-        # self.Cl_true = totCL[self.ell,0]
-
-        # self.Cl_prior = 3*self.Cl_true.copy()
-        # self.Cl_prior[:2] = 1e6
-        # self.Cl_prior[:] = 1e6  # We currently "turn off" the prior by setting it very high.
-        #                         # In the future, the C(ell)s will be sampled and used as a prior here.
 
 
     def _build_preconditioner(self):
@@ -124,12 +113,17 @@ class ConstrainedCMB:
         # The preconditioner must include this factor to match the true diagonal.
         pix_factor = self.npix / (4.0 * np.pi)
 
-        for iband in range(self.nband):
-            bl = hp.gauss_beam(self.fwhm[iband], lmax=self.lmax)
+        self.beams = []
 
-            inv_noise_var = 1.0 / self.map_rms[iband] ** 2
+        for iband in range(self.nband):
+            # For now, beams are assumed to be Gaussian, but if not, they could
+            # be passed on in here.
+            bl = hp.gauss_beam(self.fwhm[iband], lmax=self.lmax)
+            self.beams.append(bl)
+
+            inv_noise_var = self.map_ivar[iband] * self.masks[iband]
             inv_noise_var = np.where(np.isfinite(inv_noise_var), inv_noise_var, 0.0)
-            avg_inv_noise_var = np.mean(inv_noise_var)
+            avg_inv_noise_var = np.mean(inv_noise_var[inv_noise_var > 0])
 
             diag += Cl * bl ** 2 * avg_inv_noise_var * pix_factor
 
@@ -166,15 +160,15 @@ class ConstrainedCMB:
 
         for iband in range(self.nband):
             # B C^{1/2} x_tilde
-            BCx = hp.smoothalm(Cx.copy(), self.fwhm[iband], inplace=False)
+            BCx = hp.almxfl(Cx.copy(), self.beams[iband])
             # Y B C^{1/2} x_tilde
             YBCx = alm2map(BCx, self.nside, self.lmax)
             # N^{-1} Y B C^{1/2} x_tilde
-            NYBCx = YBCx / self.map_rms[iband]**2
+            NYBCx = YBCx * self.map_ivar[iband] * self.masks[iband]
             # Y^T N^{-1} Y B C^{1/2} x_tilde
             YTNYBCx = alm2map_adjoint(NYBCx, self.nside, self.lmax)
             # B^T Y^T N^{-1} Y B C^{1/2} x_tilde
-            BTYTNYBCx = hp.smoothalm(YTNYBCx, self.fwhm[iband], inplace=False)
+            BTYTNYBCx = hp.almxfl(YTNYBCx, self.beams[iband])
             # C^{1/2} B^T Y^T N^{-1} Y B C^{1/2} x_tilde
             LHS_sum += hp.almxfl(BTYTNYBCx, self.Cl_sqrt)
 
@@ -188,9 +182,9 @@ class ConstrainedCMB:
         """
         RHS_sum = np.zeros(self.alm_len, dtype=np.complex128)
         for iband in range(self.nband):
-            Nd = self.map_sky[iband] / self.map_rms[iband]**2
+            Nd = self.map_sky[iband] * self.map_ivar[iband] * self.masks[iband]
             YTNd = alm2map_adjoint(Nd, self.nside, self.lmax)
-            BTYTNd = hp.smoothalm(YTNd, self.fwhm[iband], inplace=False)
+            BTYTNd = hp.almxfl(YTNd, self.beams[iband])
             RHS_sum += BTYTNd
         # Apply C^{1/2}
         RHS_sum = hp.almxfl(RHS_sum, self.Cl_sqrt)
@@ -211,9 +205,9 @@ class ConstrainedCMB:
 
         for iband in range(self.nband):
             omega1 = np.random.normal(0, 1, self.npix)
-            Nomega1 = omega1 / self.map_rms[iband]  # N^{-1/2} omega_1
+            Nomega1 = omega1 * np.sqrt(self.map_ivar[iband] * self.masks[iband])  # N^{-1/2} omega_1
             YTNomega1 = alm2map_adjoint(Nomega1, self.nside, self.lmax)
-            BTYTNomega1 = hp.smoothalm(YTNomega1, self.fwhm[iband], inplace=False)
+            BTYTNomega1 = hp.almxfl(YTNomega1, self.beams[iband])
             RHS_sum += hp.almxfl(BTYTNomega1, self.Cl_sqrt)  # C^{1/2} B^T Y^T N^{-1/2} omega_1
         return RHS_sum
 
@@ -375,10 +369,10 @@ def main() -> int:
     parser.add_argument("--iter", type=int, default=None, dest="only_iter",
                         help="Process only this Gibbs iteration (default: all found).")
     parser.add_argument("--chain", type=int, default=1, help="Chain number to read (default 1).")
-    parser.add_argument("--maxiter", type=int, default=100,
-                        help="Maximum CG iterations (default 100).")
-    parser.add_argument("--err-tol", type=float, default=1e-6,
-                        help="CG residual to stop at (default 1e-6).")
+    parser.add_argument("--maxiter", type=int, default=1000,
+                        help="Maximum CG iterations (default 1000).")
+    parser.add_argument("--err-tol", type=float, default=1e-10,
+                        help="CG residual to stop at (default 1e-10).")
     parser.add_argument("--mask", default=None,
                         help="FITS binary mask (TEMPERATURE column) dividing the RMS. Optional.")
     parser.add_argument("--mask-fwhm-deg", type=float, default=3.0,
@@ -443,8 +437,10 @@ def main() -> int:
         foreground_sky = SkyModel(foreground_comps)
 
         signal_maps = []
-        rms_maps = []
+        ivar_maps = []
         used_bands = []
+        beam_sizes = []
+        masks = []
         for band, filename in bands_by_iter[iteration]:
             band_name = band.split("_")[-1]
             if band_name not in band_freqs:
@@ -455,13 +451,14 @@ def main() -> int:
                 map_observed_sky = f["maps/observed_sky"][0].astype(np.float64)
                 map_rms = f["maps/rms"][0].astype(np.float64)
                 stored_unit = f["metadata/band_unit"][()]
+                beam_fwhm = np.radians(f["metadata/map_fwhm_arcmin"][()]/60.)
             if isinstance(stored_unit, bytes):
                 stored_unit = stored_unit.decode("utf-8")
             nside = hp.npix2nside(map_rms.shape[-1])
 
             # The foreground model is evaluated at this band's frequency and subtracted, leaving
             # CMB + noise for the solver.
-            foreground_map = foreground_sky.get_sky_at_nu(nu, nside, "I", fwhm=0)[0]
+            foreground_map = foreground_sky.get_sky_at_nu(nu, nside, "I", fwhm=beam_fwhm)[0]
             map_observed_sky -= foreground_map
 
             # The solver works in thermodynamic units, the maps are written in the band's own unit.
@@ -471,11 +468,19 @@ def main() -> int:
             map_rms *= to_uK_CMB
 
             if args.mask is not None:
-                map_rms = map_rms / _read_mask(args.mask, nside, args.mask_fwhm_deg)
+                mask = _read_mask(args.mask, nside, args.mask_fwhm_deg)
+            else:
+                mask = np.ones_like(map_rms)
+
+            map_ivar = np.zeros_like(map_rms)
+            b_mask = (map_rms > 0.)
+            map_ivar[b_mask] = 1. / map_rms[b_mask] ** 2.
 
             signal_maps.append(map_observed_sky)
-            rms_maps.append(map_rms)
+            ivar_maps.append(map_ivar)
+            masks.append(mask)
             used_bands.append((band_name, nu))
+            beam_sizes.append(beam_fwhm)
             logger.info(f"iter {iteration}: read {band_name} ({nu:g} GHz, {stored_unit}) "
                         f"at nside {nside}.")
 
@@ -484,15 +489,24 @@ def main() -> int:
             continue
 
         cmb_alms_in = np.ascontiguousarray(cmb_comps[0].alms[0]).astype(np.complex128)
-        cmb_Cell = hp.alm2cl(cmb_alms_in)
-        # Loose prior on monopole/dipole: large enough that the data dominates, small enough to
-        # avoid floating-point trouble in the C^{1/2} renormalization.
-        cmb_Cell[:2] = 1000 * np.max(cmb_Cell[2:])
+        cmb_cell_in = hp.alm2cl(cmb_alms_in)
+        lmax = len(cmb_cell_in)
 
-        solver = ConstrainedCMB(np.array(signal_maps), np.array(rms_maps), cmb_Cell,
-                                maxiter=args.maxiter)
+        # This prior could be improved (best would be to replace the prior with
+        # sampled C_ells in the full chain), but for now a nice smooth theory
+        # prior is okay.
+        import camb
+        pars = camb.set_params(ombh2=0.022, omch2=0.122, H0=67.5, ns=0.96, As=2e-9, tau=0.06, omk=0, mnu=0.06, lmax=lmax+100)
+        res = camb.get_results(pars)
+        spec = res.get_cmb_power_spectra(pars, CMB_unit="muK", raw_cl=True)["total"]
+        cmb_cell_prior = spec[:lmax,0]
+        cmb_cell_prior[:2] = 1e6
+
+        solver = ConstrainedCMB(np.array(signal_maps), np.array(ivar_maps), cmb_cell_prior,
+                                masks=np.array(masks), maxiter=args.maxiter, beam_fwhm=beam_sizes)
         rhs = solver.get_RHS_eqn_mean() + solver.get_RHS_eqn_fluct()
         cmb_alms_bestfit = solver.solve_CG(solver.LHS_func, rhs, err_tol=args.err_tol)
+        cmb_cell_bestfit = hp.alm2cl(cmb_alms_bestfit)
 
         nside = hp.npix2nside(signal_maps[0].shape[-1])
         cmb_map_bestfit = hp.alm2map(cmb_alms_bestfit, nside)
@@ -500,16 +514,21 @@ def main() -> int:
         hp.write_map(f"{out_base}_cmb_realization.fits", cmb_map_bestfit, overwrite=True)
 
         plt.figure()
-        plt.loglog(hp.alm2cl(cmb_alms_in), label="compsep CMB")
-        plt.loglog(hp.alm2cl(cmb_alms_bestfit), label="constrained realization")
+
+        ls = np.arange(len(cmb_cell_in))
+        plt.loglog(ls, cmb_cell_in * ls * (ls + 1.) / 2. / np.pi, label="compsep CMB")
+        ls = np.arange(len(cmb_cell_bestfit))
+        plt.loglog(ls, cmb_cell_bestfit * ls * (ls + 1.) / 2. / np.pi, label="constrained realization")
+        ls = np.arange(len(cmb_cell_prior))
+        plt.loglog(ls, cmb_cell_prior * ls * (ls + 1.) / 2. / np.pi, c="k", label="Prior")
         plt.xlabel("multipole $\\ell$")
-        plt.ylabel("$C_\\ell$")
+        plt.ylabel("$\\mathcal{D}_\\ell$ [$\\mu K^2$]")
         plt.legend()
         plt.savefig(f"{out_base}_Cell.png", dpi=120, bbox_inches="tight")
         plt.close()
 
         plt.figure()
-        hp.mollview(cmb_map_bestfit, cmap="RdBu_r", title=f"Constrained CMB, iter {iteration}")
+        hp.mollview(cmb_map_bestfit, cmap="RdBu_r", title=f"Constrained CMB, iter {iteration}", min=-350., max=350.)
         plt.savefig(f"{out_base}_cmb_realization.png", dpi=120, bbox_inches="tight")
         plt.close()
         logger.info(f"iter {iteration}: wrote {out_base}_cmb_realization.fits (+ 2 figures) from "
