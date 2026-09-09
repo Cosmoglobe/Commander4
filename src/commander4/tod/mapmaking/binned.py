@@ -587,8 +587,14 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
                 tod_samples.noise_params[view.iscan, view.idet, 0] = _estimate_standalone_sigma0(
                     view, correlated_noise.sigma0_method)
 
+        sl_tod = None
+        if sidelobe_active:
+            with benchmark("far-beam-proj"):
+                sl_tod = far_beam_model.get_projection(pix, psi, view.idet)
         with benchmark("tod-diagnostics"):
-            residual_tod = _record_tod_diagnostics(tod_samples, view.iscan, view.idet, view, n_corr_est)
+            residual_tod = _record_tod_diagnostics(
+                tod_samples, view.iscan, view.idet, view, n_corr_est,
+                sidelobe_tod=gain * sl_tod if sl_tod is not None else None)
 
         ### DATA-SELECTION VETO 2 (catastrophic chi^2)
         start_bench("data-select-2")
@@ -625,8 +631,6 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         # The projection comes back in uK_RJ, like the sky and orbital-dipole model TODs, so the
         # map accumulates it as it is while the detector-unit TOD has it removed at the full gain.
         if sidelobe_active:
-            with benchmark("far-beam-proj"):
-                sl_tod = far_beam_model.get_projection(pix, psi, view.idet)
             if mapmaker_sidelobe is not None:
                 mapmaker_sidelobe.accumulate_to_map(sl_tod[good_data_mask], inv_var, pix_masked,
                                                     psi_masked, response_I_P=response_I_P)
