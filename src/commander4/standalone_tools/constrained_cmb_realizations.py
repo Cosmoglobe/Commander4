@@ -520,7 +520,7 @@ def main() -> int:
         ls = np.arange(len(cmb_cell_bestfit))
         plt.loglog(ls, cmb_cell_bestfit * ls * (ls + 1.) / 2. / np.pi, label="constrained realization")
         ls = np.arange(len(cmb_cell_prior))
-        plt.loglog(ls, cmb_cell_prior * ls * (ls + 1.) / 2. / np.pi, label="Prior")
+        plt.loglog(ls, cmb_cell_prior * ls * (ls + 1.) / 2. / np.pi, c="k", label="Prior")
         plt.xlabel("multipole $\\ell$")
         plt.ylabel("$\\mathcal{D}_\\ell$ [$\\mu K^2$]")
         plt.legend()
@@ -528,7 +528,7 @@ def main() -> int:
         plt.close()
 
         plt.figure()
-        hp.mollview(cmb_map_bestfit, cmap="RdBu_r", title=f"Constrained CMB, iter {iteration}")
+        hp.mollview(cmb_map_bestfit, cmap="RdBu_r", title=f"Constrained CMB, iter {iteration}", min=-350., max=350.)
         plt.savefig(f"{out_base}_cmb_realization.png", dpi=120, bbox_inches="tight")
         plt.close()
         logger.info(f"iter {iteration}: wrote {out_base}_cmb_realization.fits (+ 2 figures) from "
