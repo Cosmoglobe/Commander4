@@ -91,20 +91,6 @@ class ConstrainedCMB:
         # Build diagonal preconditioner in harmonic space
         self._build_preconditioner()
 
-        # # TEMPORARY. Set Cl prior to true CMB Cls.
-        # import camb
-        # pars = camb.set_params(H0=67.5, ombh2=0.022, omch2=0.122, mnu=0.06, omk=0, tau=0.06, As=2e-9, ns=0.965, halofit_version='mead', lmax=self.lmax)
-        # results = camb.get_results(pars)
-        # powers =results.get_cmb_power_spectra(pars, CMB_unit='muK', raw_cl=True)
-        # totCL=powers['total']
-        # self.ell = np.arange(self.lmax+1)
-        # self.Cl_true = totCL[self.ell,0]
-
-        # self.Cl_prior = 3*self.Cl_true.copy()
-        # self.Cl_prior[:2] = 1e6
-        # self.Cl_prior[:] = 1e6  # We currently "turn off" the prior by setting it very high.
-        #                         # In the future, the C(ell)s will be sampled and used as a prior here.
-
 
     def _build_preconditioner(self):
         """Build a diagonal (in ell) preconditioner for the renormalized CG system.
