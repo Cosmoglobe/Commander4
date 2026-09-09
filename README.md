@@ -103,13 +103,13 @@ tod_ps_residual    (NSC,ND,100)   # ... of the residual (sky, dipole and n_corr 
 jump_counts        (NSC,ND)    # jumps found per detector-scan; indexes the two ragged arrays below
 jump_locations     (M,)        # sample index of each jump, concatenated scan-major
 jump_offsets       (M,)        # amplitude of each jump
-ncorr_tod_lengths  (NSC,ND)    # (opt, DEBUG) length of each full n_corr TOD in the flat array below
-ncorr_tod_flat     (sum,)      # (opt, DEBUG) every n_corr TOD concatenated; very large
+tods/<scan_id>/<detector>/ncorr     (ntod,)  # (opt, DEBUG) full n_corr TOD in detector units
+tods/<scan_id>/<detector>/residual  (ntod,)  # (opt, DEBUG) full residual TOD in detector units
 
 maps/observed_sky  (3,npix)    # the solved sky map (I, Q, U)
 maps/rms           (3,npix)    # per-pixel white-noise rms; inf where unobserved
 maps/skymodel      (3,npix)    # (opt) sky model this iteration was processed against
-maps/res           (3,npix)    # (opt) binned residual: data minus sky, dipole and n_corr
+maps/res           (3,npix)    # (opt) binned residual: corrected data minus sky, dipole, n_corr, sidelobes
 maps/orbdipole     (3,npix)    # (opt) binned orbital dipole
 maps/corrnoise     (3,npix)    # (opt) binned correlated noise
 maps/sidelobe      (3,npix)    # (opt) binned far-sidelobe pickup, removed from the TOD

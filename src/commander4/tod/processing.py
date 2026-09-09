@@ -201,6 +201,9 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     # remain NaN and are not counted again by the data-selection summary.
     tod_samples.chisq_z[:] = np.nan
     tod_samples.good_fraction[:] = np.nan
+    if tod_samples.residual_tods is not None:
+        for scan_tods in tod_samples.residual_tods:
+            scan_tods[:] = [None] * tod_samples.ndet
 
     with benchmark("mapmaker"):
         if mapmaking.mapmaker == "CG":

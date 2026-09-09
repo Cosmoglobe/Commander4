@@ -1,6 +1,7 @@
 """Tests for the low-resolution (log-binned) TOD power spectra written to the chain."""
 
 import numpy as np
+import pytest
 
 from commander4.tod import scan_diagnostics
 from commander4.tod.scan_diagnostics import _binned_tod_power_spectrum, _record_tod_diagnostics
@@ -55,34 +56,6 @@ def test_short_tod_uses_fewer_bins_without_error():
 
 
 # --------------------------------------------------------------------------------------
-# Optional DEBUG: full n_corr TOD ragged packing
-# --------------------------------------------------------------------------------------
-def _bare_tod_samples(nscans, ndet, ncorr_tods):
-    ts = TODSamples.__new__(TODSamples)          # bypass __init__ (no MPI / data needed)
-    ts.nscans, ts.ndet, ts.ncorr_tods = nscans, ndet, ncorr_tods
-    return ts
-
-
-def test_pack_ncorr_tods_ragged():
-    a = np.arange(3, dtype=np.float32)
-    b = np.arange(5, dtype=np.float32) + 10.0
-    # scan0: det0=a (len 3), det1 missing; scan1: det0 missing, det1=b (len 5).
-    ts = _bare_tod_samples(2, 2, [[a, None], [None, b]])
-    lengths, flat = ts._pack_ncorr_tods()
-    assert lengths.tolist() == [[3, 0], [0, 5]]
-    # Flat concatenation is scan-major, detector-minor (a before b).
-    np.testing.assert_array_equal(flat, np.concatenate([a, b]))
-    assert flat.dtype == np.float32
-
-
-def test_pack_ncorr_tods_empty():
-    ts = _bare_tod_samples(2, 2, [[None, None], [None, None]])
-    lengths, flat = ts._pack_ncorr_tods()
-    assert lengths.sum() == 0
-    assert flat.size == 0 and flat.dtype == np.float32
-
-
-# --------------------------------------------------------------------------------------
 # _record_tod_diagnostics: which TOD view feeds which recorded spectrum
 # --------------------------------------------------------------------------------------
 class _DiagStubView:
@@ -118,6 +91,7 @@ def _diag_tod_samples():
         setattr(ts, name, np.full(shape, np.nan, dtype=np.float32))
     ts.chisq_z = np.full((1, 1), np.nan)
     ts.ncorr_tods = None
+    ts.residual_tods = None
     return ts
 
 
@@ -153,3 +127,28 @@ def test_record_diagnostics_without_ncorr():
     np.testing.assert_allclose(ts.tod_ps_ncorrsub[0, 0], _ps(raw), rtol=1e-5)
     np.testing.assert_allclose(ts.tod_ps_residual[0, 0], _ps(sky_orb_sub), rtol=1e-5)
     assert np.isnan(ts.tod_ps_ncorr[0, 0]).all()
+
+
+@pytest.mark.parametrize("with_ncorr", [False, True])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_saved_residual_is_full_observed_minus_model(with_ncorr: bool, dtype: type) -> None:
+    """Saving residuals works without n_corr output and survives in-place CG gap filling."""
+    raw = np.arange(128, dtype=dtype)
+    sky_orb_sub = raw - 20.0
+    n_corr = np.full(128, 2.0, dtype=dtype) if with_ncorr else None
+    sidelobe = np.full(128, 3.0, dtype=dtype)
+    samples = _diag_tod_samples()
+    samples.residual_tods = [[None]]
+    residual = _record_tod_diagnostics(
+        samples, 0, 0, _DiagStubView(raw, sky_orb_sub), n_corr, sidelobe_tod=sidelobe)
+
+    expected = sky_orb_sub - sidelobe
+    if n_corr is not None:
+        expected -= n_corr
+    saved = samples.residual_tods[0][0]
+    assert samples.ncorr_tods is None
+    assert saved.dtype == np.float32
+    np.testing.assert_array_equal(saved, expected)
+    np.testing.assert_array_equal(residual, expected)
+    residual[:] = 0.0
+    np.testing.assert_array_equal(saved, expected)

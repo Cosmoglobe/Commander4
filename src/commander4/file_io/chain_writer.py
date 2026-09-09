@@ -110,8 +110,9 @@ def write_band_chain_to_file(params: Bunch, chain: int, iter: int, exp_name: str
                              band_unit_factor: float = 1.0, band_unit: str = "uK_RJ") -> None:
     """Write one band's Gibbs sample: the per-scan TOD samples and the output maps, in one file.
 
-    The TOD samples land at the top level (which is where `TODSamples` reads them back from for
-    `gibbs.init_from_chain`) and the maps under `maps/`. The caller decides whether the file is
+    The sampled parameters land at the top level (where `TODSamples` reads them back from for
+    `gibbs.init_from_chain`), debug TODs under `tods/<scan_id>/<detector>/`, and maps under `maps/`.
+    Keys in `tod_arrays` are dataset paths; h5py creates their groups. The caller decides if the file is
     written at all — `TODSamples.gather_chain_arrays` owns that gate, because it has to be applied
     before its collective gathers — so this function only gates the `maps/` group.
 

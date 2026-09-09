@@ -43,7 +43,8 @@ def _binned_tod_power_spectrum(tod: NDArray, fsamp: float, nbin: int) -> tuple[N
 
 
 def _record_tod_diagnostics(tod_samples: TODSamples, iscan: int, idet: int, view: TODView,
-                            n_corr: NDArray | None) -> NDArray:
+                            n_corr: NDArray | None, *,
+                            sidelobe_tod: NDArray | None = None) -> NDArray:
     """ Record per-detector-scan TOD diagnostics into the chain arrays.
 
         Stores the low-resolution log-binned power spectra (sharing one binned frequency axis) of
@@ -55,8 +56,8 @@ def _record_tod_diagnostics(tod_samples: TODSamples, iscan: int, idet: int, view
                           noise all subtracted.
           * ``ncorr``:    the correlated-noise realization itself, stored only when one was drawn.
         ``ncorrsub`` and ``residual`` use the canonical corrected stream (matching mapmaking and
-        n_corr sampling). When the off-by-default DEBUG full-``n_corr`` collection is enabled, also
-        stores the entire ``n_corr`` TOD for this detector-scan.
+        n_corr sampling). The residual also subtracts ``sidelobe_tod`` when supplied, in detector
+        units. Optional full-TOD collection stores ``n_corr`` and/or the residual as float32.
 
         Returns:
             The full-length ``residual`` TOD, in detector units, so the caller can bin it into the
@@ -71,6 +72,8 @@ def _record_tod_diagnostics(tod_samples: TODSamples, iscan: int, idet: int, view
     # Both are fresh writable copies, so n_corr (when present) is subtracted in place from each.
     residual_tod = view.get_tod(subtract=(("sky", TODView._ALL_GAIN_TERMS),
                                           ("orbital_dipole", TODView._ALL_GAIN_TERMS)))
+    if sidelobe_tod is not None:
+        residual_tod -= sidelobe_tod
     ncorrsub_tod = view.get_tod()
     if n_corr is not None:
         residual_tod -= n_corr
@@ -79,6 +82,10 @@ def _record_tod_diagnostics(tod_samples: TODSamples, iscan: int, idet: int, view
     _, ncorrsub_binned = _binned_tod_power_spectrum(ncorrsub_tod, view.fsamp, nbin)
     tod_samples.tod_ps_residual[iscan, idet] = residual_binned
     tod_samples.tod_ps_ncorrsub[iscan, idet] = ncorrsub_binned
+
+    if tod_samples.residual_tods is not None:
+        # CG mapmaking gap-fills its returned residual in place; preserve observed minus model.
+        tod_samples.residual_tods[iscan][idet] = residual_tod.astype(np.float32, copy=True)
 
     if n_corr is not None:
         _, ncorr_binned = _binned_tod_power_spectrum(n_corr, view.fsamp, nbin)

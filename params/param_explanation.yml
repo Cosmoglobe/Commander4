@@ -92,7 +92,7 @@ output:
       corr_noise_maps: True       # maps/corrnoise: the binned correlated-noise draw.
       sky_model_maps: True        # maps/skymodel: the sky this iteration was fit against.
       residual_maps: True         # maps/res: binned TOD residual, i.e. data minus sky, dipole and
-                                  # n_corr (C3 tod_<freq>_res).
+                                  # n_corr, with low-level corrections and sidelobes removed.
       sidelobe_maps: True         # maps/sidelobe: the binned far-sidelobe pickup subtracted from
                                   # the TOD (C3 tod_<freq>_sl). Needs far-beam deconvolution on.
       hit_maps: True              # maps/nhit: per-pixel count of unflagged samples.
@@ -105,7 +105,12 @@ output:
                                   # residuals (C3 res_<band>_<postfix>.fits). Gathers
                                   # every band map onto the CompSep master: memory-heavy.
       ncorr_tods: False           # DEBUG ONLY: every correlated-noise TOD, per sample,
-                                  # concatenated. Enormous. Use on one band, one scan.
+                                  # at tods/<scan_id>/<detector>/ncorr. Very large.
+      residual_tods: False        # DEBUG ONLY: full observed-minus-model TODs in detector units,
+                                  # at tods/<scan_id>/<detector>/residual,
+                                  # after sky, dipole, n_corr, sidelobes and low-level corrections.
+                                  # Same residual as maps/res, before masking or CG gap filling.
+                                  # Independent of residual_maps and ncorr_tods; very large.
 
 # ----------------------------------------
 # TOD PROCESSING
