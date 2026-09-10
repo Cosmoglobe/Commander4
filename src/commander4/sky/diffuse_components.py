@@ -76,6 +76,8 @@ class DiffuseComponent(Component):
             comp_params.Cl_prior_FWHM if "Cl_prior_FWHM" in comp_params else 0.0)
         self.Cl_prior_l_pivot = (
             comp_params.Cl_prior_l_pivot if "Cl_prior_l_pivot" in comp_params else 50)
+        # If set, use the C_ell sample as the prior.
+        self.Cl_sample = None
         # C3's COMP_L_APOD: the multipole above which the prior is tapered towards zero. Defaults
         # to this component's lmax, which makes the taper a no-op (C3's own parameter files almost
         # always set it that way too).
@@ -218,15 +220,20 @@ class DiffuseComponent(Component):
         """
         if self.Cl_prior_amplitude is None:
             return np.ones(self.lmax + 1)
-        sigma = np.deg2rad(self.Cl_prior_FWHM / 60.0) / np.sqrt(8.0 * np.log(2.0))
-        ells = np.arange(1, self.lmax + 1)
-        Dl = np.empty(self.lmax + 1)
-        Dl[1:] = self.Cl_prior_amplitude * (ells / self.Cl_prior_l_pivot)**self.Cl_prior_beta \
-            * np.maximum(np.exp(-ells * (ells + 1) * sigma**2), 1e-10)
-        Dl[0] = Dl[1]
-        Cl = np.empty(self.lmax + 1)
-        Cl[1:] = Dl[1:] * 2.0 * np.pi / (ells * (ells + 1))
-        Cl[0] = Dl[0]
+        if self.Cl_sample is None:
+            # Cl is not given as a sample, so use parameteric form.
+            sigma = np.deg2rad(self.Cl_prior_FWHM / 60.0) / np.sqrt(8.0 * np.log(2.0))
+            ells = np.arange(1, self.lmax + 1)
+            Dl = np.empty(self.lmax + 1)
+            Dl[1:] = self.Cl_prior_amplitude * (ells / self.Cl_prior_l_pivot)**self.Cl_prior_beta \
+                * np.maximum(np.exp(-ells * (ells + 1) * sigma**2), 1e-10)
+            Dl[0] = Dl[1]
+            Cl = np.empty(self.lmax + 1)
+            Cl[1:] = Dl[1:] * 2.0 * np.pi / (ells * (ells + 1))
+            Cl[0] = Dl[0]
+        else:
+            # Cl is given from a sample draw, so use that as a prior.
+            Cl = self.Cl_sample
         return Cl * self.Cl_prior_apodization**2
 
     @property
