@@ -10,6 +10,7 @@ from commander4.tod.gain import GainConfig
 from commander4.tod.jumps import JumpDetectionConfig
 from commander4.tod.mapmaking.config import MapmakingConfig
 from commander4.tod.noise.sample_ncorr import CorrelatedNoiseConfig
+from commander4.tod.sidelobe_deconvolve import FarBeamConfig
 
 
 def _params(**steps) -> Bunch:
@@ -77,6 +78,14 @@ def test_documented_defaults_are_owned_by_the_config_classes():
     assert data_selection.chisq_abs_threshold == 1.0e4
     assert data_selection.min_good_fraction == 0.1
 
+    # The far-beam defaults are the Commander3 convolution limits and its LevelS scale factor.
+    far_beam = FarBeamConfig.from_params(params, EXPERIMENT)
+    assert not far_beam.enabled
+    assert far_beam.lmax == 100
+    assert far_beam.mmax == 100
+    assert far_beam.epsilon == 1.0e-4
+    assert far_beam.beam_norm == 2.0
+
 
 def test_each_config_rejects_unknown_fields_in_its_own_block():
     with pytest.raises(ValueError, match="calibrate_aganist"):
@@ -89,6 +98,30 @@ def test_each_config_rejects_unknown_fields_in_its_own_block():
     params = _params(data_selection={"minimum_good_fraction": 0.2})
     with pytest.raises(ValueError, match="minimum_good_fraction"):
         DataSelectionConfig.from_params(params)
+
+    # `npoints` was an early far-beam setting that ducc0 makes unnecessary; it must not survive
+    # unnoticed in a parameter file.
+    params = _params(far_beam_deconvolution={"npoints": [100, 80, 30]})
+    with pytest.raises(ValueError, match="npoints"):
+        FarBeamConfig.from_params(params, EXPERIMENT)
+
+
+def test_far_beam_limits_are_validated():
+    params = _params(far_beam_deconvolution={"enabled": True, "lmax": 50, "mmax": 80})
+    with pytest.raises(ValueError, match="cannot exceed lmax"):
+        FarBeamConfig.from_params(params, EXPERIMENT)
+
+    params = _params(far_beam_deconvolution={"lmax": -1})
+    with pytest.raises(ValueError, match="non-negative integer"):
+        FarBeamConfig.from_params(params, EXPERIMENT)
+
+    params = _params(far_beam_deconvolution={"epsilon": 0.0})
+    with pytest.raises(ValueError, match="epsilon"):
+        FarBeamConfig.from_params(params, EXPERIMENT)
+
+    # A band-limited beam is legitimate: lmax = mmax = 0 keeps only the monopole.
+    params = _params(far_beam_deconvolution={"enabled": True, "lmax": 0, "mmax": 0})
+    assert FarBeamConfig.from_params(params, EXPERIMENT).is_active(1)
 
 
 def test_nested_cg_blocks_validate_their_own_fields():

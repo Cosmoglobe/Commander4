@@ -207,11 +207,17 @@ def init_mpi_tod(mpi_info: Bunch, params: Bunch) -> Bunch:
     band_rank = band_comm.Get_rank()
     band_size = band_comm.Get_size()
 
+    # The band's ranks that sit on one physical node, for data identical across the band that is
+    # too large to hold per rank (the far-sidelobe cubes). Splitting the band rather than the world
+    # matters: a node can host ranks of two different bands, and they need different data.
+    node_comm = band_comm.Split_type(MPI.COMM_TYPE_SHARED)
+
     if mpi_info.tod.is_master:
         logger.verbose(f"TOD: {mpi_info.tod.size} tasks allocated across {len(tod_bands)} bands.")
     logger.debug(
         f"TOD rank {tod_rank} (on {MPI.Get_processor_name()}) handles "
-        f"{my_band.experiment_name}/{my_band.band_name}, band rank {band_rank}/{band_size}."
+        f"{my_band.experiment_name}/{my_band.band_name}, band rank {band_rank}/{band_size}, "
+        f"node rank {node_comm.Get_rank()}/{node_comm.Get_size()}."
     )
 
     mpi_info.experiment = Bunch(name=my_band.experiment_name)
@@ -223,6 +229,10 @@ def init_mpi_tod(mpi_info: Bunch, params: Bunch) -> Bunch:
         size=band_size,
         rank=band_rank,
         is_master=band_rank == 0,
+        node_comm=node_comm,
+        node_size=node_comm.Get_size(),
+        node_rank=node_comm.Get_rank(),
+        is_node_master=node_comm.Get_rank() == 0,
     )
     return mpi_info
 

@@ -87,9 +87,9 @@ def test_pack_ncorr_tods_empty():
 class _DiagStubView:
     """Stand-in for TODView exposing only what _record_tod_diagnostics reads.
 
-    ``get_tod()`` (no subtract) returns the jump-corrected raw TOD; ``get_tod(subtract=...)``
-    returns the sky+orbital-dipole-subtracted base. Both are fresh copies so the diagnostics
-    helper can subtract n_corr in place, mirroring the real TODView contract.
+    ``get_tod()`` (no subtract) returns the corrected TOD; ``get_tod(subtract=...)`` returns the
+    sky+orbital-dipole-subtracted base. Both are fresh copies so the diagnostics helper can subtract
+    n_corr in place, mirroring the real TODView contract.
     """
     def __init__(self, raw, sky_orb_subtracted, fsamp=10.0):
         self._raw = raw
@@ -98,7 +98,7 @@ class _DiagStubView:
         self.sigma0 = 1.0  # Read (with get_mask) by the chisq_z diagnostic.
 
     @property
-    def tod(self):
+    def raw_tod(self):
         return self._raw
 
     def get_tod(self, *, subtract=None, **kwargs):

@@ -1,9 +1,4 @@
-"""TOD reader for Planck LFI flight data (``experiment_id: planck_lfi``).
-
-LFI only. HFI's bolometer data differs enough (transfer functions, a different flagging scheme and
-detector-scan quality cuts tuned to other units) that it will need its own reader; the amplitude
-cuts below are LFI-specific and would silently reject HFI data.
-"""
+"""TOD reader for modulated Planck HFI flight data (``experiment_id: planck_hfi``)."""
 import logging
 import numpy as np
 import healpy as hp
@@ -34,7 +29,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                all_det_names: list[str],
                params: Bunch, scan_idx_start: int,
                scan_idx_stop: int) -> DetectorGroupTOD:
-    """Read this rank's scans for one Planck LFI band from its HDF5 scan files.
+    """Read this rank's scans for one Planck HFI band from its HDF5 scan files.
 
     The band's ``filelist`` names one file per pointing period (PID). Scans listed in
     ``bad_PIDs_path`` are skipped, and each kept scan is trimmed to a length with a cheap FFT
@@ -73,10 +68,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
     else:
         bad_PIDs = np.array([])
 
-    if "instrument_file" in my_experiment:
-        instrument_filepath = my_experiment.instrument_file
-    else:
-        instrument_filepath = None
 
     scan_list = []
     nscans = scan_idx_stop - scan_idx_start
@@ -97,18 +88,30 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
             continue
         good_scan = True
         with h5py.File(filepath, "r") as f:
-            data_nside = int(f["common/nside"][()].item())
-            ntod = int(f[f"/{pid}/common/ntod"][()].item())
+            # Hacky fixes to missing entries. #TODO: Need to figure out how to handle this.
+            try:
+                data_nside = int(f["common/nside"][()].item())
+            except:
+                continue
+            try:
+                ntod = int(f[f"/{pid}/common/ntod"][()].item())
+            except:
+                continue
             ntod_optimal = find_good_fourier_size(ntod)
             huffman_tree = f[f"/{pid}/common/hufftree"][()]
             huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
+            huffman_tree2 = f[f"/{pid}/common/hufftree2"][()]
+            huffman_symbols2 = f[f"/{pid}/common/huffsymb2"][()]
             vsun = f[f"/{pid}/common/vsun/"][()]
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
-            polang = f["common/polang"][()]
             detector_list = []
             for idet, det_name in enumerate(all_det_names):
-                tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32, copy=False)
+                # Hacky fixes to missing entries. #TODO: Need to figure out how to handle this.
+                try:
+                    ztod = f[f"/{pid}/{det_name}/ztod/"][()]
+                except:
+                    continue
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
                 # Intensity-only bands have no psi in the files; feed a zero psi (unused by I-only
                 # mapmaking, but PixelPointing requires a length-matched array).
@@ -129,7 +132,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                 detector = DetectorTOD(
                     name=det_name,
                     det_idx_fullband=idet,
-                    tod=tod,
+                    tod=ztod,
                     pointing=det_pointing,
                     sampling_rate_hz=fsamp,
                     orbital_velocity_m_per_s=vsun,
@@ -138,14 +141,16 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                     default_proc_mask=default_mask,
                     specific_proc_masks=specific_masks,
                     flag_encoded=flag_encoded,
+                    huffman_tree2=huffman_tree2,
+                    huffman_symbols2=huffman_symbols2,
                     bad_data_bitmask=6111232,
                     init_scalars=init_scalars,
-                    polang=polang[idet]
+                    tod_is_compressed=True,
                 )
                 if (detector.tod == 0).all():
                     continue
-                if np.mean(np.abs(detector.tod)) > 0.001 or np.std(detector.tod) > 0.001:
-                    continue
+                # if np.mean(np.abs(detector.tod)) > 0.001 or np.std(detector.tod) > 0.001:
+                #     continue
                 if not np.isfinite(detector.tod).all():
                     continue
                 if detector.good_data_mask.mean() < 0.75:
@@ -171,11 +176,15 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                               P_uni = [[np.nan, np.nan], [0.01, 0.5], [-2.5, -0.25]],
                               nu_fit = [[np.nan, np.nan], [0, 3.0], [0, 3.0]])
     apply_noise_priors(noise_model, params, expname, bandname)
-
+    # Hacky fixe to no scans on this rank. #TODO: Need to figure out how to handle this.
+    try:
+        fsamp
+    except:
+        fsamp = 1.0
+    
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model,
-                           instrument_filepath=instrument_filepath)
-    # my_det_central_freq = my_band.freq
+                           hfi_demodulation=True)
 
     # TODO: Re-implement bandpass shift.
     # if "bandpass_shift" in my_det:

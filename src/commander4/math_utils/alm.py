@@ -1,8 +1,8 @@
 """Operations on spherical-harmonic coefficients stored in the healpy complex convention.
 
-Everything here works on alm arrays directly: their inner product (which must count m>0 twice),
-the alm count, random draws, multiplication by an l-dependent filter, resolution changes, and the
-complex<->real repacking the samplers need. Transforms between alms and maps live in `sht.py`.
+Everything here works on alm arrays directly: inner products, array sizes, random draws,
+multipole-dependent filtering, resolution changes, and conversion between complex alms and the two
+real layouts used by Commander. Transforms between alms and maps live in `sht.py`.
 """
 from math import sqrt
 
@@ -156,7 +156,7 @@ def almxfl(alm, fl, lmax=None, mmax=None, inplace=False):
 #     for m in range(mmax + 1):
 #         m_offsets[m+1] = m_offsets[m] + (lmax - m + 1)
 #     n_threads = numba.get_num_threads()
-    
+
 #     _almxfl_numba_schedule(alm, lmax, mmax, m_offsets, fl, n_threads, inplace=True)
 #     return res
 
@@ -225,16 +225,20 @@ def alm_dot_product(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArray:
 
 def alm_complex2real(alm: NDArray[np.complexfloating], lmax: int,
                      mmax: int | None = None) -> NDArray[np.floating]:
-    """ Over the last axis of the input array, converts from the complex convention of storing alms
-        to the real convention (which is only applicable when the map is real). In the real
-        convention, the all m modes are stored, but they are all stored as real values, not complex.
-        Args:
-            alm (np.array): Complex alm array where the last axis has length nalm(lmax, mmax).
-            lmax (int): The lmax of the alm array.
-            mmax (int): The mmax of the alm array. Defaults to lmax.
-        Returns:
-            x (np.array): Real alm array where the last axis has length
-                2*nalm(lmax, mmax) - (lmax+1), which is (lmax+1)^2 for the usual mmax = lmax.
+    """Repack Healpy complex alms as the real coordinates used by Commander4 solvers.
+
+    The last axis starts with the real ``m=0`` coefficients for every l. It then stores the real and
+    imaginary parts of each ``m>0`` Healpy coefficient consecutively, multiplied by ``sqrt(2)``.
+    This scaling makes an ordinary dot product of the real coordinates equal the corresponding alm
+    inner product.
+
+    Args:
+        alm: Complex alms in Healpy m-major order, with alms on the last axis.
+        lmax: Maximum multipole.
+        mmax: Maximum azimuthal mode. Defaults to ``lmax``.
+
+    Returns:
+        Packed real coordinates of length ``2*nalm(lmax, mmax) - (lmax+1)`` on the last axis.
     """
     if alm.dtype not in (np.complex128, np.complex64):
         raise TypeError(f"Input alms must have dtype complex64 or complex128, got {alm.dtype}.")
@@ -243,24 +247,25 @@ def alm_complex2real(alm: NDArray[np.complexfloating], lmax: int,
         raise ValueError(f"Complex alms of length {alm.shape[-1]} do not match lmax={lmax}, "
                          f"mmax={mmax} (expected {nalm(lmax, mmax)}).")
     float_dtype = np.float64 if alm.dtype == np.complex128 else np.float32
-    # Alms are stored m-major, so the real m=0 modes are always the first lmax+1 entries, whatever
-    # mmax is. The m>0 entries that follow are split into their real and imaginary parts.
+    # Healpy stores all m=0 coefficients first. Viewing the remaining contiguous complex values as
+    # floats produces the required [real, imaginary, real, imaginary, ...] sequence.
     i = lmax + 1
     return np.concatenate([alm[...,:i].real,sqrt(2.0)*alm[...,i:].view(float_dtype)], axis=-1)
 
 
 def alm_real2complex(x: NDArray[np.floating], lmax: int,
                      mmax: int | None = None) -> NDArray[np.complexfloating]:
-    """ Over the last axis of the input array, converts from the real convention of storing alms
-        (which is applicable when the map is real), to the complex convention. In the complex
-        convention, the only m>=0 is stored, but are stored as complex numbers (m=0 is always real).
-        Args:
-            x (np.array): Real alm array where the last axis has length
-                2*nalm(lmax, mmax) - (lmax+1), which is (lmax+1)^2 for the usual mmax = lmax.
-            lmax (int): The lmax of the alm array.
-            mmax (int): The mmax of the alm array. Defaults to lmax.
-        Returns:
-            oalm (np.array): Complex alm array where the last axis has length nalm(lmax, mmax).
+    """Convert Commander4's packed real coordinates back to Healpy complex alms.
+
+    This is the inverse of :func:`alm_complex2real`.
+
+    Args:
+        x: Packed real coordinates on the last axis.
+        lmax: Maximum multipole.
+        mmax: Maximum azimuthal mode. Defaults to ``lmax``.
+
+    Returns:
+        Complex alms in Healpy m-major order, with length ``nalm(lmax, mmax)``.
     """
     if x.dtype not in (np.float32, np.float64):
         raise TypeError(f"Input map must have dtype float32 or float64, got {x.dtype}.")
@@ -270,11 +275,83 @@ def alm_real2complex(x: NDArray[np.floating], lmax: int,
         raise ValueError(f"Real alms of length {x.shape[-1]} do not match lmax={lmax}, "
                          f"mmax={mmax} (expected {2*nelem - (lmax+1)}).")
     complex_dtype = np.complex128 if x.dtype == np.float64 else np.complex64
-    # See alm_complex2real: the first lmax+1 entries are the real m=0 modes, the rest are the real
-    # and imaginary parts of the m>0 modes.
     i = lmax + 1
-    # oalm will have the same shape as x except for the last axis.
     oalm = np.zeros((*x.shape[:-1], nelem), complex_dtype)
     oalm[...,:i] = x[...,:i]
+    # Pair consecutive floats into complex values, then undo the sqrt(2) scaling of m>0 modes.
     oalm[...,i:] = x[...,i:].view(complex_dtype)/sqrt(2.0)
     return oalm
+
+
+def alm_complex2real_commander3(alm: NDArray[np.complexfloating], lmax: int,
+                                mmax: int | None = None) -> NDArray[np.floating]:
+    """Convert Healpy complex alms to the l-major real convention used by Commander3.
+
+    Unlike Commander4's packed layout, Commander3 reserves one slot for every signed m at index
+    ``l**2 + l + m``. For ``m>0``, the ``+m`` slot contains ``sqrt(2)*real(a_lm)`` and the ``-m``
+    slot contains ``sqrt(2)*imag(a_lm)``. A restricted ``mmax`` therefore leaves zero padding in
+    the unused signed-m slots instead of shortening the array.
+
+    Args:
+        alm: Complex alms in Healpy m-major order, with alms on the last axis.
+        lmax: Maximum multipole.
+        mmax: Maximum azimuthal mode. Defaults to ``lmax``.
+
+    Returns:
+        Real Commander3 alms, with the padded l-major layout on the last axis.
+    """
+    if alm.dtype not in (np.complex128, np.complex64):
+        raise TypeError(f"Input alms must have dtype complex64 or complex128, got {alm.dtype}.")
+    mmax = lmax if mmax is None else mmax
+    nelem = nalm(lmax, mmax)
+    if alm.shape[-1] != nelem:
+        raise ValueError(f"Complex alms of length {alm.shape[-1]} do not match lmax={lmax}, "
+                         f"mmax={mmax} (expected {nelem}).")
+
+    float_dtype = np.float64 if alm.dtype == np.complex128 else np.float32
+    x = np.zeros((*alm.shape[:-1], (lmax+1)**2), dtype=float_dtype)
+    l, m = hp.Alm.getlm(lmax, np.arange(nelem))
+    # Locations of the +m and -m real coordinates corresponding to each stored Healpy mode.
+    ip = l**2 + l + m
+    im = l**2 + l - m
+    m0 = m == 0
+    x[..., ip[m0]] = alm[..., m0].real
+    x[..., ip[~m0]] = sqrt(2.0)*alm[..., ~m0].real
+    x[..., im[~m0]] = sqrt(2.0)*alm[..., ~m0].imag
+    return x
+
+
+def alm_real2complex_commander3(x: NDArray[np.floating], lmax: int,
+                                mmax: int | None = None) -> NDArray[np.complexfloating]:
+    """Convert l-major Commander3 real alms to Healpy complex alms.
+
+    This is the inverse of :func:`alm_complex2real_commander3`. Values in padded slots with
+    ``abs(m)>mmax`` are ignored.
+
+    Args:
+        x: Real Commander3 alms, with a padded ``(lmax+1)**2`` last axis.
+        lmax: Maximum multipole.
+        mmax: Maximum azimuthal mode to include. Defaults to ``lmax``.
+
+    Returns:
+        Complex alms in Healpy m-major order, with length ``nalm(lmax, mmax)``.
+    """
+    if x.dtype not in (np.float32, np.float64):
+        raise TypeError(f"Input alms must have dtype float32 or float64, got {x.dtype}.")
+    mmax = lmax if mmax is None else mmax
+    expected_size = (lmax+1)**2
+    if x.shape[-1] != expected_size:
+        raise ValueError(f"Commander3 alms of length {x.shape[-1]} do not match lmax={lmax} "
+                         f"(expected {expected_size}).")
+
+    nelem = nalm(lmax, mmax)
+    complex_dtype = np.complex128 if x.dtype == np.float64 else np.complex64
+    alm = np.empty((*x.shape[:-1], nelem), dtype=complex_dtype)
+    l, m = hp.Alm.getlm(lmax, np.arange(nelem))
+    # Read the real and imaginary coordinates for each Healpy mode from the signed-m slots.
+    ip = l**2 + l + m
+    im = l**2 + l - m
+    m0 = m == 0
+    alm[..., m0] = x[..., ip[m0]]
+    alm[..., ~m0] = (x[..., ip[~m0]] + 1j*x[..., im[~m0]])/sqrt(2.0)
+    return alm

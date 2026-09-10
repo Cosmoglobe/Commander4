@@ -18,6 +18,7 @@ from commander4.file_io.experiments.litebird_sim import tod_reader as tod_reader
 from commander4.file_io.experiments.litebird_sim_spawndetectors import tod_reader\
     as tod_reader_litebird_sim_spawndetectors
 from commander4.file_io.experiments.planck_lfi import tod_reader as tod_reader_planck_lfi
+from commander4.file_io.experiments.planck_hfi import tod_reader as tod_reader_planck_hfi
 from commander4.file_io.experiments.general import tod_reader as tod_reader_general
 from commander4.file_io.experiments.SO_LAT import tod_reader as tod_reader_SO_LAT
 from commander4.file_io.experiments.SO_SAT import tod_reader as tod_reader_SO_SAT
@@ -28,8 +29,8 @@ experiment_tod_readers = {
     "akari" : tod_reader_akari,
     "litebird_sim" : tod_reader_litebird_sim,
     "litebird_sim_spawndetectors" : tod_reader_litebird_sim_spawndetectors,
-    # Planck LFI only; HFI's bolometer data is not supported yet and will need its own reader.
     "planck_lfi" : tod_reader_planck_lfi,
+    "planck_hfi" : tod_reader_planck_hfi,
     # The plain reader for the standard format, with no instrument-specific behaviour. Everything
     # `simgen` output reads through this, as does any other dataset already in that layout.
     "general" : tod_reader_general,

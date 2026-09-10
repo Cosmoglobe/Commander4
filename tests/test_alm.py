@@ -1,9 +1,12 @@
 """Correctness contracts for the alm repacking and mmax projection, including mmax != lmax."""
 
+import healpy as hp
 import numpy as np
 import pytest
 
-from commander4.math_utils.alm import (alm_complex2real, alm_real2complex, alm_dot_product,
+from commander4.math_utils.alm import (alm_complex2real, alm_real2complex,
+                                       alm_complex2real_commander3,
+                                       alm_real2complex_commander3, alm_dot_product,
                                        project_alms_mmax, get_mmax, nalm)
 
 
@@ -37,6 +40,29 @@ def test_mmax_defaults_to_lmax() -> None:
     alm = random_complex_alms(lmax, lmax)
     assert alm_complex2real(alm, lmax).shape[-1] == (lmax+1)**2
     assert np.allclose(alm_complex2real(alm, lmax), alm_complex2real(alm, lmax, lmax))
+
+
+@pytest.mark.parametrize("lmax, mmax", [(8, None), (8, 8), (8, 3), (8, 0), (12, 5)])
+def test_commander3_complex_real_roundtrip(lmax: int, mmax: int | None) -> None:
+    actual_mmax = lmax if mmax is None else mmax
+    alm = random_complex_alms(lmax, actual_mmax)
+    x = alm_complex2real_commander3(alm, lmax, mmax)
+
+    assert x.shape[-1] == (lmax+1)**2
+    assert np.allclose(alm_real2complex_commander3(x, lmax, mmax), alm)
+
+
+def test_commander3_real_layout_uses_l_squared_plus_l_plus_m() -> None:
+    lmax = 2
+    alm = np.zeros(nalm(lmax, lmax), dtype=np.complex128)
+    alm[hp.Alm.getidx(lmax, 1, 0)] = 2.0
+    alm[hp.Alm.getidx(lmax, 1, 1)] = 3.0 + 4.0j
+
+    x = alm_complex2real_commander3(alm, lmax)
+
+    assert x[1**2 + 1] == 2.0
+    assert x[1**2 + 1 + 1] == pytest.approx(np.sqrt(2.0)*3.0)
+    assert x[1**2 + 1 - 1] == pytest.approx(np.sqrt(2.0)*4.0)
 
 
 def test_mismatched_lengths_raise_explicit_exceptions() -> None:

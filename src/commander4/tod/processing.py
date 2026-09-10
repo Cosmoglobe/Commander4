@@ -1,9 +1,9 @@
 """The TOD-processing side of one Gibbs iteration, and the settings that configure it.
 
 `init_tod_processing` sets up the per-band data and sample containers once; `process_tod` runs the
-sampling steps for a single iteration (gain, jumps, correlated noise, mapmaking, data selection) and
-hands the resulting band maps to component separation. The `*Config` dataclasses here validate the
-`tod_processing` block of the parameter file.
+sampling steps for a single iteration (jumps, HFI baselines, gain, correlated noise, mapmaking, data
+selection) and hands the resulting band maps to component separation. The `*Config` dataclasses
+here validate the `tod_processing` block of the parameter file.
 """
 import numpy as np
 import pixell
@@ -26,6 +26,8 @@ from commander4.tod.data_selection import log_dataselect_summary, DataSelectionC
 from commander4.tod.gain import sample_absolute_gain, sample_relative_gain,\
     sample_temporal_gain_variations, GainConfig
 from commander4.tod.jumps import sample_jump_detection, JumpDetectionConfig
+from commander4.tod.hfi_demodulation import sample_hfi_baselines
+from commander4.tod.sidelobe_deconvolve import FarBeamProjector, FarBeamConfig
 from commander4.tod.view import TODView
 from commander4.tod.mapmaking.binned import tod2map_bin
 from commander4.tod.mapmaking.cg import tod2map_CG
@@ -148,6 +150,11 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     # earlier sampler changes the chain state. Each class owns its own unpacking and validation.
     mapmaking = MapmakingConfig.from_params(params, experiment_data)
     jump_detection = JumpDetectionConfig.from_params(params, experiment_data)
+    far_beam_cfg = FarBeamConfig.from_params(params, experiment_data)
+    if far_beam_cfg.is_active(iter) and mapmaking.mapmaker == "CG":
+        raise ValueError("Far-beam deconvolution is only implemented for the binned mapmaker; the "
+                         "CG mapmaker would silently leave the sidelobe pickup in the data.")
+
     absolute_gain = GainConfig.from_params(
         params, experiment_data, "abs_gain", "orbital_dipole", iter, is_master,
     )
@@ -166,6 +173,12 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
             tod_samples = sample_jump_detection(band_comm, experiment_data, tod_samples,
                                                 jump_detection, iter)
 
+    # HFI baselines use the previous iteration's gain and sigma0, like Commander3. The first pass
+    # also determines whether Python's even or odd sample indices carry the positive half-cycle.
+    if tod_samples.hfi_demodulation:
+        with benchmark("hfi-baselines"):
+            tod_samples = sample_hfi_baselines(experiment_data, tod_samples, compsep_output)
+
     # Gain uses the previous iteration's sigma0. The new sigma0 is estimated later, inside the
     # mapmaker scan loop, matching Commander3's gain -> n_corr -> bin_TOD order.
     if absolute_gain.is_active(iter):
@@ -183,6 +196,16 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
             tod_samples = sample_temporal_gain_variations(band_comm, experiment_data, tod_samples,
                                                           compsep_output, temporal_gain, iter)
 
+
+    # Holds one set of sidelobe cubes per node, shared by every band rank on it. Freed explicitly
+    # at the end of this function; going out of scope does not release an MPI window.
+    far_beam_model = None
+    if far_beam_cfg.is_active(iter):
+        with benchmark("far-beam"):
+            far_beam_model = FarBeamProjector(band_comm, mpi_info.band.node_comm, experiment_data,
+                                              tod_samples, compsep_output, far_beam_cfg)
+
+
     # A finite diagnostic means "evaluated this iteration". Previously rejected or absent scans
     # remain NaN and are not counted again by the data-selection summary.
     tod_samples.chisq_z[:] = np.nan
@@ -197,7 +220,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
         else:
             detmap_dict, maps_to_file = tod2map_bin(
                 band_comm, experiment_data, compsep_output, tod_samples, iter, mapmaking,
-                correlated_noise, data_selection,
+                correlated_noise, data_selection, far_beam_model,
             )
 
     # Report during data-selection warm-up as well as active-cut iterations.
@@ -222,6 +245,12 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
 
     with benchmark("end-barrier"):
         tod_comm.Barrier()
+
+    # Free shared memory allocated during far beam construction. The far-beam step is gated on
+    # `far_beam_cfg.is_active`, which every rank of the band evaluates identically, so this
+    # collective is either taken by all of them or by none.
+    if far_beam_model is not None:
+        far_beam_model.free()
 
     bench_summary(tod_comm, label="All bands")
     bench_summary(band_comm, label=f"Band {experiment_data.band_name}")

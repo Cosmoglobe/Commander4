@@ -28,7 +28,7 @@ class TODView:
     TOD-processing architecture.
 
     Downsampling. The view carries a single ``downsample_factor`` fixed at construction (overridable
-    per detector via ``focus``). The raw ``tod`` / ``corrected_tod`` and the *internal* full-rate
+    per detector via ``focus``). The ``raw_tod`` / ``corrected_tod`` and the *internal* full-rate
     pointing stay at full resolution, because model TODs must be integrated over each block rather
     than sampled at its center. Every quantity exposed downstream is at the active resolution:
     ``pix`` / ``psi`` take block centers, the model and data getters (``get_tod``,
@@ -81,7 +81,7 @@ class TODView:
 
     def _clear_cache(self):
         """Drop all arrays materialized for the current detector."""
-        self._tod = None
+        self._raw_tod = None
         self._corrected_tod = None
         self._pix = None
         self._psi = None
@@ -254,18 +254,36 @@ class TODView:
 
     # ------------------------------------------------------------------ raw / pointing accessors
     @property
-    def tod(self) -> NDArray[np.floating]:
-        """The raw detector TOD, at full resolution."""
-        if self._tod is None:
-            self._tod = self.detector.tod
-        return self._tod
+    def raw_tod(self) -> NDArray[np.floating]:
+        """The decoded detector TOD exactly as stored, at full resolution.
+        See `self.corrected_tod` for the TOD to use for science. """
+        if self._raw_tod is None:
+            self._raw_tod = self.detector.tod
+        return self._raw_tod
 
     @property
     def corrected_tod(self) -> NDArray[np.floating]:
-        """The raw TOD with the stored jump offsets applied, at full resolution (detector units)."""
+        """TOD (in detector units) after low-level corrections, such as jumps or demodulation.
+
+        Figures out what low-level corrections are active and applies those to `self.raw_tod`.
+        Currently implemented adjustments include:
+            - Jump corrections, requiring the jump-finding sampling step.
+            - HFI demodulation, requiring the demodulation phase and the baseline sampling steps.
+        """
         if self._corrected_tod is None:
             jump = self.tod_samples.jumps.get(self.iscan, self.idet)
-            self._corrected_tod = self.tod if jump.is_empty() else jump.apply(self.tod)
+            corrected = self.raw_tod if jump.is_empty() else jump.apply(self.raw_tod)
+
+            if getattr(self.experiment_data, "hfi_demodulation", False):
+                if not self.tod_samples.modulation_phase_initialized:
+                    raise RuntimeError("HFI TOD requested before modulation phase initialization.")
+                phase = self.tod_samples.modulation_phase[self.iscan, self.idet]
+                baseline_first, baseline_second = self.tod_samples.baselines[self.iscan, self.idet]
+                corrected = np.array(corrected, copy=True)
+                corrected[0::2] = phase * (corrected[0::2] - baseline_first)
+                corrected[1::2] = -phase * (corrected[1::2] - baseline_second)
+
+            self._corrected_tod = corrected
         return self._corrected_tod
 
     @property
@@ -439,8 +457,8 @@ class TODView:
         divide_by_gain: tuple[str, ...] | None = None,
         compsep_output: NDArray | None = None,
     ) -> NDArray[np.floating]:
-        """Return a jump-corrected detector-local TOD, at the active resolution, after subtracting
-        selected model terms.
+        """Return a detector-local TOD after doing both optional sky-subtractions, and after
+        last-minute corrections like jump offsets and HFI demodulation.
 
         Args:
             subtract: Sequence of ``(signal_name, gain_terms)`` pairs. Each signal is evaluated

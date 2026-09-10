@@ -54,16 +54,16 @@ def _record_tod_diagnostics(tod_samples: TODSamples, iscan: int, idet: int, view
           * ``residual``: the noise residual, with the sky model, orbital dipole, and correlated
                           noise all subtracted.
           * ``ncorr``:    the correlated-noise realization itself, stored only when one was drawn.
-        ``ncorrsub`` and ``residual`` use the jump-corrected stream (matching mapmaking and n_corr
-        sampling). When the off-by-default DEBUG full-``n_corr`` collection is enabled, also stores
-        the entire ``n_corr`` TOD for this detector-scan.
+        ``ncorrsub`` and ``residual`` use the canonical corrected stream (matching mapmaking and
+        n_corr sampling). When the off-by-default DEBUG full-``n_corr`` collection is enabled, also
+        stores the entire ``n_corr`` TOD for this detector-scan.
 
         Returns:
             The full-length ``residual`` TOD, in detector units, so the caller can bin it into the
             residual map (Commander3's `tod_<freq>_res`) without rebuilding it.
     """
     nbin = tod_samples.TOD_PS_NBIN
-    freqs_binned, raw_binned = _binned_tod_power_spectrum(view.tod, view.fsamp, nbin)
+    freqs_binned, raw_binned = _binned_tod_power_spectrum(view.raw_tod, view.fsamp, nbin)
     tod_samples.tod_ps_freqs[iscan, idet] = freqs_binned
     tod_samples.tod_ps_raw[iscan, idet] = raw_binned
 

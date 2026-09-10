@@ -57,7 +57,7 @@ A parameter file is seven top-level blocks, each named after the part of the pro
 
 The MPI task counts are **derived**, not stated: the TOD total is the sum of the per-band `num_tasks` over enabled bands of enabled experiments, and component separation takes one task per enabled `compsep.bands` view (one for I, one for QU). Commander4 reports the total it needs, and `mpirun -n` must match it.
 
-Parameter files can include other parameter files using `!include 'path/to/file.yml'`. The path is relative to the relevant file. Note that the exact content of the imported file is inserted at the exact location of the import, and at the relevant indendation level.
+Parameter files can include other parameter files using `!import 'path/to/file.yml'`. The path is relative to the relevant file. Note that the exact content of the imported file is inserted at the exact location of the import, and at the relevant indendation level.
 
 ### 2.2 Output
 A run writes everything below the single directory named by `output.dir`, which it creates:
@@ -86,6 +86,8 @@ detrel_gain        (ND,)       # relative gain offset, one per detector (zero-su
 temporal_gain      (NSC,ND)    # per-scan gain variation about abs+rel
 gain_prior         (ND,3)      # (sigma0, fknee, alpha) of the temporal-gain Wiener prior
 noise_params       (NSC,ND,NPAR)  # noise PSD parameters, sigma0 first (sigma0,fknee,alpha for normal oof model).
+modulation_phase   (NSC,ND)    # (HFI only) +1/-1 sign of the first stored sample parity
+baselines          (NSC,ND,2)  # (HFI only) sampled first/second-parity modulation baselines
 present            (NSC,ND)    # int8: this detector has data in this scan
 accept             (NSC,ND)    # int8: data-quality flag (present data that is not rejected)
 good_fraction      (NSC,ND)    # unflagged fraction of samples
@@ -110,6 +112,7 @@ maps/skymodel      (3,npix)    # (opt) sky model this iteration was processed ag
 maps/res           (3,npix)    # (opt) binned residual: data minus sky, dipole and n_corr
 maps/orbdipole     (3,npix)    # (opt) binned orbital dipole
 maps/corrnoise     (3,npix)    # (opt) binned correlated noise
+maps/sidelobe      (3,npix)    # (opt) binned far-sidelobe pickup, removed from the TOD
 maps/nhit          (npix,)     # (opt) int64 count of unflagged samples per pixel
 maps/cov           (6,npix)    # (opt) the 6 unique elements of P^T N^-1 P (II,IQ,IU,QQ,QU,UU)
 ```
@@ -305,3 +308,22 @@ Run `c4-validate-params path/to/param.yml` to get:
 `c4-plot-chain` creates a whole bunch of plots, both sky maps and various TOD plots, and places them in the chains folder.
 - For experimenst like SO, where per-detector plots are unfeasible, you should add the flag `--detector-plots summary`.
 - The amount of plots can get excessive, so it's recommended to use the flags to plot only specific subsets, such as `--chain`, `--iter`, `--band`.
+
+
+# 5. Benchmarking and optimization
+### 5.1 cProfile
+Setting `output.profile = True` in the parameter file will place a `cProfile` wrapper around the main Commander4 call.
+This will dump one stats file per rank to `[output.dir]/stats/` at the end of the entire run.
+
+### 5.2 The internal benchmarking tool
+The script `src/commander4/diagnostics/performance.py` exposes a couple of benchmarking functions the code uses internally.
+Its usage is explained in the file itself. It prints an averaged runtime-summary across MPI-ranks, including minimum and maximum time per rank.
+
+### 5.3 Py-spy
+There exists a lot of profiling tools for Python, but a lot of them break down when combined with MPI.
+I find that `py-spy` works well. You install it with pip, and then just attach it to a single rank while you code is running:
+```bash
+py-spy record -f speedscope --rate 1 --nonblocking --pid 911510 -o my_run.json 
+```
+When you abort it, it will produce a nice file that can either be uploaded to [https://www.speedscope.app/](https://www.speedscope.app/) to show what this rank was doing at all times. Running it on the master rank of some process is typically most informative.
+**Flag explaination:** `--rate` is number of samples per second. `-f speedscope` is the output format. `--nonblocking` means the monitored process will not be briefly stopped during the sampling (without this flag I actually frequently got a mysterious Bus Error).
