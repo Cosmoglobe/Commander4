@@ -13,11 +13,13 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from mpi4py import MPI
+from pixell.bunch import Bunch
 
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
+from commander4.data_models.tod_samples import TODSamples
 import commander4.tod.processing as tod_processing
 import commander4.tod.mapmaking.binned as binned
 from commander4.tod.sky_projection import get_s_orb_tod
@@ -63,7 +65,7 @@ def _fake_tod_samples(sigma0: float = 2.0, ndet: int = 1) -> SimpleNamespace:
         accept=np.ones((1, ndet), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
         chisq_z=np.full((1, ndet), np.nan), good_fraction=np.full((1, ndet), np.nan),
         TOD_PS_NBIN=100, tod_ps_freqs=empty_ps(), tod_ps_raw=empty_ps(), tod_ps_residual=empty_ps(),
-        tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None)
+        tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None, residual_tods=None)
 
 
 def _run(band: DetectorGroupTOD, sky_model: np.ndarray,
@@ -85,6 +87,25 @@ def _run(band: DetectorGroupTOD, sky_model: np.ndarray,
 def _project(sky: np.ndarray, pix: np.ndarray, psi: np.ndarray) -> np.ndarray:
     """The IQU sky along a pointing: I + Q cos(2 psi) + U sin(2 psi)."""
     return sky[0, pix] + sky[1, pix]*np.cos(2*psi) + sky[2, pix]*np.sin(2*psi)
+
+
+@pytest.mark.parametrize("enabled", [None, False, True])
+def test_residual_tod_parameter_controls_collection(enabled: bool | None) -> None:
+    """Omitting the new flag keeps full residual storage disabled."""
+    band = _build_band(np.zeros(128, dtype=np.int64), np.zeros(128), np.zeros(128))
+    include = Bunch()
+    if enabled is not None:
+        include.residual_tods = enabled
+    params = Bunch(output=Bunch(chains=Bunch(include=include)), gibbs=Bunch())
+    my_band = Bunch(band_unit="uK_RJ", detectors=Bunch(d0=Bunch(gain=_GAIN)))
+
+    samples = TODSamples(band, params, my_band, MPI.COMM_SELF, chain=1)
+
+    assert samples.ncorr_tods is None
+    if enabled:
+        assert samples.residual_tods == [[None]]
+    else:
+        assert samples.residual_tods is None
 
 
 def test_residual_map_is_zero_for_a_perfect_noiseless_model(monkeypatch):
@@ -225,6 +246,7 @@ def test_intensity_mapmaker_recovers_signal_rms_and_aux_maps(
         counts[:] = 0
     counts = comm.allreduce(counts)
     samples = _fake_tod_samples()
+    samples.residual_tods = [[None]]
     samples.ncorr_cg_residual = np.zeros((1, 1))
     samples.ncorr_cg_niter = np.zeros((1, 1), dtype=np.int32)
     samples.ncorr_converged = np.zeros((1, 1), dtype=bool)
@@ -249,6 +271,9 @@ def test_intensity_mapmaker_recovers_signal_rms_and_aux_maps(
         tod_processing.CorrelatedNoiseConfig(enabled=True, sample_sigma0=False),
         tod_processing.DataSelectionConfig(), far_beam,
     )
+    if band.nscans:
+        np.testing.assert_allclose(samples.residual_tods[0][0], _GAIN * response_I * offset,
+                                   atol=2e-4)
     if comm.rank != 0:
         assert detmaps == maps == {}
         return
@@ -261,8 +286,8 @@ def test_intensity_mapmaker_recovers_signal_rms_and_aux_maps(
         np.testing.assert_array_equal(maps[name][0, ~observed], 0.0)
     np.testing.assert_allclose(maps["observed_sky"][0, observed], sky[0, observed] + offset,
                                rtol=1e-5, atol=1e-4)
-    # Diagnostics subtract sky, orbit and n_corr; the separately removed sidelobe remains in res.
-    np.testing.assert_allclose(maps["res"][0, observed], offset + sidelobe, atol=1e-4)
+    # The saved TOD and residual map both remove sky, orbit, n_corr and sidelobes.
+    np.testing.assert_allclose(maps["res"][0, observed], offset, atol=1e-4)
     np.testing.assert_allclose(maps["corrnoise"][0, observed], corr_amplitude, atol=1e-6)
     np.testing.assert_allclose(maps["sidelobe"][0, observed], sidelobe, atol=1e-6)
     orbital_map = np.zeros(_NPIX)

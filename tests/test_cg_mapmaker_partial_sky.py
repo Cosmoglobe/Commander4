@@ -76,7 +76,7 @@ def _fake_tod_samples() -> SimpleNamespace:
         accept=np.ones((1, 1), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
         chisq_z=np.full((1, 1), np.nan), good_fraction=np.full((1, 1), np.nan),
         TOD_PS_NBIN=100, tod_ps_freqs=empty_ps(), tod_ps_raw=empty_ps(), tod_ps_residual=empty_ps(),
-        tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None)
+        tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None, residual_tods=None)
 
 
 def _run_mapmaker(band: DetectorGroupTOD, mapmaker: str) -> dict[str, np.ndarray]:
