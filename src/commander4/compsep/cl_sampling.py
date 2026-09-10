@@ -27,6 +27,7 @@ class ClSamplingGroup(MCMCSamplingGroup):
         proposal = {}
         for group in self.config.groups:
             sigma_l = self.comp_list[group].sigma_l
+            logger.verbose(f"Sigma_ell = [{sigma_l.shape}] {sigma_l}")
 
             # P(C_l | s) = C_l^(-(2l + 1) / 2) exp(- (2l + 1) sigma_l / 2 C_l)
             l = np.arange(len(sigma_l))

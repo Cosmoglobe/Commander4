@@ -665,7 +665,7 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
     for group in cl_groups.values():
         sampler = ClSamplingGroup(
             compsep.comm, detector_data, comp_list, target_pol=compsep_state.target_pol,
-            selected_comps=group.comps, chisq_active=chisq_active,
+            selected_comps=group.comps, chisq_active=True,
             chisq_mask=compsep_state.chisq_masks.get(group.name), root=compsep.master, config=group)
 
         with benchmark(f"cl-{group.name}"):
