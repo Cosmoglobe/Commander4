@@ -25,7 +25,7 @@ class ClSamplingGroup(MCMCSamplingGroup):
     def propose(self, current_state) -> tuple[dict[str, NDArray], bool]:
         logger.verbose("Drawing C_ell proposal.")
         proposal = {}
-        for group in self.config.groups:
+        for group in self.config.comps:
             sigma_l = current_state[group]
             logger.verbose(f"Sigma_ell = [{sigma_l.shape}] {sigma_l}")
 
@@ -38,11 +38,11 @@ class ClSamplingGroup(MCMCSamplingGroup):
         return proposal, True
 
     def apply_state(self, state) -> None:
-        for group in self.config.groups:
+        for group in self.config.comps:
             self.comp_list[group.name].Cl_sample = state[group.name]
 
     def capture_state(self):
-        return {group: self.comp_list[group].sigma_l for group in self.config.groups}
+        return {group: self.comp_list[group].sigma_l for group in self.config.comps}
 
     def has_parameters(self):
-        return True
+        return bool(self.config.comps)
