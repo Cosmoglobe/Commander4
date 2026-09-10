@@ -64,9 +64,13 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
     my_band_pol = my_band.polarization
     det_names = list(my_band.detectors)
 
+    #read the tot num of scans from the header of filelist and use it as default.
+    with open(my_band.filelist, "r") as f:
+        num_scans_def = int(f.readline().strip())
+
     total_scans = int(resolve_param(params, "num_scans",
                                     (f"experiments.{experiment_name}.bands.{my_band_name}",
-                                     f"experiments.{experiment_name}")))
+                                     f"experiments.{experiment_name}"), default=num_scans_def))
     my_scans_start, my_scans_stop = split_integer_range(total_scans, mpi_info.band.size,
                                                         mpi_info.band.rank)
     mpi_info.tod.comm.Barrier()

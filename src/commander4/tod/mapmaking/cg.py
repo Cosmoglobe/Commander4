@@ -59,7 +59,8 @@ class CGMapmaker:
                 detector_samples:TODSamples,
                 map_comm:MPI.Comm,
                 #optionals:
-                T_omega:Callable|None = None, 
+                T_omega:Callable|None = None,
+                W_mat:NDArray|None = None,
                 preconditioner:Callable = np.copy,
                 nthreads:int=1, 
                 double_prec:bool = True,
@@ -98,6 +99,7 @@ class CGMapmaker:
         self.f_dtype = np.float64 if double_prec else np.float32
         self.nthreads = nthreads
         self.T_omega = T_omega
+        self.W_mat = W_mat
         # Native sampling rate [Hz] of the mapmaking TODs, so the transfer function T_omega(omega) is
         # evaluated on a physical-frequency grid (a `tau` in seconds means seconds, not samples). The
         # CG's own noise model is white, so unlike apply_N_inv this rate is only needed for apply_T.
@@ -215,9 +217,28 @@ class CGMapmaker:
         """
         return self._apply_T(scan_tod_arr, adjoint=True)
 
+    def apply_W(self, scan_tod_arr):
+        """
+        Applies the cross-talk operator to a tod.
+        """
+
+        # TODO: how to deal with multiple detectors here???
+        # in the CG mapmaker tod processing we only load a detector at a time.
+        if self.W_mat is None:
+            return scan_tod_arr
+        else:
+            return self.W_mat @ scan_tod_arr
+
+    def apply_W_adjoint(self, scan_tod_arr):
+        """
+        Applies the cross-talk operator to a tod.
+        (self-adjoint as the matrix is symmetric)
+        """
+        return self.apply_W(scan_tod_arr)
+
     def accum_to_RHS(self, scan_tod: DetectorTOD, sigma0: float,
                      pix=None, psi=None, scan_tod_arr=None):
-        """ Computes the contribution to the RHS of the mapmaking problem, P^T T^T N^-1 d, for one
+        """ Computes the contribution to the RHS of the mapmaking problem, P^T T^T W^T N^-1 d, for one
             scan.
         Both scan TOD and the white noise level sigma0 must be given. This allows to compute the RHS
         contributions in an external loop together with the correlated noise sampling, pix can be
@@ -242,10 +263,12 @@ class CGMapmaker:
                 "(check gain, sigma0, and that flagged/non-finite samples are gap-filled).")
         # N^-1 d
         scan_tod_arr = self.apply_inv_N(scan_tod_arr, sigma0)
-        # T^T N^-1 d
+        # W^T N^-1 d
+        scan_tod_arr = self.apply_W_adjoint(scan_tod_arr)
+        # T^T W^T N^-1 d
         scan_tod_arr = self.apply_T_adjoint(scan_tod_arr)
         # logger.warning(f"scan type: {scan_tod_arr.dtype}")
-        # P^T T^T N^-1 d
+        # P^T T^T W^T N^-1 d
         self._rhs_loca_map = self.apply_P_adjoint(scan_tod, self._rhs_loca_map,
                                                   pix=pix, psi=psi, scan_tod_arr=scan_tod_arr)
 
@@ -292,11 +315,15 @@ class CGMapmaker:
                                             pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
             #T P m
             scan_tod_arr_aux = self.apply_T(scan_tod_arr_aux)
-            #N^-1 T P m
+            #W T P m
+            scan_tod_arr_aux = self.apply_W(scan_tod_arr_aux)
+            #N^-1 W T P m
             scan_tod_arr_aux = self.apply_inv_N(scan_tod_arr_aux, sigma0)
-            #T^T N^-1 T P m
+            #W^T N^-1 W T P m
+            scan_tod_arr_aux = self.apply_W_adjoint(scan_tod_arr_aux)
+            #T^T W^T N^-1 W T P m
             scan_tod_arr_aux = self.apply_T_adjoint(scan_tod_arr_aux)
-            #P^T T^T N^-1 T P
+            #P^T T^T W^T N^-1 W T P m
             out_local = self.apply_P_adjoint(view.detector, out_local, 
                                              pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
         # Sum the local contributions back to the full-sky map on the master (None on other ranks).
