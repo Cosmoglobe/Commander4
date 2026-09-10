@@ -7,6 +7,7 @@ representation; the classes after it differ only in their SED and its spectral p
 import astropy.constants as c
 import astropy.units as u
 import healpy as hp
+import logging
 import numpy as np
 import pysm3.units as pysm3u
 from numpy.typing import NDArray
@@ -19,6 +20,8 @@ from commander4.polarization import get_npol
 from commander4.math_utils.arithmetic import inplace_scale, inplace_add_scaled_vec
 from commander4.math_utils.alm import project_alms, almxfl, _dot_complex_alm_1D_arrays
 from commander4.math_utils.sht import alm_to_map, map_to_alm, alm_to_map_adjoint, map_to_alm_adjoint
+
+logger = logging.getLogger(__name__)
 
 # Blackbody and thermodynamic-to-brightness conversions shared by the SEDs below.
 A = (2*c.h*u.GHz**3/c.c**2).to('MJy').value
@@ -222,7 +225,7 @@ class DiffuseComponent(Component):
             return np.ones(self.lmax + 1)
         if self.Cl_sample is None:
             # Cl is not given as a sample, so use parameteric form.
-            logging.verbose("No prior provided yet, using parametric form.")
+            logger.verbose("No prior provided yet, using parametric form.")
             sigma = np.deg2rad(self.Cl_prior_FWHM / 60.0) / np.sqrt(8.0 * np.log(2.0))
             ells = np.arange(1, self.lmax + 1)
             Dl = np.empty(self.lmax + 1)
@@ -234,7 +237,7 @@ class DiffuseComponent(Component):
             Cl[0] = Dl[0]
         else:
             # Cl is given from a sample draw, so use that as a prior.
-            logging.verbose("Using prior from C_ell sample.")
+            logger.verbose("Using prior from C_ell sample.")
             Cl = self.Cl_sample
         return Cl * self.Cl_prior_apodization**2
 
