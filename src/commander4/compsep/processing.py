@@ -23,6 +23,7 @@ from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.sky.sky_model import SkyModel
 from commander4.compsep.cg_solver import CompSepSolver
 from commander4.compsep.chisq import ChisqResult, collect_fit_diagnostics, evaluate_chi2
+from commander4.compsep.cl_sampling import ClSamplingGroup
 from commander4.compsep.perpix_solver import solve_compsep_perpix
 from commander4.compsep.spectral_index import SpectralIndexSamplingGroup
 from commander4.file_io.chain_writer import write_compsep_chain_to_file

@@ -1,6 +1,7 @@
 """Sampling of harmonic space components.
 """
 from abc import ABC
+import logging
 import numpy as np
 from numpy.typing import NDArray
 
@@ -9,6 +10,8 @@ from mpi4py import MPI
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
 from commander4.compsep.mcmc import MCMCSamplingGroup
+
+logger = logging.getLogger(__name__)
 
 class ClSamplingGroup(MCMCSamplingGroup):
     def __init__(self, compsep_comm: MPI.Comm, det_map: DetectorMap, comp_list: CompList, *,
@@ -20,6 +23,7 @@ class ClSamplingGroup(MCMCSamplingGroup):
         self.config = config
 
     def propose(self, current_state) -> tuple[dict[str, NDArray], bool]:
+        logger.verbose("Drawing C_ell proposal.")
         proposal = {}
         for group in self.config.groups:
             sigma_l = self.comp_list[group].sigma_l
@@ -29,6 +33,7 @@ class ClSamplingGroup(MCMCSamplingGroup):
             x = np.random.chisquare(df=2.*l-1.)
             cl = (2. * l + 1.) * sigma_l / x
             proposal[group] = cl
+            logger.verbose(f"C_ell[{group}] = {cl}")
         return proposal, True
 
     def apply_state(self, state) -> None:
