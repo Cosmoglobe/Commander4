@@ -209,7 +209,7 @@ def resolve_sampling_groups(params: Bunch) -> tuple[
     if cg_groups and per_pixel_groups:
         raise ValueError("CG and per-pixel amplitude sampling groups are mutually exclusive; "
                          "configure only one method.")
-    return cg_groups, per_pixel_groups, mcmc_groups
+    return cg_groups, per_pixel_groups, mcmc_groups, cl_groups
 
 
 def _read_chisq_masks(compsep_comm: MPI.Comm,
