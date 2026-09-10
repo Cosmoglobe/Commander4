@@ -222,6 +222,7 @@ class DiffuseComponent(Component):
             return np.ones(self.lmax + 1)
         if self.Cl_sample is None:
             # Cl is not given as a sample, so use parameteric form.
+            logging.verbose("No prior provided yet, using parametric form.")
             sigma = np.deg2rad(self.Cl_prior_FWHM / 60.0) / np.sqrt(8.0 * np.log(2.0))
             ells = np.arange(1, self.lmax + 1)
             Dl = np.empty(self.lmax + 1)
@@ -233,6 +234,7 @@ class DiffuseComponent(Component):
             Cl[0] = Dl[0]
         else:
             # Cl is given from a sample draw, so use that as a prior.
+            logging.verbose("Using prior from C_ell sample.")
             Cl = self.Cl_sample
         return Cl * self.Cl_prior_apodization**2
 
