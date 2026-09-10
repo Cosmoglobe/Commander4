@@ -2,6 +2,7 @@
 """
 from abc import ABC
 import numpy as np
+from numpy.typing import NDArray
 
 from mpi4py import MPI
 
@@ -18,14 +19,18 @@ class ClSamplingGroup(MCMCSamplingGroup):
 
         self.config = config
 
-    def propose(self, current_state) -> tuple[object, bool]:
-        sigma_l = self.comp_list["cmb"].sigma_l
+    def propose(self, current_state) -> tuple[dict[str, NDArray], bool]:
+        proposal = {}
+        for group in self.config.groups:
+            sigma_l = self.comp_list[group].sigma_l
 
-        # P(C_l | s) = C_l^(-(2l + 1) / 2) exp(- (2l + 1) sigma_l / 2 C_l)
-        l = np.arange(len(sigma_l))
-        x = np.random.chisquare(df=2.*l-1.)
-        cl = (2. * l + 1.) * sigma_l / x
-        return cl, True
+            # P(C_l | s) = C_l^(-(2l + 1) / 2) exp(- (2l + 1) sigma_l / 2 C_l)
+            l = np.arange(len(sigma_l))
+            x = np.random.chisquare(df=2.*l-1.)
+            cl = (2. * l + 1.) * sigma_l / x
+            proposal[group] = cl
+        return proposal, True
 
     def apply_state(self, state) -> None:
-        self.comp_list["cmb"].Cl_sample = state
+        for group in self.config.groups:
+            self.comp_list[group].Cl_sample = group

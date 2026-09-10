@@ -158,7 +158,8 @@ class MCMCSamplingGroupConfig(SamplingGroupConfig):
 @dataclass(frozen=True)
 class ClSamplingGroupConfig(SamplingGroupConfig):
     """A C_ell sampling group."""
-    lmax: int
+    name: str
+    comps: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
