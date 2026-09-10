@@ -17,7 +17,7 @@ class ClSamplingGroup(MCMCSamplingGroup):
     def __init__(self, compsep_comm: MPI.Comm, det_map: DetectorMap, comp_list: CompList, *,
                  config: "ClSamplingGroupConfig", target_pol: str, chisq_active: bool,
                  selected_comps: list[str] | None, chisq_mask: NDArray | None = None, root: int = 0):
-        super().__init__(compsep_comm, detector_data, comp_list, target_pol=target_pol,
+        super().__init__(compsep_comm, det_map, comp_list, target_pol=target_pol,
                          chisq_active=chisq_active, chisq_mask=chisq_mask, root=root)
 
         self.config = config
