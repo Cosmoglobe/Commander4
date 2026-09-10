@@ -669,7 +669,7 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
             chisq_mask=compsep_state.chisq_masks.get(group.name), root=compsep.master, config=group)
 
         with benchmark(f"cl-{group.name}"):
-            cl_stats = sampler.run(numstep=1)
+            cl_stats = sampler.run(numstep=1, resolve_amplitudes=None)
         if cl_stats:
             sampler_stats.setdefault("cl", {})[group.name] = cl_stats
         fit = evaluate(f"Cl group {group.name!r}")
