@@ -198,7 +198,7 @@ def _read_sampling_groups(params: Bunch, key: str,
 def resolve_sampling_groups(params: Bunch) -> tuple[
         dict[str, CGSamplingGroupConfig],
         dict[str, PerPixelSamplingGroupConfig],
-        dict[str, MCMCSamplingGroupConfig]
+        dict[str, MCMCSamplingGroupConfig],
         dict[str, ClSamplingGroupConfig]]:
     """Resolve the three method-specific group sections and enforce amplitude-solver exclusivity."""
     cg_groups = _read_sampling_groups(params, "cg_sampling_groups", CGSamplingGroupConfig)
