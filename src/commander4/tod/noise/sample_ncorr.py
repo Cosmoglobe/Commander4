@@ -325,6 +325,7 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
         n_corr = np.full(Ntod, mono, dtype=tod.dtype)
         if sample_sigma0 and sigma0_method == "pairwise":
             noise_params[0] = _estimate_sigma0(tod, n_corr, mask, sigma0_dec)
+        stop_bench("ncorr-samp-setup")
         return Bunch(n_corr=n_corr, noise_params=noise_params, residual=0.0, niter=0,
                      converged=True, high_var=False)
     freq = rfftfreq(2 * Ntod, d=1.0/fsamp)  # Mirrored-FFT grid: nfft=2*Ntod -> length Ntod+1.
