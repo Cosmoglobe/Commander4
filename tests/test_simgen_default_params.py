@@ -7,7 +7,7 @@ from simgen.modifiers import build_modifiers
 from simgen.noise import make_noise_model
 from simgen.pointing import POINTING_STRATEGIES, make_pointing
 from simgen.sky import _COMPONENT_BUILDERS, build_components
-from simgen.transfer import MultiPole, SinglePole
+from commander4.math_utils.transfer_func import MultiPole, SinglePole
 
 
 PARAMETER_FILE = Path(__file__).parents[1] / "simgen" / "params" / "param_default.yml"
