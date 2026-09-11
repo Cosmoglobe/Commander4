@@ -30,9 +30,10 @@ class ClSamplingGroup(MCMCSamplingGroup):
             logger.verbose(f"Sigma_ell = [{sigma_l.shape}] {sigma_l}")
 
             # P(C_l | s) = C_l^(-(2l + 1) / 2) exp(- (2l + 1) sigma_l / 2 C_l)
-            l = np.arange(len(sigma_l))
+            l = np.arange(2, len(sigma_l))
             x = np.random.chisquare(df=2.*l-1.)
-            cl = (2. * l + 1.) * sigma_l / x
+            cl = np.zeros_like(sigma_l)
+            cl[l] = (2. * l + 1.) * sigma_l[l] / x
             proposal[group] = cl
             logger.verbose(f"C_ell[{group}] = {cl}")
         return proposal, True
