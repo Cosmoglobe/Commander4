@@ -43,9 +43,7 @@ class ClSamplingGroup(MCMCSamplingGroup):
             self.comp_list[group].Cl_sample = state[group]
 
     def capture_state(self):
-        logger.verbose(f"comp_list: {self.comp_list}")
-        logger.verbose(f"config groups: {self.config.comps}")
-        return {group: self.comp_list[group].sigma_l for group in self.config.comps}
+        return {comp.name: comp.sigma_l for comp in self.comp_list}
 
     def has_parameters(self):
         return bool(self.config.comps)
