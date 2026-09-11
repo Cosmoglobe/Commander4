@@ -23,6 +23,7 @@ from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.sky.sky_model import SkyModel
 from commander4.compsep.cg_solver import CompSepSolver
 from commander4.compsep.chisq import ChisqResult, collect_fit_diagnostics, evaluate_chi2
+from commander4.compsep.cl_sampling import ClSamplingGroup
 from commander4.compsep.perpix_solver import solve_compsep_perpix
 from commander4.compsep.spectral_index import SpectralIndexSamplingGroup
 from commander4.file_io.chain_writer import write_compsep_chain_to_file
@@ -156,6 +157,13 @@ class MCMCSamplingGroupConfig(SamplingGroupConfig):
 
 
 @dataclass(frozen=True)
+class ClSamplingGroupConfig(SamplingGroupConfig):
+    """A C_ell sampling group."""
+    name: str
+    comps: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
 class CompSepState:
     """Resolved rank-local component-separation settings and loaded mask data."""
 
@@ -165,6 +173,7 @@ class CompSepState:
     amplitude_method: str | None
     amplitude_groups: dict[str, CGSamplingGroupConfig | PerPixelSamplingGroupConfig]
     mcmc_groups: dict[str, MCMCSamplingGroupConfig]
+    cl_groups: dict[str, ClSamplingGroupConfig]
     double_precision: bool
     num_threads: int
     chisq_masks: dict[str, NDArray]
@@ -190,16 +199,18 @@ def _read_sampling_groups(params: Bunch, key: str,
 def resolve_sampling_groups(params: Bunch) -> tuple[
         dict[str, CGSamplingGroupConfig],
         dict[str, PerPixelSamplingGroupConfig],
-        dict[str, MCMCSamplingGroupConfig]]:
+        dict[str, MCMCSamplingGroupConfig],
+        dict[str, ClSamplingGroupConfig]]:
     """Resolve the three method-specific group sections and enforce amplitude-solver exclusivity."""
     cg_groups = _read_sampling_groups(params, "cg_sampling_groups", CGSamplingGroupConfig)
     per_pixel_groups = _read_sampling_groups(
         params, "per_pixel_sampling_groups", PerPixelSamplingGroupConfig)
     mcmc_groups = _read_sampling_groups(params, "mcmc_sampling_groups", MCMCSamplingGroupConfig)
+    cl_groups = _read_sampling_groups(params, "cl_sampling_groups", ClSamplingGroupConfig)
     if cg_groups and per_pixel_groups:
         raise ValueError("CG and per-pixel amplitude sampling groups are mutually exclusive; "
                          "configure only one method.")
-    return cg_groups, per_pixel_groups, mcmc_groups
+    return cg_groups, per_pixel_groups, mcmc_groups, cl_groups
 
 
 def _read_chisq_masks(compsep_comm: MPI.Comm,
@@ -444,7 +455,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     my_band.polarization = mpi_info.band.polarization
     logger.debug(f"Rank {mpi_info.compsep.rank} handles CompSep view {band_identifier}.")
 
-    cg_groups, per_pixel_groups, mcmc_groups = resolve_sampling_groups(params)
+    cg_groups, per_pixel_groups, mcmc_groups, cl_groups = resolve_sampling_groups(params)
     amplitude_groups = cg_groups if cg_groups else per_pixel_groups
     _validate_sampling_group_references(amplitude_groups, comp_list, params)
     _validate_sampling_group_references(mcmc_groups, comp_list, params)
@@ -478,6 +489,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
         amplitude_method=amplitude_method,
         amplitude_groups=amplitude_groups,
         mcmc_groups=mcmc_groups,
+        cl_groups=cl_groups,
         double_precision=double_precision,
         num_threads=nthreads,
         chisq_masks=chisq_masks,
@@ -606,6 +618,7 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
     compsep = mpi_info.compsep
     amplitude_groups = compsep_state.amplitude_groups
     mcmc_groups = compsep_state.mcmc_groups
+    cl_groups = compsep_state.cl_groups
     sky_model = SkyModel(comp_list)
     # Sampler bookkeeping for the chain: C3's nonlin-samples_*.dat and its CG residual logging. A
     # tier that sampled nothing adds no key, so this mirrors the file it ends up in.
@@ -648,6 +661,16 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
         if mcmc_stats:
             sampler_stats.setdefault("mcmc", {})[group.name] = mcmc_stats
         fit = evaluate(f"MCMC group {group.name!r}")
+
+    for group in cl_groups.values():
+        sampler = ClSamplingGroup(config=group, comp_list=comp_list)
+
+        with benchmark(f"cl-{group.name}"):
+            # TODO: this sample now needs to be provided to the next iteration
+            # as the prior for the CG solve.
+            sampler_stats.setdefault("cl", {})[group.name] = sampler.run()
+
+        # TODO: the C_ell sample should be evaluated.
 
     with benchmark("chain-gather"):
         fit_tree, band_frequencies = collect_fit_diagnostics(compsep, fit,
