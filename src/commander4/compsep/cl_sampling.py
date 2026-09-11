@@ -19,7 +19,8 @@ class ClSamplingGroup:
     def run(self) -> tuple[dict[str, NDArray], bool]:
         logger.verbose("Drawing Cl samples.")
         proposal = {}
-        components = self.comp_list.joined()
+        comp_list = self.comp_list.joined()
+        components = {comp.shortname: comp for comp in comp_list.joined()}
 
         for group in self.config.comps:
             component = components[group.lower()]
