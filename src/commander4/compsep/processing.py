@@ -663,13 +663,10 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
         fit = evaluate(f"MCMC group {group.name!r}")
 
     for group in cl_groups.values():
-        sampler = ClSamplingGroup(
-            compsep.comm, detector_data, comp_list, target_pol=compsep_state.target_pol,
-            selected_comps=group.comps, chisq_active=True,
-            chisq_mask=compsep_state.chisq_masks.get(group.name), root=compsep.master, config=group)
+        sampler = ClSamplingGroup(config=group, comp_list=comp_list)
 
         with benchmark(f"cl-{group.name}"):
-            cl_stats = sampler.run(numstep=1, resolve_amplitudes=None)
+            result = sampler.run()
         if cl_stats:
             sampler_stats.setdefault("cl", {})[group.name] = cl_stats
         fit = evaluate(f"Cl group {group.name!r}")
