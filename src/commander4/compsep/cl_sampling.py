@@ -19,16 +19,19 @@ class ClSamplingGroup:
     def run(self) -> tuple[dict[str, NDArray], bool]:
         logger.verbose("Drawing Cl samples.")
         proposal = {}
-        components = {comp.shortname: comp for comp in self.comp_list}
+        components = self.comp_list.joined()
 
         for group in self.config.comps:
-            sigma_l = components[group.lower()].sigma_l[0]
+            component = components[group.lower()]
+            sigma_l = component.sigma_l
 
             # P(C_l | s) = C_l^(-(2l + 1) / 2) exp(- (2l + 1) sigma_l / 2 C_l)
-            l = np.arange(2, len(sigma_l))
-            x = np.random.chisquare(df=2.*l-1.)
+            l = np.arange(2, sigma_l.shape[1])
             cl = np.zeros_like(sigma_l)
-            cl[l] = (2. * l + 1.) * sigma_l[l] / x
+            
+            for i in range(sigma_l.shape[0]):
+                x = np.random.chisquare(df=2.*l-1.)
+                cl[i,l] = (2. * l + 1.) * sigma_l[i, l] / x
             proposal[group] = cl
 
         return proposal
