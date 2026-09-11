@@ -19,10 +19,10 @@ class ClSamplingGroup:
     def run(self) -> tuple[dict[str, NDArray], bool]:
         logger.verbose("Drawing C_ell proposal.")
         proposal = {}
-        components = {comp.name: comp for comp in self.comp_list}
+        components = {comp.shortname: comp for comp in self.comp_list}
 
         for group in self.config.comps:
-            sigma_l = components[group]
+            sigma_l = components[group.lower()].sigma_l[0]
             logger.verbose(f"Sigma_ell = [{sigma_l.shape}] {sigma_l}")
 
             # P(C_l | s) = C_l^(-(2l + 1) / 2) exp(- (2l + 1) sigma_l / 2 C_l)
@@ -33,7 +33,6 @@ class ClSamplingGroup:
             proposal[group] = cl
             logger.verbose(f"C_ell[{group}] = {cl}")
 
-        for group in components:
-            components[group].Cl_sample = proposal[group]
+            components[group.lower()].Cl_sample = proposal[group]
 
         return proposal
