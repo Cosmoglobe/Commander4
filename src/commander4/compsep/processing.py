@@ -666,9 +666,10 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
         sampler = ClSamplingGroup(config=group, comp_list=comp_list)
 
         with benchmark(f"cl-{group.name}"):
-            result = sampler.run()
-        if cl_stats:
-            sampler_stats.setdefault("cl", {})[group.name] = cl_stats
+            # TODO: this sample now needs to be provided to the next iteration
+            # as the prior for the CG solve.
+            sampler_stats.setdefault("cl", {})[group.name] = sampler.run()
+        # TODO: this needs to be a straightforward chi square evaluation.
         fit = evaluate(f"Cl group {group.name!r}")
 
     with benchmark("chain-gather"):

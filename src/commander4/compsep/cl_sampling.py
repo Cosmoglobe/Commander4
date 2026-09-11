@@ -17,13 +17,12 @@ class ClSamplingGroup:
         self.comp_list = comp_list
 
     def run(self) -> tuple[dict[str, NDArray], bool]:
-        logger.verbose("Drawing C_ell proposal.")
+        logger.verbose("Drawing Cl samples.")
         proposal = {}
         components = {comp.shortname: comp for comp in self.comp_list}
 
         for group in self.config.comps:
             sigma_l = components[group.lower()].sigma_l[0]
-            logger.verbose(f"Sigma_ell = [{sigma_l.shape}] {sigma_l}")
 
             # P(C_l | s) = C_l^(-(2l + 1) / 2) exp(- (2l + 1) sigma_l / 2 C_l)
             l = np.arange(2, len(sigma_l))
@@ -31,8 +30,5 @@ class ClSamplingGroup:
             cl = np.zeros_like(sigma_l)
             cl[l] = (2. * l + 1.) * sigma_l[l] / x
             proposal[group] = cl
-            logger.verbose(f"C_ell[{group}] = {cl}")
-
-            components[group.lower()].Cl_sample = proposal[group]
 
         return proposal
