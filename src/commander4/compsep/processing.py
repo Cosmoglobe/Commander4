@@ -669,8 +669,8 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
             # TODO: this sample now needs to be provided to the next iteration
             # as the prior for the CG solve.
             sampler_stats.setdefault("cl", {})[group.name] = sampler.run()
-        # TODO: this needs to be a straightforward chi square evaluation.
-        fit = evaluate(f"Cl group {group.name!r}")
+
+        # TODO: the C_ell sample should be evaluated.
 
     with benchmark("chain-gather"):
         fit_tree, band_frequencies = collect_fit_diagnostics(compsep, fit,
