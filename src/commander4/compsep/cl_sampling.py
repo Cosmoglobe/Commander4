@@ -16,7 +16,7 @@ class ClSamplingGroup:
         self.config = config
         self.comp_list = comp_list
 
-    def run(self, current_state: dict) -> tuple[dict[str, NDArray], bool]:
+    def run(self) -> tuple[dict[str, NDArray], bool]:
         logger.verbose("Drawing C_ell proposal.")
         proposal = {}
         components = {comp.name: comp for comp in self.comp_list}
