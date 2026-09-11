@@ -5,13 +5,13 @@ import numpy as np
 from numpy.typing import NDArray
 
 from commander4.sky.comp_list import CompList
-from commander4.compsep.processing import ClSamplingGroupConfig
 
 logger = logging.getLogger(__name__)
 
 
 class ClSamplingGroup:
-    def __init__(self, config: ClSamplingGroupConfig, comp_list: CompList):
+    def __init__(self, config: "ClSamplingGroupConfig",  # noqa: F821
+                 comp_list: CompList):
         self.config = config
         self.comp_list = comp_list
 
