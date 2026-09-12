@@ -244,7 +244,7 @@ def test_truth_map_is_readable_as_a_commander4_init_map(tmp_path):
     simgen writes -- must make that conversion the identity.
     """
     pytest.importorskip("ducc0")
-    from commander4.sky.comp_io import _load_component_alms
+    from commander4.sky.comp_io import _load_component_state
     from commander4.sky.diffuse_components import ThermalDust
     from simgen.sky import build_components, write_component_truth_maps
 
@@ -264,7 +264,7 @@ def test_truth_map_is_readable_as_a_commander4_init_map(tmp_path):
     c4_comp = ThermalDust(comp_params, global_params, allocate_empty_alms=True, eval_pol="I",
                           comp_name="ThermalDust")
 
-    _load_component_alms(c4_comp, truth_path)
+    _load_component_state(c4_comp, truth_path)
 
     recovered = hp.alm2map(c4_comp.alms[0].astype(np.complex128), NSIDE, lmax=c4_comp.lmax)
     truth_I = comp.truth_map(NSIDE)[0]

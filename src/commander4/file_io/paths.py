@@ -19,8 +19,25 @@ LOGS = "logs"
 CHAINS_BANDS = "chains_bands"
 CHAINS_COMPSEP = "chains_compsep"
 PLOTS = "plots"
+INITIAL_STATE = "initial_state"
 
 SUBDIRS = (LOGS, CHAINS_BANDS, CHAINS_COMPSEP, PLOTS)
+
+
+def band_chain_file(run_dir: str, experiment: str, band: str, chain: int, iteration: int) -> str:
+    """Path to one band's saved TOD sample."""
+    return os.path.join(run_dir, CHAINS_BANDS,
+                        f"{experiment}_{band}_chain{chain:02d}_iter{iteration:04d}.h5")
+
+
+def compsep_chain_file(run_dir: str, chain: int, iteration: int) -> str:
+    """Path to one saved sky sample."""
+    return os.path.join(run_dir, CHAINS_COMPSEP, f"chain{chain:02d}_iter{iteration:04d}.h5")
+
+
+def initial_sky_file(run_dir: str, chain: int) -> str:
+    """Fixed sky of a TOD-only run, kept outside the posterior sample directories."""
+    return os.path.join(run_dir, INITIAL_STATE, f"chain{chain:02d}_iter0000.h5")
 
 
 def resolve_output_dir(output_params) -> str:

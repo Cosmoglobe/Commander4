@@ -155,6 +155,19 @@ def test_constrained_realization_mean_is_the_MAP_solution(realizations):
     assert quad < ndof + 5.0*np.sqrt(2.0*ndof), f"mean deviates from MAP: chi2={quad:.1f}"
 
 
+def test_cg_solution_replaces_a_smoothed_initial_sample_with_intrinsic_amplitudes():
+    params = _make_params()
+    comp_list = _make_comp_list(params)
+    for comp in comp_list:
+        comp.amp_fwhm_rad = np.radians(1.0)
+    solver = _make_solver(_make_det_map(), _make_group(False), MPI.COMM_SELF)
+    actual = solver.solve(comp_list)
+    expected = solver.solve(_make_comp_list(params))
+    for actual_comp, expected_comp in zip(actual, expected):
+        assert actual_comp.amp_fwhm_rad == 0.0
+        np.testing.assert_allclose(actual_comp.alms, expected_comp.alms)
+
+
 def test_sample_amplitudes_toggle_controls_randomness():
     """optimize=True is deterministic; optimize=False gives a different answer every call."""
     det_map = _make_det_map()

@@ -1,12 +1,12 @@
 """Writing the per-iteration chain files: band samples and maps on the TOD side, components on the
 CompSep side."""
-import os
 import h5py
 import numpy as np
 import healpy as hp
 import datetime
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
+from pathlib import Path
 
 from commander4.file_io import paths
 from commander4.sky.comp_list import CompList
@@ -111,7 +111,7 @@ def write_band_chain_to_file(params: Bunch, chain: int, iter: int, exp_name: str
     """Write one band's Gibbs sample: the per-scan TOD samples and the output maps, in one file.
 
     The sampled parameters land at the top level (where `TODSamples` reads them back from for
-    `gibbs.init_from_chain`), debug TODs under `tods/<scan_id>/<detector>/`, and maps under `maps/`.
+    `gibbs.start`), debug TODs under `tods/<scan_id>/<detector>/`, and maps under `maps/`.
     Keys in `tod_arrays` are dataset paths; h5py creates their groups. The caller decides if the file is
     written at all — `TODSamples.gather_chain_arrays` owns that gate, because it has to be applied
     before its collective gathers — so this function only gates the `maps/` group.
@@ -127,16 +127,19 @@ def write_band_chain_to_file(params: Bunch, chain: int, iter: int, exp_name: str
     """
     chains = params.output.chains
     nside_out = getattr(chains, "maps_nside", "native")
-    chain_dir = paths.subdir(params, paths.CHAINS_BANDS)
-    filename = f"{exp_name}_{band_name}_chain{chain:02d}_iter{iter:04d}.h5"
-    chain_file = os.path.join(chain_dir, filename)
+    chain_file = paths.band_chain_file(params.output.dir, exp_name, band_name, chain, iter)
 
     write_maps = should_write_chain(params, "maps", iter)
     maps_to_file = dict(maps_to_file)
     map_fwhm_arcmin = maps_to_file.pop("map_fwhm_arcmin", None)
 
-    with h5py.File(chain_file, "w") as file:
+    with h5py.File(chain_file, "x") as file:
+        file["metadata/complete"] = False
         file["metadata/datetime"] = datetime.datetime.now().isoformat()
+        file["metadata/chain"] = chain
+        file["metadata/iteration"] = iter
+        file["metadata/experiment"] = exp_name
+        file["metadata/band"] = band_name
         file["metadata/parameter_file_as_string"] = params.parameter_file_as_string
         # Thermodynamic unit the written maps and gains are expressed in (maps are brightnesses in
         # band_unit; gain is [detector units]/band_unit).
@@ -146,6 +149,7 @@ def write_band_chain_to_file(params: Bunch, chain: int, iter: int, exp_name: str
         for key, value in tod_arrays.items():
             file[key] = value
         if not write_maps:
+            file["metadata/complete"][()] = True
             return
         for key, value in maps_to_file.items():
             kind = _MAP_KINDS.get(key, "brightness")
@@ -156,6 +160,7 @@ def write_band_chain_to_file(params: Bunch, chain: int, iter: int, exp_name: str
             if band_unit_factor != 1.0:
                 value = _to_band_unit(value, kind, band_unit_factor)
             file[f"maps/{key}"] = value
+        file["metadata/complete"][()] = True
 
 
 def _write_nested(group: h5py.Group, tree: dict) -> None:
@@ -186,13 +191,20 @@ def write_compsep_chain_to_file(comp_list: list[Component] | CompList, params: B
     `band_frequencies` maps each band name to its centre frequency in GHz, and is what lets the
     mixing coefficients be written per band.
     """
-    if chain not in params.output.chains.write or not should_write_chain(params, "compsep", iter):
+    # Iteration zero is the fixed initial sky of a TOD-only run, saved once for each chain.
+    if iter != 0 and (chain not in params.output.chains.write
+                      or not should_write_chain(params, "compsep", iter)):
         return
-    chain_dir = paths.subdir(params, paths.CHAINS_COMPSEP)
-    chain_file = os.path.join(chain_dir, f"chain{chain:02d}_iter{iter:04d}.h5")
+    chain_file = paths.compsep_chain_file(params.output.dir, chain, iter)
+    if iter == 0:
+        chain_file = paths.initial_sky_file(params.output.dir, chain)
+        Path(chain_file).parent.mkdir(parents=True, exist_ok=True)
     components = comp_list.components if isinstance(comp_list, CompList) else comp_list
-    with h5py.File(chain_file, "w") as file:
+    with h5py.File(chain_file, "x") as file:
+        file["metadata/complete"] = False
         file["metadata/datetime"] = datetime.datetime.now().isoformat()
+        file["metadata/chain"] = chain
+        file["metadata/iteration"] = iter
         file["metadata/parameter_file_as_string"] = params.parameter_file_as_string
         _write_nested(file, diagnostics or {})
         seen_shortnames = set()
@@ -212,7 +224,11 @@ def write_compsep_chain_to_file(comp_list: list[Component] | CompList, params: B
                 file[f"comps/{comp.shortname}/lmax"] = comp.lmax
             else:
                 file[f"comps/{comp.shortname}/source_amps"] = comp._data
+                file[f"comps/{comp.shortname}/source_lonlat"] = comp.lonlat_arr
+                file[f"comps/{comp.shortname}/source_spectral_indices"] = comp.alpha_arr
             file[f"comps/{comp.shortname}/comp_name"] = comp.comp_name
+            file[f"comps/{comp.shortname}/component_class"] = type(comp).__name__
+            file[f"comps/{comp.shortname}/amplitude_unit"] = comp.amplitude_unit
             file[f"comps/{comp.shortname}/shortname"] = comp.shortname
             # The beam these amplitudes carry, in arcmin. This is 0.0 if the CG compsep was used,
             # as it solves for the intrinsic sky. However, if the per-pix compsep solver was used,
@@ -239,3 +255,4 @@ def write_compsep_chain_to_file(comp_list: list[Component] | CompList, params: B
                 file[f"comps/{comp.shortname}/defined_pol"] = comp.defined_pol
             if comp.eval_pol is not None:
                 file[f"comps/{comp.shortname}/eval_pol"] = comp.eval_pol
+        file["metadata/complete"][()] = True

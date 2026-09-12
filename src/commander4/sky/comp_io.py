@@ -1,9 +1,4 @@
-"""Reading a component's initial amplitudes from a chain file or a FITS map.
-
-Used by `DiffuseComponent` and `CompList` to initialize from an earlier run (`init_chain_path`) or
-from an external map (`init_from`). The fiddly part these helpers own is deciding which rows of a
-stored (npol, ...) array correspond to the polarization view being initialized.
-"""
+"""Read initial sky state from chain files, or diffuse amplitudes from FITS maps."""
 from __future__ import annotations
 
 import logging
@@ -18,6 +13,7 @@ from commander4.math_utils.alm import project_alms
 from commander4.math_utils.sht import pseudo_alm_to_map_inverse
 
 if typing.TYPE_CHECKING:
+    from commander4.sky.component import Component
     from commander4.sky.diffuse_components import DiffuseComponent
 
 logger = logging.getLogger(__name__)
@@ -97,45 +93,104 @@ def _read_view_alms_from_fits(comp: DiffuseComponent, fits_path: str) -> NDArray
     return project_alms(alm_temp, comp.lmax)
 
 
-def _restore_sampled_sed_params_from_chain(comp: DiffuseComponent, chain_path: str) -> None:
-    """Set `comp`'s *sampled* SED parameters from a chain's ``comps/<shortname>/sed/`` group.
+def _load_component_state(comp: Component, source_path: str, *, amplitudes: bool = True,
+                          spectral_parameters: bool = True) -> None:
+    """Load the requested amplitudes and spectral values, independently of subsequent sampling.
 
-    Only parameters the run is configured to *sample* are restored. Fixed ones (``nu_ref``, ``T``)
-    stay under the parameter file's control, so changing one there is not silently overridden by
-    the chain.
+    Chain files must contain the requested component and polarization. Reference frequencies
+    define the amplitude convention and must match; other spectral values may be restored.
+    FITS maps carry only amplitudes and retain the existing partial-polarization behaviour.
     """
-    if "sample_spectral_index" not in comp.comp_params \
-            or not bool(comp.comp_params.sample_spectral_index):
-        return
-    with h5py.File(chain_path, "r") as f:
-        sed_group = f[f"comps/{comp.shortname}/sed"]
-        # `beta` is currently the only sampled SED parameter, so it is the only one restored.
-        for param_name in comp.sed_param_names:
-            if param_name != "beta":
-                continue
-            value = sed_group[param_name][()]
-            logger.info(f"Component {comp.comp_name!r} ({comp.eval_pol}): restored sampled "
-                        f"{param_name} = {value} from {chain_path!r} (parameter file said "
-                        f"{getattr(comp, param_name)}).")
-            setattr(comp, param_name, float(value))
+    from commander4.sky.diffuse_components import DiffuseComponent
+    from commander4.sky.point_sources import RadioSources
 
-
-def _load_component_alms(comp: DiffuseComponent, source_path: str) -> None:
-    """Set `comp`'s initial alms from `source_path`, dispatching on its file type.
-
-    ``.h5``/``.hd5`` files are read as compsep chains (alms *and* the sampled SED parameters taken
-    directly); ``.fits`` files are read as sky maps and transformed to alms, and carry no SED
-    information. If the source does not contain this component or its polarization, the alms are
-    left at their initial value (zeros).
-    """
     lower_path = str(source_path).lower()
-    if lower_path.endswith((".h5", ".hd5")):
-        view_alms = _read_view_alms_from_chain(comp, source_path)
-        _restore_sampled_sed_params_from_chain(comp, source_path)
-    elif lower_path.endswith(".fits"):
-        view_alms = _read_view_alms_from_fits(comp, source_path)
-    else:
+    if lower_path.endswith(".fits"):
+        if not isinstance(comp, DiffuseComponent):
+            raise ValueError("FITS initialization is only supported for diffuse components.")
+        if amplitudes:
+            view_alms = _read_view_alms_from_fits(comp, source_path)
+            if view_alms is not None:
+                comp.alms = view_alms.astype(comp.dtype, copy=False)
+        return
+    if not lower_path.endswith((".h5", ".hd5", ".hdf5")):
         raise ValueError(f"Unsupported init file {source_path!r} for component "
                          f"{comp.comp_name!r}: expected a .h5/.hd5 chain or a .fits map.")
-    if view_alms is not None:
-        comp.alms = view_alms.astype(comp.dtype, copy=False)
+
+    with h5py.File(source_path, "r") as f:
+        if "metadata/complete" in f and not bool(f["metadata/complete"][()]):
+            raise ValueError(f"Sky init file {source_path!r} is incomplete.")
+        group_path = f"comps/{comp.shortname}"
+        if group_path not in f:
+            raise ValueError(f"Component {comp.shortname!r} not found in {source_path!r}; "
+                             "set its 'init_from' to null to keep its configured initialization.")
+        group = f[group_path]
+        for key, expected in (("comp_name", comp.comp_name),
+                              ("component_class", type(comp).__name__),
+                              ("amplitude_unit", comp.amplitude_unit)):
+            # Class and amplitude-unit metadata were added with separate TOD/sky initialization.
+            if key in group and group[key].asstr()[()] != expected:
+                raise ValueError(f"Component {comp.shortname!r}: {key} differs from "
+                                 f"{source_path!r}.")
+
+        required = []
+        reference_params = ("nu_ref", "nu_0", "nu_peak_ref")
+        for name in comp.sed_param_names:
+            if spectral_parameters or name in reference_params:
+                required.append(f"sed/{name}")
+        if amplitudes:
+            required.extend(["alms" if isinstance(comp, DiffuseComponent) else "source_amps",
+                             "amp_fwhm_arcmin"])
+        if isinstance(comp, RadioSources):
+            required.append("source_lonlat")
+            if spectral_parameters:
+                required.append("source_spectral_indices")
+        missing = []
+        for name in required:
+            if name not in group:
+                missing.append(name)
+        if missing:
+            raise ValueError(f"Component {comp.shortname!r} in {source_path!r} "
+                             f"is missing {missing}.")
+
+        for name in comp.sed_param_names:
+            if not spectral_parameters and name not in reference_params:
+                continue
+            value = np.asarray(group[f"sed/{name}"][()])
+            # Joined IQU components may store different reference frequencies or spectral
+            # values for I and QU. Select the same view used when constructing the component.
+            if value.shape == (2,) and comp.eval_pol in ("I", "QU"):
+                value = value[0 if comp.eval_pol == "I" else 1]
+            if name in reference_params:
+                if not np.allclose(value, getattr(comp, name), rtol=1e-10, atol=0):
+                    raise ValueError(f"Component {comp.shortname!r}: reference parameter {name} "
+                                     f"differs from {source_path!r}.")
+            else:
+                setattr(comp, name, float(value))
+
+        if isinstance(comp, RadioSources):
+            if not np.array_equal(group["source_lonlat"][:], comp.lonlat_arr):
+                raise ValueError(f"Point-source positions or ordering differ from {source_path!r}.")
+            if spectral_parameters:
+                indices = group["source_spectral_indices"][:]
+                if indices.shape != comp.alpha_arr.shape:
+                    raise ValueError(f"Point-source index shape differs in {source_path!r}.")
+                comp.alpha_arr = indices.astype(comp.alpha_arr.dtype)
+        if amplitudes:
+            if isinstance(comp, DiffuseComponent):
+                stored_alms = group["alms"][:]
+                rows = _pol_row_indices(stored_alms, comp.eval_pol, comp.shortname, source_path)
+                if rows is None:
+                    raise ValueError(f"Component {comp.shortname!r} in {source_path!r} has no "
+                                     f"{comp.eval_pol} amplitudes.")
+                comp.alms = project_alms(np.ascontiguousarray(stored_alms[rows]), comp.lmax)
+                comp.alms = comp.alms.astype(comp.dtype, copy=False)
+            else:
+                values = group["source_amps"][:]
+                if values.shape != comp._data.shape:
+                    raise ValueError(f"Point-source amplitude shape differs in {source_path!r}.")
+                comp._data = values.astype(comp._data.dtype)
+            comp.amp_fwhm_rad = np.radians(float(group["amp_fwhm_arcmin"][()]) / 60.0)
+    logger.info(f"Component {comp.comp_name!r} ({comp.eval_pol}): initialized from "
+                f"{source_path!r} (amplitudes={amplitudes}, "
+                f"spectral_parameters={spectral_parameters}).")

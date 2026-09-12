@@ -14,7 +14,8 @@ from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.file_io.map_reader import read_data_map_from_file
 from commander4.polarization import get_execution_band_id
-from commander4.sky.sky_model import build_initial_sky_model
+from commander4.sky.sky_model import SkyModel, build_initial_sky_model
+from commander4.parameters.initialization import RunStart
 
 logger = logging.getLogger(__name__)
 
@@ -123,19 +124,23 @@ def receive_compsep(mpi_info: Bunch, experiment_data: DetectorGroupTOD, todproc_
 
 
 def get_local_initial_sky(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
-                          params: Bunch) -> NDArray[np.floating]:
+                          params: Bunch, start: RunStart = RunStart(), chain: int = 1) \
+        -> tuple[NDArray[np.floating], SkyModel | None]:
     """Build the initial sky model locally and realize it at this TOD band.
 
     Used when there are no CompSep ranks: the band master builds the SkyModel from the component
     parameters and init files and realizes it; the realized map is distributed to all band ranks
     (full-sky in non-sparse mode, per-rank local pixels in sparse mode). Mirrors `receive_compsep`,
     minus the cross-world receive.
+
+    Also returns the model on the band master, so the TOD master can save a fixed-sky snapshot.
     """
     if mpi_info.band.is_master:
-        sky_model = build_initial_sky_model(params)
+        sky_model = build_initial_sky_model(params, start, chain)
     else:
         sky_model = None
-    return _realize_and_distribute_sky(sky_model, experiment_data, mpi_info.band.comm)
+    sky_map = _realize_and_distribute_sky(sky_model, experiment_data, mpi_info.band.comm)
+    return sky_map, sky_model
 
 
 def send_tod(mpi_info: Bunch, tod_map_dict: dict[DetectorMap], todproc_my_band_id: str,

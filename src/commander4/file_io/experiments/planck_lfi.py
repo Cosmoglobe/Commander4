@@ -159,7 +159,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
             scan = ScanTOD(detector_list, 0., scanID)
             scan_list.append(scan)
             num_included += 1
-        if band_comm.Get_rank() == 0 and (i_pid-scan_idx_start) % (nscans // 5) == 0:
+        if band_comm.Get_rank() == 0 and (i_pid-scan_idx_start) % max(1, nscans // 5) == 0:
             logger.debug(f"Reading scans from disk, progress on master rank of band {bandname}: "\
                          f"{i_pid-scan_idx_start}/{nscans}")
         if i_pid % 10 == 0:

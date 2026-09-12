@@ -26,6 +26,7 @@ from commander4.compsep.chisq import ChisqResult, collect_fit_diagnostics, evalu
 from commander4.compsep.perpix_solver import solve_compsep_perpix
 from commander4.compsep.spectral_index import SpectralIndexSamplingGroup
 from commander4.file_io.chain_writer import write_compsep_chain_to_file
+from commander4.parameters.initialization import RunStart
 from commander4.polarization import get_execution_band_id, EXECUTION_POLS
 from commander4.parameters.schema import resolve_band_lmax, resolve_param
 from commander4.diagnostics.performance import benchmark, bench_summary, bench_reset, log_memory
@@ -406,8 +407,8 @@ def _build_conditional_residual(detector_data: DetectorMap, comp_list: CompList,
     return residual
 
 
-def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
-    -> tuple[CompList, Bunch, str, Bunch, CompSepState]:
+def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: RunStart)\
+    -> tuple[dict[int, CompList], Bunch, str, Bunch, CompSepState]:
     """Set up the rank-local execution view for component separation.
 
     Each CompSep rank owns exactly one execution view of one band. The global CompSep rank space is
@@ -419,8 +420,8 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
         params (Bunch): The parameters from the input parameter file.
 
     Returns:
-        comp_list (CompList): The full execution-view component list, identical on all CompSep
-            ranks.
+        comp_lists (dict[int, CompList]): Separate initialized component lists for both chains,
+            identical on all CompSep ranks.
         mpi_info (Bunch): `mpi_info`, extended with this rank's band name/identifier and the
             band-master dictionaries.
         band_identifier (str): Unique string for the band execution view this rank is working on.
@@ -486,13 +487,17 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
         include_residual_maps=bool(getattr(include, "compsep_residual_maps", False)),
     )
 
-    # Load the initial component alms (from each component's init_from / init_chain_path, else
-    # zeros). Done identically on every CompSep rank so comp_list starts globally consistent.
+    # Read fixed prior means once, then load each chain's state independently on every rank.
     # Likewise for the Gaussian amplitude prior's mean mu (each component's amp_prior_mean_map,
     # else a zero-mean prior). Read once here; the CG applies S^{-1/2} on every solve.
     with benchmark("fileread-compsep"):
-        comp_list.load_initial_alms(params)
         comp_list.load_amp_prior_means()
+        comp_lists = {1: comp_list, 2: deepcopy(comp_list)}
+        for chain, components in comp_lists.items():
+            components.load_initial_state(
+                start.sky_file(chain), amplitudes="amplitudes" in start.load,
+                spectral_parameters="spectral_parameters" in start.load,
+                use_component_overrides=start.mode == "new")
 
     data_world = (band_identifier, mpi_info.world.rank)
     data_compsep = (band_identifier, mpi_info.compsep.rank)
@@ -503,7 +508,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     mpi_info.world.compsep_band_masters = world_band_masters_dict
     mpi_info.compsep.compsep_band_masters = compsep_band_masters_dict
 
-    return comp_list, mpi_info, band_identifier, my_band, compsep_state
+    return comp_lists, mpi_info, band_identifier, my_band, compsep_state
 
 
 

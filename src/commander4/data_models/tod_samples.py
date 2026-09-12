@@ -108,6 +108,7 @@ class TODSamples:
                  my_band: Bunch,
                  band_comm: MPI.Comm,
                  chain: int,
+                 init_file: str | None = None,
                  ):
         # Meta-information
         self.params = params
@@ -115,6 +116,7 @@ class TODSamples:
         self.chain = chain
         self.experiment_name = experiment_data.experiment_name
         self.band_name = experiment_data.band_name
+        self.nu = experiment_data.nu
         self.ndet = experiment_data.ndet
         self.nscans = experiment_data.nscans
         # The noise model defines how many parameters per detector-scan (first entry is sigma0).
@@ -227,10 +229,8 @@ class TODSamples:
             for _ in range(self.nscans):
                 self.residual_tods.append([None] * self.ndet)
 
-        init_chain_path = getattr(params.gibbs, "init_from_chain", False)
-        init_from_chain = bool(init_chain_path)
         # Gibbs-sampled quantities
-        if not init_from_chain:
+        if init_file is None:
             # Standard initialization: no previous chain file provided.
             if self.band_comm.Get_rank() == 0:
                 logger.info(f"Band {self.band_name}, chain {self.chain}: starting fresh Gibbs "
@@ -294,46 +294,95 @@ class TODSamples:
 
         else:
             # Disk initialization: read the state from a previous chain file.
+            init_chain_path = init_file
             if self.band_comm.Get_rank() == 0:
                 logger.info(f"Band {self.band_name}, chain {self.chain}: initializing TOD samples "
                             f"from existing chain {init_chain_path}.")
 
             with h5py.File(init_chain_path, "r") as f:
-                # The chain stores scans in the global order the Gatherv wrote them, so map each
-                # local scan onto its row in that global array before slicing anything out.
+                if "metadata/complete" in f and not bool(f["metadata/complete"][()]):
+                    raise ValueError(f"TOD init file {init_chain_path!r} is incomplete.")
+                required = ["scan_ids", "det_names", "abs_gain", "detrel_gain", "temporal_gain",
+                            "noise_params", "accept", "present", "metadata/band_unit",
+                            "jump_counts", "jump_locations", "jump_offsets"]
+                if self.hfi_demodulation:
+                    required.extend(["modulation_phase", "baselines"])
+                missing = []
+                for name in required:
+                    if name not in f:
+                        missing.append(name)
+                if missing:
+                    raise ValueError(f"TOD init file {init_chain_path!r} is missing {missing}.")
+
+                # Match physical scans and detectors, independently of the new MPI distribution
+                # and parameter-file ordering. HDF5 requires sorted row indices; undo that order
+                # in memory after reading only this rank's rows.
                 global_scan_ids = f["scan_ids"][:]
+                source_detectors = list(f["det_names"].asstr()[:])
+                if len(set(global_scan_ids)) != len(global_scan_ids):
+                    raise ValueError(f"Duplicate scan IDs in {init_chain_path!r}.")
+                if len(set(source_detectors)) != len(source_detectors):
+                    raise ValueError(f"Duplicate detector names in {init_chain_path!r}.")
                 global_id_to_index = {sid: idx for idx, sid in enumerate(global_scan_ids)}
+                detector_to_index = {name: idx for idx, name in enumerate(source_detectors)}
                 try:
                     local_indices = [global_id_to_index[sid] for sid in self.scan_ids]
+                    detector_indices = [detector_to_index[name] for name in self.det_names]
                 except KeyError as e:
-                    raise ValueError(f"Local scan ID {e} not found in the global chain file "
-                                     f"{init_chain_path}.") from e
+                    raise ValueError(f"Scan or detector {e} not found in "
+                                     f"{init_chain_path!r}.") from e
+                scan_order = np.argsort(local_indices)
+                sorted_indices = np.asarray(local_indices, dtype=np.int64)[scan_order]
+                restore_order = np.argsort(scan_order)
 
-                # `gather_chain_arrays` writes all of these on every chain iteration, so all of
-                # them are read unconditionally: a KeyError here names the missing dataset, which
-                # is far clearer than a silently half-initialized sampler.
-                # Per-band and per-detector arrays, identical across ranks.
-                self.abs_gain = float(f["abs_gain"][...])
-                self.rel_gain = f["detrel_gain"][:]
+                # Older files have units but no explicit frequency or noise-model metadata.
+                # For those, the band selected by the filename supplies the frequency, and the
+                # parameter-array shape still checks the number of noise parameters.
+                if "metadata/nu_ghz" in f and not np.isclose(
+                        f["metadata/nu_ghz"][()], self.nu, rtol=1e-10, atol=0):
+                    raise ValueError(f"Band frequency differs from {init_chain_path!r}.")
+                if "metadata/noise_model" in f:
+                    if f["metadata/noise_model"].asstr()[()] != type(self.noise_model).__name__:
+                        raise ValueError(f"Noise model differs from {init_chain_path!r}.")
+                if "metadata/noise_param_names" in f:
+                    stored_names = tuple(f["metadata/noise_param_names"].asstr()[:])
+                    if stored_names != self.noise_model.param_names:
+                        raise ValueError(f"Noise parameter order differs from {init_chain_path!r}.")
+                source_unit = f["metadata/band_unit"].asstr()[()]
+                source_gain_factor = rj_to_band_unit_factor(self.nu, source_unit)
+                self.abs_gain = float(f["abs_gain"][()]) * source_gain_factor
+                self.rel_gain = f["detrel_gain"][:][detector_indices] * source_gain_factor
+                if len(detector_indices) != len(source_detectors):
+                    # A detector subset has its own zero-sum relative-gain constraint. Move its
+                    # mean into the absolute term, preserving every detector's total gain.
+                    relative_mean = float(np.mean(self.rel_gain))
+                    self.abs_gain += relative_mean
+                    self.rel_gain -= relative_mean
 
-                # Per-scan arrays, sliced down to this rank's scans.
-                self.temporal_gain = f["temporal_gain"][local_indices, :]
-                self.noise_params = f["noise_params"][local_indices, ...]
-                self.accept = f["accept"][local_indices, ...].astype(bool)
-                self.chisq_z = f["chisq_z"][local_indices, ...]
-                self.good_fraction = f["good_fraction"][local_indices, ...]
-                self.jumps = JumpCatalog.from_hdf5(f, local_indices, self.ndet)
+                fields = ["temporal_gain", "noise_params", "accept"]
                 if self.hfi_demodulation:
-                    phase = f["modulation_phase"][local_indices, ...]
-                    self.modulation_phase = phase.astype(np.int8)
-                    self.baselines = f["baselines"][local_indices, ...]
+                    fields.extend(["modulation_phase", "baselines"])
+                source_shape = (len(global_scan_ids), len(source_detectors))
+                for name in fields:
+                    expected_shape = source_shape
+                    if name == "noise_params":
+                        expected_shape += (self.npar,)
+                    elif name == "baselines":
+                        expected_shape += (2,)
+                    if f[name].shape != expected_shape:
+                        raise ValueError(f"Dataset {name!r} in {init_chain_path!r} has shape "
+                                         f"{f[name].shape}; expected {expected_shape}.")
+                    values = f[name][sorted_indices, ...][restore_order]
+                    setattr(self, name, values[:, detector_indices, ...])
+                source_present = f["present"][sorted_indices, :][restore_order][:, detector_indices]
+                if np.any(self.present & ~source_present.astype(bool)):
+                    raise ValueError(f"Detector-scans have no saved data in {init_chain_path!r}.")
+                self.temporal_gain *= source_gain_factor
+                self.accept = self.accept.astype(bool)
+                self.jumps = JumpCatalog.from_hdf5(f, local_indices, self.ndet, detector_indices)
+                if self.hfi_demodulation:
+                    self.modulation_phase = self.modulation_phase.astype(np.int8)
                     self.modulation_phase_initialized = True
-
-            # Chain gains are stored in band_unit; convert back to internal [det units]/uK_RJ.
-            if self.band_unit_factor != 1.0:
-                self.abs_gain *= self.band_unit_factor
-                self.rel_gain = self.rel_gain * self.band_unit_factor
-                self.temporal_gain = self.temporal_gain * self.band_unit_factor
 
         if self.band_comm.Get_rank() == 0:
             logger.debug(f"Initial absolute gain estimate for {self.band_name}: {self.abs_gain:.3e}.")
@@ -478,6 +527,10 @@ class TODSamples:
         # unconditionally. `det_names` is variable-length UTF-8 for a clean string round-trip; its
         # order is the `idet` axis shared by every per-detector array here.
         arrays: dict[str, NDArray] = {
+            "metadata/nu_ghz": self.nu,
+            "metadata/noise_model": type(self.noise_model).__name__,
+            "metadata/noise_param_names": np.array(self.noise_model.param_names,
+                                                   dtype=h5py.string_dtype()),
             "scan_ids": scan_ids_global,
             "det_names": np.array(self.det_names, dtype=h5py.string_dtype()),
             "abs_gain": abs_gain_global/self.band_unit_factor,

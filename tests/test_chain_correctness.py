@@ -51,6 +51,9 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2) -> TODSamples:
     s = TODSamples.__new__(TODSamples)
     s.params, s.chain, s.band_comm = _params(), 1, MPI.COMM_SELF
     s.nscans, s.ndet, s.npar = nscans, ndet, 3
+    from commander4.tod.noise.psd import NoisePSDOof
+    s.noise_model = NoisePSDOof.__new__(NoisePSDOof)
+    s.nu = 100.0
     s.experiment_name, s.band_name = "EXP", "B"
     s.scan_ids = np.arange(nscans, dtype=np.int64)
     s.det_names = [f"d{i}" for i in range(ndet)]

@@ -112,7 +112,7 @@ def _validate_components(params) -> None:
                 "corresponding 'Cl_prior_*' settings."
             )
 
-        common_fields = {"polarization", "longname", "shortname"}
+        common_fields = {"polarization", "longname", "shortname", "init_from"}
         diffuse_fields = {
             "lmax", "spatially_varying_MM", "Cl_prior_amplitude", "Cl_prior_beta",
             "Cl_prior_FWHM", "Cl_prior_l_pivot", "Cl_prior_l_apod", "units", "init_from",

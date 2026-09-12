@@ -7,6 +7,7 @@ import pytest
 from pixell.bunch import Bunch
 
 from commander4.sky.comp_list import CompList
+from commander4.parameters.initialization import RunStart
 from commander4.sky.diffuse_components import CMB, ThermalDust
 from commander4.sky.point_sources import PointSourcesComponent
 from commander4.math_utils.alm import gaussian_random_alm
@@ -215,20 +216,23 @@ def test_copy_matching_data_from_leaves_omitted_components_unchanged() -> None:
 
 
 def _write_chain_alms(path, alms_by_shortname: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(path, "w") as f:
         for shortname, alms in alms_by_shortname.items():
             f[f"comps/{shortname}/alms"] = alms
+            f[f"comps/{shortname}/amp_fwhm_arcmin"] = 0.0
+            f[f"comps/{shortname}/sed/nu_ref"] = 1.0
 
 
-def test_load_initial_alms_reads_and_splits_from_chain(tmp_path) -> None:
+def test_load_initial_state_reads_and_splits_from_chain(tmp_path) -> None:
     nalm = (1 + 1) * (1 + 2) // 2  # lmax == 1, matching the default component config.
     cmb_alms = np.arange(3 * nalm, dtype=np.float64).reshape(3, nalm).astype(np.complex64)
     ff_alms = (np.arange(nalm, dtype=np.float64) + 100).reshape(1, nalm).astype(np.complex64)
-    chain = tmp_path / "init_chain.h5"
+    chain = tmp_path / "chains_compsep" / "chain01_iter0007.h5"
     _write_chain_alms(chain, {"cmb": cmb_alms, "ff": ff_alms})
 
     compsep = _make_compsep()
-    gibbs = Bunch(init_from_chain=str(chain))
+    gibbs = Bunch(start=Bunch(source=str(tmp_path), chain=1, iteration=7))
     cmb = _make_named_component_cfg("cmb", "IQU")
     object.__setattr__(cmb, "_name", "cmb")
     ff = _make_named_component_cfg("ff", "I")
@@ -236,7 +240,7 @@ def test_load_initial_alms_reads_and_splits_from_chain(tmp_path) -> None:
     params = Bunch(compsep=compsep, gibbs=gibbs, components=Bunch({"cmb": cmb, "ff": ff}))
 
     comp_list = CompList.init_from_params(params.components, params)
-    comp_list.load_initial_alms(params)
+    comp_list.load_initial_state(RunStart.from_gibbs(params.gibbs).sky_file(1))
 
     views = {(comp.comp_name, comp.eval_pol): comp for comp in comp_list}
     # The joined IQU alms get split into the I row and the two QU rows.
@@ -245,27 +249,27 @@ def test_load_initial_alms_reads_and_splits_from_chain(tmp_path) -> None:
     assert np.array_equal(views[("ff", "I")].alms, ff_alms[0:1])
 
 
-def test_load_initial_alms_prefers_per_component_init_from(tmp_path) -> None:
+def test_load_initial_state_prefers_per_component_init_from(tmp_path) -> None:
     nalm = (1 + 1) * (1 + 2) // 2
-    global_chain = tmp_path / "global.h5"
+    global_chain = tmp_path / "chains_compsep" / "chain01_iter0007.h5"
     special_chain = tmp_path / "special.h5"
     _write_chain_alms(global_chain, {"cmb": np.zeros((3, nalm), dtype=np.complex64)})
     _write_chain_alms(special_chain, {"cmb": np.full((3, nalm), 5.0, dtype=np.complex64)})
 
     compsep = _make_compsep()
-    gibbs = Bunch(init_from_chain=str(global_chain))
+    gibbs = Bunch(start=Bunch(source=str(tmp_path), chain=1, iteration=7))
     cmb = _make_named_component_cfg("cmb", "IQU")
     object.__setattr__(cmb, "_name", "cmb")
     cmb.params.init_from = str(special_chain)  # Per-component path takes precedence over the global one.
     params = Bunch(compsep=compsep, gibbs=gibbs, components=Bunch({"cmb": cmb}))
 
     comp_list = CompList.init_from_params(params.components, params)
-    comp_list.load_initial_alms(params)
+    comp_list.load_initial_state(RunStart.from_gibbs(params.gibbs).sky_file(1))
 
     assert all(np.all(comp.alms == 5.0) for comp in comp_list)
 
 
-def test_load_initial_alms_from_fits_map(tmp_path) -> None:
+def test_load_initial_state_from_fits_map(tmp_path) -> None:
     """`init_from` a FITS map recovers that map's alms, per polarization view.
 
     The map is built by synthesizing known alms, so it is band-limited at the component's lmax and
@@ -295,14 +299,14 @@ def test_load_initial_alms_from_fits_map(tmp_path) -> None:
     params = Bunch(compsep=compsep, gibbs=gibbs, components=Bunch({"cmb": cmb}))
 
     comp_list = CompList.init_from_params(params.components, params)
-    comp_list.load_initial_alms(params)
+    comp_list.load_initial_state(RunStart.from_gibbs(params.gibbs).sky_file(1))
 
     views = {(comp.comp_name, comp.eval_pol): comp for comp in comp_list}
     assert np.allclose(views[("cmb", "I")].alms, alms_I, rtol=1e-6, atol=1e-7)
     assert np.allclose(views[("cmb", "QU")].alms, alms_QU, rtol=1e-6, atol=1e-7)
 
 
-def test_load_initial_alms_rejects_unknown_extension(tmp_path) -> None:
+def test_load_initial_state_rejects_unknown_extension(tmp_path) -> None:
     compsep = _make_compsep()
     gibbs = Bunch()
     cmb = _make_named_component_cfg("cmb", "IQU")
@@ -312,48 +316,40 @@ def test_load_initial_alms_rejects_unknown_extension(tmp_path) -> None:
 
     comp_list = CompList.init_from_params(params.components, params)
     with pytest.raises(ValueError, match="expected a .h5/.hd5 chain or a .fits map"):
-        comp_list.load_initial_alms(params)
+        comp_list.load_initial_state(RunStart.from_gibbs(params.gibbs).sky_file(1))
 
 
-def test_load_initial_alms_partial_source_leaves_missing_pol_zero(tmp_path) -> None:
-    # An intensity-only chain initializes the I view; the IQU component's QU view stays at zero
-    # rather than erroring (so e.g. I-from-chain + QU-from-zero works).
+def test_load_initial_state_rejects_missing_chain_polarization(tmp_path) -> None:
     nalm = (1 + 1) * (1 + 2) // 2
     cmb_intensity_only = (np.arange(nalm, dtype=np.float64) + 1).reshape(1, nalm).astype(np.complex64)
-    chain = tmp_path / "intensity_only.h5"
+    chain = tmp_path / "chains_compsep" / "chain01_iter0007.h5"
     _write_chain_alms(chain, {"cmb": cmb_intensity_only})
 
     compsep = _make_compsep()
-    gibbs = Bunch(init_from_chain=str(chain))
+    gibbs = Bunch(start=Bunch(source=str(tmp_path), chain=1, iteration=7))
     cmb = _make_named_component_cfg("cmb", "IQU")
     object.__setattr__(cmb, "_name", "cmb")
     params = Bunch(compsep=compsep, gibbs=gibbs, components=Bunch({"cmb": cmb}))
 
     comp_list = CompList.init_from_params(params.components, params)
-    comp_list.load_initial_alms(params)
-
-    views = {(comp.comp_name, comp.eval_pol): comp for comp in comp_list}
-    assert np.array_equal(views[("cmb", "I")].alms, cmb_intensity_only)
-    assert np.all(views[("cmb", "QU")].alms == 0)
+    with pytest.raises(ValueError, match="has no QU amplitudes"):
+        comp_list.load_initial_state(RunStart.from_gibbs(params.gibbs).sky_file(1))
 
 
-def test_load_initial_alms_missing_component_logs_error_and_continues(tmp_path, caplog) -> None:
+def test_load_initial_state_rejects_missing_component(tmp_path) -> None:
     nalm = (1 + 1) * (1 + 2) // 2
-    chain = tmp_path / "other_components.h5"
+    chain = tmp_path / "chains_compsep" / "chain01_iter0007.h5"
     _write_chain_alms(chain, {"dust": np.ones((3, nalm), dtype=np.complex64)})  # no "cmb" entry
 
     compsep = _make_compsep()
-    gibbs = Bunch(init_from_chain=str(chain))
+    gibbs = Bunch(start=Bunch(source=str(tmp_path), chain=1, iteration=7))
     cmb = _make_named_component_cfg("cmb", "IQU")
     object.__setattr__(cmb, "_name", "cmb")
     params = Bunch(compsep=compsep, gibbs=gibbs, components=Bunch({"cmb": cmb}))
 
     comp_list = CompList.init_from_params(params.components, params)
-    with caplog.at_level("ERROR"):
-        comp_list.load_initial_alms(params)  # must not raise
-
-    assert all(np.all(comp.alms == 0) for comp in comp_list)
-    assert "not found" in caplog.text
+    with pytest.raises(ValueError, match="not found"):
+        comp_list.load_initial_state(RunStart.from_gibbs(params.gibbs).sky_file(1))
 
 
 def _dust_params(**overrides) -> Bunch:
@@ -602,43 +598,45 @@ def test_joining_restores_a_per_polarization_nu_ref() -> None:
     assert comp_list.joined()[0].beta == 1.54
 
 
-def test_restarting_from_a_chain_restores_a_sampled_spectral_index(tmp_path):
+def test_restarting_from_a_chain_restores_spectral_values(tmp_path):
     """Continuing a chain must continue its MH index walk, not reset beta to the start value."""
     import h5py
-    from commander4.sky.comp_io import _restore_sampled_sed_params_from_chain
+    from commander4.sky.comp_io import _load_component_state
 
     chain = tmp_path / "chain01_iter0007.h5"
     with h5py.File(chain, "w") as f:
         f["comps/dust/sed/beta"] = 1.5311
-        f["comps/dust/sed/T"] = 25.0        # not sampled -> must NOT be restored
-        f["comps/dust/sed/nu_ref"] = 217.0  # not sampled -> must NOT be restored
+        f["comps/dust/sed/T"] = 25.0
+        f["comps/dust/sed/nu_ref"] = 353.0
 
     cfg = _make_dust_cfg(353.0)
     cfg.params.sample_spectral_index = True
     comp = CompList.init_from_params(Bunch({"dust": cfg}),
                                      Bunch(compsep=_make_compsep()))[0]
     assert comp.beta == 1.54
-    _restore_sampled_sed_params_from_chain(comp, str(chain))
+    _load_component_state(comp, str(chain), amplitudes=False)
 
     assert comp.beta == pytest.approx(1.5311)   # sampled: taken from the chain
-    assert comp.T == 20.0                       # fixed: the parameter file still rules
+    assert comp.T == 25.0                       # loading is independent of subsequent sampling
     assert comp.nu_ref == 353.0
 
 
-def test_a_fixed_spectral_index_is_not_restored_from_a_chain(tmp_path):
-    """Without `sample_spectral_index`, beta stays a parameter-file setting the chain cannot
-    override."""
+@pytest.mark.parametrize("load_spectral", [False, True])
+def test_loading_a_fixed_spectral_index_is_optional(tmp_path, load_spectral):
+    """A saved fitted index can be loaded and then held fixed in the new run."""
     import h5py
-    from commander4.sky.comp_io import _restore_sampled_sed_params_from_chain
+    from commander4.sky.comp_io import _load_component_state
 
     chain = tmp_path / "chain01_iter0007.h5"
     with h5py.File(chain, "w") as f:
         f["comps/dust/sed/beta"] = 1.20
+        f["comps/dust/sed/T"] = 20.0
+        f["comps/dust/sed/nu_ref"] = 353.0
 
     comp = CompList.init_from_params(Bunch({"dust": _make_dust_cfg(353.0)}),
                                      Bunch(compsep=_make_compsep()))[0]
-    _restore_sampled_sed_params_from_chain(comp, str(chain))
-    assert comp.beta == 1.54
+    _load_component_state(comp, str(chain), amplitudes=False, spectral_parameters=load_spectral)
+    assert comp.beta == (1.20 if load_spectral else 1.54)
 
 
 # ===================================================================
@@ -656,6 +654,32 @@ def _make_radio_sources(template_path, nu_ref=30.0):
     from commander4.sky import RadioSources
     cfg = Bunch(shortname="radsources", nu_0=nu_ref, template_path=str(template_path))
     return RadioSources(cfg, _make_compsep(), comp_name="radsources")
+
+
+def test_point_source_state_round_trips_with_catalogue_identity(tmp_path):
+    from commander4.file_io import paths
+    from commander4.file_io.chain_writer import write_compsep_chain_to_file
+    from commander4.sky.comp_io import _load_component_state
+
+    template = tmp_path / "radio.dat"
+    _write_radio_source_table(template)
+    original = _make_radio_sources(template)
+    original._data[:] = 1500.0
+    original.alpha_arr[:] = -0.9
+    params = Bunch(output=Bunch(dir=str(tmp_path), chains=Bunch(write=[1])),
+                   parameter_file_as_string="test parameters")
+    paths.create_output_dirs(params.output)
+    write_compsep_chain_to_file([original], params, 1, 3)
+    filename = paths.compsep_chain_file(str(tmp_path), 1, 3)
+    restored = _make_radio_sources(template)
+    _load_component_state(restored, filename)
+    np.testing.assert_array_equal(restored._data, original._data)
+    np.testing.assert_array_equal(restored.alpha_arr, original.alpha_arr)
+
+    _write_radio_source_table(template, glon=90.0)
+    different_catalogue = _make_radio_sources(template)
+    with pytest.raises(ValueError, match="positions or ordering differ"):
+        _load_component_state(different_catalogue, filename)
 
 
 def _map_integral(sky_map, nside):

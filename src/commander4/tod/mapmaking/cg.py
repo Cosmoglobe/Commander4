@@ -427,7 +427,13 @@ class CGMapmakerI(CGMapmaker):
         # Use the passed array length, not the full detector ntod: apply_LHS masks pix/scan_tod_arr
         # down to good samples, so this must match (mirrors apply_P_adjoint).
         ntod = scan_tod_arr.shape[-1]
+        resp_I, _ = out_scan.response_I_P
+        if resp_I == 0.0:
+            scan_tod_arr.fill(0.0)
+            return scan_tod_arr
         self.map2tod(in_map, scan_tod_arr, pix.astype(np.int64, copy=False), ntod)
+        if resp_I != 1.0:
+            scan_tod_arr *= resp_I
         return scan_tod_arr
 
     def apply_P_adjoint(self, in_scan: ScanTOD, out_map:NDArray, pix=None, psi=None, scan_tod_arr=None):
@@ -446,7 +452,11 @@ class CGMapmakerI(CGMapmaker):
         if pix.shape != scan_tod_arr.shape:
             raise ValueError(f"pix shape {pix.shape} must match TOD shape {scan_tod_arr.shape}.")
         ntod = scan_tod_arr.shape[-1]
-        self.map_accumulator(out_map, scan_tod_arr, 1, pix.astype(np.int64, copy=False), ntod)
+        resp_I, _ = in_scan.response_I_P
+        if resp_I == 0.0:
+            return out_map
+        self.map_accumulator(out_map, scan_tod_arr, resp_I,
+                             pix.astype(np.int64, copy=False), ntod)
         return out_map
 
     @property
@@ -489,37 +499,27 @@ class CGMapmakerIQU(CGMapmaker):
             dtype=self.f_dtype) if self.ismaster else None
         
         if double_prec:
-            self.maplib.map_accumulator_IQU_f64.argtypes = [self.ct_f64_dim2, #map
-                                                            self.ct_f64_dim1, #tod
-                                                            ct.c_double,      #weight
-                                                            self.ct_i64_dim1, #pix
-                                                            self.ct_f64_dim1, #psi
-                                                            ct.c_int64,       #scan_len
-                                                            ct.c_int64]       #num_pix
-            self.maplib.map2tod_IQU_f64.argtypes = [self.ct_f64_dim2, #map
-                                                    self.ct_f64_dim1, #tod
-                                                    self.ct_i64_dim1, #pix
-                                                    self.ct_f64_dim1, #psi
-                                                    ct.c_int64,       #scan_len
-                                                    ct.c_int64]       #num_pix
-            self.map_accumulator_IQU = self.maplib.map_accumulator_IQU_f64
-            self.map2tod_IQU = self.maplib.map2tod_IQU_f64
+            self.maplib.map2tod_IQU_response_f64.argtypes = [
+                self.ct_f64_dim2, self.ct_f64_dim1, self.ct_i64_dim1, self.ct_f64_dim1,
+                ct.c_double, ct.c_double, ct.c_int64, ct.c_int64,
+            ]
+            self.maplib.map_accumulator_IQU_response_f64.argtypes = [
+                self.ct_f64_dim2, self.ct_f64_dim1, ct.c_double, self.ct_i64_dim1,
+                self.ct_f64_dim1, ct.c_double, ct.c_double, ct.c_int64, ct.c_int64,
+            ]
+            self.map_accumulator_IQU_response = self.maplib.map_accumulator_IQU_response_f64
+            self.map2tod_IQU_response = self.maplib.map2tod_IQU_response_f64
         else:
-            self.maplib.map_accumulator_IQU_f32.argtypes = [self.ct_f32_dim2, 
-                                                            self.ct_f32_dim1, 
-                                                            ct.c_double,
-                                                            self.ct_i64_dim1, 
-                                                            self.ct_f64_dim1, 
-                                                            ct.c_int64, 
-                                                            ct.c_int64]
-            self.maplib.map2tod_IQU_f32.argtypes = [self.ct_f32_dim2, 
-                                                    self.ct_f32_dim1,
-                                                    self.ct_i64_dim1, 
-                                                    self.ct_f64_dim1, 
-                                                    ct.c_int64, 
-                                                    ct.c_int64]
-            self.map_accumulator_IQU = self.maplib.map_accumulator_IQU_f32
-            self.map2tod_IQU = self.maplib.map2tod_IQU_f32
+            self.maplib.map2tod_IQU_response_f32.argtypes = [
+                self.ct_f32_dim2, self.ct_f32_dim1, self.ct_i64_dim1, self.ct_f64_dim1,
+                ct.c_double, ct.c_double, ct.c_int64, ct.c_int64,
+            ]
+            self.maplib.map_accumulator_IQU_response_f32.argtypes = [
+                self.ct_f32_dim2, self.ct_f32_dim1, ct.c_double, self.ct_i64_dim1,
+                self.ct_f64_dim1, ct.c_double, ct.c_double, ct.c_int64, ct.c_int64,
+            ]
+            self.map_accumulator_IQU_response = self.maplib.map_accumulator_IQU_response_f32
+            self.map2tod_IQU_response = self.maplib.map2tod_IQU_response_f32
 
     def apply_P(self, in_map: NDArray, out_scan:ScanTOD, pix=None, psi=None, scan_tod_arr=None):
         """
@@ -539,8 +539,12 @@ class CGMapmakerIQU(CGMapmaker):
         # Use the passed array length, not the full detector ntod: apply_LHS masks pix/psi/scan_tod_arr
         # down to good samples, so this must match (mirrors apply_P_adjoint).
         ntod = scan_tod_arr.shape[-1]
-        self.map2tod_IQU(in_map, scan_tod_arr, pix.astype(np.int64, copy=False),
-                         psi.astype(np.float64, copy=False), ntod, npix_out)
+        pix = pix.astype(np.int64, copy=False)
+        psi = psi.astype(np.float64, copy=False)
+        # The response kernel dispatches on [1, 1] itself, so a standard detector costs nothing.
+        resp_I, resp_P = out_scan.response_I_P
+        self.map2tod_IQU_response(in_map, scan_tod_arr, pix, psi, resp_I, resp_P,
+                                  ntod, npix_out)
         return scan_tod_arr
     
     def apply_P_adjoint(self, in_scan: ScanTOD, out_map:NDArray, pix=None, psi=None, scan_tod_arr=None):
@@ -560,8 +564,13 @@ class CGMapmakerIQU(CGMapmaker):
         pix = self.domain.to_local(in_scan.pix if pix is None else pix)
         psi = in_scan.psi if psi is None else psi
         ntod = scan_tod_arr.shape[-1]
-        self.map_accumulator_IQU(out_map, scan_tod_arr, 1, pix.astype(np.int64, copy=False),
-                                 psi.astype(np.float64, copy=False), ntod, npix_out)
+        pix = pix.astype(np.int64, copy=False)
+        psi = psi.astype(np.float64, copy=False)
+        # The response kernel dispatches on [1, 1] and on an all-zero response itself.
+        resp_I, resp_P = in_scan.response_I_P
+        self.map_accumulator_IQU_response(
+            out_map, scan_tod_arr, 1, pix, psi, resp_I, resp_P, ntod, npix_out,
+        )
         return out_map
 
     @property
@@ -662,7 +671,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         pix, psi = view.pix, view.psi
         good_data_mask = view.get_mask(proc_mask=False)
         gain = view.get_gain()
-        response = view.det_response if pols == "IQU" else None
+        response_I_P = view.response_I_P
 
         ### DATA-SELECTION VETO 1 (too little unflagged data).
         good_frac = good_data_mask.mean()
@@ -691,7 +700,8 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
                 sigma0_dec=correlated_noise.sigma0_decimation,
                 psd_fit_nu_min=correlated_noise.psd_fit_nu_min,
                 psd_fit_nu_max=correlated_noise.psd_fit_nu_max,
-                psd_bin=correlated_noise.psd_bin)
+                psd_bin=correlated_noise.psd_bin,
+                use_dct=correlated_noise.use_dct)
             n_corr_est = res.n_corr
             tod_samples.noise_params[view.iscan, view.idet, :] = res.noise_params
             tod_samples.ncorr_cg_residual[view.iscan, view.idet] = res.residual
@@ -729,29 +739,21 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         inv_var = (gain/sigma0)**2
 
         ### INVERSE-VARIANCE WEIGHTS (preconditioner + rms/cov) ###
-        if pols == "IQU":
-            mapmaker_invvar.accumulate_to_map(inv_var, pix, psi, response=response)
-        else:
-            mapmaker_invvar.accumulate_to_map(inv_var, pix)
+        mapmaker_invvar.accumulate_to_map(inv_var, pix, psi, response_I_P=response_I_P)
 
         ### ORBITAL DIPOLE ###
         d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
         if mapmaker_orbdipole is not None:
             # The dipole TOD is cached on the view, so `get_tod` above already paid for it.
             sky_orb_dipole = view.get_orbital_dipole_tod()
-            if pols == "IQU":
-                mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi,
-                                                     response=response)
-            else:
-                mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
+            mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi,
+                                                 response_I_P=response_I_P)
 
         ### CORRELATED-NOISE MAP ###
         if mapmaker_ncorr is not None:
             n_corr_uKRJ = (n_corr_est/gain).astype(np.float32, copy=False)
-            if pols == "IQU":
-                mapmaker_ncorr.accumulate_to_map(n_corr_uKRJ, inv_var, pix, psi, response=response)
-            else:
-                mapmaker_ncorr.accumulate_to_map(n_corr_uKRJ, inv_var, pix, psi)
+            mapmaker_ncorr.accumulate_to_map(n_corr_uKRJ, inv_var, pix, psi,
+                                             response_I_P=response_I_P)
         if corr_noise_active:
             d_sky -= n_corr_est
 
@@ -762,11 +764,8 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         # mapmaker's full-length inverse-variance denominator (the bin mapmaker instead masks both).
         if mapmaker_res is not None:
             fill_all_masked(residual_tod, good_data_mask, sigma0)
-            if pols == "IQU":
-                mapmaker_res.accumulate_to_map(residual_tod/gain, inv_var, pix, psi,
-                                               response=response)
-            else:
-                mapmaker_res.accumulate_to_map(residual_tod/gain, inv_var, pix, psi)
+            mapmaker_res.accumulate_to_map(residual_tod/gain, inv_var, pix, psi,
+                                           response_I_P=response_I_P)
         if nhit_local is not None:
             nhit_local += np.bincount(domain.to_local(pix[good_data_mask]),
                                       minlength=domain.n_local)

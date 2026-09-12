@@ -76,6 +76,9 @@ Which chain and iterations are written is set by `output.chains.write` and `outp
 Per-scan sampled quantities at the top level, output maps under `maps/`. `NSC` is the band's total scan count, `ND` its detector count, `NPAR` its noise-model parameter count. Gains are written in the band's `band_unit`; maps are brightnesses in the same unit.
 ```YAML
 metadata/band_unit             # thermodynamic unit of the gains and maps below
+metadata/nu_ghz                # band centre frequency used for gain-unit conversions
+metadata/noise_model           # noise PSD class; noise_param_names records its parameter order
+metadata/chain, metadata/iteration  # saved sample identity
 metadata/map_fwhm_arcmin       # beam of maps/observed_sky and maps/rms
 scan_ids           (NSC,)      # int64 scan IDs; the row order of every per-scan array
 det_names          (ND,)       # detector names; the column order of every per-detector array
@@ -122,9 +125,13 @@ One file per iteration holding every component, plus how well they fit the band 
 ```YAML
 comps/<sn>/alms          (npol,nalm)  # complex amplitudes in uK_RJ at nu_ref (T/E/B rows)
 comps/<sn>/source_amps   (1,nsrc)     # point-source components carry this instead of alms
+comps/<sn>/source_lonlat (nsrc,2)     # point-source catalogue positions [deg], in amplitude order
+comps/<sn>/source_spectral_indices (nsrc,)  # point-source spectral indices
 comps/<sn>/sigma_l       (npol,lmax+1)  # realized power spectrum of those alms
 comps/<sn>/lmax          scalar       # band limit of the alms
-comps/<sn>/comp_name     str          # class name, e.g. ThermalDust
+comps/<sn>/comp_name     str          # configured component name, e.g. dust
+comps/<sn>/component_class str        # Python class, e.g. ThermalDust
+comps/<sn>/amplitude_unit str         # uK_RJ for diffuse alms; mJy for point sources
 comps/<sn>/shortname     str          # the <sn> used above
 comps/<sn>/defined_pol   str          # polarization the component is defined in
 comps/<sn>/eval_pol      str          # polarization it was evaluated in
@@ -145,7 +152,79 @@ mcmc/<group>/{numstep,n_accept,accept_rate}             # Metropolis-Hastings ac
 mcmc/<group>/params/<comp>            # the accepted parameter value per component
 ```
 
-`gibbs.init_from_chain` restarts from a chain: the TOD side reads the per-scan quantities out of a `chains_bands/` file, and each component's `init_from` reads its alms out of a `chains_compsep/` one.
+Both ways of using saved state share `gibbs.start`:
+
+```yaml
+# New run, initialized from another run. Output numbering begins at 1.
+gibbs:
+  num_iterations: 10
+  start:
+    mode: new
+    source: "../previous_run"
+    iteration: latest
+    chain: matching
+    load: [tod, amplitudes, spectral_parameters]
+output:
+  dir: "../new_run"
+  # ... other output settings ...
+```
+
+```yaml
+# Continue this output directory after its last complete saved iteration.
+gibbs:
+  num_iterations: 10          # Ten additional iterations.
+  start:
+    mode: resume
+output:
+  dir: "../existing_run"
+  chains:
+    write: [1, 2]            # Save both chains so subsequent resumes are possible.
+  # ... other output settings ...
+```
+
+Omitting `gibbs.start` means a new run from configured initial values. A new run requires an output
+directory without existing chain files. `source` is a run root containing `chains_bands/` and/or
+`chains_compsep/`. Paths follow the usual convention of being relative to the working directory.
+
+`iteration` defaults to `latest`, which selects the newest **common complete** saved iteration for
+the requested state and source chains. An integer selects a particular iteration. `chain: matching`
+(the default) loads chain 1 into chain 1 and chain 2 into chain 2. For a new run, `chain: 1` or
+`chain: 2` instead loads that single source chain into both. This also supports source runs that
+saved only one chain. Both new chains subsequently evolve separately.
+
+`mode: resume` always reads `output.dir`, restores corresponding chains, and starts at the saved
+iteration plus one. Both chains must have been saved. Resume restores all required state and ignores
+component-specific initial guesses. Keep the original model and sampling settings when continuing a
+run. To change the initial state selectively, use `mode: new` and another output directory.
+`num_iterations` always counts iterations to execute in this invocation. Exact random draws are not
+guaranteed to match an uninterrupted run.
+
+If later output exists beyond the selected complete iteration, resume stops and lists those files.
+It does not move, delete or overwrite them. Archive or remove them before retrying. New chain files
+carry `metadata/complete`, written last; older files are checked for required state datasets.
+Independent TOD and CompSep output intervals can leave later files without a common complete sample.
+Use compatible intervals, and `output.chains.write: [1, 2]`, for regular resume points.
+
+For a new run, `load` selects any of `tod`, `amplitudes` and `spectral_parameters`; all are enabled by
+default. TOD state includes all three gain terms, noise parameters, acceptance flags, jumps and HFI
+modulation state. Scans and detectors are matched by identity. Gains use the saved unit; detector
+subsets preserve total gains while restoring the relative-gain zero-sum constraint. Diagnostics and
+band maps are recomputed.
+
+Sky amplitudes retain their beam smoothing. Spectral values such as beta and temperature can be
+loaded and then held fixed. Reference frequencies and amplitude conventions must match. In a new
+run, component `params.init_from` overrides the shared source; explicit `null` retains that
+component's configured initial values. FITS files supply only amplitudes. Point-source chains must
+also record matching catalogue positions and ordering.
+
+TOD-only runs save each chain's fixed sky once as `initial_state/chain<CC>_iter0000.h5`. These are
+initial-state snapshots, not Gibbs samples. Resume combines them with the latest complete TOD
+iteration. Older TOD-only runs without snapshots rebuild their fixed sky from the configured
+components and initial files, with a warning; those settings must remain unchanged.
+
+The earlier `gibbs.init_from_chain`, `gibbs.initialize` and `gibbs.start_iteration` settings are
+rejected with migration instructions. See [the chain design note](notes/chain_initialization.md)
+for the storage tradeoffs and suggested future improvements.
 
 
 # 3. Development / Contributing

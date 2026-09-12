@@ -244,11 +244,14 @@ def resolve_band_lmax(params: Bunch, band_name: str, experiment: str | None, nsi
 
 
 def validate_param_schema(params_dict: dict) -> None:
-    """Reject any top-level key outside `TOP_LEVEL_BLOCKS`."""
+    """Validate the top-level blocks and saved-sample initialization settings."""
+    from commander4.parameters.initialization import RunStart
+
     unknown = sorted(set(params_dict) - set(TOP_LEVEL_BLOCKS))
     if unknown:
         raise ValueError(f"Unknown top-level parameter block(s) {unknown}. The valid blocks are "
                          f"{list(TOP_LEVEL_BLOCKS)}.")
+    RunStart.from_gibbs(params_dict.get("gibbs", {}))
 
 
 # The three method-specific sections a sampling group can live in. Compsep exists to run these, so

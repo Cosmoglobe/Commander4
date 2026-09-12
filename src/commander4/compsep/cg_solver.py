@@ -413,5 +413,8 @@ class CompSepSolver:
 
         sol_list = self.solve_CG(self.apply_LHS_matrix, RHS, M=precond,
                              x_true=x_true if self.config.dense_matrix_debug_mode else None)
-
+        # CG solves for intrinsic amplitudes, even if initialization came from a smoothed
+        # per-pixel sample. The new solution must no longer carry that sample's beam metadata.
+        for comp in sol_list:
+            comp.amp_fwhm_rad = 0.0
         return sol_list

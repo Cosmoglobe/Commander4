@@ -19,6 +19,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.parameters.schema import resolve_param
+from commander4.parameters.initialization import RunStart
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.tod_samples import TODSamples
@@ -41,7 +42,8 @@ from commander4.diagnostics.performance import benchmark, bench_summary, bench_r
 logger = logging.getLogger(__name__)
 
 
-def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, DetectorGroupTOD,
+def init_tod_processing(mpi_info: Bunch, params: Bunch, start: RunStart) \
+        -> tuple[Bunch, str, DetectorGroupTOD,
                                                                  TODSamples, TODSamples]:
     """To be run once before starting TOD processing. Determines what data this rank is responsible
     for, reads other relevant parameter file data, and allocates the TODSamples objects, 
@@ -82,8 +84,10 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
     if mpi_info.tod.is_master:
         logger.summary(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")
 
-    tod_samples_chain1 = TODSamples(experiment_data, params, my_band, band_comm, 1)
-    tod_samples_chain2 = TODSamples(experiment_data, params, my_band, band_comm, 2)
+    tod_samples_chain1 = TODSamples(experiment_data, params, my_band, band_comm, 1,
+                                    start.tod_file(experiment_name, my_band_name, 1))
+    tod_samples_chain2 = TODSamples(experiment_data, params, my_band, band_comm, 2,
+                                    start.tod_file(experiment_name, my_band_name, 2))
 
     # Build the band's map-distribution PixelDomain once now: the pointing is static, so it is
     # reused across Gibbs iterations by both the mapmakers and the sky-model distribution (which

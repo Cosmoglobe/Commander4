@@ -17,7 +17,7 @@ from pixell.bunch import Bunch
 
 from commander4.data_models.band import Band
 import commander4.sky as sky
-from commander4.sky.comp_io import _load_component_alms, _read_view_alms_from_fits
+from commander4.sky.comp_io import _load_component_state, _read_view_alms_from_fits
 from commander4.sky.component import Component
 from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.polarization import EXECUTION_POLS
@@ -137,29 +137,21 @@ class CompList:
                                                comp_name=component._name, allocate_empty_alms=True))
         return cls(comp_list)
 
-    def load_initial_alms(self, params: Bunch) -> None:
-        """Populate each component's alms with an initial guess read from a file.
+    def load_initial_state(self, source_path: str | None = None, *,
+                           amplitudes: bool = True, spectral_parameters: bool = True,
+                           use_component_overrides: bool = True) -> None:
+        """Load a resolved sky source, optionally using per-component `init_from` overrides.
 
-        For every component the source is its own ``init_from`` parameter (inside the component's
-        ``params`` block) if present, otherwise the global ``params.gibbs.init_from_chain``. The
-        source may be a compsep chain (``.h5``/``.hd5``, alms read directly) or a FITS sky map
-        (``.fits``, transformed to alms); the type is decided by the file extension. If neither path
-        is set the alms are left at their allocated value (zeros). Only diffuse (alm-based)
-        components are supported for now.
+        An explicit null override keeps that component's configured initialization. FITS overrides
+        supply only diffuse amplitudes. Chain overrides use the shared sky quantity selections.
         """
-        global_path = params.gibbs.init_from_chain if "init_from_chain" in params.gibbs else None
         for comp in self.comp_list:
-            has_explicit_path = "init_from" in comp.comp_params
-            source_path = comp.comp_params.init_from if has_explicit_path else global_path
-            if not source_path:
+            has_explicit_path = use_component_overrides and "init_from" in comp.comp_params
+            component_path = comp.comp_params.init_from if has_explicit_path else source_path
+            if not component_path:
                 continue  # No initial guess requested; leave the allocated zeros.
-            if not isinstance(comp, DiffuseComponent):
-                if has_explicit_path:
-                    raise ValueError(
-                        f"Component {comp.comp_name!r}: 'init_from' is currently only supported "
-                        "for diffuse (alm-based) components.")
-                continue
-            _load_component_alms(comp, source_path)
+            _load_component_state(comp, component_path, amplitudes=amplitudes,
+                                  spectral_parameters=spectral_parameters)
 
     def load_amp_prior_means(self) -> None:
         """Populate each component's prior mean mu from its ``amp_prior_mean_map`` parameter.

@@ -141,6 +141,7 @@ class JumpCatalog:
         file: h5py.File,
         local_indices: list[int],
         ndet: int,
+        detector_indices: list[int] | None = None,
     ) -> "JumpCatalog":
         """Reconstruct a local jump catalog from the packed HDF5 datasets `pack` produces.
 
@@ -153,10 +154,12 @@ class JumpCatalog:
         counts_flat = counts_global.reshape(-1)
         starts_flat = np.cumsum(counts_flat, dtype=np.int64) - counts_flat
 
+        if detector_indices is None:
+            detector_indices = list(range(ndet))
         for iscan_local, iscan_global in enumerate(local_indices):
-            row_start = iscan_global * ndet
-            for idet in range(ndet):
-                flat_index = row_start + idet
+            row_start = iscan_global * counts_global.shape[1]
+            for idet, source_idet in enumerate(detector_indices):
+                flat_index = row_start + source_idet
                 count = int(counts_flat[flat_index])
                 start = int(starts_flat[flat_index])
                 stop = start + count
