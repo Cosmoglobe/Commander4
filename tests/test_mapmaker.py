@@ -1,8 +1,35 @@
 import numpy as np
+import pytest
 from numpy.typing import NDArray
 from mpi4py import MPI
 
-from commander4.tod.mapmaking.binned import MapmakerIQU, WeightsMapmakerIQU
+from commander4.tod.mapmaking.binned import Mapmaker, MapmakerIQU, WeightsMapmaker,\
+	WeightsMapmakerIQU
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_scalar_weights_normalization(dtype: type) -> None:
+    """The scalar weights expose RMS and normal-matrix maps through the IQU interface."""
+    weights = WeightsMapmaker(MPI.COMM_SELF, 1, dtype=dtype)
+    with pytest.raises(RuntimeError, match="before it is gathered"):
+        weights.normalize_map()
+    with pytest.raises(RuntimeError, match="unfinished RMS"):
+        weights.final_rms_map
+
+    pix = np.array([0, 3, 3, 7], dtype=np.int64)
+    weights.accumulate_to_map(2.0, pix, response_I_P=(0.5, 0.07))
+    weights.gather_map()
+    weights.normalize_map()
+
+    expected_weights = np.zeros(12)
+    np.add.at(expected_weights, pix, 2.0 * 0.5**2)
+    observed = expected_weights > 0
+    np.testing.assert_array_equal(weights.final_cov_map, expected_weights)
+    assert weights.final_cov_map is weights.final_map
+    assert weights.final_rms_map.dtype == dtype
+    np.testing.assert_allclose(weights.final_rms_map[observed],
+                               1.0 / np.sqrt(expected_weights[observed]), rtol=1e-7)
+    assert np.isinf(weights.final_rms_map[~observed]).all()
 
 
 def _build_norm_map_from_A(A: NDArray) -> NDArray:
@@ -225,20 +252,20 @@ def test_intensity_only_accumulators_do_not_evaluate_polarization_angles():
     pix = np.array([0, 1, 1, 4], dtype=np.int64)
     psi = np.full(pix.size, np.nan)
     tod = np.array([1.0, 2.0, 3.0, 4.0])
-    response = np.array([1.0, 0.0])
+    response_I_P = (1.0, 0.0)
     weight = 2.5
 
     signal = MapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
     signal_ref = MapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
-    signal.accumulate_to_map(tod, weight, pix, psi, response=response)
-    signal_ref.accumulate_to_map_Python(tod, weight, pix, psi, response=response)
+    signal.accumulate_to_map(tod, weight, pix, psi, response_I_P=response_I_P)
+    signal_ref.accumulate_to_map_Python(tod, weight, pix, psi, response_I_P=response_I_P)
     np.testing.assert_allclose(signal._map_signal, signal_ref._map_signal)
     np.testing.assert_array_equal(signal._map_signal[1:3], 0.0)
 
     weights = WeightsMapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
     weights_ref = WeightsMapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
-    weights.accumulate_to_map(weight, pix, psi, response=response)
-    weights_ref.accumulate_to_map_Python(weight, pix, psi, response=response)
+    weights.accumulate_to_map(weight, pix, psi, response_I_P=response_I_P)
+    weights_ref.accumulate_to_map_Python(weight, pix, psi, response_I_P=response_I_P)
     np.testing.assert_allclose(weights._map_signal, weights_ref._map_signal)
     np.testing.assert_array_equal(weights._map_signal[1:6], 0.0)
 
@@ -252,22 +279,75 @@ def test_response_accumulators_match_reference_for_binary_and_general_coefficien
     tod = rng.normal(size=pix.size)
     weight = 2.5
     responses = [
-        None,
-        np.array([1.0, 0.0]),
-        np.array([0.0, 1.0]),
-        np.array([0.0, 0.0]),
-        np.array([0.35, 0.8]),
+        (1.0, 1.0),
+        (1.0, 0.0),
+        (0.0, 1.0),
+        (0.0, 0.0),
+        (0.35, 0.8),
     ]
 
-    for response in responses:
+    for response_I_P in responses:
         signal = MapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
         signal_ref = MapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
-        signal.accumulate_to_map(tod, weight, pix, psi, response=response)
-        signal_ref.accumulate_to_map_Python(tod, weight, pix, psi, response=response)
+        signal.accumulate_to_map(tod, weight, pix, psi, response_I_P=response_I_P)
+        signal_ref.accumulate_to_map_Python(tod, weight, pix, psi, response_I_P=response_I_P)
         np.testing.assert_allclose(signal._map_signal, signal_ref._map_signal, rtol=1e-14)
 
         weights = WeightsMapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
         weights_ref = WeightsMapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
-        weights.accumulate_to_map(weight, pix, psi, response=response)
-        weights_ref.accumulate_to_map_Python(weight, pix, psi, response=response)
+        weights.accumulate_to_map(weight, pix, psi, response_I_P=response_I_P)
+        weights_ref.accumulate_to_map_Python(weight, pix, psi, response_I_P=response_I_P)
         np.testing.assert_allclose(weights._map_signal, weights_ref._map_signal, rtol=1e-14)
+
+
+def test_intensity_mapmakers_apply_the_intensity_response():
+    """The I-only mapmakers weight by the same response the IQU ones put in their II element.
+
+    `pols = "I"` runs the scalar mapmakers while the CG operator still applies `response_I`, so the
+    two must agree or the inverse-variance map (and the RMS built from it) is inconsistent with A.
+    """
+    rng = np.random.default_rng(11)
+    nside = 1
+    pix = rng.integers(0, 12 * nside**2, size=50, dtype=np.int64)
+    psi = rng.uniform(0.0, np.pi, size=pix.size)
+    tod = rng.normal(size=pix.size)
+    weight = 2.5
+    response_I_P = (0.4, 0.0)  # QU set to zero so the IQU II element is the I-only answer.
+
+    signal = Mapmaker(MPI.COMM_SELF, nside, dtype=np.float64)
+    signal_plain = Mapmaker(MPI.COMM_SELF, nside, dtype=np.float64)
+    signal_iqu = MapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
+    signal.accumulate_to_map(tod, weight, pix, response_I_P=response_I_P)
+    signal_plain.accumulate_to_map(tod, weight, pix)
+    signal_iqu.accumulate_to_map(tod, weight, pix, psi, response_I_P=response_I_P)
+    np.testing.assert_allclose(signal._map_signal, signal_iqu._map_signal[0], rtol=1e-14)
+    np.testing.assert_allclose(signal._map_signal, 0.4 * signal_plain._map_signal, rtol=1e-14)
+
+    weights = WeightsMapmaker(MPI.COMM_SELF, nside, dtype=np.float64)
+    weights_plain = WeightsMapmaker(MPI.COMM_SELF, nside, dtype=np.float64)
+    weights_iqu = WeightsMapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
+    weights.accumulate_to_map(weight, pix, response_I_P=response_I_P)
+    weights_plain.accumulate_to_map(weight, pix)
+    weights_iqu.accumulate_to_map(weight, pix, psi, response_I_P=response_I_P)
+    # P^T N^-1 P, so the response enters squared.
+    np.testing.assert_allclose(weights._map_signal, weights_iqu._map_signal[0], rtol=1e-14)
+    np.testing.assert_allclose(weights._map_signal, 0.4**2 * weights_plain._map_signal, rtol=1e-14)
+
+
+def test_the_default_response_leaves_the_intensity_mapmakers_unscaled():
+    """The [1, 1] default is a standard detector, so it must accumulate unweighted."""
+    nside = 1
+    pix = np.array([0, 3, 3, 7], dtype=np.int64)
+    tod = np.array([1.0, 2.0, 3.0, 4.0])
+
+    signal = Mapmaker(MPI.COMM_SELF, nside, dtype=np.float64)
+    signal.accumulate_to_map(tod, 2.0, pix, response_I_P=(1.0, 1.0))
+    expected = np.zeros(12 * nside**2)
+    np.add.at(expected, pix, 2.0 * tod)
+    np.testing.assert_allclose(signal._map_signal, expected, rtol=1e-14)
+
+    weights = WeightsMapmaker(MPI.COMM_SELF, nside, dtype=np.float64)
+    weights.accumulate_to_map(2.0, pix, response_I_P=(1.0, 1.0))
+    expected_weights = np.zeros(12 * nside**2)
+    np.add.at(expected_weights, pix, 2.0)
+    np.testing.assert_allclose(weights._map_signal, expected_weights, rtol=1e-14)

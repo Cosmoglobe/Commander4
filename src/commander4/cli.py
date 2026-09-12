@@ -176,9 +176,10 @@ def run_commander4(params: Bunch, params_dict: dict):
 
     # Import the numerical pipeline after init_mpi has configured this rank's thread counts.
     from commander4.tod.processing import init_tod_processing
-    from commander4.compsep.processing import init_compsep_processing, get_initial_sky_model
+    from commander4.compsep.processing import init_compsep_processing
     from commander4.mpi.transfer import receive_tod, receive_compsep, send_compsep,\
         get_local_initial_sky
+    from commander4.sky.sky_model import SkyModel
 
     # Give initialization its own stream. Every chain iteration is reseeded at the orchestration
     # boundary in run_tod_side or run_compsep_side.
@@ -255,7 +256,7 @@ def run_commander4(params: Bunch, params_dict: dict):
     elif mpi_info.world.side == "compsep":
         # Send the initial sky model to TOD before receiving the first TOD output, mirroring the
         # process_compsep -> send_compsep -> receive_tod order used inside the main loop.
-        send_compsep(mpi_info, my_band_compsep_id, get_initial_sky_model(comp_lists_by_chain[1]),
+        send_compsep(mpi_info, my_band_compsep_id, SkyModel(comp_lists_by_chain[1]),
                      mpi_info.world.tod_band_masters)
         curr_tod_output = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
                                       my_band_compsep_id, curr_tod_output, params)

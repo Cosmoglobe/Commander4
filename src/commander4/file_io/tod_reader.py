@@ -10,9 +10,11 @@ and registering it in ``experiment_tod_readers``.
 """
 from mpi4py import MPI
 from pixell.bunch import Bunch
+import logging
 import numpy as np
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.parameters.schema import resolve_param, split_integer_range
 from commander4.file_io.experiments.akari import tod_reader as tod_reader_akari
 from commander4.file_io.experiments.litebird_sim import tod_reader as tod_reader_litebird_sim
 from commander4.file_io.experiments.litebird_sim_spawndetectors import tod_reader\
@@ -22,6 +24,8 @@ from commander4.file_io.experiments.planck_hfi import tod_reader as tod_reader_p
 from commander4.file_io.experiments.general import tod_reader as tod_reader_general
 from commander4.file_io.experiments.SO_LAT import tod_reader as tod_reader_SO_LAT
 from commander4.file_io.experiments.SO_SAT import tod_reader as tod_reader_SO_SAT
+
+logger = logging.getLogger(__name__)
 
 # Known experiments and the reader each one uses. The parameter file's `experiment_id` selects the
 # entry, and every key matches the module name it is imported from.
@@ -40,16 +44,17 @@ experiment_tod_readers = {
 
 
 def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
-                        det_names: list[str],
-                        params: Bunch, my_scans_start: int,
-                        my_scans_stop: int) -> DetectorGroupTOD:
-    """Read this rank's share of one band's scans, using the reader its experiment registers.
+                        det_names: list[str], params: Bunch) -> DetectorGroupTOD:
+    """Slice the band's filelist, distribute its rows, and read this rank's scans.
+
+    Figures out which scans this rank should read by checking  `filelist_idx_start` and
+    `filelist_idx_stop` from the parameter file. Then calls the TOD-reader of our experiment.
 
     Args:
         band_comm: The band's MPI communicator; each rank reads a disjoint range of scans.
         my_experiment, my_band: The experiment and band parameter blocks.
         det_names: Detector names in full-band index order.
-        my_scans_start, my_scans_stop: The requested global scan range for this rank.
+        params: The full parameter file. Used for finding the optional filelist slice bounds.
 
     Returns:
         The band's `DetectorGroupTOD`, with its scan-index bookkeeping filled in. The reader may
@@ -62,6 +67,31 @@ def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunc
                 f"{my_experiment.experiment_id}, which is not in {experiment_tod_readers.keys()}. "\
                 "You either misspelled the experiment ID, or your experiment does not yet have a "\
                 "specified TOD reader. See this file for how to add it.")
+
+    scopes = (f"experiments.{my_experiment._name}.bands.{my_band._name}",
+              f"experiments.{my_experiment._name}")
+    filelist_idx_start = resolve_param(params, "filelist_idx_start", scopes, default=None,
+                                       legal_types=(int, type(None)))
+    filelist_idx_stop = resolve_param(params, "filelist_idx_stop", scopes, default=None,
+                                      legal_types=(int, type(None)))
+    # Count the actual rows once per band; no TOD files are opened to choose the slice.
+    total_scans: int | None = None
+    if band_comm.Get_rank() == 0:
+        with open(my_band.filelist) as infile:
+            infile.readline()
+            total_scans = len(infile.readlines())
+    total_scans = band_comm.bcast(total_scans, root=0)
+    scan_start, scan_stop, _ = slice(filelist_idx_start, filelist_idx_stop).indices(total_scans)
+    if scan_stop <= scan_start:
+        raise ValueError(f"Band {my_band._name}: filelist slice "
+                         f"[{filelist_idx_start}:{filelist_idx_stop}] selects no scans.")
+    my_scans_start, my_scans_stop = split_integer_range(
+        scan_stop - scan_start, band_comm.Get_size(), band_comm.Get_rank())
+    my_scans_start += scan_start
+    my_scans_stop += scan_start
+    if band_comm.Get_rank() == 0:
+        logger.info(f"Band {my_band._name}: selected filelist rows [{scan_start}:{scan_stop}], "
+                    f"{scan_stop - scan_start} of {total_scans} scans.")
 
     # Load and execute TOD loader script for this specific experiment.
     my_tod_reader = experiment_tod_readers[my_experiment.experiment_id]

@@ -506,14 +506,6 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     return comp_list, mpi_info, band_identifier, my_band, compsep_state
 
 
-def get_initial_sky_model(comp_list: CompList) -> SkyModel:
-    """Wrap the freshly-initialized `comp_list` as a SkyModel for the pre-loop initial send to TOD.
-
-    `comp_list` already holds its initial alms (set in `init_compsep_processing`), so this is just
-    the same `SkyModel(comp_list)` that `process_compsep` produces in later iterations.
-    """
-    return SkyModel(comp_list)
-
 
 def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
                          detector_data: DetectorMap, comp_list: CompList,

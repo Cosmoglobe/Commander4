@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from mpi4py import MPI
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_tod import DetectorTOD
@@ -10,6 +11,7 @@ from commander4.data_models.jump_corrections import JumpCorrection
 from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.hfi_demodulation import sample_hfi_baselines
+from commander4.tod.scan_diagnostics import _record_tod_diagnostics
 from commander4.tod.view import TODView
 
 _NSIDE = 1
@@ -85,12 +87,12 @@ def test_first_pass_finds_phase_then_next_pass_fits_and_demodulates(
     band, samples, sky_map, raw_tod, sky_tod = _build_hfi_case(phase=phase)
 
     # C3's first pass fits raw parity means and uses them to determine the modulation phase.
-    sample_hfi_baselines(band, samples, sky_map, rng=_ZeroRNG())
+    sample_hfi_baselines(MPI.COMM_SELF, band, samples, sky_map, rng=_ZeroRNG())
     assert samples.modulation_phase_initialized
     assert samples.modulation_phase[0, 0] == phase
 
     # Every later Gibbs pass conditions the baseline draw on the current gain-scaled sky model.
-    sample_hfi_baselines(band, samples, sky_map, rng=_ZeroRNG())
+    sample_hfi_baselines(MPI.COMM_SELF, band, samples, sky_map, rng=_ZeroRNG())
     np.testing.assert_allclose(samples.baselines[0, 0], _BASELINES)
 
     view = TODView(band, samples, compsep_output=sky_map).focus(0, band.scans[0].detectors[0])
@@ -104,7 +106,7 @@ def test_baseline_sample_includes_c3_white_noise_fluctuation(monkeypatch) -> Non
     samples.modulation_phase[0, 0] = -1
     samples.modulation_phase_initialized = True
 
-    sample_hfi_baselines(band, samples, sky_map, rng=_SequenceRNG([1.5, -2.0]))
+    sample_hfi_baselines(MPI.COMM_SELF, band, samples, sky_map, rng=_SequenceRNG([1.5, -2.0]))
 
     expected = _BASELINES + np.array([1.5, -2.0]) * _SIGMA0 / np.sqrt(_NPAIR)
     np.testing.assert_allclose(samples.baselines[0, 0], expected)
@@ -127,3 +129,32 @@ def test_corrected_tod_applies_jumps_then_hfi_demodulation() -> None:
     np.testing.assert_array_equal(view.raw_tod, raw_tod)
     np.testing.assert_allclose(view.corrected_tod, expected)
     np.testing.assert_allclose(view.get_tod(), expected)
+
+
+def test_saved_residual_removes_hfi_baselines_sky_and_noise(monkeypatch) -> None:
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    band, samples, sky_map, _, _ = _build_hfi_case(phase=-1)
+    samples.modulation_phase[0, 0] = -1
+    samples.modulation_phase_initialized = True
+    samples.baselines[0, 0] = _BASELINES
+    samples.TOD_PS_NBIN = 100
+    for name in ("tod_ps_freqs", "tod_ps_raw", "tod_ps_ncorr", "tod_ps_ncorrsub",
+                 "tod_ps_residual"):
+        setattr(samples, name, np.full((1, 1, 100), np.nan, dtype=np.float32))
+    samples.chisq_z = np.full((1, 1), np.nan)
+    samples.ncorr_tods = None
+    samples.residual_tods = [[None]]
+    n_corr = np.full(_NTOD, 3.0, dtype=np.float32)
+    residual = np.full(_NTOD, 0.5, dtype=np.float32)
+    detector = band.scans[0].detectors[0]
+    # Add the noise with the raw modulation signs; the residual is in demodulated detector units.
+    detector._tod[0::2] -= n_corr[0::2] + residual[0::2]
+    detector._tod[1::2] += n_corr[1::2] + residual[1::2]
+    detector._tod[4:] -= 3.0
+    jump = JumpCorrection(np.array([4]), np.array([3.0], dtype=np.float32))
+    samples.jumps = SimpleNamespace(get=lambda iscan, idet: jump)
+    view = TODView(band, samples, compsep_output=sky_map).focus(0, detector)
+
+    _record_tod_diagnostics(samples, 0, 0, view, n_corr)
+
+    np.testing.assert_allclose(samples.residual_tods[0][0], residual)

@@ -198,7 +198,6 @@ experiments:
     enabled: true
     experiment_id: "general"
     mapmaker: "bin"
-    num_scans: 2400
     bands:
       # The band FWHMs must match the simulation's: they are what `common_res_fwhm` smooths from.
       Band30GHz:

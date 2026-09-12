@@ -17,7 +17,7 @@ from scipy.fft import rfftfreq
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.tod_samples import TODSamples
-from commander4.diagnostics.performance import benchmark, log_memory
+from commander4.diagnostics.performance import benchmark, log_memory, start_bench, stop_bench
 from commander4.math_utils.fft import forward_rfft, backward_rfft
 from commander4.parameters.schema import resolve_param
 from commander4.tod.noise.sample_ncorr import GAIN_GAP_FILL_METHODS
@@ -57,6 +57,7 @@ class GainConfig(StepConfig):
     calibrate_against: str = "sky"
     gap_fill_method: str = "wn"
     downsample_time: float = 1.0
+    mask_threshold: float = 0.5
     sampling_rate: float = 1.0
 
     def __post_init__(self) -> None:
@@ -69,6 +70,8 @@ class GainConfig(StepConfig):
                              f"{self.gap_fill_method!r}.")
         if not np.isfinite(self.downsample_time) or self.downsample_time < 0:
             raise ValueError("downsample_time must be a finite, non-negative number.")
+        if not 0.0 <= self.mask_threshold < 1.0:
+            raise ValueError(f"mask_threshold must be in [0, 1), got {self.mask_threshold}.")
         if not np.isfinite(self.sampling_rate) or self.sampling_rate <= 0:
             raise ValueError("The experiment sampling rate must be positive and finite.")
 
@@ -178,17 +181,19 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
     Returns:
         tod_samples (TODSamples): Updated TOD samples with the new g0 estimate.
     """
+    start_bench("eqn-setup")
     sum_s_T_N_inv_d = 0  # Accumulators for the numerator and denominator of eqn 16.
     sum_s_T_N_inv_s = 0
 
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
-                        downsample_factor=config.downsample_factor)
+                        downsample_factor=config.downsample_factor,
+                        proc_mask_type="gain",
+                        mask_threshold=config.mask_threshold)
 
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
     for view in scan_view.iter_focused(accepted_only=True):
         calib = view.get_calib_tod("abs", config.calibrate_against,
-                                   gap_fill_method=config.gap_fill_method,
-                                   proc_mask_type="gain")
+                                   gap_fill_method=config.gap_fill_method)
         s_cal = calib.s_cal
         residual_tod = calib.tod
 
@@ -196,17 +201,21 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
         # apply_N_inv needs it to place the 1/f noise weight at the correct frequencies.
         gain_samprate = view.fsamp / view.downsample_factor
         N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=gain_samprate)
-        N_inv_d = experiment_data.apply_N_inv(residual_tod, view.noise_params, samprate=gain_samprate)
 
-        # Add to the numerator and denominator.
-        sum_s_T_N_inv_d += np.dot(s_cal, N_inv_d)
+        # N^-1 is symmetric, so s^T N^-1 d = (N^-1 s)^T d, giving:
+        sum_s_T_N_inv_d += np.dot(N_inv_s, residual_tod)
         sum_s_T_N_inv_s += np.dot(s_cal, N_inv_s)
+    stop_bench("eqn-setup")
 
+    start_bench("MPI-comm")
     # The g0 term is fully global, so we reduce across both all scans and all bands:
     sum_s_T_N_inv_d = band_comm.reduce(sum_s_T_N_inv_d, op=MPI.SUM, root=0)
     sum_s_T_N_inv_s = band_comm.reduce(sum_s_T_N_inv_s, op=MPI.SUM, root=0)
     # Default to the current value so a skipped or ill-posed solve leaves the gain unchanged.
     g_sampled = tod_samples.abs_gain
+    stop_bench("MPI-comm")
+
+    start_bench("eqn-solve")
     # Rank 0 draws a sample of g0 from eq (16) from BP6, and bcasts it to the other ranks.
     if band_comm.Get_rank() == 0:
         if not np.isfinite(sum_s_T_N_inv_s) or sum_s_T_N_inv_s <= 0.0:
@@ -220,6 +229,7 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
             logger.info(f"Chain {tod_samples.chain} iter{iteration} "
                         f"{experiment_data.band_name} g0: {tod_samples.abs_gain:.4e} -> "
                         f"{g_sampled:.4e} (+/- {g_std:.4e}).")
+    stop_bench("eqn-solve")
 
     with benchmark("abs-gain-barrier"):   # reported across ranks by bench_summary
         band_comm.Barrier()
@@ -248,6 +258,7 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
     Returns:
         tod_samples (TODSamples): Updated TOD samples with relative gain estimates.
     """
+    start_bench("eqn-setup")
     ndet = experiment_data.ndet
 
     #### 1. Local Calculation (on each rank) ###
@@ -258,13 +269,14 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
     # local_r_T_N_inv_s = 0.0
     local_r_T_N_inv_s = np.zeros(ndet, dtype=np.float32)
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
-                        downsample_factor=config.downsample_factor)
+                        downsample_factor=config.downsample_factor,
+                        proc_mask_type="gain",
+                        mask_threshold=config.mask_threshold)
 
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
     for view in scan_view.iter_focused(accepted_only=True):
         calib = view.get_calib_tod("rel", config.calibrate_against,
-                                   gap_fill_method=config.gap_fill_method,
-                                   proc_mask_type="gain")
+                                   gap_fill_method=config.gap_fill_method)
         s_cal = calib.s_cal
         residual_tod = calib.tod
         # Calibration TODs are block-averaged, so their true rate is fsamp/downsample_factor;
@@ -278,17 +290,21 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
         # Add the contribution from this scan to the local sum (full-band detector column).
         local_s_T_N_inv_s[view.idet] += s_T_N_inv_s_scan
         local_r_T_N_inv_s[view.idet] += r_T_N_inv_s_scan
+    stop_bench("eqn-setup")
 
     ### 2. Intra-Detector Reduction ###
     # Sum the local values across all ranks that share the same detector using det_comm.
     # After this, every rank in the det_comm will have the total sum for their detector.
+    start_bench("MPI-comm")
     band_comm.Allreduce(MPI.IN_PLACE, local_s_T_N_inv_s, op=MPI.SUM)
     band_comm.Allreduce(MPI.IN_PLACE, local_r_T_N_inv_s, op=MPI.SUM)
+    stop_bench("MPI-comm")
 
     ### 3. Solve Global System ###
     # Solve the constrained system (sum of Delta g_i = 0) over the active detectors only; detectors
     # rejected on every scan or with a vanishing calibrator carry zero weight, are held at their
     # current value, and are excluded so the bordered matrix stays non-singular.
+    start_bench("eqn-solve")
     delta_g_samples = np.array(tod_samples.rel_gain, dtype=np.float32)  # default: leave unchanged
     if band_comm.Get_rank() == 0:
         n_active = int(np.count_nonzero(local_s_T_N_inv_s > 0.0))
@@ -308,8 +324,11 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
                 logger.verbose(msg + ".")
             except np.linalg.LinAlgError:
                 logger.error("Failed to solve linear system for relative gain: Not updating.")
+    stop_bench("eqn-solve")
     # Broadcast and apply on every rank, so all band ranks hold the identical relative-gain vector.
     prev_rel_gain = np.array(tod_samples.rel_gain)
+    with benchmark("abs-gain-barrier"):   # reported across ranks by bench_summary
+        band_comm.Barrier()
     band_comm.Bcast(delta_g_samples, root=0)
     tod_samples.rel_gain[:] = delta_g_samples
     log_memory("rel-gain")
@@ -354,7 +373,9 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
     # and summed across the band afterwards, so the chain records the prior actually used.
     gain_prior_local = np.zeros((ndet, 3), dtype=np.float64)
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
-                        downsample_factor=config.downsample_factor)
+                        downsample_factor=config.downsample_factor,
+                        proc_mask_type="gain",
+                        mask_threshold=config.mask_threshold)
 
     # I'm still not sure what way of dealing with the masked samples are best:
     # 1. Replace masked values with 0s before FFT.
@@ -366,8 +387,7 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
     # prior then fills their temporal gain from neighbors.
     for view in scan_view.iter_focused(accepted_only=True):
         calib = view.get_calib_tod("temp", config.calibrate_against,
-                                   gap_fill_method=config.gap_fill_method,
-                                   proc_mask_type="gain")
+                                   gap_fill_method=config.gap_fill_method)
         s_cal = calib.s_cal
         residual_tod = calib.tod
 
@@ -375,11 +395,10 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
         # apply_N_inv needs it to place the 1/f noise weight at the correct frequencies.
         gain_samprate = view.fsamp / view.downsample_factor
         N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=gain_samprate)
-        N_inv_r = experiment_data.apply_N_inv(residual_tod, view.noise_params, samprate=gain_samprate)
 
-        # Calculate elements for the linear system
+        # N^-1 is symmetric, so s^T N^-1 d = (N^-1 s)^T d, giving:
+        b_q = np.dot(N_inv_s, residual_tod)
         A_qq = np.dot(s_cal, N_inv_s)
-        b_q = np.dot(s_cal, N_inv_r)
 
         A_qq_local[view.idet, view.iscan] = A_qq
         b_q_local[view.idet, view.iscan] = b_q

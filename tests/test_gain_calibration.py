@@ -10,6 +10,7 @@ parameter-file blocks with a per-term ``calibrate_against`` target:
 """
 
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -17,6 +18,55 @@ from pixell.bunch import Bunch
 
 from commander4.tod.view import TODView
 from commander4.tod.gain import GainConfig, _solve_relative_gain_system
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("white_noise", [False, True])
+def test_absolute_gain_reuses_filtered_calibrator(
+    monkeypatch: pytest.MonkeyPatch, dtype: type, white_noise: bool,
+) -> None:
+    """One filter per scan reproduces the two-filter gain mean and fluctuation amplitude."""
+    from mpi4py import MPI
+    from commander4.data_models.detector_group_tod import DetectorGroupTOD
+    from commander4.tod.noise.psd import NoisePSDOof
+    import commander4.tod.gain as gain
+
+    model = NoisePSDOof()
+    model.is_white = white_noise
+    experiment = DetectorGroupTOD([], "EXP", "BAND", 1, 100.0, 0.0, 180.0, 1, "I", model)
+    config = GainConfig(sampling_rate=180.0, downsample_time=1.0)
+    rng = np.random.default_rng(13)
+    views = []
+    numerator = denominator = 0.0
+    for length in (997, 1024):
+        calibrator = rng.normal(size=length).astype(dtype)
+        residual = (0.7 * calibrator + rng.normal(size=length) + 3.5).astype(dtype)
+        noise_params = np.array([2.0, 0.1, -1.5])
+        calib = SimpleNamespace(s_cal=calibrator, tod=residual)
+        views.append(SimpleNamespace(fsamp=180.0, downsample_factor=180,
+                                     noise_params=noise_params,
+                                     get_calib_tod=Mock(return_value=calib)))
+        # Reference expression before the optimization, using the real mirrored/white operator.
+        filtered_data = experiment.apply_N_inv(residual, noise_params, samprate=1.0)
+        filtered_calibrator = experiment.apply_N_inv(calibrator, noise_params, samprate=1.0)
+        numerator += np.dot(calibrator, filtered_data)
+        denominator += np.dot(calibrator, filtered_calibrator)
+
+    scan_view = SimpleNamespace(iter_focused=Mock(return_value=iter(views)))
+    monkeypatch.setattr(gain, "TODView", Mock(return_value=scan_view))
+    filter_spy = Mock(wraps=experiment.apply_N_inv)
+    monkeypatch.setattr(experiment, "apply_N_inv", filter_spy)
+    monkeypatch.setattr(gain.np.random, "randn", lambda: 0.37)
+    samples = SimpleNamespace(abs_gain=1.0, chain=1)
+    result = gain.sample_absolute_gain(MPI.COMM_SELF, experiment, samples, None, config, 1)
+
+    expected = numerator / denominator + 0.37 / np.sqrt(denominator)
+    tolerance = 2e-6 if dtype == np.float32 else 1e-12
+    assert result.abs_gain == pytest.approx(expected, rel=tolerance)
+    assert filter_spy.call_count == len(views)
+    for call, view in zip(filter_spy.call_args_list, views):
+        assert call.args[0] is view.get_calib_tod.return_value.s_cal
+        assert call.kwargs["samprate"] == 1.0
 
 
 # --------------------------------------------------------------------------------------
@@ -346,12 +396,13 @@ NTOD, FACTOR = 12, 4
 NBLOCKS = NTOD // FACTOR
 
 
-def _make_real_view(monkeypatch):
+def _make_real_view(monkeypatch, good=None):
     """Factory for a TODView over a minimal fake detector, exercising the real downsampling paths.
 
     Returns ``make_view(downsample_factor)`` so a test can build views at full *and* downsampled
     resolution over the same detector (the factor is now fixed per view), plus the detector and the
-    full-rate static-sky TOD for the expected-value comparisons.
+    full-rate static-sky TOD for the expected-value comparisons. ``good`` is an optional full-rate
+    flag cut; without one every sample passes.
     """
     monkeypatch.setenv("OMP_NUM_THREADS", "1")  # Required by get_s_orb_tod.
     rng = np.random.default_rng(7)
@@ -359,6 +410,7 @@ def _make_real_view(monkeypatch):
     psi = rng.uniform(0.0, np.pi, size=NTOD)
     det = SimpleNamespace(tod=rng.normal(size=NTOD), ntod=NTOD, fsamp=float(FACTOR), nside=1,
                           det_idx_fullband=0, get_pix_psi=lambda: (pix, psi),
+                          response_I_P=(1.0, 1.0),
                           orbital_velocity_m_per_s=np.array([1.0, 0.0, 0.0], dtype=np.float32))
     experiment_data = SimpleNamespace(scans=[SimpleNamespace(detectors=[det])], nside=1, nu=30.0)
     no_jump = SimpleNamespace(is_empty=lambda: True)
@@ -366,11 +418,15 @@ def _make_real_view(monkeypatch):
                                   abs_gain=2.0, rel_gain=np.array([0.5]),
                                   temporal_gain=np.array([[0.25]]),
                                   accept=np.ones((1, 1), dtype=bool))
+    if good is not None:
+        det._good_data_mask = good          # presence of this attribute enables the flag cut
+        det.good_data_mask = good
     skymap = rng.normal(size=(3, 12))
 
-    def make_view(downsample_factor=1):
+    def make_view(downsample_factor=1, mask_threshold=0.5):
         return TODView(experiment_data, tod_samples, compsep_output=skymap,
-                       downsample_factor=downsample_factor).focus(0, det)
+                       downsample_factor=downsample_factor,
+                       mask_threshold=mask_threshold).focus(0, det)
 
     s_full = skymap[0, pix] + np.cos(2*psi)*skymap[1, pix] + np.sin(2*psi)*skymap[2, pix]
     return make_view, det, s_full
@@ -398,3 +454,69 @@ def test_get_calib_tod_downsampled_end_to_end(monkeypatch):
     np.testing.assert_allclose(out.s_cal, _block_mean(s_full), rtol=2e-5, atol=1e-6)
     expected = _block_mean(det.tod) - 0.75*_block_mean(s_full) - 2.75*_block_mean(orb_full)
     np.testing.assert_allclose(out.tod, expected, rtol=2e-5, atol=1e-6)
+
+
+# --------------------------------------------------------------------------------------
+# Downsampling with flagged samples: a block survives on its kept fraction, and the block
+# average uses only the samples that passed.
+# --------------------------------------------------------------------------------------
+# Three blocks of four: fully good, three-quarters good, one-quarter good.
+_PARTLY_FLAGGED = np.array([1, 1, 1, 1,  1, 1, 1, 0,  0, 1, 0, 0], dtype=bool)
+
+
+def test_a_block_survives_on_its_kept_fraction_not_on_being_spotless(monkeypatch):
+    make_view, _, _ = _make_real_view(monkeypatch, good=_PARTLY_FLAGGED)
+    # 100%, 75% and 25% of samples pass, so the default 0.5 threshold keeps the first two.
+    np.testing.assert_array_equal(make_view(FACTOR).get_mask(), [True, True, False])
+    # Raising the threshold above 0.75 drops the partly-flagged block as well; demanding every
+    # sample (the old behaviour) would have dropped it at any threshold.
+    np.testing.assert_array_equal(make_view(FACTOR, mask_threshold=0.8).get_mask(),
+                                  [True, False, False])
+    # A threshold of 0 still requires *some* good sample, so the block average is never empty.
+    np.testing.assert_array_equal(make_view(FACTOR, mask_threshold=0.0).get_mask(),
+                                  [True, True, True])
+
+
+def test_block_average_ignores_flagged_samples_so_a_glitch_cannot_shift_a_kept_block(monkeypatch):
+    make_view, det, _ = _make_real_view(monkeypatch, good=_PARTLY_FLAGGED)
+    clean = make_view(FACTOR).get_tod()
+    # Put a cosmic-ray-sized hit on the one flagged sample of the surviving second block.
+    det.tod[7] = 1e6
+    glitched = make_view(FACTOR).get_tod()
+    np.testing.assert_allclose(glitched, clean, rtol=1e-6)
+    # The kept block is the mean of its three good samples, not of all four.
+    np.testing.assert_allclose(glitched[1], det.tod[4:7].mean(), rtol=1e-6)
+
+
+def test_model_is_averaged_over_the_same_samples_as_the_data(monkeypatch):
+    # The scan moves during a block, so a model averaged over all samples would not match a data
+    # average taken over the good ones alone.
+    make_view, _, s_full = _make_real_view(monkeypatch, good=_PARTLY_FLAGGED)
+    out = make_view(FACTOR).get_static_sky_tod()
+    np.testing.assert_allclose(out[1], s_full[4:7].mean(), rtol=2e-5, atol=1e-6)
+    assert not np.isclose(out[1], s_full[4:8].mean(), rtol=2e-5, atol=1e-6)
+
+
+def test_mask_threshold_must_leave_some_sample_in_a_surviving_block(monkeypatch):
+    make_view, _, _ = _make_real_view(monkeypatch)
+    with pytest.raises(ValueError, match="mask_threshold"):
+        make_view(FACTOR, mask_threshold=1.0)
+    with pytest.raises(ValueError, match="mask_threshold"):
+        make_view(FACTOR, mask_threshold=-0.1)
+    with pytest.raises(ValueError, match="mask_threshold"):
+        GainConfig(sampling_rate=180.0, mask_threshold=1.0)
+
+
+def test_get_tod_subtracts_each_named_model_and_rejects_anything_else(monkeypatch):
+    """``subtract`` dispatches on the two canonical signal names, and nothing else is accepted."""
+    make_view, det, s_full = _make_real_view(monkeypatch)
+    view = make_view(1)
+    orb = view.get_orbital_dipole_tod()
+    gain = 2.75  # abs 2.0 + rel 0.5 + temp 0.25, the fake view's full gain
+
+    np.testing.assert_allclose(view.get_tod(subtract=(("sky", ALL),)),
+                               det.tod - gain*s_full, rtol=2e-5, atol=1e-6)
+    np.testing.assert_allclose(view.get_tod(subtract=(("orbital_dipole", ALL),)),
+                               det.tod - gain*orb, rtol=2e-5, atol=1e-6)
+    with pytest.raises(ValueError, match="Unknown TOD signal"):
+        view.get_tod(subtract=(("orb", ALL),))

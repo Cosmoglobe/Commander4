@@ -3,6 +3,9 @@
 The mirrored variants reflect the TOD before transforming (length 2N) and keep the first N samples
 on the way back. That suppresses the wrap-around a plain FFT introduces at the scan boundaries,
 and is what `apply_N_inv` and the correlated-noise CG use.
+
+`forward_dct` / `backward_dct` compute the same mirrored filter through a length-N DCT instead,
+which is an exact reformulation at roughly half the cost. See `forward_dct`.
 """
 import os
 
@@ -92,3 +95,41 @@ def backward_rfft_mirrored(data_f: NDArray, ntod: int, nthreads: int = None) -> 
     nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
     dt = ducc0.fft.c2r(data_f, lastsize=nfft, forward=False, nthreads=nthreads, inorm=0)
     return dt[:ntod] / nfft
+
+
+def forward_dct(data: NDArray[np.floating], nthreads: int | None = None) -> NDArray:
+    """Forward DCT-II: the mirrored real FFT of `data`, at half the transform length.
+
+    `[data, data[::-1]]` has exactly DCT-II symmetry, and the Nyquist coefficient of that mirrored
+    array is identically zero, so the length-N DCT-II coefficients carry the same information as
+    the length-(N+1) mirrored rFFT ones minus that null mode. Filtering with a real symbol and
+    transforming back is therefore an *identity* with `forward_rfft_mirrored` /
+    `backward_rfft_mirrored`, not an approximation, on a transform of half the length.
+
+    The filter must be sampled on the same frequency grid as before, i.e. `rfftfreq(2*N)`, and then
+    truncated to its first N entries (the dropped entry multiplies the null Nyquist mode).
+
+    Args:
+        data: Real-valued 1-D array of length N.
+        nthreads: Number of threads; defaults to the OMP_NUM_THREADS environment variable.
+    Returns:
+        Real DCT-II coefficients, length N.
+    """
+    nthreads = int(os.environ.get("OMP_NUM_THREADS", 1)) if nthreads is None else nthreads
+    return ducc0.fft.dct(data, type=2, nthreads=nthreads)
+
+
+def backward_dct(data_f: NDArray[np.floating], nthreads: int | None = None) -> NDArray:
+    """Inverse of `forward_dct` (a DCT-III), normalized to match `backward_rfft_mirrored`.
+
+    `inorm=2` divides by twice the transform length, which ducc0 folds into the transform rather
+    than making a second pass over the array.
+
+    Args:
+        data_f: DCT-II coefficients, length N.
+        nthreads: Number of threads; defaults to the OMP_NUM_THREADS environment variable.
+    Returns:
+        Real-valued 1-D array of length N.
+    """
+    nthreads = int(os.environ.get("OMP_NUM_THREADS", 1)) if nthreads is None else nthreads
+    return ducc0.fft.dct(data_f, type=3, inorm=2, nthreads=nthreads)

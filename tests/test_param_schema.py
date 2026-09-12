@@ -12,7 +12,8 @@ from pixell.bunch import Bunch
 
 import numpy as np
 
-from commander4.file_io.experiments.read_utils import apply_noise_priors
+from commander4.file_io.experiments.read_utils import apply_noise_priors, apply_noise_fit_range
+from commander4.tod.noise.sample_ncorr import CorrelatedNoiseConfig
 from commander4.tod.noise.psd import NoisePSDOof
 from commander4.parameters.schema import (TOP_LEVEL_BLOCKS, validate_param_schema, compsep_enabled,
                                      derive_task_counts, task_count_breakdown, resolve_param,
@@ -190,16 +191,12 @@ def test_a_scope_that_does_not_exist_is_an_error_by_default():
 
 def test_an_optional_scope_may_be_absent_without_complaint(caplog):
     """A per-band override block most bands do not carry is not a mistake, so opting out of the
-    error must not just move the noise to the log: it drops to debug."""
+    error must not just move the noise to the log: the missing scope is skipped silently."""
     params = Bunch(tod_processing=Bunch(mapmaker="bin"))
-    with caplog.at_level("ERROR", logger="commander4.parameters.schema"):
+    with caplog.at_level("DEBUG", logger="commander4.parameters.schema"):
         assert resolve_param(params, "mapmaker", ("no.such.scope", "tod_processing"),
                              raise_on_missing_scope=False) == "bin"
     assert caplog.text == ""
-    with caplog.at_level("DEBUG", logger="commander4.parameters.schema"):
-        resolve_param(params, "mapmaker", ("no.such.scope", "tod_processing"),
-                      raise_on_missing_scope=False)
-    assert "no.such.scope" in caplog.text
 
 
 def test_legal_values_rejects_a_mistyped_value():
@@ -264,11 +261,9 @@ def test_an_empty_scope_addresses_the_given_block_itself():
     assert resolve_param(params, "x", ("inner", "")) == 2
 
 
-def test_where_the_value_came_from_is_logged(caplog):
-    """An overridden setting is otherwise invisible in a chain's log."""
-    with caplog.at_level("DEBUG", logger="commander4.parameters.schema"):
-        _mapmaker(global_mm="bin", exp_mm="CG")
-    assert "mapmaker" in caplog.text and "experiments.EXP" in caplog.text
+# There used to be a test here that `resolve_param` logs where each value came from. Those debug
+# lines were removed in 680431d for being too verbose even at 'verbose'; the precedence they
+# reported on is covered by `test_the_first_scope_that_defines_the_key_wins`.
 
 
 # --- band lmax ------------------------------------------------------------------------------
@@ -323,6 +318,39 @@ def _noise_params(band=None, experiment=None, tod_processing=None):
     if tod_processing is not None:
         tod_block.noise_prior_bounds = Bunch(**tod_processing)
     return Bunch(experiments=Bunch(EXP=exp_block), tod_processing=tod_block)
+
+
+@pytest.mark.parametrize("limits, expected", [
+    ({}, [[0.1, 3.0], [0.2, 4.0]]),
+    ({"psd_fit_nu_min": 0.0}, [[0.0, 3.0], [0.0, 4.0]]),
+    ({"psd_fit_nu_max": 2.0}, [[0.1, 2.0], [0.2, 2.0]]),
+    ({"psd_fit_nu_min": 0.5, "psd_fit_nu_max": 2.0}, [[0.5, 2.0], [0.5, 2.0]]),
+])
+def test_noise_fit_limits_are_applied_to_model(limits: dict, expected: list[list[float]]) -> None:
+    """YAML limits override only the specified endpoints and survive step-config validation."""
+    params = Bunch(tod_processing=Bunch(corr_noise=Bunch(enabled=True, **limits)))
+    model = NoisePSDOof(nu_fit=[[np.nan, np.nan], [0.1, 3.0], [0.2, 4.0]])
+    apply_noise_fit_range(model, params)
+    config = CorrelatedNoiseConfig.from_params(params, False)
+    assert config.enabled
+    assert not hasattr(config, "psd_fit_nu_min")
+    assert not hasattr(config, "psd_fit_nu_max")
+    np.testing.assert_array_equal(model.nu_fit[1:], expected)
+    assert np.isnan(model.nu_fit[0]).all()
+    for key, value in limits.items():
+        assert params.tod_processing.corr_noise[key] == value
+
+
+def test_noise_fit_limits_default_when_corr_noise_block_absent() -> None:
+    model = NoisePSDOof(nu_fit=[[np.nan, np.nan], [0, 3.0], [0, 3.0]])
+    apply_noise_fit_range(model, Bunch(tod_processing=Bunch()))
+    np.testing.assert_array_equal(model.nu_fit[1:], [[0, 3.0], [0, 3.0]])
+
+
+def test_unknown_noise_fit_key_still_rejected() -> None:
+    params = Bunch(tod_processing=Bunch(corr_noise=Bunch(psd_fit_nu_mxa=2.0)))
+    with pytest.raises(ValueError, match="psd_fit_nu_mxa"):
+        CorrelatedNoiseConfig.from_params(params, False)
 
 
 def test_noise_prior_bounds_left_alone_when_the_parameter_file_is_silent():

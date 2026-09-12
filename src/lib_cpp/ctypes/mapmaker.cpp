@@ -69,23 +69,46 @@ void _map_accumulator_IQU_T(T *map, const T *tod, const T weight, int64_t *pix, 
 
 /** Response-scaled version of _map_accumulator_IQU_T.
  *
- * Uses the effective pointing row [response_I, response_QU*cos(2 psi),
- * response_QU*sin(2 psi)] for each sample.
+ * Uses the effective pointing row [response_I, response_P*cos(2 psi),
+ * response_P*sin(2 psi)] for each sample.
  */
 template<typename T>
 void _map_accumulator_IQU_response_T(T *map, const T *tod, const T weight,
                                      int64_t *pix, const double *psi,
                                      const double response_I,
-                                     const double response_QU,
+                                     const double response_P,
                                      int64_t scan_len, int64_t num_pix){
+    if(response_I == 1.0 && response_P == 1.0){
+        _map_accumulator_IQU_T<T>(map, tod, weight, pix, psi, scan_len, num_pix);
+        return;
+    }
+    if(response_I == 0.0 && response_P == 0.0) return;
+
     const T response_I_T = static_cast<T>(response_I);
-    const T response_QU_T = static_cast<T>(response_QU);
+    const T response_P_T = static_cast<T>(response_P);
+    const T weight_I = weight * response_I_T;
+    const T weight_P = weight * response_P_T;
+    if(response_P == 0.0){
+        for(int64_t itod=0; itod<scan_len; itod++){
+            map[pix[itod]] += tod[itod] * weight_I;
+        }
+        return;
+    }
+    if(response_I == 0.0){
+        for(int64_t itod=0; itod<scan_len; itod++){
+            const T cos2psi = static_cast<T>(std::cos(2.0 * psi[itod]));
+            const T sin2psi = static_cast<T>(std::sin(2.0 * psi[itod]));
+            map[pix[itod] +   num_pix] += tod[itod] * weight_P * cos2psi;
+            map[pix[itod] + 2*num_pix] += tod[itod] * weight_P * sin2psi;
+        }
+        return;
+    }
     for(int64_t itod=0; itod<scan_len; itod++){
         const T cos2psi = static_cast<T>(std::cos(2.0 * psi[itod]));
         const T sin2psi = static_cast<T>(std::sin(2.0 * psi[itod]));
-        map[pix[itod]]             += tod[itod] * weight * response_I_T;                 // I
-        map[pix[itod] +   num_pix] += tod[itod] * weight * response_QU_T * cos2psi;      // Q
-        map[pix[itod] + 2*num_pix] += tod[itod] * weight * response_QU_T * sin2psi;      // U
+        map[pix[itod]]             += tod[itod] * weight_I;                 // I
+        map[pix[itod] +   num_pix] += tod[itod] * weight_P * cos2psi;      // Q
+        map[pix[itod] + 2*num_pix] += tod[itod] * weight_P * sin2psi;      // U
     }
 }
 
@@ -135,6 +158,64 @@ void _map2tod_IQU_T(const T *map, T *tod, int64_t *pix, const double *psi, int64
     }
 }
 
+/** Response-scaled version of _map2tod_IQU_T.
+ *
+ * Uses the effective pointing row [response_I, response_P*cos(2 psi),
+ * response_P*sin(2 psi)] for each sample.
+ */
+template<typename T>
+void _map2tod_IQU_response_T(const T *map, T *tod, int64_t *pix, const double *psi,
+                             const double response_I, const double response_P,
+                             int64_t scan_len, int64_t num_pix){
+    if(response_I == 1.0 && response_P == 1.0){
+        _map2tod_IQU_T<T>(map, tod, pix, psi, scan_len, num_pix);
+        return;
+    }
+    if(response_I == 0.0 && response_P == 0.0){
+        for(int64_t itod=0; itod<scan_len; itod++) tod[itod] = static_cast<T>(0);
+        return;
+    }
+
+    const T response_I_T = static_cast<T>(response_I);
+    const T response_P_T = static_cast<T>(response_P);
+    if(response_P == 0.0){
+        if(response_I == 1.0){
+            _map2tod_T<T>(map, tod, pix, scan_len);
+        } else {
+            for(int64_t itod=0; itod<scan_len; itod++){
+                tod[itod] = response_I_T * map[pix[itod]];
+            }
+        }
+        return;
+    }
+    if(response_I == 0.0){
+        if(response_P == 1.0){
+            for(int64_t itod=0; itod<scan_len; itod++){
+                const T cos2psi = static_cast<T>(std::cos(2.0 * psi[itod]));
+                const T sin2psi = static_cast<T>(std::sin(2.0 * psi[itod]));
+                tod[itod] = map[pix[itod] + num_pix] * cos2psi
+                          + map[pix[itod] + 2*num_pix] * sin2psi;
+            }
+        } else {
+            for(int64_t itod=0; itod<scan_len; itod++){
+                const T cos2psi = static_cast<T>(std::cos(2.0 * psi[itod]));
+                const T sin2psi = static_cast<T>(std::sin(2.0 * psi[itod]));
+                const T polarized = map[pix[itod] + num_pix] * cos2psi
+                                  + map[pix[itod] + 2*num_pix] * sin2psi;
+                tod[itod] = response_P_T * polarized;
+            }
+        }
+        return;
+    }
+    for(int64_t itod=0; itod<scan_len; itod++){
+        const T cos2psi = static_cast<T>(std::cos(2.0 * psi[itod]));
+        const T sin2psi = static_cast<T>(std::sin(2.0 * psi[itod]));
+        tod[itod] = response_I_T * map[pix[itod]]
+            + response_P_T * map[pix[itod] + num_pix] * cos2psi
+            + response_P_T * map[pix[itod] + 2*num_pix] * sin2psi;
+    }
+}
+
 /** Simple serial mapmaker accumulating the weights (typically inverse-variance weights) for the above "map_accumulator".
  * 
  *  Args:
@@ -161,30 +242,53 @@ void _map_weight_accumulator_IQU_T(T *map, const T weight, int64_t *pix, const d
 
 /** Response-scaled version of _map_weight_accumulator_IQU_T.
  *
- * Uses the effective pointing row [response_I, response_QU*cos(2 psi),
- * response_QU*sin(2 psi)] and accumulates its weighted outer product.
+ * Uses the effective pointing row [response_I, response_P*cos(2 psi),
+ * response_P*sin(2 psi)] and accumulates its weighted outer product.
  */
 template<typename T>
 void _map_weight_accumulator_IQU_response_T(T *map, const T weight,
                                             int64_t *pix, const double *psi,
                                             const double response_I,
-                                            const double response_QU,
+                                            const double response_P,
                                             int64_t scan_len,
                                             int64_t num_pix){
+    if(response_I == 1.0 && response_P == 1.0){
+        _map_weight_accumulator_IQU_T<T>(map, weight, pix, psi, scan_len, num_pix);
+        return;
+    }
+    if(response_I == 0.0 && response_P == 0.0) return;
+
     const T response_I_T = static_cast<T>(response_I);
-    const T response_QU_T = static_cast<T>(response_QU);
+    const T response_P_T = static_cast<T>(response_P);
     const T response_I_sq = response_I_T * response_I_T;
-    const T response_I_QU = response_I_T * response_QU_T;
-    const T response_QU_sq = response_QU_T * response_QU_T;
+    const T response_I_P = response_I_T * response_P_T;
+    const T response_P_sq = response_P_T * response_P_T;
+    const T weight_I_sq = weight * response_I_sq;
+    const T weight_I_P = weight * response_I_P;
+    const T weight_P_sq = weight * response_P_sq;
+    if(response_P == 0.0){
+        for(int64_t itod=0; itod<scan_len; itod++) map[pix[itod]] += weight_I_sq;
+        return;
+    }
+    if(response_I == 0.0){
+        for(int64_t itod=0; itod<scan_len; itod++){
+            const T cos2psi = static_cast<T>(std::cos(2.0 * psi[itod]));
+            const T sin2psi = static_cast<T>(std::sin(2.0 * psi[itod]));
+            map[pix[itod] + 3*num_pix] += weight_P_sq * cos2psi*cos2psi;
+            map[pix[itod] + 4*num_pix] += weight_P_sq * sin2psi*cos2psi;
+            map[pix[itod] + 5*num_pix] += weight_P_sq * sin2psi*sin2psi;
+        }
+        return;
+    }
     for(int64_t itod=0; itod<scan_len; itod++){
         const T cos2psi = static_cast<T>(std::cos(2.0 * psi[itod]));
         const T sin2psi = static_cast<T>(std::sin(2.0 * psi[itod]));
-        map[pix[itod]]             += weight * response_I_sq;                  // II
-        map[pix[itod] +   num_pix] += weight * response_I_QU * cos2psi;       // IQ
-        map[pix[itod] + 2*num_pix] += weight * response_I_QU * sin2psi;       // IU
-        map[pix[itod] + 3*num_pix] += weight * response_QU_sq * cos2psi*cos2psi; // QQ
-        map[pix[itod] + 4*num_pix] += weight * response_QU_sq * sin2psi*cos2psi; // QU
-        map[pix[itod] + 5*num_pix] += weight * response_QU_sq * sin2psi*sin2psi; // UU
+        map[pix[itod]]             += weight_I_sq;                        // II
+        map[pix[itod] +   num_pix] += weight_I_P * cos2psi;              // IQ
+        map[pix[itod] + 2*num_pix] += weight_I_P * sin2psi;              // IU
+        map[pix[itod] + 3*num_pix] += weight_P_sq * cos2psi*cos2psi;     // QQ
+        map[pix[itod] + 4*num_pix] += weight_P_sq * sin2psi*cos2psi;     // QU
+        map[pix[itod] + 5*num_pix] += weight_P_sq * sin2psi*sin2psi;     // UU
     }
 }
 
@@ -385,20 +489,20 @@ void map_accumulator_IQU_f64(double *map, double *tod, double weight, int64_t *p
 extern "C"
 void map_accumulator_IQU_response_f32(float *map, float *tod, float weight,
                                       int64_t *pix, double *psi,
-                                      double response_I, double response_QU,
+                                      double response_I, double response_P,
                                       int64_t scan_len, int64_t num_pix){
     _map_accumulator_IQU_response_T<float>(map, tod, weight, pix, psi,
-                                           response_I, response_QU,
+                                           response_I, response_P,
                                            scan_len, num_pix);
 }
 
 extern "C"
 void map_accumulator_IQU_response_f64(double *map, double *tod, double weight,
                                       int64_t *pix, double *psi,
-                                      double response_I, double response_QU,
+                                      double response_I, double response_P,
                                       int64_t scan_len, int64_t num_pix){
     _map_accumulator_IQU_response_T<double>(map, tod, weight, pix, psi,
-                                            response_I, response_QU,
+                                            response_I, response_P,
                                             scan_len, num_pix);
 }
 
@@ -423,6 +527,22 @@ void map2tod_IQU_f32(float *map, float *tod, int64_t *pix, double *psi, int64_t 
 }
 
 extern "C"
+void map2tod_IQU_response_f64(double *map, double *tod, int64_t *pix, double *psi,
+                              double response_I, double response_P,
+                              int64_t scan_len, int64_t num_pix){
+    _map2tod_IQU_response_T<double>(map, tod, pix, psi, response_I, response_P,
+                                    scan_len, num_pix);
+}
+
+extern "C"
+void map2tod_IQU_response_f32(float *map, float *tod, int64_t *pix, double *psi,
+                              double response_I, double response_P,
+                              int64_t scan_len, int64_t num_pix){
+    _map2tod_IQU_response_T<float>(map, tod, pix, psi, response_I, response_P,
+                                   scan_len, num_pix);
+}
+
+extern "C"
 void map_weight_accumulator_IQU_f32(float *map, float weight, int64_t *pix, double *psi, int64_t scan_len, int64_t num_pix){
     _map_weight_accumulator_IQU_T<float>(map, weight, pix, psi, scan_len, num_pix);
 }
@@ -436,11 +556,11 @@ extern "C"
 void map_weight_accumulator_IQU_response_f32(float *map, float weight,
                                              int64_t *pix, double *psi,
                                              double response_I,
-                                             double response_QU,
+                                             double response_P,
                                              int64_t scan_len,
                                              int64_t num_pix){
     _map_weight_accumulator_IQU_response_T<float>(map, weight, pix, psi,
-                                                  response_I, response_QU,
+                                                  response_I, response_P,
                                                   scan_len, num_pix);
 }
 
@@ -448,11 +568,11 @@ extern "C"
 void map_weight_accumulator_IQU_response_f64(double *map, double weight,
                                              int64_t *pix, double *psi,
                                              double response_I,
-                                             double response_QU,
+                                             double response_P,
                                              int64_t scan_len,
                                              int64_t num_pix){
     _map_weight_accumulator_IQU_response_T<double>(map, weight, pix, psi,
-                                                   response_I, response_QU,
+                                                   response_I, response_P,
                                                    scan_len, num_pix);
 }
 

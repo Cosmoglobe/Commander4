@@ -18,7 +18,7 @@ from numpy.typing import NDArray
 
 from pixell.bunch import Bunch
 
-from commander4.parameters.schema import resolve_param, resolve_band_lmax, split_integer_range
+from commander4.parameters.schema import resolve_param
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.tod_samples import TODSamples
@@ -66,15 +66,6 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
     my_band_pol = my_band.polarization
     det_names = list(my_band.detectors)
 
-    #read the tot num of scans from the header of filelist and use it as default.
-    with open(my_band.filelist, "r") as f:
-        num_scans_def = int(f.readline().strip())
-
-    total_scans = int(resolve_param(params, "num_scans",
-                                    (f"experiments.{experiment_name}.bands.{my_band_name}",
-                                     f"experiments.{experiment_name}"), default=num_scans_def))
-    my_scans_start, my_scans_stop = split_integer_range(total_scans, mpi_info.band.size,
-                                                        mpi_info.band.rank)
     mpi_info.tod.comm.Barrier()
 
     time.sleep(mpi_info.tod.rank*1e-5)  # Small sleep to get prints in nice order.
@@ -86,8 +77,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
 
     t0 = time.time()
     with benchmark("fileread-tod"):
-        experiment_data = read_tods_from_file(band_comm, my_experiment, my_band, det_names, params,
-                                              my_scans_start, my_scans_stop)
+        experiment_data = read_tods_from_file(band_comm, my_experiment, my_band, det_names, params)
     mpi_info.tod.comm.Barrier()
     if mpi_info.tod.is_master:
         logger.summary(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")
@@ -177,7 +167,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     # also determines whether Python's even or odd sample indices carry the positive half-cycle.
     if tod_samples.hfi_demodulation:
         with benchmark("hfi-baselines"):
-            tod_samples = sample_hfi_baselines(experiment_data, tod_samples, compsep_output)
+            tod_samples = sample_hfi_baselines(band_comm, experiment_data, tod_samples,
+                                               compsep_output)
 
     # Gain uses the previous iteration's sigma0. The new sigma0 is estimated later, inside the
     # mapmaker scan loop, matching Commander3's gain -> n_corr -> bin_TOD order.
@@ -210,6 +201,9 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     # remain NaN and are not counted again by the data-selection summary.
     tod_samples.chisq_z[:] = np.nan
     tod_samples.good_fraction[:] = np.nan
+    if tod_samples.residual_tods is not None:
+        for scan_tods in tod_samples.residual_tods:
+            scan_tods[:] = [None] * tod_samples.ndet
 
     with benchmark("mapmaker"):
         if mapmaking.mapmaker == "CG":
@@ -255,5 +249,6 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     bench_summary(tod_comm, label="All bands")
     bench_summary(band_comm, label=f"Band {experiment_data.band_name}")
     bench_reset()
+    tod_comm.Barrier()
 
     return detmap_dict, tod_samples

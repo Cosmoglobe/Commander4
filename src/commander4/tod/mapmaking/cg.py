@@ -729,8 +729,6 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
                 nomono=correlated_noise.nomono,
                 onlymono=correlated_noise.onlymono,
                 sigma0_dec=correlated_noise.sigma0_decimation,
-                psd_fit_nu_min=correlated_noise.psd_fit_nu_min,
-                psd_fit_nu_max=correlated_noise.psd_fit_nu_max,
                 psd_bin=correlated_noise.psd_bin)
             n_corr_est = res.n_corr
             tod_samples.noise_params[view.iscan, view.idet, :] = res.noise_params

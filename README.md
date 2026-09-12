@@ -103,13 +103,13 @@ tod_ps_residual    (NSC,ND,100)   # ... of the residual (sky, dipole and n_corr 
 jump_counts        (NSC,ND)    # jumps found per detector-scan; indexes the two ragged arrays below
 jump_locations     (M,)        # sample index of each jump, concatenated scan-major
 jump_offsets       (M,)        # amplitude of each jump
-ncorr_tod_lengths  (NSC,ND)    # (opt, DEBUG) length of each full n_corr TOD in the flat array below
-ncorr_tod_flat     (sum,)      # (opt, DEBUG) every n_corr TOD concatenated; very large
+tods/<scan_id>/<detector>/ncorr     (ntod,)  # (opt, DEBUG) full n_corr TOD in detector units
+tods/<scan_id>/<detector>/residual  (ntod,)  # (opt, DEBUG) full residual TOD in detector units
 
 maps/observed_sky  (3,npix)    # the solved sky map (I, Q, U)
 maps/rms           (3,npix)    # per-pixel white-noise rms; inf where unobserved
 maps/skymodel      (3,npix)    # (opt) sky model this iteration was processed against
-maps/res           (3,npix)    # (opt) binned residual: data minus sky, dipole and n_corr
+maps/res           (3,npix)    # (opt) binned residual: corrected data minus sky, dipole, n_corr, sidelobes
 maps/orbdipole     (3,npix)    # (opt) binned orbital dipole
 maps/corrnoise     (3,npix)    # (opt) binned correlated noise
 maps/sidelobe      (3,npix)    # (opt) binned far-sidelobe pickup, removed from the TOD
@@ -269,13 +269,40 @@ class MyClass:
         self._calculate_something_internal()
 ```
 
-#### Type hints
-Functions should normally have type hints for all their function arguments and return type.
+#### Type hints and docstrings.
+Functions should have type hints for all their function arguments and return type.
+
+All functions should have at least a one-line docstring. The Google docstring convension is used:
+- Argument types as type hints instead of in the docstring.
+- A one-line summary directly after the `"""` of the function as a command ("Do that"), not descriptive ("Does this").
+- Un-indented by 4 compared to the above, an optional extended explanation of the function in descriptive present tense ("This happens").
+- Use `Args:` and `Returns:` to describe arguments and return types.
+- Specify Numpy array dimensions as e.g. `(nsamp, nfreq)` when a specific array shape is expected.
+Example:
 ```Python
 from numpy.typing import NDArray
 
-def my_pow_func(array: NDArray, pow: float) -> NDArray:
-    return array**pow
+def project_to_plane(points: NDArray, normal: NDArray, offset: float = 0.0,
+                     normalize_input: bool = True, ) -> tuple[NDarray, NDArray]:
+    """Project 3-D points onto a plane.
+
+    The plane is defined by a normal vector and a scalar offset. Each point is moved along
+    the normal until it lies on the plane. The signed distance travelled is returned
+    alongside projected points, so the operation can be undone.
+
+    Points already on the plane are returned unchanged, with a distance of exactly zero.
+
+    Args:
+        points: (n_points, 3) Cartesian coordinates to project.
+        normal: (3,) Vector perpendicular to the plane. Need not be a unit vector unless
+            normalize_input is False.
+        offset: Signed distance from the origin to the plane, measured along the unit normal.
+        normalize_input: If True, scale normal to unit length first. Set to False only when
+            the caller has already done this, to avoid the redundant square root.
+
+    Returns:
+        A tuple of two arrays. The first is (n_points, 3), the projected points. The second
+        is (n_points,), the signed distance each point moved, positive along the normal.
 ```
 
 # 4. Standalone tools

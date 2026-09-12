@@ -6,12 +6,38 @@ sampler needs and the priors and grid sampling that draw its own parameters.
 """
 import logging
 import numpy as np
-import pixell
+from pixell import utils
 from scipy.fft import rfftfreq
 from numpy.typing import NDArray
 from commander4.math_utils.fft import forward_rfft
 
 logger = logging.getLogger(__name__)
+
+
+def _oof_loglike_grid(frequency_factor: NDArray, grid_factor: NDArray,
+                      power_scaled: NDArray, weight: NDArray,
+                      *, exponentiate: bool = False) -> NDArray:
+    """Evaluate a 1/f likelihood grid in small NumPy batches.
+
+    The correlated/white power ratio is the product of the input factors, or its exponential
+    for the slope grid. Power is divided by sigma0**2. Parameter-independent terms are omitted.
+    Batching retains NumPy's vectorized maths with about 1 MiB for the two temporary arrays
+    (or one candidate at a time when its frequency vector alone exceeds that budget).
+    """
+    result = np.empty(grid_factor.size, dtype=np.float64)
+    batch_size = max(1, 65536 // max(frequency_factor.size, 1))
+    for start in range(0, grid_factor.size, batch_size):
+        stop = start + batch_size
+        full_power = grid_factor[start:stop, None] * frequency_factor[None, :]
+        if exponentiate:
+            np.exp(full_power, out=full_power)
+        full_power += 1.0
+        quadratic = power_scaled / full_power
+        np.log(full_power, out=full_power)
+        full_power += quadratic
+        full_power *= weight
+        result[start:stop] = -np.sum(full_power, axis=1)
+    return result
 
 
 def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray) -> float:
@@ -50,7 +76,6 @@ class NoisePSD:
 
     param_names: tuple[str, ...] = ()
     is_white: bool = False  # Override to True in purely white-noise subclasses.
-    _jit_model_id: int = -1  # Numba model ID; -1 = Python fallback
 
     def __init__(self,
                  P_active_mean: NDArray,
@@ -69,7 +94,7 @@ class NoisePSD:
         self.P_active[:, 0] = P_active_mean[:n]
         self.P_active[:, 1] = P_active_rms[:n]
         self.P_lognorm = np.array(P_lognorm, dtype=bool).copy()
-        self.nu_fit = np.array(nu_fit, dtype=np.float32).reshape(n, 2).copy()
+        self.nu_fit = np.array(nu_fit, dtype=np.float64).reshape(n, 2).copy()
 
     @property
     def npar(self) -> int:
@@ -101,20 +126,20 @@ class NoisePSD:
         return out
 
     def sample_params(self, residual: NDArray, noise_params: NDArray, fsamp: float, *,
-                      nu_min: float = 0.0, nu_max: float = np.inf, bin_psd: bool = False) -> NDArray:
+                      bin_psd: bool = False) -> NDArray:
         """Draw a new sample of the model parameters (except ``sigma0`` at index 0).
 
         The fit is performed against the periodogram of the sky-subtracted *residual* TOD (with
         masked gaps inpainted by the caller using the correlated-noise realization plus white
         noise), fitting the *full* PSD model. This mirrors the Commander3 ``sample_noise_psd``
         routine and keeps the Markov-chain correlation length short relative to fitting the
-        drawn ``n_corr`` realization directly.
+        drawn ``n_corr`` realization directly. Each parameter uses its model-owned ``nu_fit``
+        range in Hz, including both endpoints and excluding DC. The sigma0 range is unused.
 
         Args:
             residual: Sky-subtracted residual TOD (white + correlated noise), gaps inpainted.
             noise_params: Current parameter values; ``noise_params[0]`` (sigma0) is held fixed.
             fsamp: Sampling rate of *residual* (Hz).
-            nu_min, nu_max: Frequency range (Hz) over which to fit the PSD parameters.
             bin_psd: If True, fit a log-binned periodogram (each bin Whittle-weighted by its mode
                 count); if False, fit every Fourier mode in range (default).
         Returns:
@@ -200,7 +225,7 @@ class NoisePSDOof(NoisePSD):
         return vals
 
     def sample_params(self, residual: NDArray, noise_params: NDArray, fsamp: float, *,
-                      nu_min: float = 0.0, nu_max: float = np.inf, bin_psd: bool = False,
+                      bin_psd: bool = False,
                       n_grid: int = 150, n_burnin: int = 4) -> NDArray:
         """ Draw a sample of (fknee, alpha) for the 1/f model by fitting the *full* PSD
             P(f) = sigma0^2 (1 + (f/fknee)^alpha) to the periodogram of the sky-subtracted
@@ -220,20 +245,28 @@ class NoisePSDOof(NoisePSD):
         freqs = rfftfreq(Ntod, 1.0/fsamp)
         power = (1.0 / Ntod) * np.abs(forward_rfft(residual))**2
 
-        # Restrict to the requested fit range, always excluding the zero-frequency (DC) mode.
-        in_fit = (freqs > 0) & (freqs >= nu_min) & (freqs <= nu_max)
-        f = freqs[in_fit]
-        p = power[in_fit]
-        if bin_psd:
-            # Log-bin the periodogram; each bin is Whittle-weighted by its number of modes.
-            bins = pixell.utils.expbin(f.size, nbin=100, nmin=1)
-            weight = (bins[:, 1] - bins[:, 0]).astype(np.float64)
-            f = pixell.utils.bin_data(bins, f)
-            p = pixell.utils.bin_data(bins, p)
-        else:
-            weight = np.ones(f.size, dtype=np.float64)
-        log_p = np.log(p)
-        w = weight[:, np.newaxis]
+        # Select and bin each parameter's window before the Gibbs loop. In particular, bins must
+        # not mix modes inside and outside that parameter's fit range.
+        fit_data: dict[int, tuple[NDArray, NDArray, NDArray]] = {}
+        for param_idx in (1, 2):
+            if not self.is_sampled(param_idx):
+                continue
+            nu_min, nu_max = self.nu_fit[param_idx]
+            name = self.param_names[param_idx]
+            if not (np.isfinite(nu_min) and 0 <= nu_min < nu_max):
+                raise ValueError(f"Invalid nu_fit range for {name}: {self.nu_fit[param_idx]}.")
+            in_fit = (freqs > 0) & (freqs >= nu_min) & (freqs <= nu_max)
+            f, p = freqs[in_fit], power[in_fit]
+            if f.size == 0:
+                raise ValueError(f"nu_fit for {name} contains no positive Fourier modes.")
+            if bin_psd:
+                bins = utils.expbin(f.size, nbin=100, nmin=1)
+                weight = (bins[:, 1] - bins[:, 0]).astype(np.float64)
+                f = utils.bin_data(bins, f)
+                p = utils.bin_data(bins, p)
+            else:
+                weight = np.ones(f.size, dtype=np.float64)
+            fit_data[param_idx] = (f, p.astype(np.float64, copy=False) / sigma0_sq, weight)
 
         # Grids span the uniform priors (single source of truth for the hard parameter bounds), and
         # each carries its parameter's log-prior, evaluated once because it does not depend on the
@@ -247,18 +280,21 @@ class NoisePSDOof(NoisePSD):
         sample_fknee, sample_alpha = self.is_sampled(1), self.is_sampled(2)
 
         for _ in range(n_burnin + 1):
-            # Whittle log-posterior sum_l w_l (log p_l - log S_l - p_l/S_l) + log prior, with the
-            # full model S = sigma0^2 (1 + (f/fknee)^alpha). 1. fknee given the current alpha.
+            # Drop sum(weight * log(power/sigma0**2)), which is constant across both grids.
+            # The remaining likelihood is -sum(weight * (log(1+ratio) + power_scaled/(1+ratio))).
             if sample_fknee:
-                S = sigma0_sq * (1.0 + (f[:, np.newaxis] / fknee_grid) ** alpha_current)
-                resid = log_p[:, np.newaxis] - np.log(S)
-                log_L_fknee = np.sum(w * (resid - np.exp(resid)), axis=0) + log_prior_fknee
+                f, power_scaled, weight = fit_data[1]
+                log_L_fknee = _oof_loglike_grid(
+                    f**alpha_current, fknee_grid**(-alpha_current), power_scaled, weight,
+                ) + log_prior_fknee
                 fknee_current = float(_inversion_sampler_1d(log_L_fknee, fknee_grid))
             # 2. Sample alpha given the new fknee.
             if sample_alpha:
-                S = sigma0_sq * (1.0 + (f[:, np.newaxis] / fknee_current) ** alpha_grid)
-                resid = log_p[:, np.newaxis] - np.log(S)
-                log_L_alpha = np.sum(w * (resid - np.exp(resid)), axis=0) + log_prior_alpha
+                f, power_scaled, weight = fit_data[2]
+                log_L_alpha = _oof_loglike_grid(
+                    np.log(f) - np.log(fknee_current), alpha_grid, power_scaled, weight,
+                    exponentiate=True,
+                ) + log_prior_alpha
                 alpha_current = float(_inversion_sampler_1d(log_L_alpha, alpha_grid))
 
         out = np.array(noise_params, dtype=np.float64, copy=True)

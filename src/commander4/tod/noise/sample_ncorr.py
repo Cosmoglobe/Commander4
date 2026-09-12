@@ -15,7 +15,7 @@ from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 from commander4.math_utils.fft import forward_rfft, backward_rfft,\
-        forward_rfft_mirrored, backward_rfft_mirrored
+        forward_rfft_mirrored, backward_rfft_mirrored, forward_dct, backward_dct
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.psd import NoisePSD
@@ -36,68 +36,96 @@ logger = logging.getLogger(__name__)
 
 def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigma0: float,
                                      C_corr_inv: NDArray, err_tol=1e-6, max_iter=100,
-                                     rnd_seed=None) -> NDArray:
-    """ Draws a correlated noise realization given a TOD (with gaps/masked samples) a correlated
-        noise power spectrum. Requires solving a CG, which this function solves in a very efficient
-        way by splitting up the problem such that the CG only has to be performed on the missing
-        data, not the full TOD (see arXiv:2011.06024).
-        Gaps in the TOD should be pre-filled (e.g. with fill_all_masked) before calling this
-        function: the filled values at gap positions do not affect the RHS (they are zeroed by
-        C_wn=inf), but are used as a warm start for the CG, matching the Fortran get_ncorr_sm_cg.
-        Args:
-            TOD (np.array): The 1D time ordered data. Gap positions should be pre-filled before
-                            passing (e.g. via fill_all_masked), as they seed the CG warm start.
-            mask (np.array): A boolean array where False indices indicates missing or masked data.
-            sigma0 (float): The stationary white noise level of the data.
-            C_corr_inv (np.array): The inverse covariance of the TOD we want to sample.
-            err_tol (float): The error tolerance for the CG search.
-            max_iter (int): Maximum iterations used by the CG search.
-            rnd_seed (int): Seed for drawing random numbers during the realization.
-        Returns:
-            x_final (np.array): The TOD realization of the correlated noise.
+                                     rnd_seed=None, use_dct=False) -> NDArray:
+    """Calculate a constrained realization of correlated noise when some samples are masked.
+
+    Given a TOD array, a boolean mask array, and a power spectrum prior, calculates a constrained
+    realization of the correlated noise. This problem is neither diagonal in real space (because of
+    the power spectrum prior) nor Fourier space (because of masked samples), and is therefore solved
+    with a CG setup. The problem is re-written by splitting up the TOD such that the CG only has to
+    be performed on the missing data, not the full TOD (see arXiv:2011.06024).
+
+    Gaps in the TOD should be pre-filled (e.g. with fill_all_masked) before calling this function:
+    The filled values at gap positions do not affect the RHS (they are zeroed by C_wn=inf), but are
+    used as a warm start for the CG, matching the Fortran get_ncorr_sm_cg.
+    
+    The CG search itself is performed in float64 for precision, but specifically the `apply_filter`
+    method, which contains the repeater FFTs, is float32, exactly mirroring how C3 does it.
+
+    Args:
+        TOD (nsamp,): The 1D time ordered data. Gap positions should be pre-filled before passing
+            (e.g. via fill_all_masked), as they seed the CG warm start.
+        mask (nsamp,): A boolean array where False indices indicates missing or masked data.
+        sigma0: The stationary white noise level of the data.
+        C_corr_inv (nfft,): The inverse covariance of the TOD we want to sample.
+        err_tol: The error tolerance for the CG search.
+        max_iter: Maximum iterations used by the CG search.
+        rnd_seed: Seed for drawing random numbers during the realization.
+        use_dct: Compute the mirrored filter as a length-nsamp DCT instead of a length-2*nsamp
+            FFT. This is an exact reformulation (see `math_utils.fft.forward_dct`), not an
+            approximation, and roughly halves the transform cost.
+    Returns:
+        The TOD realization of the correlated noise, matching the shape of the input `tod`.
     """
+
     def apply_filter(vec, Fourier_filter):
+        """Mirrored filter, evaluated in single precision. `Fourier_filter` must be float32,
+        and must have `nfilt` entries (see below), matching the transform in use.
+        """
         start_bench("FFT")
-        res = backward_rfft_mirrored(forward_rfft_mirrored(vec) * Fourier_filter, ntod=len(vec))
+        vec32 = np.asarray(vec, dtype=np.float32)  # a no-op for the CG's own float32 buffer
+        if use_dct:
+            res = backward_dct(forward_dct(vec32) * Fourier_filter)
+        else:
+            res = backward_rfft_mirrored(forward_rfft_mirrored(vec32) * Fourier_filter, ntod=ntod)
         stop_bench("FFT")
         return res
 
-    def apply_LHS_scaled(x_small):
-        u_x = np.zeros(Ntod, dtype=x_small.dtype)
-        u_x[~mask] = x_small
-        m_inv_u_x = apply_filter(u_x, M_inv_scaled)
-        return x_small - m_inv_u_x[~mask]
-
     out_dtype = TOD.dtype
-    Ntod = TOD.shape[0]
-    # All CG work is done in float64 to avoid residual drift and false convergence.
-    M_inv = 1.0 / ( (1/sigma0**2) + C_corr_inv)  # The stationary LHS operator (float64).
+    ntod = TOD.shape[0]
+    masked_indices = np.flatnonzero(~mask)  # An array saying which indices of `TOD` are masked.
+    # Scratch vector holding a gap-only quantity at its true sample positions, zero elsewhere
+    # (U x in the paper's notation). Every use overwrites all of `masked_indices` and writes nowhere
+    # else, so it never needs re-zeroing.
+    x_masked_only = np.zeros(ntod, dtype=np.float32)
+
+    def apply_LHS_scaled(x_small):
+        x_masked_only[masked_indices] = x_small
+        filtered = apply_filter(x_masked_only, M_inv_scaled)
+        return x_small - filtered[masked_indices]
+
+    # The DCT drops the mirrored transform's Nyquist coefficient, which is identically zero, so
+    # its filters carry one entry fewer. Slicing here keeps every `apply_filter` call agnostic.
+    nfilt = ntod if use_dct else ntod + 1
+    # Everything except the central and expensive FFT filters stay float64 for precision.
+    M_inv_f64 = 1.0 / ( (1/sigma0**2) + C_corr_inv)  # The stationary LHS operator.
+    M_inv = M_inv_f64[:nfilt].astype(np.float32)
     if rnd_seed is not None:
         np.random.seed(rnd_seed)
-    omega_2 = np.random.randn(Ntod)
-    omega_3 = np.random.randn(Ntod)
+    omega_2 = np.random.randn(ntod)
+    omega_3 = np.random.randn(ntod)
 
-    C_wn_timedomain = np.ones(Ntod, dtype=np.float64)*sigma0**2
-    C_wn_timedomain[~mask] = np.inf
-    b_full = TOD.astype(np.float64)/C_wn_timedomain + omega_2/np.sqrt(C_wn_timedomain)\
-           + apply_filter(omega_3, np.sqrt(C_corr_inv))
+    C_wn_timedomain = np.ones(ntod, dtype=np.float64)*sigma0**2
+    C_wn_timedomain[masked_indices] = np.inf
+    b_full = TOD.astype(np.float64, copy=False)/C_wn_timedomain + omega_2/np.sqrt(C_wn_timedomain)\
+           + apply_filter(omega_3, np.sqrt(C_corr_inv[:nfilt]).astype(np.float32))
     m_inv_b = apply_filter(b_full, M_inv)
-    # Then, apply U^T to extract the values at the flagged locations.
-    b_small = m_inv_b[~mask]
+    # Apply U^T to extract the values at the flagged locations.
+    b_small = m_inv_b[masked_indices].astype(np.float64)
 
     # Warm-start the CG at gap positions using the (pre-filled) TOD, matching the Fortran
     # get_ncorr_sm_cg initial vector: x(u) = (d_prime/sigma0 - mean) / 10 + mean.
     # In physical units (no sigma0 normalization) this becomes (TOD - mean) / 10 + mean.
-    if (~mask).any():
-        x0_full  = TOD.astype(np.float64) / sigma0**2
+    if masked_indices.size > 0:
+        x0_full  = TOD.astype(np.float64, copy=False) / sigma0**2
         x0_full  = (x0_full - np.mean(x0_full)) / 10.0 + np.mean(x0_full)
-        x0_small = x0_full[~mask]
+        x0_small = x0_full[masked_indices]
     else:
         x0_small = None
 
     # Normalize both RHS and LHS into sigma-units, such that the system becomes unitless.
     b_small_scaled = b_small / sigma0**2
-    M_inv_scaled = M_inv / sigma0**2
+    M_inv_scaled = (M_inv_f64[:nfilt] / sigma0**2).astype(np.float32)
 
     if b_small_scaled.size > 0:
         has_converged = False
@@ -122,13 +150,17 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
         CG_err = 0.0
         i = 0
 
-    correction_gaps_only = np.zeros(Ntod, dtype=np.float64)
-    correction_gaps_only[~mask] = x_small
-
-    # Now, apply M^-1 to get the full correction term
-    full_correction = apply_filter(correction_gaps_only, M_inv)
-    x_final = m_inv_b + full_correction
-    return x_final.astype(out_dtype), CG_err, i, has_converged
+    if masked_indices.size > 0:
+        x_masked_only[masked_indices] = x_small
+        # Now, apply M^-1 to get the full correction term
+        x_final = m_inv_b + apply_filter(x_masked_only, M_inv)
+    else:
+        # Nothing is masked, so the gap correction is identically zero and the stationary Wiener
+        # solution is already the answer. This is the path taken by the CG-free mode
+        # (cg.max_iter = 0) and by the non-convergence fallback.
+        x_final = m_inv_b
+    log_memory("ncorr-tod-samp")
+    return x_final.astype(out_dtype, copy=False), CG_err, i, has_converged
 
 
 def inefficient_corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_],
@@ -236,8 +268,7 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
                             cg_max_iter: int, sample_params: bool, sample_sigma0: bool = True,
                             sigma0_method: str = "pairwise",
                             nomono: bool = False, onlymono: bool = False, sigma0_dec: int = 1,
-                            psd_fit_nu_min: float = 0.0, psd_fit_nu_max: float = np.inf,
-                            psd_bin: bool = False) -> Bunch:
+                            psd_bin: bool = False, use_dct: bool = False) -> Bunch:
     """ Draw a correlated-noise realization for one detector-scan and optionally resample sigma0 and
         the noise-model parameters. The inverse correlated-noise spectrum is supplied by
         *noise_model*, so any NoisePSD subclass (parameters of any length) can be plugged in.
@@ -266,13 +297,15 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
         onlymono: If True, model the correlated noise as only the per-scan offset, skipping the CG
             and parameter sampling (Fortran ``onlymono``). Takes precedence over ``nomono``.
         sigma0_dec: Decimation (block-average) factor for the pairwise sigma0 estimator.
-        psd_fit_nu_min, psd_fit_nu_max: Frequency range (Hz) for PSD-parameter fitting.
         psd_bin: Whether the PSD-parameter fit uses a (mode-count-weighted) binned periodogram.
+        use_dct: Evaluate the mirrored Fourier filter as a length-nsamp DCT rather than a
+            length-2*nsamp FFT. Mathematically identical, roughly twice as fast.
     Returns:
         Bunch with fields ``n_corr`` (realization), ``noise_params`` (with updated sigma0 and/or
         parameters), ``residual`` (CG residual; 0 when no masked CG ran), ``niter`` (CG iterations),
         ``converged`` (bool), and ``high_var`` (variance sanity check failed).
     """
+    start_bench("ncorr-samp-setup")
     if sigma0_method not in SIGMA0_METHODS:
         raise ValueError(f"sigma0_method must be one of {SIGMA0_METHODS}, got {sigma0_method!r}.")
     noise_params = np.array(noise_params, dtype=np.float64, copy=True)
@@ -290,9 +323,9 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
         n_corr = np.full(Ntod, mono, dtype=tod.dtype)
         if sample_sigma0 and sigma0_method == "pairwise":
             noise_params[0] = _estimate_sigma0(tod, n_corr, mask, sigma0_dec)
+        stop_bench("ncorr-samp-setup")
         return Bunch(n_corr=n_corr, noise_params=noise_params, residual=0.0, niter=0,
                      converged=True, high_var=False)
-    start_bench("ncorr-samp-setup")
     freq = rfftfreq(2 * Ntod, d=1.0/fsamp)  # Mirrored-FFT grid: nfft=2*Ntod -> length Ntod+1.
     C_corr_inv = noise_model.compute_inv_corr_spectrum(freq, noise_params)
     # Inpaint masked regions: seeds the CG warm-start and feeds the stationary fallback solve.
@@ -301,30 +334,33 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
         tod = tod - np.mean(tod[mask])  # Solve for a mean-zero correlated noise component.
     stop_bench("ncorr-samp-setup")
 
-    start_bench("ncorr-sampling")
+    start_bench("ncorr-tod-samp")
     high_var = False
     if cg_max_iter == 0:
         # User requested no CG steps: use the stationary (full-mask) Wiener solution directly.
         n_corr, residual, niter, converged = corr_noise_realization_with_gaps(
-            tod, np.ones_like(mask), sigma0, C_corr_inv)
+            tod, np.ones_like(mask), sigma0, C_corr_inv, use_dct=use_dct)
     else:
         n_corr, residual, niter, converged = corr_noise_realization_with_gaps(
-            tod, mask, sigma0, C_corr_inv, err_tol=cg_err_tol, max_iter=cg_max_iter)
+            tod, mask, sigma0, C_corr_inv, err_tol=cg_err_tol, max_iter=cg_max_iter,
+            use_dct=use_dct)
         # Sanity check: the residual (data minus n_corr) should not carry more power than data.
         resid = (tod - n_corr) * mask
         high_var = bool(np.dot(resid, resid) > np.dot(tod*mask, tod*mask))
         if high_var or not converged:
             # Fall back to the stationary solution that ignores the gaps.
             n_corr, _, _, _ = corr_noise_realization_with_gaps(
-                tod, np.ones_like(mask), sigma0, C_corr_inv)
-    stop_bench("ncorr-sampling")
+                tod, np.ones_like(mask), sigma0, C_corr_inv, use_dct=use_dct)
 
     if nomono and mask.any():
         n_corr = n_corr - np.mean(n_corr[mask])
+    stop_bench("ncorr-tod-samp")
 
+    start_bench("sigma0-samp")
     # Re-estimate sigma0 (pairwise) from the fully-cleaned residual (after subtracting n_corr).
     if sample_sigma0 and sigma0_method == "pairwise":
         noise_params[0] = _estimate_sigma0(tod, n_corr, mask, sigma0_dec)
+    stop_bench("sigma0-samp")
 
     # Fit the PSD parameters to the residual periodogram (full model), inpainting masked samples
     # with the n_corr realization plus white noise (Commander3 sample_noise_psd convention).
@@ -334,9 +370,7 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
         ngap = int(np.count_nonzero(~mask))
         if ngap > 0:
             residual_tod[~mask] = n_corr[~mask] + float(noise_params[0]) * np.random.randn(ngap)
-        noise_params = noise_model.sample_params(residual_tod, noise_params, fsamp,
-                                                 nu_min=psd_fit_nu_min, nu_max=psd_fit_nu_max,
-                                                 bin_psd=psd_bin)
+        noise_params = noise_model.sample_params(residual_tod, noise_params, fsamp, bin_psd=psd_bin)
     stop_bench("ncorr-psd-samp")
 
     return Bunch(n_corr=n_corr, noise_params=noise_params, residual=float(residual),
@@ -446,9 +480,8 @@ class CorrelatedNoiseConfig(StepConfig):
     sigma0_decimation: int = 1
     nomono: bool = False
     onlymono: bool = False
-    psd_fit_nu_min: float = 0.0
-    psd_fit_nu_max: float = float("inf")
     psd_bin: bool = False
+    use_dct: bool = False
     cg: CGConfig = field(default_factory=CGConfig)
 
     def __post_init__(self) -> None:
@@ -471,6 +504,11 @@ class CorrelatedNoiseConfig(StepConfig):
         """
         block = dict(params.tod_processing[cls.PARAMETER_NAME]
                      if cls.PARAMETER_NAME in params.tod_processing else Bunch())
+
+        # Readers apply these inputs to NoisePSD.nu_fit when constructing the model. They are
+        # accepted here, but are not stored again or passed through the realization sampler.
+        block.pop("psd_fit_nu_min", None)
+        block.pop("psd_fit_nu_max", None)
 
         # Remove ``cg`` before validating the outer fields. CGConfig reports errors against the
         # nested path, while _from_block validates the remaining correlated-noise fields.

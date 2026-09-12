@@ -76,17 +76,30 @@ def apply_noise_priors(noise_model: NoisePSD, params: Bunch, expname: str, bandn
                 f"sampled={[n for i, n in enumerate(param_names) if noise_model.is_sampled(i)]}.")
 
 
+def apply_noise_fit_range(noise_model: NoisePSD, params: Bunch) -> None:
+    """Apply configured frequency limits to the model, keeping unspecified reader defaults.
+
+    The shared limits in ``tod_processing.corr_noise`` apply to every PSD parameter except sigma0.
+    The model's ``nu_fit`` array is the sole source of frequency limits during sampling.
+    """
+    for column, key in enumerate(("psd_fit_nu_min", "psd_fit_nu_max")):
+        value = resolve_param(params, key, ("tod_processing.corr_noise",), default=None,
+                              raise_on_missing_scope=False)
+        if value is not None:
+            noise_model.nu_fit[1:, column] = value
+
+
 def find_good_fourier_size(ntod: int) -> int:
-    """Return the largest fast real-FFT size strictly smaller than ``ntod``.
+    """Return the largest fast real-FFT size that is at most ``ntod``.
 
     ``ducc0.fft.good_size(n, True)`` returns the first fast real-FFT size at or above ``n``. Walking
-    downward until it returns the candidate itself finds the closest fast size below the scan
+    downward until it returns the candidate itself finds the closest fast size at or below the scan
     length without a machine-specific timing table.
     """
     if ntod < 2:
-        raise ValueError("TOD length must be at least 2 to select a smaller FFT size.")
+        raise ValueError("TOD length must be at least 2 to select an FFT size.")
 
-    candidate = ntod - 1
+    candidate = ntod
     while ducc0.fft.good_size(candidate, True) != candidate:
         candidate -= 1
     return candidate
