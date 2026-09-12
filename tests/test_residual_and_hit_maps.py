@@ -21,6 +21,7 @@ from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.tod_samples import TODSamples
 import commander4.tod.processing as tod_processing
+from commander4.tod.config import MapmakingConfig, CorrelatedNoiseConfig, DataSelectionConfig
 import commander4.tod.mapmaking.binned as binned
 from commander4.tod.sky_projection import get_s_orb_tod
 
@@ -70,7 +71,7 @@ def _fake_tod_samples(sigma0: float = 2.0, ndet: int = 1) -> SimpleNamespace:
 
 def _run(band: DetectorGroupTOD, sky_model: np.ndarray,
          sparse_maps: bool = False) -> dict[str, np.ndarray]:
-    mapmaking = tod_processing.MapmakingConfig(
+    mapmaking = MapmakingConfig(
         mapmaker="bin", num_threads=1,
         include_orbital_dipole_maps=False, include_corr_noise_maps=False,
         include_sky_model_maps=False, include_residual_maps=True, include_hit_maps=True,
@@ -78,8 +79,8 @@ def _run(band: DetectorGroupTOD, sky_model: np.ndarray,
     )
     _, maps = tod_processing.tod2map_bin(
         MPI.COMM_SELF, band, sky_model, _fake_tod_samples(ndet=band.ndet), 1, mapmaking,
-        tod_processing.CorrelatedNoiseConfig(sample_sigma0=False),
-        tod_processing.DataSelectionConfig(),
+        CorrelatedNoiseConfig(sample_sigma0=False),
+        DataSelectionConfig(),
     )
     return maps
 
@@ -260,7 +261,7 @@ def test_intensity_mapmaker_recovers_signal_rms_and_aux_maps(
     monkeypatch.setattr(binned, "log_corr_noise_stats", lambda *args: None)
     far_beam = SimpleNamespace(get_projection=lambda pix, psi, idet:
                               np.full(pix.size, response_I * sidelobe))
-    config = tod_processing.MapmakingConfig(
+    config = MapmakingConfig(
         mapmaker="bin", num_threads=1, include_orbital_dipole_maps=True,
         include_corr_noise_maps=True, include_sky_model_maps=True, include_residual_maps=True,
         include_sidelobe_maps=True, include_hit_maps=True, include_cov_maps=True,
@@ -268,8 +269,8 @@ def test_intensity_mapmaker_recovers_signal_rms_and_aux_maps(
     )
     detmaps, maps = binned.tod2map_bin(
         comm, band, sky, samples, 1, config,
-        tod_processing.CorrelatedNoiseConfig(enabled=True, sample_sigma0=False),
-        tod_processing.DataSelectionConfig(), far_beam,
+        CorrelatedNoiseConfig(enabled=True, sample_sigma0=False),
+        DataSelectionConfig(), far_beam,
     )
     if band.nscans:
         np.testing.assert_allclose(samples.residual_tods[0][0], _GAIN * response_I * offset,

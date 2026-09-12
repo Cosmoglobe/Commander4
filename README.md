@@ -160,6 +160,7 @@ src/commander4/
 
   tod/                 # === TOD SIDE: one Gibbs iteration over time-ordered data ===
     processing.py      #   Drives the iteration: gain, jumps, correlated noise, mapmaking, data selection.
+    config.py          #   Config dataclasses: defaults, checks, and parameter-file lookup rules.
     view.py            #   TODView: the read interface to one detector-scan and every TOD derived from it.
     gain.py            #   Gain sampling (absolute, relative, temporal).
     noise/             #   Correlated-noise realizations, sigma0 estimation, PSD models and their priors.
@@ -190,6 +191,13 @@ params/                # Parameter files, grouped by instrument.
 tests/                 # pytest suite; run with `pytest` from the repository root.
 notes/                 # Design notes.
 ```
+
+The TOD config is read at the start of each `process_tod` call. The classes in `tod/config.py`
+each own a `from_params` reader and a `__post_init__` method for checking their values. They are
+independent classes with no shared base class. Variables holding a config object are named after
+their parameter-file block with a `_cfg` postfix, e.g. `abs_gain_cfg`. The processing code states
+when each step runs. Data-selection timing is shared by both mapmakers and summary logging through
+`data_selection_status` in `tod/data_selection.py`.
 
 ### 3.2 Output, logs and error handling
 

@@ -3,7 +3,7 @@
 Covers two new pieces introduced when the three gain-sampling procedures became nested
 parameter-file blocks with a per-term ``calibrate_against`` target:
 
-* the calibrator each gain term uses, with a per-band override (via `resolve_param`)
+* the calibrator each gain term uses, with a per-band override
   taking precedence over the general-block value, which falls back to the term default.
 * ``TODView.get_calib_tod`` - builds the calibration residual for one gain term against a
   chosen calibrator signal, replacing the former per-term ``get_*_calib_tod`` methods.
@@ -17,7 +17,72 @@ import pytest
 from pixell.bunch import Bunch
 
 from commander4.tod.view import TODView
-from commander4.tod.gain import GainConfig, _solve_relative_gain_system
+from commander4.tod.gain import _solve_relative_gain_system
+from commander4.tod.config import GainConfig
+
+
+@pytest.mark.parametrize("sampler_name", [
+    "sample_absolute_gain", "sample_relative_gain", "sample_temporal_gain_variations",
+])
+@pytest.mark.parametrize("seconds, fsamp, expected", [
+    (1.0, 200.0, 200), (0.25, 200.0, 50), (0.0, 200.0, 1),
+    (0.001, 200.0, 1), (1.0, 32.51, 33),
+])
+def test_gain_samplers_convert_seconds_to_native_samples(
+    monkeypatch: pytest.MonkeyPatch, sampler_name: str, seconds: float, fsamp: float, expected: int,
+) -> None:
+    """Check the actual averaging factor passed to TODView by each gain routine."""
+    from mpi4py import MPI
+    import commander4.tod.gain as gain
+
+    experiment = SimpleNamespace(fsamp=fsamp, ndet=1, scans=[])
+    config = GainConfig(downsample_time=seconds)
+    view = Mock(side_effect=RuntimeError("stop at TODView"))
+    monkeypatch.setattr(gain, "TODView", view)
+    with pytest.raises(RuntimeError, match="stop at TODView"):
+        getattr(gain, sampler_name)(MPI.COMM_SELF, experiment, None, None, config, 1)
+    assert view.call_args.kwargs["downsample_factor"] == expected
+
+
+@pytest.mark.parametrize("nu, target, rank, warns", [
+    (545.0, "orbital_dipole", 0, True),
+    (353.0, "orbital_dipole", 0, False),
+    (857.0, "sky", 0, False),
+    (545.0, "orbital_dipole", 1, False),
+])
+def test_dipole_calibration_warning_only_above_400_ghz_on_the_band_master(
+    caplog: pytest.LogCaptureFixture, nu: float, target: str, rank: int, warns: bool,
+) -> None:
+    """Above 400 GHz the dipole is faint next to dust, so calibrating on it deserves a warning."""
+    import commander4.tod.gain as gain
+
+    comm = SimpleNamespace(Get_rank=lambda: rank)
+    experiment = SimpleNamespace(nu=nu, band_name="BAND")
+    with caplog.at_level("WARNING", logger="commander4.tod.gain"):
+        gain._warn_about_dipole_calibration(comm, experiment, GainConfig(calibrate_against=target),
+                                            "abs_gain")
+    assert ("orbital dipole" in caplog.text) == warns
+
+
+@pytest.mark.parametrize("sampler_name, step_name", [
+    ("sample_absolute_gain", "abs_gain"), ("sample_relative_gain", "rel_gain"),
+    ("sample_temporal_gain_variations", "temporal_gain"),
+])
+def test_each_gain_sampler_warns_about_dipole_calibration(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, sampler_name: str,
+    step_name: str,
+) -> None:
+    """The sampler itself warns, so the warning appears exactly when the step runs."""
+    from mpi4py import MPI
+    import commander4.tod.gain as gain
+
+    experiment = SimpleNamespace(fsamp=10.0, ndet=1, scans=[], nu=545.0, band_name="BAND")
+    monkeypatch.setattr(gain, "TODView", Mock(side_effect=RuntimeError("stop at TODView")))
+    with caplog.at_level("WARNING", logger="commander4.tod.gain"):
+        with pytest.raises(RuntimeError, match="stop at TODView"):
+            getattr(gain, sampler_name)(MPI.COMM_SELF, experiment, None, None,
+                                        GainConfig(calibrate_against="orbital_dipole"), 1)
+    assert f"{step_name} for band BAND" in caplog.text
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
@@ -34,7 +99,7 @@ def test_absolute_gain_reuses_filtered_calibrator(
     model = NoisePSDOof()
     model.is_white = white_noise
     experiment = DetectorGroupTOD([], "EXP", "BAND", 1, 100.0, 0.0, 180.0, 1, "I", model)
-    config = GainConfig(sampling_rate=180.0, downsample_time=1.0)
+    config = GainConfig(downsample_time=1.0)
     rng = np.random.default_rng(13)
     views = []
     numerator = denominator = 0.0
@@ -83,12 +148,8 @@ def _make_params(global_blocks: dict, band_blocks: dict) -> Bunch:
     )
 
 
-def _exp_data(band="BAND"):
-    return SimpleNamespace(experiment_name="EXP", band_name=band, fsamp=200.0, nu=100.0)
-
-
-def _inputs(band_blocks, passed="sky", gain_block="abs_gain", downsample_time=1.0,
-            gap_fill="wn", fsamp=200.0, nu=100.0, is_master=True):
+def _inputs(band_blocks: dict, passed: str = "sky", gain_block: str = "abs_gain",
+            downsample_time: float = 1.0, gap_fill: str = "wn") -> tuple[str, float, str]:
     """Resolve one step's calibrator, gap filling, and downsampling."""
     global_blocks = {
         gain_block: {
@@ -99,12 +160,10 @@ def _inputs(band_blocks, passed="sky", gain_block="abs_gain", downsample_time=1.
         },
     }
     params = _make_params(global_blocks, band_blocks)
-    experiment = SimpleNamespace(experiment_name="EXP", band_name="BAND", fsamp=fsamp, nu=nu)
     default = "orbital_dipole" if gain_block == "abs_gain" else "sky"
-    config = GainConfig.from_params(
-        params, experiment, gain_block, default, iteration=1, is_master=is_master,
-    )
-    return config.calibrate_against, config.downsample_factor, config.gap_fill_method
+    config = GainConfig.from_params(params.tod_processing,
+                                params.experiments.EXP.bands.BAND, gain_block, default)
+    return config.calibrate_against, config.downsample_time, config.gap_fill_method
 
 
 def test_the_passed_in_calibrator_is_used_when_the_band_does_not_override():
@@ -137,16 +196,16 @@ def test_band_override_can_change_every_gain_option():
             "downsample_time": 0.25,
         },
     }
-    config = GainConfig.from_params(
-        _make_params(global_blocks, band_blocks), _exp_data(), "abs_gain", "orbital_dipole",
-        iteration=1, is_master=False,
-    )
+    params = _make_params(global_blocks, band_blocks)
+    config = GainConfig.from_params(params.tod_processing,
+                                params.experiments.EXP.bands.BAND,
+                                "abs_gain", "orbital_dipole")
 
     assert not config.enabled
     assert config.from_iter == 4
     assert config.calibrate_against == "sky"
     assert config.gap_fill_method == "fallback"
-    assert config.downsample_factor == 50
+    assert config.downsample_time == 0.25
 
 
 def test_invalid_target_raises():
@@ -161,30 +220,6 @@ def test_an_invalid_gap_fill_method_raises():
     assert _inputs({}, gap_fill="full_cg")[2] == "full_cg"
     with pytest.raises(ValueError):
         _inputs({}, gap_fill="bogus")
-
-
-def test_orbital_dipole_calibration_warns_at_high_frequency(caplog):
-    """The dipole is a blackbody signal: in the sub-mm it is faint next to dust, so calibrating a
-    545 GHz channel on it is a configuration mistake worth flagging."""
-    with caplog.at_level("WARNING", logger="commander4.tod.processing"):
-        assert _inputs({}, passed="orbital_dipole", nu=545.0)[0] == "orbital_dipole"
-    assert "orbital dipole" in caplog.text and "545" in caplog.text
-    # Not at the frequencies where the dipole is the standard absolute calibrator ...
-    caplog.clear()
-    with caplog.at_level("WARNING", logger="commander4.tod.processing"):
-        _inputs({}, passed="orbital_dipole", nu=100.0)
-        _inputs({}, passed="orbital_dipole", nu=353.0)
-        _inputs({}, passed="sky", nu=857.0)           # ... nor for the other calibrators,
-        _inputs({}, passed="orbital_dipole", nu=545.0, is_master=False)   # ... nor off-master.
-    assert caplog.text == ""
-
-
-def test_the_downsample_factor_is_seconds_times_the_sampling_rate():
-    assert _inputs({}, downsample_time=1.0, fsamp=200.0)[1] == 200
-    assert _inputs({}, downsample_time=0.25, fsamp=200.0)[1] == 50
-    assert _inputs({}, downsample_time=0.0)[1] == 1      # 0 disables downsampling.
-    assert _inputs({}, downsample_time=0.001)[1] == 1    # clamped to at least 1.
-    assert _inputs({}, downsample_time=1.0, fsamp=32.51)[1] == 33
 
 
 # --------------------------------------------------------------------------------------
@@ -383,7 +418,7 @@ def test_relgain_deterministic_with_seeded_rng():
 
 
 # --------------------------------------------------------------------------------------
-# GainConfig converts each step's downsample_time into a sampling-rate-specific factor.
+# Gain routines convert downsample_time [s] to a number of native samples.
 
 
 # --------------------------------------------------------------------------------------
@@ -504,7 +539,8 @@ def test_mask_threshold_must_leave_some_sample_in_a_surviving_block(monkeypatch)
     with pytest.raises(ValueError, match="mask_threshold"):
         make_view(FACTOR, mask_threshold=-0.1)
     with pytest.raises(ValueError, match="mask_threshold"):
-        GainConfig(sampling_rate=180.0, mask_threshold=1.0)
+        GainConfig.from_params(Bunch(abs_gain=Bunch(mask_threshold=1.0)),
+                           Bunch(), "abs_gain", "orbital_dipole")
 
 
 def test_get_tod_subtracts_each_named_model_and_rejects_anything_else(monkeypatch):

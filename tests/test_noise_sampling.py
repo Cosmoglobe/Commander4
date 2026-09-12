@@ -12,8 +12,8 @@ from commander4.file_io.experiments.read_utils import apply_noise_fit_range
 from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.sample_ncorr import (sample_correlated_noise,
                                                     corr_noise_realization_with_gaps,
-                                                    realize_noise_in_gaps,
-                                                    CorrelatedNoiseConfig)
+                                                    realize_noise_in_gaps)
+from commander4.tod.config import CorrelatedNoiseConfig
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 
 
@@ -396,10 +396,10 @@ class TestSampleCorrelatedNoise:
 
     def test_use_dct_reaches_the_sampler_from_the_config(self):
         """The toggle is wired from `tod_processing.corr_noise.use_dct` down to the realization."""
-        assert CorrelatedNoiseConfig.from_params(Bunch(tod_processing=Bunch()), False).use_dct \
+        assert CorrelatedNoiseConfig.from_params(Bunch()).use_dct \
             is False
         block = Bunch(tod_processing=Bunch(corr_noise=Bunch(enabled=True, use_dct=True)))
-        assert CorrelatedNoiseConfig.from_params(block, False).use_dct is True
+        assert CorrelatedNoiseConfig.from_params(block.tod_processing).use_dct is True
 
         m = NoisePSDOof()
         tod, mask, params, fsamp = self._setup()
@@ -432,7 +432,7 @@ class TestSampleCorrelatedNoise:
         params = Bunch(tod_processing=Bunch(corr_noise=Bunch(
             enabled=True, sample_psd_params=True, sample_sigma0=False, psd_bin=psd_bin,
             psd_fit_nu_min=1.0, psd_fit_nu_max=2.0)))
-        config = CorrelatedNoiseConfig.from_params(params, False)
+        config = CorrelatedNoiseConfig.from_params(params.tod_processing)
         model = NoisePSDOof()
         apply_noise_fit_range(model, params)
         tod = np.random.default_rng(4).normal(size=4096)

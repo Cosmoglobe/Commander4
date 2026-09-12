@@ -5,8 +5,6 @@ non-stationary, so it is split (arXiv:2011.06024) into a stationary Fourier-doma
 solve over the gap samples alone, which is far cheaper than a CG over the whole TOD.
 """
 import logging
-from dataclasses import dataclass, field
-from typing import ClassVar
 
 import numpy as np
 import pixell
@@ -14,22 +12,15 @@ from scipy.fft import rfftfreq
 from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
-from commander4.math_utils.fft import forward_rfft, backward_rfft,\
-        forward_rfft_mirrored, backward_rfft_mirrored, forward_dct, backward_dct
+from commander4.math_utils.fft import forward_rfft_mirrored, backward_rfft_mirrored, forward_dct,\
+        backward_dct
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.psd import NoisePSD
 from commander4.tod.noise.sigma0 import calc_sigma0_robust, calc_sigma0_binned_psd
-from commander4.tod.step_config import StepConfig, CGConfig
+from commander4.tod.config import SIGMA0_METHODS
 
-from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
-                                               stop_bench, log_memory, increment_count, bench_reset
-
-SIGMA0_METHODS = ("pairwise", "binned_psd")
-# Gap-fill methods for the non-CG sampling steps (gain calibration). The correlated-noise step
-# itself does not use these: its gap handling is the masked CG (CG_max_iter>0) or the stationary
-# fallback (CG_max_iter=0). See `realize_noise_in_gaps`.
-GAIN_GAP_FILL_METHODS = ("wn", "fallback", "full_cg")
+from commander4.diagnostics.performance import start_bench, stop_bench, log_memory
 
 logger = logging.getLogger(__name__)
 
@@ -466,55 +457,3 @@ def log_corr_noise_stats(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
                     f"{context}: {name} on its prior bounds for {n_lo} ({n_lo/n_sampled:.1%}) "
                     f"of {n_sampled} detector-scans at the lower bound {lo:.4g}, and "
                     f"{n_hi} ({n_hi/n_sampled:.1%}) at the upper bound {hi:.4g}.")
-
-
-@dataclass(frozen=True)
-class CorrelatedNoiseConfig(StepConfig):
-    """Validated correlated-noise and sigma0 sampling settings."""
-
-    PARAMETER_NAME: ClassVar[str] = "corr_noise"
-
-    sample_psd_params: bool = False
-    sample_sigma0: bool = True
-    sigma0_method: str = "pairwise"
-    sigma0_decimation: int = 1
-    nomono: bool = False
-    onlymono: bool = False
-    psd_bin: bool = False
-    use_dct: bool = False
-    cg: CGConfig = field(default_factory=CGConfig)
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if self.sample_psd_params and not self.enabled:
-            raise ValueError("corr_noise.sample_psd_params requires enabled=True.")
-        if self.sigma0_method not in SIGMA0_METHODS:
-            raise ValueError(f"corr_noise.sigma0_method must be one of {SIGMA0_METHODS}, got "
-                             f"{self.sigma0_method!r}.")
-        if (not isinstance(self.sigma0_decimation, int)
-                or isinstance(self.sigma0_decimation, bool) or self.sigma0_decimation < 1):
-            raise ValueError("corr_noise.sigma0_decimation must be an integer of at least 1.")
-
-    @classmethod
-    def from_params(cls, params: Bunch, is_master: bool) -> "CorrelatedNoiseConfig":
-        """Build correlated-noise settings, including its nested CG block.
-
-        The nested ``cg`` block has its own schema and defaults. It is therefore constructed as a
-        ``CGConfig`` first, then injected into the outer config as a resolved value.
-        """
-        block = dict(params.tod_processing[cls.PARAMETER_NAME]
-                     if cls.PARAMETER_NAME in params.tod_processing else Bunch())
-
-        # Readers apply these inputs to NoisePSD.nu_fit when constructing the model. They are
-        # accepted here, but are not stored again or passed through the realization sampler.
-        block.pop("psd_fit_nu_min", None)
-        block.pop("psd_fit_nu_max", None)
-
-        # Remove ``cg`` before validating the outer fields. CGConfig reports errors against the
-        # nested path, while _from_block validates the remaining correlated-noise fields.
-        cg = CGConfig.from_block(f"tod_processing.{cls.PARAMETER_NAME}.cg",
-                                 block.pop("cg", Bunch()))
-        config = cls._from_block(f"tod_processing.{cls.PARAMETER_NAME}", block, cg=cg)
-        if config.nomono and config.onlymono:
-            raise ValueError("tod_processing.corr_noise.nomono and onlymono cannot both be true.")
-        return config

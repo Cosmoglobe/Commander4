@@ -21,6 +21,7 @@ from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
 import commander4.tod.processing as tod_processing
+from commander4.tod.config import MapmakingConfig, CorrelatedNoiseConfig, DataSelectionConfig
 
 _BITMASK = 1        # one bad-data bit; a flagged sample has (flag & _BITMASK) != 0
 _NSIDE = 1
@@ -61,7 +62,7 @@ def _fake_tod_samples(sigma0: float = 2.0) -> SimpleNamespace:
 
 def _run_bin_mapmaker(band: DetectorGroupTOD) -> dict[str, np.ndarray]:
     """Run binned mapmaking and return the maps selected for chain output."""
-    mapmaking = tod_processing.MapmakingConfig(
+    mapmaking = MapmakingConfig(
         mapmaker="bin",
         num_threads=1,
         include_orbital_dipole_maps=True,
@@ -70,8 +71,8 @@ def _run_bin_mapmaker(band: DetectorGroupTOD) -> dict[str, np.ndarray]:
         sparse_maps=False,
         common_res_fwhm=0.0,
     )
-    correlated_noise = tod_processing.CorrelatedNoiseConfig(sample_sigma0=False)
-    data_selection = tod_processing.DataSelectionConfig()
+    correlated_noise = CorrelatedNoiseConfig(sample_sigma0=False)
+    data_selection = DataSelectionConfig()
     _, maps = tod_processing.tod2map_bin(
         MPI.COMM_SELF, band, np.zeros((3, _NPIX)), _fake_tod_samples(), 1,
         mapmaking, correlated_noise, data_selection,

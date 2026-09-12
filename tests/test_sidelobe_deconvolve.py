@@ -89,7 +89,7 @@ def test_construct_model_matches_commander3_polarized_limits(monkeypatch) -> Non
     projector.instrument_file = "instrument.h5"
     projector.detnames = ["27M"]
     projector.nthreads = 2
-    projector.config = sidelobe.FarBeamConfig(enabled=True, lmax=100, mmax=100)
+    projector.far_beam_deconvolution_cfg = sidelobe.FarBeamConfig(enabled=True, lmax=100, mmax=100)
     sky = np.zeros((3, hp.nside2npix(1)))
     # A real single-rank node communicator, so the cubes go through actual MPI shared memory.
     projector.construct_model(FakeBandComm(), MPI.COMM_SELF, sky)

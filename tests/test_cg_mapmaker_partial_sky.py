@@ -23,8 +23,9 @@ from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
 from commander4.tod.mapmaking.preconditioners import BlockInvNPreconditionerIQU,\
     InvNPreconditionerIQU
-from commander4.tod.step_config import CGConfig
+from commander4.tod.config import CGConfig
 import commander4.tod.processing as tod_processing
+from commander4.tod.config import MapmakingConfig, CorrelatedNoiseConfig, DataSelectionConfig
 
 _NSIDE = 4
 _NPIX = 12 * _NSIDE**2
@@ -81,15 +82,15 @@ def _fake_tod_samples() -> SimpleNamespace:
 
 def _run_mapmaker(band: DetectorGroupTOD, mapmaker: str) -> dict[str, np.ndarray]:
     """Run one of the two mapmakers on `band` and return the maps selected for chain output."""
-    mapmaking = tod_processing.MapmakingConfig(
+    mapmaking = MapmakingConfig(
         mapmaker=mapmaker, num_threads=1, include_orbital_dipole_maps=False,
         include_corr_noise_maps=False, include_sky_model_maps=False, sparse_maps=False,
         common_res_fwhm=0.0, cg=CGConfig(max_iter=20, err_tol=1e-12))
     run = tod_processing.tod2map_CG if mapmaker == "CG" else tod_processing.tod2map_bin
     ncomp = 3 if "QU" in band.pols else 1
     _, maps = run(MPI.COMM_SELF, band, np.zeros((ncomp, _NPIX)), _fake_tod_samples(), 1,
-                  mapmaking, tod_processing.CorrelatedNoiseConfig(sample_sigma0=False),
-                  tod_processing.DataSelectionConfig())
+                  mapmaking, CorrelatedNoiseConfig(sample_sigma0=False),
+                  DataSelectionConfig())
     return maps
 
 

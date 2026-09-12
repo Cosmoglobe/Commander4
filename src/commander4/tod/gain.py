@@ -1,27 +1,23 @@
 """Gain sampling: the absolute, relative and temporal-variation terms.
 
 The three terms are sampled in that order once per Gibbs iteration, each against a configurable
-calibrator (see `_VALID_CALIB_TARGETS`). Absolute gain is a single number per band, relative gain
-one per detector under a zero-sum constraint, and the temporal term one per detector-scan drawn
-through a Wiener filter. [C3: comm_gain_mod.f90]
+calibrator (orbital dipole, sky, or sky without the dipole). Absolute gain is a single number per
+band, relative gain one per detector under a zero-sum constraint, and the temporal term one per
+detector-scan drawn through a Wiener filter. [C3: comm_gain_mod.f90]
 """
 import logging
-from dataclasses import dataclass
 
 import numpy as np
 import pixell
 from mpi4py import MPI
 from numpy.typing import NDArray
-from pixell.bunch import Bunch
 from scipy.fft import rfftfreq
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.tod_samples import TODSamples
 from commander4.diagnostics.performance import benchmark, log_memory, start_bench, stop_bench
 from commander4.math_utils.fft import forward_rfft, backward_rfft
-from commander4.parameters.schema import resolve_param
-from commander4.tod.noise.sample_ncorr import GAIN_GAP_FILL_METHODS
-from commander4.tod.step_config import StepConfig
+from commander4.tod.config import GainConfig
 from commander4.tod.view import TODView
 
 logger = logging.getLogger(__name__)
@@ -37,91 +33,21 @@ logger = logging.getLogger(__name__)
 #                   the relative and temporal terms: those only have to track gain *differences*
 #                   between detectors or scans, so they can use every bit of signal available.
 #   sky_no_dipole:  the static sky model from component separation, with the dipole left out.
-# Each term's default and any per-band override are resolved by ``GainConfig.from_params``.
-_VALID_CALIB_TARGETS = ("orbital_dipole", "sky", "sky_no_dipole")
 
-# Above this freq the orbital dipole is a poor calibrator, getting faint compared to foregrounds.
+# Above this frequency the orbital dipole is faint compared with the foregrounds.
 _ORBITAL_DIPOLE_MAX_FREQ_GHZ = 400.0
 
 
-# Each config class owns the parameter names, defaults, and validation for one TOD operation.
-# ``process_tod`` still states the physical execution order explicitly. Correlated noise and data
-# selection stay inside the mapmaker scan loops because their position relative to sigma0,
-# diagnostics, vetoes, and map accumulation is part of the algorithm.
-
-
-@dataclass(frozen=True)
-class GainConfig(StepConfig):
-    """Validated settings needed to execute one gain-sampling step."""
-
-    calibrate_against: str = "sky"
-    gap_fill_method: str = "wn"
-    downsample_time: float = 1.0
-    mask_threshold: float = 0.5
-    sampling_rate: float = 1.0
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if self.calibrate_against not in _VALID_CALIB_TARGETS:
-            raise ValueError(f"calibrate_against must be one of {_VALID_CALIB_TARGETS}, got "
-                             f"{self.calibrate_against!r}.")
-        if self.gap_fill_method not in GAIN_GAP_FILL_METHODS:
-            raise ValueError(f"gap_fill_method must be one of {GAIN_GAP_FILL_METHODS}, got "
-                             f"{self.gap_fill_method!r}.")
-        if not np.isfinite(self.downsample_time) or self.downsample_time < 0:
-            raise ValueError("downsample_time must be a finite, non-negative number.")
-        if not 0.0 <= self.mask_threshold < 1.0:
-            raise ValueError(f"mask_threshold must be in [0, 1), got {self.mask_threshold}.")
-        if not np.isfinite(self.sampling_rate) or self.sampling_rate <= 0:
-            raise ValueError("The experiment sampling rate must be positive and finite.")
-
-    @property
-    def downsample_factor(self) -> int:
-        """Number of native samples averaged into one gain-calibration sample."""
-        return max(1, round(self.downsample_time * self.sampling_rate))
-
-    @classmethod
-    def from_params(cls, params: Bunch, experiment_data: DetectorGroupTOD, step_name: str,
-                    default_calibrator: str, iteration: int, is_master: bool) -> "GainConfig":
-        """Build one gain config, applying the band's partial override to the global block."""
-        exp_name = experiment_data.experiment_name
-        band_name = experiment_data.band_name
-
-        # The global step block is the complete base configuration. It may be absent, in which
-        # case the GainConfig dataclass supplies its defaults below.
-        global_block = params.tod_processing[step_name] \
-            if step_name in params.tod_processing else Bunch()
-        config_values = dict(global_block)
-
-        # A band may carry a block with the same step name. It is a *partial* override: for example,
-        # a band can change only downsample_time while inheriting enabled/from_iter/calibrator from
-        # tod_processing. Resolve the block here for consistent lookup logging and type checking,
-        # then merge only the keys it actually contains.
-        band_overrides = resolve_param(
-            params, step_name, (f"experiments.{exp_name}.bands.{band_name}",),
-            default=Bunch(), legal_types=(Bunch, dict),
-        )
-        config_values.update(dict(band_overrides))
-
-        # Absolute gain defaults to the orbital dipole; the other terms default to the sky. The
-        # caller supplies that term-specific default, but either parameter block may override it.
-        config_values.setdefault("calibrate_against", default_calibrator)
-
-        # sampling_rate is measured data, not a parameter-file option, so inject it as a resolved
-        # value. _from_block consequently rejects attempts to set it in either parameter block.
-        config = cls._from_block(
-            f"tod_processing.{step_name}", config_values,
-            sampling_rate=float(experiment_data.fsamp),
-        )
-        if (config.is_active(iteration) and is_master
-                and config.calibrate_against == "orbital_dipole"
-                and experiment_data.nu > _ORBITAL_DIPOLE_MAX_FREQ_GHZ):
-            logger.warning(f"{step_name} for band {band_name} ({experiment_data.nu} GHz) is "
-                           f"calibrated against the orbital dipole, but above "
-                           f"{_ORBITAL_DIPOLE_MAX_FREQ_GHZ:.0f} GHz the dipole is faint compared "
-                           f"with the foregrounds and makes a poor calibrator; consider 'sky', "
-                           f"or an externally determined gain for this band.")
-        return config
+def _warn_about_dipole_calibration(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
+                                   gain_cfg: GainConfig, step_name: str) -> None:
+    """Warn on the band master if a band above 400 GHz is calibrated against the orbital dipole."""
+    if gain_cfg.calibrate_against == "orbital_dipole"\
+            and experiment_data.nu > _ORBITAL_DIPOLE_MAX_FREQ_GHZ and band_comm.Get_rank() == 0:
+        logger.warning(f"{step_name} for band {experiment_data.band_name} ({experiment_data.nu} "
+                       "GHz) is calibrated against the orbital dipole, but above "
+                       f"{_ORBITAL_DIPOLE_MAX_FREQ_GHZ:.0f} GHz the dipole is faint compared with "
+                       "the foregrounds and makes a poor calibrator; consider 'sky', or an "
+                       "externally determined gain for this band.")
 
 
 def _solve_relative_gain_system(s_weights: NDArray, r_weights: NDArray, prev_rel_gain: NDArray,
@@ -168,32 +94,35 @@ def _solve_relative_gain_system(s_weights: NDArray, r_weights: NDArray, prev_rel
 
 def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
                          tod_samples: TODSamples, det_compsep_map: NDArray,
-                         config: GainConfig, iteration: int) -> TODSamples:
+                         gain_cfg: GainConfig, iteration: int) -> TODSamples:
     """ Draw a realization of the absolute gain term, g0, which is constant across all
-        detectors and all scans within a band, using the calibrator selected by ``config``.
+        detectors and all scans within a band, using the calibrator selected by ``gain_cfg``.
     Args:
         band_comm (MPI.Comm): The band-level MPI communicator.
         experiment_data (DetectorGroupTOD): The object holding all the scan data.
         tod_samples (TODSamples): Current sampled TOD parameters (updated in-place with g0).
         det_compsep_map (NDArray): The component-separation sky map for the detector.
-        config: Validated absolute-gain settings.
+        gain_cfg: Validated absolute-gain settings.
         iteration: Current Gibbs iteration for log context.
     Returns:
         tod_samples (TODSamples): Updated TOD samples with the new g0 estimate.
     """
+    _warn_about_dipole_calibration(band_comm, experiment_data, gain_cfg, "abs_gain")
     start_bench("eqn-setup")
     sum_s_T_N_inv_d = 0  # Accumulators for the numerator and denominator of eqn 16.
     sum_s_T_N_inv_s = 0
 
+    # Convert the requested averaging time [s] to a number of native samples.
+    downsample_factor = max(1, round(gain_cfg.downsample_time * experiment_data.fsamp))
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
-                        downsample_factor=config.downsample_factor,
+                        downsample_factor=downsample_factor,
                         proc_mask_type="gain",
-                        mask_threshold=config.mask_threshold)
+                        mask_threshold=gain_cfg.mask_threshold)
 
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
     for view in scan_view.iter_focused(accepted_only=True):
-        calib = view.get_calib_tod("abs", config.calibrate_against,
-                                   gap_fill_method=config.gap_fill_method)
+        calib = view.get_calib_tod("abs", gain_cfg.calibrate_against,
+                                   gap_fill_method=gain_cfg.gap_fill_method)
         s_cal = calib.s_cal
         residual_tod = calib.tod
 
@@ -245,7 +174,7 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
 
 def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
                          tod_samples: TODSamples, det_compsep_map: NDArray,
-                         config: GainConfig, iteration: int) -> TODSamples:
+                         gain_cfg: GainConfig, iteration: int) -> TODSamples:
     """ Samples the detector-dependent relative gain (Delta g_i). This function implements the
         logic from Sec. 3.4 of BP7.
     Args:
@@ -253,11 +182,12 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
         experiment_data (DetectorGroupTOD): The object holding scan data for the band.
         tod_samples (TODSamples): Current sampled TOD parameters.
         det_compsep_map (NDArray): The component-separation sky map for the detector.
-        config: Validated relative-gain settings.
+        gain_cfg: Validated relative-gain settings.
         iteration: Current Gibbs iteration for log context.
     Returns:
         tod_samples (TODSamples): Updated TOD samples with relative gain estimates.
     """
+    _warn_about_dipole_calibration(band_comm, experiment_data, gain_cfg, "rel_gain")
     start_bench("eqn-setup")
     ndet = experiment_data.ndet
 
@@ -268,15 +198,17 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
 
     # local_r_T_N_inv_s = 0.0
     local_r_T_N_inv_s = np.zeros(ndet, dtype=np.float32)
+    # Convert the requested averaging time [s] to a number of native samples.
+    downsample_factor = max(1, round(gain_cfg.downsample_time * experiment_data.fsamp))
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
-                        downsample_factor=config.downsample_factor,
+                        downsample_factor=downsample_factor,
                         proc_mask_type="gain",
-                        mask_threshold=config.mask_threshold)
+                        mask_threshold=gain_cfg.mask_threshold)
 
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
     for view in scan_view.iter_focused(accepted_only=True):
-        calib = view.get_calib_tod("rel", config.calibrate_against,
-                                   gap_fill_method=config.gap_fill_method)
+        calib = view.get_calib_tod("rel", gain_cfg.calibrate_against,
+                                   gap_fill_method=gain_cfg.gap_fill_method)
         s_cal = calib.s_cal
         residual_tod = calib.tod
         # Calibration TODs are block-averaged, so their true rate is fsamp/downsample_factor;
@@ -345,7 +277,7 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
 
 def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
                                     tod_samples: TODSamples, det_compsep_map: NDArray,
-                                    config: GainConfig, iteration: int) -> TODSamples:
+                                    gain_cfg: GainConfig, iteration: int) -> TODSamples:
     """ Samples the time-dependent relative gain variations (delta g_qi). This function implements
         the logic from Sec. 3.5 of the BP7 paper, using a Wiener filter to smooth the gain solution
         over time (PIDs). It solves a global system for all scans of a given detector, which are
@@ -356,11 +288,12 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
         experiment_data (DetectorGroupTOD): The object holding scan data.
         tod_samples (TODSamples): The sampled TOD parameters.
         det_compsep_map (NDArray): The sky model at our band.
-        config: Validated temporal-gain settings.
+        gain_cfg: Validated temporal-gain settings.
         iteration: Current Gibbs iteration for log context.
     Returns:
         tod_samples (TODSamples): Updated TOD samples with per-scan gain variations.
     """
+    _warn_about_dipole_calibration(band_comm, experiment_data, gain_cfg, "temporal_gain")
     band_rank = band_comm.Get_rank()
     band_size = band_comm.Get_size()
     ndet = experiment_data.ndet
@@ -372,10 +305,12 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
     # (sigma0, fknee, alpha) of the Wiener prior, filled below by whichever rank solves a detector
     # and summed across the band afterwards, so the chain records the prior actually used.
     gain_prior_local = np.zeros((ndet, 3), dtype=np.float64)
+    # Convert the requested averaging time [s] to a number of native samples.
+    downsample_factor = max(1, round(gain_cfg.downsample_time * experiment_data.fsamp))
     scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
-                        downsample_factor=config.downsample_factor,
+                        downsample_factor=downsample_factor,
                         proc_mask_type="gain",
-                        mask_threshold=config.mask_threshold)
+                        mask_threshold=gain_cfg.mask_threshold)
 
     # I'm still not sure what way of dealing with the masked samples are best:
     # 1. Replace masked values with 0s before FFT.
@@ -386,8 +321,8 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
     # Rejected detector-scans (accepted_only) contribute zero weight (A_qq = b_q = 0); the Wiener
     # prior then fills their temporal gain from neighbors.
     for view in scan_view.iter_focused(accepted_only=True):
-        calib = view.get_calib_tod("temp", config.calibrate_against,
-                                   gap_fill_method=config.gap_fill_method)
+        calib = view.get_calib_tod("temp", gain_cfg.calibrate_against,
+                                   gap_fill_method=gain_cfg.gap_fill_method)
         s_cal = calib.s_cal
         residual_tod = calib.tod
 

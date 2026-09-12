@@ -10,11 +10,11 @@ from numpy.typing import NDArray
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.tod_samples import TODSamples
-from commander4.tod.mapmaking.config import MapmakingConfig
+from commander4.tod.config import MapmakingConfig
 
 
 def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
-                       experiment_data: DetectorGroupTOD, mapmaking: MapmakingConfig,
+                       experiment_data: DetectorGroupTOD, mapmaking_cfg: MapmakingConfig,
                        tod_samples: TODSamples, compsep_output: NDArray | None,
                        map_orbdipole: NDArray | None = None,
                        map_corrnoise: NDArray | None = None,
@@ -57,18 +57,18 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
             expanded_maps.append(expanded)
         (map_signal, map_rms, map_orbdipole, map_corrnoise,
          map_sidelobe, map_residual) = expanded_maps
-        if mapmaking.include_cov_maps and map_cov is not None:
+        if mapmaking_cfg.include_cov_maps and map_cov is not None:
             expanded_cov = np.zeros((6, map_cov.size), dtype=map_cov.dtype)
             expanded_cov[0] = map_cov
             map_cov = expanded_cov
 
     detmap_dict_out = {}
     # Degrading to a common analysis resolution happens after mapmaking; 0 leaves the native beam.
-    common_res_fwhm = mapmaking.common_res_fwhm
+    common_res_fwhm = mapmaking_cfg.common_res_fwhm
     if "I" in pols:
         detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
                                experiment_data.fwhm, experiment_data.nside,
-                               lmax=mapmaking.band_lmax)
+                               lmax=mapmaking_cfg.band_lmax)
         detmap_I.g0 = tod_samples.abs_gain
         if common_res_fwhm:
             detmap_I.smooth_to_resolution(common_res_fwhm)
@@ -76,7 +76,7 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
     if "QU" in pols:
         detmap_QU = DetectorMap(map_signal[1:3,:], map_rms[1:3,:], experiment_data.nu,
                                 experiment_data.fwhm, experiment_data.nside,
-                                lmax=mapmaking.band_lmax)
+                                lmax=mapmaking_cfg.band_lmax)
         detmap_QU.g0 = tod_samples.abs_gain
         if common_res_fwhm:
             detmap_QU.smooth_to_resolution(common_res_fwhm)
@@ -109,8 +109,8 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
                           ("nhit", map_nhit)):
         if aux_map is not None:
             maps_to_file[name] = aux_map
-    if mapmaking.include_sky_model_maps:
+    if mapmaking_cfg.include_sky_model_maps:
         maps_to_file["skymodel"] = compsep_output
-    if mapmaking.include_cov_maps:
+    if mapmaking_cfg.include_cov_maps:
         maps_to_file["cov"] = map_cov
     return detmap_dict_out, maps_to_file

@@ -15,15 +15,14 @@ from commander4.backend.ctypes_lib import load_cmdr4_ctypes_lib
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.tod_samples import TODSamples
-from commander4.tod.noise.sample_ncorr import sample_correlated_noise, log_corr_noise_stats,\
-    CorrelatedNoiseConfig
+from commander4.tod.noise.sample_ncorr import sample_correlated_noise, log_corr_noise_stats
 from commander4.tod.noise.sigma0 import _estimate_standalone_sigma0
 from commander4.tod.scan_diagnostics import _record_tod_diagnostics
 from commander4.tod.view import TODView
 from commander4.data_models.pixel_domain import PixelDomain
-from commander4.tod.mapmaking.config import MapmakingConfig
+from commander4.tod.config import MapmakingConfig, CorrelatedNoiseConfig, DataSelectionConfig
 from commander4.tod.mapmaking.output import finalize_band_maps
-from commander4.tod.data_selection import DataSelectionConfig
+from commander4.tod.data_selection import data_selection_status
 from commander4.tod.sidelobe_deconvolve import FarBeamProjector
 from commander4.diagnostics.performance import benchmark, log_memory
 
@@ -464,8 +463,9 @@ class WeightsMapmakerIQU:
 
 def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_output: NDArray,
                 tod_samples: TODSamples, iteration: int,
-                mapmaking: MapmakingConfig, correlated_noise: CorrelatedNoiseConfig,
-                data_selection: DataSelectionConfig, far_beam_model: FarBeamProjector|None = None,
+                mapmaking_cfg: MapmakingConfig, corr_noise_cfg: CorrelatedNoiseConfig,
+                data_selection_cfg: DataSelectionConfig,
+                far_beam_model: FarBeamProjector|None = None,
                 ) -> tuple[dict[str, DetectorMap], dict[str, NDArray]]:
     """ Commander4 bin mapmaking. All ranks on the provided MPI communicator collaborates on creating
         the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
@@ -476,22 +476,22 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         compsep_output (NDArray): The sky model at our band. Not used, but written to chain file.
         tod_samples (TODSamples): Sampled TOD parameters, such as gain.
         iteration: Current Gibbs iteration.
-        mapmaking: Validated mapmaking settings.
-        correlated_noise: Validated correlated-noise settings.
-        data_selection: Validated detector-scan selection settings.
+        mapmaking_cfg: Validated mapmaking settings.
+        corr_noise_cfg: Validated correlated-noise settings.
+        data_selection_cfg: Validated detector-scan selection settings.
     Output:
         Detector maps for component separation and maps selected for chain output.
 
     """
     start_bench("setup")
-    corr_noise_active = correlated_noise.is_active(iteration)
-    selection_active = data_selection.cuts_are_active(iteration, correlated_noise)
+    corr_noise_active = corr_noise_cfg.enabled and iteration >= corr_noise_cfg.from_iter
+    _, selection_active = data_selection_status(iteration, data_selection_cfg, corr_noise_cfg)
     sidelobe_active = far_beam_model is not None
     pols = experiment_data.pols
     scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
     # Optional per-experiment sparse map storage: each rank holds only its locally-observed pixels
     # rather than a full sky map. The band master still ends up with full-sky maps.
-    domain = experiment_data.get_pixel_domain(scan_view, band_comm, mapmaking.sparse_maps)
+    domain = experiment_data.get_pixel_domain(scan_view, band_comm, mapmaking_cfg.sparse_maps)
 
     # Set up various mapmakers. Each aux map costs a full-sky map and a per-detector-scan
     # accumulation, so one is built only when the chain is going to hold it; `None` means "not
@@ -501,17 +501,17 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
     mapmaker_invvar = weights_class(band_comm, experiment_data.nside, pixel_domain=domain)
     mapmaker = signal_class(band_comm, experiment_data.nside, pixel_domain=domain)
     mapmaker_orbdipole = (signal_class(band_comm, experiment_data.nside, pixel_domain=domain)
-                          if mapmaking.include_orbital_dipole_maps else None)
+                          if mapmaking_cfg.include_orbital_dipole_maps else None)
     mapmaker_res = (signal_class(band_comm, experiment_data.nside, pixel_domain=domain)
-                    if mapmaking.include_residual_maps else None)
+                    if mapmaking_cfg.include_residual_maps else None)
     mapmaker_ncorr = (signal_class(band_comm, experiment_data.nside, pixel_domain=domain)
-                      if corr_noise_active and mapmaking.include_corr_noise_maps else None)
+                      if corr_noise_active and mapmaking_cfg.include_corr_noise_maps else None)
     mapmaker_sidelobe = (signal_class(band_comm, experiment_data.nside, pixel_domain=domain)
-                         if sidelobe_active and mapmaking.include_sidelobe_maps else None)
+                         if sidelobe_active and mapmaking_cfg.include_sidelobe_maps else None)
     # Unit scalar weights count hits directly at observed pixels in the C++ accumulator, without
     # a full-map temporary per detector-scan or any gain/polarization weighting.
     mapmaker_nhit = (WeightsMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
-                     if mapmaking.include_hit_maps else None)
+                     if mapmaking_cfg.include_hit_maps else None)
     if corr_noise_active:
         sampled_params = []
         residuals = []
@@ -536,7 +536,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         start_bench("data-select-1")
         good_frac = good_data_mask.mean()
         tod_samples.good_fraction[view.iscan, view.idet] = good_frac
-        if selection_active and good_frac < data_selection.min_good_fraction:
+        if selection_active and good_frac < data_selection_cfg.min_good_fraction:
             tod_samples.accept[view.iscan, view.idet] = False
             stop_bench("data-select-1")
             continue
@@ -553,22 +553,22 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
             res = sample_correlated_noise(
                 sky_subtracted_TOD, view.get_mask(proc_mask_type="ncorr"),
                 np.array(view.noise_params, copy=True),
-                experiment_data.noise_model, view.fsamp, cg_err_tol=correlated_noise.cg.err_tol,
-                cg_max_iter=correlated_noise.cg.max_iter,
-                sample_params=correlated_noise.sample_psd_params,
-                sample_sigma0=correlated_noise.sample_sigma0,
-                sigma0_method=correlated_noise.sigma0_method,
-                nomono=correlated_noise.nomono,
-                onlymono=correlated_noise.onlymono,
-                sigma0_dec=correlated_noise.sigma0_decimation,
-                psd_bin=correlated_noise.psd_bin,
-                use_dct=correlated_noise.use_dct)
+                experiment_data.noise_model, view.fsamp, cg_err_tol=corr_noise_cfg.cg.err_tol,
+                cg_max_iter=corr_noise_cfg.cg.max_iter,
+                sample_params=corr_noise_cfg.sample_psd_params,
+                sample_sigma0=corr_noise_cfg.sample_sigma0,
+                sigma0_method=corr_noise_cfg.sigma0_method,
+                nomono=corr_noise_cfg.nomono,
+                onlymono=corr_noise_cfg.onlymono,
+                sigma0_dec=corr_noise_cfg.sigma0_decimation,
+                psd_bin=corr_noise_cfg.psd_bin,
+                use_dct=corr_noise_cfg.use_dct)
             n_corr_est = res.n_corr
             tod_samples.noise_params[view.iscan, view.idet, :] = res.noise_params
             tod_samples.ncorr_cg_residual[view.iscan, view.idet] = res.residual
             tod_samples.ncorr_cg_niter[view.iscan, view.idet] = res.niter
             tod_samples.ncorr_converged[view.iscan, view.idet] = res.converged and not res.high_var
-            if correlated_noise.sample_psd_params:
+            if corr_noise_cfg.sample_psd_params:
                 sampled_params.append(np.array(res.noise_params, copy=True))
             if not res.converged:
                 num_failed_convergences_ncorr += 1
@@ -578,12 +578,12 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
             residuals.append(res.residual)
             niters.append(res.niter)
             stop_bench("ncorr")
-        elif correlated_noise.sample_sigma0:
+        elif corr_noise_cfg.sample_sigma0:
             # No correlated noise this iteration: estimate sigma0 here, at the same point in the
             # chain (after gain) as the n_corr-coupled estimate, instead of a separate pre-gain pass.
             with benchmark("sigma0-samp"):
                 tod_samples.noise_params[view.iscan, view.idet, 0] = _estimate_standalone_sigma0(
-                    view, correlated_noise.sigma0_method)
+                    view, corr_noise_cfg.sigma0_method)
 
         sl_tod = None
         if sidelobe_active:
@@ -598,7 +598,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         start_bench("data-select-2")
         if selection_active:
             z = tod_samples.chisq_z[view.iscan, view.idet]
-            if not (np.isfinite(z) and abs(z) <= data_selection.chisq_abs_threshold):
+            if not (np.isfinite(z) and abs(z) <= data_selection_cfg.chisq_abs_threshold):
                 tod_samples.accept[view.iscan, view.idet] = False
                 stop_bench("data-select-2")
                 continue
@@ -711,8 +711,8 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
     with benchmark("finalize"):
         if band_comm.Get_rank() == 0:
             detmap_dict_out, maps_to_file = finalize_band_maps(
-                map_signal, map_rms, pols, experiment_data, mapmaking, tod_samples, compsep_output,
-                map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
+                map_signal, map_rms, pols, experiment_data, mapmaking_cfg, tod_samples,
+                compsep_output, map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
                 map_sidelobe=map_sidelobe, map_residual=map_residual, map_nhit=map_nhit,
                 map_cov=map_cov)
 

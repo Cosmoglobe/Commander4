@@ -13,7 +13,7 @@ from pixell.bunch import Bunch
 import numpy as np
 
 from commander4.file_io.experiments.read_utils import apply_noise_priors, apply_noise_fit_range
-from commander4.tod.noise.sample_ncorr import CorrelatedNoiseConfig
+from commander4.tod.config import CorrelatedNoiseConfig
 from commander4.tod.noise.psd import NoisePSDOof
 from commander4.parameters.schema import (TOP_LEVEL_BLOCKS, validate_param_schema, compsep_enabled,
                                      derive_task_counts, task_count_breakdown, resolve_param,
@@ -331,7 +331,7 @@ def test_noise_fit_limits_are_applied_to_model(limits: dict, expected: list[list
     params = Bunch(tod_processing=Bunch(corr_noise=Bunch(enabled=True, **limits)))
     model = NoisePSDOof(nu_fit=[[np.nan, np.nan], [0.1, 3.0], [0.2, 4.0]])
     apply_noise_fit_range(model, params)
-    config = CorrelatedNoiseConfig.from_params(params, False)
+    config = CorrelatedNoiseConfig.from_params(params.tod_processing)
     assert config.enabled
     assert not hasattr(config, "psd_fit_nu_min")
     assert not hasattr(config, "psd_fit_nu_max")
@@ -349,8 +349,8 @@ def test_noise_fit_limits_default_when_corr_noise_block_absent() -> None:
 
 def test_unknown_noise_fit_key_still_rejected() -> None:
     params = Bunch(tod_processing=Bunch(corr_noise=Bunch(psd_fit_nu_mxa=2.0)))
-    with pytest.raises(ValueError, match="psd_fit_nu_mxa"):
-        CorrelatedNoiseConfig.from_params(params, False)
+    with pytest.raises(TypeError, match="psd_fit_nu_mxa"):
+        CorrelatedNoiseConfig.from_params(params.tod_processing)
 
 
 def test_noise_prior_bounds_left_alone_when_the_parameter_file_is_silent():

@@ -2,18 +2,12 @@
 
 `init_tod_processing` sets up the per-band data and sample containers once; `process_tod` runs the
 sampling steps for a single iteration (jumps, HFI baselines, gain, correlated noise, mapmaking, data
-selection) and hands the resulting band maps to component separation. The `*Config` dataclasses
-here validate the `tod_processing` block of the parameter file.
+selection) and hands the resulting band maps to component separation. Each iteration starts by
+reading the config objects defined in `tod/config.py`.
 """
 import numpy as np
-import pixell
-from pixell import utils
-from mpi4py import MPI
 import logging
-from scipy.fft import rfftfreq
 import time
-from dataclasses import dataclass, field, fields
-from typing import ClassVar, Self
 from numpy.typing import NDArray
 
 from pixell.bunch import Bunch
@@ -22,17 +16,17 @@ from commander4.parameters.schema import resolve_param
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.tod_samples import TODSamples
-from commander4.tod.data_selection import log_dataselect_summary, DataSelectionConfig
+from commander4.tod.data_selection import log_dataselect_summary, data_selection_status
 from commander4.tod.gain import sample_absolute_gain, sample_relative_gain,\
-    sample_temporal_gain_variations, GainConfig
-from commander4.tod.jumps import sample_jump_detection, JumpDetectionConfig
+    sample_temporal_gain_variations
+from commander4.tod.jumps import sample_jump_detection
 from commander4.tod.hfi_demodulation import sample_hfi_baselines
-from commander4.tod.sidelobe_deconvolve import FarBeamProjector, FarBeamConfig
+from commander4.tod.sidelobe_deconvolve import FarBeamProjector
 from commander4.tod.view import TODView
 from commander4.tod.mapmaking.binned import tod2map_bin
 from commander4.tod.mapmaking.cg import tod2map_CG
-from commander4.tod.mapmaking.config import MapmakingConfig
-from commander4.tod.noise.sample_ncorr import CorrelatedNoiseConfig
+from commander4.tod.config import GainConfig, JumpDetectionConfig, CorrelatedNoiseConfig,\
+    DataSelectionConfig, FarBeamConfig, MapmakingConfig
 from commander4.polarization import get_execution_band_ids
 from commander4.file_io.tod_reader import read_tods_from_file
 from commander4.file_io.chain_writer import write_band_chain_to_file
@@ -136,32 +130,30 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     tod_comm = mpi_info.tod.comm
     is_master = mpi_info.band.is_master
 
-    # Resolve every config before executing any step, so invalid later settings fail before an
-    # earlier sampler changes the chain state. Each class owns its own unpacking and validation.
-    mapmaking = MapmakingConfig.from_params(params, experiment_data)
-    jump_detection = JumpDetectionConfig.from_params(params, experiment_data)
-    far_beam_cfg = FarBeamConfig.from_params(params, experiment_data)
-    if far_beam_cfg.is_active(iter) and mapmaking.mapmaker == "CG":
+    # Read the whole config before any sampler changes the chain state.
+    tod_block = params.tod_processing
+    experiment_block = params.experiments[experiment_data.experiment_name]
+    band_block = experiment_block.bands[experiment_data.band_name]
+    mapmaking_cfg = MapmakingConfig.from_params(params, experiment_data)
+    jump_detection_cfg = JumpDetectionConfig.from_params(tod_block, experiment_block)
+    far_beam_deconvolution_cfg = FarBeamConfig.from_params(tod_block)
+    abs_gain_cfg = GainConfig.from_params(tod_block, band_block, "abs_gain", "orbital_dipole")
+    rel_gain_cfg = GainConfig.from_params(tod_block, band_block, "rel_gain", "sky")
+    temporal_gain_cfg = GainConfig.from_params(tod_block, band_block, "temporal_gain", "sky")
+    corr_noise_cfg = CorrelatedNoiseConfig.from_params(tod_block)
+    data_selection_cfg = DataSelectionConfig.from_params(tod_block)
+
+    far_beam_active = (far_beam_deconvolution_cfg.enabled
+                       and iter >= far_beam_deconvolution_cfg.from_iter)
+    if far_beam_active and mapmaking_cfg.mapmaker == "CG":
         raise ValueError("Far-beam deconvolution is only implemented for the binned mapmaker; the "
                          "CG mapmaker would silently leave the sidelobe pickup in the data.")
 
-    absolute_gain = GainConfig.from_params(
-        params, experiment_data, "abs_gain", "orbital_dipole", iter, is_master,
-    )
-    relative_gain = GainConfig.from_params(
-        params, experiment_data, "rel_gain", "sky", iter, is_master,
-    )
-    temporal_gain = GainConfig.from_params(
-        params, experiment_data, "temporal_gain", "sky", iter, is_master,
-    )
-    correlated_noise = CorrelatedNoiseConfig.from_params(params, is_master)
-    data_selection = DataSelectionConfig.from_params(params)
-
     # Jump corrections must be stored before any later step reads the TOD.
-    if jump_detection.is_active(iter):
+    if jump_detection_cfg.enabled and iter >= jump_detection_cfg.from_iter:
         with benchmark("jump-detect"):
             tod_samples = sample_jump_detection(band_comm, experiment_data, tod_samples,
-                                                jump_detection, iter)
+                                                jump_detection_cfg, iter)
 
     # HFI baselines use the previous iteration's gain and sigma0, like Commander3. The first pass
     # also determines whether Python's even or odd sample indices carry the positive half-cycle.
@@ -172,29 +164,30 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
 
     # Gain uses the previous iteration's sigma0. The new sigma0 is estimated later, inside the
     # mapmaker scan loop, matching Commander3's gain -> n_corr -> bin_TOD order.
-    if absolute_gain.is_active(iter):
+    if abs_gain_cfg.enabled and iter >= abs_gain_cfg.from_iter:
         with benchmark("abs-gain"):
             tod_samples = sample_absolute_gain(band_comm, experiment_data, tod_samples,
-                                               compsep_output, absolute_gain, iter)
+                                               compsep_output, abs_gain_cfg, iter)
 
-    if relative_gain.is_active(iter):
+    if rel_gain_cfg.enabled and iter >= rel_gain_cfg.from_iter:
         with benchmark("rel-gain"):
             tod_samples = sample_relative_gain(band_comm, experiment_data, tod_samples,
-                                               compsep_output, relative_gain, iter)
+                                               compsep_output, rel_gain_cfg, iter)
 
-    if temporal_gain.is_active(iter):
+    if temporal_gain_cfg.enabled and iter >= temporal_gain_cfg.from_iter:
         with benchmark("temp-gain"):
             tod_samples = sample_temporal_gain_variations(band_comm, experiment_data, tod_samples,
-                                                          compsep_output, temporal_gain, iter)
+                                                          compsep_output, temporal_gain_cfg, iter)
 
 
     # Holds one set of sidelobe cubes per node, shared by every band rank on it. Freed explicitly
     # at the end of this function; going out of scope does not release an MPI window.
     far_beam_model = None
-    if far_beam_cfg.is_active(iter):
+    if far_beam_active:
         with benchmark("far-beam"):
             far_beam_model = FarBeamProjector(band_comm, mpi_info.band.node_comm, experiment_data,
-                                              tod_samples, compsep_output, far_beam_cfg)
+                                              tod_samples, compsep_output,
+                                              far_beam_deconvolution_cfg)
 
 
     # A finite diagnostic means "evaluated this iteration". Previously rejected or absent scans
@@ -206,22 +199,23 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
             scan_tods[:] = [None] * tod_samples.ndet
 
     with benchmark("mapmaker"):
-        if mapmaking.mapmaker == "CG":
+        if mapmaking_cfg.mapmaker == "CG":
             detmap_dict, maps_to_file = tod2map_CG(
-                band_comm, experiment_data, compsep_output, tod_samples, iter, mapmaking,
-                correlated_noise, data_selection,
+                band_comm, experiment_data, compsep_output, tod_samples, iter, mapmaking_cfg,
+                corr_noise_cfg, data_selection_cfg,
             )
         else:
             detmap_dict, maps_to_file = tod2map_bin(
-                band_comm, experiment_data, compsep_output, tod_samples, iter, mapmaking,
-                correlated_noise, data_selection, far_beam_model,
+                band_comm, experiment_data, compsep_output, tod_samples, iter, mapmaking_cfg,
+                corr_noise_cfg, data_selection_cfg, far_beam_model,
             )
 
     # Report during data-selection warm-up as well as active-cut iterations.
-    if data_selection.is_available(iter, correlated_noise):
+    report_selection, apply_cuts = data_selection_status(iter, data_selection_cfg, corr_noise_cfg)
+    if report_selection:
         log_dataselect_summary(
-            band_comm, tod_samples, data_selection,
-            active=data_selection.cuts_are_active(iter, correlated_noise),
+            band_comm, tod_samples, data_selection_cfg,
+            active=apply_cuts,
             iteration=iter,
         )
 
@@ -241,7 +235,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
         tod_comm.Barrier()
 
     # Free shared memory allocated during far beam construction. The far-beam step is gated on
-    # `far_beam_cfg.is_active`, which every rank of the band evaluates identically, so this
+    # `far_beam_active`, which every rank of the band evaluates identically, so this
     # collective is either taken by all of them or by none.
     if far_beam_model is not None:
         far_beam_model.free()
