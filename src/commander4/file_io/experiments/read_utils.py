@@ -76,6 +76,19 @@ def apply_noise_priors(noise_model: NoisePSD, params: Bunch, expname: str, bandn
                 f"sampled={[n for i, n in enumerate(param_names) if noise_model.is_sampled(i)]}.")
 
 
+def apply_noise_fit_range(noise_model: NoisePSD, params: Bunch) -> None:
+    """Apply configured frequency limits to the model, keeping unspecified reader defaults.
+
+    The shared limits in ``tod_processing.corr_noise`` apply to every PSD parameter except sigma0.
+    The model's ``nu_fit`` array is the sole source of frequency limits during sampling.
+    """
+    for column, key in enumerate(("psd_fit_nu_min", "psd_fit_nu_max")):
+        value = resolve_param(params, key, ("tod_processing.corr_noise",), default=None,
+                              raise_on_missing_scope=False)
+        if value is not None:
+            noise_model.nu_fit[1:, column] = value
+
+
 def find_good_fourier_size(ntod: int) -> int:
     """Return the largest fast real-FFT size that is at most ``ntod``.
 

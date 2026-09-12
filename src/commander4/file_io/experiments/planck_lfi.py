@@ -21,6 +21,7 @@ from commander4.tod.noise.psd import NoisePSD, NoisePSDOof
 from commander4.data_models.pointing import PixelPointing
 from commander4.file_io.experiments.read_utils import (
     apply_noise_priors,
+    apply_noise_fit_range,
     find_good_fourier_size,
     read_processing_masks,
 )
@@ -165,12 +166,14 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
         if i_pid % 10 == 0:
             gc.collect()
 
+
     # Initialize noise model with defaults and uniform priors suited for LFI.
     noise_model = NoisePSDOof(P_active_mean = [np.nan, 0.1, -1.0],
                               P_active_rms = [np.nan, np.inf, np.inf],
                               P_uni = [[np.nan, np.nan], [0.01, 0.5], [-2.5, -0.25]],
                               nu_fit = [[np.nan, np.nan], [0, 3.0], [0, 3.0]])
     apply_noise_priors(noise_model, params, expname, bandname)
+    apply_noise_fit_range(noise_model, params)
 
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model,

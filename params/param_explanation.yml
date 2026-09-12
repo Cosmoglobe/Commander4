@@ -25,13 +25,25 @@
 # Commander4 always runs TWO Gibbs chains in parallel, because the TOD and CompSep sides live on
 # disjoint MPI ranks.
 gibbs:
-  num_iterations: 10          # Number of Gibbs iterations to perform.
+  num_iterations: 10          # Number of additional Gibbs iterations to perform.
 
   seed: 1995                  # Master RNG seed. Re-running with the same seed and the
                               # same parameters reproduces the chain.
 
-  # Restart from a previous run's chain. Should be equivalent to having run the chain for longer.
-  # init_from_chain: "../c4_chains/some_previous_run/"
+  # One startup policy for fresh runs, initialization from saved values, and continuation.
+  # start:
+  #   mode: new                # Default. Start numbering and sampling schedules at iteration 1.
+  #   source: "../c4_chains/previous_run/"  # Optional for new; omit for a fresh initialization.
+  #   iteration: latest        # Newest common complete saved sample; or an explicit integer.
+  #   chain: matching          # 1->1, 2->2. Use 1 or 2 to seed both new chains from one source.
+  #   load: [tod, amplitudes, spectral_parameters]  # Any subset; default is all three.
+  #
+  # To continue output.dir instead, use only:
+  # start:
+  #   mode: resume             # Restore both chains; start at the saved iteration + 1.
+  # Resume needs both chains saved and all required state. Initial-guess overrides are ignored.
+  # Later incomplete output is reported, never moved or overwritten. num_iterations above is
+  # always the number of iterations to execute in this invocation.
 
 # ----------------------------------------
 # RESOURCES
@@ -201,9 +213,9 @@ tod_processing:
     nomono: False             # Project the per-scan monopole out of n_corr (C3 "nomono").
     onlymono: False           # Model the correlated noise as nothing but a per-scan
                               # offset. A debugging mode, not a physical model.
-    psd_fit_nu_min: 0.0       # [Hz] Frequency window used when fitting the PSD
-    psd_fit_nu_max: 2.0       # [Hz] parameters. nu_max must stay below the band's
-                              # Nyquist frequency, fsamp/2.
+    psd_fit_nu_min: 0.0       # [Hz] Readers apply these limits to the noise model's nu_fit.
+    psd_fit_nu_max: 2.0       # [Hz] Omitted limits keep the reader's model defaults.
+                              # Endpoints are included; DC is excluded. No modes exist above fsamp/2.
     psd_bin: False            # Fit every Fourier mode (False), or a mode-weighted binned
                               # PSD (True). Binning is much faster on long scans.
     use_dct: False            # Evaluate the n_corr Fourier filters as a length-nsamp DCT

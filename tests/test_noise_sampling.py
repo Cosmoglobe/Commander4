@@ -8,6 +8,7 @@ from scipy.fft import rfftfreq
 from commander4.tod.noise.sigma0 import (calc_sigma0_simple, calc_sigma0_robust,
                                               calc_sigma0_binned_psd)
 from commander4.tod.noise.psd import NoisePSDOof
+from commander4.file_io.experiments.read_utils import apply_noise_fit_range
 from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.sample_ncorr import (sample_correlated_noise,
                                                     corr_noise_realization_with_gaps,
@@ -241,13 +242,13 @@ class TestNoisePSDOof:
         assert np.allclose(inv, expected)
 
     def test_sample_params_keeps_sigma0_and_uses_Puni_bounds(self):
-        m = NoisePSDOof()
+        m = NoisePSDOof(nu_fit=[[np.nan, np.nan], [0, 2.0], [0, 2.0]])
         sigma0 = 1.234
         residual = _synth_corr_noise(1, 2**14, 10.0, sigma0, 0.5, -2.0) \
             + np.random.default_rng(2).normal(0.0, sigma0, 2**14)
         _seed_all_rng(0)
         params = np.array([sigma0, 0.3, -1.5])
-        out = m.sample_params(residual, params, 10.0, nu_min=0.0, nu_max=2.0)
+        out = m.sample_params(residual, params, 10.0)
         assert out.shape == params.shape
         assert out[0] == params[0]            # sigma0 held fixed
         assert out is not params              # returns a fresh array
@@ -259,7 +260,8 @@ class TestNoisePSDOof:
     def test_sample_params_recovers_input(self):
         # The sampler builds its (fknee, alpha) grids from the model's uniform priors, so construct
         # a model whose P_uni spans the injected values rather than relying on the defaults.
-        m = NoisePSDOof(P_uni=[[np.nan, np.nan], [0.01, 10.0], [-4.5, -0.25]])
+        m = NoisePSDOof(P_uni=[[np.nan, np.nan], [0.01, 10.0], [-4.5, -0.25]],
+                        nu_fit=[[np.nan, np.nan], [0, 2.0], [0, 2.0]])
         sigma0, fknee, alpha = 1.0, 0.5, -2.0
         # Fit is performed on the residual (white + correlated noise) with the full PSD model.
         residual = _synth_corr_noise(7, 2**16, 10.0, sigma0, fknee, alpha) \
@@ -269,7 +271,7 @@ class TestNoisePSDOof:
             fks, als = [], []
             for _ in range(8):
                 out = m.sample_params(residual, np.array([sigma0, 0.2, -1.0]), 10.0,
-                                      nu_min=0.0, nu_max=2.0, bin_psd=bin_psd)
+                                      bin_psd=bin_psd)
                 fks.append(out[1])
                 als.append(out[2])
             assert np.mean(fks) == pytest.approx(fknee, rel=0.4), f"bin_psd={bin_psd}"
@@ -408,7 +410,7 @@ class TestSampleCorrelatedNoise:
         assert res.n_corr.shape == tod.shape
 
     def test_param_sampling_toggle(self):
-        m = NoisePSDOof()
+        m = NoisePSDOof(nu_fit=[[np.nan, np.nan], [0, 2.0], [0, 2.0]])
         tod, mask, params, fsamp = self._setup()
         # With both sampling switches off, noise_params come back untouched.
         _seed_all_rng(0)
@@ -420,9 +422,33 @@ class TestSampleCorrelatedNoise:
         _seed_all_rng(0)
         res_on = sample_correlated_noise(tod.copy(), mask, params.copy(), m, fsamp,
                                          cg_err_tol=1e-6, cg_max_iter=0, sample_params=True,
-                                         sample_sigma0=False, psd_fit_nu_max=2.0)
+                                         sample_sigma0=False)
         assert res_on.noise_params[0] == params[0]               # sigma0 fixed
         assert not np.array_equal(res_on.noise_params[1:], params[1:])  # fknee/alpha updated
+
+    @pytest.mark.parametrize("psd_bin", [False, True])
+    def test_configured_model_window_reaches_psd_sampling(self, psd_bin: bool) -> None:
+        """The production sampler must respect reader-applied limits on both sides of the band."""
+        params = Bunch(tod_processing=Bunch(corr_noise=Bunch(
+            enabled=True, sample_psd_params=True, sample_sigma0=False, psd_bin=psd_bin,
+            psd_fit_nu_min=1.0, psd_fit_nu_max=2.0)))
+        config = CorrelatedNoiseConfig.from_params(params, False)
+        model = NoisePSDOof()
+        apply_noise_fit_range(model, params)
+        tod = np.random.default_rng(4).normal(size=4096)
+        time = np.arange(tod.size) / 8.0
+        contaminated = tod + 100 * np.cos(2 * np.pi * 0.5 * time)
+        contaminated += 100 * np.cos(2 * np.pi * 3.0 * time)
+        results = []
+        for residual in (tod, contaminated):
+            _seed_all_rng(19)
+            result = sample_correlated_noise(
+                residual.copy(), np.ones(tod.size, dtype=bool), np.array([1.0, 0.1, -1.5]),
+                model, 8.0, cg_err_tol=config.cg.err_tol, cg_max_iter=config.cg.max_iter,
+                sample_params=config.sample_psd_params, sample_sigma0=config.sample_sigma0,
+                psd_bin=config.psd_bin)
+            results.append(result.noise_params)
+        np.testing.assert_allclose(results[0], results[1], rtol=1e-9, atol=1e-11)
 
     def test_sigma0_reestimated_from_residual(self):
         """sample_sigma0=True replaces noise_params[0] with a data-driven estimate."""
@@ -595,7 +621,7 @@ class TestNoisePSDPriors:
         m = NoisePSDOof(P_active_rms=[np.nan, -1.0, np.inf])
         assert not m.is_sampled(1) and m.is_sampled(2)
         start = np.array([80.0, 0.1, -1.0])
-        out = m.sample_params(self._residual(1), start, 32.5, nu_max=10.0)
+        out = m.sample_params(self._residual(1), start, 32.5)
         assert out[1] == start[1]      # fknee untouched
         assert out[2] != start[2]      # alpha still sampled
 
@@ -608,9 +634,9 @@ class TestNoisePSDPriors:
         start = np.array([80.0, 0.1, -1.0])
         flat = NoisePSDOof()
         tight = NoisePSDOof(P_active_mean=[np.nan, 5.0, -2.7], P_active_rms=[np.nan, 0.02, np.inf])
-        flat_fknee = np.mean([flat.sample_params(self._residual(s), start, 32.5, nu_max=10.0)[1]
+        flat_fknee = np.mean([flat.sample_params(self._residual(s), start, 32.5)[1]
                               for s in range(12)])
-        tight_fknee = np.mean([tight.sample_params(self._residual(s), start, 32.5, nu_max=10.0)[1]
+        tight_fknee = np.mean([tight.sample_params(self._residual(s), start, 32.5)[1]
                                for s in range(12)])
         assert flat_fknee == pytest.approx(0.5, rel=0.3)   # data wins under a flat prior
         assert tight_fknee > 2.0                            # a 0.02-decade prior at 5 Hz dominates
@@ -623,7 +649,7 @@ class TestNoisePSDPriors:
         """
         start = np.array([80.0, 0.1, -1.0])
         m = NoisePSDOof()
-        out = np.array([m.sample_params(self._residual(s), start, 32.5, nu_max=10.0)
+        out = np.array([m.sample_params(self._residual(s), start, 32.5)
                         for s in range(25)])
         assert out[:, 1].mean() == pytest.approx(0.5, rel=0.15)
         assert out[:, 2].mean() == pytest.approx(-1.5, rel=0.15)

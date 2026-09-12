@@ -268,7 +268,6 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
                             cg_max_iter: int, sample_params: bool, sample_sigma0: bool = True,
                             sigma0_method: str = "pairwise",
                             nomono: bool = False, onlymono: bool = False, sigma0_dec: int = 1,
-                            psd_fit_nu_min: float = 0.0, psd_fit_nu_max: float = np.inf,
                             psd_bin: bool = False, use_dct: bool = False) -> Bunch:
     """ Draw a correlated-noise realization for one detector-scan and optionally resample sigma0 and
         the noise-model parameters. The inverse correlated-noise spectrum is supplied by
@@ -298,7 +297,6 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
         onlymono: If True, model the correlated noise as only the per-scan offset, skipping the CG
             and parameter sampling (Fortran ``onlymono``). Takes precedence over ``nomono``.
         sigma0_dec: Decimation (block-average) factor for the pairwise sigma0 estimator.
-        psd_fit_nu_min, psd_fit_nu_max: Frequency range (Hz) for PSD-parameter fitting.
         psd_bin: Whether the PSD-parameter fit uses a (mode-count-weighted) binned periodogram.
         use_dct: Evaluate the mirrored Fourier filter as a length-nsamp DCT rather than a
             length-2*nsamp FFT. Mathematically identical, roughly twice as fast.
@@ -372,9 +370,7 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
         ngap = int(np.count_nonzero(~mask))
         if ngap > 0:
             residual_tod[~mask] = n_corr[~mask] + float(noise_params[0]) * np.random.randn(ngap)
-        noise_params = noise_model.sample_params(residual_tod, noise_params, fsamp,
-                                                 nu_min=psd_fit_nu_min, nu_max=psd_fit_nu_max,
-                                                 bin_psd=psd_bin)
+        noise_params = noise_model.sample_params(residual_tod, noise_params, fsamp, bin_psd=psd_bin)
     stop_bench("ncorr-psd-samp")
 
     return Bunch(n_corr=n_corr, noise_params=noise_params, residual=float(residual),
@@ -484,8 +480,6 @@ class CorrelatedNoiseConfig(StepConfig):
     sigma0_decimation: int = 1
     nomono: bool = False
     onlymono: bool = False
-    psd_fit_nu_min: float = 0.0
-    psd_fit_nu_max: float = float("inf")
     psd_bin: bool = False
     use_dct: bool = False
     cg: CGConfig = field(default_factory=CGConfig)
@@ -510,6 +504,11 @@ class CorrelatedNoiseConfig(StepConfig):
         """
         block = dict(params.tod_processing[cls.PARAMETER_NAME]
                      if cls.PARAMETER_NAME in params.tod_processing else Bunch())
+
+        # Readers apply these inputs to NoisePSD.nu_fit when constructing the model. They are
+        # accepted here, but are not stored again or passed through the realization sampler.
+        block.pop("psd_fit_nu_min", None)
+        block.pop("psd_fit_nu_max", None)
 
         # Remove ``cg`` before validating the outer fields. CGConfig reports errors against the
         # nested path, while _from_block validates the remaining correlated-noise fields.
