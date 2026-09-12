@@ -13,7 +13,7 @@
 # GIBBS
 # ----------------------------------------
 gibbs:
-  num_iterations: 10
+  num_iterations: 2
 
   seed: 1995
 
@@ -33,7 +33,7 @@ resources:
 output:
   # All output goes here, in the subdirectories logs/, chains_bands/,
   # chains_compsep/ and plots/.
-  dir: "../c4_chains/simgen_transfunc/"
+  dir: "../c4_chains/simgen_transfunc_corr/"
 
   logging:
     console:
@@ -54,12 +54,15 @@ output:
       orbital_dipole_maps: False
       corr_noise_maps: False
       sky_model_maps: True
+      residual_maps: True
 
 # ----------------------------------------
 # TOD PROCESSING
 # ----------------------------------------
-tod_processing: {}
-
+tod_processing:
+  cg_mapmaker:
+    max_iter: 60
+    err_tol: 1.0e-10
 # ----------------------------------------
 # COMPONENT SEPARATION
 # ----------------------------------------
@@ -164,16 +167,18 @@ experiments:
   SimSat:
     enabled: true
     experiment_id: "general"
-    mapmaker: "bin"
+    mapmaker: "CG"
+    num_scans: 2400
     bands:
       Band30GHz:
         enabled: true
-        num_tasks: 1
+        num_tasks: 10
         eval_nside: 64
         fwhm: 120.0
         freq: 30.0
         fsamp: 32.5
         band_unit: "uK_RJ"
+        tau_ms: 150.0
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
         filelist: "../c4_sims/simgen_transfunc/Band30GHz/filelist.txt"
@@ -185,7 +190,7 @@ experiments:
 
       Band44GHz:
         enabled: true
-        num_tasks: 1
+        num_tasks: 10
         eval_nside: 64
         fwhm: 100.0
         freq: 44.0
@@ -202,7 +207,7 @@ experiments:
 
       Band70GHz:
         enabled: true
-        num_tasks: 1
+        num_tasks: 10
         eval_nside: 64
         fwhm: 80.0
         freq: 70.0
@@ -219,7 +224,7 @@ experiments:
 
       Band100GHz:
         enabled: true
-        num_tasks: 1
+        num_tasks: 10
         eval_nside: 64
         fwhm: 65.0
         freq: 100.0
@@ -236,7 +241,7 @@ experiments:
 
       Band217GHz:
         enabled: true
-        num_tasks: 1
+        num_tasks: 10
         eval_nside: 64
         fwhm: 50.0
         freq: 217.0
@@ -253,7 +258,7 @@ experiments:
 
       Band353GHz:
         enabled: true
-        num_tasks: 1
+        num_tasks: 10
         eval_nside: 64
         fwhm: 40.0
         freq: 353.0

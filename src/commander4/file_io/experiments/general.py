@@ -22,6 +22,7 @@ from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
 from commander4.tod.noise.psd import NoisePSDOof
+from commander4.math_utils.transfer_func import _tau_sec
 from commander4.file_io.experiments.read_utils import (
     apply_noise_priors,
     find_good_fourier_size,
@@ -150,8 +151,11 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
     noise_model = NoisePSDOof()
     apply_noise_priors(noise_model, params, expname, bandname)
 
+    # Transfer function constant loaded through _tau_sec function, so that 
+    # seconds and milliseconds are both accepted.
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
+                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model, 
+                           tf_tau_sec=_tau_sec(my_band))
 
     ### Collect some info on master rank of each detector and print it ###
     local_tot_scans = scan_idx_stop - scan_idx_start
