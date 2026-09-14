@@ -130,14 +130,13 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                     init_scalars=init_scalars,
                 )
                 if (detector.tod == 0).all():
-                    logger.warning(f"Detector {detector.name} has all-zero TOD for scan {pid}. Skipping.")
+                    logger.debug(f"Detector {detector.name} has all-zero TOD for scan {pid}. Skipping.")
                     continue
                 if not np.isfinite(detector.tod).all():
-                    logger.warning(f"Detector {detector.name} has non-finite TOD for scan {pid}. Skipping.")
+                    logger.debug(f"Detector {detector.name} has non-finite TOD for scan {pid}. Skipping.")
                     continue
                 if detector.good_data_mask.mean() < 0.05:
-                    logger.warning(f" Flag: {detector.flag} ")
-                    logger.warning(f"Detector {detector.name} has less than 5% good data for scan {pid}. Skipping.")
+                    logger.debug(f"Detector {detector.name} has less than 5% good data for scan {pid}. Skipping.")
                     continue
                 detector_list.append(detector)
                 ntod_sum_original += ntod
