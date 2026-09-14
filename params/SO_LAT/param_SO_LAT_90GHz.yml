@@ -242,7 +242,6 @@ experiments:
     tod_is_compressed: true
     mapmaker: "bin"
     sparse_maps: true
-    num_scans: 233
     bad_data_bitmask: 0b11111111111111111111111111111111  # Entries in the 32-bit bitmask corresponding to bad data.
     jump_bitmask: 0b00000000000000000000000000000010
     bands:

@@ -25,6 +25,7 @@ from commander4.tod.noise.psd import NoisePSDOof
 from commander4.math_utils.transfer_func import _tau_sec
 from commander4.file_io.experiments.read_utils import (
     apply_noise_priors,
+    apply_noise_fit_range,
     find_good_fourier_size,
     read_processing_masks,
 )
@@ -150,6 +151,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
 
     noise_model = NoisePSDOof()
     apply_noise_priors(noise_model, params, expname, bandname)
+    apply_noise_fit_range(noise_model, params)
 
     # Transfer function constant loaded through _tau_sec function, so that 
     # seconds and milliseconds are both accepted.

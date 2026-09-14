@@ -27,6 +27,7 @@ from commander4.diagnostics.performance import benchmark, bench_summary, start_b
 
 from commander4.file_io.experiments.read_utils import (
     apply_noise_priors,
+    apply_noise_fit_range,
     find_good_fourier_size,
     read_processing_masks,
 )
@@ -167,6 +168,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
 
     noise_model = NoisePSDOof()
     apply_noise_priors(noise_model, params, expname, bandname)
+    apply_noise_fit_range(noise_model, params)
 
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)

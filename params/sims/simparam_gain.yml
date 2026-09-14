@@ -195,7 +195,6 @@ experiments:
     enabled: true
     experiment_id: "general"
     mapmaker: "bin"
-    num_scans: 2400
     bands:
       # `gain` and `initial_noise_params` are stated here so the chain starts away from the truth.
       # They override the values simgen wrote into each scan's `scalars` dataset, which is what

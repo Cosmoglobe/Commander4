@@ -8,10 +8,27 @@ import numpy as np
 from numpy.typing import NDArray
 import ducc0
 import os
-import healpy as hp
 from pixell.bunch import Bunch
 from pixell import coordsys
 from commander4.backend import utils as cpp_utils
+
+
+def remap_pix_nside(pix: NDArray[np.integer], nside_from: int, nside_to: int,
+                    nthreads: int | None = None) -> NDArray[np.integer]:
+    """Convert RING HEALPix pixel indices from one nside to another.
+
+    Args:
+        pix: RING pixel indices at ``nside_from``.
+        nside_from: The nside the indices are given at.
+        nside_to: The nside to convert them to.
+        nthreads: Threads to use; defaults to the OMP_NUM_THREADS environment variable.
+    """
+    if nside_from == nside_to:
+        return pix
+    nthreads = int(os.environ.get("OMP_NUM_THREADS", 1)) if nthreads is None else nthreads
+    geom_from = ducc0.healpix.Healpix_Base(nside_from, "RING")
+    geom_to = ducc0.healpix.Healpix_Base(nside_to, "RING")
+    return geom_to.ang2pix(geom_from.pix2ang(pix, nthreads=nthreads), nthreads=nthreads)
 
 
 class ScanBoresightPointing:
@@ -106,9 +123,14 @@ class ScanBoresightPointing:
     ) -> tuple[NDArray[np.integer], NDArray[np.floating]]:
         target_nside = self.nside if nside is None else nside
         dec, ra, psi = self.get_det_point(idet)
-        # healpy expects co-latitude theta rather than declination.
-        theta = np.pi/2.0 - dec
-        pix = hp.ang2pix(target_nside, theta, ra)
+        # ducc0 takes the two angles as one (n, 2) array of (co-latitude, longitude), and unlike
+        # healpy's ang2pix it threads over the samples.
+        ptg = np.empty((dec.size, 2), dtype=np.float64)
+        ptg[:, 0] = np.pi/2.0 - dec
+        ptg[:, 1] = ra
+        nthreads = int(os.environ.get("OMP_NUM_THREADS", 1))
+        geom = ducc0.healpix.Healpix_Base(target_nside, "RING")
+        pix = geom.ang2pix(ptg, nthreads=nthreads)
         psi = psi.astype(np.float32, copy=False)[:self.ntod]
         return pix, psi
 
@@ -238,13 +260,7 @@ class PixelPointing:
             pix = self.pix_encoded
 
         pix = pix[:self.ntod]
-        if target_nside != self.data_nside:
-            nthreads = int(os.environ["OMP_NUM_THREADS"])
-            geom_from = ducc0.healpix.Healpix_Base(self.data_nside, "RING")
-            geom_to = ducc0.healpix.Healpix_Base(target_nside, "RING")
-            ang = geom_from.pix2ang(pix, nthreads=nthreads)
-            pix = geom_to.ang2pix(ang, nthreads=nthreads)
-        return pix
+        return remap_pix_nside(pix, self.data_nside, target_nside)
 
     def get_psi(self, nside: int | None = None) -> NDArray[np.floating]:
         """Return polarization angles, converting compressed one-based bins to their centers."""

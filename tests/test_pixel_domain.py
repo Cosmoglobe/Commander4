@@ -143,8 +143,8 @@ def _random_scan(rng, npix_observed, ntod):
     tod = rng.normal(size=ntod)
     return pix, psi, tod
 
-@pytest.mark.parametrize("response", [None, np.array([1.0, 0.7])])
-def test_weights_iqu_sparse_matches_full(response):
+@pytest.mark.parametrize("response_I_P", [(1.0, 1.0), (1.0, 0.7)])
+def test_weights_iqu_sparse_matches_full(response_I_P):
     rng = np.random.default_rng(7)
     nside = 4
     pix, psi, _ = _random_scan(rng, npix_observed=40, ntod=500)
@@ -153,15 +153,15 @@ def test_weights_iqu_sparse_matches_full(response):
     full = WeightsMapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
     sparse = WeightsMapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64,
                                pixel_domain=_sparse_domain(MPI.COMM_SELF, nside, local_pix))
-    full.accumulate_to_map(2.5, pix, psi, response=response)
-    sparse.accumulate_to_map(2.5, pix, psi, response=response)
+    full.accumulate_to_map(2.5, pix, psi, response_I_P=response_I_P)
+    sparse.accumulate_to_map(2.5, pix, psi, response_I_P=response_I_P)
     full.gather_map()
     sparse.gather_map()
     assert_allclose(sparse._gathered_map, full._gathered_map, rtol=1e-12, atol=1e-12)
 
 
-@pytest.mark.parametrize("response", [None, np.array([1.0, 0.7])])
-def test_signal_iqu_sparse_matches_full(response):
+@pytest.mark.parametrize("response_I_P", [(1.0, 1.0), (1.0, 0.7)])
+def test_signal_iqu_sparse_matches_full(response_I_P):
     rng = np.random.default_rng(11)
     nside = 4
     pix, psi, tod = _random_scan(rng, npix_observed=40, ntod=500)
@@ -170,8 +170,8 @@ def test_signal_iqu_sparse_matches_full(response):
     full = MapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
     sparse = MapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64,
                         pixel_domain=_sparse_domain(MPI.COMM_SELF, nside, local_pix))
-    full.accumulate_to_map(tod, 2.5, pix, psi, response=response)
-    sparse.accumulate_to_map(tod, 2.5, pix, psi, response=response)
+    full.accumulate_to_map(tod, 2.5, pix, psi, response_I_P=response_I_P)
+    sparse.accumulate_to_map(tod, 2.5, pix, psi, response_I_P=response_I_P)
     full.gather_map()
     sparse.gather_map()
     assert_allclose(sparse._gathered_map, full._gathered_map, rtol=1e-12, atol=1e-12)

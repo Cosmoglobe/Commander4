@@ -16,6 +16,7 @@ from commander4.tod.noise.psd import NoisePSD, NoisePSDOof
 from commander4.data_models.pointing import PixelPointing
 from commander4.file_io.experiments.read_utils import (
     apply_noise_priors,
+    apply_noise_fit_range,
     find_good_fourier_size,
     read_processing_masks,
 )
@@ -24,6 +25,14 @@ from commander4.diagnostics.performance import benchmark, bench_summary, start_b
 
 logger = logging.getLogger(__name__)
 
+# HFI's spider-web bolometers (SWBs) are unpolarized by design, but the RIMO still quotes the few
+# percent of residual polarization leakage measured for them. Treating that as a real polarization
+# response would give an intensity-only detector a spurious Q/U response at an ill-defined angle, so
+# anything below this fraction is set to exactly zero, which puts the detector on the intensity-only
+# path through the sky projection and both mapmakers. The RIMO leaves a wide gap between the two
+# detector types (SWBs 1.7-8.6%, polarization-sensitive bolometers 83-96%), so the exact cut is free.
+UNPOLARIZED_POLEFF_CUTOFF = 0.2
+
 
 def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                all_det_names: list[str],
@@ -31,9 +40,12 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                scan_idx_stop: int) -> DetectorGroupTOD:
     """Read this rank's scans for one Planck HFI band from its HDF5 scan files.
 
-    The band's ``filelist`` names one file per pointing period (PID). Scans listed in
-    ``bad_PIDs_path`` are skipped, and each kept scan is trimmed to a length with a cheap FFT
-    (`find_good_fourier_size`).
+    The band's ``filelist`` maps each pointing period (PID) to its HDF5 file. Eacg scan is trimmed
+    to a length with a cheap FFT (`find_good_fourier_size`). The experiment's required
+    ``instrument_file`` supplies each detector's ``polEff`` in percent, read once per band and
+    converted to the dimensionless polarization response in ``response_I_P = (1.0, polEff / 100)``.
+    A detector whose efficiency falls below ``UNPOLARIZED_POLEFF_CUTOFF`` is an unpolarized
+    bolometer and gets a response of exactly zero, making it intensity-only everywhere downstream.
 
     Args:
         band_comm: The band's MPI communicator.
@@ -61,6 +73,22 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
             filepaths.append(filename[1:-1])
             oids.append(filename.split(".")[0].split("_")[-1])
 
+    ndet = len(all_det_names)
+    instrument_filepath = my_experiment.instrument_file
+    pol_eff = np.empty(ndet, dtype=np.float64)
+    if band_comm.Get_rank() == 0:
+        with h5py.File(instrument_filepath, "r") as instrument:
+            for idet, det_name in enumerate(all_det_names):
+                # HFI instrument files store polEff as a percentage; mapmaking needs a fraction.
+                pol_eff[idet] = float(instrument[f"{det_name}/polEff"][()].item()) / 100.0
+        unpolarized = pol_eff < UNPOLARIZED_POLEFF_CUTOFF
+        if unpolarized.any():
+            names = ", ".join(name for name, cut in zip(all_det_names, unpolarized) if cut)
+            logger.info(f"Band {bandname}: {names} have polEff below "
+                        f"{100*UNPOLARIZED_POLEFF_CUTOFF:.0f}% and are treated as intensity-only.")
+            pol_eff[unpolarized] = 0.0
+    band_comm.Bcast(pol_eff, root=0)
+
     default_mask, specific_masks = read_processing_masks(band_comm, my_band)
 
     if "bad_PIDs_path" in my_experiment:
@@ -68,13 +96,21 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
     else:
         bad_PIDs = np.array([])
 
+    # HFI flag bits, as packed by todscripts/hfi/hfitohdf5.py: bit 0 marks the filler samples
+    # between the two chunks each scan spans, bit 1 the DPC glitch flag (populated at 100 and 143
+    # GHz only), bit 9 the NPIPE per-detector glitch flag (populated in every band). Bit 8 labels a
+    # whole chunk rather than individual samples and must never be treated as bad data.
+    if "bad_data_bitmask" in my_experiment:
+        bad_data_bitmask = my_experiment.bad_data_bitmask
+    else:
+        bad_data_bitmask = 515
+
 
     scan_list = []
     nscans = scan_idx_stop - scan_idx_start
     num_included = 0
     ntod_sum_original = 0
     ntod_sum_final = 0
-    ndet = len(all_det_names)
     det_init_scalars = np.zeros((ndet, 4)) + np.nan
     # Small de-sycnronization sleep.
     # time.sleep(5.0 * (band_comm.Get_rank() / band_comm.Get_size()))
@@ -143,9 +179,10 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                     flag_encoded=flag_encoded,
                     huffman_tree2=huffman_tree2,
                     huffman_symbols2=huffman_symbols2,
-                    bad_data_bitmask=6111232,
+                    bad_data_bitmask=bad_data_bitmask,
                     init_scalars=init_scalars,
                     tod_is_compressed=True,
+                    response_I_P=(1.0, pol_eff[idet]),
                 )
                 if (detector.tod == 0).all():
                     continue
@@ -164,7 +201,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
             scan = ScanTOD(detector_list, 0., scanID)
             scan_list.append(scan)
             num_included += 1
-        if band_comm.Get_rank() == 0 and (i_pid-scan_idx_start) % (nscans // 5) == 0:
+        if band_comm.Get_rank() == 0 and (i_pid-scan_idx_start) % max(1, nscans // 5) == 0:
             logger.debug(f"Reading scans from disk, progress on master rank of band {bandname}: "\
                          f"{i_pid-scan_idx_start}/{nscans}")
         if i_pid % 10 == 0:
@@ -176,6 +213,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                               P_uni = [[np.nan, np.nan], [0.01, 0.5], [-2.5, -0.25]],
                               nu_fit = [[np.nan, np.nan], [0, 3.0], [0, 3.0]])
     apply_noise_priors(noise_model, params, expname, bandname)
+    apply_noise_fit_range(noise_model, params)
     # Hacky fixe to no scans on this rank. #TODO: Need to figure out how to handle this.
     try:
         fsamp
@@ -184,7 +222,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
     
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model,
-                           hfi_demodulation=True)
+                           instrument_filepath=instrument_filepath, hfi_demodulation=True)
 
     # TODO: Re-implement bandpass shift.
     # if "bandpass_shift" in my_det:

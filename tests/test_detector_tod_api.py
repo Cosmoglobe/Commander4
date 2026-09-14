@@ -8,7 +8,7 @@ import pytest
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.pointing import PixelPointing
 from commander4.compression import huffman
-from commander4.tod.sky_projection import get_s_orb_tod, get_static_sky_tod
+from commander4.tod.sky_projection import get_s_orb_tod, project_sky_to_tod
 
 
 def _pointing(ntod_original: int = 8, ntod: int = 6) -> PixelPointing:
@@ -23,7 +23,7 @@ def _pointing(ntod_original: int = 8, ntod: int = 6) -> PixelPointing:
 def _detector(
     pointing: PixelPointing,
     orbital_velocity_m_per_s: np.ndarray | None = None,
-    det_response: np.ndarray | None = None,
+    response_I_P: tuple[float, float] | np.ndarray | None = None,
 ) -> DetectorTOD:
     return DetectorTOD(
         name="detector",
@@ -39,7 +39,7 @@ def _detector(
         flag_encoded=np.zeros(pointing.ntod_original, dtype=np.int64),
         bad_data_bitmask=1,
         flag_is_compressed=False,
-        det_response=det_response,
+        response_I_P=response_I_P,
     )
 
 
@@ -50,6 +50,17 @@ def test_lengths_are_derived_from_pointing() -> None:
     assert detector.ntod == 6
     assert detector.tod.shape == (6,)
     assert detector.flag.shape == (6,)
+
+
+@pytest.mark.parametrize("response", [None, (1.0, 0.947), np.array([0.25, 0.0])])
+def test_constructor_stores_intensity_and_polarization_response(
+    response: tuple[float, float] | np.ndarray | None,
+) -> None:
+    detector = _detector(_pointing(), response_I_P=response)
+
+    expected = (1.0, 1.0) if response is None else tuple(response)
+    assert detector.response_I_P == expected
+    assert isinstance(detector.response_I_P, tuple)
 
 
 def test_compressed_psi_bins_decode_to_bin_centers() -> None:
@@ -96,26 +107,26 @@ def test_static_sky_projection_skips_inactive_response_components() -> None:
 
     intensity_sky = sky.copy()
     intensity_sky[1:3] = np.nan
-    intensity = get_static_sky_tod(
-        intensity_sky, pixels, psi, response=np.array([1.0, 0.0]),
+    intensity = project_sky_to_tod(
+        intensity_sky, pixels, psi, response_I_P=(1.0, 0.0),
     )
     np.testing.assert_allclose(intensity, sky[0, pixels])
 
     polarization_sky = sky.copy()
     polarization_sky[0] = np.nan
-    polarization = get_static_sky_tod(
-        polarization_sky, pixels, psi, response=np.array([0.0, 1.0]),
+    polarization = project_sky_to_tod(
+        polarization_sky, pixels, psi, response_I_P=(0.0, 1.0),
     )
     expected_polarization = sky[1, pixels] * cos_2psi + sky[2, pixels] * sin_2psi
     np.testing.assert_allclose(polarization, expected_polarization, rtol=1e-6)
 
-    zero = get_static_sky_tod(
-        np.full_like(sky, np.nan), pixels, psi, response=np.array([0.0, 0.0]),
+    zero = project_sky_to_tod(
+        np.full_like(sky, np.nan), pixels, psi, response_I_P=(0.0, 0.0),
     )
     np.testing.assert_array_equal(zero, 0.0)
 
     general_response = np.array([0.25, 0.75])
-    general = get_static_sky_tod(sky, pixels, psi, response=general_response)
+    general = project_sky_to_tod(sky, pixels, psi, response_I_P=general_response)
     expected_general = (general_response[0] * sky[0, pixels]
                         + general_response[1] * expected_polarization)
     np.testing.assert_allclose(general, expected_general, rtol=1e-6)

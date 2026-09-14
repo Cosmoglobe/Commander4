@@ -127,7 +127,8 @@ class DetectorMap:
     @property
     def map_rms(self):
         """RMS noise map, computed as ``1 / sqrt(inv_n_map)``."""
-        return 1./np.sqrt(self.inv_n_map)
+        with np.errstate(divide="ignore"):
+            return 1./np.sqrt(self.inv_n_map)
 
     @property
     def fwhm_rad(self):

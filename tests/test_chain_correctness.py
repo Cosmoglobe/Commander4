@@ -4,6 +4,7 @@ import os
 
 import h5py
 import numpy as np
+import pytest
 from pixell.bunch import Bunch
 
 from commander4.data_models.tod_samples import TODSamples
@@ -71,6 +72,7 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2) -> TODSamples:
                  "tod_ps_residual"):
         setattr(s, name, np.zeros((nscans, ndet, TODSamples.TOD_PS_NBIN), dtype=np.float32))
     s.ncorr_tods = None
+    s.residual_tods = None
     s.jumps = JumpCatalog.empty(nscans, ndet)
     return s
 
@@ -101,6 +103,77 @@ def test_hfi_chain_carries_modulation_phase_and_baselines() -> None:
 
     np.testing.assert_array_equal(written["modulation_phase"], samples.modulation_phase)
     np.testing.assert_array_equal(written["baselines"], samples.baselines)
+
+
+@pytest.mark.parametrize("save_residual", [False, True])
+@pytest.mark.parametrize("save_ncorr", [False, True])
+def test_full_tods_round_trip_independently(tmp_path, save_residual: bool,
+                                          save_ncorr: bool) -> None:
+    """Different-length streams remain associated with their scan IDs and detector names."""
+    samples = _minimal_tod_samples()
+    samples.params = _params(str(tmp_path))
+    paths.create_output_dirs(samples.params.output)
+    samples.scan_ids = np.array([11, 3, 29], dtype=np.int64)
+    samples.det_names = ["100-1a", "100-1b"]
+    streams = [[np.array([1.0, 2.0], dtype=np.float32), None],
+               [None, np.array([3.0], dtype=np.float32)],
+               [np.array([4.0, 5.0, 6.0], dtype=np.float32), np.array([7.0], dtype=np.float32)]]
+    if save_residual:
+        samples.residual_tods = streams
+    if save_ncorr:
+        samples.ncorr_tods = streams
+
+    path = _write_band(samples.params, samples.gather_chain_arrays(1))
+
+    with h5py.File(path) as handle:
+        assert ("tods" in handle) == (save_residual or save_ncorr)
+        for name, enabled in (("residual", save_residual), ("ncorr", save_ncorr)):
+            assert f"{name}_tod_lengths" not in handle
+            assert f"{name}_tod_flat" not in handle
+            for iscan, scan_id in enumerate(samples.scan_ids):
+                for idet, detector in enumerate(samples.det_names):
+                    dataset = f"tods/{scan_id}/{detector}/{name}"
+                    expected = streams[iscan][idet]
+                    assert (dataset in handle) == (enabled and expected is not None)
+                    if enabled and expected is not None:
+                        np.testing.assert_array_equal(handle[dataset][:], expected)
+                        assert handle[dataset].dtype == np.float32
+
+
+@pytest.mark.parametrize("nscans", [0, 3])
+def test_residual_output_without_evaluated_scans(nscans: int) -> None:
+    samples = _minimal_tod_samples(nscans=nscans)
+    samples.residual_tods = []
+    for _ in range(nscans):
+        samples.residual_tods.append([None] * samples.ndet)
+    arrays = samples.gather_chain_arrays(1)
+    for key in arrays:
+        assert not key.startswith("tods/")
+
+
+def test_full_tod_gather_preserves_scan_ids_across_ranks() -> None:
+    """Also run under mpirun to cover uneven scan counts and a rank with no scans."""
+    from mpi4py import MPI
+
+    comm = MPI.COMM_WORLD
+    samples = _minimal_tod_samples(nscans=comm.rank)
+    samples.band_comm = comm
+    samples.scan_ids += 100 * comm.rank
+    samples.residual_tods = []
+    for scan_id in samples.scan_ids:
+        samples.residual_tods.append([np.full(comm.rank + 1, scan_id, dtype=np.float32), None])
+
+    arrays = samples.gather_chain_arrays(1)
+
+    if comm.rank != 0:
+        assert arrays is None
+        return
+    for rank in range(comm.size):
+        for iscan in range(rank):
+            scan_id = 100 * rank + iscan
+            np.testing.assert_array_equal(arrays[f"tods/{scan_id}/d0/residual"],
+                                          np.full(rank + 1, scan_id, dtype=np.float32))
+            assert f"tods/{scan_id}/d1/residual" not in arrays
 
 
 def test_disabled_tod_chain_returns_before_collective_gathers() -> None:

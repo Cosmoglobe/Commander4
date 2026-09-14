@@ -21,7 +21,7 @@ from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
-from commander4.tod.sky_projection import get_static_sky_tod
+from commander4.tod.sky_projection import project_sky_to_tod
 from simgen.config import bget, load_params
 from simgen.diagnostics import hit_map, noise_map_rhs, white_noise_normal_matrix, write_band_diagnostics
 from simgen.instrument import Band, build_bands
@@ -69,7 +69,7 @@ def _det_signal(band: Band, chunk, det, skymap: NDArray,
     """Sky signal (+ orbital dipole) plus the pixel and psi arrays for one detector's pointing."""
     pix_data, pix_eval = _eval_and_data_pix(chunk.theta, chunk.phi, band.data_nside, band.eval_nside)
     psi = chunk.psi + det.psi_offset
-    signal = get_static_sky_tod(skymap, pix_eval, psi)
+    signal = project_sky_to_tod(skymap, pix_eval, psi)
     if include_orbdip and np.any(chunk.vsun != 0.0):
         signal = signal + compute_orbital_dipole(chunk.vsun, pix_eval, band.eval_nside,
                                                  band.freq, band.units)
@@ -100,7 +100,7 @@ def _simulate_scan(band: Band, strategy, sample_offset: int, skymap: NDArray, nt
             shared_orbdip, pix_data, shared_pix_eval = shared
             psi = bore.psi + det.psi_offset
             # Shared boresight: same pixels for every detector, signal differs only via psi.
-            signal = get_static_sky_tod(skymap, shared_pix_eval, psi)
+            signal = project_sky_to_tod(skymap, shared_pix_eval, psi)
             if shared_orbdip is not None:  # add the (shared) orbital dipole, computed once
                 signal = signal + shared_orbdip
         rng = np.random.default_rng([seed, band_idx, scan_idx, det.idx])

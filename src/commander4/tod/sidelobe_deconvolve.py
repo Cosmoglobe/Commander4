@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
-from typing import ClassVar, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import h5py
 import healpy as hp
@@ -13,12 +12,11 @@ import numpy as np
 from ducc0 import totalconvolve
 from mpi4py import MPI
 from numpy.typing import NDArray
-from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.math_utils.alm import alm_real2complex_commander3
 from commander4.mpi.shared_memory import SharedArray
-from commander4.tod.step_config import StepConfig
+from commander4.tod.config import FarBeamConfig
 
 
 if TYPE_CHECKING:
@@ -29,55 +27,13 @@ logger = logging.getLogger(__name__)
 _BEAM_COMPONENTS = ("T", "E", "B")
 
 
-@dataclass(frozen=True)
-class FarBeamConfig(StepConfig):
-    """Validated far-sidelobe deconvolution settings.
-
-    The defaults reproduce Commander3: it truncates both the sky and the beam at l = m = 100
-    before convolving, and scales the finished sidelobe TOD by two "by comparison with LevelS"
-    (comm_tod_driver_mod.f90:233).
-    """
-
-    PARAMETER_NAME: ClassVar[str] = "far_beam_deconvolution"
-
-    lmax: int = 100
-    mmax: int = 100
-    epsilon: float = 1.0e-4
-    beam_norm: float = 2.0
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        for name in ("lmax", "mmax"):
-            value = getattr(self, name)
-            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                raise ValueError(f"{self.PARAMETER_NAME}.{name} must be a non-negative integer.")
-        if self.mmax > self.lmax:
-            raise ValueError(f"{self.PARAMETER_NAME}.mmax ({self.mmax}) cannot exceed lmax "
-                             f"({self.lmax}); m is bounded by l.")
-        # ducc0 rejects an accuracy outside this range, and both ends are far past anything useful.
-        if not 1e-12 < self.epsilon < 1.0:
-            raise ValueError(f"{self.PARAMETER_NAME}.epsilon must lie between 1e-12 and 1.")
-        if not np.isfinite(self.beam_norm):
-            raise ValueError(f"{self.PARAMETER_NAME}.beam_norm must be a finite number.")
-
-    @classmethod
-    def from_params(cls, params: Bunch, experiment_data: DetectorGroupTOD) -> FarBeamConfig:
-        """Build the far-beam settings from their step block.
-
-        An absent block is valid and gives the disabled defaults.
-        """
-        block = (params.tod_processing[cls.PARAMETER_NAME]
-                 if cls.PARAMETER_NAME in params.tod_processing else Bunch())
-        return cls._from_block(f"tod_processing.{cls.PARAMETER_NAME}", block)
-
-
 class FarBeamProjector:
     """Precompute one polarized sidelobe-convolution cube per detector and project it to TOD."""
 
     def __init__(self, band_comm: MPI.Comm, node_comm: MPI.Comm,
                  experiment_data: DetectorGroupTOD, tod_samples: TODSamples,
-                 compsep_output: NDArray, config: FarBeamConfig):
-        self.config = config
+                 compsep_output: NDArray, far_beam_deconvolution_cfg: FarBeamConfig):
+        self.far_beam_deconvolution_cfg = far_beam_deconvolution_cfg
         self.nside = experiment_data.nside
         self.nthreads = int(os.environ.get("OMP_NUM_THREADS", "1"))
         self.instrument_file = experiment_data.instrument_filepath
@@ -101,8 +57,8 @@ class FarBeamProjector:
             file_lmax = int(f[f"{self.detnames[0]}/sllmax"][0])
             file_mmax = int(f[f"{self.detnames[0]}/slmmax"][0])
             # Truncate to the configured limits without exceeding what the file contains.
-            lmax = min(self.config.lmax, file_lmax)
-            mmax = min(self.config.mmax, file_mmax, lmax)
+            lmax = min(self.far_beam_deconvolution_cfg.lmax, file_lmax)
+            mmax = min(self.far_beam_deconvolution_cfg.mmax, file_mmax, lmax)
             blms = []
             for detname in self.detnames:
                 det_lmax = int(f[f"{detname}/sllmax"][0])
@@ -120,7 +76,7 @@ class FarBeamProjector:
                 blm = alm_real2complex_commander3(beam_real, lmax, mmax)
                 # The convolution is linear, so scaling the beam once is equivalent to scaling
                 # every projected TOD, and far cheaper.
-                blms.append(self.config.beam_norm * blm)
+                blms.append(self.far_beam_deconvolution_cfg.beam_norm * blm)
 
         # With sparse maps, only rank zero has a complete sky. Transform there, then give every rank
         # the small alm array needed to build its local detector cubes. iter=0 matches Commander3's
@@ -131,7 +87,8 @@ class FarBeamProjector:
                if band_comm.Get_rank() == 0 else None)
         slm = band_comm.bcast(slm, root=0)
 
-        self.plan = totalconvolve.ConvolverPlan(lmax=lmax, kmax=mmax, epsilon=self.config.epsilon,
+        self.plan = totalconvolve.ConvolverPlan(lmax=lmax, kmax=mmax,
+                                                epsilon=self.far_beam_deconvolution_cfg.epsilon,
                                                 nthreads=self.nthreads)
         # ducc0 decides a cube shape based on stuff like lmax, mmax, epsilon.
         cube_shape = (self.plan.Npsi(), self.plan.Ntheta(), self.plan.Nphi())

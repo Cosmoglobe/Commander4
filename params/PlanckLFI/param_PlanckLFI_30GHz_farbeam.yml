@@ -214,7 +214,6 @@ experiments:
     enabled: true
     mapmaker: "bin"
     experiment_id: "planck_lfi"  # Decides expected data format, what TOD reader is used, etc.
-    num_scans: 45860
     instrument_file: "/mn/stornext/d16/cmbco/AST9240/2022/data/LFI_instrument_v8.h5"
     bands:
       Planck30GHz:
