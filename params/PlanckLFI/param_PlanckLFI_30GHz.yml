@@ -237,7 +237,6 @@ experiments:
     enabled: true
     mapmaker: "bin"
     experiment_id: "planck_lfi"  # Decides expected data format, what TOD reader is used, etc.
-    num_scans: 45860
     bands:
       Planck30GHz:
         enabled: true

@@ -57,7 +57,6 @@ output:
 # TOD PROCESSING
 # ----------------------------------------
 tod_processing: {}
-
 # ----------------------------------------
 # COMPONENT SEPARATION
 # ----------------------------------------
@@ -163,7 +162,6 @@ experiments:
     enabled: true
     experiment_id: "general"
     mapmaker: "bin"
-    num_scans: 2400
     bands:
       Band30GHz:
         enabled: true

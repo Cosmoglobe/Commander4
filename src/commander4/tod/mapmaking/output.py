@@ -10,24 +10,26 @@ from numpy.typing import NDArray
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.tod_samples import TODSamples
-from commander4.tod.mapmaking.config import MapmakingConfig
+from commander4.tod.config import MapmakingConfig
 
 
 def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
-                       experiment_data: DetectorGroupTOD, mapmaking: MapmakingConfig,
+                       experiment_data: DetectorGroupTOD, mapmaking_cfg: MapmakingConfig,
                        tod_samples: TODSamples, compsep_output: NDArray | None,
                        map_orbdipole: NDArray | None = None,
                        map_corrnoise: NDArray | None = None,
+                       map_sidelobe: NDArray | None = None,
                        map_residual: NDArray | None = None,
                        map_nhit: NDArray | None = None,
                        map_cov: NDArray | None = None) -> tuple[dict, dict]:
     """Split the solved band maps into `DetectorMap`s, and collect what goes to the chain file.
 
     Args:
-        map_signal: Solved sky map, shape (3, npix), rows I, Q, U.
+        map_signal: Solved sky map, shape (3, npix), rows I, Q, U; a scalar I map may be 1-D.
         map_rms: Per-pixel white-noise rms, same shape.
         pols: Which polarizations this band carries, e.g. "I", "QU" or "IQU".
         compsep_output: The current sky model for this band, written as `skymodel`.
+        map_sidelobe: Binned far-sidelobe pickup, in uK_RJ. Commander3's `tod_<freq>_sl` map.
         map_residual: Binned noise residual (data minus sky model, orbital dipole and correlated
             noise), in uK_RJ. Commander3's `tod_<freq>_res` map.
         map_nhit: Per-pixel count of accumulated good samples, shape (npix,).
@@ -41,13 +43,32 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
         `mapmaking.common_res_fwhm` is set, `observed_sky` and `rms` are the smoothed maps that
         compsep actually used, and `map_fwhm_arcmin` records the beam they are at.
     """
+    # Keep scalar accumulation buffers small until output. The chain format uses I,Q,U rows and
+    # six covariance rows even for I-only bands; absent polarization has zero signal and no weight.
+    if pols == "I" and map_signal.ndim == 1:
+        expanded_maps: list[NDArray | None] = []
+        for values, fill in ((map_signal, 0.0), (map_rms, np.inf), (map_orbdipole, 0.0),
+                              (map_corrnoise, 0.0), (map_sidelobe, 0.0), (map_residual, 0.0)):
+            if values is None:
+                expanded_maps.append(None)
+                continue
+            expanded = np.full((3, values.size), fill, dtype=values.dtype)
+            expanded[0] = values
+            expanded_maps.append(expanded)
+        (map_signal, map_rms, map_orbdipole, map_corrnoise,
+         map_sidelobe, map_residual) = expanded_maps
+        if mapmaking_cfg.include_cov_maps and map_cov is not None:
+            expanded_cov = np.zeros((6, map_cov.size), dtype=map_cov.dtype)
+            expanded_cov[0] = map_cov
+            map_cov = expanded_cov
+
     detmap_dict_out = {}
     # Degrading to a common analysis resolution happens after mapmaking; 0 leaves the native beam.
-    common_res_fwhm = mapmaking.common_res_fwhm
+    common_res_fwhm = mapmaking_cfg.common_res_fwhm
     if "I" in pols:
         detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
                                experiment_data.fwhm, experiment_data.nside,
-                               lmax=mapmaking.band_lmax)
+                               lmax=mapmaking_cfg.band_lmax)
         detmap_I.g0 = tod_samples.abs_gain
         if common_res_fwhm:
             detmap_I.smooth_to_resolution(common_res_fwhm)
@@ -55,7 +76,7 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
     if "QU" in pols:
         detmap_QU = DetectorMap(map_signal[1:3,:], map_rms[1:3,:], experiment_data.nu,
                                 experiment_data.fwhm, experiment_data.nside,
-                                lmax=mapmaking.band_lmax)
+                                lmax=mapmaking_cfg.band_lmax)
         detmap_QU.g0 = tod_samples.abs_gain
         if common_res_fwhm:
             detmap_QU.smooth_to_resolution(common_res_fwhm)
@@ -66,7 +87,7 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
         # Reuse the smoothing compsep already paid for rather than repeating it, filling the
         # (3, npix) layout back in so the written datasets keep their shape.
         sky_out = np.zeros_like(map_signal)
-        rms_out = np.zeros_like(map_rms)
+        rms_out = np.full_like(map_rms, np.inf) if pols == "I" else np.zeros_like(map_rms)
         if "I" in pols:
             sky_out[0,:] = detmap_dict_out["I"].map_sky[0]
             rms_out[0,:] = detmap_dict_out["I"].map_rms[0]
@@ -84,11 +105,12 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
     # when the two above are smoothed. The mapmaker only builds one the run asked for, so being
     # present is the whole gate; the two below come from elsewhere and are gated here instead.
     for name, aux_map in (("orbdipole", map_orbdipole), ("corrnoise", map_corrnoise),
-                          ("res", map_residual), ("nhit", map_nhit)):
+                          ("sidelobe", map_sidelobe), ("res", map_residual),
+                          ("nhit", map_nhit)):
         if aux_map is not None:
             maps_to_file[name] = aux_map
-    if mapmaking.include_sky_model_maps:
+    if mapmaking_cfg.include_sky_model_maps:
         maps_to_file["skymodel"] = compsep_output
-    if mapmaking.include_cov_maps:
+    if mapmaking_cfg.include_cov_maps:
         maps_to_file["cov"] = map_cov
     return detmap_dict_out, maps_to_file

@@ -24,7 +24,7 @@ def test_end_to_end_transfer_function(tmp_path, compress):
     import h5py
     import yaml
     from simgen import pipeline
-    from simgen.transfer import SinglePole
+    from commander4.math_utils.transfer_func import SinglePole
     from commander4.backend import utils as cpp_utils
 
     tau_ms, fsamp, nside = 15.0, 12.0, 16

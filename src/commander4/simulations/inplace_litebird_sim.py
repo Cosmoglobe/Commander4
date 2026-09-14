@@ -24,6 +24,7 @@ from commander4.sky.diffuse_components import ThermalDust, Synchrotron, FreeFree
         SpinningDust
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset
+from commander4.tod.sky_projection import project_sky_to_tod
 
 
 def _scalar_nu_ref(comp_params):
@@ -178,6 +179,10 @@ def get_orbital_dipole(det: DetectorTOD, pix: NDArray[np.integer], freq: float, 
     orb_vel_vec = det.orbital_velocity_m_per_s
     if orb_vel_vec is None:
         raise ValueError("Read-time orbital-dipole simulation requires an orbital velocity.")
+    # The orbital dipole is unpolarized, so only the intensity response of the detector matters.
+    resp_I, _ = det.response_I_P
+    if resp_I == 0.0:
+        return np.zeros(pix.shape, dtype=np.float32)
     # pointing_vec = hp.pix2vec(det.nside, pix)
     geom = ducc0.healpix.Healpix_Base(det.nside, "RING")
     pointing_vec = geom.pix2vec(pix)
@@ -194,7 +199,7 @@ def get_orbital_dipole(det: DetectorTOD, pix: NDArray[np.integer], freq: float, 
     # Find the conversion factor from K_CMB to the units expected by the code (typically uK_RJ).
     KCMB_to_uKRJ = (1.0 * u.K_CMB).to(units, equivalencies=u.cmb_equivalencies(freq * u.GHz)).value
 
-    return orbital_dipole_amplitude * KCMB_to_uKRJ
+    return orbital_dipole_amplitude * KCMB_to_uKRJ * resp_I
 
 
 
@@ -235,14 +240,12 @@ def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetectorGroupTOD, b
     band_comm.Bcast(comps_sum_smoothed, root=0)
     stop_bench("bcast")
 
-    I, Q, U = comps_sum_smoothed
     for scan in detector_data.scans:
         for det in scan.detectors:
             start_bench("orbdip")
             pix, psi = det.get_pix_psi()
             ntod = det.tod.size
-            det.tod[:] = np.zeros(ntod, dtype=np.float32)
-            det.tod[:] = I[pix] + Q[pix]*np.cos(2*psi) + U[pix]*np.sin(2*psi)
+            det.tod[:] = project_sky_to_tod(comps_sum_smoothed, pix, psi, det.response_I_P)
             if sim_params.include_OrbitalDipole:
                 det.tod[:] += get_orbital_dipole(det, pix, freq, units)
             stop_bench("orbdip")

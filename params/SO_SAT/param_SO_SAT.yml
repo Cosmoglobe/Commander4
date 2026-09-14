@@ -138,6 +138,8 @@ compsep:
       preconditioner: JointPreconditioner #NoiseOnlyPreconditioner #FullPreconditioner #MixingMatrixPreconditioner #BeamOnlyPreconditioner #
       dense_matrix_debug_mode: false  # Solve system first with dense matrix math, for debugging CG. Very slow for nside>32.
 
+  mcmc_sampling_groups: {}
+
   bands:
     ### TOD BANDS ###
     SO_SAT_ws0_f090:
@@ -340,7 +342,6 @@ experiments:
     bands:
       SO_SAT_ws0_f090:
         enabled: true
-        num_scans: 120          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
@@ -356,7 +357,6 @@ experiments:
 
       SO_SAT_ws0_f150:
         enabled: true
-        num_scans: 112          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
@@ -372,7 +372,6 @@ experiments:
 
       SO_SAT_ws1_f090:
         enabled: true
-        num_scans: 56          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
@@ -388,7 +387,6 @@ experiments:
 
       SO_SAT_ws1_f150:
         enabled: true
-        num_scans: 51          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
@@ -404,7 +402,6 @@ experiments:
 
       SO_SAT_ws2_f090:
         enabled: true
-        num_scans: 80          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
@@ -420,7 +417,6 @@ experiments:
 
       SO_SAT_ws2_f150:
         enabled: true
-        num_scans: 76          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
@@ -436,7 +432,6 @@ experiments:
 
       SO_SAT_ws3_f090:
         enabled: true
-        num_scans: 111          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
@@ -452,7 +447,6 @@ experiments:
 
       SO_SAT_ws3_f150:
         enabled: true
-        num_scans: 98          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
@@ -468,7 +462,6 @@ experiments:
 
       SO_SAT_ws4_f090:
         enabled: true
-        num_scans: 104          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
@@ -484,7 +477,6 @@ experiments:
 
       SO_SAT_ws4_f150:
         enabled: true
-        num_scans: 101          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
@@ -500,7 +492,6 @@ experiments:
 
       SO_SAT_ws5_f090:
         enabled: true
-        num_scans: 118          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
@@ -516,7 +507,6 @@ experiments:
 
       SO_SAT_ws5_f150:
         enabled: true
-        num_scans: 114          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
@@ -532,7 +522,6 @@ experiments:
 
       SO_SAT_ws6_f090:
         enabled: true
-        num_scans: 112          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
@@ -548,7 +537,6 @@ experiments:
 
       SO_SAT_ws6_f150:
         enabled: true
-        num_scans: 104          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]

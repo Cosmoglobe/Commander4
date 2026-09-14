@@ -214,7 +214,7 @@ def init_loggers(logger_params, log_file_path: str | None = None,
     # directly to the constructor, but logging.Formatter.__init__ uses 'fmt' not
     # 'format', so the factory path silently falls back to an unconfigured
     # formatter; setting the formatters here avoids that problem entirely.
-    _fmt = ('{asctime} - rank {world_rank:>3} - {name} - {levelname} - '
+    _fmt = ('{asctime} - rank {world_rank:>4} - {name} - {levelname} - '
             '{message}')
     _datefmt = '%H:%M:%S'
     rank_filter = WorldRankFilter(world_rank)

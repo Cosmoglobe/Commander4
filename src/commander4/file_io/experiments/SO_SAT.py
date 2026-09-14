@@ -20,6 +20,7 @@ from commander4.diagnostics.performance import benchmark, bench_summary, start_b
 from commander4.data_models.pointing import DetectorBoresightPointing, ScanBoresightPointing
 from commander4.file_io.experiments.read_utils import (
     apply_noise_priors,
+    apply_noise_fit_range,
     find_good_fourier_size,
     read_processing_masks,
 )
@@ -106,7 +107,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
                 huffman_tree2 = None
                 huffman_symbols2 = None
             fsamp = float(f["/common/fsamp/"][()].item())
-            det_responses = f["/common/resp/"][()]
+            file_responses = f["/common/resp/"][()]
 
             # The detector names are stored as a single "Bytes-like" string, formatted like a
             # Python list. We extract the string from the Bytes, and then re-create the list with .split(",").
@@ -138,7 +139,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
                     tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32)
 
                 pointing = DetectorBoresightPointing(scan_pointing, det_file_idx)
-                det_response = det_responses[det_file_idx]
+                response_I_P = file_responses[det_file_idx]
 
                 flag_encoded = f[f"/{pid}/{det_name}/flag/"][()]
                 # gain_init, sigma0_init, fknee_init, alpha_init:
@@ -161,7 +162,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
                     bad_data_bitmask=my_experiment.bad_data_bitmask,
                     init_scalars=init_scalars,
                     tod_is_compressed=my_experiment.tod_is_compressed,
-                    det_response=det_response,
+                    response_I_P=response_I_P,
                 )
                 # `<=` so the 0.0 default still drops fully-flagged detector-scans.
                 if np.mean(detector.good_data_mask) <= min_unmasked_fraction:
@@ -188,6 +189,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
                                      [0.01  ,    100],  # fknee
                                      [-4.5  ,    0.0]]) # alpha
     apply_noise_priors(noise_model, params, expname, bandname)
+    apply_noise_fit_range(noise_model, params)
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
                            my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
 

@@ -75,6 +75,7 @@ class RadioSources(PointSourcesComponent):
     """
 
     default_shortname = "radsources"
+    amplitude_unit = "mJy"
     # `alpha_arr` is deliberately absent from the SED parameter names: it is one spectral index per
     # source, read from `template_path` alongside the source positions and amplitudes, so it belongs
     # with the template rather than in every iteration of the chain.

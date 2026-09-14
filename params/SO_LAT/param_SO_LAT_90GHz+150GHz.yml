@@ -253,7 +253,6 @@ experiments:
       SO_LAT_i1ws0_f90:
         enabled: true
         num_tasks: 233
-        num_scans: 233
         eval_nside: 8192
         fwhm: 2.2 # [arcmin]
         freq: 90.0 # [GHz]
@@ -278,7 +277,6 @@ experiments:
       SO_LAT_i1ws0_f150:
         enabled: true
         num_tasks: 228
-        num_scans: 228
         eval_nside: 8192
         fwhm: 1.4 # [arcmin]
         freq: 150.0 # [GHz]

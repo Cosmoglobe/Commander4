@@ -164,27 +164,25 @@ def preproc_diff(arr):
 
 @njit
 def preproc_digitize_and_diff(arr, npsi):
-    """
-    Fuses digitization and pairwise differencing into a single zero-allocation pass.
-    Designed specifically for floating point angle arrays.
+    """Digitize angles into one-based circular bins and return their first differences.
+
+    Bin ``i`` covers ``[(i-1)*2*pi/npsi, i*2*pi/npsi)``. This matches the Commander scan format;
+    readers reconstruct the physical pointing with the bin center ``(i-0.5)*2*pi/npsi``.
     """
     n = len(arr)
     out = np.empty(n, dtype=np.int64)
     if n == 0:
         return out
-        
+
     factor = npsi / (2.0 * np.pi)
-    
-    # Initialize and store the first digitized value
-    prev_dig = np.int64(np.round(arr[0] * factor))
+
+    # Modulo makes 2*pi and negative angles wrap into the standard [0, 2*pi) interval.
+    prev_dig = np.int64(np.floor((arr[0] % (2.0*np.pi))*factor)) + 1
     out[0] = prev_dig
-    
+
     for i in range(1, n):
-        # Digitize current value
-        curr_dig = np.int64(np.round(arr[i] * factor))
-        # Store difference
+        curr_dig = np.int64(np.floor((arr[i] % (2.0*np.pi))*factor)) + 1
         out[i] = curr_dig - prev_dig
-        # Update previous
         prev_dig = curr_dig
-        
+
     return out

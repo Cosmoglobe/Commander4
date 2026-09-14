@@ -57,7 +57,7 @@ A parameter file is seven top-level blocks, each named after the part of the pro
 
 The MPI task counts are **derived**, not stated: the TOD total is the sum of the per-band `num_tasks` over enabled bands of enabled experiments, and component separation takes one task per enabled `compsep.bands` view (one for I, one for QU). Commander4 reports the total it needs, and `mpirun -n` must match it.
 
-Parameter files can include other parameter files using `!include 'path/to/file.yml'`. The path is relative to the relevant file. Note that the exact content of the imported file is inserted at the exact location of the import, and at the relevant indendation level.
+Parameter files can include other parameter files using `!import 'path/to/file.yml'`. The path is relative to the relevant file. Note that the exact content of the imported file is inserted at the exact location of the import, and at the relevant indendation level.
 
 ### 2.2 Output
 A run writes everything below the single directory named by `output.dir`, which it creates:
@@ -86,6 +86,8 @@ detrel_gain        (ND,)       # relative gain offset, one per detector (zero-su
 temporal_gain      (NSC,ND)    # per-scan gain variation about abs+rel
 gain_prior         (ND,3)      # (sigma0, fknee, alpha) of the temporal-gain Wiener prior
 noise_params       (NSC,ND,NPAR)  # noise PSD parameters, sigma0 first (sigma0,fknee,alpha for normal oof model).
+modulation_phase   (NSC,ND)    # (HFI only) +1/-1 sign of the first stored sample parity
+baselines          (NSC,ND,2)  # (HFI only) sampled first/second-parity modulation baselines
 present            (NSC,ND)    # int8: this detector has data in this scan
 accept             (NSC,ND)    # int8: data-quality flag (present data that is not rejected)
 good_fraction      (NSC,ND)    # unflagged fraction of samples
@@ -101,15 +103,16 @@ tod_ps_residual    (NSC,ND,100)   # ... of the residual (sky, dipole and n_corr 
 jump_counts        (NSC,ND)    # jumps found per detector-scan; indexes the two ragged arrays below
 jump_locations     (M,)        # sample index of each jump, concatenated scan-major
 jump_offsets       (M,)        # amplitude of each jump
-ncorr_tod_lengths  (NSC,ND)    # (opt, DEBUG) length of each full n_corr TOD in the flat array below
-ncorr_tod_flat     (sum,)      # (opt, DEBUG) every n_corr TOD concatenated; very large
+tods/<scan_id>/<detector>/ncorr     (ntod,)  # (opt, DEBUG) full n_corr TOD in detector units
+tods/<scan_id>/<detector>/residual  (ntod,)  # (opt, DEBUG) full residual TOD in detector units
 
 maps/observed_sky  (3,npix)    # the solved sky map (I, Q, U)
 maps/rms           (3,npix)    # per-pixel white-noise rms; inf where unobserved
 maps/skymodel      (3,npix)    # (opt) sky model this iteration was processed against
-maps/res           (3,npix)    # (opt) binned residual: data minus sky, dipole and n_corr
+maps/res           (3,npix)    # (opt) binned residual: corrected data minus sky, dipole, n_corr, sidelobes
 maps/orbdipole     (3,npix)    # (opt) binned orbital dipole
 maps/corrnoise     (3,npix)    # (opt) binned correlated noise
+maps/sidelobe      (3,npix)    # (opt) binned far-sidelobe pickup, removed from the TOD
 maps/nhit          (npix,)     # (opt) int64 count of unflagged samples per pixel
 maps/cov           (6,npix)    # (opt) the 6 unique elements of P^T N^-1 P (II,IQ,IU,QQ,QU,UU)
 ```
@@ -157,6 +160,7 @@ src/commander4/
 
   tod/                 # === TOD SIDE: one Gibbs iteration over time-ordered data ===
     processing.py      #   Drives the iteration: gain, jumps, correlated noise, mapmaking, data selection.
+    config.py          #   Config dataclasses: defaults, checks, and parameter-file lookup rules.
     view.py            #   TODView: the read interface to one detector-scan and every TOD derived from it.
     gain.py            #   Gain sampling (absolute, relative, temporal).
     noise/             #   Correlated-noise realizations, sigma0 estimation, PSD models and their priors.
@@ -187,6 +191,13 @@ params/                # Parameter files, grouped by instrument.
 tests/                 # pytest suite; run with `pytest` from the repository root.
 notes/                 # Design notes.
 ```
+
+The TOD config is read at the start of each `process_tod` call. The classes in `tod/config.py`
+each own a `from_params` reader and a `__post_init__` method for checking their values. They are
+independent classes with no shared base class. Variables holding a config object are named after
+their parameter-file block with a `_cfg` postfix, e.g. `abs_gain_cfg`. The processing code states
+when each step runs. Data-selection timing is shared by both mapmakers and summary logging through
+`data_selection_status` in `tod/data_selection.py`.
 
 ### 3.2 Output, logs and error handling
 
@@ -266,13 +277,40 @@ class MyClass:
         self._calculate_something_internal()
 ```
 
-#### Type hints
-Functions should normally have type hints for all their function arguments and return type.
+#### Type hints and docstrings.
+Functions should have type hints for all their function arguments and return type.
+
+All functions should have at least a one-line docstring. The Google docstring convension is used:
+- Argument types as type hints instead of in the docstring.
+- A one-line summary directly after the `"""` of the function as a command ("Do that"), not descriptive ("Does this").
+- Un-indented by 4 compared to the above, an optional extended explanation of the function in descriptive present tense ("This happens").
+- Use `Args:` and `Returns:` to describe arguments and return types.
+- Specify Numpy array dimensions as e.g. `(nsamp, nfreq)` when a specific array shape is expected.
+Example:
 ```Python
 from numpy.typing import NDArray
 
-def my_pow_func(array: NDArray, pow: float) -> NDArray:
-    return array**pow
+def project_to_plane(points: NDArray, normal: NDArray, offset: float = 0.0,
+                     normalize_input: bool = True, ) -> tuple[NDarray, NDArray]:
+    """Project 3-D points onto a plane.
+
+    The plane is defined by a normal vector and a scalar offset. Each point is moved along
+    the normal until it lies on the plane. The signed distance travelled is returned
+    alongside projected points, so the operation can be undone.
+
+    Points already on the plane are returned unchanged, with a distance of exactly zero.
+
+    Args:
+        points: (n_points, 3) Cartesian coordinates to project.
+        normal: (3,) Vector perpendicular to the plane. Need not be a unit vector unless
+            normalize_input is False.
+        offset: Signed distance from the origin to the plane, measured along the unit normal.
+        normalize_input: If True, scale normal to unit length first. Set to False only when
+            the caller has already done this, to avoid the redundant square root.
+
+    Returns:
+        A tuple of two arrays. The first is (n_points, 3), the projected points. The second
+        is (n_points,), the signed distance each point moved, positive along the normal.
 ```
 
 # 4. Standalone tools
@@ -305,3 +343,22 @@ Run `c4-validate-params path/to/param.yml` to get:
 `c4-plot-chain` creates a whole bunch of plots, both sky maps and various TOD plots, and places them in the chains folder.
 - For experimenst like SO, where per-detector plots are unfeasible, you should add the flag `--detector-plots summary`.
 - The amount of plots can get excessive, so it's recommended to use the flags to plot only specific subsets, such as `--chain`, `--iter`, `--band`.
+
+
+# 5. Benchmarking and optimization
+### 5.1 cProfile
+Setting `output.profile = True` in the parameter file will place a `cProfile` wrapper around the main Commander4 call.
+This will dump one stats file per rank to `[output.dir]/stats/` at the end of the entire run.
+
+### 5.2 The internal benchmarking tool
+The script `src/commander4/diagnostics/performance.py` exposes a couple of benchmarking functions the code uses internally.
+Its usage is explained in the file itself. It prints an averaged runtime-summary across MPI-ranks, including minimum and maximum time per rank.
+
+### 5.3 Py-spy
+There exists a lot of profiling tools for Python, but a lot of them break down when combined with MPI.
+I find that `py-spy` works well. You install it with pip, and then just attach it to a single rank while you code is running:
+```bash
+py-spy record -f speedscope --rate 1 --nonblocking --pid 911510 -o my_run.json 
+```
+When you abort it, it will produce a nice file that can either be uploaded to [https://www.speedscope.app/](https://www.speedscope.app/) to show what this rank was doing at all times. Running it on the master rank of some process is typically most informative.
+**Flag explaination:** `--rate` is number of samples per second. `-f speedscope` is the output format. `--nonblocking` means the monitored process will not be briefly stopped during the sampling (without this flag I actually frequently got a mysterious Bus Error).

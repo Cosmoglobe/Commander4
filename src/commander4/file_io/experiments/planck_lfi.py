@@ -21,6 +21,7 @@ from commander4.tod.noise.psd import NoisePSD, NoisePSDOof
 from commander4.data_models.pointing import PixelPointing
 from commander4.file_io.experiments.read_utils import (
     apply_noise_priors,
+    apply_noise_fit_range,
     find_good_fourier_size,
     read_processing_masks,
 )
@@ -73,6 +74,10 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
     else:
         bad_PIDs = np.array([])
 
+    if "instrument_file" in my_experiment:
+        instrument_filepath = my_experiment.instrument_file
+    else:
+        instrument_filepath = None
 
     scan_list = []
     nscans = scan_idx_stop - scan_idx_start
@@ -101,6 +106,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
             vsun = f[f"/{pid}/common/vsun/"][()]
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
+            polang = f["common/polang"][()]
             detector_list = []
             for idet, det_name in enumerate(all_det_names):
                 tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32, copy=False)
@@ -135,6 +141,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                     flag_encoded=flag_encoded,
                     bad_data_bitmask=6111232,
                     init_scalars=init_scalars,
+                    polang=polang[idet]
                 )
                 if (detector.tod == 0).all():
                     continue
@@ -159,15 +166,18 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
         if i_pid % 10 == 0:
             gc.collect()
 
+
     # Initialize noise model with defaults and uniform priors suited for LFI.
     noise_model = NoisePSDOof(P_active_mean = [np.nan, 0.1, -1.0],
                               P_active_rms = [np.nan, np.inf, np.inf],
                               P_uni = [[np.nan, np.nan], [0.01, 0.5], [-2.5, -0.25]],
                               nu_fit = [[np.nan, np.nan], [0, 3.0], [0, 3.0]])
     apply_noise_priors(noise_model, params, expname, bandname)
+    apply_noise_fit_range(noise_model, params)
 
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
+                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model,
+                           instrument_filepath=instrument_filepath)
     # my_det_central_freq = my_band.freq
 
     # TODO: Re-implement bandpass shift.

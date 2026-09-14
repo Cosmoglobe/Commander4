@@ -10,6 +10,9 @@ from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.noise.psd import NoisePSD
 from commander4.math_utils.fft import forward_rfft_mirrored, backward_rfft_mirrored
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 class DetectorGroupTOD:
     """Container for all scan TODs belonging to one detector group (experiment + band).
@@ -27,9 +30,14 @@ class DetectorGroupTOD:
         fwhm (float): Beam FWHM in arcminutes.
         ndet (int): Number of detectors per scan.
         pols (str): Polarisation configuration string (``'I'``, ``'QU'``, or ``'IQU'``).
+        noise_model (NoisePSD): Noise model for this detector group.
+        tf_tau_ms (float|None): Transfer function time constant in milliseconds, or None if no TF.
+        hfi_demodulation (bool): Whether this band contains alternating Planck HFI half-cycles.
     """
     def __init__(self, scans: list[ScanTOD], experiment_name: str, band_name: str, nside: int,
-                 nu: float, fwhm: float, fsamp: float, ndet: int, pols: str, noise_model: NoisePSD):
+                 nu: float, fwhm: float, fsamp: float, ndet: int, pols: str, noise_model: NoisePSD, 
+                 tf_tau_sec: float|None = None, instrument_filepath: str|None = None, 
+                 hfi_demodulation: bool = False):
         self.scans = scans
         self.nscans = len(scans)
         self.experiment_name = experiment_name
@@ -40,6 +48,10 @@ class DetectorGroupTOD:
         self.fsamp = fsamp
         self.ndet = ndet
         self.pols = pols
+        self.tf_tau_sec = tf_tau_sec
+        # Whether the TOD needs demodulation to be read (Planck HFI stores alternating
+        # positive/negative modulation half-cycles.)
+        self.hfi_demodulation = hfi_demodulation
         # The below values are not known until all ranks are finished reading in data, because some
         # scans might be rejected. They are set after the fact.
         self.scan_idx_start: int = 0  # Index of my first scan in a compact indexing.
@@ -47,6 +59,7 @@ class DetectorGroupTOD:
         self.nscans_allranks: int = 0  # Total number of scans across all ranks (on this band).
         self.noise_model = noise_model
         self._pixel_domain = None  # Cached PixelDomain (built lazily; pointing is static).
+        self.instrument_filepath = instrument_filepath
 
     def get_pixel_domain(self, scan_view, comm, sparse: bool):
         """Return the band's map-distribution :class:`PixelDomain`, building and caching it once.

@@ -4,8 +4,8 @@ The cuts themselves are applied as per-scan vetoes inside the mapmaking scan loo
 tod_processing (accept/reject must be decided there, so a catastrophically bad detector-scan never
 enters the current iteration's map products); the diagnostics they judge (good_fraction, chisq_z)
 are recorded in the same loop and written to the chain. This module holds the rest: the chi-squared
-statistic and the per-band summary logging. `DataSelectionConfig` owns its parameter validation;
-the mapmaker receives that config directly. Rejection is sticky within a chain: rejected
+statistic, iteration conditions, and per-band summary logging. Config objects are read in
+`tod/config.py` and passed directly to the mapmaker. Rejection is sticky within a chain: rejected
 detector-scans are skipped by all accepted_only loops, so their samples and diagnostics stop
 refreshing and they are never re-judged.
 
@@ -14,8 +14,6 @@ parked as dead code at the bottom of this file for possible re-introduction.
 """
 
 import logging
-from dataclasses import dataclass
-from typing import ClassVar
 
 import numpy as np
 from mpi4py import MPI
@@ -23,10 +21,23 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.data_models.tod_samples import TODSamples, _gather_scan_distributed_array
-from commander4.tod.noise.sample_ncorr import CorrelatedNoiseConfig
-from commander4.tod.step_config import StepConfig
+from commander4.tod.config import DataSelectionConfig, CorrelatedNoiseConfig
 
 logger = logging.getLogger(__name__)
+
+
+def data_selection_status(iteration: int, data_selection_cfg: DataSelectionConfig,
+                          corr_noise_cfg: CorrelatedNoiseConfig) -> tuple[bool, bool]:
+    """Return whether to report diagnostics and apply cuts in this iteration.
+
+    Diagnostics wait for correlated-noise sampling if it is enabled, but can be reported before
+    rejection starts and after it stops. Both rejection limits are inclusive.
+    """
+    noise_ready = not corr_noise_cfg.enabled or iteration >= corr_noise_cfg.from_iter
+    report = data_selection_cfg.enabled and noise_ready
+    before_end = data_selection_cfg.until_iter is None or iteration <= data_selection_cfg.until_iter
+    apply_cuts = report and iteration >= data_selection_cfg.from_iter and before_end
+    return report, apply_cuts
 
 
 def masked_chisq_z(residual: NDArray, mask: NDArray, sigma0: float) -> float:
@@ -46,7 +57,7 @@ def masked_chisq_z(residual: NDArray, mask: NDArray, sigma0: float) -> float:
 
 
 def log_dataselect_summary(band_comm: MPI.Comm, tod_samples: TODSamples,
-                           dataselect_cfg: "DataSelectionConfig", active: bool,
+                           data_selection_cfg: DataSelectionConfig, active: bool,
                            iteration: int) -> None:
     """Log a single per-band summary of this iteration's data selection (reporting only).
 
@@ -59,9 +70,9 @@ def log_dataselect_summary(band_comm: MPI.Comm, tod_samples: TODSamples,
     gf, z = tod_samples.good_fraction, tod_samples.chisq_z
     fresh = np.isfinite(gf)
     if active:
-        bad_lowfrac = fresh & (gf < dataselect_cfg.min_good_fraction)
-        bad_chisq = fresh & ~bad_lowfrac & ~(np.isfinite(z)
-                                             & (np.abs(z) <= dataselect_cfg.chisq_abs_threshold))
+        bad_lowfrac = fresh & (gf < data_selection_cfg.min_good_fraction)
+        within_threshold = np.isfinite(z) & (np.abs(z) <= data_selection_cfg.chisq_abs_threshold)
+        bad_chisq = fresh & ~bad_lowfrac & ~within_threshold
     else:
         bad_lowfrac = bad_chisq = np.zeros(fresh.shape, dtype=bool)
     good = fresh & ~bad_lowfrac & ~bad_chisq
@@ -93,8 +104,8 @@ def log_dataselect_summary(band_comm: MPI.Comm, tod_samples: TODSamples,
         context = f"Chain {tod_samples.chain} iter{iteration} {tod_samples.band_name}"
         logger.info(f"{context} data selection: rejected {n_lowfrac + n_chisq} "
                     f"detector-scans this iteration (low-good-fraction: {n_lowfrac}, |chisq_z| > "
-                    f"{dataselect_cfg.chisq_abs_threshold:.4g}: {n_chisq}); {n_accept}/{n_present} "
-                    f"accepted ({frac:.2%}). chisq_z 5/50/95%: "
+                    f"{data_selection_cfg.chisq_abs_threshold:.4g}: {n_chisq}); "
+                    f"{n_accept}/{n_present} accepted ({frac:.2%}). chisq_z 5/50/95%: "
                     f"{zq[0]:.3g}/{zq[1]:.3g}/{zq[2]:.3g}, "
                     f"worst |chisq_z| = {z_worst:.3g}.")
         if frac < 0.9:
@@ -190,52 +201,3 @@ def sample_data_selection(band_comm: MPI.Comm, tod_samples: TODSamples, ds_cfg: 
                                                        > ds_cfg.outlier_nmad * mad)
 
     tod_samples.accept[bad_lowfrac | bad_chisq | bad_mad] = False
-
-
-@dataclass(frozen=True)
-class DataSelectionConfig(StepConfig):
-    """Validated detector-scan selection thresholds and iteration range."""
-
-    PARAMETER_NAME: ClassVar[str] = "data_selection"
-
-    until_iter: int | None = None
-    chisq_abs_threshold: float = 1.0e4
-    min_good_fraction: float = 0.1
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if self.until_iter is not None:
-            if not isinstance(self.until_iter, int) or isinstance(self.until_iter, bool):
-                raise ValueError("data_selection.until_iter must be an integer or null.")
-            if self.until_iter < self.from_iter:
-                raise ValueError("data_selection.until_iter cannot be before from_iter.")
-        if not np.isfinite(self.chisq_abs_threshold) or self.chisq_abs_threshold <= 0:
-            raise ValueError("data_selection.chisq_abs_threshold must be positive and finite.")
-        if not 0.0 <= self.min_good_fraction <= 1.0:
-            raise ValueError("data_selection.min_good_fraction must be between 0 and 1.")
-
-    @classmethod
-    def from_params(cls, params: Bunch) -> "DataSelectionConfig":
-        """Build detector-scan selection settings from its parameter block.
-
-        Unlike the other step configs, data selection needs no experiment metadata, band override,
-        or nested config. Its ``from_params`` method therefore only selects the block before the
-        shared ``_from_block`` validation and construction.
-        """
-        # An absent block is valid and produces the disabled StepConfig defaults.
-        block = (params.tod_processing[cls.PARAMETER_NAME]
-                 if cls.PARAMETER_NAME in params.tod_processing else Bunch())
-        return cls._from_block(f"tod_processing.{cls.PARAMETER_NAME}", block)
-
-    def is_available(self, iteration: int,
-                     correlated_noise: CorrelatedNoiseConfig) -> bool:
-        """Whether diagnostics can be reported after waiting for configured n_corr sampling."""
-        return self.enabled and (correlated_noise.is_active(iteration)
-                                 or not correlated_noise.enabled)
-
-    def cuts_are_active(self, iteration: int,
-                        correlated_noise: CorrelatedNoiseConfig) -> bool:
-        """Whether this iteration applies detector-scan vetoes."""
-        before_end = self.until_iter is None or iteration <= self.until_iter
-        return (self.is_available(iteration, correlated_noise)
-                and super().is_active(iteration) and before_end)

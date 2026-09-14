@@ -483,7 +483,6 @@ class ThermalDust(DiffuseComponent):
         self.beta = comp_params.beta
         self.T = comp_params.T
         self.nu_ref = self._reference_frequency(comp_params)
-        self.prior_l_power_law = 2.5
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for Thermal Dust emission.
@@ -518,7 +517,6 @@ class Synchrotron(DiffuseComponent):
         self.beta = comp_params.beta
         self.nu_ref = self._reference_frequency(comp_params)
         self.nside_comp_map = 512
-        self.prior_l_power_law = -3
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for Synchrotron emission.

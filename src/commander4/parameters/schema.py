@@ -203,19 +203,20 @@ def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any =
                            f"cannot be looked up there; check the parameter file.")
                 if raise_on_missing_scope:
                     raise ValueError(message)
-                logger.debug(f"Optional parameter scope '{scope}' is absent; skipping it.")
+                # These prints ended up being very verbose even for 'verbose'. Commenting out.
+                # logger.debug(f"Optional parameter scope '{scope}' is absent; skipping it.")
                 break
             block = block[part]
         else:
             if key in block:
                 source = f"'{scope}'" if scope else "the given parameter block"
-                logger.debug(f"Resolved '{key}' = {block[key]!r} from {source}.")
+                # logger.debug(f"Resolved '{key}' = {block[key]!r} from {source}.")
                 return checked(block[key], f"from {source}")
     searched = [scope if scope else "the given parameter block" for scope in scopes]
     if default is _NO_DEFAULT:
         raise ValueError(f"'{key}' is not set in any of {searched}, and has no default. Set "
                          f"it in one of them; the first that defines it wins.")
-    logger.debug(f"'{key}' is not set in any of {searched}; using default {default!r}.")
+    # logger.debug(f"'{key}' is not set in any of {searched}; using default {default!r}.")
     return checked(default, "the default")
 
 
