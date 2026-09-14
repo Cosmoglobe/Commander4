@@ -27,49 +27,95 @@ uK_CMB_to_uK_RJ_dict = {}
 
 
 def get_static_sky_tod(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
-                       psi: NDArray[np.floating]|None = None) -> NDArray[np.floating]:
-    """ Projects the current sky-model at our band frequency (in uK_RJ, without gain) into the
-        specified scan pointing. The sky model does not include the orbital dipole.
+                       psi: NDArray[np.floating] | None = None,
+                       response: NDArray[np.floating] | None = None) -> NDArray[np.floating]:
+    """Project the current sky model into one detector's pointing.
+
+    Args:
+        det_compsep_map: The current sky model as seen by this detector.
+        pix: The healpix pixel indices of the TOD.
+        psi: The polarization angles of the TOD.
+        response: A two-length array defining how sensitive the detector is to intensity and
+            polarization. Is almost always [1, 1], which is also what `None` is interpreted as.
+    Returns:
+        A TOD of the sky projected onto the pointing of the detector.
     """
+    if response is None:
+        response_I, response_QU = 1.0, 1.0
+    else:
+        response_I, response_QU = float(response[0]), float(response[1])
     # An I-only band's sky map has a single component, and psi is irrelevant to it. TODView always
     # passes psi (it does not know the band's polarization), so the component count, not psi, is
     # what selects the intensity-only kernel.
     if psi is None or det_compsep_map.shape[0] == 1:
-        return _get_static_sky_tod_I(det_compsep_map, pix)
+        return _get_static_sky_tod_I(det_compsep_map, pix, response_I)
     elif det_compsep_map.shape[0] == 2:
-        return _get_static_sky_tod_QU(det_compsep_map, pix, psi)
+        return _get_static_sky_tod_QU(det_compsep_map, pix, psi, response_QU)
     elif det_compsep_map.shape[0] == 3:
-        return _get_static_sky_tod_IQU(det_compsep_map, pix, psi)
+        if response_I == 0.0:
+            return _get_static_sky_tod_QU(det_compsep_map[1:3], pix, psi, response_QU)
+        if response_QU == 0.0:
+            return _get_static_sky_tod_I(det_compsep_map, pix, response_I)
+        return _get_static_sky_tod_IQU(
+            det_compsep_map, pix, psi, response_I, response_QU,
+        )
     else:
         raise ValueError("Input compsep map has mismatching dimensions.")
 
 @njit(fastmath=True)
 def _get_static_sky_tod_IQU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
-                       psi: NDArray[np.floating]) -> NDArray[np.float32]:
+                            psi: NDArray[np.floating],
+                            response_I: float, response_QU: float) -> NDArray[np.float32]:
     sky = np.empty(pix.shape[0], dtype=np.float32)
-    for i in range(pix.shape[0]):
-        p = pix[i]
-        angle = 2.0 * psi[i]
-        sky[i] = det_compsep_map[0, p] + np.cos(angle)*det_compsep_map[1, p]\
-               + np.sin(angle)*det_compsep_map[2, p]                 
+    if response_I == 1.0 and response_QU == 1.0:
+        for i in range(pix.shape[0]):
+            p = pix[i]
+            angle = 2.0 * psi[i]
+            sky[i] = (det_compsep_map[0, p] + np.cos(angle) * det_compsep_map[1, p]
+                      + np.sin(angle) * det_compsep_map[2, p])
+    else:
+        for i in range(pix.shape[0]):
+            p = pix[i]
+            angle = 2.0 * psi[i]
+            sky[i] = response_I * det_compsep_map[0, p] + response_QU * (
+                np.cos(angle) * det_compsep_map[1, p] + np.sin(angle) * det_compsep_map[2, p]
+            )
     return sky
 
 @njit(fastmath=True)
 def _get_static_sky_tod_QU(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
-                       psi: NDArray[np.floating]) -> NDArray[np.float32]:
+                           psi: NDArray[np.floating],
+                           response_QU: float) -> NDArray[np.float32]:
     sky = np.empty(pix.shape[0], dtype=np.float32)
-    for i in range(pix.shape[0]):
-        p = pix[i]
-        angle = 2.0 * psi[i]
-        sky[i] = np.cos(angle)*det_compsep_map[0, p] + np.sin(angle)*det_compsep_map[1, p]                 
+    if response_QU == 0.0:
+        sky[:] = 0.0
+    elif response_QU == 1.0:
+        for i in range(pix.shape[0]):
+            p = pix[i]
+            angle = 2.0 * psi[i]
+            sky[i] = (np.cos(angle) * det_compsep_map[0, p]
+                      + np.sin(angle) * det_compsep_map[1, p])
+    else:
+        for i in range(pix.shape[0]):
+            p = pix[i]
+            angle = 2.0 * psi[i]
+            sky[i] = response_QU * (
+                np.cos(angle) * det_compsep_map[0, p] + np.sin(angle) * det_compsep_map[1, p]
+            )
     return sky
 
 @njit(fastmath=True)
-def _get_static_sky_tod_I(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer]
-                          ) -> NDArray[np.float32]:
+def _get_static_sky_tod_I(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
+                          response_I: float) -> NDArray[np.float32]:
     sky = np.empty(pix.shape[0], dtype=np.float32)
-    for i in range(pix.shape[0]):
-        sky[i] = det_compsep_map[0, pix[i]]
+    if response_I == 0.0:
+        sky[:] = 0.0
+    elif response_I == 1.0:
+        for i in range(pix.shape[0]):
+            sky[i] = det_compsep_map[0, pix[i]]
+    else:
+        for i in range(pix.shape[0]):
+            sky[i] = response_I * det_compsep_map[0, pix[i]]
     return sky
 
 
@@ -93,6 +139,10 @@ def get_s_orb_tod(det: DetectorTOD, experiment: DetectorGroupTOD, pix: NDArray[n
     orbital_velocity = det.orbital_velocity_m_per_s
     if orbital_velocity is None:
         return np.zeros(pix.shape, dtype=np.float32)
+    response = getattr(det, "det_response", None)
+    response_I = 1.0 if response is None else float(response[0])
+    if response_I == 0.0:
+        return np.zeros(pix.shape, dtype=np.float32)
 
     # If nthreads is not set, put it to how many threads OMP has.
     nthreads = int(os.environ["OMP_NUM_THREADS"]) if nthreads is None else nthreads
@@ -106,4 +156,6 @@ def get_s_orb_tod(det: DetectorTOD, experiment: DetectorGroupTOD, pix: NDArray[n
     s_orb = np.sum(LOS_vec, axis=-1, dtype=np.float32)
     s_orb *= T_CMB_div_C
     s_orb *= uK_CMB_to_uK_RJ_dict[experiment.nu]  # Converting to uK_RJ units.
+    if response_I != 1.0:
+        s_orb *= response_I
     return s_orb.astype(np.float32, copy=False)

@@ -35,8 +35,8 @@ class ScanBoresightPointing:
                  nside: int,
                  ntod: int | None = None):
         self.site = Bunch(
-            lat       = site[0],
-            lon       = site[1],
+            lon       = site[0],
+            lat       = site[1],
             alt       = site[2],
             weather   = "toco")
         self.detoffs = np.asarray(detoffs)

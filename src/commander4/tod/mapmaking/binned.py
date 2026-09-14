@@ -225,17 +225,23 @@ class MapmakerIQU:
             raise RuntimeError("Cannot accumulate into a finalized map.")
         pix_idx = self.domain.to_local(pix).astype(np.int64, copy=False)
         w_tod = np.ascontiguousarray(tod, dtype=np.float64) * float(weights)
-        ang = 2.0 * np.ascontiguousarray(psi, dtype=np.float64)
-        c2 = np.cos(ang)
-        s2 = np.sin(ang)
         if response is None:
             response_I, response_QU = 1.0, 1.0
         else:
             response_I = float(response[0])
             response_QU = float(response[1])
-        np.add.at(self._map_signal[0], pix_idx, w_tod * response_I)
-        np.add.at(self._map_signal[1], pix_idx, w_tod * response_QU * c2)
-        np.add.at(self._map_signal[2], pix_idx, w_tod * response_QU * s2)
+        if response_I == 1.0:
+            np.add.at(self._map_signal[0], pix_idx, w_tod)
+        elif response_I != 0.0:
+            np.add.at(self._map_signal[0], pix_idx, w_tod * response_I)
+        if response_QU != 0.0:
+            ang = 2.0 * np.ascontiguousarray(psi, dtype=np.float64)
+            c2 = np.cos(ang)
+            s2 = np.sin(ang)
+            if response_QU != 1.0:
+                w_tod = w_tod * response_QU
+            np.add.at(self._map_signal[1], pix_idx, w_tod * c2)
+            np.add.at(self._map_signal[2], pix_idx, w_tod * s2)
 
     def gather_map(self):
         """Reduce the local IQU buffers across MPI ranks into the full-sky root map."""
@@ -374,21 +380,27 @@ class WeightsMapmakerIQU:
         if self._map_signal is None:
             raise RuntimeError("Cannot accumulate into a finalized weights map.")
         pix_idx = self.domain.to_local(pix).astype(np.int64, copy=False)
-        ang = 2.0 * np.ascontiguousarray(psi, dtype=np.float64)
-        c2 = np.cos(ang)
-        s2 = np.sin(ang)
         weight_f64 = float(weight)
         if response is None:
             response_I, response_QU = 1.0, 1.0
         else:
             response_I = float(response[0])
             response_QU = float(response[1])
-        np.add.at(self._map_signal[0], pix_idx, weight_f64 * response_I * response_I)
-        np.add.at(self._map_signal[1], pix_idx, weight_f64 * response_I * response_QU * c2)
-        np.add.at(self._map_signal[2], pix_idx, weight_f64 * response_I * response_QU * s2)
-        np.add.at(self._map_signal[3], pix_idx, weight_f64 * response_QU * response_QU * c2 * c2)
-        np.add.at(self._map_signal[4], pix_idx, weight_f64 * response_QU * response_QU * s2 * c2)
-        np.add.at(self._map_signal[5], pix_idx, weight_f64 * response_QU * response_QU * s2 * s2)
+        if response_I != 0.0:
+            weight_I_sq = weight_f64 * response_I * response_I
+            np.add.at(self._map_signal[0], pix_idx, weight_I_sq)
+        if response_QU != 0.0:
+            ang = 2.0 * np.ascontiguousarray(psi, dtype=np.float64)
+            c2 = np.cos(ang)
+            s2 = np.sin(ang)
+            weight_QU_sq = weight_f64 * response_QU * response_QU
+            np.add.at(self._map_signal[3], pix_idx, weight_QU_sq * c2 * c2)
+            np.add.at(self._map_signal[4], pix_idx, weight_QU_sq * s2 * c2)
+            np.add.at(self._map_signal[5], pix_idx, weight_QU_sq * s2 * s2)
+            if response_I != 0.0:
+                weight_I_QU = weight_f64 * response_I * response_QU
+                np.add.at(self._map_signal[1], pix_idx, weight_I_QU * c2)
+                np.add.at(self._map_signal[2], pix_idx, weight_I_QU * s2)
 
     def gather_map(self):
         """Reduce the local IQU weight buffers across MPI ranks into the full-sky root map."""
