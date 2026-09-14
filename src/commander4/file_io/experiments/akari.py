@@ -21,8 +21,13 @@ from commander4.file_io.experiments.read_utils import (
     find_good_fourier_size,
     read_processing_masks,
 )
+from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
+                                               stop_bench, log_memory, increment_count, bench_reset
 
-def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_names: list[str],
+logger = logging.getLogger(__name__)
+
+def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, 
+               all_det_names: list[str],
                params: Bunch, scan_idx_start: int,
                scan_idx_stop: int) -> DetectorGroupTOD:
     """Read this rank's scans for one AKARI band from its HDF5 scan files.
@@ -38,10 +43,9 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
     Returns:
         The band's `DetectorGroupTOD`, holding only the scans and detectors this rank read.
     """
-    logger = logging.getLogger(__name__)
     oids = []
     pids = []
-    filenames = []
+    filepaths = []
     bandname = my_band._name
     expname = my_experiment._name
 
@@ -50,53 +54,65 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
         for line in infile:
             pid, filename, _, _, _ = line.split()
             pids.append(f"{int(pid):06d}")
-            filenames.append(filename[1:-1])
+            filepaths.append(filename[1:-1])
             oids.append(filename.split(".")[0].split("_")[-1])
 
     default_mask, specific_masks = read_processing_masks(band_comm, my_band)
+
     if "bad_PIDs_path" in my_experiment:
         bad_PIDs = np.load(my_experiment.bad_PIDs_path)
     else:
         bad_PIDs = np.array([])
 
 
-    # Attempting to reduce fragmentation by allocating buffers.
-    ntod_upper_bound = int(my_band.fsamp*100*3600)  # 10 hour scan.
-    flag_buffer = np.zeros(ntod_upper_bound, dtype=np.int64)
-    tod_buffer = np.zeros(ntod_upper_bound, dtype=np.float32)
+    # # Attempting to reduce fragmentation by allocating buffers.
+    # ntod_upper_bound = int(my_band.fsamp*100*3600)  # 10 hour scan.
+    # flag_buffer = np.zeros(ntod_upper_bound, dtype=np.int64)
+    # tod_buffer = np.zeros(ntod_upper_bound, dtype=np.float32)
 
     scan_list = []
+    nscans = scan_idx_stop - scan_idx_start
     num_included = 0
     ntod_sum_original = 0
     ntod_sum_final = 0
+    ndet = len(all_det_names)
+    det_init_scalars = np.zeros((ndet, 4)) + np.nan
+
     for i_pid in range(scan_idx_start, scan_idx_stop):
         pid = pids[i_pid]
+        scanID = int(pid)
+        filepath = filepaths[i_pid]
         if pid in bad_PIDs:
             continue
-
-        filepath = filenames[i_pid]
+        good_scan = True
         with h5py.File(filepath, "r") as f:
+            data_nside = int(f["common/nside"][()].item())
             ntod = int(f[f"/{pid}/common/ntod"][()].item())
             ntod_optimal = find_good_fourier_size(ntod)
             huffman_tree = f[f"/{pid}/common/hufftree"][()]
             huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
-            if ntod > ntod_upper_bound:
-                raise ValueError(f"{ntod_upper_bound} {ntod}")
+            detector_list = []
+            # if ntod > ntod_upper_bound:
+            #     raise ValueError(f"{ntod_upper_bound} {ntod}")
             vsun = np.ones(3)  # dummy, we don't have that in Akari.
             # Akari is intensity-only: the files carry no psi, so we hand PixelPointing a zero psi of
             # the right length (psi is unused by I-only mapmaking, but PixelPointing requires one).
             psi_zeros = np.zeros(ntod_optimal, dtype=np.float32)
             detector_list = []
-            for idet, det_name in enumerate(det_names):
+            for idet, det_name in enumerate(all_det_names):
+                # logger.warning(f"Reading detector {det_name} for scan {pid} from file {filepath}")
                 tod = f[f"/{pid}/{det_name}/tod/"][:ntod_optimal].astype(np.float32)
                 pix_encoded = f[f"/{pid}/{det_name}/pix/"][()]
                 flag_encoded = f[f"/{pid}/{det_name}/flag/"][()]
-                # gain_init, sigma0_init, fknee_init, alpha_init:
                 init_scalars = f[f"/{pid}/{det_name}/scalars"][()]
+                                # Data format has this weird thing were gain seems to be in "micro-gain"...
+                # init_scalars[0] *= 1e-6
+
+                det_init_scalars[idet] = init_scalars
                 det_pointing = PixelPointing(pix_encoded, psi_zeros, huffman_tree, huffman_symbols,
-                                             npsi, my_band.eval_nside, my_band.data_nside, ntod,
+                                             npsi, my_band.eval_nside, data_nside, ntod,
                                              ntod_optimal)
                 detector = DetectorTOD(
                     name=det_name,
@@ -114,23 +130,29 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
                     init_scalars=init_scalars,
                 )
                 if (detector.tod == 0).all():
+                    logger.debug(f"Detector {detector.name} has all-zero TOD for scan {pid}. Skipping.")
                     continue
                 if not np.isfinite(detector.tod).all():
+                    logger.debug(f"Detector {detector.name} has non-finite TOD for scan {pid}. Skipping.")
                     continue
-                if detector.good_data_mask.mean() < 0.5:
+                if detector.good_data_mask.mean() < 0.05:
+                    logger.debug(f"Detector {detector.name} has less than 5% good data for scan {pid}. Skipping.")
                     continue
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
-        if len(detector_list) > 0:
-            scanID = int(pid)
+        if len(detector_list) == 0:
+            good_scan = False
+        if good_scan:
             scan = ScanTOD(detector_list, 0., scanID)
             scan_list.append(scan)
             num_included += 1
+        if band_comm.Get_rank() == 0 and (i_pid-scan_idx_start) % (nscans // 5) == 0:
+            logger.debug(f"Reading scans from disk, progress on master rank of band {bandname}: "\
+                         f"{i_pid-scan_idx_start}/{nscans}")
         if i_pid % 10 == 0:
             gc.collect()
 
-    ndet = len(det_names)
     noise_model = NoisePSDOof()
     apply_noise_priors(noise_model, params, expname, bandname)
     apply_noise_fit_range(noise_model, params)

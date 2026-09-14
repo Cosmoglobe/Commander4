@@ -393,20 +393,31 @@ class CGMapmakerI(CGMapmaker):
     """
 
     def __init__(self, 
-                 detector_tod:DetectorGroupTOD, 
-                 detector_samples:TODSamples,
-                 map_comm:MPI.Comm, 
-                 T_omega:Callable|None = None, 
-                 preconditioner:Callable = np.copy, 
-                 nthreads:int = 1,
-                 double_prec:bool = True,
-                 CG_maxiter:int = 200,
-                 CG_tol:float = 1e-10,
-                 CG_check_interval:int = 1,
-                 pixel_domain = None):
+                detector_tod:DetectorGroupTOD, 
+                detector_samples:TODSamples,
+                map_comm:MPI.Comm, 
+                T_omega:Callable|None = None,
+                W_mat:NDArray|None = None,
+                preconditioner:Callable = np.copy, 
+                nthreads:int = 1,
+                double_prec:bool = True,
+                CG_maxiter:int = 200,
+                CG_tol:float = 1e-10,
+                CG_check_interval:int = 1,
+                pixel_domain = None):
 
-        super().__init__(detector_tod, detector_samples, map_comm, T_omega, preconditioner,
-                         nthreads, double_prec, CG_maxiter, CG_tol, CG_check_interval, pixel_domain)
+        super().__init__(detector_tod=detector_tod, 
+                        detector_samples=detector_samples, 
+                        map_comm=map_comm, 
+                        T_omega=T_omega,
+                        W_mat=W_mat,
+                        preconditioner=preconditioner,
+                        nthreads=nthreads,
+                        double_prec=double_prec, 
+                        CG_maxiter=CG_maxiter, 
+                        CG_tol=CG_tol, 
+                        CG_check_interval=CG_check_interval, 
+                        pixel_domain=pixel_domain)
 
         self._ncomp = 1
         # Master holds the full-sky solution and RHS; the iterate is scattered to the ranks' local
@@ -495,20 +506,31 @@ class CGMapmakerIQU(CGMapmaker):
     """
 
     def __init__(self, 
-                 detector_tod:DetectorGroupTOD, 
-                 detector_samples:TODSamples, 
-                 map_comm:MPI.Comm, 
-                 T_omega:Callable|None = None, 
-                 preconditioner:Callable = np.copy, 
-                 nthreads:int = 1,
-                 double_prec:bool = True,
-                 CG_maxiter:int = 200,
-                 CG_tol:float = 1e-10,
-                 CG_check_interval:int = 1,
-                 pixel_domain = None):
+                detector_tod:DetectorGroupTOD, 
+                detector_samples:TODSamples, 
+                map_comm:MPI.Comm, 
+                T_omega:Callable|None = None,
+                W_mat:NDArray|None = None,
+                preconditioner:Callable = np.copy, 
+                nthreads:int = 1,
+                double_prec:bool = True,
+                CG_maxiter:int = 200,
+                CG_tol:float = 1e-10,
+                CG_check_interval:int = 1,
+                pixel_domain = None):
 
-        super().__init__(detector_tod, detector_samples, map_comm, T_omega, preconditioner,
-                         nthreads, double_prec, CG_maxiter, CG_tol, CG_check_interval, pixel_domain)
+        super().__init__(detector_tod=detector_tod, 
+                        detector_samples=detector_samples, 
+                        map_comm=map_comm, 
+                        T_omega=T_omega,
+                        W_mat=W_mat,
+                        preconditioner=preconditioner,
+                        nthreads=nthreads,
+                        double_prec=double_prec, 
+                        CG_maxiter=CG_maxiter, 
+                        CG_tol=CG_tol, 
+                        CG_check_interval=CG_check_interval, 
+                        pixel_domain=pixel_domain)
 
         self._ncomp = 3
         # Master holds the full-sky solution and RHS; the iterate is scattered to the ranks' local
