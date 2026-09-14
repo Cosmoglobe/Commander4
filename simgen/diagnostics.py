@@ -22,6 +22,8 @@ def white_noise_normal_matrix(band: "Band", det_pix: dict[str, NDArray],
     normal = np.zeros((ncoeff, npix), dtype=np.float64)
     for det in band.detectors:
         pixels = det_pix[det.name]
+        # MR: it might pay off to sort pixels, inv_variance, cosine and sine here
+        # by pixel index, to improve cache locality of the "add.at" below
         inv_variance = 1.0 / det.sigma0**2
         if band.polarization == "I":
             np.add.at(normal[0], pixels, inv_variance)
@@ -42,6 +44,8 @@ def white_noise_normal_matrix(band: "Band", det_pix: dict[str, NDArray],
     return normal
 
 
+# MR: this is potentially very slow. If it ever becomes a nuisance, I
+# might have some ideas.
 def hit_map(band: "Band", det_pix: dict[str, NDArray]) -> NDArray[np.integer]:
     """Count samples per map pixel across all detectors for one simulated scan."""
     hits = np.zeros(12 * band.eval_nside**2, dtype=np.int64)

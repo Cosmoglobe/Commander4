@@ -70,6 +70,7 @@ class TransferFunction(ABC):
             level (and hence the gain calibration) up to the small mirrored-boundary effect.
         """
         n = signal.shape[-1]
+        # MR: this looks like another candidate for DCT, right?
         ext = np.concatenate([signal.astype(np.float64), signal[::-1].astype(np.float64)])
         freqs = np.fft.rfftfreq(2 * n, d=1.0 / fsamp)
         filtered = np.fft.irfft(np.fft.rfft(ext) * self.response(freqs), n=2 * n)[:n]
