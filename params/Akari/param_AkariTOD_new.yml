@@ -241,7 +241,8 @@ experiments:
     enabled: true
     mapmaker: "CG"
     experiment_id: "akari"  # Decides expected data format, what TOD reader is used, etc.
-    num_scans: 11395
+    filelist_idx_start: 0
+    filelist_idx_stop: 11395
     bad_data_bitmask: 2097149 #0b1111111111111111111111111111101
     bands:
       AKARI065:
