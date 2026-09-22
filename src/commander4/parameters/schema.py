@@ -18,7 +18,8 @@ MPI task counts the parameter file no longer states.
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
+from collections.abc import Sequence
 
 from pixell.bunch import Bunch
 

@@ -9,8 +9,7 @@ import numpy as np
 import logging
 from copy import deepcopy, copy
 from commander4.math_utils.arithmetic import inplace_add_scaled_vec, inplace_scale_add, dot
-from commander4.sky.comp_list import inplace_complist_add_scaled_array,\
-    inplace_complist_scale_and_add, complist_dot
+from commander4.sky.comp_list import complist_dot
 
 logger = logging.getLogger(__name__)
 

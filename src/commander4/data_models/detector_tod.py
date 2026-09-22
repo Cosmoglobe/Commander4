@@ -4,14 +4,11 @@ The TOD, pointing and flags are usually stored Huffman-compressed and are decomp
 first access, so a band can hold many scans without materializing all of them at once.
 """
 import numpy as np
-import healpy as hp
 from numpy.typing import NDArray
-from pixell.bunch import Bunch
 
 from commander4.backend import utils as cpp_utils
 from commander4.data_models.pointing import PixelPointing, DetectorBoresightPointing
-from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
-                                               stop_bench, log_memory, increment_count, bench_reset
+from commander4.diagnostics.performance import benchmark, start_bench, stop_bench
 
 
 class DetectorTOD:

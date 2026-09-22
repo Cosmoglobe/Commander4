@@ -38,7 +38,7 @@ def _normalize_names(value, field_name: str) -> tuple[str, ...] | None:
     if value is None or value == "all":
         return None
     if isinstance(value, str):
-        raise ValueError(f"{field_name} must be a list of names, 'all', or omitted.")
+        raise TypeError(f"{field_name} must be a list of names, 'all', or omitted.")
     names = tuple(value)
     if any(not isinstance(name, str) for name in names):
         raise ValueError(f"Every entry in {field_name} must be a string.")

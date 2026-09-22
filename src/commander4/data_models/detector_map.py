@@ -139,7 +139,7 @@ class DetectorMap:
     def pol(self):
         """Whether the map is polarised (True for Q/U, False for I only)."""
         #polarization: True->Q/U, False->I
-        return False if len(self.map_sky) == 1 else True
+        return len(self.map_sky) != 1
     
     @property
     def spin(self):

@@ -10,7 +10,8 @@ import time
 import logging
 from mpi4py import MPI
 from numpy.typing import NDArray
-from typing import Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING
+from collections.abc import Callable
 from copy import deepcopy
 
 from commander4.data_models.detector_map import DetectorMap
@@ -20,7 +21,7 @@ from commander4.math_utils.sht import alm_to_map_adjoint
 from commander4.sky.comp_list import complist_dot, complist_norm
 from commander4.compsep.dense_matrix_debug import DenseMatrix
 from commander4.compsep.cg_driver import DistributedCG
-import commander4.compsep.preconditioners as preconditioners
+from commander4.compsep import preconditioners
 from commander4.data_models.band import Band
 from commander4.diagnostics.performance import benchmark, log_memory
 

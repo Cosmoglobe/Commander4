@@ -19,7 +19,7 @@ from mpi4py import MPI
 import logging
 from numpy.typing import NDArray
 import healpy as hp
-from typing import Callable
+from collections.abc import Callable
 
 from commander4.backend.ctypes_lib import load_cmdr4_ctypes_lib
 from commander4.data_models.detector_tod import DetectorTOD
