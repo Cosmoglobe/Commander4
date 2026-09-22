@@ -57,7 +57,7 @@ A parameter file is seven top-level blocks, each named after the part of the pro
 
 The MPI task counts are **derived**, not stated: the TOD total is the sum of the per-band `num_tasks` over enabled bands of enabled experiments, and component separation takes one task per enabled `compsep.bands` view (one for I, one for QU). Commander4 reports the total it needs, and `mpirun -n` must match it.
 
-Parameter files can include other parameter files using `!import 'path/to/file.yml'`. The path is relative to the relevant file. Note that the exact content of the imported file is inserted at the exact location of the import, and at the relevant indendation level.
+Parameter files can include other parameter files using `!import 'path/to/file.yml'`. The path is relative to the relevant file, unless it is absolute. `~` and environment variables such as `$HOME` are expanded, as in a shell. Note that the exact content of the imported file is inserted at the exact location of the import, and at the relevant indentation level.
 
 ### 2.2 Output
 A run writes everything below the single directory named by `output.dir`, which it creates:
@@ -311,6 +311,7 @@ def project_to_plane(points: NDArray, normal: NDArray, offset: float = 0.0,
     Returns:
         A tuple of two arrays. The first is (n_points, 3), the projected points. The second
         is (n_points,), the signed distance each point moved, positive along the normal.
+    """
 ```
 
 # 4. Standalone tools
