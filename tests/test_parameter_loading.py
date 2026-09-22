@@ -70,6 +70,22 @@ def test_nested_imports_resolve_relative_to_their_own_file(tmp_path) -> None:
     assert params_dict == {"band": {"freq": 30.0, "detectors": {"det_1": {"gain": 1.0}}}}
 
 
+def test_import_paths_expand_home_and_environment_variables(tmp_path, monkeypatch) -> None:
+    """An !import path may start with `~` or `$HOME`, which must point to the home directory."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    home_params = tmp_path / "home" / "params"
+    home_params.mkdir(parents=True)
+    (home_params / "wmap.yml").write_text("WMAPKa:\n  freq: 33.0\n", encoding="utf-8")
+    (home_params / "lfi.yml").write_text("LFI30:\n  freq: 28.4\n", encoding="utf-8")
+    (tmp_path / "params.yml").write_text(
+        'bands:\n  !import "~/params/wmap.yml"\n  !import $HOME/params/lfi.yml\n', encoding="utf-8",
+    )
+
+    _, params_dict, _ = load_params(str(tmp_path / "params.yml"))
+
+    assert params_dict == {"bands": {"WMAPKa": {"freq": 33.0}, "LFI30": {"freq": 28.4}}}
+
+
 def test_yaml_errors_are_reported_against_the_file_the_line_came_from(tmp_path) -> None:
     """A syntax error inside an imported file must name that file and its line, not the main one."""
     (tmp_path / "bands.yml").write_text(
