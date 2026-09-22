@@ -9,7 +9,7 @@ from pixell.bunch import Bunch
 from commander4.parameters.bunch import as_bunch_recursive
 
 # A line containing nothing but `!import <path>` (plus an optional trailing comment) is replaced by
-# the text of that file. Paths may be quoted.
+# the text of that file. Paths may be quoted, and may use `~` or environment variables like `$HOME`.
 INCLUDE_PATTERN = re.compile(r"^(\s*)!import\s+(.+?)(?:\s+#.*)?$")
 
 
@@ -108,7 +108,8 @@ def expand_includes(parameter_file: str,
     that pulled them in. An ``!import`` written as the value of a key therefore becomes that key's
     value, and one written among the entries of a mapping adds its keys to that mapping. Include
     paths are relative to the directory of the file containing the ``!import`` line, so ``..`` and
-    subdirectories both work.
+    subdirectories both work. ``~`` and environment variables such as ``$HOME`` are expanded before
+    the path is used.
 
     Args:
         parameter_file: Path of the file to read.
@@ -139,6 +140,9 @@ def expand_includes(parameter_file: str,
                 expanded_lines.append((line, parameter_file, line_number))
                 continue
             indent, include_name = match.group(1), match.group(2).strip("\"'")
+            # Python does not expand `~` or `$HOME` like a shell does, so do it here. An absolute
+            # path makes os.path.join ignore the directory in front of it.
+            include_name = os.path.expanduser(os.path.expandvars(include_name))
             include_file = os.path.join(os.path.dirname(parameter_file), include_name)
             if not os.path.isfile(include_file):
                 raise FileNotFoundError(f"Could not find !import file {include_file}, imported "
