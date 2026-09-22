@@ -1,0 +1,37 @@
+"""Sampling of harmonic space components.
+"""
+import logging
+import numpy as np
+from numpy.typing import NDArray
+
+from commander4.sky.comp_list import CompList
+
+logger = logging.getLogger(__name__)
+
+
+class ClSamplingGroup:
+    def __init__(self, config: "ClSamplingGroupConfig",  # noqa: F821
+                 comp_list: CompList):
+        self.config = config
+        self.comp_list = comp_list
+
+    def run(self) -> tuple[dict[str, NDArray], bool]:
+        logger.verbose("Drawing Cl samples.")
+        proposal = {}
+        comp_list = self.comp_list.joined()
+        components = {comp.shortname: comp for comp in comp_list.joined()}
+
+        for group in self.config.comps:
+            component = components[group.lower()]
+            sigma_l = component.sigma_l
+
+            # P(C_l | s) = C_l^(-(2l + 1) / 2) exp(- (2l + 1) sigma_l / 2 C_l)
+            ell = np.arange(2, sigma_l.shape[1])
+            cl = np.zeros_like(sigma_l)
+
+            for i in range(sigma_l.shape[0]):
+                x = np.random.chisquare(df=2.*ell-1.)
+                cl[i, ell] = (2. * ell + 1.) * sigma_l[i, ell] / x
+            proposal[group] = cl
+
+        return proposal
