@@ -52,6 +52,8 @@ class DetectorTOD:
         response_I_P: tuple[float, float] | NDArray | None = None,
         polang: float | None = None,
     ):
+# MR: Docstring doesn't match argument list
+# Why is orbital velocity per-detector?
         """Construct a DetectorTOD.
 
         Args:
@@ -198,7 +200,7 @@ class DetectorTOD:
         pix_psi = self.pointing.get_pix_psi(nside)
         stop_bench("pointing")
         return pix_psi
-        
+
 
     @property
     def flag(self) -> NDArray[np.integer]:

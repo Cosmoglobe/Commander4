@@ -27,7 +27,7 @@ def _prep_input(arr_in, arr_out, nside, spin):
             arr_out = arr_out.reshape((1,-1))
 
     if arr_in.ndim !=2 or (arr_out is not None and arr_out.ndim != 2):
-        raise RuntimeError("bad array dimensionality") 
+        raise RuntimeError("bad array dimensionality")
 
     if nside not in hp_geominfos:
         hp_geominfos[nside] = ducc0.healpix.Healpix_Base(nside, "RING").sht_info()
@@ -75,7 +75,7 @@ def map_to_alm(mp: NDArray, nside: int, lmax: int, *, spin: int=0,
                        nthreads: int|None=None, out=None, acc: bool=False) -> NDArray:
     """ Spherical harmonic analysis (inverse synthesis; Y^-1), using only the scalar normalization
         factor 4pi/npix, not any further processing.
-        See `pseudo_alm_to_map_inverse` for an equivalent to healpys iterative map2alm.
+        See `pseudo_alm_to_map_inverse` for an equivalent to healpy's iterative map2alm.
     """
     with benchmark("map2alm"):
         nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
@@ -118,7 +118,7 @@ def pseudo_alm_to_map_inverse(map: NDArray, nside: int, lmax: int, *, spin: int=
                return_info: bool=False) -> NDArray:
     """Tries to extract spherical harmonic coefficients from (sets of) one or two maps
     by using the iterative LSMR algorithm.
-    
+
     Parameters
     ----------
     map: numpy.ndarray(([ncomp,] 12*nside**2), dtype=numpy.float32 or numpy.float64
@@ -140,13 +140,13 @@ def pseudo_alm_to_map_inverse(map: NDArray, nside: int, lmax: int, *, spin: int=
         the relative tolerance used as a stopping criterion
     maxiter: int >= 0
         the maximum number of iterations before stopping the algorithm
-    
+
     Returns
     -------
     numpy.ndarray(([ncomp,] (lmax+1)*(lmax+2)//2), dtype=numpy.complex of same accuracy as `map`)
         the set of spherical harmonic coefficients.
         If `out` was supplied, this will be the same object
-    
+
     if `return_info` is True (default False), also returns a (5,) tuple containing:
         int:
             the reason for stopping the iteration
@@ -154,13 +154,13 @@ def pseudo_alm_to_map_inverse(map: NDArray, nside: int, lmax: int, *, spin: int=
             2: approximate least-squares solution found
             3: condition number of the equation system too large
             7: maximum number of iterations reached
-        
+
         int:
             the iteration count
-        
+
         float:
             the residual norm, divided by the norm of `map`
-        
+
         float:
             the quality of the least-squares solution
     """
