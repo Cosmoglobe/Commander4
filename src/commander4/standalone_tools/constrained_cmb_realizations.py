@@ -68,7 +68,11 @@ def alm2map_adjoint(map, nside, lmax):
 
 
 class ConstrainedCMB:
-    """The constrained-realization system, with C_l supplied for ell = 0 through the CMB lmax."""
+    """Sample CMB alms in uK_CMB, with C_l for ell = 0 through the CMB lmax.
+
+    Sky maps must be in uK_CMB, inverse variances in uK_CMB**-2, and the prior in uK_CMB**2.
+    Masks are dimensionless and beam FWHMs are in radians.
+    """
 
     def __init__(self, map_sky: NDArray, map_ivar: NDArray, cmb_Cell: NDArray,
                  masks: NDArray | None = None, beam_fwhm: NDArray | None = None,
@@ -423,16 +427,15 @@ def main() -> int:
                 stored_unit = stored_unit.decode("utf-8")
             nside = hp.npix2nside(map_rms.shape[-1])
 
-            # The foreground model is evaluated at this band's frequency and subtracted, leaving
-            # CMB + noise for the solver.
+            # Band maps use stored_unit; SkyModel always returns uK_RJ at the band's frequency.
+            # Convert both to thermodynamic units before subtracting the foreground model.
+            rj_to_uK_CMB = rj_to_band_unit_factor(nu, "uK_CMB")
+            band_to_uK_CMB = rj_to_uK_CMB / rj_to_band_unit_factor(nu, stored_unit)
+            map_observed_sky *= band_to_uK_CMB
+            map_rms *= band_to_uK_CMB
             foreground_map = foreground_sky.get_sky_at_nu(nu, nside, "I", fwhm=beam_fwhm)[0]
+            foreground_map = foreground_map.astype(np.float64) * rj_to_uK_CMB
             map_observed_sky -= foreground_map
-
-            # The solver works in thermodynamic units, the maps are written in the band's own unit.
-            to_uK_CMB = (rj_to_band_unit_factor(nu, "uK_CMB")
-                         / rj_to_band_unit_factor(nu, stored_unit))
-            map_observed_sky *= to_uK_CMB
-            map_rms *= to_uK_CMB
 
             if args.mask is not None:
                 mask = _read_mask(args.mask, nside, args.mask_fwhm_deg)
@@ -455,7 +458,9 @@ def main() -> int:
             logger.warning(f"No usable bands for iteration {iteration}; skipping.")
             continue
 
+        # Chain amplitudes are uK_RJ at the component's reference frequency, even for the CMB.
         cmb_alms_in = np.ascontiguousarray(cmb_comps[0].alms[0]).astype(np.complex128)
+        cmb_alms_in *= rj_to_band_unit_factor(cmb_comps[0].nu_ref, "uK_CMB")
         cmb_cell_in = hp.alm2cl(cmb_alms_in)
         lmax = cmb_comps[0].lmax
 
@@ -479,7 +484,8 @@ def main() -> int:
         nside = hp.npix2nside(signal_maps[0].shape[-1])
         cmb_map_bestfit = hp.alm2map(cmb_alms_bestfit, nside)
         out_base = os.path.join(output_dir, f"chain{args.chain:02d}_iter{iteration:04d}")
-        hp.write_map(f"{out_base}_cmb_realization.fits", cmb_map_bestfit, overwrite=True)
+        hp.write_map(f"{out_base}_cmb_realization.fits", cmb_map_bestfit, overwrite=True,
+                     column_units="uK_CMB", extra_header=[("BUNIT", "uK_CMB")])
 
         plt.figure()
 
@@ -490,13 +496,14 @@ def main() -> int:
         ls = np.arange(len(cmb_cell_prior))
         plt.loglog(ls, cmb_cell_prior * ls * (ls + 1.) / 2. / np.pi, c="k", label="Prior")
         plt.xlabel("multipole $\\ell$")
-        plt.ylabel("$\\mathcal{D}_\\ell$ [$\\mu K^2$]")
+        plt.ylabel("$\\mathcal{D}_\\ell$ [$\\mu K_\\mathrm{CMB}^2$]")
         plt.legend()
         plt.savefig(f"{out_base}_Cell.png", dpi=120, bbox_inches="tight")
         plt.close()
 
         plt.figure()
-        hp.mollview(cmb_map_bestfit, cmap="RdBu_r", title=f"Constrained CMB, iter {iteration}", min=-350., max=350.)
+        hp.mollview(cmb_map_bestfit, cmap="RdBu_r", title=f"Constrained CMB, iter {iteration}",
+                    min=-350., max=350., unit="uK_CMB")
         plt.savefig(f"{out_base}_cmb_realization.png", dpi=120, bbox_inches="tight")
         plt.close()
         logger.info(f"iter {iteration}: wrote {out_base}_cmb_realization.fits (+ 2 figures) from "
