@@ -20,6 +20,7 @@ import re
 import yaml
 from astropy.io import fits
 from pixell.bunch import Bunch
+from numpy.typing import NDArray
 
 from commander4.file_io import paths
 from commander4.parameters.bunch import as_bunch_recursive
@@ -68,9 +69,11 @@ def alm2map_adjoint(map, nside, lmax):
 
 
 class ConstrainedCMB:
-    """The constrained-realization system for the CMB alms, with an externally supplied C_l."""
+    """The constrained-realization system, with C_l supplied for ell = 0 through the CMB lmax."""
 
-    def __init__(self, map_sky, map_ivar, cmb_Cell, masks=None, beam_fwhm=None, maxiter=100):
+    def __init__(self, map_sky: NDArray, map_ivar: NDArray, cmb_Cell: NDArray,
+                 masks: NDArray | None = None, beam_fwhm: NDArray | None = None,
+                 maxiter: int = 100) -> None:
         self.maxiter = maxiter
         self.map_sky = map_sky
         self.map_ivar = map_ivar
@@ -80,7 +83,7 @@ class ConstrainedCMB:
         self.nband, self.npix = map_sky.shape
         self.fwhm = 1.0/60.0*np.pi/180.0*np.ones(self.nband) if beam_fwhm is None else beam_fwhm
         self.nside = hp.npix2nside(self.npix)
-        self.lmax = 2*self.nside
+        self.lmax = len(cmb_Cell) - 1
         self.alm_len = ((self.lmax+1)*(self.lmax+2))//2
         self.Cl_prior = cmb_Cell
 
@@ -241,52 +244,6 @@ class ConstrainedCMB:
         s_bestfit = hp.almxfl(CG_solver.x, self.Cl_sqrt)
 
         return s_bestfit
-
-
-# def constrained_cmb_loop(comm, compsep_master: int, params: dict):
-#     master = comm.Get_rank() == 0
-#     logger = logging.getLogger(__name__)
-
-#     while True:
-#         # check for simulation end
-#         stop = MPI.COMM_WORLD.recv(source=compsep_master) if master else False
-#         stop = comm.bcast(stop, root=0)
-#         if stop:
-#             if master:
-#                 logger.warning("CMB: stop requested; exiting")
-#             return
-#         if master:
-#             logger.info("CMB: new job obtained")
-
-#         data, iter, chain = MPI.COMM_WORLD.recv(source=compsep_master) if master else None
-#         # Broadcast te data to all tasks, or do anything else that's appropriate
-#         data = comm.bcast(data, root=0)
-#         if master:
-#             logger.info("CMB: successfully got data.")
-#         if master:
-#             signal_maps, rms_maps = data
-#             signal_maps = signal_maps[:2]  # Ignore highest frequency band - very dust contaminated.
-#             rms_maps = rms_maps[:2]
-#             constrained_cmb_solver = ConstrainedCMB(signal_maps, rms_maps, iter)
-#             logger.info("CMB: Solving for mean-field map")
-#             RHS_mean_field = constrained_cmb_solver.get_RHS_eqn_mean()
-#             CMB_mean_field_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.LHS_func, RHS_mean_field)
-#             CMB_mean_field_Cl = hp.alm2cl(CMB_mean_field_alms)
-#             CMB_mean_field_map = alm2map(CMB_mean_field_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax)
-
-#             constrained_cmb_solver = ConstrainedCMB(signal_maps, rms_maps, iter)
-#             logger.info("CMB: Solving for fluctuation map")
-#             RHS_fluct = constrained_cmb_solver.get_RHS_eqn_fluct()
-#             CMB_fluct_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.LHS_func, RHS_fluct)
-#             CMB_fluct_Cl = hp.alm2cl(CMB_fluct_alms)
-#             CMB_fluct_map = alm2map(CMB_fluct_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax)
-
-#             if params.output.plots.enabled:
-#                 plotting.plot_constrained_cmb_results(
-#                     master, params, detector, chain, iter,
-#                     constrained_cmb_solver.ell, CMB_mean_field_map,
-#                     CMB_fluct_map, signal_maps[0],
-#                     constrained_cmb_solver.Cl_true)
 
 
 def _load_params_from_chain(run_dir: str) -> Bunch | None:
@@ -490,7 +447,7 @@ def main() -> int:
 
         cmb_alms_in = np.ascontiguousarray(cmb_comps[0].alms[0]).astype(np.complex128)
         cmb_cell_in = hp.alm2cl(cmb_alms_in)
-        lmax = len(cmb_cell_in)
+        lmax = cmb_comps[0].lmax
 
         # This prior could be improved (best would be to replace the prior with
         # sampled C_ells in the full chain), but for now a nice smooth theory
@@ -499,11 +456,12 @@ def main() -> int:
         pars = camb.set_params(ombh2=0.022, omch2=0.122, H0=67.5, ns=0.96, As=2e-9, tau=0.06, omk=0, mnu=0.06, lmax=lmax+100)
         res = camb.get_results(pars)
         spec = res.get_cmb_power_spectra(pars, CMB_unit="muK", raw_cl=True)["total"]
-        cmb_cell_prior = spec[:lmax,0]
+        cmb_cell_prior = spec[:lmax+1, 0]
         cmb_cell_prior[:2] = 1e6
 
         solver = ConstrainedCMB(np.array(signal_maps), np.array(ivar_maps), cmb_cell_prior,
-                                masks=np.array(masks), maxiter=args.maxiter, beam_fwhm=beam_sizes)
+                                masks=np.array(masks), maxiter=args.maxiter,
+                                beam_fwhm=np.array(beam_sizes))
         rhs = solver.get_RHS_eqn_mean() + solver.get_RHS_eqn_fluct()
         cmb_alms_bestfit = solver.solve_CG(solver.LHS_func, rhs, err_tol=args.err_tol)
         cmb_cell_bestfit = hp.alm2cl(cmb_alms_bestfit)
