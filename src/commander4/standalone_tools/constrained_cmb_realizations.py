@@ -104,7 +104,21 @@ class ConstrainedCMB:
         self._build_preconditioner()
 
 
-    def _build_preconditioner(self) -> None:
+    def update_data(self, map_sky: NDArray, map_ivar: NDArray, beam_fwhm: NDArray) -> None:
+        """Update a Gibbs sample's likelihood while retaining the shared low-ell factor.
+
+        Map shapes, mask and C_l prior must stay fixed. Noise and beams may change: the original
+        low-ell factor remains a valid positive-definite preconditioner, though its effectiveness
+        can change. Only the inexpensive harmonic diagonal is refreshed.
+        """
+        if map_sky.shape != self.map_sky.shape or map_ivar.shape != map_sky.shape:
+            raise ValueError("Shared preconditioning requires the same band count and map nside.")
+        self.map_sky = map_sky
+        self.map_ivar = map_ivar
+        self.fwhm = beam_fwhm
+        self._build_preconditioner(rebuild_lowell=False)
+
+    def _build_preconditioner(self, rebuild_lowell: bool = True) -> None:
         """Build the harmonic diagonal and, for masked data, a coupled low-ell correction.
 
         The renormalized LHS is  (I + C^{1/2} sum_i B_i^T Y^T N_i^{-1} Y B_i C^{1/2}).
@@ -144,9 +158,10 @@ class ConstrainedCMB:
             self._precond_ell.min() / self._precond_ell.max(),
         )
 
-        self._lowell_factor = None
-        if self.precond_lmax > 0 and np.any(weights == 0) and np.any(weights > 0):
-            self._build_lowell_preconditioner(weights, min(self.precond_lmax, self.lmax))
+        if rebuild_lowell:
+            self._lowell_factor = None
+            if self.precond_lmax > 0 and np.any(weights == 0) and np.any(weights > 0):
+                self._build_lowell_preconditioner(weights, min(self.precond_lmax, self.lmax))
 
     def _build_lowell_preconditioner(self, weights: NDArray, lmax: int) -> None:
         """Factor a real-harmonic low-ell block, following C3's coupled CMB preconditioner.
@@ -389,6 +404,60 @@ def _read_mask(mask_path: str, nside: int, smoothing_fwhm_deg: float) -> NDArray
     return -np.expm1(-0.5 * (distance / sigma)**2)
 
 
+def _load_iteration(params: Bunch, iteration: int, compsep_path: str,
+                    band_files: list[tuple[str, str]], band_freqs: dict[str, float]) -> Bunch:
+    """Load one Gibbs sample's foreground-subtracted maps, noise, beams and CMB amplitudes.
+
+    Band filenames are absolute paths paired with parameter-file band names. All brightness
+    quantities returned here are in uK_CMB; the caller supplies the shared mask and C_l prior.
+    """
+    components = _build_intensity_components(params, compsep_path)
+    cmb_comps = []
+    foreground_comps = []
+    for component in components:
+        if isinstance(component, CMB):
+            cmb_comps.append(component)
+        else:
+            foreground_comps.append(component)
+    if len(cmb_comps) != 1:
+        raise ValueError(f"Expected exactly one CMB component, found {len(cmb_comps)}.")
+    foreground_sky = SkyModel(foreground_comps)
+    signal_maps = []
+    ivar_maps = []
+    beam_sizes = []
+    for band, filename in band_files:
+        nu = band_freqs[band]
+        with h5py.File(filename, "r") as handle:
+            observed = handle["maps/observed_sky"][0].astype(np.float64)
+            rms = handle["maps/rms"][0].astype(np.float64)
+            stored_unit = handle["metadata/band_unit"][()]
+            beam = np.radians(handle["metadata/map_fwhm_arcmin"][()] / 60.0)
+        if isinstance(stored_unit, bytes):
+            stored_unit = stored_unit.decode("utf-8")
+        nside = hp.npix2nside(rms.size)
+
+        # Band maps use stored_unit; the foreground model is uK_RJ at this band's frequency.
+        rj_to_uK_CMB = rj_to_band_unit_factor(nu, "uK_CMB")
+        band_to_uK_CMB = rj_to_uK_CMB / rj_to_band_unit_factor(nu, stored_unit)
+        observed *= band_to_uK_CMB
+        rms *= band_to_uK_CMB
+        foreground = foreground_sky.get_sky_at_nu(nu, nside, "I", fwhm=beam)[0]
+        observed -= foreground.astype(np.float64) * rj_to_uK_CMB
+        ivar = np.zeros_like(rms)
+        valid = rms > 0
+        ivar[valid] = 1.0 / rms[valid]**2
+        signal_maps.append(observed)
+        ivar_maps.append(ivar)
+        beam_sizes.append(beam)
+        logger.info(f"iter {iteration}: read {band} ({nu:g} GHz, {stored_unit}) at nside {nside}.")
+
+    # Chain CMB amplitudes are uK_RJ at their reference frequency, including for spectrum plots.
+    cmb_alms = np.ascontiguousarray(cmb_comps[0].alms[0]).astype(np.complex128)
+    cmb_alms *= rj_to_band_unit_factor(cmb_comps[0].nu_ref, "uK_CMB")
+    return Bunch(signal_maps=np.array(signal_maps), ivar_maps=np.array(ivar_maps),
+                 beam_sizes=np.array(beam_sizes), cmb_alms=cmb_alms, lmax=cmb_comps[0].lmax)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Draw constrained CMB realizations from a finished Commander4 run.")
@@ -398,9 +467,14 @@ def main() -> int:
              f"{paths.CHAINS_COMPSEP}/ and {paths.CHAINS_BANDS}/).")
     parser.add_argument("--output-dir", default=None,
                         help="Directory for outputs. Defaults to <run_dir>/cmb_realizations.")
-    parser.add_argument("--iter", type=int, default=None, dest="only_iter",
-                        help="Process only this Gibbs iteration (default: all found).")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--iter", type=int, nargs="+", default=None, dest="only_iters",
+                           help="Gibbs iteration numbers to process (default: all found).")
+    selection.add_argument("--burn-in", type=int, default=None, metavar="N",
+                           help="Discard iterations numbered N or lower; process all later samples.")
     parser.add_argument("--chain", type=int, default=1, help="Chain number to read (default 1).")
+    parser.add_argument("--n-realizations", type=int, default=1,
+                        help="Independent CMB realizations per Gibbs iteration (default 1).")
     parser.add_argument("--maxiter", type=int, default=1000,
                         help="Maximum CG iterations (default 1000).")
     parser.add_argument("--err-tol", type=float, default=1e-10,
@@ -417,6 +491,10 @@ def main() -> int:
                              "nearest excluded pixel center. Weights multiply inverse variance.")
     parser.add_argument("--verbose", "-v", action="store_true", help="Debug-level logging.")
     args = parser.parse_args()
+    if args.n_realizations < 1:
+        parser.error("--n-realizations must be positive.")
+    if args.burn_in is not None and args.burn_in < 0:
+        parser.error("--burn-in must be nonnegative.")
 
     logger.handlers.clear()
     stream_handler = logging.StreamHandler()
@@ -454,127 +532,99 @@ def main() -> int:
                 continue
         bands_by_iter.setdefault(iteration, []).append((band, filename))
     iterations = sorted(bands_by_iter)
-    if args.only_iter is not None:
-        iterations = [it for it in iterations if it == args.only_iter]
-    if not iterations:
-        logger.error(f"No band maps found in {bands_dir} for chain {args.chain}.")
-        return 1
+    if args.only_iters is not None:
+        iterations = [it for it in iterations if it in args.only_iters]
+    if args.burn_in is not None:
+        iterations = [it for it in iterations if it > args.burn_in]
 
+    # Discover usable samples before preparing anything expensive. The first selected sample
+    # supplies the reference noise weights and beams for the shared low-ell preconditioner.
+    jobs = []
     for iteration in iterations:
         compsep_path = os.path.join(compsep_dir, f"chain{args.chain:02d}_iter{iteration:04d}.h5")
         if not os.path.isfile(compsep_path):
             logger.warning(f"No compsep chain for iteration {iteration}; skipping.")
             continue
-
-        components = _build_intensity_components(params, compsep_path)
-        cmb_comps = [comp for comp in components if isinstance(comp, CMB)]
-        foreground_comps = [comp for comp in components if not isinstance(comp, CMB)]
-        if len(cmb_comps) != 1:
-            logger.error(f"Expected exactly one CMB component, found {len(cmb_comps)}.")
-            return 1
-        foreground_sky = SkyModel(foreground_comps)
-
-        signal_maps = []
-        ivar_maps = []
-        used_bands = []
-        beam_sizes = []
-        masks = []
+        band_files = []
         for band, filename in bands_by_iter[iteration]:
             band_name = band.split("_")[-1]
             if band_name not in band_freqs:
                 logger.warning(f"Band {band_name!r} is not in the parameter file; skipping.")
                 continue
-            nu = band_freqs[band_name]
-            with h5py.File(os.path.join(bands_dir, filename), "r") as f:
-                map_observed_sky = f["maps/observed_sky"][0].astype(np.float64)
-                map_rms = f["maps/rms"][0].astype(np.float64)
-                stored_unit = f["metadata/band_unit"][()]
-                beam_fwhm = np.radians(f["metadata/map_fwhm_arcmin"][()]/60.)
-            if isinstance(stored_unit, bytes):
-                stored_unit = stored_unit.decode("utf-8")
-            nside = hp.npix2nside(map_rms.shape[-1])
-
-            # Band maps use stored_unit; SkyModel always returns uK_RJ at the band's frequency.
-            # Convert both to thermodynamic units before subtracting the foreground model.
-            rj_to_uK_CMB = rj_to_band_unit_factor(nu, "uK_CMB")
-            band_to_uK_CMB = rj_to_uK_CMB / rj_to_band_unit_factor(nu, stored_unit)
-            map_observed_sky *= band_to_uK_CMB
-            map_rms *= band_to_uK_CMB
-            foreground_map = foreground_sky.get_sky_at_nu(nu, nside, "I", fwhm=beam_fwhm)[0]
-            foreground_map = foreground_map.astype(np.float64) * rj_to_uK_CMB
-            map_observed_sky -= foreground_map
-
-            if args.mask is not None:
-                mask = _read_mask(args.mask, nside, args.mask_fwhm_deg)
-            else:
-                mask = np.ones_like(map_rms)
-
-            map_ivar = np.zeros_like(map_rms)
-            b_mask = (map_rms > 0.)
-            map_ivar[b_mask] = 1. / map_rms[b_mask] ** 2.
-
-            signal_maps.append(map_observed_sky)
-            ivar_maps.append(map_ivar)
-            masks.append(mask)
-            used_bands.append((band_name, nu))
-            beam_sizes.append(beam_fwhm)
-            logger.info(f"iter {iteration}: read {band_name} ({nu:g} GHz, {stored_unit}) "
-                        f"at nside {nside}.")
-
-        if not signal_maps:
+            band_files.append((band_name, os.path.join(bands_dir, filename)))
+        if not band_files:
             logger.warning(f"No usable bands for iteration {iteration}; skipping.")
             continue
+        jobs.append((iteration, compsep_path, band_files))
+    if not jobs:
+        logger.error(f"No usable Gibbs samples found for chain {args.chain} and this selection.")
+        return 1
 
-        # Chain amplitudes are uK_RJ at the component's reference frequency, even for the CMB.
-        cmb_alms_in = np.ascontiguousarray(cmb_comps[0].alms[0]).astype(np.complex128)
-        cmb_alms_in *= rj_to_band_unit_factor(cmb_comps[0].nu_ref, "uK_CMB")
-        cmb_cell_in = hp.alm2cl(cmb_alms_in)
-        lmax = cmb_comps[0].lmax
+    iteration, compsep_path, band_files = jobs[0]
+    data = _load_iteration(params, iteration, compsep_path, band_files, band_freqs)
+    nside = hp.npix2nside(data.signal_maps.shape[-1])
+    if args.mask is None:
+        mask = np.ones(data.signal_maps.shape[-1])
+    else:
+        mask = _read_mask(args.mask, nside, args.mask_fwhm_deg)
 
-        # This prior could be improved (best would be to replace the prior with
-        # sampled C_ells in the full chain), but for now a nice smooth theory
-        # prior is okay.
-        import camb
-        pars = camb.set_params(ombh2=0.022, omch2=0.122, H0=67.5, ns=0.96, As=2e-9, tau=0.06, omk=0, mnu=0.06, lmax=lmax+100)
-        res = camb.get_results(pars)
-        spec = res.get_cmb_power_spectra(pars, CMB_unit="muK", raw_cl=True)["total"]
-        cmb_cell_prior = spec[:lmax+1, 0]
-        cmb_cell_prior[:2] = 1e6
+    # This fixed thermodynamic theory prior is shared by all Gibbs samples and realizations.
+    import camb
+    pars = camb.set_params(ombh2=0.022, omch2=0.122, H0=67.5, ns=0.96, As=2e-9,
+                           tau=0.06, omk=0, mnu=0.06, lmax=data.lmax + 100)
+    res = camb.get_results(pars)
+    spec = res.get_cmb_power_spectra(pars, CMB_unit="muK", raw_cl=True)["total"]
+    cmb_cell_prior = spec[:data.lmax + 1, 0]
+    cmb_cell_prior[:2] = 1e6
 
-        solver = ConstrainedCMB(np.array(signal_maps), np.array(ivar_maps), cmb_cell_prior,
-                                masks=np.array(masks), maxiter=args.maxiter,
-                                beam_fwhm=np.array(beam_sizes), precond_lmax=args.precond_lmax)
-        rhs = solver.get_RHS_eqn_mean() + solver.get_RHS_eqn_fluct()
-        cmb_alms_bestfit = solver.solve_CG(solver.LHS_func, rhs, err_tol=args.err_tol)
-        cmb_cell_bestfit = hp.alm2cl(cmb_alms_bestfit)
+    logger.info(f"Preparing shared preconditioner from Gibbs iteration {iteration} for "
+                f"{len(jobs)} iterations, {args.n_realizations} realizations each.")
+    solver = ConstrainedCMB(data.signal_maps, data.ivar_maps, cmb_cell_prior,
+                            masks=np.broadcast_to(mask, data.signal_maps.shape),
+                            beam_fwhm=data.beam_sizes, maxiter=args.maxiter,
+                            precond_lmax=args.precond_lmax)
 
-        nside = hp.npix2nside(signal_maps[0].shape[-1])
-        cmb_map_bestfit = hp.alm2map(cmb_alms_bestfit, nside)
-        out_base = os.path.join(output_dir, f"chain{args.chain:02d}_iter{iteration:04d}")
-        hp.write_map(f"{out_base}_cmb_realization.fits", cmb_map_bestfit, overwrite=True,
-                     column_units="uK_CMB", extra_header=[("BUNIT", "uK_CMB")])
+    for job_index, (iteration, compsep_path, band_files) in enumerate(jobs):
+        if job_index > 0:
+            data = _load_iteration(params, iteration, compsep_path, band_files, band_freqs)
+            if data.lmax != solver.lmax:
+                raise ValueError("Selected Gibbs samples must have the same CMB lmax.")
+            solver.update_data(data.signal_maps, data.ivar_maps, data.beam_sizes)
+        rhs_mean = solver.get_RHS_eqn_mean()
+        cmb_cell_in = hp.alm2cl(data.cmb_alms)
 
-        plt.figure()
+        for realization in range(1, args.n_realizations + 1):
+            logger.info(f"iter {iteration}: realization {realization}/{args.n_realizations}.")
+            rhs = rhs_mean + solver.get_RHS_eqn_fluct()
+            cmb_alms = solver.solve_CG(solver.LHS_func, rhs, err_tol=args.err_tol)
+            cmb_cell = hp.alm2cl(cmb_alms)
+            cmb_map = hp.alm2map(cmb_alms, nside)
+            suffix = f"_real{realization:04d}" if args.n_realizations > 1 else ""
+            out_base = os.path.join(output_dir, f"chain{args.chain:02d}_iter{iteration:04d}{suffix}")
+            hp.write_map(f"{out_base}_cmb_realization.fits", cmb_map, overwrite=True,
+                         column_units="uK_CMB", extra_header=[("BUNIT", "uK_CMB"),
+                         ("CHAIN", args.chain), ("ITER", iteration), ("REALIZ", realization)])
 
-        ls = np.arange(len(cmb_cell_in))
-        plt.loglog(ls, cmb_cell_in * ls * (ls + 1.) / 2. / np.pi, label="compsep CMB")
-        ls = np.arange(len(cmb_cell_bestfit))
-        plt.loglog(ls, cmb_cell_bestfit * ls * (ls + 1.) / 2. / np.pi, label="constrained realization")
-        ls = np.arange(len(cmb_cell_prior))
-        plt.loglog(ls, cmb_cell_prior * ls * (ls + 1.) / 2. / np.pi, c="k", label="Prior")
-        plt.xlabel("multipole $\\ell$")
-        plt.ylabel("$\\mathcal{D}_\\ell$ [$\\mu K_\\mathrm{CMB}^2$]")
-        plt.legend()
-        plt.savefig(f"{out_base}_Cell.png", dpi=120, bbox_inches="tight")
-        plt.close()
+            plt.figure()
+            ls = np.arange(len(cmb_cell_in))
+            plt.loglog(ls, cmb_cell_in * ls * (ls + 1.) / (2. * np.pi), label="compsep CMB")
+            ls = np.arange(len(cmb_cell))
+            plt.loglog(ls, cmb_cell * ls * (ls + 1.) / (2. * np.pi), label="constrained realization")
+            ls = np.arange(len(cmb_cell_prior))
+            plt.loglog(ls, cmb_cell_prior * ls * (ls + 1.) / (2. * np.pi), c="k", label="Prior")
+            plt.xlabel("multipole $\\ell$")
+            plt.ylabel("$\\mathcal{D}_\\ell$ [$\\mu K_\\mathrm{CMB}^2$]")
+            plt.legend()
+            plt.savefig(f"{out_base}_Cell.png", dpi=120, bbox_inches="tight")
+            plt.close()
 
-        plt.figure()
-        hp.mollview(cmb_map_bestfit, cmap="RdBu_r", title=f"Constrained CMB, iter {iteration}",
-                    min=-350., max=350., unit="uK_CMB")
-        plt.savefig(f"{out_base}_cmb_realization.png", dpi=120, bbox_inches="tight")
-        plt.close()
-        logger.info(f"iter {iteration}: wrote {out_base}_cmb_realization.fits (+ 2 figures) from "
-                    f"{len(used_bands)} bands.")
+            hp.mollview(cmb_map, cmap="RdBu_r",
+                        title=f"Constrained CMB, iter {iteration}, realization {realization}",
+                        min=-350., max=350., unit="uK_CMB")
+            plt.savefig(f"{out_base}_cmb_realization.png", dpi=120, bbox_inches="tight")
+            plt.close()
+            logger.info(f"iter {iteration}: wrote {out_base}_cmb_realization.fits (+ 2 figures) "
+                        f"from {len(band_files)} bands.")
 
     return 0
 

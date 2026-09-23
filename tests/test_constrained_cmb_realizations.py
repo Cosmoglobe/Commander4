@@ -10,13 +10,19 @@ import h5py
 import numpy as np
 import pytest
 import yaml
+from astropy.io import fits
 from scipy.special import sph_harm_y
 
+from commander4.parameters.bunch import as_bunch_recursive
 from commander4.standalone_tools import constrained_cmb_realizations as cr
+from commander4.units import SUPPORTED_BAND_UNITS, rj_to_band_unit_factor
 
 
 @pytest.mark.parametrize("lmax", [3, 11])
-def test_masked_mean_matches_dense_posterior(lmax: int, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("precond_lmax", [0, 2, 32])
+def test_masked_mean_matches_dense_posterior(
+    lmax: int, precond_lmax: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Recover modes above 2*nside and also accept a prior shorter than that old cutoff."""
     monkeypatch.setattr(cr, "nthreads", 1)
     nside = 4
@@ -60,7 +66,7 @@ def test_masked_mean_matches_dense_posterior(lmax: int, monkeypatch: pytest.Monk
     expected = np.linalg.solve(precision, design.T @ (weight * data))
 
     solver = cr.ConstrainedCMB(data[None, :], ivar[None, :], cl, masks=mask[None, :],
-                               beam_fwhm=np.array([beam]), maxiter=500)
+                               beam_fwhm=np.array([beam]), maxiter=500, precond_lmax=precond_lmax)
     assert solver.lmax == lmax
     actual_alm = solver.solve_CG(solver.LHS_func, solver.get_RHS_eqn_mean(), err_tol=1e-22)
     alm_weight = np.full(solver.alm_len, 2.0)
@@ -75,8 +81,10 @@ def test_masked_mean_matches_dense_posterior(lmax: int, monkeypatch: pytest.Monk
 
 @pytest.mark.parametrize("lmax", [3, 11])
 @pytest.mark.parametrize("apodization_deg", [None, 20.0])
+@pytest.mark.parametrize("precond_lmax", [0, 32])
 def test_cli_uses_component_lmax(
-    lmax: int, apodization_deg: float | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    lmax: int, apodization_deg: float | None, precond_lmax: int,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Carry the component cutoff and optional mask taper through chain loading and sampling."""
     monkeypatch.setattr(cr, "nthreads", 1)
@@ -116,6 +124,7 @@ def test_cli_uses_component_lmax(
     def record_solve(self, lhs, rhs, err_tol: float = 1e-6) -> np.ndarray:
         assert self.lmax == lmax
         assert len(self.Cl_prior) == lmax + 1
+        assert (self._lowell_factor is not None) == (precond_lmax > 0)
         np.testing.assert_array_equal(self.masks[0, :20], 0.0)
         if apodization_deg is None:
             np.testing.assert_array_equal(self.masks[0], binary_mask)
@@ -127,6 +136,8 @@ def test_cli_uses_component_lmax(
 
     monkeypatch.setattr(cr.ConstrainedCMB, "solve_CG", record_solve)
     argv = ["c4-cmb-realizations", str(tmp_path), "--iter", "1", "--mask", str(mask_path)]
+    if precond_lmax == 0:
+        argv.extend(["--precond-lmax", "0"])
     if apodization_deg is not None:
         argv.extend(["--mask-fwhm-deg", str(apodization_deg)])
     monkeypatch.setattr(sys, "argv", argv)
@@ -224,3 +235,379 @@ def test_apodized_mask_excludes_contamination(tmp_path: Path, monkeypatch: pytes
 def test_invalid_mask_width_is_rejected(width: float) -> None:
     with pytest.raises(ValueError, match="finite and nonnegative"):
         cr._read_mask("unused.fits", 8, width)
+
+
+def test_coarse_preconditioner_is_symmetric_positive_and_preserves_likelihood(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The coarse-grid block is a CG-safe approximation and changes no likelihood operations."""
+    monkeypatch.setattr(cr, "nthreads", 1)
+    rng = np.random.default_rng(9)
+    nside, lmax = 8, 11
+    npix = hp.nside2npix(nside)
+    sky = rng.normal(size=(2, npix))
+    ivar = rng.uniform(1, 5, size=(2, npix))
+    masks = (rng.uniform(size=(2, npix)) > 0.3).astype(float)
+    cl = 1 / (np.arange(lmax + 1) + 1.0)**2
+    cl[:2] = 0.0
+    solver = cr.ConstrainedCMB(sky, ivar, cl, masks=masks, precond_lmax=4)
+    diagonal = cr.ConstrainedCMB(sky, ivar, cl, masks=masks, precond_lmax=0)
+    x = rng.normal(size=solver.alm_len) + 1j*rng.normal(size=solver.alm_len)
+    y = rng.normal(size=solver.alm_len) + 1j*rng.normal(size=solver.alm_len)
+    x[:lmax + 1] = x[:lmax + 1].real
+    y[:lmax + 1] = y[:lmax + 1].real
+    original = x.copy()
+    mx = solver.preconditioner(x)
+    my = solver.preconditioner(y)
+    assert solver.dot_alm(x, my) == pytest.approx(solver.dot_alm(mx, y), rel=1e-12)
+    assert solver.dot_alm(x, mx) > 0
+    np.testing.assert_array_equal(x, original)
+    np.testing.assert_allclose(solver.preconditioner(x + 2*y), mx + 2*my, atol=1e-12)
+    np.testing.assert_array_equal(solver.LHS_func(x), diagonal.LHS_func(x))
+    np.testing.assert_array_equal(solver.get_RHS_eqn_mean(), diagonal.get_RHS_eqn_mean())
+    ell, _ = hp.Alm.getlm(lmax)
+    np.testing.assert_array_equal(mx[ell > 4], diagonal.preconditioner(x)[ell > 4])
+
+
+def test_full_lowell_block_accelerates_the_same_solution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the block spans the full system, CG should solve in one step with the same answer."""
+    monkeypatch.setattr(cr, "nthreads", 1)
+    rng = np.random.default_rng(17)
+    nside, lmax = 4, 11
+    npix = hp.nside2npix(nside)
+    sky = rng.normal(size=(1, npix))
+    ivar = np.full_like(sky, 1000.0)
+    masks = np.ones_like(sky)
+    masks[:, :npix//3] = 0
+    cl = 1 / (np.arange(lmax + 1) + 1.0)**2
+    solutions = []
+    counts = []
+    for cutoff in [0, lmax]:
+        solver = cr.ConstrainedCMB(sky, ivar, cl, masks=masks, maxiter=500, precond_lmax=cutoff)
+        count = 0
+
+        def counted_lhs(x: np.ndarray) -> np.ndarray:
+            nonlocal count
+            count += 1
+            return solver.LHS_func(x)
+
+        solutions.append(solver.solve_CG(counted_lhs, solver.get_RHS_eqn_mean(), err_tol=1e-20))
+        counts.append(count)
+    assert counts[1] == 1
+    assert counts[0] > 10
+    np.testing.assert_allclose(solutions[0], solutions[1], atol=1e-8)
+
+
+def test_no_data_preconditioner_and_prior_draw_are_finite(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cr, "nthreads", 1)
+    sky = np.zeros((1, hp.nside2npix(4)))
+    solver = cr.ConstrainedCMB(sky, np.ones_like(sky), np.ones(9), masks=np.zeros_like(sky))
+    assert solver._lowell_factor is None
+    np.testing.assert_array_equal(solver._precond_ell, 1.0)
+    rhs = solver.get_RHS_eqn_fluct()
+    np.testing.assert_allclose(solver.solve_CG(solver.LHS_func, rhs), rhs, atol=1e-14)
+
+
+def test_full_sky_uses_diagonal_preconditioner() -> None:
+    sky = np.zeros((1, hp.nside2npix(4)))
+    solver = cr.ConstrainedCMB(sky, np.ones_like(sky), np.ones(9))
+    assert solver._lowell_factor is None
+
+
+def test_invalid_preconditioner_cutoff_is_rejected() -> None:
+    sky = np.zeros((1, hp.nside2npix(4)))
+    with pytest.raises(ValueError, match="Preconditioner lmax"):
+        cr.ConstrainedCMB(sky, np.ones_like(sky), np.ones(9), precond_lmax=-1)
+
+
+def test_updated_data_reuses_lowell_factor_and_solves_current_likelihood(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Changing noise and beams refreshes the physics without refactoring the shared block."""
+    monkeypatch.setattr(cr, "nthreads", 1)
+    rng = np.random.default_rng(51)
+    nside, lmax = 4, 8
+    npix = hp.nside2npix(nside)
+    sky = rng.normal(size=(2, npix))
+    ivar = rng.uniform(1, 2, size=sky.shape)
+    masks = np.ones_like(sky)
+    masks[:, :npix//3] = 0
+    cl = 2 / (np.arange(lmax + 1) + 1.0)**2
+    solver = cr.ConstrainedCMB(sky, ivar, cl, masks=masks, maxiter=500)
+    factor = solver._lowell_factor
+    first_diagonal = solver._precond_ell.copy()
+    new_sky = rng.normal(size=sky.shape)
+    new_ivar = ivar * rng.uniform(2, 8, size=sky.shape)
+    new_beams = np.radians([8.0, 15.0])
+
+    def forbid_rebuild(*args, **kwargs) -> None:
+        pytest.fail("The low-ell matrix must not be rebuilt between Gibbs samples.")
+
+    monkeypatch.setattr(solver, "_build_lowell_preconditioner", forbid_rebuild)
+    solver.update_data(new_sky, new_ivar, new_beams)
+    assert solver._lowell_factor is factor
+    assert not np.array_equal(solver._precond_ell, first_diagonal)
+    reference = cr.ConstrainedCMB(new_sky, new_ivar, cl, masks=masks, beam_fwhm=new_beams,
+                                  maxiter=500, precond_lmax=0)
+    np.testing.assert_array_equal(solver._precond_ell, reference._precond_ell)
+    np.testing.assert_array_equal(solver.get_RHS_eqn_mean(), reference.get_RHS_eqn_mean())
+    rhs = reference.get_RHS_eqn_mean() + reference.get_RHS_eqn_fluct()
+    np.testing.assert_array_equal(solver.LHS_func(rhs), reference.LHS_func(rhs))
+    actual = solver.solve_CG(solver.LHS_func, rhs, err_tol=1e-22)
+    expected = reference.solve_CG(reference.LHS_func, rhs, err_tol=1e-22)
+    np.testing.assert_allclose(actual, expected, atol=1e-9)
+    with pytest.raises(ValueError, match="same band count and map nside"):
+        solver.update_data(new_sky[:, :12], new_ivar[:, :12], new_beams)
+
+
+@pytest.mark.parametrize("selection, selected", [
+    ([], [1, 3, 5, 8]),
+    (["--burn-in", "3"], [5, 8]),
+    (["--iter", "3", "8"], [3, 8]),
+    (["--burn-in", "8"], []),
+])
+def test_cli_reuses_setup_across_iterations_and_realizations(
+    selection: list[str], selected: list[int], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sparse Gibbs numbering, changing foregrounds/noise, and three independent draws per sample."""
+    monkeypatch.setattr(cr, "nthreads", 1)
+    lmax, nside = 3, 2
+    params = {
+        "components": {
+            "CMB": {"enabled": True, "component_class": "CMB", "params": {
+                "polarization": "I", "shortname": "cmb", "lmax": lmax,
+                "spatially_varying_MM": False, "Cl_prior_amplitude": None,
+            }},
+            "Dust": {"enabled": True, "component_class": "ThermalDust", "params": {
+                "polarization": "I", "shortname": "dust", "lmax": lmax,
+                "spatially_varying_MM": False, "Cl_prior_amplitude": None,
+                "nu_ref": 100.0, "beta": 1.54, "T": 20.0,
+            }},
+        },
+        "compsep": {"double_precision": True},
+        "experiments": {"Sim": {"bands": {"Band100": {"freq": 100.0}}}},
+    }
+    (tmp_path / "chains_compsep").mkdir()
+    (tmp_path / "chains_bands").mkdir()
+    npix = hp.nside2npix(nside)
+    for iteration in [1, 3, 5, 8]:
+        compsep_path = tmp_path / f"chains_compsep/chain01_iter{iteration:04d}.h5"
+        dust = np.zeros((1, hp.Alm.getsize(lmax)), dtype=complex)
+        dust[0, 0] = 2*iteration*np.sqrt(4*np.pi)
+        with h5py.File(compsep_path, "w") as handle:
+            handle["metadata/parameter_file_as_string"] = yaml.safe_dump(params)
+            handle["comps/cmb/alms"] = np.zeros_like(dust)
+            handle["comps/dust/alms"] = dust
+        band_path = tmp_path / f"chains_bands/Sim_Band100_chain01_iter{iteration:04d}.h5"
+        with h5py.File(band_path, "w") as handle:
+            handle["maps/observed_sky"] = np.full((1, npix), 12.0 + iteration)
+            handle["maps/rms"] = np.full((1, npix), 0.5 + 0.1*iteration)
+            handle["metadata/band_unit"] = "uK_RJ"
+            handle["metadata/map_fwhm_arcmin"] = 10.0*iteration
+    mask = np.ones(npix)
+    mask[:12] = 0
+    mask_path = tmp_path / "mask.fits"
+    hp.write_map(mask_path, mask, dtype=np.float64)
+
+    events = []
+    factors = []
+    original_load = cr._load_iteration
+    original_mask = cr._read_mask
+    original_build = cr.ConstrainedCMB._build_lowell_preconditioner
+    original_mean = cr.ConstrainedCMB.get_RHS_eqn_mean
+    original_solve = cr.ConstrainedCMB.solve_CG
+
+    def load_sample(params, iteration, *args):
+        events.append(("load", iteration))
+        result = original_load(params, iteration, *args)
+        conversion = rj_to_band_unit_factor(100.0, "uK_CMB")
+        np.testing.assert_allclose(result.signal_maps, (12.0 - iteration)*conversion, atol=1e-5)
+        np.testing.assert_allclose(result.ivar_maps, 1/((0.5 + 0.1*iteration)*conversion)**2)
+        return result
+
+    def read_mask(*args):
+        events.append(("mask", None))
+        return original_mask(*args)
+
+    def get_results(pars):
+        events.append(("prior", None))
+        return SimpleNamespace(get_cmb_power_spectra=lambda *args, **kwargs: {
+            "total": np.ones((200, 4))})
+
+    def build(self, weights, cutoff):
+        events.append(("build", None))
+        return original_build(self, weights, cutoff)
+
+    def mean(self):
+        events.append(("mean", None))
+        return original_mean(self)
+
+    def solve(self, lhs, rhs, err_tol=1e-6):
+        events.append(("solve", None))
+        factors.append(self._lowell_factor)
+        return original_solve(self, lhs, rhs, err_tol)
+
+    monkeypatch.setattr(cr, "_load_iteration", load_sample)
+    monkeypatch.setattr(cr, "_read_mask", read_mask)
+    monkeypatch.setattr(camb, "get_results", get_results)
+    monkeypatch.setattr(cr.ConstrainedCMB, "_build_lowell_preconditioner", build)
+    monkeypatch.setattr(cr.ConstrainedCMB, "get_RHS_eqn_mean", mean)
+    monkeypatch.setattr(cr.ConstrainedCMB, "solve_CG", solve)
+    monkeypatch.setattr(sys, "argv", ["c4-cmb-realizations", str(tmp_path), "--mask", str(mask_path),
+                                     "--n-realizations", "3", *selection])
+    initial_figures = cr.plt.get_fignums()
+    assert cr.main() == (0 if selected else 1)
+    assert cr.plt.get_fignums() == initial_figures
+    expected_events = []
+    if selected:
+        expected_events = [("load", selected[0]), ("mask", None), ("prior", None), ("build", None)]
+        for index, iteration in enumerate(selected):
+            if index > 0:
+                expected_events.append(("load", iteration))
+            expected_events.append(("mean", None))
+            expected_events.extend([("solve", None)]*3)
+        for factor in factors:
+            assert factor is factors[0]
+    assert events == expected_events
+    output_dir = tmp_path / "cmb_realizations"
+    assert len(list(output_dir.glob("*.fits"))) == 3*len(selected)
+    assert len(list(output_dir.glob("*.png"))) == 6*len(selected)
+    for iteration in selected:
+        maps = []
+        for realization in [1, 2, 3]:
+            path = output_dir / (
+                f"chain01_iter{iteration:04d}_real{realization:04d}_cmb_realization.fits")
+            maps.append(hp.read_map(path))
+            with fits.open(path) as handle:
+                assert handle[1].header["CHAIN"] == 1
+                assert handle[1].header["ITER"] == iteration
+                assert handle[1].header["REALIZ"] == realization
+                assert handle[1].header["BUNIT"] == "uK_CMB"
+        for index in range(1, 3):
+            assert not np.array_equal(maps[0], maps[index])
+
+
+@pytest.mark.parametrize("options", [
+    ["--n-realizations", "0"], ["--burn-in", "-1"], ["--burn-in", "3", "--iter", "5"],
+])
+def test_invalid_batch_options_are_rejected(options: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["c4-cmb-realizations", "unused", *options])
+    with pytest.raises(SystemExit) as exc:
+        cr.main()
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("stored_unit", [*SUPPORTED_BAND_UNITS, "mixed"])
+def test_cli_uses_thermodynamic_units_throughout(
+    stored_unit: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Equivalent band units give the same residuals, noise weights, and sampled CMB map."""
+    monkeypatch.setattr(cr, "nthreads", 1)
+    nside, lmax = 4, 5
+    npix = hp.nside2npix(nside)
+    cmb_ref = 217.0  # A reference far from the RJ limit also exposes spectrum-unit errors.
+    params = {
+        "components": {
+            "CMB": {"enabled": True, "component_class": "CMB", "params": {
+                "polarization": "I", "shortname": "cmb", "lmax": lmax, "nu_ref": cmb_ref,
+                "spatially_varying_MM": False, "Cl_prior_amplitude": None,
+            }},
+            "Dust": {"enabled": True, "component_class": "ThermalDust", "params": {
+                "polarization": "I", "shortname": "dust", "lmax": lmax,
+                "nu_ref": 353.0, "beta": 1.54, "T": 20.0,
+                "spatially_varying_MM": False, "Cl_prior_amplitude": None,
+            }},
+        },
+        "compsep": {"double_precision": True},
+        "experiments": {"Sim": {"bands": {
+            "Band100": {"freq": 100.0}, "Band353": {"freq": 353.0},
+        }}},
+    }
+    (tmp_path / "chains_compsep").mkdir()
+    (tmp_path / "chains_bands").mkdir()
+    chain_path = tmp_path / "chains_compsep/chain01_iter0001.h5"
+    cmb_alm = np.zeros(hp.Alm.getsize(lmax), dtype=complex)
+    cmb_alm[hp.Alm.getidx(lmax, 2, 0)] = 3.0
+    cmb_alm[hp.Alm.getidx(lmax, 3, 1)] = 2.0 + 1.0j
+    dust_alm = np.zeros_like(cmb_alm)
+    dust_alm[0] = 50.0
+    dust_alm[hp.Alm.getidx(lmax, 4, 2)] = 10.0 + 5.0j
+    with h5py.File(chain_path, "w") as handle:
+        handle["metadata/parameter_file_as_string"] = yaml.safe_dump(params)
+        handle["comps/cmb/alms"] = cmb_alm[None, :] / rj_to_band_unit_factor(cmb_ref, "uK_CMB")
+        handle["comps/dust/alms"] = dust_alm[None, :]
+    components = cr._build_intensity_components(as_bunch_recursive(params), str(chain_path))
+    foregrounds = []
+    for component in components:
+        if not isinstance(component, cr.CMB):
+            foregrounds.append(component)
+    foreground_sky = cr.SkyModel(foregrounds)
+    signal_maps = []
+    ivar_maps = []
+    beam_sizes = []
+    for band, nu, fwhm_arcmin in [("Band100", 100.0, 20.0), ("Band353", 353.0, 100.0)]:
+        beam = np.radians(fwhm_arcmin / 60.0)
+        cmb_map = cr.alm2map(hp.almxfl(cmb_alm, hp.gauss_beam(beam, lmax=lmax)), nside, lmax)
+        noise = np.linspace(-0.2, 0.2, npix)
+        rms = np.linspace(0.5, 1.5, npix)
+        foreground_rj = foreground_sky.get_sky_at_nu(nu, nside, "I", fwhm=beam)[0]
+        observed_cmb = cmb_map + noise + foreground_rj.astype(float) * rj_to_band_unit_factor(
+            nu, "uK_CMB")
+        unit = stored_unit
+        if stored_unit == "mixed":
+            unit = "K_CMB" if nu == 100.0 else "MJy/sr"
+        cmb_to_stored = rj_to_band_unit_factor(nu, unit) / rj_to_band_unit_factor(nu, "uK_CMB")
+        band_path = tmp_path / f"chains_bands/Sim_{band}_chain01_iter0001.h5"
+        with h5py.File(band_path, "w") as handle:
+            handle["maps/observed_sky"] = (observed_cmb * cmb_to_stored)[None, :]
+            handle["maps/rms"] = (rms * cmb_to_stored)[None, :]
+            handle["metadata/band_unit"] = unit
+            handle["metadata/map_fwhm_arcmin"] = fwhm_arcmin
+        signal_maps.append(cmb_map + noise)
+        ivar_maps.append(1 / rms**2)
+        beam_sizes.append(beam)
+
+    def theory_spectra(pars, CMB_unit: str, raw_cl: bool) -> dict[str, np.ndarray]:
+        assert CMB_unit == "muK" and raw_cl
+        return {"total": np.ones((200, 4))}
+
+    monkeypatch.setattr(camb, "get_results", lambda pars: SimpleNamespace(
+        get_cmb_power_spectra=theory_spectra))
+    prior = np.ones(lmax + 1)
+    prior[:2] = 1e6
+    reference = cr.ConstrainedCMB(np.array(signal_maps), np.array(ivar_maps), prior,
+                                  beam_fwhm=np.array(beam_sizes), maxiter=1000)
+    np.random.seed(81)
+    rhs = reference.get_RHS_eqn_mean() + reference.get_RHS_eqn_fluct()
+    expected_alm = reference.solve_CG(reference.LHS_func, rhs, err_tol=1e-10)
+    original_solve = cr.ConstrainedCMB.solve_CG
+
+    def check_units(self, lhs, rhs, err_tol: float = 1e-6) -> np.ndarray:
+        np.testing.assert_allclose(self.map_sky, signal_maps, atol=1e-11)
+        np.testing.assert_allclose(self.map_ivar, ivar_maps, rtol=1e-12)
+        np.testing.assert_array_equal(self.Cl_prior, prior)
+        result = original_solve(self, lhs, rhs, err_tol)
+        np.testing.assert_allclose(result, expected_alm, atol=1e-8)
+        return result
+
+    original_loglog = cr.plt.loglog
+    plotted_spectra = []
+
+    def record_spectrum(ell, spectrum, **kwargs):
+        plotted_spectra.append(np.array(spectrum))
+        return original_loglog(ell, spectrum, **kwargs)
+
+    monkeypatch.setattr(cr.ConstrainedCMB, "solve_CG", check_units)
+    monkeypatch.setattr(cr.plt, "loglog", record_spectrum)
+    monkeypatch.setattr(sys, "argv", ["c4-cmb-realizations", str(tmp_path), "--iter", "1"])
+    np.random.seed(81)
+    assert cr.main() == 0
+    ell = np.arange(lmax + 1)
+    expected_dl = hp.alm2cl(cmb_alm) * ell * (ell + 1) / (2 * np.pi)
+    np.testing.assert_allclose(plotted_spectra[0], expected_dl, atol=1e-12)
+    output_path = tmp_path / "cmb_realizations/chain01_iter0001_cmb_realization.fits"
+    np.testing.assert_allclose(hp.read_map(output_path), cr.alm2map(expected_alm, nside, lmax),
+                               atol=1e-8)
+    with fits.open(output_path) as handle:
+        assert handle[1].header["BUNIT"] == "uK_CMB"
+        assert handle[1].header["TUNIT1"] == "uK_CMB"
