@@ -20,6 +20,7 @@ import re
 import yaml
 from pixell.bunch import Bunch
 from numpy.typing import NDArray
+from scipy.linalg import cho_factor, cho_solve
 
 from commander4.file_io import paths
 from commander4.parameters.bunch import as_bunch_recursive
@@ -76,8 +77,11 @@ class ConstrainedCMB:
 
     def __init__(self, map_sky: NDArray, map_ivar: NDArray, cmb_Cell: NDArray,
                  masks: NDArray | None = None, beam_fwhm: NDArray | None = None,
-                 maxiter: int = 100) -> None:
+                 maxiter: int = 100, precond_lmax: int = 32) -> None:
+        if precond_lmax < 0:
+            raise ValueError("Preconditioner lmax must be nonnegative; 0 selects diagonal only.")
         self.maxiter = maxiter
+        self.precond_lmax = precond_lmax
         self.map_sky = map_sky
         self.map_ivar = map_ivar
         self.masks = masks
@@ -96,20 +100,21 @@ class ConstrainedCMB:
         Cl_safe[Cl_safe < 0] = 0.0
         self.Cl_sqrt = np.sqrt(Cl_safe)
 
-        # Build diagonal preconditioner in harmonic space
+        # Use a coupled low-ell block for masked skies, and a diagonal approximation above it.
         self._build_preconditioner()
 
 
-    def _build_preconditioner(self):
-        """Build a diagonal (in ell) preconditioner for the renormalized CG system.
+    def _build_preconditioner(self) -> None:
+        """Build the harmonic diagonal and, for masked data, a coupled low-ell correction.
 
         The renormalized LHS is  (I + C^{1/2} sum_i B_i^T Y^T N_i^{-1} Y B_i C^{1/2}).
         Approximating pixel-space noise by its sky-average makes this diagonal
         in harmonic space:
 
-            d_ell = 1 + C_ell * sum_i  b_ell_i^2 * <1/sigma_i^2>
+            d_ell = 1 + C_ell * (Npix / 4pi) * sum_i b_ell_i^2 * <mask_i / sigma_i^2>
 
-        The preconditioner is M = 1 / d_ell.
+        The high-ell preconditioner is M = 1 / d_ell. A dense block replaces its low-ell entries
+        when pixels have zero weight. This captures mask-induced coupling between harmonic modes.
         """
         Cl = self.Cl_sqrt ** 2  # = Cl_safe, the clamped version
         diag = np.ones(self.lmax + 1)  # identity contribution
@@ -120,6 +125,8 @@ class ConstrainedCMB:
         pix_factor = self.npix / (4.0 * np.pi)
 
         self.beams = []
+        weights = self.map_ivar * self.masks
+        weights = np.where(np.isfinite(weights), weights, 0.0)
 
         for iband in range(self.nband):
             # For now, beams are assumed to be Gaussian, but if not, they could
@@ -127,9 +134,7 @@ class ConstrainedCMB:
             bl = hp.gauss_beam(self.fwhm[iband], lmax=self.lmax)
             self.beams.append(bl)
 
-            inv_noise_var = self.map_ivar[iband] * self.masks[iband]
-            inv_noise_var = np.where(np.isfinite(inv_noise_var), inv_noise_var, 0.0)
-            avg_inv_noise_var = np.mean(inv_noise_var[inv_noise_var > 0])
+            avg_inv_noise_var = np.mean(weights[iband])
 
             diag += Cl * bl ** 2 * avg_inv_noise_var * pix_factor
 
@@ -139,9 +144,68 @@ class ConstrainedCMB:
             self._precond_ell.min() / self._precond_ell.max(),
         )
 
-    def preconditioner(self, x):
-        """Apply the diagonal harmonic-space preconditioner."""
-        return hp.almxfl(x, self._precond_ell)
+        self._lowell_factor = None
+        if self.precond_lmax > 0 and np.any(weights == 0) and np.any(weights > 0):
+            self._build_lowell_preconditioner(weights, min(self.precond_lmax, self.lmax))
+
+    def _build_lowell_preconditioner(self, weights: NDArray, lmax: int) -> None:
+        """Factor a real-harmonic low-ell block, following C3's coupled CMB preconditioner.
+
+        Only the preconditioner uses a coarser pixel grid. Summing inverse variances into its
+        pixels preserves their total weight. The likelihood continues to use the original maps.
+        Real coordinates are a_l0, sqrt(2)*Re(a_lm), sqrt(2)*Im(a_lm), giving a Euclidean inner
+        product equal to dot_alm and a symmetric positive-definite matrix for Cholesky.
+        """
+        nside = min(self.nside, 2**int(np.ceil(np.log2(max(1, lmax)))))
+        coarse_weights = []
+        for weight in weights:
+            coarse_weights.append(hp.ud_grade(weight, nside, power=-2))
+        n_m0 = lmax + 1
+        nalm = hp.Alm.getsize(lmax)
+        nmodes = (lmax + 1)**2
+        matrix = np.empty((nmodes, nmodes))
+        sqrt_cl = self.Cl_sqrt[:lmax + 1]
+
+        for column in range(nmodes):
+            basis = np.zeros(nalm, dtype=np.complex128)
+            if column < n_m0:
+                basis[column] = 1.0
+            elif column < nalm:
+                basis[column] = 1.0 / np.sqrt(2.0)
+            else:
+                basis[column - nalm + n_m0] = 1j / np.sqrt(2.0)
+            result = basis.copy()
+            for band in range(self.nband):
+                response = sqrt_cl * self.beams[band][:lmax + 1]
+                sky = alm2map(hp.almxfl(basis, response), nside, lmax)
+                weighted_alm = alm2map_adjoint(sky * coarse_weights[band], nside, lmax)
+                result += hp.almxfl(weighted_alm, response)
+            matrix[:n_m0, column] = result[:n_m0].real
+            matrix[n_m0:nalm, column] = np.sqrt(2.0) * result[n_m0:].real
+            matrix[nalm:, column] = np.sqrt(2.0) * result[n_m0:].imag
+
+        matrix = 0.5 * (matrix + matrix.T)
+        self._lowell_factor = cho_factor(matrix, lower=True, overwrite_a=True, check_finite=False)
+        ell, m = hp.Alm.getlm(lmax)
+        self._lowell_indices = hp.Alm.getidx(self.lmax, ell, m)
+        self._lowell_n_m0 = n_m0
+        logger.info(f"Built coupled CMB preconditioner through ell={lmax} "
+                    f"({nmodes} real modes, nside={nside}).")
+
+    def preconditioner(self, x: NDArray) -> NDArray:
+        """Apply the coupled low-ell block and the harmonic diagonal at higher ell."""
+        result = hp.almxfl(x, self._precond_ell)
+        if self._lowell_factor is not None:
+            low = x[self._lowell_indices]
+            n_m0 = self._lowell_n_m0
+            nalm = low.size
+            rhs = np.concatenate([low[:n_m0].real, np.sqrt(2.0) * low[n_m0:].real,
+                                  np.sqrt(2.0) * low[n_m0:].imag])
+            solved = cho_solve(self._lowell_factor, rhs, check_finite=False)
+            low[:n_m0] = solved[:n_m0]
+            low[n_m0:] = (solved[n_m0:nalm] + 1j * solved[nalm:]) / np.sqrt(2.0)
+            result[self._lowell_indices] = low
+        return result
 
     def dot_alm(self, alm1, alm2):
         """ Function calculating the dot product of two alms, given that they follow the Healpy standard,
@@ -341,6 +405,9 @@ def main() -> int:
                         help="Maximum CG iterations (default 1000).")
     parser.add_argument("--err-tol", type=float, default=1e-10,
                         help="CG residual to stop at (default 1e-10).")
+    parser.add_argument("--precond-lmax", type=int, default=32,
+                        help="Coupled low-ell preconditioner cutoff for masked runs (default 32). "
+                             "Set 0 for diagonal only. Larger values cost more memory and setup.")
     parser.add_argument("--mask", default=None,
                         help="FITS binary mask (first field). Zero pixels are excluded; any masked "
                              "area excludes a pixel when reducing resolution. Optional.")
@@ -476,7 +543,7 @@ def main() -> int:
 
         solver = ConstrainedCMB(np.array(signal_maps), np.array(ivar_maps), cmb_cell_prior,
                                 masks=np.array(masks), maxiter=args.maxiter,
-                                beam_fwhm=np.array(beam_sizes))
+                                beam_fwhm=np.array(beam_sizes), precond_lmax=args.precond_lmax)
         rhs = solver.get_RHS_eqn_mean() + solver.get_RHS_eqn_fluct()
         cmb_alms_bestfit = solver.solve_CG(solver.LHS_func, rhs, err_tol=args.err_tol)
         cmb_cell_bestfit = hp.alm2cl(cmb_alms_bestfit)
