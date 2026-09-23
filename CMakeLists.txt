@@ -57,8 +57,21 @@ set_target_properties(cmdr4_ctypes PROPERTIES
   PREFIX ""
 )
 
-find_package(pybind11 CONFIG REQUIRED)
-pybind11_add_module(${PKGNAME} MODULE ${CXX_SOURCES})
+execute_process(
+        COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        OUTPUT_VARIABLE NB_DIR)
+list(APPEND CMAKE_PREFIX_PATH "${NB_DIR}")
+find_package(nanobind CONFIG REQUIRED)
+nanobind_add_module(${PKGNAME} FREE_THREADED NOSTRIP NB_SUPPRESS_WARNINGS NOMINSIZE ${CXX_SOURCES} ${CXX_SOURCES})
+#nanobind_add_stub(
+#    ${PKGNAME}_stub
+#    MODULE commander4.${PKGNAME}
+#    OUTPUT ${PKGNAME}.pyi
+#    PYTHON_PATH $<TARGET_FILE_DIR:${PKGNAME}>
+#    DEPENDS ${PKGNAME}
+#    RECURSIVE
+#)
 
 target_include_directories(${PKGNAME} PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_cpp
