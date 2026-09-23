@@ -8,7 +8,7 @@ import numpy as np
 import ducc0
 import healpy as hp
 import logging
-from pixell import utils
+from pixell import enmap, utils
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -18,7 +18,6 @@ import argparse
 import glob
 import re
 import yaml
-from astropy.io import fits
 from pixell.bunch import Bunch
 from numpy.typing import NDArray
 
@@ -299,19 +298,27 @@ def _build_intensity_components(params: Bunch, compsep_path: str) -> list:
     return intensity_comps
 
 
-def _read_mask(mask_path: str, nside: int, smoothing_fwhm_deg: float) -> np.ndarray:
-    """A smoothed apodization mask at `nside`, from a binary mask in a FITS file.
+def _read_mask(mask_path: str, nside: int, smoothing_fwhm_deg: float) -> NDArray:
+    """Read a RING inverse-variance weight mask, optionally tapered outside excluded pixels.
 
-    The mask divides the RMS, so masked pixels get a large (eventually infinite) RMS and are
-    effectively excluded from the solve.
+    Any masked child pixel excludes its parent when degrading resolution.
+    A zero ``smoothing_fwhm_deg`` gives a binary mask. If non-zero, provides the apodization weights
+    w = 1 - exp(-d**2 / (2*sigma**2)) outside the masked area, d is the angular distance to the
+    nearest excluded pixel center and sigma is set by the FWHM.
+    Pixels inside the provided mask always have zero weight: The apodization is provided outside it.
     """
-    with fits.open(mask_path) as hdul:
-        binary_mask = hdul[1].data["TEMPERATURE"].flatten().astype(bool)
-    binary_mask = hp.ud_grade(binary_mask, nside)
-    smoothed_mask = hp.smoothing(binary_mask.astype(np.float64),
-                                 fwhm=np.radians(smoothing_fwhm_deg))
-    smoothed_mask[smoothed_mask < 0.0] = 0.0
-    return smoothed_mask
+    if not np.isfinite(smoothing_fwhm_deg) or smoothing_fwhm_deg < 0:
+        raise ValueError("Mask apodization FWHM must be finite and nonnegative.")
+    input_mask = hp.read_map(mask_path, field=0, dtype=np.float64)
+    coverage = hp.ud_grade((input_mask > 0).astype(np.float64), nside)
+    keep = coverage == 1.0
+    weights = keep.astype(np.float64)
+    if smoothing_fwhm_deg == 0 or np.all(keep) or not np.any(keep):
+        return weights
+
+    distance = enmap.distance_transform_healpix(keep)
+    sigma = np.radians(smoothing_fwhm_deg) / np.sqrt(8.0 * np.log(2.0))
+    return -np.expm1(-0.5 * (distance / sigma)**2)
 
 
 def main() -> int:
@@ -331,9 +338,12 @@ def main() -> int:
     parser.add_argument("--err-tol", type=float, default=1e-10,
                         help="CG residual to stop at (default 1e-10).")
     parser.add_argument("--mask", default=None,
-                        help="FITS binary mask (TEMPERATURE column) dividing the RMS. Optional.")
-    parser.add_argument("--mask-fwhm-deg", type=float, default=3.0,
-                        help="FWHM in degrees the mask is smoothed by (default 3).")
+                        help="FITS binary mask (first field). Zero pixels are excluded; any masked "
+                             "area excludes a pixel when reducing resolution. Optional.")
+    parser.add_argument("--mask-fwhm-deg", type=float, default=0.0,
+                        help="Outward Gaussian apodization FWHM in degrees. Default 0 disables "
+                             "apodization. Retained pixels reach half weight at FWHM/2 from the "
+                             "nearest excluded pixel center. Weights multiply inverse variance.")
     parser.add_argument("--verbose", "-v", action="store_true", help="Debug-level logging.")
     args = parser.parse_args()
 
