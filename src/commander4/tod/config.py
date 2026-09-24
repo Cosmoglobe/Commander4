@@ -199,6 +199,23 @@ class FarBeamConfig:
         block = tod["far_beam_deconvolution"] if "far_beam_deconvolution" in tod else {}
         return cls(**block)
 
+@dataclass(frozen=True)
+class ZodiConfig:
+    """Zodi evaluation and subtraction configuration.
+    """
+
+    enabled: bool = False
+    from_iter: int = 1
+    update_params: dict = {}
+
+    def __post_init__(self) -> None:
+        """Check the settings before they are used by a numerical routine."""
+
+    @classmethod
+    def from_params(cls, tod: Bunch | dict) -> ZodiConfig:
+        """Read the global zodi block, using disabled defaults when it is absent."""
+        block = tod["zodi"] if "zodi" in tod else {}
+        return cls(**block)
 
 @dataclass(frozen=True)
 class MapmakingConfig:
