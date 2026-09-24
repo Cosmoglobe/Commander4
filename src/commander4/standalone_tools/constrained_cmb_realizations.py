@@ -27,7 +27,7 @@ from commander4.file_io import paths
 from commander4.parameters.bunch import as_bunch_recursive
 from commander4.sky.comp_io import _read_view_alms_from_chain
 from commander4.sky.comp_list import CompList
-from commander4.sky.diffuse_components import CMB
+from commander4.sky.diffuse_components import CMB, DiffuseComponent
 from commander4.sky.sky_model import SkyModel
 from commander4.units import rj_to_band_unit_factor
 
@@ -388,20 +388,33 @@ def _band_frequencies(params: Bunch) -> dict[str, float]:
     return freqs
 
 
-def _build_intensity_components(params: Bunch, compsep_path: str) -> list:
-    """The run's components, with their intensity amplitudes read from one compsep chain file.
+def _build_intensity_components(params: Bunch, compsep_path: str) -> list[DiffuseComponent]:
+    """Restore intensity alms, SED parameters and amplitude beams from one saved sample.
 
-    The components are constructed by the same code the main program uses, so their SEDs and
-    reference frequencies come from the run's own parameter file rather than being restated here.
+    The parameter file defines the component types. Their saved SED state, including fixed
+    parameters, defines the foregrounds to subtract. Joined IQU parameters use their I value.
+    Missing state is an error: initial parameter values cannot replace a saved Gibbs sample.
     """
     comp_list = CompList.init_from_params(params.components, params)
     intensity_comps = comp_list.components_for_eval_pol("I")
-    for comp in intensity_comps:
-        alms = _read_view_alms_from_chain(comp, compsep_path)
-        if alms is None:
-            raise ValueError(f"Component {comp.comp_name!r} has no intensity alms in "
-                             f"{compsep_path!r}.")
-        comp.alms = alms
+    with h5py.File(compsep_path, "r") as handle:
+        for comp in intensity_comps:
+            alms = _read_view_alms_from_chain(comp, compsep_path)
+            if alms is None:
+                raise ValueError(f"Component {comp.comp_name!r} has no intensity alms in "
+                                 f"{compsep_path!r}.")
+            comp.alms = alms
+            group_path = f"comps/{comp.shortname}"
+            for param_name in comp.sed_param_names:
+                dataset = f"{group_path}/sed/{param_name}"
+                if dataset not in handle:
+                    raise ValueError(f"Missing component state {dataset!r} in {compsep_path!r}.")
+                value = np.asarray(handle[dataset][()]).tolist()
+                setattr(comp, param_name, comp._per_pol(value))
+            dataset = f"{group_path}/amp_fwhm_arcmin"
+            if dataset not in handle:
+                raise ValueError(f"Missing component state {dataset!r} in {compsep_path!r}.")
+            comp.amp_fwhm_rad = np.radians(float(handle[dataset][()]) / 60.0)
     return intensity_comps
 
 
