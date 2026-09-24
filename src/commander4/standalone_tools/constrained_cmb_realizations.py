@@ -1,27 +1,30 @@
 """Offline tool: draw constrained CMB realizations from a finished chain's band maps.
 
-Reads the datamaps written by a run, solves the constrained-realization system for the CMB alms
-with a supplied C_l prior, and writes the resulting maps. The in-process versions of the same solve
-live in ``compsep/constrained_cmb_loop`` and ``compsep/constrained_cmb_loop_mpi``.
+Subtracts each saved sample's foregrounds from its band maps, then draws CMB alms conditioned on
+those residuals and a fixed theoretical C_l prior. The mask and low-ell preconditioner are shared
+across Gibbs samples and realizations. Only intensity is sampled; all calculations use uK_CMB.
 """
-import numpy as np
-import ducc0
-import healpy as hp
-import logging
-from pixell import enmap, utils
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import h5py
-import os
 import argparse
 import glob
+import logging
+import os
 import re
+from collections.abc import Callable, Sequence
+
+import ducc0
+import h5py
+import healpy as hp
+import matplotlib
+import numpy as np
 import yaml
-from collections.abc import Sequence
-from pixell.bunch import Bunch
 from numpy.typing import NDArray
+from pixell import enmap, utils
+from pixell.bunch import Bunch
 from scipy.linalg import cho_factor, cho_solve
+
+# Select a non-interactive backend before importing pyplot: this tool also runs in batch jobs.
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 from commander4.file_io import paths
 from commander4.parameters.bunch import as_bunch_recursive
@@ -34,39 +37,36 @@ from commander4.units import rj_to_band_unit_factor
 logger = logging.getLogger("cmb_realizations")
 
 
-CHAIN_ITER_RE = re.compile(r"chain(?P<chain>\d+)_iter(?P<iter>\d+)\.h5$")
 BAND_CHAIN_ITER_RE = re.compile(r"(?:(?P<prefix>.+)_)?chain(?P<chain>\d+)_iter(?P<iter>\d+)\.h5$")
+nthreads = 32  # Threads per ducc spherical-harmonic transform.
 
-def _extract_chain_iter(filename: str) -> tuple[int | None, int | None]:
-    match = CHAIN_ITER_RE.search(filename)
-    if not match:
-        return None, None
-    return int(match.group("chain")), int(match.group("iter"))
 
 def _extract_band_chain_iter(filename: str) -> tuple[str | None, int | None, int | None]:
+    """Read the experiment/band prefix, chain number and iteration from a band filename."""
     match = BAND_CHAIN_ITER_RE.search(filename)
     if not match:
         return None, None, None
     return str(match.group("prefix")), int(match.group("chain")), int(match.group("iter"))
 
 
-nthreads = 32  # Number of threads to use for ducc S
-def alm2map(alm, nside, lmax):
+def alm2map(alm: NDArray, nside: int, lmax: int) -> NDArray:
+    """Synthesize a scalar RING map from healpy-packed alms (the operator Y)."""
     base = ducc0.healpix.Healpix_Base(nside, "RING")
     geom = base.sht_info()
-    return ducc0.sht.synthesis(alm=alm.reshape((1,-1)),
-                               lmax=lmax,
-                               spin=0,
-                               nthreads=nthreads, **geom).reshape((-1,))
+    return ducc0.sht.synthesis(alm=alm.reshape(1, -1), lmax=lmax, spin=0,
+                               nthreads=nthreads, **geom).reshape(-1)
 
 
-def alm2map_adjoint(map, nside, lmax):
+def alm2map_adjoint(sky_map: NDArray, nside: int, lmax: int) -> NDArray:
+    """Apply Y^T, the adjoint of synthesis, without pixel-area normalization.
+
+    This is not an inverse map-to-alm transform. The likelihood needs the sum over weighted
+    pixels, so multiplying by the pixel area here would change the noise normalization.
+    """
     base = ducc0.healpix.Healpix_Base(nside, "RING")
     geom = base.sht_info()
-    return ducc0.sht.adjoint_synthesis(map=map.reshape((1,-1)),
-                                       lmax=lmax,
-                                       spin=0,
-                                       nthreads=nthreads, **geom).reshape((-1,))
+    return ducc0.sht.adjoint_synthesis(map=sky_map.reshape(1, -1), lmax=lmax, spin=0,
+                                       nthreads=nthreads, **geom).reshape(-1)
 
 
 class ConstrainedCMB:
@@ -76,6 +76,9 @@ class ConstrainedCMB:
     Maps, inverse variances and masks are sequences of one-dimensional arrays, one per band.
     Each band keeps its native HEALPix resolution; all bands use the same CMB harmonic range.
     Masks are dimensionless and beam FWHMs are in radians.
+
+    We solve for x_tilde with CMB alms s = sqrt(C) x_tilde. In these coordinates the prior
+    precision is the identity, avoiding explicit division by small or zero C_l values.
     """
 
     def __init__(self, map_sky: Sequence[NDArray], map_ivar: Sequence[NDArray], cmb_Cell: NDArray,
@@ -89,8 +92,8 @@ class ConstrainedCMB:
         self.map_ivar = list(map_ivar)
         self.nband = len(self.map_sky)
         self.masks = [] if masks is None else list(masks)
-        self.npix = []
-        self.nsides = []
+        self.npix: list[int] = []
+        self.nsides: list[int] = []
         if masks is None:
             for sky in self.map_sky:
                 self.masks.append(np.ones_like(sky))
@@ -102,20 +105,19 @@ class ConstrainedCMB:
                 raise ValueError("Each band needs matching map, inverse-variance and mask shapes.")
             self.npix.append(sky.size)
             self.nsides.append(hp.npix2nside(sky.size))
-        self.fwhm = 1.0/60.0*np.pi/180.0*np.ones(self.nband) if beam_fwhm is None else beam_fwhm
+        self.fwhm = np.full(self.nband, np.radians(1.0 / 60.0))
+        if beam_fwhm is not None:
+            self.fwhm = beam_fwhm
+        # The component's harmonic range is independent of the bands' pixel resolutions.
         self.lmax = len(cmb_Cell) - 1
-        self.alm_len = ((self.lmax+1)*(self.lmax+2))//2
+        self.alm_len = hp.Alm.getsize(self.lmax)
         self.Cl_prior = cmb_Cell
 
-        # Precompute C_ell^{1/2} for the square-root reformulation.
-        # Any negative values are clamped to 0.
-        Cl_safe = self.Cl_prior[:self.lmax+1].copy()
-        Cl_safe[Cl_safe < 0] = 0.0
-        self.Cl_sqrt = np.sqrt(Cl_safe)
+        # Zero-variance modes stay fixed at zero; negative prior values are treated as zero.
+        self.Cl_sqrt = np.sqrt(np.maximum(self.Cl_prior, 0.0))
 
         # Use a coupled low-ell block for masked skies, and a diagonal approximation above it.
         self._build_preconditioner()
-
 
     def update_data(self, map_sky: Sequence[NDArray], map_ivar: Sequence[NDArray],
                     beam_fwhm: NDArray) -> None:
@@ -138,20 +140,19 @@ class ConstrainedCMB:
     def _build_preconditioner(self, rebuild_lowell: bool = True) -> None:
         """Build the harmonic diagonal and, for masked data, a coupled low-ell correction.
 
-        The renormalized LHS is  (I + C^{1/2} sum_i B_i^T Y^T N_i^{-1} Y B_i C^{1/2}).
-        Approximating pixel-space noise by its sky-average makes this diagonal
-        in harmonic space:
+        Replacing each band's pixel weights by their whole-sky average gives a diagonal
+        approximation to LHS_func:
 
             d_ell = 1 + C_ell * sum_i (Npix_i / 4pi) * b_ell_i^2 * <mask_i / sigma_i^2>
 
         The high-ell preconditioner is M = 1 / d_ell. A dense block replaces its low-ell entries
         when pixels have zero weight. This captures mask-induced coupling between harmonic modes.
         """
-        Cl = self.Cl_sqrt ** 2  # = Cl_safe, the clamped version
+        cl = self.Cl_sqrt**2
         diag = np.ones(self.lmax + 1)  # identity contribution
 
         # The LHS uses ducc0 synthesis (Y) and adjoint_synthesis (Y^T),
-        # which are un-normalized: Y^T Y ≈ (Npix/4π) I in harmonic space.
+        # which are unnormalized: Y^T Y ≈ (Npix/4π) I in harmonic space.
         # The preconditioner must include this factor to match the true diagonal.
         self.beams = []
         weights = []
@@ -159,8 +160,6 @@ class ConstrainedCMB:
         has_positive_weight = False
 
         for iband in range(self.nband):
-            # For now, beams are assumed to be Gaussian, but if not, they could
-            # be passed on in here.
             bl = hp.gauss_beam(self.fwhm[iband], lmax=self.lmax)
             self.beams.append(bl)
             weight = self.map_ivar[iband] * self.masks[iband]
@@ -168,9 +167,11 @@ class ConstrainedCMB:
             weights.append(weight)
             has_zero_weight |= np.any(weight == 0)
             has_positive_weight |= np.any(weight > 0)
+            # Include masked pixels in the average; averaging only retained pixels overweights
+            # partially observed bands. Each native grid contributes its own pixel count.
             avg_inv_noise_var = np.mean(weight)
             pix_factor = self.npix[iband] / (4.0 * np.pi)
-            diag += Cl * bl ** 2 * avg_inv_noise_var * pix_factor
+            diag += cl * bl**2 * avg_inv_noise_var * pix_factor
 
         self._precond_ell = 1.0 / diag
         logger.debug(
@@ -191,12 +192,14 @@ class ConstrainedCMB:
         Real coordinates are a_l0, sqrt(2)*Re(a_lm), sqrt(2)*Im(a_lm), giving a Euclidean inner
         product equal to dot_alm and a symmetric positive-definite matrix for Cholesky.
         """
+        # Round up to a HEALPix power of two, but never upgrade a band's native grid.
         target_nside = 2**int(np.ceil(np.log2(max(1, lmax))))
         coarse_nsides = []
         coarse_weights = []
         for band, weight in enumerate(weights):
             nside = min(self.nsides[band], target_nside)
             coarse_nsides.append(nside)
+            # power=-2 sums weights into coarse pixels instead of averaging them.
             coarse_weights.append(hp.ud_grade(weight, nside, power=-2))
         n_m0 = lmax + 1
         nalm = hp.Alm.getsize(lmax)
@@ -204,6 +207,8 @@ class ConstrainedCMB:
         matrix = np.empty((nmodes, nmodes))
         sqrt_cl = self.Cl_sqrt[:lmax + 1]
 
+        # Build the matrix one real basis vector at a time. The coordinate order is all m=0
+        # modes, then real parts for m>0, then imaginary parts for m>0.
         for column in range(nmodes):
             basis = np.zeros(nalm, dtype=np.complex128)
             if column < n_m0:
@@ -212,7 +217,7 @@ class ConstrainedCMB:
                 basis[column] = 1.0 / np.sqrt(2.0)
             else:
                 basis[column - nalm + n_m0] = 1j / np.sqrt(2.0)
-            result = basis.copy()
+            result = basis.copy()  # Identity contribution from the renormalized prior.
             for band in range(self.nband):
                 nside = coarse_nsides[band]
                 response = sqrt_cl * self.beams[band][:lmax + 1]
@@ -223,9 +228,12 @@ class ConstrainedCMB:
             matrix[n_m0:nalm, column] = np.sqrt(2.0) * result[n_m0:].real
             matrix[nalm:, column] = np.sqrt(2.0) * result[n_m0:].imag
 
+        # Remove transform roundoff asymmetry before Cholesky factorization.
         matrix = 0.5 * (matrix + matrix.T)
         self._lowell_factor = cho_factor(matrix, lower=True, overwrite_a=True, check_finite=False)
         ell, m = hp.Alm.getlm(lmax)
+        # Packed alm offsets depend on lmax: the low-ell modes are not a contiguous slice
+        # of the full array once m>0, so map their (ell, m) indices explicitly.
         self._lowell_indices = hp.Alm.getidx(self.lmax, ell, m)
         self._lowell_n_m0 = n_m0
         logger.info(f"Built coupled CMB preconditioner through ell={lmax} "
@@ -235,7 +243,7 @@ class ConstrainedCMB:
         """Apply the coupled low-ell block and the harmonic diagonal at higher ell."""
         result = hp.almxfl(x, self._precond_ell)
         if self._lowell_factor is not None:
-            low = x[self._lowell_indices]
+            low = x[self._lowell_indices]  # Advanced indexing copies; x stays unchanged.
             n_m0 = self._lowell_n_m0
             nalm = low.size
             rhs = np.concatenate([low[:n_m0].real, np.sqrt(2.0) * low[n_m0:].real,
@@ -243,113 +251,94 @@ class ConstrainedCMB:
             solved = cho_solve(self._lowell_factor, rhs, check_finite=False)
             low[:n_m0] = solved[:n_m0]
             low[n_m0:] = (solved[n_m0:nalm] + 1j * solved[nalm:]) / np.sqrt(2.0)
+            # Replace the low-ell diagonal result, rather than adding a second correction.
             result[self._lowell_indices] = low
         return result
 
-    def dot_alm(self, alm1, alm2):
-        """ Function calculating the dot product of two alms, given that they follow the Healpy standard,
-            where alms are represented as complex numbers, but with the conjugate 'negative' ms missing.
-        """        
-        # return np.sum((alm1[:self.lmax]*alm2[:self.lmax]).real) + np.sum((alm1[self.lmax:]*np.conj(alm2[self.lmax:])).real*2)
-        n_m0 = self.lmax + 1  # number of m=0 modes
-        return np.sum((alm1[:n_m0]*alm2[:n_m0]).real) + np.sum((alm1[n_m0:]*np.conj(alm2[n_m0:])).real*2)
+    def dot_alm(self, alm1: NDArray, alm2: NDArray) -> float:
+        """Real inner product for healpy-packed alms, including the unstored negative-m modes."""
+        # A real sky has real m=0 coefficients. Each stored m>0 coefficient represents a
+        # conjugate pair, so its contribution to the full harmonic inner product counts twice.
+        n_m0 = self.lmax + 1
+        m0_product = np.sum((alm1[:n_m0] * alm2[:n_m0]).real)
+        positive_m_product = np.sum((alm1[n_m0:] * np.conj(alm2[n_m0:])).real * 2)
+        return float(m0_product + positive_m_product)
 
+    def LHS_func(self, x_tilde: NDArray) -> NDArray:
+        """Apply A = I + sqrt(C) sum_i B_i Y_i^T W_i Y_i B_i sqrt(C).
 
-    def LHS_func(self, x_tilde):
-        """ The LHS of the C^{1/2}-renormalized system:
-            (I + C^{1/2} sum_i B_i^T Y^T N_i^{-1} Y B_i C^{1/2}) x_tilde
-            where x_tilde = C^{-1/2} x.
-            All inputs are assumed to be in CMB uK units.
+        W_i is the masked inverse variance. Y_i synthesizes on band i's native pixel grid;
+        the Gaussian beam B_i and prior sqrt(C) are diagonal in harmonic space.
         """
-        # Start with the identity contribution
-        LHS_sum = x_tilde.copy()
+        result = x_tilde.copy()  # The identity term is the renormalized prior precision.
+        sky_alm = hp.almxfl(x_tilde, self.Cl_sqrt)
+        for band in range(self.nband):
+            # Project the same CMB onto each band's beam/grid, weight its pixels, then apply
+            # the adjoint projection. Both sides need the beam and sqrt(C) for symmetry.
+            beamed_alm = hp.almxfl(sky_alm, self.beams[band])
+            sky_map = alm2map(beamed_alm, self.nsides[band], self.lmax)
+            weighted_map = sky_map * self.map_ivar[band] * self.masks[band]
+            weighted_alm = alm2map_adjoint(weighted_map, self.nsides[band], self.lmax)
+            beamed_alm = hp.almxfl(weighted_alm, self.beams[band])
+            result += hp.almxfl(beamed_alm, self.Cl_sqrt)
+        return result
 
-        # C^{1/2} x_tilde
-        Cx = hp.almxfl(x_tilde, self.Cl_sqrt)
+    def get_RHS_eqn_mean(self) -> NDArray:
+        """Return sqrt(C) sum_i B_i Y_i^T W_i d_i for foreground-subtracted band maps d_i."""
+        rhs = np.zeros(self.alm_len, dtype=np.complex128)
+        for band in range(self.nband):
+            weighted_map = self.map_sky[band] * self.map_ivar[band] * self.masks[band]
+            weighted_alm = alm2map_adjoint(weighted_map, self.nsides[band], self.lmax)
+            rhs += hp.almxfl(weighted_alm, self.beams[band])
+        return hp.almxfl(rhs, self.Cl_sqrt)
 
-        for iband in range(self.nband):
-            # B C^{1/2} x_tilde
-            BCx = hp.almxfl(Cx.copy(), self.beams[iband])
-            # Y B C^{1/2} x_tilde
-            YBCx = alm2map(BCx, self.nsides[iband], self.lmax)
-            # N^{-1} Y B C^{1/2} x_tilde
-            NYBCx = YBCx * self.map_ivar[iband] * self.masks[iband]
-            # Y^T N^{-1} Y B C^{1/2} x_tilde
-            YTNYBCx = alm2map_adjoint(NYBCx, self.nsides[iband], self.lmax)
-            # B^T Y^T N^{-1} Y B C^{1/2} x_tilde
-            BTYTNYBCx = hp.almxfl(YTNYBCx, self.beams[iband])
-            # C^{1/2} B^T Y^T N^{-1} Y B C^{1/2} x_tilde
-            LHS_sum += hp.almxfl(BTYTNYBCx, self.Cl_sqrt)
+    def get_RHS_eqn_fluct(self) -> NDArray:
+        """Return omega_0 + sqrt(C) sum_i B_i Y_i^T sqrt(W_i) omega_i.
 
-        return LHS_sum
-
-
-    def get_RHS_eqn_mean(self):
-        """ Calculates and returns the RHS of the renormalized mean-field equation:
-            C^{1/2} sum_i B_i^T Y^T N_i^{-1} d_i
-            All inputs are assumed to be in CMB uK units.
+        Independent unit Gaussian harmonic and pixel draws give this RHS covariance A.
+        Solving against A gives posterior covariance A^{-1} in the x_tilde coordinates.
         """
-        RHS_sum = np.zeros(self.alm_len, dtype=np.complex128)
-        for iband in range(self.nband):
-            Nd = self.map_sky[iband] * self.map_ivar[iband] * self.masks[iband]
-            YTNd = alm2map_adjoint(Nd, self.nsides[iband], self.lmax)
-            BTYTNd = hp.almxfl(YTNd, self.beams[iband])
-            RHS_sum += BTYTNd
-        # Apply C^{1/2}
-        RHS_sum = hp.almxfl(RHS_sum, self.Cl_sqrt)
-        return RHS_sum
+        # synalm gives variance 1 to m=0 and variance 1/2 to each real/imaginary part for m>0.
+        # These are unit Gaussians in the same real coordinates used by the preconditioner.
+        rhs = hp.synalm(np.ones(self.lmax + 1), self.lmax)
+        for band in range(self.nband):
+            pixel_noise = np.random.normal(0, 1, self.npix[band])
+            # The mask multiplies inverse variance, so fractional apodization weights must
+            # enter under the square root here to agree with the likelihood covariance.
+            weighted_noise = pixel_noise * np.sqrt(self.map_ivar[band] * self.masks[band])
+            noise_alm = alm2map_adjoint(weighted_noise, self.nsides[band], self.lmax)
+            beamed_alm = hp.almxfl(noise_alm, self.beams[band])
+            rhs += hp.almxfl(beamed_alm, self.Cl_sqrt)
+        return rhs
 
+    def solve_CG(self, LHS: Callable[[NDArray], NDArray], RHS: NDArray,
+                 err_tol: float = 1e-6) -> NDArray:
+        """Solve the renormalized system with CG and return physical CMB alms in uK_CMB.
 
-    def get_RHS_eqn_fluct(self):
-        """ Calculates and returns the RHS of the renormalized fluctuation equation:
-            omega_0 + C^{1/2} sum_i B_i^T Y^T N_i^{-1/2} omega_1
-            where omega_0 and omega_1 are drawn from N(0, I).
-            All inputs are assumed to be in CMB uK units.
+        Args:
+            LHS: Operator applying A to renormalized harmonic coefficients.
+            RHS: Mean RHS, fluctuation RHS, or their sum in the same coordinates.
+            err_tol: Pixell's squared relative preconditioned residual,
+                (r^T M r) / (r_initial^T M r_initial), where M applies the preconditioner.
+
+        Returns:
+            CMB alms sqrt(C) x_tilde. Reaching maxiter logs a warning and returns the current
+            iterate even if it has not converged. The stopping test uses CG's recursive residual.
         """
-        RHS_sum = np.zeros(self.alm_len, dtype=np.complex128)
-        # omega_0 term: in the renormalized system this is simply a unit-variance random alm.
-        # hp.synalm(Cl) draws alms with <|a_lm|^2> = Cl, so synalm(ones) gives unit variance.
-        omega0 = hp.synalm(np.ones(self.lmax + 1), self.lmax)
-        RHS_sum += omega0
-
-        for iband in range(self.nband):
-            omega1 = np.random.normal(0, 1, self.npix[iband])
-            Nomega1 = omega1 * np.sqrt(self.map_ivar[iband] * self.masks[iband])  # N^{-1/2} omega_1
-            YTNomega1 = alm2map_adjoint(Nomega1, self.nsides[iband], self.lmax)
-            BTYTNomega1 = hp.almxfl(YTNomega1, self.beams[iband])
-            RHS_sum += hp.almxfl(BTYTNomega1, self.Cl_sqrt)  # C^{1/2} B^T Y^T N^{-1/2} omega_1
-        return RHS_sum
-
-
-    def solve_CG(self, LHS, RHS, err_tol: float = 1e-6):
-        """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG from the pixell package.
-            Assumes that both x and b are in alm space.
-
-            Args:
-                LHS: A callable taking x as argument and returning Ax.
-                RHS: A Numpy array representing b, in alm space.
-                err_tol: Residual below which CG stops; `maxiter` caps it either way.
-            Returns:
-                m_bestfit: The resulting best-fit solution, in alm space.
-        """
-        CG_solver = utils.CG(LHS, RHS, dot=self.dot_alm, M=self.preconditioner)
-        iter = 0
-        while CG_solver.err > err_tol:
-            CG_solver.step()
-            iter += 1
-            logger.debug(f"CG iter {iter:3d} - Residual {CG_solver.err:.3e}")
-            if iter >= self.maxiter:
+        cg = utils.CG(LHS, RHS, dot=self.dot_alm, M=self.preconditioner)
+        iteration = 0
+        while cg.err > err_tol:
+            cg.step()
+            iteration += 1
+            logger.debug(f"CG iter {iteration:3d} - Residual {cg.err:.3e}")
+            if iteration >= self.maxiter:
                 logger.warning(f"Maximum number of iterations ({self.maxiter}) reached in CG "
-                               f"at residual {CG_solver.err:.3e} (tolerance {err_tol:.1e}).")
+                               f"at residual {cg.err:.3e} (tolerance {err_tol:.1e}).")
                 break
         else:
-            logger.info(f"CG converged after {iter} iterations "
-                        f"(residual {CG_solver.err:.3e} < {err_tol:.1e}).")
-
-        # Recover physical solution: x = C^{1/2} x_tilde
-        s_bestfit = hp.almxfl(CG_solver.x, self.Cl_sqrt)
-
-        return s_bestfit
+            logger.info(f"CG converged after {iteration} iterations "
+                        f"(residual {cg.err:.3e} < {err_tol:.1e}).")
+        return hp.almxfl(cg.x, self.Cl_sqrt)
 
 
 def _load_params_from_chain(run_dir: str) -> Bunch | None:
@@ -378,7 +367,7 @@ def _load_params_from_chain(run_dir: str) -> Bunch | None:
 
 def _band_frequencies(params: Bunch) -> dict[str, float]:
     """Map every band name in the parameter file onto its centre frequency in GHz."""
-    freqs = {}
+    freqs: dict[str, float] = {}
     for experiment_name in params.experiments:
         experiment = params.experiments[experiment_name]
         if "bands" not in experiment:
@@ -409,11 +398,15 @@ def _build_intensity_components(params: Bunch, compsep_path: str) -> list[Diffus
                 dataset = f"{group_path}/sed/{param_name}"
                 if dataset not in handle:
                     raise ValueError(f"Missing component state {dataset!r} in {compsep_path!r}.")
+                # The component resolver expects a Python scalar or an [I, QU] list, whereas
+                # HDF5 supplies numpy scalars/arrays. Select I before evaluating any SED.
                 value = np.asarray(handle[dataset][()]).tolist()
                 setattr(comp, param_name, comp._per_pol(value))
             dataset = f"{group_path}/amp_fwhm_arcmin"
             if dataset not in handle:
                 raise ValueError(f"Missing component state {dataset!r} in {compsep_path!r}.")
+            # SkyModel subtracts this beam in quadrature from the requested band beam.
+            # Restoring it prevents smoothing the already-smoothed amplitudes a second time.
             comp.amp_fwhm_rad = np.radians(float(handle[dataset][()]) / 60.0)
     return intensity_comps
 
@@ -421,15 +414,15 @@ def _build_intensity_components(params: Bunch, compsep_path: str) -> list[Diffus
 def _read_mask(mask_path: str, nside: int, smoothing_fwhm_deg: float) -> NDArray:
     """Read a RING inverse-variance weight mask, optionally tapered outside excluded pixels.
 
-    Any masked child pixel excludes its parent when degrading resolution.
-    A zero ``smoothing_fwhm_deg`` gives a binary mask. If non-zero, provides the apodization weights
-    w = 1 - exp(-d**2 / (2*sigma**2)) outside the masked area, d is the angular distance to the
-    nearest excluded pixel center and sigma is set by the FWHM.
-    Pixels inside the provided mask always have zero weight: The apodization is provided outside it.
+    Any masked child pixel excludes its parent when degrading resolution. Zero FWHM gives a
+    binary mask; positive FWHM gives w = 1 - exp(-d**2 / (2*sigma**2)), where d is the angular
+    distance to the nearest excluded pixel center. Excluded pixels retain exactly zero weight.
     """
     if not np.isfinite(smoothing_fwhm_deg) or smoothing_fwhm_deg < 0:
         raise ValueError("Mask apodization FWHM must be finite and nonnegative.")
     input_mask = hp.read_map(mask_path, field=0, dtype=np.float64)
+    # ud_grade averages child pixels. Requiring full coverage prevents a partly masked parent
+    # from reopening; thresholding the average at >0 would leak excluded sky into the fit.
     coverage = hp.ud_grade((input_mask > 0).astype(np.float64), nside)
     keep = coverage == 1.0
     weights = keep.astype(np.float64)
@@ -438,6 +431,7 @@ def _read_mask(mask_path: str, nside: int, smoothing_fwhm_deg: float) -> NDArray
 
     distance = enmap.distance_transform_healpix(keep)
     sigma = np.radians(smoothing_fwhm_deg) / np.sqrt(8.0 * np.log(2.0))
+    # expm1 evaluates the small weights near the boundary without cancellation in 1 - exp(...).
     return -np.expm1(-0.5 * (distance / sigma)**2)
 
 
@@ -447,6 +441,7 @@ def _load_iteration(params: Bunch, iteration: int, compsep_path: str,
 
     Band filenames are absolute paths paired with parameter-file band names. All brightness
     quantities returned here are in uK_CMB; the caller supplies the shared mask and C_l prior.
+    Map lists retain each band's native pixel grid; beam_sizes contains FWHMs in radians.
     """
     components = _build_intensity_components(params, compsep_path)
     cmb_comps = []
@@ -459,9 +454,9 @@ def _load_iteration(params: Bunch, iteration: int, compsep_path: str,
     if len(cmb_comps) != 1:
         raise ValueError(f"Expected exactly one CMB component, found {len(cmb_comps)}.")
     foreground_sky = SkyModel(foreground_comps)
-    signal_maps = []
-    ivar_maps = []
-    beam_sizes = []
+    signal_maps: list[NDArray] = []
+    ivar_maps: list[NDArray] = []
+    beam_sizes: list[float] = []
     for band, filename in band_files:
         nu = band_freqs[band]
         with h5py.File(filename, "r") as handle:
@@ -478,6 +473,8 @@ def _load_iteration(params: Bunch, iteration: int, compsep_path: str,
         band_to_uK_CMB = rj_to_uK_CMB / rj_to_band_unit_factor(nu, stored_unit)
         observed *= band_to_uK_CMB
         rms *= band_to_uK_CMB
+        # Condition on this Gibbs sample's foregrounds. Foreground uncertainty is represented
+        # by processing multiple Gibbs samples, not by perturbing foregrounds within a CMB draw.
         foreground = foreground_sky.get_sky_at_nu(nu, nside, "I", fwhm=beam)[0]
         observed -= foreground.astype(np.float64) * rj_to_uK_CMB
         ivar = np.zeros_like(rms)
@@ -496,6 +493,7 @@ def _load_iteration(params: Bunch, iteration: int, compsep_path: str,
 
 
 def main() -> int:
+    """Select saved samples, prepare shared state, and write the requested CMB realizations."""
     parser = argparse.ArgumentParser(
         description="Draw constrained CMB realizations from a finished Commander4 run.")
     parser.add_argument(
@@ -508,14 +506,14 @@ def main() -> int:
     selection.add_argument("--iter", type=int, nargs="+", default=None, dest="only_iters",
                            help="Gibbs iteration numbers to process (default: all found).")
     selection.add_argument("--burn-in", type=int, default=None, metavar="N",
-                           help="Discard iterations numbered N or lower; process all later samples.")
+                           help="Discard iterations numbered N or lower; process later samples.")
     parser.add_argument("--chain", type=int, default=1, help="Chain number to read (default 1).")
     parser.add_argument("--n-realizations", type=int, default=1,
                         help="Independent CMB realizations per Gibbs iteration (default 1).")
     parser.add_argument("--maxiter", type=int, default=1000,
                         help="Maximum CG iterations (default 1000).")
     parser.add_argument("--err-tol", type=float, default=1e-10,
-                        help="CG residual to stop at (default 1e-10).")
+                        help="Squared relative preconditioned residual tolerance (default 1e-10).")
     parser.add_argument("--precond-lmax", type=int, default=32,
                         help="Coupled low-ell preconditioner cutoff for masked runs (default 32). "
                              "Set 0 for diagonal only. Larger values cost more memory and setup.")
@@ -559,7 +557,7 @@ def main() -> int:
 
     # Which (band, iteration) pairs the run actually wrote maps for. A band file exists on every
     # written iteration, but its `maps/` group is thinned separately, so check for the group too.
-    bands_by_iter = {}
+    bands_by_iter: dict[int, list[tuple[str, str]]] = {}
     for filename in sorted(os.listdir(bands_dir)):
         band, chain, iteration = _extract_band_chain_iter(filename)
         if band is None or chain != args.chain:
@@ -576,7 +574,7 @@ def main() -> int:
 
     # Discover usable samples before preparing anything expensive. The first selected sample
     # supplies the reference noise weights and beams for the shared low-ell preconditioner.
-    jobs = []
+    jobs: list[tuple[int, str, list[tuple[str, str]]]] = []
     for iteration in iterations:
         compsep_path = os.path.join(compsep_dir, f"chain{args.chain:02d}_iter{iteration:04d}.h5")
         if not os.path.isfile(compsep_path):
@@ -602,7 +600,8 @@ def main() -> int:
     reference_bands = []
     for band, _ in band_files:
         reference_bands.append(band)
-    masks_by_nside = {}
+    # Equal-resolution bands share one mask. Build every resolution before either sampling loop.
+    masks_by_nside: dict[int, NDArray] = {}
     masks = []
     for sky in data.signal_maps:
         nside = hp.npix2nside(sky.size)
@@ -616,18 +615,19 @@ def main() -> int:
 
     # This fixed thermodynamic theory prior is shared by all Gibbs samples and realizations.
     import camb
-    pars = camb.set_params(ombh2=0.022, omch2=0.122, H0=67.5, ns=0.96, As=2e-9,
-                           tau=0.06, omk=0, mnu=0.06, lmax=data.lmax + 100)
-    res = camb.get_results(pars)
-    spec = res.get_cmb_power_spectra(pars, CMB_unit="muK", raw_cl=True)["total"]
-    cmb_cell_prior = spec[:data.lmax + 1, 0]
+    camb_params = camb.set_params(ombh2=0.022, omch2=0.122, H0=67.5, ns=0.96, As=2e-9,
+                                 tau=0.06, omk=0, mnu=0.06, lmax=data.lmax + 100)
+    camb_results = camb.get_results(camb_params)
+    # raw_cl returns C_l, not D_l = l(l+1) C_l / (2 pi); column 0 is the temperature spectrum.
+    spectra = camb_results.get_cmb_power_spectra(camb_params, CMB_unit="muK", raw_cl=True)["total"]
+    cmb_cell_prior = spectra[:data.lmax + 1, 0]
+    # CAMB supplies no monopole/dipole power. Give these nuisance modes a broad, finite prior.
     cmb_cell_prior[:2] = 1e6
 
     logger.info(f"Preparing shared preconditioner from Gibbs iteration {iteration} for "
                 f"{len(jobs)} iterations, {args.n_realizations} realizations each.")
     solver = ConstrainedCMB(data.signal_maps, data.ivar_maps, cmb_cell_prior,
-                            masks=masks,
-                            beam_fwhm=data.beam_sizes, maxiter=args.maxiter,
+                            masks=masks, beam_fwhm=data.beam_sizes, maxiter=args.maxiter,
                             precond_lmax=args.precond_lmax)
 
     for job_index, (iteration, compsep_path, band_files) in enumerate(jobs):
@@ -641,6 +641,8 @@ def main() -> int:
             if data.lmax != solver.lmax:
                 raise ValueError("Selected Gibbs samples must have the same CMB lmax.")
             solver.update_data(data.signal_maps, data.ivar_maps, data.beam_sizes)
+        # The deterministic RHS stays fixed within a Gibbs sample. Only the random RHS changes
+        # between realizations; reusing the solver must never reuse a previous random draw.
         rhs_mean = solver.get_RHS_eqn_mean()
         cmb_cell_in = hp.alm2cl(data.cmb_alms)
 
@@ -651,18 +653,19 @@ def main() -> int:
             cmb_cell = hp.alm2cl(cmb_alms)
             cmb_map = hp.alm2map(cmb_alms, output_nside)
             suffix = f"_real{realization:04d}" if args.n_realizations > 1 else ""
-            out_base = os.path.join(output_dir, f"chain{args.chain:02d}_iter{iteration:04d}{suffix}")
+            filename = f"chain{args.chain:02d}_iter{iteration:04d}{suffix}"
+            out_base = os.path.join(output_dir, filename)
             hp.write_map(f"{out_base}_cmb_realization.fits", cmb_map, overwrite=True,
                          column_units="uK_CMB", extra_header=[("BUNIT", "uK_CMB"),
                          ("CHAIN", args.chain), ("ITER", iteration), ("REALIZ", realization)])
 
+            # Plot D_l for readability; all three spectra use the shared CMB harmonic range.
+            ell = np.arange(solver.lmax + 1)
             plt.figure()
-            ls = np.arange(len(cmb_cell_in))
-            plt.loglog(ls, cmb_cell_in * ls * (ls + 1.) / (2. * np.pi), label="compsep CMB")
-            ls = np.arange(len(cmb_cell))
-            plt.loglog(ls, cmb_cell * ls * (ls + 1.) / (2. * np.pi), label="constrained realization")
-            ls = np.arange(len(cmb_cell_prior))
-            plt.loglog(ls, cmb_cell_prior * ls * (ls + 1.) / (2. * np.pi), c="k", label="Prior")
+            plt.loglog(ell, cmb_cell_in * ell * (ell + 1.) / (2. * np.pi), label="compsep CMB")
+            plt.loglog(ell, cmb_cell * ell * (ell + 1.) / (2. * np.pi),
+                       label="constrained realization")
+            plt.loglog(ell, cmb_cell_prior * ell * (ell + 1.) / (2. * np.pi), c="k", label="Prior")
             plt.xlabel("multipole $\\ell$")
             plt.ylabel("$\\mathcal{D}_\\ell$ [$\\mu K_\\mathrm{CMB}^2$]")
             plt.legend()
