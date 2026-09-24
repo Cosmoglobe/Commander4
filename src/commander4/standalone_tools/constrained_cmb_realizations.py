@@ -18,6 +18,7 @@ import argparse
 import glob
 import re
 import yaml
+from collections.abc import Sequence
 from pixell.bunch import Bunch
 from numpy.typing import NDArray
 from scipy.linalg import cho_factor, cho_solve
@@ -72,24 +73,36 @@ class ConstrainedCMB:
     """Sample CMB alms in uK_CMB, with C_l for ell = 0 through the CMB lmax.
 
     Sky maps must be in uK_CMB, inverse variances in uK_CMB**-2, and the prior in uK_CMB**2.
+    Maps, inverse variances and masks are sequences of one-dimensional arrays, one per band.
+    Each band keeps its native HEALPix resolution; all bands use the same CMB harmonic range.
     Masks are dimensionless and beam FWHMs are in radians.
     """
 
-    def __init__(self, map_sky: NDArray, map_ivar: NDArray, cmb_Cell: NDArray,
-                 masks: NDArray | None = None, beam_fwhm: NDArray | None = None,
+    def __init__(self, map_sky: Sequence[NDArray], map_ivar: Sequence[NDArray], cmb_Cell: NDArray,
+                 masks: Sequence[NDArray] | None = None, beam_fwhm: NDArray | None = None,
                  maxiter: int = 100, precond_lmax: int = 32) -> None:
         if precond_lmax < 0:
             raise ValueError("Preconditioner lmax must be nonnegative; 0 selects diagonal only.")
         self.maxiter = maxiter
         self.precond_lmax = precond_lmax
-        self.map_sky = map_sky
-        self.map_ivar = map_ivar
-        self.masks = masks
-        if self.masks is None:
-            self.masks = np.array([ np.ones_like(m) for m in self.map_sky ])
-        self.nband, self.npix = map_sky.shape
+        self.map_sky = list(map_sky)
+        self.map_ivar = list(map_ivar)
+        self.nband = len(self.map_sky)
+        self.masks = [] if masks is None else list(masks)
+        self.npix = []
+        self.nsides = []
+        if masks is None:
+            for sky in self.map_sky:
+                self.masks.append(np.ones_like(sky))
+        if len(self.map_ivar) != self.nband or len(self.masks) != self.nband:
+            raise ValueError("Maps, inverse variances and masks must have the same band count.")
+        for band, sky in enumerate(self.map_sky):
+            if (sky.ndim != 1 or self.map_ivar[band].shape != sky.shape
+                    or self.masks[band].shape != sky.shape):
+                raise ValueError("Each band needs matching map, inverse-variance and mask shapes.")
+            self.npix.append(sky.size)
+            self.nsides.append(hp.npix2nside(sky.size))
         self.fwhm = 1.0/60.0*np.pi/180.0*np.ones(self.nband) if beam_fwhm is None else beam_fwhm
-        self.nside = hp.npix2nside(self.npix)
         self.lmax = len(cmb_Cell) - 1
         self.alm_len = ((self.lmax+1)*(self.lmax+2))//2
         self.Cl_prior = cmb_Cell
@@ -104,17 +117,21 @@ class ConstrainedCMB:
         self._build_preconditioner()
 
 
-    def update_data(self, map_sky: NDArray, map_ivar: NDArray, beam_fwhm: NDArray) -> None:
+    def update_data(self, map_sky: Sequence[NDArray], map_ivar: Sequence[NDArray],
+                    beam_fwhm: NDArray) -> None:
         """Update a Gibbs sample's likelihood while retaining the shared low-ell factor.
 
         Map shapes, mask and C_l prior must stay fixed. Noise and beams may change: the original
         low-ell factor remains a valid positive-definite preconditioner, though its effectiveness
         can change. Only the inexpensive harmonic diagonal is refreshed.
         """
-        if map_sky.shape != self.map_sky.shape or map_ivar.shape != map_sky.shape:
-            raise ValueError("Shared preconditioning requires the same band count and map nside.")
-        self.map_sky = map_sky
-        self.map_ivar = map_ivar
+        if len(map_sky) != self.nband or len(map_ivar) != self.nband:
+            raise ValueError("Reuse requires the same band count and map nsides.")
+        for band, sky in enumerate(map_sky):
+            if sky.shape != (self.npix[band],) or map_ivar[band].shape != sky.shape:
+                raise ValueError("Reuse requires the same band count and map nsides.")
+        self.map_sky = list(map_sky)
+        self.map_ivar = list(map_ivar)
         self.fwhm = beam_fwhm
         self._build_preconditioner(rebuild_lowell=False)
 
@@ -125,7 +142,7 @@ class ConstrainedCMB:
         Approximating pixel-space noise by its sky-average makes this diagonal
         in harmonic space:
 
-            d_ell = 1 + C_ell * (Npix / 4pi) * sum_i b_ell_i^2 * <mask_i / sigma_i^2>
+            d_ell = 1 + C_ell * sum_i (Npix_i / 4pi) * b_ell_i^2 * <mask_i / sigma_i^2>
 
         The high-ell preconditioner is M = 1 / d_ell. A dense block replaces its low-ell entries
         when pixels have zero weight. This captures mask-induced coupling between harmonic modes.
@@ -136,20 +153,23 @@ class ConstrainedCMB:
         # The LHS uses ducc0 synthesis (Y) and adjoint_synthesis (Y^T),
         # which are un-normalized: Y^T Y ≈ (Npix/4π) I in harmonic space.
         # The preconditioner must include this factor to match the true diagonal.
-        pix_factor = self.npix / (4.0 * np.pi)
-
         self.beams = []
-        weights = self.map_ivar * self.masks
-        weights = np.where(np.isfinite(weights), weights, 0.0)
+        weights = []
+        has_zero_weight = False
+        has_positive_weight = False
 
         for iband in range(self.nband):
             # For now, beams are assumed to be Gaussian, but if not, they could
             # be passed on in here.
             bl = hp.gauss_beam(self.fwhm[iband], lmax=self.lmax)
             self.beams.append(bl)
-
-            avg_inv_noise_var = np.mean(weights[iband])
-
+            weight = self.map_ivar[iband] * self.masks[iband]
+            weight = np.where(np.isfinite(weight), weight, 0.0)
+            weights.append(weight)
+            has_zero_weight |= np.any(weight == 0)
+            has_positive_weight |= np.any(weight > 0)
+            avg_inv_noise_var = np.mean(weight)
+            pix_factor = self.npix[iband] / (4.0 * np.pi)
             diag += Cl * bl ** 2 * avg_inv_noise_var * pix_factor
 
         self._precond_ell = 1.0 / diag
@@ -160,10 +180,10 @@ class ConstrainedCMB:
 
         if rebuild_lowell:
             self._lowell_factor = None
-            if self.precond_lmax > 0 and np.any(weights == 0) and np.any(weights > 0):
+            if self.precond_lmax > 0 and has_zero_weight and has_positive_weight:
                 self._build_lowell_preconditioner(weights, min(self.precond_lmax, self.lmax))
 
-    def _build_lowell_preconditioner(self, weights: NDArray, lmax: int) -> None:
+    def _build_lowell_preconditioner(self, weights: Sequence[NDArray], lmax: int) -> None:
         """Factor a real-harmonic low-ell block, following C3's coupled CMB preconditioner.
 
         Only the preconditioner uses a coarser pixel grid. Summing inverse variances into its
@@ -171,9 +191,12 @@ class ConstrainedCMB:
         Real coordinates are a_l0, sqrt(2)*Re(a_lm), sqrt(2)*Im(a_lm), giving a Euclidean inner
         product equal to dot_alm and a symmetric positive-definite matrix for Cholesky.
         """
-        nside = min(self.nside, 2**int(np.ceil(np.log2(max(1, lmax)))))
+        target_nside = 2**int(np.ceil(np.log2(max(1, lmax))))
+        coarse_nsides = []
         coarse_weights = []
-        for weight in weights:
+        for band, weight in enumerate(weights):
+            nside = min(self.nsides[band], target_nside)
+            coarse_nsides.append(nside)
             coarse_weights.append(hp.ud_grade(weight, nside, power=-2))
         n_m0 = lmax + 1
         nalm = hp.Alm.getsize(lmax)
@@ -191,6 +214,7 @@ class ConstrainedCMB:
                 basis[column - nalm + n_m0] = 1j / np.sqrt(2.0)
             result = basis.copy()
             for band in range(self.nband):
+                nside = coarse_nsides[band]
                 response = sqrt_cl * self.beams[band][:lmax + 1]
                 sky = alm2map(hp.almxfl(basis, response), nside, lmax)
                 weighted_alm = alm2map_adjoint(sky * coarse_weights[band], nside, lmax)
@@ -205,7 +229,7 @@ class ConstrainedCMB:
         self._lowell_indices = hp.Alm.getidx(self.lmax, ell, m)
         self._lowell_n_m0 = n_m0
         logger.info(f"Built coupled CMB preconditioner through ell={lmax} "
-                    f"({nmodes} real modes, nside={nside}).")
+                    f"({nmodes} real modes, band nsides={coarse_nsides}).")
 
     def preconditioner(self, x: NDArray) -> NDArray:
         """Apply the coupled low-ell block and the harmonic diagonal at higher ell."""
@@ -247,11 +271,11 @@ class ConstrainedCMB:
             # B C^{1/2} x_tilde
             BCx = hp.almxfl(Cx.copy(), self.beams[iband])
             # Y B C^{1/2} x_tilde
-            YBCx = alm2map(BCx, self.nside, self.lmax)
+            YBCx = alm2map(BCx, self.nsides[iband], self.lmax)
             # N^{-1} Y B C^{1/2} x_tilde
             NYBCx = YBCx * self.map_ivar[iband] * self.masks[iband]
             # Y^T N^{-1} Y B C^{1/2} x_tilde
-            YTNYBCx = alm2map_adjoint(NYBCx, self.nside, self.lmax)
+            YTNYBCx = alm2map_adjoint(NYBCx, self.nsides[iband], self.lmax)
             # B^T Y^T N^{-1} Y B C^{1/2} x_tilde
             BTYTNYBCx = hp.almxfl(YTNYBCx, self.beams[iband])
             # C^{1/2} B^T Y^T N^{-1} Y B C^{1/2} x_tilde
@@ -268,7 +292,7 @@ class ConstrainedCMB:
         RHS_sum = np.zeros(self.alm_len, dtype=np.complex128)
         for iband in range(self.nband):
             Nd = self.map_sky[iband] * self.map_ivar[iband] * self.masks[iband]
-            YTNd = alm2map_adjoint(Nd, self.nside, self.lmax)
+            YTNd = alm2map_adjoint(Nd, self.nsides[iband], self.lmax)
             BTYTNd = hp.almxfl(YTNd, self.beams[iband])
             RHS_sum += BTYTNd
         # Apply C^{1/2}
@@ -289,9 +313,9 @@ class ConstrainedCMB:
         RHS_sum += omega0
 
         for iband in range(self.nband):
-            omega1 = np.random.normal(0, 1, self.npix)
+            omega1 = np.random.normal(0, 1, self.npix[iband])
             Nomega1 = omega1 * np.sqrt(self.map_ivar[iband] * self.masks[iband])  # N^{-1/2} omega_1
-            YTNomega1 = alm2map_adjoint(Nomega1, self.nside, self.lmax)
+            YTNomega1 = alm2map_adjoint(Nomega1, self.nsides[iband], self.lmax)
             BTYTNomega1 = hp.almxfl(YTNomega1, self.beams[iband])
             RHS_sum += hp.almxfl(BTYTNomega1, self.Cl_sqrt)  # C^{1/2} B^T Y^T N^{-1/2} omega_1
         return RHS_sum
@@ -454,7 +478,7 @@ def _load_iteration(params: Bunch, iteration: int, compsep_path: str,
     # Chain CMB amplitudes are uK_RJ at their reference frequency, including for spectrum plots.
     cmb_alms = np.ascontiguousarray(cmb_comps[0].alms[0]).astype(np.complex128)
     cmb_alms *= rj_to_band_unit_factor(cmb_comps[0].nu_ref, "uK_CMB")
-    return Bunch(signal_maps=np.array(signal_maps), ivar_maps=np.array(ivar_maps),
+    return Bunch(signal_maps=signal_maps, ivar_maps=ivar_maps,
                  beam_sizes=np.array(beam_sizes), cmb_alms=cmb_alms, lmax=cmb_comps[0].lmax)
 
 
@@ -562,11 +586,20 @@ def main() -> int:
 
     iteration, compsep_path, band_files = jobs[0]
     data = _load_iteration(params, iteration, compsep_path, band_files, band_freqs)
-    nside = hp.npix2nside(data.signal_maps.shape[-1])
-    if args.mask is None:
-        mask = np.ones(data.signal_maps.shape[-1])
-    else:
-        mask = _read_mask(args.mask, nside, args.mask_fwhm_deg)
+    reference_bands = []
+    for band, _ in band_files:
+        reference_bands.append(band)
+    masks_by_nside = {}
+    masks = []
+    for sky in data.signal_maps:
+        nside = hp.npix2nside(sky.size)
+        if nside not in masks_by_nside:
+            if args.mask is None:
+                masks_by_nside[nside] = np.ones(sky.size)
+            else:
+                masks_by_nside[nside] = _read_mask(args.mask, nside, args.mask_fwhm_deg)
+        masks.append(masks_by_nside[nside])
+    output_nside = max(masks_by_nside)
 
     # This fixed thermodynamic theory prior is shared by all Gibbs samples and realizations.
     import camb
@@ -580,12 +613,17 @@ def main() -> int:
     logger.info(f"Preparing shared preconditioner from Gibbs iteration {iteration} for "
                 f"{len(jobs)} iterations, {args.n_realizations} realizations each.")
     solver = ConstrainedCMB(data.signal_maps, data.ivar_maps, cmb_cell_prior,
-                            masks=np.broadcast_to(mask, data.signal_maps.shape),
+                            masks=masks,
                             beam_fwhm=data.beam_sizes, maxiter=args.maxiter,
                             precond_lmax=args.precond_lmax)
 
     for job_index, (iteration, compsep_path, band_files) in enumerate(jobs):
         if job_index > 0:
+            current_bands = []
+            for band, _ in band_files:
+                current_bands.append(band)
+            if current_bands != reference_bands:
+                raise ValueError("Selected samples must have the same bands in the same order.")
             data = _load_iteration(params, iteration, compsep_path, band_files, band_freqs)
             if data.lmax != solver.lmax:
                 raise ValueError("Selected Gibbs samples must have the same CMB lmax.")
@@ -598,7 +636,7 @@ def main() -> int:
             rhs = rhs_mean + solver.get_RHS_eqn_fluct()
             cmb_alms = solver.solve_CG(solver.LHS_func, rhs, err_tol=args.err_tol)
             cmb_cell = hp.alm2cl(cmb_alms)
-            cmb_map = hp.alm2map(cmb_alms, nside)
+            cmb_map = hp.alm2map(cmb_alms, output_nside)
             suffix = f"_real{realization:04d}" if args.n_realizations > 1 else ""
             out_base = os.path.join(output_dir, f"chain{args.chain:02d}_iter{iteration:04d}{suffix}")
             hp.write_map(f"{out_base}_cmb_realization.fits", cmb_map, overwrite=True,

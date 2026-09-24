@@ -18,65 +18,110 @@ from commander4.standalone_tools import constrained_cmb_realizations as cr
 from commander4.units import SUPPORTED_BAND_UNITS, rj_to_band_unit_factor
 
 
+@pytest.mark.parametrize("nsides", [[4], [2, 4, 8]])
 @pytest.mark.parametrize("lmax", [3, 11])
 @pytest.mark.parametrize("precond_lmax", [0, 2, 32])
 def test_masked_mean_matches_dense_posterior(
-    lmax: int, precond_lmax: int, monkeypatch: pytest.MonkeyPatch
+    nsides: list[int], lmax: int, precond_lmax: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Recover modes above 2*nside and also accept a prior shorter than that old cutoff."""
+    """Check native-grid likelihoods and draws against independent real spherical harmonics."""
     monkeypatch.setattr(cr, "nthreads", 1)
-    nside = 4
-    theta, phi = hp.pix2ang(nside, np.arange(hp.nside2npix(nside)))
-    columns = []
-    alm_columns = []
-    ells = []
-    # Independent real harmonics: m>0 has two real degrees of freedom, each with variance C_l.
-    for m in range(lmax + 1):
-        for ell in range(m, lmax + 1):
-            y = sph_harm_y(ell, m, theta, phi)
-            alm = np.zeros(hp.Alm.getsize(lmax), dtype=complex)
-            index = hp.Alm.getidx(lmax, ell, m)
-            if m == 0:
-                columns.append(y.real)
-                alm[index] = 1.0
-                alm_columns.append(alm)
-                ells.append(ell)
-            else:
-                columns.append(np.sqrt(2) * y.real)
-                alm[index] = 1 / np.sqrt(2)
-                alm_columns.append(alm.copy())
-                ells.append(ell)
-                columns.append(-np.sqrt(2) * y.imag)
-                alm[index] = 1j / np.sqrt(2)
-                alm_columns.append(alm)
-                ells.append(ell)
-    design = np.array(columns).T
+    designs = []
+    masks = []
+    ivars = []
+    beams = np.radians(np.linspace(12.0, 30.0, len(nsides)))
+    for band, nside in enumerate(nsides):
+        theta, phi = hp.pix2ang(nside, np.arange(hp.nside2npix(nside)))
+        columns = []
+        alm_columns = []
+        ells = []
+        # m>0 has two real degrees of freedom, each with variance C_l.
+        for m in range(lmax + 1):
+            for ell in range(m, lmax + 1):
+                y = sph_harm_y(ell, m, theta, phi)
+                alm = np.zeros(hp.Alm.getsize(lmax), dtype=complex)
+                index = hp.Alm.getidx(lmax, ell, m)
+                if m == 0:
+                    columns.append(y.real)
+                    alm[index] = 1.0
+                    alm_columns.append(alm)
+                    ells.append(ell)
+                else:
+                    columns.append(np.sqrt(2) * y.real)
+                    alm[index] = 1 / np.sqrt(2)
+                    alm_columns.append(alm.copy())
+                    ells.append(ell)
+                    columns.append(-np.sqrt(2) * y.imag)
+                    alm[index] = 1j / np.sqrt(2)
+                    alm_columns.append(alm)
+                    ells.append(ell)
+        design = np.array(columns).T
+        design *= hp.gauss_beam(beams[band], lmax=lmax)[ells]
+        designs.append(design)
+        ivars.append((band + 1) * (3 + np.cos(theta)))
+        masks.append((np.abs(np.cos(theta)) > 0.3).astype(float))
     basis = np.array(alm_columns).T
     ells = np.array(ells)
     cl = 2 / (np.arange(lmax + 1) + 1.0)**2
-    beam = np.radians(12.0)
-    design *= hp.gauss_beam(beam, lmax=lmax)[ells]
     rng = np.random.default_rng(71)
     truth = rng.normal(size=len(ells)) * np.sqrt(cl[ells])
-    ivar = 3 + np.cos(theta)
-    mask = (np.abs(np.cos(theta)) > 0.3).astype(float)
-    data = design @ truth + rng.normal(size=theta.size) / np.sqrt(ivar)
-    weight = ivar * mask
-    precision = np.diag(1 / cl[ells]) + design.T @ (weight[:, None] * design)
-    expected = np.linalg.solve(precision, design.T @ (weight * data))
+    precision = np.diag(1 / cl[ells])
+    mean_rhs = np.zeros(len(ells))
+    maps = []
+    for design, ivar, mask in zip(designs, ivars, masks):
+        data = design @ truth + rng.normal(size=ivar.size) / np.sqrt(ivar)
+        maps.append(data)
+        weight = ivar * mask
+        precision += design.T @ (weight[:, None] * design)
+        mean_rhs += design.T @ (weight * data)
+    expected = np.linalg.solve(precision, mean_rhs)
 
-    solver = cr.ConstrainedCMB(data[None, :], ivar[None, :], cl, masks=mask[None, :],
-                               beam_fwhm=np.array([beam]), maxiter=500, precond_lmax=precond_lmax)
+    solver = cr.ConstrainedCMB(maps, ivars, cl, masks=masks, beam_fwhm=beams,
+                               maxiter=500, precond_lmax=precond_lmax)
     assert solver.lmax == lmax
+    assert solver.nsides == nsides
+    expected_diagonal = np.ones(lmax + 1)
+    for band, (ivar, mask) in enumerate(zip(ivars, masks)):
+        beam = hp.gauss_beam(beams[band], lmax=lmax)
+        expected_diagonal += cl * beam**2 * np.sum(ivar * mask) / (4*np.pi)
+    np.testing.assert_allclose(solver._precond_ell, 1 / expected_diagonal, rtol=1e-14)
+    if precond_lmax >= lmax and lmax >= max(nsides):
+        # With no grid coarsening and all modes in the block, its inverse is exact.
+        probe = basis @ truth
+        np.testing.assert_allclose(solver.preconditioner(solver.LHS_func(probe)), probe, atol=1e-11)
     actual_alm = solver.solve_CG(solver.LHS_func, solver.get_RHS_eqn_mean(), err_tol=1e-22)
     alm_weight = np.full(solver.alm_len, 2.0)
     alm_weight[:lmax + 1] = 1.0
     actual = (basis.conj().T @ (alm_weight * actual_alm)).real
     np.testing.assert_allclose(actual, expected, atol=1e-9)
-    fluctuation = solver.get_RHS_eqn_fluct()
-    assert fluctuation.shape == actual_alm.shape == (hp.Alm.getsize(lmax),)
-    assert np.all(np.isfinite(fluctuation))
     assert np.any(np.abs(actual[ells == lmax]) > 1e-3)
+
+    # Supply known independent standard normals, then compare the complete draw with a dense solve.
+    # This checks the prior term and each band's pixel-noise term without using the solver's SHTs.
+    prior_noise = rng.normal(size=len(ells))
+    pixel_noise = []
+    fluct_rhs = prior_noise / np.sqrt(cl[ells])
+    for design, ivar, mask in zip(designs, ivars, masks):
+        noise = rng.normal(size=ivar.size)
+        pixel_noise.append(noise)
+        fluct_rhs += design.T @ (np.sqrt(ivar * mask) * noise)
+    monkeypatch.setattr(cr.hp, "synalm", lambda *args: basis @ prior_noise)
+    noises = iter(pixel_noise)
+
+    def normal(mean: float, sigma: float, size: int) -> np.ndarray:
+        noise = next(noises)
+        assert size == noise.size
+        return noise
+
+    monkeypatch.setattr(cr.np.random, "normal", normal)
+    fluctuation = solver.get_RHS_eqn_fluct()
+    fluct_coords = (basis.conj().T @ (alm_weight * fluctuation)).real
+    np.testing.assert_allclose(fluct_coords, np.sqrt(cl[ells]) * fluct_rhs, atol=1e-11)
+    rhs = solver.get_RHS_eqn_mean() + fluctuation
+    draw = solver.solve_CG(solver.LHS_func, rhs, err_tol=1e-22)
+    draw_coords = (basis.conj().T @ (alm_weight * draw)).real
+    expected_draw = np.linalg.solve(precision, mean_rhs + fluct_rhs)
+    np.testing.assert_allclose(draw_coords, expected_draw, atol=1e-9)
 
 
 @pytest.mark.parametrize("lmax", [3, 11])
@@ -125,7 +170,7 @@ def test_cli_uses_component_lmax(
         assert self.lmax == lmax
         assert len(self.Cl_prior) == lmax + 1
         assert (self._lowell_factor is not None) == (precond_lmax > 0)
-        np.testing.assert_array_equal(self.masks[0, :20], 0.0)
+        np.testing.assert_array_equal(self.masks[0][:20], 0.0)
         if apodization_deg is None:
             np.testing.assert_array_equal(self.masks[0], binary_mask)
         else:
@@ -223,7 +268,7 @@ def test_apodized_mask_excludes_contamination(tmp_path: Path, monkeypatch: pytes
     rhs = solver.get_RHS_eqn_mean() + solver.get_RHS_eqn_fluct()
     original = solver.solve_CG(solver.LHS_func, rhs, err_tol=1e-16)
     old_mean_rhs = solver.get_RHS_eqn_mean()
-    solver.map_sky[0, binary_mask == 0] += 1e12
+    solver.map_sky[0][binary_mask == 0] += 1e12
     new_mean_rhs = solver.get_RHS_eqn_mean()
     np.testing.assert_array_equal(new_mean_rhs, old_mean_rhs)
     contaminated_rhs = rhs + (new_mean_rhs - old_mean_rhs)
@@ -320,24 +365,28 @@ def test_invalid_preconditioner_cutoff_is_rejected() -> None:
         cr.ConstrainedCMB(sky, np.ones_like(sky), np.ones(9), precond_lmax=-1)
 
 
+@pytest.mark.parametrize("nsides", [[4, 4], [2, 4]])
 def test_updated_data_reuses_lowell_factor_and_solves_current_likelihood(
-    monkeypatch: pytest.MonkeyPatch,
+    nsides: list[int], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Changing noise and beams refreshes the physics without refactoring the shared block."""
     monkeypatch.setattr(cr, "nthreads", 1)
     rng = np.random.default_rng(51)
-    nside, lmax = 4, 8
-    npix = hp.nside2npix(nside)
-    sky = rng.normal(size=(2, npix))
-    ivar = rng.uniform(1, 2, size=sky.shape)
-    masks = np.ones_like(sky)
-    masks[:, :npix//3] = 0
+    lmax = 8
+    sky, ivar, masks, new_sky, new_ivar = [], [], [], [], []
+    for nside in nsides:
+        npix = hp.nside2npix(nside)
+        sky.append(rng.normal(size=npix))
+        ivar.append(rng.uniform(1, 2, size=npix))
+        mask = np.ones(npix)
+        mask[:npix//3] = 0
+        masks.append(mask)
+        new_sky.append(rng.normal(size=npix))
+        new_ivar.append(ivar[-1] * rng.uniform(2, 8, size=npix))
     cl = 2 / (np.arange(lmax + 1) + 1.0)**2
     solver = cr.ConstrainedCMB(sky, ivar, cl, masks=masks, maxiter=500)
     factor = solver._lowell_factor
     first_diagonal = solver._precond_ell.copy()
-    new_sky = rng.normal(size=sky.shape)
-    new_ivar = ivar * rng.uniform(2, 8, size=sky.shape)
     new_beams = np.radians([8.0, 15.0])
 
     def forbid_rebuild(*args, **kwargs) -> None:
@@ -357,9 +406,10 @@ def test_updated_data_reuses_lowell_factor_and_solves_current_likelihood(
     expected = reference.solve_CG(reference.LHS_func, rhs, err_tol=1e-22)
     np.testing.assert_allclose(actual, expected, atol=1e-9)
     with pytest.raises(ValueError, match="same band count and map nside"):
-        solver.update_data(new_sky[:, :12], new_ivar[:, :12], new_beams)
+        solver.update_data([new_sky[0][:12], new_sky[1]], new_ivar, new_beams)
 
 
+@pytest.mark.parametrize("nsides", [[2], [2, 4, 4]])
 @pytest.mark.parametrize("selection, selected", [
     ([], [1, 3, 5, 8]),
     (["--burn-in", "3"], [5, 8]),
@@ -367,11 +417,15 @@ def test_updated_data_reuses_lowell_factor_and_solves_current_likelihood(
     (["--burn-in", "8"], []),
 ])
 def test_cli_reuses_setup_across_iterations_and_realizations(
-    selection: list[str], selected: list[int], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    nsides: list[int], selection: list[str], selected: list[int],
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Sparse Gibbs numbering, changing foregrounds/noise, and three independent draws per sample."""
     monkeypatch.setattr(cr, "nthreads", 1)
-    lmax, nside = 3, 2
+    lmax = 3
+    bands = {}
+    for band in range(len(nsides)):
+        bands[f"Band{band}"] = {"freq": 100.0}
     params = {
         "components": {
             "CMB": {"enabled": True, "component_class": "CMB", "params": {
@@ -385,11 +439,10 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
             }},
         },
         "compsep": {"double_precision": True},
-        "experiments": {"Sim": {"bands": {"Band100": {"freq": 100.0}}}},
+        "experiments": {"Sim": {"bands": bands}},
     }
     (tmp_path / "chains_compsep").mkdir()
     (tmp_path / "chains_bands").mkdir()
-    npix = hp.nside2npix(nside)
     for iteration in [1, 3, 5, 8]:
         compsep_path = tmp_path / f"chains_compsep/chain01_iter{iteration:04d}.h5"
         dust = np.zeros((1, hp.Alm.getsize(lmax)), dtype=complex)
@@ -398,13 +451,15 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
             handle["metadata/parameter_file_as_string"] = yaml.safe_dump(params)
             handle["comps/cmb/alms"] = np.zeros_like(dust)
             handle["comps/dust/alms"] = dust
-        band_path = tmp_path / f"chains_bands/Sim_Band100_chain01_iter{iteration:04d}.h5"
-        with h5py.File(band_path, "w") as handle:
-            handle["maps/observed_sky"] = np.full((1, npix), 12.0 + iteration)
-            handle["maps/rms"] = np.full((1, npix), 0.5 + 0.1*iteration)
-            handle["metadata/band_unit"] = "uK_RJ"
-            handle["metadata/map_fwhm_arcmin"] = 10.0*iteration
-    mask = np.ones(npix)
+        for band, nside in enumerate(nsides):
+            npix = hp.nside2npix(nside)
+            band_path = tmp_path / f"chains_bands/Sim_Band{band}_chain01_iter{iteration:04d}.h5"
+            with h5py.File(band_path, "w") as handle:
+                handle["maps/observed_sky"] = np.full((1, npix), 12.0 + iteration)
+                handle["maps/rms"] = np.full((1, npix), 0.5 + 0.1*iteration)
+                handle["metadata/band_unit"] = "uK_RJ"
+                handle["metadata/map_fwhm_arcmin"] = 10.0*iteration
+    mask = np.ones(hp.nside2npix(max(nsides)))
     mask[:12] = 0
     mask_path = tmp_path / "mask.fits"
     hp.write_map(mask_path, mask, dtype=np.float64)
@@ -421,8 +476,12 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
         events.append(("load", iteration))
         result = original_load(params, iteration, *args)
         conversion = rj_to_band_unit_factor(100.0, "uK_CMB")
-        np.testing.assert_allclose(result.signal_maps, (12.0 - iteration)*conversion, atol=1e-5)
-        np.testing.assert_allclose(result.ivar_maps, 1/((0.5 + 0.1*iteration)*conversion)**2)
+        for band, nside in enumerate(nsides):
+            assert result.signal_maps[band].size == hp.nside2npix(nside)
+            np.testing.assert_allclose(result.signal_maps[band],
+                                       (12.0 - iteration)*conversion, atol=1e-5)
+            np.testing.assert_allclose(result.ivar_maps[band],
+                                       1/((0.5 + 0.1*iteration)*conversion)**2)
         return result
 
     def read_mask(*args):
@@ -444,6 +503,10 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
 
     def solve(self, lhs, rhs, err_tol=1e-6):
         events.append(("solve", None))
+        assert self.nsides == nsides
+        for band, nside in enumerate(nsides):
+            expected_mask = (hp.ud_grade(mask, nside) == 1.0).astype(float)
+            np.testing.assert_array_equal(self.masks[band], expected_mask)
         factors.append(self._lowell_factor)
         return original_solve(self, lhs, rhs, err_tol)
 
@@ -460,7 +523,9 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
     assert cr.plt.get_fignums() == initial_figures
     expected_events = []
     if selected:
-        expected_events = [("load", selected[0]), ("mask", None), ("prior", None), ("build", None)]
+        expected_events = [("load", selected[0])]
+        expected_events.extend([("mask", None)] * len(set(nsides)))
+        expected_events.extend([("prior", None), ("build", None)])
         for index, iteration in enumerate(selected):
             if index > 0:
                 expected_events.append(("load", iteration))
@@ -478,6 +543,8 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
             path = output_dir / (
                 f"chain01_iter{iteration:04d}_real{realization:04d}_cmb_realization.fits")
             maps.append(hp.read_map(path))
+            assert maps[-1].size == hp.nside2npix(max(nsides))
+            assert np.all(np.isfinite(maps[-1]))
             with fits.open(path) as handle:
                 assert handle[1].header["CHAIN"] == 1
                 assert handle[1].header["ITER"] == iteration
