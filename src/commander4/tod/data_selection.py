@@ -70,6 +70,7 @@ def log_dataselect_summary(band_comm: MPI.Comm, tod_samples: TODSamples,
     gf, z = tod_samples.good_fraction, tod_samples.chisq_z
     fresh = np.isfinite(gf)
     if active:
+#MR: why use bit operations here?
         bad_lowfrac = fresh & (gf < data_selection_cfg.min_good_fraction)
         within_threshold = np.isfinite(z) & (np.abs(z) <= data_selection_cfg.chisq_abs_threshold)
         bad_chisq = fresh & ~bad_lowfrac & ~within_threshold
