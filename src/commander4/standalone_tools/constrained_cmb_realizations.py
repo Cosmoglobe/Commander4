@@ -50,6 +50,8 @@ Mask and convergence settings:
 FUTURE TODO LIST
 1. The C(ell) prior is currently hard-coded to a theory prior. When we get actual C(ell) sampling up
    running in the main C4 loop we should add support for reading that in.
+2. When non-diffuse components are introduced we need to change the component read-in to not assume
+   everything has an alm entry.
 """
 import argparse
 import glob
