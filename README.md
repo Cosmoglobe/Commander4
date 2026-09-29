@@ -290,7 +290,7 @@ c4-plot-chain path/to/output-dir/  # Produces a ton of plots from a given chain.
 
 c4-diff-params path/to/param1.yml path/to/param2.yml  # Prints the difference between two parameter files.
 
-c4-cmb-realizations  path/to/chain-dir/  # Generate constrained CMB realizations from chain (non yet fully functional).
+c4-cmb-realizations path/to/output-dir/  # Generate constrained CMB realizations from saved band maps and components.
 
 c4-generate-stubs  # Manually re-generate the stubs that are automatically during a build (very niche).
 ```
@@ -308,6 +308,17 @@ Run `c4-validate-params path/to/param.yml` to get:
 `c4-plot-chain` creates a whole bunch of plots, both sky maps and various TOD plots, and places them in the chains folder.
 - For experimenst like SO, where per-detector plots are unfeasible, you should add the flag `--detector-plots summary`.
 - The amount of plots can get excessive, so it's recommended to use the flags to plot only specific subsets, such as `--chain`, `--iter`, `--band`.
+
+### 4.5 Constrained CMB realizations
+
+Draw masked CMB realizations from a completed run's saved band maps and components:
+
+```bash
+c4-cmb-realizations path/to/output-dir/ --burn-in 100 --n-realizations 10 --mask mask.fits
+```
+
+See `c4-cmb-realizations --help` and the
+[module documentation](src/commander4/standalone_tools/constrained_cmb_realizations.py) for details.
 
 
 # 5. Benchmarking and optimization

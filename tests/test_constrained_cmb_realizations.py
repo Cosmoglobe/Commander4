@@ -13,6 +13,7 @@ import yaml
 from astropy.io import fits
 from scipy.special import sph_harm_y
 
+from commander4.file_io.chain_writer import write_compsep_chain_to_file
 from commander4.parameters.bunch import as_bunch_recursive
 from commander4.standalone_tools import constrained_cmb_realizations as cr
 from commander4.units import SUPPORTED_BAND_UNITS, rj_to_band_unit_factor
@@ -146,6 +147,8 @@ def test_cli_uses_component_lmax(
     with h5py.File(tmp_path / "chains_compsep/chain01_iter0001.h5", "w") as handle:
         handle["metadata/parameter_file_as_string"] = yaml.safe_dump(params)
         handle["comps/cmb/alms"] = np.zeros((1, hp.Alm.getsize(lmax)), dtype=complex)
+        handle["comps/cmb/sed/nu_ref"] = 1.0
+        handle["comps/cmb/amp_fwhm_arcmin"] = 0.0
     npix = hp.nside2npix(4)
     binary_mask = np.ones(npix)
     binary_mask[:20] = 0
@@ -425,7 +428,7 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
     lmax = 3
     bands = {}
     for band in range(len(nsides)):
-        bands[f"Band{band}"] = {"freq": 100.0}
+        bands[f"Band{band}"] = {"freq": 70.0 + 30.0*band}
     params = {
         "components": {
             "CMB": {"enabled": True, "component_class": "CMB", "params": {
@@ -435,7 +438,7 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
             "Dust": {"enabled": True, "component_class": "ThermalDust", "params": {
                 "polarization": "I", "shortname": "dust", "lmax": lmax,
                 "spatially_varying_MM": False, "Cl_prior_amplitude": None,
-                "nu_ref": 100.0, "beta": 1.54, "T": 20.0,
+                "nu_ref": 100.0, "beta": 1.54, "T": 20.0, "sample_spectral_index": True,
             }},
         },
         "compsep": {"double_precision": True},
@@ -451,6 +454,12 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
             handle["metadata/parameter_file_as_string"] = yaml.safe_dump(params)
             handle["comps/cmb/alms"] = np.zeros_like(dust)
             handle["comps/dust/alms"] = dust
+            handle["comps/cmb/sed/nu_ref"] = 1.0
+            handle["comps/cmb/amp_fwhm_arcmin"] = 0.0
+            handle["comps/dust/sed/beta"] = 1.0 + 0.1*iteration
+            handle["comps/dust/sed/T"] = 20.0
+            handle["comps/dust/sed/nu_ref"] = 100.0
+            handle["comps/dust/amp_fwhm_arcmin"] = 0.0
         for band, nside in enumerate(nsides):
             npix = hp.nside2npix(nside)
             band_path = tmp_path / f"chains_bands/Sim_Band{band}_chain01_iter{iteration:04d}.h5"
@@ -475,11 +484,16 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
     def load_sample(params, iteration, *args):
         events.append(("load", iteration))
         result = original_load(params, iteration, *args)
-        conversion = rj_to_band_unit_factor(100.0, "uK_CMB")
         for band, nside in enumerate(nsides):
+            nu = 70.0 + 30.0*band
+            conversion = rj_to_band_unit_factor(nu, "uK_CMB")
+            # Modified blackbody in RJ units, evaluated with this sample's beta.
+            h_over_k_GHz = 0.04799243073366221
+            sed = (nu / 100.0)**(2.0 + 0.1*iteration)
+            sed *= np.expm1(h_over_k_GHz*100.0/20.0) / np.expm1(h_over_k_GHz*nu/20.0)
             assert result.signal_maps[band].size == hp.nside2npix(nside)
             np.testing.assert_allclose(result.signal_maps[band],
-                                       (12.0 - iteration)*conversion, atol=1e-5)
+                                       (12.0 + iteration - 2*iteration*sed)*conversion, atol=1e-5)
             np.testing.assert_allclose(result.ivar_maps[band],
                                        1/((0.5 + 0.1*iteration)*conversion)**2)
         return result
@@ -603,6 +617,12 @@ def test_cli_uses_thermodynamic_units_throughout(
         handle["metadata/parameter_file_as_string"] = yaml.safe_dump(params)
         handle["comps/cmb/alms"] = cmb_alm[None, :] / rj_to_band_unit_factor(cmb_ref, "uK_CMB")
         handle["comps/dust/alms"] = dust_alm[None, :]
+        handle["comps/cmb/sed/nu_ref"] = cmb_ref
+        handle["comps/cmb/amp_fwhm_arcmin"] = 0.0
+        handle["comps/dust/sed/beta"] = 1.54
+        handle["comps/dust/sed/T"] = 20.0
+        handle["comps/dust/sed/nu_ref"] = 353.0
+        handle["comps/dust/amp_fwhm_arcmin"] = 0.0
     components = cr._build_intensity_components(as_bunch_recursive(params), str(chain_path))
     foregrounds = []
     for component in components:
@@ -678,3 +698,121 @@ def test_cli_uses_thermodynamic_units_throughout(
     with fits.open(output_path) as handle:
         assert handle[1].header["BUNIT"] == "uK_CMB"
         assert handle[1].header["TUNIT1"] == "uK_CMB"
+
+
+@pytest.fixture(params=["I", "IQU"])
+def saved_component_sample(request: pytest.FixtureRequest, tmp_path: Path) -> tuple:
+    """Write a real chain with SEDs different from the configuration and smoothed amplitudes."""
+    lmax = 8
+    components = {}
+    for name, shortname, component_class, sed in [
+        ("CMB", "cmb", "CMB", {"nu_ref": 1.0}),
+        ("Dust", "dust", "ThermalDust", {"nu_ref": 353.0, "beta": 1.54, "T": 20.0}),
+        ("Sync", "sync", "Synchrotron", {"nu_ref": 30.0, "beta": -3.1}),
+    ]:
+        components[name] = {"enabled": True, "component_class": component_class, "params": {
+            "polarization": request.param, "shortname": shortname, "lmax": lmax,
+            "spatially_varying_MM": False, "Cl_prior_amplitude": None, **sed,
+        }}
+    # Dust is sampled; sync is fixed. Offline restoration must use both saved states.
+    components["Dust"]["params"]["sample_spectral_index"] = True
+    config = {"components": components, "compsep": {"double_precision": True},
+              "output": {"dir": str(tmp_path), "chains": {"write": [1]}}}
+    params = as_bunch_recursive(config)
+    params.parameter_file_as_string = yaml.safe_dump(config)
+    (tmp_path / "chains_compsep").mkdir()
+    comp_list = cr.CompList.init_from_params(params.components, params)
+    intrinsic = {}
+    for comp in comp_list:
+        alm = np.zeros(hp.Alm.getsize(lmax), dtype=complex)
+        alm[0] = 30.0
+        alm[hp.Alm.getidx(lmax, 8, 3)] = 20.0 + 10.0j
+        alm[hp.Alm.getidx(lmax, 4, 0)] = 10.0
+        amp_fwhm = np.radians(6.0)
+        if comp.eval_pol == "I":
+            intrinsic[comp.shortname] = alm.copy()
+        else:
+            alm *= 3.0  # Distinct QU amplitudes expose accidental row selection.
+        comp.alms[:] = hp.almxfl(alm, hp.gauss_beam(amp_fwhm, lmax=lmax))
+        comp.amp_fwhm_rad = amp_fwhm
+        if comp.shortname == "cmb":
+            comp.nu_ref = 100.0 if comp.eval_pol == "I" else 217.0
+        elif comp.shortname == "dust":
+            comp.nu_ref = 70.0 if comp.eval_pol == "I" else 353.0
+            comp.beta = 1.9 if comp.eval_pol == "I" else 1.3
+            comp.T = 24.0 if comp.eval_pol == "I" else 18.0
+        else:
+            comp.nu_ref = 40.0 if comp.eval_pol == "I" else 30.0
+            comp.beta = -2.6 if comp.eval_pol == "I" else -3.3
+    write_compsep_chain_to_file(comp_list.joined(), params, chain=1, iter=1)
+    chain_path = str(tmp_path / "chains_compsep/chain01_iter0001.h5")
+    return params, chain_path, intrinsic
+
+
+def test_component_restoration_matches_saved_seds_and_beams(saved_component_sample: tuple) -> None:
+    """The intensity view must round-trip even when the writer joins different I and QU SEDs."""
+    params, chain_path, intrinsic = saved_component_sample
+    restored = cr._build_intensity_components(params, chain_path)
+    expected_seds = {"cmb": {"nu_ref": 100.0},
+                     "dust": {"nu_ref": 70.0, "beta": 1.9, "T": 24.0},
+                     "sync": {"nu_ref": 40.0, "beta": -2.6}}
+    for comp in restored:
+        assert comp.eval_pol == "I"
+        assert comp.amp_fwhm_rad == pytest.approx(np.radians(6.0))
+        for name, value in expected_seds[comp.shortname].items():
+            assert getattr(comp, name) == pytest.approx(value)
+        expected_alm = hp.almxfl(intrinsic[comp.shortname], hp.gauss_beam(np.radians(6.0), lmax=8))
+        np.testing.assert_allclose(comp.alms[0], expected_alm, atol=1e-12)
+
+
+def test_iteration_subtracts_saved_foregrounds_without_double_smoothing(
+    saved_component_sample: tuple, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Independent native-grid skies leave only the intended CMB-plus-noise residual."""
+    monkeypatch.setattr(cr, "nthreads", 1)
+    params, chain_path, intrinsic = saved_component_sample
+    band_files = []
+    band_freqs = {}
+    expected_maps = []
+    for band, nu, nside, beam_deg in [("Band30", 30.0, 4, 6.0), ("Band100", 100.0, 8, 12.0)]:
+        beam = hp.gauss_beam(np.radians(beam_deg), lmax=8)
+        sync_sed = (nu / 40.0)**-2.6
+        h_over_k_GHz = 0.04799243073366221
+        dust_sed = (nu / 70.0)**2.9
+        dust_sed *= np.expm1(h_over_k_GHz*70.0/24.0) / np.expm1(h_over_k_GHz*nu/24.0)
+        foreground = hp.alm2map(hp.almxfl(intrinsic["dust"], beam), nside) * dust_sed
+        foreground += hp.alm2map(hp.almxfl(intrinsic["sync"], beam), nside) * sync_sed
+        foreground *= rj_to_band_unit_factor(nu, "uK_CMB")
+        cmb = hp.alm2map(hp.almxfl(intrinsic["cmb"], beam), nside)
+        cmb *= rj_to_band_unit_factor(100.0, "uK_CMB")
+        expected = cmb + 0.125
+        path = tmp_path / f"{band}.h5"
+        with h5py.File(path, "w") as handle:
+            handle["maps/observed_sky"] = (foreground + expected)[None, :]
+            handle["maps/rms"] = np.ones((1, expected.size))
+            handle["metadata/band_unit"] = "uK_CMB"
+            handle["metadata/map_fwhm_arcmin"] = 60.0*beam_deg
+        band_files.append((band, str(path)))
+        band_freqs[band] = nu
+        expected_maps.append(expected)
+    loaded = cr._load_iteration(params, 1, chain_path, band_files, band_freqs)
+    for actual, expected in zip(loaded.signal_maps, expected_maps):
+        # SkyModel accumulates foregrounds in float32.
+        np.testing.assert_allclose(actual, expected, rtol=0, atol=5e-5)
+    stored_cmb = hp.almxfl(intrinsic["cmb"], hp.gauss_beam(np.radians(6.0), lmax=8))
+    np.testing.assert_allclose(loaded.cmb_alms,
+                               stored_cmb * rj_to_band_unit_factor(100.0, "uK_CMB"), atol=1e-12)
+    with h5py.File(band_files[0][1], "r+") as handle:
+        handle["metadata/map_fwhm_arcmin"][...] = 60.0
+    with pytest.raises(ValueError, match="cannot be realized any sharper"):
+        cr._load_iteration(params, 1, chain_path, band_files, band_freqs)
+
+
+@pytest.mark.parametrize("dataset", ["sed/beta", "sed/T", "sed/nu_ref", "amp_fwhm_arcmin"])
+def test_missing_component_state_is_rejected(saved_component_sample: tuple, dataset: str) -> None:
+    """A missing sample value cannot silently turn into its initial configuration value."""
+    params, chain_path, _ = saved_component_sample
+    with h5py.File(chain_path, "r+") as handle:
+        del handle[f"comps/dust/{dataset}"]
+    with pytest.raises(ValueError, match=f"Missing component state.*comps/dust/{dataset}"):
+        cr._build_intensity_components(params, chain_path)

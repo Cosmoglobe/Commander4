@@ -3,6 +3,53 @@
 Subtracts each saved sample's foregrounds from its band maps, then draws CMB alms conditioned on
 those residuals and a fixed theoretical C_l prior. The mask and low-ell preconditioner are shared
 across Gibbs samples and realizations. Only intensity is sampled; all calculations use uK_CMB.
+
+Usage:
+    c4-cmb-realizations path/to/output-dir/ --chain 1 --burn-in 100 --n-realizations 10
+        --mask path/to/mask.fits --maxiter 10000 --err-tol 1e-16
+    (Enter the example as one shell command.)
+
+Sample selection:
+    --burn-in N selects iteration numbers strictly greater than N. Alternatively, --iter 104 108 112
+    selects explicit iterations. Omit both to process all available iterations. The default is one
+    realization per iteration.
+
+Shared setup:
+    The mask, fixed theoretical CMB prior, and low-ell preconditioner are prepared before sampling.
+    The first selected Gibbs sample supplies the reference noise weights and beams for the shared
+    low-ell block. Later samples load their own foregrounds, observed maps, RMS and beams, and
+    refresh the inexpensive diagonal preconditioner. Reusing the block affects convergence speed,
+    not the converged result. The mean RHS is computed once per Gibbs iteration; each realization
+    gets a fresh random RHS.
+
+    Bands may have different HEALPix resolutions. Each likelihood uses its band's native pixel
+    grid, with a mask prepared once per resolution. All bands share the CMB component's lmax.
+    Across selected Gibbs samples, the band list, each band's nside and the CMB lmax must stay fixed.
+
+Foreground subtraction:
+    Each sample restores component alms, all saved SED parameters (including sampled spectral
+    indices), and amplitude smoothing beams. Joined IQU components use their intensity state.
+    These datasets must be present in the chain; missing state raises an error rather than using
+    initial parameter values. Band beams cannot be sharper than the saved foreground amplitude
+    beams.
+
+Output:
+    Files default to <run_dir>/cmb_realizations/, or the directory supplied with --output-dir.
+    Multiple realizations include both indices, e.g. chain01_iter0101_real0001_cmb_realization.fits,
+    with two corresponding figures. Single-realization runs use chain01_iter0101_cmb_realization.fits.
+    FITS headers record the chain, Gibbs iteration, realization number, and uK_CMB units.
+    Output maps use the highest input-band nside.
+
+Mask and convergence settings:
+    The default mask is binary. --mask-fwhm-deg 3 enables an outward 3-degree taper while retaining
+    exact zero weight inside the mask. --precond-lmax 0 disables the coupled low-ell correction.
+    The default 1,000 CG iterations may be insufficient for masked skies; the example above uses
+    a larger cap and tighter tolerance. Check convergence messages for every draw. The solver
+    currently writes the result even when it reaches the iteration cap without converging.
+
+FUTURE TODO LIST
+1. The C(ell) prior is currently hard-coded to a theory prior. When we get actual C(ell) sampling up
+   running in the main C4 loop we should add support for reading that in.
 """
 import argparse
 import glob
