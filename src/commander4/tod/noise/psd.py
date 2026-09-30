@@ -16,13 +16,30 @@ logger = logging.getLogger(__name__)
 
 def _oof_loglike_grid(frequency_factor: NDArray, grid_factor: NDArray,
                       power_scaled: NDArray, weight: NDArray,
-                      *, exponentiate: bool = False) -> NDArray:
+                      *, exponentiate: bool = False, offset: NDArray | float = 1.0) -> NDArray:
     """Evaluate a 1/f likelihood grid in small NumPy batches.
 
     The correlated/white power ratio is the product of the input factors, or its exponential
     for the slope grid. Power is divided by sigma0**2. Parameter-independent terms are omitted.
     Batching retains NumPy's vectorized maths with about 1 MiB for the two temporary arrays
     (or one candidate at a time when its frequency vector alone exceeds that budget).
+
+    Args:
+        frequency_factor (np.ndarray): Per-frequency factor multiplied by each grid candidate
+            (e.g. f**alpha for an fknee grid, or log(f/fknee) for an exponentiated alpha grid).
+        grid_factor (np.ndarray): Per-candidate factor evaluated at each frequency (e.g.
+            fknee**-alpha, or the alpha values themselves when exponentiate=True).
+        power_scaled (np.ndarray): Periodogram power divided by sigma0**2.
+        weight (np.ndarray): Per-frequency weight (mode count per bin, or all ones when unbinned).
+        exponentiate (bool): If True, exponentiate the grid_factor * frequency_factor product
+            before adding offset (the slope grids); if False, use the product directly (the
+            fknee grids).
+        offset (np.ndarray | float): Part of noise model held fixed during sampling.
+            For oof offset=1 (default).
+            For 2oof offset=1+(f/f_knee_i)**alpha_i where i is the component not being sampled.
+    Returns:
+        result (np.ndarray): Log-likelihood (up to an additive, parameter-independent constant)
+            at each grid point.
     """
     result = np.empty(grid_factor.size, dtype=np.float64)
     batch_size = max(1, 65536 // max(frequency_factor.size, 1))
@@ -31,14 +48,13 @@ def _oof_loglike_grid(frequency_factor: NDArray, grid_factor: NDArray,
         full_power = grid_factor[start:stop, None] * frequency_factor[None, :]
         if exponentiate:
             np.exp(full_power, out=full_power)
-        full_power += 1.0
+        full_power += offset
         quadratic = power_scaled / full_power
         np.log(full_power, out=full_power)
         full_power += quadratic
         full_power *= weight
         result[start:stop] = -np.sum(full_power, axis=1)
     return result
-
 
 def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray) -> float:
     """ Performs 1D inversion sampling on a grid. This involves calculating the cumulative
@@ -52,7 +68,8 @@ def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray) -> float:
     """
     lnL -= np.max(lnL)
     L = np.exp(lnL)  # Calculate the linear likelihood.
-    cdf = np.cumsum(L)  # Cumulative likelihood.
+    cdf = np.cumsum(L) - 0.5*L  # Cumulative likelihood, at cell centres.
+    cdf -= cdf[0]
     cdf /= cdf[-1]  # Constrain it to [0,1].
     u = np.random.uniform(0, 1)
     sample = np.interp(u, cdf, grid_points)  # Find the x-value that matches the y-value we drew.
@@ -304,10 +321,143 @@ class NoisePSDOof(NoisePSD):
 
 
 class NoisePSD2Oof(NoisePSD):
-    # TODO: Implement.
     """P(f) = sigma0^2 (1 + (f / f_knee)^alpha + (f / f_knee2)^alpha2)."""
 
     param_names = ('sigma0', 'fknee', 'alpha', 'fknee2', 'alpha2')
+
+    def __init__(self,
+                 P_active_mean = [np.nan, 1.0, -2.7, 5.0, 1.0],
+                 P_active_rms = [np.nan, np.inf, np.inf, np.inf, np.inf],
+                 P_uni = [[np.nan, np.nan], [0.01, 100.0], [-4.5, -0.5], [0.01, 12.0], [1e-6, 5.0]],
+                 nu_fit = [[np.nan, np.nan], [0, 10.0], [0, 10.0], [0, 12.0], [0, 12.0]],
+                 **kw):
+        P_lognorm = np.array([False, True, False, True, False])  # sigma0, fknee, alpha, fknee2, alpha2
+        super().__init__(P_active_mean=P_active_mean[:5], P_active_rms=P_active_rms[:5],
+                         P_uni=P_uni[:5], nu_fit=nu_fit[:5], P_lognorm=P_lognorm, **kw)
+
+    def eval_full(self, freqs: NDArray, noise_params: NDArray) -> NDArray:
+        s0, fk, a, fk2, a2 = noise_params
+        vals = np.full(len(freqs), s0 ** 2, dtype=np.float64)
+        pos = freqs > 0
+        vals[pos] = s0 ** 2 * (1.0 + (freqs[pos] / fk) ** a + (freqs[pos] / fk2) ** a2)
+        return vals
+
+    def eval_corr(self, freqs: NDArray, noise_params: NDArray) -> NDArray:
+        s0, fk, a, fk2, a2 = noise_params
+        vals = np.zeros(len(freqs), dtype=np.float64)
+        pos = freqs > 0
+        vals[pos] = s0 ** 2 * ((freqs[pos] / fk) ** a + (freqs[pos] / fk2) ** a2)
+        return vals
+
+    def sample_params(self, residual: NDArray, noise_params: NDArray, fsamp: float, *,
+                      bin_psd: bool = False,
+                      n_grid: int = 150, n_burnin: int = 4) -> NDArray:
+        """ Draw a sample of (fknee, alpha, fknee2, alpha2) for the double 1/f model.
+            See the NoisePSDOof class docstring for full explanation.
+        Returns:
+            A new [sigma0, fknee, alpha, fknee2, alpha2] array with updated values.
+        """
+        sigma0_sq = float(noise_params[0])**2
+        fknee_current = float(noise_params[1])
+        alpha_current = float(noise_params[2])
+        fknee2_current = float(noise_params[3])
+        alpha2_current = float(noise_params[4])
+
+        Ntod = len(residual)
+        freqs = rfftfreq(Ntod, 1.0/fsamp)
+        power = (1.0 / Ntod) * np.abs(forward_rfft(residual))**2
+
+        # Select and bin each parameter's window before the Gibbs loop. In particular, bins must
+        # not mix modes inside and outside that parameter's fit range.
+        fit_data: dict[int, tuple[NDArray, NDArray, NDArray]] = {}
+        for param_idx in (1, 2, 3, 4):
+            if not self.is_sampled(param_idx):
+                continue
+            nu_min, nu_max = self.nu_fit[param_idx]
+            name = self.param_names[param_idx]
+            if not (np.isfinite(nu_min) and 0 <= nu_min < nu_max):
+                raise ValueError(f"Invalid nu_fit range for {name}: {self.nu_fit[param_idx]}.")
+            in_fit = (freqs > 0) & (freqs >= nu_min) & (freqs <= nu_max)
+            f, p = freqs[in_fit], power[in_fit]
+            if f.size == 0:
+                raise ValueError(f"nu_fit for {name} contains no positive Fourier modes.")
+            if bin_psd:
+                bins = utils.expbin(f.size, nbin=100, nmin=1)
+                weight = (bins[:, 1] - bins[:, 0]).astype(np.float64)
+                f = utils.bin_data(bins, f)
+                p = utils.bin_data(bins, p)
+            else:
+                weight = np.ones(f.size, dtype=np.float64)
+            fit_data[param_idx] = (f, p.astype(np.float64, copy=False) / sigma0_sq, weight)
+
+        # Grids span the uniform priors (single source of truth for the hard parameter bounds), and
+        # each carries its parameter's log-prior, evaluated once because it does not depend on the
+        # other parameter's current value.
+        fk_lo, fk_hi   = float(self.P_uni[1, 0]), float(self.P_uni[1, 1])
+        al_lo, al_hi   = float(self.P_uni[2, 0]), float(self.P_uni[2, 1])
+        fk2_lo, fk2_hi = float(self.P_uni[3, 0]), float(self.P_uni[3, 1])
+        al2_lo, al2_hi = float(self.P_uni[4, 0]), float(self.P_uni[4, 1])
+        fknee_grid = np.geomspace(fk_lo, fk_hi, n_grid)
+        alpha_grid = np.linspace(al_lo, al_hi, n_grid)
+        fknee2_grid = np.geomspace(fk2_lo, fk2_hi, n_grid)
+        alpha2_grid = np.linspace(al2_lo, al2_hi, n_grid)
+        log_prior_fknee = self.log_prior(1, fknee_grid)
+        log_prior_alpha = self.log_prior(2, alpha_grid)
+        log_prior_fknee2 = self.log_prior(3, fknee2_grid)
+        log_prior_alpha2 = self.log_prior(4, alpha2_grid)
+        sample_fknee, sample_alpha = self.is_sampled(1), self.is_sampled(2)
+        sample_fknee2, sample_alpha2 = self.is_sampled(3), self.is_sampled(4)
+
+        for _ in range(n_burnin + 1):
+            # Drop sum(weight * log(power/sigma0**2)), which is constant across both grids.
+            # The remaining likelihood is -sum(weight * (log(1+ratio) + power_scaled/(1+ratio))).
+
+            # 1. Sample fknee | alpha, fknee2, alpha2
+            if sample_fknee:
+                f, power_scaled, weight = fit_data[1]
+                offset = 1.0 + (f / fknee2_current) ** alpha2_current # component 2 held fixed
+                log_L_fknee = _oof_loglike_grid(
+                    f**alpha_current, fknee_grid**(-alpha_current), power_scaled, weight,
+                    offset=offset,
+                ) + log_prior_fknee
+                fknee_current = float(_inversion_sampler_1d(log_L_fknee, fknee_grid))            
+
+            # 2. Sample alpha | fknee, fknee2, alpha2
+            if sample_alpha:
+                f, power_scaled, weight = fit_data[2]
+                offset = 1.0 + (f / fknee2_current) ** alpha2_current # component 2 held fixed
+                log_L_alpha = _oof_loglike_grid(
+                    np.log(f) - np.log(fknee_current), alpha_grid, power_scaled, weight,
+                    exponentiate=True, offset=offset,
+                ) + log_prior_alpha
+                alpha_current = float(_inversion_sampler_1d(log_L_alpha, alpha_grid))
+
+            # 3. Sample fknee2 | fknee, alpha, alpha2
+            if sample_fknee2:
+                f, power_scaled, weight = fit_data[3]
+                offset = 1.0 + (f / fknee_current) ** alpha_current # component 1 held fixed
+                log_L_fknee2 = _oof_loglike_grid(
+                    f**alpha2_current, fknee2_grid**(-alpha2_current), power_scaled, weight,
+                    offset=offset,
+                ) + log_prior_fknee2
+                fknee2_current = float(_inversion_sampler_1d(log_L_fknee2, fknee2_grid))
+                
+            # 4. Sample alpha2 | fknee, alpha and fknee2
+            if sample_alpha2:
+                f, power_scaled, weight = fit_data[4]
+                offset = 1.0 + (f / fknee_current) ** alpha_current # component 1 held fixed
+                log_L_alpha2 = _oof_loglike_grid(
+                    np.log(f) - np.log(fknee2_current), alpha2_grid, power_scaled, weight,
+                    exponentiate=True, offset=offset,
+                ) + log_prior_alpha2
+                alpha2_current = float(_inversion_sampler_1d(log_L_alpha2, alpha2_grid))
+        out = np.array(noise_params, dtype=np.float64, copy=True)
+        out[1] = fknee_current
+        out[2] = alpha_current
+        out[3] = fknee2_current
+        out[4] = alpha2_current
+        return out
+
 
 
 class NoisePSDOofGauss(NoisePSD):

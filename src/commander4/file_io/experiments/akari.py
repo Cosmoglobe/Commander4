@@ -14,7 +14,7 @@ from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
-from commander4.tod.noise.psd import NoisePSDOof
+from commander4.tod.noise.psd import NoisePSDOof, NoisePSD2Oof
 from commander4.file_io.experiments.read_utils import (
     apply_noise_priors,
     apply_noise_fit_range,
@@ -154,6 +154,9 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
             gc.collect()
 
     noise_model = NoisePSDOof()
+    # If using NoisePSD2Oof, explicitly set the prior bounds etc for Akari. 
+    # Default 2oof-params are not optimal.
+    # noise_model = NoisePSD2Oof() 
     apply_noise_priors(noise_model, params, expname, bandname)
     apply_noise_fit_range(noise_model, params)
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
