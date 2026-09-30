@@ -24,12 +24,22 @@ def _oof_loglike_grid(frequency_factor: NDArray, grid_factor: NDArray,
     Batching retains NumPy's vectorized maths with about 1 MiB for the two temporary arrays
     (or one candidate at a time when its frequency vector alone exceeds that budget).
 
-    Update 18.09.26:
-    Added functionality to work for 2oof noise model. 
-    New arg:
-        offset: Part of noise model held fixed during sampling. 
+    Args:
+        frequency_factor (np.ndarray): Per-frequency factor multiplied by each grid candidate
+            (e.g. f**alpha for an fknee grid, or log(f/fknee) for an exponentiated alpha grid).
+        grid_factor (np.ndarray): Per-candidate factor evaluated at each frequency (e.g.
+            fknee**-alpha, or the alpha values themselves when exponentiate=True).
+        power_scaled (np.ndarray): Periodogram power divided by sigma0**2.
+        weight (np.ndarray): Per-frequency weight (mode count per bin, or all ones when unbinned).
+        exponentiate (bool): If True, exponentiate the grid_factor * frequency_factor product
+            before adding offset (the slope grids); if False, use the product directly (the
+            fknee grids).
+        offset (np.ndarray | float): Part of noise model held fixed during sampling.
             For oof offset=1 (default).
             For 2oof offset=1+(f/f_knee_i)**alpha_i where i is the component not being sampled.
+    Returns:
+        result (np.ndarray): Log-likelihood (up to an additive, parameter-independent constant)
+            at each grid point.
     """
     result = np.empty(grid_factor.size, dtype=np.float64)
     batch_size = max(1, 65536 // max(frequency_factor.size, 1))
@@ -38,7 +48,7 @@ def _oof_loglike_grid(frequency_factor: NDArray, grid_factor: NDArray,
         full_power = grid_factor[start:stop, None] * frequency_factor[None, :]
         if exponentiate:
             np.exp(full_power, out=full_power)
-        full_power += offset    # Previously += 1.0
+        full_power += offset
         quadratic = power_scaled / full_power
         np.log(full_power, out=full_power)
         full_power += quadratic
@@ -58,10 +68,6 @@ def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray) -> float:
     """
     lnL -= np.max(lnL)
     L = np.exp(lnL)  # Calculate the linear likelihood.
-    # Mass at cell *centres*: a plain cumsum credits each cell's probability to its right edge, so
-    # interpolating it lands half a grid cell below the mode on every draw (3% low on the default
-    # fknee grid). That bias accumulates along a flat posterior ridge, which is exactly what the
-    # two-component model has in (fknee2, alpha2).
     cdf = np.cumsum(L) - 0.5*L  # Cumulative likelihood, at cell centres.
     cdf -= cdf[0]
     cdf /= cdf[-1]  # Constrain it to [0,1].
@@ -316,8 +322,6 @@ class NoisePSDOof(NoisePSD):
 
 class NoisePSD2Oof(NoisePSD):
     """P(f) = sigma0^2 (1 + (f / f_knee)^alpha + (f / f_knee2)^alpha2)."""
-
-    ### Vikenes: Implemented 18.09.26. Not tested yet. 
 
     param_names = ('sigma0', 'fknee', 'alpha', 'fknee2', 'alpha2')
 

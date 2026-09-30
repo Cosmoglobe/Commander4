@@ -154,7 +154,9 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
             gc.collect()
 
     noise_model = NoisePSDOof()
-    # noise_model = NoisePSD2Oof()
+    # If using NoisePSD2Oof, explicitly set the prior bounds etc for Akari. 
+    # Default 2oof-params are not optimal.
+    # noise_model = NoisePSD2Oof() 
     apply_noise_priors(noise_model, params, expname, bandname)
     apply_noise_fit_range(noise_model, params)
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
