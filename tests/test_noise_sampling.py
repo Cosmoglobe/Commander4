@@ -7,7 +7,7 @@ from scipy.fft import rfftfreq
 
 from commander4.tod.noise.sigma0 import (calc_sigma0_simple, calc_sigma0_robust,
                                               calc_sigma0_binned_psd)
-from commander4.tod.noise.psd import NoisePSDOof
+from commander4.tod.noise.psd import NoisePSD2Oof, NoisePSDOof
 from commander4.file_io.experiments.read_utils import apply_noise_fit_range
 from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.sample_ncorr import (sample_correlated_noise,
@@ -29,23 +29,37 @@ def _seed_all_rng(seed: int) -> None:
     _seed_numba_rng(seed)
 
 
-def _synth_corr_noise(seed: int, ntod: int, fsamp: float, sigma0: float, fknee: float,
-                      alpha: float) -> np.ndarray:
-    """Synthesize a correlated-noise stream whose periodogram follows sigma0^2 (f/fknee)^alpha.
+def _synth_noise_from_psd(P: np.ndarray, ntod: int, seed: int) -> np.ndarray:
+    """Draw a noise stream whose periodogram follows the one-sided PSD *P* (on the rfft grid).
 
     Uses the rfft/irfft convention (forward unnormalized, inverse divided by ntod) matching the
-    project's FFT helpers, so that (1/ntod)|rfft(n_corr)|^2 has expectation P_corr(f).
+    project's FFT helpers, so that (1/ntod)|rfft(n)|^2 has expectation P(f).
     """
     rng = np.random.default_rng(seed)
-    freqs = np.fft.rfftfreq(ntod, d=1.0/fsamp)
-    P = np.zeros_like(freqs)
-    P[1:] = sigma0**2 * (freqs[1:]/fknee)**alpha
-    spec = np.sqrt(ntod*P/2.0) * (rng.standard_normal(freqs.size)
-                                  + 1j*rng.standard_normal(freqs.size))
+    spec = np.sqrt(ntod*P/2.0) * (rng.standard_normal(P.size)
+                                  + 1j*rng.standard_normal(P.size))
     spec[0] = 0.0  # zero-mean
     if ntod % 2 == 0:
         spec[-1] = spec[-1].real  # real Nyquist mode
     return np.fft.irfft(spec, n=ntod)
+
+
+def _synth_corr_noise(seed: int, ntod: int, fsamp: float, sigma0: float, fknee: float,
+                      alpha: float) -> np.ndarray:
+    """Synthesize a correlated-noise stream whose periodogram follows sigma0^2 (f/fknee)^alpha."""
+    freqs = np.fft.rfftfreq(ntod, d=1.0/fsamp)
+    P = np.zeros_like(freqs)
+    P[1:] = sigma0**2 * (freqs[1:]/fknee)**alpha
+    return _synth_noise_from_psd(P, ntod, seed)
+
+
+def _synth_2oof_corr_noise(seed: int, ntod: int, fsamp: float, sigma0: float, fknee: float,
+                           alpha: float, fknee2: float, alpha2: float) -> np.ndarray:
+    """As `_synth_corr_noise`, for the two-component PSD sigma0^2 ((f/fk)^a + (f/fk2)^a2)."""
+    freqs = np.fft.rfftfreq(ntod, d=1.0/fsamp)
+    P = np.zeros_like(freqs)
+    P[1:] = sigma0**2 * ((freqs[1:]/fknee)**alpha + (freqs[1:]/fknee2)**alpha2)
+    return _synth_noise_from_psd(P, ntod, seed)
 
 # ===================================================================
 # sigma0 estimation
@@ -276,6 +290,204 @@ class TestNoisePSDOof:
                 als.append(out[2])
             assert np.mean(fks) == pytest.approx(fknee, rel=0.4), f"bin_psd={bin_psd}"
             assert np.mean(als) == pytest.approx(alpha, abs=0.4), f"bin_psd={bin_psd}"
+
+
+# ===================================================================
+# NoisePSD model (double 1/f / "2oof")
+# ===================================================================
+
+# A well-separated configuration at fsamp = 20 Hz (Nyquist 10 Hz): the red component dominates the
+# white floor below ~0.3 Hz, the floor holds from there to ~1 Hz, and the blue component dominates
+# from 1 Hz out to Nyquist, reaching 100x the floor. Each component therefore has about a decade of
+# lever arm, which is what makes (fknee2, alpha2) identifiable at all.
+_2OOF_TRUTH = np.array([1.0, 0.3, -2.0, 1.0, 2.0])   # sigma0, fknee, alpha, fknee2, alpha2
+_2OOF_FSAMP = 20.0
+
+
+class TestNoisePSD2Oof:
+    @staticmethod
+    def _model():
+        """Bounds bracketing `_2OOF_TRUTH`, with the red and blue slope ranges kept disjoint.
+
+        Disjoint alpha ranges are not cosmetic: with overlapping ranges the two components can swap
+        roles mid-chain, which leaves the PSD fine and both parameter pairs meaningless.
+        """
+        return NoisePSD2Oof(P_uni=[[np.nan, np.nan], [0.01, 3.0], [-4.5, -0.5],
+                                   [0.1, 10.0], [0.5, 4.0]],
+                            nu_fit=[[np.nan, np.nan]] + [[0, 10.0] for _ in range(4)])
+
+    @staticmethod
+    def _residual(ntod=2**14, seed=7):
+        """Two-component correlated noise plus the matching white floor (what the fit sees)."""
+        return (_synth_2oof_corr_noise(seed, ntod, _2OOF_FSAMP, *_2OOF_TRUTH)
+                + np.random.default_rng(seed + 1).normal(0.0, _2OOF_TRUTH[0], ntod))
+
+    def test_eval_matches_formula(self):
+        m = NoisePSD2Oof()
+        s0, fk, a, fk2, a2 = 2.0, 0.5, -2.3, 4.0, 1.4
+        params = np.array([s0, fk, a, fk2, a2])
+        freqs = np.array([0.0, 0.1, 1.0, 5.0])
+        full = m.eval_full(freqs, params)
+        corr = m.eval_corr(freqs, params)
+        # At f = 0: full PSD is the white-noise floor, correlated PSD is zero (both components).
+        assert full[0] == pytest.approx(s0**2)
+        assert corr[0] == 0.0
+        pos = freqs > 0
+        assert np.allclose(corr[pos], s0**2 * ((freqs[pos]/fk)**a + (freqs[pos]/fk2)**a2))
+        assert np.allclose(full[pos], s0**2 * (1.0 + (freqs[pos]/fk)**a + (freqs[pos]/fk2)**a2))
+
+    @pytest.mark.parametrize("model, params", [(NoisePSDOof(), np.array([1.7, 0.4, -1.9])),
+                                               (NoisePSD2Oof(), np.array([2.0, 0.5, -2.3,
+                                                                          4.0, 1.4]))])
+    def test_eval_full_is_eval_corr_plus_the_white_floor(self, model, params):
+        """`apply_N_inv` uses eval_full and the noise CG uses eval_corr; they must differ by exactly
+        sigma0^2, at every frequency including f = 0, or the two halves weight different noise."""
+        freqs = rfftfreq(1024, d=1.0/_2OOF_FSAMP)
+        np.testing.assert_allclose(model.eval_full(freqs, params) - params[0]**2,
+                                   model.eval_corr(freqs, params), rtol=1e-12, atol=1e-12)
+        assert model.eval_full(freqs, params)[0] == pytest.approx(params[0]**2)
+
+    def test_inv_corr_spectrum_is_one_over_Pcorr(self):
+        """compute_inv_corr_spectrum must equal 1/P_corr with *both* components in P_corr."""
+        m = NoisePSD2Oof()
+        s0, fk, a, fk2, a2 = 1.3, 0.4, -1.7, 3.0, 1.5
+        freqs = rfftfreq(2048, d=1.0/10.0)
+        inv = m.compute_inv_corr_spectrum(freqs, np.array([s0, fk, a, fk2, a2]))
+        assert inv[0] == 0.0  # zero-frequency mode excluded
+        expected = np.zeros_like(freqs)
+        expected[1:] = 1.0 / (s0**2 * ((freqs[1:]/fk)**a + (freqs[1:]/fk2)**a2))
+        assert np.allclose(inv, expected)
+
+    def test_sample_params_keeps_sigma0_and_uses_Puni_bounds(self):
+        m = NoisePSD2Oof(nu_fit=[[np.nan, np.nan]] + [[0, 8.0] for _ in range(4)])
+        sigma0, ntod = 1.234, 2**13
+        residual = (_synth_2oof_corr_noise(1, ntod, _2OOF_FSAMP, sigma0, 0.3, -2.0, 1.0, 2.0)
+                    + np.random.default_rng(2).normal(0.0, sigma0, ntod))
+        _seed_all_rng(0)
+        params = np.array([sigma0, 0.2, -1.5, 2.0, 1.5])
+        out = m.sample_params(residual, params, _2OOF_FSAMP)
+        assert out.shape == params.shape
+        assert out[0] == params[0]            # sigma0 held fixed
+        assert out is not params              # returns a fresh array
+        np.testing.assert_array_equal(params, [sigma0, 0.2, -1.5, 2.0, 1.5])  # input untouched
+        # Grids span the model's uniform priors (single source of truth for the hard bounds).
+        for idx in (1, 2, 3, 4):
+            assert m.P_uni[idx, 0] <= out[idx] <= m.P_uni[idx, 1], m.param_names[idx]
+
+    def test_sample_params_recovers_both_components(self):
+        """Both components must be recovered from a far start, not just held near a correct one.
+
+        `(fknee2, alpha2)` are strongly correlated, so the Gibbs chain advances slowly along that
+        ridge: at the production `n_grid=150, n_burnin=4` a far start is still 0.86 out in fknee2,
+        so the chain is lengthened and the grid refined here. Binned, so that stays cheap. With
+        these settings the worst error over 3 noise realizations x 3 seeds is 0.12, against the 0.4
+        tolerances below.
+        """
+        m, residual = self._model(), self._residual()
+        _seed_all_rng(123)
+        draws = np.array([m.sample_params(residual, np.array([1.0, 0.05, -1.0, 4.0, 0.8]),
+                                          _2OOF_FSAMP, bin_psd=True, n_grid=600, n_burnin=49)
+                          for _ in range(8)])
+        mean = draws[:, 1:].mean(axis=0)
+        assert mean[0] == pytest.approx(_2OOF_TRUTH[1], rel=0.4)   # fknee
+        assert mean[1] == pytest.approx(_2OOF_TRUTH[2], abs=0.4)   # alpha
+        assert mean[2] == pytest.approx(_2OOF_TRUTH[3], rel=0.4)   # fknee2
+        assert mean[3] == pytest.approx(_2OOF_TRUTH[4], abs=0.4)   # alpha2
+
+    @pytest.mark.parametrize("bin_psd", [False, True])
+    def test_sample_params_holds_a_correct_input(self, bin_psd: bool):
+        """One production call (five sweeps, default grids) must not walk away from the truth.
+
+        This is the property the Gibbs chain actually relies on: `sample_params` is called once per
+        Gibbs iteration from the previous iteration's values, so a systematic per-call drift would
+        accumulate over the run even though any single call looks harmless.
+        """
+        m, residual = self._model(), self._residual()
+        _seed_all_rng(5)
+        draws = np.array([m.sample_params(residual, _2OOF_TRUTH.copy(), _2OOF_FSAMP,
+                                          bin_psd=bin_psd) for _ in range(4)])
+        mean = draws[:, 1:].mean(axis=0)
+        assert mean[0] == pytest.approx(_2OOF_TRUTH[1], rel=0.4), f"bin_psd={bin_psd}"
+        assert mean[1] == pytest.approx(_2OOF_TRUTH[2], abs=0.4), f"bin_psd={bin_psd}"
+        assert mean[2] == pytest.approx(_2OOF_TRUTH[3], rel=0.4), f"bin_psd={bin_psd}"
+        assert mean[3] == pytest.approx(_2OOF_TRUTH[4], abs=0.4), f"bin_psd={bin_psd}"
+
+    def test_default_bounds_give_finite_parameters(self):
+        """A default-constructed model must be usable: every default bound must admit a grid.
+
+        A zero lower bound on a log-spaced grid makes `np.geomspace`/`np.logspace` produce NaN, so
+        the sampler silently returned NaN parameters instead of raising -- the worst possible
+        failure, since a NaN fknee2 then propagates into every PSD evaluation downstream, and into
+        the other three parameters through the Gibbs offset.
+        """
+        m = NoisePSD2Oof()
+        for idx in (1, 2, 3, 4):
+            assert float(m.P_uni[idx, 0]) > 0.0 or not m.P_lognorm[idx], m.param_names[idx]
+        _seed_all_rng(3)
+        out = m.sample_params(self._residual(2**12, 4), _2OOF_TRUTH.copy(), _2OOF_FSAMP)
+        assert np.all(np.isfinite(out))
+        for idx in (1, 2, 3, 4):
+            assert m.P_uni[idx, 0] <= out[idx] <= m.P_uni[idx, 1], m.param_names[idx]
+
+    def test_alpha2_of_zero_duplicates_the_white_floor(self):
+        """Why alpha2 must be bounded away from zero: at alpha2 = 0 the second component degenerates
+        into a second copy of the white floor, which doubles the apparent floor inside eval_corr and
+        leaves fknee2 with no effect on the PSD at all -- an exactly unidentifiable parameter."""
+        m = NoisePSD2Oof()
+        freqs = np.array([0.0, 0.01, 0.1, 1.0, 5.0])
+        flat = np.array([2.0, 0.5, -2.3, 4.0, 0.0])
+        single = NoisePSDOof().eval_corr(freqs, flat[:3])
+        assert np.allclose(m.eval_corr(freqs, flat)[1:], single[1:] + flat[0]**2)
+        assert m.eval_corr(freqs, flat)[0] == 0.0     # f = 0 stays safe even so
+        moved = np.array([2.0, 0.5, -2.3, 99.0, 0.0])
+        np.testing.assert_array_equal(m.eval_corr(freqs, flat), m.eval_corr(freqs, moved))
+
+    def test_default_bounds_exclude_alpha2_of_zero(self):
+        """The default hard bounds must keep the grid off that degeneracy."""
+        m = NoisePSD2Oof()
+        assert float(m.P_uni[4, 0]) > 0.0
+        assert m.log_prior(4, 0.0) == -1e30
+
+    def test_sample_correlated_noise_accepts_the_five_parameter_model(self):
+        """The orchestrator is parameter-count agnostic: it must draw n_corr and resample 1..4."""
+        m, tod = self._model(), self._residual(2**12, 3)
+        mask = np.ones(tod.size, dtype=bool)
+        mask[1000:1050] = False  # contiguous gap
+        mask[2000] = False       # single-sample gap
+        _seed_all_rng(0)
+        res = sample_correlated_noise(tod.copy(), mask, _2OOF_TRUTH.copy(), m, _2OOF_FSAMP,
+                                      cg_err_tol=1e-6, cg_max_iter=50, sample_params=True,
+                                      sample_sigma0=False)
+        assert res.n_corr.shape == tod.shape
+        assert np.all(np.isfinite(res.n_corr))
+        assert res.noise_params.shape == _2OOF_TRUTH.shape
+        assert res.noise_params[0] == _2OOF_TRUTH[0]                       # sigma0 fixed
+        assert not np.array_equal(res.noise_params[1:], _2OOF_TRUTH[1:])   # all four resampled
+        for idx in (1, 2, 3, 4):
+            assert m.P_uni[idx, 0] <= res.noise_params[idx] <= m.P_uni[idx, 1]
+
+    def test_realize_noise_in_gaps_accepts_the_five_parameter_model(self):
+        m, noise = self._model(), self._residual(2**12, 3)
+        mask = np.ones(noise.size, dtype=bool)
+        mask[1000:1100] = False
+        mask[2000] = False
+        for method in ("fallback", "full_cg"):
+            _seed_all_rng(0)
+            out = realize_noise_in_gaps(noise.copy(), mask, m, _2OOF_TRUTH, _2OOF_FSAMP,
+                                        _2OOF_FSAMP, method)
+            assert np.all(np.isfinite(out))
+            assert np.array_equal(out[mask], noise[mask])      # valid samples untouched
+            assert not np.allclose(out[~mask], noise[~mask])   # gaps replaced
+            assert np.var(out[~mask]) > 0
+
+    def test_apply_noise_fit_range_sets_every_sampled_window(self):
+        """The reader's shared limits must reach all four sampled parameters, not just fknee/alpha."""
+        m = NoisePSD2Oof()
+        params = Bunch(tod_processing=Bunch(corr_noise=Bunch(
+            enabled=True, psd_fit_nu_min=0.5, psd_fit_nu_max=4.0)))
+        apply_noise_fit_range(m, params)
+        np.testing.assert_array_equal(m.nu_fit[1:], np.tile([0.5, 4.0], (4, 1)))
+        assert np.all(np.isnan(m.nu_fit[0]))   # the sigma0 row is left alone
 
 
 # ===================================================================
@@ -557,6 +769,24 @@ class TestApplyNInv:
             # Both dot products cancel heavily (|lhs| is orders of magnitude below the size of
             # the terms summed), so their own value is the wrong yardstick for rounding error.
             # Scale the tolerance by the natural size of the bilinear form instead.
+            scale = np.linalg.norm(x.astype(np.float64)) * np.linalg.norm(ny.astype(np.float64))
+            tolerance = 5e-6 if dtype == np.float32 else 1e-12
+            np.testing.assert_allclose(lhs, rhs, rtol=0.0, atol=tolerance*scale)
+
+    @pytest.mark.parametrize("dtype", [np.float32, np.float64])
+    @pytest.mark.parametrize("samprate", [None, 1.0])
+    def test_symmetry_contract_with_a_five_parameter_model(self, dtype: type,
+                                                          samprate: float | None):
+        """The gain samplers' x^T N^-1 y = (N^-1 x)^T y contract must not depend on the PSD model."""
+        band = self._detgroup(NoisePSD2Oof(), fsamp=_2OOF_FSAMP)
+        rng = np.random.default_rng(17)
+        for size in (997, 1024):
+            x = (rng.normal(size=size) + 2.0).astype(dtype)
+            y = (rng.normal(size=size) - 3.0).astype(dtype)
+            nx = band.apply_N_inv(x, _2OOF_TRUTH, samprate=samprate)
+            ny = band.apply_N_inv(y, _2OOF_TRUTH, samprate=samprate)
+            lhs = np.dot(x.astype(np.float64), ny.astype(np.float64))
+            rhs = np.dot(nx.astype(np.float64), y.astype(np.float64))
             scale = np.linalg.norm(x.astype(np.float64)) * np.linalg.norm(ny.astype(np.float64))
             tolerance = 5e-6 if dtype == np.float32 else 1e-12
             np.testing.assert_allclose(lhs, rhs, rtol=0.0, atol=tolerance*scale)

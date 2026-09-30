@@ -58,7 +58,12 @@ def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray) -> float:
     """
     lnL -= np.max(lnL)
     L = np.exp(lnL)  # Calculate the linear likelihood.
-    cdf = np.cumsum(L)  # Cumulative likelihood.
+    # Mass at cell *centres*: a plain cumsum credits each cell's probability to its right edge, so
+    # interpolating it lands half a grid cell below the mode on every draw (3% low on the default
+    # fknee grid). That bias accumulates along a flat posterior ridge, which is exactly what the
+    # two-component model has in (fknee2, alpha2).
+    cdf = np.cumsum(L) - 0.5*L  # Cumulative likelihood, at cell centres.
+    cdf -= cdf[0]
     cdf /= cdf[-1]  # Constrain it to [0,1].
     u = np.random.uniform(0, 1)
     sample = np.interp(u, cdf, grid_points)  # Find the x-value that matches the y-value we drew.
