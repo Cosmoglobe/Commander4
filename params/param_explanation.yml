@@ -275,6 +275,7 @@ tod_processing:
 # ----------------------------------------
 # What the CompSep side does with the band maps. There is deliberately no CompSep `nside`:
 # resolution is per band (`eval_nside`) and per component (`lmax`).
+# this block is what is called global_params in diffuse_components.py for example
 compsep:
   enabled: true               # false = TOD-only mode: no CompSep ranks are allocated, and the
                               # TOD side runs against a static sky model.
@@ -295,7 +296,8 @@ compsep:
                               # per-pixel solver, which cannot handle mixed beams; the CG
                               # solver does not need it and is better without it. Must be
                               # at least as wide as the broadest beam in the run.
-
+  data_dir: "/mn/stornext/d23/cmbco/globe"    # String, data directory where to find the 
+                                              # data used for comsep
   # --- Amplitude sampling ---------------------------------------------------------------
   # CG and per-pixel groups are mutually exclusive alternatives: enabling groups in both
   # sections is a startup error. Within a section you may have several groups, each
@@ -537,6 +539,56 @@ components:
       # constrain nothing -- outside a survey patch, say -- the solution is pulled to this
       # map instead of to zero.
       # amp_prior_mean_map: "/path/to/dust_prior_mean.fits"
+
+  FullDust:
+    enabled: true
+    component_class: 'FullDust'
+    params:
+      polarization: "IQU"     # Assumed IQU like ThermalDust — see note below.
+      longname: 'full-dust'
+      shortname: "full-dust"
+      lmax: 1024
+      spatially_varying_MM: False
+      Cl_prior_amplitude: null   # No C(l) prior: S is the identity for this component.
+
+    # --- SED parameters (modified blackbody + spline nodes + astrodust) ---
+      beta: 1.56              # Emissivity index.
+      T: 20                   # [K] Dust temperature.
+      nu_ref: 545              # [GHz] Reference frequency the amplitudes are quoted at.
+      nu_min: 0.0              # [GHz] Lower cutoff; SED is zero at and below it. 0.0 = no limit.
+      nu_max: 1.0e+30          # [GHz] Upper cutoff; SED is zero at and above it. 1e30 = no limit.
+      # nu_join: 900            # [GHz] frequency where the SED transitions from the MBB 
+                              # function to the spline nodes defined in nodes_path.
+                              # If not set, the MBB applies across the full SED and
+                              # nodes_path / astrodust_path are ignored.
+      # nodes_path: globe/path  # Path to the spline nodes table: frequency in GHz,
+                                # node amplitude in Mj/sr. Required if nu_join is set.
+                                # Can be either a full path or the directory from data_dir in compsep
+      # astrodust_path: globe/path  # Path to the astrodust model table: frequency in
+                                # GHz, amplitude in Mj/sr. Needs at least two rows (its
+                                # slope anchors the right end of the spline).
+                                # Will only be included if nu_join and spline nodes are included.
+                                # Can be either a full path or the directory from data_dir in compsep
+      # ad_scale: 1             # Dimensionless scale applied to the astrodust model.
+                                # Required whenever astrodust_path is set.
+      # The end of the spline transitions smoothly to the astrodust model, with linear
+      # interpolation thereafter. If astrodust is not included, the spline instead
+      # ends with zero slope.
+      units: "uK_RJ"
+
+      # --- Spectral-index sampling (used by mcmc_sampling_groups above) ---
+      # sample_spectral_index: True   # Required for this component to appear in an MCMC
+                                      # group. Without it, naming it there is an error.
+      # spectral_index_proposal_sigma: 0.01   # Gaussian MH step length in beta.
+      # spectral_index_bounds: [1.0, 2.5]     # Hard uniform bounds. A proposal outside
+                                              # them is rejected without a solve.
+      # spectral_index_prior:
+      #   type: gaussian
+      #   mean: 1.56
+      #   rms: 0.1
+
+      # amp_prior_mean_map: "/path/to/dust_prior_mean.fits"
+
 
   Synchrotron:
     enabled: true
