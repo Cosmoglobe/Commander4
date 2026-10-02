@@ -69,6 +69,7 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     ncomp = len(comp_list)
     with benchmark("perpix-gather"):
         all_freq = proc_comm.gather(band_freq, root=0)
+        all_unit = proc_comm.gather(detector_data.unit, root=0)
         all_map_sky = proc_comm.gather(map_sky, root=0)
         all_map_rms = proc_comm.gather(map_rms, root=0)
 
@@ -83,21 +84,25 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
         for ipol in range(npol):
             t0 = time.time()
             freqs = []
+            units = []
             maps_sky = []
             maps_rms = []
             for iband in range(len(all_freq)):
                 if all_map_sky[iband][ipol] is not None:
                     freqs.append(all_freq[iband])
+                    units.append(all_unit[iband])
                     maps_sky.append(all_map_sky[iband][ipol])
                     maps_rms.append(all_map_rms[iband][ipol])
-            freqs = np.array(freqs)
             maps_sky = np.array(maps_sky)
             maps_rms = np.array(maps_rms)
             nband = len(freqs)
             comp_maps[ipol] = np.zeros((ncomp, npix))
+            # Each band's row of M converts the amplitudes to that band's unit, which its map and
+            # rms are in, so the per-pixel fit needs no common unit across bands.
             M = np.empty((nband, ncomp))
             for icomp in range(ncomp):
-                M[:, icomp] = comp_list[icomp].get_sed(freqs)
+                for iband in range(nband):
+                    M[iband, icomp] = comp_list[icomp].get_sed(freqs[iband], units[iband])
             rand = np.random.randn(npix, nband)
             # TODO: Write unit tests that confirm Python and C gives same answers.
             # TODO: Should scale M to make solution more well-conditioned, and then adjust

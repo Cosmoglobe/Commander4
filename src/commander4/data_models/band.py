@@ -8,24 +8,28 @@ class Band:
     """Holds spherical-harmonic coefficients (alms) and metadata for a frequency band.
 
     The ``alms`` are stored behind a validated property (with setter), while
-    ``nu``, ``fwhm``, and ``nside`` are plain public attributes.
+    ``nu``, ``unit``, ``fwhm``, and ``nside`` are plain public attributes.
 
     Attributes:
         nu (float): Band centre frequency in GHz.
+        unit (str): The band's own unit (``band_unit``), which the alms are in.
         fwhm (float): Beam FWHM in arcminutes.
         nside (int): HEALPix nside associated with this band.
     """
-    def __init__(self, alms: NDArray[np.complexfloating], nu: float, fwhm: float, nside: int):
+    def __init__(self, alms: NDArray[np.complexfloating], nu: float, unit: str, fwhm: float,
+                 nside: int):
         """Construct a Band.
 
         Args:
             alms: Complex spherical-harmonic coefficients, shape ``(npol, nalm)``.
             nu: Band centre frequency in GHz.
+            unit: The band's own unit (``band_unit``).
             fwhm: Beam FWHM in arcminutes.
             nside: HEALPix nside for this band.
         """
         self._alms = alms
         self.nu = nu
+        self.unit = unit
         self.fwhm = fwhm #stored in arcmin
         self.nside = nside
 
@@ -37,8 +41,8 @@ class Band:
         alm_len_complex = ((det_map.lmax+1)*(det_map.lmax+2))//2
         npol = 2 if det_map.pol else 1
         dtype = np.complex128 if double_precision else np.complex64
-        return cls(np.zeros((npol, alm_len_complex), dtype=dtype), det_map.nu, det_map.fwhm,
-                   det_map.nside)
+        return cls(np.zeros((npol, alm_len_complex), dtype=dtype), det_map.nu, det_map.unit,
+                   det_map.fwhm, det_map.nside)
 
     @property
     def alms(self):
@@ -64,12 +68,12 @@ class Band:
         else:
             raise ValueError("Trying to set alms with unexpected number of dimensions"
                                 f"{alms.ndim} != 2")
-            
+
     @property
     def is_pol(self):
         """Whether the band has polarisation components."""
         return self._alms.shape[0] != 1
-    
+
     @property
     def lmax(self):
         """Maximum multipole, inferred from the alm array length."""

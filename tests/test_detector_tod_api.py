@@ -90,7 +90,7 @@ def test_physical_arguments_have_explicit_units() -> None:
 
 def test_missing_orbital_velocity_produces_zero_orbital_dipole() -> None:
     detector = _detector(_pointing())
-    experiment = SimpleNamespace(nu=30.0, nside=1)
+    experiment = SimpleNamespace(nu=30.0, unit="uK_RJ", nside=1)
     pixels = np.arange(detector.ntod, dtype=np.int64)
 
     orbital_dipole = get_s_orb_tod(detector, experiment, pixels, nthreads=1)
@@ -135,7 +135,7 @@ def test_static_sky_projection_skips_inactive_response_components() -> None:
 def test_orbital_dipole_applies_intensity_response() -> None:
     pointing = _pointing()
     velocity = np.array([1000.0, 2000.0, 3000.0])
-    experiment = SimpleNamespace(nu=30.0, nside=1)
+    experiment = SimpleNamespace(nu=30.0, unit="uK_RJ", nside=1)
     pixels = np.arange(pointing.ntod, dtype=np.int64)
     standard = get_s_orb_tod(
         _detector(pointing, velocity), experiment, pixels, nthreads=1,

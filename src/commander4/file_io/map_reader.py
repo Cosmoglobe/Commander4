@@ -3,7 +3,6 @@ import numpy as np
 import healpy as hp
 from astropy.io import fits
 import logging
-import pysm3.units as pysm3_u
 from pixell.bunch import Bunch
 
 from commander4.parameters.schema import resolve_param, resolve_band_lmax
@@ -42,6 +41,11 @@ def _get_map_info(band: Bunch, maptype: str):
 
 
 def retrieve_map_from_fits_file(band: Bunch, pol: str, maptype: str):
+    """One Stokes column of a band's signal or rms map, in the band's own `band_unit`.
+
+    The map is not converted: component separation brings the sky model to the band's unit. A unit
+    in the FITS column header that differs from `band_unit` is reported, and `band_unit` is used.
+    """
     filename, dataset_names, _ = _get_map_info(band, maptype)
     dataset_name = dataset_names[POLARIZATION_INDEX[pol]]
 
@@ -53,28 +57,15 @@ def retrieve_map_from_fits_file(band: Bunch, pol: str, maptype: str):
         ### FIND DATA ###
         data = hdul[1].data[dataset_name].flatten().astype(np.float32, copy=False)
 
-        ### FIND UNITS ###
-        units_param = band.units if "units" in band else None
+        ### CHECK UNITS ###
         column_idx = hdul[1].data.columns.names.index(dataset_name)
         units_file = hdul[1].data.columns.units[column_idx]
-        if isinstance(units_param, str):
-            units_param = units_param.strip() or None
         if isinstance(units_file, str):
             units_file = units_file.strip() or None
-        if units_file is not None and units_file.lower() == "unknown":
-            units_file = None
-        if units_file is None and units_param is None:
-            logger.warning(f"No units specified for {band._name}. Assuming uK_CMB!")
-            units = "uK_CMB"
-        elif units_file is not None and units_param is not None:
-            if units_file != units_param:
-                logger.warning(
-                    f"Both data-file ({units_file}) and param-file ({units_param}) specify "
-                    f"map units for {band._name}; using param-file value."
-                )
-            units = units_param
-        else:
-            units = units_file or units_param
+        if units_file is not None and units_file.lower() != "unknown" \
+                and units_file != band.band_unit:
+            logger.warning(f"The {maptype} map of {band._name} says its unit is {units_file!r}, "
+                           f"but band_unit is {band.band_unit!r}; using band_unit.")
 
         ### FIND ORDERING ###
         ordering_file = hdul[1].header.get("ORDERING")
@@ -107,13 +98,6 @@ def retrieve_map_from_fits_file(band: Bunch, pol: str, maptype: str):
         if ordering == "NEST":
             data = hp.reorder(data, inp="NEST", out="RING")
 
-        ### UNIT CONVERSION ###
-        if units != "uK_RJ":
-            data = (data * pysm3_u.Unit(units)).to(
-                pysm3_u.uK_RJ,
-                equivalencies=pysm3_u.cmb_equivalencies(band.freq * pysm3_u.GHz),
-            ).value
-
     return data
 
 
@@ -130,6 +114,11 @@ def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
     pols = my_band.polarization
     if pols not in ("I", "QU", "IQU"):
         raise ValueError(f"Specified polarization {pols!r} is not recognized.")
+    if "units" in my_band:
+        raise ValueError(f"Band {my_band._name}: 'units' was renamed to 'band_unit'.")
+    if "band_unit" not in my_band:
+        raise ValueError(f"Band {my_band._name} must set band_unit (e.g. 'uK_CMB' or 'MJy/sr'): "
+                         "the unit its signal and rms maps are in.")
     maps_sky = []
     maps_rms = []
     rms_map_type = _get_map_info(my_band, "rms")[2]
@@ -166,8 +155,8 @@ def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
         maps_rms.append(map_rms)
 
     lmax = resolve_band_lmax(params, my_band._name, None, nside)
-    detmap = DetectorMap(np.array(maps_sky), np.array(maps_rms), my_band.freq, my_band.fwhm, nside,
-                         lmax=lmax)
+    detmap = DetectorMap(np.array(maps_sky), np.array(maps_rms), my_band.freq, my_band.band_unit,
+                         my_band.fwhm, nside, lmax=lmax)
     detmap.g0 = 0.0
     detmap.gain = 0.0
     # Smooth to the common analysis resolution on read; 0 leaves the band at its native beam.

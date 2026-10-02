@@ -12,7 +12,7 @@ WMAPKa:
   fwhm: 39.6 # [arcmin]
   freq: 33.0 # [GHz]
   polarization: "IQU"
-  units: "mK_CMB"
+  band_unit: "mK_CMB"
 
 WMAPQ1:
   enabled: true
@@ -28,7 +28,7 @@ WMAPQ1:
   fwhm: 30.6 # [arcmin]
   freq: 40.6 # [GHz]
   polarization: "IQU"
-  units: "mK_CMB"
+  band_unit: "mK_CMB"
 
 WMAPQ2:
   enabled: true
@@ -44,7 +44,7 @@ WMAPQ2:
   fwhm: 30.6 # [arcmin]
   freq: 40.6 # [GHz]
   polarization: "IQU"
-  units: "mK_CMB"
+  band_unit: "mK_CMB"
 
 WMAPV1:
   enabled: true
@@ -60,7 +60,7 @@ WMAPV1:
   fwhm: 21.0 # [arcmin]
   freq: 60.8 # [GHz]
   polarization: "IQU"
-  units: "mK_CMB"
+  band_unit: "mK_CMB"
 
 WMAPV2:
   enabled: true
@@ -76,4 +76,4 @@ WMAPV2:
   fwhm: 21.0 # [arcmin]
   freq: 60.8 # [GHz]
   polarization: "IQU"
-  units: "mK_CMB"
+  band_unit: "mK_CMB"

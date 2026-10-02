@@ -279,6 +279,13 @@ compsep:
   enabled: true               # false = TOD-only mode: no CompSep ranks are allocated, and the
                               # TOD side runs against a static sky model.
 
+  global_unit: "uK_RJ"        # Unit the component amplitudes are stored in, at each
+                              # component's nu_ref. Optional, uK_RJ by default (C3 hard-codes
+                              # uK_RJ). It also sets the unit of Cl_prior_amplitude (squared)
+                              # and of the alms in the compsep chain, but no result depends on
+                              # it: each component's SED converts from it to each band's own
+                              # band_unit. A chain can only be restarted with the same value.
+
   double_precision: false     # Work in float64/complex128 rather than float32/complex64.
                               # Optional, false by default. It covers the component alms, the
                               # band alms, DetectorMap.inv_n_map (and so map_rms, which is
@@ -416,9 +423,11 @@ compsep:
       freq: 0.408             # [GHz] Band centre. Every SED is evaluated at this single
                               # frequency: C4 has no bandpass integration yet.
       polarization: "IQU"
-      units: "uK_CMB"         # Unit the FILE is in. Converted to uK_RJ on read, which is
-                              # what CompSep works in internally. Supported: uK_RJ, mK_RJ,
-                              # K_RJ, uK_CMB, mK_CMB, K_CMB, MJy/sr.
+      band_unit: "uK_CMB"     # Required. Unit the signal and rms maps are in. The maps are
+                              # never converted: CompSep brings the sky model to each band's
+                              # own unit (C3's BAND_UNIT). Supported: uK_RJ, mK_RJ, K_RJ,
+                              # uK_CMB, mK_CMB, K_CMB, MJy/sr. Thermodynamic (CMB) units
+                              # cannot be used in the far infrared (above ~1 THz).
 
     # Planck 857 GHz. The dust intensity anchor, and an example of an intensity-only band:
     # `polarization: "I"` costs one CompSep rank instead of two.
@@ -436,7 +445,7 @@ compsep:
       fwhm: 4.6
       freq: 857.0
       polarization: "I"
-      units: "uK_CMB"
+      band_unit: "uK_CMB"
 
     ### MAP BANDS, IMPORTED ###
     # `!import <path>` splices the named file's text in at exactly this point and at this
@@ -498,7 +507,8 @@ components:
       # read as alms, already in uK_RJ. Starting from a sensible sky lets the gain steps,
       # which calibrate against the sky model, work from iteration one.
       # init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_cmb_amp_BP8.1_v1.fits"
-      # units: "uK_CMB"       # Unit of that init file. Only read alongside init_from.
+      # units: "uK_CMB"       # Unit of that init file, converted to compsep.global_unit at
+                              # nu_ref. Only read alongside init_from/amp_prior_mean_map.
 
   ThermalDust:
     enabled: true
@@ -688,12 +698,11 @@ experiments:
         band_unit: "uK_CMB"  # LFI's file-supplied gains are calibrated per uK_CMB.
         polarization: "IQU"
 
-        # Thermodynamic unit the gain -- and the maps written to the band chain -- are
-        # expressed in. C4 works internally in uK_RJ, so the gain is internally
-        # [detector units]/uK_RJ; one factor converts at the file boundary, multiplying
-        # the gain on read and dividing it on write, and multiplying the output maps on
-        # write. Planck calibrates against the CMB, so LFI gains are naturally per uK_CMB.
-        # Absent = uK_RJ, which is appropriate only when the supplied gains use that convention.
+        # band_unit is required (C3's BAND_UNIT). It is the unit of everything this band holds:
+        # the gains are [detector units]/band_unit, and the sky model, orbital dipole and
+        # output maps are all in band_unit, in memory and in the band chain alike. Nothing is
+        # converted; CompSep brings the sky model to each band's unit. Planck calibrates
+        # against the CMB, so LFI gains are naturally per uK_CMB.
 
         # A processing mask gates the SAMPLING steps -- gain, correlated noise, jump
         # detection -- and nothing else. Mapmaking deliberately bins with the flag cut
@@ -764,6 +773,7 @@ experiments:
         eval_nside: 512
         fwhm: 27.1
         freq: 44.1
+        band_unit: "uK_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"

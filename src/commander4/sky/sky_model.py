@@ -37,13 +37,17 @@ class SkyModel:
         """
         return max((comp.amp_fwhm_rad for comp in self._components), default=0.0)
 
-    def get_sky_at_nu(self, nu, nside, pols_required, fwhm=None):
-        """Get the realized sky at some frequency and fwhm resolution.
+    def get_sky_at_nu(self, nu: float, unit: str, nside: int, pols_required: str,
+                      fwhm: float | None = None):
+        """Get the realized sky at some frequency, in some unit, and at some fwhm resolution.
 
         The component list may be either the split execution list used during CompSep (`I` and
         `QU` views) or a joined logical list containing `IQU` components.
 
         Args:
+            nu: Frequency in GHz.
+            unit: Unit of the returned map. A caller realizing the sky for a band passes that
+                band's `band_unit`; the conversion happens in each component's `get_sed`.
             fwhm: Beam to realize the sky through, in radians. `None` asks for the sharpest this
                 model can give, which is `amp_fwhm_rad` (normally 0.0).
 
@@ -73,14 +77,14 @@ class SkyModel:
         for component in self._components:
             if component.eval_pol == "I":
                 if pols_required in ("I", "IQU"):
-                    skymap[0] += component.get_sky(nu, nside, fwhm)[0]
+                    skymap[0] += component.get_sky(nu, unit, nside, fwhm)[0]
             elif component.eval_pol == "QU":
                 if pols_required == "QU":
-                    skymap += component.get_sky(nu, nside, fwhm)
+                    skymap += component.get_sky(nu, unit, nside, fwhm)
                 elif pols_required == "IQU":
-                    skymap[1:] += component.get_sky(nu, nside, fwhm)
+                    skymap[1:] += component.get_sky(nu, unit, nside, fwhm)
             elif component.eval_pol == "IQU":
-                component_sky = component.get_sky(nu, nside, fwhm)
+                component_sky = component.get_sky(nu, unit, nside, fwhm)
                 if pols_required == "I":
                     skymap[0] += component_sky[0]
                 elif pols_required == "QU":

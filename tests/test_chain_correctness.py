@@ -28,12 +28,12 @@ def _params(output_dir: str | None = None, interval: dict | None = None,
     return params
 
 
-def _write_band(params, tod_arrays=None, maps_to_file=None, iter=1, **kwargs) -> str:
+def _write_band(params, tod_arrays=None, maps_to_file=None, iter=1, band_unit="uK_RJ") -> str:
     """Write one band file and return its path."""
     write_band_chain_to_file(
         params, chain=1, iter=iter, exp_name="Experiment", band_name="Band",
         tod_arrays=tod_arrays if tod_arrays is not None else {},
-        maps_to_file=maps_to_file if maps_to_file is not None else {}, **kwargs)
+        maps_to_file=maps_to_file if maps_to_file is not None else {}, band_unit=band_unit)
     return os.path.join(paths.subdir(params, paths.CHAINS_BANDS),
                         f"Experiment_Band_chain01_iter{iter:04d}.h5")
 
@@ -54,7 +54,7 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2) -> TODSamples:
     s.experiment_name, s.band_name = "EXP", "B"
     s.scan_ids = np.arange(nscans, dtype=np.int64)
     s.det_names = [f"d{i}" for i in range(ndet)]
-    s.band_unit_factor, s.band_unit = 1.0, "uK_RJ"
+    s.band_unit = "uK_RJ"
     s.abs_gain, s.rel_gain = 1.0, np.zeros(ndet)
     s.temporal_gain = np.zeros((nscans, ndet))
     s.noise_params = np.zeros((nscans, ndet, s.npar))
@@ -232,29 +232,37 @@ def test_rms_downgrade_averages_inverse_variance_and_takes_square_root(tmp_path)
         np.testing.assert_allclose(handle["maps/rms"][:], 2.0)
 
 
-def test_hit_counts_are_summed_when_degraded_and_left_unit_free(tmp_path) -> None:
-    """A hit map adds over the sub-pixels it merges, and carries no thermodynamic unit."""
+def test_hit_counts_are_summed_when_degraded(tmp_path) -> None:
+    """A hit map adds over the sub-pixels it merges."""
     params = _params(str(tmp_path), maps_nside=1)  # 48 input pixels collapse into 12.
     paths.create_output_dirs(params.output)
 
     path = _write_band(params, maps_to_file={"nhit": np.full(48, 5, dtype=np.int64)},
-                       band_unit_factor=3.0, band_unit="uK_CMB")
+                       band_unit="uK_CMB")
 
     with h5py.File(path) as handle:
         written = handle["maps/nhit"][:]
     assert written.shape == (12,)
-    np.testing.assert_array_equal(written, 20)  # 4 sub-pixels x 5 hits, no band_unit factor.
+    np.testing.assert_array_equal(written, 20)  # 4 sub-pixels x 5 hits.
 
 
-def test_the_covariance_map_converts_as_an_inverse_variance(tmp_path) -> None:
-    """`cov` is a summed uK_RJ^-2 weight: it sums when degraded and picks up D^-2, not D."""
+def test_the_covariance_map_sums_and_is_written_in_the_band_unit(tmp_path) -> None:
+    """`cov` is a summed band_unit^-2 weight: it sums when degraded, and is not converted."""
     params = _params(str(tmp_path), maps_nside=1)  # 48 input pixels collapse into 12.
     paths.create_output_dirs(params.output)
-    D = 4.0
 
-    path = _write_band(params, maps_to_file={"cov": np.full((6, 48), 2.0)}, band_unit_factor=D)
+    path = _write_band(params, maps_to_file={"cov": np.full((6, 48), 2.0)}, band_unit="uK_CMB")
 
     with h5py.File(path) as handle:
         written = handle["maps/cov"][:]
+        assert handle["metadata/band_unit"][()].decode() == "uK_CMB"
     assert written.shape == (6, 12)
-    np.testing.assert_allclose(written, 4*2.0/D**2)
+    np.testing.assert_allclose(written, 4*2.0)
+
+
+def test_a_map_without_a_degrade_rule_is_refused(tmp_path) -> None:
+    """A new map must be added to `_MAP_KINDS`, rather than silently degraded as a brightness."""
+    params = _params(str(tmp_path))
+    paths.create_output_dirs(params.output)
+    with pytest.raises(ValueError, match="_MAP_KINDS"):
+        _write_band(params, maps_to_file={"new_weight_map": np.ones((1, 12))})

@@ -1,7 +1,7 @@
 """`DetectorMap`: one band's maps as component separation sees them, plus common-beam smoothing.
 
 This is the object TOD processing sends across the communicator each iteration: the binned or
-CG-solved sky map, its RMS, and the band metadata (frequency, beam, nside) needed to build the
+CG-solved sky map, its RMS, and the band metadata (frequency, unit, beam, nside) needed to build the
 mixing matrix. The two smoothing helpers bring a band to a coarser common beam.
 """
 import logging
@@ -12,6 +12,7 @@ from numpy.typing import NDArray
 from commander4.math_utils.arithmetic import inplace_arr_prod
 from commander4.math_utils.alm import almxfl
 from commander4.math_utils.sht import alm_to_map, alm_to_map_adjoint
+from commander4.units import check_unit_usable
 
 logger = logging.getLogger(__name__)
 
@@ -74,22 +75,25 @@ class DetectorMap:
     ``spin`` are computed on the fly via properties.
 
     Attributes:
-        map_sky (NDArray): Sky signal map of shape ``(npol, npix)``.
-        inv_n_map (NDArray): Inverse noise variance map, same shape as ``map_sky``.
+        map_sky (NDArray): Sky signal map of shape ``(npol, npix)``, in ``unit``.
+        inv_n_map (NDArray): Inverse noise variance map, same shape as ``map_sky``, in ``unit^-2``.
         nu (float): Band centre frequency in GHz.
+        unit (str): The band's own unit (``band_unit``). The maps are never rescaled; component
+            separation brings the sky model to this unit through each component's `get_sed`.
         fwhm (float): Beam full-width-at-half-maximum in arcminutes.
         nside (int): HEALPix nside of the map.
         lmax (int): Maximum multipole for harmonic transforms.
         double_precision (bool): Whether the inverse noise map is stored in float64.
     """
-    def __init__(self, map_sky:NDArray, map_rms:NDArray, nu:float, fwhm:float, nside:int,
-                 double_precision:bool=False, lmax:int|None = None):
+    def __init__(self, map_sky:NDArray, map_rms:NDArray, nu:float, unit:str, fwhm:float,
+                 nside:int, double_precision:bool=False, lmax:int|None = None):
         """Construct a DetectorMap.
 
         Args:
             map_sky: Sky signal map, shape ``(npol, npix)`` or ``(npix,)``.
             map_rms: RMS noise map (same shape as ``map_sky``).
             nu: Band centre frequency in GHz.
+            unit: The unit ``map_sky`` and ``map_rms`` are in, i.e. the band's ``band_unit``.
             fwhm: Beam FWHM in arcminutes.
             nside: HEALPix nside of the maps.
             double_precision: If True, store ``inv_n_map`` in float64.
@@ -110,9 +114,11 @@ class DetectorMap:
         if map_sky.shape[-1] != expected_npix:
             raise ValueError(f"Map pixel count {map_sky.shape[-1]} does not match nside {nside} "
                              f"({expected_npix} pixels).")
+        check_unit_usable(nu, unit, f"Band map at {nu} GHz")
 
         self.map_sky = map_sky
         self.nu = nu
+        self.unit = unit
         self.fwhm = fwhm #stored in arcmin
         self.nside = nside
         # The band's harmonic bandlimit. Components are truncated to this lmax on their way into

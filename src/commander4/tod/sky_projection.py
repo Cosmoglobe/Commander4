@@ -11,21 +11,17 @@ import os
 
 import ducc0
 import numpy as np
-import pysm3.units as pysm3_u
 from numba import njit, prange
 from numpy.typing import NDArray
 
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.units import T_CMB, unit_factor
 
 logger = logging.getLogger(__name__)
 
-#TODO: Units should be handled in a more robust way.
-T_CMB = 2.725 * 1e6  # CMB temperature in uK_CMB units.
 C = 299792458  # m/s (Speed of light)
-T_CMB_div_C = T_CMB / C
-# Precomputing the conversion factor from 1 uK_CMB to 1 uK_RJ
-uK_CMB_to_uK_RJ_dict = {}
+T_CMB_div_C = T_CMB / C  # K_CMB per (m/s) of line-of-sight velocity.
 
 
 def project_sky_to_tod(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
@@ -120,17 +116,17 @@ def get_s_orb_tod(det: DetectorTOD, experiment: DetectorGroupTOD, pix: NDArray[n
     """ Compute the orbital dipole contribution to the TOD for a single detector.
 
     Projects the CMB dipole induced by the satellite's orbital motion into the
-    detector pointing, returning a TOD-length array in uK_RJ units.
+    detector pointing, returning a TOD-length array in the band's own unit.
 
     Args:
         det (DetectorTOD): Single-detector TOD data (provides orbital velocity in metres/second).
-        experiment (DetectorGroupTOD): Experiment-level data (provides nu and nside).
+        experiment (DetectorGroupTOD): Experiment-level data (provides nu, unit and nside).
         pix (NDArray[np.integer]): Decompressed pixel indices for this detector.
         nthreads (int, optional): Number of threads for HEALPix operations.
             Defaults to the OMP_NUM_THREADS environment variable.
 
     Returns:
-        NDArray: Orbital dipole signal in uK_RJ, shape ``(npix,)``.
+        NDArray: Orbital dipole signal in the band's `unit`, shape ``(npix,)``.
     """
     orbital_velocity = det.orbital_velocity_m_per_s
     if orbital_velocity is None:
@@ -142,16 +138,13 @@ def get_s_orb_tod(det: DetectorTOD, experiment: DetectorGroupTOD, pix: NDArray[n
 
     # If nthreads is not set, put it to how many threads OMP has.
     nthreads = int(os.environ["OMP_NUM_THREADS"]) if nthreads is None else nthreads
-    if experiment.nu not in uK_CMB_to_uK_RJ_dict:
-        uK_CMB_to_uK_RJ_dict[experiment.nu] = (1*pysm3_u.uK_CMB).to(pysm3_u.uK_RJ,
-                        equivalencies=pysm3_u.cmb_equivalencies(experiment.nu*pysm3_u.GHz)).value
     geom = ducc0.healpix.Healpix_Base(experiment.nside, "RING")
     LOS_vec = geom.pix2vec(pix, nthreads=nthreads)
     LOS_vec *= orbital_velocity
     # How much do the LOS and orbital velocity align?
     s_orb = np.sum(LOS_vec, axis=-1, dtype=np.float32)
-    s_orb *= T_CMB_div_C
-    s_orb *= uK_CMB_to_uK_RJ_dict[experiment.nu]  # Converting to uK_RJ units.
+    s_orb *= T_CMB_div_C  # The dipole in K_CMB: T_CMB * (v . n) / c.
+    s_orb *= unit_factor(experiment.nu, "K_CMB", experiment.unit)  # To the band's unit.
     if resp_I != 1.0:
         s_orb *= resp_I  # Multiply with the intensity efficiency of the detector.
     return s_orb.astype(np.float32, copy=False)

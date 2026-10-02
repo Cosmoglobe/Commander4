@@ -1,7 +1,7 @@
 """Sky components (swappable) and the per-band sky-model builder.
 
-Each ``SkyComponent`` produces a beam-smoothed, band-resolution sky map (uK_RJ, the Stokes channels
-of the band's polarization) for a given band:
+Each ``SkyComponent`` produces a beam-smoothed, band-resolution sky map (in the run's ``units``, the
+Stokes channels of the band's polarization) for a given band:
 
     band_map(band) -> ndarray (npol, npix_eval)
 
@@ -24,11 +24,11 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 import commander4.sky as c4comp
+from commander4.units import T_CMB   # [K_CMB], the value the Commander4 dipole model uses
 from simgen.config import bget
 
 logger = logging.getLogger(__name__)
 
-T_CMB = 2.72548          # [K_CMB]
 C_LIGHT = 299792458.0    # [m/s]
 
 # Default PySM3 preset per foreground class (matches inplace_litebird_sim).
@@ -50,6 +50,8 @@ def _build_c4_component(comp_cfg: Bunch, global_params: Bunch):
     Missing structural keys that ``get_sed`` does not need (smoothing prior, spatially-varying MM)
     are filled with harmless defaults so a minimal sim ``components`` block also works; the SED
     parameters (beta/T/nu_ref) must be supplied by the user. ``lmax: "full"`` is resolved as in C4.
+    The component's amplitude unit is the run's sky unit (``units``), the unit the templates at
+    ``nu_ref`` are generated in.
     """
     cls = getattr(c4comp, comp_cfg.component_class)
     cp = deepcopy(comp_cfg.params)
@@ -61,7 +63,8 @@ def _build_c4_component(comp_cfg: Bunch, global_params: Bunch):
             cp[key] = val
     if cp.lmax == "full":
         cp.lmax = (global_params.nside * 5) // 2
-    return cls(cp, global_params, eval_pol="I", comp_name=comp_cfg._name)
+    c4_global_params = Bunch(global_unit=bget(global_params, "units", "uK_RJ"))
+    return cls(cp, c4_global_params, eval_pol="I", comp_name=comp_cfg._name)
 
 
 def _select_pol(iqu_map: NDArray, polarization: str) -> NDArray:
@@ -79,13 +82,13 @@ class SkyComponent(ABC):
 
     @abstractmethod
     def band_map(self, band) -> NDArray[np.floating]:
-        """Beam-smoothed (npol, npix_eval) map for ``band``, in the band's unit (uK_RJ)."""
+        """Beam-smoothed (npol, npix_eval) map for ``band``, in the band's unit (``band.units``)."""
 
     def truth_map(self, nside: int) -> NDArray[np.floating]:
         """This component's input *amplitude*: the (3, npix) IQU sky at its own ``nu_ref``.
 
-        Unsmoothed and in the run's sky unit, so that ``truth_map(nside) * get_sed(nu)``, smoothed
-        by the band beam, reproduces ``band_map``. That is exactly the quantity a Commander4
+        Unsmoothed and in the run's sky unit, so that ``truth_map(nside) * get_sed(nu, unit)``,
+        smoothed by the band beam, reproduces ``band_map``. That is exactly the quantity a Commander4
         ``DiffuseComponent`` carries in its alms (see ``write_component_truth_maps``).
         """
         raise NotImplementedError(
@@ -97,7 +100,8 @@ class DiffuseComponent(SkyComponent):
     """Foreground with a PySM3-preset (or FITS) spatial template scaled by a C4 SED.
 
     The IQU template is realized once at the component's reference frequency, then for each band it
-    is beam-smoothed, downgraded to the band nside and multiplied by the C4 ``get_sed(band.freq)``.
+    is beam-smoothed, downgraded to the band nside and multiplied by the C4
+    ``get_sed(band.freq, band.units)``.
     """
     def __init__(self, comp_cfg: Bunch, global_params: Bunch):
         super().__init__(comp_cfg, global_params)
@@ -105,7 +109,7 @@ class DiffuseComponent(SkyComponent):
         self.nu_ref = _scalar_nu_ref(comp_cfg.params)
         self.template_cfg = bget(comp_cfg.params, "template", Bunch())
         self.units = bget(global_params, "units", "uK_RJ")
-        self._template_iqu: NDArray | None = None   # (3, npix_base), uK_RJ, unsmoothed
+        self._template_iqu: NDArray | None = None   # (3, npix_base), in `units`, unsmoothed
 
     def _template(self) -> NDArray:
         if self._template_iqu is not None:
@@ -130,7 +134,8 @@ class DiffuseComponent(SkyComponent):
     def band_map(self, band) -> NDArray[np.floating]:
         template = self._template()
         smoothed = hp.smoothing(template, fwhm=band.fwhm_rad)
-        m = hp.ud_grade(smoothed, band.eval_nside).astype(np.float32) * self.c4.get_sed(band.freq)
+        m = hp.ud_grade(smoothed, band.eval_nside).astype(np.float32) \
+            * self.c4.get_sed(band.freq, band.units)
         return _select_pol(m, band.polarization)
 
     def truth_map(self, nside: int) -> NDArray[np.floating]:
@@ -152,8 +157,8 @@ class CMBComponent(SkyComponent):
         self.lmax = bget(comp_cfg.params, "lmax", 3 * global_params.nside - 1)
         if self.lmax == "full":
             self.lmax = (global_params.nside * 5) // 2
-        # Commander4's CMB stores its amplitude in uK_RJ referenced to `nu_ref` (default 1 GHz,
-        # where uK_RJ ~= uK_CMB), and its SED is the thermodynamic-to-RJ ratio relative to it.
+        # Commander4's CMB stores its amplitude in its global unit (here `units`) referenced to
+        # `nu_ref` (default 1 GHz, where uK_RJ ~= uK_CMB).
         self.nu_ref = float(bget(comp_cfg.params, "nu_ref", 1.0))
         self.units = bget(global_params, "units", "uK_RJ")
         self.seed = int(bget(global_params, "seed", 0))

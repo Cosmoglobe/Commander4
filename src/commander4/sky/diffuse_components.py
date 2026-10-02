@@ -8,7 +8,6 @@ import astropy.constants as c
 import astropy.units as u
 import healpy as hp
 import numpy as np
-import pysm3.units as pysm3u
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 from scipy.interpolate import interp1d
@@ -16,20 +15,17 @@ from scipy.interpolate import interp1d
 from commander4.data_models.band import Band
 from commander4.sky.component import Component
 from commander4.polarization import get_npol
+from commander4.parameters.schema import resolve_param
+from commander4.units import SUPPORTED_UNITS, unit_factor
 from commander4.math_utils.arithmetic import inplace_scale, inplace_add_scaled_vec
 from commander4.math_utils.alm import project_alms, almxfl, _dot_complex_alm_1D_arrays
 from commander4.math_utils.sht import alm_to_map, map_to_alm, alm_to_map_adjoint, map_to_alm_adjoint
 
-# Blackbody and thermodynamic-to-brightness conversions shared by the SEDs below.
+# Blackbody constants shared by the SEDs below.
 A = (2*c.h*u.GHz**3/c.c**2).to('MJy').value
 h_over_k = (c.h/c.k_B/(1*u.K)).to('GHz-1').value
-h_over_kTCMB = (c.h/c.k_B/(2.7255*u.K)).to('GHz-1').value
 def blackbody(nu, T):
     return A*nu**3/np.expm1(nu*h_over_k/T)
-def g(nu):
-    # From uK_CMB to MJy/sr
-    x = nu*h_over_kTCMB
-    return np.expm1(x)**2/(x**4*np.exp(x))
 
 
 
@@ -37,15 +33,12 @@ class DiffuseComponent(Component):
     """A sky component stored as spherical-harmonic coefficients with a per-band SED.
 
     Holds everything common to that representation: the alm buffer, the C(l) amplitude prior, unit
-    conversion of init maps, and the SHT projections onto a band. Subclasses supply only `get_sed`
-    and its spectral parameters.
+    conversion of init maps, the SED call that turns an amplitude into a band signal, and the SHT
+    projections onto a band. Subclasses supply only `sed_rj` and its spectral parameters, and set
+    `nu_ref`.
     """
 
     requires_defined_pol = True
-    # The unit the amplitude alms are internally represented in, always uK_RJ for diffuse
-    # components (including the CMB). Init sky maps are converted to it from their own ``units``
-    # (at the component's reference frequency); chain alms are already stored in it.
-    amplitude_unit = "uK_RJ"
 
     def __init__(self, comp_params: Bunch, global_params: Bunch,
                  allocate_empty_alms=False, eval_pol:None|str=None,
@@ -81,8 +74,12 @@ class DiffuseComponent(Component):
         # always set it that way too).
         self.Cl_prior_l_apod = self._per_pol(
             comp_params.Cl_prior_l_apod if "Cl_prior_l_apod" in comp_params else self.lmax)
-        # Unit of an init_from sky map for this component (None -> assume it is already in
-        # `amplitude_unit`). Only used when reading FITS init maps, not compsep chains.
+        # The unit the amplitude alms are stored in: the run's global unit, referenced to `nu_ref`.
+        # It also sets the unit of the C(l) prior (its square) and of the alms in the compsep chain.
+        self.amplitude_unit = resolve_param(global_params, "global_unit", ("",), default="uK_RJ",
+                                            legal_values=SUPPORTED_UNITS)
+        # Unit of an init_from or amp_prior_mean_map sky map for this component (None -> assume it
+        # is already in `amplitude_unit`). Only used when reading FITS maps, not compsep chains.
         self.units = comp_params.units if "units" in comp_params else None
         # Cached prior mean mu, filled from `amp_prior_mean_map` by CompList.load_amp_prior_means;
         # None means a zero-mean prior. See the amp_prior_mean property.
@@ -107,21 +104,27 @@ class DiffuseComponent(Component):
     def init_map_to_amplitude(self, sky_map: NDArray) -> NDArray:
         """Convert an init sky map (in ``self.units``) to this component's amplitude unit.
 
-        The conversion is done at the component's reference frequency (``self.nu_ref``) using pysm3's
-        CMB equivalencies. It is a no-op when the units are unspecified or already equal to the
-        amplitude unit.
+        The conversion is done at the component's reference frequency (``self.nu_ref``). It is a
+        no-op when the units are unspecified or already equal to the amplitude unit.
         """
         if self.units is None or self.units == self.amplitude_unit:
             return sky_map
-        ref_freq = getattr(self, "nu_ref", None)
-        if ref_freq is None:
-            raise ValueError(
-                f"Component {self.comp_name!r}: converting an init map from {self.units!r} to "
-                f"{self.amplitude_unit!r} requires a reference frequency, but none is defined.")
-        factor = (1*pysm3u.Unit(self.units)).to(
-            pysm3u.Unit(self.amplitude_unit),
-            equivalencies=pysm3u.cmb_equivalencies(ref_freq*pysm3u.GHz)).value
-        return sky_map * factor
+        return sky_map*unit_factor(self.nu_ref, self.units, self.amplitude_unit)
+
+    def get_sed(self, nu: float, unit: str) -> float:
+        """Factor from this component's amplitude to its signal at `nu` (GHz), expressed in `unit`.
+
+        The amplitude is in `amplitude_unit` at `nu_ref`. It is converted to uK_RJ at `nu_ref`,
+        scaled to `nu` by the spectral shape `sed_rj`, and converted to `unit` at `nu`. This is the
+        one place a component amplitude becomes a band signal, so `unit` is always the unit of the
+        band asking.
+        """
+        amplitude_to_rj = unit_factor(self.nu_ref, self.amplitude_unit, "uK_RJ")
+        return amplitude_to_rj*self.sed_rj(nu)*unit_factor(nu, "uK_RJ", unit)
+
+    def sed_rj(self, nu: float) -> float:
+        """The spectral shape: RJ brightness at `nu` (GHz) relative to that at `nu_ref`."""
+        raise NotImplementedError(f"{type(self).__name__}.sed_rj() is not implemented.")
 
     @property
     def npol(self):
@@ -206,7 +209,8 @@ class DiffuseComponent(Component):
 
         where sigma is the Gaussian width of Cl_prior_FWHM (arcmin; 0 disables the rolloff). The
         1e-10 floor (relative to the power law) keeps C_l strictly positive so 1/C_l is safe for the
-        preconditioners. Units are (uK_RJ @ nu_ref)^2, i.e. the units of the alms themselves (C3
+        preconditioners. Units are (amplitude_unit @ nu_ref)^2, i.e. the units of the alms
+        themselves, so `Cl_prior_amplitude` is quoted in the square of `compsep.global_unit` (C3
         instead defines the prior in the component's native unit and converts internally).
 
         f_apod is C3's high-l apodization (`get_Cl_apod` in comm_cl_mod.f90, parameter COMP_L_APOD):
@@ -323,18 +327,16 @@ class DiffuseComponent(Component):
             raise ValueError("component_alms property not set.")
         return self._realize_alms_as_map(component_alms, nside, fwhm)
 
-    def get_sky(self, nu, nside, fwhm=0):
-        """ Realize this component at a beam-resolution `fwhm` (radians), scaled by its SED at `nu`.
+    def get_sky(self, nu: float, unit: str, nside: int, fwhm: float = 0):
+        """ Realize this component at frequency `nu` (GHz) in `unit`, at beam resolution `fwhm`
+            (radians).
             Note that if the component amplitudes already carry beam-smoothing (which happens when
             the per-pix common-resolution amplitude solver is used), only the effective fwhm
             difference is applied.
         """
         target_fwhm = 0.0 if fwhm is None else fwhm
         applied_fwhm = np.sqrt(max(target_fwhm**2 - self.amp_fwhm_rad**2, 0.0))
-        return self.get_component_map(nside, applied_fwhm)*self.get_sed(nu)
-    
-    def get_sed(self, nu):
-        raise NotImplementedError(f"{type(self).__name__}.get_sed() is not implemented.")
+        return self.get_component_map(nside, applied_fwhm)*self.get_sed(nu, unit)
 
     # Overrides the base-class dot product: diffuse-component _data holds complex alms, whose inner
     # product must account for the m>0 coefficients each standing for two real degrees of freedom.
@@ -355,20 +357,21 @@ class DiffuseComponent(Component):
             raise ValueError("Band and component polarization must match.")
 
         alm_in_band_space = project_alms(self.alms, band.lmax)
+        # The mixing factor also converts the amplitude to the band's own unit.
+        sed = self.get_sed(band.nu, band.unit)
         if self.spatially_varying_MM:  # If this component's mixing matrix is pixel-dependent.
             # Y a
             comp_map = alm_to_map(alm_in_band_space, band.nside, band.lmax, spin=self.spin,
                                   nthreads=nthreads)
             # M Y a
             for ipol in range(self.npol):
-                inplace_scale(comp_map[ipol], self.get_sed(band.nu)) 
+                inplace_scale(comp_map[ipol], sed)
             # Y^-1 M Y a
             band.alms = map_to_alm(comp_map, band.nside, band.lmax, spin=self.spin, out=band.alms,
                                    acc=True, nthreads=nthreads)
         else:
             for ipol in range(self.npol):
-                inplace_add_scaled_vec(band.alms[ipol], alm_in_band_space[ipol],
-                                       self.get_sed(band.nu))
+                inplace_add_scaled_vec(band.alms[ipol], alm_in_band_space[ipol], sed)
         return band.alms
 
     def eval_comp_from_band(self, band:Band, nthreads: int = 1, inplace=True):
@@ -382,6 +385,7 @@ class DiffuseComponent(Component):
         if self.is_pol != band.is_pol:
             raise ValueError("Band and component polarization must match.")
 
+        sed = self.get_sed(band.nu, band.unit)
         if self.spatially_varying_MM:  # If this component's mixing matrix is pixel-dependent.
             # Y^-1^T B^T a
             band_map = map_to_alm_adjoint(band.alms, band.nside, band.lmax, spin=self.spin, out=None,
@@ -389,7 +393,7 @@ class DiffuseComponent(Component):
 
             # M^T Y^-1 B^T a
             for ipol in range(self.npol):
-                inplace_scale(band_map[ipol], self.get_sed(band.nu))
+                inplace_scale(band_map[ipol], sed)
 
             # Y^T M^T Y^-1^T B^T a
             tmp_alm = alm_to_map_adjoint(band_map, band.nside, band.lmax, spin=self.spin, out=None,
@@ -398,7 +402,7 @@ class DiffuseComponent(Component):
         else:
             tmp_alm = band.alms.copy()
             for ipol in range(self.npol):
-                inplace_scale(tmp_alm[ipol], self.get_sed(band.nu))
+                inplace_scale(tmp_alm[ipol], sed)
             
         # Project alm from band to component lmax.
         contrib_to_comp_alm = project_alms(tmp_alm, self.lmax)
@@ -415,9 +419,9 @@ class CMB(DiffuseComponent):
 
     default_shortname = "cmb"
     sed_param_names = ("nu_ref",)
-    # Like all diffuse components, the CMB amplitude is stored internally in uK_RJ, referenced to
-    # `nu_ref` (default 1 GHz, where uK_RJ ~= uK_CMB). `get_sed` is therefore the *ratio* of the
-    # thermodynamic-to-RJ conversion at `nu` relative to `nu_ref`.
+    # Like all diffuse components, the CMB amplitude is stored in the global unit, referenced to
+    # `nu_ref`. With a global unit of uK_CMB the amplitude is exactly uK_CMB whatever `nu_ref` is.
+    # With the default uK_RJ, the default `nu_ref` of 1 GHz keeps it close to uK_CMB.
 
     def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
                  shortname = None, eval_pol = None, comp_name: str | None = None):
@@ -433,23 +437,15 @@ class CMB(DiffuseComponent):
         # is arbitrary (the sky is invariant to it); 1 GHz keeps stored amplitudes ~= uK_CMB.
         self.nu_ref = self._reference_frequency(comp_params) if "nu_ref" in comp_params else 1.0
 
-    def get_sed(self, nu):
-        """SED for CMB emission: the thermodynamic-to-RJ conversion at `nu` relative to `nu_ref`.
+    def sed_rj(self, nu: float) -> float:
+        """The CMB spectral shape: the thermodynamic-to-RJ conversion at `nu` relative to `nu_ref`.
 
-        The CMB amplitude is stored in uK_RJ referenced to `nu_ref`, so multiplying by this ratio
-        yields the uK_RJ brightness at `nu`. The result is dimensionless.
-
-        Args:
-            nu (float or np.ndarray): Frequency in GHz at which to evaluate the SED.
-        Returns:
-            The SED scaling factor (float or np.ndarray).
+        A CMB fluctuation of fixed thermodynamic temperature has an RJ brightness proportional to
+        the uK_CMB -> uK_RJ factor at each frequency, so the ratio of the two factors is the shape.
         """
-        def cmb_to_rj(f):
-            return (np.ones_like(f)*pysm3u.uK_CMB).to(
-                pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(f*u.GHz)).value
-        return cmb_to_rj(nu) / cmb_to_rj(self.nu_ref)
-    
-    def get_sky_anisotropies(self, nu, nside, fwhm=0):
+        return unit_factor(nu, "uK_CMB", "uK_RJ")/unit_factor(self.nu_ref, "uK_CMB", "uK_RJ")
+
+    def get_sky_anisotropies(self, nu: float, unit: str, nside: int, fwhm: float = 0):
         if self.alms is None:
             raise ValueError("component_alms property not set.")
         component_alms = self.alms.copy()
@@ -461,7 +457,7 @@ class CMB(DiffuseComponent):
         # Zero out the quadrupole (l=2)
         for m in range(3):  # m = 0, 1, 2
             component_alms[:,hp.Alm.getidx(self.lmax, 2, m)] = 0.0 + 0.0j
-        return self._realize_alms_as_map(component_alms, nside, fwhm) * self.get_sed(nu)
+        return self._realize_alms_as_map(component_alms, nside, fwhm)*self.get_sed(nu, unit)
 
 
 class ThermalDust(DiffuseComponent):
@@ -484,15 +480,15 @@ class ThermalDust(DiffuseComponent):
         self.T = comp_params.T
         self.nu_ref = self._reference_frequency(comp_params)
 
-    def get_sed(self, nu):
+    def sed_rj(self, nu):
         """Calculates the spectral energy distribution (SED) for Thermal Dust emission.
            The result is unitless, but meant to be multiplied by a RJ brightness temperature.
         Args:
-            nu (float or np.ndarray): Frequency in GHz at which to evaluate the SED.            
+            nu (float or np.ndarray): Frequency in GHz at which to evaluate the SED.
         Returns:
             The SED scaling factor (float or np.ndarray).
         """
-        # Modified blackbody, in uK_CMB
+        # Modified blackbody, as an RJ brightness ratio.
         x = (h_over_k*nu)/(self.T)
         x0 = (h_over_k*self.nu_ref)/(self.T)
         return (nu / self.nu_ref)**(self.beta + 1.0) * np.expm1(x0) / np.expm1(x)
@@ -518,7 +514,7 @@ class Synchrotron(DiffuseComponent):
         self.nu_ref = self._reference_frequency(comp_params)
         self.nside_comp_map = 512
 
-    def get_sed(self, nu):
+    def sed_rj(self, nu):
         """Calculates the spectral energy distribution (SED) for Synchrotron emission.
            The result is unitless, but meant to be multiplied by a RJ brightness temperature.
         Args:
@@ -561,7 +557,7 @@ class FreeFree(DiffuseComponent):
         inner_exp = 5.960 - (np.sqrt(3) / np.pi) * np.log(log_arg)
         return np.log(np.exp(inner_exp) + np.e)
 
-    def get_sed(self, nu):
+    def sed_rj(self, nu):
         """Calculates the spectral energy distribution (SED) for Free-Free emission.
            The result is unitless, but meant to be multiplied by a RJ brightness temperature.
         Args:
@@ -582,11 +578,12 @@ class SpinningDust(DiffuseComponent):
 
     The template is the Cold Neutral Medium model, which peaks at 30 GHz. It is shifted in
     frequency so its peak lands at `nu_peak` (`comp_params.nu_peak`), which is the one shape
-    parameter; `nu_0` only sets where the amplitude map is normalized.
+    parameter; the `nu_0` parameter only sets where the amplitude map is normalized, and is stored
+    as `nu_ref` like every other component's reference frequency.
     """
 
     default_shortname = "spin-dust"
-    sed_param_names = ("nu_peak_eval", "nu_peak_ref", "nu_0")
+    sed_param_names = ("nu_peak_eval", "nu_peak_ref", "nu_ref")
 
     def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
                  shortname = None, eval_pol = None, comp_name: str | None = None):
@@ -603,7 +600,7 @@ class SpinningDust(DiffuseComponent):
         freqs, SED = np.loadtxt(comp_params.template_path).T
         self.nu_peak_ref = 30.0  # Peak frequency of the template as tabulated.
         self.nu_peak_eval = comp_params.nu_peak
-        self.nu_0 = comp_params.nu_0  # Reference frequency for the amplitude map in GHz
+        self.nu_ref = comp_params.nu_0  # Reference frequency for the amplitude map in GHz
 
         # Interpolate in log-log space, where the template is smooth and spans many decades.
         log_nu = np.log(freqs)
@@ -615,10 +612,10 @@ class SpinningDust(DiffuseComponent):
         """Template emissivity at frequency `nu` (GHz), by log-log interpolation."""
         return np.exp(self._log_j_interp(np.log(nu)))
 
-    def get_sed(self, nu: float|NDArray[np.floating]):
+    def sed_rj(self, nu: float|NDArray[np.floating]):
         """Calculates the spinning dust SED scaling factor.
 
-        Scales an amplitude map from its reference frequency `nu_0` to the target frequency `nu`.
+        Scales an amplitude map from its reference frequency `nu_ref` to the target frequency `nu`.
 
         Args:
             nu (float|array): Frequency at which to get the SED, in GHz.
@@ -630,13 +627,13 @@ class SpinningDust(DiffuseComponent):
         SED_eval = self._get_template_emissivity(nu_shifted_eval)
 
         # Denominator: template evaluated at the shifted reference frequency for normalization
-        nu_shifted_ref = self.nu_0 * self.nu_peak_ref / self.nu_peak_eval
+        nu_shifted_ref = self.nu_ref * self.nu_peak_ref / self.nu_peak_eval
         SED_ref = self._get_template_emissivity(nu_shifted_ref)
 
         # Shifting the SED spectrum from the reference frequency to the given peak frequency.
         SED_at_eval_freq = SED_eval / SED_ref
 
         # Converting from intensity to brightness temperature.
-        SED_uK_RJ = (self.nu_0 / nu)**2 * SED_at_eval_freq
+        SED_uK_RJ = (self.nu_ref / nu)**2 * SED_at_eval_freq
         return SED_uK_RJ
     

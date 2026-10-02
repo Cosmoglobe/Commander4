@@ -15,6 +15,7 @@ from pixell.bunch import Bunch
 from commander4.file_io import paths
 from commander4.file_io.chain_writer import write_compsep_chain_to_file
 from commander4.sky.comp_list import CompList
+from commander4.units import unit_factor
 
 
 def _params(output_dir: str) -> Bunch:
@@ -35,7 +36,7 @@ def _comp_list(lmax: int = 4) -> CompList:
     return CompList.init_from_params(Bunch({"cmb": cmb}), params)
 
 
-def _write(tmp_path, diagnostics=None, band_frequencies=None, lmax=4) -> str:
+def _write(tmp_path, diagnostics=None, band_specs=None, lmax=4) -> str:
     params = _params(str(tmp_path))
     paths.create_output_dirs(params.output)
     comp_list = _comp_list(lmax)
@@ -44,7 +45,7 @@ def _write(tmp_path, diagnostics=None, band_frequencies=None, lmax=4) -> str:
         rng = np.random.default_rng(0)
         comp.alms[:] = rng.normal(size=comp.alms.shape) + 1j*rng.normal(size=comp.alms.shape)
     write_compsep_chain_to_file(comp_list.joined(), params, chain=1, iter=1,
-                                diagnostics=diagnostics, band_frequencies=band_frequencies)
+                                diagnostics=diagnostics, band_specs=band_specs)
     return os.path.join(paths.subdir(params, paths.CHAINS_COMPSEP), "chain01_iter0001.h5")
 
 
@@ -96,14 +97,26 @@ def test_a_disabled_cl_prior_writes_nothing(tmp_path) -> None:
 
 
 def test_mixing_coefficients_are_written_per_band(tmp_path) -> None:
-    """C3's `mixmat_<comp>_<band>.fits`. C4 indices are scalar, so each is a single number."""
-    path = _write(tmp_path, band_frequencies={"Band30GHz": 30.0, "Band353GHz": 353.0})
+    """C3's `mixmat_<comp>_<band>.fits`. C4 indices are scalar, so each is a single number.
+
+    The coefficient includes the conversion to the band's own unit, which the file records.
+    """
+    path = _write(tmp_path, band_specs={"Band30GHz": (30.0, "uK_RJ"),
+                                        "Band353GHz": (353.0, "uK_RJ"),
+                                        "Band143GHz": (143.0, "uK_CMB"),
+                                        "Band217GHz": (217.0, "uK_CMB")})
 
     with h5py.File(path) as f:
         mixing = {name: float(f["comps/cmb/mixing"][name][()]) for name in f["comps/cmb/mixing"]}
-    assert set(mixing) == {"Band30GHz", "Band353GHz"}
-    # A CMB component in uK_RJ: the CMB-to-RJ factor falls steeply with frequency.
+        assert f["metadata/global_unit"][()].decode() == "uK_RJ"
+        assert f["metadata/band_units/Band143GHz"][()].decode() == "uK_CMB"
+    assert set(mixing) == {"Band30GHz", "Band353GHz", "Band143GHz", "Band217GHz"}
+    # A CMB component in uK_RJ: in RJ bands the CMB-to-RJ factor falls steeply with frequency.
     assert mixing["Band30GHz"] > mixing["Band353GHz"] > 0.0
+    # In uK_CMB bands the CMB is flat, so only the conversion at nu_ref = 100 GHz remains.
+    expected = unit_factor(100.0, "uK_RJ", "uK_CMB")
+    assert mixing["Band143GHz"] == pytest.approx(expected, rel=1e-6)
+    assert mixing["Band217GHz"] == pytest.approx(expected, rel=1e-6)
 
 
 def test_the_diagnostics_tree_becomes_nested_groups(tmp_path) -> None:

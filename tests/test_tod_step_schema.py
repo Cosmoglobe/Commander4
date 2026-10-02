@@ -271,7 +271,7 @@ def pipeline(monkeypatch: pytest.MonkeyPatch) -> Bunch:
     samples = SimpleNamespace(hfi_demodulation=True, chisq_z=np.zeros((1, 1)),
                               good_fraction=np.zeros((1, 1)), residual_tods=None,
                               gather_chain_arrays=Mock(return_value={}),
-                              band_unit_factor=1.0, band_unit="uK_RJ")
+                              band_unit="uK_RJ")
     calls = Mock()
     for name in ("sample_jump_detection", "sample_hfi_baselines", "sample_absolute_gain",
                  "sample_relative_gain", "sample_temporal_gain_variations"):

@@ -12,6 +12,7 @@ from commander4.sky.point_sources import PointSourcesComponent
 from commander4.math_utils.alm import gaussian_random_alm
 from commander4.math_utils.sht import alm_to_map
 from commander4.sky.comp_list import complist_dot, complist_norm
+from commander4.units import unit_factor
 
 
 def _make_compsep(ntask_compsep_qu: int = 1, ntask_compsep_i: int = 1) -> Bunch:
@@ -245,6 +246,32 @@ def test_load_initial_alms_reads_and_splits_from_chain(tmp_path) -> None:
     assert np.array_equal(views[("ff", "I")].alms, ff_alms[0:1])
 
 
+def test_load_initial_alms_refuses_a_chain_in_another_global_unit(tmp_path) -> None:
+    """Chain alms are in the global unit of the run that wrote them, so another unit is refused.
+
+    A chain without `metadata/global_unit` predates the setting and is read as uK_RJ, which is what
+    the other tests here rely on.
+    """
+    nalm = (1 + 1) * (1 + 2) // 2
+    chain = tmp_path / "init_chain.h5"
+    _write_chain_alms(chain, {"cmb": np.zeros((3, nalm), dtype=np.complex64)})
+    with h5py.File(chain, "a") as f:
+        f["metadata/global_unit"] = "uK_CMB"
+    cmb = _make_named_component_cfg("cmb", "IQU")
+    object.__setattr__(cmb, "_name", "cmb")
+    params = Bunch(compsep=_make_compsep(), gibbs=Bunch(init_from_chain=str(chain)),
+                   components=Bunch({"cmb": cmb}))
+
+    comp_list = CompList.init_from_params(params.components, params)
+    with pytest.raises(ValueError, match="global_unit"):
+        comp_list.load_initial_alms(params)
+
+    # The same chain is accepted by a run in that unit.
+    params.compsep.global_unit = "uK_CMB"
+    comp_list = CompList.init_from_params(params.components, params)
+    comp_list.load_initial_alms(params)
+
+
 def test_load_initial_alms_prefers_per_component_init_from(tmp_path) -> None:
     nalm = (1 + 1) * (1 + 2) // 2
     global_chain = tmp_path / "global.h5"
@@ -376,8 +403,8 @@ def test_diffuse_component_resolves_per_pol_reference_frequency() -> None:
     assert dust_I.nu_ref == 857.0
     assert dust_QU.nu_ref == 353.0
     # The SED is normalized to 1 at each view's own reference frequency.
-    assert np.isclose(dust_I.get_sed(857.0), 1.0)
-    assert np.isclose(dust_QU.get_sed(353.0), 1.0)
+    assert np.isclose(dust_I.get_sed(857.0, "uK_RJ"), 1.0)
+    assert np.isclose(dust_QU.get_sed(353.0, "uK_RJ"), 1.0)
 
 
 def test_scalar_reference_frequency_is_shared_by_both_polarizations() -> None:
@@ -536,13 +563,15 @@ def test_cmb_get_sed_is_unity_at_nu_ref_and_ratio_elsewhere() -> None:
     cmb_params.nu_ref = 100.0
     cmb = CMB(cmb_params, compsep, eval_pol="I", comp_name="cmb")
 
-    # The SED is normalized to 1 at the reference frequency and is the ratio of the
-    # thermodynamic-to-RJ conversion elsewhere.
-    assert np.isclose(cmb.get_sed(100.0), 1.0)
+    # With uK_RJ amplitudes and a uK_RJ band, the SED is normalized to 1 at the reference
+    # frequency and is the ratio of the thermodynamic-to-RJ conversion elsewhere.
+    assert np.isclose(cmb.get_sed(100.0, "uK_RJ"), 1.0)
     def g(f):
         return (1 * pysm3u.uK_CMB).to(
             pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(f * pysm3u.GHz)).value
-    assert np.isclose(cmb.get_sed(353.0), g(353.0) / g(100.0))
+    assert np.isclose(cmb.get_sed(353.0, "uK_RJ"), g(353.0) / g(100.0))
+    # In a uK_CMB band the same amplitude is converted to uK_CMB at the band frequency.
+    assert np.isclose(cmb.get_sed(353.0, "uK_CMB"), 1.0 / g(100.0))
 
 # ===================================================================
 # SED parameters in the compsep chain (Component.sed_param_names)
@@ -572,7 +601,7 @@ def test_every_component_class_declares_its_sed_parameters() -> None:
     from commander4.sky import CMB, FreeFree, Synchrotron, ThermalDust, SpinningDust, RadioSources
     expected = {CMB: ("nu_ref",), ThermalDust: ("beta", "T", "nu_ref"),
                 Synchrotron: ("beta", "nu_ref"), FreeFree: ("T", "nu_ref"),
-                SpinningDust: ("nu_peak_eval", "nu_peak_ref", "nu_0"), RadioSources: ("nu_ref",)}
+                SpinningDust: ("nu_peak_eval", "nu_peak_ref", "nu_ref"), RadioSources: ("nu_ref",)}
     for cls, names in expected.items():
         assert cls.sed_param_names == names, cls.__name__
 
@@ -682,15 +711,16 @@ def test_radio_sources_sed_follows_the_commander3_radio_law(tmp_path) -> None:
     _write_radio_source_table(template, alpha=-0.7)
     comp = _make_radio_sources(template, nu_ref=30.0)
 
-    assert comp.get_sed(30.0)[0] == pytest.approx(1.0)
-    assert comp.get_sed(120.0)[0] == pytest.approx((120.0/30.0)**(-2.0 - 0.7))
+    assert comp.sed_rj(30.0)[0] == pytest.approx(1.0)
+    assert comp.sed_rj(120.0)[0] == pytest.approx((120.0/30.0)**(-2.0 - 0.7))
 
 
 def test_radio_sources_sky_equals_amplitude_times_sed(tmp_path) -> None:
     """The flux conversion belongs at nu_ref only.
 
-    Applying it at the band frequency as well double-counts the nu^-2 already inside `get_sed`,
-    which made `get_sky(nu)` disagree with `get_component_map() * get_sed(nu)` by (nu_ref/nu)^2.
+    Applying it at the band frequency as well double-counts the nu^-2 already inside `sed_rj`,
+    which made `get_sky(nu)` disagree with `get_component_map() * sed_rj(nu)` by (nu_ref/nu)^2.
+    The band unit only adds the uK_RJ -> band unit factor at the band frequency.
     """
     template = tmp_path / "radio.dat"
     _write_radio_source_table(template)
@@ -698,9 +728,10 @@ def test_radio_sources_sky_equals_amplitude_times_sed(tmp_path) -> None:
 
     amplitude = comp.get_component_map(nside=64, fwhm=np.deg2rad(2.0))
     for nu in (30.0, 100.0, 353.0):
-        sky = comp.get_sky(nu, nside=64, fwhm=np.deg2rad(2.0))
-        expected = amplitude*comp.get_sed(nu)[0]
-        assert sky == pytest.approx(expected, rel=1e-5)
+        for unit in ("uK_RJ", "uK_CMB", "MJy/sr"):
+            sky = comp.get_sky(nu, unit, nside=64, fwhm=np.deg2rad(2.0))
+            expected = amplitude*comp.sed_rj(nu)[0]*unit_factor(nu, "uK_RJ", unit)
+            assert sky == pytest.approx(expected, rel=1e-5)
 
 
 def test_radio_sources_conserve_flux_across_resolutions(tmp_path) -> None:
@@ -776,7 +807,7 @@ def test_deconvolved_amplitudes_can_be_realized_at_any_beam() -> None:
     """The CG solver leaves `amp_fwhm_rad` zero, so nothing is out of reach."""
     sky = _sky_model_at_amp_fwhm(0.0)
     for fwhm in (0.0, np.deg2rad(1.0), None):
-        assert sky.get_sky_at_nu(100.0, 2, "I", fwhm=fwhm).shape == (1, 12*2**2)
+        assert sky.get_sky_at_nu(100.0, "uK_RJ", 2, "I", fwhm=fwhm).shape == (1, 12*2**2)
 
 
 def test_asking_for_a_sharper_sky_than_the_amplitudes_hold_is_refused() -> None:
@@ -785,15 +816,15 @@ def test_asking_for_a_sharper_sky_than_the_amplitudes_hold_is_refused() -> None:
     sky = _sky_model_at_amp_fwhm(np.deg2rad(100.0/60))
 
     with pytest.raises(ValueError, match="cannot be realized any sharper"):
-        sky.get_sky_at_nu(100.0, 2, "I", fwhm=np.deg2rad(30.0/60))
+        sky.get_sky_at_nu(100.0, "uK_RJ", 2, "I", fwhm=np.deg2rad(30.0/60))
 
 
 def test_none_means_the_sharpest_this_model_can_give() -> None:
     """The way for a caller to say "best available" without naming a number."""
     sky = _sky_model_at_amp_fwhm(np.deg2rad(100.0/60))
 
-    at_none = sky.get_sky_at_nu(100.0, 2, "I", fwhm=None)
-    at_amp = sky.get_sky_at_nu(100.0, 2, "I", fwhm=sky.amp_fwhm_rad)
+    at_none = sky.get_sky_at_nu(100.0, "uK_RJ", 2, "I", fwhm=None)
+    at_amp = sky.get_sky_at_nu(100.0, "uK_RJ", 2, "I", fwhm=sky.amp_fwhm_rad)
 
     assert np.array_equal(at_none, at_amp)
 
@@ -802,4 +833,5 @@ def test_the_amplitudes_own_beam_is_not_treated_as_too_sharp() -> None:
     """`amp_fwhm_rad` is set from a band's own fwhm, so equality here must not trip the check."""
     sky = _sky_model_at_amp_fwhm(np.deg2rad(100.0/60))
 
-    assert sky.get_sky_at_nu(100.0, 2, "I", fwhm=np.deg2rad(100.0/60)).shape == (1, 12*2**2)
+    sky_map = sky.get_sky_at_nu(100.0, "uK_RJ", 2, "I", fwhm=np.deg2rad(100.0/60))
+    assert sky_map.shape == (1, 12*2**2)

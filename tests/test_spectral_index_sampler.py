@@ -43,10 +43,11 @@ class StubComponent:
 
 
 class FakeDetectorMap:
-    def __init__(self, map_sky, map_rms, nu, fwhm, nside, double_precision=True):
+    def __init__(self, map_sky, map_rms, nu, unit, fwhm, nside, double_precision=True):
         self.map_sky = np.array(map_sky, dtype=np.float64, copy=True)
         self._map_rms = np.array(map_rms, dtype=np.float64, copy=True)
         self.nu = nu
+        self.unit = unit
         self.fwhm = fwhm
         self.fwhm_rad = fwhm  # MCMCSamplingGroup.local_loglike realizes the model at this resolution.
         self.nside = nside
@@ -71,19 +72,19 @@ class FakeSkyModel:
     def __init__(self, components):
         self._components = components
 
-    def get_sky_at_nu(self, nu, nside, pols_required, fwhm=None):
+    def get_sky_at_nu(self, nu, unit, nside, pols_required, fwhm=None):
         npix = 12 * nside**2
         if pols_required == "I":
             skymap = np.zeros((1, npix), dtype=np.float64)
             for component in self._components:
                 if not component.is_pol:
-                    skymap[0] += component.get_sky(nu, nside, fwhm)[0]
+                    skymap[0] += component.get_sky(nu, unit, nside, fwhm)[0]
             return skymap
         if pols_required == "QU":
             skymap = np.zeros((2, npix), dtype=np.float64)
             for component in self._components:
                 if component.is_pol:
-                    skymap += component.get_sky(nu, nside, fwhm)
+                    skymap += component.get_sky(nu, unit, nside, fwhm)
             return skymap
         raise ValueError("Unsupported polarization in test stub.")
 
@@ -165,20 +166,20 @@ class FakeComponent:
     def alms(self, alms):
         self._data = np.array(alms, dtype=np.float64, copy=True)
 
-    def get_sed(self, nu):
+    def get_sed(self, nu, unit):
         return np.asarray(nu, dtype=np.float64)**self.beta
 
-    def get_sky(self, nu, nside, fwhm=0.0):
+    def get_sky(self, nu, unit, nside, fwhm=0.0):
         npix = 12 * nside**2
         amplitude = float(self.alms[0, 0])
         base = np.full((self.npol, npix), amplitude, dtype=np.float64)
-        return base * self.get_sed(nu)
+        return base * self.get_sed(nu, unit)
 
 
 def make_detector_data(component, nu=2.0, nside=1, rms=1.0):
-    map_sky = component.get_sky(nu, nside)
+    map_sky = component.get_sky(nu, "uK_RJ", nside)
     map_rms = np.full_like(map_sky, rms, dtype=np.float64)
-    return FakeDetectorMap(map_sky, map_rms, nu=nu, fwhm=0.0, nside=nside,
+    return FakeDetectorMap(map_sky, map_rms, nu=nu, unit="uK_RJ", fwhm=0.0, nside=nside,
                            double_precision=True)
 
 
@@ -275,7 +276,7 @@ class TestSampleSpectralIndicesMH:
 
         target_map = np.full((1, 12), 8.0, dtype=np.float64)
         detector_data = FakeDetectorMap(target_map, np.ones_like(target_map), nu=2.0,
-                        fwhm=0.0, nside=1, double_precision=True)
+                                        unit="uK_RJ", fwhm=0.0, nside=1, double_precision=True)
         group = _make_group(detector_data, FakeCompList([comp_i, comp_qu]))
 
         def resolve():  # Fit the amplitude exactly to the proposed index so the residual vanishes.

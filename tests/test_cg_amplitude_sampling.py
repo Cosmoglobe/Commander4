@@ -36,6 +36,7 @@ from commander4.compsep.cg_solver import CompSepSolver
 from commander4.math_utils.alm import gaussian_random_alm, _dot_complex_alm_1D_arrays
 from commander4.math_utils.sht import alm_to_map
 from commander4.sky.comp_list import complist_dot
+from commander4.units import unit_factor
 
 LMAX = 4
 NSIDE = 4
@@ -79,7 +80,8 @@ def _make_det_map(seed: int = 0) -> DetectorMap:
     npix = 12*NSIDE**2
     rng = np.random.default_rng(seed)
     return DetectorMap(rng.normal(0.0, 1.0, (1, npix)), np.full((1, npix), 3.0),
-                       nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
+                       nu=100.0, unit="uK_RJ", fwhm=0.0, nside=NSIDE, double_precision=True,
+                       lmax=LMAX)
 
 
 @pytest.fixture(scope="module")
@@ -268,7 +270,8 @@ class TestPriorMean:
         # Enormous noise: A^T N^-1 A is negligible against S^-1, so only the prior informs the fit.
         npix = 12*NSIDE**2
         det_map = DetectorMap(np.full((1, npix), 5.0), np.full((1, npix), 1e8),
-                              nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
+                              nu=100.0, unit="uK_RJ", fwhm=0.0, nside=NSIDE,
+                              double_precision=True, lmax=LMAX)
         solution = _make_solver(det_map, _make_group(False)).solve(comp_list)
 
         np.testing.assert_allclose(solution[0].alms, mu, rtol=1e-4, atol=1e-6)
@@ -277,7 +280,8 @@ class TestPriorMean:
         """mu shifts the constrained realization as well, not just the MAP solve."""
         params = _make_params()
         det_map = DetectorMap(np.zeros((1, 12*NSIDE**2)), np.full((1, 12*NSIDE**2), 1e8),
-                              nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
+                              nu=100.0, unit="uK_RJ", fwhm=0.0, nside=NSIDE,
+                              double_precision=True, lmax=LMAX)
 
         # `amp_prior_mean` is a property, so it can only be patched on the class -- which every
         # component instance shares. The unpatched control therefore has to run first.
@@ -374,7 +378,8 @@ class TestPriorMeanMap:
         params = _make_params()
         npix = 12*NSIDE**2
         det_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1e8),
-                              nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
+                              nu=100.0, unit="uK_RJ", fwhm=0.0, nside=NSIDE,
+                              double_precision=True, lmax=LMAX)
         solution = _make_solver(det_map, _make_group(False)).solve(comp_list)
 
         np.testing.assert_allclose(solution[0].alms, mu, rtol=1e-4, atol=1e-6)
@@ -388,3 +393,54 @@ class TestPriorMeanMap:
         comp = self._comp_list(tmp_path)[0]
         with pytest.raises(ValueError, match="prior mean has shape"):
             comp.amp_prior_mean = np.zeros((comp.npol, comp.alm_len_complex + 1), dtype=comp.dtype)
+
+
+class TestUnitInvariance:
+    """Units change only how numbers are written, never the solution.
+
+    The CG solves in x = S^{-1/2} a. A band unit rescales the band's map, rms and mixing factor
+    together, and a global unit rescales one component's amplitude together with its prior, so in
+    exact arithmetic the solver iterates on the same numbers. With identical random draws, even
+    the constrained realizations must agree.
+    """
+
+    @staticmethod
+    def _cmb_list(global_unit: str, prior_amplitude: float) -> CompList:
+        # nu_ref = 100 GHz, so uK_RJ and uK_CMB differ by a real factor (~1.29) at nu_ref.
+        cmb = Bunch(enabled=True, component_class="CMB",
+                    params=Bunch(lmax=LMAX, polarization="I", shortname="cmb", nu_ref=100.0,
+                                 spatially_varying_MM=False, Cl_prior_amplitude=prior_amplitude))
+        object.__setattr__(cmb, "_name", "CMB")
+        params = Bunch(compsep=Bunch(double_precision=True, global_unit=global_unit))
+        comp_list = CompList.init_from_params(Bunch({"CMB": cmb}), params)
+        for comp in comp_list:
+            comp.alms[:] = 0.0
+        return comp_list
+
+    @staticmethod
+    def _det_map(unit: str) -> DetectorMap:
+        # A data set in uK_RJ at 217 GHz, re-expressed in `unit`.
+        det_map = _make_det_map(seed=3)
+        to_unit = unit_factor(217.0, "uK_RJ", unit)
+        return DetectorMap(det_map.map_sky*to_unit, det_map.map_rms*to_unit, nu=217.0, unit=unit,
+                           fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
+
+    @pytest.mark.parametrize("sample", [False, True])
+    @pytest.mark.parametrize("global_unit", ["uK_CMB", "MJy/sr"])
+    def test_the_global_unit_only_rescales_the_amplitudes(self, sample, global_unit):
+        k = unit_factor(100.0, "uK_RJ", global_unit)
+        reference = _make_solver(self._det_map("uK_RJ"), _make_group(sample)).solve(
+            self._cmb_list("uK_RJ", 10.0), seed=7)
+        # The prior is in the square of the amplitude unit, so it converts with k^2.
+        other = _make_solver(self._det_map("uK_RJ"), _make_group(sample)).solve(
+            self._cmb_list(global_unit, 10.0*k**2), seed=7)
+        np.testing.assert_allclose(other[0].alms, reference[0].alms*k, rtol=1e-8, atol=1e-12)
+
+    @pytest.mark.parametrize("sample", [False, True])
+    @pytest.mark.parametrize("band_unit", ["uK_CMB", "K_CMB", "MJy/sr"])
+    def test_the_band_unit_does_not_change_the_amplitudes(self, sample, band_unit):
+        reference = _make_solver(self._det_map("uK_RJ"), _make_group(sample)).solve(
+            self._cmb_list("uK_RJ", 10.0), seed=7)
+        other = _make_solver(self._det_map(band_unit), _make_group(sample)).solve(
+            self._cmb_list("uK_RJ", 10.0), seed=7)
+        np.testing.assert_allclose(other[0].alms, reference[0].alms, rtol=1e-6, atol=1e-10)

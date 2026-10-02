@@ -10,6 +10,7 @@ them weighted by `(gain/sigma0)^2`, so it cannot be inverted back into a sample 
 """
 from types import SimpleNamespace
 
+import h5py
 import numpy as np
 import pytest
 from mpi4py import MPI
@@ -24,6 +25,7 @@ import commander4.tod.processing as tod_processing
 from commander4.tod.config import MapmakingConfig, CorrelatedNoiseConfig, DataSelectionConfig
 import commander4.tod.mapmaking.binned as binned
 from commander4.tod.sky_projection import get_s_orb_tod
+from commander4.units import unit_factor
 
 _BITMASK = 1
 _NSIDE = 1
@@ -32,8 +34,9 @@ _GAIN = 1.5   # abs_gain below; rel and temporal gain are zero, so this is the w
 
 
 def _build_band(pix, psi, tod, flag=None,
-                response_I_P: tuple[float, float] | None = None) -> DetectorGroupTOD:
-    """One IQU detector-scan with uncompressed pointing and no orbital motion.
+                response_I_P: tuple[float, float] | None = None, unit: str = "uK_RJ",
+                velocity: np.ndarray | None = None) -> DetectorGroupTOD:
+    """One IQU detector-scan with uncompressed pointing and, by default, no orbital motion.
 
     The zero orbital velocity is what makes the expected residual exactly the noise: with no
     spacecraft velocity the orbital-dipole TOD the mapmaker subtracts is identically zero, so the
@@ -42,9 +45,11 @@ def _build_band(pix, psi, tod, flag=None,
     ntod = pix.size
     pointing = PixelPointing(pix.astype(np.int64), psi.astype(np.float64), np.array([0], np.int64),
                              None, None, _NSIDE, _NSIDE, ntod, ntod)
+    if velocity is None:
+        velocity = np.zeros(3)
     det = DetectorTOD(
         name="d0", det_idx_fullband=0, tod=tod.astype(np.float32), pointing=pointing,
-        sampling_rate_hz=1.0, orbital_velocity_m_per_s=np.zeros(3, dtype=np.float32),
+        sampling_rate_hz=1.0, orbital_velocity_m_per_s=velocity.astype(np.float32),
         huffman_tree=None, huffman_symbols=None, default_proc_mask=np.ones(_NPIX, bool),
         specific_proc_masks={},
         flag_encoded=(np.zeros(ntod) if flag is None else flag).astype(np.int64),
@@ -52,33 +57,36 @@ def _build_band(pix, psi, tod, flag=None,
         response_I_P=response_I_P,
     )
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
-    return DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=30.0, fwhm=0.0,
-                            fsamp=1.0, ndet=1, pols="IQU", noise_model=noise_model)
+    return DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=30.0,
+                            unit=unit, fwhm=0.0, fsamp=1.0, ndet=1, pols="IQU",
+                            noise_model=noise_model)
 
 
-def _fake_tod_samples(sigma0: float = 2.0, ndet: int = 1) -> SimpleNamespace:
+def _fake_tod_samples(sigma0: float = 2.0, ndet: int = 1, gain: float = _GAIN,
+                      band_unit: str = "uK_RJ") -> SimpleNamespace:
     """Minimal stand-in exposing exactly the fields tod2map_bin / TODView / the diagnostics read."""
     no_jump = SimpleNamespace(is_empty=lambda: True)
     empty_ps = lambda: np.full((1, ndet, 100), np.nan, dtype=np.float32)
     return SimpleNamespace(
-        noise_params=np.full((1, ndet, 1), sigma0), abs_gain=_GAIN, rel_gain=np.zeros(ndet),
+        noise_params=np.full((1, ndet, 1), sigma0), abs_gain=gain, rel_gain=np.zeros(ndet),
         temporal_gain=np.zeros((1, ndet)), jumps=SimpleNamespace(get=lambda iscan, idet: no_jump),
-        accept=np.ones((1, ndet), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
+        accept=np.ones((1, ndet), dtype=bool), band_unit=band_unit,
         chisq_z=np.full((1, ndet), np.nan), good_fraction=np.full((1, ndet), np.nan),
         TOD_PS_NBIN=100, tod_ps_freqs=empty_ps(), tod_ps_raw=empty_ps(), tod_ps_residual=empty_ps(),
         tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None, residual_tods=None)
 
 
-def _run(band: DetectorGroupTOD, sky_model: np.ndarray,
-         sparse_maps: bool = False) -> dict[str, np.ndarray]:
+def _run(band: DetectorGroupTOD, sky_model: np.ndarray, sparse_maps: bool = False,
+         gain: float = _GAIN) -> dict[str, np.ndarray]:
     mapmaking = MapmakingConfig(
         mapmaker="bin", num_threads=1,
         include_orbital_dipole_maps=False, include_corr_noise_maps=False,
         include_sky_model_maps=False, include_residual_maps=True, include_hit_maps=True,
         sparse_maps=sparse_maps, common_res_fwhm=0.0,
     )
+    tod_samples = _fake_tod_samples(ndet=band.ndet, gain=gain, band_unit=band.unit)
     _, maps = tod_processing.tod2map_bin(
-        MPI.COMM_SELF, band, sky_model, _fake_tod_samples(ndet=band.ndet), 1, mapmaking,
+        MPI.COMM_SELF, band, sky_model, tod_samples, 1, mapmaking,
         CorrelatedNoiseConfig(sample_sigma0=False),
         DataSelectionConfig(),
     )
@@ -109,6 +117,41 @@ def test_residual_tod_parameter_controls_collection(enabled: bool | None) -> Non
         assert samples.residual_tods is None
 
 
+def _write_restart_chain(path, band_unit: str, abs_gain: float) -> None:
+    """A one-scan, one-detector band chain holding exactly what a restart reads back."""
+    with h5py.File(path, "w") as f:
+        f["metadata/band_unit"] = band_unit
+        f["scan_ids"] = np.array([0], dtype=np.int64)
+        f["abs_gain"] = abs_gain
+        f["detrel_gain"] = np.zeros(1)
+        f["temporal_gain"] = np.zeros((1, 1))
+        f["noise_params"] = np.full((1, 1, 1), 2.0)
+        f["accept"] = np.ones((1, 1), dtype=np.int8)
+        f["chisq_z"] = np.zeros((1, 1))
+        f["good_fraction"] = np.ones((1, 1))
+        f["jump_counts"] = np.zeros((1, 1), dtype=np.int64)
+        f["jump_locations"] = np.zeros(0, dtype=np.int64)
+        f["jump_offsets"] = np.zeros(0)
+
+
+def test_restart_reads_gains_as_stored_and_refuses_another_band_unit(tmp_path):
+    """Chain gains are in the chain's band_unit, as in memory, so a restart copies them as they
+    are. A parameter file with another band_unit would misread every gain, so it is refused."""
+    chain = tmp_path / "band_chain.h5"
+    _write_restart_chain(chain, "uK_CMB", abs_gain=2.5)
+    params = Bunch(output=Bunch(chains=Bunch(include=Bunch())),
+                   gibbs=Bunch(init_from_chain=str(chain)))
+    my_band = Bunch(detectors=Bunch(d0=Bunch(gain=_GAIN)))
+
+    band = _build_band(np.zeros(8, dtype=np.int64), np.zeros(8), np.zeros(8), unit="uK_CMB")
+    samples = TODSamples(band, params, my_band, MPI.COMM_SELF, chain=1)
+    assert samples.abs_gain == 2.5
+
+    band = _build_band(np.zeros(8, dtype=np.int64), np.zeros(8), np.zeros(8), unit="uK_RJ")
+    with pytest.raises(ValueError, match="band_unit"):
+        TODSamples(band, params, my_band, MPI.COMM_SELF, chain=1)
+
+
 def test_residual_map_is_zero_for_a_perfect_noiseless_model(monkeypatch):
     """A TOD that is exactly gain*sky leaves nothing behind, so maps/res must vanish."""
     monkeypatch.setenv("OMP_NUM_THREADS", "1")
@@ -123,6 +166,39 @@ def test_residual_map_is_zero_for_a_perfect_noiseless_model(monkeypatch):
     # float32 TODs at this signal amplitude, so compare at single precision.
     np.testing.assert_allclose(maps["res"], 0.0, atol=1e-3)
     np.testing.assert_allclose(maps["observed_sky"], sky, rtol=0, atol=1e-3)
+
+
+@pytest.mark.parametrize("band_unit", ["uK_CMB", "K_CMB", "MJy/sr"])
+def test_band_unit_changes_only_the_unit_of_the_outputs(monkeypatch, band_unit):
+    """The same detector data analysed in another band_unit gives the same maps, converted.
+
+    The TOD is in detector units and does not change. The analysis in `band_unit` gets its gain,
+    sky model and orbital dipole in that unit, so a perfect model still leaves a zero residual and
+    the binned map equals the uK_RJ map times the uK_RJ -> band_unit factor.
+    """
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    rng = np.random.default_rng(9)
+    n = 256
+    pix = rng.integers(0, _NPIX, n).astype(np.int64)
+    psi = rng.uniform(0.0, np.pi, n)
+    sky_rj = rng.normal(scale=50.0, size=(3, _NPIX))
+    velocity = np.array([3.0e4, -1.0e4, 2.0e4])   # A realistic orbital speed, in m/s.
+    to_unit = unit_factor(30.0, "uK_RJ", band_unit)
+
+    # The detector data: gain times (sky + orbital dipole), built in uK_RJ.
+    reference_band = _build_band(pix, psi, np.zeros(n), velocity=velocity)
+    dipole_rj = get_s_orb_tod(reference_band.scans[0].detectors[0], reference_band, pix)
+    tod = _GAIN*(_project(sky_rj, pix, psi) + dipole_rj)
+
+    maps_rj = _run(_build_band(pix, psi, tod, velocity=velocity), sky_rj)
+    maps_unit = _run(_build_band(pix, psi, tod, unit=band_unit, velocity=velocity),
+                     sky_rj*to_unit, gain=_GAIN/to_unit)
+
+    np.testing.assert_allclose(maps_rj["res"], 0.0, atol=1e-3)
+    np.testing.assert_allclose(maps_unit["res"], 0.0, atol=1e-3*to_unit)
+    np.testing.assert_allclose(maps_unit["observed_sky"], maps_rj["observed_sky"]*to_unit,
+                               rtol=1e-5, atol=1e-6*to_unit)
+    np.testing.assert_allclose(maps_unit["rms"], maps_rj["rms"]*to_unit, rtol=1e-5)
 
 
 def test_response_split_detectors_recover_sky_and_zero_residual(monkeypatch):
@@ -151,7 +227,7 @@ def test_response_split_detectors_recover_sky_and_zero_residual(monkeypatch):
     polarization.det_idx_fullband = 1
     band = DetectorGroupTOD(
         [ScanTOD([intensity, polarization], 0.0, 0)], "EXP", "B", nside=_NSIDE,
-        nu=30.0, fwhm=0.0, fsamp=1.0, ndet=2, pols="IQU",
+        nu=30.0, unit="uK_RJ", fwhm=0.0, fsamp=1.0, ndet=2, pols="IQU",
         noise_model=SimpleNamespace(npar=1, params=np.array([np.nan])),
     )
 

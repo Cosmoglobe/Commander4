@@ -16,7 +16,7 @@ from scipy.special import sph_harm_y
 from commander4.file_io.chain_writer import write_compsep_chain_to_file
 from commander4.parameters.bunch import as_bunch_recursive
 from commander4.standalone_tools import constrained_cmb_realizations as cr
-from commander4.units import SUPPORTED_BAND_UNITS, rj_to_band_unit_factor
+from commander4.units import SUPPORTED_UNITS, unit_factor
 
 
 @pytest.mark.parametrize("nsides", [[4], [2, 4, 8]])
@@ -486,7 +486,7 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
         result = original_load(params, iteration, *args)
         for band, nside in enumerate(nsides):
             nu = 70.0 + 30.0*band
-            conversion = rj_to_band_unit_factor(nu, "uK_CMB")
+            conversion = unit_factor(nu, "uK_RJ", "uK_CMB")
             # Modified blackbody in RJ units, evaluated with this sample's beta.
             h_over_k_GHz = 0.04799243073366221
             sed = (nu / 100.0)**(2.0 + 0.1*iteration)
@@ -578,7 +578,7 @@ def test_invalid_batch_options_are_rejected(options: list[str], monkeypatch: pyt
     assert exc.value.code == 2
 
 
-@pytest.mark.parametrize("stored_unit", [*SUPPORTED_BAND_UNITS, "mixed"])
+@pytest.mark.parametrize("stored_unit", [*SUPPORTED_UNITS, "mixed"])
 def test_cli_uses_thermodynamic_units_throughout(
     stored_unit: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -615,7 +615,7 @@ def test_cli_uses_thermodynamic_units_throughout(
     dust_alm[hp.Alm.getidx(lmax, 4, 2)] = 10.0 + 5.0j
     with h5py.File(chain_path, "w") as handle:
         handle["metadata/parameter_file_as_string"] = yaml.safe_dump(params)
-        handle["comps/cmb/alms"] = cmb_alm[None, :] / rj_to_band_unit_factor(cmb_ref, "uK_CMB")
+        handle["comps/cmb/alms"] = cmb_alm[None, :] / unit_factor(cmb_ref, "uK_RJ", "uK_CMB")
         handle["comps/dust/alms"] = dust_alm[None, :]
         handle["comps/cmb/sed/nu_ref"] = cmb_ref
         handle["comps/cmb/amp_fwhm_arcmin"] = 0.0
@@ -637,13 +637,14 @@ def test_cli_uses_thermodynamic_units_throughout(
         cmb_map = cr.alm2map(hp.almxfl(cmb_alm, hp.gauss_beam(beam, lmax=lmax)), nside, lmax)
         noise = np.linspace(-0.2, 0.2, npix)
         rms = np.linspace(0.5, 1.5, npix)
-        foreground_rj = foreground_sky.get_sky_at_nu(nu, nside, "I", fwhm=beam)[0]
-        observed_cmb = cmb_map + noise + foreground_rj.astype(float) * rj_to_band_unit_factor(
-            nu, "uK_CMB")
+        # The foreground realized directly in uK_CMB, as the tool does (the SkyModel sums in
+        # float32, so converting afterwards would differ at the float32 rounding level).
+        foreground = foreground_sky.get_sky_at_nu(nu, "uK_CMB", nside, "I", fwhm=beam)[0]
+        observed_cmb = cmb_map + noise + foreground.astype(float)
         unit = stored_unit
         if stored_unit == "mixed":
             unit = "K_CMB" if nu == 100.0 else "MJy/sr"
-        cmb_to_stored = rj_to_band_unit_factor(nu, unit) / rj_to_band_unit_factor(nu, "uK_CMB")
+        cmb_to_stored = unit_factor(nu, "uK_RJ", unit) / unit_factor(nu, "uK_RJ", "uK_CMB")
         band_path = tmp_path / f"chains_bands/Sim_{band}_chain01_iter0001.h5"
         with h5py.File(band_path, "w") as handle:
             handle["maps/observed_sky"] = (observed_cmb * cmb_to_stored)[None, :]
@@ -782,9 +783,9 @@ def test_iteration_subtracts_saved_foregrounds_without_double_smoothing(
         dust_sed *= np.expm1(h_over_k_GHz*70.0/24.0) / np.expm1(h_over_k_GHz*nu/24.0)
         foreground = hp.alm2map(hp.almxfl(intrinsic["dust"], beam), nside) * dust_sed
         foreground += hp.alm2map(hp.almxfl(intrinsic["sync"], beam), nside) * sync_sed
-        foreground *= rj_to_band_unit_factor(nu, "uK_CMB")
+        foreground *= unit_factor(nu, "uK_RJ", "uK_CMB")
         cmb = hp.alm2map(hp.almxfl(intrinsic["cmb"], beam), nside)
-        cmb *= rj_to_band_unit_factor(100.0, "uK_CMB")
+        cmb *= unit_factor(100.0, "uK_RJ", "uK_CMB")
         expected = cmb + 0.125
         path = tmp_path / f"{band}.h5"
         with h5py.File(path, "w") as handle:
@@ -801,7 +802,7 @@ def test_iteration_subtracts_saved_foregrounds_without_double_smoothing(
         np.testing.assert_allclose(actual, expected, rtol=0, atol=5e-5)
     stored_cmb = hp.almxfl(intrinsic["cmb"], hp.gauss_beam(np.radians(6.0), lmax=8))
     np.testing.assert_allclose(loaded.cmb_alms,
-                               stored_cmb * rj_to_band_unit_factor(100.0, "uK_CMB"), atol=1e-12)
+                               stored_cmb * unit_factor(100.0, "uK_RJ", "uK_CMB"), atol=1e-12)
     with h5py.File(band_files[0][1], "r+") as handle:
         handle["metadata/map_fwhm_arcmin"][...] = 60.0
     with pytest.raises(ValueError, match="cannot be realized any sharper"):

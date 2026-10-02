@@ -53,8 +53,21 @@ def _read_view_alms_from_chain(comp: DiffuseComponent, chain_path: str) -> NDArr
 
     A missing component is logged as an error (but not fatal); a component present without this
     view's polarization is a benign partial initialization and only debug-logged.
+
+    Raises:
+        ValueError: If the chain stores its alms in another global unit than this run uses. A chain
+            without `metadata/global_unit` predates the setting and is in uK_RJ.
     """
     with h5py.File(chain_path, "r") as f:
+        stored_unit = "uK_RJ"
+        if "metadata/global_unit" in f:
+            stored_unit = f["metadata/global_unit"][()]
+            if isinstance(stored_unit, bytes):
+                stored_unit = stored_unit.decode("utf-8")
+        if stored_unit != comp.amplitude_unit:
+            raise ValueError(f"Init chain {chain_path!r} stores component amplitudes in "
+                             f"{stored_unit}, but this run uses compsep.global_unit = "
+                             f"{comp.amplitude_unit}. Use the same global unit to start from it.")
         group_path = f"comps/{comp.shortname}"
         if group_path not in f or "alms" not in f[group_path]:
             logger.error(f"Component {comp.comp_name!r} (shortname {comp.shortname!r}) not found in "

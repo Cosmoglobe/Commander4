@@ -52,7 +52,8 @@ def _zero_comp_list() -> CompList:
 def _make_group(map_sky, rms, chisq_mask=None) -> _TrivialGroup:
     det_map = DetectorMap(np.asarray(map_sky, dtype=np.float64),
                           np.asarray(rms, dtype=np.float64),
-                          nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=2)
+                          nu=100.0, unit="uK_RJ", fwhm=0.0, nside=NSIDE, double_precision=True,
+                          lmax=2)
     return _TrivialGroup(MPI.COMM_SELF, det_map, _zero_comp_list(), target_pol="I",
                          chisq_active=True, chisq_mask=chisq_mask)
 

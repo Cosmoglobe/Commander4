@@ -55,7 +55,7 @@ def hfi_inputs(tmp_path: Path) -> tuple[Bunch, list[str]]:
     params = params_from_dict({"experiments": {"HFI": {
         "experiment_id": "planck_hfi", "instrument_file": str(instrument_path),
         "bands": {"Band": {"filelist": str(filelist), "eval_nside": 1, "freq": 353.0,
-                           "fwhm": 4.9, "polarization": "IQU"}},
+                           "band_unit": "uK_CMB", "fwhm": 4.9, "polarization": "IQU"}},
     }}, "tod_processing": {}})
     return params, det_names
 

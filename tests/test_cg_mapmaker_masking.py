@@ -44,8 +44,9 @@ def _build_band(pix: np.ndarray, bad_idx, nside: int, sigma0: float, pols: str,
         flag_encoded=flag, bad_data_bitmask=_BITMASK, flag_is_compressed=False,
     )
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
-    band = DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=nside, nu=0.0, fwhm=0.0,
-                       fsamp=fsamp, ndet=1, pols=pols, noise_model=noise_model)
+    band = DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=nside, nu=0.0,
+                            unit="uK_RJ", fwhm=0.0, fsamp=fsamp, ndet=1, pols=pols,
+                            noise_model=noise_model)
     ts = TODSamples.__new__(TODSamples)
     ts.accept = np.ones((1, 1), dtype=bool)
     ts.noise_params = np.full((1, 1, 1), sigma0)

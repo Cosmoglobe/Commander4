@@ -12,7 +12,7 @@ Planck100GHz:
   fwhm: 9.7 # [arcmin]
   freq: 100.0 # [GHz]
   polarization: "IQU"
-  units: "uK_CMB"
+  band_unit: "uK_CMB"
 
 Planck143GHz:
   enabled: true
@@ -28,7 +28,7 @@ Planck143GHz:
   fwhm: 7.3 # [arcmin]
   freq: 143.0 # [GHz]
   polarization: "IQU"
-  units: "uK_CMB"
+  band_unit: "uK_CMB"
 
 Planck217GHz:
   enabled: true
@@ -44,7 +44,7 @@ Planck217GHz:
   fwhm: 5.0 # [arcmin]
   freq: 217.0 # [GHz]
   polarization: "IQU"
-  units: "uK_CMB"
+  band_unit: "uK_CMB"
 
 Planck353GHz:
   enabled: true
@@ -60,7 +60,7 @@ Planck353GHz:
   fwhm: 4.9 # [arcmin]
   freq: 353.0 # [GHz]
   polarization: "IQU"
-  units: "uK_CMB"
+  band_unit: "uK_CMB"
 
 ### INTENSITY ONLY MAPS ###
 Planck545GHz:
@@ -77,7 +77,7 @@ Planck545GHz:
   fwhm: 4.8 # [arcmin]
   freq: 545.0 # [GHz]
   polarization: "I"
-  units: "uK_CMB"
+  band_unit: "uK_CMB"
 
 Planck857GHz:
   enabled: true
@@ -93,4 +93,4 @@ Planck857GHz:
   fwhm: 4.6 # [arcmin]
   freq: 857.0 # [GHz]
   polarization: "I"
-  units: "uK_CMB"
+  band_unit: "uK_CMB"

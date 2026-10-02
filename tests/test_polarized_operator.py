@@ -19,7 +19,7 @@ def _spin2_cross_channel_leakage(q_rms: float, u_rms: float, nside: int, lmax: i
     detector_map = DetectorMap(
         map_sky,
         map_rms,
-        nu=100.0,
+        nu=100.0, unit="uK_RJ",
         fwhm=0.0,
         nside=nside,
         double_precision=True,
@@ -42,8 +42,9 @@ class _DummyDetectorMap:
 
 
 class _DummyBand:
-    def __init__(self, nu: float, fwhm: float):
+    def __init__(self, nu: float, unit: str, fwhm: float):
         self.nu = nu
+        self.unit = unit
         self.fwhm = fwhm
 
 
@@ -51,7 +52,7 @@ class _DummyCompSep:
     def __init__(self, inv_n_map: np.ndarray, lmax: int):
         self.CompSep_comm = MPI.COMM_SELF
         self.det_map = _DummyDetectorMap(inv_n_map, lmax)
-        self.my_band = _DummyBand(nu=100.0, fwhm=0.0)
+        self.my_band = _DummyBand(nu=100.0, unit="uK_RJ", fwhm=0.0)
 
 
 class _DummyDiffuseComp:
@@ -72,7 +73,7 @@ class _DummyDiffuseComp:
     def P_Cl_prior_inv(self) -> np.ndarray:
         return np.ones(self.lmax + 1, dtype=np.float64)
 
-    def get_sed(self, nu: float) -> float:
+    def get_sed(self, nu: float, unit: str) -> float:
         return 1.0
 
 
@@ -122,7 +123,7 @@ class _SEDDiffuseComp(_DummyDiffuseComp):
         super().__init__(lmax=lmax, npol=npol)
         self.sed = sed
 
-    def get_sed(self, nu: float) -> float:
+    def get_sed(self, nu: float, unit: str) -> float:
         return self.sed
 
 

@@ -130,7 +130,7 @@ class FarBeamProjector:
 
 
     def get_projection(self, pix: NDArray, psi: NDArray, idet: int) -> NDArray:
-        """Far-sidelobe pickup for one detector-scan, in uK_RJ.
+        """Far-sidelobe pickup for one detector-scan, in the band unit (that of the sky map).
 
         Args:
             pix: HEALPix RING pixel per sample, at the band's evaluation nside.

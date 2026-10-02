@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.noise.psd import NoisePSD
 from commander4.math_utils.fft import forward_rfft_mirrored, backward_rfft_mirrored
+from commander4.units import check_unit_usable
 
 import logging
 logger = logging.getLogger(__name__)
@@ -27,6 +28,8 @@ class DetectorGroupTOD:
         band_name (str): Band identifier (e.g. ``'30GHz'``).
         nside (int): HEALPix nside for map evaluation.
         nu (float): Band centre frequency in GHz.
+        unit (str): The band's own unit (``band_unit``). Gains are in detector units per this
+            unit, and the sky model, orbital dipole and output maps are all expressed in it.
         fwhm (float): Beam FWHM in arcminutes.
         ndet (int): Number of detectors per scan.
         pols (str): Polarisation configuration string (``'I'``, ``'QU'``, or ``'IQU'``).
@@ -35,15 +38,17 @@ class DetectorGroupTOD:
         hfi_demodulation (bool): Whether this band contains alternating Planck HFI half-cycles.
     """
     def __init__(self, scans: list[ScanTOD], experiment_name: str, band_name: str, nside: int,
-                 nu: float, fwhm: float, fsamp: float, ndet: int, pols: str, noise_model: NoisePSD, 
-                 tf_tau_sec: float|None = None, instrument_filepath: str|None = None, 
-                 hfi_demodulation: bool = False):
+                 nu: float, unit: str, fwhm: float, fsamp: float, ndet: int, pols: str,
+                 noise_model: NoisePSD, tf_tau_sec: float|None = None,
+                 instrument_filepath: str|None = None, hfi_demodulation: bool = False):
+        check_unit_usable(nu, unit, f"Band {band_name} (band_unit)")
         self.scans = scans
         self.nscans = len(scans)
         self.experiment_name = experiment_name
         self.band_name = band_name
         self.nside = nside
         self.nu = nu
+        self.unit = unit
         self.fwhm = fwhm
         self.fsamp = fsamp
         self.ndet = ndet

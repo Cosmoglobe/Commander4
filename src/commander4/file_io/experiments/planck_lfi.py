@@ -19,6 +19,7 @@ from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.tod.noise.psd import NoisePSD, NoisePSDOof
 from commander4.data_models.pointing import PixelPointing
+from commander4.units import unit_factor
 from commander4.file_io.experiments.read_utils import (
     apply_noise_priors,
     apply_noise_fit_range,
@@ -119,8 +120,12 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                     psi_encoded = np.zeros(ntod_optimal, dtype=np.float32)
                 flag_encoded = f[f"/{pid}/{det_name}/flag/"][()]
                 init_scalars = f[f"/{pid}/{det_name}/scalars/"][()]
-                # Data format has this weird thing were gain seems to be in "micro-gain"...
-                init_scalars[0] *= 1e-6
+                # The file is calibrated in K_CMB, as Commander3 reads it: the gain is detector
+                # units per K_CMB, and sigma0 is in K_CMB. Bring sigma0 to detector units with that
+                # gain (C3's `scalars(2)*gain_def`), then express the gain per band_unit.
+                gain_per_K = init_scalars[0]
+                init_scalars[1] *= gain_per_K
+                init_scalars[0] = gain_per_K*unit_factor(my_band.freq, my_band.band_unit, "K_CMB")
 
                 det_init_scalars[idet] = init_scalars
                 det_pointing = PixelPointing(pix_encoded, psi_encoded, huffman_tree,
@@ -176,7 +181,8 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
     apply_noise_fit_range(noise_model, params)
 
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model,
+                           my_band.band_unit, my_band.fwhm, fsamp, ndet, my_band.polarization,
+                           noise_model,
                            instrument_filepath=instrument_filepath)
     # my_det_central_freq = my_band.freq
 

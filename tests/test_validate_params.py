@@ -43,6 +43,7 @@ def _valid_params() -> dict:
                     "Band": {
                         "enabled": True,
                         "num_tasks": 2,
+                        "band_unit": "uK_RJ",
                         "detectors": {"detector": {}},
                     },
                 },
@@ -67,12 +68,14 @@ def _thread_suggestion_params(num_threads: int | list[int] = 4) -> Bunch:
             "enabled": True,
             "num_tasks": 1,
             "eval_nside": 128,
+            "band_unit": "uK_RJ",
             "detectors": {"detector": {}},
         },
         "High": {
             "enabled": True,
             "num_tasks": 1,
             "eval_nside": 1024,
+            "band_unit": "uK_RJ",
             "detectors": {"detector": {}},
         },
     }
@@ -220,6 +223,34 @@ def test_unknown_reader_is_rejected_before_data_access(tmp_path) -> None:
     params["experiments"]["Example"]["experiment_id"] = "misspelled_reader"
 
     with pytest.raises(ValueError, match="misspelled_reader"):
+        validate_parameter_file(_write_params(tmp_path, params))
+
+
+def test_every_tod_band_must_state_its_unit(tmp_path) -> None:
+    """As C3's BAND_UNIT: gains and maps are in it, so no default can be right for all data."""
+    params = _valid_params()
+    del params["experiments"]["Example"]["bands"]["Band"]["band_unit"]
+
+    with pytest.raises(ValueError, match="band_unit is required"):
+        validate_parameter_file(_write_params(tmp_path, params))
+
+
+def test_file_bands_use_band_unit_and_the_global_unit_is_checked(tmp_path) -> None:
+    params = _valid_params()
+    file_band = {"enabled": True, "get_from": "file", "polarization": "I", "units": "uK_CMB"}
+    params["compsep"] = {"enabled": True, "bands": {"Map": file_band},
+                         "cg_sampling_groups": {"amplitudes": {}}}
+
+    with pytest.raises(ValueError, match="renamed to 'band_unit'"):
+        validate_parameter_file(_write_params(tmp_path, params))
+
+    del file_band["units"]
+    with pytest.raises(ValueError, match="band_unit is required"):
+        validate_parameter_file(_write_params(tmp_path, params))
+
+    file_band["band_unit"] = "uK_CMB"
+    params["compsep"]["global_unit"] = "Jy"
+    with pytest.raises(ValueError, match="global_unit"):
         validate_parameter_file(_write_params(tmp_path, params))
 
 

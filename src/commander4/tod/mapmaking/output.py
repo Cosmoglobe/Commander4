@@ -29,9 +29,10 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
         map_rms: Per-pixel white-noise rms, same shape.
         pols: Which polarizations this band carries, e.g. "I", "QU" or "IQU".
         compsep_output: The current sky model for this band, written as `skymodel`.
-        map_sidelobe: Binned far-sidelobe pickup, in uK_RJ. Commander3's `tod_<freq>_sl` map.
+        map_sidelobe: Binned far-sidelobe pickup, in the band unit. Commander3's `tod_<freq>_sl`
+            map.
         map_residual: Binned noise residual (data minus sky model, orbital dipole and correlated
-            noise), in uK_RJ. Commander3's `tod_<freq>_res` map.
+            noise), in the band unit. Commander3's `tod_<freq>_res` map.
         map_nhit: Per-pixel count of accumulated good samples, shape (npix,).
         map_cov: The six unique elements of the per-pixel `P^T N^-1 P`, shape (6, npix). Only its
             inverse diagonal survives as `map_rms`, so this is the only place the QU off-diagonals
@@ -67,7 +68,7 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
     common_res_fwhm = mapmaking_cfg.common_res_fwhm
     if "I" in pols:
         detmap_I = DetectorMap(map_signal[0,:], map_rms[0,:], experiment_data.nu,
-                               experiment_data.fwhm, experiment_data.nside,
+                               experiment_data.unit, experiment_data.fwhm, experiment_data.nside,
                                lmax=mapmaking_cfg.band_lmax)
         detmap_I.g0 = tod_samples.abs_gain
         if common_res_fwhm:
@@ -75,7 +76,7 @@ def finalize_band_maps(map_signal: NDArray, map_rms: NDArray, pols: str,
         detmap_dict_out["I"] = detmap_I
     if "QU" in pols:
         detmap_QU = DetectorMap(map_signal[1:3,:], map_rms[1:3,:], experiment_data.nu,
-                                experiment_data.fwhm, experiment_data.nside,
+                                experiment_data.unit, experiment_data.fwhm, experiment_data.nside,
                                 lmax=mapmaking_cfg.band_lmax)
         detmap_QU.g0 = tod_samples.abs_gain
         if common_res_fwhm:

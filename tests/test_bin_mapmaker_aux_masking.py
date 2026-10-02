@@ -43,8 +43,9 @@ def _build_band(pix: np.ndarray, psi: np.ndarray, flag: np.ndarray, tod: np.ndar
         flag_is_compressed=False,
     )
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
-    return DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=_NU, fwhm=0.0,
-                       fsamp=1.0, ndet=1, pols="IQU", noise_model=noise_model)
+    return DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=_NU,
+                            unit="uK_RJ", fwhm=0.0, fsamp=1.0, ndet=1, pols="IQU",
+                            noise_model=noise_model)
 
 
 def _fake_tod_samples(sigma0: float = 2.0) -> SimpleNamespace:
@@ -54,7 +55,7 @@ def _fake_tod_samples(sigma0: float = 2.0) -> SimpleNamespace:
     return SimpleNamespace(
         noise_params=np.full((1, 1, 1), sigma0), abs_gain=1.5, rel_gain=np.zeros(1),
         temporal_gain=np.zeros((1, 1)), jumps=SimpleNamespace(get=lambda iscan, idet: no_jump),
-        accept=np.ones((1, 1), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
+        accept=np.ones((1, 1), dtype=bool), band_unit="uK_RJ",
         chisq_z=np.full((1, 1), np.nan), good_fraction=np.full((1, 1), np.nan),
         TOD_PS_NBIN=100, tod_ps_freqs=empty_ps(), tod_ps_raw=empty_ps(), tod_ps_residual=empty_ps(),
         tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None, residual_tods=None)

@@ -399,7 +399,8 @@ def _build_conditional_residual(detector_data: DetectorMap, comp_list: CompList,
         return detector_data
     band_pol = "QU" if detector_data.pol else "I"
     fixed_sky = SkyModel(CompList(fixed_comps)).get_sky_at_nu(
-        detector_data.nu, detector_data.nside, band_pol, fwhm=detector_data.fwhm_rad)
+        detector_data.nu, detector_data.unit, detector_data.nside, band_pol,
+        fwhm=detector_data.fwhm_rad)
     residual = deepcopy(detector_data)
     residual.map_sky = detector_data.map_sky - fixed_sky.astype(detector_data.map_sky.dtype,
                                                                 copy=False)
@@ -642,13 +643,13 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
         fit = evaluate(f"MCMC group {group.name!r}")
 
     with benchmark("chain-gather"):
-        fit_tree, band_frequencies = collect_fit_diagnostics(compsep, fit,
-                                                             compsep_state.include_chisq_map)
+        fit_tree, band_specs = collect_fit_diagnostics(compsep, fit,
+                                                       compsep_state.include_chisq_map)
     if compsep.rank == compsep.master:
         diagnostics = {**fit_tree, **sampler_stats}
         with benchmark("filewrite-compsep"):
             write_compsep_chain_to_file(comp_list.joined(), params, chain, iter, diagnostics,
-                                        band_frequencies)
+                                        band_specs)
         chi2 = fit_tree["chi2"]
         logger.summary(f"Chain {chain}, iteration {iter} complete: chi2={chi2['total']:.6e}, "
                        f"ndof={chi2['ndof']}, red.chi2={chi2['reduced']:.4f}, z={chi2['z']:.3f}.")

@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.file_io import paths
+from commander4.parameters.schema import resolve_param
 from commander4.sky.comp_list import CompList
 from commander4.sky.component import Component
 
@@ -17,16 +18,18 @@ from commander4.sky.component import Component
 # than the per-scan samples next to them and are usually the only output worth thinning.
 CHAIN_KINDS = ("bands", "compsep", "maps")
 
-# How each `maps/` dataset behaves under the two transforms `write_band_chain_to_file` applies:
-# degrading to `output.chains.maps_nside`, and converting uK_RJ to the band's own unit.
+# How each `maps/` dataset behaves when `write_band_chain_to_file` degrades it to
+# `output.chains.maps_nside`. All of them are already in the band's own unit.
 #
-#   "brightness"  a sky brightness: averages when degraded, and picks up one factor of D.
-#   "rms"         a brightness uncertainty: degrades in inverse variance, one factor of D.
-#   "weight"      a summed inverse variance (uK_RJ^-2): sums when degraded, D^-2.
-#   "count"       a pure sample count: sums when degraded, unit-free.
+#   "brightness"  a sky brightness (band_unit): averages when degraded.
+#   "rms"         a brightness uncertainty (band_unit): degrades in inverse variance.
+#   "weight"      a summed inverse variance (band_unit^-2): sums when degraded.
+#   "count"       a pure sample count: sums when degraded.
 #
-# Anything not listed is treated as "brightness", which every sky map here is.
-_MAP_KINDS = {"rms": "rms", "cov": "weight", "nhit": "count"}
+# Every dataset must be listed, so a new map cannot be degraded by the wrong rule unnoticed.
+_MAP_KINDS = {"observed_sky": "brightness", "orbdipole": "brightness", "corrnoise": "brightness",
+              "sidelobe": "brightness", "res": "brightness", "skymodel": "brightness",
+              "rms": "rms", "cov": "weight", "nhit": "count"}
 
 
 def _degrade_map(value: NDArray, kind: str, nside_out: int) -> NDArray:
@@ -56,19 +59,6 @@ def _degrade_map(value: NDArray, kind: str, nside_out: int) -> NDArray:
         return summed
     else:
         raise ValueError(f"Unknown map kind '{kind}' in _degrade_map.")
-
-
-def _to_band_unit(value: NDArray, kind: str, band_unit_factor: float) -> NDArray:
-    """Convert one `maps/` dataset from uK_RJ to the band's own unit.
-
-    Out-of-place, so the caller's arrays -- shared with the uK_RJ `DetectorMap` sent to compsep --
-    stay untouched. D is a Python float, so the dtype survives.
-    """
-    if kind == "count":  # A sample count carries no thermodynamic unit.
-        return value
-    if kind == "weight":  # An inverse variance, i.e. uK_RJ^-2.
-        return value/band_unit_factor**2
-    return value*band_unit_factor
 
 
 def should_write_chain(params: Bunch, kind: str, iter: int) -> bool:
@@ -107,7 +97,7 @@ def should_write_chain(params: Bunch, kind: str, iter: int) -> bool:
 
 def write_band_chain_to_file(params: Bunch, chain: int, iter: int, exp_name: str, band_name: str,
                              tod_arrays: dict[str, NDArray], maps_to_file: dict,
-                             band_unit_factor: float = 1.0, band_unit: str = "uK_RJ") -> None:
+                             band_unit: str) -> None:
     """Write one band's Gibbs sample: the per-scan TOD samples and the output maps, in one file.
 
     The sampled parameters land at the top level (where `TODSamples` reads them back from for
@@ -116,9 +106,8 @@ def write_band_chain_to_file(params: Bunch, chain: int, iter: int, exp_name: str
     written at all — `TODSamples.gather_chain_arrays` owns that gate, because it has to be applied
     before its collective gathers — so this function only gates the `maps/` group.
 
-    The maps arrive in uK_RJ and are written in the band's `band_unit`, each converted according to
-    its `_MAP_KINDS` entry by `band_unit_factor` D (=1 for uK_RJ). The gains in `tod_arrays` were
-    already divided by D by the gather, gain having brightness in its denominator.
+    The maps and gains arrive in the band's `band_unit` (the gains in detector units per it) and are
+    written as they are; `metadata/band_unit` records which unit that is.
 
     `maps_to_file` also carries the scalar `map_fwhm_arcmin` (see `mapmaking.output`), which is the
     beam `observed_sky` and `rms` are at. It becomes file metadata rather than a dataset, and is
@@ -148,13 +137,14 @@ def write_band_chain_to_file(params: Bunch, chain: int, iter: int, exp_name: str
         if not write_maps:
             return
         for key, value in maps_to_file.items():
-            kind = _MAP_KINDS.get(key, "brightness")
+            if key not in _MAP_KINDS:
+                raise ValueError(f"Band map {key!r} has no entry in _MAP_KINDS, so it is not known "
+                                 "how to degrade it. Add it there.")
+            kind = _MAP_KINDS[key]
             # `maps_nside` is a cap: it thins maps that are finer than it, and leaves anything
             # already coarser alone.
             if nside_out != "native" and nside_out < hp.npix2nside(value.shape[-1]):
                 value = _degrade_map(value, kind, nside_out)
-            if band_unit_factor != 1.0:
-                value = _to_band_unit(value, kind, band_unit_factor)
             file[f"maps/{key}"] = value
 
 
@@ -175,7 +165,7 @@ def _write_nested(group: h5py.Group, tree: dict) -> None:
 
 def write_compsep_chain_to_file(comp_list: list[Component] | CompList, params: Bunch,
                                 chain: int, iter: int, diagnostics: dict | None = None,
-                                band_frequencies: dict[str, float] | None = None):
+                                band_specs: dict[str, tuple[float, str]] | None = None):
     """Write one component-separation sample: the components, and how well they fit the data.
 
     `diagnostics` is the goodness-of-fit and sampler bookkeeping `process_compsep` collected for
@@ -183,17 +173,23 @@ def write_compsep_chain_to_file(comp_list: list[Component] | CompList, params: B
     information over `chisq_<postfix>.fits`, `fg_ind_mean_c<CCCC>.dat` and `nonlin-samples_*.dat`;
     here it lives next to the components it describes.
 
-    `band_frequencies` maps each band name to its centre frequency in GHz, and is what lets the
-    mixing coefficients be written per band.
+    `band_specs` maps each band name to its centre frequency in GHz and its `band_unit`, and is what
+    lets the mixing coefficients be written per band. `metadata/global_unit` records the unit of the
+    diffuse amplitudes, and `metadata/band_units/<band>` the unit of each band's residual map.
     """
     if chain not in params.output.chains.write or not should_write_chain(params, "compsep", iter):
         return
     chain_dir = paths.subdir(params, paths.CHAINS_COMPSEP)
     chain_file = os.path.join(chain_dir, f"chain{chain:02d}_iter{iter:04d}.h5")
     components = comp_list.components if isinstance(comp_list, CompList) else comp_list
+    global_unit = resolve_param(params, "global_unit", ("compsep",), default="uK_RJ",
+                                raise_on_missing_scope=False)
     with h5py.File(chain_file, "w") as file:
         file["metadata/datetime"] = datetime.datetime.now().isoformat()
         file["metadata/parameter_file_as_string"] = params.parameter_file_as_string
+        file["metadata/global_unit"] = global_unit
+        for band_name, (_, band_unit) in (band_specs or {}).items():
+            file[f"metadata/band_units/{band_name}"] = band_unit
         _write_nested(file, diagnostics or {})
         seen_shortnames = set()
         for comp in components:
@@ -232,9 +228,10 @@ def write_compsep_chain_to_file(comp_list: list[Component] | CompList, params: B
                 if value is not None:
                     file[f"comps/{comp.shortname}/Cl_prior/{param_name}"] = value
             # The mixing "matrix", C3's mixmat_<comp>_<band>. C4 indices are scalar, so a
-            # component's whole mixing matrix at a band is the single number `get_sed(nu)`.
-            for band_name, nu in (band_frequencies or {}).items():
-                file[f"comps/{comp.shortname}/mixing/{band_name}"] = comp.get_sed(nu)
+            # component's whole mixing matrix at a band is the single number `get_sed(nu, unit)`,
+            # which includes the conversion from the global unit to the band's unit.
+            for band_name, (nu, band_unit) in (band_specs or {}).items():
+                file[f"comps/{comp.shortname}/mixing/{band_name}"] = comp.get_sed(nu, band_unit)
             if comp.defined_pol is not None:
                 file[f"comps/{comp.shortname}/defined_pol"] = comp.defined_pol
             if comp.eval_pol is not None:

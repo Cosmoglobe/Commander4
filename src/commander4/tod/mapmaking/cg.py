@@ -817,8 +817,9 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         ### RESIDUAL AND HIT MAPS ###
         # `residual_tod` is the detector-unit noise residual `_record_tod_diagnostics` already
         # built (sky model, orbital dipole and n_corr all subtracted); dividing by the gain puts it
-        # in uK_RJ, like the signal map. It is gap-filled and binned full-length, matching this
-        # mapmaker's full-length inverse-variance denominator (the bin mapmaker instead masks both).
+        # in the band unit, like the signal map. It is gap-filled and binned full-length, matching
+        # this mapmaker's full-length inverse-variance denominator (the bin mapmaker instead masks
+        # both).
         if mapmaker_res is not None:
             fill_all_masked(residual_tod, good_data_mask, sigma0)
             if pols == "IQU":

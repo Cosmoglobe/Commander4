@@ -439,6 +439,7 @@ def _stokes_labels(npol: int) -> list[str]:
 def _get_component_map(
     component: Component,
     freq: float,
+    unit: str,
     nside: int,
     npol: int,
     ipol: int,
@@ -451,12 +452,12 @@ def _get_component_map(
             return np.zeros((npix,))
         if use_raw:
             return component.get_component_map(nside, fwhm=smoothing_scale_radians)[0]
-        return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[0]
+        return component.get_sky(freq, unit, nside, fwhm=smoothing_scale_radians)[0]
 
     if component.is_pol:
         if use_raw:
             return component.get_component_map(nside, fwhm=smoothing_scale_radians)[ipol]
-        return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[ipol]
+        return component.get_sky(freq, unit, nside, fwhm=smoothing_scale_radians)[ipol]
     return np.zeros((npix,))
 
 
@@ -512,6 +513,7 @@ def plot_combo_maps(
     *,
     map_signal: np.ndarray,
     nu: float,
+    unit: str,
     nside: int,
     map_rms: np.ndarray | None = None,
     map_corrnoise: np.ndarray | None = None,
@@ -521,6 +523,7 @@ def plot_combo_maps(
     g0: float | None = None,
     fwhm_arcmin: float = np.nan,
 ) -> None:
+    """Combined diagnostic maps of one band; `unit` is the band's unit, which its maps are in."""
     out_folder = os.path.join(params.plots_dir, "combo_maps")
     os.makedirs(out_folder, exist_ok=True)
 
@@ -570,13 +573,14 @@ def plot_combo_maps(
         max_component_panels = min(len(comp_sublist), 5)
         beam_radians = fwhm_arcmin * np.pi / (180 * 60) if np.isfinite(fwhm_arcmin) else 0.0
         for i, component in enumerate(comp_sublist[:max_component_panels]):
-            comp_map = _get_component_map(component, nu, nside, npol, ipol, beam_radians)
+            comp_map = _get_component_map(component, nu, unit, nside, npol, ipol, beam_radians)
             if "cmb" not in component.shortname:
                 foreground_subtracted -= comp_map
             else:
                 cmb_subtracted -= comp_map
                 cmb_maps = component.get_sky_anisotropies(
                     nu,
+                    unit,
                     nside,
                     fwhm=beam_radians,
                 )
@@ -813,9 +817,11 @@ def plot_components(
     *,
     map_signal: np.ndarray,
     nu: float,
+    unit: str,
     nside: int,
     fwhm_arcmin: float = np.nan,
 ) -> None:
+    """Per-component maps and spectra of one band; `unit` is the band's unit."""
     map_comp_out = os.path.join(params.plots_dir, "maps_comps")
     dl_out = os.path.join(params.plots_dir, "spectra_comps_Dl")
     cl_out = os.path.join(params.plots_dir, "spectra_comps_Cl")
@@ -840,7 +846,7 @@ def plot_components(
         residual = signal.copy()
 
         for component in comp_sublist:
-            comp_map = _get_component_map(component, nu, nside, npol, ipol, beam_radians)
+            comp_map = _get_component_map(component, nu, unit, nside, npol, ipol, beam_radians)
             if component.shortname != "cmb":
                 foreground_subtracted -= comp_map
             residual -= comp_map

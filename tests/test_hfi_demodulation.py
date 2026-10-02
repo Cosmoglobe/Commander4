@@ -60,7 +60,7 @@ def _build_hfi_case(phase: int = -1):
     )
     noise_model = SimpleNamespace(npar=1, params=np.array([_SIGMA0]))
     band = DetectorGroupTOD(
-        [ScanTOD([detector], 0.0, 1)], "PlanckHFI", "Planck100GHz", _NSIDE, 100.0,
+        [ScanTOD([detector], 0.0, 1)], "PlanckHFI", "Planck100GHz", _NSIDE, 100.0, "uK_RJ",
         10.0, 180.0, 1, "I", noise_model, hfi_demodulation=True,
     )
     no_jump = SimpleNamespace(is_empty=lambda: True)

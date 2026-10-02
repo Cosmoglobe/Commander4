@@ -87,7 +87,8 @@ def test_diffuse_truth_map_is_the_band_map_amplitude(tmp_path):
     truth = comp.truth_map(NSIDE)
     assert truth.shape == (3, hp.nside2npix(NSIDE))
     # Exactly the operations band_map applies, but starting from the truth map.
-    expected = hp.smoothing(truth, fwhm=band.fwhm_rad).astype(np.float32) * comp.c4.get_sed(217.0)
+    expected = hp.smoothing(truth, fwhm=band.fwhm_rad).astype(np.float32) \
+        * comp.c4.get_sed(217.0, band.units)
 
     np.testing.assert_allclose(comp.band_map(band), expected, rtol=1e-5, atol=1e-5)
     # The SED at 217 GHz is far from unity, so this is not a vacuous comparison.
@@ -103,7 +104,7 @@ def test_diffuse_truth_map_is_the_template_at_nu_ref(tmp_path):
     params = _params({"ThermalDust": _dust_cfg(template_path)}, {"B353": _band(353.0, 40.0)})
     comp = build_components(params)[0]
 
-    assert comp.c4.get_sed(353.0) == pytest.approx(1.0)
+    assert comp.c4.get_sed(353.0, "uK_RJ") == pytest.approx(1.0)
     np.testing.assert_allclose(comp.truth_map(NSIDE), template, rtol=1e-6, atol=1e-6)
 
 
@@ -127,7 +128,7 @@ def test_cmb_truth_map_is_the_band_map_amplitude(nu_ref):
 
     # Scale with Commander4's own CMB SED, so this pins the simgen amplitude to the C4 convention
     # rather than to a re-derivation of it here.
-    c4_sed = _build_c4_component(comp.comp_cfg, params.general).get_sed(217.0)
+    c4_sed = _build_c4_component(comp.comp_cfg, params.general).get_sed(217.0, band.units)
     assert abs(c4_sed - 1.0) > 0.1          # a real conversion, so the comparison is not vacuous
     expected = comp.truth_map(NSIDE) * c4_sed
     np.testing.assert_allclose(comp.band_map(band), expected, rtol=1e-5, atol=1e-5)

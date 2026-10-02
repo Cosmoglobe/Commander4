@@ -149,7 +149,7 @@ class MCMCSamplingGroup(ABC):
         """
         band_pol = "QU" if self.detector_data.pol else "I"
         model_sky = SkyModel(self.comp_list.split_for_eval_pol(self.target_pol)).get_sky_at_nu(
-            self.detector_data.nu, self.detector_data.nside, band_pol,
+            self.detector_data.nu, self.detector_data.unit, self.detector_data.nside, band_pol,
             fwhm=self.detector_data.fwhm_rad)
         pix = slice(None) if self.chisq_mask is None else self.chisq_mask
         residual = self.detector_data.map_sky[:, pix] - model_sky[:, pix]

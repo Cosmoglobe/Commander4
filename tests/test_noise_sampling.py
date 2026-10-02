@@ -536,7 +536,8 @@ class TestApplyNInv:
     @staticmethod
     def _detgroup(noise_model, fsamp=10.0):
         return DetectorGroupTOD(scans=[], experiment_name="x", band_name="b", nside=64, nu=100.0,
-                           fwhm=30.0, fsamp=fsamp, ndet=1, pols="IQU", noise_model=noise_model)
+                                unit="uK_RJ", fwhm=30.0, fsamp=fsamp, ndet=1, pols="IQU",
+                                noise_model=noise_model)
 
     @pytest.mark.parametrize("dtype", [np.float32, np.float64])
     @pytest.mark.parametrize("white_noise", [False, True])

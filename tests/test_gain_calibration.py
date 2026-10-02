@@ -98,7 +98,7 @@ def test_absolute_gain_reuses_filtered_calibrator(
 
     model = NoisePSDOof()
     model.is_white = white_noise
-    experiment = DetectorGroupTOD([], "EXP", "BAND", 1, 100.0, 0.0, 180.0, 1, "I", model)
+    experiment = DetectorGroupTOD([], "EXP", "BAND", 1, 100.0, "uK_RJ", 0.0, 180.0, 1, "I", model)
     config = GainConfig(downsample_time=1.0)
     rng = np.random.default_rng(13)
     views = []
@@ -447,7 +447,8 @@ def _make_real_view(monkeypatch, good=None):
                           det_idx_fullband=0, get_pix_psi=lambda: (pix, psi),
                           response_I_P=(1.0, 1.0),
                           orbital_velocity_m_per_s=np.array([1.0, 0.0, 0.0], dtype=np.float32))
-    experiment_data = SimpleNamespace(scans=[SimpleNamespace(detectors=[det])], nside=1, nu=30.0)
+    experiment_data = SimpleNamespace(scans=[SimpleNamespace(detectors=[det])], nside=1, nu=30.0,
+                                      unit="uK_RJ")
     no_jump = SimpleNamespace(is_empty=lambda: True)
     tod_samples = SimpleNamespace(jumps=SimpleNamespace(get=lambda iscan, idet: no_jump),
                                   abs_gain=2.0, rel_gain=np.array([0.5]),

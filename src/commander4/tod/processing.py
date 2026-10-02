@@ -229,7 +229,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
         with benchmark("filewrite-band"):
             write_band_chain_to_file(params, chain, iter, experiment_data.experiment_name,
                                      experiment_data.band_name, tod_arrays, maps_to_file,
-                                     tod_samples.band_unit_factor, tod_samples.band_unit)
+                                     tod_samples.band_unit)
 
     with benchmark("end-barrier"):
         tod_comm.Barrier()

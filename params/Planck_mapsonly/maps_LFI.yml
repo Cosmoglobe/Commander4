@@ -12,7 +12,7 @@ Planck30GHz:
   fwhm: 32.3 # [arcmin]
   freq: 28.4 # [GHz]  Effective band centre, matching the TOD band in params/PlanckLFI/.
   polarization: "IQU"
-  units: "uK_CMB"
+  band_unit: "uK_CMB"
 
 Planck44GHz:
   enabled: true
@@ -28,7 +28,7 @@ Planck44GHz:
   fwhm: 27.0 # [arcmin]
   freq: 44.1 # [GHz]  Effective band centre, matching the TOD band in params/PlanckLFI/.
   polarization: "IQU"
-  units: "uK_CMB"
+  band_unit: "uK_CMB"
 
 Planck70GHz:
   enabled: true
@@ -44,4 +44,4 @@ Planck70GHz:
   fwhm: 13.2 # [arcmin]
   freq: 70.1 # [GHz]  Effective band centre, matching the TOD band in params/PlanckLFI/.
   polarization: "IQU"
-  units: "uK_CMB"
+  band_unit: "uK_CMB"

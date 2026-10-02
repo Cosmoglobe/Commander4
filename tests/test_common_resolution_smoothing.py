@@ -96,8 +96,8 @@ def test_smoothing_a_full_sky_band_is_unchanged():
 def test_detector_map_smooth_to_resolution_on_a_patch():
     """The end-to-end path the parameter `general.common_res_fwhm` drives."""
     signal, rms, observed = _partial_sky_maps()
-    detmap = DetectorMap(map_sky=signal[None, :], map_rms=rms[None, :], nu=90.0, fwhm=30.0,
-                         nside=NSIDE)
+    detmap = DetectorMap(map_sky=signal[None, :], map_rms=rms[None, :], nu=90.0, unit="uK_RJ",
+                         fwhm=30.0, nside=NSIDE)
 
     detmap.smooth_to_resolution(60.0)
 
@@ -111,8 +111,8 @@ def test_detector_map_smooth_to_resolution_on_a_patch():
 def test_smoothing_to_a_finer_beam_is_refused(caplog):
     """Smoothing only coarsens; a finer target leaves the band alone rather than sharpening it."""
     signal, rms, _ = _partial_sky_maps()
-    detmap = DetectorMap(map_sky=signal[None, :], map_rms=rms[None, :], nu=90.0, fwhm=30.0,
-                         nside=NSIDE)
+    detmap = DetectorMap(map_sky=signal[None, :], map_rms=rms[None, :], nu=90.0, unit="uK_RJ",
+                         fwhm=30.0, nside=NSIDE)
     before = detmap.map_sky.copy()
 
     detmap.smooth_to_resolution(10.0)

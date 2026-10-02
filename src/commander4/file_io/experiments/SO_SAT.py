@@ -191,7 +191,8 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
     apply_noise_priors(noise_model, params, expname, bandname)
     apply_noise_fit_range(noise_model, params)
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
+                           my_band.band_unit, my_band.fwhm, fsamp, ndet, my_band.polarization,
+                           noise_model)
 
     ### Summarize detector-scan inclusion and Fourier-cut retention ###
     # The fraction is reported per detector-scan rather than per scan, since a scan survives as

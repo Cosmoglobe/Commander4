@@ -24,6 +24,7 @@ from commander4.polarization import EXECUTION_POLS
 from commander4.polarization import assert_pol_supported
 from commander4.math_utils.arithmetic import inplace_scale_add, inplace_add_scaled_vec
 from commander4.parameters.schema import resolve_param
+from commander4.units import SUPPORTED_UNITS, check_unit_usable
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,8 @@ class CompList:
         # deliberately independent of the MPI/compsep layout: a view whose polarization is not
         # actually solved or used in a given run stays inert at its initial value.
         resolve_param(params, "double_precision", ("compsep",), default=False, legal_types=bool)
+        resolve_param(params, "global_unit", ("compsep",), default="uK_RJ",
+                      legal_values=SUPPORTED_UNITS)
         comp_list = []
         for component_str in components:
             component = components[component_str]
@@ -135,6 +138,12 @@ class CompList:
             for eval_pol in EXECUTION_POLS[component_pol]:
                 comp_list.append(component_cls(component.params, params.compsep, eval_pol=eval_pol,
                                                comp_name=component._name, allocate_empty_alms=True))
+        # The amplitudes are stored in the global unit at each component's nu_ref, so that unit
+        # must be able to express a brightness there (thermodynamic units fail in the far IR).
+        for comp in comp_list:
+            if isinstance(comp, DiffuseComponent):
+                check_unit_usable(comp.nu_ref, comp.amplitude_unit,
+                                  f"Component {comp.comp_name!r} (compsep.global_unit at nu_ref)")
         return cls(comp_list)
 
     def load_initial_alms(self, params: Bunch) -> None:

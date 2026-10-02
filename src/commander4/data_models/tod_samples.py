@@ -17,7 +17,6 @@ import typing
 
 from commander4.file_io.chain_writer import should_write_chain
 from commander4.data_models.jump_corrections import JumpCatalog
-from commander4.units import rj_to_band_unit_factor
 if typing.TYPE_CHECKING:
     from commander4.data_models.detector_group_tod import DetectorGroupTOD
 
@@ -122,19 +121,10 @@ class TODSamples:
         self.npar = self.noise_model.npar
         self.scan_idx_start = experiment_data.scan_idx_start
         self.scan_idx_stop = experiment_data.scan_idx_stop
-        # C4 works internally in uK_RJ; a band may quote its gain and maps in another unit via
-        # `band_unit`. `band_unit_factor` D (= value of 1 uK_RJ in band_unit) converts at the file
-        # boundary: brightness maps multiply by D, the gain (brightness in its denominator) divides by
-        # D on write and multiplies on read. Defaults to uK_RJ (D=1, a no-op). See [[unit_conversions]].
-        if "band_unit" in my_band:
-            band_unit = my_band.band_unit
-        else:
-            band_unit = "uK_RJ"
-            if self.band_comm.Get_rank() == 0 and self.chain == 1:
-                logger.warning(f"Band {self.band_name} has no `band_unit`; assuming uK_RJ. Set it "
-                               f"explicitly (e.g. uK_CMB for CMB-calibrated gains) to silence this.")
-        self.band_unit = band_unit
-        self.band_unit_factor = rj_to_band_unit_factor(experiment_data.nu, band_unit)
+        # The gains are in detector units per `band_unit`, everywhere: in the parameter file, in
+        # memory and in the chain, as in C3. The sky model and orbital dipole the gain multiplies
+        # arrive in the same unit, so nothing here is ever converted.
+        self.band_unit = experiment_data.unit
         # Explicit int64 so a rank that holds no scans still yields an int64 array.
         self.scan_ids = np.array([scan.scan_id for scan in experiment_data.scans], dtype=np.int64)
         # Ordered per-band detector names. Their position is the ``idet`` axis shared by every
@@ -278,10 +268,6 @@ class TODSamples:
                 else:
                     raise ValueError("Did not find initial gain value in input files.")
 
-                # Initial gains are quoted in band_unit; convert to internal [det units]/uK_RJ
-                # (gain multiplies by D on read) before decomposing into abs/rel/temporal.
-                all_det_gains *= self.band_unit_factor
-
                 self.abs_gain = float(np.nanmean(all_det_gains))
                 # Relative gain only for detectors with data in >=1 local scan; detectors absent
                 # from every local scan get 0 (never used downstream) and are kept out of the
@@ -299,6 +285,17 @@ class TODSamples:
                             f"from existing chain {init_chain_path}.")
 
             with h5py.File(init_chain_path, "r") as f:
+                # Chain gains are in the chain's band_unit. A chain without the metadata predates
+                # band_unit and was written in uK_RJ.
+                stored_unit = "uK_RJ"
+                if "metadata/band_unit" in f:
+                    stored_unit = f["metadata/band_unit"][()]
+                    if isinstance(stored_unit, bytes):
+                        stored_unit = stored_unit.decode("utf-8")
+                if stored_unit != self.band_unit:
+                    raise ValueError(f"Band {self.band_name}: init chain {init_chain_path} stores "
+                                     f"gains per {stored_unit}, but the parameter file sets "
+                                     f"band_unit = {self.band_unit}. Use the same band_unit.")
                 # The chain stores scans in the global order the Gatherv wrote them, so map each
                 # local scan onto its row in that global array before slicing anything out.
                 global_scan_ids = f["scan_ids"][:]
@@ -328,12 +325,6 @@ class TODSamples:
                     self.modulation_phase = phase.astype(np.int8)
                     self.baselines = f["baselines"][local_indices, ...]
                     self.modulation_phase_initialized = True
-
-            # Chain gains are stored in band_unit; convert back to internal [det units]/uK_RJ.
-            if self.band_unit_factor != 1.0:
-                self.abs_gain *= self.band_unit_factor
-                self.rel_gain = self.rel_gain * self.band_unit_factor
-                self.temporal_gain = self.temporal_gain * self.band_unit_factor
 
         if self.band_comm.Get_rank() == 0:
             logger.debug(f"Initial absolute gain estimate for {self.band_name}: {self.abs_gain:.3e}.")
@@ -467,24 +458,19 @@ class TODSamples:
         if band_comm.Get_rank() != 0:
             return None
 
-        # Gains go out in band_unit: gain has brightness in its denominator, so divide by D
-        # (output maps instead multiply by D). Division makes copies, so self.* stays uK_RJ.
-        # Only the gain prior's sigma0 column is a gain amplitude; fknee and alpha are unit-free.
-        gain_prior_out = self.gain_prior.copy()
-        gain_prior_out[:, 0] /= self.band_unit_factor
-
         # The top level of the band chain file, dataset name by dataset name. All of it is written
         # on every chain iteration, which is what lets the reader in `__init__` read it back
         # unconditionally. `det_names` is variable-length UTF-8 for a clean string round-trip; its
-        # order is the `idet` axis shared by every per-detector array here.
+        # order is the `idet` axis shared by every per-detector array here. The gains and the gain
+        # prior's sigma0 column are in detector units per band_unit, as they are in memory.
         arrays: dict[str, NDArray] = {
             "scan_ids": scan_ids_global,
             "det_names": np.array(self.det_names, dtype=h5py.string_dtype()),
-            "abs_gain": abs_gain_global/self.band_unit_factor,
-            "detrel_gain": rel_gain_global/self.band_unit_factor,
-            "temporal_gain": temporal_gain_global/self.band_unit_factor,
+            "abs_gain": abs_gain_global,
+            "detrel_gain": rel_gain_global,
+            "temporal_gain": temporal_gain_global,
             "noise_params": noise_params_global,
-            "gain_prior": gain_prior_out,
+            "gain_prior": self.gain_prior.copy(),
             "present": present_global,
             "accept": accept_global,
             "chisq_z": chisq_z_global,

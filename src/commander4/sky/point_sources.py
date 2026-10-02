@@ -14,6 +14,7 @@ from commander4.data_models.band import Band
 from commander4.sky.component import Component
 from commander4.sky.beams import gauss_beam, get_gauss_beam_radius
 from commander4.math_utils.sht import map_to_alm, map_to_alm_adjoint
+from commander4.units import unit_factor
 
 
 def _project_sources_to_map(skymap: NDArray, pixel_discs: list[NDArray],
@@ -180,16 +181,25 @@ class RadioSources(PointSourcesComponent):
         else:
             return False
 
-    def get_sed(self, nu:float):
-        """ Returns one SED value per source, evaluated at `nu` relative to `nu_ref` (both GHz).
+    def sed_rj(self, nu: float) -> NDArray:
+        """ Returns one RJ SED value per source, evaluated at `nu` relative to `nu_ref` (both GHz).
 
         The -2 in the exponent converts the tabulated flux-density index to brightness temperature.
         """
         return (nu/self.nu_ref)**(self.alpha_arr - 2)
 
-    def get_sky(self, nu:float, nside:int, fwhm:float=0.0):
-        """ Returns the sky at frequency `nu` (GHz) from the point sources, at a certain `nside`,
-            observed through a Gaussian beam of `fwhm` **radians**.
+    def get_sed(self, nu: float, unit: str) -> NDArray:
+        """ One factor per source, from its amplitude to its signal at `nu` (GHz) in `unit`.
+
+        The amplitude is a flux density in mJy, spread over the beam as mJy/sr. It is converted to
+        uK_RJ at `nu_ref`, scaled to `nu` by `sed_rj`, and converted to `unit` at `nu`. The point
+        sources keep their amplitude in mJy whatever `compsep.global_unit` is.
+        """
+        return self.mJysr_to_uKRJ*self.sed_rj(nu)*unit_factor(nu, "uK_RJ", unit)
+
+    def get_sky(self, nu: float, unit: str, nside: int, fwhm: float = 0.0):
+        """ Returns the sky at frequency `nu` (GHz) in `unit` from the point sources, at a certain
+            `nside`, observed through a Gaussian beam of `fwhm` **radians**.
 
         The beam is applied by painting each source through it, so unlike a `DiffuseComponent` there
         is no separate smoothing step: `fwhm` selects the beam the sources are painted with. The
@@ -200,8 +210,7 @@ class RadioSources(PointSourcesComponent):
         map = np.zeros((1, hp.nside2npix(nside)),
                        dtype=np.float64 if self.double_prec else np.float32)
         _project_sources_to_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                                self._data[0,:], self.get_sed(nu))
-        map *= self.mJysr_to_uKRJ
+                                self._data[0,:], self.get_sed(nu, unit))
         return map
 
     def get_component_map(self, nside:int, fwhm:float=0.0):
@@ -209,9 +218,9 @@ class RadioSources(PointSourcesComponent):
             `nu_ref`.
 
         No SED is applied, so the result is frequency-independent, which is why the mJy/sr to uK_RJ
-        conversion is evaluated at the component's own reference frequency. That matches what a
-        `DiffuseComponent` returns here: its alms are likewise stored in uK_RJ referenced to
-        `nu_ref`, with `get_sed(nu)` carrying the amplitude to any other frequency.
+        conversion is evaluated at the component's own reference frequency. A `DiffuseComponent`
+        returns its amplitude map here too, in its own amplitude unit referenced to `nu_ref`, with
+        `get_sed(nu, unit)` carrying the amplitude to any other frequency and unit.
         """
         self.compute_pix_beams(fwhm, nside)
         map = np.zeros((1, hp.nside2npix(nside)),
@@ -221,23 +230,21 @@ class RadioSources(PointSourcesComponent):
         map *= self.mJysr_to_uKRJ
         return map
     
-    def _project_to_band_map(self, map:NDArray, nu:float):
-        """ Computes the point source contribution in uK_RJ for the band's frequency and beam, and
-            sums it into `map`, which must have shape [1, npix].
+    def _project_to_band_map(self, map: NDArray, nu: float, unit: str):
+        """ Computes the point source contribution in the band's `unit` for the band's frequency
+            and beam, and sums it into `map`, which must have shape [1, npix].
         """
         _project_sources_to_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                                self._data[0,:], sed_s=self.get_sed(nu))
-        map *= self.mJysr_to_uKRJ
-    
-    def _eval_from_band_map(self, map, nu):
+                                self._data[0,:], sed_s=self.get_sed(nu, unit))
+
+    def _eval_from_band_map(self, map: NDArray, nu: float, unit: str):
         """ Computes the amplitude contribution from the local band to each point source, given
-            `map`, which must have shape [1, npix].
+            `map` in the band's `unit`, which must have shape [1, npix].
 
         All the contributions will be summed to the total proper amplitudes by the master node.
         """
         _evaluate_sources_from_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                                   self._data[0,:], sed_s=self.get_sed(nu))
-        self._data *= self.mJysr_to_uKRJ
+                                   self._data[0,:], sed_s=self.get_sed(nu, unit))
 
     def project_comp_to_band(self, band:Band, nthreads: int = 1):
         """ Project the point sources contribution to the given band in-place, summing it into the
@@ -253,7 +260,7 @@ class RadioSources(PointSourcesComponent):
         # The point-source equivalent of: M Y a
         ps_map = np.zeros((1,hp.nside2npix(band_nside)),   # Empty band map
                           dtype=np.float64 if self.double_prec else np.float32)
-        self._project_to_band_map(ps_map, band.nu)
+        self._project_to_band_map(ps_map, band.nu, band.unit)
 
         # Y^-1 M Y a
         map_to_alm(ps_map, band_nside, band.lmax, spin=0, out=band.alms, acc=True,
@@ -280,7 +287,7 @@ class RadioSources(PointSourcesComponent):
                                       nthreads=nthreads)
 
         # M^T Y^-1 B^T a
-        self._eval_from_band_map(band_map, band.nu)  # Updates self._data in place.
+        self._eval_from_band_map(band_map, band.nu, band.unit)  # Updates self._data in place.
 
         return self._data
 

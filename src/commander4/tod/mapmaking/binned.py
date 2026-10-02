@@ -607,7 +607,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         with benchmark("map-binning"):
             # Retrieve the new sigma0 for this det-scan, sampled above.
             sigma0 = view.sigma0
-            # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
+            # sigma0 is in detector-units, transform into the band unit by dividing it by the gain.
             inv_var = (gain/sigma0)**2
             mapmaker_invvar.accumulate_to_map(inv_var, pix_masked, psi_masked,
                                               response_I_P=response_I_P)
@@ -626,7 +626,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
             d_sky -= n_corr_est
 
         ### FAR SIDELOBE ###
-        # The projection comes back in uK_RJ, like the sky and orbital-dipole model TODs, so the
+        # The projection comes back in the band unit, like the sky and orbital-dipole TODs, so the
         # map accumulates it as it is while the detector-unit TOD has it removed at the full gain.
         if sidelobe_active:
             if mapmaker_sidelobe is not None:
@@ -649,8 +649,8 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         ### RESIDUAL AND HIT MAPS ###
         # `residual_tod` is the detector-unit noise residual `_record_tod_diagnostics` already
         # built (sky model, orbital dipole and n_corr all subtracted); dividing by the gain puts it
-        # in uK_RJ, like the signal map. Masked like the signal map, so its numerator counts the
-        # same good samples as the shared `map_cov` denominator.
+        # in the band unit, like the signal map. Masked like the signal map, so its numerator counts
+        # the same good samples as the shared `map_cov` denominator.
         if mapmaker_res is not None:
             with benchmark("map-binning"):
                 mapmaker_res.accumulate_to_map(residual_tod[good_data_mask]/gain, inv_var,

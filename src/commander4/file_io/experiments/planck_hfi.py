@@ -158,6 +158,8 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                 flag_encoded = f[f"/{pid}/{det_name}/flag/"][()]
                 init_scalars = f[f"/{pid}/{det_name}/scalars/"][()]
                 # Data format has this weird thing were gain seems to be in "micro-gain"...
+                # The 1e-6 assumes the band_unit is a micro-unit (uK_CMB). The file gains have not
+                # been checked against any unit, so gains in the parameter file take precedence.
                 init_scalars[0] *= 1e-6
 
                 det_init_scalars[idet] = init_scalars
@@ -221,7 +223,8 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
         fsamp = 1.0
     
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model,
+                           my_band.band_unit, my_band.fwhm, fsamp, ndet, my_band.polarization,
+                           noise_model,
                            instrument_filepath=instrument_filepath, hfi_demodulation=True)
 
     # TODO: Re-implement bandpass shift.

@@ -60,6 +60,7 @@ class DiagonalJointPreconditioner:
         all_fwhm_rad = compsep.CompSep_comm.gather(np.deg2rad(compsep.my_band.fwhm/60), root=0)
         all_map_inv_var = compsep.CompSep_comm.gather(compsep.det_map.inv_n_map, root=0)
         all_freqs = compsep.CompSep_comm.gather(compsep.my_band.nu, root=0)
+        all_units = compsep.CompSep_comm.gather(compsep.my_band.unit, root=0)
 
         # We can now get rid of the ranks that do not hold components.
         if not self.is_master:
@@ -71,13 +72,15 @@ class DiagonalJointPreconditioner:
         for icomp in range(ncomp):
             if not hasattr(comp_list[icomp], "alms"): #FIXME: for now workaround to exclude point sources
                 continue
-            # Construct the full mixing matrix M on all ranks
+            # Construct the full mixing matrix M on all ranks. Each band's row is in its own unit;
+            # the inverse-noise weights below are in the inverse square of the same unit.
             M = np.empty((nband, ncomp), dtype=np.float64)
             for jcomp in range(ncomp):
                 comp = comp_list[jcomp]
                 if not hasattr(comp, "alms"): #FIXME: for now workaround to exclude point sources
                     continue
-                M[:, jcomp] = comp.get_sed(np.array(all_freqs, dtype=np.float64))
+                for iband in range(nband):
+                    M[iband, jcomp] = comp.get_sed(all_freqs[iband], all_units[iband])
 
             # This is our estimate of the inverse of A, which serves as a preconditioner for A.
             A_diag = np.zeros(comp_list[icomp].alm_len_complex, dtype=np.complex128)
@@ -198,6 +201,7 @@ class JointPreconditioner:
         all_fwhm_rad = compsep.CompSep_comm.gather(np.deg2rad(compsep.my_band.fwhm/60), root=0)
         all_map_inv_var = compsep.CompSep_comm.gather(compsep.det_map.inv_n_map, root=0)
         all_freqs = compsep.CompSep_comm.gather(compsep.my_band.nu, root=0)
+        all_units = compsep.CompSep_comm.gather(compsep.my_band.unit, root=0)
         all_band_lmax = compsep.CompSep_comm.gather(compsep.det_map.lmax, root=0)
 
         # Worker ranks participate in the gather above, but the actual block construction is done
@@ -241,11 +245,14 @@ class JointPreconditioner:
                 band_pol_matrices.append(np.eye(self.npol, dtype=np.float64) * pol_weight)
 
         # Mixing is assumed to be spatially constant, so each band contributes only a single
-        # frequency-dependent mixing vector.
+        # frequency-dependent mixing vector, in that band's own unit. With include_noise off the
+        # bands are weighted by these factors alone, so the preconditioner then depends on the
+        # band units; that affects convergence only, not the solution.
         mixing_matrix = np.empty((nband, len(diffuse_comps)), dtype=np.float64)
-        for iband, band_freq in enumerate(all_freqs):
+        for iband in range(nband):
             for jcomp, comp in enumerate(diffuse_comps):
-                mixing_matrix[iband, jcomp] = comp.get_sed(np.float64(band_freq))
+                mixing_matrix[iband, jcomp] = comp.get_sed(np.float64(all_freqs[iband]),
+                                                           all_units[iband])
 
         # Precompute the per-band beam transfer functions and the diagonal prior factors.
         beam_windows_squared = [

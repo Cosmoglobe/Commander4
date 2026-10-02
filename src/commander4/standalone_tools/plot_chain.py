@@ -364,6 +364,13 @@ def _resample_map(map_data: np.ndarray, nside_out: int | None, kind: str) -> np.
     return np.asarray(output)
 
 
+def _stored_unit(handle: h5py.File, dataset_path: str) -> str:
+    """A unit string recorded in a chain file, or uK_RJ for older files that do not record it."""
+    if dataset_path in handle:
+        return str(_decode_h5_value(handle[dataset_path][()]))
+    return "uK_RJ"
+
+
 def _map_unit(dataset_name: str, band_unit: str) -> str:
     if dataset_name == "nhit":
         return "samples"
@@ -388,9 +395,7 @@ def _plot_band_maps(entries: list[ChainFile], output_dir: str, nside_out: int | 
             with h5py.File(entry.path, "r") as handle:
                 if "maps" not in handle:
                     continue
-                band_unit = "uK_RJ"
-                if "metadata/band_unit" in handle:
-                    band_unit = str(_decode_h5_value(handle["metadata/band_unit"][()]))
+                band_unit = _stored_unit(handle, "metadata/band_unit")
                 fwhm = None
                 if "metadata/map_fwhm_arcmin" in handle:
                     fwhm = float(handle["metadata/map_fwhm_arcmin"][()])
@@ -1582,9 +1587,12 @@ def _plot_compsep_maps(
                         residual_map = _resample_map(
                             handle[f"residuals/{view_name}"][()], nside_out, "brightness"
                         )
+                        # A residual view is named <band>_<pol>, and is in that band's own unit.
+                        band_name = view_name.rsplit("_", 1)[0]
+                        band_unit = _stored_unit(handle, f"metadata/band_units/{band_name}")
                         map_groups.append((
                             f"residual_{view_name}", residual_map,
-                            f"Compsep residual {view_name}", "uK_RJ",
+                            f"Compsep residual {view_name}", band_unit,
                         ))
                 for map_name, map_rows, map_title, unit in map_groups:
                     category = "chi2" if map_name == "chi2" else "residuals"
@@ -1701,6 +1709,8 @@ def _plot_component_maps(
             with h5py.File(entry.path, "r") as handle:
                 if "comps" not in handle:
                     continue
+                # Diffuse amplitudes are stored in the run's global unit, at each nu_ref.
+                amplitude_unit = _stored_unit(handle, "metadata/global_unit")
                 for component_name in handle["comps"]:
                     out_folder = _category_folder(
                         output_dir, "maps_components", component_name
@@ -1746,7 +1756,7 @@ def _plot_component_maps(
                         title,
                         component_maps,
                         plot_labels,
-                        unit="uK_RJ",
+                        unit=amplitude_unit,
                         symmetric=[True] * len(plot_labels),
                     )
                     plot_count += int(os.path.isfile(filename))
@@ -1763,12 +1773,14 @@ def _plot_component_spectra(entries: list[ChainFile], output_dir: str) -> int:
                 output_dir, "spectra_components", component_name, "full_sky"
             )
             records = []
+            amplitude_unit = "uK_RJ"
             for entry in group_entries:
                 try:
                     with h5py.File(entry.path, "r") as handle:
                         path = f"comps/{component_name}/sigma_l"
                         if path in handle:
                             records.append((entry.iteration, np.asarray(handle[path][()])))
+                        amplitude_unit = _stored_unit(handle, "metadata/global_unit")
                 except OSError:
                     continue
             if not records:
@@ -1786,7 +1798,7 @@ def _plot_component_spectra(entries: list[ChainFile], output_dir: str) -> int:
                     series.append((f"iter {iteration}", multipoles[2:], values[row_index, 2:]))
                 panels.append(plotting.ChainLinePanel(
                     title=row_label,
-                    ylabel="$C_l$ [uK_RJ$^2$]",
+                    ylabel=f"$C_l$ [{amplitude_unit}$^2$]",
                     series=series,
                     xscale="log",
                     yscale="log",
@@ -1814,11 +1826,13 @@ def _plot_cmb_galactic_cut_spectra(
     plot_count = 0
     for chain, group_entries in _group_compsep_entries(entries).items():
         records: dict[tuple[str, str], list[tuple[int, np.ndarray]]] = {}
+        amplitude_unit = "uK_RJ"
         for entry in group_entries:
             try:
                 with h5py.File(entry.path, "r") as handle:
                     if "comps" not in handle:
                         continue
+                    amplitude_unit = _stored_unit(handle, "metadata/global_unit")
                     for component_name in handle["comps"]:
                         component_path = f"comps/{component_name}"
                         comp_name = component_name
@@ -1859,7 +1873,7 @@ def _plot_cmb_galactic_cut_spectra(
                     series.append((f"iter {iteration}", multipoles[2:], spectrum[2:]))
                 panels.append(plotting.ChainLinePanel(
                     title=row_label,
-                    ylabel="$C_l/f_{sky}$ [uK_RJ$^2$]",
+                    ylabel=f"$C_l/f_{{sky}}$ [{amplitude_unit}$^2$]",
                     series=series,
                     xscale="log",
                     yscale="log",
@@ -1908,7 +1922,7 @@ def _plot_source_amplitudes(entries: list[ChainFile], output_dir: str) -> int:
                 filename,
                 f"{component_name} source amplitudes; chain {chain}",
                 "source index",
-                "amplitude [uK_RJ]",
+                "flux density [mJy]",
                 series,
             )
             plot_count += int(os.path.isfile(filename))

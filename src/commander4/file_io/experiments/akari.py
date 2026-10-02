@@ -157,7 +157,8 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
     apply_noise_priors(noise_model, params, expname, bandname)
     apply_noise_fit_range(noise_model, params)
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
+                           my_band.band_unit, my_band.fwhm, fsamp, ndet, my_band.polarization,
+                           noise_model)
 
     ### Collect some info on master rank of each band and print it ###
     local_tot_scans = scan_idx_stop - scan_idx_start

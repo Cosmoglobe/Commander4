@@ -36,6 +36,7 @@ class BandFit:
         band_name: The band this view belongs to, e.g. ``Band30GHz``.
         pol: The execution polarization of the view, ``I`` or ``QU``.
         nu: Band centre frequency in GHz.
+        unit: The band's own unit, which `residual` is in.
         chi2: Sum of z^2 over this view's observed pixels.
         ndof: How many observed pixels went into `chi2`.
         chi2_map: z^2 summed into `nside_chisq` pixels, shape (3, npix_chisq). Row 0 is intensity
@@ -48,6 +49,7 @@ class BandFit:
     band_name: str
     pol: str
     nu: float
+    unit: str
     chi2: float
     ndof: int
     chi2_map: NDArray
@@ -88,8 +90,8 @@ def evaluate_chi2(compsep: Bunch, detector_data: DetectorMap, sky_model: SkyMode
             optional per-band residual maps are built from.
     """
     band_pol = "QU" if detector_data.pol else "I"
-    sky_at_band = sky_model.get_sky_at_nu(
-        detector_data.nu, detector_data.nside, band_pol, fwhm=detector_data.fwhm_rad)
+    sky_at_band = sky_model.get_sky_at_nu(detector_data.nu, detector_data.unit, detector_data.nside,
+                                          band_pol, fwhm=detector_data.fwhm_rad)
     pol_names = ["Q", "U"] if detector_data.pol else ["I"]
     npix, npix_chisq = detector_data.map_sky.shape[-1], hp.nside2npix(nside_chisq)
     # ud_grade averages, so scaling by how many fine pixels fall in a coarse one turns the average
@@ -125,13 +127,13 @@ def evaluate_chi2(compsep: Bunch, detector_data: DetectorMap, sky_model: SkyMode
         logger.info(f"Fit after {label}, all bands: chi2={total:.6e}, ndof={ndof}, "
                     f"red.chi2={total/ndof:.4f}")
     band = BandFit(band_name=band_name, pol=pol, nu=float(detector_data.nu),
-                   chi2=float(chi2_local), ndof=int(ndof_local), chi2_map=chi2_map,
-                   residual=residual)
+                   unit=detector_data.unit, chi2=float(chi2_local), ndof=int(ndof_local),
+                   chi2_map=chi2_map, residual=residual)
     return ChisqResult(total=total, ndof=ndof, band=band)
 
 
 def collect_fit_diagnostics(compsep: Bunch, result: ChisqResult, include_chisq_map: bool
-                            ) -> tuple[dict, dict[str, float]]:
+                            ) -> tuple[dict, dict[str, tuple[float, str]]]:
     """Gather the fit onto the CompSep master as the tree of datasets the chain writes.
 
     Each rank holds only its own band, so the per-band numbers and maps have to be collected before
@@ -142,10 +144,10 @@ def collect_fit_diagnostics(compsep: Bunch, result: ChisqResult, include_chisq_m
     Called collectively by every CompSep rank.
 
     Returns:
-        `(fit_tree, band_frequencies)` on the master, and two empty dicts elsewhere. `fit_tree`
-        holds the `chi2` group and, when kept, the `residuals` group; `band_frequencies` maps each
-        band name to its centre frequency in GHz, which is what lets the chain writer record a
-        mixing coefficient per band.
+        `(fit_tree, band_specs)` on the master, and two empty dicts elsewhere. `fit_tree` holds the
+        `chi2` group and, when kept, the `residuals` group; `band_specs` maps each band name to its
+        centre frequency in GHz and its `band_unit`, which is what lets the chain writer record a
+        mixing coefficient per band and the unit of each residual map.
     """
     is_master = compsep.rank == compsep.master
 
@@ -168,17 +170,17 @@ def collect_fit_diagnostics(compsep: Bunch, result: ChisqResult, include_chisq_m
         chi2["map"] = chi2_map_total.astype(np.float32)
 
     residuals: dict = {}
-    band_frequencies: dict[str, float] = {}
+    band_specs: dict[str, tuple[float, str]] = {}
     for band in per_band:
         view_name = f"{band.band_name}_{band.pol}"
         chi2["bands"][view_name] = {
             "chi2": band.chi2, "ndof": band.ndof, "nu": band.nu,
             "reduced": band.chi2/band.ndof if band.ndof > 0 else float("nan")}
-        band_frequencies[band.band_name] = band.nu
+        band_specs[band.band_name] = (band.nu, band.unit)
         if band.residual is not None:
             residuals[view_name] = band.residual.astype(np.float32)
 
     fit_tree: dict = {"chi2": chi2}
     if residuals:
         fit_tree["residuals"] = residuals
-    return fit_tree, band_frequencies
+    return fit_tree, band_specs

@@ -171,7 +171,8 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
     apply_noise_fit_range(noise_model, params)
 
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model)
+                           my_band.band_unit, my_band.fwhm, fsamp, ndet, my_band.polarization,
+                           noise_model)
 
     start_bench("skysim")
     if my_experiment.replace_tod_with_sim:

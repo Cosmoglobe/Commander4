@@ -61,6 +61,11 @@ def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunc
         discard scans (bad PIDs, empty data), so the actual per-rank ranges are only known
         afterwards and are recomputed here rather than taken from the requested ones.
     """
+    # Every band states its unit, as C3's BAND_UNIT does: gains, maps and the sky model the TOD
+    # code sees are all in it, so no default could be right for every data set.
+    if "band_unit" not in my_band:
+        raise ValueError(f"Band {my_band._name} must set band_unit (e.g. 'uK_CMB' or 'MJy/sr'): "
+                         "the unit its gains and maps are expressed in.")
     # Confirm that the specified experiment type (e.g. "planck") is in dictionary.
     if my_experiment.experiment_id not in experiment_tod_readers.keys():
         raise ValueError("An experiment in the parameter file has experiment_id = "\

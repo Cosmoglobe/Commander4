@@ -1,0 +1,324 @@
+# Parameter file for full TOD processing and CG component separation on Planck HFI TOD data at
+# native resolution.
+# Includes all six HFI bands and all detectors present in the TOD files.
+
+# ----------------------------------------
+# GIBBS
+# ----------------------------------------
+gibbs:
+  num_iterations: 20
+
+  seed: 1995
+
+  # start:
+  #   mode: new
+  #   source: "../c4_chains/HFI_test/"
+  #   chain: 1
+  #   iteration: latest
+  #   load: [tod]
+
+# ----------------------------------------
+# RESOURCES
+# ----------------------------------------
+resources:
+  tod:
+    num_threads: 2
+
+  compsep:
+    num_threads: 4
+
+# ----------------------------------------
+# OUTPUT
+# ----------------------------------------
+output:
+  # All output goes here, in the subdirectories logs/, chains_bands/,
+  # chains_compsep/ and plots/.
+  dir: "/cluster/work/users/jgslunde/output/c4_chains/HFI/betzy_test/"
+
+  logging:
+    console:
+      level: 'verbose'
+    file:
+      level: 'debug'
+
+  profiling: False
+
+  chains:
+    write: [1,]  # Write only chain 1 to disk.
+    interval:  # Write all data every iteration.
+      bands: 1
+      compsep: 1
+      maps: 1
+    maps_nside: "native"
+    nside_chisq: 128
+
+    include:
+      orbital_dipole_maps: True
+      corr_noise_maps: True
+      sky_model_maps: True
+      residual_maps: True   # maps/res: binned TOD residual (C3 tod_<freq>_res). One extra
+                            # map accumulator per mapmaker.
+      hit_maps: True        # maps/nhit: per-pixel count of unflagged samples.
+      cov_maps: True       # maps/cov: the 6 unique elements of P^T N^-1 P, of which only the
+                            # inverse diagonal survives as maps/rms. Six full-sky float64 maps.
+      chisq_map: True       # chi2/map in the compsep chain (C3 chisq_<postfix>.fits).
+      compsep_residual_maps: True  # residuals/<band>_<pol>: full-resolution per-band residuals
+                            # (C3 res_<band>_<postfix>.fits). Gathers every band map onto the
+                            # compsep master, so it is memory-heavy.
+      ncorr_tods: False   # DEBUG ONLY: full per-sample n_corr TODs (very large data).
+
+# ----------------------------------------
+# TOD PROCESSING
+# ----------------------------------------
+tod_processing:
+  # TODO: DEMODULATION:
+
+  abs_gain:
+    enabled: true
+    from_iter: 1
+    calibrate_against: orbital_dipole # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
+    gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
+    downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+
+  rel_gain:
+    enabled: true
+    from_iter: 1
+    calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
+    gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
+    downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+
+  temporal_gain:
+    enabled: false
+    from_iter: 1
+    calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
+    gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
+    downsample_time: 1.0   # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
+
+  corr_noise:
+    enabled: true
+    from_iter: 10
+    sample_psd_params: true     # Resample noise-model params (needs corr_noise.enabled).
+    sample_sigma0: True            # Re-estimate sigma0 from the n_corr-subtracted residual.
+    nomono: False                 # Project the per-scan monopole out of n_corr (Fortran "nomono").
+    onlymono: False               # Model the correlated noise as only the per-scan offset.
+    sigma0_decimation: 1          # Block-average factor for the sigma0 estimator.
+    psd_fit_nu_min: 0.0           # Min frequency (Hz) for noise-PSD parameter fitting.
+    psd_fit_nu_max: 2.0           # Max frequency (Hz) for noise-PSD parameter fitting.
+    psd_bin: true                 # Fit every Fourier mode (False) or mode-weighted binned PSD.
+    sigma0_method: pairwise     # White-noise estimator: 'pairwise' (first-difference) or 'binned_psd'.
+    use_dct: true                 # Evaluate the n_corr Fourier filters as a length-nsamp DCT
+                                  # rather than the length-2*nsamp mirrored FFT. Same operator,
+                                  # about half the transform cost.
+    cg:
+      max_iter: 50                # Max CG iterations; 0 -> skip CG, use stationary fallback.
+      err_tol: 1.0e-5             # Correlated-noise CG convergence tolerance.
+
+# ----------------------------------------
+# COMPONENT SEPARATION
+# ----------------------------------------
+compsep: {}
+
+
+# ----------------------------------------
+# COMPONENTS
+# ----------------------------------------
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      longname: "CMB"
+      shortname: "cmb"
+      init_from: "/cluster/work/users/jgslunde/data/maps/COM_CMB_IQU-smica_2048_R3.00_full_uK_14amin_dip.fits"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      lmax: 1024
+      spatially_varying_MM: False
+
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      init_from: "/cluster/work/users/jgslunde/data/maps/init_dust_amp_BP8.1_v1.fits"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      beta: 1.56
+      T: 20
+      nu_ref: [857, 353]  # [I, QU]
+      units: "uK_RJ"
+      lmax: 1024
+      spatially_varying_MM: False
+
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      longname: "Synchrotron"
+      shortname: "sync"
+      init_from: "/cluster/work/users/jgslunde/data/maps/init_synch_amp_BP8.1_v1.fits"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      beta: -3.1
+      nu_ref: [0.408, 30]  # [I, QU]
+      units: "uK_RJ"
+      lmax: 512
+      spatially_varying_MM: False
+
+  FreeFree:
+    enabled: true
+    component_class: "FreeFree"
+    params:
+      polarization: "I"
+      longname: "Free-Free"
+      shortname: "ff"
+      init_from: "/cluster/work/users/jgslunde/data/maps/init_ff_amp_BP8.1_v1.fits"
+      Cl_prior_amplitude: null  # No amplitude prior.
+      T: 7000
+      nu_ref: 40
+      units: "uK_RJ"
+      lmax: 512
+      spatially_varying_MM: False
+
+
+# ----------------------------------------
+# EXPERIMENTS
+# ----------------------------------------
+experiments:
+  PlanckHFI:
+    enabled: true
+    mapmaker: "bin"
+    experiment_id: "planck_hfi"  # Decides expected data format, what TOD reader is used, etc.
+    instrument_file: "/cluster/work/users/jgslunde/data/HFI_instrument_v6.h5"
+    filelist_idx_start: 0
+    filelist_idx_stop: 26424  # Only cold-phase scans (OD 91-974), drop warm-phase scans.
+    bad_data_bitmask: 515  # Chunk-boundary filler (bit 0) + DPC glitches (bit 1, 100/143 GHz
+                           # only) + NPIPE glitches (bit 9, all bands). Masks 10-20% of all
+                           # samples. Bit 8 labels a whole chunk, not bad samples: never set it.
+    bands:
+      Planck100GHz:
+        enabled: true
+        num_tasks: 536
+        eval_nside: 1024
+        fwhm: 9.68 # [arcmin]
+        freq: 100.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        processing_mask: "/cluster/work/users/jgslunde/data/mask_proc_070_res_v5.fits"
+        filelist: "/cluster/work/users/jgslunde/data/HFI_TODs/filelist_100.txt"
+        detectors:
+          100-1a: {}
+          100-1b: {}
+          100-2a: {}
+          100-2b: {}
+          100-3a: {}
+          100-3b: {}
+          100-4a: {}
+          100-4b: {}
+
+      Planck143GHz:
+        enabled: true
+        num_tasks: 933
+        eval_nside: 2048
+        fwhm: 7.30 # [arcmin]
+        freq: 143.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        processing_mask: "/cluster/work/users/jgslunde/data/mask_proc_070_res_v5.fits"
+        filelist: "/cluster/work/users/jgslunde/data/HFI_TODs/filelist_143.txt"
+        detectors:
+          143-1a: {}
+          143-1b: {}
+          143-2a: {}
+          143-2b: {}
+          143-3a: {}
+          143-3b: {}
+          143-4a: {}
+          143-4b: {}
+          143-5: {}
+          143-6: {}
+          143-7: {}
+
+      Planck217GHz:
+        enabled: true
+        num_tasks: 1109
+        eval_nside: 2048
+        fwhm: 5.01 # [arcmin]
+        freq: 217.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        processing_mask: "/cluster/work/users/jgslunde/data/mask_proc_070_res_v5.fits"
+        filelist: "/cluster/work/users/jgslunde/data/HFI_TODs/filelist_217.txt"
+        detectors:
+          217-1: {}
+          217-2: {}
+          217-3: {}
+          217-4: {}
+          217-5a: {}
+          217-5b: {}
+          217-6a: {}
+          217-6b: {}
+          217-7a: {}
+          217-7b: {}
+          217-8a: {}
+          217-8b: {}
+
+      Planck353GHz:
+        enabled: true
+        num_tasks: 1073
+        eval_nside: 2048
+        fwhm: 4.9 # [arcmin]
+        freq: 353.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        processing_mask: "/cluster/work/users/jgslunde/data/mask_proc_070_res_v5.fits"
+        filelist: "/cluster/work/users/jgslunde/data/HFI_TODs/filelist_353.txt"
+        detectors:
+          353-1: {}
+          353-2: {}
+          353-3a: {}
+          353-3b: {}
+          353-4a: {}
+          353-4b: {}
+          353-5a: {}
+          353-5b: {}
+          353-6a: {}
+          353-6b: {}
+          353-7: {}
+          353-8: {}
+
+      Planck545GHz:
+        enabled: true
+        num_tasks: 189
+        eval_nside: 2048
+        fwhm: 4.8 # [arcmin]
+        freq: 545.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "I"
+        processing_mask: "/cluster/work/users/jgslunde/data/mask_proc_070_res_v5.fits"
+        filelist: "/cluster/work/users/jgslunde/data/HFI_TODs/filelist_545.txt"
+        detectors:
+          545-1: {}
+          545-2: {}
+          545-4: {}
+        abs_gain:
+          calibrate_against: "sky"
+
+      Planck857GHz:
+        enabled: true
+        num_tasks: 256
+        eval_nside: 2048
+        fwhm: 4.6 # [arcmin]
+        freq: 857.0 # [GHz]
+        band_unit: "uK_CMB"
+        polarization: "I"
+        processing_mask: "/cluster/work/users/jgslunde/data/mask_proc_070_res_v5.fits"
+        filelist: "/cluster/work/users/jgslunde/data/HFI_TODs/filelist_857.txt"
+        detectors:
+          857-1: {}
+          857-2: {}
+          857-3: {}
+          857-4: {}
+        abs_gain:
+          calibrate_against: "sky"

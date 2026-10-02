@@ -138,7 +138,7 @@ compsep:
       fwhm: 60.0  # [arcmin]
       freq: 0.408 # [GHz]
       polarization: "IQU"
-      units: "uK_CMB"
+      band_unit: "uK_CMB"
 
     ###### WMAP MAPS ######
     !import "../Planck_mapsonly/maps_WMAP.yml"

@@ -25,6 +25,7 @@ from commander4.sky.diffuse_components import ThermalDust, Synchrotron, FreeFree
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset
 from commander4.tod.sky_projection import project_sky_to_tod
+from commander4.units import T_CMB, unit_factor
 
 
 def _scalar_nu_ref(comp_params):
@@ -100,82 +101,70 @@ def generate_cmb(freq, fwhm, units, nside, lmax, params):
     return cmb_smooth.value
 
 
-def generate_thermal_dust(freq, fwhm, units, nside, params):
+def generate_thermal_dust(freq, fwhm, unit, nside, params):
     nu_dust = _scalar_nu_ref(params.components.ThermalDust.params)
-
-    #d0 = constant beta 1.54 and T = 20
-    dust = pysm3.Sky(nside=min(1024,nside), preset_strings=["d0"], output_unit=units)
-    dust_ref = dust.get_emission(nu_dust*u.GHz)
-    dust_ref_smoothed = hp.smoothing(dust_ref, fwhm=fwhm)*dust_ref.unit
 
     dust_params = deepcopy(params.components.ThermalDust.params)
     dust_params.nu_ref = nu_dust  # single reference frequency for the in-place sim
     dust_params.polarized = True
-
     dust = ThermalDust(dust_params, params, comp_name="ThermalDust")
-    dust_s = dust_ref_smoothed*dust.get_sed(freq)
-    dust_s = hp.ud_grade(dust_s.value, nside)*dust_s.unit
 
-    return dust_s.value
+    # d0 = constant beta 1.54 and T = 20. The emission at nu_ref is the component amplitude, so it
+    # is generated in the amplitude unit, and `get_sed` carries it to the band's `unit`.
+    dust_sky = pysm3.Sky(nside=min(1024,nside), preset_strings=["d0"],
+                         output_unit=dust.amplitude_unit)
+    dust_ref = dust_sky.get_emission(nu_dust*u.GHz).value
+    dust_s = hp.smoothing(dust_ref, fwhm=fwhm)*dust.get_sed(freq, unit)
+    return hp.ud_grade(dust_s, nside)
 
 
-def generate_sync(freq, fwhm, units, nside, params):
+def generate_sync(freq, fwhm, unit, nside, params):
     nu_sync = _scalar_nu_ref(params.components.Synchrotron.params)
-
-    # s5 = const beta -3.1
-    sync = pysm3.Sky(nside=min(1024,nside), preset_strings=["s5"], output_unit=units)
-    sync_ref = sync.get_emission(nu_sync*u.GHz)
-    sync_ref_smoothed = hp.smoothing(sync_ref, fwhm=fwhm)*sync_ref.unit
 
     sync_params = deepcopy(params.components.Synchrotron.params)
     sync_params.nu_ref = nu_sync  # single reference frequency for the in-place sim
     sync_params.polarized = True
-
     sync = Synchrotron(sync_params, params, comp_name="Synchrotron")
-    sync_s = sync_ref_smoothed*sync.get_sed(freq)
-    sync_s = hp.ud_grade(sync_s.value, nside)*sync_s.unit
 
-    return sync_s.value
+    # s5 = const beta -3.1, generated in the amplitude unit as for the dust above.
+    sync_sky = pysm3.Sky(nside=min(1024,nside), preset_strings=["s5"],
+                         output_unit=sync.amplitude_unit)
+    sync_ref = sync_sky.get_emission(nu_sync*u.GHz).value
+    sync_s = hp.smoothing(sync_ref, fwhm=fwhm)*sync.get_sed(freq, unit)
+    return hp.ud_grade(sync_s, nside)
 
 
-def generate_ff(freq, fwhm, units, nside, params):
+def generate_ff(freq, fwhm, unit, nside, params):
     nu_ff = _scalar_nu_ref(params.components.FreeFree.params)
-
-    ff = pysm3.Sky(nside=min(1024,nside), preset_strings=["f1"], output_unit=units)
-    ff_ref = ff.get_emission(nu_ff*u.GHz)
-    ff_ref_smoothed = hp.smoothing(ff_ref, fwhm=fwhm)*ff_ref.unit
 
     ff_params = deepcopy(params.components.FreeFree.params)
     ff_params.nu_ref = nu_ff  # single reference frequency for the in-place sim
     ff_params.polarized = False
-
     ff = FreeFree(ff_params, params, comp_name="FreeFree")
-    ff_s = ff_ref_smoothed*ff.get_sed(freq)
-    ff_s = hp.ud_grade(ff_s.value, nside)*ff_s.unit
 
-    return ff_s.value
+    ff_sky = pysm3.Sky(nside=min(1024,nside), preset_strings=["f1"], output_unit=ff.amplitude_unit)
+    ff_ref = ff_sky.get_emission(nu_ff*u.GHz).value
+    ff_s = hp.smoothing(ff_ref, fwhm=fwhm)*ff.get_sed(freq, unit)
+    return hp.ud_grade(ff_s, nside)
 
 
-def generate_spdust(freq, fwhm, units, nside, params):
+def generate_spdust(freq, fwhm, unit, nside, params):
     nu_spdust = params.nu_ref_sync
-
-    spdust = pysm3.Sky(nside=min(1024,nside), preset_strings=["a1"], output_unit=units)
-    spdust_ref = spdust.get_emission(nu_spdust*u.GHz)
-    spdust_ref_smoothed = hp.smoothing(spdust_ref, fwhm=fwhm)
 
     spdust_params = deepcopy(params.components.SpinningDust.params)
     spdust_params.polarized = False
-
     spdust = SpinningDust(spdust_params, params, comp_name="SpinningDust")
-    spdust_s = spdust_ref_smoothed*spdust.get_sed(freq)
-    spdust_s = hp.ud_grade(spdust_s.value, nside)*spdust_s.unit
 
-    return spdust_s.value
+    spdust_sky = pysm3.Sky(nside=min(1024,nside), preset_strings=["a1"],
+                           output_unit=spdust.amplitude_unit)
+    spdust_ref = spdust_sky.get_emission(nu_spdust*u.GHz).value
+    spdust_s = hp.smoothing(spdust_ref, fwhm=fwhm)*spdust.get_sed(freq, unit)
+    return hp.ud_grade(spdust_s, nside)
 
 
-T_CMB = 2.72548  # K_CMB
 C_LIGHT = 299792458.0  # m/s
-def get_orbital_dipole(det: DetectorTOD, pix: NDArray[np.integer], freq: float, units) -> NDArray:
+def get_orbital_dipole(det: DetectorTOD, pix: NDArray[np.integer], freq: float,
+                       unit: str) -> NDArray:
     orb_vel_vec = det.orbital_velocity_m_per_s
     if orb_vel_vec is None:
         raise ValueError("Read-time orbital-dipole simulation requires an orbital velocity.")
@@ -195,44 +184,47 @@ def get_orbital_dipole(det: DetectorTOD, pix: NDArray[np.integer], freq: float, 
     dot_product = np.sum(beta_vec * pointing_vec, axis=1)
     orbital_dipole_amplitude = T_CMB * ((1.0 / (gamma * (1.0 - dot_product))) - 1.0)
 
-    # We have calculated the orbital dipole in units of CMB Kelvin.
-    # Find the conversion factor from K_CMB to the units expected by the code (typically uK_RJ).
-    KCMB_to_uKRJ = (1.0 * u.K_CMB).to(units, equivalencies=u.cmb_equivalencies(freq * u.GHz)).value
-
-    return orbital_dipole_amplitude * KCMB_to_uKRJ * resp_I
+    # We have calculated the orbital dipole in units of CMB Kelvin; convert it to the band's unit.
+    return orbital_dipole_amplitude*unit_factor(freq, "K_CMB", unit)*resp_I
 
 
 
 def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetectorGroupTOD, band_params: Bunch,
                          params: Bunch, sim_params: Bunch) -> DetectorGroupTOD:
+    """Replace the band's TOD with a simulated sky, orbital dipole and noise, at gain 1.
+
+    Everything is generated in the band's own `band_unit`, so a gain of 1 (detector unit per
+    band_unit) reproduces the simulated TOD.
+    """
     nside = detector_data.nside
     npix = 12*nside**2
     fwhm = np.deg2rad(detector_data.fwhm/60.0)
     freq = detector_data.nu
-    units = u.uK_RJ
+    unit = detector_data.unit
 
     # Hard-coded noise parameters
     alpha_ncorr = sim_params.corr_noise_alpha
     fknee_ncorr = sim_params.corr_noise_fknee
 
-    KCMB_to_KRJ = (1.0 * u.K_CMB).to(u.K_RJ, equivalencies=u.cmb_equivalencies(freq * u.GHz)).value
-    # Convert per-root-second RMS to per-sample RMS.
-    sigma0_persamp = KCMB_to_KRJ*band_params.sigma0_rts*np.sqrt(band_params.fsamp)
+    # sigma0_rts is quoted in uK_CMB*sqrt(s). Convert it to the band unit, and from per-root-second
+    # to per-sample RMS.
+    sigma0_persamp = unit_factor(freq, "uK_CMB", unit)*band_params.sigma0_rts \
+        * np.sqrt(band_params.fsamp)
 
     start_bench("sky")
     comps_sum_smoothed = np.zeros((3, npix), dtype=np.float32)
     if band_comm.Get_rank() == 0:
         if sim_params.include_CMB:
-            comps_sum_smoothed += generate_cmb(freq, fwhm, units, nside, 3*nside, params)
+            comps_sum_smoothed += generate_cmb(freq, fwhm, u.Unit(unit), nside, 3*nside, params)
             gc.collect()
         if sim_params.include_ThermalDust:
-            comps_sum_smoothed += generate_thermal_dust(freq, fwhm, units, nside, params)
+            comps_sum_smoothed += generate_thermal_dust(freq, fwhm, unit, nside, params)
             gc.collect()
         if sim_params.include_Synchrotron:
-            comps_sum_smoothed += generate_sync(freq, fwhm, units, nside, params)
+            comps_sum_smoothed += generate_sync(freq, fwhm, unit, nside, params)
             gc.collect()
         if sim_params.include_FreeFree:
-            comps_sum_smoothed += generate_ff(freq, fwhm, units, nside, params)
+            comps_sum_smoothed += generate_ff(freq, fwhm, unit, nside, params)
             gc.collect()
     stop_bench("sky")
 
@@ -247,7 +239,7 @@ def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetectorGroupTOD, b
             ntod = det.tod.size
             det.tod[:] = project_sky_to_tod(comps_sum_smoothed, pix, psi, det.response_I_P)
             if sim_params.include_OrbitalDipole:
-                det.tod[:] += get_orbital_dipole(det, pix, freq, units)
+                det.tod[:] += get_orbital_dipole(det, pix, freq, unit)
             stop_bench("orbdip")
 
             start_bench("noise")

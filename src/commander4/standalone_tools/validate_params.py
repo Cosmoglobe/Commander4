@@ -13,9 +13,11 @@ from commander4.parameters.schema import (
     derive_task_counts,
     enabled_compsep_views,
     enabled_tod_bands,
+    resolve_param,
     task_count_breakdown,
     validate_param_schema,
 )
+from commander4.units import SUPPORTED_UNITS
 
 
 SHT_NSIDE_FLOOR = 512
@@ -156,6 +158,33 @@ def _validate_experiments(params) -> None:
                 f"experiments.{band_info.experiment_name}.bands.{band_info.band_name} must "
                 "contain at least one detector."
             )
+        if "band_unit" not in band or band.band_unit not in SUPPORTED_UNITS:
+            raise ValueError(
+                f"experiments.{band_info.experiment_name}.bands.{band_info.band_name}.band_unit "
+                f"is required and must be one of {SUPPORTED_UNITS}."
+            )
+
+
+def _validate_compsep_units(params) -> None:
+    """Check the global unit, and that every enabled file band states its own unit.
+
+    TOD bands state their unit under `experiments`, and send it along with their maps.
+    """
+    if "compsep" not in params:
+        return
+    resolve_param(params, "global_unit", ("compsep",), default="uK_RJ",
+                  legal_values=SUPPORTED_UNITS)
+    if "bands" not in params.compsep:
+        return
+    for band_name in params.compsep.bands:
+        band = params.compsep.bands[band_name]
+        if not band.enabled or "get_from" not in band or band.get_from != "file":
+            continue
+        if "units" in band:
+            raise ValueError(f"compsep.bands.{band_name}.units was renamed to 'band_unit'.")
+        if "band_unit" not in band or band.band_unit not in SUPPORTED_UNITS:
+            raise ValueError(f"compsep.bands.{band_name}.band_unit is required and must be one "
+                             f"of {SUPPORTED_UNITS}.")
 
 
 def _check_referenced_paths(value, source_dir: str, location: str = "") -> None:
@@ -350,6 +379,7 @@ def validate_parameter_file(
     _validate_structure(params_dict)
     _validate_components(params)
     _validate_experiments(params)
+    _validate_compsep_units(params)
     enabled_compsep_views(params)
     if "compsep" in params:
         from commander4.compsep.processing import resolve_sampling_groups

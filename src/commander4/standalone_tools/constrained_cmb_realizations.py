@@ -81,7 +81,7 @@ from commander4.sky.comp_io import _read_view_alms_from_chain
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import CMB, DiffuseComponent
 from commander4.sky.sky_model import SkyModel
-from commander4.units import rj_to_band_unit_factor
+from commander4.units import unit_factor
 
 logger = logging.getLogger("cmb_realizations")
 
@@ -517,15 +517,14 @@ def _load_iteration(params: Bunch, iteration: int, compsep_path: str,
             stored_unit = stored_unit.decode("utf-8")
         nside = hp.npix2nside(rms.size)
 
-        # Band maps use stored_unit; the foreground model is uK_RJ at this band's frequency.
-        rj_to_uK_CMB = rj_to_band_unit_factor(nu, "uK_CMB")
-        band_to_uK_CMB = rj_to_uK_CMB / rj_to_band_unit_factor(nu, stored_unit)
+        # Band maps are in the band's stored_unit; the solver works in uK_CMB.
+        band_to_uK_CMB = unit_factor(nu, stored_unit, "uK_CMB")
         observed *= band_to_uK_CMB
         rms *= band_to_uK_CMB
         # Condition on this Gibbs sample's foregrounds. Foreground uncertainty is represented
         # by processing multiple Gibbs samples, not by perturbing foregrounds within a CMB draw.
-        foreground = foreground_sky.get_sky_at_nu(nu, nside, "I", fwhm=beam)[0]
-        observed -= foreground.astype(np.float64) * rj_to_uK_CMB
+        foreground = foreground_sky.get_sky_at_nu(nu, "uK_CMB", nside, "I", fwhm=beam)[0]
+        observed -= foreground.astype(np.float64)
         ivar = np.zeros_like(rms)
         valid = rms > 0
         ivar[valid] = 1.0 / rms[valid]**2
@@ -534,9 +533,10 @@ def _load_iteration(params: Bunch, iteration: int, compsep_path: str,
         beam_sizes.append(beam)
         logger.info(f"iter {iteration}: read {band} ({nu:g} GHz, {stored_unit}) at nside {nside}.")
 
-    # Chain CMB amplitudes are uK_RJ at their reference frequency, including for spectrum plots.
+    # Chain CMB amplitudes are in the run's global unit at their reference frequency, including
+    # for spectrum plots.
     cmb_alms = np.ascontiguousarray(cmb_comps[0].alms[0]).astype(np.complex128)
-    cmb_alms *= rj_to_band_unit_factor(cmb_comps[0].nu_ref, "uK_CMB")
+    cmb_alms *= unit_factor(cmb_comps[0].nu_ref, cmb_comps[0].amplitude_unit, "uK_CMB")
     return Bunch(signal_maps=signal_maps, ivar_maps=ivar_maps,
                  beam_sizes=np.array(beam_sizes), cmb_alms=cmb_alms, lmax=cmb_comps[0].lmax)
 

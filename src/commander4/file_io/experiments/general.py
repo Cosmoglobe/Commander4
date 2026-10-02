@@ -111,6 +111,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
                 # [gain, sigma0, fknee, alpha] per detector, with the gain in "micro-gain" (the
                 # Planck convention this format inherits; simgen writes det.gain*1e6). These seed
                 # the chain, so a parameter file need not repeat values the file already carries.
+                # The gain is per simgen `units`, which the band's band_unit must equal.
                 init_scalars = f[f"/{pid}/{det_name}/scalars/"][()]
                 init_scalars[0] *= 1e-6
 
@@ -156,7 +157,8 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
     # Transfer function constant loaded through _tau_sec function, so that 
     # seconds and milliseconds are both accepted.
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,
-                           my_band.fwhm, fsamp, ndet, my_band.polarization, noise_model, 
+                           my_band.band_unit, my_band.fwhm, fsamp, ndet, my_band.polarization,
+                           noise_model, 
                            tf_tau_sec=_tau_sec(my_band))
 
     ### Collect some info on master rank of each detector and print it ###

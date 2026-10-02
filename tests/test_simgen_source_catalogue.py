@@ -66,7 +66,7 @@ def test_total_brightness_survives_the_round_trip(catalogue):
     band = Bunch(freq=217.0, eval_nside=NSIDE, fwhm_rad=beam_rad, polarization="I")
     sim_map = comp.band_map(band)[0]
     # `get_sky` takes the beam in radians, the same unit `SkyModel` passes both component families.
-    c4_map = _radio_sources(path).get_sky(band.freq, NSIDE, fwhm=beam_rad)[0]
+    c4_map = _radio_sources(path).get_sky(band.freq, "uK_RJ", NSIDE, fwhm=beam_rad)[0]
     assert c4_map.sum() == pytest.approx(sim_map.sum(), rel=1e-3)
 
 
@@ -75,8 +75,8 @@ def test_a_flat_spectrum_stays_flat_across_bands(catalogue):
     _, path = catalogue
     c4 = _radio_sources(path)
     assert np.allclose(c4.alpha_arr, 2.0)
-    assert np.allclose(c4.get_sed(30.0), 1.0)
-    assert np.allclose(c4.get_sed(353.0), 1.0)
+    assert np.allclose(c4.sed_rj(30.0), 1.0)
+    assert np.allclose(c4.sed_rj(353.0), 1.0)
 
 
 def test_a_sloped_spectrum_maps_to_alpha_minus_two():
