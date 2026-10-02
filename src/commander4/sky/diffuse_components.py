@@ -778,15 +778,6 @@ class FullDust(DiffuseComponent):
         else: 
             return SED_val
 
-    def print_sed(self):
-        ## Only use this function for debugging 
-        nu_arr=np.logspace(np.log10(self.nu_min+1),np.log10(self.nu_max-1),1000)
-        # nu_arr=np.logspace(np.log10(self.nu_min+1),np.log10(self.astrodust[0,0]-1),1000)
-        # nu_arr=np.concatenate((nu_arr,self.astrodust[0,:].flatten()))
-        SEDval=self.get_sed(nu_arr)
-        # logger.warning() #print 20ish of the points 
-        np.save("fulldust_sed_noAD7.npy",np.asarray((nu_arr,SEDval)))
-        return
         
 class Synchrotron(DiffuseComponent):
     """Synchrotron emission, a power law in RJ brightness with spectral index `beta`."""
