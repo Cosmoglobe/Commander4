@@ -508,19 +508,60 @@ class ThermalDust(DiffuseComponent):
         return (nu / self.nu_ref)**(self.beta + 1.0) * np.expm1(x0) / np.expm1(x)
 
 class FullDust(DiffuseComponent):
-    ##TODO:
-    ## fix all of the output to say the 'compname and the shortname', make sure sed on debug outputs to the right place
-    ## and in the right format
-    ## finishg param_explanation.yml
-    ## check the results for simple Commander 4 run
-    ## commit
+    """Full-frequency-range thermal dust SED, built from three pieces stitched together.
 
-    """Thermal dust, a modified blackbody with emissivity index `beta` and temperature `T`
-    below nu_join, tabulated/splines dust nodes (table with nodes and amplitudes at the nodes) 
-    from nu_join up to the minimum nu of astrodust
-    and the astrodust model scaled by an amplitude, ad_scale for the highest frequencies."""
+    1. Below ``nu_join``: a modified blackbody (MBB) with emissivity index ``beta``
+       and temperature ``T``.
+    2. From ``nu_join`` up to the lowest frequency of the astrodust table: a cubic
+       spline through user-supplied nodes (table of node frequency and amplitude).
+       The spline is anchored to the MBB at ``nu_join`` (value and slope), so the
+       MBB -> spline transition is C1 continuous.
+    3. From the lowest frequency of the astrodust table upward: the astrodust
+       model, multiplied by an overall amplitude ``ad_scale``. The spline's right
+       end is matched to the astrodust value and to the slope of its first two
+       table entries.
 
-    default_shortname = "full_dust"
+    The SED is zero outside (``nu_min``, ``nu_max``) and above the highest
+    frequency in the astrodust table.
+
+    If ``nu_join`` is not given, the component is a plain MBB (no spline, no astrodust).
+
+    Units and conventions:
+        - All frequencies (``nu``, ``nu_ref``, ``nu_join``, ``nu_min``, ``nu_max`` and the
+          frequency columns of the node/astrodust tables) are in GHz.
+        - ``T`` is in K. ``beta`` is dimensionless.
+        - The SED returned by ``get_sed`` is unitless and normalized to 1 at ``nu_ref``
+          (for the MBB part). It is meant to be multiplied by an amplitude map in
+          RJ brightness temperature.
+        - The amplitude columns of the node and astrodust tables are treated as
+          intensity-like values normalized in the same way as the MBB
+          (i.e. relative to the MBB intensity at ``nu_ref``). Internally they are
+          multiplied by ``(nu_ref/nu)**2`` to convert to the RJ-like SED convention.
+          (Please double check this normalization matches your tables.)
+
+    Attributes:
+        beta (float): MBB emissivity index (dimensionless).
+        T (float): MBB dust temperature [K].
+        nu_ref (float): Reference frequency [GHz] at which the MBB SED equals 1.
+        nu_min (float): Lower cutoff [GHz]; SED is zero at and below it. 0.0 ignores.
+        nu_max (float): Upper cutoff [GHz]; SED is zero at and above it. 1e30 ignores.
+        nu_join (float | None): Frequency [GHz] where the MBB hands over to the spline.
+            None disables the spline and astrodust pieces.
+        nodes_path (str | None): Path (relative to ``global_params.data_dir``) of a
+            plain-text table with two columns: node frequency [GHz] and node amplitude.
+        astrodust_path (str | None): Path (relative to ``global_params.data_dir``) of a
+            plain-text table with two columns: frequency [GHz] and astrodust amplitude.
+            Must be sorted by increasing frequency.
+        ad_scale (float | None): Dimensionless multiplier applied to the astrodust
+            amplitudes. Required if ``astrodust_path`` is set.
+        nodes (np.ndarray): Node table, shape (2, n_nodes); row 0 = frequency [GHz],
+            row 1 = amplitude. Sorted by frequency after loading.
+        astrodust (np.ndarray): Astrodust table, shape (2, n_freq); row 0 = frequency [GHz],
+            row 1 = amplitude.
+        spline (scipy.interpolate.CubicSpline | None): Spline in (log(nu), arcsinh(amplitude))
+            space; None when only a single node is given and there is no astrodust table.
+    """
+    default_shortname = "fulldust"
     sed_param_names = ("beta", "T", "nu_ref","nu_join","nodes","astrodust","ad_scale","nu_min","nu_max")
     # this should just be the stuff that is meant to be written to the chain, if not innitialized is ok
 
@@ -562,7 +603,7 @@ class FullDust(DiffuseComponent):
                     # A single-line table loads as shape (2,) -> transposing does nothing, so make it (2, 1).
                     self.nodes = self.nodes.reshape(2, 1)
                 if self.nu_join >= self.nodes[0,0]:
-                    logger.critical(f"FullDust {self.shortname} nu_join must be less than the smallest frequency in the node_path table.")
+                    raise ValueError(f"FullDust {self.shortname} nu_join must be less than the smallest frequency in the node_path table.")
                 if not all(self.nodes[0,i] <= self.nodes[0,i+1] for i in range(len(self.nodes[0,:]) - 1)):
                     logger.debug(f"FullDust {self.shortname} spline nodes are not ordered, they will be sorted for the spline computation.")
                     self.nodes=self.nodes[:,self.nodes[0,:].argsort()]
@@ -570,14 +611,31 @@ class FullDust(DiffuseComponent):
                 self.astrodust=np.loadtxt(os.path.join(global_params.data_dir,self.astrodust_path)).T
                 ## This had better be sorted already, if not the code is going to act weird
                 if self.nodes[0,-1] >= self.astrodust[0,0]:
-                    logger.critical(f"FullDust {self.shortname}: The highest frequency in node_path must be smaller than the lowest frequency in the astrodust table.") 
+                    raise ValueError(f"FullDust {self.shortname}: The highest frequency in node_path must be smaller than the lowest frequency in the astrodust table.") 
             self.get_spline()
 
-        self.print_sed()
     
     def get_spline(self):
-        # spline, expects to get frequencies in log space (so hand nu as np.log(nu) to the spline)
-        # and spline will return as a hyperbolic sin, so to get in Mj/sr take sinh(spline(log(nu)))
+        """Build the cubic spline that bridges the MBB and the astrodust model.
+
+        The spline is constructed in (log(nu), arcsinh(amplitude)) space. The arcsinh
+        keeps the spline well behaved for amplitudes that span many orders of
+        magnitude (or change sign), and is inverted with sinh in ``get_sed``.
+
+        Knots, in order: the MBB value at ``nu_join``, all the nodes, and (if there is
+        an astrodust table) the first astrodust point. If there is no astrodust point 
+        then nu_max at 0 is the final node.
+        
+        Boundary conditions (first derivative in log-nu / arcsinh space):
+            - left end: slope of the MBB at ``nu_join``, so the join is C1 continuous.
+            - right end: slope of the (scaled) astrodust table between its first two
+              points if there is an astrodust table, otherwise zero (flat).
+
+        Returns:
+            scipy.interpolate.CubicSpline | None: The spline, also stored as
+            ``self.spline``. None if there is no astrodust table and at most one node
+            (a single node is then used as a constant in ``get_sed``).
+        """
         xj=(h_over_k*self.nu_join)/(self.T)
         x0=(h_over_k*self.nu_ref)/(self.T)
 
@@ -620,21 +678,34 @@ class FullDust(DiffuseComponent):
 
             self.spline=CubicSpline(np.asarray(x),np.asarray(y),bc_type=((1,fp),(1,lp)))
         else:
-            if arr_len<=2:
-                self.spline=None
-                logger.debug("Only one node included for the spline, so no spline will be computed, using the tabulated value as constant across the frequency range.")
-            else:
-                self.spline=CubicSpline(np.asarray(x),np.asarray(y),bc_type=((1,fp),(1 ,0.0)),extrapolate=False)
+            logger.debug("No astrodust model being used here.")
+            if (self.nu_max>self.nodes[0,-1]):
+                x.append(np.log(self.nu_max))
+                y.append(0)
+                logger.debug("A zero is being appended to the end of the spline at nu_max.")
+            elif arr_len<=2:
+                raise ValueError("Only one node included for the spline, and nu_max smaller than the node included, this is an invalid state.")
+            self.spline=CubicSpline(np.asarray(x),np.asarray(y),bc_type=((1,fp),(1 ,0.0)),extrapolate=False)
         return self.spline
 
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for Long Dust emission.
-           The result is unitless, but meant to be multiplied by a RJ brightness temperature.
+           The result is meant to be multiplied by a RJ brightness temperature.
+
+        Frequency regions (each mask is also restricted to nu_min < nu < nu_max):
+            - nu < nu_join:                            modified blackbody, normalized to 1 at nu_ref
+            - nu_join <= nu < astrodust[0,0]:          spline through the nodes
+            - astrodust[0,0] <= nu <= astrodust[0,-1]: ad_scale * linearly interpolated astrodust table
+            - everything else:                         0
+        Without ``nu_join`` the whole (nu_min, nu_max) range is the MBB; without an
+        astrodust table the spline extends up to ``nu_max``.
+
         Args:
-            nu (float or np.ndarray): Frequency in GHz at which to evaluate the SED.            
+            nu (int, float or np.ndarray): Frequency in GHz at which to evaluate the SED.
         Returns:
-            The SED scaling factor (float or np.ndarray).
+            np.ndarray: The SED scaling factor (unitless), same length as ``nu``.
+            A scalar input is returned as a length-1 array.
         """
         # check to see if nu is a single value or an array
         # this should be deleted when upstream code is compatible with receiving arrays instead of single values
@@ -708,12 +779,13 @@ class FullDust(DiffuseComponent):
             return SED_val
 
     def print_sed(self):
+        ## Only use this function for debugging 
         nu_arr=np.logspace(np.log10(self.nu_min+1),np.log10(self.nu_max-1),1000)
         # nu_arr=np.logspace(np.log10(self.nu_min+1),np.log10(self.astrodust[0,0]-1),1000)
         # nu_arr=np.concatenate((nu_arr,self.astrodust[0,:].flatten()))
         SEDval=self.get_sed(nu_arr)
         # logger.warning() #print 20ish of the points 
-        np.save("fulldust_sed_noAD4.npy",np.asarray((nu_arr,SEDval)))
+        np.save("fulldust_sed_noAD7.npy",np.asarray((nu_arr,SEDval)))
         return
         
 class Synchrotron(DiffuseComponent):
