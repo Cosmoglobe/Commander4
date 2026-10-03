@@ -293,11 +293,13 @@ class TODView:
         `corrected_tod` before the glitch pulses are removed.
         """
         if self._pre_demodulation_tod is None:
-            jump = self.tod_samples.jumps.get(self.iscan, self.idet)
-            tod = self.raw_tod if jump.is_empty() else jump.apply(self.raw_tod)
-            events = self.tod_samples.glitches[self.iscan, self.idet]
-            if events.num_events > 0:
-                tod = tod - events.baseline_step_tod(self.detector.ntod, self.fsamp)
+            tod = self.raw_tod
+            jumps = self.tod_samples.jumps[self.iscan, self.idet]
+            if jumps.num_events > 0:
+                tod = tod + jumps.offset_tod(self.detector.ntod)
+            glitches = self.tod_samples.glitches[self.iscan, self.idet]
+            if glitches.num_events > 0:
+                tod = tod - glitches.baseline_step_tod(self.detector.ntod, self.fsamp)
             self._pre_demodulation_tod = tod
         return self._pre_demodulation_tod
 
@@ -395,14 +397,12 @@ class TODView:
                       proc_mask_type: str = "") -> NDArray[np.bool_]:
         """Combine the bad-data flag cut and a sky processing mask, at the full sampling rate."""
         mask = np.ones(self.detector.ntod, dtype=bool)
-        # Datasets without an explicit flag cut behave as if all samples pass it.
-        if good_data_mask and getattr(self.detector, "_good_data_mask", None) is not None:
-            mask &= self.detector.good_data_mask
-        # The samples cut around glitches are bad data like flagged samples, so this cut drops them.
         if good_data_mask:
-            events = self.tod_samples.glitches[self.iscan, self.idet]
-            if events.num_events > 0:
-                mask &= events.good_sample_mask(self.detector.ntod)
+            mask &= self.detector.good_data_mask
+            # The samples cut around glitches are bad data like flagged samples, so they go too.
+            glitches = self.tod_samples.glitches[self.iscan, self.idet]
+            if glitches.num_events > 0:
+                mask &= glitches.good_sample_mask(self.detector.ntod)
         if proc_mask:
             proc = self._project_processing_mask(proc_mask_type)
             if proc is not None:
@@ -471,12 +471,12 @@ class TODView:
 
     def _fullres_glitch_pulses(self, template_only: bool = False) -> NDArray[np.float32]:
         """Full-rate glitch pulses of the focused detector-scan; zeros when it has no events."""
-        events = self.tod_samples.glitches[self.iscan, self.idet]
-        if events.num_events == 0:
+        glitches = self.tod_samples.glitches[self.iscan, self.idet]
+        if glitches.num_events == 0:
             return np.zeros(self.detector.ntod, dtype=np.float32)
         template_amps = self.tod_samples.glitch_template_amps[self.idet]
         template_taus = self.tod_samples.glitch_template_taus[self.idet]
-        return events.pulse_tod(self.detector.ntod, template_amps, template_taus, self.fsamp,
+        return glitches.pulse_tod(self.detector.ntod, template_amps, template_taus, self.fsamp,
                                 template_only)
 
 

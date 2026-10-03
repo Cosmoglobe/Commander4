@@ -123,6 +123,10 @@ output:
                                   # after sky, dipole, n_corr, sidelobes and low-level corrections.
                                   # Same residual as maps/res, before masking or CG gap filling.
                                   # Independent of residual_maps and ncorr_tods; very large.
+      jump_events: False          # DEBUG ONLY: the jumps of each detector-scan (locations and
+                                  # offsets), at jumps/<scan_id>/<detector>/. The count per
+                                  # detector-scan, jump_counts, is always written. Never read
+                                  # back: a restart finds the jumps again from the data.
       glitch_events: False        # DEBUG ONLY: the glitch events of each detector-scan, at
                                   # glitches/<scan_id>/<detector>/, plus the per-detector
                                   # template shapes. Only once glitch detection has run.
@@ -145,11 +149,15 @@ tod_processing:
     max_iter: 40              # Max CG iterations per band map solve.
     err_tol: 1.0e-6           # Squared relative preconditioned residual at which the solve stops.
 
-  # Jump detection: find and remove sudden offset steps in the TOD. C4 does this by.
-  # Requires the experiment to declare a `jump_bitmask`.
+  # Jump detection: find sudden offset steps in the TOD and remove them. A jump is a stretch of
+  # samples marked with the experiment's `jump_bitmask` in the flag stream, which is therefore
+  # required. Its offset is the difference of the mean residual (TOD minus the current sky model)
+  # just before and just after it.
   jump_detection:
     enabled: false
     from_iter: 1
+    window: 10                # Valid samples averaged on each side of a jump. A jump without
+                              # this many valid samples on both sides is left uncorrected.
 
   # Glitch (cosmic-ray) sampling: find glitch events once, then refit their amplitudes and
   # shapes every iteration, following Commander3's HFI cosmic-ray model. PLACEHOLDER: the step

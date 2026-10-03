@@ -73,7 +73,7 @@ class JumpDetectionConfig:
             raise ValueError("jump_detection.enabled must be true or false.")
         if not isinstance(self.window, int) or self.window < 1:
             raise ValueError("jump_detection.window must be an integer of at least 1.")
-        if self.enabled and self.jump_bitmask is None:
+        if self.enabled and (self.jump_bitmask is None or self.jump_bitmask < 1):
             raise ValueError("Jump detection is enabled, but the experiment has no jump_bitmask.")
 
     @classmethod

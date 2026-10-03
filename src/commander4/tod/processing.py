@@ -19,7 +19,7 @@ from commander4.data_models.tod_samples import TODSamples
 from commander4.tod.data_selection import log_dataselect_summary, data_selection_status
 from commander4.tod.gain import sample_absolute_gain, sample_relative_gain,\
     sample_temporal_gain_variations
-from commander4.tod.jumps import sample_jump_detection
+from commander4.tod.jumps.sampling import sample_jump_detection
 from commander4.tod.hfi_demodulation import sample_hfi_baselines
 from commander4.tod.glitches.sampling import sample_glitches
 from commander4.tod.sidelobe_deconvolve import FarBeamProjector
@@ -155,7 +155,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     if jump_detection_cfg.enabled and iter >= jump_detection_cfg.from_iter:
         with benchmark("jump-detect"):
             tod_samples = sample_jump_detection(band_comm, experiment_data, tod_samples,
-                                                jump_detection_cfg, iter)
+                                                compsep_output, jump_detection_cfg, iter)
 
     # HFI baselines use the previous iteration's gain and sigma0, like Commander3. The first pass
     # also determines whether Python's even or odd sample indices carry the positive half-cycle.

@@ -100,9 +100,9 @@ tod_ps_raw         (NSC,ND,100)   # binned PSD of the raw TOD
 tod_ps_ncorr       (NSC,ND,100)   # ... of the correlated-noise realization
 tod_ps_ncorrsub    (NSC,ND,100)   # ... of the TOD with only the correlated noise removed
 tod_ps_residual    (NSC,ND,100)   # ... of the residual (sky, dipole and n_corr all removed)
-jump_counts        (NSC,ND)    # jumps found per detector-scan; indexes the two ragged arrays below
-jump_locations     (M,)        # sample index of each jump, concatenated scan-major
-jump_offsets       (M,)        # amplitude of each jump
+jump_counts        (NSC,ND)    # jumps found per detector-scan
+jumps/<scan_id>/<detector>/locations  (NJ,)  # (opt, DEBUG) first sample after each jump; left out if none
+jumps/<scan_id>/<detector>/offsets    (NJ,)  # (opt, DEBUG) offset in detector units that undoes each jump
 glitches/template_amps  (ND,3,8)  # (opt, DEBUG) per-detector short/long/slow pulse shapes: 8 exponential amplitudes
 glitches/template_taus  (ND,3,8)  # (opt, DEBUG) ... and their time constants [s]
 glitches/<scan_id>/<detector>/    # (opt, DEBUG) the glitch events of one detector-scan; left out if it has none:
@@ -175,6 +175,7 @@ src/commander4/
     view.py            #   TODView: the read interface to one detector-scan and every TOD derived from it.
     gain.py            #   Gain sampling (absolute, relative, temporal).
     noise/             #   Correlated-noise realizations, sigma0 estimation, PSD models and their priors.
+    jumps/             #   Jump detection from the flag stream, and the found jumps.
     glitches/          #   Glitch (cosmic-ray) events and their sampler; placeholders for now.
     mapmaking/         #   binned.py (per-pixel inversion) and cg.py (iterative, deconvolves a transfer function).
 
