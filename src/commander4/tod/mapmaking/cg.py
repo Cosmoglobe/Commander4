@@ -723,7 +723,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         pix, psi = view.pix, view.psi
         good_data_mask = view.get_mask(proc_mask=False)
         gain = view.get_gain()
-        response = view.det_response if pols == "IQU" else None
+        response_I_P = view.response_I_P
 
         ### DATA-SELECTION VETO 1 (too little unflagged data).
         good_frac = good_data_mask.mean()
@@ -789,7 +789,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
 
         ### INVERSE-VARIANCE WEIGHTS (preconditioner + rms/cov) ###
         if pols == "IQU":
-            mapmaker_invvar.accumulate_to_map(inv_var, pix, psi, response=response)
+            mapmaker_invvar.accumulate_to_map(inv_var, pix, psi, response_I_P=response_I_P)
         else:
             mapmaker_invvar.accumulate_to_map(inv_var, pix)
 
@@ -800,7 +800,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
             sky_orb_dipole = view.get_orbital_dipole_tod()
             if pols == "IQU":
                 mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi,
-                                                     response=response)
+                                                     response_I_P=response_I_P)
             else:
                 mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
 
@@ -808,7 +808,8 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         if mapmaker_ncorr is not None:
             n_corr_uKRJ = (n_corr_est/gain).astype(np.float32, copy=False)
             if pols == "IQU":
-                mapmaker_ncorr.accumulate_to_map(n_corr_uKRJ, inv_var, pix, psi, response=response)
+                mapmaker_ncorr.accumulate_to_map(n_corr_uKRJ, inv_var, pix, psi,
+                                                 response_I_P=response_I_P)
             else:
                 mapmaker_ncorr.accumulate_to_map(n_corr_uKRJ, inv_var, pix, psi)
         if corr_noise_active:
@@ -823,7 +824,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
             fill_all_masked(residual_tod, good_data_mask, sigma0)
             if pols == "IQU":
                 mapmaker_res.accumulate_to_map(residual_tod/gain, inv_var, pix, psi,
-                                               response=response)
+                                               response_I_P=response_I_P)
             else:
                 mapmaker_res.accumulate_to_map(residual_tod/gain, inv_var, pix, psi)
         if nhit_local is not None:
