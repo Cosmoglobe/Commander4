@@ -123,6 +123,10 @@ output:
                                   # after sky, dipole, n_corr, sidelobes and low-level corrections.
                                   # Same residual as maps/res, before masking or CG gap filling.
                                   # Independent of residual_maps and ncorr_tods; very large.
+      glitch_events: False        # DEBUG ONLY: the glitch events of each detector-scan, at
+                                  # glitches/<scan_id>/<detector>/, plus the per-detector
+                                  # template shapes. Only once glitch detection has run.
+                                  # Never read back: a restart detects the glitches again.
 
 # ----------------------------------------
 # TOD PROCESSING
@@ -144,6 +148,14 @@ tod_processing:
   # Jump detection: find and remove sudden offset steps in the TOD. C4 does this by.
   # Requires the experiment to declare a `jump_bitmask`.
   jump_detection:
+    enabled: false
+    from_iter: 1
+
+  # Glitch (cosmic-ray) sampling: find glitch events once, then refit their amplitudes and
+  # shapes every iteration, following Commander3's HFI cosmic-ray model. PLACEHOLDER: the step
+  # runs but finds and removes nothing yet, and logs a warning; the experiment's glitch flag bits
+  # still remove the glitches. Runs after the HFI baselines and before gain.
+  glitches:
     enabled: false
     from_iter: 1
 

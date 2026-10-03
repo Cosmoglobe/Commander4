@@ -17,6 +17,7 @@ import numpy as np
 from mpi4py import MPI
 
 from commander4.data_models.detector_tod import DetectorTOD
+from commander4.tod.glitches.events import empty_glitch_grid
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
@@ -54,6 +55,7 @@ def _fake_tod_samples(sigma0: float = 2.0) -> SimpleNamespace:
     return SimpleNamespace(
         noise_params=np.full((1, 1, 1), sigma0), abs_gain=1.5, rel_gain=np.zeros(1),
         temporal_gain=np.zeros((1, 1)), jumps=SimpleNamespace(get=lambda iscan, idet: no_jump),
+        glitches=empty_glitch_grid(1, 1),
         accept=np.ones((1, 1), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
         chisq_z=np.full((1, 1), np.nan), good_fraction=np.full((1, 1), np.nan),
         TOD_PS_NBIN=100, tod_ps_freqs=empty_ps(), tod_ps_raw=empty_ps(), tod_ps_residual=empty_ps(),

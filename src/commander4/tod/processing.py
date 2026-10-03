@@ -1,9 +1,9 @@
 """The TOD-processing side of one Gibbs iteration, and the settings that configure it.
 
 `init_tod_processing` sets up the per-band data and sample containers once; `process_tod` runs the
-sampling steps for a single iteration (jumps, HFI baselines, gain, correlated noise, mapmaking, data
-selection) and hands the resulting band maps to component separation. Each iteration starts by
-reading the config objects defined in `tod/config.py`.
+sampling steps for a single iteration (jumps, HFI baselines, glitches, gain, correlated noise,
+mapmaking, data selection) and hands the resulting band maps to component separation. Each
+iteration starts by reading the config objects defined in `tod/config.py`.
 """
 import numpy as np
 import logging
@@ -21,12 +21,13 @@ from commander4.tod.gain import sample_absolute_gain, sample_relative_gain,\
     sample_temporal_gain_variations
 from commander4.tod.jumps import sample_jump_detection
 from commander4.tod.hfi_demodulation import sample_hfi_baselines
+from commander4.tod.glitches.sampling import sample_glitches
 from commander4.tod.sidelobe_deconvolve import FarBeamProjector
 from commander4.tod.view import TODView
 from commander4.tod.mapmaking.binned import tod2map_bin
 from commander4.tod.mapmaking.cg import tod2map_CG
-from commander4.tod.config import GainConfig, JumpDetectionConfig, CorrelatedNoiseConfig,\
-    DataSelectionConfig, FarBeamConfig, MapmakingConfig
+from commander4.tod.config import GainConfig, JumpDetectionConfig, GlitchConfig,\
+    CorrelatedNoiseConfig, DataSelectionConfig, FarBeamConfig, MapmakingConfig
 from commander4.polarization import get_execution_band_ids
 from commander4.file_io.tod_reader import read_tods_from_file
 from commander4.file_io.chain_writer import write_band_chain_to_file
@@ -136,6 +137,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     band_block = experiment_block.bands[experiment_data.band_name]
     mapmaking_cfg = MapmakingConfig.from_params(params, experiment_data)
     jump_detection_cfg = JumpDetectionConfig.from_params(tod_block, experiment_block)
+    glitch_cfg = GlitchConfig.from_params(tod_block)
     far_beam_deconvolution_cfg = FarBeamConfig.from_params(tod_block)
     abs_gain_cfg = GainConfig.from_params(tod_block, band_block, "abs_gain", "orbital_dipole")
     rel_gain_cfg = GainConfig.from_params(tod_block, band_block, "rel_gain", "sky")
@@ -161,6 +163,12 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
         with benchmark("hfi-baselines"):
             tod_samples = sample_hfi_baselines(band_comm, experiment_data, tod_samples,
                                                compsep_output)
+
+    # Glitch detection, performed after HFI demodulation.
+    if glitch_cfg.enabled and iter >= glitch_cfg.from_iter:
+        with benchmark("glitches"):
+            tod_samples = sample_glitches(band_comm, experiment_data, tod_samples, compsep_output,
+                                          glitch_cfg)
 
     # Gain uses the previous iteration's sigma0. The new sigma0 is estimated later, inside the
     # mapmaker scan loop, matching Commander3's gain -> n_corr -> bin_TOD order.

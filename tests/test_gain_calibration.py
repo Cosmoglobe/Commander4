@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 from pixell.bunch import Bunch
 
+from commander4.tod.glitches.events import empty_glitch_grid
 from commander4.tod.view import TODView
 from commander4.tod.gain import _solve_relative_gain_system
 from commander4.tod.config import GainConfig
@@ -450,6 +451,7 @@ def _make_real_view(monkeypatch, good=None):
     experiment_data = SimpleNamespace(scans=[SimpleNamespace(detectors=[det])], nside=1, nu=30.0)
     no_jump = SimpleNamespace(is_empty=lambda: True)
     tod_samples = SimpleNamespace(jumps=SimpleNamespace(get=lambda iscan, idet: no_jump),
+                                  glitches=empty_glitch_grid(1, 1),
                                   abs_gain=2.0, rel_gain=np.array([0.5]),
                                   temporal_gain=np.array([[0.25]]),
                                   accept=np.ones((1, 1), dtype=bool))

@@ -47,6 +47,7 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2) -> TODSamples:
     from mpi4py import MPI
 
     from commander4.data_models.jump_corrections import JumpCatalog
+    from commander4.tod.glitches.events import empty_glitch_grid
 
     s = TODSamples.__new__(TODSamples)
     s.params, s.chain, s.band_comm = _params(), 1, MPI.COMM_SELF
@@ -74,6 +75,11 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2) -> TODSamples:
     s.ncorr_tods = None
     s.residual_tods = None
     s.jumps = JumpCatalog.empty(nscans, ndet)
+    s.glitches = empty_glitch_grid(nscans, ndet)
+    s.glitch_template_amps = np.full((ndet, 3, 8), np.nan)
+    s.glitch_template_taus = np.full((ndet, 3, 8), np.nan)
+    s.glitch_events_detected = False
+    s.write_glitch_events = False
     return s
 
 
@@ -103,6 +109,40 @@ def test_hfi_chain_carries_modulation_phase_and_baselines() -> None:
 
     np.testing.assert_array_equal(written["modulation_phase"], samples.modulation_phase)
     np.testing.assert_array_equal(written["baselines"], samples.baselines)
+
+
+def test_glitch_events_are_debug_output_written_per_detector_scan(tmp_path) -> None:
+    from commander4.tod.glitches.events import GlitchEvents
+
+    def glitch_names(samples) -> list[str]:
+        return sorted(name for name in samples.gather_chain_arrays(1) if name.startswith("glitch"))
+
+    samples = _minimal_tod_samples()
+    samples.glitch_events_detected = True
+    samples.glitches[2, 1] = GlitchEvents([5, 9], [20, 20], [0, 2], [2.0, 0.5], [5, 9], [5, 9],
+                                          [0, 0], [])
+    assert glitch_names(samples) == []  # Off unless asked for.
+
+    samples.write_glitch_events = True
+    written = samples.gather_chain_arrays(1)
+
+    # Only the detector-scan with events gets a group, named by scan ID and detector name.
+    event_groups = {name.rsplit("/", 1)[0] for name in glitch_names(samples)
+                    if not name.startswith("glitches/template_")}
+    assert event_groups == {"glitches/2/d1"}
+    np.testing.assert_array_equal(written["glitches/2/d1/start"], [5, 9])
+    assert written["glitches/2/d1/shape_params"].size == 0
+    assert written["glitches/template_amps"].shape == (2, 3, 8)
+
+    # The chain writer turns the paths into nested HDF5 groups.
+    params = _params(str(tmp_path))
+    paths.create_output_dirs(params.output)
+    with h5py.File(_write_band(params, written)) as handle:
+        assert handle["glitches/2/d1/type"].dtype == np.int8
+
+    # Nothing is written before the glitch step has run.
+    samples.glitch_events_detected = False
+    assert glitch_names(samples) == []
 
 
 @pytest.mark.parametrize("save_residual", [False, True])

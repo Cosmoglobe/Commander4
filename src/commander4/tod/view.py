@@ -92,6 +92,7 @@ class TODView:
     def _clear_cache(self):
         """Drop all arrays materialized for the current detector."""
         self._raw_tod = None
+        self._pre_demodulation_tod = None
         self._corrected_tod = None
         self._pix = None
         self._psi = None
@@ -283,17 +284,37 @@ class TODView:
         return self._raw_tod
 
     @property
+    def pre_demodulation_tod(self) -> NDArray[np.floating]:
+        """The raw TOD with jumps and glitch baseline steps removed, before HFI demodulation.
+
+        The HFI baseline sampler fits this TOD, since it must not see the baselines it samples. A
+        bright glitch shifts both sample parities alike, so its step is removed here, before
+        demodulation flips the sign of every other sample. Without demodulation, this is
+        `corrected_tod` before the glitch pulses are removed.
+        """
+        if self._pre_demodulation_tod is None:
+            jump = self.tod_samples.jumps.get(self.iscan, self.idet)
+            tod = self.raw_tod if jump.is_empty() else jump.apply(self.raw_tod)
+            events = self.tod_samples.glitches[self.iscan, self.idet]
+            if events.num_events > 0:
+                tod = tod - events.baseline_step_tod(self.detector.ntod, self.fsamp)
+            self._pre_demodulation_tod = tod
+        return self._pre_demodulation_tod
+
+    @property
     def corrected_tod(self) -> NDArray[np.floating]:
         """TOD (in detector units) after low-level corrections, such as jumps or demodulation.
 
         Figures out what low-level corrections are active and applies those to `self.raw_tod`.
-        Currently implemented adjustments include:
+        Currently implemented adjustments include, in this order:
             - Jump corrections, requiring the jump-finding sampling step.
+            - Glitch baseline steps, requiring the glitch sampling step (a placeholder for now).
             - HFI demodulation, requiring the demodulation phase and the baseline sampling steps.
+            - Glitch pulses, see `get_glitch_pulse_tod` (a placeholder for now).
+        The first two make up `pre_demodulation_tod`.
         """
         if self._corrected_tod is None:
-            jump = self.tod_samples.jumps.get(self.iscan, self.idet)
-            corrected = self.raw_tod if jump.is_empty() else jump.apply(self.raw_tod)
+            corrected = self.pre_demodulation_tod
 
             if getattr(self.experiment_data, "hfi_demodulation", False):
                 if not self.tod_samples.modulation_phase_initialized:
@@ -303,6 +324,10 @@ class TODView:
                 corrected = np.array(corrected, copy=True)
                 corrected[0::2] = phase * (corrected[0::2] - baseline_first)
                 corrected[1::2] = -phase * (corrected[1::2] - baseline_second)
+
+            # After demodulation a glitch has the sign of the sky, like the heat it deposits.
+            if self.tod_samples.glitches[self.iscan, self.idet].num_events > 0:
+                corrected = corrected - self._fullres_glitch_pulses()
 
             self._corrected_tod = corrected
         return self._corrected_tod
@@ -373,6 +398,11 @@ class TODView:
         # Datasets without an explicit flag cut behave as if all samples pass it.
         if good_data_mask and getattr(self.detector, "_good_data_mask", None) is not None:
             mask &= self.detector.good_data_mask
+        # The samples cut around glitches are bad data like flagged samples, so this cut drops them.
+        if good_data_mask:
+            events = self.tod_samples.glitches[self.iscan, self.idet]
+            if events.num_events > 0:
+                mask &= events.good_sample_mask(self.detector.ntod)
         if proc_mask:
             proc = self._project_processing_mask(proc_mask_type)
             if proc is not None:
@@ -437,6 +467,31 @@ class TODView:
             full = get_s_orb_tod(self.detector, self.experiment_data, self._fullres_pix)
             self._orbital_dipole = self._downsample_mean(full)
         return self._orbital_dipole
+
+
+    def _fullres_glitch_pulses(self, template_only: bool = False) -> NDArray[np.float32]:
+        """Full-rate glitch pulses of the focused detector-scan; zeros when it has no events."""
+        events = self.tod_samples.glitches[self.iscan, self.idet]
+        if events.num_events == 0:
+            return np.zeros(self.detector.ntod, dtype=np.float32)
+        template_amps = self.tod_samples.glitch_template_amps[self.idet]
+        template_taus = self.tod_samples.glitch_template_taus[self.idet]
+        return events.pulse_tod(self.detector.ntod, template_amps, template_taus, self.fsamp,
+                                template_only)
+
+
+    def get_glitch_pulse_tod(self, template_only: bool = False) -> NDArray[np.floating]:
+        """Evaluate the glitch pulses of the focused detector-scan, in detector units.
+
+        The pulses have the sign of the sky in the demodulated TOD, and ``corrected_tod`` has them
+        all removed already. A fit to the raw HFI TOD must remove them modulated, like the sky.
+        Built at the full rate and block-averaged, like the other model TODs.
+
+        Args:
+            template_only: If True, leave out the bright events. Adding the template pulses back
+                to ``corrected_tod`` gives the data the glitch amplitude sampler fits.
+        """
+        return self._downsample_mean(self._fullres_glitch_pulses(template_only))
 
 
     def get_tod(

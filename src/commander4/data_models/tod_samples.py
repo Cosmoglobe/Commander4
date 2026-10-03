@@ -17,6 +17,8 @@ import typing
 
 from commander4.file_io.chain_writer import should_write_chain
 from commander4.data_models.jump_corrections import JumpCatalog
+from commander4.tod.glitches.events import empty_glitch_grid, GLITCH_TEMPLATE_TYPES,\
+    GLITCH_TEMPLATE_NEXP, GLITCH_EVENT_FIELDS
 from commander4.units import rj_to_band_unit_factor
 if typing.TYPE_CHECKING:
     from commander4.data_models.detector_group_tod import DetectorGroupTOD
@@ -143,6 +145,16 @@ class TODSamples:
         # Identical across all ranks of a band (taken from the band's detector list).
         self.det_names = list(my_band.detectors)
         self.jumps = JumpCatalog.empty(self.nscans, self.ndet)
+        # Glitch (cosmic-ray) events per detector-scan, and the template shapes that each
+        # detector's short/long/slow events share: (ndet, type, exponential) amplitudes and time
+        # constants in seconds. Filled by `tod/glitches/sampling.py`; empty and NaN until it runs.
+        # Event detection runs once per run, like C3's `first_call`, and the flag records that.
+        # The events are not read back from a chain, so a restart detects them again, as C3 does.
+        self.glitches = empty_glitch_grid(self.nscans, self.ndet)  # GlitchEvents per [iscan, idet]
+        template_shape = (self.ndet, len(GLITCH_TEMPLATE_TYPES), GLITCH_TEMPLATE_NEXP)
+        self.glitch_template_amps = np.full(template_shape, np.nan)
+        self.glitch_template_taus = np.full(template_shape, np.nan)
+        self.glitch_events_detected = False
         # Two distinct per-detector-scan boolean masks over the dense (nscans, ndet) grid:
         #   * present: whether this detector actually has data in this scan. Scans hold only the
         #     detectors present in them (DetectorGroupTOD/ScanTOD are sparse), so a detector missing from
@@ -226,6 +238,9 @@ class TODSamples:
             self.residual_tods = []
             for _ in range(self.nscans):
                 self.residual_tods.append([None] * self.ndet)
+        # Optional DEBUG: the glitch events of every detector-scan, written but never read back.
+        self.write_glitch_events = bool(getattr(params.output.chains.include, "glitch_events",
+                                                False))
 
         init_chain_path = getattr(params.gibbs, "init_from_chain", False)
         init_from_chain = bool(init_chain_path)
@@ -461,6 +476,20 @@ class TODSamples:
                                                             scans_per_rank)
         jump_locations_global = _gather_variable_length_1d_array(band_comm, jump_locations_local)
         jump_offsets_global = _gather_variable_length_1d_array(band_comm, jump_offsets_local)
+
+        # 6. Optional DEBUG: glitch events, gathered as objects like the debug TODs above. Only
+        # detector-scans with events are sent. Both conditions are the same on every rank, so all
+        # ranks join this collective gather or none do.
+        glitch_events_global = None
+        if self.write_glitch_events and self.glitch_events_detected:
+            glitch_events_local = []
+            for iscan in range(self.nscans):
+                for idet in range(self.ndet):
+                    events = self.glitches[iscan, idet]
+                    if events.num_events > 0:
+                        glitch_events_local.append((self.scan_ids[iscan], self.det_names[idet],
+                                                    events))
+            glitch_events_global = band_comm.gather(glitch_events_local, root=0)
         ####################################################################
         # Assemble the datasets, on the band master only.
         ####################################################################
@@ -506,6 +535,14 @@ class TODSamples:
         if modulation_phase_global is not None:
             arrays["modulation_phase"] = modulation_phase_global
             arrays["baselines"] = baselines_global
+        if glitch_events_global is not None:
+            # Per-detector shapes, identical on every rank, so no communication was needed.
+            arrays["glitches/template_amps"] = self.glitch_template_amps
+            arrays["glitches/template_taus"] = self.glitch_template_taus
+            for rank_events in glitch_events_global:
+                for scan_id, det_name, events in rank_events:
+                    for field in GLITCH_EVENT_FIELDS:
+                        arrays[f"glitches/{scan_id}/{det_name}/{field}"] = getattr(events, field)
 
         if full_tods_global is not None:
             for scan_ids, ncorr_tods, residual_tods in full_tods_global:

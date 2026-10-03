@@ -10,6 +10,7 @@ from pixell.bunch import Bunch
 from commander4.tod.data_selection import data_selection_status
 from commander4.tod.config import GainConfig, MapmakingConfig, CGConfig, CorrelatedNoiseConfig
 from commander4.tod.config import JumpDetectionConfig, DataSelectionConfig, FarBeamConfig
+from commander4.tod.config import GlitchConfig
 
 
 def _params(**steps) -> Bunch:
@@ -78,6 +79,11 @@ def test_documented_defaults_are_owned_by_the_config_classes():
     # The far-beam defaults are the Commander3 convolution limits and its LevelS scale factor.
     far_beam = FarBeamConfig.from_params(params.tod_processing)
     assert not far_beam.enabled
+
+    # Glitch sampling is a placeholder, so it stays off unless asked for.
+    glitches = GlitchConfig.from_params(params.tod_processing)
+    assert not glitches.enabled
+    assert glitches.from_iter == 1
     assert far_beam.lmax == 100
     assert far_beam.mmax == 100
     assert far_beam.epsilon == 1.0e-4
@@ -253,6 +259,7 @@ def test_direct_construction_validates_scientific_settings(
 
 @pytest.mark.parametrize("config_class", [
     GainConfig, JumpDetectionConfig, CorrelatedNoiseConfig, DataSelectionConfig, FarBeamConfig,
+    GlitchConfig,
 ])
 def test_direct_construction_rejects_a_non_boolean_enabled(config_class: type) -> None:
     """A quoted "false" is a non-empty string, so without this check the step would run."""
@@ -273,8 +280,9 @@ def pipeline(monkeypatch: pytest.MonkeyPatch) -> Bunch:
                               gather_chain_arrays=Mock(return_value={}),
                               band_unit_factor=1.0, band_unit="uK_RJ")
     calls = Mock()
-    for name in ("sample_jump_detection", "sample_hfi_baselines", "sample_absolute_gain",
-                 "sample_relative_gain", "sample_temporal_gain_variations"):
+    for name in ("sample_jump_detection", "sample_hfi_baselines", "sample_glitches",
+                 "sample_absolute_gain", "sample_relative_gain",
+                 "sample_temporal_gain_variations"):
         sampler = Mock(return_value=samples)
         calls.attach_mock(sampler, name)
         monkeypatch.setattr(processing, name, sampler)
@@ -292,10 +300,10 @@ def pipeline(monkeypatch: pytest.MonkeyPatch) -> Bunch:
 
 
 def test_iteration_gates_keep_the_scientific_order(pipeline: Bunch) -> None:
-    """The inclusive start applies to jumps, all three gains, and the far beam."""
+    """The inclusive start applies to jumps, glitches, all three gains, and the far beam."""
     params = _params()
     params.experiments.EXP.jump_bitmask = 1
-    for name in ("jump_detection", "abs_gain", "rel_gain", "temporal_gain",
+    for name in ("jump_detection", "glitches", "abs_gain", "rel_gain", "temporal_gain",
                  "far_beam_deconvolution"):
         params.tod_processing[name] = Bunch(enabled=True, from_iter=3)
 
@@ -306,7 +314,7 @@ def test_iteration_gates_keep_the_scientific_order(pipeline: Bunch) -> None:
     pipeline.calls.reset_mock()
     pipeline.run(pipeline.mpi, pipeline.experiment, pipeline.samples, None, params, 2, 3)
     assert [call[0] for call in pipeline.calls.mock_calls] == [
-        "sample_jump_detection", "sample_hfi_baselines", "sample_absolute_gain",
+        "sample_jump_detection", "sample_hfi_baselines", "sample_glitches", "sample_absolute_gain",
         "sample_relative_gain", "sample_temporal_gain_variations", "FarBeamProjector",
         "tod2map_bin", "write_band_chain_to_file", "FarBeamProjector().free"]
 

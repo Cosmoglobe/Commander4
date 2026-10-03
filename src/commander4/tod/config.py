@@ -84,6 +84,25 @@ class JumpDetectionConfig:
 
 
 @dataclass(frozen=True)
+class GlitchConfig:
+    """Glitch (cosmic-ray) sampling switch. The step is a placeholder that changes nothing yet."""
+
+    enabled: bool = False
+    from_iter: int = 1
+
+    def __post_init__(self) -> None:
+        """Check the settings before they are used by a numerical routine."""
+        if not isinstance(self.enabled, bool):
+            raise ValueError("glitches.enabled must be true or false.")
+
+    @classmethod
+    def from_params(cls, tod: Bunch | dict) -> GlitchConfig:
+        """Read the global glitch block, using disabled defaults when it is absent."""
+        block = tod["glitches"] if "glitches" in tod else {}
+        return cls(**block)
+
+
+@dataclass(frozen=True)
 class CGConfig:
     """CG controls; each solver defines its own error criterion.
 

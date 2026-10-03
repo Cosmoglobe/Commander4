@@ -103,6 +103,17 @@ tod_ps_residual    (NSC,ND,100)   # ... of the residual (sky, dipole and n_corr 
 jump_counts        (NSC,ND)    # jumps found per detector-scan; indexes the two ragged arrays below
 jump_locations     (M,)        # sample index of each jump, concatenated scan-major
 jump_offsets       (M,)        # amplitude of each jump
+glitches/template_amps  (ND,3,8)  # (opt, DEBUG) per-detector short/long/slow pulse shapes: 8 exponential amplitudes
+glitches/template_taus  (ND,3,8)  # (opt, DEBUG) ... and their time constants [s]
+glitches/<scan_id>/<detector>/    # (opt, DEBUG) the glitch events of one detector-scan; left out if it has none:
+  start            (NEV,)         #   first sample of each event
+  length           (NEV,)         #   samples each event's model spans
+  type             (NEV,)         #   int8: -1 bright, 0 short, 1 long, 2 slow
+  amplitude        (NEV,)         #   pulse amplitude in detector units (1 for bright events)
+  cut_start        (NEV,)         #   samples cut from the data are [cut_start, cut_stop); equal = none
+  cut_stop         (NEV,)
+  shape_param_counts (NEV,)       #   shape parameters per event (0 for template events)
+  shape_params     (K,)           #   bright-event shapes: a1, a2, tau1, tau2, t_dep, spline node values
 tods/<scan_id>/<detector>/ncorr     (ntod,)  # (opt, DEBUG) full n_corr TOD in detector units
 tods/<scan_id>/<detector>/residual  (ntod,)  # (opt, DEBUG) full residual TOD in detector units
 
@@ -164,6 +175,7 @@ src/commander4/
     view.py            #   TODView: the read interface to one detector-scan and every TOD derived from it.
     gain.py            #   Gain sampling (absolute, relative, temporal).
     noise/             #   Correlated-noise realizations, sigma0 estimation, PSD models and their priors.
+    glitches/          #   Glitch (cosmic-ray) events and their sampler; placeholders for now.
     mapmaking/         #   binned.py (per-pixel inversion) and cg.py (iterative, deconvolves a transfer function).
 
   compsep/             # === COMPSEP SIDE: solving for component amplitudes and spectral parameters ===
