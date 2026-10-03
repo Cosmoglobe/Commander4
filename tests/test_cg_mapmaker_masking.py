@@ -12,6 +12,7 @@ are handled correctly by the C ``map2tod``/accumulator pair.
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from mpi4py import MPI
 
 from commander4.data_models.detector_tod import DetectorTOD
@@ -204,3 +205,26 @@ def test_apply_LHS_IQU_symmetric_and_spans_all_samples():
     np.testing.assert_allclose(np.vdot(m1, Am2), np.vdot(m2, Am1), rtol=1e-9, atol=1e-10)
     # Pixels reached only through flagged samples still carry weight (gap-fill, not removal).
     assert np.any(Am1[:, 5] != 0.0) and np.any(Am1[:, 9] != 0.0)
+
+
+@pytest.mark.parametrize("mapmaker_class, pols", [(CGMapmakerI, "I"), (CGMapmakerIQU, "IQU")])
+def test_apply_P_adjoint_single_precision_matches_double(mapmaker_class, pols):
+    """The f32 ``apply_P_adjoint`` must give the same map as the f64 one.
+
+    The C f32 accumulators take ``float weight``. Declaring it as ``c_double`` in ctypes makes the
+    C side read the weight as 0.0 on x86-64, so the f32 map silently stays all zeros.
+    """
+    nside = 2
+    rng = np.random.default_rng(2)
+    pix = np.array([0, 1, 2, 5, 4, 6, 7, 9, 8, 10, 0, 1], dtype=np.int64)
+    psi = rng.uniform(0, np.pi, pix.size)
+    tod = rng.normal(size=pix.size)
+    band, ts = _build_band(pix, [], nside, 1.0, pols, psi=psi)
+    maps = []
+    for double_prec, dtype in [(True, np.float64), (False, np.float32)]:
+        cg = mapmaker_class(band, ts, MPI.COMM_SELF, double_prec=double_prec)
+        out_map = np.zeros((len(pols), 12 * nside**2), dtype=dtype)
+        cg.apply_P_adjoint(None, out_map, pix=pix, psi=psi, scan_tod_arr=tod.astype(dtype))
+        maps.append(out_map)
+    assert np.any(maps[0] != 0.0)
+    np.testing.assert_allclose(maps[1], maps[0], rtol=1e-5, atol=1e-6)

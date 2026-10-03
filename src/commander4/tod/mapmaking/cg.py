@@ -442,9 +442,9 @@ class CGMapmakerI(CGMapmaker):
             self.map_accumulator = self.maplib.map_accumulator_f64
             self.map2tod = self.maplib.map2tod_f64
         else:
-            self.maplib.map_accumulator_f32.argtypes = [self.ct_f32_dim2, 
-                                                        self.ct_f32_dim1, 
-                                                        ct.c_double, 
+            self.maplib.map_accumulator_f32.argtypes = [self.ct_f32_dim2,
+                                                        self.ct_f32_dim1,
+                                                        ct.c_float,
                                                         self.ct_i64_dim1, 
                                                         ct.c_int64]
             self.maplib.map2tod_f32.argtypes = [self.ct_f32_dim2, 
@@ -560,9 +560,9 @@ class CGMapmakerIQU(CGMapmaker):
             self.map_accumulator_IQU = self.maplib.map_accumulator_IQU_f64
             self.map2tod_IQU = self.maplib.map2tod_IQU_f64
         else:
-            self.maplib.map_accumulator_IQU_f32.argtypes = [self.ct_f32_dim2, 
-                                                            self.ct_f32_dim1, 
-                                                            ct.c_double,
+            self.maplib.map_accumulator_IQU_f32.argtypes = [self.ct_f32_dim2,
+                                                            self.ct_f32_dim1,
+                                                            ct.c_float,
                                                             self.ct_i64_dim1, 
                                                             self.ct_f64_dim1, 
                                                             ct.c_int64, 
