@@ -8,7 +8,7 @@ from mpi4py import MPI
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.tod.glitches.events import GlitchEvents, empty_glitch_grid
-from commander4.data_models.jump_corrections import JumpCorrection
+from commander4.tod.jumps.events import JumpEvents, empty_jump_grid
 from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.hfi_demodulation import sample_hfi_baselines
@@ -68,7 +68,6 @@ def _build_hfi_case(phase: int = -1, pulse: np.ndarray | None = None):
         [ScanTOD([detector], 0.0, 1)], "PlanckHFI", "Planck100GHz", _NSIDE, 100.0,
         10.0, 180.0, 1, "I", noise_model, hfi_demodulation=True,
     )
-    no_jump = SimpleNamespace(is_empty=lambda: True)
     samples = SimpleNamespace(
         hfi_demodulation=True,
         modulation_phase=np.ones((1, 1), dtype=np.int8),
@@ -79,7 +78,7 @@ def _build_hfi_case(phase: int = -1, pulse: np.ndarray | None = None):
         rel_gain=np.zeros(1),
         temporal_gain=np.zeros((1, 1)),
         accept=np.ones((1, 1), dtype=bool),
-        jumps=SimpleNamespace(get=lambda iscan, idet: no_jump),
+        jumps=empty_jump_grid(1, 1),
         glitches=empty_glitch_grid(1, 1),
     )
     return band, samples, sky_map, raw_tod, sky_tod
@@ -146,8 +145,7 @@ def test_corrected_tod_applies_jumps_then_hfi_demodulation() -> None:
     samples.modulation_phase[0, 0] = -1
     samples.modulation_phase_initialized = True
     samples.baselines[0, 0] = _BASELINES
-    jump = JumpCorrection(np.array([4]), np.array([3.0], dtype=np.float32))
-    samples.jumps = SimpleNamespace(get=lambda iscan, idet: jump)
+    samples.jumps[0, 0] = JumpEvents([4], [3.0])
 
     expected = raw_tod.copy()
     expected[4:] += 3.0
@@ -180,8 +178,7 @@ def test_saved_residual_removes_hfi_baselines_sky_and_noise(monkeypatch) -> None
     detector._tod[0::2] -= n_corr[0::2] + residual[0::2]
     detector._tod[1::2] += n_corr[1::2] + residual[1::2]
     detector._tod[4:] -= 3.0
-    jump = JumpCorrection(np.array([4]), np.array([3.0], dtype=np.float32))
-    samples.jumps = SimpleNamespace(get=lambda iscan, idet: jump)
+    samples.jumps[0, 0] = JumpEvents([4], [3.0])
     view = TODView(band, samples, compsep_output=sky_map).focus(0, detector)
 
     _record_tod_diagnostics(samples, 0, 0, view, n_corr)

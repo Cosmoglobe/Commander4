@@ -12,6 +12,7 @@ from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.config import GlitchConfig
 from commander4.tod.glitches.sampling import sample_glitches
+from commander4.tod.jumps.events import empty_jump_grid
 from commander4.tod.view import TODView
 
 _NTOD = 20
@@ -50,7 +51,7 @@ def _band_and_samples(events: GlitchEvents) -> tuple[DetectorGroupTOD, SimpleNam
     glitches = empty_glitch_grid(1, 1)
     glitches[0, 0] = events
     samples = SimpleNamespace(
-        jumps=SimpleNamespace(get=lambda iscan, idet: SimpleNamespace(is_empty=lambda: True)),
+        jumps=empty_jump_grid(1, 1),
         glitches=glitches, glitch_template_amps=np.zeros((1, 3, 8)),
         glitch_template_taus=np.ones((1, 3, 8)), glitch_events_detected=False,
         accept=np.ones((1, 1), dtype=bool))

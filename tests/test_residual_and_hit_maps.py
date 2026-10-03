@@ -17,6 +17,7 @@ from pixell.bunch import Bunch
 
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.tod.glitches.events import empty_glitch_grid
+from commander4.tod.jumps.events import empty_jump_grid
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
@@ -59,11 +60,10 @@ def _build_band(pix, psi, tod, flag=None,
 
 def _fake_tod_samples(sigma0: float = 2.0, ndet: int = 1) -> SimpleNamespace:
     """Minimal stand-in exposing exactly the fields tod2map_bin / TODView / the diagnostics read."""
-    no_jump = SimpleNamespace(is_empty=lambda: True)
     empty_ps = lambda: np.full((1, ndet, 100), np.nan, dtype=np.float32)
     return SimpleNamespace(
         noise_params=np.full((1, ndet, 1), sigma0), abs_gain=_GAIN, rel_gain=np.zeros(ndet),
-        temporal_gain=np.zeros((1, ndet)), jumps=SimpleNamespace(get=lambda iscan, idet: no_jump),
+        temporal_gain=np.zeros((1, ndet)), jumps=empty_jump_grid(1, ndet),
         glitches=empty_glitch_grid(1, ndet),
         accept=np.ones((1, ndet), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
         chisq_z=np.full((1, ndet), np.nan), good_fraction=np.full((1, ndet), np.nan),

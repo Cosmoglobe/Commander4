@@ -46,8 +46,8 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2) -> TODSamples:
     """A `TODSamples` carrying only what `gather_chain_arrays` reads, on a one-rank communicator."""
     from mpi4py import MPI
 
-    from commander4.data_models.jump_corrections import JumpCatalog
     from commander4.tod.glitches.events import empty_glitch_grid
+    from commander4.tod.jumps.events import empty_jump_grid
 
     s = TODSamples.__new__(TODSamples)
     s.params, s.chain, s.band_comm = _params(), 1, MPI.COMM_SELF
@@ -74,7 +74,8 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2) -> TODSamples:
         setattr(s, name, np.zeros((nscans, ndet, TODSamples.TOD_PS_NBIN), dtype=np.float32))
     s.ncorr_tods = None
     s.residual_tods = None
-    s.jumps = JumpCatalog.empty(nscans, ndet)
+    s.jumps = empty_jump_grid(nscans, ndet)
+    s.write_jump_events = False
     s.glitches = empty_glitch_grid(nscans, ndet)
     s.glitch_template_amps = np.full((ndet, 3, 8), np.nan)
     s.glitch_template_taus = np.full((ndet, 3, 8), np.nan)
@@ -90,8 +91,7 @@ def test_the_band_file_carries_every_dataset_a_restart_reads_back() -> None:
     the reader is allowed to be unconditional. This list mirrors the reads in `__init__`.
     """
     read_back = {"scan_ids", "abs_gain", "detrel_gain", "temporal_gain", "noise_params",
-                 "accept", "chisq_z", "good_fraction",
-                 "jump_counts", "jump_locations", "jump_offsets"}
+                 "accept", "chisq_z", "good_fraction"}
 
     written = set(_minimal_tod_samples().gather_chain_arrays(1))
 
@@ -143,6 +143,25 @@ def test_glitch_events_are_debug_output_written_per_detector_scan(tmp_path) -> N
     # Nothing is written before the glitch step has run.
     samples.glitch_events_detected = False
     assert glitch_names(samples) == []
+
+
+def test_jump_counts_are_always_written_and_the_jumps_only_as_debug_output() -> None:
+    from commander4.tod.jumps.events import JumpEvents
+
+    samples = _minimal_tod_samples()
+    samples.jumps[1, 0] = JumpEvents([10, 30], [1.5, -0.5])
+
+    written = samples.gather_chain_arrays(1)
+    np.testing.assert_array_equal(written["jump_counts"], [[0, 0], [2, 0], [0, 0]])
+    assert not any(name.startswith("jumps/") for name in written)  # Off unless asked for.
+
+    samples.write_jump_events = True
+    written = samples.gather_chain_arrays(1)
+    # Only the detector-scan with jumps gets a group, named by scan ID and detector name.
+    assert {name for name in written if name.startswith("jumps/")} == {
+        "jumps/1/d0/locations", "jumps/1/d0/offsets"}
+    np.testing.assert_array_equal(written["jumps/1/d0/locations"], [10, 30])
+    np.testing.assert_array_equal(written["jumps/1/d0/offsets"], [1.5, -0.5])
 
 
 @pytest.mark.parametrize("save_residual", [False, True])

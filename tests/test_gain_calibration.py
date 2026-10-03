@@ -17,6 +17,7 @@ import pytest
 from pixell.bunch import Bunch
 
 from commander4.tod.glitches.events import empty_glitch_grid
+from commander4.tod.jumps.events import empty_jump_grid
 from commander4.tod.view import TODView
 from commander4.tod.gain import _solve_relative_gain_system
 from commander4.tod.config import GainConfig
@@ -447,17 +448,14 @@ def _make_real_view(monkeypatch, good=None):
     det = SimpleNamespace(tod=rng.normal(size=NTOD), ntod=NTOD, fsamp=float(FACTOR), nside=1,
                           det_idx_fullband=0, get_pix_psi=lambda: (pix, psi),
                           response_I_P=(1.0, 1.0),
-                          orbital_velocity_m_per_s=np.array([1.0, 0.0, 0.0], dtype=np.float32))
+                          orbital_velocity_m_per_s=np.array([1.0, 0.0, 0.0], dtype=np.float32),
+                          good_data_mask=np.ones(NTOD, dtype=bool) if good is None else good)
     experiment_data = SimpleNamespace(scans=[SimpleNamespace(detectors=[det])], nside=1, nu=30.0)
-    no_jump = SimpleNamespace(is_empty=lambda: True)
-    tod_samples = SimpleNamespace(jumps=SimpleNamespace(get=lambda iscan, idet: no_jump),
+    tod_samples = SimpleNamespace(jumps=empty_jump_grid(1, 1),
                                   glitches=empty_glitch_grid(1, 1),
                                   abs_gain=2.0, rel_gain=np.array([0.5]),
                                   temporal_gain=np.array([[0.25]]),
                                   accept=np.ones((1, 1), dtype=bool))
-    if good is not None:
-        det._good_data_mask = good          # presence of this attribute enables the flag cut
-        det.good_data_mask = good
     skymap = rng.normal(size=(3, 12))
 
     def make_view(downsample_factor=1, mask_threshold=0.5):

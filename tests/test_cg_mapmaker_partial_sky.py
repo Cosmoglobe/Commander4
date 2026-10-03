@@ -19,6 +19,7 @@ from mpi4py import MPI
 
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.tod.glitches.events import empty_glitch_grid
+from commander4.tod.jumps.events import empty_jump_grid
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
@@ -70,11 +71,10 @@ def _build_band(pix: np.ndarray, psi: np.ndarray, tod: np.ndarray, pols: str,
 
 def _fake_tod_samples() -> SimpleNamespace:
     """Minimal stand-in exposing exactly the fields the mapmakers / TODView / diagnostics read."""
-    no_jump = SimpleNamespace(is_empty=lambda: True)
     empty_ps = lambda: np.full((1, 1, 100), np.nan, dtype=np.float32)
     return SimpleNamespace(
         noise_params=np.full((1, 1, 1), _SIGMA0), abs_gain=1.0, rel_gain=np.zeros(1),
-        temporal_gain=np.zeros((1, 1)), jumps=SimpleNamespace(get=lambda iscan, idet: no_jump),
+        temporal_gain=np.zeros((1, 1)), jumps=empty_jump_grid(1, 1),
         glitches=empty_glitch_grid(1, 1),
         accept=np.ones((1, 1), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
         chisq_z=np.full((1, 1), np.nan), good_fraction=np.full((1, 1), np.nan),
