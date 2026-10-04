@@ -1,9 +1,9 @@
-#include <pybind11/pybind11.h>
+#include "ducc0/bindings/pybind_utils.h"
 #include "utils_pymod.cc"
 
 using namespace cmdr4;
 
-PYBIND11_MODULE(PKGNAME, m)
+NB_MODULE(PKGNAME, m)
   {
 #define CMDR4_XSTRINGIFY(s) CMDR4_STRINGIFY(s)
 #define CMDR4_STRINGIFY(s) #s

@@ -82,7 +82,7 @@ target_include_directories(cmdr4_ctypes PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_cpp
 )
 
-target_compile_definitions(${PKGNAME} PRIVATE PKGNAME=${PKGNAME} PKGVERSION=${PKGVERSION})
+target_compile_definitions(${PKGNAME} PRIVATE PKGNAME=${PKGNAME} PKGVERSION=${PKGVERSION} DUCC0_USE_NANOBIND)
 
 ### Architecture flags (Linux-only) ###
 set(CMDR4_ARCH_FLAGS "-march=native" CACHE STRING "Compiler flags for specifying target architecture.")
@@ -182,16 +182,13 @@ if(CMDR4_GENERATE_STUBS)
     execute_process(
       COMMAND \"${CMAKE_COMMAND}\" -E env
               \"PYTHONPATH=${CMDR4_STUB_PYTHONPATH}\"
-              \"${Python_EXECUTABLE}\" -m pybind11_stubgen
-              commander4._cmdr4_backend
-              --output-dir \"${CMAKE_CURRENT_SOURCE_DIR}/src\"
-              --root-suffix \"\"
+              \"${Python_EXECUTABLE}\" -m nanobind.stubgen
+              -m commander4._cmdr4_backend -r
+              -O \"${CMAKE_CURRENT_SOURCE_DIR}/src/commander4\"
       RESULT_VARIABLE _cmdr4_stubgen_res
     )
     if(NOT _cmdr4_stubgen_res EQUAL 0)
-      message(WARNING
-        \"pybind11_stubgen failed with exit code \${_cmdr4_stubgen_res}; continuing without stubs\"
-      )
+      message(WARNING \"nanobind.stubgen failed (\${_cmdr4_stubgen_res}); continuing without stubs\")
     endif()
   ")
 endif()

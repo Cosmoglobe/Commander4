@@ -1,7 +1,4 @@
-#include <pybind11/pybind11.h>
-#include <pybind11/numpy.h>
-#include <pybind11/stl.h>
-#include <pybind11/functional.h>
+#include "ducc0/bindings/pybind_utils.h"  // must be the first include
 #include <vector>
 #include <algorithm>
 #include <cmath>
@@ -10,7 +7,6 @@
 #include "ducc0/infra/mav.h"
 #include "ducc0/infra/misc_utils.h"
 #include "ducc0/math/constants.h"
-#include "ducc0/bindings/pybind_utils.h"
 
 namespace cmdr4 {
 
@@ -18,8 +14,7 @@ namespace detail_pymodule_utils {
 
 using namespace std;
 using namespace ducc0;
-namespace py = pybind11;
-auto None = py::none();
+auto None = py::none();  // py:: is just the nanobind namespace (this comes from ducc0).
 
 // exception type for signalling a (nearly) singular matrix)
 struct SingularError {};
@@ -353,7 +348,7 @@ numpy.ndarray(ndata,), dtype identical to that of symb)
 
 void add_utils(py::module_ &msup)
   {
-  using namespace pybind11::literals;
+  using namespace py::literals;
   auto m = msup.def_submodule("utils");
 //  m.doc() = utils_DS;
 
