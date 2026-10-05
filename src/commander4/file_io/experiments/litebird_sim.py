@@ -14,7 +14,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 from mpi4py import MPI
 
-from commander4.backend import utils as cpp_utils
+from commander4.backend import compression as cpp_compression
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
@@ -113,9 +113,8 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
                     psi_encoded = psi_encoded[0]
 
                 flag_buffer[:ntod] = 0.0
-                flag_buffer[:ntod] = cpp_utils.huffman_decode(
-                    np.frombuffer(flag_encoded, dtype=np.uint8),
-                    huffman_tree, huffman_symbols, flag_buffer[:ntod])
+                cpp_compression.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8),
+                                               huffman_tree, huffman_symbols, flag_buffer[:ntod])
                 flag_buffer[:ntod_optimal] = np.cumsum(flag_buffer[:ntod_optimal])
                 flag_buffer[:ntod_optimal] &= 6111232
                 if np.sum(flag_buffer[:ntod_optimal]) != 0:

@@ -6,7 +6,7 @@ first access, so a band can hold many scans without materializing all of them at
 import numpy as np
 from numpy.typing import NDArray
 
-from commander4.backend import utils as cpp_utils
+from commander4.backend import compression as cpp_compression
 from commander4.data_models.pointing import PixelPointing, DetectorBoresightPointing
 from commander4.diagnostics.performance import benchmark, start_bench, stop_bench
 
@@ -171,8 +171,8 @@ class DetectorTOD:
         if self._tod_is_compressed:
             tod = np.zeros(self.ntod_original, dtype=self._huffman_symbols2.dtype)
             with benchmark("huffman"):
-                tod[:] = cpp_utils.huffman_decode(self._tod,
-                                        self._huffman_tree2, self._huffman_symbols2, tod)
+                cpp_compression.huffman_decode(self._tod, self._huffman_tree2,
+                                               self._huffman_symbols2, tod)
             tod[:] = np.cumsum(tod)
             tod = tod.astype(np.float32)
         else:
@@ -210,7 +210,7 @@ class DetectorTOD:
         if self._flag_is_compressed:
             flag = np.zeros(self.ntod_original, dtype=self._huffman_symbols.dtype)
             with benchmark("huffman"):
-                flag = cpp_utils.huffman_decode(self._flag_encoded,
+                flag = cpp_compression.huffman_decode(self._flag_encoded,
                                             self._huffman_tree, self._huffman_symbols, flag)
             flag = np.cumsum(flag)
         else:

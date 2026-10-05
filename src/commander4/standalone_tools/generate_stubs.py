@@ -1,6 +1,7 @@
 """Command-line tool: generate type stubs for the compiled backend."""
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +40,8 @@ def main() -> None:
         str(out_dir),
     ]
 
+    # Start from an empty stub directory, so stubs of removed submodules do not linger.
+    shutil.rmtree(out_dir / "_cmdr4_backend", ignore_errors=True)
     subprocess.run(cmd, check=True)
 
 

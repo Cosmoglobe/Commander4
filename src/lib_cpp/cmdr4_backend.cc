@@ -1,5 +1,5 @@
 #include "ducc0/bindings/pybind_utils.h"
-#include "utils_pymod.cc"
+#include "compression_pymod.cc"
 #include "mapmaker_pymod.cc"
 #include "compsep_pymod.cc"
 
@@ -13,7 +13,7 @@ NB_MODULE(PKGNAME, m)
 #undef CMDR4_STRINGIFY
 #undef CMDR4_XSTRINGIFY
 
-  add_utils(m);
+  add_compression(m);
   add_mapmaker(m);
   add_compsep(m);
   }

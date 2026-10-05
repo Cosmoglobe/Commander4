@@ -2,7 +2,7 @@
 
 All compiled code is the nanobind module ``commander4._cmdr4_backend`` (C++ sources in
 ``src/lib_cpp/``, one ``*_pymod.cc`` file per submodule, built by CMake, type stubs in
-``src/commander4/_cmdr4_backend/``). Its submodules (``utils``, ``mapmaker``, ``compsep``) are
+``src/commander4/_cmdr4_backend/``). Its submodules (``compression``, ``mapmaker``, ``compsep``) are
 re-exported here so that callers write e.g. ``from commander4.backend import mapmaker as
 cpp_mapmaker``.
 

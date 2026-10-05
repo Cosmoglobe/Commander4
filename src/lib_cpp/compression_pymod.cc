@@ -4,15 +4,18 @@
 
 namespace cmdr4 {
 
-namespace detail_pymodule_utils {
+namespace detail_pymodule_compression {
 
 using namespace std;
 using namespace ducc0;
 // Note that this script inherits (from ducc0) py:: as the nanobind namespace.
 
-template<typename T> static NpArr Py2_huffman_decode(const CNpArr &bytes_,
-  const CNpArr &tree_, const CNpArr &symb_, const NpArr &out_)
+/** Decodes the bitstream into out, for symbols (and out) of integer type T. */
+template<typename T> static void huffman_decode_T(const CNpArr &bytes_,
+  const CNpArr &tree_, const CNpArr &symb_, const NpArr &out_, const char *dtype_descr)
   {
+  MR_assert(isPyarr<T>(out_), "type mismatch: 'out' must have the same dtype as 'symb' (",
+    dtype_descr, ")");
   auto bytes = to_cmav<uint8_t,1>(bytes_);
   auto tree = to_cmav<int64_t,1>(tree_);
   auto symb = to_cmav<T,1>(symb_);
@@ -43,38 +46,31 @@ template<typename T> static NpArr Py2_huffman_decode(const CNpArr &bytes_,
     }
   MR_assert(pos==nout, "out array is too large");
   }
-  return out_;
-  }
-
-template<typename T> static NpArr Py3_huffman_decode(const CNpArr &bytes,
-  const CNpArr &tree, const CNpArr &symb, const NpArr &out,
-  const char *dtype_descr)
-  {
-  MR_assert(isPyarr<T>(out), "type mismatch: 'out' must have the same dtype as 'symb' (",
-    dtype_descr, ")");
-  return Py2_huffman_decode<T>(bytes, tree, symb, out);
   }
 
 static NpArr Py_huffman_decode(const CNpArr &bytes,
   const CNpArr &tree, const CNpArr &symb, const NpArr &out)
   {
   if (isPyarr<int8_t>(symb))
-    return Py3_huffman_decode<int8_t>(bytes, tree, symb, out, "i1");
-  if (isPyarr<uint8_t>(symb))
-    return Py3_huffman_decode<uint8_t>(bytes, tree, symb, out, "u1");
-  if (isPyarr<int16_t>(symb))
-    return Py3_huffman_decode<int16_t>(bytes, tree, symb, out, "i2");
-  if (isPyarr<uint16_t>(symb))
-    return Py3_huffman_decode<uint16_t>(bytes, tree, symb, out, "u2");
-  if (isPyarr<int32_t>(symb))
-    return Py3_huffman_decode<int32_t>(bytes, tree, symb, out, "i4");
-  if (isPyarr<uint32_t>(symb))
-    return Py3_huffman_decode<uint32_t>(bytes, tree, symb, out, "u4");
-  if (isPyarr<int64_t>(symb))
-    return Py3_huffman_decode<int64_t>(bytes, tree, symb, out, "i8");
-  if (isPyarr<uint64_t>(symb))
-    return Py3_huffman_decode<uint64_t>(bytes, tree, symb, out, "u8");
-  MR_fail("type mismatch: 'symb' must have an integer dtype among 'i1', 'u1', 'i2', 'u2', 'i4', 'u4', 'i8', or 'u8'");
+    huffman_decode_T<int8_t>(bytes, tree, symb, out, "i1");
+  else if (isPyarr<uint8_t>(symb))
+    huffman_decode_T<uint8_t>(bytes, tree, symb, out, "u1");
+  else if (isPyarr<int16_t>(symb))
+    huffman_decode_T<int16_t>(bytes, tree, symb, out, "i2");
+  else if (isPyarr<uint16_t>(symb))
+    huffman_decode_T<uint16_t>(bytes, tree, symb, out, "u2");
+  else if (isPyarr<int32_t>(symb))
+    huffman_decode_T<int32_t>(bytes, tree, symb, out, "i4");
+  else if (isPyarr<uint32_t>(symb))
+    huffman_decode_T<uint32_t>(bytes, tree, symb, out, "u4");
+  else if (isPyarr<int64_t>(symb))
+    huffman_decode_T<int64_t>(bytes, tree, symb, out, "i8");
+  else if (isPyarr<uint64_t>(symb))
+    huffman_decode_T<uint64_t>(bytes, tree, symb, out, "u8");
+  else
+    MR_fail("type mismatch: 'symb' must have an integer dtype among 'i1', 'u1', 'i2', 'u2', ",
+            "'i4', 'u4', 'i8', or 'u8'");
+  return out;
   }
 
 constexpr const char *Py_huffman_decode_DS = R"""(
@@ -99,17 +95,17 @@ numpy.ndarray(ndata,), dtype identical to that of symb)
     the uncopressed data array, identical to `out`
 )""";
 
-void add_utils(py::module_ &msup)
+void add_compression(py::module_ &msup)
   {
   using namespace py::literals;
-  auto m = msup.def_submodule("utils");
+  auto m = msup.def_submodule("compression");
 
   m.def("huffman_decode", Py_huffman_decode, Py_huffman_decode_DS, "bytes"_a,
         "tree"_a, "symb"_a, "out"_a);
   }
 
-}  // ends `namespace detail_pymodule_utils`
+}  // ends `namespace detail_pymodule_compression`
 
-using detail_pymodule_utils::add_utils;
+using detail_pymodule_compression::add_compression;
 
 }  // ends `namespace cmdr4`

@@ -130,6 +130,8 @@ get_filename_component(CMDR4_NANOBIND_PARENT_DIR "${NB_CMAKE_DIR}/../.." ABSOLUT
 if(CMDR4_GENERATE_STUBS)
   install(CODE "
     message(STATUS \"Generating stubs for commander4._cmdr4_backend...\")
+    # Start from an empty stub directory, so stubs of removed submodules do not linger.
+    file(REMOVE_RECURSE \"${CMAKE_CURRENT_SOURCE_DIR}/src/commander4/_cmdr4_backend\")
     execute_process(
       COMMAND \"${CMAKE_COMMAND}\" -E env
               \"PYTHONPATH=\${CMAKE_INSTALL_PREFIX}:${CMDR4_NANOBIND_PARENT_DIR}\"

@@ -10,7 +10,7 @@ import ducc0
 import os
 from pixell.bunch import Bunch
 from pixell import coordsys
-from commander4.backend import utils as cpp_utils
+from commander4.backend import compression as cpp_compression
 
 
 def remap_pix_nside(pix: NDArray[np.integer], nside_from: int, nside_to: int,
@@ -251,8 +251,8 @@ class PixelPointing:
         target_nside = self.nside if nside is None else nside
         if self.pix_is_compressed:
             pix = np.zeros(self.ntod_original, dtype=self.huffman_symbols.dtype)
-            pix = cpp_utils.huffman_decode(self.pix_compressed_u8, self.huffman_tree,
-                                           self.huffman_symbols, pix)
+            pix = cpp_compression.huffman_decode(self.pix_compressed_u8, self.huffman_tree,
+                                                 self.huffman_symbols, pix)
             # The compressed stream stores first differences, so reconstruct the
             # absolute pixel indices with a cumulative sum.
             pix = np.cumsum(pix)
@@ -266,8 +266,8 @@ class PixelPointing:
         """Return polarization angles, converting compressed one-based bins to their centers."""
         if self.psi_is_compressed:
             psi = np.zeros(self.ntod_original, dtype=self.huffman_symbols.dtype)
-            psi = cpp_utils.huffman_decode(self.psi_compressed_u8, self.huffman_tree,
-                                           self.huffman_symbols, psi)
+            psi = cpp_compression.huffman_decode(self.psi_compressed_u8, self.huffman_tree,
+                                                 self.huffman_symbols, psi)
             # Commander scan files store first differences of one-based bin numbers. Bin i covers
             # [(i-1)*width, i*width), so its representative angle is the center (i-0.5)*width.
             psi_bins = np.cumsum(psi)[:self.ntod]
