@@ -1,5 +1,6 @@
 #include "ducc0/bindings/pybind_utils.h"
 #include "utils_pymod.cc"
+#include "mapmaker_pymod.cc"
 
 using namespace cmdr4;
 
@@ -12,4 +13,5 @@ NB_MODULE(PKGNAME, m)
 #undef CMDR4_XSTRINGIFY
 
   add_utils(m);
+  add_mapmaker(m);
   }

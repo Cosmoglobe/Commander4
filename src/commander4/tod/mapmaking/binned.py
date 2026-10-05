@@ -5,13 +5,12 @@ build the signal map, `WeightsMapmaker`/`WeightsMapmakerIQU` the inverse-varianc
 mapmakers need. `tod2map_bin` drives the whole per-band scan loop.
 """
 import numpy as np
-import ctypes as ct
 from mpi4py import MPI
 import logging
 from numpy.typing import NDArray
 
+from commander4.backend import mapmaker as cpp_mapmaker
 from commander4.diagnostics.performance import log_memory, start_bench, stop_bench
-from commander4.backend.ctypes_lib import load_cmdr4_ctypes_lib
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.tod_samples import TODSamples
@@ -24,7 +23,7 @@ from commander4.tod.config import MapmakingConfig, CorrelatedNoiseConfig, DataSe
 from commander4.tod.mapmaking.output import finalize_band_maps
 from commander4.tod.data_selection import data_selection_status
 from commander4.tod.sidelobe_deconvolve import FarBeamProjector
-from commander4.diagnostics.performance import benchmark, log_memory
+from commander4.diagnostics.performance import benchmark
 
 logger = logging.getLogger(__name__)
 
@@ -51,17 +50,9 @@ class Mapmaker:
         self._gathered_map = None
         self._finalized_map = None
 
-        # Setting up Ctypes mapmaker
-        self.maplib = load_cmdr4_ctypes_lib()
-        ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
-        ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
-        self.maplib.map_accumulator_f64.argtypes = [ct_f64_dim1, ct_f64_dim1, ct.c_double,
-                                                    ct_i64_dim1, ct.c_int64]
-
     @property
     def final_map(self):
-        if self.map_comm.Get_rank() == 0:
-            if self._finalized_map is None:
+        if self._finalized_map is None and self.map_comm.Get_rank() == 0:
                 raise RuntimeError("Attempted to retrieve an unfinished map.")
         return self._finalized_map
 
@@ -71,15 +62,11 @@ class Mapmaker:
         # Check that we are still in business, and haven't already called "gather_map".
         if self._map_signal is None:
             raise RuntimeError("Cannot accumulate into a finalized map.")
-        ntod = tod.shape[0]
-        tod_f64 = np.ascontiguousarray(tod, dtype=np.float64)
         # An intensity map only sees the intensity response, and it enters the design matrix
         # linearly, so folding it into the scalar weight is the whole of it.
         resp_I, _ = response_I_P
-        weight_f64 = float(weights) * resp_I
-        pix = self.domain.to_local(pix)
-        self.maplib.map_accumulator_f64(self._map_signal, tod_f64, weight_f64,
-                                    pix.astype(np.int64, copy=False), ntod)
+        pix = self.domain.to_local(pix).astype(np.int64, copy=False)
+        cpp_mapmaker.map_accumulator(self._map_signal, tod, float(weights) * resp_I, pix)
 
     def gather_map(self):
         """Reduce the local map buffers across MPI ranks into the full-sky root map."""
@@ -117,17 +104,9 @@ class WeightsMapmaker:
         self._gathered_map = None
         self._finalized_rms_map = None
 
-        # Setting up Ctypes mapmaker
-        self.maplib = load_cmdr4_ctypes_lib()
-        ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
-        ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
-        self.maplib.map_weight_accumulator_f64.argtypes = [ct_f64_dim1, ct.c_double, ct_i64_dim1,
-                                   ct.c_int64]
-
     @property
     def final_map(self):
-        if self.map_comm.Get_rank() == 0:
-            if self._gathered_map is None:
+        if self._gathered_map is None and self.map_comm.Get_rank() == 0:
                 raise RuntimeError("Attempted to retrieve an unfinished weights map.")
         return self._gathered_map
 
@@ -149,14 +128,10 @@ class WeightsMapmaker:
         # Check that we are still in business, and haven't already called "gather_map".
         if self._map_signal is None:
             raise RuntimeError("Cannot accumulate into a finalized weights map.")
-        ntod = pix.shape[0]
         # This is P^T N^-1 P, so the intensity response enters squared (the IQU kernel's II term).
         resp_I, _ = response_I_P
-        weight_f64 = float(weight) * resp_I**2
-        pix = self.domain.to_local(pix)
-        # The scalar weight kernel indexes map[pix] directly and takes no num_pix argument.
-        self.maplib.map_weight_accumulator_f64(self._map_signal, weight_f64,
-                                               pix.astype(np.int64, copy=False), ntod)
+        pix = self.domain.to_local(pix).astype(np.int64, copy=False)
+        cpp_mapmaker.map_weight_accumulator(self._map_signal, float(weight) * resp_I**2, pix)
 
     def gather_map(self):
         """Reduce the local weights buffers across MPI ranks into the full-sky root map."""
@@ -202,23 +177,9 @@ class MapmakerIQU:
         self._finalized_map = None
         self._has_gathered = False
 
-        # Setting up Ctypes mapmaker
-        self.maplib = load_cmdr4_ctypes_lib()
-        ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
-        ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
-        ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
-        self.maplib.map_accumulator_IQU_response_f64.argtypes = [ct_f64_dim2, ct_f64_dim1,
-                                     ct.c_double, ct_i64_dim1,
-                                     ct_f64_dim1, ct.c_double,
-                                     ct.c_double, ct.c_int64,
-                                     ct.c_int64]
-        self.maplib.map_solve_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim2, ct_f64_dim2,
-                      ct.c_int64]
-
     @property
     def final_map(self):
-        if self.map_comm.Get_rank() == 0:
-            if self._finalized_map is None:
+        if self._finalized_map is None and self.map_comm.Get_rank() == 0:
                 raise RuntimeError("Attempted to read a map before it was finalized.")
         return self._finalized_map
 
@@ -229,21 +190,15 @@ class MapmakerIQU:
         # Check that we are still in business, and haven't already called "gather_map".
         if self._map_signal is None:
             raise RuntimeError("Cannot accumulate into a finalized map.")
-        ntod = tod.shape[0]
-        tod_f64 = np.ascontiguousarray(tod, dtype=np.float64)
-        weight_f64 = float(weights)
-        psi_f64 = np.ascontiguousarray(psi, dtype=np.float64)
-        # The IQU kernels stride the (3, n) buffer by its pixel count, so num_pix must be n_local.
-        pix_i64 = self.domain.to_local(pix).astype(np.int64, copy=False)
-
+        pix = self.domain.to_local(pix).astype(np.int64, copy=False)
         resp_I, resp_P = response_I_P
-        self.maplib.map_accumulator_IQU_response_f64(self._map_signal, tod_f64, weight_f64, pix_i64,
-                                                     psi_f64, resp_I, resp_P, ntod, self._nloc)
+        cpp_mapmaker.map_accumulator_IQU(self._map_signal, tod, float(weights), pix,
+                                         np.asarray(psi, dtype=np.float64),
+                                         response_I=resp_I, response_P=resp_P)
 
     def accumulate_to_map_Python(self, tod:NDArray, weights:NDArray, pix:NDArray, psi:NDArray,
                                  response_I_P: tuple[float, float] = (1.0, 1.0)):
-        """Reference accumulator matching the ctypes IQU implementation."""
-        # Reference implementation matching the ctypes IQU accumulator.
+        """Reference accumulator matching the C++ IQU kernel."""
         if self._map_signal is None:
             raise RuntimeError("Cannot accumulate into a finalized map.")
         pix_idx = self.domain.to_local(pix).astype(np.int64, copy=False)
@@ -279,7 +234,7 @@ class MapmakerIQU:
             norm_map = np.ascontiguousarray(normalization_map, dtype=np.float64)
             rhs_map = np.ascontiguousarray(self._gathered_map, dtype=np.float64)
             solved = np.zeros((3, self.npix), dtype=np.float64)
-            self.maplib.map_solve_IQU_f64(solved, rhs_map, norm_map, self.npix)
+            cpp_mapmaker.map_solve_IQU(solved, rhs_map, norm_map)
             self._finalized_map = solved.astype(self.dtype, copy=False)
             self._gathered_map = None
 
@@ -346,28 +301,16 @@ class WeightsMapmakerIQU:
         self._finalized_rms_map = None
         self._has_gathered = False
 
-        # Setting up Ctypes mapmaker
-        self.maplib = load_cmdr4_ctypes_lib()
-        ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
-        ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
-        ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
-        self.maplib.map_weight_accumulator_IQU_response_f64.argtypes = [ct_f64_dim2,
-                                        ct.c_double, ct_i64_dim1, ct_f64_dim1, ct.c_double,
-                                        ct.c_double, ct.c_int64, ct.c_int64]
-        self.maplib.map_invdiag_IQU_f64.argtypes = [ct_f64_dim2, ct_f64_dim2, ct.c_int64]
-
     @property
     def final_rms_map(self):
-        if self.map_comm.Get_rank() == 0:
-            if self._finalized_rms_map is None:
-                raise RuntimeError("Attempted to read an unfinished RMS map.")
+        if self._finalized_rms_map is None and self.map_comm.Get_rank() == 0:
+            raise RuntimeError("Attempted to read an unfinished RMS map.")
         return self._finalized_rms_map
     
     @property
     def final_cov_map(self):
-        if self.map_comm.Get_rank() == 0:
-            if self._gathered_map is None:
-                raise RuntimeError("Attempted to read an unfinished covariance map.")
+        if self._gathered_map is None and self.map_comm.Get_rank() == 0:
+            raise RuntimeError("Attempted to read an unfinished covariance map.")
         return self._gathered_map
 
     def accumulate_to_map(self, weight:float, pix:NDArray, psi:NDArray,
@@ -376,20 +319,15 @@ class WeightsMapmakerIQU:
         # Check that we are still in business, and haven't already called "gather_map".
         if self._map_signal is None:
             raise RuntimeError("Cannot accumulate into a finalized weights map.")
-        ntod = pix.shape[0]
-        weight_f64 = float(weight)
-        psi_f64 = np.ascontiguousarray(psi, dtype=np.float64)
-        # The IQU kernels stride the (6, n) buffer by its pixel count, so num_pix must be n_local.
-        pix_i64 = self.domain.to_local(pix).astype(np.int64, copy=False)
-        # The response kernel dispatches on [1, 1] itself, so a standard detector costs nothing.
+        pix = self.domain.to_local(pix).astype(np.int64, copy=False)
         resp_I, resp_P = response_I_P
-        self.maplib.map_weight_accumulator_IQU_response_f64(self._map_signal, weight_f64, pix_i64,
-                                                        psi_f64, resp_I, resp_P, ntod, self._nloc)
+        cpp_mapmaker.map_weight_accumulator_IQU(self._map_signal, float(weight), pix,
+                                                np.asarray(psi, dtype=np.float64),
+                                                response_I=resp_I, response_P=resp_P)
 
     def accumulate_to_map_Python(self, weight:float, pix:NDArray, psi:NDArray,
                                  response_I_P: tuple[float, float] = (1.0, 1.0)):
-        """Reference accumulator matching the ctypes IQU weights implementation."""
-        # Reference implementation matching the ctypes IQU weight accumulator.
+        """Reference accumulator matching the C++ IQU weights kernel."""
         if self._map_signal is None:
             raise RuntimeError("Cannot accumulate into a finalized weights map.")
         pix_idx = self.domain.to_local(pix).astype(np.int64, copy=False)
@@ -424,7 +362,7 @@ class WeightsMapmakerIQU:
                 raise RuntimeError("Cannot normalize a weights map before it is gathered.")
             norm_map = np.ascontiguousarray(self._gathered_map, dtype=np.float64)
             rms = np.zeros((3, self.npix), dtype=np.float64)
-            self.maplib.map_invdiag_IQU_f64(rms, norm_map, self.npix)
+            cpp_mapmaker.map_invdiag_IQU(rms, norm_map)
             self._finalized_rms_map = rms.astype(self.dtype, copy=False)
 
     def normalize_map_Python(self):

@@ -13,19 +13,18 @@ rather than left as an unconstrained direction for the CG to amplify.
 (The component-separation solver's preconditioners are a separate family, in
 `compsep/preconditioners.py`.)
 """
-import ctypes as ct
 import logging
 
 import numpy as np
 from numpy.typing import NDArray
 
-from commander4.backend.ctypes_lib import load_cmdr4_ctypes_lib
+from commander4.backend import mapmaker as cpp_mapmaker
 from commander4.math_utils.arithmetic import inplace_arr_prod
 
 logger = logging.getLogger(__name__)
 
 # Reciprocal-condition floor below which a per-pixel 3x3 counts as unsolvable. Matches the binned
-# mapmaker's C solver (mapmaker.cpp::_invert_SPD_3x3), so both mapmakers drop the same pixels.
+# mapmaker's C++ solver (mapmaker_pymod.cc::invert_SPD_3x3), so both mapmakers drop the same pixels.
 _RCOND_FLOOR = 1e-12
 
 
@@ -79,19 +78,12 @@ class BlockInvNPreconditionerIQU:
         self.inv_N_IQU, _ = invert_normal_matrix_IQU(normal_matrix)
         self.npix = self.inv_N_IQU.shape[1]
 
-        self.maplib = load_cmdr4_ctypes_lib()
-        ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
-        self.maplib.apply_invN_to_map_IQU_f64.argtypes = [ct_f64_dim2,  # map_in
-                                                          ct_f64_dim2,  # map_out
-                                                          ct_f64_dim2,  # inv_N_map
-                                                          ct.c_int64]   # num_pix
-
     def __call__(self, map: NDArray) -> NDArray:
         if map.shape != (3, self.npix):
             raise ValueError(f"Map must have shape (3, {self.npix}), got {map.shape}.")
         map_in = np.ascontiguousarray(map, dtype=np.float64)
         map_out = np.empty_like(map_in)
-        self.maplib.apply_invN_to_map_IQU_f64(map_in, map_out, self.inv_N_IQU, self.npix)
+        cpp_mapmaker.apply_invN_to_map_IQU(map_in, map_out, self.inv_N_IQU)
         return map_out
 
 

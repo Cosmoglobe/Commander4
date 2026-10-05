@@ -350,7 +350,6 @@ void add_utils(py::module_ &msup)
   {
   using namespace py::literals;
   auto m = msup.def_submodule("utils");
-//  m.doc() = utils_DS;
 
   m.def("amplitude_sampling_per_pix_helper",
         Py_amplitude_sampling_per_pix_helper,
@@ -366,8 +365,8 @@ void add_utils(py::module_ &msup)
         "tree"_a, "symb"_a, "out"_a);
   }
 
-}
+}  // ends `namespace detail_pymodule_utils`
 
 using detail_pymodule_utils::add_utils;
 
-}
+}  // ends `namespace cmdr4`

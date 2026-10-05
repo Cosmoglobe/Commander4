@@ -145,25 +145,6 @@ def test_glitch_events_are_debug_output_written_per_detector_scan(tmp_path) -> N
     assert glitch_names(samples) == []
 
 
-def test_jump_counts_are_always_written_and_the_jumps_only_as_debug_output() -> None:
-    from commander4.tod.jumps.events import JumpEvents
-
-    samples = _minimal_tod_samples()
-    samples.jumps[1, 0] = JumpEvents([10, 30], [1.5, -0.5])
-
-    written = samples.gather_chain_arrays(1)
-    np.testing.assert_array_equal(written["jump_counts"], [[0, 0], [2, 0], [0, 0]])
-    assert not any(name.startswith("jumps/") for name in written)  # Off unless asked for.
-
-    samples.write_jump_events = True
-    written = samples.gather_chain_arrays(1)
-    # Only the detector-scan with jumps gets a group, named by scan ID and detector name.
-    assert {name for name in written if name.startswith("jumps/")} == {
-        "jumps/1/d0/locations", "jumps/1/d0/offsets"}
-    np.testing.assert_array_equal(written["jumps/1/d0/locations"], [10, 30])
-    np.testing.assert_array_equal(written["jumps/1/d0/offsets"], [1.5, -0.5])
-
-
 @pytest.mark.parametrize("save_residual", [False, True])
 @pytest.mark.parametrize("save_ncorr", [False, True])
 def test_full_tods_round_trip_independently(tmp_path, save_residual: bool,

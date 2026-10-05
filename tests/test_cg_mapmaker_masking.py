@@ -7,7 +7,7 @@ Fourier transfer function that needs a *continuous* TOD -- so it cannot remove f
 both the LHS and RHS gap-fill them and therefore span **every** sample of each accepted
 detector-scan. These tests build a real single-detector band and check that the operator spans all
 samples (flagged pixels stay populated, matching the RHS), and that the full-length pointing arrays
-are handled correctly by the C ``map2tod``/accumulator pair.
+are handled correctly by the C++ ``map2tod``/accumulator pair.
 """
 from types import SimpleNamespace
 
@@ -208,23 +208,23 @@ def test_apply_LHS_IQU_symmetric_and_spans_all_samples():
 
 
 @pytest.mark.parametrize("mapmaker_class, pols", [(CGMapmakerI, "I"), (CGMapmakerIQU, "IQU")])
-def test_apply_P_adjoint_single_precision_matches_double(mapmaker_class, pols):
-    """The f32 ``apply_P_adjoint`` must give the same map as the f64 one.
+def test_apply_P_adjoint_float32_tod_matches_float64(mapmaker_class, pols):
+    """A float32 TOD must accumulate into the (float64) map exactly as the same TOD in float64.
 
-    The C f32 accumulators take ``float weight``. Declaring it as ``c_double`` in ctypes makes the
-    C side read the weight as 0.0 on x86-64, so the f32 map silently stays all zeros.
+    The kernels use each sample as a double, so the two maps agree to rounding; a broken float32
+    path would instead show up as a different (e.g. all-zero) map.
     """
     nside = 2
     rng = np.random.default_rng(2)
     pix = np.array([0, 1, 2, 5, 4, 6, 7, 9, 8, 10, 0, 1], dtype=np.int64)
     psi = rng.uniform(0, np.pi, pix.size)
-    tod = rng.normal(size=pix.size)
+    tod = rng.normal(size=pix.size).astype(np.float32)
     band, ts = _build_band(pix, [], nside, 1.0, pols, psi=psi)
+    cg = mapmaker_class(band, ts, MPI.COMM_SELF)
     maps = []
-    for double_prec, dtype in [(True, np.float64), (False, np.float32)]:
-        cg = mapmaker_class(band, ts, MPI.COMM_SELF, double_prec=double_prec)
-        out_map = np.zeros((len(pols), 12 * nside**2), dtype=dtype)
-        cg.apply_P_adjoint(None, out_map, pix=pix, psi=psi, scan_tod_arr=tod.astype(dtype))
+    for scan_tod_arr in [tod.astype(np.float64), tod]:
+        out_map = np.zeros((len(pols), 12 * nside**2))
+        cg.apply_P_adjoint(None, out_map, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr)
         maps.append(out_map)
     assert np.any(maps[0] != 0.0)
-    np.testing.assert_allclose(maps[1], maps[0], rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(maps[1], maps[0], rtol=1e-12, atol=1e-12)

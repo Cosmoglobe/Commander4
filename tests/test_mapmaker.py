@@ -101,7 +101,7 @@ def _rms_expected(norm_map: NDArray) -> NDArray:
 
 
 def test_mapmaker_iqu_solve_matches_numpy_float64():
-	"""ctypes IQU solver matches NumPy solve for well-conditioned float64 inputs."""
+	"""C++IQU solver matches NumPy solve for well-conditioned float64 inputs."""
 	rng = np.random.default_rng(123)
 	nside = 1
 	npix = 12 * nside**2
@@ -120,7 +120,7 @@ def test_mapmaker_iqu_solve_matches_numpy_float64():
 
 
 def test_mapmaker_iqu_solve_float32_identity():
-	"""ctypes IQU solver handles float32 outputs with identity normalization."""
+	"""C++IQU solver handles float32 outputs with identity normalization."""
 	rng = np.random.default_rng(456)
 	nside = 1
 	npix = 12 * nside**2
@@ -162,7 +162,7 @@ def test_mapmaker_iqu_singular_pixel_zeroed():
 
 
 def test_weights_mapmaker_iqu_invdiag_matches_numpy():
-	"""ctypes RMS computation matches NumPy inverse-diagonal reference."""
+	"""C++RMS computation matches NumPy inverse-diagonal reference."""
 	rng = np.random.default_rng(321)
 	nside = 1
 	npix = 12 * nside**2
@@ -199,8 +199,8 @@ def test_weights_mapmaker_iqu_singular_pixel_infinite():
 	assert np.allclose(mapmaker.final_rms_map, expected, rtol=1e-5, atol=1e-6)
 
 
-def test_mapmaker_iqu_ill_conditioned_masked_ctypes():
-	"""ctypes IQU solver masks ill-conditioned pixels near singularity."""
+def test_mapmaker_iqu_ill_conditioned_masked_cpp():
+	"""C++IQU solver masks ill-conditioned pixels near singularity."""
 	nside = 1
 	npix = 12 * nside**2
 	norm_map = np.zeros((6, npix), dtype=np.float64)
@@ -225,8 +225,8 @@ def test_mapmaker_iqu_ill_conditioned_masked_ctypes():
 	assert np.allclose(mapmaker.final_map[:, 1], rhs[:, 1], rtol=1e-12, atol=1e-12)
 
 
-def test_weights_mapmaker_iqu_ill_conditioned_masked_ctypes():
-	"""ctypes RMS computation gives infinite RMS for ill-conditioned pixels."""
+def test_weights_mapmaker_iqu_ill_conditioned_masked_cpp():
+	"""C++RMS computation gives infinite RMS for ill-conditioned pixels."""
 	nside = 1
 	npix = 12 * nside**2
 	norm_map = np.zeros((6, npix), dtype=np.float64)
