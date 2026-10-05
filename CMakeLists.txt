@@ -23,7 +23,7 @@ else()
 endif()
 
 # Match the macros used by src/lib_cpp/cmdr4_backend.cc
-# - PKGNAME must expand to an identifier for PYBIND11_MODULE(PKGNAME, m)
+# - PKGNAME must expand to an identifier for NB_MODULE(PKGNAME, m)
 # - PKGVERSION is stringified inside the C++ code.
 set(PKGNAME _cmdr4_backend)
 set(PKGVERSION ${PROJECT_VERSION})
@@ -63,15 +63,7 @@ execute_process(
         OUTPUT_VARIABLE NB_DIR)
 list(APPEND CMAKE_PREFIX_PATH "${NB_DIR}")
 find_package(nanobind CONFIG REQUIRED)
-nanobind_add_module(${PKGNAME} FREE_THREADED NOSTRIP NB_SUPPRESS_WARNINGS NOMINSIZE ${CXX_SOURCES} ${CXX_SOURCES})
-#nanobind_add_stub(
-#    ${PKGNAME}_stub
-#    MODULE commander4.${PKGNAME}
-#    OUTPUT ${PKGNAME}.pyi
-#    PYTHON_PATH $<TARGET_FILE_DIR:${PKGNAME}>
-#    DEPENDS ${PKGNAME}
-#    RECURSIVE
-#)
+nanobind_add_module(${PKGNAME} FREE_THREADED NOSTRIP NB_SUPPRESS_WARNINGS NOMINSIZE ${CXX_SOURCES})
 
 target_include_directories(${PKGNAME} PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_cpp
@@ -169,7 +161,7 @@ option(CMDR4_GENERATE_STUBS "Generate .pyi stubs during install" ON)
 
 # The stub step imports the freshly installed module, so it needs CMAKE_INSTALL_PREFIX on the
 # path. Prepend rather than replace: under pip's build isolation the build requirements
-# (pybind11-stubgen, and numpy for the ndarray annotations) are reachable only through the
+# (including nanobind, which provides nanobind.stubgen) are reachable only through the
 # inherited PYTHONPATH, and overwriting it would silently leave the stubs ungenerated.
 set(CMDR4_STUB_PYTHONPATH "${CMAKE_INSTALL_PREFIX}")
 if(NOT "$ENV{PYTHONPATH}" STREQUAL "")

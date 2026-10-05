@@ -14,7 +14,7 @@ namespace detail_pymodule_utils {
 
 using namespace std;
 using namespace ducc0;
-auto None = py::none();  // py:: is just the nanobind namespace (this comes from ducc0).
+// Note that this script inherits (from ducc0) py:: as the nanobind namespace.
 
 // exception type for signalling a (nearly) singular matrix)
 struct SingularError {};
@@ -359,7 +359,7 @@ void add_utils(py::module_ &msup)
         "map_rms"_a,
         "M"_a,
         "random"_a,
-        "comp_maps"_a=None,
+        "comp_maps"_a=py::none(),
         "nthreads"_a=1);
 
   m.def("huffman_decode", Py_huffman_decode, Py_huffman_decode_DS, "bytes"_a,

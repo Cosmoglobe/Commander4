@@ -24,7 +24,7 @@ def main() -> None:
     out_dir = repo_root / "src" / "commander4"
 
     try:
-        import nanobind
+        import nanobind  # noqa: F401
     except ImportError:
         sys.exit("c4-generate-stubs needs nanobind in this environment: pip install nanobind")
 
