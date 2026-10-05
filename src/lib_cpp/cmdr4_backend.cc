@@ -1,6 +1,7 @@
 #include "ducc0/bindings/pybind_utils.h"
 #include "utils_pymod.cc"
 #include "mapmaker_pymod.cc"
+#include "compsep_pymod.cc"
 
 using namespace cmdr4;
 
@@ -14,4 +15,5 @@ NB_MODULE(PKGNAME, m)
 
   add_utils(m);
   add_mapmaker(m);
+  add_compsep(m);
   }

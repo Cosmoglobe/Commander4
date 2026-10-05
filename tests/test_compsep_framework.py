@@ -331,7 +331,7 @@ def test_broken_dense_matrix_debug_path_cannot_be_selected() -> None:
 
 def test_per_pixel_solver_rejects_non_diffuse_components_before_mpi_work() -> None:
     with pytest.raises(ValueError, match="does not support object"):
-        solve_compsep_perpix(None, None, [object()], double_precision=False)
+        solve_compsep_perpix(None, None, [object()], double_precision=False, nthreads=1)
 
 
 def test_unimplemented_component_classes_are_rejected_during_construction() -> None:
@@ -362,7 +362,7 @@ def test_per_pixel_solver_accepts_resolved_precision() -> None:
         nu=30.0, fwhm=0.0, nside=2,
     )
     result = solve_compsep_perpix(
-        MPI.COMM_SELF, detector_data, comp_list, double_precision=False)
+        MPI.COMM_SELF, detector_data, comp_list, double_precision=False, nthreads=1)
     assert result[0].alms.dtype == np.complex64
     assert np.all(np.isfinite(result[0].alms))
 

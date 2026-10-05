@@ -2,11 +2,10 @@
 
 Alternative to the global CG solve for the case where every band has been brought to a common
 resolution. The mixing matrix is then the same at every multipole, so the amplitudes follow from a
-small (nband x ncomp) normal-equation solve per pixel, done in C through ctypes. Unlike the CG
-solver, the amplitudes it produces carry the common beam rather than being deconvolved.
+small (nband x ncomp) normal-equation solve per pixel, done in C++. Unlike the CG solver, the
+amplitudes it produces carry the common beam rather than being deconvolved.
 """
 import time
-import ctypes
 import logging
 import numpy as np
 from mpi4py import MPI
@@ -14,18 +13,19 @@ from pixell import curvedsky
 
 from commander4.sky.component import Component
 from commander4.sky.diffuse_components import DiffuseComponent
-from commander4.backend.ctypes_lib import load_cmdr4_ctypes_lib
+from commander4.backend import compsep as cpp_compsep
 from commander4.data_models.detector_map import DetectorMap
 from commander4.diagnostics.performance import benchmark
 
 
 def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
                          comp_list: list[Component],
-                         double_precision: bool) -> list[Component]:
+                         double_precision: bool, nthreads: int) -> list[Component]:
     """ A pixel-by-pixel solver for the component separation problem. Requires uniform nside and a
         common beam across all bands (smoothing to a common resolution is done at the data sources,
         controlled by ``compsep.common_res_fwhm``). This solver ignores beams entirely, so bands
         arriving at differing resolutions are silently mixed; a warning is logged below.
+        The per-pixel solves run on the master rank only, with ``nthreads`` threads.
     """
     for component in comp_list:
         if not isinstance(component, DiffuseComponent):
@@ -49,15 +49,6 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     map_sky = detector_data.map_sky
     band_freq = detector_data.nu
     map_rms = detector_data.map_rms
-    ctypes_lib = load_cmdr4_ctypes_lib()
-    ctypes_lib.solve_compsep.argtypes = [
-        ctypes.c_int, ctypes.c_int, ctypes.c_int,
-        np.ctypeslib.ndpointer(dtype=np.float64, ndim=2, flags='C_CONTIGUOUS'), # map_sky
-        np.ctypeslib.ndpointer(dtype=np.float64, ndim=2, flags='C_CONTIGUOUS'), # map_rms
-        np.ctypeslib.ndpointer(dtype=np.float64, ndim=2, flags='C_CONTIGUOUS'), # M
-        np.ctypeslib.ndpointer(dtype=np.float64, ndim=2, flags='C_CONTIGUOUS'), # rnd
-        np.ctypeslib.ndpointer(dtype=np.float64, ndim=2, flags='C_CONTIGUOUS'), # map_out
-    ]
 
     # This solver has no beam model, so all bands should already share one resolution (smoothed at
     # ingest via compsep.common_res_fwhm); differing FWHMs silently mix resolutions, so warn.
@@ -94,19 +85,16 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
             maps_sky = np.array(maps_sky)
             maps_rms = np.array(maps_rms)
             nband = len(freqs)
-            comp_maps[ipol] = np.zeros((ncomp, npix))
             M = np.empty((nband, ncomp))
             for icomp in range(ncomp):
                 M[:, icomp] = comp_list[icomp].get_sed(freqs)
             rand = np.random.randn(npix, nband)
-            # TODO: Write unit tests that confirm Python and C gives same answers.
             # TODO: Should scale M to make solution more well-conditioned, and then adjust
             # solution with the scaling factor used.
             with benchmark("perpix-solve"):
-                ctypes_lib.solve_compsep(npix, nband, ncomp,
-                                         maps_sky.astype(np.float64, copy=False),
-                                         maps_rms.astype(np.float64, copy=False), M, rand,
-                                         comp_maps[ipol])
+                comp_maps[ipol] = cpp_compsep.solve_perpix(maps_sky.astype(np.float64, copy=False),
+                                                           maps_rms.astype(np.float64, copy=False),
+                                                           M, rand, nthreads)
             logger.info(f"Finished pixel-by-pixel component separation in {time.time()-t0:.2f}s "\
                         f"for polarization {ipol+1} of {npol}.")
 

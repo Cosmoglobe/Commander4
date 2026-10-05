@@ -42,21 +42,6 @@ set(CXX_SOURCES
   external/ducc0/src/ducc0/infra/mav.cc
 )
 
-### ctypes libraries ###
-# Native C ABI helpers loaded via ctypes.
-# Keep these in one shared library
-# To add new ctypes helpers: drop a new .cpp into src/lib_cpp/ctypes/.
-file(GLOB CMDR4_CTYPES_SOURCES CONFIGURE_DEPENDS
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/lib_cpp/ctypes/*.cpp"
-)
-list(SORT CMDR4_CTYPES_SOURCES)
-
-add_library(cmdr4_ctypes SHARED ${CMDR4_CTYPES_SOURCES})
-set_target_properties(cmdr4_ctypes PROPERTIES
-  OUTPUT_NAME "cmdr4_ctypes"
-  PREFIX ""
-)
-
 execute_process(
         COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
         OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -68,10 +53,6 @@ nanobind_add_module(${PKGNAME} FREE_THREADED NOSTRIP NB_SUPPRESS_WARNINGS NOMINS
 target_include_directories(${PKGNAME} PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/external/ducc0/src
-)
-
-target_include_directories(cmdr4_ctypes PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_cpp
 )
 
 target_compile_definitions(${PKGNAME} PRIVATE PKGNAME=${PKGNAME} PKGVERSION=${PKGVERSION} DUCC0_USE_NANOBIND)
@@ -93,65 +74,43 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
 endif()
 
 target_compile_options(${PKGNAME} PRIVATE ${CMDR4_WARN_FLAGS})
-target_compile_options(cmdr4_ctypes PRIVATE ${CMDR4_WARN_FLAGS})
 
 if(OPTFLAGS MATCHES "^native")
   target_compile_options(${PKGNAME} PRIVATE ${CMDR4_ARCH_FLAGS})
-  target_compile_options(cmdr4_ctypes PRIVATE ${CMDR4_ARCH_FLAGS})
 endif()
 if(OPTFLAGS MATCHES "-debug$")
   target_compile_options(${PKGNAME} PRIVATE ${CMDR4_DEBUG_FLAGS})
-  target_compile_options(cmdr4_ctypes PRIVATE ${CMDR4_DEBUG_FLAGS})
 elseif(OPTFLAGS MATCHES "-strip$")
   target_link_options(${PKGNAME} PRIVATE ${CMDR4_STRIP_FLAGS})
-  target_link_options(cmdr4_ctypes PRIVATE ${CMDR4_STRIP_FLAGS})
 endif()
 if(OPTFLAGS MATCHES "^none")
   target_compile_options(${PKGNAME} PRIVATE ${CMDR4_NOOPT_FLAGS})
-  target_compile_options(cmdr4_ctypes PRIVATE ${CMDR4_NOOPT_FLAGS})
 else()
   target_compile_options(${PKGNAME} PRIVATE ${CMDR4_OPT_FLAGS})
-  target_compile_options(cmdr4_ctypes PRIVATE ${CMDR4_OPT_FLAGS})
 endif()
 
 find_package(Threads REQUIRED)
 target_link_libraries(${PKGNAME} PRIVATE Threads::Threads)
-target_link_libraries(cmdr4_ctypes PRIVATE Threads::Threads)
-
-# ctypes sources may include <omp.h>. Link OpenMP if available.
-find_package(OpenMP QUIET)
-if(OpenMP_CXX_FOUND)
-  target_link_libraries(cmdr4_ctypes PRIVATE OpenMP::OpenMP_CXX)
-endif()
-
-target_link_libraries(cmdr4_ctypes PRIVATE m)
 
 if(DEFINED ENV{CMDR4_CFLAGS})
   separate_arguments(CFLAGS_TMP NATIVE_COMMAND "$ENV{CMDR4_CFLAGS}")
   target_compile_options(${PKGNAME} PRIVATE ${CFLAGS_TMP})
-  target_compile_options(cmdr4_ctypes PRIVATE ${CFLAGS_TMP})
 endif()
 if(DEFINED ENV{CMDR4_LFLAGS})
   separate_arguments(LFLAGS_TMP NATIVE_COMMAND "$ENV{CMDR4_LFLAGS}")
   target_link_options(${PKGNAME} PRIVATE ${LFLAGS_TMP})
-  target_link_options(cmdr4_ctypes PRIVATE ${LFLAGS_TMP})
 endif()
 if(DEFINED ENV{CMDR4_FLAGS})
   separate_arguments(FLAGS_TMP NATIVE_COMMAND "$ENV{CMDR4_FLAGS}")
   target_compile_options(${PKGNAME} PRIVATE ${FLAGS_TMP})
   target_link_options(${PKGNAME} PRIVATE ${FLAGS_TMP})
-  target_compile_options(cmdr4_ctypes PRIVATE ${FLAGS_TMP})
-  target_link_options(cmdr4_ctypes PRIVATE ${FLAGS_TMP})
 endif()
 
 target_compile_features(${PKGNAME} PRIVATE cxx_std_17)
-target_compile_features(cmdr4_ctypes PRIVATE cxx_std_17)
 
 set_property(TARGET ${PKGNAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-set_property(TARGET cmdr4_ctypes PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
 
 install(TARGETS ${PKGNAME} LIBRARY DESTINATION commander4)
-install(TARGETS cmdr4_ctypes LIBRARY DESTINATION commander4/_libs)
 
 ### Stub generation ###
 # Runs stubgen during the CMake install step (which scikit-build-core runs when assembling
