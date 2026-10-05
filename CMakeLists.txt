@@ -60,8 +60,8 @@ set_target_properties(cmdr4_ctypes PROPERTIES
 execute_process(
         COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
         OUTPUT_STRIP_TRAILING_WHITESPACE
-        OUTPUT_VARIABLE NB_DIR)
-list(APPEND CMAKE_PREFIX_PATH "${NB_DIR}")
+        OUTPUT_VARIABLE NB_CMAKE_DIR)  # Not NB_DIR: nanobind's own config overwrites that name.
+list(APPEND CMAKE_PREFIX_PATH "${NB_CMAKE_DIR}")
 find_package(nanobind CONFIG REQUIRED)
 nanobind_add_module(${PKGNAME} FREE_THREADED NOSTRIP NB_SUPPRESS_WARNINGS NOMINSIZE ${CXX_SOURCES})
 
@@ -159,22 +159,22 @@ install(TARGETS cmdr4_ctypes LIBRARY DESTINATION commander4/_libs)
 # Output is written into the source tree (src-layout) to keep IDE support for editable installs.
 option(CMDR4_GENERATE_STUBS "Generate .pyi stubs during install" ON)
 
-# The stub step imports the freshly installed module, so it needs CMAKE_INSTALL_PREFIX on the
-# path. Prepend rather than replace: under pip's build isolation the build requirements
-# (including nanobind, which provides nanobind.stubgen) are reachable only through the
-# inherited PYTHONPATH, and overwriting it would silently leave the stubs ungenerated.
-set(CMDR4_STUB_PYTHONPATH "${CMAKE_INSTALL_PREFIX}")
-if(NOT "$ENV{PYTHONPATH}" STREQUAL "")
-  set(CMDR4_STUB_PYTHONPATH "${CMAKE_INSTALL_PREFIX}:$ENV{PYTHONPATH}")
-endif()
+# The stub step must import the module just installed into the install prefix. A previous editable
+# install leaves a .pth file in site-packages whose import hook redirects
+# `commander4._cmdr4_backend` to the old installed .so, which would give stubs one build behind.
+# So Python runs with -S (no site-packages, no .pth files), and the path holds only the install
+# prefix and the directory containing nanobind (which provides nanobind.stubgen).
+# The escaped \${CMAKE_INSTALL_PREFIX} is read at install time, so it follows `cmake --install
+# --prefix`, which scikit-build-core uses.
+get_filename_component(CMDR4_NANOBIND_PARENT_DIR "${NB_CMAKE_DIR}/../.." ABSOLUTE)
 
 if(CMDR4_GENERATE_STUBS)
   install(CODE "
     message(STATUS \"Generating stubs for commander4._cmdr4_backend...\")
     execute_process(
       COMMAND \"${CMAKE_COMMAND}\" -E env
-              \"PYTHONPATH=${CMDR4_STUB_PYTHONPATH}\"
-              \"${Python_EXECUTABLE}\" -m nanobind.stubgen
+              \"PYTHONPATH=\${CMAKE_INSTALL_PREFIX}:${CMDR4_NANOBIND_PARENT_DIR}\"
+              \"${Python_EXECUTABLE}\" -S -m nanobind.stubgen
               -m commander4._cmdr4_backend -r
               -O \"${CMAKE_CURRENT_SOURCE_DIR}/src/commander4\"
       RESULT_VARIABLE _cmdr4_stubgen_res
