@@ -1,7 +1,8 @@
 """Constrained CMB realizations from multi-band maps, MPI version (one band per rank).
 
-Same solve as ``constrained_cmb_loop``, but each rank holds a single band's map and RMS and the
-band sum in the CG operator becomes an allreduce. Not yet wired into the Gibbs loop.
+Same solve as ``constrained_cmb_loop``, but each rank holds a single band's map and inverse noise
+variance and the band sum in the CG operator becomes an allreduce. Not yet wired into the Gibbs
+loop.
 """
 import numpy as np
 import ducc0
@@ -19,12 +20,12 @@ nthreads = 32  # Number of threads to use for ducc SHTs.
 class ConstrainedCMB:
     """The constrained-realization system for the CMB alms, with one band per MPI rank."""
 
-    def __init__(self, map_sky, map_rms, iter, comm):
+    def __init__(self, map_sky, map_inv_var, iter, comm):
         self.comm = comm
         self.nprocs = comm.Get_size()
         self.iter = iter
         self.map_sky = map_sky
-        self.map_rms = map_rms
+        self.map_inv_var = map_inv_var
         self.npix = map_sky.shape[0]
         self.fwhm = 1.0/60.0*np.pi/180.0
         self.nside = hp.npix2nside(self.npix)
@@ -62,7 +63,7 @@ class ConstrainedCMB:
         LHS_sum = np.zeros_like(x)
         Ax = hp.smoothalm(x, self.fwhm, inplace=False)
         YAx = alm_to_map(Ax, self.nside, self.lmax, nthreads=nthreads)
-        NYAx = YAx/self.map_rms**2
+        NYAx = YAx*self.map_inv_var
         YTNYAx = alm_to_map_adjoint(NYAx, self.nside, self.lmax, nthreads=nthreads)
         ATYTNYAx = hp.smoothalm(YTNYAx, self.fwhm, inplace=False)
 
@@ -82,7 +83,7 @@ class ConstrainedCMB:
         self.comm.Bcast(x, root=0)
         Ax = hp.smoothalm(x, self.fwhm, inplace=False)
         YAx = alm_to_map(Ax, self.nside, self.lmax, nthreads=nthreads)
-        NYAx = YAx/self.map_rms**2
+        NYAx = YAx*self.map_inv_var
         YTNYAx = alm_to_map_adjoint(NYAx, self.nside, self.lmax, nthreads=nthreads)
         ATYTNYAx = hp.smoothalm(YTNYAx, self.fwhm, inplace=False)
         self.comm.Reduce(ATYTNYAx,  # Sending our part of the LHS equation to rank 0.
@@ -97,7 +98,7 @@ class ConstrainedCMB:
             N is the noise covariance, and A is the beam.
         """
         RHS_sum = np.zeros(self.alm_len, dtype=np.complex128)
-        Nd = self.map_sky/self.map_rms**2
+        Nd = self.map_sky*self.map_inv_var
         YTNd = alm_to_map_adjoint(Nd, self.nside, self.lmax, nthreads=nthreads)
         ATYTNd = hp.smoothalm(YTNd, self.fwhm, inplace=False)
         self.comm.Allreduce([ATYTNd, MPI.DOUBLE],
@@ -116,7 +117,7 @@ class ConstrainedCMB:
         RHS_sum = np.zeros(self.alm_len, dtype=np.complex128)
 
         omega1 = np.random.normal(0, 1, self.npix)
-        Nomega1 = omega1/self.map_rms
+        Nomega1 = omega1*np.sqrt(self.map_inv_var)
         YTNomega1 = alm_to_map_adjoint(Nomega1, self.nside, self.lmax, nthreads=nthreads)
         ATYTNomega1 = hp.smoothalm(YTNomega1, self.fwhm, inplace=False)
         self.comm.Allreduce([ATYTNomega1, MPI.DOUBLE],
@@ -186,8 +187,8 @@ def constrained_cmb_loop_MPI(comm, compsep_master: int, params: dict):
         # Broadcast te data to all tasks, or do anything else that's appropriate
         # data = comm.bcast(data, root=0)
 
-        signal_maps, rms_maps = data
-        constrained_cmb_solver = ConstrainedCMB(signal_maps, rms_maps, iter, comm)
+        signal_maps, inv_var_maps = data
+        constrained_cmb_solver = ConstrainedCMB(signal_maps, inv_var_maps, iter, comm)
         RHS_mean_field = constrained_cmb_solver.get_RHS_eqn_mean()
         RHS_fluct = constrained_cmb_solver.get_RHS_eqn_fluct()
 
@@ -200,7 +201,7 @@ def constrained_cmb_loop_MPI(comm, compsep_master: int, params: dict):
             while not comm.recv(source=0):  # Looking for "stop" signal.
                 constrained_cmb_solver.worker_LHS_func()  # If not asked to stop, compute LHS.
 
-        constrained_cmb_solver = ConstrainedCMB(signal_maps, rms_maps, iter, comm)
+        constrained_cmb_solver = ConstrainedCMB(signal_maps, inv_var_maps, iter, comm)
         if master:
             logger.log(VERBOSE, "CMB: solving for fluctuation map.")
             CMB_fluct_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.master_LHS_func, RHS_fluct)

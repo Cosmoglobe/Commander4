@@ -14,14 +14,13 @@ must hold a whole scan, though only for one detector at a time.
 sigma0 and accumulates every sigma0-dependent quantity, and the CG solve follows.
 """
 import numpy as np
-import ctypes as ct
 from mpi4py import MPI
 import logging
 from numpy.typing import NDArray
 import healpy as hp
 from collections.abc import Callable
 
-from commander4.backend.ctypes_lib import load_cmdr4_ctypes_lib
+from commander4.backend import mapmaker as cpp_mapmaker
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.view import TODView
@@ -61,8 +60,7 @@ class CGMapmaker:
                 T_omega:Callable|None = None,
                 W_mat:NDArray|None = None,
                 preconditioner:Callable = np.copy,
-                nthreads:int=1, 
-                double_prec:bool = True,
+                nthreads:int=1,
                 CG_maxiter:int=60,
                 CG_tol:float=1e-6,
                 CG_check_interval:int = 1,
@@ -78,7 +76,6 @@ class CGMapmaker:
                 real-frequency array and return a complex filter.
             preconditioner: Preconditioner callable ``M(x) -> x'``.
             nthreads: Number of threads for FFT and HEALPix operations.
-            double_prec: If True, use float64 for internal maps.
             CG_maxiter: Maximum number of CG iterations.
             CG_tol: Convergence tolerance on the squared relative preconditioned residual.
             CG_check_interval: Check convergence every this many iterations.
@@ -92,10 +89,8 @@ class CGMapmaker:
         self.logger = logging.getLogger(__name__)
         self.detector_tod = detector_tod
         self.detector_samples = detector_samples
-        self.double_prec = double_prec
         self.map_comm = map_comm
         self.ismaster = self.map_comm.Get_rank() == 0
-        self.f_dtype = np.float64 if double_prec else np.float32
         self.nthreads = nthreads
         self.T_omega = T_omega
         self.W_mat = W_mat
@@ -109,10 +104,6 @@ class CGMapmaker:
         self.M = preconditioner
         self.domain = pixel_domain if pixel_domain is not None \
             else PixelDomain(map_comm, detector_tod.nside, "full")
-        # The sparse gather/scatter collectives operate in float64; the float32 map path is only
-        # supported full-sky (and is unused in production, which always runs double_prec).
-        if self.domain.mode == "sparse" and not double_prec:
-            raise NotImplementedError("Sparse CG maps require double_prec=True.")
         self._nloc = self.domain.n_local
         # View over the band's detector-scans, used to access pointing (pix/psi) when applying the
         # pointing matrix and its adjoint.
@@ -120,13 +111,6 @@ class CGMapmaker:
         self._rhs_loca_map = None
         self._rhs_finalized_map = None
 
-        self.maplib = load_cmdr4_ctypes_lib()
-        self.ct_i64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_int64, ndim=1, flags="contiguous")
-        self.ct_f64_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=1, flags="contiguous")
-        self.ct_f64_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_double, ndim=2, flags="contiguous")
-        self.ct_f32_dim1 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=1, flags="contiguous")
-        self.ct_f32_dim2 = np.ctypeslib.ndpointer(dtype=ct.c_float, ndim=2, flags="contiguous")
-       
     @property
     def solved_map(self):
         """The solved sky map. Only valid on the master rank after ``solve()``."""
@@ -297,7 +281,7 @@ class CGMapmaker:
         ismaster = self.map_comm.Get_rank() == 0
         # Distribute the iterate to the ranks' local pixel domains (master -> ranks).
         local_in = self.domain.scatter_from_full(in_map if ismaster else None, self._ncomp,
-                                                  dtype=self.f_dtype)
+                                                  dtype=np.float64)
         out_local = self._zeros_map
         # The LHS operator P^T T^T N^-1 T P and the RHS P^T T^T N^-1 d must span the same set of
         # detector-scans AND the same samples, or the CG solves an inconsistent (A, b). We iterate
@@ -308,7 +292,7 @@ class CGMapmaker:
             pix = view.pix
             psi = view.psi
             sigma0 = view.sigma0
-            scan_tod_arr_aux = np.zeros(pix.shape[0], dtype=self.f_dtype)  # full-length, as RHS
+            scan_tod_arr_aux = np.zeros(pix.shape[0], dtype=np.float64)  # full-length, as RHS
             #P m
             scan_tod_arr_aux = self.apply_P(local_in, view.detector, 
                                             pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
@@ -398,61 +382,33 @@ class CGMapmakerI(CGMapmaker):
                 map_comm:MPI.Comm, 
                 T_omega:Callable|None = None,
                 W_mat:NDArray|None = None,
-                preconditioner:Callable = np.copy, 
+                preconditioner:Callable = np.copy,
                 nthreads:int = 1,
-                double_prec:bool = True,
                 CG_maxiter:int = 200,
                 CG_tol:float = 1e-10,
                 CG_check_interval:int = 1,
                 pixel_domain = None):
 
-        super().__init__(detector_tod=detector_tod, 
-                        detector_samples=detector_samples, 
-                        map_comm=map_comm, 
+        super().__init__(detector_tod=detector_tod,
+                        detector_samples=detector_samples,
+                        map_comm=map_comm,
                         T_omega=T_omega,
                         W_mat=W_mat,
                         preconditioner=preconditioner,
                         nthreads=nthreads,
-                        double_prec=double_prec, 
-                        CG_maxiter=CG_maxiter, 
-                        CG_tol=CG_tol, 
-                        CG_check_interval=CG_check_interval, 
+                        CG_maxiter=CG_maxiter,
+                        CG_tol=CG_tol,
+                        CG_check_interval=CG_check_interval,
                         pixel_domain=pixel_domain)
 
         self._ncomp = 1
         # Master holds the full-sky solution and RHS; the iterate is scattered to the ranks' local
         # domains each iteration (see apply_LHS).
         self._map_signal = np.zeros((1,hp.nside2npix(detector_tod.nside)),
-            dtype=self.f_dtype) if self.ismaster else None
+            dtype=np.float64) if self.ismaster else None
         #RHS map to be accumulated on master rank
         self._rhs_finalized_map = np.zeros((1,hp.nside2npix(detector_tod.nside)),
-            dtype=self.f_dtype) if self.ismaster else None
-        
-        #RHS map to be accumulate
-        if double_prec:
-            self.maplib.map_accumulator_f64.argtypes = [self.ct_f64_dim2, #map
-                                                        self.ct_f64_dim1, #tod
-                                                        ct.c_double,      #weight
-                                                        self.ct_i64_dim1, #pix
-                                                        ct.c_int64]       #scan_len
-            self.maplib.map2tod_f64.argtypes = [self.ct_f64_dim2, #map
-                                                self.ct_f64_dim1, #tod
-                                                self.ct_i64_dim1, #pix
-                                                ct.c_int64]       #scan_len
-            self.map_accumulator = self.maplib.map_accumulator_f64
-            self.map2tod = self.maplib.map2tod_f64
-        else:
-            self.maplib.map_accumulator_f32.argtypes = [self.ct_f32_dim2,
-                                                        self.ct_f32_dim1,
-                                                        ct.c_float,
-                                                        self.ct_i64_dim1, 
-                                                        ct.c_int64]
-            self.maplib.map2tod_f32.argtypes = [self.ct_f32_dim2, 
-                                                self.ct_f32_dim1,
-                                                self.ct_i64_dim1, 
-                                                ct.c_int64]
-            self.map_accumulator = self.maplib.map_accumulator_f32
-            self.map2tod = self.maplib.map2tod_f32
+            dtype=np.float64) if self.ismaster else None
 
     def apply_P(self, in_map: NDArray, out_scan:ScanTOD, pix=None, psi=None, scan_tod_arr=None):
         """
@@ -468,10 +424,8 @@ class CGMapmakerI(CGMapmaker):
         pix = self.domain.to_local(out_scan.pix if pix is None else pix)
         if pix.shape != scan_tod_arr.shape:
             raise ValueError(f"pix shape {pix.shape} must match TOD shape {scan_tod_arr.shape}.")
-        # Use the passed array length, not the full detector ntod: apply_LHS masks pix/scan_tod_arr
-        # down to good samples, so this must match (mirrors apply_P_adjoint).
-        ntod = scan_tod_arr.shape[-1]
-        self.map2tod(in_map, scan_tod_arr, pix.astype(np.int64, copy=False), ntod)
+        # The I-only map has shape (1, npix); the kernel takes the 1-D row.
+        cpp_mapmaker.map2tod(in_map[0], scan_tod_arr, pix.astype(np.int64, copy=False))
         return scan_tod_arr
 
     def apply_P_adjoint(self, in_scan: ScanTOD, out_map:NDArray, pix=None, psi=None, scan_tod_arr=None):
@@ -489,14 +443,15 @@ class CGMapmakerI(CGMapmaker):
         pix = self.domain.to_local(in_scan.pix if pix is None else pix)
         if pix.shape != scan_tod_arr.shape:
             raise ValueError(f"pix shape {pix.shape} must match TOD shape {scan_tod_arr.shape}.")
-        ntod = scan_tod_arr.shape[-1]
-        self.map_accumulator(out_map, scan_tod_arr, 1, pix.astype(np.int64, copy=False), ntod)
+        # out_map[0] is a view, so the kernel accumulates into out_map itself.
+        cpp_mapmaker.map_accumulator(out_map[0], scan_tod_arr, 1.0,
+                                     pix.astype(np.int64, copy=False))
         return out_map
 
     @property
     def _zeros_map(self):
         """Allocate a zero local map buffer (full-sky in full mode, rank-local in sparse mode)."""
-        return np.zeros((1, self._nloc), dtype=self.f_dtype)
+        return np.zeros((1, self._nloc), dtype=np.float64)
 
 class CGMapmakerIQU(CGMapmaker):
     """Polarised (I, Q, U) CG mapmaker.
@@ -511,70 +466,35 @@ class CGMapmakerIQU(CGMapmaker):
                 map_comm:MPI.Comm, 
                 T_omega:Callable|None = None,
                 W_mat:NDArray|None = None,
-                preconditioner:Callable = np.copy, 
+                preconditioner:Callable = np.copy,
                 nthreads:int = 1,
-                double_prec:bool = True,
                 CG_maxiter:int = 200,
                 CG_tol:float = 1e-10,
                 CG_check_interval:int = 1,
                 pixel_domain = None):
 
-        super().__init__(detector_tod=detector_tod, 
-                        detector_samples=detector_samples, 
-                        map_comm=map_comm, 
+        super().__init__(detector_tod=detector_tod,
+                        detector_samples=detector_samples,
+                        map_comm=map_comm,
                         T_omega=T_omega,
                         W_mat=W_mat,
                         preconditioner=preconditioner,
                         nthreads=nthreads,
-                        double_prec=double_prec, 
-                        CG_maxiter=CG_maxiter, 
-                        CG_tol=CG_tol, 
-                        CG_check_interval=CG_check_interval, 
+                        CG_maxiter=CG_maxiter,
+                        CG_tol=CG_tol,
+                        CG_check_interval=CG_check_interval,
                         pixel_domain=pixel_domain)
 
         self._ncomp = 3
         # Master holds the full-sky solution and RHS; the iterate is scattered to the ranks' local
         # domains each iteration (see apply_LHS).
         self._map_signal = np.zeros((3,hp.nside2npix(detector_tod.nside)),
-            dtype=self.f_dtype) if self.ismaster else None
+            dtype=np.float64) if self.ismaster else None
         #local RHS map
         self._rhs_loca_map = None
         #RHS map to be accumulated on master rank
         self._rhs_finalized_map = np.zeros((3,hp.nside2npix(detector_tod.nside)),
-            dtype=self.f_dtype) if self.ismaster else None
-        
-        if double_prec:
-            self.maplib.map_accumulator_IQU_f64.argtypes = [self.ct_f64_dim2, #map
-                                                            self.ct_f64_dim1, #tod
-                                                            ct.c_double,      #weight
-                                                            self.ct_i64_dim1, #pix
-                                                            self.ct_f64_dim1, #psi
-                                                            ct.c_int64,       #scan_len
-                                                            ct.c_int64]       #num_pix
-            self.maplib.map2tod_IQU_f64.argtypes = [self.ct_f64_dim2, #map
-                                                    self.ct_f64_dim1, #tod
-                                                    self.ct_i64_dim1, #pix
-                                                    self.ct_f64_dim1, #psi
-                                                    ct.c_int64,       #scan_len
-                                                    ct.c_int64]       #num_pix
-            self.map_accumulator_IQU = self.maplib.map_accumulator_IQU_f64
-            self.map2tod_IQU = self.maplib.map2tod_IQU_f64
-        else:
-            self.maplib.map_accumulator_IQU_f32.argtypes = [self.ct_f32_dim2,
-                                                            self.ct_f32_dim1,
-                                                            ct.c_float,
-                                                            self.ct_i64_dim1, 
-                                                            self.ct_f64_dim1, 
-                                                            ct.c_int64, 
-                                                            ct.c_int64]
-            self.maplib.map2tod_IQU_f32.argtypes = [self.ct_f32_dim2, 
-                                                    self.ct_f32_dim1,
-                                                    self.ct_i64_dim1, 
-                                                    self.ct_f64_dim1, 
-                                                    ct.c_int64, 
-                                                    ct.c_int64]
-            self.map_accumulator_IQU = self.maplib.map_accumulator_IQU_f32
-            self.map2tod_IQU = self.maplib.map2tod_IQU_f32
+            dtype=np.float64) if self.ismaster else None
 
     def apply_P(self, in_map: NDArray, out_scan:ScanTOD, pix=None, psi=None, scan_tod_arr=None):
         """
@@ -586,16 +506,11 @@ class CGMapmakerIQU(CGMapmaker):
         If a `scan_tod_arr` is passed it is used instead of overwriting `out_scan`
         """
         scan_tod_arr = out_scan.tod if scan_tod_arr is None else scan_tod_arr
-        # in_map is indexed by pix and strided by its pixel axis, which defines the domain
-        # (full-sky or rank-local); num_pix is that axis length.
-        npix_out = in_map.shape[-1]
+        # in_map is indexed by pix, so its pixel axis defines the domain (full-sky or rank-local).
         pix = self.domain.to_local(out_scan.pix if pix is None else pix)
         psi = out_scan.psi if psi is None else psi
-        # Use the passed array length, not the full detector ntod: apply_LHS masks pix/psi/scan_tod_arr
-        # down to good samples, so this must match (mirrors apply_P_adjoint).
-        ntod = scan_tod_arr.shape[-1]
-        self.map2tod_IQU(in_map, scan_tod_arr, pix.astype(np.int64, copy=False),
-                         psi.astype(np.float64, copy=False), ntod, npix_out)
+        cpp_mapmaker.map2tod_IQU(in_map, scan_tod_arr, pix.astype(np.int64, copy=False),
+                                 psi.astype(np.float64, copy=False))
         return scan_tod_arr
     
     def apply_P_adjoint(self, in_scan: ScanTOD, out_map:NDArray, pix=None, psi=None, scan_tod_arr=None):
@@ -609,20 +524,18 @@ class CGMapmakerIQU(CGMapmaker):
         If a `scan_tod_arr` is passed it is used instead of overwriting `out_scan`
         """
         scan_tod_arr = in_scan.tod if scan_tod_arr is None else scan_tod_arr
-        # out_map is indexed by pix and strided by its pixel axis, which defines the domain
-        # (full-sky or rank-local); num_pix is that axis length.
-        npix_out = out_map.shape[-1]
+        # out_map is indexed by pix, so its pixel axis defines the domain (full-sky or rank-local).
         pix = self.domain.to_local(in_scan.pix if pix is None else pix)
         psi = in_scan.psi if psi is None else psi
-        ntod = scan_tod_arr.shape[-1]
-        self.map_accumulator_IQU(out_map, scan_tod_arr, 1, pix.astype(np.int64, copy=False),
-                                 psi.astype(np.float64, copy=False), ntod, npix_out)
+        cpp_mapmaker.map_accumulator_IQU(out_map, scan_tod_arr, 1.0,
+                                         pix.astype(np.int64, copy=False),
+                                         psi.astype(np.float64, copy=False))
         return out_map
 
     @property
     def _zeros_map(self):
         """Allocate a zero local map buffer (full-sky in full mode, rank-local in sparse mode)."""
-        return np.zeros((3, self._nloc), dtype=self.f_dtype)
+        return np.zeros((3, self._nloc), dtype=np.float64)
 
 
 def called_on_non_master(arr):
@@ -656,7 +569,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
     ### CG MAPMAKER ###
     # Single fused scan loop (mirrors Commander3's process_TOD): each detector-scan samples
     # correlated noise / sigma0 *first*, then accumulates every sigma0-dependent quantity with that
-    # freshly-sampled sigma0. Those are the inverse-variance weights (preconditioner + rms/cov), the
+    # freshly-sampled sigma0. Those are the inverse-variance weights (preconditioner + output), the
     # orbital-dipole and corr-noise maps, and the CG RHS. Building the inverse-variance map in a
     # separate up-front pass instead leaves it on the previous iteration's sigma0, which makes the
     # CG RHS inconsistent with its own A (the LHS operator and preconditioner read the live sigma0).
@@ -671,7 +584,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         T_omega = TF_model.response
     else:
         T_omega = None
-    # The inverse-variance map (preconditioner + rms/cov) is accumulated inside the fused loop below,
+    # The inverse-variance map (preconditioner + output) is accumulated inside the fused loop below,
     # so neither it nor cg_mapmaker.M can be finalized until afterwards. cg_mapmaker is constructed
     # here with a placeholder preconditioner; M is unused until solve() and accum_to_RHS never reads
     # it, so it is reassigned to the real Jacobi preconditioner after the loop.
@@ -787,7 +700,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         sigma0 = view.sigma0
         inv_var = (gain/sigma0)**2
 
-        ### INVERSE-VARIANCE WEIGHTS (preconditioner + rms/cov) ###
+        ### INVERSE-VARIANCE WEIGHTS (preconditioner + output) ###
         if pols == "IQU":
             mapmaker_invvar.accumulate_to_map(inv_var, pix, psi, response_I_P=response_I_P)
         else:
@@ -863,21 +776,19 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
     mapmaker_invvar.gather_map()
     if pols == "IQU":
         mapmaker_invvar.normalize_map()
-        map_rms = mapmaker_invvar.final_rms_map
+        map_inv_var = mapmaker_invvar.final_inv_var_map
         map_cov = mapmaker_invvar.final_cov_map
         if ismaster:
             cg_mapmaker.M = BlockInvNPreconditionerIQU(map_cov)
     else:
-        # A is diagonal for I-only, so an unobserved pixel is simply one with zero weight. map_cov
-        # stays 1-D (Mapmaker.normalize_map indexes it against a 1-D map), while map_rms gets a
-        # leading component axis to match the IQU case's (ncomp, npix) shape.
+        # A is diagonal for I-only, so it is the inverse variance itself. map_cov stays 1-D
+        # (Mapmaker.normalize_map indexes it against a 1-D map), while map_inv_var gets a leading
+        # component axis to match the IQU case's (ncomp, npix) shape.
         map_cov = mapmaker_invvar.final_map
-        map_rms = None  # Only the master holds the gathered weights, hence the rms.
+        map_inv_var = None  # Only the master holds the gathered weights.
         if ismaster:
             cg_mapmaker.M = InvNPreconditionerI(map_cov)
-            observed = map_cov > 0
-            map_rms = np.full((1, map_cov.size), np.inf)
-            map_rms[0, observed] = 1.0/np.sqrt(map_cov[observed])
+            map_inv_var = map_cov[None, :]
 
     def finalize_aux(aux_mapmaker):
         """Gather and normalize one aux map against the shared cov; `None` if it was not built."""
@@ -905,8 +816,8 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
     maps_to_file = {}
     if band_comm.Get_rank() == 0:
         detmap_dict_out, maps_to_file = finalize_band_maps(
-            map_signal, map_rms, pols, experiment_data, mapmaking_cfg, tod_samples, compsep_output,
-            map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
+            map_signal, map_inv_var, pols, experiment_data, mapmaking_cfg, tod_samples,
+            compsep_output, map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
             map_residual=map_residual, map_nhit=map_nhit, map_cov=map_cov)
 
     return detmap_dict_out, maps_to_file

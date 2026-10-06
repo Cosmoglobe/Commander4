@@ -1,8 +1,11 @@
 """`DetectorMap`: one band's maps as component separation sees them, plus common-beam smoothing.
 
 This is the object TOD processing sends across the communicator each iteration: the binned or
-CG-solved sky map, its RMS, and the band metadata (frequency, beam, nside) needed to build the
-mixing matrix. The two smoothing helpers bring a band to a coarser common beam.
+CG-solved sky map, its inverse noise variance, and the band metadata (frequency, beam, nside)
+needed to build the mixing matrix. The two smoothing helpers bring a band to a coarser common beam.
+
+The noise is held as inverse variance throughout, with 0 marking an unobserved pixel. RMS maps only
+exist in files, so they are converted when read or written.
 """
 import logging
 import numpy as np
@@ -16,19 +19,19 @@ from commander4.math_utils.sht import alm_to_map, alm_to_map_adjoint
 logger = logging.getLogger(__name__)
 
 
-def smooth_signal_map_noiseweighted(map_signal: NDArray, map_rms: NDArray,
+def smooth_signal_map_noiseweighted(map_signal: NDArray, map_inv_var: NDArray,
                                     fwhm_rad: float) -> NDArray:
     """Inverse-variance-weighted Gaussian smoothing of a signal map.
 
-    Each pixel is weighted by 1/variance before smoothing (so noisy pixels contribute less) and the
-    result is renormalized by the smoothed weights. Used to bring a band to a coarser common beam.
+    Each pixel is weighted by its inverse variance before smoothing (so noisy pixels contribute
+    less) and the result is renormalized by the smoothed weights. Used to bring a band to a coarser
+    common beam.
 
     A band covering only part of the sky has zero weight outside its footprint, and far enough from
     it the smoothed weight is zero (or slightly negative, from beam ringing) as well. Those pixels
     are left at zero rather than divided into a NaN: they are unobserved, which the paired
-    ``smooth_rms_map_noiseweighted`` records as an infinite RMS, i.e. zero inverse-noise weight.
+    ``smooth_inv_var_map_noiseweighted`` records as zero inverse variance.
     """
-    map_inv_var = 1.0/map_rms**2
     smoothed_weight = hp.smoothing(map_inv_var, fwhm=fwhm_rad)
     smoothed_signal = hp.smoothing(map_signal*map_inv_var, fwhm=fwhm_rad)
     observed = smoothed_weight > 0.0
@@ -36,73 +39,74 @@ def smooth_signal_map_noiseweighted(map_signal: NDArray, map_rms: NDArray,
                      where=observed)
 
 
-def smooth_rms_map_noiseweighted(rms_map: NDArray, fwhm_rad: float) -> NDArray:
-    """Per-pixel noise RMS of a map smoothed by :func:`smooth_signal_map_noiseweighted`.
+def smooth_inv_var_map_noiseweighted(map_inv_var: NDArray, fwhm_rad: float) -> NDArray:
+    """Per-pixel inverse noise variance of a map smoothed by `smooth_signal_map_noiseweighted`.
 
     Propagates the inverse-variance-weighted Gaussian smoothing analytically, accounting for the
-    beam and pixel windows, so the returned map is the correct noise RMS of the smoothed signal.
+    beam and pixel windows, so the returned map is the correct inverse noise variance of the
+    smoothed signal.
 
-    Pixels the smoothed weight does not reach (outside a partial-sky band's footprint) get an
-    infinite RMS, which is how an unobserved pixel is represented: the caller inverts this to an
-    inverse-noise weight of exactly zero.
+    Pixels the smoothed weight does not reach (outside a partial-sky band's footprint) get zero
+    inverse variance, which is how an unobserved pixel is represented.
     """
-    npix = rms_map.shape[0]
+    npix = map_inv_var.shape[0]
     nside = hp.npix2nside(npix)
-    smoothed_inv_var = hp.smoothing(1.0/rms_map**2, fwhm=fwhm_rad)
+    smoothed_inv_var = hp.smoothing(map_inv_var, fwhm=fwhm_rad)
     lmax = 3*nside - 1
     ell = np.arange(lmax + 1)
     b_ell = hp.gauss_beam(fwhm_rad, lmax=lmax)
     p_ell = hp.pixwin(nside, lmax=lmax)
     omega_pix = hp.nside2resol(nside)**2  # White-noise C_ell for a single pixel.
     true_empirical_norm = np.sum((2*ell + 1)/(4*np.pi)*omega_pix*(p_ell**2)*(b_ell**2))
-    # Smooth the weights with the squared beam, divide by the squared smoothed weights.
-    numerator = hp.smoothing(1.0/rms_map**2, fwhm=fwhm_rad/np.sqrt(2.0))*true_empirical_norm
+    # The smoothed signal is sum_j B_ij w_j d_j / sum_j B_ij w_j, so its variance is
+    # sum_j B_ij^2 w_j / (sum_j B_ij w_j)^2. The squared beam B_ij^2 is a Gaussian of width
+    # fwhm/sqrt(2), scaled by true_empirical_norm.
+    numerator = hp.smoothing(map_inv_var, fwhm=fwhm_rad/np.sqrt(2.0))*true_empirical_norm
     # Beam ringing can push either smoothed weight map slightly negative just outside the
-    # footprint; those pixels are unobserved too, and must not come back as a zero (i.e. infinitely
-    # weighted) RMS. For a full-sky band both maps are positive everywhere and this is a no-op.
+    # footprint; those pixels are unobserved too, and must not come back with a negative or
+    # infinite weight. For a full-sky band both maps are positive everywhere and this is a no-op.
     observed = (smoothed_inv_var > 0.0) & (numerator > 0.0)
-    variance = np.divide(numerator, smoothed_inv_var**2, out=np.full_like(numerator, np.inf),
-                         where=observed)
-    return np.sqrt(variance)
+    return np.divide(smoothed_inv_var**2, numerator, out=np.zeros_like(numerator), where=observed)
 
 
 class DetectorMap:
     """Holds a sky map and associated metadata for a single detector or band.
 
     Stores the sky signal map, inverse noise variance map, beam properties, and
-    resolution parameters. Derived quantities such as ``map_rms``, ``pol``, and
-    ``spin`` are computed on the fly via properties.
+    resolution parameters. Derived quantities such as ``pol`` and ``spin`` are computed on the fly
+    via properties.
 
     Attributes:
         map_sky (NDArray): Sky signal map of shape ``(npol, npix)``.
-        inv_n_map (NDArray): Inverse noise variance map, same shape as ``map_sky``.
+        map_inv_var (NDArray): Inverse noise variance map, same shape as ``map_sky``; 0 where
+            unobserved.
         nu (float): Band centre frequency in GHz.
         fwhm (float): Beam full-width-at-half-maximum in arcminutes.
         nside (int): HEALPix nside of the map.
         lmax (int): Maximum multipole for harmonic transforms.
         double_precision (bool): Whether the inverse noise map is stored in float64.
     """
-    def __init__(self, map_sky:NDArray, map_rms:NDArray, nu:float, fwhm:float, nside:int,
+    def __init__(self, map_sky:NDArray, map_inv_var:NDArray, nu:float, fwhm:float, nside:int,
                  double_precision:bool=False, lmax:int|None = None):
         """Construct a DetectorMap.
 
         Args:
             map_sky: Sky signal map, shape ``(npol, npix)`` or ``(npix,)``.
-            map_rms: RMS noise map (same shape as ``map_sky``).
+            map_inv_var: Inverse noise variance map (same shape as ``map_sky``), 0 where unobserved.
             nu: Band centre frequency in GHz.
             fwhm: Beam FWHM in arcminutes.
             nside: HEALPix nside of the maps.
-            double_precision: If True, store ``inv_n_map`` in float64.
+            double_precision: If True, store ``map_inv_var`` in float64.
             lmax: Maximum multipole. Defaults to ``3*nside - 1``, the full bandlimit of a
                 HEALPix map at this resolution (C3's ``BAND_LMAX``, which is likewise set per band
                 and typically sits between 2*nside and 3*nside).
         """
         #cast dimensions correctly to allow constructer with 1-d array for intensity maps.
         map_sky = map_sky.reshape((1,-1)) if map_sky.ndim == 1 else map_sky
-        map_rms = map_rms.reshape((1,-1)) if map_rms.ndim == 1 else map_rms
-        
-        if map_rms.shape != map_sky.shape:
-            raise ValueError("Sky and RMS maps should have matching dimensions.")
+        map_inv_var = map_inv_var.reshape((1,-1)) if map_inv_var.ndim == 1 else map_inv_var
+
+        if map_inv_var.shape != map_sky.shape:
+            raise ValueError("Sky and inverse-variance maps should have matching dimensions.")
         if map_sky.shape[0] not in [1,2]:
             raise ValueError("Trying to set sky map with wrong first axis length "
                              f"{map_sky.shape[0]} != 1 or 2")
@@ -122,13 +126,8 @@ class DetectorMap:
         self.lmax = (3*nside - 1) if lmax is None else lmax
         self._beam_Cl = hp.gauss_beam(np.deg2rad(fwhm/60.0), self.lmax)
         self.double_precision = double_precision
-        self.inv_n_map = (1./map_rms**2).astype(np.float64 if double_precision else np.float32, copy=False)
-
-    @property
-    def map_rms(self):
-        """RMS noise map, computed as ``1 / sqrt(inv_n_map)``."""
-        with np.errstate(divide="ignore"):
-            return 1./np.sqrt(self.inv_n_map)
+        self.map_inv_var = map_inv_var.astype(np.float64 if double_precision else np.float32,
+                                              copy=False)
 
     @property
     def fwhm_rad(self):
@@ -166,17 +165,16 @@ class DetectorMap:
                            f"band's beam of {self.fwhm} arcmin; leaving the band unchanged.")
             return
         extra_fwhm_rad = np.deg2rad(np.sqrt(target_fwhm_arcmin**2 - self.fwhm**2)/60.0)
-        map_rms = self.map_rms
-        sky_dtype, inv_dtype = self.map_sky.dtype, self.inv_n_map.dtype
+        sky_dtype, inv_dtype = self.map_sky.dtype, self.map_inv_var.dtype
         smoothed_sky = np.empty(self.map_sky.shape, dtype=np.float64)
-        smoothed_inv_n = np.empty(self.inv_n_map.shape, dtype=np.float64)
+        smoothed_inv_var = np.empty(self.map_inv_var.shape, dtype=np.float64)
         for ipol in range(self.npol):
-            smoothed_sky[ipol] = smooth_signal_map_noiseweighted(self.map_sky[ipol], map_rms[ipol],
-                                                                 extra_fwhm_rad)
-            smoothed_inv_n[ipol] = 1.0/smooth_rms_map_noiseweighted(map_rms[ipol],
-                                                                    extra_fwhm_rad)**2
+            smoothed_sky[ipol] = smooth_signal_map_noiseweighted(
+                self.map_sky[ipol], self.map_inv_var[ipol], extra_fwhm_rad)
+            smoothed_inv_var[ipol] = smooth_inv_var_map_noiseweighted(self.map_inv_var[ipol],
+                                                                    extra_fwhm_rad)
         self.map_sky = smoothed_sky.astype(sky_dtype, copy=False)
-        self.inv_n_map = smoothed_inv_n.astype(inv_dtype, copy=False)
+        self.map_inv_var = smoothed_inv_var.astype(inv_dtype, copy=False)
         self.fwhm = target_fwhm_arcmin
         self._beam_Cl = hp.gauss_beam(self.fwhm_rad, self.lmax)
 
@@ -187,7 +185,7 @@ class DetectorMap:
         """
         map_out = map if inplace else deepcopy(map)
         for ipol in range(self.npol):
-            inplace_arr_prod(map_out[ipol,:], self.inv_n_map[ipol,:])
+            inplace_arr_prod(map_out[ipol,:], self.map_inv_var[ipol,:])
 
         return map_out
 

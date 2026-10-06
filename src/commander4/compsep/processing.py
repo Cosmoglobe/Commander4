@@ -545,6 +545,7 @@ def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
             solved_sublist = solve_compsep_perpix(
                 solver_comm, residual_data, active_sublist,
                 double_precision=compsep_state.double_precision,
+                nthreads=compsep_state.num_threads,
             )
         else:
             raise ValueError(

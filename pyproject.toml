@@ -7,11 +7,7 @@ requires = [
     "scikit-build-core>=0.10",
     # cmake and ninja are deliberately not listed: scikit-build-core checks PATH and injects them
     # only when no suitable version is found, which keeps site-installed toolchains on HPC.
-    "pybind11",
-    "pybind11-stubgen",
-    # Not used to compile anything: pybind11/numpy.h needs no numpy headers. Required because
-    # pybind11_stubgen imports numpy at install time to render the .pyi annotations.
-    "numpy"
+    "nanobind>=2.5"
     ]
 
 # Package description and runtime depenencies

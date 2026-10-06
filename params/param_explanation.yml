@@ -301,9 +301,8 @@ compsep:
 
   double_precision: false     # Work in float64/complex128 rather than float32/complex64.
                               # Optional, false by default. It covers the component alms, the
-                              # band alms, DetectorMap.inv_n_map (and so map_rms, which is
-                              # derived from it), the per-pixel solver's maps, and the
-                              # point-source amplitudes. Map precision is NOT separately
+                              # band alms, DetectorMap.map_inv_var, the per-pixel solver's maps,
+                              # and the point-source amplitudes. Map precision is NOT separately
                               # settable: the SHT returns a map in the precision of the alms it
                               # was given, so alm and map space always match. False halves the
                               # memory and is enough in practice.

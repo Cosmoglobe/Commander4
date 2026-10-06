@@ -49,11 +49,13 @@ for i in trange(1000):
     sizes.append(pix1.size)
     pix_encoded = np.frombuffer(pix_encoded_list[i], dtype=np.uint8)
     pix0 = np.empty(sizes[i], dtype=np.int64)
-    pix0 = cmdr4_backend.utils.huffman_decode(pix_encoded, hufftree_list[i], huffsymb_list[i], pix0)
+    pix0 = cmdr4_backend.compression.huffman_decode(pix_encoded, hufftree_list[i],
+                                                    huffsymb_list[i], pix0)
     pix0 = np.cumsum(pix0)
     psi_encoded = np.frombuffer(psi_encoded_list[i], dtype=np.uint8)
     psi0 = np.empty(sizes[i], dtype=np.int64)
-    psi0 = cmdr4_backend.utils.huffman_decode(psi_encoded, hufftree_list[i], huffsymb_list[i], psi0)
+    psi0 = cmdr4_backend.compression.huffman_decode(psi_encoded, hufftree_list[i],
+                                                    huffsymb_list[i], psi0)
     psi0 = np.cumsum(psi0)
     if (np.max(np.abs(pix0-pix1))) != 0:
         raise RuntimeError("pix mismatch")
@@ -76,11 +78,13 @@ t0 = time.time()
 for i in trange(1000):
     pix_encoded = np.frombuffer(pix_encoded_list[i], dtype=np.uint8)
     pix0 = np.empty(sizes[i], dtype=np.int64)
-    pix0 = cmdr4_backend.utils.huffman_decode(pix_encoded, hufftree_list[i], huffsymb_list[i], pix0)
+    pix0 = cmdr4_backend.compression.huffman_decode(pix_encoded, hufftree_list[i],
+                                                    huffsymb_list[i], pix0)
     pix0 = np.cumsum(pix0)
     psi_encoded = np.frombuffer(psi_encoded_list[i], dtype=np.uint8)
     psi0 = np.empty(sizes[i], dtype=np.int64)
-    psi0 = cmdr4_backend.utils.huffman_decode(psi_encoded, hufftree_list[i], huffsymb_list[i], psi0)
+    psi0 = cmdr4_backend.compression.huffman_decode(psi_encoded, hufftree_list[i],
+                                                    huffsymb_list[i], psi0)
     psi0 = np.cumsum(psi0)
 dt = time.time()-t0
 print(f"cmdr4_backend version finished in {dt:.2f}s ({nsamp/dt:.2e} samples/s).")

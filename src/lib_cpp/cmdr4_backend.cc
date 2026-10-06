@@ -1,9 +1,11 @@
-#include <pybind11/pybind11.h>
-#include "utils_pymod.cc"
+#include "ducc0/bindings/pybind_utils.h"
+#include "compression_pymod.cc"
+#include "mapmaker_pymod.cc"
+#include "compsep_pymod.cc"
 
 using namespace cmdr4;
 
-PYBIND11_MODULE(PKGNAME, m)
+NB_MODULE(PKGNAME, m)
   {
 #define CMDR4_XSTRINGIFY(s) CMDR4_STRINGIFY(s)
 #define CMDR4_STRINGIFY(s) #s
@@ -11,5 +13,7 @@ PYBIND11_MODULE(PKGNAME, m)
 #undef CMDR4_STRINGIFY
 #undef CMDR4_XSTRINGIFY
 
-  add_utils(m);
+  add_compression(m);
+  add_mapmaker(m);
+  add_compsep(m);
   }

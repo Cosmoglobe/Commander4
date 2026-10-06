@@ -14,7 +14,6 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 from mpi4py import MPI
 
-from commander4.backend import utils as cpp_utils
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD

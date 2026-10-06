@@ -9,7 +9,6 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 from mpi4py import MPI
 
-from commander4.backend import utils as cpp_utils
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.scan_tod import ScanTOD
@@ -185,9 +184,10 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
         if i_pid % 10 == 0:
             gc.collect()
 
-    noise_model = NoisePSDOof(P_uni=[[np.nan, np.nan],  # sigma0
+    noise_model = NoisePSDOof(P_active_mean=[np.nan, 0.1, -5.0],
+                              P_uni=[[np.nan, np.nan],  # sigma0
                                      [0.01  ,    100],  # fknee
-                                     [-4.5  ,    0.0]]) # alpha
+                                     [-5.0  ,    0.0]]) # alpha
     apply_noise_priors(noise_model, params, expname, bandname)
     apply_noise_fit_range(noise_model, params)
     band_tod = DetectorGroupTOD(scan_list, expname, bandname, my_band.eval_nside, my_band.freq,

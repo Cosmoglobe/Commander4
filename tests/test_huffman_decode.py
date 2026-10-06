@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_array_equal
 
-from commander4.backend import utils as cpp_utils
+from commander4.backend import compression as cpp_compression
 from commander4.compression import huffman
 
 
@@ -12,7 +12,7 @@ def test_huffman_decode_roundtrip_int8() -> None:
     encoded = np.frombuffer(huffman.huffman_compress_array(values, sym_codes, sym_lengths), dtype=np.uint8)
     out = np.empty(values.size, dtype=values.dtype)
 
-    decoded = cpp_utils.huffman_decode(encoded, tree, symb, out)
+    decoded = cpp_compression.huffman_decode(encoded, tree, symb, out)
 
     assert decoded.dtype == values.dtype
     assert_array_equal(decoded, values)
@@ -24,7 +24,7 @@ def test_huffman_decode_roundtrip_uint8() -> None:
     encoded = np.frombuffer(huffman.huffman_compress_array(values, sym_codes, sym_lengths), dtype=np.uint8)
     out = np.empty(values.size, dtype=values.dtype)
 
-    decoded = cpp_utils.huffman_decode(encoded, tree, symb, out)
+    decoded = cpp_compression.huffman_decode(encoded, tree, symb, out)
 
     assert decoded.dtype == values.dtype
     assert_array_equal(decoded, values)
@@ -37,7 +37,7 @@ def test_huffman_decode_requires_out_dtype_to_match_symb() -> None:
     out = np.empty(values.size, dtype=np.int16)
 
     with pytest.raises(RuntimeError, match="'out' must have the same dtype as 'symb'"):
-        cpp_utils.huffman_decode(encoded, tree, symb, out)
+        cpp_compression.huffman_decode(encoded, tree, symb, out)
 
 
 def test_psi_digitization_uses_one_based_circular_bins() -> None:
