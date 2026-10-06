@@ -85,14 +85,14 @@ tree: numpy.ndarray((ntree,), dtype=np.int64)
 symb: numpy.ndarray((nsymb,), dtype any signed or unsigned 8/16/32/64-bit integer type)
     the array of possible symbols in the stream
 out: numpy.ndarray((ndata,), dtype identical to that of symb)
-    the array into which the uncopressed data is written
+    the array into which the uncompressed data is written
   The size of this array *must* match the number of decoded symbols!
   The dtype of this array *must* be identical to that of symb.
 
 Returns
 -------
 numpy.ndarray(ndata,), dtype identical to that of symb)
-    the uncopressed data array, identical to `out`
+    the uncompressed data array, identical to `out`
 )""";
 
 void add_compression(py::module_ &msup)

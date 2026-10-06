@@ -127,7 +127,7 @@ class DetectorMap:
         self._beam_Cl = hp.gauss_beam(np.deg2rad(fwhm/60.0), self.lmax)
         self.double_precision = double_precision
         self.map_inv_var = map_inv_var.astype(np.float64 if double_precision else np.float32,
-                                          copy=False)
+                                              copy=False)
 
     @property
     def fwhm_rad(self):
