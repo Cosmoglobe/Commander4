@@ -48,7 +48,8 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     spin = 2 if pol else 0
     map_sky = detector_data.map_sky
     band_freq = detector_data.nu
-    map_rms = detector_data.map_rms
+    # Inverse noise variance, zero where unobserved (rather than infinite RMS).
+    map_inv_var = detector_data.inv_n_map
 
     # This solver has no beam model, so all bands should already share one resolution (smoothed at
     # ingest via compsep.common_res_fwhm); differing FWHMs silently mix resolutions, so warn.
@@ -61,7 +62,7 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     with benchmark("perpix-gather"):
         all_freq = proc_comm.gather(band_freq, root=0)
         all_map_sky = proc_comm.gather(map_sky, root=0)
-        all_map_rms = proc_comm.gather(map_rms, root=0)
+        all_map_inv_var = proc_comm.gather(map_inv_var, root=0)
 
     nside = detector_data.nside
     npix = 12*nside**2
@@ -75,15 +76,15 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
             t0 = time.time()
             freqs = []
             maps_sky = []
-            maps_rms = []
+            maps_inv_var = []
             for iband in range(len(all_freq)):
                 if all_map_sky[iband][ipol] is not None:
                     freqs.append(all_freq[iband])
                     maps_sky.append(all_map_sky[iband][ipol])
-                    maps_rms.append(all_map_rms[iband][ipol])
+                    maps_inv_var.append(all_map_inv_var[iband][ipol])
             freqs = np.array(freqs)
             maps_sky = np.array(maps_sky)
-            maps_rms = np.array(maps_rms)
+            maps_inv_var = np.array(maps_inv_var)
             nband = len(freqs)
             M = np.empty((nband, ncomp))
             for icomp in range(ncomp):
@@ -92,9 +93,9 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
             # TODO: Should scale M to make solution more well-conditioned, and then adjust
             # solution with the scaling factor used.
             with benchmark("perpix-solve"):
-                comp_maps[ipol] = cpp_compsep.solve_perpix(maps_sky.astype(np.float64, copy=False),
-                                                           maps_rms.astype(np.float64, copy=False),
-                                                           M, rand, nthreads)
+                comp_maps[ipol] = cpp_compsep.solve_perpix(
+                    maps_sky.astype(np.float64, copy=False),
+                    maps_inv_var.astype(np.float64, copy=False), M, rand, nthreads)
             logger.info(f"Finished pixel-by-pixel component separation in {time.time()-t0:.2f}s "\
                         f"for polarization {ipol+1} of {npol}.")
 

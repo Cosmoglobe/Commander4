@@ -112,10 +112,10 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
                 if psi_encoded.ndim == 2 and psi_encoded.shape[0] == 1:
                     psi_encoded = psi_encoded[0]
 
-                flag_buffer[:ntod] = 0.0
+                # The decoder overwrites every one of the ntod samples, so no zeroing is needed.
                 cpp_compression.huffman_decode(np.frombuffer(flag_encoded, dtype=np.uint8),
                                                huffman_tree, huffman_symbols, flag_buffer[:ntod])
-                flag_buffer[:ntod_optimal] = np.cumsum(flag_buffer[:ntod_optimal])
+                np.cumsum(flag_buffer[:ntod_optimal], out=flag_buffer[:ntod_optimal])
                 flag_buffer[:ntod_optimal] &= 6111232
                 if np.sum(flag_buffer[:ntod_optimal]) != 0:
                     good_scan = False

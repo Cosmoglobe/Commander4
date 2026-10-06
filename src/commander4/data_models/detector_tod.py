@@ -173,7 +173,7 @@ class DetectorTOD:
             with benchmark("huffman"):
                 cpp_compression.huffman_decode(self._tod, self._huffman_tree2,
                                                self._huffman_symbols2, tod)
-            tod[:] = np.cumsum(tod)
+            np.cumsum(tod, out=tod)
             tod = tod.astype(np.float32)
         else:
             tod = self._tod

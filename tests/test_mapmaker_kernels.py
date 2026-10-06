@@ -144,6 +144,28 @@ def test_map_solve_IQU_rejects_wrong_shapes_and_dtypes() -> None:
         cpp_mapmaker.map_solve_IQU(np.zeros((3, NPIX), dtype=np.float32), rhs, norm_map)
 
 
+@pytest.mark.parametrize("bad_pixel", [NPIX, -1])
+def test_kernels_reject_out_of_range_pixels(bad_pixel: int) -> None:
+    """A pixel index outside [0, npix) must raise instead of touching memory outside the map."""
+    tod, pix, psi = _scan(np.float64, seed=20)
+    pix[50] = bad_pixel
+    m1, m3, m6, tod_out = np.zeros(NPIX), np.zeros((3, NPIX)), np.zeros((6, NPIX)), np.empty(NTOD)
+    # Every loop of every kernel, including the intensity-only (response_P = 0) loops.
+    calls = [
+        lambda: cpp_mapmaker.map_accumulator(m1, tod, 1.0, pix),
+        lambda: cpp_mapmaker.map_weight_accumulator(m1, 1.0, pix),
+        lambda: cpp_mapmaker.map_accumulator_IQU(m3, tod, 1.0, pix, psi),
+        lambda: cpp_mapmaker.map_accumulator_IQU(m3, tod, 1.0, pix, psi, response_P=0.0),
+        lambda: cpp_mapmaker.map_weight_accumulator_IQU(m6, 1.0, pix, psi),
+        lambda: cpp_mapmaker.map_weight_accumulator_IQU(m6, 1.0, pix, psi, response_P=0.0),
+        lambda: cpp_mapmaker.map2tod(m1, tod_out, pix),
+        lambda: cpp_mapmaker.map2tod_IQU(m3, tod_out, pix, psi),
+    ]
+    for call in calls:
+        with pytest.raises(RuntimeError, match="pixel index out of range"):
+            call()
+
+
 def test_map_accumulator_IQU_rejects_wrong_dtypes_and_lengths() -> None:
     tod, pix, psi = _scan(np.float32, seed=19)
     m = np.zeros((3, NPIX))

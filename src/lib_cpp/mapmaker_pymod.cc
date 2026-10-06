@@ -14,6 +14,10 @@ using namespace ducc0;
 // precision long before that. The TOD may be float32 or float64; each sample is used as a double.
 // IQU maps have shape (3, npix), and the per-pixel symmetric 3x3 matrices (6, npix), stored as
 // their 6 unique elements (II, IQ, IU, QQ, QU, UU).
+// Every pixel index is checked to lie in [0, npix), since an index outside the map would silently
+// read or write other memory. Casting to size_t turns a negative index into a huge one, so a single
+// comparison covers both ends. The check only reads pix, which the loop reads anyway, so it adds
+// no memory traffic and its cost was not measurable even with all cores of a node busy.
 
 /** Accumulates weight*tod into an intensity map: map[pix[i]] += weight*tod[i]. */
 template<typename Ttod>
@@ -22,8 +26,12 @@ void map_accumulator_T(const NpArr &map_, const CNpArr &tod_, double weight, con
     auto tod = to_cmav<Ttod,1>(tod_, "tod");
     auto pix = to_cmav<int64_t,1>(pix_, "pix");
     MR_assert(pix.shape(0)==tod.shape(0), "tod and pix lengths differ");
-    for (size_t i = 0; i < tod.shape(0); i++)
-        map(pix(i)) += weight * tod(i);
+    const size_t npix = map.shape(0);
+    for (size_t i = 0; i < tod.shape(0); i++){
+        const int64_t p = pix(i);
+        MR_assert(size_t(p) < npix, "pixel index out of range");
+        map(p) += weight * tod(i);
+    }
 }
 
 void Py_map_accumulator(const NpArr &map, const CNpArr &tod, double weight, const CNpArr &pix){
@@ -40,8 +48,12 @@ void Py_map_accumulator(const NpArr &map, const CNpArr &tod, double weight, cons
 void Py_map_weight_accumulator(const NpArr &map_, double weight, const CNpArr &pix_){
     auto map = to_vmav<double,1>(map_, "map");
     auto pix = to_cmav<int64_t,1>(pix_, "pix");
-    for (size_t i = 0; i < pix.shape(0); i++)
-        map(pix(i)) += weight;
+    const size_t npix = map.shape(0);
+    for (size_t i = 0; i < pix.shape(0); i++){
+        const int64_t p = pix(i);
+        MR_assert(size_t(p) < npix, "pixel index out of range");
+        map(p) += weight;
+    }
 }
 
 
@@ -57,7 +69,7 @@ void map_accumulator_IQU_T(const NpArr &map_, const CNpArr &tod_, double weight,
     auto tod = to_cmav<Ttod,1>(tod_, "tod");
     auto pix = to_cmav<int64_t,1>(pix_, "pix");
     auto psi = to_cmav<double,1>(psi_, "psi");
-    const size_t ntod = tod.shape(0);
+    const size_t ntod = tod.shape(0), npix = map.shape(1);
     MR_assert(map.shape(0)==3, "map must have shape (3, npix)");
     MR_assert(pix.shape(0)==ntod && psi.shape(0)==ntod, "tod, pix and psi lengths differ");
 
@@ -66,14 +78,18 @@ void map_accumulator_IQU_T(const NpArr &map_, const CNpArr &tod_, double weight,
     if (response_I == 0.0 && response_P == 0.0) return;
     if (response_P == 0.0){
         // Intensity-only detector: skip the polarization angles entirely (psi is never read).
-        for (size_t i = 0; i < ntod; i++)
-            map(0, pix(i)) += weight_I * tod(i);
+        for (size_t i = 0; i < ntod; i++){
+            const int64_t p = pix(i);
+            MR_assert(size_t(p) < npix, "pixel index out of range");
+            map(0, p) += weight_I * tod(i);
+        }
         return;
     }
     for (size_t i = 0; i < ntod; i++){
         // Read the sample into locals before writing: the compiler cannot rule out that a write
         // to map changes psi or tod, so it would re-read them and compute cos and sin separately.
         const int64_t p = pix(i);
+        MR_assert(size_t(p) < npix, "pixel index out of range");
         const double d = tod(i);
         const double cos2psi = std::cos(2.0 * psi(i));
         const double sin2psi = std::sin(2.0 * psi(i));
@@ -104,7 +120,7 @@ void Py_map_weight_accumulator_IQU(const NpArr &map_, double weight, const CNpAr
     auto map = to_vmav<double,2>(map_, "map");
     auto pix = to_cmav<int64_t,1>(pix_, "pix");
     auto psi = to_cmav<double,1>(psi_, "psi");
-    const size_t ntod = pix.shape(0);
+    const size_t ntod = pix.shape(0), npix = map.shape(1);
     MR_assert(map.shape(0)==6, "map must have shape (6, npix)");
     MR_assert(psi.shape(0)==ntod, "pix and psi lengths differ");
 
@@ -114,12 +130,16 @@ void Py_map_weight_accumulator_IQU(const NpArr &map_, double weight, const CNpAr
     if (response_I == 0.0 && response_P == 0.0) return;
     if (response_P == 0.0){
         // Intensity-only detector: only II is non-zero, and psi is never read.
-        for (size_t i = 0; i < ntod; i++)
-            map(0, pix(i)) += weight_II;
+        for (size_t i = 0; i < ntod; i++){
+            const int64_t p = pix(i);
+            MR_assert(size_t(p) < npix, "pixel index out of range");
+            map(0, p) += weight_II;
+        }
         return;
     }
     for (size_t i = 0; i < ntod; i++){
         const int64_t p = pix(i);
+        MR_assert(size_t(p) < npix, "pixel index out of range");
         const double cos2psi = std::cos(2.0 * psi(i));
         const double sin2psi = std::sin(2.0 * psi(i));
         map(0, p) += weight_II;                      // II
@@ -138,8 +158,12 @@ void Py_map2tod(const CNpArr &map_, const NpArr &tod_, const CNpArr &pix_){
     auto tod = to_vmav<double,1>(tod_, "tod");
     auto pix = to_cmav<int64_t,1>(pix_, "pix");
     MR_assert(pix.shape(0)==tod.shape(0), "tod and pix lengths differ");
-    for (size_t i = 0; i < tod.shape(0); i++)
-        tod(i) = map(pix(i));
+    const size_t npix = map.shape(0);
+    for (size_t i = 0; i < tod.shape(0); i++){
+        const int64_t p = pix(i);
+        MR_assert(size_t(p) < npix, "pixel index out of range");
+        tod(i) = map(p);
+    }
 }
 
 
@@ -149,13 +173,16 @@ void Py_map2tod_IQU(const CNpArr &map_, const NpArr &tod_, const CNpArr &pix_, c
     auto tod = to_vmav<double,1>(tod_, "tod");
     auto pix = to_cmav<int64_t,1>(pix_, "pix");
     auto psi = to_cmav<double,1>(psi_, "psi");
-    const size_t ntod = tod.shape(0);
+    const size_t ntod = tod.shape(0), npix = map.shape(1);
     MR_assert(map.shape(0)==3, "map must have shape (3, npix)");
     MR_assert(pix.shape(0)==ntod && psi.shape(0)==ntod, "tod, pix and psi lengths differ");
-    for (size_t i = 0; i < ntod; i++)
-        tod(i) = map(0, pix(i))
-               + map(1, pix(i)) * std::cos(2.0 * psi(i))
-               + map(2, pix(i)) * std::sin(2.0 * psi(i));
+    for (size_t i = 0; i < ntod; i++){
+        const int64_t p = pix(i);
+        MR_assert(size_t(p) < npix, "pixel index out of range");
+        tod(i) = map(0, p)
+               + map(1, p) * std::cos(2.0 * psi(i))
+               + map(2, p) * std::sin(2.0 * psi(i));
+    }
 }
 
 
