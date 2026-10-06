@@ -252,31 +252,33 @@ void Py_map_solve_IQU(const NpArr &map_out_, const CNpArr &map_rhs_, const CNpAr
 }
 
 
-/** Computes RMS maps sqrt(diag(A^-1)) into rms_out (3, npix) from the per-pixel matrices norm_map.
+/** Computes the inverse noise variance of I, Q and U, 1/diag(A^-1), into inv_var_out (3, npix).
  *
- * Singular or ill-conditioned pixels get infinite RMS (zero weight).
+ * The variance of one Stokes parameter, with the other two fitted at the same time, is the matching
+ * diagonal element of A^-1. Singular or ill-conditioned pixels get zero inverse variance.
  */
-void Py_map_invdiag_IQU(const NpArr &rms_out_, const CNpArr &norm_map_){
-    auto rms_out = to_vmav<double,2>(rms_out_, "rms_out");
+void Py_map_inv_var_IQU(const NpArr &inv_var_out_, const CNpArr &norm_map_){
+    auto inv_var_out = to_vmav<double,2>(inv_var_out_, "inv_var_out");
     auto norm_map = to_cmav<double,2>(norm_map_, "norm_map");
-    const size_t num_pix = rms_out.shape(1);
-    MR_assert(rms_out.shape(0)==3 && norm_map.shape(0)==6, "need shapes (3,npix) and (6,npix)");
+    const size_t num_pix = inv_var_out.shape(1);
+    MR_assert(inv_var_out.shape(0)==3 && norm_map.shape(0)==6, "need shapes (3,npix) and (6,npix)");
     MR_assert(norm_map.shape(1)==num_pix, "pixel counts differ");
 
-    const double inf = std::numeric_limits<double>::infinity();
     for (size_t ipix = 0; ipix < num_pix; ipix++){
         double inv00, inv01, inv02, inv11, inv12, inv22;
         if (!invert_SPD_3x3(norm_map(0, ipix), norm_map(1, ipix), norm_map(2, ipix),
                             norm_map(3, ipix), norm_map(4, ipix), norm_map(5, ipix),
                             inv00, inv01, inv02, inv11, inv12, inv22)){
-            rms_out(0, ipix) = inf;
-            rms_out(1, ipix) = inf;
-            rms_out(2, ipix) = inf;
+            inv_var_out(0, ipix) = 0.0;
+            inv_var_out(1, ipix) = 0.0;
+            inv_var_out(2, ipix) = 0.0;
             continue;
         }
-        rms_out(0, ipix) = inv00 > 0.0 ? std::sqrt(inv00) : inf;
-        rms_out(1, ipix) = inv11 > 0.0 ? std::sqrt(inv11) : inf;
-        rms_out(2, ipix) = inv22 > 0.0 ? std::sqrt(inv22) : inf;
+        // invert_SPD_3x3 does not fully test for positive definiteness, so guard against a
+        // negative variance.
+        inv_var_out(0, ipix) = inv00 > 0.0 ? 1.0 / inv00 : 0.0;
+        inv_var_out(1, ipix) = inv11 > 0.0 ? 1.0 / inv11 : 0.0;
+        inv_var_out(2, ipix) = inv22 > 0.0 ? 1.0 / inv22 : 0.0;
     }
 }
 
@@ -331,9 +333,10 @@ void add_mapmaker(py::module_ &msup)
   m.def("map_solve_IQU", Py_map_solve_IQU,
         "Solve the per-pixel 3x3 IQU system into map_out (3, npix); unsolvable pixels get 0.",
         "map_out"_a, "map_rhs"_a, "norm_map"_a);
-  m.def("map_invdiag_IQU", Py_map_invdiag_IQU,
-        "Write `sqrt(diag(A^-1))` per pixel into rms_out (3, npix); unsolvable pixels get inf.",
-        "rms_out"_a, "norm_map"_a);
+  m.def("map_inv_var_IQU", Py_map_inv_var_IQU,
+        "Write the inverse variance `1/diag(A^-1)` per pixel into inv_var_out (3, npix); "
+        "unsolvable pixels get 0.",
+        "inv_var_out"_a, "norm_map"_a);
   m.def("apply_invN_to_map_IQU", Py_apply_invN_to_map_IQU,
         "Multiply each pixel's IQU vector by its 3x3 matrix: `map_out = inv_N_map map_in`.",
         "map_in"_a, "map_out"_a, "inv_N_map"_a);

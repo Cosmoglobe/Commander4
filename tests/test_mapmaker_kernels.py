@@ -116,14 +116,14 @@ def test_map_solve_IQU() -> None:
     np.testing.assert_allclose(map_out, expected, rtol=1e-10, atol=1e-12)
 
 
-def test_map_invdiag_IQU() -> None:
-    """RMS is sqrt(diag(A^-1)) per pixel; pixels whose A cannot be inverted get infinite RMS."""
+def test_map_inv_var_IQU() -> None:
+    """Inverse variance is 1/diag(A^-1) per pixel; pixels whose A cannot be inverted get 0."""
     A, norm_map = _normal_matrices(seed=15)
-    rms_out = np.full((3, NPIX), np.nan)
-    cpp_mapmaker.map_invdiag_IQU(rms_out, norm_map)
-    expected = np.full((3, NPIX), np.inf)
-    expected[:, GOOD] = np.sqrt(np.diagonal(np.linalg.inv(A[GOOD]), axis1=1, axis2=2)).T
-    np.testing.assert_allclose(rms_out, expected, rtol=1e-10)
+    inv_var_out = np.full((3, NPIX), np.nan)
+    cpp_mapmaker.map_inv_var_IQU(inv_var_out, norm_map)
+    expected = np.zeros((3, NPIX))
+    expected[:, GOOD] = 1.0/np.diagonal(np.linalg.inv(A[GOOD]), axis1=1, axis2=2).T
+    np.testing.assert_allclose(inv_var_out, expected, rtol=1e-10)
 
 
 def test_apply_invN_to_map_IQU() -> None:

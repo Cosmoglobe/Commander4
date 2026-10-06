@@ -7,29 +7,20 @@ from commander4.tod.mapmaking.binned import Mapmaker, MapmakerIQU, WeightsMapmak
 	WeightsMapmakerIQU
 
 
-@pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_scalar_weights_normalization(dtype: type) -> None:
-    """The scalar weights expose RMS and normal-matrix maps through the IQU interface."""
-    weights = WeightsMapmaker(MPI.COMM_SELF, 1, dtype=dtype)
-    with pytest.raises(RuntimeError, match="before it is gathered"):
-        weights.normalize_map()
-    with pytest.raises(RuntimeError, match="unfinished RMS"):
-        weights.final_rms_map
+def test_scalar_weights_gather() -> None:
+    """The scalar weights expose the normal-matrix map through the IQU interface's final_cov_map."""
+    weights = WeightsMapmaker(MPI.COMM_SELF, 1)
+    with pytest.raises(RuntimeError, match="unfinished weights map"):
+        weights.final_map
 
     pix = np.array([0, 3, 3, 7], dtype=np.int64)
     weights.accumulate_to_map(2.0, pix, response_I_P=(0.5, 0.07))
     weights.gather_map()
-    weights.normalize_map()
 
     expected_weights = np.zeros(12)
     np.add.at(expected_weights, pix, 2.0 * 0.5**2)
-    observed = expected_weights > 0
     np.testing.assert_array_equal(weights.final_cov_map, expected_weights)
     assert weights.final_cov_map is weights.final_map
-    assert weights.final_rms_map.dtype == dtype
-    np.testing.assert_allclose(weights.final_rms_map[observed],
-                               1.0 / np.sqrt(expected_weights[observed]), rtol=1e-7)
-    assert np.isinf(weights.final_rms_map[~observed]).all()
 
 
 def _build_norm_map_from_A(A: NDArray) -> NDArray:
@@ -69,14 +60,14 @@ def _solve_expected(norm_map: NDArray, rhs: NDArray) -> NDArray:
 	return expected
 
 
-def _rms_expected(norm_map: NDArray) -> NDArray:
-	"""Reference RMS estimate from per-pixel inverse covariance diagonals.
+def _inv_var_expected(norm_map: NDArray) -> NDArray:
+	"""Reference inverse variance 1/diag(A^-1) from the per-pixel matrices A.
 
-	Pixels that cannot be inverted (no weights, singular, ill-conditioned) get RMS = inf,
-	which is the "zero weight" sentinel used by both mapmaker implementations.
+	Pixels that cannot be inverted (no weights, singular, ill-conditioned) get zero inverse
+	variance, as in both mapmaker implementations.
 	"""
 	npix = norm_map.shape[1]
-	expected = np.full((3, npix), np.inf, dtype=norm_map.dtype)
+	expected = np.zeros((3, npix), dtype=norm_map.dtype)
 	reg = norm_map.dtype.type(1e-12)
 	for ipix in range(npix):
 		a00 = norm_map[0, ipix]
@@ -94,9 +85,7 @@ def _rms_expected(norm_map: NDArray) -> NDArray:
 		)
 		A = A + np.eye(3, dtype=norm_map.dtype) * reg
 		A_inv = np.linalg.inv(A)
-		expected[0, ipix] = np.sqrt(A_inv[0, 0]) if A_inv[0, 0] > 0 else np.inf
-		expected[1, ipix] = np.sqrt(A_inv[1, 1]) if A_inv[1, 1] > 0 else np.inf
-		expected[2, ipix] = np.sqrt(A_inv[2, 2]) if A_inv[2, 2] > 0 else np.inf
+		expected[:, ipix] = 1.0/np.diagonal(A_inv)
 	return expected
 
 
@@ -161,8 +150,8 @@ def test_mapmaker_iqu_singular_pixel_zeroed():
 	assert np.allclose(mapmaker.final_map, expected, rtol=1e-10, atol=1e-12)
 
 
-def test_weights_mapmaker_iqu_invdiag_matches_numpy():
-	"""C++RMS computation matches NumPy inverse-diagonal reference."""
+def test_weights_mapmaker_iqu_inv_var_matches_numpy():
+	"""C++ inverse-variance computation matches NumPy inverse-diagonal reference."""
 	rng = np.random.default_rng(321)
 	nside = 1
 	npix = 12 * nside**2
@@ -175,12 +164,12 @@ def test_weights_mapmaker_iqu_invdiag_matches_numpy():
 	mapmaker._has_gathered = True
 	mapmaker.normalize_map()
 
-	expected = _rms_expected(norm_map)
-	assert np.allclose(mapmaker.final_rms_map, expected, rtol=1e-10, atol=1e-12)
+	expected = _inv_var_expected(norm_map)
+	assert np.allclose(mapmaker.final_inv_var_map, expected, rtol=1e-10, atol=1e-12)
 
 
-def test_weights_mapmaker_iqu_singular_pixel_infinite():
-	"""Python reference RMS computation gives infinite RMS for fully singular pixels."""
+def test_weights_mapmaker_iqu_singular_pixel_zero_weight():
+	"""Python reference gives zero inverse variance for fully singular pixels."""
 	nside = 1
 	npix = 12 * nside**2
 	norm_map = np.zeros((6, npix), dtype=np.float32)
@@ -194,9 +183,9 @@ def test_weights_mapmaker_iqu_singular_pixel_infinite():
 	mapmaker._has_gathered = True
 	mapmaker.normalize_map_Python()
 
-	expected = _rms_expected(norm_map)
-	expected[:, 0] = np.inf
-	assert np.allclose(mapmaker.final_rms_map, expected, rtol=1e-5, atol=1e-6)
+	expected = _inv_var_expected(norm_map)
+	expected[:, 0] = 0.0
+	assert np.allclose(mapmaker.final_inv_var_map, expected, rtol=1e-5, atol=1e-6)
 
 
 def test_mapmaker_iqu_ill_conditioned_masked_cpp():
@@ -226,7 +215,7 @@ def test_mapmaker_iqu_ill_conditioned_masked_cpp():
 
 
 def test_weights_mapmaker_iqu_ill_conditioned_masked_cpp():
-	"""C++RMS computation gives infinite RMS for ill-conditioned pixels."""
+	"""C++ inverse-variance computation gives zero weight to ill-conditioned pixels."""
 	nside = 1
 	npix = 12 * nside**2
 	norm_map = np.zeros((6, npix), dtype=np.float64)
@@ -242,8 +231,8 @@ def test_weights_mapmaker_iqu_ill_conditioned_masked_cpp():
 	mapmaker._has_gathered = True
 	mapmaker.normalize_map()
 
-	assert np.all(np.isinf(mapmaker.final_rms_map[:, 0]))
-	assert np.allclose(mapmaker.final_rms_map[:, 1], 1.0, rtol=1e-12, atol=1e-12)
+	assert np.all(mapmaker.final_inv_var_map[:, 0] == 0.0)
+	assert np.allclose(mapmaker.final_inv_var_map[:, 1], 1.0, rtol=1e-12, atol=1e-12)
 
 
 def test_intensity_only_accumulators_do_not_evaluate_polarization_angles():
@@ -304,7 +293,7 @@ def test_intensity_mapmakers_apply_the_intensity_response():
     """The I-only mapmakers weight by the same response the IQU ones put in their II element.
 
     `pols = "I"` runs the scalar mapmakers while the CG operator still applies `response_I`, so the
-    two must agree or the inverse-variance map (and the RMS built from it) is inconsistent with A.
+    two must agree or the inverse-variance map is inconsistent with A.
     """
     rng = np.random.default_rng(11)
     nside = 1
@@ -323,8 +312,8 @@ def test_intensity_mapmakers_apply_the_intensity_response():
     np.testing.assert_allclose(signal._map_signal, signal_iqu._map_signal[0], rtol=1e-14)
     np.testing.assert_allclose(signal._map_signal, 0.4 * signal_plain._map_signal, rtol=1e-14)
 
-    weights = WeightsMapmaker(MPI.COMM_SELF, nside, dtype=np.float64)
-    weights_plain = WeightsMapmaker(MPI.COMM_SELF, nside, dtype=np.float64)
+    weights = WeightsMapmaker(MPI.COMM_SELF, nside)
+    weights_plain = WeightsMapmaker(MPI.COMM_SELF, nside)
     weights_iqu = WeightsMapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
     weights.accumulate_to_map(weight, pix, response_I_P=response_I_P)
     weights_plain.accumulate_to_map(weight, pix)
@@ -346,7 +335,7 @@ def test_the_default_response_leaves_the_intensity_mapmakers_unscaled():
     np.add.at(expected, pix, 2.0 * tod)
     np.testing.assert_allclose(signal._map_signal, expected, rtol=1e-14)
 
-    weights = WeightsMapmaker(MPI.COMM_SELF, nside, dtype=np.float64)
+    weights = WeightsMapmaker(MPI.COMM_SELF, nside)
     weights.accumulate_to_map(2.0, pix, response_I_P=(1.0, 1.0))
     expected_weights = np.zeros(12 * nside**2)
     np.add.at(expected_weights, pix, 2.0)

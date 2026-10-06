@@ -48,8 +48,7 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
     spin = 2 if pol else 0
     map_sky = detector_data.map_sky
     band_freq = detector_data.nu
-    # Inverse noise variance, zero where unobserved (rather than infinite RMS).
-    map_inv_var = detector_data.inv_n_map
+    map_inv_var = detector_data.map_inv_var  # Zero where unobserved.
 
     # This solver has no beam model, so all bands should already share one resolution (smoothed at
     # ingest via compsep.common_res_fwhm); differing FWHMs silently mix resolutions, so warn.

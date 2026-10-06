@@ -226,8 +226,8 @@ class CompSepSolver:
         if self.sample_amplitudes:
             # + N^{-1/2} eta_1. Drawn per band and independently on every rank, as it must be:
             # eta_1 is the white-noise realization of *this* band's data. Zero-weight pixels
-            # (unobserved, inv_n_map = 0) get no fluctuation, matching their absence from the LHS.
-            eta_1 = np.random.normal(0.0, 1.0, b_map.shape)*np.sqrt(self.det_map.inv_n_map)
+            # (unobserved, map_inv_var = 0) get no fluctuation, matching their absence from the LHS.
+            eta_1 = np.random.normal(0.0, 1.0, b_map.shape)*np.sqrt(self.det_map.map_inv_var)
             logger.debug(f"RHS |N^-1 d| = {np.mean(np.abs(b_map)):.2e}, "
                          f"|N^-1/2 eta_1| = {np.mean(np.abs(eta_1)):.2e}")
             b_map += eta_1.astype(b_map.dtype, copy=False)

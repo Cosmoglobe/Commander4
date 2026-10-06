@@ -101,9 +101,9 @@ def evaluate_chi2(compsep: Bunch, detector_data: DetectorMap, sky_model: SkyMode
     chi2_local, ndof_local = 0.0, 0
     for ipol in range(detector_data.npol):
         # An unobserved pixel has zero inverse-noise weight, and contributes no degree of freedom.
-        observed = detector_data.inv_n_map[ipol] > 0
+        observed = detector_data.map_inv_var[ipol] > 0
         full_residual = detector_data.map_sky[ipol] - sky_at_band[ipol]
-        z = full_residual[observed]*np.sqrt(detector_data.inv_n_map[ipol][observed])
+        z = full_residual[observed]*np.sqrt(detector_data.map_inv_var[ipol][observed])
         chi2_local += np.sum(z**2, dtype=np.float64)
         ndof_local += z.size
         if residual is not None:

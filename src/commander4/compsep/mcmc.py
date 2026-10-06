@@ -153,7 +153,7 @@ class MCMCSamplingGroup(ABC):
             fwhm=self.detector_data.fwhm_rad)
         pix = slice(None) if self.chisq_mask is None else self.chisq_mask
         residual = self.detector_data.map_sky[:, pix] - model_sky[:, pix]
-        whitened_residual = residual*np.sqrt(self.detector_data.inv_n_map[:, pix])
+        whitened_residual = residual*np.sqrt(self.detector_data.map_inv_var[:, pix])
         return -0.5 * float(np.sum(whitened_residual**2))
 
     def global_loglike(self) -> float:

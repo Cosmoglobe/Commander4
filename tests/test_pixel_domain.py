@@ -186,8 +186,8 @@ def test_scalar_sparse_matches_full():
     full_sig = Mapmaker(MPI.COMM_SELF, nside, dtype=np.float64)
     sparse_sig = Mapmaker(MPI.COMM_SELF, nside, dtype=np.float64,
                          pixel_domain=_sparse_domain(MPI.COMM_SELF, nside, local_pix))
-    full_w = WeightsMapmaker(MPI.COMM_SELF, nside, dtype=np.float64)
-    sparse_w = WeightsMapmaker(MPI.COMM_SELF, nside, dtype=np.float64,
+    full_w = WeightsMapmaker(MPI.COMM_SELF, nside)
+    sparse_w = WeightsMapmaker(MPI.COMM_SELF, nside,
                               pixel_domain=_sparse_domain(MPI.COMM_SELF, nside, local_pix))
     full_sig.accumulate_to_map(tod, 2.5, pix)
     sparse_sig.accumulate_to_map(tod, 2.5, pix)

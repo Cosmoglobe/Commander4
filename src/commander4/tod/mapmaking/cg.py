@@ -569,7 +569,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
     ### CG MAPMAKER ###
     # Single fused scan loop (mirrors Commander3's process_TOD): each detector-scan samples
     # correlated noise / sigma0 *first*, then accumulates every sigma0-dependent quantity with that
-    # freshly-sampled sigma0. Those are the inverse-variance weights (preconditioner + rms/cov), the
+    # freshly-sampled sigma0. Those are the inverse-variance weights (preconditioner + output), the
     # orbital-dipole and corr-noise maps, and the CG RHS. Building the inverse-variance map in a
     # separate up-front pass instead leaves it on the previous iteration's sigma0, which makes the
     # CG RHS inconsistent with its own A (the LHS operator and preconditioner read the live sigma0).
@@ -584,7 +584,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         T_omega = TF_model.response
     else:
         T_omega = None
-    # The inverse-variance map (preconditioner + rms/cov) is accumulated inside the fused loop below,
+    # The inverse-variance map (preconditioner + output) is accumulated inside the fused loop below,
     # so neither it nor cg_mapmaker.M can be finalized until afterwards. cg_mapmaker is constructed
     # here with a placeholder preconditioner; M is unused until solve() and accum_to_RHS never reads
     # it, so it is reassigned to the real Jacobi preconditioner after the loop.
@@ -700,7 +700,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         sigma0 = view.sigma0
         inv_var = (gain/sigma0)**2
 
-        ### INVERSE-VARIANCE WEIGHTS (preconditioner + rms/cov) ###
+        ### INVERSE-VARIANCE WEIGHTS (preconditioner + output) ###
         if pols == "IQU":
             mapmaker_invvar.accumulate_to_map(inv_var, pix, psi, response_I_P=response_I_P)
         else:
@@ -776,21 +776,19 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
     mapmaker_invvar.gather_map()
     if pols == "IQU":
         mapmaker_invvar.normalize_map()
-        map_rms = mapmaker_invvar.final_rms_map
+        map_inv_var = mapmaker_invvar.final_inv_var_map
         map_cov = mapmaker_invvar.final_cov_map
         if ismaster:
             cg_mapmaker.M = BlockInvNPreconditionerIQU(map_cov)
     else:
-        # A is diagonal for I-only, so an unobserved pixel is simply one with zero weight. map_cov
-        # stays 1-D (Mapmaker.normalize_map indexes it against a 1-D map), while map_rms gets a
-        # leading component axis to match the IQU case's (ncomp, npix) shape.
+        # A is diagonal for I-only, so it is the inverse variance itself. map_cov stays 1-D
+        # (Mapmaker.normalize_map indexes it against a 1-D map), while map_inv_var gets a leading
+        # component axis to match the IQU case's (ncomp, npix) shape.
         map_cov = mapmaker_invvar.final_map
-        map_rms = None  # Only the master holds the gathered weights, hence the rms.
+        map_inv_var = None  # Only the master holds the gathered weights.
         if ismaster:
             cg_mapmaker.M = InvNPreconditionerI(map_cov)
-            observed = map_cov > 0
-            map_rms = np.full((1, map_cov.size), np.inf)
-            map_rms[0, observed] = 1.0/np.sqrt(map_cov[observed])
+            map_inv_var = map_cov[None, :]
 
     def finalize_aux(aux_mapmaker):
         """Gather and normalize one aux map against the shared cov; `None` if it was not built."""
@@ -818,8 +816,8 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
     maps_to_file = {}
     if band_comm.Get_rank() == 0:
         detmap_dict_out, maps_to_file = finalize_band_maps(
-            map_signal, map_rms, pols, experiment_data, mapmaking_cfg, tod_samples, compsep_output,
-            map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
+            map_signal, map_inv_var, pols, experiment_data, mapmaking_cfg, tod_samples,
+            compsep_output, map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
             map_residual=map_residual, map_nhit=map_nhit, map_cov=map_cov)
 
     return detmap_dict_out, maps_to_file

@@ -89,20 +89,17 @@ class Mapmaker:
 class WeightsMapmaker:
     """Scalar (temperature-only) weights mapmaker.
 
-    Accumulates per-sample weights into a map, reduces across MPI ranks,
-    and exposes the gathered weights and RMS maps, like WeightsMapmakerIQU.
+    Accumulates per-sample weights into a map and reduces across MPI ranks. The normal matrix is
+    diagonal for an intensity map, so the gathered weights are also its inverse noise variance.
     """
-    def __init__(self, map_comm:MPI.Comm, nside:int, dtype=np.float32,
-                 pixel_domain:PixelDomain|None=None):
+    def __init__(self, map_comm:MPI.Comm, nside:int, pixel_domain:PixelDomain|None=None):
         self.map_comm = map_comm
         self.nside = nside
         self.npix = 12*nside**2
-        self.dtype= dtype
         self.domain = pixel_domain if pixel_domain is not None else PixelDomain(map_comm, nside, "full")
         self._nloc = self.domain.n_local
         self._map_signal = np.zeros(self._nloc, dtype=np.float64)
         self._gathered_map = None
-        self._finalized_rms_map = None
 
     @property
     def final_map(self):
@@ -114,13 +111,6 @@ class WeightsMapmaker:
     def final_cov_map(self) -> NDArray | None:
         """Gathered scalar normal-matrix weights on the root, or None on other ranks."""
         return self.final_map
-
-    @property
-    def final_rms_map(self) -> NDArray | None:
-        """Normalized RMS on the root, or None on other ranks."""
-        if self.map_comm.Get_rank() == 0 and self._finalized_rms_map is None:
-            raise RuntimeError("Attempted to read an unfinished RMS map.")
-        return self._finalized_rms_map
 
     def accumulate_to_map(self, weight:NDArray, pix:NDArray, psi=None,
                           response_I_P: tuple[float, float] = (1.0, 1.0)):
@@ -138,16 +128,6 @@ class WeightsMapmaker:
         self._gathered_map = self.domain.reduce_to_full(self._map_signal)
         self._map_signal = None  # Free memory and indicate that accumulation is done.
 
-    def normalize_map(self) -> None:
-        """Compute RMS = 1/sqrt(weight), leaving unobserved pixels at infinity."""
-        if self.map_comm.Get_rank() == 0:
-            if self._gathered_map is None:
-                raise RuntimeError("Cannot normalize a weights map before it is gathered.")
-            rms = np.full(self.npix, np.inf, dtype=self.dtype)
-            observed = self._gathered_map > 0
-            rms[observed] = 1.0 / np.sqrt(self._gathered_map[observed])
-            self._finalized_rms_map = rms
-
 
 
 class MapmakerIQU:
@@ -160,7 +140,7 @@ class MapmakerIQU:
 
     Usage:
     - Use WeightsMapmakerIQU to accumulate the 6 unique elements of A and
-        call `normalize_map()` there to produce RMS/covariance maps.
+        call `normalize_map()` there to produce inverse-variance maps.
     - Use MapmakerIQU to accumulate signal maps, then call `normalize_map(A)`
         with the gathered A map to produce the finalized I,Q,U map.
     """
@@ -279,13 +259,13 @@ class WeightsMapmakerIQU:
 
     This class accumulates the left-hand side (A matrix) of the mapmaking
     system, storing the 6 unique elements per pixel. The gathered A map is
-    then inverted per pixel to provide RMS/covariance information and used as
+    then inverted per pixel to provide the inverse noise variance of I, Q and U, and used as
     normalization input for MapmakerIQU.
 
     Usage:
     - Call `accumulate_to_map()` for each scan to build the A elements.
     - Call `gather_map()` to reduce across MPI tasks.
-    - Call `normalize_map()` to compute RMS maps and expose `final_cov_map`
+    - Call `normalize_map()` to compute inverse-variance maps and expose `final_cov_map`
         for MapmakerIQU normalization.
     """
     def __init__(self, map_comm:MPI.Comm, nside:int, dtype=np.float32,
@@ -298,14 +278,14 @@ class WeightsMapmakerIQU:
         self._nloc = self.domain.n_local
         self._map_signal = np.zeros((6, self._nloc), dtype=np.float64)
         self._gathered_map = None
-        self._finalized_rms_map = None
+        self._finalized_inv_var_map = None
         self._has_gathered = False
 
     @property
-    def final_rms_map(self):
-        if self._finalized_rms_map is None and self.map_comm.Get_rank() == 0:
-            raise RuntimeError("Attempted to read an unfinished RMS map.")
-        return self._finalized_rms_map
+    def final_inv_var_map(self):
+        if self._finalized_inv_var_map is None and self.map_comm.Get_rank() == 0:
+            raise RuntimeError("Attempted to read an unfinished inverse-variance map.")
+        return self._finalized_inv_var_map
     
     @property
     def final_cov_map(self):
@@ -356,23 +336,23 @@ class WeightsMapmakerIQU:
         self._has_gathered = True
 
     def normalize_map(self):
-        """Compute RMS maps from the per-pixel inverse covariance diagonals."""
+        """Compute inverse-variance maps 1/diag(A^-1) from the per-pixel matrices A."""
         if self.map_comm.Get_rank() == 0:
             if not self._has_gathered:
                 raise RuntimeError("Cannot normalize a weights map before it is gathered.")
             norm_map = np.ascontiguousarray(self._gathered_map, dtype=np.float64)
-            rms = np.zeros((3, self.npix), dtype=np.float64)
-            cpp_mapmaker.map_invdiag_IQU(rms, norm_map)
-            self._finalized_rms_map = rms.astype(self.dtype, copy=False)
+            inv_var = np.zeros((3, self.npix), dtype=np.float64)
+            cpp_mapmaker.map_inv_var_IQU(inv_var, norm_map)
+            self._finalized_inv_var_map = inv_var.astype(self.dtype, copy=False)
 
     def normalize_map_Python(self):
-        """Reference RMS computation using NumPy inversion."""
+        """Reference inverse-variance computation using NumPy inversion."""
         if self.map_comm.Get_rank() == 0:
             if not self._has_gathered:
                 raise RuntimeError("Cannot normalize a weights map before it is gathered.")
-            # Pixels which cannot be inverted keep RMS = inf (zero weight), as in the C++ solver.
-            self._finalized_rms_map = np.full((3, self.npix), np.inf, dtype=self.dtype)
- 
+            # Pixels which cannot be inverted keep zero inverse variance, as in the C++ solver.
+            self._finalized_inv_var_map = np.zeros((3, self.npix), dtype=self.dtype)
+
             # `A` matrix is float64 no matter what, to get very accurate inversion.
             A = np.zeros((self.npix, 3, 3), dtype=np.float64)
             A[:, 0, 0] = self._gathered_map[0]
@@ -391,12 +371,12 @@ class WeightsMapmakerIQU:
             eps = np.finfo(np.float64).eps
             mask = (diag_prod > 0) & (np.abs(det) > eps * diag_prod)
 
-            # If any of the above, RMS is set to inf.
+            # If any of the above, the inverse variance stays 0.
             if np.any(mask):
                 A_inv = np.linalg.inv(A[mask])
                 diag = np.diagonal(A_inv, axis1=1, axis2=2)
-                diag = np.where(diag >= 0, np.sqrt(diag), np.inf)
-                self._finalized_rms_map[:, mask] = diag.T.astype(self.dtype, copy=False)
+                inv_var = np.divide(1.0, diag, out=np.zeros_like(diag), where=diag > 0)
+                self._finalized_inv_var_map[:, mask] = inv_var.T.astype(self.dtype, copy=False)
 
 
 def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_output: NDArray,
@@ -613,11 +593,14 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
     start_bench("map-gather")
     ### GATHER AND NORMALIZE MAPS ###
     # Finalize the inverse-variance map (now accumulated with this iteration's sigma0) before reading
-    # its rms/cov, which normalize the signal and every aux map below.
+    # its cov, which normalizes the signal and every aux map below.
     mapmaker_invvar.gather_map()
-    mapmaker_invvar.normalize_map()
-    map_rms = mapmaker_invvar.final_rms_map
     map_cov = mapmaker_invvar.final_cov_map
+    if pols == "I":  # A is diagonal for I-only, so it is the inverse variance itself.
+        map_inv_var = map_cov
+    else:
+        mapmaker_invvar.normalize_map()
+        map_inv_var = mapmaker_invvar.final_inv_var_map
     mapmaker.gather_map()
     mapmaker.normalize_map(map_cov)
     map_signal = mapmaker.final_map
@@ -649,7 +632,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
     with benchmark("finalize"):
         if band_comm.Get_rank() == 0:
             detmap_dict_out, maps_to_file = finalize_band_maps(
-                map_signal, map_rms, pols, experiment_data, mapmaking_cfg, tod_samples,
+                map_signal, map_inv_var, pols, experiment_data, mapmaking_cfg, tod_samples,
                 compsep_output, map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
                 map_sidelobe=map_sidelobe, map_residual=map_residual, map_nhit=map_nhit,
                 map_cov=map_cov)

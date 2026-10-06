@@ -12,13 +12,13 @@ from commander4.math_utils.alm import alm_dot_product
 
 def _spin2_cross_channel_leakage(q_rms: float, u_rms: float, nside: int, lmax: int) -> float:
     map_sky = np.zeros((2, 12 * nside**2), dtype=np.float64)
-    map_rms = np.vstack([
-        np.full(12 * nside**2, q_rms, dtype=np.float64),
-        np.full(12 * nside**2, u_rms, dtype=np.float64),
+    map_inv_var = np.vstack([
+        np.full(12 * nside**2, 1.0/q_rms**2, dtype=np.float64),
+        np.full(12 * nside**2, 1.0/u_rms**2, dtype=np.float64),
     ])
     detector_map = DetectorMap(
         map_sky,
-        map_rms,
+        map_inv_var,
         nu=100.0,
         fwhm=0.0,
         nside=nside,
@@ -36,8 +36,8 @@ def _spin2_cross_channel_leakage(q_rms: float, u_rms: float, nside: int, lmax: i
 
 
 class _DummyDetectorMap:
-    def __init__(self, inv_n_map: np.ndarray, lmax: int):
-        self.inv_n_map = inv_n_map
+    def __init__(self, map_inv_var: np.ndarray, lmax: int):
+        self.map_inv_var = map_inv_var
         self.lmax = lmax
 
 
@@ -48,9 +48,9 @@ class _DummyBand:
 
 
 class _DummyCompSep:
-    def __init__(self, inv_n_map: np.ndarray, lmax: int):
+    def __init__(self, map_inv_var: np.ndarray, lmax: int):
         self.CompSep_comm = MPI.COMM_SELF
-        self.det_map = _DummyDetectorMap(inv_n_map, lmax)
+        self.det_map = _DummyDetectorMap(map_inv_var, lmax)
         self.my_band = _DummyBand(nu=100.0, fwhm=0.0)
 
 
@@ -103,11 +103,11 @@ def test_spin2_unequal_qu_weights_induce_large_cross_channel_leakage():
 def test_joint_preconditioner_uses_trace_weight_for_spin2_channels():
     nside = 16
     npix = 12 * nside**2
-    inv_n_map = np.vstack([
+    map_inv_var = np.vstack([
         np.full(npix, 1.0, dtype=np.float64),
         np.full(npix, 0.25, dtype=np.float64),
     ])
-    compsep = _DummyCompSep(inv_n_map=inv_n_map, lmax=16)
+    compsep = _DummyCompSep(map_inv_var=map_inv_var, lmax=16)
     comp_list = _DummyCompList([_DummyDiffuseComp(lmax=16, npol=2)])
 
     precond = JointPreconditioner(compsep, comp_list)
@@ -129,8 +129,8 @@ class _SEDDiffuseComp(_DummyDiffuseComp):
 def _single_band_precond_block(preconditioner_name: str, ell: int):
     """Build one preconditioner over a single 60' band with two differently-mixing components."""
     lmax, nside = 8, 8
-    inv_n_map = np.full((1, 12*nside**2), 2.0, dtype=np.float64)
-    compsep = _DummyCompSep(inv_n_map=inv_n_map, lmax=lmax)
+    map_inv_var = np.full((1, 12*nside**2), 2.0, dtype=np.float64)
+    compsep = _DummyCompSep(map_inv_var=map_inv_var, lmax=lmax)
     compsep.my_band.fwhm = 60.0   # arcmin
     comp_list = _DummyCompList([_SEDDiffuseComp(lmax=lmax, npol=1, sed=sed) for sed in (1.0, 3.0)])
     precond = getattr(preconditioners, preconditioner_name)(compsep, comp_list)

@@ -78,7 +78,7 @@ def _make_comp_list(params: Bunch) -> CompList:
 def _make_det_map(seed: int = 0) -> DetectorMap:
     npix = 12*NSIDE**2
     rng = np.random.default_rng(seed)
-    return DetectorMap(rng.normal(0.0, 1.0, (1, npix)), np.full((1, npix), 3.0),
+    return DetectorMap(rng.normal(0.0, 1.0, (1, npix)), np.full((1, npix), 1.0/3.0**2),
                        nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
 
 
@@ -267,7 +267,7 @@ class TestPriorMean:
 
         # Enormous noise: A^T N^-1 A is negligible against S^-1, so only the prior informs the fit.
         npix = 12*NSIDE**2
-        det_map = DetectorMap(np.full((1, npix), 5.0), np.full((1, npix), 1e8),
+        det_map = DetectorMap(np.full((1, npix), 5.0), np.full((1, npix), 1e-16),
                               nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
         solution = _make_solver(det_map, _make_group(False)).solve(comp_list)
 
@@ -276,7 +276,7 @@ class TestPriorMean:
     def test_prior_mean_enters_the_sampled_solve_too(self, monkeypatch):
         """mu shifts the constrained realization as well, not just the MAP solve."""
         params = _make_params()
-        det_map = DetectorMap(np.zeros((1, 12*NSIDE**2)), np.full((1, 12*NSIDE**2), 1e8),
+        det_map = DetectorMap(np.zeros((1, 12*NSIDE**2)), np.full((1, 12*NSIDE**2), 1e-16),
                               nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
 
         # `amp_prior_mean` is a property, so it can only be patched on the class -- which every
@@ -373,7 +373,7 @@ class TestPriorMeanMap:
 
         params = _make_params()
         npix = 12*NSIDE**2
-        det_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1e8),
+        det_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1e-16),
                               nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
         solution = _make_solver(det_map, _make_group(False)).solve(comp_list)
 
