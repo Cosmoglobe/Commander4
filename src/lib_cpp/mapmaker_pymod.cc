@@ -306,6 +306,70 @@ void Py_apply_invN_to_map_IQU(const CNpArr &map_in_, const NpArr &map_out_,
 }
 
 
+// Hash table from global pixel index to a rank's local pixel index (used by PixelDomain). It is
+// open addressing with linear probing in one power-of-two array of uint64 slots, at least four times
+// the number of local pixels. Each slot holds the global pixel in its high 32 bits and the local
+// index in its low 32 bits, so a lookup reads one 8-byte word and usually one cache line. An empty
+// slot has all bits set. Global pixels must lie below 2^32 - 1, i.e. nside <= 16384.
+constexpr uint64_t EMPTY_SLOT = ~uint64_t(0);
+
+/** The table slot where the search for global pixel `pix` starts, in a table of 2^bits slots.
+ *
+ * Fibonacci hashing: multiply by 2^64 divided by the golden ratio and keep the top `bits` bits. This
+ * spreads runs of neighbouring pixel numbers evenly over the table.
+ */
+inline size_t pixel_hash_slot(uint64_t pix, int bits){
+    return size_t((pix * 0x9E3779B97F4A7C15ULL) >> (64 - bits));
+}
+
+/** Builds the hash table that maps local_pix[j] to j. */
+NpArr Py_build_pixel_hash(const CNpArr &local_pix_){
+    auto local_pix = to_cmav<int64_t,1>(local_pix_, "local_pix");
+    const size_t nlocal = local_pix.shape(0);
+    MR_assert(nlocal < (size_t(1) << 32), "too many local pixels for 32-bit local indices");
+    int bits = 2;
+    while ((size_t(1) << bits) < 4*nlocal) bits++;
+    const size_t mask = (size_t(1) << bits) - 1;
+    auto table_ = make_Pyarr<uint64_t>({mask + 1});
+    auto table = to_vmav<uint64_t,1>(table_);
+    for (size_t slot = 0; slot <= mask; slot++)
+        table(slot) = EMPTY_SLOT;
+    for (size_t j = 0; j < nlocal; j++){
+        const uint64_t p = uint64_t(local_pix(j));  // a negative index becomes huge and fails below
+        MR_assert(p < (EMPTY_SLOT >> 32), "global pixel index out of range");
+        size_t slot = pixel_hash_slot(p, bits);
+        while (table(slot) != EMPTY_SLOT){
+            MR_assert((table(slot) >> 32) != p, "duplicate pixel in local_pix");
+            slot = (slot + 1) & mask;
+        }
+        table(slot) = (p << 32) | uint64_t(j);
+    }
+    return table_;
+}
+
+/** Looks up the local index of every global pixel in pix; fails if one is not in the table. */
+NpArr Py_global_to_local(const CNpArr &table_, const CNpArr &pix_){
+    auto table = to_cmav<uint64_t,1>(table_, "table");
+    auto pix = to_cmav<int64_t,1>(pix_, "pix");
+    const size_t mask = table.shape(0) - 1;
+    int bits = 0;
+    while ((size_t(1) << bits) < table.shape(0)) bits++;
+    auto out_ = make_Pyarr<int64_t>({pix.shape(0)});
+    auto out = to_vmav<int64_t,1>(out_);
+    for (size_t i = 0; i < pix.shape(0); i++){
+        const uint64_t p = uint64_t(pix(i));
+        MR_assert(p < (EMPTY_SLOT >> 32), "global pixel index out of range");
+        size_t slot = pixel_hash_slot(p, bits);
+        while ((table(slot) >> 32) != p){
+            MR_assert(table(slot) != EMPTY_SLOT, "pixel not in the local pixel domain");
+            slot = (slot + 1) & mask;
+        }
+        out(i) = int64_t(table(slot) & 0xFFFFFFFFu);
+    }
+    return out_;
+}
+
+
 void add_mapmaker(py::module_ &msup)
   {
   using namespace py::literals;
@@ -340,6 +404,13 @@ void add_mapmaker(py::module_ &msup)
   m.def("apply_invN_to_map_IQU", Py_apply_invN_to_map_IQU,
         "Multiply each pixel's IQU vector by its 3x3 matrix: `map_out = inv_N_map map_in`.",
         "map_in"_a, "map_out"_a, "inv_N_map"_a);
+  m.def("build_pixel_hash", Py_build_pixel_hash,
+        "Build the hash table (a uint64 array) that maps global pixel `local_pix[j]` to `j`.",
+        "local_pix"_a);
+  m.def("global_to_local", Py_global_to_local,
+        "Return the local index (int64) of every global pixel in pix, using a table from "
+        "`build_pixel_hash`. Fails if a pixel is not in the table.",
+        "table"_a, "pix"_a);
   }
 
 

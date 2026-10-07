@@ -166,6 +166,32 @@ def test_kernels_reject_out_of_range_pixels(bad_pixel: int) -> None:
             call()
 
 
+def test_pixel_hash_round_trip() -> None:
+    """global_to_local inverts local_pix, for unsorted pixels anywhere on an nside-16384 sky."""
+    rng = np.random.default_rng(21)
+    npix_max = 12*16384**2
+    # A run of neighbouring pixels, both ends of the valid range, and pixels spread over the sky.
+    local_pix = np.unique(np.concatenate([np.arange(1000, 3000), [0, npix_max - 1],
+                                          rng.integers(0, npix_max, 5000)]))
+    rng.shuffle(local_pix)
+    table = cpp_mapmaker.build_pixel_hash(local_pix)
+    pix = rng.choice(local_pix, size=20000)
+    np.testing.assert_array_equal(local_pix[cpp_mapmaker.global_to_local(table, pix)], pix)
+    empty = np.zeros(0, dtype=np.int64)
+    assert cpp_mapmaker.global_to_local(cpp_mapmaker.build_pixel_hash(empty), empty).size == 0
+
+
+def test_pixel_hash_rejects_unknown_duplicate_and_out_of_range_pixels() -> None:
+    table = cpp_mapmaker.build_pixel_hash(np.array([5, 9, 2], dtype=np.int64))
+    with pytest.raises(RuntimeError, match="not in the local pixel domain"):
+        cpp_mapmaker.global_to_local(table, np.array([5, 3], dtype=np.int64))
+    for bad in (-1, 2**32 - 1):  # cannot be stored in the 32-bit half of a slot
+        with pytest.raises(RuntimeError, match="out of range"):
+            cpp_mapmaker.global_to_local(table, np.array([5, bad], dtype=np.int64))
+    with pytest.raises(RuntimeError, match="duplicate"):
+        cpp_mapmaker.build_pixel_hash(np.array([5, 9, 5], dtype=np.int64))
+
+
 def test_map_accumulator_IQU_rejects_wrong_dtypes_and_lengths() -> None:
     tod, pix, psi = _scan(np.float32, seed=19)
     m = np.zeros((3, NPIX))

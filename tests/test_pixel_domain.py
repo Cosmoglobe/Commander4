@@ -39,6 +39,12 @@ def test_to_local_maps_global_to_compact_indices():
     assert_allclose(np.asarray(local_pix)[dom.to_local(pix)], pix)
 
 
+def test_to_local_rejects_pixels_outside_the_domain():
+    dom = _sparse_domain(MPI.COMM_SELF, nside=2, local_pix=[3, 7, 8])
+    with pytest.raises(RuntimeError, match="not in the local pixel domain"):
+        dom.to_local(np.array([7, 4], dtype=np.int64))
+
+
 # --- from_view -------------------------------------------------------------------------------
 
 class _FakeView:

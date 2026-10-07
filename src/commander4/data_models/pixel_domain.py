@@ -8,7 +8,7 @@ import numpy as np
 from mpi4py import MPI
 from numpy.typing import NDArray
 
-from commander4.math_utils.search import gallop_search_many
+from commander4.backend import mapmaker as cpp_mapmaker
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset
 
@@ -29,6 +29,9 @@ _NUMPY_TO_MPI_DTYPE = {np.dtype(np.float64): MPI.DOUBLE, np.dtype(np.float32): M
 #   - "full":   the historical behaviour. ``local_pix`` is the whole sky, ``to_local`` is the
 #               identity, and the collectives are a plain ``Reduce`` / ``Bcast`` over npix.
 #   - "sparse": each rank holds ``local_pix`` (the sorted unique global pixels its scans touch).
+#               ``to_local`` finds a pixel's local index in a hash table built once from
+#               ``local_pix`` (see ``build_pixel_hash`` in ``mapmaker_pymod.cc``), so its cost per
+#               sample does not depend on how many pixels the rank holds or how they are ordered.
 #               Local buffers are (ncomp, n_local). Reduction is a ``Gatherv`` of the local data to
 #               the master followed by a scatter-add into the full-sky map; the symmetric scatter
 #               (master -> ranks, for the CG LHS) is a ``Scatterv`` of the per-rank pixel slices.
@@ -65,6 +68,7 @@ class PixelDomain:
 
         self.local_pix = np.ascontiguousarray(local_pix, dtype=np.int64)
         self.n_local = int(self.local_pix.size)
+        self._pixel_hash = cpp_mapmaker.build_pixel_hash(self.local_pix)
         # Static gather plan, exchanged once: per-rank element counts, their displacements, and the
         # concatenation of every rank's global pixels (held only on the master for the scatter-add).
         counts = np.asarray(comm.allgather(self.n_local), dtype=np.int32)
@@ -95,17 +99,14 @@ class PixelDomain:
         return cls(comm, nside, "sparse", local_pix=local_pix)
 
     def to_local(self, pix: NDArray) -> NDArray:
-        """Map global HEALPix indices to compact local-buffer indices (identity in full mode)."""
+        """Map global HEALPix indices to compact local-buffer indices (identity in full mode).
+
+        In sparse mode every pixel must be in ``local_pix``; one that is not raises a RuntimeError.
+        """
         if self.mode == "full":
-            out = pix
-        else:
-            with benchmark("pix-search"):
-                # local_pix is sorted and contains every pixel this rank can pass, so searchsorted is exact.
-                out = np.zeros_like(pix)
-                gallop_search_many(self.local_pix, pix, out)
-                # The above should give the same result as doing:
-                # out = np.searchsorted(self.local_pix, pix)
-        return out
+            return pix
+        with benchmark("pix-to-local"):
+            return cpp_mapmaker.global_to_local(self._pixel_hash, np.asarray(pix, dtype=np.int64))
 
     def reduce_to_full(self, local_data: NDArray, root: int = 0) -> NDArray | None:
         """Sum the per-rank local buffers into a full-sky map on ``root`` (else return ``None``).
