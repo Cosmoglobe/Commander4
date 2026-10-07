@@ -3,6 +3,9 @@
 The simpler of the two mapmakers (see `mapmaking/cg.py` for the CG one). `Mapmaker`/`MapmakerIQU`
 build the signal map, `WeightsMapmaker`/`WeightsMapmakerIQU` the inverse-variance weights that both
 mapmakers need. `tod2map_bin` drives the whole per-band scan loop.
+
+Every `accumulate_to_map` takes `pix_local`: local pixel indices into the rank's map buffer
+(`TODView.pix_local`), converted once per detector-scan rather than by each map separately.
 """
 import numpy as np
 from mpi4py import MPI
@@ -56,7 +59,7 @@ class Mapmaker:
                 raise RuntimeError("Attempted to retrieve an unfinished map.")
         return self._finalized_map
 
-    def accumulate_to_map(self, tod:NDArray, weights:NDArray, pix:NDArray, psi=None,
+    def accumulate_to_map(self, tod:NDArray, weights:NDArray, pix_local:NDArray, psi=None,
                           response_I_P: tuple[float, float] = (1.0, 1.0)):
         """Accumulate weighted TOD samples into the local map buffer."""
         # Check that we are still in business, and haven't already called "gather_map".
@@ -65,8 +68,8 @@ class Mapmaker:
         # An intensity map only sees the intensity response, and it enters the design matrix
         # linearly, so folding it into the scalar weight is the whole of it.
         resp_I, _ = response_I_P
-        pix = self.domain.to_local(pix).astype(np.int64, copy=False)
-        cpp_mapmaker.map_accumulator(self._map_signal, tod, float(weights) * resp_I, pix)
+        pix_local = np.asarray(pix_local, dtype=np.int64)
+        cpp_mapmaker.map_accumulator(self._map_signal, tod, float(weights) * resp_I, pix_local)
 
     def gather_map(self):
         """Reduce the local map buffers across MPI ranks into the full-sky root map."""
@@ -112,7 +115,7 @@ class WeightsMapmaker:
         """Gathered scalar normal-matrix weights on the root, or None on other ranks."""
         return self.final_map
 
-    def accumulate_to_map(self, weight:NDArray, pix:NDArray, psi=None,
+    def accumulate_to_map(self, weight:NDArray, pix_local:NDArray, psi=None,
                           response_I_P: tuple[float, float] = (1.0, 1.0)):
         """Accumulate per-sample weights into the local map buffer."""
         # Check that we are still in business, and haven't already called "gather_map".
@@ -120,8 +123,8 @@ class WeightsMapmaker:
             raise RuntimeError("Cannot accumulate into a finalized weights map.")
         # This is P^T N^-1 P, so the intensity response enters squared (the IQU kernel's II term).
         resp_I, _ = response_I_P
-        pix = self.domain.to_local(pix).astype(np.int64, copy=False)
-        cpp_mapmaker.map_weight_accumulator(self._map_signal, float(weight) * resp_I**2, pix)
+        pix_local = np.asarray(pix_local, dtype=np.int64)
+        cpp_mapmaker.map_weight_accumulator(self._map_signal, float(weight) * resp_I**2, pix_local)
 
     def gather_map(self):
         """Reduce the local weights buffers across MPI ranks into the full-sky root map."""
@@ -164,24 +167,24 @@ class MapmakerIQU:
         return self._finalized_map
 
 
-    def accumulate_to_map(self, tod:NDArray, weights:NDArray, pix:NDArray, psi:NDArray,
+    def accumulate_to_map(self, tod:NDArray, weights:NDArray, pix_local:NDArray, psi:NDArray,
                           response_I_P: tuple[float, float] = (1.0, 1.0)):
         """Accumulate I,Q,U signal into the local map buffer."""
         # Check that we are still in business, and haven't already called "gather_map".
         if self._map_signal is None:
             raise RuntimeError("Cannot accumulate into a finalized map.")
-        pix = self.domain.to_local(pix).astype(np.int64, copy=False)
         resp_I, resp_P = response_I_P
-        cpp_mapmaker.map_accumulator_IQU(self._map_signal, tod, float(weights), pix,
+        cpp_mapmaker.map_accumulator_IQU(self._map_signal, tod, float(weights),
+                                         np.asarray(pix_local, dtype=np.int64),
                                          np.asarray(psi, dtype=np.float64),
                                          response_I=resp_I, response_P=resp_P)
 
-    def accumulate_to_map_Python(self, tod:NDArray, weights:NDArray, pix:NDArray, psi:NDArray,
-                                 response_I_P: tuple[float, float] = (1.0, 1.0)):
+    def accumulate_to_map_Python(self, tod:NDArray, weights:NDArray, pix_local:NDArray,
+                                 psi:NDArray, response_I_P: tuple[float, float] = (1.0, 1.0)):
         """Reference accumulator matching the C++ IQU kernel."""
         if self._map_signal is None:
             raise RuntimeError("Cannot accumulate into a finalized map.")
-        pix_idx = self.domain.to_local(pix).astype(np.int64, copy=False)
+        pix_idx = np.asarray(pix_local, dtype=np.int64)
         w_tod = np.ascontiguousarray(tod, dtype=np.float64) * float(weights)
         resp_I, resp_P = response_I_P
         if resp_I == 1.0:
@@ -293,24 +296,24 @@ class WeightsMapmakerIQU:
             raise RuntimeError("Attempted to read an unfinished covariance map.")
         return self._gathered_map
 
-    def accumulate_to_map(self, weight:float, pix:NDArray, psi:NDArray,
+    def accumulate_to_map(self, weight:float, pix_local:NDArray, psi:NDArray,
                           response_I_P: tuple[float, float] = (1.0, 1.0)):
         """Accumulate IQU weight/covariance elements into the local buffer."""
         # Check that we are still in business, and haven't already called "gather_map".
         if self._map_signal is None:
             raise RuntimeError("Cannot accumulate into a finalized weights map.")
-        pix = self.domain.to_local(pix).astype(np.int64, copy=False)
         resp_I, resp_P = response_I_P
-        cpp_mapmaker.map_weight_accumulator_IQU(self._map_signal, float(weight), pix,
+        cpp_mapmaker.map_weight_accumulator_IQU(self._map_signal, float(weight),
+                                                np.asarray(pix_local, dtype=np.int64),
                                                 np.asarray(psi, dtype=np.float64),
                                                 response_I=resp_I, response_P=resp_P)
 
-    def accumulate_to_map_Python(self, weight:float, pix:NDArray, psi:NDArray,
+    def accumulate_to_map_Python(self, weight:float, pix_local:NDArray, psi:NDArray,
                                  response_I_P: tuple[float, float] = (1.0, 1.0)):
         """Reference accumulator matching the C++ IQU weights kernel."""
         if self._map_signal is None:
             raise RuntimeError("Cannot accumulate into a finalized weights map.")
-        pix_idx = self.domain.to_local(pix).astype(np.int64, copy=False)
+        pix_idx = np.asarray(pix_local, dtype=np.int64)
         weight_f64 = float(weight)
         resp_I, resp_P = response_I_P
         if resp_I != 0.0:
@@ -444,7 +447,9 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         start_bench("pix-psi")
         good_data_mask = view.get_mask(proc_mask=False)
         pix, psi = view.pix, view.psi
-        pix_masked = pix[good_data_mask]
+        # The maps take local pixel indices, converted once for this det-scan; `pix` itself stays
+        # the global index, which the far-sidelobe projection needs.
+        pix_local_masked = view.pix_local[good_data_mask]
         psi_masked = psi[good_data_mask]
         response_I_P = view.response_I_P
         gain = view.get_gain()
@@ -527,7 +532,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
             sigma0 = view.sigma0
             # sigma0 is in detector-units, transform into uK_RJ by dividing it by the gain.
             inv_var = (gain/sigma0)**2
-            mapmaker_invvar.accumulate_to_map(inv_var, pix_masked, psi_masked,
+            mapmaker_invvar.accumulate_to_map(inv_var, pix_local_masked, psi_masked,
                                               response_I_P=response_I_P)
 
         ### ORBITAL DIPOLE ###
@@ -539,7 +544,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
             with benchmark("map-binning"):
                 mapmaker_ncorr.accumulate_to_map(
                     (n_corr_est[good_data_mask]/gain).astype(np.float32, copy=False),
-                    inv_var, pix_masked, psi_masked, response_I_P=response_I_P)
+                    inv_var, pix_local_masked, psi_masked, response_I_P=response_I_P)
         if corr_noise_active:
             d_sky -= n_corr_est
 
@@ -548,20 +553,21 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         # map accumulates it as it is while the detector-unit TOD has it removed at the full gain.
         if sidelobe_active:
             if mapmaker_sidelobe is not None:
-                mapmaker_sidelobe.accumulate_to_map(sl_tod[good_data_mask], inv_var, pix_masked,
-                                                    psi_masked, response_I_P=response_I_P)
+                mapmaker_sidelobe.accumulate_to_map(sl_tod[good_data_mask], inv_var,
+                                                    pix_local_masked, psi_masked,
+                                                    response_I_P=response_I_P)
             d_sky -= gain * sl_tod
 
         d_sky_masked = d_sky[good_data_mask]
         with benchmark("map-binning"):
-            mapmaker.accumulate_to_map(d_sky_masked/gain, inv_var, pix_masked, psi_masked,
+            mapmaker.accumulate_to_map(d_sky_masked/gain, inv_var, pix_local_masked, psi_masked,
                                        response_I_P=response_I_P)
         if mapmaker_orbdipole is not None:
             # The dipole TOD is cached on the view, so `get_tod` above already paid for it.
             sky_orb_dipole = view.get_orbital_dipole_tod()
             with benchmark("map-binning"):
                 mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole[good_data_mask], inv_var,
-                                                     pix_masked, psi_masked,
+                                                     pix_local_masked, psi_masked,
                                                      response_I_P=response_I_P)
 
         ### RESIDUAL AND HIT MAPS ###
@@ -572,10 +578,10 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         if mapmaker_res is not None:
             with benchmark("map-binning"):
                 mapmaker_res.accumulate_to_map(residual_tod[good_data_mask]/gain, inv_var,
-                                            pix_masked, psi_masked, response_I_P=response_I_P)
+                                            pix_local_masked, psi_masked, response_I_P=response_I_P)
         if mapmaker_nhit is not None:
             with benchmark("nhit-local"):
-                mapmaker_nhit.accumulate_to_map(1.0, pix_masked)
+                mapmaker_nhit.accumulate_to_map(1.0, pix_local_masked)
 
     with benchmark("MPI-sync"):
         band_comm.Barrier()

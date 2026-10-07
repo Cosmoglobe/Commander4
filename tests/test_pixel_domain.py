@@ -166,7 +166,7 @@ def test_weights_iqu_sparse_matches_full(response_I_P):
     sparse = WeightsMapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64,
                                pixel_domain=domain)
     full.accumulate_to_map(2.5, pix, psi, response_I_P=response_I_P)
-    sparse.accumulate_to_map(2.5, pix, psi, response_I_P=response_I_P)
+    sparse.accumulate_to_map(2.5, domain.to_local(pix), psi, response_I_P=response_I_P)
     full.gather_map()
     sparse.gather_map()
     assert_allclose(sparse._gathered_map, full._gathered_map, rtol=1e-12, atol=1e-12)
@@ -183,7 +183,7 @@ def test_signal_iqu_sparse_matches_full(response_I_P):
     sparse = MapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64,
                         pixel_domain=domain)
     full.accumulate_to_map(tod, 2.5, pix, psi, response_I_P=response_I_P)
-    sparse.accumulate_to_map(tod, 2.5, pix, psi, response_I_P=response_I_P)
+    sparse.accumulate_to_map(tod, 2.5, domain.to_local(pix), psi, response_I_P=response_I_P)
     full.gather_map()
     sparse.gather_map()
     assert_allclose(sparse._gathered_map, full._gathered_map, rtol=1e-12, atol=1e-12)
@@ -202,9 +202,9 @@ def test_scalar_sparse_matches_full():
     sparse_w = WeightsMapmaker(MPI.COMM_SELF, nside,
                               pixel_domain=domain)
     full_sig.accumulate_to_map(tod, 2.5, pix)
-    sparse_sig.accumulate_to_map(tod, 2.5, pix)
+    sparse_sig.accumulate_to_map(tod, 2.5, domain.to_local(pix))
     full_w.accumulate_to_map(2.5, pix)
-    sparse_w.accumulate_to_map(2.5, pix)
+    sparse_w.accumulate_to_map(2.5, domain.to_local(pix))
     full_sig.gather_map(); sparse_sig.gather_map()
     full_w.gather_map(); sparse_w.gather_map()
     assert_allclose(sparse_sig._gathered_map, full_sig._gathered_map, rtol=1e-12, atol=1e-12)

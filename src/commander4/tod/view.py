@@ -95,6 +95,7 @@ class TODView:
         self._pre_demodulation_tod = None
         self._corrected_tod = None
         self._pix = None
+        self._pix_local = None
         self._psi = None
         self._flag = None
         self._ds_indices = None
@@ -342,6 +343,20 @@ class TODView:
         return self._pix
 
     @property
+    def _fullres_pix_local(self) -> NDArray[np.integer]:
+        """Full-rate pointing as local pixel indices, i.e. indices into this rank's map buffers.
+
+        Converted once per detector (``PixelDomain.to_local``) and shared by every map that the
+        detector-scan touches. In full-sky map mode these are the global pixels themselves.
+        """
+        if self._pix_local is None:
+            domain = self.experiment_data.pixel_domain
+            # No domain built means full-sky maps, as for the mapmakers' own default domain.
+            self._pix_local = (self._fullres_pix if domain is None
+                               else domain.to_local(self._fullres_pix))
+        return self._pix_local
+
+    @property
     def _fullres_psi(self) -> NDArray[np.floating] | NDArray[np.integer]:
         """Full-rate polarization angle (used internally for model evaluation)."""
         if self._psi is None:
@@ -354,6 +369,17 @@ class TODView:
         if self._downsample_factor == 1:
             return self._fullres_pix
         return self._fullres_pix[self._block_indices]
+
+    @property
+    def pix_local(self) -> NDArray[np.integer]:
+        """``pix`` as local pixel indices, for indexing this rank's map buffers (``PixelDomain``).
+
+        Use this, not ``pix``, wherever a map is accumulated or read; ``pix`` stays the global
+        HEALPix index for everything that needs a sky position (masks, dipole, sidelobes).
+        """
+        if self._downsample_factor == 1:
+            return self._fullres_pix_local
+        return self._fullres_pix_local[self._block_indices]
 
     @property
     def psi(self) -> NDArray[np.floating] | NDArray[np.integer]:
@@ -450,7 +476,7 @@ class TODView:
         if sky_model.shape[-1] == 12 * self.experiment_data.nside**2:
             sky_pix = self._fullres_pix
         else:
-            sky_pix = self.experiment_data.pixel_domain.to_local(self._fullres_pix)
+            sky_pix = self._fullres_pix_local
         sky = self._downsample_mean(project_sky_to_tod(sky_model, sky_pix, psi=self._fullres_psi,
                                                        response_I_P=self.response_I_P))
         if compsep_output is None:

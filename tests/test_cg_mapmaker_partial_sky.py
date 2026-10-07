@@ -15,6 +15,7 @@ an identity transfer function the two mapmakers solve the same normal equations,
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from mpi4py import MPI
 
 from commander4.data_models.detector_tod import DetectorTOD
@@ -82,11 +83,12 @@ def _fake_tod_samples() -> SimpleNamespace:
         tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None, residual_tods=None)
 
 
-def _run_mapmaker(band: DetectorGroupTOD, mapmaker: str) -> dict[str, np.ndarray]:
+def _run_mapmaker(band: DetectorGroupTOD, mapmaker: str,
+                  sparse_maps: bool = False) -> dict[str, np.ndarray]:
     """Run one of the two mapmakers on `band` and return the maps selected for chain output."""
     mapmaking = MapmakingConfig(
         mapmaker=mapmaker, num_threads=1, include_orbital_dipole_maps=False,
-        include_corr_noise_maps=False, include_sky_model_maps=False, sparse_maps=False,
+        include_corr_noise_maps=False, include_sky_model_maps=False, sparse_maps=sparse_maps,
         common_res_fwhm=0.0, cg=CGConfig(max_iter=20, err_tol=1e-12))
     run = tod_processing.tod2map_CG if mapmaker == "CG" else tod_processing.tod2map_bin
     ncomp = 3 if "QU" in band.pols else 1
@@ -96,8 +98,12 @@ def _run_mapmaker(band: DetectorGroupTOD, mapmaker: str) -> dict[str, np.ndarray
     return maps
 
 
-def test_cg_patch_matches_binned_and_zeroes_unsolvable_pixels(monkeypatch):
-    """IQU patch: the CG map equals the binned map where solvable, and is zero everywhere else."""
+@pytest.mark.parametrize("sparse_maps", [False, True])
+def test_cg_patch_matches_binned_and_zeroes_unsolvable_pixels(monkeypatch, sparse_maps):
+    """IQU patch: the CG map equals the binned map where solvable, and is zero everywhere else.
+
+    With `sparse_maps` the CG keeps rank-local maps, which the full-sky binned map checks.
+    """
     monkeypatch.setenv("OMP_NUM_THREADS", "1")  # get_s_orb_tod reads this.
     rng = np.random.default_rng(4)
     pix, psi = _patch_pointing("IQU")
@@ -107,7 +113,7 @@ def test_cg_patch_matches_binned_and_zeroes_unsolvable_pixels(monkeypatch):
            + rng.normal(size=pix.size) * _SIGMA0)
     band = _build_band(pix, psi, tod, "IQU")
 
-    cg = _run_mapmaker(band, "CG")
+    cg = _run_mapmaker(band, "CG", sparse_maps)
     binned = _run_mapmaker(_build_band(pix, psi, tod, "IQU"), "bin")
 
     assert np.isfinite(cg["observed_sky"]).all()
@@ -123,7 +129,8 @@ def test_cg_patch_matches_binned_and_zeroes_unsolvable_pixels(monkeypatch):
     np.testing.assert_array_equal(cg["rms"], binned["rms"])
 
 
-def test_cg_patch_intensity_only(monkeypatch):
+@pytest.mark.parametrize("sparse_maps", [False, True])
+def test_cg_patch_intensity_only(monkeypatch, sparse_maps):
     """I-only patch: unobserved pixels get +inf rms and a zero map, the rest the weighted mean."""
     monkeypatch.setenv("OMP_NUM_THREADS", "1")
     rng = np.random.default_rng(5)
@@ -133,7 +140,8 @@ def test_cg_patch_intensity_only(monkeypatch):
     tod = (sky[pix] + rng.normal(size=pix.size) * _SIGMA0).astype(np.float32)
     # No spacecraft motion, so the mapmaker's orbital-dipole subtraction leaves the TOD alone and
     # the solution is just the binned TOD.
-    maps = _run_mapmaker(_build_band(pix, psi, tod, "I", velocity=(0.0, 0.0, 0.0)), "CG")
+    maps = _run_mapmaker(_build_band(pix, psi, tod, "I", velocity=(0.0, 0.0, 0.0)), "CG",
+                         sparse_maps)
 
     signal, map_rms = maps["observed_sky"], maps["rms"]
     assert signal.shape == map_rms.shape == (1, _NPIX)

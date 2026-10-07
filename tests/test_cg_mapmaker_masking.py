@@ -224,7 +224,7 @@ def test_apply_P_adjoint_float32_tod_matches_float64(mapmaker_class, pols):
     maps = []
     for scan_tod_arr in [tod.astype(np.float64), tod]:
         out_map = np.zeros((len(pols), 12 * nside**2))
-        cg.apply_P_adjoint(None, out_map, pix=pix, psi=psi, scan_tod_arr=scan_tod_arr)
+        cg.apply_P_adjoint(None, out_map, pix_local=pix, psi=psi, scan_tod_arr=scan_tod_arr)
         maps.append(out_map)
     assert np.any(maps[0] != 0.0)
     np.testing.assert_allclose(maps[1], maps[0], rtol=1e-12, atol=1e-12)

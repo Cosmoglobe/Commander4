@@ -129,10 +129,14 @@ class CGMapmaker:
         else:
             return np.empty(())
 
-    def apply_P(self, in_map: NDArray, out_scan:ScanTOD, pix=None, psi=None, scan_tod_arr=None):
+    # The pointing operators take `pix_local`: local pixel indices into the rank's map buffers
+    # (`TODView.pix_local`), converted once per detector-scan by the caller.
+    def apply_P(self, in_map: NDArray, out_scan:ScanTOD, pix_local: NDArray, psi=None,
+                scan_tod_arr=None):
         raise NotImplementedError("Subclasses must implement apply_P()")
 
-    def apply_P_adjoint(self, in_map: NDArray, out_scan:ScanTOD, pix=None, psi=None, scan_tod_arr=None):
+    def apply_P_adjoint(self, in_map: NDArray, out_scan:ScanTOD, pix_local: NDArray, psi=None,
+                        scan_tod_arr=None):
         raise NotImplementedError("Subclasses must implement apply_P_adjoint()")
 
     def apply_inv_N(self, scan_tod_arr:NDArray, sigma0:float):
@@ -220,12 +224,12 @@ class CGMapmaker:
         return self.apply_W(scan_tod_arr)
 
     def accum_to_RHS(self, scan_tod: DetectorTOD, sigma0: float,
-                     pix=None, psi=None, scan_tod_arr=None):
+                     pix_local: NDArray, psi=None, scan_tod_arr=None):
         """ Computes the contribution to the RHS of the mapmaking problem, P^T T^T W^T N^-1 d, for one
             scan.
         Both scan TOD and the white noise level sigma0 must be given. This allows to compute the RHS
-        contributions in an external loop together with the correlated noise sampling, pix can be
-        passed already uncompressed from an external loop to avoid double uncompression.
+        contributions in an external loop together with the correlated noise sampling. pix_local
+        are the scan's local pixel indices (`TODView.pix_local`).
         """
         if self._rhs_loca_map is None:
             #if not done already, allocate memory for local maps
@@ -252,8 +256,8 @@ class CGMapmaker:
         scan_tod_arr = self.apply_T_adjoint(scan_tod_arr)
         # logger.warning(f"scan type: {scan_tod_arr.dtype}")
         # P^T T^T W^T N^-1 d
-        self._rhs_loca_map = self.apply_P_adjoint(scan_tod, self._rhs_loca_map,
-                                                  pix=pix, psi=psi, scan_tod_arr=scan_tod_arr)
+        self._rhs_loca_map = self.apply_P_adjoint(scan_tod, self._rhs_loca_map, pix_local=pix_local,
+                                                  psi=psi, scan_tod_arr=scan_tod_arr)
 
     def finalize_RHS(self, root=0):
         """
@@ -289,13 +293,13 @@ class CGMapmaker:
         # RHS gap-fills flagged samples rather than removing them (apply_T needs a continuous TOD),
         # so both sides run over every sample of each accepted detector-scan.
         for view in self._scan_view.iter_focused(accepted_only=True):
-            pix = view.pix
+            pix_local = view.pix_local  # converted once, shared by P and P^T below
             psi = view.psi
             sigma0 = view.sigma0
-            scan_tod_arr_aux = np.zeros(pix.shape[0], dtype=np.float64)  # full-length, as RHS
+            scan_tod_arr_aux = np.zeros(pix_local.shape[0], dtype=np.float64)  # full-length, as RHS
             #P m
-            scan_tod_arr_aux = self.apply_P(local_in, view.detector, 
-                                            pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
+            scan_tod_arr_aux = self.apply_P(local_in, view.detector, pix_local=pix_local, psi=psi,
+                                            scan_tod_arr=scan_tod_arr_aux)
             #T P m
             scan_tod_arr_aux = self.apply_T(scan_tod_arr_aux)
             #W T P m
@@ -307,8 +311,8 @@ class CGMapmaker:
             #T^T W^T N^-1 W T P m
             scan_tod_arr_aux = self.apply_T_adjoint(scan_tod_arr_aux)
             #P^T T^T W^T N^-1 W T P m
-            out_local = self.apply_P_adjoint(view.detector, out_local, 
-                                             pix=pix, psi=psi, scan_tod_arr=scan_tod_arr_aux)
+            out_local = self.apply_P_adjoint(view.detector, out_local, pix_local=pix_local,
+                                             psi=psi, scan_tod_arr=scan_tod_arr_aux)
         # Sum the local contributions back to the full-sky map on the master (None on other ranks).
         return self.domain.reduce_to_full(out_local)
 
@@ -410,42 +414,40 @@ class CGMapmakerI(CGMapmaker):
         self._rhs_finalized_map = np.zeros((1,hp.nside2npix(detector_tod.nside)),
             dtype=np.float64) if self.ismaster else None
 
-    def apply_P(self, in_map: NDArray, out_scan:ScanTOD, pix=None, psi=None, scan_tod_arr=None):
+    def apply_P(self, in_map: NDArray, out_scan:ScanTOD, pix_local: NDArray, psi=None,
+                scan_tod_arr=None):
         """
         Applies the pointing matrix operator to one scan.
-        
-        It takes in input a time ordered data scan and accumulates them over a map in output. if a 
-        `pix` is passed, it will be used to compute the result instead of decompressing a new one 
-        from `out_scan`. If a `scan_tod_arr` is passed it is used instead of overwriting `out_scan`.
+
+        It reads the map `in_map` (indexed by the local pixel indices `pix_local`) along the scan.
+        If a `scan_tod_arr` is passed it is used instead of overwriting `out_scan`.
         In the CGMapmakerI the psi will be ignored.
         """
         scan_tod_arr = out_scan.tod if scan_tod_arr is None else scan_tod_arr
-        # in_map is indexed by pix, so its pixel axis defines the domain (full-sky or rank-local).
-        pix = self.domain.to_local(out_scan.pix if pix is None else pix)
-        if pix.shape != scan_tod_arr.shape:
-            raise ValueError(f"pix shape {pix.shape} must match TOD shape {scan_tod_arr.shape}.")
+        if pix_local.shape != scan_tod_arr.shape:
+            raise ValueError(f"pix shape {pix_local.shape} must match TOD shape "
+                             f"{scan_tod_arr.shape}.")
         # The I-only map has shape (1, npix); the kernel takes the 1-D row.
-        cpp_mapmaker.map2tod(in_map[0], scan_tod_arr, pix.astype(np.int64, copy=False))
+        cpp_mapmaker.map2tod(in_map[0], scan_tod_arr, np.asarray(pix_local, dtype=np.int64))
         return scan_tod_arr
 
-    def apply_P_adjoint(self, in_scan: ScanTOD, out_map:NDArray, pix=None, psi=None, scan_tod_arr=None):
+    def apply_P_adjoint(self, in_scan: ScanTOD, out_map:NDArray, pix_local: NDArray, psi=None,
+                        scan_tod_arr=None):
         """
         Applies the adjoint, or transpose in matrix-notation, of the pointing matrix operator to one
         scan, updating out_map inplace.
 
-        It takes in input a time ordered data scan and accumulates them over a map in output. if a 
-        `pix` is passed, it will be used to compute the result instead of decompressing a new one 
-        from `in_scan`. If a `scan_tod_arr` is passed it is used instead of overwriting `in_scan`.
+        It accumulates the scan into the map `out_map` (indexed by the local pixel indices
+        `pix_local`). If a `scan_tod_arr` is passed it is used instead of overwriting `in_scan`.
         In the CGMapmakerI the psi will be ignored.
         """
         scan_tod_arr = in_scan.tod if scan_tod_arr is None else scan_tod_arr
-        # out_map is indexed by pix, so its pixel axis defines the domain (full-sky or rank-local).
-        pix = self.domain.to_local(in_scan.pix if pix is None else pix)
-        if pix.shape != scan_tod_arr.shape:
-            raise ValueError(f"pix shape {pix.shape} must match TOD shape {scan_tod_arr.shape}.")
+        if pix_local.shape != scan_tod_arr.shape:
+            raise ValueError(f"pix shape {pix_local.shape} must match TOD shape "
+                             f"{scan_tod_arr.shape}.")
         # out_map[0] is a view, so the kernel accumulates into out_map itself.
         cpp_mapmaker.map_accumulator(out_map[0], scan_tod_arr, 1.0,
-                                     pix.astype(np.int64, copy=False))
+                                     np.asarray(pix_local, dtype=np.int64))
         return out_map
 
     @property
@@ -496,39 +498,35 @@ class CGMapmakerIQU(CGMapmaker):
         self._rhs_finalized_map = np.zeros((3,hp.nside2npix(detector_tod.nside)),
             dtype=np.float64) if self.ismaster else None
 
-    def apply_P(self, in_map: NDArray, out_scan:ScanTOD, pix=None, psi=None, scan_tod_arr=None):
+    def apply_P(self, in_map: NDArray, out_scan:ScanTOD, pix_local: NDArray, psi=None,
+                scan_tod_arr=None):
         """
         Applies the pointing matrix operator to one scan.
-        
-        It takes in input a time ordered data scan and accumulates them over a map in output. if a 
-        `pix` or `psi` is passed, it will be used to compute the result instead of decompressing 
-        a new one from `out_scan`. 
-        If a `scan_tod_arr` is passed it is used instead of overwriting `out_scan`
+
+        It reads the map `in_map` (indexed by the local pixel indices `pix_local`) along the scan.
+        If `psi` is not passed it is decompressed from `out_scan`. If a `scan_tod_arr` is passed it
+        is used instead of overwriting `out_scan`.
         """
         scan_tod_arr = out_scan.tod if scan_tod_arr is None else scan_tod_arr
-        # in_map is indexed by pix, so its pixel axis defines the domain (full-sky or rank-local).
-        pix = self.domain.to_local(out_scan.pix if pix is None else pix)
         psi = out_scan.psi if psi is None else psi
-        cpp_mapmaker.map2tod_IQU(in_map, scan_tod_arr, pix.astype(np.int64, copy=False),
+        cpp_mapmaker.map2tod_IQU(in_map, scan_tod_arr, np.asarray(pix_local, dtype=np.int64),
                                  psi.astype(np.float64, copy=False))
         return scan_tod_arr
-    
-    def apply_P_adjoint(self, in_scan: ScanTOD, out_map:NDArray, pix=None, psi=None, scan_tod_arr=None):
+
+    def apply_P_adjoint(self, in_scan: ScanTOD, out_map:NDArray, pix_local: NDArray, psi=None,
+                        scan_tod_arr=None):
         """
         Applies the adjoint, or transpose in matrix-notation, of the pointing matrix operator to one
         scan, updating out_map inplace.
 
-        It takes in input a time ordered data scan and accumulates them over a map in output. if a 
-        `pix` or `psi` is passed, it will be used to compute the result instead of decompressing 
-        a new one from `out_scan`. 
-        If a `scan_tod_arr` is passed it is used instead of overwriting `out_scan`
+        It accumulates the scan into the map `out_map` (indexed by the local pixel indices
+        `pix_local`). If `psi` is not passed it is decompressed from `in_scan`. If a
+        `scan_tod_arr` is passed it is used instead of overwriting `in_scan`.
         """
         scan_tod_arr = in_scan.tod if scan_tod_arr is None else scan_tod_arr
-        # out_map is indexed by pix, so its pixel axis defines the domain (full-sky or rank-local).
-        pix = self.domain.to_local(in_scan.pix if pix is None else pix)
         psi = in_scan.psi if psi is None else psi
         cpp_mapmaker.map_accumulator_IQU(out_map, scan_tod_arr, 1.0,
-                                         pix.astype(np.int64, copy=False),
+                                         np.asarray(pix_local, dtype=np.int64),
                                          psi.astype(np.float64, copy=False))
         return out_map
 
@@ -632,8 +630,9 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
     for view in scan_view.iter_focused(accepted_only=True):
         # Full-length pointing (no good_data_mask compaction): the CG operator gap-fills flagged
         # samples rather than removing them, so every sample carries weight (gain/sigma0)^2 and the
-        # inverse-variance / preconditioner must count them all to match the A operator.
-        pix, psi = view.pix, view.psi
+        # inverse-variance / preconditioner must count them all to match the A operator. Every map
+        # below is indexed by the local pixel indices, converted once for this det-scan.
+        pix_local, psi = view.pix_local, view.psi
         good_data_mask = view.get_mask(proc_mask=False)
         gain = view.get_gain()
         response_I_P = view.response_I_P
@@ -702,9 +701,9 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
 
         ### INVERSE-VARIANCE WEIGHTS (preconditioner + output) ###
         if pols == "IQU":
-            mapmaker_invvar.accumulate_to_map(inv_var, pix, psi, response_I_P=response_I_P)
+            mapmaker_invvar.accumulate_to_map(inv_var, pix_local, psi, response_I_P=response_I_P)
         else:
-            mapmaker_invvar.accumulate_to_map(inv_var, pix)
+            mapmaker_invvar.accumulate_to_map(inv_var, pix_local)
 
         ### ORBITAL DIPOLE ###
         d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
@@ -712,19 +711,19 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
             # The dipole TOD is cached on the view, so `get_tod` above already paid for it.
             sky_orb_dipole = view.get_orbital_dipole_tod()
             if pols == "IQU":
-                mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi,
+                mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix_local, psi,
                                                      response_I_P=response_I_P)
             else:
-                mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix, psi)
+                mapmaker_orbdipole.accumulate_to_map(sky_orb_dipole, inv_var, pix_local, psi)
 
         ### CORRELATED-NOISE MAP ###
         if mapmaker_ncorr is not None:
             n_corr_uKRJ = (n_corr_est/gain).astype(np.float32, copy=False)
             if pols == "IQU":
-                mapmaker_ncorr.accumulate_to_map(n_corr_uKRJ, inv_var, pix, psi,
+                mapmaker_ncorr.accumulate_to_map(n_corr_uKRJ, inv_var, pix_local, psi,
                                                  response_I_P=response_I_P)
             else:
-                mapmaker_ncorr.accumulate_to_map(n_corr_uKRJ, inv_var, pix, psi)
+                mapmaker_ncorr.accumulate_to_map(n_corr_uKRJ, inv_var, pix_local, psi)
         if corr_noise_active:
             d_sky -= n_corr_est
 
@@ -736,13 +735,12 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         if mapmaker_res is not None:
             fill_all_masked(residual_tod, good_data_mask, sigma0)
             if pols == "IQU":
-                mapmaker_res.accumulate_to_map(residual_tod/gain, inv_var, pix, psi,
+                mapmaker_res.accumulate_to_map(residual_tod/gain, inv_var, pix_local, psi,
                                                response_I_P=response_I_P)
             else:
-                mapmaker_res.accumulate_to_map(residual_tod/gain, inv_var, pix, psi)
+                mapmaker_res.accumulate_to_map(residual_tod/gain, inv_var, pix_local, psi)
         if nhit_local is not None:
-            nhit_local += np.bincount(domain.to_local(pix[good_data_mask]),
-                                      minlength=domain.n_local)
+            nhit_local += np.bincount(pix_local[good_data_mask], minlength=domain.n_local)
 
         # Gap-fill flagged samples instead of compacting them away. The CG operator applies a
         # Fourier transform (apply_T), which requires a continuous, full-length TOD: removing masked
@@ -755,7 +753,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         cg_mapmaker.accum_to_RHS(
                     scan_tod=view.detector,
                     sigma0=sigma0,
-                    pix=pix,
+                    pix_local=pix_local,
                     psi=psi,
                     scan_tod_arr=d_sky/gain
                     )
