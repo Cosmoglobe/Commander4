@@ -68,6 +68,9 @@ class PixelDomain:
 
         self.local_pix = np.ascontiguousarray(local_pix, dtype=np.int64)
         self.n_local = int(self.local_pix.size)
+        # Lookup table from global pixel to local index, i.e. the inverse of local_pix. It is a
+        # hash table (a uint64 array that only the C++ code reads) rather than a full-sky array, so
+        # its size grows with n_local instead of npix. Built once and used by to_local.
         self._pixel_hash = cpp_mapmaker.build_pixel_hash(self.local_pix)
         # Static gather plan, exchanged once: per-rank element counts, their displacements, and the
         # concatenation of every rank's global pixels (held only on the master for the scatter-add).
@@ -102,6 +105,7 @@ class PixelDomain:
         """Map global HEALPix indices to compact local-buffer indices (identity in full mode).
 
         In sparse mode every pixel must be in ``local_pix``; one that is not raises a RuntimeError.
+        The result satisfies ``local_pix[to_local(pix)] == pix``.
         """
         if self.mode == "full":
             return pix
@@ -132,7 +136,7 @@ class PixelDomain:
             recvbuf = [recv, counts, displs, MPI.DOUBLE] if rank == root else None
             self.comm.Gatherv(send, recvbuf, root=root)
             if rank == root:
-                # Pixels observed by several ranks land at repeated indices; add.at accumulates them.
+                # Pixels observed by several ranks land at repeated indices; add.at accumulates them
                 np.add.at(full[c], self._all_pix, recv)
         if rank != root:
             return None

@@ -307,16 +307,19 @@ void Py_apply_invN_to_map_IQU(const CNpArr &map_in_, const NpArr &map_out_,
 
 
 // Hash table from global pixel index to a rank's local pixel index (used by PixelDomain). It is
-// open addressing with linear probing in one power-of-two array of uint64 slots, at least four times
-// the number of local pixels. Each slot holds the global pixel in its high 32 bits and the local
-// index in its low 32 bits, so a lookup reads one 8-byte word and usually one cache line. An empty
-// slot has all bits set. Global pixels must lie below 2^32 - 1, i.e. nside <= 16384.
+// open addressing with linear probing in one power-of-two array of uint64 slots, at least four
+// times the number of local pixels. Each slot holds the global pixel in its high 32 bits and the
+// local index in its low 32 bits, so a lookup reads one 8-byte word and usually one cache line. An
+// empty slot has all bits set. Global pixels must lie below 2^32 - 1, i.e. nside <= 16384.
+// A pixel is stored in the first free slot at or after its hash slot (pixel_hash_slot), so a lookup
+// starts at the hash slot and steps forward until it finds the pixel. The table is at most a
+// quarter full, so the first slot is nearly always the right one.
 constexpr uint64_t EMPTY_SLOT = ~uint64_t(0);
 
 /** The table slot where the search for global pixel `pix` starts, in a table of 2^bits slots.
  *
- * Fibonacci hashing: multiply by 2^64 divided by the golden ratio and keep the top `bits` bits. This
- * spreads runs of neighbouring pixel numbers evenly over the table.
+ * Fibonacci hashing: multiply by 2^64 divided by the golden ratio and keep the top `bits` bits.
+ * This spreads runs of neighbouring pixel numbers evenly over the table.
  */
 inline size_t pixel_hash_slot(uint64_t pix, int bits){
     return size_t((pix * 0x9E3779B97F4A7C15ULL) >> (64 - bits));
@@ -337,12 +340,13 @@ NpArr Py_build_pixel_hash(const CNpArr &local_pix_){
     for (size_t j = 0; j < nlocal; j++){
         const uint64_t p = uint64_t(local_pix(j));  // a negative index becomes huge and fails below
         MR_assert(p < (EMPTY_SLOT >> 32), "global pixel index out of range");
+        // Step forward from the hash slot to the first free slot; `& mask` wraps around at the end.
         size_t slot = pixel_hash_slot(p, bits);
         while (table(slot) != EMPTY_SLOT){
             MR_assert((table(slot) >> 32) != p, "duplicate pixel in local_pix");
             slot = (slot + 1) & mask;
         }
-        table(slot) = (p << 32) | uint64_t(j);
+        table(slot) = (p << 32) | uint64_t(j);  // global pixel in the high half, local in the low
     }
     return table_;
 }
@@ -359,12 +363,14 @@ NpArr Py_global_to_local(const CNpArr &table_, const CNpArr &pix_){
     for (size_t i = 0; i < pix.shape(0); i++){
         const uint64_t p = uint64_t(pix(i));
         MR_assert(p < (EMPTY_SLOT >> 32), "global pixel index out of range");
+        // Step forward from the hash slot until the slot holding p. Reaching an empty slot means p
+        // was never inserted.
         size_t slot = pixel_hash_slot(p, bits);
         while ((table(slot) >> 32) != p){
             MR_assert(table(slot) != EMPTY_SLOT, "pixel not in the local pixel domain");
             slot = (slot + 1) & mask;
         }
-        out(i) = int64_t(table(slot) & 0xFFFFFFFFu);
+        out(i) = int64_t(table(slot) & 0xFFFFFFFFu);  // the low half is the local index
     }
     return out_;
 }
