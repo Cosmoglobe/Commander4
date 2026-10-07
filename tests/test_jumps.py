@@ -6,6 +6,7 @@ from mpi4py import MPI
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_tod import DetectorTOD
+from commander4.data_models.pixel_domain import PixelDomain
 from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.config import JumpDetectionConfig
@@ -69,7 +70,7 @@ def _band_and_samples(tod: np.ndarray, flag: np.ndarray, pix: np.ndarray, gain: 
     samples = SimpleNamespace(jumps=empty_jump_grid(1, 1), glitches=empty_glitch_grid(1, 1),
                               accept=np.ones((1, 1), dtype=bool), chain=1, abs_gain=gain,
                               rel_gain=np.zeros(1), temporal_gain=np.zeros((1, 1)))
-    band.get_pixel_domain(TODView(band, samples), MPI.COMM_SELF, sparse=False)
+    band.pixel_domain = PixelDomain(MPI.COMM_SELF, 1, "full")
     return band, samples, detector
 
 

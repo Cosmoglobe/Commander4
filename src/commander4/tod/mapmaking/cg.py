@@ -17,7 +17,6 @@ import numpy as np
 from mpi4py import MPI
 import logging
 from numpy.typing import NDArray
-import healpy as hp
 from collections.abc import Callable
 
 from commander4.backend import mapmaker as cpp_mapmaker
@@ -106,7 +105,10 @@ class CGMapmaker:
         # pointing matrix and its adjoint.
         self._scan_view = TODView(detector_tod, detector_samples)
         self._rhs_loca_map = None
+        # The full-sky RHS and solution exist only on the master, and only once `finalize_RHS` and
+        # `solve` produce them; the iterate is scattered to the ranks each iteration (apply_LHS).
         self._rhs_finalized_map = None
+        self._map_signal = None
 
     @property
     def solved_map(self):
@@ -401,13 +403,6 @@ class CGMapmakerI(CGMapmaker):
                         CG_check_interval=CG_check_interval)
 
         self._ncomp = 1
-        # Master holds the full-sky solution and RHS; the iterate is scattered to the ranks' local
-        # domains each iteration (see apply_LHS).
-        self._map_signal = np.zeros((1,hp.nside2npix(detector_tod.nside)),
-            dtype=np.float64) if self.ismaster else None
-        #RHS map to be accumulated on master rank
-        self._rhs_finalized_map = np.zeros((1,hp.nside2npix(detector_tod.nside)),
-            dtype=np.float64) if self.ismaster else None
 
     def apply_P(self, in_map: NDArray, out_scan:ScanTOD, pix_local: NDArray, psi=None,
                 scan_tod_arr=None):
@@ -481,15 +476,6 @@ class CGMapmakerIQU(CGMapmaker):
                         CG_check_interval=CG_check_interval)
 
         self._ncomp = 3
-        # Master holds the full-sky solution and RHS; the iterate is scattered to the ranks' local
-        # domains each iteration (see apply_LHS).
-        self._map_signal = np.zeros((3,hp.nside2npix(detector_tod.nside)),
-            dtype=np.float64) if self.ismaster else None
-        #local RHS map
-        self._rhs_loca_map = None
-        #RHS map to be accumulated on master rank
-        self._rhs_finalized_map = np.zeros((3,hp.nside2npix(detector_tod.nside)),
-            dtype=np.float64) if self.ismaster else None
 
     def apply_P(self, in_map: NDArray, out_scan:ScanTOD, pix_local: NDArray, psi=None,
                 scan_tod_arr=None):
@@ -566,9 +552,9 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
     # CG RHS inconsistent with its own A (the LHS operator and preconditioner read the live sigma0).
     pols = experiment_data.pols
     scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
-    # Optional per-experiment sparse map storage: each rank holds only its locally-observed pixels
-    # rather than a full sky map. The band master still ends up with full-sky maps.
-    domain = experiment_data.get_pixel_domain(scan_view, band_comm, mapmaking_cfg.sparse_maps)
+    # Which pixels each rank's map buffers hold (all of them, or only the locally observed ones
+    # with sparse maps). The band master always ends up with full-sky maps.
+    domain = experiment_data.pixel_domain
     #Transfer function operator:
     if experiment_data.tf_tau_sec is not None:
         TF_model = SinglePole(experiment_data.tf_tau_sec)
@@ -603,11 +589,12 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
                     if mapmaking_cfg.include_residual_maps else None)
     mapmaker_ncorr = (BinMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
                       if corr_noise_active and mapmaking_cfg.include_corr_noise_maps else None)
-    # Hit counts are a plain per-pixel sample count, so they skip the IQU response/weighting the
-    # mapmakers apply and are just accumulated with np.bincount into the local pixel buffer. Only
-    # the unflagged samples are counted, even though the CG weights every (gap-filled) sample: a
-    # hit map is meant to say how much real data a pixel has.
-    nhit_local = np.zeros(domain.n_local) if mapmaking_cfg.include_hit_maps else None
+    # Unit scalar weights count hits directly at observed pixels in the C++ accumulator, without
+    # a full-map temporary per detector-scan or any gain/polarization weighting. Only the unflagged
+    # samples are counted, even though the CG weights every (gap-filled) sample: a hit map is meant
+    # to say how much real data a pixel has.
+    mapmaker_nhit = (WeightsMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
+                     if mapmaking_cfg.include_hit_maps else None)
 
     if corr_noise_active:
         sampled_params = []
@@ -730,8 +717,8 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
                                                response_I_P=response_I_P)
             else:
                 mapmaker_res.accumulate_to_map(residual_tod/gain, inv_var, pix_local, psi)
-        if nhit_local is not None:
-            nhit_local += np.bincount(pix_local[good_data_mask], minlength=domain.n_local)
+        if mapmaker_nhit is not None:
+            mapmaker_nhit.accumulate_to_map(1.0, pix_local[good_data_mask])
 
         # Gap-fill flagged samples instead of compacting them away. The CG operator applies a
         # Fourier transform (apply_T), which requires a continuous, full-length TOD: removing masked
@@ -795,8 +782,9 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
     map_corrnoise = finalize_aux(mapmaker_ncorr)
     map_residual = finalize_aux(mapmaker_res)
     map_nhit = None
-    if nhit_local is not None:
-        nhit_full = domain.reduce_to_full(nhit_local)
+    if mapmaker_nhit is not None:
+        mapmaker_nhit.gather_map()
+        nhit_full = mapmaker_nhit.final_map
         if nhit_full is not None:
             map_nhit = np.round(nhit_full).astype(np.int64)
 

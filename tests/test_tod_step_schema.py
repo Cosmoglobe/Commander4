@@ -141,19 +141,11 @@ def test_mapmaking_config_resolves_resources_and_output_selection():
     config = MapmakingConfig.from_params(params, EXPERIMENT)
     assert config.mapmaker == "bin"
     assert config.num_threads == 1
-    assert config.sparse_maps == MapmakingConfig.sparse_maps
     assert config.common_res_fwhm == MapmakingConfig.common_res_fwhm
     assert config.include_orbital_dipole_maps
     assert not config.include_corr_noise_maps
     assert not config.include_sky_model_maps
     assert config.band_lmax == 3*EXPERIMENT.nside - 1
-
-
-def test_sparse_maps_requires_a_boolean():
-    params = _params()
-    params.experiments.EXP.sparse_maps = "false"
-    with pytest.raises(ValueError, match="must have type bool"):
-        MapmakingConfig.from_params(params, EXPERIMENT)
 
 
 def test_mapmaking_config_takes_band_lmax_from_band_then_experiment():

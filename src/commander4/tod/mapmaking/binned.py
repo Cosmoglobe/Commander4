@@ -410,9 +410,9 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
     sidelobe_active = far_beam_model is not None
     pols = experiment_data.pols
     scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
-    # Optional per-experiment sparse map storage: each rank holds only its locally-observed pixels
-    # rather than a full sky map. The band master still ends up with full-sky maps.
-    domain = experiment_data.get_pixel_domain(scan_view, band_comm, mapmaking_cfg.sparse_maps)
+    # Which pixels each rank's map buffers hold (all of them, or only the locally observed ones
+    # with sparse maps). The band master always ends up with full-sky maps.
+    domain = experiment_data.pixel_domain
 
     # Set up various mapmakers. Each aux map costs a full-sky map and a per-detector-scan
     # accumulation, so one is built only when the chain is going to hold it; `None` means "not

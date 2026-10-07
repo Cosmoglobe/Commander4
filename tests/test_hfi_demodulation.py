@@ -7,6 +7,7 @@ from mpi4py import MPI
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_tod import DetectorTOD
+from commander4.data_models.pixel_domain import PixelDomain
 from commander4.tod.glitches.events import GlitchEvents, empty_glitch_grid
 from commander4.tod.jumps.events import JumpEvents, empty_jump_grid
 from commander4.data_models.pointing import PixelPointing
@@ -81,7 +82,7 @@ def _build_hfi_case(phase: int = -1, pulse: np.ndarray | None = None):
         jumps=empty_jump_grid(1, 1),
         glitches=empty_glitch_grid(1, 1),
     )
-    band.get_pixel_domain(TODView(band, samples), MPI.COMM_SELF, sparse=False)
+    band.pixel_domain = PixelDomain(MPI.COMM_SELF, _NSIDE, "full")
     return band, samples, sky_map, raw_tod, sky_tod
 
 

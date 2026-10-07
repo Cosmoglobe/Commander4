@@ -15,7 +15,7 @@ from pixell.bunch import Bunch
 from commander4.parameters.schema import resolve_param
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
-from commander4.data_models.pixel_domain import DistributedMap
+from commander4.data_models.pixel_domain import DistributedMap, PixelDomain
 from commander4.data_models.tod_samples import TODSamples
 from commander4.tod.data_selection import log_dataselect_summary, data_selection_status
 from commander4.tod.gain import sample_absolute_gain, sample_relative_gain,\
@@ -81,14 +81,16 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
     tod_samples_chain1 = TODSamples(experiment_data, params, my_band, band_comm, 1)
     tod_samples_chain2 = TODSamples(experiment_data, params, my_band, band_comm, 2)
 
-    # Build the band's map-distribution PixelDomain once now: the pointing is static, so it is
-    # reused across Gibbs iterations by both the mapmakers and the sky-model distribution (which
-    # needs it to give each rank only its local pixels). In full mode this is a cheap no-op.
+    # Build the band's map-distribution PixelDomain once, here:
+    # If we're using dense per-rank maps nothing of note is done here.
+    # If we're using sparse maps we here pre-calculate the global->local pixel hash table. This
+    # table needs only the pixels hit, so it can be calculated prior to the main Gibbs loop.
     sparse_maps = resolve_param(params, "sparse_maps",
                                 (f"experiments.{experiment_data.experiment_name}",),
-                                default=MapmakingConfig.sparse_maps, legal_types=bool)
-    experiment_data.get_pixel_domain(TODView(experiment_data, tod_samples_chain1), band_comm,
-                                     sparse_maps)
+                                default=False, legal_types=bool)
+    experiment_data.pixel_domain = PixelDomain.from_view(
+        TODView(experiment_data, tod_samples_chain1), band_comm,
+        "sparse" if sparse_maps else "full", experiment_data.nside)
 
     # Creating "tod_band_masters", an array which maps the band index to the rank of the master
     # of that band.

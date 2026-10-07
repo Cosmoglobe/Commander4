@@ -21,6 +21,7 @@ from commander4.tod.glitches.events import empty_glitch_grid
 from commander4.tod.jumps.events import empty_jump_grid
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.data_models.pixel_domain import PixelDomain
 from commander4.data_models.pointing import PixelPointing
 import commander4.tod.processing as tod_processing
 from commander4.tod.config import MapmakingConfig, CorrelatedNoiseConfig, DataSelectionConfig
@@ -70,11 +71,11 @@ def _run_bin_mapmaker(band: DetectorGroupTOD) -> dict[str, np.ndarray]:
         include_orbital_dipole_maps=True,
         include_corr_noise_maps=False,
         include_sky_model_maps=False,
-        sparse_maps=False,
         common_res_fwhm=0.0,
     )
     correlated_noise = CorrelatedNoiseConfig(sample_sigma0=False)
     data_selection = DataSelectionConfig()
+    band.pixel_domain = PixelDomain(MPI.COMM_SELF, _NSIDE, "full")
     _, maps = tod_processing.tod2map_bin(
         MPI.COMM_SELF, band, np.zeros((3, _NPIX)), _fake_tod_samples(), 1,
         mapmaking, correlated_noise, data_selection,

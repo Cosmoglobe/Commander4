@@ -23,6 +23,7 @@ from commander4.tod.glitches.events import empty_glitch_grid
 from commander4.tod.jumps.events import empty_jump_grid
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.data_models.pixel_domain import PixelDomain
 from commander4.data_models.pointing import PixelPointing
 from commander4.tod.mapmaking.preconditioners import BlockInvNPreconditionerIQU,\
     InvNPreconditionerIQU
@@ -89,14 +90,16 @@ def _run_mapmaker(band: DetectorGroupTOD, mapmaker: str,
     """Run one of the two mapmakers on `band` and return the maps selected for chain output."""
     mapmaking = MapmakingConfig(
         mapmaker=mapmaker, num_threads=1, include_orbital_dipole_maps=False,
-        include_corr_noise_maps=False, include_sky_model_maps=False, sparse_maps=sparse_maps,
+        include_corr_noise_maps=False, include_sky_model_maps=False,
         common_res_fwhm=0.0, cg=CGConfig(max_iter=20, err_tol=1e-12))
     run = tod_processing.tod2map_CG if mapmaker == "CG" else tod_processing.tod2map_bin
     ncomp = 3 if "QU" in band.pols else 1
     tod_samples = _fake_tod_samples()
     # As in a real run, the domain is built first and the sky model holds its local pixels.
-    domain = band.get_pixel_domain(TODView(band, tod_samples), MPI.COMM_SELF, sparse_maps)
-    _, maps = run(MPI.COMM_SELF, band, np.zeros((ncomp, domain.n_local)), tod_samples, 1,
+    band.pixel_domain = PixelDomain.from_view(TODView(band, tod_samples), MPI.COMM_SELF,
+                                              "sparse" if sparse_maps else "full", _NSIDE)
+    sky = np.zeros((ncomp, band.pixel_domain.n_local))
+    _, maps = run(MPI.COMM_SELF, band, sky, tod_samples, 1,
                   mapmaking, CorrelatedNoiseConfig(sample_sigma0=False),
                   DataSelectionConfig())
     return maps
