@@ -21,6 +21,7 @@ from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.tod_samples import TODSamples
 from commander4.tod.mapmaking.cg import CGMapmakerI, CGMapmakerIQU
+from commander4.tod.view import TODView
 
 _BITMASK = 1  # one bad-data bit; a flagged sample has (flag & _BITMASK) != 0
 
@@ -50,6 +51,7 @@ def _build_band(pix: np.ndarray, bad_idx, nside: int, sigma0: float, pols: str,
     ts = TODSamples.__new__(TODSamples)
     ts.accept = np.ones((1, 1), dtype=bool)
     ts.noise_params = np.full((1, 1, 1), sigma0)
+    band.get_pixel_domain(TODView(band, ts), MPI.COMM_SELF, sparse=False)
     return band, ts
 
 

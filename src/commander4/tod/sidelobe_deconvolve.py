@@ -32,7 +32,10 @@ class FarBeamProjector:
 
     def __init__(self, band_comm: MPI.Comm, node_comm: MPI.Comm,
                  experiment_data: DetectorGroupTOD, tod_samples: TODSamples,
-                 compsep_output: NDArray, far_beam_deconvolution_cfg: FarBeamConfig):
+                 compsep_output_full: NDArray | None, far_beam_deconvolution_cfg: FarBeamConfig):
+        """`compsep_output_full` is the band's full-sky I/Q/U sky map on rank 0, else None."""
+        if experiment_data.pols != "IQU":
+            raise ValueError("Polarized sidelobe convolution requires an I/Q/U sky map.")
         self.far_beam_deconvolution_cfg = far_beam_deconvolution_cfg
         self.nside = experiment_data.nside
         self.nthreads = int(os.environ.get("OMP_NUM_THREADS", "1"))
@@ -45,11 +48,11 @@ class FarBeamProjector:
         for _, det in experiment_data.iter_detector_scans():
             self.polangs[det.det_idx_fullband] = det.polang
 
-        self.construct_model(band_comm, node_comm, compsep_output)
+        self.construct_model(band_comm, node_comm, compsep_output_full)
 
 
     def construct_model(self, band_comm: MPI.Comm, node_comm: MPI.Comm,
-                        compsep_output: NDArray) -> None:
+                        compsep_output_full: NDArray | None) -> None:
         """Build one ducc0 convolution cube for each detector's T/E/B sidelobe beam."""
         # Each LFI detector has its own beam. Commander3 forms one signal by summing the matching
         # sky/beam component pairs: T_sky*T_beam + E_sky*E_beam + B_sky*B_beam.
@@ -78,12 +81,10 @@ class FarBeamProjector:
                 # every projected TOD, and far cheaper.
                 blms.append(self.far_beam_deconvolution_cfg.beam_norm * blm)
 
-        # With sparse maps, only rank zero has a complete sky. Transform there, then give every rank
-        # the small alm array needed to build its local detector cubes. iter=0 matches Commander3's
-        # single, non-iterative map-to-alm transform.
-        if compsep_output.ndim != 2 or compsep_output.shape[0] != len(_BEAM_COMPONENTS):
-            raise ValueError("Polarized sidelobe convolution requires an I/Q/U sky map.")
-        slm = (hp.map2alm(compsep_output, lmax=lmax, iter=0, pol=True)
+        # Only rank zero has the full-sky map. Transform there, then give every rank the small alm
+        # array needed to build its local detector cubes. iter=0 matches Commander3's single,
+        # non-iterative map-to-alm transform.
+        slm = (hp.map2alm(compsep_output_full, lmax=lmax, iter=0, pol=True)
                if band_comm.Get_rank() == 0 else None)
         slm = band_comm.bcast(slm, root=0)
 

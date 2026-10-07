@@ -29,6 +29,7 @@ from commander4.tod.mapmaking.preconditioners import BlockInvNPreconditionerIQU,
 from commander4.tod.config import CGConfig
 import commander4.tod.processing as tod_processing
 from commander4.tod.config import MapmakingConfig, CorrelatedNoiseConfig, DataSelectionConfig
+from commander4.tod.view import TODView
 
 _NSIDE = 4
 _NPIX = 12 * _NSIDE**2
@@ -92,7 +93,10 @@ def _run_mapmaker(band: DetectorGroupTOD, mapmaker: str,
         common_res_fwhm=0.0, cg=CGConfig(max_iter=20, err_tol=1e-12))
     run = tod_processing.tod2map_CG if mapmaker == "CG" else tod_processing.tod2map_bin
     ncomp = 3 if "QU" in band.pols else 1
-    _, maps = run(MPI.COMM_SELF, band, np.zeros((ncomp, _NPIX)), _fake_tod_samples(), 1,
+    tod_samples = _fake_tod_samples()
+    # As in a real run, the domain is built first and the sky model holds its local pixels.
+    domain = band.get_pixel_domain(TODView(band, tod_samples), MPI.COMM_SELF, sparse_maps)
+    _, maps = run(MPI.COMM_SELF, band, np.zeros((ncomp, domain.n_local)), tod_samples, 1,
                   mapmaking, CorrelatedNoiseConfig(sample_sigma0=False),
                   DataSelectionConfig())
     return maps

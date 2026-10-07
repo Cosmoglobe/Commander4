@@ -26,6 +26,7 @@ import commander4.tod.processing as tod_processing
 from commander4.tod.config import MapmakingConfig, CorrelatedNoiseConfig, DataSelectionConfig
 import commander4.tod.mapmaking.binned as binned
 from commander4.tod.sky_projection import get_s_orb_tod
+from commander4.tod.view import TODView
 
 _BITMASK = 1
 _NSIDE = 1
@@ -79,9 +80,12 @@ def _run(band: DetectorGroupTOD, sky_model: np.ndarray,
         include_sky_model_maps=False, include_residual_maps=True, include_hit_maps=True,
         sparse_maps=sparse_maps, common_res_fwhm=0.0,
     )
+    tod_samples = _fake_tod_samples(ndet=band.ndet)
+    # As in a real run, the domain is built first and the sky model is handed over at its pixels.
+    domain = band.get_pixel_domain(TODView(band, tod_samples), MPI.COMM_SELF, sparse_maps)
     _, maps = tod_processing.tod2map_bin(
-        MPI.COMM_SELF, band, sky_model, _fake_tod_samples(ndet=band.ndet), 1, mapmaking,
-        CorrelatedNoiseConfig(sample_sigma0=False),
+        MPI.COMM_SELF, band, domain.scatter_from_full(sky_model, ncomp=3), tod_samples, 1,
+        mapmaking, CorrelatedNoiseConfig(sample_sigma0=False),
         DataSelectionConfig(),
     )
     return maps
@@ -269,8 +273,9 @@ def test_intensity_mapmaker_recovers_signal_rms_and_aux_maps(
         include_sidelobe_maps=True, include_hit_maps=True, include_cov_maps=True,
         sparse_maps=sparse_maps,
     )
+    domain = band.get_pixel_domain(TODView(band, samples), comm, sparse_maps)
     detmaps, maps = binned.tod2map_bin(
-        comm, band, sky, samples, 1, config,
+        comm, band, domain.scatter_from_full(sky, ncomp=1), samples, 1, config,
         CorrelatedNoiseConfig(enabled=True, sample_sigma0=False),
         DataSelectionConfig(), far_beam,
     )

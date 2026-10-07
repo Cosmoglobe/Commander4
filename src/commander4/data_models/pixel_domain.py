@@ -4,6 +4,8 @@ With `sparse_maps` enabled a rank holds only the pixels its own scans observe, r
 sky map. This class records that mapping and the gather/scatter it implies, so the mapmakers can be
 written against local pixel indices regardless of the mode.
 """
+from dataclasses import dataclass
+
 import numpy as np
 from mpi4py import MPI
 from numpy.typing import NDArray
@@ -38,6 +40,19 @@ _NUMPY_TO_MPI_DTYPE = {np.dtype(np.float64): MPI.DOUBLE, np.dtype(np.float32): M
 #               (master -> ranks, for the CG LHS) is a ``Scatterv`` of the per-rank pixel slices.
 #               The index plan (counts/displacements and the concatenated global pixels) is static
 #               across Gibbs iterations and is exchanged once at construction.
+
+
+@dataclass(frozen=True)
+class DistributedMap:
+    """A full-sky map as the ranks of a band hold it, such as the band's realized sky model.
+
+    Attributes:
+        local: The map at this rank's local pixels, ``(ncomp, n_local)``, held by every rank. This
+            is the form to index with the local pointing (``PixelDomain.to_local``).
+        full: The full-sky map, ``(ncomp, npix)``, on the band master; ``None`` on other ranks.
+    """
+    local: NDArray
+    full: NDArray | None
 
 
 class PixelDomain:

@@ -15,7 +15,7 @@ from commander4.tod.config import MapmakingConfig
 
 def finalize_band_maps(map_signal: NDArray, map_inv_var: NDArray, pols: str,
                        experiment_data: DetectorGroupTOD, mapmaking_cfg: MapmakingConfig,
-                       tod_samples: TODSamples, compsep_output: NDArray | None,
+                       tod_samples: TODSamples,
                        map_orbdipole: NDArray | None = None,
                        map_corrnoise: NDArray | None = None,
                        map_sidelobe: NDArray | None = None,
@@ -28,7 +28,6 @@ def finalize_band_maps(map_signal: NDArray, map_inv_var: NDArray, pols: str,
         map_signal: Solved sky map, shape (3, npix), rows I, Q, U; a scalar I map may be 1-D.
         map_inv_var: Per-pixel white-noise inverse variance, same shape; 0 where unobserved.
         pols: Which polarizations this band carries, e.g. "I", "QU" or "IQU".
-        compsep_output: The current sky model for this band, written as `skymodel`.
         map_sidelobe: Binned far-sidelobe pickup, in uK_RJ. Commander3's `tod_<freq>_sl` map.
         map_residual: Binned noise residual (data minus sky model, orbital dipole and correlated
             noise), in uK_RJ. Commander3's `tod_<freq>_res` map.
@@ -104,14 +103,13 @@ def finalize_band_maps(map_signal: NDArray, map_inv_var: NDArray, pols: str,
         maps_to_file["rms"] = (1.0/np.sqrt(inv_var_out)).astype(np.float32)
     # The aux maps are debug output binned straight from the TODs, and stay at the native beam even
     # when the two above are smoothed. The mapmaker only builds one the run asked for, so being
-    # present is the whole gate; the two below come from elsewhere and are gated here instead.
+    # present is the whole gate; the one below comes from elsewhere and is gated here instead. The
+    # sky model is added by `process_tod`, which holds it as a full-sky map.
     for name, aux_map in (("orbdipole", map_orbdipole), ("corrnoise", map_corrnoise),
                           ("sidelobe", map_sidelobe), ("res", map_residual),
                           ("nhit", map_nhit)):
         if aux_map is not None:
             maps_to_file[name] = aux_map
-    if mapmaking_cfg.include_sky_model_maps:
-        maps_to_file["skymodel"] = compsep_output
     if mapmaking_cfg.include_cov_maps:
         maps_to_file["cov"] = map_cov
     return detmap_dict_out, maps_to_file

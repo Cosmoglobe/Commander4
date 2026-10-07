@@ -394,7 +394,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         band_comm (Comm): The communicator consisting of all MPI ranks which holds TOD data that
                           should go into the same map.
         experiment_data (DetectorGroupTOD): TOD data class to be made into maps.
-        compsep_output (NDArray): The sky model at our band. Not used, but written to chain file.
+        compsep_output (NDArray): The sky model at our band, at this rank's local pixels.
         tod_samples (TODSamples): Sampled TOD parameters, such as gain.
         iteration: Current Gibbs iteration.
         mapmaking_cfg: Validated mapmaking settings.
@@ -639,7 +639,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         if band_comm.Get_rank() == 0:
             detmap_dict_out, maps_to_file = finalize_band_maps(
                 map_signal, map_inv_var, pols, experiment_data, mapmaking_cfg, tod_samples,
-                compsep_output, map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
+                map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
                 map_sidelobe=map_sidelobe, map_residual=map_residual, map_nhit=map_nhit,
                 map_cov=map_cov)
 

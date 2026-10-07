@@ -68,6 +68,7 @@ def test_instrument_percentages_follow_detector_names_into_sky_projection(
     band = experiment.bands.Band
 
     result = tod_reader(MPI.COMM_SELF, experiment, band, det_names, params, 0, 1)
+    result.get_pixel_domain(TODView(result, SimpleNamespace()), MPI.COMM_SELF, sparse=False)
 
     assert result.instrument_filepath == experiment.instrument_file
     assert result.nscans == 1
@@ -117,6 +118,7 @@ def test_intensity_only_band_reads_without_requiring_psi(
         del handle["000042/353-3b/psi"]
 
     result = tod_reader(MPI.COMM_SELF, experiment, band, det_names, params, 0, 1)
+    result.get_pixel_domain(TODView(result, SimpleNamespace()), MPI.COMM_SELF, sparse=False)
 
     for det, efficiency in zip(result.scans[0].detectors, [0.92, 0.0]):
         assert det.response_I_P == pytest.approx((1.0, efficiency))

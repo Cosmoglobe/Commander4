@@ -36,7 +36,6 @@ from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.sample_ncorr import sample_correlated_noise, log_corr_noise_stats
 from commander4.tod.noise.sigma0 import _estimate_standalone_sigma0
 from commander4.tod.scan_diagnostics import _record_tod_diagnostics
-from commander4.data_models.pixel_domain import PixelDomain
 from commander4.math_utils.arithmetic import inplace_scale, dot, norm
 from commander4.math_utils.fft import forward_rfft, backward_rfft
 from commander4.math_utils.transfer_func import SinglePole
@@ -63,8 +62,7 @@ class CGMapmaker:
                 nthreads:int=1,
                 CG_maxiter:int=60,
                 CG_tol:float=1e-6,
-                CG_check_interval:int = 1,
-                pixel_domain:PixelDomain|None = None):
+                CG_check_interval:int = 1):
         """Initialise the CG mapmaker.
 
         Args:
@@ -79,11 +77,10 @@ class CGMapmaker:
             CG_maxiter: Maximum number of CG iterations.
             CG_tol: Convergence tolerance on the squared relative preconditioned residual.
             CG_check_interval: Check convergence every this many iterations.
-            pixel_domain: Pixel-distribution domain. When ``None`` a full-sky domain is built, in
-                which case every rank holds full-sky local maps (the historical behaviour). In
-                sparse mode each rank's RHS/LHS buffers cover only its observed pixels, and the
-                full-sky iterate held by the master is scattered/gathered to the ranks each
-                iteration.
+
+        The rank's RHS/LHS buffers hold the pixels of the band's ``PixelDomain``
+        (``detector_tod.pixel_domain``, which must be built), and the full-sky iterate held by the
+        master is scattered/gathered to the ranks each iteration.
         """
 
         self.logger = logging.getLogger(__name__)
@@ -102,8 +99,8 @@ class CGMapmaker:
         self.CG_tol = CG_tol
         self.CG_check_interval = CG_check_interval
         self.M = preconditioner
-        self.domain = pixel_domain if pixel_domain is not None \
-            else PixelDomain(map_comm, detector_tod.nside, "full")
+        # The same domain the view converts the pointing with, so the two always agree.
+        self.domain = detector_tod.pixel_domain
         self._nloc = self.domain.n_local
         # View over the band's detector-scans, used to access pointing (pix/psi) when applying the
         # pointing matrix and its adjoint.
@@ -390,8 +387,7 @@ class CGMapmakerI(CGMapmaker):
                 nthreads:int = 1,
                 CG_maxiter:int = 200,
                 CG_tol:float = 1e-10,
-                CG_check_interval:int = 1,
-                pixel_domain = None):
+                CG_check_interval:int = 1):
 
         super().__init__(detector_tod=detector_tod,
                         detector_samples=detector_samples,
@@ -402,8 +398,7 @@ class CGMapmakerI(CGMapmaker):
                         nthreads=nthreads,
                         CG_maxiter=CG_maxiter,
                         CG_tol=CG_tol,
-                        CG_check_interval=CG_check_interval,
-                        pixel_domain=pixel_domain)
+                        CG_check_interval=CG_check_interval)
 
         self._ncomp = 1
         # Master holds the full-sky solution and RHS; the iterate is scattered to the ranks' local
@@ -472,8 +467,7 @@ class CGMapmakerIQU(CGMapmaker):
                 nthreads:int = 1,
                 CG_maxiter:int = 200,
                 CG_tol:float = 1e-10,
-                CG_check_interval:int = 1,
-                pixel_domain = None):
+                CG_check_interval:int = 1):
 
         super().__init__(detector_tod=detector_tod,
                         detector_samples=detector_samples,
@@ -484,8 +478,7 @@ class CGMapmakerIQU(CGMapmaker):
                         nthreads=nthreads,
                         CG_maxiter=CG_maxiter,
                         CG_tol=CG_tol,
-                        CG_check_interval=CG_check_interval,
-                        pixel_domain=pixel_domain)
+                        CG_check_interval=CG_check_interval)
 
         self._ncomp = 3
         # Master holds the full-sky solution and RHS; the iterate is scattered to the ranks' local
@@ -551,7 +544,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         band_comm (Comm): The communicator consisting of all MPI ranks which holds TOD data that
                           should go into the same map.
         experiment_data (DetectorGroupTOD): TOD data class to be made into maps.
-        compsep_output (NDArray): The sky model at our band. Not used, but written to chain file.
+        compsep_output (NDArray): The sky model at our band, at this rank's local pixels.
         tod_samples (TODSamples): Sampled TOD parameters, such as gain.
         iteration: Current Gibbs iteration.
         mapmaking_cfg: Validated mapmaking settings.
@@ -590,14 +583,12 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
         mapmaker_invvar = WeightsMapmakerIQU(band_comm, experiment_data.nside, pixel_domain=domain)
         cg_mapmaker = CGMapmakerIQU(experiment_data, tod_samples, band_comm, T_omega=T_omega,
                     preconditioner=called_on_non_master, nthreads=mapmaking_cfg.num_threads,
-                    CG_maxiter=mapmaking_cfg.cg.max_iter, CG_tol=mapmaking_cfg.cg.err_tol,
-                    pixel_domain=domain)
+                    CG_maxiter=mapmaking_cfg.cg.max_iter, CG_tol=mapmaking_cfg.cg.err_tol)
     elif pols == "I":
         mapmaker_invvar = WeightsMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
         cg_mapmaker = CGMapmakerI(experiment_data, tod_samples, band_comm, T_omega=T_omega,
                     preconditioner=called_on_non_master, nthreads=mapmaking_cfg.num_threads,
-                    CG_maxiter=mapmaking_cfg.cg.max_iter, CG_tol=mapmaking_cfg.cg.err_tol,
-                    pixel_domain=domain)
+                    CG_maxiter=mapmaking_cfg.cg.max_iter, CG_tol=mapmaking_cfg.cg.err_tol)
     else:
         raise ValueError(f"specified polarizations {pols} is notsupported yet.")
 
@@ -815,7 +806,7 @@ def tod2map_CG(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_o
     if band_comm.Get_rank() == 0:
         detmap_dict_out, maps_to_file = finalize_band_maps(
             map_signal, map_inv_var, pols, experiment_data, mapmaking_cfg, tod_samples,
-            compsep_output, map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
+            map_orbdipole=map_orbdipole, map_corrnoise=map_corrnoise,
             map_residual=map_residual, map_nhit=map_nhit, map_cov=map_cov)
 
     return detmap_dict_out, maps_to_file

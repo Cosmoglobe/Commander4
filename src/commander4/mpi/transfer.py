@@ -12,6 +12,7 @@ from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.data_models.pixel_domain import DistributedMap
 from commander4.file_io.map_reader import read_data_map_from_file
 from commander4.polarization import get_execution_band_id
 from commander4.sky.sky_model import build_initial_sky_model
@@ -55,19 +56,15 @@ def _should_send_compsep_result(compsep_my_band_id: str,
 ###########################################################
 
 def _realize_and_distribute_sky(sky_model, experiment_data: DetectorGroupTOD,
-                                band_comm) -> NDArray[np.floating]:
+                                band_comm) -> DistributedMap:
     """Realize the band sky model on the master and hand each rank only the pixels it needs.
 
-    The band master realizes the full-sky ``(npols, npix)`` detector map and keeps it (it doubles
-    as the full-sky map written to the chain). Each rank then receives, through the band's
-    ``PixelDomain``, just the sky values at the pixels its own scans observe. In the default
-    (non-sparse) map mode the domain scatter is a plain broadcast, so every rank ends up with the
-    full-sky map exactly as before. Only the master needs the ``SkyModel`` object, so it is never
-    broadcast, avoiding a full-sky realization and a copy of the model on every other rank
-    (the dominant TOD-side memory cost at high nside).
-
-    Downstream, ``TODView`` detects whether its sky map is full-sky or domain-restricted by its
-    column count and indexes the pointing accordingly, so consumers are agnostic to the mode.
+    The band master realizes the full-sky ``(npols, npix)`` detector map and keeps it, for the
+    chain output and the far-sidelobe transform. Every rank, the master included, then receives
+    through the band's ``PixelDomain`` the sky values at its local pixels, the same pixels its map
+    buffers hold. Only the master needs the ``SkyModel`` object, so it is never broadcast, avoiding
+    a full-sky realization and a copy of the model on every other rank (the dominant TOD-side
+    memory cost at high nside).
     """
     is_band_master = band_comm.Get_rank() == 0
     pols = experiment_data.pols
@@ -80,24 +77,17 @@ def _realize_and_distribute_sky(sky_model, experiment_data: DetectorGroupTOD,
         full_map = sky_model.get_sky_at_nu(experiment_data.nu, experiment_data.nside, pols, fwhm)
     else:
         full_map = None
-    domain = experiment_data.pixel_domain
-    if domain is None:
-        # Domain not built yet (unexpected call order): fall back to the historical full-sky bcast.
-        return band_comm.bcast(full_map, root=0)
-    local_map = domain.scatter_from_full(full_map, ncomp, dtype=np.float32)
-    # Master keeps the full-sky map (chain output + its own pointing); workers keep only their
-    # local slice. In full mode scatter_from_full already broadcast the full map to everyone.
-    return full_map if (is_band_master and domain.mode == "sparse") else local_map
+    local_map = experiment_data.pixel_domain.scatter_from_full(full_map, ncomp, dtype=np.float32)
+    return DistributedMap(local=local_map, full=full_map)
 
 
 def receive_compsep(mpi_info: Bunch, experiment_data: DetectorGroupTOD, todproc_my_band_id: str,
-                    senders: dict[str, int]) -> NDArray[np.floating]:
+                    senders: dict[str, int]) -> DistributedMap:
     """Receive the CompSep sky model and distribute the realized band map within TOD.
 
     The band master receives the ``SkyModel`` from the CompSep side and realizes it at the band
     frequency/resolution; the result is distributed to all band ranks (see
-    ``_realize_and_distribute_sky``: full-sky in non-sparse mode, per-rank local pixels in sparse
-    mode).
+    ``_realize_and_distribute_sky``).
 
     Args:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
@@ -109,8 +99,7 @@ def receive_compsep(mpi_info: Bunch, experiment_data: DetectorGroupTOD, todproc_
             world rank of the sender task (on the CompSep side), keyed by execution-view band ID.
 
     Returns:
-        NDArray: The realized sky map for this rank (full-sky on the master / in non-sparse mode,
-            otherwise restricted to the rank's locally-observed pixels).
+        The realized band sky map, as this rank holds it.
     """
     world_comm = mpi_info.world.comm
     band_comm = mpi_info.band.comm
@@ -123,13 +112,12 @@ def receive_compsep(mpi_info: Bunch, experiment_data: DetectorGroupTOD, todproc_
 
 
 def get_local_initial_sky(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
-                          params: Bunch) -> NDArray[np.floating]:
+                          params: Bunch) -> DistributedMap:
     """Build the initial sky model locally and realize it at this TOD band.
 
     Used when there are no CompSep ranks: the band master builds the SkyModel from the component
     parameters and init files and realizes it; the realized map is distributed to all band ranks
-    (full-sky in non-sparse mode, per-rank local pixels in sparse mode). Mirrors `receive_compsep`,
-    minus the cross-world receive.
+    (see `_realize_and_distribute_sky`). Mirrors `receive_compsep`, minus the cross-world receive.
     """
     if mpi_info.band.is_master:
         sky_model = build_initial_sky_model(params)

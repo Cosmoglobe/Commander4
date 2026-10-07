@@ -76,7 +76,9 @@ class DetectorGroupTOD:
 
     @property
     def pixel_domain(self):
-        """The cached map-distribution :class:`PixelDomain`, or ``None`` if not built yet."""
+        """The band's map-distribution :class:`PixelDomain`, built by ``get_pixel_domain``."""
+        if self._pixel_domain is None:
+            raise RuntimeError("The pixel domain has not been built; call get_pixel_domain first.")
         return self._pixel_domain
 
     def iter_detector_scans(self, accept: NDArray | None = None):
