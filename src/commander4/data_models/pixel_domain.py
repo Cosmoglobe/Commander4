@@ -28,10 +28,11 @@ _NUMPY_TO_MPI_DTYPE = {np.dtype(np.float64): MPI.DOUBLE, np.dtype(np.float32): M
 # Two modes:
 #   - "full":   the historical behaviour. ``local_pix`` is the whole sky, ``to_local`` is the
 #               identity, and the collectives are a plain ``Reduce`` / ``Bcast`` over npix.
-#   - "sparse": each rank holds ``local_pix`` (the sorted unique global pixels its scans touch).
-#               ``to_local`` finds a pixel's local index in a hash table built once from
-#               ``local_pix`` (see ``build_pixel_hash`` in ``mapmaker_pymod.cc``), so its cost per
-#               sample does not depend on how many pixels the rank holds or how they are ordered.
+#   - "sparse": each rank holds ``local_pix`` (the unique global pixels its scans touch, in the
+#               order the scans first reach them; see ``from_view``). ``to_local`` finds a pixel's
+#               local index in a hash table built once from ``local_pix`` (see
+#               ``build_pixel_hash`` in ``mapmaker_pymod.cc``), so its cost per sample does not
+#               depend on how many pixels the rank holds or how they are ordered.
 #               Local buffers are (ncomp, n_local). Reduction is a ``Gatherv`` of the local data to
 #               the master followed by a scatter-add into the full-sky map; the symmetric scatter
 #               (master -> ranks, for the CG LHS) is a ``Scatterv`` of the per-rank pixel slices.
@@ -47,7 +48,8 @@ class PixelDomain:
         nside: HEALPix nside of the full-sky map.
         npix: Full-sky pixel count (``12*nside**2``).
         mode: ``"full"`` or ``"sparse"``.
-        local_pix: Sorted unique global pixel ids held by this rank (sparse mode), else ``None``.
+        local_pix: Unique global pixel ids held by this rank, in visit order (sparse mode), else
+            ``None``.
         n_local: Length of the local buffer (``n_local == npix`` in full mode).
     """
 
@@ -90,15 +92,24 @@ class PixelDomain:
         pointing used by every downstream mapmaker and does not change if ``accept`` toggles between
         Gibbs iterations. Pointing is accessed through the ``TODView`` (``view.pix``), never decoded
         directly. ``"full"`` mode skips the pass entirely.
+
+        The pixels are numbered in visit order: the order in which the detector-scans, taken in
+        processing order, first reach them. Successive samples of a scan then mostly land next to
+        each other in the local map buffers, which makes the map updates much faster than a
+        numbering sorted by global index (scans generally cut across the RING rows rather than
+        following them).
         """
         if mode == "full":
             return cls(comm, nside, "full")
-        # A transient full-sky boolean hitmap (npix bytes) is the cheapest robust way to union the
-        # pixels; it is freed before the large accumulation buffers are allocated.
-        hit = np.zeros(12 * nside**2, dtype=bool)
+        # Each detector-scan's distinct pixels, in the order that scan first reaches them, joined in
+        # processing order. The first appearance of a pixel in this list is its first visit. The
+        # empty array gives a rank without detector-scans an empty domain.
+        visits = [np.zeros(0, dtype=np.int64)]
         for view in scan_view.iter_focused():
-            hit[view.pix] = True
-        local_pix = np.flatnonzero(hit).astype(np.int64)
+            pix, first = np.unique(view.pix, return_index=True)
+            visits.append(pix[np.argsort(first)])
+        pix, first = np.unique(np.concatenate(visits), return_index=True)
+        local_pix = pix[np.argsort(first)]
         return cls(comm, nside, "sparse", local_pix=local_pix)
 
     def to_local(self, pix: NDArray) -> NDArray:

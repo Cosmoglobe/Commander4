@@ -59,11 +59,17 @@ class _FakeScanView:
         for pix in self._pix_arrays:
             yield _FakeView(pix)
 
-def test_from_view_collects_union_of_observed_pixels():
-    scan_view = _FakeScanView([np.array([5, 5, 1]), np.array([1, 40, 7])])
+def test_from_view_numbers_pixels_in_visit_order():
+    """Each observed pixel appears once, in the order the detector-scans first reach it."""
+    scan_view = _FakeScanView([np.array([5, 5, 1]), np.array([1, 40, 7, 5, 2])])
     dom = PixelDomain.from_view(scan_view, MPI.COMM_SELF, "sparse", nside=2)
-    assert_allclose(dom.local_pix, np.array([1, 5, 7, 40]))
-    assert dom.n_local == 4
+    np.testing.assert_array_equal(dom.local_pix, [5, 1, 40, 7, 2])
+    assert dom.n_local == 5
+
+
+def test_from_view_without_detector_scans_gives_an_empty_domain():
+    dom = PixelDomain.from_view(_FakeScanView([]), MPI.COMM_SELF, "sparse", nside=2)
+    assert dom.n_local == 0
 
 
 # --- reduce / scatter round-trips (collective; meaningful under mpirun) ----------------------
@@ -74,7 +80,7 @@ def test_reduce_to_full_matches_reference():
     nside, npix = 4, 12 * 16
     rng = np.random.default_rng(100 + rank)
     # Each rank observes an overlapping window of pixels, so several ranks share pixels.
-    local_pix = np.unique(rng.integers(0, npix, size=30))
+    local_pix = rng.permutation(np.unique(rng.integers(0, npix, size=30)))  # unsorted, as in use
     dom = _sparse_domain(comm, nside, local_pix)
 
     local = rng.normal(size=(3, dom.n_local))
@@ -98,7 +104,7 @@ def test_scatter_from_full_round_trips():
     rank = comm.Get_rank()
     nside, npix = 4, 12 * 16
     rng = np.random.default_rng(200 + rank)
-    local_pix = np.unique(rng.integers(0, npix, size=25))
+    local_pix = rng.permutation(np.unique(rng.integers(0, npix, size=25)))  # unsorted, as in use
     dom = _sparse_domain(comm, nside, local_pix)
 
     full = rng.normal(size=(2, npix)) if rank == 0 else None
@@ -114,7 +120,7 @@ def test_scatter_from_full_float32_round_trips():
     rank = comm.Get_rank()
     nside, npix = 4, 12 * 16
     rng = np.random.default_rng(300 + rank)
-    local_pix = np.unique(rng.integers(0, npix, size=25))
+    local_pix = rng.permutation(np.unique(rng.integers(0, npix, size=25)))  # unsorted, as in use
     dom = _sparse_domain(comm, nside, local_pix)
 
     full = rng.normal(size=(3, npix)).astype(np.float32) if rank == 0 else None
@@ -132,7 +138,7 @@ def test_sky_model_local_slice_matches_full_at_pointing():
     nside, npix = 4, 12 * 16
     rng = np.random.default_rng(17)
     # A rank's observed pixels (what from_view collects) and a per-sample pointing into them.
-    local_pix = np.unique(rng.integers(0, npix, size=30))
+    local_pix = rng.permutation(np.unique(rng.integers(0, npix, size=30)))  # unsorted, as in use
     dom = _sparse_domain(comm, nside, local_pix)
     full_map = rng.normal(size=(3, npix)).astype(np.float32)
     local_map = dom.scatter_from_full(full_map, ncomp=3, dtype=np.float32)
@@ -154,11 +160,11 @@ def test_weights_iqu_sparse_matches_full(response_I_P):
     rng = np.random.default_rng(7)
     nside = 4
     pix, psi, _ = _random_scan(rng, npix_observed=40, ntod=500)
-    local_pix = np.unique(pix)
+    domain = PixelDomain.from_view(_FakeScanView([pix]), MPI.COMM_SELF, "sparse", nside)
 
     full = WeightsMapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
     sparse = WeightsMapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64,
-                               pixel_domain=_sparse_domain(MPI.COMM_SELF, nside, local_pix))
+                               pixel_domain=domain)
     full.accumulate_to_map(2.5, pix, psi, response_I_P=response_I_P)
     sparse.accumulate_to_map(2.5, pix, psi, response_I_P=response_I_P)
     full.gather_map()
@@ -171,11 +177,11 @@ def test_signal_iqu_sparse_matches_full(response_I_P):
     rng = np.random.default_rng(11)
     nside = 4
     pix, psi, tod = _random_scan(rng, npix_observed=40, ntod=500)
-    local_pix = np.unique(pix)
+    domain = PixelDomain.from_view(_FakeScanView([pix]), MPI.COMM_SELF, "sparse", nside)
 
     full = MapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
     sparse = MapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64,
-                        pixel_domain=_sparse_domain(MPI.COMM_SELF, nside, local_pix))
+                        pixel_domain=domain)
     full.accumulate_to_map(tod, 2.5, pix, psi, response_I_P=response_I_P)
     sparse.accumulate_to_map(tod, 2.5, pix, psi, response_I_P=response_I_P)
     full.gather_map()
@@ -187,14 +193,14 @@ def test_scalar_sparse_matches_full():
     rng = np.random.default_rng(13)
     nside = 4
     pix, _, tod = _random_scan(rng, npix_observed=40, ntod=500)
-    local_pix = np.unique(pix)
+    domain = PixelDomain.from_view(_FakeScanView([pix]), MPI.COMM_SELF, "sparse", nside)
 
     full_sig = Mapmaker(MPI.COMM_SELF, nside, dtype=np.float64)
     sparse_sig = Mapmaker(MPI.COMM_SELF, nside, dtype=np.float64,
-                         pixel_domain=_sparse_domain(MPI.COMM_SELF, nside, local_pix))
+                         pixel_domain=domain)
     full_w = WeightsMapmaker(MPI.COMM_SELF, nside)
     sparse_w = WeightsMapmaker(MPI.COMM_SELF, nside,
-                              pixel_domain=_sparse_domain(MPI.COMM_SELF, nside, local_pix))
+                              pixel_domain=domain)
     full_sig.accumulate_to_map(tod, 2.5, pix)
     sparse_sig.accumulate_to_map(tod, 2.5, pix)
     full_w.accumulate_to_map(2.5, pix)
