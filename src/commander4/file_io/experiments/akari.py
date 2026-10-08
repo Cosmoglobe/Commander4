@@ -80,7 +80,6 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
 
     for i_pid in range(scan_idx_start, scan_idx_stop):
         pid = pids[i_pid]
-        scanID = int(pid)
         filepath = filepaths[i_pid]
         if pid in bad_PIDs:
             continue
@@ -93,12 +92,15 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
             huffman_symbols = f[f"/{pid}/common/huffsymb"][()]
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
+            start_time = f[f"/{pid}/common/time"][()]
+
             detector_list = []
             # if ntod > ntod_upper_bound:
             #     raise ValueError(f"{ntod_upper_bound} {ntod}")
             vsun = np.ones(3)  # dummy, we don't have that in Akari.
             # Akari is intensity-only: the files carry no psi, so we hand PixelPointing a zero psi of
             # the right length (psi is unused by I-only mapmaking, but PixelPointing requires one).
+            # TODO: this can now maybe be avoided?
             psi_zeros = np.zeros(ntod_optimal, dtype=np.float32)
             detector_list = []
             for idet, det_name in enumerate(all_det_names):
@@ -144,10 +146,13 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
         if len(detector_list) == 0:
             good_scan = False
         if good_scan:
-            scan = ScanTOD(detector_list, 0., scanID)
-            scan_list.append(scan)
+            scan_list.append(ScanTOD(detlist=detector_list, 
+                           start_time=start_time, 
+                           scan_id=int(pid)))
             num_included += 1
-        if band_comm.Get_rank() == 0 and (i_pid-scan_idx_start) % (nscans // 5) == 0:
+
+        if band_comm.Get_rank() == 0 and (i_pid-scan_idx_start) %\
+                (nscans // 5 if nscans > 5 else nscans) == 0:
             logger.debug(f"Reading scans from disk, progress on master rank of band {bandname}: "\
                          f"{i_pid-scan_idx_start}/{nscans}")
         if i_pid % 10 == 0:

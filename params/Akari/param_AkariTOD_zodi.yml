@@ -49,6 +49,7 @@ output:
       orbital_dipole_maps: False
       corr_noise_maps: True
       sky_model_maps: True
+      zodi_maps: True
       residual_maps: True   # maps/res: binned TOD residual (C3 tod_<freq>_res). One extra
                             # map accumulator per mapmaker.
       hit_maps: True        # maps/nhit: per-pixel count of unflagged samples.
@@ -104,6 +105,7 @@ tod_processing:
   zodi:
     enabled: True
     from_iter: 1
+    update_params: {}
 
   cg_mapmaker:
     max_iter: 60
@@ -243,9 +245,10 @@ components:
 experiments:
   Akari:
     enabled: true
-    mapmaker: "CG"
+    mapmaker: "bin"
     experiment_id: "akari"  # Decides expected data format, what TOD reader is used, etc.
-    num_scans: 11395
+    filelist_idx_start: 1
+    filelist_idx_stop: 11395
     bad_data_bitmask: 2097149 #0b1111111111111111111111111111101
     bands:
       AKARI065:
@@ -319,18 +322,18 @@ experiments:
           AKARI_090-06: {}
           AKARI_090-07: {}
           AKARI_090-08: {}
-          AKARI_090-09: {}
-          AKARI_090-10: {}
-          AKARI_090-11: {}
-          AKARI_090-12: {}
-          AKARI_090-13: {}
-          AKARI_090-14: {}
-          AKARI_090-15: {}
-          AKARI_090-16: {}
-          AKARI_090-17: {}
-          AKARI_090-18: {}
-          AKARI_090-19: {}
-          AKARI_090-20: {}
+          # AKARI_090-09: {}
+          # AKARI_090-10: {}
+          # AKARI_090-11: {}
+          # AKARI_090-12: {}
+          # AKARI_090-13: {}
+          # AKARI_090-14: {}
+          # AKARI_090-15: {}
+          # AKARI_090-16: {}
+          # AKARI_090-17: {}
+          # AKARI_090-18: {}
+          # AKARI_090-19: {}
+          # AKARI_090-20: {}
           # AKARI_090-21: {}
           # AKARI_090-22: {}
           # AKARI_090-23: {}

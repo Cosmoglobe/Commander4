@@ -97,6 +97,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
             vsun = f[f"/{pid}/common/vsun/"][()]
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
+            start_time = f[f"/{pid}/common/time"][()]
 
             if ntod > ntod_upper_bound:
                 raise ValueError(f"Scan {pid} of band {bandname} has {ntod} samples, above the "
@@ -143,7 +144,9 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
                 detector_list.append(detector)
                 ntod_sum_original += ntod
                 ntod_sum_final += ntod_optimal
-        scan_list.append(ScanTOD(detector_list, 0., int(pid)))
+        scan_list.append(ScanTOD(detlist=detector_list, 
+                                 start_time=start_time, 
+                                 scan_id=int(pid)))
         num_included += 1
         if i_pid % 10 == 0:
             gc.collect()

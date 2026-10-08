@@ -19,6 +19,7 @@ from commander4.tod.noise.sample_ncorr import sample_correlated_noise, log_corr_
 from commander4.tod.noise.sigma0 import _estimate_standalone_sigma0
 from commander4.tod.scan_diagnostics import _record_tod_diagnostics
 from commander4.tod.view import TODView
+from commander4.tod.zodi import Zodi
 from commander4.data_models.pixel_domain import PixelDomain
 from commander4.tod.config import MapmakingConfig, CorrelatedNoiseConfig, DataSelectionConfig
 from commander4.tod.mapmaking.output import finalize_band_maps
@@ -466,6 +467,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
                 mapmaking_cfg: MapmakingConfig, corr_noise_cfg: CorrelatedNoiseConfig,
                 data_selection_cfg: DataSelectionConfig,
                 far_beam_model: FarBeamProjector|None = None,
+                zodi_model: Zodi|None = None,
                 ) -> tuple[dict[str, DetectorMap], dict[str, NDArray]]:
     """ Commander4 bin mapmaking. All ranks on the provided MPI communicator collaborates on creating
         the band maps (sky signal, inverse variance, possibly also aux maps like orbital dipole).
@@ -487,6 +489,7 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
     corr_noise_active = corr_noise_cfg.enabled and iteration >= corr_noise_cfg.from_iter
     _, selection_active = data_selection_status(iteration, data_selection_cfg, corr_noise_cfg)
     sidelobe_active = far_beam_model is not None
+    zodi_active = zodi_model is not None
     pols = experiment_data.pols
     scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
     # Optional per-experiment sparse map storage: each rank holds only its locally-observed pixels
@@ -505,9 +508,11 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
     mapmaker_res = (signal_class(band_comm, experiment_data.nside, pixel_domain=domain)
                     if mapmaking_cfg.include_residual_maps else None)
     mapmaker_ncorr = (signal_class(band_comm, experiment_data.nside, pixel_domain=domain)
-                      if corr_noise_active and mapmaking_cfg.include_corr_noise_maps else None)
+                    if corr_noise_active and mapmaking_cfg.include_corr_noise_maps else None)
     mapmaker_sidelobe = (signal_class(band_comm, experiment_data.nside, pixel_domain=domain)
-                         if sidelobe_active and mapmaking_cfg.include_sidelobe_maps else None)
+                    if sidelobe_active and mapmaking_cfg.include_sidelobe_maps else None)
+    mapmaker_zodi = (signal_class(band_comm, experiment_data.nside, pixel_domain=domain)
+                    if zodi_active and mapmaking_cfg.include_zodi_maps else None)
     # Unit scalar weights count hits directly at observed pixels in the C++ accumulator, without
     # a full-map temporary per detector-scan or any gain/polarization weighting.
     mapmaker_nhit = (WeightsMapmaker(band_comm, experiment_data.nside, pixel_domain=domain)
@@ -592,8 +597,13 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
         with benchmark("tod-diagnostics"):
             residual_tod = _record_tod_diagnostics(
                 tod_samples, view.iscan, view.idet, view, n_corr_est,
-                sidelobe_tod=gain * sl_tod if sl_tod is not None else None)
+                sidelobe_tod=gain * sl_tod if sl_tod is not None else None) #TODO:should I include zodi here?
 
+        zodi_tod = None
+        if zodi_active:
+            with benchmark("zodi-eval"):
+                scan_start_time = experiment_data.scans[view.iscan].start_time
+                zodi_tod = zodi_model.evaluate(pix=pix, scan_time=scan_start_time)
         ### DATA-SELECTION VETO 2 (catastrophic chi^2)
         start_bench("data-select-2")
         if selection_active:
@@ -634,7 +644,14 @@ def tod2map_bin(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_
                                                     psi_masked, response_I_P=response_I_P)
             d_sky -= gain * sl_tod
 
-        d_sky_masked = d_sky[good_data_mask]
+        if zodi_active:
+            if mapmaker_zodi is not None:
+                mapmaker_zodi.accumulate_to_map(zodi_tod, inv_var, pix,
+                                                    psi, response_I_P=response_I_P)
+
+            d_sky -= gain * zodi_tod
+
+        d_sky_masked = d_sky[good_data_mask] #TODO: slow operations could be performed after masking.
         with benchmark("map-binning"):
             mapmaker.accumulate_to_map(d_sky_masked/gain, inv_var, pix_masked, psi_masked,
                                        response_I_P=response_I_P)

@@ -4,6 +4,7 @@ import logging
 import os
 from typing import TYPE_CHECKING
 import zodipy
+import healpy as hp
 import astropy.units as u
 from astropy.time import Time
 from astropy.coordinates import SkyCoord
@@ -11,7 +12,10 @@ from commander4.tod.config import ZodiConfig
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 
 class Zodi:
-    """ Precompute the Zodi model object"""
+    """ Zodipy interface class for Commander4.
+
+        The emission is computed and returned in MJy/sr.
+    """
 
     def __init__(self, experiment_data: DetectorGroupTOD, zodi_cfg: ZodiConfig):
         self.zodi_cfg = zodi_cfg
@@ -60,12 +64,11 @@ class Zodi:
         self.zodi_model.update_parameters(model_d)
         return self.zodi_model
 
-
     def evaluate(self, pix: NDArray, scan_time: float) -> NDArray:
         #I consider the time constant through the whole scan
         lon, lat = hp.pix2ang(self.data_nside, pix, lonlat=True) * u.deg
-        obstime = Time(scan_time) #TODO: WHAT TIME FORMATS ARE THE TODS STAMPS??
-        skycoord = SkyCoord(lon, lat, obstime=time, frame="galactic")
-        # Evaluate the zodiacal light model
-        emissions = model.evaluate(skycoord)
-        return emissions
+        obstime = Time(scan_time[0], format='mjd')
+        skycoord = SkyCoord(lon, lat, obstime=obstime, frame="galactic")
+        emiss_MJy_sr = self.zodi_model.evaluate(skycoord)
+        emiss_uK_RJ = emiss_MJy_sr.to(u.uK, equivalencies=u.brightness_temperature(self.nu * u.GHz))
+        return emiss_uK_RJ.value

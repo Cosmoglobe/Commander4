@@ -206,10 +206,12 @@ class ZodiConfig:
 
     enabled: bool = False
     from_iter: int = 1
-    update_params: dict = {}
+    update_params: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Check the settings before they are used by a numerical routine."""
+        if not isinstance(self.enabled, bool):
+            raise ValueError("zodi.enabled must be true or false.")
 
     @classmethod
     def from_params(cls, tod: Bunch | dict) -> ZodiConfig:
@@ -230,6 +232,7 @@ class MapmakingConfig:
     include_sidelobe_maps: bool = False
     include_hit_maps: bool = False
     include_cov_maps: bool = False
+    include_zodi_maps: bool = False
     sparse_maps: bool = False
     common_res_fwhm: float = 0.0
     band_lmax: int | None = None
@@ -272,5 +275,6 @@ class MapmakingConfig:
             include_sidelobe_maps=bool(include.get("sidelobe_maps", cls.include_sidelobe_maps)),
             include_hit_maps=bool(include.get("hit_maps", cls.include_hit_maps)),
             include_cov_maps=bool(include.get("cov_maps", cls.include_cov_maps)),
+            include_zodi_maps=bool(include.get("zodi_maps", cls.include_cov_maps)),
             cg=CGConfig(**cg_block),
         )

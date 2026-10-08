@@ -23,10 +23,11 @@ from commander4.tod.jumps import sample_jump_detection
 from commander4.tod.hfi_demodulation import sample_hfi_baselines
 from commander4.tod.sidelobe_deconvolve import FarBeamProjector
 from commander4.tod.view import TODView
+from commander4.tod.zodi import Zodi
 from commander4.tod.mapmaking.binned import tod2map_bin
 from commander4.tod.mapmaking.cg import tod2map_CG
 from commander4.tod.config import GainConfig, JumpDetectionConfig, CorrelatedNoiseConfig,\
-    DataSelectionConfig, FarBeamConfig, MapmakingConfig
+    DataSelectionConfig, FarBeamConfig, MapmakingConfig, ZodiConfig
 from commander4.polarization import get_execution_band_ids
 from commander4.file_io.tod_reader import read_tods_from_file
 from commander4.file_io.chain_writer import write_band_chain_to_file
@@ -142,6 +143,9 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     temporal_gain_cfg = GainConfig.from_params(tod_block, band_block, "temporal_gain", "sky")
     corr_noise_cfg = CorrelatedNoiseConfig.from_params(tod_block)
     data_selection_cfg = DataSelectionConfig.from_params(tod_block)
+    zodi_cfg = ZodiConfig.from_params(tod_block)
+
+    zodi_active = (zodi_cfg.enabled and iter >= zodi_cfg.from_iter)
 
     far_beam_active = (far_beam_deconvolution_cfg.enabled
                        and iter >= far_beam_deconvolution_cfg.from_iter)
@@ -189,6 +193,9 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
                                               tod_samples, compsep_output,
                                               far_beam_deconvolution_cfg)
 
+    zodi_model = None
+    if zodi_active:
+        zodi_model = Zodi(experiment_data, zodi_cfg)
 
     # A finite diagnostic means "evaluated this iteration". Previously rejected or absent scans
     # remain NaN and are not counted again by the data-selection summary.
@@ -202,12 +209,12 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
         if mapmaking_cfg.mapmaker == "CG":
             detmap_dict, maps_to_file = tod2map_CG(
                 band_comm, experiment_data, compsep_output, tod_samples, iter, mapmaking_cfg,
-                corr_noise_cfg, data_selection_cfg,
+                corr_noise_cfg, data_selection_cfg, zodi_model,
             )
         else:
             detmap_dict, maps_to_file = tod2map_bin(
                 band_comm, experiment_data, compsep_output, tod_samples, iter, mapmaking_cfg,
-                corr_noise_cfg, data_selection_cfg, far_beam_model,
+                corr_noise_cfg, data_selection_cfg, far_beam_model, zodi_model
             )
 
     # Report during data-selection warm-up as well as active-cut iterations.
