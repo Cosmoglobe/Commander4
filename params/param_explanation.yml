@@ -640,11 +640,10 @@ experiments:
                               # split evenly across MPI ranks before reading any TOD files.
     mapmaker: "bin"           # Overrides tod_processing.mapmaker for this experiment.
 
-    sparse_maps: false        # true = each rank's map buffers and sky-model slice hold
-                              # only the pixels its own scans observe. Essential for a
-                              # small survey patch at high nside; wasteful for a full-sky
-                              # experiment, where the default full-sky broadcast is
-                              # cheaper.
+    sparse_maps: true         # true = each rank's map buffers and sky-model slice hold
+                              # only the pixels its own scans observe. Faster and smaller
+                              # than full-sky buffers, also for full-sky experiments.
+                              # false = every rank holds full-sky maps; mainly a check.
 
     # instrument_file: "/path/to/instrument.h5"
                               # Required for planck_hfi: reads <detector>/polEff in

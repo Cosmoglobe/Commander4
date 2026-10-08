@@ -51,42 +51,51 @@ def _patch_pointing(pols: str) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _build_band(pix: np.ndarray, psi: np.ndarray, tod: np.ndarray, pols: str,
-                velocity: tuple[float, float, float] = (1.0, 0.2, -0.3)) -> DetectorGroupTOD:
-    """One-detector, one-scan band with uncompressed pointing and no flagged samples.
+                velocity: tuple[float, float, float] = (1.0, 0.2, -0.3),
+                responses: list[tuple[float, float]] | None = None) -> DetectorGroupTOD:
+    """One-scan band with uncompressed pointing and no flagged samples.
 
-    `velocity` is the spacecraft velocity direction driving the orbital dipole the mapmakers
-    subtract; set it to zero for a test that wants the map to be the plain binned TOD.
+    Every detector sees the pixels `pix`. `psi` and `tod` have one row per detector, or are 1-D for
+    a single detector. `responses` gives each detector's (response_I, response_P); the default is
+    (1, 1). `velocity` is the spacecraft velocity direction driving the orbital dipole the
+    mapmakers subtract; set it to zero for a test that wants the map to be the plain binned TOD.
     """
     ntod = pix.size
-    pointing = PixelPointing(pix.astype(np.int64), psi.astype(np.float64), np.array([0], np.int64),
-                             None, None, _NSIDE, _NSIDE, ntod, ntod)
+    psi, tod = np.atleast_2d(psi), np.atleast_2d(tod)
+    responses = [None]*len(tod) if responses is None else responses
     orbital_velocity = np.array(velocity, dtype=np.float32)
-    det = DetectorTOD(
-        name="d0", det_idx_fullband=0, tod=tod.astype(np.float32), pointing=pointing,
-        sampling_rate_hz=1.0, orbital_velocity_m_per_s=orbital_velocity, huffman_tree=None,
-        huffman_symbols=None, default_proc_mask=np.ones(_NPIX, bool), specific_proc_masks={},
-        flag_encoded=np.zeros(ntod, np.int64), bad_data_bitmask=1, flag_is_compressed=False,
-    )
+    detectors = []
+    for idet, (det_psi, det_tod, response) in enumerate(zip(psi, tod, responses)):
+        pointing = PixelPointing(pix.astype(np.int64), det_psi.astype(np.float64),
+                                 np.array([0], np.int64), None, None, _NSIDE, _NSIDE, ntod, ntod)
+        detectors.append(DetectorTOD(
+            name=f"d{idet}", det_idx_fullband=idet, tod=det_tod.astype(np.float32),
+            pointing=pointing, sampling_rate_hz=1.0, orbital_velocity_m_per_s=orbital_velocity,
+            huffman_tree=None, huffman_symbols=None, default_proc_mask=np.ones(_NPIX, bool),
+            specific_proc_masks={}, flag_encoded=np.zeros(ntod, np.int64), bad_data_bitmask=1,
+            flag_is_compressed=False, response_I_P=response,
+        ))
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
-    return DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=30.0, fwhm=0.0,
-                            fsamp=1.0, ndet=1, pols=pols, noise_model=noise_model)
+    return DetectorGroupTOD([ScanTOD(detectors, 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=30.0,
+                            fwhm=0.0, fsamp=1.0, ndet=len(detectors), pols=pols,
+                            noise_model=noise_model)
 
 
-def _fake_tod_samples() -> SimpleNamespace:
+def _fake_tod_samples(ndet: int = 1) -> SimpleNamespace:
     """Minimal stand-in exposing exactly the fields the mapmakers / TODView / diagnostics read."""
-    empty_ps = lambda: np.full((1, 1, 100), np.nan, dtype=np.float32)
+    empty_ps = lambda: np.full((1, ndet, 100), np.nan, dtype=np.float32)
     return SimpleNamespace(
-        noise_params=np.full((1, 1, 1), _SIGMA0), abs_gain=1.0, rel_gain=np.zeros(1),
-        temporal_gain=np.zeros((1, 1)), jumps=empty_jump_grid(1, 1),
-        glitches=empty_glitch_grid(1, 1),
-        accept=np.ones((1, 1), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
-        chisq_z=np.full((1, 1), np.nan), good_fraction=np.full((1, 1), np.nan),
+        noise_params=np.full((1, ndet, 1), _SIGMA0), abs_gain=1.0, rel_gain=np.zeros(ndet),
+        temporal_gain=np.zeros((1, ndet)), jumps=empty_jump_grid(1, ndet),
+        glitches=empty_glitch_grid(1, ndet),
+        accept=np.ones((1, ndet), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
+        chisq_z=np.full((1, ndet), np.nan), good_fraction=np.full((1, ndet), np.nan),
         TOD_PS_NBIN=100, tod_ps_freqs=empty_ps(), tod_ps_raw=empty_ps(), tod_ps_residual=empty_ps(),
         tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None, residual_tods=None)
 
 
-def _run_mapmaker(band: DetectorGroupTOD, mapmaker: str,
-                  sparse_maps: bool = False) -> dict[str, np.ndarray]:
+def _run_mapmaker(band: DetectorGroupTOD, mapmaker: str, sparse_maps: bool = False,
+                  tod_samples: SimpleNamespace | None = None) -> dict[str, np.ndarray]:
     """Run one of the two mapmakers on `band` and return the maps selected for chain output."""
     mapmaking = MapmakingConfig(
         mapmaker=mapmaker, num_threads=1, include_orbital_dipole_maps=False,
@@ -94,7 +103,7 @@ def _run_mapmaker(band: DetectorGroupTOD, mapmaker: str,
         common_res_fwhm=0.0, cg=CGConfig(max_iter=20, err_tol=1e-12))
     run = tod_processing.tod2map_CG if mapmaker == "CG" else tod_processing.tod2map_bin
     ncomp = 3 if "QU" in band.pols else 1
-    tod_samples = _fake_tod_samples()
+    tod_samples = _fake_tod_samples() if tod_samples is None else tod_samples
     # As in a real run, the domain is built first and the sky model holds its local pixels.
     band.pixel_domain = PixelDomain.from_view(TODView(band, tod_samples), MPI.COMM_SELF,
                                               "sparse" if sparse_maps else "full", _NSIDE)
@@ -124,6 +133,7 @@ def test_cg_patch_matches_binned_and_zeroes_unsolvable_pixels(monkeypatch, spars
     binned = _run_mapmaker(_build_band(pix, psi, tod, "IQU"), "bin")
 
     assert np.isfinite(cg["observed_sky"]).all()
+    assert cg["observed_sky"].dtype == binned["observed_sky"].dtype == np.float32
     # The edge pixel's 3x3 is singular (single psi), so both mapmakers must give up on it, and the
     # 161 unhit pixels have no data at all.
     solvable = np.isfinite(cg["rms"])
@@ -151,7 +161,10 @@ def test_cg_patch_intensity_only(monkeypatch, sparse_maps):
                          sparse_maps)
 
     signal, map_rms = maps["observed_sky"], maps["rms"]
-    assert signal.shape == map_rms.shape == (1, _NPIX)
+    # The chain format has I, Q, U rows even for an I-only band, with nothing in Q and U.
+    assert signal.shape == map_rms.shape == (3, _NPIX)
+    np.testing.assert_array_equal(signal[1:], 0.0)
+    assert np.isinf(map_rms[1:]).all()
     observed = np.zeros(_NPIX, dtype=bool)
     observed[:_N_GOOD_PIX] = True
     assert np.isinf(map_rms[0, ~observed]).all()
@@ -160,6 +173,36 @@ def test_cg_patch_intensity_only(monkeypatch, sparse_maps):
     # A is diagonal for I-only, so the exact solution is the per-pixel mean of the TOD.
     expected = np.bincount(pix, weights=tod, minlength=_NPIX)[observed] / _NHIT
     np.testing.assert_allclose(signal[0, observed], expected, rtol=1e-6, atol=1e-6)
+
+
+@pytest.mark.parametrize("pols", ["IQU", "I"])
+def test_cg_matches_binned_for_detectors_with_different_gains_and_responses(monkeypatch, pols):
+    """The CG operator projects and weights each sample as the binned maps do: with the detector's
+    response in its pointing row, and with the weight (gain/sigma0)^2."""
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    rng = np.random.default_rng(6)
+    pix = np.repeat(np.arange(_N_GOOD_PIX), _NHIT)
+    psi = rng.uniform(0.0, np.pi, size=(2, pix.size))
+    responses, gains, sigma0s = [(1.0, 1.0), (0.8, 0.6)], np.array([1.0, 1.7]), np.array([2.0, 3.0])
+    sky = rng.normal(size=(3, _NPIX)) * 100.0
+    if pols == "I":
+        sky[1:] = 0.0
+    tod = np.stack([gain*(r_I*sky[0, pix] + r_P*(sky[1, pix]*np.cos(2*det_psi)
+                                                 + sky[2, pix]*np.sin(2*det_psi)))
+                    + rng.normal(size=pix.size)*sigma0
+                    for det_psi, (r_I, r_P), gain, sigma0 in zip(psi, responses, gains, sigma0s)])
+    maps = {}
+    for mapmaker in ("CG", "bin"):
+        tod_samples = _fake_tod_samples(ndet=2)
+        tod_samples.rel_gain = gains - tod_samples.abs_gain
+        tod_samples.noise_params[0, :, 0] = sigma0s
+        band = _build_band(pix, psi, tod, pols, velocity=(0.0, 0.0, 0.0), responses=responses)
+        maps[mapmaker] = _run_mapmaker(band, mapmaker, tod_samples=tod_samples)
+
+    solvable = np.isfinite(maps["bin"]["rms"])
+    assert solvable[0].sum() == _N_GOOD_PIX
+    np.testing.assert_allclose(maps["CG"]["observed_sky"][solvable],
+                               maps["bin"]["observed_sky"][solvable], rtol=1e-5, atol=1e-4)
 
 
 def _normal_matrix_three_pixels() -> np.ndarray:

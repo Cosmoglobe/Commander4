@@ -15,26 +15,24 @@ from commander4.tod.config import MapmakingConfig
 
 def finalize_band_maps(map_signal: NDArray, map_inv_var: NDArray, pols: str,
                        experiment_data: DetectorGroupTOD, mapmaking_cfg: MapmakingConfig,
-                       tod_samples: TODSamples,
-                       map_orbdipole: NDArray | None = None,
-                       map_corrnoise: NDArray | None = None,
-                       map_sidelobe: NDArray | None = None,
-                       map_residual: NDArray | None = None,
-                       map_nhit: NDArray | None = None,
-                       map_cov: NDArray | None = None) -> tuple[dict, dict]:
+                       tod_samples: TODSamples, aux_maps: dict[str, NDArray],
+                       map_nhit: NDArray | None, map_cov: NDArray) -> tuple[dict, dict]:
     """Split the solved band maps into `DetectorMap`s, and collect what goes to the chain file.
 
     Args:
-        map_signal: Solved sky map, shape (3, npix), rows I, Q, U; a scalar I map may be 1-D.
+        map_signal: Solved sky map, shape (3, npix) with rows I, Q, U, or (1, npix) for an I-only
+            band. Solved in float64, and passed on and stored as float32 like the other sky maps.
         map_inv_var: Per-pixel white-noise inverse variance, same shape; 0 where unobserved.
         pols: Which polarizations this band carries, e.g. "I", "QU" or "IQU".
-        map_sidelobe: Binned far-sidelobe pickup, in uK_RJ. Commander3's `tod_<freq>_sl` map.
-        map_residual: Binned noise residual (data minus sky model, orbital dipole and correlated
-            noise), in uK_RJ. Commander3's `tod_<freq>_res` map.
-        map_nhit: Per-pixel count of accumulated good samples, shape (npix,).
-        map_cov: The six unique elements of the per-pixel `P^T N^-1 P`, shape (6, npix). Only its
-            inverse diagonal survives in `map_inv_var`, so this is the only place the QU
-            off-diagonals are recorded.
+        aux_maps: Binned debug maps in uK_RJ, keyed by their name in the chain file and shaped
+            like `map_signal`; only those the run asked for are present. `sidelobe` is the
+            far-sidelobe pickup (Commander3's `tod_<freq>_sl` map), and `res` the noise residual,
+            data minus sky model, orbital dipole and correlated noise (Commander3's
+            `tod_<freq>_res` map).
+        map_nhit: Per-pixel count of accumulated good samples, shape (npix,), or None.
+        map_cov: The unique elements of the per-pixel `P^T N^-1 P`, shape (6, npix), or (1, npix)
+            for an I-only band. Only its inverse diagonal survives in `map_inv_var`, so this is the
+            only place the QU off-diagonals are recorded.
 
     Returns:
         `(detmap_dict, maps_to_file)`. The detector maps are what compsep receives; `maps_to_file`
@@ -43,24 +41,18 @@ def finalize_band_maps(map_signal: NDArray, map_inv_var: NDArray, pols: str,
         `mapmaking.common_res_fwhm` is set, `observed_sky` and `rms` are the smoothed maps that
         compsep actually used, and `map_fwhm_arcmin` records the beam they are at.
     """
-    # Keep scalar accumulation buffers small until output. The chain format uses I,Q,U rows and
-    # six covariance rows even for I-only bands; absent polarization has zero signal and no weight.
-    if pols == "I" and map_signal.ndim == 1:
-        expanded_maps: list[NDArray | None] = []
-        for values in (map_signal, map_inv_var, map_orbdipole, map_corrnoise, map_sidelobe,
-                       map_residual):
-            if values is None:
-                expanded_maps.append(None)
-                continue
-            expanded = np.zeros((3, values.size), dtype=values.dtype)
-            expanded[0] = values
-            expanded_maps.append(expanded)
-        (map_signal, map_inv_var, map_orbdipole, map_corrnoise,
-         map_sidelobe, map_residual) = expanded_maps
-        if mapmaking_cfg.include_cov_maps and map_cov is not None:
-            expanded_cov = np.zeros((6, map_cov.size), dtype=map_cov.dtype)
-            expanded_cov[0] = map_cov
-            map_cov = expanded_cov
+    map_signal = map_signal.astype(np.float32, copy=False)
+    # Keep I-only maps small until output. The chain format uses I,Q,U rows and six covariance
+    # rows even for I-only bands; absent polarization has zero signal and no weight.
+    if pols == "I":
+        def pad_rows(values: NDArray, nrows: int) -> NDArray:
+            padded = np.zeros((nrows, values.shape[-1]), dtype=values.dtype)
+            padded[0] = values[0]
+            return padded
+        map_signal, map_inv_var = pad_rows(map_signal, 3), pad_rows(map_inv_var, 3)
+        aux_maps = {name: pad_rows(values, 3) for name, values in aux_maps.items()}
+        if mapmaking_cfg.include_cov_maps:
+            map_cov = pad_rows(map_cov, 6)
 
     detmap_dict_out = {}
     # Degrading to a common analysis resolution happens after mapmaking; 0 leaves the native beam.
@@ -103,13 +95,11 @@ def finalize_band_maps(map_signal: NDArray, map_inv_var: NDArray, pols: str,
         maps_to_file["rms"] = (1.0/np.sqrt(inv_var_out)).astype(np.float32)
     # The aux maps are debug output binned straight from the TODs, and stay at the native beam even
     # when the two above are smoothed. The mapmaker only builds one the run asked for, so being
-    # present is the whole gate; the one below comes from elsewhere and is gated here instead. The
+    # present is the whole gate; the cov map comes from elsewhere and is gated here instead. The
     # sky model is added by `process_tod`, which holds it as a full-sky map.
-    for name, aux_map in (("orbdipole", map_orbdipole), ("corrnoise", map_corrnoise),
-                          ("sidelobe", map_sidelobe), ("res", map_residual),
-                          ("nhit", map_nhit)):
-        if aux_map is not None:
-            maps_to_file[name] = aux_map
+    maps_to_file.update(aux_maps)
+    if map_nhit is not None:
+        maps_to_file["nhit"] = map_nhit
     if mapmaking_cfg.include_cov_maps:
         maps_to_file["cov"] = map_cov
     return detmap_dict_out, maps_to_file

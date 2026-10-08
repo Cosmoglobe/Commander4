@@ -39,70 +39,93 @@ def _normal_matrices(seed: int) -> tuple[NDArray, NDArray]:
     return A, packed
 
 
-@pytest.mark.parametrize("tod_dtype", [np.float32, np.float64])
-def test_map_accumulator(tod_dtype: type) -> None:
-    tod, pix, _ = _scan(tod_dtype, seed=1)
-    m = np.random.default_rng(2).normal(size=NPIX)  # must be added to, not replaced
-    expected = m.copy()
-    np.add.at(expected, pix, 2.5*tod.astype(np.float64))
-    cpp_mapmaker.map_accumulator(m, tod, 2.5, pix)
-    np.testing.assert_allclose(m, expected, **TOL)
-
-
-def test_map_weight_accumulator() -> None:
+def test_hit_accumulator() -> None:
     _, pix, _ = _scan(np.float64, seed=3)
-    m = np.random.default_rng(4).normal(size=NPIX)
-    expected = m.copy()
-    np.add.at(expected, pix, 2.5)
-    cpp_mapmaker.map_weight_accumulator(m, 2.5, pix)
-    np.testing.assert_allclose(m, expected, **TOL)
+    hits = np.random.default_rng(4).normal(size=NPIX)  # must be added to, not replaced
+    expected = hits + np.bincount(pix, minlength=NPIX)
+    cpp_mapmaker.hit_accumulator(hits, pix)
+    np.testing.assert_allclose(hits, expected, **TOL)
 
 
 @pytest.mark.parametrize("tod_dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("ncomp", [3, 1])
 @pytest.mark.parametrize("response_I, response_P", RESPONSES)
-def test_map_accumulator_IQU(tod_dtype: type, response_I: float, response_P: float) -> None:
+def test_tod2map(tod_dtype: type, ncomp: int, response_I: float, response_P: float) -> None:
+    """map += P^T tod. Without polarization (intensity map, or response_P = 0) psi is not read."""
     tod, pix, psi = _scan(tod_dtype, seed=5)
-    m = np.random.default_rng(6).normal(size=(3, NPIX))
-    # Each sample sees the pointing row [r_I, r_P cos(2 psi), r_P sin(2 psi)].
+    m = np.random.default_rng(6).normal(size=(ncomp, NPIX))  # must be added to, not replaced
+    # Each sample's pointing row is [r_I, r_P cos(2 psi), r_P sin(2 psi)], or [r_I] for intensity.
     rows = [np.full(NTOD, response_I), response_P*np.cos(2*psi), response_P*np.sin(2*psi)]
     expected = m.copy()
-    for k in range(3):
-        np.add.at(expected[k], pix, 2.5*rows[k]*tod.astype(np.float64))
-    cpp_mapmaker.map_accumulator_IQU(m, tod, 2.5, pix, psi,
-                                     response_I=response_I, response_P=response_P)
+    for k in range(ncomp):
+        np.add.at(expected[k], pix, rows[k]*tod.astype(np.float64))
+    if ncomp == 1 or response_P == 0.0:
+        psi = np.full(NTOD, np.nan)  # would spoil the map if it were read
+    cpp_mapmaker.tod2map(m, tod, pix, psi, response_I=response_I, response_P=response_P)
     np.testing.assert_allclose(m, expected, **TOL)
 
 
+@pytest.mark.parametrize("tod_dtype", [np.float32, np.float64])
 @pytest.mark.parametrize("response_I, response_P", RESPONSES)
-def test_map_weight_accumulator_IQU(response_I: float, response_P: float) -> None:
-    _, pix, psi = _scan(np.float64, seed=7)
-    m = np.random.default_rng(8).normal(size=(6, NPIX))
-    # The 6 unique elements (II, IQ, IU, QQ, QU, UU) of the outer product of the pointing row.
+def test_binned_map_accumulator(tod_dtype: type, response_I: float, response_P: float) -> None:
+    """The weights and every TOD map of one pass equal NumPy's separate accumulations."""
+    _, pix, psi = _scan(tod_dtype, seed=7)
+    rng = np.random.default_rng(8)
+    tods = rng.normal(size=(3, NTOD)).astype(tod_dtype)
+    weights, maps = rng.normal(size=(6, NPIX)), rng.normal(size=(3, 3, NPIX))
+    # The pointing row [r_I, r_P cos(2 psi), r_P sin(2 psi)], and the 6 unique elements (II, IQ,
+    # IU, QQ, QU, UU) of its outer product.
     r = [np.full(NTOD, response_I), response_P*np.cos(2*psi), response_P*np.sin(2*psi)]
     outer = [r[0]*r[0], r[0]*r[1], r[0]*r[2], r[1]*r[1], r[1]*r[2], r[2]*r[2]]
-    expected = m.copy()
+    expected_weights, expected_maps = weights.copy(), maps.copy()
     for k in range(6):
-        np.add.at(expected[k], pix, 2.5*outer[k])
-    cpp_mapmaker.map_weight_accumulator_IQU(m, 2.5, pix, psi,
-                                            response_I=response_I, response_P=response_P)
-    np.testing.assert_allclose(m, expected, **TOL)
+        np.add.at(expected_weights[k], pix, 2.5*outer[k])
+    for j in range(3):
+        for k in range(3):
+            np.add.at(expected_maps[j, k], pix, 2.5*r[k]*tods[j].astype(np.float64))
+    cpp_mapmaker.binned_map_accumulator(weights, maps, tods, 2.5, pix, psi,
+                                        response_I=response_I, response_P=response_P)
+    np.testing.assert_allclose(weights, expected_weights, **TOL)
+    np.testing.assert_allclose(maps, expected_maps, **TOL)
 
 
-def test_map2tod() -> None:
-    _, pix, _ = _scan(np.float64, seed=9)
-    m = np.random.default_rng(10).normal(size=NPIX)
+def test_binned_map_accumulator_intensity_band_and_no_maps() -> None:
+    """An I-only band has one weight and one map row per pixel, and never reads psi."""
+    tod, pix, _ = _scan(np.float32, seed=22)
+    psi = np.full(NTOD, np.nan)  # would turn every map into NaN if it were read
+    weights, maps = np.zeros((1, NPIX)), np.zeros((1, 1, NPIX))
+    cpp_mapmaker.binned_map_accumulator(weights, maps, tod[None, :], 2.5, pix, psi,
+                                        response_I=0.4, response_P=1.0)
+    expected_weights, expected_map = np.zeros(NPIX), np.zeros(NPIX)
+    np.add.at(expected_weights, pix, 2.5*0.4**2)
+    np.add.at(expected_map, pix, 2.5*0.4*tod.astype(np.float64))
+    np.testing.assert_allclose(weights[0], expected_weights, **TOL)
+    np.testing.assert_allclose(maps[0, 0], expected_map, **TOL)
+    # With no TOD maps only the weights are accumulated (the CG mapmaker's case).
+    weights6 = np.zeros((6, NPIX))
+    cpp_mapmaker.binned_map_accumulator(weights6, np.zeros((0, 3, NPIX)),
+                                        np.zeros((0, NTOD), np.float32), 1.0, pix, psi,
+                                        response_P=0.0)
+    np.testing.assert_allclose(weights6[0], np.bincount(pix, minlength=NPIX), **TOL)
+
+
+@pytest.mark.parametrize("ncomp", [3, 1])
+@pytest.mark.parametrize("response_I, response_P", RESPONSES)
+def test_map2tod(ncomp: int, response_I: float, response_P: float) -> None:
+    """tod = P map, and tod2map is its exact transpose: <P m, t> = <m, P^T t> for any m and t."""
+    other_tod, pix, psi = _scan(np.float64, seed=11)
+    m = np.random.default_rng(12).normal(size=(ncomp, NPIX))
+    rows = [np.full(NTOD, response_I), response_P*np.cos(2*psi), response_P*np.sin(2*psi)]
+    expected = sum(rows[k]*m[k, pix] for k in range(ncomp))
+    if ncomp == 1 or response_P == 0.0:
+        psi = np.full(NTOD, np.nan)  # would spoil the TOD if it were read
     tod = np.full(NTOD, np.nan)  # NaN shows any sample the kernel fails to write
-    cpp_mapmaker.map2tod(m, tod, pix)
-    np.testing.assert_allclose(tod, m[pix], **TOL)
-
-
-def test_map2tod_IQU() -> None:
-    _, pix, psi = _scan(np.float64, seed=11)
-    m = np.random.default_rng(12).normal(size=(3, NPIX))
-    tod = np.full(NTOD, np.nan)
-    cpp_mapmaker.map2tod_IQU(m, tod, pix, psi)
-    expected = m[0, pix] + m[1, pix]*np.cos(2*psi) + m[2, pix]*np.sin(2*psi)
+    cpp_mapmaker.map2tod(m, tod, pix, psi, response_I=response_I, response_P=response_P)
     np.testing.assert_allclose(tod, expected, **TOL)
+    transposed = np.zeros((ncomp, NPIX))
+    cpp_mapmaker.tod2map(transposed, other_tod, pix, psi, response_I=response_I,
+                         response_P=response_P)
+    np.testing.assert_allclose(np.dot(tod, other_tod), np.vdot(m, transposed), **TOL)
 
 
 def test_map_solve_IQU() -> None:
@@ -135,6 +158,21 @@ def test_apply_invN_to_map_IQU() -> None:
     np.testing.assert_allclose(map_out, np.einsum("pij,jp->ip", A, map_in), **TOL)
 
 
+def test_solvers_give_up_on_a_nearly_singular_pixel() -> None:
+    """A pixel whose 3x3 is only nearly singular (I and Q almost degenerate) is unsolvable too."""
+    norm_map = np.zeros((6, NPIX))
+    norm_map[[0, 3, 5]] = 1.0
+    norm_map[1, 0] = 1.0 - 1e-13  # IQ correlation at rounding distance from exact degeneracy
+    rhs = np.ones((3, NPIX))
+    solved, inv_var = np.full((3, NPIX), np.nan), np.full((3, NPIX), np.nan)
+    cpp_mapmaker.map_solve_IQU(solved, rhs, norm_map)
+    cpp_mapmaker.map_inv_var_IQU(inv_var, norm_map)
+    np.testing.assert_array_equal(solved[:, 0], 0.0)
+    np.testing.assert_array_equal(inv_var[:, 0], 0.0)
+    np.testing.assert_allclose(solved[:, 1:], 1.0, **TOL)
+    np.testing.assert_allclose(inv_var[:, 1:], 1.0, **TOL)
+
+
 def test_map_solve_IQU_rejects_wrong_shapes_and_dtypes() -> None:
     _, norm_map = _normal_matrices(seed=18)
     rhs = np.ones((3, NPIX))
@@ -149,17 +187,20 @@ def test_kernels_reject_out_of_range_pixels(bad_pixel: int) -> None:
     """A pixel index outside [0, npix) must raise instead of touching memory outside the map."""
     tod, pix, psi = _scan(np.float64, seed=20)
     pix[50] = bad_pixel
-    m1, m3, m6, tod_out = np.zeros(NPIX), np.zeros((3, NPIX)), np.zeros((6, NPIX)), np.empty(NTOD)
-    # Every loop of every kernel, including the intensity-only (response_P = 0) loops.
+    m1, m3, m6 = np.zeros((1, NPIX)), np.zeros((3, NPIX)), np.zeros((6, NPIX))
+    tod_out = np.empty(NTOD)
+    maps3, maps1, tods = np.zeros((1, 3, NPIX)), np.zeros((1, 1, NPIX)), tod[None, :]
+    # Every loop of every kernel, including the intensity-only loops.
     calls = [
-        lambda: cpp_mapmaker.map_accumulator(m1, tod, 1.0, pix),
-        lambda: cpp_mapmaker.map_weight_accumulator(m1, 1.0, pix),
-        lambda: cpp_mapmaker.map_accumulator_IQU(m3, tod, 1.0, pix, psi),
-        lambda: cpp_mapmaker.map_accumulator_IQU(m3, tod, 1.0, pix, psi, response_P=0.0),
-        lambda: cpp_mapmaker.map_weight_accumulator_IQU(m6, 1.0, pix, psi),
-        lambda: cpp_mapmaker.map_weight_accumulator_IQU(m6, 1.0, pix, psi, response_P=0.0),
-        lambda: cpp_mapmaker.map2tod(m1, tod_out, pix),
-        lambda: cpp_mapmaker.map2tod_IQU(m3, tod_out, pix, psi),
+        lambda: cpp_mapmaker.hit_accumulator(np.zeros(NPIX), pix),
+        lambda: cpp_mapmaker.binned_map_accumulator(m6, maps3, tods, 1.0, pix, psi),
+        lambda: cpp_mapmaker.binned_map_accumulator(m6, maps3, tods, 1.0, pix, psi,
+                                                    response_P=0.0),
+        lambda: cpp_mapmaker.binned_map_accumulator(m1, maps1, tods, 1.0, pix, psi),
+        lambda: cpp_mapmaker.map2tod(m3, tod_out, pix, psi),
+        lambda: cpp_mapmaker.map2tod(m1, tod_out, pix, psi),
+        lambda: cpp_mapmaker.tod2map(m3, tod, pix, psi),
+        lambda: cpp_mapmaker.tod2map(m1, tod, pix, psi),
     ]
     for call in calls:
         with pytest.raises(RuntimeError, match="pixel index out of range"):
@@ -192,12 +233,14 @@ def test_pixel_hash_rejects_unknown_duplicate_and_out_of_range_pixels() -> None:
         cpp_mapmaker.build_pixel_hash(np.array([5, 9, 5], dtype=np.int64))
 
 
-def test_map_accumulator_IQU_rejects_wrong_dtypes_and_lengths() -> None:
+def test_tod2map_rejects_wrong_dtypes_shapes_and_lengths() -> None:
     tod, pix, psi = _scan(np.float32, seed=19)
     m = np.zeros((3, NPIX))
     with pytest.raises(RuntimeError):  # maps are float64 only
-        cpp_mapmaker.map_accumulator_IQU(m.astype(np.float32), tod, 1.0, pix, psi)
+        cpp_mapmaker.tod2map(m.astype(np.float32), tod, pix, psi)
+    with pytest.raises(RuntimeError):  # neither (3, npix) nor (1, npix)
+        cpp_mapmaker.tod2map(np.zeros((2, NPIX)), tod, pix, psi)
     with pytest.raises(RuntimeError):  # int32 pixel indices
-        cpp_mapmaker.map_accumulator_IQU(m, tod, 1.0, pix.astype(np.int32), psi)
+        cpp_mapmaker.tod2map(m, tod, pix.astype(np.int32), psi)
     with pytest.raises(RuntimeError):  # pix shorter than the TOD would read past its end
-        cpp_mapmaker.map_accumulator_IQU(m, tod, 1.0, pix[:10].copy(), psi)
+        cpp_mapmaker.tod2map(m, tod, pix[:10].copy(), psi)

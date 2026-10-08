@@ -11,8 +11,7 @@ from mpi4py import MPI
 from numpy.typing import NDArray
 
 from commander4.backend import mapmaker as cpp_mapmaker
-from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
-                                               stop_bench, log_memory, increment_count, bench_reset
+from commander4.diagnostics.performance import benchmark
 
 
 # MPI elementary datatypes for the float buffers exchanged by the collectives below.
@@ -84,16 +83,18 @@ class PixelDomain:
             raise ValueError(f"Unknown PixelDomain mode '{mode}'.")
 
         self.local_pix = np.ascontiguousarray(local_pix, dtype=np.int64)
-        self.n_local = int(self.local_pix.size)
+        self.n_local = int(self.local_pix.size)  # Number of pixels in the map held by this rank.
         # Lookup table from global pixel to local index, i.e. the inverse of local_pix. It is a
         # hash table (a uint64 array that only the C++ code reads) rather than a full-sky array, so
         # its size grows with n_local instead of npix. Built once and used by to_local.
         self._pixel_hash = cpp_mapmaker.build_pixel_hash(self.local_pix)
         # Static gather plan, exchanged once: per-rank element counts, their displacements, and the
         # concatenation of every rank's global pixels (held only on the master for the scatter-add).
-        counts = np.asarray(comm.allgather(self.n_local), dtype=np.int32)
+        # 64-bit, since the pixels of all ranks together can pass 2^31; mpi4py then uses the
+        # large-count MPI calls (MPI 4 or newer).
+        counts = np.asarray(comm.allgather(self.n_local), dtype=np.int64)
         self._recvcounts = counts
-        self._displs = np.insert(np.cumsum(counts), 0, 0)[:-1].astype(np.int32)
+        self._displs = np.insert(np.cumsum(counts), 0, 0)[:-1]
         self._all_pix = np.empty(int(counts.sum()), dtype=np.int64) if rank == 0 else None
         recvbuf = [self._all_pix, counts, self._displs, MPI.INT64_T] if rank == 0 else None
         comm.Gatherv(self.local_pix, recvbuf, root=0)

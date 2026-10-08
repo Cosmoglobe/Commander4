@@ -2,7 +2,7 @@
 
 The mapmaking operator is ``A = P^T T^T N^-1 T P``. Dropping the transfer function ``T`` leaves
 ``P^T N^-1 P``, which is exactly the per-pixel normal matrix the binned mapmaker accumulates
-(`WeightsMapmaker` / `WeightsMapmakerIQU`) -- block diagonal in pixels, and therefore cheap to
+(`BinnedMapmaker.map_cov`) -- block diagonal in pixels, and therefore cheap to
 invert. Every preconditioner here is built from that matrix; they differ only in how much of it they
 keep.
 
@@ -33,7 +33,7 @@ def invert_normal_matrix_IQU(normal_matrix: NDArray) -> tuple[NDArray, NDArray]:
 
     Args:
         normal_matrix: (6, npix) unique elements (II, IQ, IU, QQ, QU, UU) of the accumulated
-            per-pixel inverse-noise matrix, i.e. `WeightsMapmakerIQU.final_cov_map`.
+            per-pixel inverse-noise matrix, i.e. `BinnedMapmaker.map_cov`.
 
     Returns:
         ``(inverse, solvable)``. ``inverse`` is (6, npix), the unique elements of A_pp^-1, left at

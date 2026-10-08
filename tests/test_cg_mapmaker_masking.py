@@ -7,7 +7,7 @@ Fourier transfer function that needs a *continuous* TOD -- so it cannot remove f
 both the LHS and RHS gap-fill them and therefore span **every** sample of each accepted
 detector-scan. These tests build a real single-detector band and check that the operator spans all
 samples (flagged pixels stay populated, matching the RHS), and that the full-length pointing arrays
-are handled correctly by the C++ ``map2tod``/accumulator pair.
+are handled correctly by the C++ ``map2tod``/``tod2map`` pair.
 """
 from types import SimpleNamespace
 
@@ -21,7 +21,7 @@ from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.tod_samples import TODSamples
 from commander4.data_models.pixel_domain import PixelDomain
-from commander4.tod.mapmaking.cg import CGMapmakerI, CGMapmakerIQU
+from commander4.tod.mapmaking.cg import CGMapmaker
 
 _BITMASK = 1  # one bad-data bit; a flagged sample has (flag & _BITMASK) != 0
 
@@ -51,6 +51,7 @@ def _build_band(pix: np.ndarray, bad_idx, nside: int, sigma0: float, pols: str,
     ts = TODSamples.__new__(TODSamples)
     ts.accept = np.ones((1, 1), dtype=bool)
     ts.noise_params = np.full((1, 1, 1), sigma0)
+    ts.abs_gain, ts.rel_gain, ts.temporal_gain = 1.0, np.zeros(1), np.zeros((1, 1))
     band.pixel_domain = PixelDomain(MPI.COMM_SELF, nside, "full")
     return band, ts
 
@@ -66,7 +67,7 @@ def test_apply_LHS_I_is_full_sample_diagonal():
     pix = np.array([0, 1, 2, 5, 4, 6, 7, 9, 8, 10], dtype=np.int64)
     bad_idx = [3, 7]
     band, ts = _build_band(pix, bad_idx, nside, sigma0, "I")
-    cg = CGMapmakerI(band, ts, MPI.COMM_SELF)
+    cg = CGMapmaker(band, ts, MPI.COMM_SELF)
 
     npix = 12 * nside**2
     m = np.random.default_rng(0).normal(size=(1, npix))
@@ -86,7 +87,7 @@ def test_finalize_RHS_without_accumulation_contributes_zeros():
     nside = 2
     pix = np.array([0, 1, 2, 3], dtype=np.int64)
     band, ts = _build_band(pix, [], nside, 1.0, "I")
-    cg = CGMapmakerI(band, ts, MPI.COMM_SELF)
+    cg = CGMapmaker(band, ts, MPI.COMM_SELF)
 
     # Deliberately skip accum_to_RHS, mimicking a rank with no accepted detector-scans.
     rhs = cg.finalize_RHS()
@@ -115,7 +116,7 @@ def test_apply_T_identity_is_a_noop():
     nside = 2
     pix = np.arange(12, dtype=np.int64) % (12 * nside**2)
     band, ts = _build_band(pix, [], nside, 1.0, "I")
-    cg = CGMapmakerI(band, ts, MPI.COMM_SELF)
+    cg = CGMapmaker(band, ts, MPI.COMM_SELF)
     x = np.random.default_rng(0).normal(size=pix.size)
     np.testing.assert_allclose(cg.apply_T(x.copy()), x, atol=1e-12)
     np.testing.assert_allclose(cg.apply_T_adjoint(x.copy()), x, atol=1e-12)
@@ -131,7 +132,7 @@ def test_apply_T_adjoint_is_true_transpose():
     nside = 2
     pix = np.arange(16, dtype=np.int64) % (12 * nside**2)
     band, ts = _build_band(pix, [], nside, 1.0, "I")
-    cg = CGMapmakerI(band, ts, MPI.COMM_SELF, T_omega=_single_pole(0.9))
+    cg = CGMapmaker(band, ts, MPI.COMM_SELF, T_omega=_single_pole(0.9))
     n = pix.size
     rng = np.random.default_rng(3)
     x, y = rng.normal(size=n), rng.normal(size=n)
@@ -159,7 +160,7 @@ def test_apply_T_uses_physical_sampling_rate():
 
     def apply_at(fsamp):
         band, ts = _build_band(pix, [], nside, 1.0, "I", fsamp=fsamp)
-        return CGMapmakerI(band, ts, MPI.COMM_SELF, T_omega=T_omega).apply_T(x.copy())
+        return CGMapmaker(band, ts, MPI.COMM_SELF, T_omega=T_omega).apply_T(x.copy())
 
     fsamp = 8.0
     ext = np.concatenate([x, x[::-1]])
@@ -179,7 +180,7 @@ def test_apply_LHS_symmetric_with_nontrivial_transfer_function():
     nside, sigma0 = 2, 1.3
     pix = np.array([0, 1, 2, 5, 4, 6, 7, 9, 8, 10], dtype=np.int64)
     band, ts = _build_band(pix, [], nside, sigma0, "I")
-    cg = CGMapmakerI(band, ts, MPI.COMM_SELF, T_omega=_single_pole(0.7))
+    cg = CGMapmaker(band, ts, MPI.COMM_SELF, T_omega=_single_pole(0.7))
     npix = 12 * nside**2
     rng = np.random.default_rng(5)
     m1, m2 = rng.normal(size=(1, npix)), rng.normal(size=(1, npix))
@@ -196,7 +197,7 @@ def test_apply_LHS_IQU_symmetric_and_spans_all_samples():
     rng = np.random.default_rng(1)
     psi = rng.uniform(0, np.pi, pix.size)
     band, ts = _build_band(pix, bad_idx, nside, sigma0, "IQU", psi=psi)
-    cg = CGMapmakerIQU(band, ts, MPI.COMM_SELF)
+    cg = CGMapmaker(band, ts, MPI.COMM_SELF)
 
     npix = 12 * nside**2
     m1 = rng.normal(size=(3, npix))
@@ -209,8 +210,8 @@ def test_apply_LHS_IQU_symmetric_and_spans_all_samples():
     assert np.any(Am1[:, 5] != 0.0) and np.any(Am1[:, 9] != 0.0)
 
 
-@pytest.mark.parametrize("mapmaker_class, pols", [(CGMapmakerI, "I"), (CGMapmakerIQU, "IQU")])
-def test_apply_P_adjoint_float32_tod_matches_float64(mapmaker_class, pols):
+@pytest.mark.parametrize("pols", ["I", "IQU"])
+def test_apply_P_adjoint_float32_tod_matches_float64(pols):
     """A float32 TOD must accumulate into the (float64) map exactly as the same TOD in float64.
 
     The kernels use each sample as a double, so the two maps agree to rounding; a broken float32
@@ -222,11 +223,11 @@ def test_apply_P_adjoint_float32_tod_matches_float64(mapmaker_class, pols):
     psi = rng.uniform(0, np.pi, pix.size)
     tod = rng.normal(size=pix.size).astype(np.float32)
     band, ts = _build_band(pix, [], nside, 1.0, pols, psi=psi)
-    cg = mapmaker_class(band, ts, MPI.COMM_SELF)
+    cg = CGMapmaker(band, ts, MPI.COMM_SELF)
     maps = []
     for scan_tod_arr in [tod.astype(np.float64), tod]:
         out_map = np.zeros((len(pols), 12 * nside**2))
-        cg.apply_P_adjoint(None, out_map, pix_local=pix, psi=psi, scan_tod_arr=scan_tod_arr)
+        cg.apply_P_adjoint(scan_tod_arr, out_map, pix, psi)
         maps.append(out_map)
     assert np.any(maps[0] != 0.0)
     np.testing.assert_allclose(maps[1], maps[0], rtol=1e-12, atol=1e-12)

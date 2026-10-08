@@ -14,7 +14,7 @@ from numpy.testing import assert_allclose
 import pytest
 
 from commander4.data_models.pixel_domain import PixelDomain
-from commander4.tod.mapmaking.binned import MapmakerIQU, WeightsMapmakerIQU, Mapmaker, WeightsMapmaker
+from commander4.tod.mapmaking.binned import BinnedMapmaker
 
 
 def _sparse_domain(comm, nside, local_pix):
@@ -74,38 +74,45 @@ def test_from_view_without_detector_scans_gives_an_empty_domain():
 
 # --- reduce / scatter round-trips (collective; meaningful under mpirun) ----------------------
 
-def test_reduce_to_full_matches_reference():
+@pytest.mark.parametrize("mode", ["sparse", "full"])
+def test_reduce_to_full_matches_reference(mode):
     comm = MPI.COMM_WORLD
-    rank, size = comm.Get_rank(), comm.Get_size()
+    rank = comm.Get_rank()
     nside, npix = 4, 12 * 16
     rng = np.random.default_rng(100 + rank)
-    # Each rank observes an overlapping window of pixels, so several ranks share pixels.
-    local_pix = rng.permutation(np.unique(rng.integers(0, npix, size=30)))  # unsorted, as in use
-    dom = _sparse_domain(comm, nside, local_pix)
+    # Each rank observes an overlapping, unsorted set of pixels, as in use; in full mode, all.
+    local_pix = rng.permutation(np.unique(rng.integers(0, npix, size=30)))
+    if mode == "full":
+        local_pix = np.arange(npix)
+    dom = PixelDomain(comm, nside, mode, local_pix=local_pix)
 
     local = rng.normal(size=(3, dom.n_local))
     full = dom.reduce_to_full(local)
+    full_1d = dom.reduce_to_full(np.ascontiguousarray(local[0]))
 
     # Reference: scatter-add each rank's contribution into a full-sky map and sum across ranks.
     ref_local = np.zeros((3, npix))
-    np.add.at(ref_local[0], local_pix, local[0])
-    np.add.at(ref_local[1], local_pix, local[1])
-    np.add.at(ref_local[2], local_pix, local[2])
+    for c in range(3):
+        np.add.at(ref_local[c], local_pix, local[c])
     ref = np.zeros((3, npix))
     comm.Reduce(ref_local, ref if rank == 0 else None, op=MPI.SUM, root=0)
     if rank == 0:
         assert_allclose(full, ref, rtol=1e-12, atol=1e-12)
+        assert_allclose(full_1d, ref[0], rtol=1e-12, atol=1e-12)
     else:
-        assert full is None
+        assert full is None and full_1d is None
 
 
-def test_scatter_from_full_round_trips():
+@pytest.mark.parametrize("mode", ["sparse", "full"])
+def test_scatter_from_full_round_trips(mode):
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     nside, npix = 4, 12 * 16
     rng = np.random.default_rng(200 + rank)
     local_pix = rng.permutation(np.unique(rng.integers(0, npix, size=25)))  # unsorted, as in use
-    dom = _sparse_domain(comm, nside, local_pix)
+    if mode == "full":
+        local_pix = np.arange(npix)
+    dom = PixelDomain(comm, nside, mode, local_pix=local_pix)
 
     full = rng.normal(size=(2, npix)) if rank == 0 else None
     local = dom.scatter_from_full(full, ncomp=2)
@@ -155,57 +162,25 @@ def _random_scan(rng, npix_observed, ntod):
     tod = rng.normal(size=ntod)
     return pix, psi, tod
 
-@pytest.mark.parametrize("response_I_P", [(1.0, 1.0), (1.0, 0.7)])
-def test_weights_iqu_sparse_matches_full(response_I_P):
+@pytest.mark.parametrize("pols, response_I_P", [("IQU", (1.0, 1.0)), ("IQU", (1.0, 0.7)),
+                                                ("I", (0.8, 0.0))])
+def test_binned_maps_sparse_match_full(pols, response_I_P):
+    """Local maps give the same maps on the master as full-sky ones, bit for bit: every pixel sums
+    the same samples in the same order."""
     rng = np.random.default_rng(7)
     nside = 4
-    pix, psi, _ = _random_scan(rng, npix_observed=40, ntod=500)
-    domain = PixelDomain.from_view(_FakeScanView([pix]), MPI.COMM_SELF, "sparse", nside)
-
-    full = WeightsMapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
-    sparse = WeightsMapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64,
-                               pixel_domain=domain)
-    full.accumulate_to_map(2.5, pix, psi, response_I_P=response_I_P)
-    sparse.accumulate_to_map(2.5, domain.to_local(pix), psi, response_I_P=response_I_P)
-    full.gather_map()
-    sparse.gather_map()
-    assert_allclose(sparse._gathered_map, full._gathered_map, rtol=1e-12, atol=1e-12)
-
-
-@pytest.mark.parametrize("response_I_P", [(1.0, 1.0), (1.0, 0.7)])
-def test_signal_iqu_sparse_matches_full(response_I_P):
-    rng = np.random.default_rng(11)
-    nside = 4
     pix, psi, tod = _random_scan(rng, npix_observed=40, ntod=500)
-    domain = PixelDomain.from_view(_FakeScanView([pix]), MPI.COMM_SELF, "sparse", nside)
-
-    full = MapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64)
-    sparse = MapmakerIQU(MPI.COMM_SELF, nside, dtype=np.float64,
-                        pixel_domain=domain)
-    full.accumulate_to_map(tod, 2.5, pix, psi, response_I_P=response_I_P)
-    sparse.accumulate_to_map(tod, 2.5, domain.to_local(pix), psi, response_I_P=response_I_P)
-    full.gather_map()
-    sparse.gather_map()
-    assert_allclose(sparse._gathered_map, full._gathered_map, rtol=1e-12, atol=1e-12)
-
-
-def test_scalar_sparse_matches_full():
-    rng = np.random.default_rng(13)
-    nside = 4
-    pix, _, tod = _random_scan(rng, npix_observed=40, ntod=500)
-    domain = PixelDomain.from_view(_FakeScanView([pix]), MPI.COMM_SELF, "sparse", nside)
-
-    full_sig = Mapmaker(MPI.COMM_SELF, nside, dtype=np.float64)
-    sparse_sig = Mapmaker(MPI.COMM_SELF, nside, dtype=np.float64,
-                         pixel_domain=domain)
-    full_w = WeightsMapmaker(MPI.COMM_SELF, nside)
-    sparse_w = WeightsMapmaker(MPI.COMM_SELF, nside,
-                              pixel_domain=domain)
-    full_sig.accumulate_to_map(tod, 2.5, pix)
-    sparse_sig.accumulate_to_map(tod, 2.5, domain.to_local(pix))
-    full_w.accumulate_to_map(2.5, pix)
-    sparse_w.accumulate_to_map(2.5, domain.to_local(pix))
-    full_sig.gather_map(); sparse_sig.gather_map()
-    full_w.gather_map(); sparse_w.gather_map()
-    assert_allclose(sparse_sig._gathered_map, full_sig._gathered_map, rtol=1e-12, atol=1e-12)
-    assert_allclose(sparse_w._gathered_map, full_w._gathered_map, rtol=1e-12, atol=1e-12)
+    results = []
+    for domain in (PixelDomain(MPI.COMM_SELF, nside, "full"),
+                   PixelDomain.from_view(_FakeScanView([pix]), MPI.COMM_SELF, "sparse", nside)):
+        binned = BinnedMapmaker(domain, pols, ["signal", "aux"], count_hits=True)
+        binned.accumulate(2.5, domain.to_local(pix), psi, {"signal": tod, "aux": 2.0*tod},
+                          response_I_P)
+        binned.count_hits(domain.to_local(pix))
+        binned.finalize()
+        results.append(binned)
+    full, sparse = results
+    for name in ("map_cov", "map_inv_var", "map_nhit"):
+        np.testing.assert_array_equal(getattr(sparse, name), getattr(full, name))
+    for name in ("signal", "aux"):
+        np.testing.assert_array_equal(sparse.maps[name], full.maps[name])

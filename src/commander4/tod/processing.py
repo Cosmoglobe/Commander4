@@ -8,7 +8,6 @@ iteration starts by reading the config objects defined in `tod/config.py`.
 import numpy as np
 import logging
 import time
-from numpy.typing import NDArray
 
 from pixell.bunch import Bunch
 
@@ -87,7 +86,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
     # table needs only the pixels hit, so it can be calculated prior to the main Gibbs loop.
     sparse_maps = resolve_param(params, "sparse_maps",
                                 (f"experiments.{experiment_data.experiment_name}",),
-                                default=False, legal_types=bool)
+                                default=True, legal_types=bool)
     experiment_data.pixel_domain = PixelDomain.from_view(
         TODView(experiment_data, tod_samples_chain1), band_comm,
         "sparse" if sparse_maps else "full", experiment_data.nside)
