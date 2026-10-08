@@ -24,8 +24,7 @@ from commander4.tod.hfi_demodulation import sample_hfi_baselines
 from commander4.tod.glitches.sampling import sample_glitches
 from commander4.tod.sidelobe_deconvolve import FarBeamProjector
 from commander4.tod.view import TODView
-from commander4.tod.mapmaking.binned import tod2map_bin
-from commander4.tod.mapmaking.cg import tod2map_CG
+from commander4.tod.mapmaking.tod2map import tod2map
 from commander4.tod.config import GainConfig, JumpDetectionConfig, GlitchConfig,\
     CorrelatedNoiseConfig, DataSelectionConfig, FarBeamConfig, MapmakingConfig
 from commander4.polarization import get_execution_band_ids
@@ -123,8 +122,8 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
     """Run one TOD iteration for one band.
 
     The function states the scientific order directly. Correlated noise, sigma0, diagnostics, and
-    data-selection vetoes run inside the selected mapmaker because they operate on one focused
-    detector-scan and must occur at exact positions relative to map accumulation.
+    data-selection vetoes run inside the mapmaking scan loop (`tod2map`) because they operate on
+    one focused detector-scan and must occur at exact positions relative to map accumulation.
 
     Args:
         compsep_output: The band's realized sky model. The samplers and mapmakers read it along
@@ -154,9 +153,6 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
 
     far_beam_active = (far_beam_deconvolution_cfg.enabled
                        and iter >= far_beam_deconvolution_cfg.from_iter)
-    if far_beam_active and mapmaking_cfg.mapmaker == "CG":
-        raise ValueError("Far-beam deconvolution is only implemented for the binned mapmaker; the "
-                         "CG mapmaker would silently leave the sidelobe pickup in the data.")
 
     # Jump corrections must be stored before any later step reads the TOD.
     if jump_detection_cfg.enabled and iter >= jump_detection_cfg.from_iter:
@@ -215,16 +211,9 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
             scan_tods[:] = [None] * tod_samples.ndet
 
     with benchmark("mapmaker"):
-        if mapmaking_cfg.mapmaker == "CG":
-            detmap_dict, maps_to_file = tod2map_CG(
-                band_comm, experiment_data, compsep_output.local, tod_samples, iter,
-                mapmaking_cfg, corr_noise_cfg, data_selection_cfg,
-            )
-        else:
-            detmap_dict, maps_to_file = tod2map_bin(
-                band_comm, experiment_data, compsep_output.local, tod_samples, iter,
-                mapmaking_cfg, corr_noise_cfg, data_selection_cfg, far_beam_model,
-            )
+        detmap_dict, maps_to_file = tod2map(
+            band_comm, experiment_data, compsep_output.local, tod_samples, iter, mapmaking_cfg,
+            corr_noise_cfg, data_selection_cfg, far_beam_model)
     if is_master and mapmaking_cfg.include_sky_model_maps:
         maps_to_file["skymodel"] = compsep_output.full
 

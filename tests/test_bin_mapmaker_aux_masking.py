@@ -1,12 +1,12 @@
 """The binned mapmaker's aux maps must bin over the same good samples as the signal / cov maps.
 
-Unlike the gap-filling CG path, ``tod2map_bin`` *drops* flagged samples: the signal and
+The binned mapmaker (``tod2map``) *drops* flagged samples: the signal and
 inverse-variance maps accumulate only good samples, and every aux map (orbital dipole, corr-noise)
 is normalized by that same good-sample inverse-variance cov. Accumulating flagged samples into an
 aux map's numerator alone would therefore bias it at partially-flagged pixels (numerator over all
 samples, denominator over good samples only).
 
-This drives the real ``tod2map_bin`` and asserts the orbital-dipole aux map (and the signal / rms
+This drives the real ``tod2map`` and asserts the orbital-dipole aux map (and the signal / rms
 maps) are invariant to extra *flagged* samples added at already-observed pixels -- i.e. flagged
 samples do not leak into the aux maps. The corr-noise aux map is fixed on the same lines with the
 same masking, so the orbital-dipole check guards both.
@@ -51,7 +51,7 @@ def _build_band(pix: np.ndarray, psi: np.ndarray, flag: np.ndarray, tod: np.ndar
 
 
 def _fake_tod_samples(sigma0: float = 2.0) -> SimpleNamespace:
-    """Minimal stand-in exposing exactly the fields tod2map_bin / TODView / the diagnostics read."""
+    """Minimal stand-in exposing exactly the fields tod2map / TODView / the diagnostics read."""
     empty_ps = lambda: np.full((1, 1, 100), np.nan, dtype=np.float32)
     return SimpleNamespace(
         noise_params=np.full((1, 1, 1), sigma0), abs_gain=1.5, rel_gain=np.zeros(1),
@@ -76,7 +76,7 @@ def _run_bin_mapmaker(band: DetectorGroupTOD) -> dict[str, np.ndarray]:
     correlated_noise = CorrelatedNoiseConfig(sample_sigma0=False)
     data_selection = DataSelectionConfig()
     band.pixel_domain = PixelDomain(MPI.COMM_SELF, _NSIDE, "full")
-    _, maps = tod_processing.tod2map_bin(
+    _, maps = tod_processing.tod2map(
         MPI.COMM_SELF, band, np.zeros((3, _NPIX)), _fake_tod_samples(), 1,
         mapmaking, correlated_noise, data_selection,
     )

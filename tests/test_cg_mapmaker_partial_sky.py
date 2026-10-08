@@ -8,9 +8,10 @@ not exactly 0) while ``A_II`` and ``A_UU`` are large, so a diagonal precondition
 that one pixel. The block-Jacobi preconditioner inverts the whole 3x3 instead and zeroes the pixels
 whose 3x3 is singular, which projects them out of the solve.
 
-These tests drive the real ``tod2map_CG`` on a small patch and check that the solved map is zero
-exactly where the rms is ``+inf``, and that the well-measured pixels reproduce ``tod2map_bin`` -- with
-an identity transfer function the two mapmakers solve the same normal equations, so they must agree.
+These tests drive the real ``tod2map`` on a small patch and check that the solved CG map is zero
+exactly where the rms is ``+inf``, and that the well-measured pixels reproduce the binned map --
+with an identity transfer function the two mapmakers solve the same normal equations, so they must
+agree. With a transfer function, the CG map is checked against a direct solve instead.
 """
 from types import SimpleNamespace
 
@@ -52,17 +53,22 @@ def _patch_pointing(pols: str) -> tuple[np.ndarray, np.ndarray]:
 
 def _build_band(pix: np.ndarray, psi: np.ndarray, tod: np.ndarray, pols: str,
                 velocity: tuple[float, float, float] = (1.0, 0.2, -0.3),
-                responses: list[tuple[float, float]] | None = None) -> DetectorGroupTOD:
-    """One-scan band with uncompressed pointing and no flagged samples.
+                responses: list[tuple[float, float]] | None = None,
+                flagged: np.ndarray | None = None,
+                tf_tau_sec: float | None = None) -> DetectorGroupTOD:
+    """One-scan band with uncompressed pointing, sampled at 1 Hz.
 
     Every detector sees the pixels `pix`. `psi` and `tod` have one row per detector, or are 1-D for
     a single detector. `responses` gives each detector's (response_I, response_P); the default is
     (1, 1). `velocity` is the spacecraft velocity direction driving the orbital dipole the
     mapmakers subtract; set it to zero for a test that wants the map to be the plain binned TOD.
+    `flagged` marks the samples flagged as bad data in every detector (none by default), and
+    `tf_tau_sec` is the bolometer time constant (no transfer function by default).
     """
     ntod = pix.size
     psi, tod = np.atleast_2d(psi), np.atleast_2d(tod)
     responses = [None]*len(tod) if responses is None else responses
+    flag = np.zeros(ntod, np.int64) if flagged is None else flagged.astype(np.int64)
     orbital_velocity = np.array(velocity, dtype=np.float32)
     detectors = []
     for idet, (det_psi, det_tod, response) in enumerate(zip(psi, tod, responses)):
@@ -72,13 +78,13 @@ def _build_band(pix: np.ndarray, psi: np.ndarray, tod: np.ndarray, pols: str,
             name=f"d{idet}", det_idx_fullband=idet, tod=det_tod.astype(np.float32),
             pointing=pointing, sampling_rate_hz=1.0, orbital_velocity_m_per_s=orbital_velocity,
             huffman_tree=None, huffman_symbols=None, default_proc_mask=np.ones(_NPIX, bool),
-            specific_proc_masks={}, flag_encoded=np.zeros(ntod, np.int64), bad_data_bitmask=1,
+            specific_proc_masks={}, flag_encoded=flag, bad_data_bitmask=1,
             flag_is_compressed=False, response_I_P=response,
         ))
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
     return DetectorGroupTOD([ScanTOD(detectors, 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=30.0,
                             fwhm=0.0, fsamp=1.0, ndet=len(detectors), pols=pols,
-                            noise_model=noise_model)
+                            noise_model=noise_model, tf_tau_sec=tf_tau_sec)
 
 
 def _fake_tod_samples(ndet: int = 1) -> SimpleNamespace:
@@ -95,22 +101,22 @@ def _fake_tod_samples(ndet: int = 1) -> SimpleNamespace:
 
 
 def _run_mapmaker(band: DetectorGroupTOD, mapmaker: str, sparse_maps: bool = False,
-                  tod_samples: SimpleNamespace | None = None) -> dict[str, np.ndarray]:
+                  tod_samples: SimpleNamespace | None = None,
+                  cg: CGConfig = CGConfig(max_iter=20, err_tol=1e-12)) -> dict[str, np.ndarray]:
     """Run one of the two mapmakers on `band` and return the maps selected for chain output."""
     mapmaking = MapmakingConfig(
         mapmaker=mapmaker, num_threads=1, include_orbital_dipole_maps=False,
         include_corr_noise_maps=False, include_sky_model_maps=False,
-        common_res_fwhm=0.0, cg=CGConfig(max_iter=20, err_tol=1e-12))
-    run = tod_processing.tod2map_CG if mapmaker == "CG" else tod_processing.tod2map_bin
+        common_res_fwhm=0.0, cg=cg)
     ncomp = 3 if "QU" in band.pols else 1
     tod_samples = _fake_tod_samples() if tod_samples is None else tod_samples
     # As in a real run, the domain is built first and the sky model holds its local pixels.
     band.pixel_domain = PixelDomain.from_view(TODView(band, tod_samples), MPI.COMM_SELF,
                                               "sparse" if sparse_maps else "full", _NSIDE)
     sky = np.zeros((ncomp, band.pixel_domain.n_local))
-    _, maps = run(MPI.COMM_SELF, band, sky, tod_samples, 1,
-                  mapmaking, CorrelatedNoiseConfig(sample_sigma0=False),
-                  DataSelectionConfig())
+    _, maps = tod_processing.tod2map(MPI.COMM_SELF, band, sky, tod_samples, 1, mapmaking,
+                                     CorrelatedNoiseConfig(sample_sigma0=False),
+                                     DataSelectionConfig())
     return maps
 
 
@@ -176,9 +182,11 @@ def test_cg_patch_intensity_only(monkeypatch, sparse_maps):
 
 
 @pytest.mark.parametrize("pols", ["IQU", "I"])
-def test_cg_matches_binned_for_detectors_with_different_gains_and_responses(monkeypatch, pols):
-    """The CG operator projects and weights each sample as the binned maps do: with the detector's
-    response in its pointing row, and with the weight (gain/sigma0)^2."""
+def test_cg_matches_binned_for_flags_and_detectors_with_different_gains_and_responses(monkeypatch,
+                                                                                        pols):
+    """Without a transfer function the CG map equals the binned map. Both use only the good
+    samples, and the CG operator projects and weights each sample as the binned maps do: with the
+    detector's response in its pointing row, and with the weight (gain/sigma0)^2."""
     monkeypatch.setenv("OMP_NUM_THREADS", "1")
     rng = np.random.default_rng(6)
     pix = np.repeat(np.arange(_N_GOOD_PIX), _NHIT)
@@ -191,18 +199,77 @@ def test_cg_matches_binned_for_detectors_with_different_gains_and_responses(monk
                                                  + sky[2, pix]*np.sin(2*det_psi)))
                     + rng.normal(size=pix.size)*sigma0
                     for det_psi, (r_I, r_P), gain, sigma0 in zip(psi, responses, gains, sigma0s)])
+    # A flagged stretch holding a large glitch, and a few single flagged samples.
+    flagged = np.zeros(pix.size, dtype=bool)
+    flagged[300:340] = True
+    flagged[[11, 12, 500]] = True
+    tod[:, flagged] = 1e5
     maps = {}
     for mapmaker in ("CG", "bin"):
         tod_samples = _fake_tod_samples(ndet=2)
         tod_samples.rel_gain = gains - tod_samples.abs_gain
         tod_samples.noise_params[0, :, 0] = sigma0s
-        band = _build_band(pix, psi, tod, pols, velocity=(0.0, 0.0, 0.0), responses=responses)
+        band = _build_band(pix, psi, tod, pols, velocity=(0.0, 0.0, 0.0), responses=responses,
+                           flagged=flagged)
         maps[mapmaker] = _run_mapmaker(band, mapmaker, tod_samples=tod_samples)
 
+    # Pixel 13 is seen only during the flagged stretch, so neither mapmaker can solve it.
     solvable = np.isfinite(maps["bin"]["rms"])
-    assert solvable[0].sum() == _N_GOOD_PIX
+    assert solvable[0].sum() == _N_GOOD_PIX - 1 and not solvable[0, 13]
+    np.testing.assert_array_equal(maps["CG"]["rms"], maps["bin"]["rms"])
+    np.testing.assert_array_equal(maps["CG"]["observed_sky"][~solvable], 0.0)
     np.testing.assert_allclose(maps["CG"]["observed_sky"][solvable],
                                maps["bin"]["observed_sky"][solvable], rtol=1e-5, atol=1e-4)
+
+
+def _transfer_matrix(ntod: int, tau: float) -> np.ndarray:
+    """The CG's transfer-function operator T for a 1 Hz scan of `ntod` samples, as a dense matrix:
+    mirror the scan to twice its length, filter with 1/(1 + 2 pi i f tau), keep the first half."""
+    H = 1.0/(1.0 + 2j*np.pi*np.fft.rfftfreq(2*ntod, d=1.0)*tau)
+    unit = np.eye(ntod)
+    mirrored = np.concatenate([unit, unit[::-1]])
+    return np.fft.irfft(np.fft.rfft(mirrored, axis=0)*H[:, None], n=2*ntod, axis=0)[:ntod]
+
+
+def test_cg_with_flags_and_a_transfer_function_matches_a_dense_solve(monkeypatch):
+    """With a transfer function T, the CG map is the maximum-likelihood map of the good samples
+    alone: the solution of P^T T^T N^-1 T P m = P^T T^T N^-1 d, with N^-1 zero at flagged samples.
+    Flagged data (here a large glitch) must not reach the map, even though T smears every sample
+    over its neighbours, and a pixel seen only while flagged is left unsolved."""
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    rng = np.random.default_rng(8)
+    tau = 1.5  # seconds; at 1 Hz, T smears each sample over a few neighbours
+    # Pixels 0-9 at random angles, with a flagged stretch in the middle that alone sees pixel 10.
+    pix = rng.integers(0, 10, 412)
+    pix[200:212] = 10
+    psi = rng.uniform(0.0, np.pi, pix.size)
+    flagged = np.zeros(pix.size, dtype=bool)
+    flagged[200:212] = True
+    flagged[[37, 38, 301]] = True
+    sky = rng.normal(size=(3, _NPIX))*100.0
+    T = _transfer_matrix(pix.size, tau)
+    tod = T @ (sky[0, pix] + sky[1, pix]*np.cos(2*psi) + sky[2, pix]*np.sin(2*psi))
+    tod = (tod + rng.normal(size=pix.size)*_SIGMA0).astype(np.float32)
+    tod[flagged] = 1e5
+    band = _build_band(pix, psi, tod, "IQU", velocity=(0.0, 0.0, 0.0), flagged=flagged,
+                       tf_tau_sec=tau)
+    maps = _run_mapmaker(band, "CG", cg=CGConfig(max_iter=300, err_tol=1e-20))
+
+    # The dense solve, over the pixels whose good samples constrain I, Q and U; the rest stay 0.
+    P = np.zeros((pix.size, 3, _NPIX))
+    P[np.arange(pix.size), 0, pix] = 1.0
+    P[np.arange(pix.size), 1, pix] = np.cos(2*psi)
+    P[np.arange(pix.size), 2, pix] = np.sin(2*psi)
+    TP = T @ P.reshape(pix.size, -1)
+    weight = np.where(flagged, 0.0, 1.0/_SIGMA0**2)
+    A = TP.T @ (weight[:, None]*TP)
+    b = TP.T @ (weight*tod.astype(np.float64))
+    solved = (np.arange(3*_NPIX) % _NPIX) < 10
+    expected = np.zeros(3*_NPIX)
+    expected[solved] = np.linalg.solve(A[np.ix_(solved, solved)], b[solved])
+    np.testing.assert_allclose(maps["observed_sky"], expected.reshape(3, _NPIX), rtol=1e-4,
+                               atol=1e-3)
+    assert np.isinf(maps["rms"][:, 10]).all()
 
 
 def _normal_matrix_three_pixels() -> np.ndarray:

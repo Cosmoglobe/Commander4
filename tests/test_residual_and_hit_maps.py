@@ -25,7 +25,7 @@ from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.tod_samples import TODSamples
 import commander4.tod.processing as tod_processing
 from commander4.tod.config import MapmakingConfig, CorrelatedNoiseConfig, DataSelectionConfig
-import commander4.tod.mapmaking.binned as binned
+import commander4.tod.mapmaking.tod2map as tod2map_module
 from commander4.tod.sky_projection import get_s_orb_tod
 from commander4.tod.view import TODView
 
@@ -61,7 +61,7 @@ def _build_band(pix, psi, tod, flag=None,
 
 
 def _fake_tod_samples(sigma0: float = 2.0, ndet: int = 1) -> SimpleNamespace:
-    """Minimal stand-in exposing exactly the fields tod2map_bin / TODView / the diagnostics read."""
+    """Minimal stand-in exposing exactly the fields tod2map / TODView / the diagnostics read."""
     empty_ps = lambda: np.full((1, ndet, 100), np.nan, dtype=np.float32)
     return SimpleNamespace(
         noise_params=np.full((1, ndet, 1), sigma0), abs_gain=_GAIN, rel_gain=np.zeros(ndet),
@@ -86,7 +86,7 @@ def _run(band: DetectorGroupTOD, sky_model: np.ndarray,
     band.pixel_domain = PixelDomain.from_view(TODView(band, tod_samples), MPI.COMM_SELF,
                                               "sparse" if sparse_maps else "full", _NSIDE)
     sky_local = band.pixel_domain.scatter_from_full(sky_model, ncomp=3)
-    _, maps = tod_processing.tod2map_bin(
+    _, maps = tod_processing.tod2map(
         MPI.COMM_SELF, band, sky_local, tod_samples, 1,
         mapmaking, CorrelatedNoiseConfig(sample_sigma0=False),
         DataSelectionConfig(),
@@ -266,8 +266,8 @@ def test_intensity_mapmaker_recovers_signal_rms_and_aux_maps(
         return SimpleNamespace(n_corr=n_corr, noise_params=np.array([2.0]), residual=0.0,
                                niter=0, converged=True, high_var=False)
 
-    monkeypatch.setattr(binned, "sample_correlated_noise", fixed_noise)
-    monkeypatch.setattr(binned, "log_corr_noise_stats", lambda *args: None)
+    monkeypatch.setattr(tod2map_module, "sample_correlated_noise", fixed_noise)
+    monkeypatch.setattr(tod2map_module, "log_corr_noise_stats", lambda *args: None)
     far_beam = SimpleNamespace(get_projection=lambda pix, psi, idet:
                               np.full(pix.size, response_I * sidelobe))
     config = MapmakingConfig(
@@ -277,7 +277,7 @@ def test_intensity_mapmaker_recovers_signal_rms_and_aux_maps(
     )
     band.pixel_domain = PixelDomain.from_view(TODView(band, samples), comm,
                                               "sparse" if sparse_maps else "full", _NSIDE)
-    detmaps, maps = binned.tod2map_bin(
+    detmaps, maps = tod2map_module.tod2map(
         comm, band, band.pixel_domain.scatter_from_full(sky, ncomp=1), samples, 1, config,
         CorrelatedNoiseConfig(enabled=True, sample_sigma0=False),
         DataSelectionConfig(), far_beam,

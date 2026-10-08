@@ -279,10 +279,9 @@ def pipeline(monkeypatch: pytest.MonkeyPatch) -> Bunch:
         sampler = Mock(return_value=samples)
         calls.attach_mock(sampler, name)
         monkeypatch.setattr(processing, name, sampler)
-    for name in ("tod2map_bin", "tod2map_CG"):
-        mapmaker = Mock(return_value=({}, {}))
-        calls.attach_mock(mapmaker, name)
-        monkeypatch.setattr(processing, name, mapmaker)
+    mapmaker = Mock(return_value=({}, {}))
+    calls.attach_mock(mapmaker, "tod2map")
+    monkeypatch.setattr(processing, "tod2map", mapmaker)
     for name in ("FarBeamProjector", "write_band_chain_to_file", "log_dataselect_summary"):
         operation = Mock()
         calls.attach_mock(operation, name)
@@ -302,14 +301,14 @@ def test_iteration_gates_keep_the_scientific_order(pipeline: Bunch) -> None:
 
     pipeline.run(pipeline.mpi, pipeline.experiment, pipeline.samples, pipeline.sky, params, 1, 2)
     assert [call[0] for call in pipeline.calls.mock_calls] == [
-        "sample_hfi_baselines", "tod2map_bin", "write_band_chain_to_file"]
+        "sample_hfi_baselines", "tod2map", "write_band_chain_to_file"]
 
     pipeline.calls.reset_mock()
     pipeline.run(pipeline.mpi, pipeline.experiment, pipeline.samples, pipeline.sky, params, 2, 3)
     assert [call[0] for call in pipeline.calls.mock_calls] == [
         "sample_jump_detection", "sample_hfi_baselines", "sample_glitches", "sample_absolute_gain",
         "sample_relative_gain", "sample_temporal_gain_variations", "FarBeamProjector",
-        "tod2map_bin", "write_band_chain_to_file", "FarBeamProjector().free"]
+        "tod2map", "write_band_chain_to_file", "FarBeamProjector().free"]
 
 
 def test_settings_are_read_again_for_each_iteration(pipeline: Bunch) -> None:
@@ -331,14 +330,15 @@ def test_invalid_later_settings_fail_before_sampling(pipeline: Bunch) -> None:
     assert pipeline.calls.mock_calls == []
 
 
-def test_cg_rejects_far_beam_before_sampling_when_it_becomes_active(pipeline: Bunch) -> None:
+def test_cg_gets_the_far_beam_model_once_it_becomes_active(pipeline: Bunch) -> None:
+    """Both mapmakers share the scan loop that subtracts the far sidelobes."""
     params = _params(mapmaker="CG", far_beam_deconvolution={"enabled": True, "from_iter": 3})
     pipeline.run(pipeline.mpi, pipeline.experiment, pipeline.samples, pipeline.sky, params, 1, 2)
-    pipeline.calls.tod2map_CG.assert_called_once()
+    assert pipeline.calls.tod2map.call_args.args[8] is None
     pipeline.calls.reset_mock()
-    with pytest.raises(ValueError, match="Far-beam"):
-        pipeline.run(pipeline.mpi, pipeline.experiment, pipeline.samples, pipeline.sky, params, 1, 3)
-    assert pipeline.calls.mock_calls == []
+    pipeline.run(pipeline.mpi, pipeline.experiment, pipeline.samples, pipeline.sky, params, 1, 3)
+    far_beam_model = pipeline.calls.FarBeamProjector.return_value
+    assert pipeline.calls.tod2map.call_args.args[8] is far_beam_model
 
 
 @pytest.mark.parametrize("iteration, report, apply_cuts", [
