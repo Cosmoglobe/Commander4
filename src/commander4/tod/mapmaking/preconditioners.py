@@ -8,7 +8,9 @@ keep.
 
 All of them zero the pixels the binned mapmaker cannot solve either, which is what makes the CG
 usable on a partial sky: an unobserved or degenerately-sampled pixel is projected out of the solve
-rather than left as an unconstrained direction for the CG to amplify.
+rather than left as an unconstrained direction for the CG to amplify. The per-pixel 3x3 inverse
+comes from the binned mapmaker's own C++ solver (`map_invert_IQU`), so both mapmakers decide the
+same way which pixels they can solve.
 
 (The component-separation solver's preconditioners are a separate family, in
 `compsep/preconditioners.py`.)
@@ -22,39 +24,6 @@ from commander4.backend import mapmaker as cpp_mapmaker
 from commander4.math_utils.arithmetic import inplace_arr_prod
 
 logger = logging.getLogger(__name__)
-
-# Reciprocal-condition floor below which a per-pixel 3x3 counts as unsolvable. Matches the binned
-# mapmaker's C++ solver (mapmaker_pymod.cc::invert_SPD_3x3), so both mapmakers drop the same pixels.
-_RCOND_FLOOR = 1e-12
-
-
-def invert_normal_matrix_IQU(normal_matrix: NDArray) -> tuple[NDArray, NDArray]:
-    """Invert the per-pixel 3x3 normal matrix, given and returned as its 6 unique elements.
-
-    Args:
-        normal_matrix: (6, npix) unique elements (II, IQ, IU, QQ, QU, UU) of the accumulated
-            per-pixel inverse-noise matrix, i.e. `BinnedMapmaker.map_cov`.
-
-    Returns:
-        ``(inverse, solvable)``. ``inverse`` is (6, npix), the unique elements of A_pp^-1, left at
-        zero wherever the 3x3 is singular or too ill-conditioned to invert. ``solvable`` is the
-        (npix,) boolean mask of the pixels that were inverted.
-    """
-    if normal_matrix.ndim != 2 or normal_matrix.shape[0] != 6:
-        raise ValueError(f"Normal matrix must have shape (6, npix), got {normal_matrix.shape}.")
-    a00, a01, a02, a11, a12, a22 = np.asarray(normal_matrix, dtype=np.float64)
-    # Cofactors of the symmetric 3x3, then Cramer's rule. A zero diagonal entry means the matrix is
-    # singular (or not positive definite); det <= _RCOND_FLOOR*diag_prod means it is too
-    # ill-conditioned to invert. Either way the whole block stays at zero.
-    c00, c01, c02 = a11*a22 - a12*a12, a02*a12 - a01*a22, a01*a12 - a02*a11
-    det = a00*c00 + a01*c01 + a02*c02
-    diag_prod = a00*a11*a22
-    solvable = (diag_prod > np.finfo(np.float64).tiny) & (det > _RCOND_FLOOR*diag_prod)
-    inv_det = np.zeros_like(det)
-    np.divide(1.0, det, out=inv_det, where=solvable)
-    inverse = np.ascontiguousarray(
-        np.stack([c00, c01, c02, a00*a22 - a02*a02, a01*a02 - a00*a12, a00*a11 - a01*a01])*inv_det)
-    return inverse, solvable
 
 
 class BlockInvNPreconditionerIQU:
@@ -73,9 +42,11 @@ class BlockInvNPreconditionerIQU:
 
         Args:
             normal_matrix: (6, npix) unique elements (II, IQ, IU, QQ, QU, UU) of the accumulated
-                per-pixel inverse-noise matrix.
+                per-pixel inverse-noise matrix, i.e. `BinnedMapmaker.map_cov`.
         """
-        self.inv_N_IQU, _ = invert_normal_matrix_IQU(normal_matrix)
+        # The unique elements of each pixel's inverse 3x3; all zero where it cannot be inverted.
+        self.inv_N_IQU = np.empty((6, normal_matrix.shape[1]))
+        cpp_mapmaker.map_invert_IQU(self.inv_N_IQU, normal_matrix)
         self.npix = self.inv_N_IQU.shape[1]
 
     def __call__(self, map: NDArray) -> NDArray:
@@ -110,7 +81,10 @@ class InvNPreconditionerIQU:
             normal_matrix: (6, npix) unique elements (II, IQ, IU, QQ, QU, UU) of the accumulated
                 per-pixel inverse-noise matrix.
         """
-        _, solvable = invert_normal_matrix_IQU(normal_matrix)
+        # The pixels the binned mapmaker can solve are those whose 3x3 inverse is not all zero.
+        inverse = np.empty((6, normal_matrix.shape[1]))
+        cpp_mapmaker.map_invert_IQU(inverse, normal_matrix)
+        solvable = np.any(inverse != 0.0, axis=0)
         A_diag = np.asarray(normal_matrix, dtype=np.float64)[(0, 3, 5), :]
         self.inv_N_IQU = np.zeros_like(A_diag)
         np.divide(1.0, A_diag, out=self.inv_N_IQU, where=solvable[np.newaxis, :])

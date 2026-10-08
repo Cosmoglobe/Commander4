@@ -149,6 +149,16 @@ def test_map_inv_var_IQU() -> None:
     np.testing.assert_allclose(inv_var_out, expected, rtol=1e-10)
 
 
+def test_map_invert_IQU() -> None:
+    """Writes each pixel's inverse 3x3 as its 6 unique elements; uninvertible pixels get 0."""
+    A, norm_map = _normal_matrices(seed=23)
+    inv_out = np.full((6, NPIX), np.nan)
+    cpp_mapmaker.map_invert_IQU(inv_out, norm_map)
+    expected = np.zeros((6, NPIX))
+    expected[:, GOOD] = np.linalg.inv(A[GOOD])[:, [0, 0, 0, 1, 1, 2], [0, 1, 2, 1, 2, 2]].T
+    np.testing.assert_allclose(inv_out, expected, rtol=1e-10, atol=1e-12)
+
+
 def test_apply_invN_to_map_IQU() -> None:
     """Multiplies each pixel's IQU vector by its full (not just diagonal) 3x3 matrix."""
     A, inv_N_map = _normal_matrices(seed=16)
@@ -165,10 +175,13 @@ def test_solvers_give_up_on_a_nearly_singular_pixel() -> None:
     norm_map[1, 0] = 1.0 - 1e-13  # IQ correlation at rounding distance from exact degeneracy
     rhs = np.ones((3, NPIX))
     solved, inv_var = np.full((3, NPIX), np.nan), np.full((3, NPIX), np.nan)
+    inverse = np.full((6, NPIX), np.nan)
     cpp_mapmaker.map_solve_IQU(solved, rhs, norm_map)
     cpp_mapmaker.map_inv_var_IQU(inv_var, norm_map)
+    cpp_mapmaker.map_invert_IQU(inverse, norm_map)
     np.testing.assert_array_equal(solved[:, 0], 0.0)
     np.testing.assert_array_equal(inv_var[:, 0], 0.0)
+    np.testing.assert_array_equal(inverse[:, 0], 0.0)
     np.testing.assert_allclose(solved[:, 1:], 1.0, **TOL)
     np.testing.assert_allclose(inv_var[:, 1:], 1.0, **TOL)
 

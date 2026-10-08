@@ -37,6 +37,9 @@ _NUMPY_TO_MPI_DTYPE = {np.dtype(np.float64): MPI.DOUBLE, np.dtype(np.float32): M
 #               Local buffers are (ncomp, n_local). Reduction is a ``Gatherv`` of the local data to
 #               the master followed by a scatter-add into the full-sky map; the symmetric scatter
 #               (master -> ranks, for the CG LHS) is a ``Scatterv`` of the per-rank pixel slices.
+#               Each rank sends and receives its values sorted by global pixel, so the master walks
+#               through the full-sky map in increasing memory order, which is faster than in visit
+#               order. The sorting is done by the ranks, in parallel; the master works alone.
 #               The index plan (counts/displacements and the concatenated global pixels) is static
 #               across Gibbs iterations and is exchanged once at construction.
 
@@ -88,16 +91,19 @@ class PixelDomain:
         # hash table (a uint64 array that only the C++ code reads) rather than a full-sky array, so
         # its size grows with n_local instead of npix. Built once and used by to_local.
         self._pixel_hash = cpp_mapmaker.build_pixel_hash(self.local_pix)
+        # Before sending our map to master we sort its pixels to be in ascending global healpix
+        # pixel order. This is not necessary, but gives better memory locality for master's binning.
+        self._sorted = np.argsort(self.local_pix)
         # Static gather plan, exchanged once: per-rank element counts, their displacements, and the
-        # concatenation of every rank's global pixels (held only on the master for the scatter-add).
-        # 64-bit, since the pixels of all ranks together can pass 2^31; mpi4py then uses the
-        # large-count MPI calls (MPI 4 or newer).
+        # concatenation of every rank's sorted global pixels (held only on the master for the
+        # scatter-add). 64-bit, since the pixels of all ranks together can pass 2^31; mpi4py then
+        # uses the large-count MPI calls (MPI 4 or newer).
         counts = np.asarray(comm.allgather(self.n_local), dtype=np.int64)
         self._recvcounts = counts
         self._displs = np.insert(np.cumsum(counts), 0, 0)[:-1]
         self._all_pix = np.empty(int(counts.sum()), dtype=np.int64) if rank == 0 else None
         recvbuf = [self._all_pix, counts, self._displs, MPI.INT64_T] if rank == 0 else None
-        comm.Gatherv(self.local_pix, recvbuf, root=0)
+        comm.Gatherv(self.local_pix[self._sorted], recvbuf, root=0)
 
     @classmethod
     def from_view(cls, scan_view, comm: MPI.Comm, mode: str, nside: int) -> "PixelDomain":
@@ -159,7 +165,8 @@ class PixelDomain:
             full = np.zeros((ncomp, self.npix), dtype=np.float64)
             recv = np.empty(int(counts.sum()), dtype=np.float64)
         for c in range(ncomp):
-            send = np.ascontiguousarray(data2d[c], dtype=np.float64)
+            # Sent sorted by global pixel, matching _all_pix (see the module comment).
+            send = np.ascontiguousarray(data2d[c][self._sorted], dtype=np.float64)
             recvbuf = [recv, counts, displs, MPI.DOUBLE] if rank == root else None
             self.comm.Gatherv(send, recvbuf, root=root)
             if rank == root:
@@ -187,6 +194,7 @@ class PixelDomain:
         counts, displs = self._recvcounts, self._displs
         mpi_dtype = _NUMPY_TO_MPI_DTYPE[np.dtype(dtype)]
         local = np.empty((ncomp, self.n_local), dtype=dtype)
+        received = np.empty(self.n_local, dtype=dtype)
         for c in range(ncomp):
             if rank == root:
                 # Gather the full map at the concatenated per-rank pixels, then scatter the slices.
@@ -194,5 +202,7 @@ class PixelDomain:
                 sendbuf = [send, counts, displs, mpi_dtype]
             else:
                 sendbuf = None
-            self.comm.Scatterv(sendbuf, local[c], root=root)
+            self.comm.Scatterv(sendbuf, received, root=root)
+            # The values arrive sorted by global pixel (see _all_pix); put them back in local order.
+            local[c][self._sorted] = received
         return local

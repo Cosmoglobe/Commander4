@@ -297,6 +297,34 @@ void Py_map_inv_var_IQU(const NpArr &inv_var_out_, const CNpArr &norm_map_){
 }
 
 
+/** Inverts each pixel's symmetric 3x3 matrix into inv_out (6, npix), as its 6 unique elements.
+ *
+ * Used for the block preconditioner of the CG mapmaker. Singular or ill-conditioned pixels get an
+ * all-zero inverse, by the same test as map_solve_IQU, so both mapmakers drop the same pixels.
+ */
+void Py_map_invert_IQU(const NpArr &inv_out_, const CNpArr &norm_map_){
+    auto inv_out = to_vmav<double,2>(inv_out_, "inv_out");
+    auto norm_map = to_cmav<double,2>(norm_map_, "norm_map");
+    const size_t num_pix = inv_out.shape(1);
+    MR_assert(inv_out.shape(0)==6 && norm_map.shape(0)==6, "need shapes (6,npix) and (6,npix)");
+    MR_assert(norm_map.shape(1)==num_pix, "pixel counts differ");
+
+    for (size_t ipix = 0; ipix < num_pix; ipix++){
+        // invert_SPD_3x3 leaves these at zero when it cannot invert the matrix.
+        double inv00 = 0.0, inv01 = 0.0, inv02 = 0.0, inv11 = 0.0, inv12 = 0.0, inv22 = 0.0;
+        invert_SPD_3x3(norm_map(0, ipix), norm_map(1, ipix), norm_map(2, ipix),
+                       norm_map(3, ipix), norm_map(4, ipix), norm_map(5, ipix),
+                       inv00, inv01, inv02, inv11, inv12, inv22);
+        inv_out(0, ipix) = inv00;
+        inv_out(1, ipix) = inv01;
+        inv_out(2, ipix) = inv02;
+        inv_out(3, ipix) = inv11;
+        inv_out(4, ipix) = inv12;
+        inv_out(5, ipix) = inv22;
+    }
+}
+
+
 /** Multiplies each pixel's IQU vector by its symmetric 3x3 matrix: map_out = inv_N_map map_in.
  *
  * Used by the block preconditioner of the CG mapmaker.
@@ -421,6 +449,10 @@ void add_mapmaker(py::module_ &msup)
         "Write the inverse variance `1/diag(A^-1)` per pixel into inv_var_out (3, npix); "
         "unsolvable pixels get 0.",
         "inv_var_out"_a, "norm_map"_a);
+  m.def("map_invert_IQU", Py_map_invert_IQU,
+        "Write each pixel's inverse 3x3 matrix into inv_out (6, npix), as its 6 unique elements; "
+        "unsolvable pixels get 0.",
+        "inv_out"_a, "norm_map"_a);
   m.def("apply_invN_to_map_IQU", Py_apply_invN_to_map_IQU,
         "Multiply each pixel's IQU vector by its 3x3 matrix: `map_out = inv_N_map map_in`.",
         "map_in"_a, "map_out"_a, "inv_N_map"_a);

@@ -172,6 +172,11 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_outp
         inv_var = (gain/view.sigma0)**2
 
         ### MAP TODS, in uK_RJ ###
+        # TODO: Known bug with a bolometer transfer function T (`tf_tau_sec`). The data hold
+        # T(sky + orbital dipole + sidelobes), but the models subtracted here and in the other
+        # Gibbs steps are not passed through T, so the residuals and the CG right-hand side keep
+        # (1 - T) times them. To be resolved when/if we migrate to the C3-style design (deconvolve
+        # the TOD, filter the models with the same regularization kernel).
         with benchmark("misc"):
             d_sky = view.get_tod(subtract=(("orbital_dipole", TODView._ALL_GAIN_TERMS),))
         if corr_noise_active:
