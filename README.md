@@ -4,6 +4,8 @@ If you are at the ITA cluster (the "owls") load the following modules before ins
 module load intel/oneapi
 module load mpi/latest
 module load compiler/latest  # Only necessary for developers.
+export CXX=icpx  # This will make ALL C++ code compile with Intel. If you don't want that,
+                 # just do `CXX=icpx pip install` when installing Commander4. 
 ```
 Then, make sure you have a sensible Python setup. **The default Python 3.9 installation is not sufficient.**
 
