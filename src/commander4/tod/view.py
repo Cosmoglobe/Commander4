@@ -63,7 +63,8 @@ class TODView:
         Args:
             experiment_data: Static TOD container for the current band.
             tod_samples: Sampled gain and noise parameters for the current chain state.
-            compsep_output: Optional default sky model used by sky-subtraction helpers.
+            compsep_output: Optional default sky model used by sky-subtraction helpers, holding
+                this rank's local pixels (``PixelDomain``).
             downsample_factor: Block-averaging factor applied to every derived TOD/mask the view
                 returns (1 = full resolution). Each operation that needs a coarser rate (e.g. gain
                 calibration) constructs its own view at the desired factor.
@@ -95,6 +96,7 @@ class TODView:
         self._pre_demodulation_tod = None
         self._corrected_tod = None
         self._pix = None
+        self._pix_local = None
         self._psi = None
         self._flag = None
         self._ds_indices = None
@@ -342,6 +344,17 @@ class TODView:
         return self._pix
 
     @property
+    def _fullres_pix_local(self) -> NDArray[np.integer]:
+        """Full-rate pointing as local pixel indices, i.e. indices into this rank's map buffers.
+
+        Converted once per detector (``PixelDomain.to_local``) and shared by every map that the
+        detector-scan touches.
+        """
+        if self._pix_local is None:
+            self._pix_local = self.experiment_data.pixel_domain.to_local(self._fullres_pix)
+        return self._pix_local
+
+    @property
     def _fullres_psi(self) -> NDArray[np.floating] | NDArray[np.integer]:
         """Full-rate polarization angle (used internally for model evaluation)."""
         if self._psi is None:
@@ -354,6 +367,17 @@ class TODView:
         if self._downsample_factor == 1:
             return self._fullres_pix
         return self._fullres_pix[self._block_indices]
+
+    @property
+    def pix_local(self) -> NDArray[np.integer]:
+        """``pix`` as local pixel indices, for indexing this rank's map buffers (``PixelDomain``).
+
+        Use this, not ``pix``, wherever a map is accumulated or read; ``pix`` stays the global
+        HEALPix index for everything that needs a sky position (masks, dipole, sidelobes).
+        """
+        if self._downsample_factor == 1:
+            return self._fullres_pix_local
+        return self._fullres_pix_local[self._block_indices]
 
     @property
     def psi(self) -> NDArray[np.floating] | NDArray[np.integer]:
@@ -444,14 +468,13 @@ class TODView:
         if sky_model is None:
             raise ValueError("A component-separation sky map must be provided for sky subtraction.")
 
-        # The realized sky model is full-sky (ncomp, npix) on the band master and in non-sparse map
-        # mode, but only (ncomp, n_local) on workers in sparse mode (see
-        # communication._realize_and_distribute_sky). The column count is what tells the two apart.
-        if sky_model.shape[-1] == 12 * self.experiment_data.nside**2:
-            sky_pix = self._fullres_pix
-        else:
-            sky_pix = self.experiment_data.pixel_domain.to_local(self._fullres_pix)
-        sky = self._downsample_mean(project_sky_to_tod(sky_model, sky_pix, psi=self._fullres_psi,
+        # The sky model holds this rank's local pixels, like the map buffers (see PixelDomain). A
+        # full-sky map would still index without error in sparse mode, but at the wrong pixels.
+        if sky_model.shape[-1] != self.experiment_data.pixel_domain.n_local:
+            raise ValueError(f"Sky model has {sky_model.shape[-1]} pixels, but this rank's pixel "
+                             f"domain holds {self.experiment_data.pixel_domain.n_local}.")
+        sky = self._downsample_mean(project_sky_to_tod(sky_model, self._fullres_pix_local,
+                                                       psi=self._fullres_psi,
                                                        response_I_P=self.response_I_P))
         if compsep_output is None:
             self._static_sky = sky

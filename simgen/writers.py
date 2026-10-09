@@ -62,6 +62,10 @@ def write_scan_file(path: str, pid: int, data_nside: int, fsamp: float, npsi: in
         f["common/nside"] = np.array([data_nside], dtype=np.int32)
         f["common/fsamp"] = np.array([fsamp], dtype=np.float64)
         f["common/npsi"] = np.array([npsi], dtype=np.int32)
+        # The detector names, comma-separated as in the Planck files, and one polang per detector.
+        # polang is zero because each detector's psi below already includes its angle offset.
+        f["common/det"] = np.bytes_(", ".join(det_names))
+        f["common/polang"] = np.zeros(len(det_names), dtype=np.float64)
         f[f"{pidg}/common/ntod"] = np.array([ntod], dtype=np.int64)
         f[f"{pidg}/common/hufftree"] = hufftree.astype(np.int64, copy=False)
         f[f"{pidg}/common/huffsymb"] = huffsymb

@@ -66,7 +66,7 @@ def run_tod_side(mpi_info: Bunch, params: Bunch, experiment_data, my_band_tod_id
     Args:
         tod_samples_by_chain: Per-chain `TODSamples`, updated in place. Both chains are held at
             once because a step cannot hot-swap them: the two sides send and receive independently.
-        compsep_output: The initial sky model, already realized for this band.
+        compsep_output: The initial sky model, already realized for this band (`DistributedMap`).
         compsep_active: False in TOD-only mode, where there is nobody to exchange with.
     """
     from commander4.tod.processing import process_tod

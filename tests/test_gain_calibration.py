@@ -14,8 +14,10 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from mpi4py import MPI
 from pixell.bunch import Bunch
 
+from commander4.data_models.pixel_domain import PixelDomain
 from commander4.tod.glitches.events import empty_glitch_grid
 from commander4.tod.jumps.events import empty_jump_grid
 from commander4.tod.view import TODView
@@ -450,7 +452,8 @@ def _make_real_view(monkeypatch, good=None):
                           response_I_P=(1.0, 1.0),
                           orbital_velocity_m_per_s=np.array([1.0, 0.0, 0.0], dtype=np.float32),
                           good_data_mask=np.ones(NTOD, dtype=bool) if good is None else good)
-    experiment_data = SimpleNamespace(scans=[SimpleNamespace(detectors=[det])], nside=1, nu=30.0)
+    experiment_data = SimpleNamespace(scans=[SimpleNamespace(detectors=[det])], nside=1, nu=30.0,
+                                      pixel_domain=PixelDomain(MPI.COMM_SELF, 1, "full"))
     tod_samples = SimpleNamespace(jumps=empty_jump_grid(1, 1),
                                   glitches=empty_glitch_grid(1, 1),
                                   abs_gain=2.0, rel_gain=np.array([0.5]),

@@ -232,7 +232,6 @@ class MapmakingConfig:
     include_sidelobe_maps: bool = False
     include_hit_maps: bool = False
     include_cov_maps: bool = False
-    sparse_maps: bool = False
     common_res_fwhm: float = 0.0
     band_lmax: int | None = None
     cg: CGConfig = field(default_factory=CGConfig)
@@ -263,8 +262,6 @@ class MapmakingConfig:
         return cls(
             mapmaker=mapmaker,
             num_threads=params.resources.tod.num_threads,
-            sparse_maps=resolve_param(params, "sparse_maps", (f"experiments.{exp_name}",),
-                                      default=cls.sparse_maps, legal_types=bool),
             common_res_fwhm=float(getattr(params.compsep, "common_res_fwhm", cls.common_res_fwhm)),
             band_lmax=resolve_band_lmax(params, band_name, exp_name, experiment_data.nside),
             include_orbital_dipole_maps=bool(include["orbital_dipole_maps"]),

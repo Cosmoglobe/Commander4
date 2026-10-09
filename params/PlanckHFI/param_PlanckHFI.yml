@@ -33,7 +33,7 @@ resources:
 output:
   # All output goes here, in the subdirectories logs/, chains_bands/,
   # chains_compsep/ and plots/.
-  dir: "../c4_chains/HFI_test5/"
+  dir: "../c4_chains/HFI/"
 
   logging:
     console:
@@ -66,7 +66,7 @@ output:
                             # (C3 res_<band>_<postfix>.fits). Gathers every band map onto the
                             # compsep master, so it is memory-heavy.
       ncorr_tods: False   # DEBUG ONLY: full per-sample n_corr TODs (very large data).
-      residual_tods: True
+      residual_tods: False
 
 # ----------------------------------------
 # TOD PROCESSING
@@ -76,28 +76,28 @@ tod_processing:
 
   abs_gain:
     enabled: true
-    from_iter: 1
+    from_iter: 2
     calibrate_against: orbital_dipole # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 0.5        # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   rel_gain:
     enabled: true
-    from_iter: 1
+    from_iter: 2
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 0.5        # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   temporal_gain:
     enabled: false
-    from_iter: 1
+    from_iter: 2
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 0.5        # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   corr_noise:
     enabled: true
-    from_iter: 10
+    from_iter: 2
     sample_psd_params: true     # Resample noise-model params (needs corr_noise.enabled).
     sample_sigma0: True            # Re-estimate sigma0 from the n_corr-subtracted residual.
     nomono: False                 # Project the per-scan monopole out of n_corr (Fortran "nomono").
@@ -114,13 +114,13 @@ tod_processing:
       max_iter: 100               # Max CG iterations; 0 -> skip CG, use stationary fallback.
       err_tol: 1.0e-5             # Correlated-noise CG convergence tolerance.
 
-  # far_beam_deconvolution:
-  #   enabled: True
-  #   from_iter: 1
-  #   lmax: 3071         # Sky and beam are truncated here before convolving (C3 uses 100).
-  #   mmax: 3071         # Beam azimuthal limit; drives the cube size hardest.
-  #   epsilon: 1.0e-4    # ducc0 interpolation accuracy.
-  #   beam_norm: 2.0     # C3's LevelS-comparison factor on the sidelobe beams.
+  far_beam_deconvolution:
+    enabled: True
+    from_iter: 1
+    lmax: 256          # Sky and beam are truncated here before convolving (C3 uses 100).
+    mmax: 256          # Beam azimuthal limit; drives the cube size hardest.
+    epsilon: 1.0e-4    # ducc0 interpolation accuracy.
+    beam_norm: 2.0     # C3's LevelS-comparison factor on the sidelobe beams.
 
 
 # ----------------------------------------
@@ -199,6 +199,7 @@ experiments:
   PlanckHFI:
     enabled: true
     mapmaker: "bin"
+    sparse_maps: true
     experiment_id: "planck_hfi"  # Decides expected data format, what TOD reader is used, etc.
     instrument_file: "/mn/stornext/d23/cmbco/globe/planck/rimo/HFI_instrument_v6.h5"
     filelist_idx_start: 0

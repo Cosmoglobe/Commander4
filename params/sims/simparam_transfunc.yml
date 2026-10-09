@@ -3,8 +3,11 @@
 # 
 # 18 tasks = 6 TOD + 6 CompSep-I + 6 CompSep-QU.
 #
-# This file is a copy of `simparam_compsep_only.yml` with only the paths changed (the six TOD
-# filelists, the output directory and the log file), so the two analyses are identical.
+# This file is a copy of `simparam_compsep_only.yml` with only the paths (the six TOD filelists,
+# the output directory and the log file), the mapmaker ("CG") and Band30GHz's `tau_ms` changed.
+# So only Band30GHz deconvolves the bolometer response; the other bands are solved as if T = 1,
+# although the simulation applies it to every band. The model TODs (sky model, orbital dipole,
+# far sidelobes) are subtracted without T, a known inconsistency.
 #
 # Includes CG component separation (CMB+Dust+Sync) of 6 Planck-like bands at nside 64.
 # TOD sampling is enabled, but all TOD steps are disabled (i.e. only mapmaking).

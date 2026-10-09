@@ -14,6 +14,7 @@ from mpi4py import MPI
 from pixell.bunch import Bunch
 
 from commander4.compression import huffman
+from commander4.data_models.pixel_domain import PixelDomain
 from commander4.file_io.experiments.planck_hfi import UNPOLARIZED_POLEFF_CUTOFF, tod_reader
 from commander4.parameters.parse import params_from_dict
 from commander4.tod.view import TODView
@@ -68,6 +69,7 @@ def test_instrument_percentages_follow_detector_names_into_sky_projection(
     band = experiment.bands.Band
 
     result = tod_reader(MPI.COMM_SELF, experiment, band, det_names, params, 0, 1)
+    result.pixel_domain = PixelDomain(MPI.COMM_SELF, result.nside, "full")
 
     assert result.instrument_filepath == experiment.instrument_file
     assert result.nscans == 1
@@ -117,6 +119,7 @@ def test_intensity_only_band_reads_without_requiring_psi(
         del handle["000042/353-3b/psi"]
 
     result = tod_reader(MPI.COMM_SELF, experiment, band, det_names, params, 0, 1)
+    result.pixel_domain = PixelDomain(MPI.COMM_SELF, result.nside, "full")
 
     for det, efficiency in zip(result.scans[0].detectors, [0.92, 0.0]):
         assert det.response_I_P == pytest.approx((1.0, efficiency))

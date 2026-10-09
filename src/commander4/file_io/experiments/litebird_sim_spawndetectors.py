@@ -102,7 +102,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, det_na
             # outside the detector-loop, to avoid loading the disk system too much.
             det_name_Synne = "001_000_002_60A_166_T" # Temporary hard-coded solution.
             # tod = np.zeros(ntod_optimal, dtype=np.float32)
-            default_pix = f[f"/{pid}/{det_name_Synne}/pix/"][:ntod_optimal].astype(np.int32, copy=False)
+            default_pix = f[f"/{pid}/{det_name_Synne}/pix/"][:ntod_optimal].astype(np.int64, copy=False)
             default_psi = f[f"/{pid}/{det_name_Synne}/psi/"][:ntod_optimal].astype(np.float32, copy=False)
         stop_bench("fileread")
 
