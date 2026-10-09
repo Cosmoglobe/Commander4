@@ -11,5 +11,5 @@ imports state the full module path.
 from commander4.sky.component import Component
 from commander4.sky.template_component import TemplateComponent, CMBRelQuad
 from commander4.sky.diffuse_components import (DiffuseComponent, CMB, ThermalDust, Synchrotron,
-                                               FreeFree, SpinningDust)
+                                               FreeFree, SpinningDust,FullDust)
 from commander4.sky.point_sources import PointSourcesComponent, RadioSources
