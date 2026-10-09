@@ -1,7 +1,10 @@
-"""Commander3-equivalence tests for polarized far-sidelobe convolution."""
+"""Commander3-equivalence tests for far-sidelobe convolution."""
+
+from types import SimpleNamespace
 
 import healpy as hp
 import numpy as np
+import pytest
 from mpi4py import MPI
 
 import commander4.tod.sidelobe_deconvolve as sidelobe
@@ -54,19 +57,36 @@ class FakeConvolverPlan:
         pass
 
 
-def test_construct_model_matches_commander3_polarized_limits(monkeypatch) -> None:
+def _fake_instrument_file(components: tuple[str, ...]) -> FakeHDF:
+    """Detector 27M with sidelobe limits (105, 102) and, per stored component, a beam whose
+    monopole is 1 (T), 2 (E) or 3 (B)."""
     file_lmax = 105
-    file_mmax = 102
-    file_data = {
-        "27M/sllmax": np.array([file_lmax]),
-        "27M/slmmax": np.array([file_mmax]),
-    }
-    for value, component in enumerate(("T", "E", "B"), start=1):
+    file_data = {"27M/sllmax": np.array([file_lmax]), "27M/slmmax": np.array([102])}
+    for component in components:
         beam = np.zeros((file_lmax + 1)**2)
-        beam[0] = value
+        beam[0] = ("T", "E", "B").index(component) + 1
         file_data[f"27M/sl/{component}"] = beam
+    return FakeHDF(file_data)
 
-    fake_hdf = FakeHDF(file_data)
+
+def _bare_projector(pols: str = "IQU") -> sidelobe.FarBeamProjector:
+    projector = sidelobe.FarBeamProjector.__new__(sidelobe.FarBeamProjector)
+    projector.pols = pols
+    projector.instrument_file = "instrument.h5"
+    projector.detnames = ["27M"]
+    projector.nthreads = 2
+    projector.far_beam_deconvolution_cfg = sidelobe.FarBeamConfig(enabled=True, lmax=100, mmax=100)
+    return projector
+
+
+@pytest.mark.parametrize("pols, stored, used", [
+    ("IQU", ("T", "E", "B"), ("T", "E", "B")),
+    ("IQU", ("T",), ("T",)),  # a missing E or B beam is skipped
+    ("I", ("T", "E", "B"), ("T",)),  # an intensity band has no E or B sky
+])
+def test_construct_model_matches_commander3_limits(monkeypatch, pols, stored, used) -> None:
+    """Every used T/E/B beam is paired with its own sky component."""
+    fake_hdf = _fake_instrument_file(stored)
     plans = []
 
     def make_plan(**kwargs):
@@ -79,38 +99,59 @@ def test_construct_model_matches_commander3_polarized_limits(monkeypatch) -> Non
 
     def fake_map2alm(maps, **kwargs):
         map2alm_calls.append((maps, kwargs))
-        return expected_slm
+        # Like healpy: T/E/B alms for a polarized transform, one flat alm array otherwise.
+        return expected_slm if kwargs["pol"] else expected_slm[0]
 
     monkeypatch.setattr(sidelobe.h5py, "File", lambda *args, **kwargs: fake_hdf)
     monkeypatch.setattr(sidelobe.totalconvolve, "ConvolverPlan", make_plan)
     monkeypatch.setattr(sidelobe.hp, "map2alm", fake_map2alm)
 
-    projector = sidelobe.FarBeamProjector.__new__(sidelobe.FarBeamProjector)
-    projector.instrument_file = "instrument.h5"
-    projector.detnames = ["27M"]
-    projector.nthreads = 2
-    projector.far_beam_deconvolution_cfg = sidelobe.FarBeamConfig(enabled=True, lmax=100, mmax=100)
-    sky = np.zeros((3, hp.nside2npix(1)))
+    projector = _bare_projector(pols)
+    sky = np.zeros((len(pols), hp.nside2npix(1)))
     # A real single-rank node communicator, so the cubes go through actual MPI shared memory.
     projector.construct_model(FakeBandComm(), MPI.COMM_SELF, sky)
 
     assert len(plans) == 1
     assert plans[0].lmax == 100
     assert plans[0].kmax == 100
-    assert len(plans[0].calls) == 3*101
-    for component, (slm, blm, mbeam) in enumerate(plans[0].calls[:3]):
+    assert len(plans[0].calls) == len(used)*101
+    for component, (slm, blm, mbeam) in zip(used, plans[0].calls):
+        isky = ("T", "E", "B").index(component)
         assert np.shares_memory(slm, expected_slm)
-        assert np.array_equal(slm, expected_slm[component])
+        assert np.array_equal(slm, expected_slm[isky])
         assert blm.shape == (hp.Alm.getsize(100, 100),)
-        assert blm[0] == 2.0*(component + 1)
+        assert blm[0] == 2.0*(isky + 1)
         assert mbeam == 0
     assert map2alm_calls[0][0] is sky
-    assert map2alm_calls[0][1] == {"lmax": 100, "iter": 0, "pol": True}
-    assert np.all(projector.cubes[0][:201] == 12.0)
+    assert map2alm_calls[0][1] == {"lmax": 100, "iter": 0, "pol": pols == "IQU"}
+    # The fake getPlane writes the beam monopole (times beam_norm = 2), summed over components.
+    expected_cube = 2.0*sum(("T", "E", "B").index(c) + 1 for c in used)
+    assert np.all(projector.cubes[0][:201] == expected_cube)
 
     # The cubes live in an MPI window that nothing releases on garbage collection.
     projector.free()
     assert projector.cubes == []
+
+
+def test_init_rejects_a_band_without_intensity_and_a_detector_without_polang(monkeypatch) -> None:
+    monkeypatch.setattr(sidelobe.FarBeamProjector, "construct_model", lambda *args: None)
+    det = SimpleNamespace(name="27M", det_idx_fullband=0, polang=None)
+    band = SimpleNamespace(pols="IQU", nside=1, instrument_filepath="instrument.h5", ndet=1,
+                           iter_detector_scans=lambda: [(0, det)])
+    tod_samples = SimpleNamespace(det_names=["27M"])
+    cfg = sidelobe.FarBeamConfig(enabled=True)
+    with pytest.raises(ValueError, match="27M has no polang"):
+        sidelobe.FarBeamProjector(None, None, band, tod_samples, None, cfg)
+    band.pols = "QU"
+    with pytest.raises(ValueError, match="needs an I or I/Q/U band"):
+        sidelobe.FarBeamProjector(None, None, band, tod_samples, None, cfg)
+
+
+def test_construct_model_requires_the_T_beam(monkeypatch) -> None:
+    fake_hdf = _fake_instrument_file(("E", "B"))
+    monkeypatch.setattr(sidelobe.h5py, "File", lambda *args, **kwargs: fake_hdf)
+    with pytest.raises(ValueError, match="No sidelobe T beam for 27M"):
+        _bare_projector().construct_model(FakeBandComm(), MPI.COMM_SELF, None)
 
 
 def test_projection_evaluates_every_sample_at_the_ducc_angle() -> None:
