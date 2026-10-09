@@ -1,4 +1,4 @@
-"""Project the Commander3 Planck LFI far-sidelobe beams into time-ordered data."""
+"""Project the Commander3 Planck far-sidelobe beams into time-ordered data."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ class FarBeamProjector:
     def construct_model(self, band_comm: MPI.Comm, node_comm: MPI.Comm,
                         compsep_output_full: NDArray | None) -> None:
         """Build one ducc0 convolution cube for each detector's T/E/B sidelobe beam."""
-        # Each LFI detector has its own beam. Commander3 forms one signal by summing the matching
+        # Each detector has its own beam. Commander3 forms one signal by summing the matching
         # sky/beam component pairs: T_sky*T_beam + E_sky*E_beam + B_sky*B_beam.
         with h5py.File(self.instrument_file, "r") as f:
             file_lmax = int(f[f"{self.detnames[0]}/sllmax"][0])
@@ -70,16 +70,18 @@ class FarBeamProjector:
                     raise ValueError(f"Sidelobe limits for {detname} are "
                                      f"(lmax={det_lmax}, mmax={det_mmax}); expected "
                                      f"(lmax={file_lmax}, mmax={file_mmax}).")
-                beam_real = np.stack([
-                    f[f"{detname}/sl/{component}"][()] for component in _BEAM_COMPONENTS
-                ])
+                # Check what components (T,E,B) are actually in the file:
+                components = [name for name in _BEAM_COMPONENTS if f"{detname}/sl/{name}" in f]
+                if "T" not in components:  # Raise if T is not among them.
+                    raise ValueError(f"No sidelobe T beam for {detname} in {self.instrument_file}.")
+                beam_real = np.stack([f[f"{detname}/sl/{name}"][()] for name in components])
                 # Commander3 stores complete l blocks consecutively. Truncating this leading slice
-                # therefore keeps exactly the modes with l <= lmax for all three components.
+                # therefore keeps exactly the modes with l <= lmax for every component.
                 beam_real = beam_real[..., :(lmax+1)**2]
                 blm = alm_real2complex_commander3(beam_real, lmax, mmax)
                 # The convolution is linear, so scaling the beam once is equivalent to scaling
                 # every projected TOD, and far cheaper.
-                blms.append(self.far_beam_deconvolution_cfg.beam_norm * blm)
+                blms.append((components, self.far_beam_deconvolution_cfg.beam_norm * blm))
 
         # Only rank zero has the full-sky map. Transform there, then give every rank the small alm
         # array needed to build its local detector cubes. iter=0 matches Commander3's single,
@@ -104,7 +106,7 @@ class FarBeamProjector:
         self.shared = SharedArray(node_comm, (len(blms), *cube_shape),
                                   name="far-sidelobe convolution cubes")
         if self.shared.is_owner:
-            for idet, blm in enumerate(blms):
+            for idet, (components, blm) in enumerate(blms):
                 cube = self.shared.array[idet]
                 # Before prepPsi, the first axis holds packed Fourier coefficients in the beam-
                 # rotation angle: m=0, then real/imaginary planes for every m>0. prepPsi zero-pads
@@ -116,12 +118,13 @@ class FarBeamProjector:
                     planes = cube[start:stop]
                     self.plan.getPlane(slm[0], blm[0], mbeam, planes)
                     # This ducc0 Python wrapper accepts only one component per getPlane call. Add E
-                    # and B explicitly. The following prepPsi transform is linear, so summing here
-                    # gives the same result as transforming and then summing three separate
-                    # component cubes.
+                    # and B (when present) explicitly. The following prepPsi transform is linear,
+                    # so summing here gives the same result as transforming and then summing
+                    # separate component cubes. T is always the first beam component.
                     contribution = np.empty_like(planes)
-                    for component in range(1, len(_BEAM_COMPONENTS)):
-                        self.plan.getPlane(slm[component], blm[component], mbeam, contribution)
+                    for name, blm_component in zip(components[1:], blm[1:]):
+                        isky = _BEAM_COMPONENTS.index(name)  # row of the T/E/B sky alms
+                        self.plan.getPlane(slm[isky], blm_component, mbeam, contribution)
                         planes += contribution
                 self.plan.prepPsi(cube)
         self.shared.wait_until_filled()
