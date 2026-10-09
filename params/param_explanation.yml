@@ -562,10 +562,10 @@ components:
                               # If not set, the MBB applies across the full SED and
                               # nodes_path / astrodust_path are ignored.
       # nodes_path: globe/path  # Path to the spline nodes table: frequency in GHz,
-                                # node amplitude in Mj/sr. Required if nu_join is set.
+                                # node amplitude in Mj/sr (normalized at the nu_join). Required if nu_join is set.
                                 # Can be either a full path or the directory from data_dir in compsep
       # astrodust_path: globe/path  # Path to the astrodust model table: frequency in
-                                # GHz, amplitude in Mj/sr. Needs at least two rows (its
+                                # GHz, amplitude in Mj/sr (normalized at the nu_join). Needs at least two rows (its
                                 # slope anchors the right end of the spline).
                                 # Will only be included if nu_join and spline nodes are included.
                                 # Can be either a full path or the directory from data_dir in compsep
