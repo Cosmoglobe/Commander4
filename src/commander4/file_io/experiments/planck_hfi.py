@@ -141,6 +141,11 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
             vsun = f[f"/{pid}/common/vsun/"][()]
             fsamp = float(f["/common/fsamp/"][()].item())
             npsi = int(f["/common/npsi/"][()].item())
+            # The detector angle the far-sidelobe projection subtracts from psi; Commander3 also
+            # takes it from common/polang (0 for every HFI detector). Looked up by name, since the
+            # band's detector list need not follow the file's order.
+            file_det_names = [name.strip() for name in f["common/det"][()].decode().split(",")]
+            polangs = dict(zip(file_det_names, f["common/polang"][()]))
             detector_list = []
             for idet, det_name in enumerate(all_det_names):
                 # Hacky fixes to missing entries. #TODO: Need to figure out how to handle this.
@@ -183,6 +188,7 @@ def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                     init_scalars=init_scalars,
                     tod_is_compressed=True,
                     response_I_P=(1.0, pol_eff[idet]),
+                    polang=float(polangs[det_name]),
                 )
                 if (detector.tod == 0).all():
                     continue
