@@ -680,8 +680,8 @@ class FullDust(DiffuseComponent):
         else:
             logger.debug("No astrodust model being used here.")
             if (self.nu_max>self.nodes[0,-1]):
-                x.append(np.log(self.nu_max))
-                y.append(0)
+                x=np.append(x,np.log(self.nu_max))
+                y=np.append(y,0)
                 logger.debug("A zero is being appended to the end of the spline at nu_max.")
             elif arr_len<=2:
                 raise ValueError("Only one node included for the spline, and nu_max smaller than the node included, this is an invalid state.")
@@ -693,7 +693,7 @@ class FullDust(DiffuseComponent):
         """Calculates the spectral energy distribution (SED) for Long Dust emission.
            The result is meant to be multiplied by a RJ brightness temperature.
 
-        Frequency regions (each mask is also restricted to nu_min < nu < nu_max):
+        Frequency regions (each mask is also restricted to nu_min <= nu <= nu_max):
             - nu < nu_join:                            modified blackbody, normalized to 1 at nu_ref
             - nu_join <= nu < astrodust[0,0]:          spline through the nodes
             - astrodust[0,0] <= nu <= astrodust[0,-1]: ad_scale * linearly interpolated astrodust table

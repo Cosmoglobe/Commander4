@@ -555,8 +555,8 @@ components:
       beta: 1.56              # Emissivity index.
       T: 20                   # [K] Dust temperature.
       nu_ref: 545              # [GHz] Reference frequency the amplitudes are quoted at.
-      nu_min: 0.0              # [GHz] Lower cutoff; SED is zero at and below it. 0.0 = no limit.
-      nu_max: 1.0e+30          # [GHz] Upper cutoff; SED is zero at and above it. 1e30 = no limit.
+      nu_min: 30.0              # [GHz] Lower cutoff; SED is zero below it.
+      nu_max: 1.0e+30          # [GHz] Upper cutoff; SED is zero above it.
       # nu_join: 900            # [GHz] frequency where the SED transitions from the MBB 
                               # function to the spline nodes defined in nodes_path.
                               # If not set, the MBB applies across the full SED and
