@@ -56,7 +56,7 @@ def make_params(directory: Path, paths: list[str], det_names: list[str],
     """Parameter file with one `general` band reading ``paths`` (scan IDs 1, 2, ...)."""
     write_filelist(str(directory / "filelist.txt"), list(enumerate(paths, start=1)))
     return params_from_dict({"experiments": {"Exp": {
-        "experiment_id": "general", **experiment_keys,
+        "experiment_id": "general", "bad_data_bitmask": 6111232, **experiment_keys,
         "bands": {"Band": {"filelist": str(directory / "filelist.txt"), "eval_nside": 1,
                            "freq": 100.0, "fwhm": 10.0, "polarization": "IQU",
                            "detectors": {name: {} for name in det_names}}}}},
@@ -65,8 +65,7 @@ def make_params(directory: Path, paths: list[str], det_names: list[str],
 
 def read(params: Bunch, comm: MPI.Comm = MPI.COMM_SELF) -> DetectorGroupTOD:
     band = params.experiments.Exp.bands.Band
-    return tod_reader.read_tods_from_file(comm, params.experiments.Exp, band,
-                                          list(band.detectors), params)
+    return tod_reader.read_tods_from_file(comm, params, params.experiments.Exp, band)
 
 
 def tod(value: float = 1.0) -> np.ndarray:

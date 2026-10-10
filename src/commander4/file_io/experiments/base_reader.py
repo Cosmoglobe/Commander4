@@ -1,8 +1,8 @@
 """`TODReader`: reads one band's scans from Commander-format HDF5 scan files.
 
 Every experiment reader is this class or a subclass of it. A subclass passes the properties of its
-experiment's file format (flag bitmask, compression, noise priors, ...) to `TODReader.__init__`. It
-overrides one of the steps below only if its files need logic that the base class does not have:
+experiment's file format (gain units, pointing layout, noise priors, ...) to `TODReader.__init__`.
+It overrides one of the steps below only if its files need logic that the base class does not have:
 
     read()                    the scan loop; calls the steps below for every scan and detector
       read_scan_header()      the values shared by all detectors of one scan
@@ -11,8 +11,8 @@ overrides one of the steps below only if its files need logic that the base clas
       keep_detector()         the cuts that need only the detector-scan itself
       drop_level_outliers()   the cut that compares each detector-scan with the rest of the band
 
-The data-quality thresholds of the cuts come only from the parameter file, never from the code.
-The functions below the class are the reader's helpers: noise priors, FFT sizes, processing masks.
+The data-quality settings (the flag bitmask and the cut thresholds) come only from the parameter
+file, never from the code. The functions below the class are the reader's helpers.
 
 The file layout, one file per scan (also what ``simgen`` writes)::
 
@@ -21,7 +21,8 @@ The file layout, one file per scan (also what ``simgen`` writes)::
     <pid>/<detector>/{tod or ztod, pix, psi, flag, scalars}   once per detector-scan
 
 where ``<pid>`` is the scan ID as six digits. Entries that only some experiments carry are read
-when present.
+when present. A detector's TOD is Huffman-compressed when it is stored as ``ztod`` rather than
+``tod``; it is then decoded with the scan's second tree (``hufftree2``, ``huffsymb2``).
 """
 import gc
 import logging
@@ -45,10 +46,6 @@ from commander4.math_utils.transfer_func import _tau_sec
 
 logger = logging.getLogger(__name__)
 
-# Flag bits marking unusable samples in the standard format. Matches `GOOD_SCAN_BITMASK` in
-# simgen/writers.py, which documents the contract a writer of this format must satisfy.
-STANDARD_BAD_DATA_BITMASK = 6111232
-
 # Minimum polarization efficiency before the detector is treated as unpolarized.
 # Current only applies to HFI, where the "unpolarized" bolometers are still quoted at a few
 # percent polarization. The measurement is considered inaccurate, so we treat them as unpolarized.
@@ -63,72 +60,64 @@ class TODReader:
 
     Args:
         band_comm: The band's MPI communicator.
-        experiment, band: The experiment and band parameter blocks.
-        det_names: Detector names in full-band order; a detector's position here is its
-            ``det_idx_fullband`` column in the dense per-detector sample arrays.
-        params: The full parameter file.
+        params, experiment, band: The full parameter file, and this band's experiment and band
+            blocks. The band's ``detectors`` set the full-band detector order: a detector's
+            position there is its ``det_idx_fullband``.
         noise_model: The band's noise PSD model, with priors suited to the instrument. The
-            parameter file's noise priors and fit range are applied on top. None means
-            `NoisePSDOof` with its own defaults.
+            parameter file's noise settings are applied on top. None means `NoisePSDOof` with its
+            own defaults.
         gain_factor: Multiplies the first of each detector's file ``scalars``, the initial gain.
             The standard format stores the gain in micro-units, hence 1e-6.
-        bad_data_bitmask: Flag bits that mark a sample unusable; None cuts no samples. The
-            parameter file's ``bad_data_bitmask`` overrides it.
-        tod_is_compressed: Read the Huffman-compressed ``ztod`` instead of the plain ``tod``. The
-            parameter file's ``tod_is_compressed`` overrides it.
         boresight_pointing: The files store one boresight path per scan plus each detector's
             focal-plane offset, instead of each detector's pixels and angles.
         pol_eff_from_instrument_file: Take each detector's polarization response from
             ``<detector>/polEff`` (in percent) in the experiment's ``instrument_file``.
         hfi_demodulation: The TOD holds alternating Planck HFI modulation half-cycles.
 
-    Two data-quality thresholds are read from the parameter file's experiment block:
-    ``min_unmasked_fraction`` (default 0) for `keep_detector`, and ``max_rms_ratio`` (default
-    None, which disables the cut) for `drop_level_outliers`.
+    Read from the experiment block of the parameter file: ``bad_data_bitmask`` (required);
+    ``min_unmasked_fraction`` (default 0) for `keep_detector`; ``max_rms_ratio`` (default None,
+    which disables the cut) for `drop_level_outliers`; and ``replace_tod_with_sim``.
     """
-    def __init__(self, band_comm: MPI.Comm, experiment: Bunch, band: Bunch, det_names: list[str],
-                 params: Bunch, *, noise_model: NoisePSD | None = None, gain_factor: float = 1e-6,
-                 bad_data_bitmask: int | None = STANDARD_BAD_DATA_BITMASK,
-                 tod_is_compressed: bool = False, boresight_pointing: bool = False,
-                 pol_eff_from_instrument_file: bool = False, hfi_demodulation: bool = False):
+    def __init__(self, band_comm: MPI.Comm, params: Bunch, experiment: Bunch, band: Bunch, *,
+                 noise_model: NoisePSD | None = None, gain_factor: float = 1e-6,
+                 boresight_pointing: bool = False, pol_eff_from_instrument_file: bool = False,
+                 hfi_demodulation: bool = False):
         self.band_comm = band_comm
         self.experiment = experiment
         self.band = band
-        self.det_names = det_names
+        self.det_names = list(band.detectors)
         self.gain_factor = gain_factor
-        self.bad_data_bitmask = getattr(experiment, "bad_data_bitmask", bad_data_bitmask)
-        self.tod_is_compressed = getattr(experiment, "tod_is_compressed", tod_is_compressed)
-        self.min_unmasked_fraction = float(getattr(experiment, "min_unmasked_fraction", 0.0))
-        self.max_rms_ratio = getattr(experiment, "max_rms_ratio", None)
         self.boresight_pointing = boresight_pointing
         self.hfi_demodulation = hfi_demodulation
+        scope = (f"experiments.{experiment._name}",)
+        self.bad_data_bitmask = resolve_param(params, "bad_data_bitmask", scope, legal_types=int)
+        self.min_unmasked_fraction = resolve_param(params, "min_unmasked_fraction", scope,
+                                                   default=0.0)
+        self.max_rms_ratio = resolve_param(params, "max_rms_ratio", scope, default=None)
         # A TOD that the dispatcher replaces with a simulation after reading may be zeros on disk.
-        self.tod_is_simulated = getattr(experiment, "replace_tod_with_sim", False)
+        self.tod_is_simulated = resolve_param(params, "replace_tod_with_sim", scope, default=False)
 
         self.default_mask, self.specific_masks = read_processing_masks(band_comm, band)
         self.noise_model = NoisePSDOof() if noise_model is None else noise_model
-        apply_noise_priors(self.noise_model, params, experiment._name, band._name)
-        apply_noise_fit_range(self.noise_model, params)
+        self.noise_model.apply_param_file(params, experiment._name, band._name)
 
-        # Polarization response [I, P] per detector name from the instrument file; empty if unused.
-        self.instrument_response_I_P = {}
+        # (ndet,) polarization efficiency per detector from the instrument file, or None if unused.
+        self.pol_eff = None
         if pol_eff_from_instrument_file:
-            pol_eff = np.empty(len(det_names), dtype=np.float64)
+            self.pol_eff = np.empty(len(self.det_names), dtype=np.float64)
             if band_comm.Get_rank() == 0:
                 with h5py.File(experiment.instrument_file, "r") as instrument:
-                    for idet, det_name in enumerate(det_names):
+                    for idet, det_name in enumerate(self.det_names):
                         # Instrument files store polEff in percent; the response is a fraction.
-                        pol_eff[idet] = float(instrument[f"{det_name}/polEff"][()].item()) / 100.0
-                unpolarized = pol_eff < UNPOLARIZED_POLEFF_CUTOFF
+                        self.pol_eff[idet] = float(instrument[f"{det_name}/polEff"][()].item())/100
+                unpolarized = self.pol_eff < UNPOLARIZED_POLEFF_CUTOFF
                 if unpolarized.any():
-                    names = ", ".join(name for name, cut in zip(det_names, unpolarized) if cut)
+                    names = ", ".join(np.array(self.det_names)[unpolarized])
                     logger.info(f"Band {band._name}: {names} have polEff below "
                                 f"{100*UNPOLARIZED_POLEFF_CUTOFF:.0f}% and are treated as "
                                 "intensity-only.")
-                    pol_eff[unpolarized] = 0.0
-            band_comm.Bcast(pol_eff, root=0)
-            self.instrument_response_I_P = {name: (1.0, eff)
-                                            for name, eff in zip(det_names, pol_eff)}
+                    self.pol_eff[unpolarized] = 0.0
+            band_comm.Bcast(self.pol_eff, root=0)
 
 
     def read(self, scan_ids: list[int], paths: list[str]) -> DetectorGroupTOD:
@@ -183,9 +172,9 @@ class TODReader:
         """Read the values shared by all detectors of one scan.
 
         Returns:
-            A `Bunch` of the scan's values, or None if the file has no ``ntod`` for this scan.
-            Per-detector values from the file (``polang``, ``response_I_P``) are dicts keyed by
-            detector name, because the file's detector order need not be the band's.
+            A `Bunch` of the scan's values, or None if the file has no ``ntod`` for this scan. The
+            per-detector values (``polang``, ``response_I_P``, ``file_idx``) are arrays in the
+            band's detector order, indexed by ``det_idx_fullband``.
         """
         pid = f"{scan_id:06d}"
         if f"{pid}/common/ntod" not in f:
@@ -193,6 +182,7 @@ class TODReader:
         common = f["common"]
         scan_common = f[f"{pid}/common"]
         ntod = int(scan_common["ntod"][()].item())
+        ndet = len(self.det_names)
         header = Bunch(pid=pid, ntod=ntod,
                        # TODO(fft sizes): use a size chosen for the whole band from a pre-pass.
                        ntod_fft=find_good_fourier_size(ntod),
@@ -201,7 +191,9 @@ class TODReader:
                        huffman_tree=scan_common["hufftree"][()],
                        huffman_symbols=scan_common["huffsymb"][()],
                        huffman_tree2=None, huffman_symbols2=None, data_nside=None, npsi=None,
-                       vsun=np.zeros(3), start_time=0.0, polang={}, response_I_P={})
+                       vsun=np.zeros(3), start_time=0.0,
+                       polang=np.full(ndet, np.nan),  # NaN: the file gives no angle
+                       response_I_P=np.ones((ndet, 2)))
         # A second tree decodes Huffman-compressed TODs.
         if "hufftree2" in scan_common:
             header.huffman_tree2 = scan_common["hufftree2"][()]
@@ -215,18 +207,24 @@ class TODReader:
         if "time" in scan_common:
             header.start_time = float(scan_common["time"][0])  # MJD
         if "det" in common:
+            # The file lists its detectors in its own order, which need not be the band's.
+            # `file_idx[idet]` is band detector idet's position in the file (-1: not in the file).
             file_det_names = [name.strip() for name in common["det"].asstr()[()].split(",")]
+            position = {name: i for i, name in enumerate(file_det_names)}
+            header.file_idx = np.array([position.get(name, -1) for name in self.det_names])
+            in_file = header.file_idx >= 0
             if "polang" in common:
-                header.polang = dict(zip(file_det_names, common["polang"][()].tolist()))
+                header.polang[in_file] = common["polang"][()][header.file_idx[in_file]]
             if "resp" in common:
-                header.response_I_P = dict(zip(file_det_names, common["resp"][()]))
-        # The instrument file's response takes precedence over the scan file's.
-        header.response_I_P.update(self.instrument_response_I_P)
+                header.response_I_P[in_file] = common["resp"][()][header.file_idx[in_file]]
+        # The instrument file's polarization efficiency takes precedence over the scan file's.
+        if self.pol_eff is not None:
+            header.response_I_P[:, 0] = 1.0
+            header.response_I_P[:, 1] = self.pol_eff
 
         if self.boresight_pointing:
             # One boresight path for the whole scan, rotated per detector by its focal-plane
             # offset and polarization angle (both listed in the file's detector order).
-            header.file_det_index = {name: i for i, name in enumerate(file_det_names)}
             header.scan_pointing = ScanBoresightPointing(
                 header.start_time, float(scan_common["time_end"][0]), ntod, common["site"][()],
                 scan_common["bore"][()], common["detoff"][()], common["polang"][()],
@@ -241,7 +239,7 @@ class TODReader:
         An intensity-only band gets a zero psi, because its files need not store one.
         """
         if self.boresight_pointing:
-            return DetectorBoresightPointing(header.scan_pointing, header.file_det_index[det_name])
+            return DetectorBoresightPointing(header.scan_pointing, header.file_idx[idet])
         group = f[f"{header.pid}/{det_name}"]
         pix = group["pix"][()]
         if pix.ndim == 2:  # Some simulations store shape (1, ntod).
@@ -262,7 +260,8 @@ class TODReader:
         if det_name not in f[header.pid]:
             return None
         group = f[f"{header.pid}/{det_name}"]
-        if self.tod_is_compressed:
+        tod_is_compressed = "ztod" in group
+        if tod_is_compressed:
             tod = group["ztod"][()]
         else:
             # TODO(buffers, read_direct): read straight into a slice of one per-rank buffer.
@@ -271,6 +270,7 @@ class TODReader:
         if "scalars" in group:
             init_scalars = group["scalars"][()]  # [gain, sigma0, fknee, alpha]
             init_scalars[0] *= self.gain_factor
+        polang = header.polang[idet]
         return DetectorTOD(
             name=det_name,
             det_idx_fullband=idet,
@@ -287,9 +287,10 @@ class TODReader:
             flag_encoded=group["flag"][()],
             bad_data_bitmask=self.bad_data_bitmask,
             init_scalars=init_scalars,
-            tod_is_compressed=self.tod_is_compressed,
-            response_I_P=header.response_I_P.get(det_name),
-            polang=header.polang.get(det_name),
+            tod_is_compressed=tod_is_compressed,
+            response_I_P=header.response_I_P[idet],
+            # DetectorTOD marks a missing angle with None, which the sidelobe model checks for.
+            polang=None if np.isnan(polang) else float(polang),
         )
 
 
@@ -351,81 +352,6 @@ class TODReader:
             if len(scan.detectors) > 0:
                 kept_scans.append(scan)
         return kept_scans
-
-
-def _resolve_noise_prior_block(params: Bunch, key: str, expname: str, bandname: str,
-                               param_names: tuple[str, ...], model_name: str) -> dict | None:
-    """One noise-prior block from the band, else the experiment, else ``tod_processing``.
-
-    Returns None when no scope sets it. Every key is checked against the model's parameter names,
-    because a misspelled name would otherwise silently leave the default in force, and a parameter
-    stuck at a wrong default looks exactly like a converged one in the chain.
-    """
-    block = resolve_param(params, key, (f"experiments.{expname}.bands.{bandname}",
-                                        f"experiments.{expname}", "tod_processing"), default=None)
-    if block is None:
-        return None
-    for name in block:
-        if name not in param_names:
-            raise ValueError(f"{key!r} for band {bandname!r} names {name!r}, which is not a "
-                             f"parameter of {model_name}: {list(param_names)}.")
-    return block
-
-
-def apply_noise_priors(noise_model: NoisePSD, params: Bunch, expname: str, bandname: str) -> None:
-    """Override the noise model's prior defaults with anything the parameter file specifies.
-
-    Two optional blocks, each a mapping from noise-parameter name to its setting, taken from the
-    band block, else the experiment block, else ``tod_processing``. Only the named parameters are
-    changed; the rest keep the instrument-appropriate defaults the reader built the model with::
-
-        noise_prior_bounds:          # hard [lo, hi] limits (C3's p_uni)
-          fknee: [0.01, 100.0]
-          alpha: [-4.5, -0.5]
-        noise_prior:                 # informative [mean, rms] (C3's p_active); optional
-          fknee: [10.0, 0.5]         # rms in *decades* for log-normal parameters such as fknee
-          alpha: [-2.7, 0.3]
-
-    The bounds are the endpoints of the grid the PSD sampler draws on, so a true value outside them
-    cannot be recovered: the sample pins against the nearest edge instead. The informative prior
-    multiplies the likelihood along that grid (see `NoisePSD.log_prior`); an rms of ``.inf`` leaves
-    it uninformative, and an rms ``<= 0`` holds the parameter fixed at its current value entirely.
-
-    Args:
-        noise_model: The model to modify in place.
-        expname, bandname: Keys of this band's experiment and band blocks in `params`.
-    """
-    param_names = noise_model.param_names
-    model_name = type(noise_model).__name__
-    bounds = _resolve_noise_prior_block(params, "noise_prior_bounds", expname, bandname,
-                                        param_names, model_name)
-    prior = _resolve_noise_prior_block(params, "noise_prior", expname, bandname,
-                                       param_names, model_name)
-    if bounds is None and prior is None:
-        return
-    for name, limits in (bounds or {}).items():
-        noise_model.P_uni[param_names.index(name)] = limits
-    for name, (mean, rms) in (prior or {}).items():
-        noise_model.P_active[param_names.index(name)] = (mean, rms)
-    # `sampled` is spelled out because an rms of <= 0 switching a parameter off is easy to miss in
-    # the [mean, rms] pairs, and a silently unsampled parameter looks exactly like a converged one.
-    logger.info(f"Band {bandname}: noise priors overridden from the parameter file. "
-                f"bounds={dict(zip(param_names, noise_model.P_uni.tolist()))}, "
-                f"[mean, rms]={dict(zip(param_names, noise_model.P_active.tolist()))}, "
-                f"sampled={[n for i, n in enumerate(param_names) if noise_model.is_sampled(i)]}.")
-
-
-def apply_noise_fit_range(noise_model: NoisePSD, params: Bunch) -> None:
-    """Apply configured frequency limits to the model, keeping unspecified reader defaults.
-
-    The shared limits in ``tod_processing.corr_noise`` apply to every PSD parameter except sigma0.
-    The model's ``nu_fit`` array is the sole source of frequency limits during sampling.
-    """
-    for column, key in enumerate(("psd_fit_nu_min", "psd_fit_nu_max")):
-        value = resolve_param(params, key, ("tod_processing.corr_noise",), default=None,
-                              raise_on_missing_scope=False)
-        if value is not None:
-            noise_model.nu_fit[1:, column] = value
 
 
 def find_good_fourier_size(ntod: int) -> int:

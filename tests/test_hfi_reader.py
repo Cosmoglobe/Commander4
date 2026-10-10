@@ -24,7 +24,7 @@ from simgen.writers import write_scan_file
 
 
 @pytest.fixture
-def hfi_inputs(tmp_path: Path) -> tuple[Bunch, list[str]]:
+def hfi_inputs(tmp_path: Path) -> Bunch:
     """Include an absent detector and different configuration, TOD, and instrument orders."""
     scan_path = tmp_path / "scan.h5"
     present_names = ["353-1", "353-3b"]
@@ -57,20 +57,22 @@ def hfi_inputs(tmp_path: Path) -> tuple[Bunch, list[str]]:
     filelist.write_text(f'1\n42 "{scan_path}" 1 0 0\n')
     params = params_from_dict({"experiments": {"HFI": {
         "experiment_id": "planck_hfi", "instrument_file": str(instrument_path),
+        "bad_data_bitmask": 515,
         "bands": {"Band": {"filelist": str(filelist), "eval_nside": 1, "freq": 353.0,
-                           "fwhm": 4.9, "polarization": "IQU"}},
+                           "fwhm": 4.9, "polarization": "IQU",
+                           "detectors": {name: {} for name in det_names}}},
     }}, "tod_processing": {}})
-    return params, det_names
+    return params
 
 
 def test_instrument_percentages_follow_detector_names_into_sky_projection(
-    hfi_inputs: tuple[Bunch, list[str]],
+    hfi_inputs: Bunch,
 ) -> None:
-    params, det_names = hfi_inputs
+    params = hfi_inputs
     experiment = params.experiments.HFI
     band = experiment.bands.Band
 
-    result = read_tods_from_file(MPI.COMM_SELF, experiment, band, det_names, params)
+    result = read_tods_from_file(MPI.COMM_SELF, params, experiment, band)
     result.pixel_domain = PixelDomain(MPI.COMM_SELF, result.nside, "full")
 
     assert result.instrument_filepath == experiment.instrument_file
@@ -92,17 +94,17 @@ def test_instrument_percentages_follow_detector_names_into_sky_projection(
 
 
 def test_efficiency_just_above_the_cutoff_is_kept_as_measured(
-    hfi_inputs: tuple[Bunch, list[str]],
+    hfi_inputs: Bunch,
 ) -> None:
     """Only detectors below the cutoff are zeroed; the value itself is never rounded or rescaled."""
-    params, det_names = hfi_inputs
+    params = hfi_inputs
     experiment = params.experiments.HFI
     with h5py.File(experiment.instrument_file, "a") as handle:
         del handle["353-1/polEff"]
         handle["353-1/polEff"] = [100 * UNPOLARIZED_POLEFF_CUTOFF + 1.0]
 
     band = experiment.bands.Band
-    result = read_tods_from_file(MPI.COMM_SELF, experiment, band, det_names, params)
+    result = read_tods_from_file(MPI.COMM_SELF, params, experiment, band)
 
     kept = dict((det.name, det.response_I_P) for det in result.scans[0].detectors)
     assert kept["353-1"] == pytest.approx((1.0, UNPOLARIZED_POLEFF_CUTOFF + 0.01))
@@ -110,9 +112,9 @@ def test_efficiency_just_above_the_cutoff_is_kept_as_measured(
 
 
 def test_intensity_only_band_reads_without_requiring_psi(
-    hfi_inputs: tuple[Bunch, list[str]],
+    hfi_inputs: Bunch,
 ) -> None:
-    params, det_names = hfi_inputs
+    params = hfi_inputs
     experiment = params.experiments.HFI
     band = experiment.bands.Band
     band.polarization = "I"
@@ -121,7 +123,7 @@ def test_intensity_only_band_reads_without_requiring_psi(
         del handle["000042/353-1/psi"]
         del handle["000042/353-3b/psi"]
 
-    result = read_tods_from_file(MPI.COMM_SELF, experiment, band, det_names, params)
+    result = read_tods_from_file(MPI.COMM_SELF, params, experiment, band)
     result.pixel_domain = PixelDomain(MPI.COMM_SELF, result.nside, "full")
 
     for det, efficiency in zip(result.scans[0].detectors, [0.92, 0.0]):
@@ -132,22 +134,22 @@ def test_intensity_only_band_reads_without_requiring_psi(
 
 
 def test_missing_instrument_efficiency_is_not_assumed_to_be_unity(
-    hfi_inputs: tuple[Bunch, list[str]],
+    hfi_inputs: Bunch,
 ) -> None:
-    params, det_names = hfi_inputs
+    params = hfi_inputs
     experiment = params.experiments.HFI
     with h5py.File(experiment.instrument_file, "a") as handle:
         del handle["353-1/polEff"]
 
     with pytest.raises(KeyError, match="polEff"):
-        read_tods_from_file(MPI.COMM_SELF, experiment, experiment.bands.Band, det_names, params)
+        read_tods_from_file(MPI.COMM_SELF, params, experiment, experiment.bands.Band)
 
 
 @pytest.mark.skipif(MPI.COMM_WORLD.Get_size() != 2, reason="requires exactly two MPI ranks")
 def test_two_rank_reader_broadcasts_efficiencies_from_an_empty_master(
-    hfi_inputs: tuple[Bunch, list[str]], monkeypatch: pytest.MonkeyPatch,
+    hfi_inputs: Bunch, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    params, det_names = hfi_inputs
+    params = hfi_inputs
     experiment = params.experiments.HFI
     comm = MPI.COMM_WORLD
     original_open = h5py.File
@@ -162,7 +164,7 @@ def test_two_rank_reader_broadcasts_efficiencies_from_an_empty_master(
     monkeypatch.setattr(h5py, "File", checked_open)
     # Rank zero has no scans but still supplies the shared detector metadata.
     scan_path = str(Path(experiment.bands.Band.filelist).parent / "scan.h5")
-    reader = PlanckHFIReader(comm, experiment, experiment.bands.Band, det_names, params)
+    reader = PlanckHFIReader(comm, params, experiment, experiment.bands.Band)
     result = reader.read([42][:comm.rank], [scan_path][:comm.rank])
 
     assert len(instrument_opens) == (1 if comm.rank == 0 else 0)

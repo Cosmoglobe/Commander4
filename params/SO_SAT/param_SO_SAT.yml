@@ -334,7 +334,6 @@ experiments:
   SO_SAT:
     enabled: true
     experiment_id: "SO_SAT"
-    tod_is_compressed: false   # these files store a plain `tod`, not `ztod`
     mapmaker: "bin"
     sparse_maps: true
     bad_data_bitmask: 0b11111111111111111111111111111111  # Treat all flags as "bad". Is this correct?

@@ -349,6 +349,7 @@ experiments:
     enabled: false
     mapmaker: "bin"
     experiment_id: "planck_lfi"  # Decides expected data format, what TOD reader is used, etc.
+    bad_data_bitmask: 6111232  # Flag bits that mark a sample unusable.
     min_unmasked_fraction: 0.75  # Read-time cut: drop detector-scans with less unflagged data.
     max_rms_ratio: 6.0           # Read-time cut: drop detector-scans whose TOD RMS is above 6x
                                  # their detector's median (e.g. PID 1, with a -0.19 V offset).

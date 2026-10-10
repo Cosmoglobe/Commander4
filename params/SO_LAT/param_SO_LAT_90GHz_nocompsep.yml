@@ -197,7 +197,6 @@ experiments:
   SO_LAT:
     enabled: true
     experiment_id: "SO_LAT"
-    tod_is_compressed: true
     mapmaker: "bin"
     sparse_maps: true
     bad_data_bitmask: 0b11111111111111111111111111111111  # Entries in the 32-bit bitmask corresponding to bad data.

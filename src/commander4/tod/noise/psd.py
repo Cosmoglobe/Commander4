@@ -7,9 +7,11 @@ sampler needs and the priors and grid sampling that draw its own parameters.
 import logging
 import numpy as np
 from pixell import utils
+from pixell.bunch import Bunch
 from scipy.fft import rfftfreq
 from numpy.typing import NDArray
 from commander4.math_utils.fft import forward_rfft
+from commander4.parameters.schema import resolve_param
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +102,60 @@ class NoisePSD:
     def npar(self) -> int:
         """Number of free parameters."""
         return len(self.params)
+
+    def apply_param_file(self, params: Bunch, expname: str, bandname: str) -> None:
+        """Override the instrument defaults this model was built with by the parameter file.
+
+        Two optional blocks, each a mapping from noise-parameter name to its setting, taken from the
+        band block, else the experiment block, else ``tod_processing``. Only the named parameters
+        are changed::
+
+            noise_prior_bounds:          # hard [lo, hi] limits (C3's p_uni)
+              fknee: [0.01, 100.0]
+              alpha: [-4.5, -0.5]
+            noise_prior:                 # informative [mean, rms] (C3's p_active); optional
+              fknee: [10.0, 0.5]         # rms in *decades* for log-normal parameters such as fknee
+              alpha: [-2.7, 0.3]
+
+        The bounds are the endpoints of the grid the PSD sampler draws on, so a true value outside
+        them cannot be recovered: the sample pins against the nearest edge instead. The informative
+        prior multiplies the likelihood along that grid (see `log_prior`); an rms of ``.inf`` leaves
+        it uninformative, and an rms ``<= 0`` holds the parameter fixed at its current value.
+
+        ``tod_processing.corr_noise.psd_fit_nu_min`` and ``psd_fit_nu_max`` set the frequency range
+        [Hz] every parameter except sigma0 is fitted over; an unset endpoint keeps its default.
+
+        Args:
+            params: The full parameter file.
+            expname, bandname: Keys of this band's experiment and band blocks in `params`.
+        """
+        scopes = (f"experiments.{expname}.bands.{bandname}", f"experiments.{expname}",
+                  "tod_processing")
+        bounds = resolve_param(params, "noise_prior_bounds", scopes, default={})
+        prior = resolve_param(params, "noise_prior", scopes, default={})
+        # A misspelled name would otherwise leave its default silently in force, and a parameter
+        # stuck at a wrong default looks exactly like a converged one in the chain.
+        for name in [*bounds, *prior]:
+            if name not in self.param_names:
+                raise ValueError(f"Band {bandname}: the noise prior names {name!r}, which is not a "
+                                 f"parameter of {type(self).__name__}: {list(self.param_names)}.")
+        for name, limits in bounds.items():
+            self.P_uni[self.param_names.index(name)] = limits
+        for name, (mean, rms) in prior.items():
+            self.P_active[self.param_names.index(name)] = (mean, rms)
+        for column, key in enumerate(("psd_fit_nu_min", "psd_fit_nu_max")):
+            value = resolve_param(params, key, ("tod_processing.corr_noise",), default=None,
+                                  raise_on_missing_scope=False)
+            if value is not None:
+                self.nu_fit[1:, column] = value
+        if len(bounds) > 0 or len(prior) > 0:
+            # `sampled` is spelled out because an rms <= 0 switching a parameter off is easy to
+            # miss in the [mean, rms] pairs, and an unsampled parameter looks like a converged one.
+            sampled = [name for i, name in enumerate(self.param_names) if self.is_sampled(i)]
+            logger.info(f"Band {bandname}: noise priors overridden from the parameter file. "
+                        f"bounds={dict(zip(self.param_names, self.P_uni.tolist()))}, "
+                        f"[mean, rms]={dict(zip(self.param_names, self.P_active.tolist()))}, "
+                        f"sampled={sampled}.")
 
     # All models receive the noise parameters explicitly (rather than reading ``self.params``)
     # because the live per-scan/per-detector values are stored in ``TODSamples.noise_params``,
