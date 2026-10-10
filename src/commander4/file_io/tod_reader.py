@@ -42,8 +42,8 @@ experiment_tod_readers = {
 }
 
 
-def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
-                        det_names: list[str], params: Bunch) -> DetectorGroupTOD:
+def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch,
+                        my_band: Bunch) -> DetectorGroupTOD:
     """Read this rank's share of one band's scans.
 
     The band master reads the filelist, keeps the rows selected by ``filelist_idx_start`` and
@@ -54,9 +54,8 @@ def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunc
 
     Args:
         band_comm: The band's MPI communicator; each rank reads a disjoint block of scans.
-        my_experiment, my_band: The experiment and band parameter blocks.
-        det_names: Detector names in full-band index order.
-        params: The full parameter file.
+        params, my_experiment, my_band: The full parameter file, and this band's experiment and
+            band blocks.
 
     Returns:
         The band's `DetectorGroupTOD`, with its scan-index bookkeeping filled in. The reader may
@@ -109,7 +108,7 @@ def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunc
     my_start, my_stop = split_integer_range(len(scans), band_comm.Get_size(), rank)
     my_scans = scans[my_start:my_stop]
     reader = experiment_tod_readers[my_experiment.experiment_id](
-        band_comm, my_experiment, my_band, det_names, params)
+        band_comm, params, my_experiment, my_band)
     experiment_data = reader.read([scan_id for _, scan_id, _ in my_scans],
                                   [path for _, _, path in my_scans])
 
@@ -132,7 +131,7 @@ def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunc
     if rank == 0:
         nscans_kept, ndetscans_kept, ntod_kept, ntod_file = global_stats
         logger.info(f"Band {band_name}: read {nscans_kept} of {len(scans)} scans and "
-                    f"{ndetscans_kept} of {len(scans)*len(det_names)} detector-scans, with "
+                    f"{ndetscans_kept} of {len(scans)*len(reader.det_names)} detector-scans, with "
                     f"{100*ntod_kept/max(ntod_file, 1):.1f}% of their samples retained after the "
                     "Fourier cut.")
     return experiment_data

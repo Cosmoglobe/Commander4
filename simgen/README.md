@@ -213,6 +213,7 @@ experiments:
   SimSat:
     is_sim: true
     experiment_id: "general"
+    bad_data_bitmask: 6111232  # Flag bits that mark a sample unusable (simgen's standard).
     replace_tod_with_sim: false        # use the TODs in the files (do not overwrite with the in-place sim)
     bands:
       Band30GHz:

@@ -194,6 +194,7 @@ experiments:
   SimSat:
     enabled: true
     experiment_id: "general"
+    bad_data_bitmask: 6111232  # Flag bits that mark a sample unusable (simgen's standard).
     mapmaker: "bin"
     bands:
       # `gain` and `initial_noise_params` are stated here so the chain starts away from the truth.

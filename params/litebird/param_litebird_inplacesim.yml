@@ -205,6 +205,7 @@ experiments:
     psi_is_compressed: false
     mapmaker: "bin"
     experiment_id: "litebird_sim_spawndetectors"  # Decides expected data format, what TOD reader is used, etc.
+    bad_data_bitmask: 0  # Unused: the spawned detectors carry no flags.
     # bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     num_scans: 9142
 

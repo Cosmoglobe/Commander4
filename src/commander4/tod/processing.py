@@ -58,7 +58,6 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
     my_experiment = params.experiments[experiment_name]
     my_band = my_experiment.bands[my_band_name]
     my_band_pol = my_band.polarization
-    det_names = list(my_band.detectors)
 
     mpi_info.tod.comm.Barrier()
 
@@ -71,7 +70,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
 
     t0 = time.time()
     with benchmark("fileread-tod"):
-        experiment_data = read_tods_from_file(band_comm, my_experiment, my_band, det_names, params)
+        experiment_data = read_tods_from_file(band_comm, params, my_experiment, my_band)
     mpi_info.tod.comm.Barrier()
     if mpi_info.tod.is_master:
         logger.summary(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")

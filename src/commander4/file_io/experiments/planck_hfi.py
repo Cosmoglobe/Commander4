@@ -14,16 +14,8 @@ class PlanckHFIReader(TODReader):
     its polarization response, and unpolarized bolometers get exactly zero (see
     `UNPOLARIZED_POLEFF_CUTOFF` in ``base_reader.py``).
     """
-    def __init__(self, band_comm: MPI.Comm, experiment: Bunch, band: Bunch, det_names: list[str],
-                 params: Bunch):
-        super().__init__(band_comm, experiment, band, det_names, params,
-                         # HFI flag bits, as packed by todscripts/hfi/hfitohdf5.py: bit 0 marks the
-                         # filler samples between the two chunks each scan spans, bit 1 the DPC
-                         # glitch flag (populated at 100 and 143 GHz only), bit 9 the NPIPE
-                         # per-detector glitch flag (populated in every band). Bit 8 labels a whole
-                         # chunk rather than individual samples and must never mark bad data.
-                         bad_data_bitmask=515,
-                         tod_is_compressed=True,
+    def __init__(self, band_comm: MPI.Comm, params: Bunch, experiment: Bunch, band: Bunch):
+        super().__init__(band_comm, params, experiment, band,
                          pol_eff_from_instrument_file=True,
                          hfi_demodulation=True,
                          # The same priors as LFI.

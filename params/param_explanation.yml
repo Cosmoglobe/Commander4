@@ -651,18 +651,13 @@ experiments:
                               # percent and sets response_I_P to (1, polEff/100).
                               # Also supplies beam data when far-beam sampling is enabled.
 
-    # tod_is_compressed: true # Read the Huffman-compressed `ztod` instead of the plain
-                              # `tod`. Defaults to what the reader expects (true for
-                              # planck_hfi, false for the others).
     # pix_is_compressed: false # Read by litebird_sim_spawndetectors only, which needs
     # psi_is_compressed: false # plain pointing. The other readers detect compressed
-                              # pointing by themselves.
+                              # pointing and TODs by themselves (`ztod` instead of `tod`).
 
-    # bad_data_bitmask: 0b11111111111111111111111111111111
-                              # Flag bits that mark a sample unusable: a sample is kept
-                              # only where (flag & bad_data_bitmask) == 0. Honoured by
-                              # every reader. Defaults to the standard-format value
-                              # 6111232 (planck_hfi: 515).
+    bad_data_bitmask: 6111232 # Required. Flag bits that mark a sample unusable: a sample is
+                              # kept only where (flag & bad_data_bitmask) == 0. 6111232 is
+                              # the value simgen's files and the LFI files use.
     # jump_bitmask: 0b10      # Flag bit that marks a detected jump. Required whenever
                               # tod_processing.jump_detection is enabled.
     # bad_PIDs_path: "/path/to/badPIDs.npy"

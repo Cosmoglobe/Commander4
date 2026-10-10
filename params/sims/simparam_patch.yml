@@ -200,6 +200,7 @@ experiments:
   PatchTel:
     enabled: true
     experiment_id: "general"
+    bad_data_bitmask: 6111232  # Flag bits that mark a sample unusable (simgen's standard).
     mapmaker: "bin"
     sparse_maps: true              # The feature under test; flip to false for the comparison run.
     bands:

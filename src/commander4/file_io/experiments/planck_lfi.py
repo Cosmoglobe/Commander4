@@ -10,9 +10,8 @@ from commander4.tod.noise.psd import NoisePSDOof
 class PlanckLFIReader(TODReader):
     """Planck LFI: the standard format, with LFI's noise priors."""
     # TODO: Re-implement the per-detector bandpass shift (C3's `bandpass_shift`).
-    def __init__(self, band_comm: MPI.Comm, experiment: Bunch, band: Bunch, det_names: list[str],
-                 params: Bunch):
-        super().__init__(band_comm, experiment, band, det_names, params,
+    def __init__(self, band_comm: MPI.Comm, params: Bunch, experiment: Bunch, band: Bunch):
+        super().__init__(band_comm, params, experiment, band,
                          noise_model=NoisePSDOof(
                              P_active_mean=[np.nan, 0.1, -1.0],
                              P_active_rms=[np.nan, np.inf, np.inf],

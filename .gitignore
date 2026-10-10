@@ -1,4 +1,5 @@
 ### COMMANDER4 SPECIFIC GITIGNORE ###
+notes/
 stats/
 logs/
 plots/

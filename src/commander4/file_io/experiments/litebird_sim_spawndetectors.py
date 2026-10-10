@@ -29,13 +29,12 @@ class SpawnDetectorsReader(TODReader):
     the in-place simulation (``replace_tod_with_sim: true``) to fill. Every detector is therefore
     present in every scan. The files' pointing must be stored uncompressed.
     """
-    def __init__(self, band_comm: MPI.Comm, experiment: Bunch, band: Bunch, det_names: list[str],
-                 params: Bunch):
+    def __init__(self, band_comm: MPI.Comm, params: Bunch, experiment: Bunch, band: Bunch):
         if getattr(experiment, "pix_is_compressed", False) or getattr(experiment,
                                                                       "psi_is_compressed", False):
             raise NotImplementedError("Compressed data not yet implemented in litebird injection "
                                       "sims.")
-        super().__init__(band_comm, experiment, band, det_names, params)
+        super().__init__(band_comm, params, experiment, band)
 
 
     def read_scan_header(self, f: h5py.File, scan_id: int) -> Bunch | None:
