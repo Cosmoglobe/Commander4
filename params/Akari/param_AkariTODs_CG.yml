@@ -350,7 +350,7 @@ experiments:
     mapmaker: "bin"
     experiment_id: "planck_lfi"  # Decides expected data format, what TOD reader is used, etc.
     min_unmasked_fraction: 0.75  # Read-time cut: drop detector-scans with less unflagged data.
-    max_rms_ratio: 10.0          # Read-time cut: drop detector-scans whose TOD RMS is above 10x
+    max_rms_ratio: 6.0           # Read-time cut: drop detector-scans whose TOD RMS is above 6x
                                  # their detector's median (e.g. PID 1, with a -0.19 V offset).
     bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
     num_scans: 8000 #45860

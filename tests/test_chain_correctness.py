@@ -70,6 +70,7 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2) -> TODSamples:
     s.ncorr_cg_residual = np.zeros((nscans, ndet))
     s.ncorr_cg_niter = np.zeros((nscans, ndet), dtype=np.int32)
     s.ncorr_converged = np.zeros((nscans, ndet), dtype=np.int8)
+    s.scan_runtime = np.zeros(nscans)
     for name in ("tod_ps_freqs", "tod_ps_ncorr", "tod_ps_raw", "tod_ps_ncorrsub",
                  "tod_ps_residual"):
         setattr(s, name, np.zeros((nscans, ndet, TODSamples.TOD_PS_NBIN), dtype=np.float32))
@@ -111,6 +112,18 @@ def test_per_scan_datasets_are_written_in_time_order() -> None:
     np.testing.assert_array_equal(arrays["scan_ids"], [10, 20, 30, 40])
     np.testing.assert_array_equal(arrays["temporal_gain"][:, 0], [10, 20, 30, 40])
     assert arrays["detrel_gain"].shape == (samples.ndet,)
+
+
+def test_first_scans_runtime_is_written_as_the_median_of_the_others() -> None:
+    """The rank's first timed scan also paid one-time costs (Numba compilation), so the chain gets
+    the median of the other timed scans instead. Scan 2 was never processed and stays at zero."""
+    samples = _minimal_tod_samples(nscans=4)
+    samples.scan_runtime = np.array([5.0, 1.0, 0.0, 3.0])
+
+    arrays = samples.gather_chain_arrays(1)
+
+    np.testing.assert_array_equal(arrays["scan_runtime"], [2.0, 1.0, 0.0, 3.0])
+    np.testing.assert_array_equal(samples.scan_runtime, [5.0, 1.0, 0.0, 3.0])  # Kept as measured.
 
 
 def test_hfi_chain_carries_modulation_phase_and_baselines() -> None:

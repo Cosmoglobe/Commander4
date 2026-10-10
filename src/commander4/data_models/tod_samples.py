@@ -223,6 +223,10 @@ class TODSamples:
         self.ncorr_cg_niter = np.full((self.nscans, self.ndet), -1, dtype=np.int32)
         self.ncorr_converged = np.full((self.nscans, self.ndet), -1, dtype=np.int8)
 
+        # Wall time [s] the mapmaking scan loop spent on each scan this iteration. Can be used
+        # by subsequent runs to produce better load balancing.
+        self.scan_runtime = np.zeros(self.nscans, dtype=np.float64)
+
         # The temporal-gain Wiener prior each detector was actually sampled under, as
         # (ndet, 3) = (sigma0, fknee, alpha), Commander3's gain_sigma_0/gain_fknee/gain_alpha.
         # Commander3 samples this prior, while C4 hard-codes it in sample_temporal_gain_variations.
@@ -451,6 +455,14 @@ class TODSamples:
                                                                scans_per_rank)
         ncorr_converged_global = _gather_scan_distributed_array(band_comm, self.ncorr_converged,
                                                                 scans_per_rank)
+        # The first scan each rank processes in `tod2map` also pays one-time Numba compilation cost,
+        # so its runtime is nonsense, so we overwrite it with the median runtime of the other scans.
+        scan_runtime = self.scan_runtime.copy()
+        timed = np.flatnonzero(scan_runtime)
+        if timed.size > 1:
+            scan_runtime[timed[0]] = np.median(scan_runtime[timed[1:]])
+        scan_runtime_global = _gather_scan_distributed_array(band_comm, scan_runtime,
+                                                             scans_per_rank)
 
         # 4b3. Planck HFI alternating-modulation state. Other experiments do not write empty
         # instrument-specific datasets.
@@ -536,6 +548,7 @@ class TODSamples:
             "ncorr_cg_residual": ncorr_cg_residual_global,
             "ncorr_cg_niter": ncorr_cg_niter_global,
             "ncorr_converged": ncorr_converged_global,
+            "scan_runtime": scan_runtime_global,
             "tod_ps_freqs": tod_ps_freqs_global,
             "tod_ps_ncorr": tod_ps_ncorr_global,
             "tod_ps_raw": tod_ps_raw_global,
