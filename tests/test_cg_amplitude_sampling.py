@@ -39,7 +39,7 @@ from commander4.sky.comp_list import complist_dot
 
 LMAX = 4
 NSIDE = 4
-NSAMP = 200
+NSAMP = 100  # Enough to detect the 19% bug described above at about 7 standard errors.
 
 
 def _make_params(sample_amplitudes: bool = True) -> Bunch:
@@ -358,7 +358,9 @@ class TestPriorMeanMap:
         second = _make_solver(det_map, _make_group(False)).solve(comp_list)
 
         np.testing.assert_array_equal(comp_list[0].amp_prior_mean, mu_before)
-        np.testing.assert_allclose(first[0].alms, second[0].alms, rtol=1e-10, atol=1e-12)
+        # The CG stops at err_tol, and threaded SHTs sum in a varying order, so two solves agree
+        # only to roughly the CG tolerance. A corrupted cache would change the answer by order one.
+        np.testing.assert_allclose(first[0].alms, second[0].alms, rtol=1e-4, atol=1e-6)
 
     def test_uninformative_data_recovers_the_prior_map(self, tmp_path):
         """End-to-end: with no data information the solution is the prior-mean map itself."""

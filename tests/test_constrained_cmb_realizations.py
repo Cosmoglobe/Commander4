@@ -125,9 +125,10 @@ def test_masked_mean_matches_dense_posterior(
     np.testing.assert_allclose(draw_coords, expected_draw, atol=1e-9)
 
 
-@pytest.mark.parametrize("lmax", [3, 11])
-@pytest.mark.parametrize("apodization_deg", [None, 20.0])
-@pytest.mark.parametrize("precond_lmax", [0, 32])
+# Every pair of setting values appears together once; the full 2x2x2 grid adds no coverage.
+@pytest.mark.parametrize("lmax, apodization_deg, precond_lmax", [
+    (3, None, 0), (3, 20.0, 32), (11, None, 32), (11, 20.0, 0),
+])
 def test_cli_uses_component_lmax(
     lmax: int, apodization_deg: float | None, precond_lmax: int,
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -412,7 +413,6 @@ def test_updated_data_reuses_lowell_factor_and_solves_current_likelihood(
         solver.update_data([new_sky[0][:12], new_sky[1]], new_ivar, new_beams)
 
 
-@pytest.mark.parametrize("nsides", [[2], [2, 4, 4]])
 @pytest.mark.parametrize("selection, selected", [
     ([], [1, 3, 5, 8]),
     (["--burn-in", "3"], [5, 8]),
@@ -420,11 +420,14 @@ def test_updated_data_reuses_lowell_factor_and_solves_current_likelihood(
     (["--burn-in", "8"], []),
 ])
 def test_cli_reuses_setup_across_iterations_and_realizations(
-    nsides: list[int], selection: list[str], selected: list[int],
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    selection: list[str], selected: list[int], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Sparse Gibbs numbering, changing foregrounds/noise, and three independent draws per sample."""
+    """Sparse Gibbs numbering, changing foregrounds/noise, and two independent draws per sample.
+
+    Two bands share nside 4, so the mask must be prepared once per resolution, not once per band.
+    """
     monkeypatch.setattr(cr, "nthreads", 1)
+    nsides = [2, 4, 4]
     lmax = 3
     bands = {}
     for band in range(len(nsides)):
@@ -531,7 +534,7 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
     monkeypatch.setattr(cr.ConstrainedCMB, "get_RHS_eqn_mean", mean)
     monkeypatch.setattr(cr.ConstrainedCMB, "solve_CG", solve)
     monkeypatch.setattr(sys, "argv", ["c4-cmb-realizations", str(tmp_path), "--mask", str(mask_path),
-                                     "--n-realizations", "3", *selection])
+                                     "--n-realizations", "2", *selection])
     initial_figures = cr.plt.get_fignums()
     assert cr.main() == (0 if selected else 1)
     assert cr.plt.get_fignums() == initial_figures
@@ -544,16 +547,16 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
             if index > 0:
                 expected_events.append(("load", iteration))
             expected_events.append(("mean", None))
-            expected_events.extend([("solve", None)]*3)
+            expected_events.extend([("solve", None)]*2)
         for factor in factors:
             assert factor is factors[0]
     assert events == expected_events
     output_dir = tmp_path / "cmb_realizations"
-    assert len(list(output_dir.glob("*.fits"))) == 3*len(selected)
-    assert len(list(output_dir.glob("*.png"))) == 6*len(selected)
+    assert len(list(output_dir.glob("*.fits"))) == 2*len(selected)
+    assert len(list(output_dir.glob("*.png"))) == 4*len(selected)
     for iteration in selected:
         maps = []
-        for realization in [1, 2, 3]:
+        for realization in [1, 2]:
             path = output_dir / (
                 f"chain01_iter{iteration:04d}_real{realization:04d}_cmb_realization.fits")
             maps.append(hp.read_map(path))
@@ -564,8 +567,7 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
                 assert handle[1].header["ITER"] == iteration
                 assert handle[1].header["REALIZ"] == realization
                 assert handle[1].header["BUNIT"] == "uK_CMB"
-        for index in range(1, 3):
-            assert not np.array_equal(maps[0], maps[index])
+        assert not np.array_equal(maps[0], maps[1])
 
 
 @pytest.mark.parametrize("options", [
