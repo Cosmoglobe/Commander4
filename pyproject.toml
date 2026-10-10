@@ -35,6 +35,11 @@ dependencies = [
     "qpoint",
     ]  # Add new Python runtime dependencies here.
 
+# Development-only tools, not installed for users. Install with `pip install -e . --group test`
+# (needs pip >= 25.1).
+[dependency-groups]
+test = ["pytest", "pytest-xdist"]
+
 # Install Commander4 and its standalone tools as commands on PATH.
 [project.scripts]
 commander4 = "commander4.cli:main"
