@@ -82,7 +82,8 @@ def test_standard_scan_is_read_by_detector_name(tmp_path: Path) -> None:
     result = read(make_params(tmp_path, [path], ["a", "b", "c"]))
 
     assert result.nscans == 1 and result.ndet == 3 and result.fsamp == 10.0
-    assert (result.scan_idx_start, result.scan_idx_stop, result.nscans_allranks) == (0, 1, 1)
+    assert result.nscans_allranks == 1
+    np.testing.assert_array_equal(result.scan_time_index, [0])
     scan = result.scans[0]
     assert scan.scan_id == 1 and scan.start_time == 0.0
     assert [(det.name, det.det_idx_fullband) for det in scan.detectors] == [("a", 0), ("b", 1)]
@@ -156,6 +157,8 @@ def test_filelist_slice_and_bad_scan_ids_select_the_scans(tmp_path: Path) -> Non
 
     assert [scan.scan_id for scan in result.scans] == [2, 4]
     assert result.nscans_allranks == 2
+    # The time index is the scan's filelist row, which counts rows the slice and bad list skip.
+    np.testing.assert_array_equal(result.scan_time_index, [1, 3])
 
 
 def test_simulated_tod_skips_the_tod_value_cuts(tmp_path: Path,
