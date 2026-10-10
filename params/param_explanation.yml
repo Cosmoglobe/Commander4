@@ -629,8 +629,9 @@ experiments:
     experiment_id: "planck_lfi"
                               # Selects the TOD reader: one module per experiment in
                               # file_io/experiments/, named after this value. Known
-                              # readers: planck_lfi, akari, SO_LAT, SO_SAT, litebird_sim,
-                              # litebird_sim_spawndetectors, general.
+                              # readers: general (the standard format, which simgen
+                              # writes), planck_lfi, planck_hfi, akari, SO_LAT, SO_SAT,
+                              # litebird_sim_spawndetectors.
     filelist_idx_start: null  # Optional Python slice bounds on each band's filelist rows,
     filelist_idx_stop: null   # excluding the header. Zero-based; start included, stop excluded.
                               # Omitted/null = beginning/end. Negative indices count from the end;
@@ -650,31 +651,39 @@ experiments:
                               # percent and sets response_I_P to (1, polEff/100).
                               # Also supplies beam data when far-beam sampling is enabled.
 
-    # tod_is_compressed: true # The TOD itself is Huffman-compressed in the HDF5 files.
-    # pix_is_compressed: true # Likewise for the pixel index stream,
-    # psi_is_compressed: true # and for the polarization angle stream. Each defaults to
-                              # whatever the reader expects for that data format.
+    # tod_is_compressed: true # Read the Huffman-compressed `ztod` instead of the plain
+                              # `tod`. Defaults to what the reader expects (true for
+                              # planck_hfi, false for the others).
+    # pix_is_compressed: false # Read by litebird_sim_spawndetectors only, which needs
+    # psi_is_compressed: false # plain pointing. The other readers detect compressed
+                              # pointing by themselves.
 
     # bad_data_bitmask: 0b11111111111111111111111111111111
                               # Flag bits that mark a sample unusable: a sample is kept
-                              # only where (flag & bad_data_bitmask) == 0. Honoured by the
-                              # SO_LAT, SO_SAT, akari and planck_hfi readers (planck_hfi
-                              # defaults to 515 when unset); planck_lfi hard-codes its own
-                              # value, so setting it here would do nothing.
+                              # only where (flag & bad_data_bitmask) == 0. Honoured by
+                              # every reader. Defaults to the standard-format value
+                              # 6111232 (planck_hfi: 515).
     # jump_bitmask: 0b10      # Flag bit that marks a detected jump. Required whenever
                               # tod_processing.jump_detection is enabled.
     # bad_PIDs_path: "/path/to/badPIDs.npy"
                               # NumPy array of scan IDs to skip entirely at read time.
+    # Read-time cuts. They drop a detector-scan before it ever reaches the samplers, unlike
+    # tod_processing.data_selection, which flags rather than drops, every iteration. A
+    # detector-scan that is unusable (no unflagged sample, or a TOD that is non-finite or
+    # all zero) is always dropped. The thresholds live only here, never in the code.
     # min_unmasked_fraction: 0.0
                               # Drop a detector-scan with less than this fraction of
-                              # unflagged samples at READ time, before it ever reaches the
-                              # samplers. Read by the SO_SAT reader only. Distinct from
-                              # data_selection.min_good_fraction, which flags rather than
-                              # drops, and does so every iteration.
+                              # unflagged samples.
+    # max_rms_ratio: null     # Drop a detector-scan whose TOD RMS (offset included, over
+                              # unflagged samples) is above this many times the median RMS
+                              # of the same detector over the band. null disables the cut.
+                              # Catches broken detector-scans without a threshold in
+                              # detector units; e.g. 10 for LFI drops PID 1's offset.
 
     # Replace the TOD read from disk with a synthetic sky plus noise realization, once at
-    # load. Used by the SO and LiteBIRD readers to test the samplers against a known
-    # truth while keeping the real pointing and flags.
+    # load. Works for every experiment, to test the samplers against a known truth while
+    # keeping the real pointing and flags. The read-time cuts on TOD values (non-finite,
+    # all-zero, amplitude) are then skipped, since the TOD on disk may be all zeros.
     # replace_tod_with_sim: true
     # sim_params:
     #   include_CMB: True
@@ -694,15 +703,14 @@ experiments:
                               # across them. These sum to the TOD task total.
         eval_nside: 512       # Resolution the band map is made at, and the resolution
                               # CompSep then sees.
-        # data_nside: 512     # Resolution the pixel indices are stored at on disk. Read
-                              # by the akari reader only; every other reader takes it from
-                              # common/nside in the HDF5 file.
+        # data_nside: 512     # Not read: every reader takes the resolution the pixel
+                              # indices are stored at from common/nside in the scan files.
         fwhm: 32.4            # [arcmin] Gaussian beam.
         freq: 28.4            # [GHz] Effective band centre. Note this is not the nominal
                               # 30.0: the SED is evaluated here, so use the effective
                               # value.
-        # fsamp: 32.5         # [Hz] Sample rate. The planck_lfi reader takes it from the
-                              # data file; readers that do not require it here.
+        # fsamp: 32.5         # [Hz] Not read: every reader takes the sample rate from
+                              # common/fsamp in the scan files.
         band_unit: "uK_CMB"  # LFI's file-supplied gains are calibrated per uK_CMB.
         polarization: "IQU"
 

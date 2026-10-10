@@ -193,7 +193,8 @@ src/commander4/
 
   data_models/         # The containers the two sides pass around (band TOD, band maps, pointing, samples).
   file_io/             # Everything that touches disk: chain writing, map reading, and:
-    experiments/       #   One TOD reader per experiment, each module named after its `experiment_id`.
+    experiments/       #   TOD readers: base_reader.py reads the standard scan files. Each other
+                       #   module is named after an `experiment_id` and subclasses it.
   parameters/          # Parameter-file parsing (parse.py) and scoped lookup + validation (schema.py).
   mpi/                 # Communicator setup, and the transfer of maps and sky models between the two sides.
   math_utils/          # SHTs, alm helpers, FFTs, in-place array arithmetic.
