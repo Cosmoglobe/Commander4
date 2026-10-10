@@ -79,7 +79,9 @@ def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunc
     # The band master reads the filelist; the other ranks get the selected scans from it.
     # TODO(pre-pass): read each scan's ntod here too (and a pointing summary), so the split below
     # can balance the ranks and the whole band can share a few FFT sizes.
-    scans: list[tuple[int, str]] | None = None
+    # Each selected scan as (filelist row, scan ID, file path). The rows run in time order, so a
+    # scan's row is its place in time.
+    scans: list[tuple[int, int, str]] | None = None
     if rank == 0:
         with open(my_band.filelist) as infile:
             infile.readline()  # The first line holds the number of scans.
@@ -89,8 +91,11 @@ def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunc
         bad_scan_ids = set()
         if "bad_PIDs_path" in my_experiment:
             bad_scan_ids = {int(scan_id) for scan_id in np.load(my_experiment.bad_PIDs_path)}
-        scans = [(int(row[0]), row[1].strip('"')) for row in rows[start:stop]
-                 if int(row[0]) not in bad_scan_ids]
+        scans = []
+        for row in range(start, stop):
+            scan_id = int(rows[row][0])
+            if scan_id not in bad_scan_ids:
+                scans.append((row, scan_id, rows[row][1].strip('"')))
         logger.info(f"Band {band_name}: selected filelist rows [{start}:{max(start, stop)}], "
                     f"{max(0, stop - start)} of {len(rows)} scans, of which "
                     f"{max(0, stop - start) - len(scans)} are listed as bad.")
@@ -99,22 +104,20 @@ def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunc
         raise ValueError(f"Band {band_name}: filelist slice "
                          f"[{filelist_idx_start}:{filelist_idx_stop}] selects no usable scans.")
 
-    # TODO(distribution): weight the split by scan length. Keep each rank's scans contiguous in
-    # time, because the temporal-gain prior and the chain gather assume rank order is time order.
+    # TODO(distribution): split by sky position and weight by scan cost. A rank's scans need not
+    # be contiguous in time, since every time-ordered step sorts by `scan_time_index`.
     my_start, my_stop = split_integer_range(len(scans), band_comm.Get_size(), rank)
     my_scans = scans[my_start:my_stop]
     reader = experiment_tod_readers[my_experiment.experiment_id](
         band_comm, my_experiment, my_band, det_names, params)
-    experiment_data = reader.read([scan_id for scan_id, _ in my_scans],
-                                  [path for _, path in my_scans])
+    experiment_data = reader.read([scan_id for _, scan_id, _ in my_scans],
+                                  [path for _, _, path in my_scans])
 
-    # Because some scans might have been discarded during read-in, we can only now figure out what
-    # the scan start and stop index each rank holds.
-    scans_per_rank = np.zeros(band_comm.Get_size(), dtype=np.int32)
-    band_comm.Allgather(np.array([experiment_data.nscans], dtype=np.int32), scans_per_rank)
-    experiment_data.scan_idx_start = int(np.sum(scans_per_rank[:rank]))
-    experiment_data.scan_idx_stop = int(np.sum(scans_per_rank[:rank+1]))
-    experiment_data.nscans_allranks = int(np.sum(scans_per_rank))
+    # The reader may drop scans, so the time index and the total are only known now.
+    row_of_scan = {scan_id: row for row, scan_id, _ in my_scans}
+    experiment_data.scan_time_index = np.array([row_of_scan[scan.scan_id]
+                                                for scan in experiment_data.scans], dtype=np.int64)
+    experiment_data.nscans_allranks = band_comm.allreduce(experiment_data.nscans, op=MPI.SUM)
 
     if getattr(my_experiment, "replace_tod_with_sim", False):
         replace_tod_with_sim(band_comm, experiment_data, my_band, params, my_experiment.sim_params)

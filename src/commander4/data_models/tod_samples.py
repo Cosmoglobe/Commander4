@@ -125,8 +125,7 @@ class TODSamples:
         # The noise model defines how many parameters per detector-scan (first entry is sigma0).
         self.noise_model = experiment_data.noise_model
         self.npar = self.noise_model.npar
-        self.scan_idx_start = experiment_data.scan_idx_start
-        self.scan_idx_stop = experiment_data.scan_idx_stop
+        self.scan_time_index = experiment_data.scan_time_index
         # C4 works internally in uK_RJ; a band may quote its gain and maps in another unit via
         # `band_unit`. `band_unit_factor` D (= value of 1 uK_RJ in band_unit) converts at the file
         # boundary: brightness maps multiply by D, the gain (brightness in its denominator) divides by
@@ -409,8 +408,12 @@ class TODSamples:
         ####################################################################
         # Gather the various TOD samples.
         ####################################################################
-        # 0. Unique scan-IDs (per-scan quantity)
+        # 0. Unique scan-IDs (per-scan quantity), and each scan's place in time. The gathers below
+        # stack the ranks' scans in rank order, which need not be time order; the per-scan datasets
+        # are sorted into time order before they are returned.
         scan_ids_global = _gather_scan_distributed_array(band_comm, self.scan_ids, scans_per_rank)
+        scan_time_index_global = _gather_scan_distributed_array(band_comm, self.scan_time_index,
+                                                                scans_per_rank)
 
         # 1. Absolute gain (per-band quantity)
         abs_gain_global = self.abs_gain  # Copies held on each rank, no communication required.
@@ -514,13 +517,16 @@ class TODSamples:
         # unconditionally. `det_names` is variable-length UTF-8 for a clean string round-trip; its
         # order is the `idet` axis shared by every per-detector array here.
         arrays: dict[str, NDArray] = {
-            "scan_ids": scan_ids_global,
             "det_names": np.array(self.det_names, dtype=h5py.string_dtype()),
             "abs_gain": abs_gain_global/self.band_unit_factor,
             "detrel_gain": rel_gain_global/self.band_unit_factor,
+            "gain_prior": gain_prior_out,
+        }
+        # The datasets with a scan axis first, written in time order.
+        per_scan_arrays: dict[str, NDArray] = {
+            "scan_ids": scan_ids_global,
             "temporal_gain": temporal_gain_global/self.band_unit_factor,
             "noise_params": noise_params_global,
-            "gain_prior": gain_prior_out,
             "present": present_global,
             "accept": accept_global,
             "chisq_z": chisq_z_global,
@@ -538,8 +544,13 @@ class TODSamples:
             "jump_counts": jump_counts_global,
         }
         if modulation_phase_global is not None:
-            arrays["modulation_phase"] = modulation_phase_global
-            arrays["baselines"] = baselines_global
+            per_scan_arrays["modulation_phase"] = modulation_phase_global
+            per_scan_arrays["baselines"] = baselines_global
+        time_order = np.argsort(scan_time_index_global)
+        # The ranks had the scans stored in some arbitrary order,
+        # so we sort them back to being in time-order.
+        for name, values in per_scan_arrays.items():
+            arrays[name] = values[time_order]
         arrays.update(jump_datasets)
         if write_glitches:
             # Per-detector shapes, identical on every rank, so no communication was needed.

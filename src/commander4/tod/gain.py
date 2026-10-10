@@ -341,6 +341,9 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
     # Gather scan counts on all ranks (needed for gather/scatter with varying roots)
     scan_counts = np.array(band_comm.allgather(nscans_local), dtype=int)
     displacements = np.insert(np.cumsum(scan_counts), 0, 0)[:-1]
+    # The gathers below stack the ranks' scans in rank order, but the Wiener prior couples scans
+    # that are neighbours in time. `time_order` sorts the stacked scans into time order.
+    time_order = np.argsort(np.concatenate(band_comm.allgather(experiment_data.scan_time_index)))
 
     # Distribute detector solves across ranks in round-robin fashion.
     # Each detector's equation system is gathered to, solved on, and scattered from
@@ -353,9 +356,9 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
 
         delta_g_sample = None
         if band_rank == solving_rank:
-            # Concatenate gathered arrays into single flat arrays
-            A_diag = np.concatenate(all_A_qq)
-            b = np.concatenate(all_b_q)
+            # Concatenate gathered arrays into single flat arrays, in time order.
+            A_diag = np.concatenate(all_A_qq)[time_order]
+            b = np.concatenate(all_b_q)[time_order]
 
             n_scans_total = len(A_diag)
             if n_scans_total > 1:
@@ -416,6 +419,11 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
 
             else:
                 delta_g_sample = np.zeros(n_scans_total)
+
+            # Back from time order to the rank order that the scatter below expects.
+            delta_g_rank_order = np.empty_like(delta_g_sample)
+            delta_g_rank_order[time_order] = delta_g_sample
+            delta_g_sample = delta_g_rank_order
 
         # Scatter the results back to all ranks from the solving rank
         if band_size > 1:
