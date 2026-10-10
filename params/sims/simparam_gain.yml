@@ -206,7 +206,6 @@ experiments:
         eval_nside: 64
         fwhm: 120.0
         freq: 30.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [1.0e-7, 0.1, -1.0]   # [sigma0, fknee, alpha]; sigma0 is the truth.
@@ -223,7 +222,6 @@ experiments:
         eval_nside: 64
         fwhm: 70.0
         freq: 100.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [8.0e-8, 0.1, -1.0]
@@ -240,7 +238,6 @@ experiments:
         eval_nside: 64
         fwhm: 40.0
         freq: 217.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [1.2e-7, 0.1, -1.0]

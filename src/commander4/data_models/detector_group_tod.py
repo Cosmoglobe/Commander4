@@ -59,9 +59,6 @@ class DetectorGroupTOD:
         # contiguous stretches of time, so the steps that need time order (the temporal-gain prior,
         # the chain output) sort by this. The TOD reader sets it; the default is this rank's order.
         self.scan_time_index = np.arange(self.nscans, dtype=np.int64)
-        # Total number of scans across all ranks on this band, known only after every rank has
-        # read its scans (the reader may drop some). Also set by the TOD reader.
-        self.nscans_allranks: int = 0
         self.noise_model = noise_model
         # The band's PixelDomain: which pixels this rank's map buffers hold. It depends only on the
         # static pointing, so it is built once at startup (tod/processing.py) and kept for the run.

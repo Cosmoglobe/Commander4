@@ -201,13 +201,10 @@ components:
 experiments:
   LiteBIRD:
     enabled: true
-    pix_is_compressed: false
-    psi_is_compressed: false
     mapmaker: "bin"
     experiment_id: "litebird_sim_spawndetectors"  # Decides expected data format, what TOD reader is used, etc.
     bad_data_bitmask: 0  # Unused: the spawned detectors carry no flags.
     # bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
-    num_scans: 9142
 
     replace_tod_with_sim: true
     sim_params:
@@ -228,7 +225,6 @@ experiments:
         eval_nside: 512
         fwhm: 66.93 # [arcmin]
         freq: 40.0 # [GHz]
-        fsamp: 19.0 # [Hz]
         sigma0_rts: 35.96
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
@@ -242,7 +238,6 @@ experiments:
         eval_nside: 512
         fwhm: 47.58 # [arcmin]
         freq: 61.0 # [GHz]
-        fsamp: 19.0 # [Hz]
         sigma0_rts: 18.9
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
@@ -256,7 +251,6 @@ experiments:
         eval_nside: 512
         fwhm: 56.07 # [arcmin]
         freq: 50.0 # [GHz]
-        fsamp: 19.0 # [Hz]
         sigma0_rts: 20.61
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
@@ -270,7 +264,6 @@ experiments:
         eval_nside: 512
         fwhm: 39.0 # [arcmin]
         freq: 77.0 # [GHz]
-        fsamp: 19.0 # [Hz]
         sigma0_rts: 10.51
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
@@ -284,7 +277,6 @@ experiments:
         eval_nside: 512
         fwhm: 47.58 # [arcmin]
         freq: 94.0 # [GHz]
-        fsamp: 19.0 # [Hz]
         sigma0_rts: 7.2
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
@@ -298,7 +290,6 @@ experiments:
         eval_nside: 512
         fwhm: 56.07 # [arcmin]
         freq: 145.0 # [GHz]
-        fsamp: 19.0 # [Hz]
         sigma0_rts: 4.41
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
@@ -312,7 +303,6 @@ experiments:
         eval_nside: 512
         fwhm: 39.0 # [arcmin]
         freq: 118.0 # [GHz]
-        fsamp: 19.0 # [Hz]
         sigma0_rts: 4.71
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
@@ -326,7 +316,6 @@ experiments:
         eval_nside: 512
         fwhm: 32.72 # [arcmin]
         freq: 182.0 # [GHz]
-        fsamp: 19.0 # [Hz]
         sigma0_rts: 3.4
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
@@ -340,7 +329,6 @@ experiments:
         eval_nside: 512
         fwhm: 22.07 # [arcmin]
         freq: 217.0 # [GHz]
-        fsamp: 19.0 # [Hz]
         sigma0_rts: 8.59
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
@@ -354,7 +342,6 @@ experiments:
         eval_nside: 512
         fwhm: 26.67 # [arcmin]
         freq: 334.0 # [GHz]
-        fsamp: 19.0 # [Hz]
         sigma0_rts: 14.93
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
@@ -368,7 +355,6 @@ experiments:
         eval_nside: 512
         fwhm: 18.0 # 17.85 # [arcmin]
         freq: 280.0 # [GHz]
-        fsamp: 19.0 # [Hz]
         sigma0_rts: 11.27
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
@@ -382,7 +368,6 @@ experiments:
         eval_nside: 512
         fwhm: 18.0 # 15.12 # [arcmin]
         freq: 402.0 # [GHz]
-        fsamp: 19.0 # [Hz]
         sigma0_rts: 33.62
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
@@ -396,7 +381,6 @@ experiments:
         eval_nside: 512
         fwhm: 18.0 # 10.0 # [arcmin]
         freq: 570.0 # [GHz]
-        fsamp: 19.0 # [Hz]
         sigma0_rts: 233.1
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"

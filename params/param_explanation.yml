@@ -651,9 +651,8 @@ experiments:
                               # percent and sets response_I_P to (1, polEff/100).
                               # Also supplies beam data when far-beam sampling is enabled.
 
-    # pix_is_compressed: false # Read by litebird_sim_spawndetectors only, which needs
-    # psi_is_compressed: false # plain pointing. The other readers detect compressed
-                              # pointing and TODs by themselves (`ztod` instead of `tod`).
+    # Whether the TOD and pointing are Huffman-compressed, the sample rate (common/fsamp) and
+    # the resolution of the stored pixels (common/nside) are all read from the scan files.
 
     bad_data_bitmask: 6111232 # Required. Flag bits that mark a sample unusable: a sample is
                               # kept only where (flag & bad_data_bitmask) == 0. 6111232 is
@@ -699,14 +698,10 @@ experiments:
                               # across them. These sum to the TOD task total.
         eval_nside: 512       # Resolution the band map is made at, and the resolution
                               # CompSep then sees.
-        # data_nside: 512     # Not read: every reader takes the resolution the pixel
-                              # indices are stored at from common/nside in the scan files.
         fwhm: 32.4            # [arcmin] Gaussian beam.
         freq: 28.4            # [GHz] Effective band centre. Note this is not the nominal
                               # 30.0: the SED is evaluated here, so use the effective
                               # value.
-        # fsamp: 32.5         # [Hz] Not read: every reader takes the sample rate from
-                              # common/fsamp in the scan files.
         band_unit: "uK_CMB"  # LFI's file-supplied gains are calibrated per uK_CMB.
         polarization: "IQU"
 

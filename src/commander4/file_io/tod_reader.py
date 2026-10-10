@@ -58,8 +58,9 @@ def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch
             band blocks.
 
     Returns:
-        The band's `DetectorGroupTOD`, with its scan-index bookkeeping filled in. The reader may
-        drop scans (empty or bad data), so the actual per-rank ranges are only known afterwards.
+        This rank's `DetectorGroupTOD`. The reader may drop scans (empty or bad data), so it can
+        hold fewer scans than the rank was given; each kept scan's filelist row is its
+        ``scan_time_index``.
     """
     if my_experiment.experiment_id not in experiment_tod_readers:
         raise ValueError("An experiment in the parameter file has experiment_id = "\
@@ -75,11 +76,11 @@ def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch
     filelist_idx_stop = resolve_param(params, "filelist_idx_stop", scopes, default=None,
                                       legal_types=(int, type(None)))
 
-    # The band master reads the filelist; the other ranks get the selected scans from it.
-    # TODO(pre-pass): read each scan's ntod here too (and a pointing summary), so the split below
-    # can balance the ranks and the whole band can share a few FFT sizes.
-    # Each selected scan as (filelist row, scan ID, file path). The rows run in time order, so a
-    # scan's row is its place in time.
+    # The band master reads the filelist; the other ranks get the selected scans from it. Each
+    # selected scan is (filelist row, scan ID, file path). The rows run in time order, so a scan's
+    # row is its place in time.
+    # TODO(filelist columns): read the per-scan weight, sky position and ntod that a filelist tool
+    # will write into the columns after the path, for the split below and for buffer sizes.
     scans: list[tuple[int, int, str]] | None = None
     if rank == 0:
         with open(my_band.filelist) as infile:
@@ -106,19 +107,11 @@ def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch
     # TODO(distribution): split by sky position and weight by scan cost. A rank's scans need not
     # be contiguous in time, since every time-ordered step sorts by `scan_time_index`.
     my_start, my_stop = split_integer_range(len(scans), band_comm.Get_size(), rank)
-    my_scans = scans[my_start:my_stop]
     reader = experiment_tod_readers[my_experiment.experiment_id](
         band_comm, params, my_experiment, my_band)
-    experiment_data = reader.read([scan_id for _, scan_id, _ in my_scans],
-                                  [path for _, _, path in my_scans])
+    experiment_data = reader.read(scans[my_start:my_stop])
 
-    # The reader may drop scans, so the time index and the total are only known now.
-    row_of_scan = {scan_id: row for row, scan_id, _ in my_scans}
-    experiment_data.scan_time_index = np.array([row_of_scan[scan.scan_id]
-                                                for scan in experiment_data.scans], dtype=np.int64)
-    experiment_data.nscans_allranks = band_comm.allreduce(experiment_data.nscans, op=MPI.SUM)
-
-    if getattr(my_experiment, "replace_tod_with_sim", False):
+    if reader.tod_is_simulated:
         replace_tod_with_sim(band_comm, experiment_data, my_band, params, my_experiment.sim_params)
 
     # Summarize what survived the reader's cuts and the Fourier cut, over the whole band.

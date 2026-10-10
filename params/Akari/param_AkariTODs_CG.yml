@@ -354,7 +354,6 @@ experiments:
     max_rms_ratio: 6.0           # Read-time cut: drop detector-scans whose TOD RMS is above 6x
                                  # their detector's median (e.g. PID 1, with a -0.19 V offset).
     bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
-    num_scans: 8000 #45860
     bands:
       Planck30GHz:
         enabled: true
@@ -363,7 +362,6 @@ experiments:
         eval_nside: 512
         fwhm: 32.4 # [arcmin]
         freq: 28.4 # [GHz]
-        fsamp: 32.5079365079365 # [Hz]
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_030_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
         detectors:
@@ -386,7 +384,6 @@ experiments:
         eval_nside: 512
         fwhm: 27.1 # [arcmin]
         freq: 44.1 # [GHz]
-        fsamp: 46.5454545454545
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_044_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_44.txt"
         detectors:
@@ -415,7 +412,6 @@ experiments:
         eval_nside: 1024
         fwhm: 13.3 # [arcmin]
         freq: 70.1 # [GHz]
-        fsamp: 78.7692307692308
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_70.txt"
         detectors:
@@ -462,7 +458,6 @@ experiments:
     bad_data_bitmask: 0b1111111111111111111111111111101
     min_unmasked_fraction: 0.05  # Read-time cut: drop detector-scans with less unflagged data.
     #bad_PIDs_path: "/mn/stornext/d23/cmbco/jonas/c4_testing/Commander4/badPIDs.npy"
-    num_scans: 11395
     bands:
       AkariN60:
         abs_gain:
@@ -471,10 +466,8 @@ experiments:
         polarization: "I"
         num_tasks: 64 #128 #24
         eval_nside: 512
-        data_nside: 2048
         fwhm: 0.6166 # [arcmin]
         freq: 4996 # [GHz]
-        fsamp: 25.28 # [Hz]
         processing_mask: "/mn/stornext/d23/cmbco/globe/akari/mask/mask_proc_akari_n60_v1.fits"
         filelist: "/mn/stornext/d23/cmbco/globe/akari/tod/n065/filelist_akari_n65.txt"
         detectors:

@@ -204,7 +204,6 @@ experiments:
     bad_data_bitmask: 6111232  # Flag bits that mark a sample unusable (simgen's standard).
     mapmaker: "bin"
     sparse_maps: true              # The feature under test; flip to false for the comparison run.
-    num_scans: 32
     bands:
       Band100GHz:
         enabled: true
@@ -212,7 +211,6 @@ experiments:
         eval_nside: 512
         fwhm: 30.0
         freq: 100.0
-        fsamp: 30.0
         band_unit: "uK_RJ"
         polarization: "I"
         # [sigma0, fknee, alpha]; sigma0 is the injected truth, fknee/alpha start off it
@@ -231,7 +229,6 @@ experiments:
         eval_nside: 128
         fwhm: 45.0
         freq: 150.0
-        fsamp: 30.0
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [200.0, 0.05, -1.0]
@@ -248,7 +245,6 @@ experiments:
         eval_nside: 128
         fwhm: 30.0
         freq: 220.0
-        fsamp: 30.0
         band_unit: "uK_RJ"
         polarization: "I"
         initial_noise_params: [400.0, 0.1, -1.0]

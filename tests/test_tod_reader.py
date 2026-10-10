@@ -81,7 +81,6 @@ def test_standard_scan_is_read_by_detector_name(tmp_path: Path) -> None:
     result = read(make_params(tmp_path, [path], ["a", "b", "c"]))
 
     assert result.nscans == 1 and result.ndet == 3 and result.fsamp == 10.0
-    assert result.nscans_allranks == 1
     np.testing.assert_array_equal(result.scan_time_index, [0])
     scan = result.scans[0]
     assert scan.scan_id == 1 and scan.start_time == 0.0
@@ -146,6 +145,21 @@ def test_level_outliers_are_judged_against_their_own_detector(tmp_path: Path) ->
     assert kept == {(scan_id, name) for scan_id in range(1, 6) for name in "ab"} - {(3, "a")}
 
 
+def test_a_scan_emptied_by_the_level_cut_is_removed_with_its_time_index(tmp_path: Path) -> None:
+    rng = np.random.default_rng(2)
+    paths = []
+    for scan_id in range(1, 6):
+        a = rng.normal(size=NTOD).astype(np.float32)
+        if scan_id == 3:
+            a += 100.0
+        paths.append(write_scan(tmp_path, scan_id, {"a": a}))
+
+    result = read(make_params(tmp_path, paths, ["a"], max_rms_ratio=10.0))
+
+    assert [scan.scan_id for scan in result.scans] == [1, 2, 4, 5]
+    np.testing.assert_array_equal(result.scan_time_index, [0, 1, 3, 4])
+
+
 def test_filelist_slice_and_bad_scan_ids_select_the_scans(tmp_path: Path) -> None:
     paths = [write_scan(tmp_path, scan_id, {"a": tod()}) for scan_id in range(1, 6)]
     np.save(tmp_path / "bad.npy", np.array([3]))
@@ -155,7 +169,6 @@ def test_filelist_slice_and_bad_scan_ids_select_the_scans(tmp_path: Path) -> Non
     result = read(params)
 
     assert [scan.scan_id for scan in result.scans] == [2, 4]
-    assert result.nscans_allranks == 2
     # The time index is the scan's filelist row, which counts rows the slice and bad list skip.
     np.testing.assert_array_equal(result.scan_time_index, [1, 3])
 
@@ -186,4 +199,3 @@ def test_rank_without_scans_still_gets_the_sample_rate(tmp_path: Path) -> None:
 
     assert result.nscans == 1 - comm.rank
     assert result.fsamp == 10.0
-    assert result.nscans_allranks == 1
