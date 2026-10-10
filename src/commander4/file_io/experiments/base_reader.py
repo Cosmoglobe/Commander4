@@ -120,19 +120,20 @@ class TODReader:
             band_comm.Bcast(self.pol_eff, root=0)
 
 
-    def read(self, scan_ids: list[int], paths: list[str]) -> DetectorGroupTOD:
+    def read(self, scan_list: list[tuple[int, int, str]]) -> DetectorGroupTOD:
         """Read the given scans and keep the detector-scans that pass `keep_detector`.
 
         A scan whose detectors are all dropped is left out, so the band may hold fewer scans than
         were asked for.
 
         Args:
-            scan_ids: The scan IDs to read, in time order.
-            paths: The file holding each scan.
+            scan_list: The scans to read, in time order, each as (filelist row, scan ID, file
+                path). The row is the scan's place in time, kept as its ``scan_time_index``.
         """
         scans = []
+        time_index = []
         fsamp = 0.0
-        for iscan, (scan_id, path) in enumerate(zip(scan_ids, paths)):
+        for iscan, (row, scan_id, path) in enumerate(scan_list):
             with h5py.File(path, "r") as f:
                 header = self.read_scan_header(f, scan_id)
                 if header is None:
@@ -149,23 +150,29 @@ class TODReader:
                         detectors.append(det)
             if len(detectors) > 0:
                 scans.append(ScanTOD(detectors, header.start_time, scan_id))
-            if self.band_comm.Get_rank() == 0 and iscan % max(1, len(scan_ids)//5) == 0:
+                time_index.append(row)
+            if self.band_comm.Get_rank() == 0 and iscan % max(1, len(scan_list)//5) == 0:
                 logger.debug(f"Reading scans from disk, progress on master rank of band "
-                             f"{self.band._name}: {iscan}/{len(scan_ids)}")
+                             f"{self.band._name}: {iscan}/{len(scan_list)}")
             if iscan % 10 == 0:
                 gc.collect()
         if self.max_rms_ratio is not None and not self.tod_is_simulated:
-            scans = self.drop_level_outliers(scans)
+            self.drop_level_outliers(scans)
+            # Remove the scans the cut left without detectors, together with their time index.
+            time_index = [row for row, scan in zip(time_index, scans) if len(scan.detectors) > 0]
+            scans = [scan for scan in scans if len(scan.detectors) > 0]
 
         # Ranks that read no scan get the sample rate from the others.
         fsamp = self.band_comm.allreduce(fsamp, op=MPI.MAX)
-        return DetectorGroupTOD(scans, self.experiment._name, self.band._name,
-                                self.band.eval_nside, self.band.freq, self.band.fwhm, fsamp,
-                                len(self.det_names), self.band.polarization, self.noise_model,
-                                tf_tau_sec=_tau_sec(self.band),
-                                instrument_filepath=getattr(self.experiment, "instrument_file",
-                                                            None),
-                                hfi_demodulation=self.hfi_demodulation)
+        band_tod = DetectorGroupTOD(scans, self.experiment._name, self.band._name,
+                                    self.band.eval_nside, self.band.freq, self.band.fwhm, fsamp,
+                                    len(self.det_names), self.band.polarization, self.noise_model,
+                                    tf_tau_sec=_tau_sec(self.band),
+                                    instrument_filepath=getattr(self.experiment,
+                                                                "instrument_file", None),
+                                    hfi_demodulation=self.hfi_demodulation)
+        band_tod.scan_time_index = np.array(time_index, dtype=np.int64)
+        return band_tod
 
 
     def read_scan_header(self, f: h5py.File, scan_id: int) -> Bunch | None:
@@ -315,16 +322,14 @@ class TODReader:
         return bool(np.isfinite(tod).all() and tod.any())
 
 
-    def drop_level_outliers(self, scans: list[ScanTOD]) -> list[ScanTOD]:
+    def drop_level_outliers(self, scans: list[ScanTOD]) -> None:
         """Drop detector-scans whose TOD level is far above their detector's usual level.
 
         The level is the RMS of the unflagged samples, offset included. A detector-scan is dropped
         when its level is above ``max_rms_ratio`` times the median level of the same detector over
         the whole band. This catches broken detector-scans, such as a large constant offset,
-        without a threshold in detector units. Collective over ``band_comm``.
-
-        Returns:
-            The scans with those detector-scans removed; a scan left with no detectors is removed.
+        without a threshold in detector units. The scans' detector lists are edited in place, so a
+        scan can be left with none. Collective over ``band_comm``.
         """
         detectors = [det for scan in scans for det in scan.detectors]
         det_idx = np.array([det.det_idx_fullband for det in detectors], dtype=np.int64)
@@ -343,15 +348,11 @@ class TODReader:
             logger.info(f"Band {self.band._name}: dropped {ndropped} detector-scans whose TOD RMS "
                         f"is more than {self.max_rms_ratio} times their detector's median.")
         # `keep` follows the order of `detectors`: scan by scan, detector by detector.
-        kept_scans = []
         start = 0
         for scan in scans:
             stop = start + len(scan.detectors)
             scan.detectors = [det for det, ok in zip(scan.detectors, keep[start:stop]) if ok]
             start = stop
-            if len(scan.detectors) > 0:
-                kept_scans.append(scan)
-        return kept_scans
 
 
 def find_good_fourier_size(ntod: int) -> int:

@@ -172,7 +172,6 @@ experiments:
     experiment_id: "general"
     bad_data_bitmask: 6111232  # Flag bits that mark a sample unusable (simgen's standard).
     mapmaker: "CG"
-    num_scans: 2400
     bands:
       Band30GHz:
         enabled: true
@@ -180,7 +179,6 @@ experiments:
         eval_nside: 64
         fwhm: 120.0
         freq: 30.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         tau_ms: 150.0
         polarization: "IQU"
@@ -198,7 +196,6 @@ experiments:
         eval_nside: 64
         fwhm: 100.0
         freq: 44.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
@@ -215,7 +212,6 @@ experiments:
         eval_nside: 64
         fwhm: 80.0
         freq: 70.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
@@ -232,7 +228,6 @@ experiments:
         eval_nside: 64
         fwhm: 65.0
         freq: 100.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
@@ -249,7 +244,6 @@ experiments:
         eval_nside: 64
         fwhm: 50.0
         freq: 217.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
@@ -266,7 +260,6 @@ experiments:
         eval_nside: 64
         fwhm: 40.0
         freq: 353.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]

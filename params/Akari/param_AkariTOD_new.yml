@@ -241,7 +241,6 @@ experiments:
     enabled: true
     mapmaker: "CG"
     experiment_id: "akari"  # Decides expected data format, what TOD reader is used, etc.
-    num_scans: 11395
     bad_data_bitmask: 2097149 #0b1111111111111111111111111111101
     min_unmasked_fraction: 0.05  # Read-time cut: drop detector-scans with less unflagged data.
     bands:

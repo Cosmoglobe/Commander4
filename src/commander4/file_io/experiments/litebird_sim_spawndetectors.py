@@ -6,7 +6,6 @@ with an arbitrary detector count without simulating each one's pointing.
 """
 import h5py
 import numpy as np
-from mpi4py import MPI
 from pixell.bunch import Bunch
 
 import commander4.compression.huffman as huffman
@@ -29,14 +28,6 @@ class SpawnDetectorsReader(TODReader):
     the in-place simulation (``replace_tod_with_sim: true``) to fill. Every detector is therefore
     present in every scan. The files' pointing must be stored uncompressed.
     """
-    def __init__(self, band_comm: MPI.Comm, params: Bunch, experiment: Bunch, band: Bunch):
-        if getattr(experiment, "pix_is_compressed", False) or getattr(experiment,
-                                                                      "psi_is_compressed", False):
-            raise NotImplementedError("Compressed data not yet implemented in litebird injection "
-                                      "sims.")
-        super().__init__(band_comm, params, experiment, band)
-
-
     def read_scan_header(self, f: h5py.File, scan_id: int) -> Bunch | None:
         """Add the shared pointing and a block of zero TODs to the standard scan header."""
         header = super().read_scan_header(f, scan_id)
@@ -44,9 +35,13 @@ class SpawnDetectorsReader(TODReader):
             return None
         # The shared pointing is read once per scan, not once per detector, to spare the disks.
         group = f[f"{header.pid}/{SOURCE_DETECTOR}"]
+        pix, psi = group["pix"][()], group["psi"][()]
+        # Huffman-compressed pointing is stored as one opaque byte blob (numpy.void).
+        if isinstance(pix, np.void) or isinstance(psi, np.void):
+            raise NotImplementedError("litebird_sim_spawndetectors needs uncompressed pointing.")
         # reshape(-1) drops the leading axis of simulations that store shape (1, ntod).
-        header.pix = group["pix"][()].reshape(-1)[:header.ntod_fft].astype(np.int64, copy=False)
-        header.psi = group["psi"][()].reshape(-1)[:header.ntod_fft].astype(np.float32, copy=False)
+        header.pix = pix.reshape(-1)[:header.ntod_fft].astype(np.int64, copy=False)
+        header.psi = psi.reshape(-1)[:header.ntod_fft].astype(np.float32, copy=False)
         header.tods = np.zeros((len(self.det_names), header.ntod_fft), dtype=np.float32)
         return header
 

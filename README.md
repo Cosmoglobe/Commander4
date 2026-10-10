@@ -79,7 +79,7 @@ Per-scan sampled quantities at the top level, output maps under `maps/`. `NSC` i
 ```YAML
 metadata/band_unit             # thermodynamic unit of the gains and maps below
 metadata/map_fwhm_arcmin       # beam of maps/observed_sky and maps/rms
-scan_ids           (NSC,)      # int64 scan IDs; the row order of every per-scan array
+scan_ids           (NSC,)      # int64 scan IDs in time order; the row order of every per-scan array
 det_names          (ND,)       # detector names; the column order of every per-detector array
 scan_start_time    (NSC,)      # scan start time (C3 'MJD'); 0.0 if the reader supplies no time
 orbital_velocity   (NSC,ND,3)  # spacecraft velocity [m/s], what anchors the absolute calibration
