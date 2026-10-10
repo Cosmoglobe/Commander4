@@ -215,7 +215,7 @@ experiments:
     mapmaker: "bin"
     experiment_id: "planck_lfi"  # Decides expected data format, what TOD reader is used, etc.
     min_unmasked_fraction: 0.75  # Read-time cut: drop detector-scans with less unflagged data.
-    max_rms_ratio: 10.0          # Read-time cut: drop detector-scans whose TOD RMS is above 10x
+    max_rms_ratio: 6.0           # Read-time cut: drop detector-scans whose TOD RMS is above 6x
                                  # their detector's median (e.g. PID 1, with a -0.19 V offset).
     instrument_file: "/mn/stornext/d16/cmbco/AST9240/2022/data/LFI_instrument_v8.h5"
     bands:

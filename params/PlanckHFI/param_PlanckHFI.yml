@@ -76,28 +76,28 @@ tod_processing:
 
   abs_gain:
     enabled: true
-    from_iter: 2
+    from_iter: 1
     calibrate_against: orbital_dipole # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 0.5        # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   rel_gain:
     enabled: true
-    from_iter: 2
+    from_iter: 1
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 0.5        # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   temporal_gain:
     enabled: false
-    from_iter: 2
+    from_iter: 1
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 0.5        # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   corr_noise:
     enabled: true
-    from_iter: 2
+    from_iter: 1
     sample_psd_params: true     # Resample noise-model params (needs corr_noise.enabled).
     sample_sigma0: True            # Re-estimate sigma0 from the n_corr-subtracted residual.
     nomono: False                 # Project the per-scan monopole out of n_corr (Fortran "nomono").
@@ -116,7 +116,7 @@ tod_processing:
 
   far_beam_deconvolution:
     enabled: True
-    from_iter: 2
+    from_iter: 1
     lmax: 256          # Sky and beam are truncated here before convolving (C3 uses 100).
     mmax: 256          # Beam azimuthal limit; drives the cube size hardest.
     epsilon: 1.0e-4    # ducc0 interpolation accuracy.

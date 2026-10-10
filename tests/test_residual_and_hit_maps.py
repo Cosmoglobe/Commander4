@@ -70,18 +70,20 @@ def _fake_tod_samples(sigma0: float = 2.0, ndet: int = 1) -> SimpleNamespace:
         accept=np.ones((1, ndet), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
         chisq_z=np.full((1, ndet), np.nan), good_fraction=np.full((1, ndet), np.nan),
         TOD_PS_NBIN=100, tod_ps_freqs=empty_ps(), tod_ps_raw=empty_ps(), tod_ps_residual=empty_ps(),
-        tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None, residual_tods=None)
+        tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None, residual_tods=None,
+        scan_runtime=np.zeros(1))
 
 
-def _run(band: DetectorGroupTOD, sky_model: np.ndarray,
-         sparse_maps: bool = False) -> dict[str, np.ndarray]:
+def _run(band: DetectorGroupTOD, sky_model: np.ndarray, sparse_maps: bool = False,
+         tod_samples: SimpleNamespace | None = None) -> dict[str, np.ndarray]:
     mapmaking = MapmakingConfig(
         mapmaker="bin", num_threads=1,
         include_orbital_dipole_maps=False, include_corr_noise_maps=False,
         include_sky_model_maps=False, include_residual_maps=True, include_hit_maps=True,
         common_res_fwhm=0.0,
     )
-    tod_samples = _fake_tod_samples(ndet=band.ndet)
+    if tod_samples is None:
+        tod_samples = _fake_tod_samples(ndet=band.ndet)
     # As in a real run, the domain is built first and the sky model is handed over at its pixels.
     band.pixel_domain = PixelDomain.from_view(TODView(band, tod_samples), MPI.COMM_SELF,
                                               "sparse" if sparse_maps else "full", _NSIDE)
@@ -132,6 +134,20 @@ def test_residual_map_is_zero_for_a_perfect_noiseless_model(monkeypatch):
     # float32 TODs at this signal amplitude, so compare at single precision.
     np.testing.assert_allclose(maps["res"], 0.0, atol=1e-3)
     np.testing.assert_allclose(maps["observed_sky"], sky, rtol=0, atol=1e-3)
+
+
+def test_mapmaking_loop_records_each_scans_wall_time(monkeypatch):
+    """The scan's time in the loop is recorded afresh on every call, not added to the last one."""
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    rng = np.random.default_rng(6)
+    n = 256
+    band = _build_band(rng.integers(0, _NPIX, n), rng.uniform(0.0, np.pi, n), rng.normal(size=n))
+    tod_samples = _fake_tod_samples()
+    tod_samples.scan_runtime[:] = 1e6  # A stale value from an earlier iteration.
+
+    _run(band, np.zeros((3, _NPIX)), tod_samples=tod_samples)
+
+    assert 0.0 < tod_samples.scan_runtime[0] < 1e6
 
 
 def test_response_split_detectors_recover_sky_and_zero_residual(monkeypatch):

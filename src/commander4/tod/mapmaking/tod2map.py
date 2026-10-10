@@ -8,6 +8,8 @@ for its weights and the aux maps, but solves the sky map iteratively after the l
 the right-hand side it adds up during the loop. Both use only the good samples: the binned maps
 leave the flagged ones out, and the CG gives them zero weight.
 """
+import time
+
 import numpy as np
 from mpi4py import MPI
 from numpy.typing import NDArray
@@ -86,7 +88,17 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_outp
     stop_bench("setup")
 
     ### MAIN SCAN LOOP ###
+    # Each scan's wall time in this loop is recorded as its measured cost, for spreading the scans
+    # over the ranks in a later run. A detector-scan's time runs from the start of its pass to the
+    # start of the next one, so the passes that a veto ends early are counted too.
+    tod_samples.scan_runtime[:] = 0.0
+    last_iscan, last_start = None, 0.0
     for view in scan_view.iter_focused(accepted_only=True):
+        now = time.perf_counter()
+        if last_iscan is not None:
+            tod_samples.scan_runtime[last_iscan] += now - last_start
+        last_iscan, last_start = view.iscan, now
+
         start_bench("pix-psi")
         good_data_mask = view.get_mask(proc_mask=False)
         pix, psi = view.pix, view.psi
@@ -213,6 +225,8 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_outp
             # axis, and gives the flagged samples zero weight itself.
             with benchmark("cg-rhs"):
                 cg.accum_to_RHS(view, d_sky/gain)
+    if last_iscan is not None:
+        tod_samples.scan_runtime[last_iscan] += time.perf_counter() - last_start
 
     with benchmark("MPI-sync"):
         band_comm.Barrier()

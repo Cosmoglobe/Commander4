@@ -678,7 +678,8 @@ experiments:
                               # unflagged samples) is above this many times the median RMS
                               # of the same detector over the band. null disables the cut.
                               # Catches broken detector-scans without a threshold in
-                              # detector units; e.g. 10 for LFI drops PID 1's offset.
+                              # detector units. LFI uses 6: normal LFI detector-scans
+                              # stay below 4.3, broken ones (offsets) are above 10.
 
     # Replace the TOD read from disk with a synthetic sky plus noise realization, once at
     # load. Works for every experiment, to test the samplers against a known truth while
