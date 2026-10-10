@@ -43,6 +43,7 @@ c4-diff-params = "commander4.standalone_tools.diff_params:main"
 c4-validate-params = "commander4.standalone_tools.validate_params:main"
 c4-generate-stubs = "commander4.standalone_tools.generate_stubs:main"
 c4-cmb-realizations = "commander4.standalone_tools.constrained_cmb_realizations:main"
+c4-scan-weights = "commander4.standalone_tools.scan_weights:main"
 c4-simgen = "simgen.__main__:main"
 
 # Test configuration. `testpaths` keeps a bare `pytest` run pointed at the test directory, and the

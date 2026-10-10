@@ -1,5 +1,5 @@
 """The shared TOD reader: what it reads from a standard scan file, and which detector-scans it drops
-(the cuts).
+(the cuts). Also the sky position `TODSamples` records for each scan read.
 
 The scan files are written by simgen's `write_scan_file`, with plain (uncompressed) pointing so the
 expected pixels and angles are exact. Tests that need flags re-encode them with their own tree.
@@ -7,6 +7,7 @@ expected pixels and angles are exact. Tests that need flags re-encode them with 
 from pathlib import Path
 
 import h5py
+import healpy as hp
 import numpy as np
 import pytest
 from mpi4py import MPI
@@ -15,6 +16,7 @@ from pixell.bunch import Bunch
 import commander4.file_io.tod_reader as tod_reader
 from commander4.compression import huffman
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.data_models.tod_samples import TODSamples
 from commander4.file_io.experiments.base_reader import find_good_fourier_size
 from commander4.parameters.parse import params_from_dict
 from simgen.writers import write_filelist, write_scan_file
@@ -81,7 +83,6 @@ def test_standard_scan_is_read_by_detector_name(tmp_path: Path) -> None:
     result = read(make_params(tmp_path, [path], ["a", "b", "c"]))
 
     assert result.nscans == 1 and result.ndet == 3 and result.fsamp == 10.0
-    np.testing.assert_array_equal(result.scan_time_index, [0])
     scan = result.scans[0]
     assert scan.scan_id == 1 and scan.start_time == 0.0
     assert [(det.name, det.det_idx_fullband) for det in scan.detectors] == [("a", 0), ("b", 1)]
@@ -95,6 +96,49 @@ def test_standard_scan_is_read_by_detector_name(tmp_path: Path) -> None:
         assert det.polang == polang
         np.testing.assert_array_equal(det.orbital_velocity_m_per_s, [1.0, 2.0, 3.0])
         assert det.good_data_mask.all()
+
+
+def read_sky_position(directory: Path, vectors: np.ndarray) -> np.ndarray:
+    """Read a one-detector scan whose pointing follows the (3, ntod) unit ``vectors``, and return
+    the sky position (theta, phi) that `TODSamples` records for it."""
+    ntod, nside = vectors.shape[1], 256
+    assert find_good_fourier_size(ntod) == ntod  # So the reader keeps every sample.
+    path = str(directory / "scan_000001.h5")
+    write_scan_file(path, 1, nside, 10.0, 4096, ntod, np.zeros(3), ["a"],
+                    {"a": hp.vec2pix(nside, *vectors)}, {"a": np.zeros(ntod)},
+                    {"a": np.linspace(1.0, 2.0, ntod, dtype=np.float32)},
+                    {"a": np.array([1e6, 1.0, 0.1, -1.0])}, compress=False)
+    params = make_params(directory, [path], ["a"])
+    params.output, params.gibbs = Bunch(chains=Bunch(include=Bunch())), Bunch()
+    band = params.experiments.Exp.bands.Band
+    band.eval_nside = nside
+    return TODSamples(read(params), params, band, MPI.COMM_SELF, chain=1).scan_sky_position[0]
+
+
+def test_sky_position_of_a_spinning_scan_is_its_spin_axis(tmp_path: Path) -> None:
+    """The detector circles the axis 4.4 times at 88 degrees from it, as Planck LFI does. The last
+    part-ring tilts the mean pointing direction by about 60 degrees, but not the spin axis."""
+    axis = hp.ang2vec(1.0, 2.0)
+    # Two unit vectors at right angles to the axis and to each other span the plane of the rings.
+    u = np.cross(axis, [0.0, 0.0, 1.0])
+    u /= np.linalg.norm(u)
+    v = np.cross(axis, u)
+    angle = np.linspace(0.0, 4.4*2*np.pi, 8192, endpoint=False)
+    opening = np.radians(88.0)
+    vectors = (np.cos(opening)*axis[:, None]
+               + np.sin(opening)*(np.cos(angle)*u[:, None] + np.sin(angle)*v[:, None]))
+
+    np.testing.assert_allclose(read_sky_position(tmp_path, vectors), [1.0, 2.0], atol=1e-2)
+
+
+def test_sky_position_of_a_patch_scan_is_the_patch_centre(tmp_path: Path) -> None:
+    """The detector sweeps back and forth over a 10 x 5 degree patch, as a ground telescope does."""
+    t = np.linspace(0.0, 1.0, 8192)
+    theta = 1.0 + np.radians(5.0)*np.sin(2*np.pi*20*t)  # 20 sweeps of 10 degrees in theta
+    phi = 2.0 + np.radians(5.0)*(t - 0.5)  # while the sky drifts 5 degrees in phi
+
+    np.testing.assert_allclose(read_sky_position(tmp_path, np.array(hp.ang2vec(theta, phi)).T),
+                               [1.0, 2.0], atol=1e-2)
 
 
 def test_bad_detector_scans_and_empty_scans_are_dropped(tmp_path: Path) -> None:
@@ -145,7 +189,7 @@ def test_level_outliers_are_judged_against_their_own_detector(tmp_path: Path) ->
     assert kept == {(scan_id, name) for scan_id in range(1, 6) for name in "ab"} - {(3, "a")}
 
 
-def test_a_scan_emptied_by_the_level_cut_is_removed_with_its_time_index(tmp_path: Path) -> None:
+def test_a_scan_emptied_by_the_level_cut_is_removed(tmp_path: Path) -> None:
     rng = np.random.default_rng(2)
     paths = []
     for scan_id in range(1, 6):
@@ -157,20 +201,21 @@ def test_a_scan_emptied_by_the_level_cut_is_removed_with_its_time_index(tmp_path
     result = read(make_params(tmp_path, paths, ["a"], max_rms_ratio=10.0))
 
     assert [scan.scan_id for scan in result.scans] == [1, 2, 4, 5]
-    np.testing.assert_array_equal(result.scan_time_index, [0, 1, 3, 4])
 
 
 def test_filelist_slice_and_bad_scan_ids_select_the_scans(tmp_path: Path) -> None:
+    """The filelist rows are not in time order. The slice counts them in scan-ID order."""
     paths = [write_scan(tmp_path, scan_id, {"a": tod()}) for scan_id in range(1, 6)]
     np.save(tmp_path / "bad.npy", np.array([3]))
     params = make_params(tmp_path, paths, ["a"], filelist_idx_start=1, filelist_idx_stop=-1,
                          bad_PIDs_path=str(tmp_path / "bad.npy"))
+    lines = (tmp_path / "filelist.txt").read_text().splitlines()
+    shuffled = [lines[0]] + [lines[1:][i] for i in (3, 0, 4, 1, 2)]  # scan IDs 4, 1, 5, 2, 3
+    (tmp_path / "filelist.txt").write_text("\n".join(shuffled) + "\n")
 
     result = read(params)
 
     assert [scan.scan_id for scan in result.scans] == [2, 4]
-    # The time index is the scan's filelist row, which counts rows the slice and bad list skip.
-    np.testing.assert_array_equal(result.scan_time_index, [1, 3])
 
 
 def test_simulated_tod_skips_the_tod_value_cuts(tmp_path: Path,

@@ -342,8 +342,8 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
     scan_counts = np.array(band_comm.allgather(nscans_local), dtype=int)
     displacements = np.insert(np.cumsum(scan_counts), 0, 0)[:-1]
     # The gathers below stack the ranks' scans in rank order, but the Wiener prior couples scans
-    # that are neighbours in time. `time_order` sorts the stacked scans into time order.
-    time_order = np.argsort(np.concatenate(band_comm.allgather(experiment_data.scan_time_index)))
+    # that are neighbours in time. `time_order` sorts the stacked scans by scan ID, i.e. in time.
+    time_order = np.argsort(np.concatenate(band_comm.allgather(tod_samples.scan_ids)))
 
     # Distribute detector solves across ranks in round-robin fashion.
     # Each detector's equation system is gathered to, solved on, and scattered from

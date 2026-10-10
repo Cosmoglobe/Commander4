@@ -54,7 +54,6 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2) -> TODSamples:
     s.nscans, s.ndet, s.npar = nscans, ndet, 3
     s.experiment_name, s.band_name = "EXP", "B"
     s.scan_ids = np.arange(nscans, dtype=np.int64)
-    s.scan_time_index = np.arange(nscans, dtype=np.int64)
     s.det_names = [f"d{i}" for i in range(ndet)]
     s.band_unit_factor, s.band_unit = 1.0, "uK_RJ"
     s.abs_gain, s.rel_gain = 1.0, np.zeros(ndet)
@@ -66,6 +65,7 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2) -> TODSamples:
     s.chisq_z = np.zeros((nscans, ndet))
     s.good_fraction = np.ones((nscans, ndet))
     s.scan_start_time = np.zeros(nscans)
+    s.scan_sky_position = np.zeros((nscans, 2))
     s.orbital_velocity = np.zeros((nscans, ndet, 3), dtype=np.float32)
     s.ncorr_cg_residual = np.zeros((nscans, ndet))
     s.ncorr_cg_niter = np.zeros((nscans, ndet), dtype=np.int32)
@@ -101,10 +101,9 @@ def test_the_band_file_carries_every_dataset_a_restart_reads_back() -> None:
 
 
 def test_per_scan_datasets_are_written_in_time_order() -> None:
-    """A rank's scans need not be in time order; the chain rows always are."""
+    """A rank's scans need not be in time order; the chain rows always are (by scan ID)."""
     samples = _minimal_tod_samples(nscans=4)
     samples.scan_ids = np.array([30, 10, 40, 20], dtype=np.int64)
-    samples.scan_time_index = np.array([3, 1, 4, 2], dtype=np.int64)
     samples.temporal_gain = samples.scan_ids[:, None] * np.ones((1, samples.ndet))
 
     arrays = samples.gather_chain_arrays(1)

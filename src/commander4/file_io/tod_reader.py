@@ -46,11 +46,11 @@ def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch
                         my_band: Bunch) -> DetectorGroupTOD:
     """Read this rank's share of one band's scans.
 
-    The band master reads the filelist, keeps the rows selected by ``filelist_idx_start`` and
-    ``filelist_idx_stop``, and drops the scans listed in ``bad_PIDs_path``. The remaining scans are
-    split into contiguous blocks, one per rank, and each rank reads its block with the experiment's
-    reader. If the experiment sets ``replace_tod_with_sim``, the TOD is then replaced by a
-    simulation.
+    The band master reads the filelist and sorts its rows by scan ID, which is time order. It keeps
+    the sorted rows selected by ``filelist_idx_start`` and ``filelist_idx_stop``, and drops the
+    scans listed in ``bad_PIDs_path``. The remaining scans are split into contiguous blocks, one per
+    rank, and each rank reads its block with the experiment's reader. If the experiment sets
+    ``replace_tod_with_sim``, the TOD is then replaced by a simulation.
 
     Args:
         band_comm: The band's MPI communicator; each rank reads a disjoint block of scans.
@@ -59,8 +59,7 @@ def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch
 
     Returns:
         This rank's `DetectorGroupTOD`. The reader may drop scans (empty or bad data), so it can
-        hold fewer scans than the rank was given; each kept scan's filelist row is its
-        ``scan_time_index``.
+        hold fewer scans than the rank was given.
     """
     if my_experiment.experiment_id not in experiment_tod_readers:
         raise ValueError("An experiment in the parameter file has experiment_id = "\
@@ -76,28 +75,29 @@ def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch
     filelist_idx_stop = resolve_param(params, "filelist_idx_stop", scopes, default=None,
                                       legal_types=(int, type(None)))
 
-    # The band master reads the filelist; the other ranks get the selected scans from it. Each
-    # selected scan is (filelist row, scan ID, file path). The rows run in time order, so a scan's
-    # row is its place in time.
-    # TODO(filelist columns): read the per-scan weight, sky position and ntod that a filelist tool
-    # will write into the columns after the path, for the split below and for buffer sizes.
-    scans: list[tuple[int, int, str]] | None = None
+    # The band master reads the filelist; the other ranks get the selected scans from it, each as
+    # (scan ID, file path). Scan IDs increase with time, but the rows of a filelist need not (the
+    # LFI filelists are not), so the rows are sorted by scan ID before the slice.
+    # TODO(filelist columns): read the per-scan weight and sky position that `c4-scan-weights`
+    # writes into the columns after the path, for the split below, and later ntod for buffer sizes.
+    scans: list[tuple[int, str]] | None = None
     if rank == 0:
         with open(my_band.filelist) as infile:
             infile.readline()  # The first line holds the number of scans.
             # Each row is a scan ID, a quoted file path, and three columns that are not used.
             rows = [line.split() for line in infile if line.strip()]
+        rows.sort(key=lambda columns: int(columns[0]))
         start, stop, _ = slice(filelist_idx_start, filelist_idx_stop).indices(len(rows))
         bad_scan_ids = set()
         if "bad_PIDs_path" in my_experiment:
             bad_scan_ids = {int(scan_id) for scan_id in np.load(my_experiment.bad_PIDs_path)}
         scans = []
-        for row in range(start, stop):
-            scan_id = int(rows[row][0])
+        for columns in rows[start:stop]:
+            scan_id = int(columns[0])
             if scan_id not in bad_scan_ids:
-                scans.append((row, scan_id, rows[row][1].strip('"')))
-        logger.info(f"Band {band_name}: selected filelist rows [{start}:{max(start, stop)}], "
-                    f"{max(0, stop - start)} of {len(rows)} scans, of which "
+                scans.append((scan_id, columns[1].strip('"')))
+        logger.info(f"Band {band_name}: selected rows [{start}:{max(start, stop)}] of the filelist "
+                    f"sorted by scan ID, {max(0, stop - start)} of {len(rows)} scans, of which "
                     f"{max(0, stop - start) - len(scans)} are listed as bad.")
     scans = band_comm.bcast(scans, root=0)
     if len(scans) == 0:
@@ -105,7 +105,7 @@ def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch
                          f"[{filelist_idx_start}:{filelist_idx_stop}] selects no usable scans.")
 
     # TODO(distribution): split by sky position and weight by scan cost. A rank's scans need not
-    # be contiguous in time, since every time-ordered step sorts by `scan_time_index`.
+    # be contiguous in time, since every step that needs time order sorts by scan ID.
     my_start, my_stop = split_integer_range(len(scans), band_comm.Get_size(), rank)
     reader = experiment_tod_readers[my_experiment.experiment_id](
         band_comm, params, my_experiment, my_band)

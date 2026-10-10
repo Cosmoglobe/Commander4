@@ -24,8 +24,6 @@ class DetectorGroupTOD:
     Attributes:
         scans (list[ScanTOD]): Scans assigned to this MPI rank.
         nscans (int): Number of scans in ``scans``.
-        scan_time_index (NDArray): (nscans,) each scan's row in the band's filelist, i.e. its
-            place in time. Rank order need not be time order, so sort by this when it matters.
         experiment_name (str): Experiment identifier (e.g. ``'PlanckLFI'``).
         band_name (str): Band identifier (e.g. ``'30GHz'``).
         nside (int): HEALPix nside for map evaluation.
@@ -55,10 +53,6 @@ class DetectorGroupTOD:
         # Whether the TOD needs demodulation to be read (Planck HFI stores alternating
         # positive/negative modulation half-cycles.)
         self.hfi_demodulation = hfi_demodulation
-        # Each scan's place in time: its row in the band's filelist. The ranks need not hold
-        # contiguous stretches of time, so the steps that need time order (the temporal-gain prior,
-        # the chain output) sort by this. The TOD reader sets it; the default is this rank's order.
-        self.scan_time_index = np.arange(self.nscans, dtype=np.int64)
         self.noise_model = noise_model
         # The band's PixelDomain: which pixels this rank's map buffers hold. It depends only on the
         # static pointing, so it is built once at startup (tod/processing.py) and kept for the run.

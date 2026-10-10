@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 import h5py
+import healpy as hp
 from numpy.typing import NDArray
 from mpi4py import MPI
 from pixell.bunch import Bunch
@@ -125,7 +126,6 @@ class TODSamples:
         # The noise model defines how many parameters per detector-scan (first entry is sigma0).
         self.noise_model = experiment_data.noise_model
         self.npar = self.noise_model.npar
-        self.scan_time_index = experiment_data.scan_time_index
         # C4 works internally in uK_RJ; a band may quote its gain and maps in another unit via
         # `band_unit`. `band_unit_factor` D (= value of 1 uK_RJ in band_unit) converts at the file
         # boundary: brightness maps multiply by D, the gain (brightness in its denominator) divides by
@@ -192,6 +192,24 @@ class TODSamples:
         # files without one (today the simgen and Akari files).
         self.scan_start_time = np.array([scan.start_time for scan in experiment_data.scans],
                                         dtype=np.float64)
+        # Per-scan sky position (theta, phi) [rad], static. Written to the chain, where
+        # `c4-scan-weights` reads it to write the filelist that the next run splits scans by.
+        # It is the normal of the plane that best fits the first detector's pointing, on the side
+        # the pointing is on. A spinning scan (Planck) traces rings in one plane, whose normal is
+        # the spin axis; a part-ring lies in the same plane, so this works where the mean pointing
+        # direction does not. A scan of a small patch lies close to the patch's tangent plane,
+        # whose normal points at the patch centre.
+        sky_directions = np.zeros((self.nscans, 3))
+        for iscan, scan in enumerate(experiment_data.scans):
+            det = scan.detectors[0]
+            pix = det.get_pix()
+            # About 1000 samples per scan fix the plane to well under an arcminute.
+            vectors = np.array(hp.pix2vec(det.nside, pix[::max(1, len(pix)//1000)]))  # (3, n)
+            # The direction the vectors scatter least along is the eigenvector of their 3x3
+            # covariance with the smallest eigenvalue (eigh sorts them in ascending order).
+            normal = np.linalg.eigh(np.cov(vectors))[1][:, 0]
+            sky_directions[iscan] = normal*np.sign(normal @ vectors.mean(axis=1))
+        self.scan_sky_position = np.column_stack(hp.vec2ang(sky_directions))
 
         # Low-resolution (log-binned) TOD power spectra, written to the chain by default: a shared
         # binned frequency axis plus the binned periodograms of several per-detector-scan TOD views
@@ -412,12 +430,10 @@ class TODSamples:
         ####################################################################
         # Gather the various TOD samples.
         ####################################################################
-        # 0. Unique scan-IDs (per-scan quantity), and each scan's place in time. The gathers below
-        # stack the ranks' scans in rank order, which need not be time order; the per-scan datasets
-        # are sorted into time order before they are returned.
+        # 0. Unique scan-IDs (per-scan quantity), which increase with time. The gathers below stack
+        # the ranks' scans in rank order, which need not be time order; the per-scan datasets are
+        # sorted by scan ID before they are returned.
         scan_ids_global = _gather_scan_distributed_array(band_comm, self.scan_ids, scans_per_rank)
-        scan_time_index_global = _gather_scan_distributed_array(band_comm, self.scan_time_index,
-                                                                scans_per_rank)
 
         # 1. Absolute gain (per-band quantity)
         abs_gain_global = self.abs_gain  # Copies held on each rank, no communication required.
@@ -448,6 +464,8 @@ class TODSamples:
                                                                 scans_per_rank)
         orbital_velocity_global = _gather_scan_distributed_array(band_comm, self.orbital_velocity,
                                                                  scans_per_rank)
+        scan_sky_position_global = _gather_scan_distributed_array(band_comm, self.scan_sky_position,
+                                                                  scans_per_rank)
         ncorr_cg_residual_global = _gather_scan_distributed_array(band_comm,
                                                                   self.ncorr_cg_residual,
                                                                   scans_per_rank)
@@ -545,6 +563,7 @@ class TODSamples:
             "good_fraction": good_fraction_global,
             "scan_start_time": scan_start_time_global,
             "orbital_velocity": orbital_velocity_global,
+            "scan_sky_position": scan_sky_position_global,
             "ncorr_cg_residual": ncorr_cg_residual_global,
             "ncorr_cg_niter": ncorr_cg_niter_global,
             "ncorr_converged": ncorr_converged_global,
@@ -559,9 +578,9 @@ class TODSamples:
         if modulation_phase_global is not None:
             per_scan_arrays["modulation_phase"] = modulation_phase_global
             per_scan_arrays["baselines"] = baselines_global
-        time_order = np.argsort(scan_time_index_global)
-        # The ranks had the scans stored in some arbitrary order,
-        # so we sort them back to being in time-order.
+        # The ranks had the scans stored in some arbitrary order, so we sort them back to being in
+        # time order, which is scan-ID order.
+        time_order = np.argsort(scan_ids_global)
         for name, values in per_scan_arrays.items():
             arrays[name] = values[time_order]
         arrays.update(jump_datasets)
