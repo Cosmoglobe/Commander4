@@ -1,0 +1,52 @@
+# Commander4: per-pixel amplitude solver + common-resolution smoothing feature test.
+#
+# Analyses `simgen/params/param_common_res.yml`, which describes the simulation and the truth
+# it injects. Generate the TODs first, then run this:
+#     mpirun -n 8 c4-simgen -p simgen/params/param_common_res.yml
+#     cd ..   && mpirun -n 12 commander4 -p params/sims/simparam_compsep_perpix.yml
+# 12 tasks = 4 TOD + 4 CompSep-I + 4 CompSep-QU.
+#
+# FEATURES UNDER TEST, neither of which any other file here reaches:
+#   * `compsep.per_pixel_sampling_groups`, the per-pixel least-squares amplitude solver in
+#     `compsep/perpix_solver.py`. It is the alternative to the global CG solve and is mutually
+#     exclusive with it, so `cg_sampling_groups` is empty below.
+#   * `compsep.common_res_fwhm`, the noise-weighted smoothing of every band to one beam, applied at
+#     the data sources on read (`data_models/detector_map.py`). The per-pixel solver has no beam
+#     model at all, so without this it would silently mix resolutions.
+#
+# The two go together: the per-pixel solver is only correct once all bands share a beam. The
+# simulation's beams span 100' to 30', a factor 3.3, so the smoothing is a large operation rather
+# than a rounding correction, and `common_res_fwhm` is set to the broadest of them.
+#
+# Unlike the CG solver, the per-pixel solver returns amplitudes *at* the common resolution rather
+# than deconvolved, so the recovered maps must be compared against the simulation's truth maps
+# smoothed to 100', not against the truth maps directly. The chain records which of the two a file
+# holds: `comps/<name>/amp_fwhm_arcmin` is 100 here and 0 for a deconvolved CG solve.
+#
+# It also reads the point-source catalogue simgen writes, as a component held fixed at the
+# catalogue values (see the `RadioSources` block). That is the only place a point-source component
+# can go today: `perpix_solver.py` rejects non-diffuse components and the CG path for them is
+# unfinished, but a fixed component is still projected into every band and subtracted before the
+# solve, which is all that is needed to keep the sources out of the fitted components.
+#
+# WHAT TO CHECK:
+#   * The component maps in `<output_dir>/chains_compsep/` against `truth_<Component>.fits` from the
+#     simulation, smoothed to 100'. Measured: recovered-vs-truth slope 0.98-1.00 and correlation
+#     0.97-0.99 for all three diffuse components.
+#   * That the point sources stay out of the CMB. Correlate the CMB residual against
+#     `truth_PointSources.fits` smoothed to 100': it is ~0.00 with the `RadioSources` block below
+#     and +0.55 without it, and the residual inside the source discs goes 6.6 -> 35 uK_RJ.
+#   * `maps/observed_sky` - `maps/skymodel` in `<output_dir>/chains_bands/`, against `maps/rms`.
+#     Both maps are at the beam named by `metadata/map_fwhm_arcmin` (100' here, since
+#     `common_res_fwhm` is set), so the residual is meaningful as it stands. Measured: 1.0-2.8.
+#   * Run the same simulation through `simparam_compsep_CG.yml`'s solver settings and compare. At
+#     common resolution the per-pixel and CG solutions should agree where the data constrain them;
+#     a disagreement that tracks the beam spread is a smoothing bug.
+#   * The startup warning from `solve_compsep_perpix` if the bands reach it at different
+#     resolutions. It must not fire here, and firing means `common_res_fwhm` was ignored.
+#
+# KNOWN, NOT A BUG: the reduced chi^2 sits near 1.7 rather than 1.0. The common-resolution
+# smoothing correlates the noise between neighbouring pixels, and only a per-pixel rms is carried
+# through it, so the chi^2 is not properly normalized. It scales with how much smoothing is
+# applied: 1.65 at common_res_fwhm 100', 1.80 at 110', 3.04 at 150' (point sources excluded in all
+# three). Fixing it needs a noise model that survives smoothing, not a change to this file.

@@ -1,0 +1,29 @@
+# Commander4: gain-calibration + raw-detector-units feature test.
+#
+# Analyses `simgen/params/param_gain.yml`, which describes the simulation and the truth it
+# injects. Generate the TODs first, then run this:
+#     mpirun -n 8 c4-simgen -p simgen/params/param_gain.yml
+#     cd ..   && mpirun -n 12 commander4 -p params/sims/simparam_gain.yml
+# 12 tasks = 6 TOD + 3 CompSep-I + 3 CompSep-QU.
+#
+# FEATURES UNDER TEST:
+#   * `tod_processing.abs_gain` and `tod_processing.rel_gain`, in `tod/gain.py`.
+#   * The unit and gain-scale bookkeeping. The simulation's TODs are in raw detector units with
+#     gains ~1e-9 rather than uK_RJ at gain 1.0, so a missing or doubled conversion factor shows up
+#     as a power-of-ten error rather than hiding in the noise.
+#
+# STARTS AWAY FROM THE TRUTH AT: every detector initialised at gain 1.05e-9 against a truth of
+# 1.0e-9, so the chain starts 5% high in the absolute gain and flat (i.e. wrong) in every relative
+# gain.
+#
+# WHAT TO CHECK: the `abs_gain` and `detrel_gain` datasets in `<output_dir>/chains_bands/`, and the
+# "Finished absolute/relative gain estimation" log lines. Absolute gain is calibrated against the
+# orbital dipole, an analytic template independent of the sky model, so it should converge within
+# an iteration or two of `from_iter`. Relative gain is calibrated against the sky model and only
+# becomes accurate once component separation has produced a decent one; pointing each component's
+# `init_from` at the simulation's truth maps makes the `sky` calibrator correct from iteration one.
+# Also check that `abs_gain` stays at ~1e-9 rather than drifting by powers of ten, and that the band
+# maps in `<output_dir>/chains_bands/` come out of order the sky, not of order the raw TOD.
+#
+# Correlated-noise sampling is deliberately off (the simulation is white-noise only), but sigma0 is
+# still re-estimated each iteration, which exercises the standalone sigma0 path.

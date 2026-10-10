@@ -12,7 +12,7 @@ from pixell.bunch import Bunch
 
 import numpy as np
 
-from commander4.file_io.experiments.read_utils import apply_noise_priors, apply_noise_fit_range
+from commander4.file_io.experiments.base_reader import apply_noise_priors, apply_noise_fit_range
 from commander4.tod.config import CorrelatedNoiseConfig
 from commander4.tod.noise.psd import NoisePSDOof
 from commander4.parameters.schema import (TOP_LEVEL_BLOCKS, validate_param_schema, compsep_enabled,
@@ -303,7 +303,7 @@ def test_a_file_band_takes_its_lmax_from_its_compsep_entry():
 
 
 # ===================================================================
-# Noise-PSD prior bounds (experiments/read_utils.apply_noise_priors)
+# Noise-PSD prior bounds (experiments/base_reader.apply_noise_priors)
 # ===================================================================
 
 def _noise_params(band=None, experiment=None, tod_processing=None):

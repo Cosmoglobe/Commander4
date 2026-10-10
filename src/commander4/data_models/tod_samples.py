@@ -188,10 +188,9 @@ class TODSamples:
             self.modulation_phase = np.ones((self.nscans, self.ndet), dtype=np.int8)
             self.baselines = np.zeros((self.nscans, self.ndet, 2), dtype=np.float64)
         self.modulation_phase_initialized = False
-        # Per-scan start time, Commander3's `MJD`. The epoch is whatever the experiment reader put
-        # in `ScanTOD.start_time`, so this is MJD only for readers whose files carry one. Today
-        # that is SO_SAT alone; every other reader passes 0.0, which is the "no absolute time
-        # available" value here.
+        # Per-scan start time, Commander3's `MJD`. The reader takes it from the scan file's
+        # `<pid>/common/time`, and passes 0.0, the "no absolute time available" value here, for
+        # files without one (today the simgen and Akari files).
         self.scan_start_time = np.array([scan.start_time for scan in experiment_data.scans],
                                         dtype=np.float64)
 

@@ -3,7 +3,7 @@
 import ducc0.fft
 import pytest
 
-from commander4.file_io.experiments.read_utils import find_good_fourier_size
+from commander4.file_io.experiments.base_reader import find_good_fourier_size
 
 
 @pytest.mark.parametrize("ntod", [2, 17, 64, 100, 9750, 400_000])

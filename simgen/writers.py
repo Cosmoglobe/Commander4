@@ -34,11 +34,11 @@ def write_scan_file(path: str, pid: int, data_nside: int, fsamp: float, npsi: in
         npsi: Number of psi digitization bins (only used when ``compress`` is True).
         vsun: Orbital velocity (3,) at the scan midpoint [m/s, Galactic], stored as ``common/vsun``.
         det_pix/det_psi/det_tod: Per-detector pixel (int, data_nside), psi (rad), and TOD arrays.
-        det_scalars: Per-detector ``[micro_gain, sigma0, fknee, alpha]`` arrays consumed by the
-            Planck TOD reader. The LiteBIRD reader ignores this additional metadata.
+        det_scalars: Per-detector ``[micro_gain, sigma0, fknee, alpha]`` arrays, which the reader
+            uses as the chain's starting gain and noise parameters.
         compress: If True (default), ``pix`` and ``psi`` are Huffman-compressed (opaque payloads the
             reader detects by type). If False they are stored as plain ``int32``/``float32`` arrays,
-            which ``tod_reader_litebird_sim`` reads directly (``PixelPointing`` auto-detects). NOTE:
+            which the reader reads directly (``PixelPointing`` auto-detects). NOTE:
             ``flag`` is always Huffman-compressed because that reader unconditionally decodes it; the
             per-scan ``hufftree``/``huffsymb`` therefore always exist (built from the flag stream).
     """

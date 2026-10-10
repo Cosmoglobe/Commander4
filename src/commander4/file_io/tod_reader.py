@@ -1,12 +1,13 @@
-"""Dispatch to the per-experiment TOD reader named by a band's ``experiment_id``.
+"""Read one band's TOD: choose this rank's scans, run the experiment's reader, finish the band.
 
-Each experiment needs its own reader because the file layouts differ, but they all return the same
-`DetectorGroupTOD`, so nothing downstream needs to know which one ran. Every reader lives in
-``file_io/experiments/`` in a module named after the ``experiment_id`` it registers, so a parameter
-file's ``experiment_id: "SO_LAT"`` is served by ``file_io/experiments/SO_LAT.py``.
+Every experiment reader is `TODReader` (``file_io/experiments/base_reader.py``) or a subclass of it,
+in the module of ``file_io/experiments/`` named after the ``experiment_id`` it is registered under
+below. `TODReader` reads the standard Commander scan-file format. A subclass passes its experiment's
+fixed values to ``TODReader.__init__``, and overrides one of the reader's steps only if its files
+need logic that the base class lacks. They all return the same `DetectorGroupTOD`, so nothing
+downstream needs to know which one ran.
 
-Add a new experiment by writing a reader with the signature below, in a module named after its id,
-and registering it in ``experiment_tod_readers``.
+Add a new experiment by writing such a subclass and registering it in ``experiment_tod_readers``.
 """
 from mpi4py import MPI
 from pixell.bunch import Bunch
@@ -15,99 +16,120 @@ import numpy as np
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.parameters.schema import resolve_param, split_integer_range
-from commander4.file_io.experiments.akari import tod_reader as tod_reader_akari
-from commander4.file_io.experiments.litebird_sim import tod_reader as tod_reader_litebird_sim
-from commander4.file_io.experiments.litebird_sim_spawndetectors import tod_reader\
-    as tod_reader_litebird_sim_spawndetectors
-from commander4.file_io.experiments.planck_lfi import tod_reader as tod_reader_planck_lfi
-from commander4.file_io.experiments.planck_hfi import tod_reader as tod_reader_planck_hfi
-from commander4.file_io.experiments.general import tod_reader as tod_reader_general
-from commander4.file_io.experiments.SO_LAT import tod_reader as tod_reader_SO_LAT
-from commander4.file_io.experiments.SO_SAT import tod_reader as tod_reader_SO_SAT
+from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
+from commander4.file_io.experiments.base_reader import TODReader
+from commander4.file_io.experiments.akari import AkariReader
+from commander4.file_io.experiments.litebird_sim_spawndetectors import SpawnDetectorsReader
+from commander4.file_io.experiments.planck_lfi import PlanckLFIReader
+from commander4.file_io.experiments.planck_hfi import PlanckHFIReader
+from commander4.file_io.experiments.SO_LAT import SOLATReader
+from commander4.file_io.experiments.SO_SAT import SOSATReader
 
 logger = logging.getLogger(__name__)
 
-# Known experiments and the reader each one uses. The parameter file's `experiment_id` selects the
-# entry, and every key matches the module name it is imported from.
+# Known experiments and the reader class each one uses. The parameter file's `experiment_id`
+# selects the entry, and every key matches the module name its class is imported from.
 experiment_tod_readers = {
-    "akari" : tod_reader_akari,
-    "litebird_sim" : tod_reader_litebird_sim,
-    "litebird_sim_spawndetectors" : tod_reader_litebird_sim_spawndetectors,
-    "planck_lfi" : tod_reader_planck_lfi,
-    "planck_hfi" : tod_reader_planck_hfi,
-    # The plain reader for the standard format, with no instrument-specific behaviour. Everything
-    # `simgen` output reads through this, as does any other dataset already in that layout.
-    "general" : tod_reader_general,
-    "SO_LAT" : tod_reader_SO_LAT,
-    "SO_SAT" : tod_reader_SO_SAT,
+    "akari" : AkariReader,
+    # The standard format with no instrument-specific values. Everything `simgen` writes reads
+    # through this, as does any other dataset already in that layout.
+    "general" : TODReader,
+    "litebird_sim_spawndetectors" : SpawnDetectorsReader,
+    "planck_lfi" : PlanckLFIReader,
+    "planck_hfi" : PlanckHFIReader,
+    "SO_LAT" : SOLATReader,
+    "SO_SAT" : SOSATReader,
 }
 
 
 def read_tods_from_file(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch,
                         det_names: list[str], params: Bunch) -> DetectorGroupTOD:
-    """Slice the band's filelist, distribute its rows, and read this rank's scans.
+    """Read this rank's share of one band's scans.
 
-    Figures out which scans this rank should read by checking  `filelist_idx_start` and
-    `filelist_idx_stop` from the parameter file. Then calls the TOD-reader of our experiment.
+    The band master reads the filelist, keeps the rows selected by ``filelist_idx_start`` and
+    ``filelist_idx_stop``, and drops the scans listed in ``bad_PIDs_path``. The remaining scans are
+    split into contiguous blocks, one per rank, and each rank reads its block with the experiment's
+    reader. If the experiment sets ``replace_tod_with_sim``, the TOD is then replaced by a
+    simulation.
 
     Args:
-        band_comm: The band's MPI communicator; each rank reads a disjoint range of scans.
+        band_comm: The band's MPI communicator; each rank reads a disjoint block of scans.
         my_experiment, my_band: The experiment and band parameter blocks.
         det_names: Detector names in full-band index order.
-        params: The full parameter file. Used for finding the optional filelist slice bounds.
+        params: The full parameter file.
 
     Returns:
         The band's `DetectorGroupTOD`, with its scan-index bookkeeping filled in. The reader may
-        discard scans (bad PIDs, empty data), so the actual per-rank ranges are only known
-        afterwards and are recomputed here rather than taken from the requested ones.
+        drop scans (empty or bad data), so the actual per-rank ranges are only known afterwards.
     """
-    # Confirm that the specified experiment type (e.g. "planck") is in dictionary.
-    if my_experiment.experiment_id not in experiment_tod_readers.keys():
+    if my_experiment.experiment_id not in experiment_tod_readers:
         raise ValueError("An experiment in the parameter file has experiment_id = "\
                 f"{my_experiment.experiment_id}, which is not in {experiment_tod_readers.keys()}. "\
                 "You either misspelled the experiment ID, or your experiment does not yet have a "\
                 "specified TOD reader. See this file for how to add it.")
-
-    scopes = (f"experiments.{my_experiment._name}.bands.{my_band._name}",
+    band_name = my_band._name
+    rank = band_comm.Get_rank()
+    scopes = (f"experiments.{my_experiment._name}.bands.{band_name}",
               f"experiments.{my_experiment._name}")
     filelist_idx_start = resolve_param(params, "filelist_idx_start", scopes, default=None,
                                        legal_types=(int, type(None)))
     filelist_idx_stop = resolve_param(params, "filelist_idx_stop", scopes, default=None,
                                       legal_types=(int, type(None)))
-    # Count the actual rows once per band; no TOD files are opened to choose the slice.
-    total_scans: int | None = None
-    if band_comm.Get_rank() == 0:
-        with open(my_band.filelist) as infile:
-            infile.readline()
-            total_scans = len(infile.readlines())
-    total_scans = band_comm.bcast(total_scans, root=0)
-    scan_start, scan_stop, _ = slice(filelist_idx_start, filelist_idx_stop).indices(total_scans)
-    if scan_stop <= scan_start:
-        raise ValueError(f"Band {my_band._name}: filelist slice "
-                         f"[{filelist_idx_start}:{filelist_idx_stop}] selects no scans.")
-    my_scans_start, my_scans_stop = split_integer_range(
-        scan_stop - scan_start, band_comm.Get_size(), band_comm.Get_rank())
-    my_scans_start += scan_start
-    my_scans_stop += scan_start
-    if band_comm.Get_rank() == 0:
-        logger.info(f"Band {my_band._name}: selected filelist rows [{scan_start}:{scan_stop}], "
-                    f"{scan_stop - scan_start} of {total_scans} scans.")
 
-    # Load and execute TOD loader script for this specific experiment.
-    my_tod_reader = experiment_tod_readers[my_experiment.experiment_id]
-    experiment_data: DetectorGroupTOD = my_tod_reader(
-        band_comm, my_experiment, my_band, det_names, params, my_scans_start, my_scans_stop)
+    # The band master reads the filelist; the other ranks get the selected scans from it.
+    # TODO(pre-pass): read each scan's ntod here too (and a pointing summary), so the split below
+    # can balance the ranks and the whole band can share a few FFT sizes.
+    scans: list[tuple[int, str]] | None = None
+    if rank == 0:
+        with open(my_band.filelist) as infile:
+            infile.readline()  # The first line holds the number of scans.
+            # Each row is a scan ID, a quoted file path, and three columns that are not used.
+            rows = [line.split() for line in infile if line.strip()]
+        start, stop, _ = slice(filelist_idx_start, filelist_idx_stop).indices(len(rows))
+        bad_scan_ids = set()
+        if "bad_PIDs_path" in my_experiment:
+            bad_scan_ids = {int(scan_id) for scan_id in np.load(my_experiment.bad_PIDs_path)}
+        scans = [(int(row[0]), row[1].strip('"')) for row in rows[start:stop]
+                 if int(row[0]) not in bad_scan_ids]
+        logger.info(f"Band {band_name}: selected filelist rows [{start}:{max(start, stop)}], "
+                    f"{max(0, stop - start)} of {len(rows)} scans, of which "
+                    f"{max(0, stop - start) - len(scans)} are listed as bad.")
+    scans = band_comm.bcast(scans, root=0)
+    if len(scans) == 0:
+        raise ValueError(f"Band {band_name}: filelist slice "
+                         f"[{filelist_idx_start}:{filelist_idx_stop}] selects no usable scans.")
+
+    # TODO(distribution): weight the split by scan length. Keep each rank's scans contiguous in
+    # time, because the temporal-gain prior and the chain gather assume rank order is time order.
+    my_start, my_stop = split_integer_range(len(scans), band_comm.Get_size(), rank)
+    my_scans = scans[my_start:my_stop]
+    reader = experiment_tod_readers[my_experiment.experiment_id](
+        band_comm, my_experiment, my_band, det_names, params)
+    experiment_data = reader.read([scan_id for scan_id, _ in my_scans],
+                                  [path for _, path in my_scans])
 
     # Because some scans might have been discarded during read-in, we can only now figure out what
     # the scan start and stop index each rank holds.
     scans_per_rank = np.zeros(band_comm.Get_size(), dtype=np.int32)
     band_comm.Allgather(np.array([experiment_data.nscans], dtype=np.int32), scans_per_rank)
-    rank = band_comm.Get_rank()
-    my_scans_start = int(np.sum(scans_per_rank[:rank]))
-    my_scans_stop = int(np.sum(scans_per_rank[:rank+1]))
-    # Overwrite start and stop entries to reflect correct values.
-    experiment_data.scan_idx_start = my_scans_start
-    experiment_data.scan_idx_stop = my_scans_stop
+    experiment_data.scan_idx_start = int(np.sum(scans_per_rank[:rank]))
+    experiment_data.scan_idx_stop = int(np.sum(scans_per_rank[:rank+1]))
     experiment_data.nscans_allranks = int(np.sum(scans_per_rank))
 
+    if getattr(my_experiment, "replace_tod_with_sim", False):
+        replace_tod_with_sim(band_comm, experiment_data, my_band, params, my_experiment.sim_params)
+
+    # Summarize what survived the reader's cuts and the Fourier cut, over the whole band.
+    detectors = [det for scan in experiment_data.scans for det in scan.detectors]
+    local_stats = np.array([experiment_data.nscans, len(detectors),
+                            sum(det.ntod for det in detectors),
+                            sum(det.ntod_original for det in detectors)], dtype=np.int64)
+    global_stats = np.zeros_like(local_stats)
+    band_comm.Reduce(local_stats, global_stats, op=MPI.SUM, root=0)
+    if rank == 0:
+        nscans_kept, ndetscans_kept, ntod_kept, ntod_file = global_stats
+        logger.info(f"Band {band_name}: read {nscans_kept} of {len(scans)} scans and "
+                    f"{ndetscans_kept} of {len(scans)*len(det_names)} detector-scans, with "
+                    f"{100*ntod_kept/max(ntod_file, 1):.1f}% of their samples retained after the "
+                    "Fourier cut.")
     return experiment_data

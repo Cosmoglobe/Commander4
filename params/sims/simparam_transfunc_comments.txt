@@ -1,0 +1,33 @@
+# Commander4: bolometer transfer-function impact test.
+#
+# Analyses `simgen/params/param_transfunc.yml`, which describes the simulation and why the
+# pair is a controlled difference rather than a recovery. Generate the TODs first, then run this:
+#     mpirun -n 12 c4-simgen -p simgen/params/param_transfunc.yml
+#     cd ..   && mpirun -n 18 commander4 -p params/sims/simparam_transfunc.yml
+# 18 tasks = 6 TOD + 6 CompSep-I + 6 CompSep-QU.
+#
+# This file is a copy of `simparam_compsep_only.yml` with only the paths (the six TOD filelists,
+# the output directory and the log file), the mapmaker ("CG") and Band30GHz's `tau_ms: 150.0`
+# changed. So only Band30GHz deconvolves the bolometer response; the other bands are solved as if
+# T = 1, although the simulation applies it to every band. The model TODs (sky model, orbital
+# dipole, far sidelobes) are subtracted without T, a known inconsistency.
+#
+# WHAT TO CHECK, always against the TF-off reference run and never against an absolute.
+#
+# The numbers below were measured at the current beams (120'-40'), 20 iterations, compsep nside 64,
+# with the binned mapmaker and no deconvolution, so they show what ignoring the response costs.
+# They are reference points, not pass thresholds: the transfer function's imprint depends on the
+# beam, so re-measure both halves if the beams change again.
+#   * `<output_dir>/chains_bands/SimSat_<band>_chain01_iter0001.h5`, `maps/observed_sky`. The TOD
+#     side is inert, so this map is a deterministic function of the TODs and differencing it against
+#     the reference is the cleanest available measurement. Expect a scan-direction lag, largest
+#     where the sky gradient across the scan is largest. Measured: rms(difference) is 15-24% of the
+#     map rms, rising with frequency from 13.8 uK_RJ at 30 GHz to 178 uK_RJ at 353 GHz.
+#   * The per-band chi^2 logged each iteration. Measured at iteration 20: reduced chi^2 over all
+#     bands 0.996 (reference) against 2.670 (here). Per band the residual against the band's own
+#     noise rms goes 1.08, 1.22, 1.20, 1.40, 3.17, 4.51 from 30 to 353 GHz, against 1.00 throughout
+#     in the reference: the sharper the beam, the more scan-direction lag survives.
+#   * The component maps against the simulation's `truth_*.fits`. A transfer function is not one of
+#     the fitted components, so the solve has nowhere to put the residual and spreads it over all
+#     three; the CMB pays most. Measured rms error against truth in intensity: CMB 9.6 -> 42.4 uK
+#     (4.4x), dust 105 -> 245 uK_RJ (2.3x), synchrotron 68 -> 80 uK_RJ (1.2x).

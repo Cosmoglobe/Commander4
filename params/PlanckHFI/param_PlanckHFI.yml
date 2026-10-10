@@ -116,7 +116,7 @@ tod_processing:
 
   far_beam_deconvolution:
     enabled: True
-    from_iter: 1
+    from_iter: 2
     lmax: 256          # Sky and beam are truncated here before convolving (C3 uses 100).
     mmax: 256          # Beam azimuthal limit; drives the cube size hardest.
     epsilon: 1.0e-4    # ducc0 interpolation accuracy.
@@ -209,6 +209,7 @@ experiments:
                            # only) + NPIPE glitches (bit 9, all bands). Masks 10-20% of all
                            # samples. Bit 8 labels a whole chunk, not bad samples: never set it.
                            # NB: This will *mask* all glitches. In the future we want to fit them.
+    min_unmasked_fraction: 0.75  # Read-time cut: drop detector-scans with less unflagged data.
 
     bands:
       Planck100GHz:

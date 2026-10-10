@@ -1,0 +1,30 @@
+# Commander4: partial-sky / sparse-map + amplitude-prior-mean feature test.
+#
+# Analyses `simgen/params/param_patch.yml`, which describes the simulation and the truth it
+# injects. Generate the TODs first, then run this:
+#     mpirun -n 12 c4-simgen -p simgen/params/param_patch.yml
+#     cd ..   && mpirun -n 12 commander4 -p params/sims/simparam_patch.yml
+# 12 tasks = 6 TOD + 3 CompSep-I + 3 CompSep-QU.
+#
+# FEATURES UNDER TEST:
+#   * `experiments.PatchTel.sparse_maps`, the per-rank local-pixel map layout
+#     (`data_models/pixel_domain.py`, selected in `tod/processing.py`), together with component
+#     separation and correlated-noise sampling on a sky that is ~98.5% unobserved.
+#   * `amp_prior_mean_map` on synchrotron, the mean mu of the Gaussian amplitude prior. It belongs
+#     here rather than in a file of its own: outside the patch the inverse-noise weight is exactly
+#     zero, so the solution is set purely by the prior and must relax to mu rather than to zero.
+#     That is the sharpest available check on the S^-1/2 mu term, which is short-circuited entirely
+#     when mu is absent, as it is in every other file here.
+#
+# WHAT TO CHECK:
+#   * Run once as given and once with `sparse_maps: false`. The recovered maps inside the patch must
+#     agree to solver tolerance. That is the actual sparse-map test.
+#   * Synchrotron outside the patch, which must relax to the prior mean (here the simulation's own
+#     truth map) rather than to zero. CMB and dust keep a zero-mean prior, so within one run one
+#     component exercises the mu path and two do not. Setting mu to the truth makes this a plumbing
+#     test: a mu equal to the truth cannot bias the answer, so it says the path is wired up and the
+#     units line up, not that the prior is correctly weighted.
+#   * Inside the patch, all three components against the simulation's `truth_*.fits`.
+#   * The per-band chi^2 logged each iteration. NOTE: it currently averages over *all* pixels
+#     including unobserved ones, so the reduced chi^2 printed here is diluted by roughly the
+#     observed sky fraction (~1/0.015). Compare iterations against each other, not against 1.

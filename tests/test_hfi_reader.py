@@ -15,7 +15,9 @@ from pixell.bunch import Bunch
 
 from commander4.compression import huffman
 from commander4.data_models.pixel_domain import PixelDomain
-from commander4.file_io.experiments.planck_hfi import UNPOLARIZED_POLEFF_CUTOFF, tod_reader
+from commander4.file_io.experiments.base_reader import UNPOLARIZED_POLEFF_CUTOFF
+from commander4.file_io.experiments.planck_hfi import PlanckHFIReader
+from commander4.file_io.tod_reader import read_tods_from_file
 from commander4.parameters.parse import params_from_dict
 from commander4.tod.view import TODView
 from simgen.writers import write_scan_file
@@ -68,7 +70,7 @@ def test_instrument_percentages_follow_detector_names_into_sky_projection(
     experiment = params.experiments.HFI
     band = experiment.bands.Band
 
-    result = tod_reader(MPI.COMM_SELF, experiment, band, det_names, params, 0, 1)
+    result = read_tods_from_file(MPI.COMM_SELF, experiment, band, det_names, params)
     result.pixel_domain = PixelDomain(MPI.COMM_SELF, result.nside, "full")
 
     assert result.instrument_filepath == experiment.instrument_file
@@ -99,7 +101,8 @@ def test_efficiency_just_above_the_cutoff_is_kept_as_measured(
         del handle["353-1/polEff"]
         handle["353-1/polEff"] = [100 * UNPOLARIZED_POLEFF_CUTOFF + 1.0]
 
-    result = tod_reader(MPI.COMM_SELF, experiment, experiment.bands.Band, det_names, params, 0, 1)
+    band = experiment.bands.Band
+    result = read_tods_from_file(MPI.COMM_SELF, experiment, band, det_names, params)
 
     kept = dict((det.name, det.response_I_P) for det in result.scans[0].detectors)
     assert kept["353-1"] == pytest.approx((1.0, UNPOLARIZED_POLEFF_CUTOFF + 0.01))
@@ -118,7 +121,7 @@ def test_intensity_only_band_reads_without_requiring_psi(
         del handle["000042/353-1/psi"]
         del handle["000042/353-3b/psi"]
 
-    result = tod_reader(MPI.COMM_SELF, experiment, band, det_names, params, 0, 1)
+    result = read_tods_from_file(MPI.COMM_SELF, experiment, band, det_names, params)
     result.pixel_domain = PixelDomain(MPI.COMM_SELF, result.nside, "full")
 
     for det, efficiency in zip(result.scans[0].detectors, [0.92, 0.0]):
@@ -137,7 +140,7 @@ def test_missing_instrument_efficiency_is_not_assumed_to_be_unity(
         del handle["353-1/polEff"]
 
     with pytest.raises(KeyError, match="polEff"):
-        tod_reader(MPI.COMM_SELF, experiment, experiment.bands.Band, det_names, params, 0, 1)
+        read_tods_from_file(MPI.COMM_SELF, experiment, experiment.bands.Band, det_names, params)
 
 
 @pytest.mark.skipif(MPI.COMM_WORLD.Get_size() != 2, reason="requires exactly two MPI ranks")
@@ -158,7 +161,9 @@ def test_two_rank_reader_broadcasts_efficiencies_from_an_empty_master(
 
     monkeypatch.setattr(h5py, "File", checked_open)
     # Rank zero has no scans but still supplies the shared detector metadata.
-    result = tod_reader(comm, experiment, experiment.bands.Band, det_names, params, 0, comm.rank)
+    scan_path = str(Path(experiment.bands.Band.filelist).parent / "scan.h5")
+    reader = PlanckHFIReader(comm, experiment, experiment.bands.Band, det_names, params)
+    result = reader.read([42][:comm.rank], [scan_path][:comm.rank])
 
     assert len(instrument_opens) == (1 if comm.rank == 0 else 0)
     assert result.nscans == comm.rank

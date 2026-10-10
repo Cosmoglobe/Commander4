@@ -8,7 +8,7 @@ from scipy.fft import rfftfreq
 from commander4.tod.noise.sigma0 import (calc_sigma0_simple, calc_sigma0_robust,
                                               calc_sigma0_binned_psd)
 from commander4.tod.noise.psd import NoisePSDOof
-from commander4.file_io.experiments.read_utils import apply_noise_fit_range
+from commander4.file_io.experiments.base_reader import apply_noise_fit_range
 from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.sample_ncorr import (sample_correlated_noise,
                                                     corr_noise_realization_with_gaps,
