@@ -120,20 +120,18 @@ class TODReader:
             band_comm.Bcast(self.pol_eff, root=0)
 
 
-    def read(self, scan_list: list[tuple[int, int, str]]) -> DetectorGroupTOD:
+    def read(self, scan_list: list[tuple[int, str]]) -> DetectorGroupTOD:
         """Read the given scans and keep the detector-scans that pass `keep_detector`.
 
         A scan whose detectors are all dropped is left out, so the band may hold fewer scans than
         were asked for.
 
         Args:
-            scan_list: The scans to read, in time order, each as (filelist row, scan ID, file
-                path). The row is the scan's place in time, kept as its ``scan_time_index``.
+            scan_list: The scans to read, each as (scan ID, file path).
         """
         scans = []
-        time_index = []
         fsamp = 0.0
-        for iscan, (row, scan_id, path) in enumerate(scan_list):
+        for iscan, (scan_id, path) in enumerate(scan_list):
             with h5py.File(path, "r") as f:
                 header = self.read_scan_header(f, scan_id)
                 if header is None:
@@ -150,7 +148,6 @@ class TODReader:
                         detectors.append(det)
             if len(detectors) > 0:
                 scans.append(ScanTOD(detectors, header.start_time, scan_id))
-                time_index.append(row)
             if self.band_comm.Get_rank() == 0 and iscan % max(1, len(scan_list)//5) == 0:
                 logger.debug(f"Reading scans from disk, progress on master rank of band "
                              f"{self.band._name}: {iscan}/{len(scan_list)}")
@@ -158,21 +155,17 @@ class TODReader:
                 gc.collect()
         if self.max_rms_ratio is not None and not self.tod_is_simulated:
             self.drop_level_outliers(scans)
-            # Remove the scans the cut left without detectors, together with their time index.
-            time_index = [row for row, scan in zip(time_index, scans) if len(scan.detectors) > 0]
             scans = [scan for scan in scans if len(scan.detectors) > 0]
 
         # Ranks that read no scan get the sample rate from the others.
         fsamp = self.band_comm.allreduce(fsamp, op=MPI.MAX)
-        band_tod = DetectorGroupTOD(scans, self.experiment._name, self.band._name,
-                                    self.band.eval_nside, self.band.freq, self.band.fwhm, fsamp,
-                                    len(self.det_names), self.band.polarization, self.noise_model,
-                                    tf_tau_sec=_tau_sec(self.band),
-                                    instrument_filepath=getattr(self.experiment,
-                                                                "instrument_file", None),
-                                    hfi_demodulation=self.hfi_demodulation)
-        band_tod.scan_time_index = np.array(time_index, dtype=np.int64)
-        return band_tod
+        return DetectorGroupTOD(scans, self.experiment._name, self.band._name,
+                                self.band.eval_nside, self.band.freq, self.band.fwhm, fsamp,
+                                len(self.det_names), self.band.polarization, self.noise_model,
+                                tf_tau_sec=_tau_sec(self.band),
+                                instrument_filepath=getattr(self.experiment, "instrument_file",
+                                                            None),
+                                hfi_demodulation=self.hfi_demodulation)
 
 
     def read_scan_header(self, f: h5py.File, scan_id: int) -> Bunch | None:

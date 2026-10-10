@@ -165,7 +165,7 @@ def test_two_rank_reader_broadcasts_efficiencies_from_an_empty_master(
     # Rank zero has no scans but still supplies the shared detector metadata.
     scan_path = str(Path(experiment.bands.Band.filelist).parent / "scan.h5")
     reader = PlanckHFIReader(comm, params, experiment, experiment.bands.Band)
-    result = reader.read([(0, 42, scan_path)][:comm.rank])
+    result = reader.read([(42, scan_path)][:comm.rank])
 
     assert len(instrument_opens) == (1 if comm.rank == 0 else 0)
     assert result.nscans == comm.rank

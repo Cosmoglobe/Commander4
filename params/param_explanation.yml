@@ -636,7 +636,9 @@ experiments:
     filelist_idx_stop: null   # excluding the header. Zero-based; start included, stop excluded.
                               # Omitted/null = beginning/end. Negative indices count from the end;
                               # bounds beyond the filelist are clipped. The slice must be nonempty.
-                              # These are row positions, not the scan IDs in the first column.
+                              # These are row positions, not the scan IDs in the first column,
+                              # counted after sorting the rows by scan ID (time order), whatever
+                              # order the file has them in.
                               # Each bound can be overridden per band. The selected rows are
                               # split evenly across MPI ranks before reading any TOD files.
     mapmaker: "bin"           # Overrides tod_processing.mapmaker for this experiment.
