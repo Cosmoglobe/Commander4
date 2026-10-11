@@ -42,7 +42,6 @@ def _valid_params() -> dict:
                 "bands": {
                     "Band": {
                         "enabled": True,
-                        "num_tasks": 2,
                         "detectors": {"detector": {}},
                     },
                 },
@@ -65,13 +64,11 @@ def _thread_suggestion_params(num_threads: int | list[int] = 4) -> Bunch:
     params["experiments"]["Example"]["bands"] = {
         "Low": {
             "enabled": True,
-            "num_tasks": 1,
             "eval_nside": 128,
             "detectors": {"detector": {}},
         },
         "High": {
             "enabled": True,
-            "num_tasks": 1,
             "eval_nside": 1024,
             "detectors": {"detector": {}},
         },
@@ -96,7 +93,7 @@ def test_valid_file_reports_task_count_and_sampling_groups(tmp_path) -> None:
 
     task_summary, groups = validate_parameter_file(_write_params(tmp_path, params))
 
-    assert task_summary == "3 = 2 TOD + 1 CompSep-I + 0 CompSep-QU"
+    assert task_summary == "at least 2 = 1 TOD + 1 CompSep-I + 0 CompSep-QU"
     assert groups == ["cg_sampling_groups.amplitudes"]
 
 
@@ -108,7 +105,7 @@ def test_command_prints_a_submission_ready_summary(tmp_path, monkeypatch, capsys
 
     output = capsys.readouterr().out
     assert f"Valid parameter file: {parameter_file}" in output
-    assert "MPI tasks: 2 = 2 TOD + 0 CompSep-I + 0 CompSep-QU" in output
+    assert "MPI tasks: at least 1 = 1 TOD + 0 CompSep-I + 0 CompSep-QU" in output
     assert "Enabled sampling groups: none" in output
 
 

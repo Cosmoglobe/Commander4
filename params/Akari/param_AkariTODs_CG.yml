@@ -358,7 +358,7 @@ experiments:
       Planck30GHz:
         enabled: true
         polarization: "IQU"
-        num_tasks: 64 #24
+        band_weight: 64 #24
         eval_nside: 512
         fwhm: 32.4 # [arcmin]
         freq: 28.4 # [GHz]
@@ -380,7 +380,7 @@ experiments:
       Planck44GHz:
         enabled: false
         polarization: "IQU"
-        num_tasks: 40
+        band_weight: 40
         eval_nside: 512
         fwhm: 27.1 # [arcmin]
         freq: 44.1 # [GHz]
@@ -408,7 +408,7 @@ experiments:
       Planck70GHz:
         enabled: false
         polarization: "IQU"
-        num_tasks: 64
+        band_weight: 64
         eval_nside: 1024
         fwhm: 13.3 # [arcmin]
         freq: 70.1 # [GHz]
@@ -464,7 +464,7 @@ experiments:
           calibrate_against: sky   # Preserve full-sky abs-gain calibration (legacy nu>380 rule).
         enabled: true
         polarization: "I"
-        num_tasks: 64 #128 #24
+        band_weight: 64 #128 #24
         eval_nside: 512
         fwhm: 0.6166 # [arcmin]
         freq: 4996 # [GHz]

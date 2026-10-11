@@ -19,8 +19,8 @@ from commander4.parameters.schema import (TOP_LEVEL_BLOCKS, validate_param_schem
                                      resolve_band_lmax)
 
 
-def _band(num_tasks=1, enabled=True, **kw):
-    return Bunch(enabled=enabled, num_tasks=num_tasks, **kw)
+def _band(band_weight=1, enabled=True, **kw):
+    return Bunch(enabled=enabled, band_weight=band_weight, **kw)
 
 
 def _params(compsep_bands=(), tod_bands=(("BandA", 4), ("BandB", 2)), groups=True, **compsep_kw):
@@ -83,26 +83,26 @@ def test_double_precision_accepts_booleans_and_may_be_omitted():
 def test_task_counts_are_derived_from_the_band_configuration():
     params = _params(compsep_bands=(("BandA", "IQU", True), ("BandB", "I", True)))
     counts = derive_task_counts(params)
-    assert (counts.tod, counts.compsep_I, counts.compsep_QU) == (6, 2, 1)
-    assert counts.total == 9
+    assert (counts.tod_bands, counts.compsep_I, counts.compsep_QU) == (2, 2, 1)
+    assert counts.min_total == 5
 
 
 def test_disabled_bands_and_experiments_contribute_nothing():
     params = _params(compsep_bands=(("BandA", "IQU", True), ("BandB", "IQU", False)))
     params.experiments.EXP.bands.BandB.enabled = False
     counts = derive_task_counts(params)
-    assert (counts.tod, counts.compsep_I, counts.compsep_QU, counts.total) == (4, 1, 1, 6)
+    assert (counts.tod_bands, counts.compsep_I, counts.compsep_QU, counts.min_total) == (1, 1, 1, 3)
 
     params.experiments.EXP.enabled = False
-    assert derive_task_counts(params).tod == 0
+    assert derive_task_counts(params).tod_bands == 0
 
 
 def test_tod_only_mode_allocates_no_compsep_ranks():
     """`compsep.enabled: false` is how TOD-only runs are spelled now that the counts are derived."""
     bands = (("BandA", "IQU", True), ("BandB", "IQU", True))
-    assert derive_task_counts(_params(compsep_bands=bands)).total == 6 + 4
+    assert derive_task_counts(_params(compsep_bands=bands)).min_total == 2 + 4
     counts = derive_task_counts(_params(compsep_bands=bands, enabled=False))
-    assert (counts.compsep_I, counts.compsep_QU, counts.total) == (0, 0, 6)
+    assert (counts.compsep_I, counts.compsep_QU, counts.min_total) == (0, 0, 2)
     assert compsep_enabled(_params(compsep_bands=bands)) is True       # defaults to on
     assert compsep_enabled(_params(compsep_bands=bands, enabled=False)) is False
 
@@ -114,10 +114,10 @@ def test_no_enabled_sampling_group_allocates_no_compsep_ranks():
     chi-squared, when TOD-only reaches the same fixed sky model on its own.
     """
     bands = (("BandA", "IQU", True), ("BandB", "IQU", True))
-    assert derive_task_counts(_params(compsep_bands=bands)).total == 6 + 4
+    assert derive_task_counts(_params(compsep_bands=bands)).min_total == 2 + 4
 
     counts = derive_task_counts(_params(compsep_bands=bands, groups=False))
-    assert (counts.compsep_I, counts.compsep_QU, counts.total) == (0, 0, 6)
+    assert (counts.compsep_I, counts.compsep_QU, counts.min_total) == (0, 0, 2)
     assert compsep_enabled(_params(compsep_bands=bands, groups=False)) is False
 
     # A group present but switched off counts as none enabled.
@@ -143,7 +143,7 @@ def test_the_breakdown_names_every_term():
     """The 'wrong mpirun -n' message must be actionable without hand-counting bands."""
     counts = derive_task_counts(_params(compsep_bands=(("BandA", "IQU", True),)))
     text = task_count_breakdown(counts)
-    assert "8" in text and "6" in text and "TOD" in text and "CompSep-I" in text
+    assert text == "at least 4 = 2 TOD + 1 CompSep-I + 1 CompSep-QU"
 
 
 # --------------------------------------------------------------------------------------
@@ -153,7 +153,7 @@ MAPMAKER_SCOPES = ("experiments.EXP.bands.BAND", "experiments.EXP", "tod_process
 
 
 def _mapmaker_params(global_mm=None, exp_mm=None, band_mm=None):
-    band = Bunch(enabled=True, num_tasks=1)
+    band = Bunch(enabled=True)
     if band_mm is not None:
         band.mapmaker = band_mm
     experiment = Bunch(enabled=True, bands=Bunch(BAND=band))

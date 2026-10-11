@@ -246,7 +246,7 @@ experiments:
     bands:
       AKARI065:
         enabled: false
-        num_tasks: 64
+        band_weight: 64
         eval_nside: 512
         fwhm: 0.6166 # [arcmin]
         freq: 4996 # [GHz]
@@ -298,7 +298,7 @@ experiments:
             #bandpass_shift: 0.28  # Ghz
       AKARI090:
         enabled: true
-        num_tasks: 64
+        band_weight: 64
         eval_nside: 512
         fwhm: 1 # [arcmin]
         freq: 2141 # [GHz]

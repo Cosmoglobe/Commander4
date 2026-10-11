@@ -356,7 +356,7 @@ def validate_parameter_file(
 
         resolve_sampling_groups(params)
     counts = derive_task_counts(params)
-    if counts.total < 1:
+    if counts.min_total < 1:
         raise ValueError("The parameter file enables no TOD bands or CompSep views.")
     if check_paths:
         _check_referenced_paths(params_dict, os.path.dirname(os.path.abspath(parameter_file)))

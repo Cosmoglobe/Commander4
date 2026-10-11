@@ -219,7 +219,7 @@ experiments:
     bands:
       SO_SAT_ws0_f090:
         enabled: true
-        num_tasks: 12
+        band_weight: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
         freq: 90.0 # [GHz]
@@ -234,7 +234,7 @@ experiments:
 
       SO_SAT_ws0_f150:
         enabled: true
-        num_tasks: 12
+        band_weight: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
         freq: 150.0 # [GHz]
@@ -249,7 +249,7 @@ experiments:
 
       SO_SAT_ws1_f090:
         enabled: true
-        num_tasks: 12
+        band_weight: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
         freq: 90.0 # [GHz]
@@ -264,7 +264,7 @@ experiments:
 
       SO_SAT_ws1_f150:
         enabled: true
-        num_tasks: 12
+        band_weight: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
         freq: 150.0 # [GHz]
@@ -279,7 +279,7 @@ experiments:
 
       SO_SAT_ws2_f090:
         enabled: true
-        num_tasks: 12
+        band_weight: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
         freq: 90.0 # [GHz]
@@ -294,7 +294,7 @@ experiments:
 
       SO_SAT_ws2_f150:
         enabled: true
-        num_tasks: 12
+        band_weight: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
         freq: 150.0 # [GHz]
@@ -309,7 +309,7 @@ experiments:
 
       SO_SAT_ws3_f090:
         enabled: true
-        num_tasks: 12
+        band_weight: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
         freq: 90.0 # [GHz]
@@ -324,7 +324,7 @@ experiments:
 
       SO_SAT_ws3_f150:
         enabled: true
-        num_tasks: 12
+        band_weight: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
         freq: 150.0 # [GHz]
@@ -339,7 +339,7 @@ experiments:
 
       SO_SAT_ws4_f090:
         enabled: true
-        num_tasks: 12
+        band_weight: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
         freq: 90.0 # [GHz]
@@ -354,7 +354,7 @@ experiments:
 
       SO_SAT_ws4_f150:
         enabled: true
-        num_tasks: 12
+        band_weight: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
         freq: 150.0 # [GHz]
@@ -369,7 +369,7 @@ experiments:
 
       SO_SAT_ws5_f090:
         enabled: true
-        num_tasks: 12
+        band_weight: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
         freq: 90.0 # [GHz]
@@ -384,7 +384,7 @@ experiments:
 
       SO_SAT_ws5_f150:
         enabled: true
-        num_tasks: 12
+        band_weight: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
         freq: 150.0 # [GHz]
@@ -399,7 +399,7 @@ experiments:
 
       SO_SAT_ws6_f090:
         enabled: true
-        num_tasks: 12
+        band_weight: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
         freq: 90.0 # [GHz]
@@ -414,7 +414,7 @@ experiments:
 
       SO_SAT_ws6_f150:
         enabled: true
-        num_tasks: 12
+        band_weight: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
         freq: 150.0 # [GHz]

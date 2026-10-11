@@ -252,7 +252,7 @@ experiments:
     bands:
       SO_LAT_i1ws0_f90:
         enabled: true
-        num_tasks: 233
+        band_weight: 233
         eval_nside: 8192
         fwhm: 2.2 # [arcmin]
         freq: 90.0 # [GHz]
@@ -276,7 +276,7 @@ experiments:
 
       SO_LAT_i1ws0_f150:
         enabled: true
-        num_tasks: 228
+        band_weight: 228
         eval_nside: 8192
         fwhm: 1.4 # [arcmin]
         freq: 150.0 # [GHz]

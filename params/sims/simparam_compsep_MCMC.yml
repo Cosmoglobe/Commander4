@@ -234,7 +234,7 @@ experiments:
     bands:
       Band30GHz:
         enabled: true
-        num_tasks: 1
+        band_weight: 1
         eval_nside: 64
         fwhm: 120.0
         freq: 30.0
@@ -250,7 +250,7 @@ experiments:
 
       Band44GHz:
         enabled: true
-        num_tasks: 1
+        band_weight: 1
         eval_nside: 64
         fwhm: 100.0
         freq: 44.0
@@ -266,7 +266,7 @@ experiments:
 
       Band70GHz:
         enabled: true
-        num_tasks: 1
+        band_weight: 1
         eval_nside: 64
         fwhm: 80.0
         freq: 70.0
@@ -282,7 +282,7 @@ experiments:
 
       Band100GHz:
         enabled: true
-        num_tasks: 1
+        band_weight: 1
         eval_nside: 64
         fwhm: 65.0
         freq: 100.0
@@ -298,7 +298,7 @@ experiments:
 
       Band217GHz:
         enabled: true
-        num_tasks: 1
+        band_weight: 1
         eval_nside: 64
         fwhm: 50.0
         freq: 217.0
@@ -314,7 +314,7 @@ experiments:
 
       Band353GHz:
         enabled: true
-        num_tasks: 1
+        band_weight: 1
         eval_nside: 64
         fwhm: 40.0
         freq: 353.0

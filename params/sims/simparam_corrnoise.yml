@@ -164,7 +164,6 @@ experiments:
     bands:
       Band100GHz:
         enabled: true
-        num_tasks: 4
         eval_nside: 64
         fwhm: 50.0
         freq: 100.0

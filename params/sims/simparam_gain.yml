@@ -202,7 +202,7 @@ experiments:
       # `simparam_compsep_CG.yml` reads from instead.
       Band30GHz:
         enabled: true
-        num_tasks: 2
+        band_weight: 2
         eval_nside: 64
         fwhm: 120.0
         freq: 30.0
@@ -218,7 +218,7 @@ experiments:
 
       Band100GHz:
         enabled: true
-        num_tasks: 2
+        band_weight: 2
         eval_nside: 64
         fwhm: 70.0
         freq: 100.0
@@ -234,7 +234,7 @@ experiments:
 
       Band217GHz:
         enabled: true
-        num_tasks: 2
+        band_weight: 2
         eval_nside: 64
         fwhm: 40.0
         freq: 217.0

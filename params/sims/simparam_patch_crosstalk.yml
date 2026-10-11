@@ -207,7 +207,7 @@ experiments:
     bands:
       Band100GHz:
         enabled: true
-        num_tasks: 5
+        band_weight: 5
         eval_nside: 512
         fwhm: 30.0
         freq: 100.0
@@ -225,7 +225,7 @@ experiments:
 
       Band150GHz:
         enabled: false
-        num_tasks: 2
+        band_weight: 2
         eval_nside: 128
         fwhm: 45.0
         freq: 150.0
@@ -241,7 +241,7 @@ experiments:
 
       Band220GHz:
         enabled: false
-        num_tasks: 2
+        band_weight: 2
         eval_nside: 128
         fwhm: 30.0
         freq: 220.0

@@ -221,7 +221,7 @@ experiments:
     bands:
       LiteBIRD40GHz_L1:
         enabled: true
-        num_tasks: 24
+        band_weight: 24
         eval_nside: 512
         fwhm: 66.93 # [arcmin]
         freq: 40.0 # [GHz]
@@ -234,7 +234,7 @@ experiments:
 
       LiteBIRD61GHz_L1:
         enabled: true
-        num_tasks: 24
+        band_weight: 24
         eval_nside: 512
         fwhm: 47.58 # [arcmin]
         freq: 61.0 # [GHz]
@@ -247,7 +247,7 @@ experiments:
 
       LiteBIRD50GHz_L2:
         enabled: true
-        num_tasks: 24
+        band_weight: 24
         eval_nside: 512
         fwhm: 56.07 # [arcmin]
         freq: 50.0 # [GHz]
@@ -260,7 +260,7 @@ experiments:
 
       LiteBIRD77GHz_L2:
         enabled: true
-        num_tasks: 24
+        band_weight: 24
         eval_nside: 512
         fwhm: 39.0 # [arcmin]
         freq: 77.0 # [GHz]
@@ -273,7 +273,7 @@ experiments:
 
       LiteBIRD94GHz_M1:
         enabled: true
-        num_tasks: 24
+        band_weight: 24
         eval_nside: 512
         fwhm: 47.58 # [arcmin]
         freq: 94.0 # [GHz]
@@ -286,7 +286,7 @@ experiments:
 
       LiteBIRD145GHz_M1:
         enabled: true
-        num_tasks: 24
+        band_weight: 24
         eval_nside: 512
         fwhm: 56.07 # [arcmin]
         freq: 145.0 # [GHz]
@@ -299,7 +299,7 @@ experiments:
 
       LiteBIRD118GHz_M2:
         enabled: true
-        num_tasks: 24
+        band_weight: 24
         eval_nside: 512
         fwhm: 39.0 # [arcmin]
         freq: 118.0 # [GHz]
@@ -312,7 +312,7 @@ experiments:
 
       LiteBIRD182GHz_M2:
         enabled: true
-        num_tasks: 24
+        band_weight: 24
         eval_nside: 512
         fwhm: 32.72 # [arcmin]
         freq: 182.0 # [GHz]
@@ -325,7 +325,7 @@ experiments:
 
       LiteBIRD217GHz_H1:
         enabled: true
-        num_tasks: 24
+        band_weight: 24
         eval_nside: 512
         fwhm: 22.07 # [arcmin]
         freq: 217.0 # [GHz]
@@ -338,7 +338,7 @@ experiments:
 
       LiteBIRD334GHz_H1:
         enabled: true
-        num_tasks: 24
+        band_weight: 24
         eval_nside: 512
         fwhm: 26.67 # [arcmin]
         freq: 334.0 # [GHz]
@@ -351,7 +351,7 @@ experiments:
 
       LiteBIRD280GHz_H2:
         enabled: true
-        num_tasks: 24
+        band_weight: 24
         eval_nside: 512
         fwhm: 18.0 # 17.85 # [arcmin]
         freq: 280.0 # [GHz]
@@ -364,7 +364,7 @@ experiments:
 
       LiteBIRD402GHz_H2:
         enabled: true
-        num_tasks: 24
+        band_weight: 24
         eval_nside: 512
         fwhm: 18.0 # 15.12 # [arcmin]
         freq: 402.0 # [GHz]
@@ -377,7 +377,7 @@ experiments:
 
       LiteBIRD570GHz_H3:
         enabled: true
-        num_tasks: 24
+        band_weight: 24
         eval_nside: 512
         fwhm: 18.0 # 10.0 # [arcmin]
         freq: 570.0 # [GHz]

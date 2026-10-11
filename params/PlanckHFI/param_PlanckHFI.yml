@@ -217,7 +217,6 @@ experiments:
     bands:
       Planck100GHz:
         enabled: true
-        num_tasks: 176
         eval_nside: 1024
         fwhm: 9.68 # [arcmin]
         freq: 100.0 # [GHz]
@@ -239,7 +238,6 @@ experiments:
 
       Planck143GHz:
         enabled: true
-        num_tasks: 306
         eval_nside: 2048
         fwhm: 7.30 # [arcmin]
         freq: 143.0 # [GHz]
@@ -262,7 +260,6 @@ experiments:
 
       Planck217GHz:
         enabled: true
-        num_tasks: 364
         eval_nside: 2048
         fwhm: 5.01 # [arcmin]
         freq: 217.0 # [GHz]
@@ -286,7 +283,6 @@ experiments:
 
       Planck353GHz:
         enabled: true
-        num_tasks: 352
         eval_nside: 2048
         fwhm: 4.9 # [arcmin]
         freq: 353.0 # [GHz]
@@ -310,7 +306,6 @@ experiments:
 
       Planck545GHz:
         enabled: true
-        num_tasks: 62
         eval_nside: 2048
         fwhm: 4.8 # [arcmin]
         freq: 545.0 # [GHz]
@@ -332,7 +327,6 @@ experiments:
 
       Planck857GHz:
         enabled: true
-        num_tasks: 84
         eval_nside: 2048
         fwhm: 4.6 # [arcmin]
         freq: 857.0 # [GHz]

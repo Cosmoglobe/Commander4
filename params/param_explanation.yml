@@ -698,8 +698,14 @@ experiments:
     bands:
       Planck30GHz:
         enabled: true
-        num_tasks: 4          # MPI ranks assigned to this band. The scans are split
-                              # across them. These sum to the TOD task total.
+        band_weight: "auto"   # This band's share of the TOD ranks, i.e. of all MPI tasks that
+                              # CompSep does not take; the band's scans are split across them.
+                              # "auto" (default) = the band's number of detector-samples: ntod
+                              # (filelist column 6) summed over the scans it reads, times its
+                              # detectors. If any band's filelist lacks a scan's ntod, every band
+                              # counts scans times detectors instead. A number = ranks in proportion
+                              # to it, so whole numbers that sum to the TOD task count give exactly
+                              # those counts. Set a number on every enabled band, or on none.
         eval_nside: 512       # Resolution the band map is made at, and the resolution
                               # CompSep then sees.
         fwhm: 32.4            # [arcmin] Gaussian beam.
@@ -783,7 +789,6 @@ experiments:
       # CompSep expects and no experiment produces.
       Planck44GHz:
         enabled: false
-        num_tasks: 40
         eval_nside: 512
         fwhm: 27.1
         freq: 44.1

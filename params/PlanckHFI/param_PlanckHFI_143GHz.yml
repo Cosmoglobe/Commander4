@@ -217,7 +217,6 @@ experiments:
     bands:
       Planck143GHz:
         enabled: true
-        num_tasks: 306
         eval_nside: 2048
         fwhm: 7.30 # [arcmin]
         freq: 143.0 # [GHz]

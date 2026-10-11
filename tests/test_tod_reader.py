@@ -19,6 +19,7 @@ from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.tod_samples import TODSamples
 from commander4.file_io.experiments.base_reader import find_good_fourier_size
 from commander4.parameters.parse import params_from_dict
+from commander4.parameters.schema import enabled_tod_bands
 from simgen.writers import write_filelist, write_scan_file
 
 NTOD = 67  # Not a fast FFT size, so the reader trims every scan.
@@ -283,6 +284,25 @@ def test_scan_weights_picks_run_time_or_ntod(tmp_path: Path,
     assert used_weights == [[5.0, 7.0], [100.0, 300.0]]
     with pytest.raises(ValueError, match="no ntod"):
         read(params)
+
+
+def test_auto_band_weights_count_detector_samples(tmp_path: Path) -> None:
+    """Band A has 2 detectors and scans of 100 and 300 samples (scan 3 is marked not to be read);
+    band B has 1 detector and one 50-sample scan."""
+    (tmp_path / "a.txt").write_text('3\n1 "a1.h5" 1 0 0 100 1\n2 "a2.h5" 1 0 0 300 1\n'
+                                    '3 "a3.h5" 1 0 0 900 0\n')
+    (tmp_path / "b.txt").write_text('1\n7 "b7.h5" 1 0 0 50 1\n')
+    params = params_from_dict({"experiments": {"Exp": {"enabled": True, "bands": {
+        "A": {"enabled": True, "filelist": str(tmp_path / "a.txt"),
+              "detectors": {"a": {}, "b": {}}},
+        "B": {"enabled": True, "filelist": str(tmp_path / "b.txt"), "detectors": {"c": {}}},
+    }}}})
+    bands = enabled_tod_bands(params)
+
+    assert tod_reader.tod_band_weights(params, bands) == [800.0, 50.0]
+    # Without a known ntod for every scan, every band is weighed by scans times detectors.
+    (tmp_path / "b.txt").write_text('1\n7 "b7.h5"\n')
+    assert tod_reader.tod_band_weights(params, bands) == [4, 1]
 
 
 @pytest.mark.skipif(MPI.COMM_WORLD.Get_size() != 2, reason="requires exactly two MPI ranks")

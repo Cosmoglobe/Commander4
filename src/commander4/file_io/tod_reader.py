@@ -9,6 +9,7 @@ downstream needs to know which one ran.
 
 Add a new experiment by writing such a subclass and registering it in ``experiment_tod_readers``.
 """
+from collections.abc import Sequence
 from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
@@ -17,7 +18,7 @@ import logging
 import numpy as np
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
-from commander4.parameters.schema import resolve_param
+from commander4.parameters.schema import TODBandConfig, resolve_param
 from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.file_io.experiments.base_reader import TODReader
 from commander4.file_io.experiments.akari import AkariReader
@@ -83,18 +84,83 @@ def split_by_sky_position(vectors: NDArray, weights: NDArray, nparts: int) -> ND
     return rank
 
 
+def select_scans(params: Bunch, my_experiment: Bunch, my_band: Bunch) -> list[list[str]]:
+    """The filelist rows of the scans one band reads, sorted by scan ID.
+
+    Keeps the scans with IDs from ``scan_id_start`` (included) to ``scan_id_stop`` (excluded), and
+    drops the scans listed in ``bad_PIDs_path`` and those the filelist marks as not to be read (0 in
+    its 7th column). Scan IDs increase with time, but the rows of a filelist need not (the LFI and
+    HFI filelists are not), so the scans are selected and ordered by scan ID.
+
+    Returns:
+        Each selected row, split into its columns: scan ID, quoted file path, and the optional
+        columns that c4-scan-weights writes (weight, theta, phi, ntod, read).
+    """
+    band_name = my_band._name
+    scopes = (f"experiments.{my_experiment._name}.bands.{band_name}",
+              f"experiments.{my_experiment._name}")
+    scan_id_start = resolve_param(params, "scan_id_start", scopes, default=None,
+                                  legal_types=(int, type(None)))
+    scan_id_stop = resolve_param(params, "scan_id_stop", scopes, default=None,
+                                 legal_types=(int, type(None)))
+    with open(my_band.filelist) as infile:
+        infile.readline()  # The first line holds the number of scans.
+        rows = [line.split() for line in infile if line.strip()]
+    rows.sort(key=lambda columns: int(columns[0]))
+    in_range = [columns for columns in rows
+                if (scan_id_start is None or int(columns[0]) >= scan_id_start)
+                and (scan_id_stop is None or int(columns[0]) < scan_id_stop)]
+    skipped_scan_ids = set()
+    if "bad_PIDs_path" in my_experiment:
+        skipped_scan_ids = {int(scan_id) for scan_id in np.load(my_experiment.bad_PIDs_path)}
+    # Column 7 is 0 for scans that an earlier run found to hold no usable data: nothing in the file,
+    # or every detector flagged or cut at read time.
+    skipped_scan_ids |= {int(columns[0]) for columns in rows
+                         if len(columns) > 6 and columns[6] == "0"}
+    selected = [columns for columns in in_range if int(columns[0]) not in skipped_scan_ids]
+    logger.debug(f"Band {band_name}: {len(in_range)} of the filelist's {len(rows)} scans have IDs "
+                 f"in [{scan_id_start}, {scan_id_stop}), of which {len(in_range) - len(selected)} "
+                 "are listed as bad or marked in the filelist as holding no usable data.")
+    if len(selected) == 0:
+        raise ValueError(f"Band {band_name}: scan IDs [{scan_id_start}, {scan_id_stop}) select no "
+                         "usable scans.")
+    return selected
+
+
+def tod_band_weights(params: Bunch, tod_bands: Sequence[TODBandConfig]) -> list[float]:
+    """The weights by which the TOD ranks are split between the bands (see `split_tod_ranks`).
+
+    A band's weight is its ``band_weight`` if the parameter file sets one. Otherwise ("auto") it is
+    the band's number of detector-samples: the sum of ntod (the filelist's 6th column) over the
+    scans it reads (see `select_scans`), times its number of detectors. If any of these scans, in
+    any band, has no known ntod, every band counts its scans instead (number of scans times
+    detectors), so that all bands are weighed on the same scale.
+    """
+    if all(band.weight is not None for band in tod_bands):
+        return [band.weight for band in tod_bands]
+    ntods, ndets = [], []
+    for band in tod_bands:
+        experiment = params.experiments[band.experiment_name]
+        rows = select_scans(params, experiment, experiment.bands[band.band_name])
+        # c4-scan-weights writes -1 for an ntod it does not know.
+        ntods.append([float(columns[5]) if len(columns) > 5 else -1.0 for columns in rows])
+        ndets.append(len(experiment.bands[band.band_name].detectors))
+    if all(ntod > 0 for band_ntods in ntods for ntod in band_ntods):
+        return [ndet*sum(band_ntods) for ndet, band_ntods in zip(ndets, ntods)]
+    logger.info("Some selected scans have no known ntod in their filelist (column 6, written by "
+                "c4-scan-weights), so the bands are weighed by number of scans times detectors.")
+    return [ndet*len(band_ntods) for ndet, band_ntods in zip(ndets, ntods)]
+
+
 def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch,
                         my_band: Bunch) -> DetectorGroupTOD:
     """Read this rank's share of one band's scans.
 
-    The band master reads the filelist and sorts its rows by scan ID, which is time order. It keeps
-    the scans with IDs from ``scan_id_start`` (included) to ``scan_id_stop`` (excluded), and drops
-    the scans listed in ``bad_PIDs_path`` and those the filelist marks as not to be read (0 in its
-    7th column). It splits the remaining scans between the ranks by sky position and weight (see
-    `split_by_sky_position`), where ``scan_weights`` picks the weight: the filelist's measured run
-    time ("runtime", the default) or number of samples ("ntod"). Each rank reads its share with the
-    experiment's reader. If the experiment sets ``replace_tod_with_sim``, the TOD is then replaced
-    by a simulation.
+    The band master selects the scans from the filelist (see `select_scans`), and splits them
+    between the ranks by sky position and weight (see `split_by_sky_position`), where
+    ``scan_weights`` picks the weight: the filelist's measured run time ("runtime", the default) or
+    number of samples ("ntod"). Each rank reads its share with the experiment's reader. If the
+    experiment sets ``replace_tod_with_sim``, the TOD is then replaced by a simulation.
 
     Args:
         band_comm: The band's MPI communicator; each rank reads a disjoint set of scans.
@@ -114,43 +180,15 @@ def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch
     rank = band_comm.Get_rank()
     scopes = (f"experiments.{my_experiment._name}.bands.{band_name}",
               f"experiments.{my_experiment._name}")
-    scan_id_start = resolve_param(params, "scan_id_start", scopes, default=None,
-                                  legal_types=(int, type(None)))
-    scan_id_stop = resolve_param(params, "scan_id_stop", scopes, default=None,
-                                 legal_types=(int, type(None)))
     scan_weights = resolve_param(params, "scan_weights", scopes, default="runtime",
                                  legal_values=("runtime", "ntod"))
 
-    # The band master reads the filelist and selects the scans; the other ranks get them from it,
-    # each as (scan ID, file path). Scan IDs increase with time, but the rows of a filelist need
-    # not (the LFI and HFI filelists are not), so the scans are selected and ordered by scan ID.
+    # The band master selects the scans; the other ranks get them from it, each as (scan ID, path).
     scans: list[tuple[int, str]] | None = None
     if rank == 0:
-        with open(my_band.filelist) as infile:
-            infile.readline()  # The first line holds the number of scans.
-            # Each row is a scan ID, a quoted file path, and optional columns (see c4-scan-weights).
-            rows = [line.split() for line in infile if line.strip()]
-        rows.sort(key=lambda columns: int(columns[0]))
-        in_range = [columns for columns in rows
-                    if (scan_id_start is None or int(columns[0]) >= scan_id_start)
-                    and (scan_id_stop is None or int(columns[0]) < scan_id_stop)]
-        skipped_scan_ids = set()
-        if "bad_PIDs_path" in my_experiment:
-            skipped_scan_ids = {int(scan_id) for scan_id in np.load(my_experiment.bad_PIDs_path)}
-        # Column 7 is 0 for scans that an earlier run found to hold no usable data: nothing in the
-        # file, or every detector flagged or cut at read time.
-        skipped_scan_ids |= {int(columns[0]) for columns in rows
-                             if len(columns) > 6 and columns[6] == "0"}
-        selected = [columns for columns in in_range if int(columns[0]) not in skipped_scan_ids]
+        selected = select_scans(params, my_experiment, my_band)
         scans = [(int(columns[0]), columns[1].strip('"')) for columns in selected]
-        logger.info(f"Band {band_name}: {len(in_range)} of the filelist's {len(rows)} scans have "
-                    f"IDs in [{scan_id_start}, {scan_id_stop}), of which "
-                    f"{len(in_range) - len(scans)} are listed as bad or marked in the filelist as "
-                    "holding no usable data.")
     scans = band_comm.bcast(scans, root=0)
-    if len(scans) == 0:
-        raise ValueError(f"Band {band_name}: scan IDs [{scan_id_start}, {scan_id_stop}) select no "
-                         "usable scans.")
 
     # The band master splits the scans between the ranks. A rank's scans need not be contiguous in
     # time; every step that needs time order sorts by scan ID.
@@ -164,8 +202,8 @@ def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch
             weights = np.array([float(columns[5]) if len(columns) > 5 else -1.0
                                 for columns in selected])
             if (weights <= 0).any():
-                raise ValueError(f"Band {band_name}: scan_weights is 'ntod', but the filelist has no "
-                                 f"ntod (column 6) for {(weights <= 0).sum()} of the selected scans.")
+                raise ValueError(f"Band {band_name}: scan_weights is 'ntod', but the filelist has "
+                                 "no ntod (column 6) for some of the selected scans.")
         else:
             weights = np.array([float(columns[2]) if len(columns) > 2 else 1.0
                                 for columns in selected])

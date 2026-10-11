@@ -1,4 +1,5 @@
 """Split MPI ranks between the TOD and CompSep sides and the enabled bands."""
+import itertools
 import os
 import time
 import logging
@@ -12,6 +13,7 @@ from commander4.parameters.schema import (
     enabled_compsep_views,
     enabled_tod_bands,
     has_enabled_sampling_group,
+    split_tod_ranks,
     task_count_breakdown,
 )
 
@@ -29,15 +31,17 @@ def init_mpi(params: Bunch) -> Bunch:
     worldsize, worldrank = world_comm.Get_size(), world_comm.Get_rank()
     is_world_master = worldrank == 0
     # The task counts are derived from the band configuration rather than stated in the parameter
-    # file: the TOD total is the sum of the per-band `num_tasks`, and CompSep takes one task per
-    # enabled band view (one for I, one for QU).
+    # file: CompSep takes one task per enabled band view (one for I, one for QU), and every other
+    # task is a TOD task. `init_mpi_tod` splits those between the bands.
     ntasks = derive_task_counts(params)
     tot_num_CompSep_ranks = ntasks.compsep_I + ntasks.compsep_QU
+    ntask_tod = worldsize - tot_num_CompSep_ranks
     if is_world_master:
         mpi4py_version = tuple(map(int, mpi4py.__version__.split('.')))
         MPI_version = MPI.Get_version()
         logger.info(f"MPI version: {MPI_version}. mpi4py version: {mpi4py_version}.")
-        logger.summary(f"MPI task layout: {task_count_breakdown(ntasks)}.")
+        logger.summary(f"MPI task layout: {ntask_tod} TOD + {ntasks.compsep_I} CompSep-I + "
+                       f"{ntasks.compsep_QU} CompSep-QU.")
         if MPI_version < (4,0):
             logger.warning(f"MPI version ({MPI_version}) is below (4,0)!")
         if mpi4py_version < (4,0):
@@ -52,12 +56,11 @@ def init_mpi(params: Bunch) -> Bunch:
             raise RuntimeError("Enabled compsep sampling groups are configured, but "
                                "'compsep.enabled' is false, so no CompSep MPI ranks are "
                                "allocated to run them. Enable compsep, or disable the groups.")
-        if worldsize != ntasks.total:
+        if worldsize < ntasks.min_total or (ntasks.tod_bands == 0 and ntask_tod > 0):
             raise RuntimeError(f"This run needs {task_count_breakdown(ntasks)} MPI tasks, "
                                f"but was started with {worldsize}. The counts follow from the "
-                               "parameter file (the per-band 'num_tasks' of every enabled band, "
-                               "and one CompSep task per enabled 'compsep.bands' view); run with "
-                               f"'mpirun -n {ntasks.total}'.")
+                               "parameter file: one CompSep task per enabled 'compsep.bands' view, "
+                               "and at least one TOD task per enabled band.")
         # Otherwise CompSep is simply off (TOD-only) and compsep.bands is ignored.
         if not compsep_enabled(params):
             reason = ("compsep.enabled is false" if turned_off
@@ -69,13 +72,13 @@ def init_mpi(params: Bunch) -> Bunch:
     # Split the world communicator into a communicator for compsep and one for TOD (with "color"
     # being the keyword for the split).
     nthreads_compsep = params.resources.compsep.num_threads
-    if worldrank < ntasks.tod:
+    if worldrank < ntask_tod:
         color = 0
         side = "tod"
         my_num_threads = params.resources.tod.num_threads
         my_num_threads_numba = my_num_threads
 
-    elif worldrank < ntasks.tod + tot_num_CompSep_ranks:
+    else:
         color = 1  # Compsep
         side = "compsep"
         # num_threads is either an int, or a list specifying nthreads for each rank.
@@ -86,13 +89,10 @@ def init_mpi(params: Bunch) -> Bunch:
                 raise ValueError(
                     f"Length of resources.compsep.num_threads ({len(nthreads_compsep)}) does not "
                     f"match the number of CompSep ranks ({tot_num_CompSep_ranks}).")
-            my_num_threads = nthreads_compsep[worldrank - ntasks.tod]
+            my_num_threads = nthreads_compsep[worldrank - ntask_tod]
         # Testing revealed 24 to be a good number (regardless of nside), but I tested this on the
         # new 384-core nodes, the optimal number is probably slightly lower on the older owls.
         my_num_threads_numba = min(24,my_num_threads)
-    else:
-        raise ValueError(f"My rank ({worldrank}) exceeds the combined number of allocated tasks to"
-                         f"both TOD ({ntasks.tod}) and compsep ({tot_num_CompSep_ranks})")
 
     # It's important to set these environment variables before importing any package that might
     # use them, such as Numpy or Scipy, as they will not apply retroactively!
@@ -130,8 +130,8 @@ def init_mpi(params: Bunch) -> Bunch:
 
     # Determine the world ranks of the respective master tasks for compsep and TOD
     # We ensured that this works by the "key=worldrank" in the split command.
-    tod_master = 0 if ntasks.tod > 0 else None
-    compsep_master = ntasks.tod if tot_num_CompSep_ranks > 0 else None
+    tod_master = 0 if ntask_tod > 0 else None
+    compsep_master = ntask_tod if tot_num_CompSep_ranks > 0 else None
 
     world_comm.barrier()
     time.sleep(worldrank*1e-5)  # Small sleep to get prints in nice order.
@@ -186,20 +186,31 @@ def init_mpi(params: Bunch) -> Bunch:
     
 
 def init_mpi_tod(mpi_info: Bunch, params: Bunch) -> Bunch:
-    """Assign this TOD rank from the shared band inventory and create its band communicator."""
+    """Split the TOD ranks between the enabled bands, and create this rank's band communicator.
+
+    The TOD master weighs the bands (see `tod_band_weights`) and splits the ranks by these weights
+    (see `split_tod_ranks`). Each band gets a contiguous block of ranks, in the order of the
+    parameter file.
+    """
     tod_rank = mpi_info.tod.rank
     tod_bands = enabled_tod_bands(params)
-    my_band = next(
-        (band for band in tod_bands if band.rank_start <= tod_rank < band.rank_stop),
-        None,
-    )
-    if my_band is None:
-        raise RuntimeError(f"TOD rank {tod_rank} was not assigned to an enabled band.")
-    if tod_bands[-1].rank_stop != mpi_info.tod.size:
-        raise RuntimeError(
-            f"Enabled TOD bands require {tod_bands[-1].rank_stop} ranks, but the TOD side has "
-            f"{mpi_info.tod.size}."
-        )
+    rank_counts: list[int] | None = None
+    if tod_rank == 0:
+        # Imported here: the readers import numba, which has to come after `init_mpi` has set the
+        # thread counts.
+        from commander4.file_io.tod_reader import tod_band_weights
+        weights = tod_band_weights(params, tod_bands)
+        rank_counts = split_tod_ranks(weights, mpi_info.tod.size)
+        mean_weight_per_rank = sum(weights)/mpi_info.tod.size
+        logger.info(f"TOD: split {mpi_info.tod.size} ranks between {len(tod_bands)} bands: "
+                    + ", ".join(f"{band.band_name} {count}"
+                                for band, count in zip(tod_bands, rank_counts))
+                    + ". The band with the most weight per rank has "
+                    f"{max(w/n for w, n in zip(weights, rank_counts))/mean_weight_per_rank:.2f} x "
+                    "the mean.")
+    rank_counts = mpi_info.tod.comm.bcast(rank_counts, root=0)
+    rank_stops = list(itertools.accumulate(rank_counts))
+    my_band = tod_bands[next(iband for iband, stop in enumerate(rank_stops) if tod_rank < stop)]
 
     # The global inventory index is the communicator color. Unlike the old per-experiment index,
     # it cannot merge bands from different experiments.
@@ -212,8 +223,6 @@ def init_mpi_tod(mpi_info: Bunch, params: Bunch) -> Bunch:
     # matters: a node can host ranks of two different bands, and they need different data.
     node_comm = band_comm.Split_type(MPI.COMM_TYPE_SHARED)
 
-    if mpi_info.tod.is_master:
-        logger.verbose(f"TOD: {mpi_info.tod.size} tasks allocated across {len(tod_bands)} bands.")
     logger.debug(
         f"TOD rank {tod_rank} (on {MPI.Get_processor_name()}) handles "
         f"{my_band.experiment_name}/{my_band.band_name}, band rank {band_rank}/{band_size}, "

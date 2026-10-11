@@ -244,7 +244,7 @@ experiments:
     bands:
       Planck30GHz:
         enabled: true
-        num_tasks: 24
+        band_weight: 24
         eval_nside: 512
         fwhm: 32.4 # [arcmin]
         freq: 28.4 # [GHz]
@@ -263,7 +263,7 @@ experiments:
             bandpass_shift: 0.13
       Planck44GHz:
         enabled: true
-        num_tasks: 42
+        band_weight: 42
         eval_nside: 512
         fwhm: 27.1 # [arcmin]
         freq: 44.1 # [GHz]
@@ -286,7 +286,7 @@ experiments:
             bandpass_shift: -0.05
       Planck70GHz:
         enabled: true
-        num_tasks: 120
+        band_weight: 120
         eval_nside: 1024
         fwhm: 13.3 # [arcmin]
         freq: 70.1 # [GHz]

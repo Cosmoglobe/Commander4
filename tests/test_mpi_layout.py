@@ -1,4 +1,4 @@
-"""Pure MPI-layout contracts: enabled inventories and rank assignment."""
+"""Pure MPI-layout contracts: enabled inventories, band weights and rank assignment."""
 
 import pytest
 from mpi4py import MPI
@@ -11,11 +11,12 @@ from commander4.parameters.schema import (
     derive_task_counts,
     enabled_compsep_views,
     enabled_tod_bands,
+    split_tod_ranks,
 )
 
 
-def _tod_band(num_tasks: int, enabled: bool = True) -> Bunch:
-    return Bunch(enabled=enabled, num_tasks=num_tasks, detectors=Bunch(detector={}))
+def _tod_band(band_weight: float | str, enabled: bool = True) -> Bunch:
+    return Bunch(enabled=enabled, band_weight=band_weight, detectors=Bunch(detector={}))
 
 
 def _params() -> Bunch:
@@ -38,13 +39,22 @@ def _params() -> Bunch:
     )
 
 
-def test_tod_inventory_has_global_band_indices_and_contiguous_rank_intervals() -> None:
+def test_tod_inventory_has_global_band_indices_and_weights() -> None:
     bands = enabled_tod_bands(_params())
 
     assert bands == (
-        TODBandConfig(0, "First", "BandA", 0, 2),
-        TODBandConfig(1, "Second", "BandB", 2, 5),
+        TODBandConfig(0, "First", "BandA", 2.0),
+        TODBandConfig(1, "Second", "BandB", 3.0),
     )
+
+
+def test_tod_ranks_follow_the_band_weights() -> None:
+    # Whole-number weights that sum to the number of ranks give exactly those numbers.
+    assert split_tod_ranks([176, 306, 364, 352, 62, 84], 1344) == [176, 306, 364, 352, 62, 84]
+    # Otherwise each band gets as many ranks as keeps its weight per rank lowest; every band at
+    # least one.
+    assert split_tod_ranks([1.0, 1.0, 2.0], 8) == [2, 2, 4]
+    assert split_tod_ranks([1000.0, 1.0], 3) == [2, 1]
 
 
 def test_compsep_inventory_places_intensity_before_polarization() -> None:
@@ -60,7 +70,7 @@ def test_compsep_inventory_places_intensity_before_polarization() -> None:
 def test_task_counts_come_from_the_same_inventories() -> None:
     counts = derive_task_counts(_params())
 
-    assert (counts.tod, counts.compsep_I, counts.compsep_QU, counts.total) == (5, 2, 2, 9)
+    assert (counts.tod_bands, counts.compsep_I, counts.compsep_QU, counts.min_total) == (2, 2, 2, 6)
 
 
 def test_duplicate_tod_band_names_across_experiments_are_rejected() -> None:
@@ -71,11 +81,20 @@ def test_duplicate_tod_band_names_across_experiments_are_rejected() -> None:
         enabled_tod_bands(params)
 
 
-def test_non_positive_tod_task_count_is_rejected() -> None:
+@pytest.mark.parametrize("band_weight", [0, -1.0, "fast"])
+def test_band_weight_must_be_positive_or_auto(band_weight: float | str) -> None:
     params = _params()
-    params.experiments.First.bands.BandA.num_tasks = 0
+    params.experiments.First.bands.BandA.band_weight = band_weight
 
-    with pytest.raises(ValueError, match="num_tasks must be at least 1"):
+    with pytest.raises(ValueError, match="positive number or 'auto'"):
+        enabled_tod_bands(params)
+
+
+def test_numeric_and_auto_band_weights_are_not_mixed() -> None:
+    params = _params()
+    params.experiments.First.bands.BandA.band_weight = "auto"
+
+    with pytest.raises(ValueError, match="on every band, or on none"):
         enabled_tod_bands(params)
 
 

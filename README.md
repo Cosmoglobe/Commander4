@@ -57,7 +57,7 @@ See [params/param_explanation.yml](params/param_explanation.yml) for an exhausti
 
 A parameter file is seven top-level blocks, each named after the part of the program that reads them: `gibbs`, `resources`, `output`, `components`, `experiments`, `tod_processing` and `compsep`.
 
-The MPI task counts are **derived**, not stated: the TOD total is the sum of the per-band `num_tasks` over enabled bands of enabled experiments, and component separation takes one task per enabled `compsep.bands` view (one for I, one for QU). Commander4 reports the total it needs, and `mpirun -n` must match it.
+The MPI task counts are **derived**, not stated: component separation takes one task per enabled `compsep.bands` view (one for I, one for QU), and every other task goes to TOD processing, with at least one per enabled band. The TOD tasks are split between the bands in proportion to each band's `band_weight`: by default (`"auto"`) its number of detector-samples (ntod × detectors, from the filelists), or a number set on every band. Any `mpirun -n` that leaves each band at least one task works.
 
 Parameter files can include other parameter files using `!import 'path/to/file.yml'`. The path is relative to the relevant file, unless it is absolute. `~` and environment variables such as `$HOME` are expanded, as in a shell. Note that the exact content of the imported file is inserted at the exact location of the import, and at the relevant indentation level.
 
@@ -359,7 +359,7 @@ See [`simgen/README.md`](simgen/README.md) for the simulator's parameter format 
 
 ### 4.3 Parameter file validation
 Run `c4-validate-params path/to/param.yml` to get:
-- Info about how many MPI ranks the file is currently configered with, such that you know how many to use with `mpirun -n ...`
+- The smallest number of MPI ranks the file can run with (`mpirun -n ...`): one per TOD band, plus the CompSep ranks.
 - Info about what distribution of threads is optimal for the component separation. If you know how many nodes and cores per node you plan to dedicate to component separation, you can run `c4-validate-params params.yml --compsep-threads-per-node 384 --compsep-nodes 2` to get a proposed distribution, which can be pasted directly into the parameter file.
 
 ### 4.4 Chain plotting
