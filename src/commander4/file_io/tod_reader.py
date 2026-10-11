@@ -49,14 +49,16 @@ def split_by_sky_position(vectors: NDArray, weights: NDArray, nparts: int) -> ND
     """Assign each scan to one of ``nparts`` ranks: equal total weight per rank, with each rank's
     scans close together on the sky, so that they overlap and the rank's maps hold few pixels.
 
-    Recursive bisection: sort the scans along the direction in which their sky positions spread
-    most, and cut where the cumulative weight reaches the left side's share of the ranks. Then split
-    each side the same way, until there is one part per rank. The sort keeps the order of scans at
-    the same position, so a filelist without positions gives contiguous blocks of scans in time.
+    Recursive bisection: sort the scans along the direction in which their pointing-plane normals
+    spread most, and cut where the cumulative weight reaches the left side's share of the ranks.
+    Then split each side the same way, until there is one part per rank. The sort keeps the order
+    of scans with the same normal, so scans without known normals, all given the same one, end up
+    in contiguous blocks in time.
 
     Args:
-        vectors: (nscans, 3) unit vectors of the scans' sky positions, in time order.
-        weights: (nscans,) cost of each scan, e.g. its measured run time or number of samples.
+        vectors: (nscans, 3) unit vectors of the scans' pointing-plane normals, the normals of the
+            planes that best fit their pointing (see `read_tods_from_file`), in time order.
+        weights: (nscans,) cost of each scan, e.g. its number of samples.
         nparts: The number of ranks.
 
     Returns:
@@ -69,7 +71,7 @@ def split_by_sky_position(vectors: NDArray, weights: NDArray, nparts: int) -> ND
         if nranks == 1 or len(indices) < 2:
             rank[indices] = first_rank
             return
-        # The direction of largest spread: the eigenvector of the positions' 3x3 covariance with the
+        # The direction of largest spread: the eigenvector of the normals' 3x3 covariance with the
         # largest eigenvalue (eigh sorts them in ascending order).
         direction = np.linalg.eigh(np.cov(vectors[indices].T))[1][:, -1]
         indices = indices[np.argsort(vectors[indices] @ direction, kind="stable")]
@@ -88,13 +90,14 @@ def select_scans(params: Bunch, my_experiment: Bunch, my_band: Bunch) -> list[li
     """The filelist rows of the scans one band reads, sorted by scan ID.
 
     Keeps the scans with IDs from ``scan_id_start`` (included) to ``scan_id_stop`` (excluded), and
-    drops the scans listed in ``bad_PIDs_path`` and those the filelist marks as not to be read (0 in
-    its 7th column). Scan IDs increase with time, but the rows of a filelist need not (the LFI and
-    HFI filelists are not), so the scans are selected and ordered by scan ID.
+    drops the scans listed in ``bad_PIDs_path`` and those whose filelist row gives ntod 0, which
+    means the file holds no data for them. Scan IDs increase with time, but the rows of a filelist
+    need not (the LFI and HFI filelists are not), so the scans are selected and ordered by scan ID.
 
     Returns:
-        Each selected row, split into its columns: scan ID, quoted file path, and the optional
-        columns that c4-scan-weights writes (weight, theta, phi, ntod, read).
+        Each selected row, split into its columns. Commander3's filelists have five: scan ID, quoted
+        file path, weight, and the scan's pointing-plane normal (theta, phi). Its newer converters
+        add a sixth, the scan's ntod.
     """
     band_name = my_band._name
     scopes = (f"experiments.{my_experiment._name}.bands.{band_name}",
@@ -110,17 +113,16 @@ def select_scans(params: Bunch, my_experiment: Bunch, my_band: Bunch) -> list[li
     in_range = [columns for columns in rows
                 if (scan_id_start is None or int(columns[0]) >= scan_id_start)
                 and (scan_id_stop is None or int(columns[0]) < scan_id_stop)]
-    skipped_scan_ids = set()
+    bad_scan_ids = set()
     if "bad_PIDs_path" in my_experiment:
-        skipped_scan_ids = {int(scan_id) for scan_id in np.load(my_experiment.bad_PIDs_path)}
-    # Column 7 is 0 for scans that an earlier run found to hold no usable data: nothing in the file,
-    # or every detector flagged or cut at read time.
-    skipped_scan_ids |= {int(columns[0]) for columns in rows
-                         if len(columns) > 6 and columns[6] == "0"}
-    selected = [columns for columns in in_range if int(columns[0]) not in skipped_scan_ids]
+        bad_scan_ids = {int(scan_id) for scan_id in np.load(my_experiment.bad_PIDs_path)}
+    # Commander3's newer converters write ntod 0 for a scan without data in its file, such as the
+    # HFI converter's placeholder scans.
+    selected = [columns for columns in in_range if int(columns[0]) not in bad_scan_ids
+                and not (len(columns) > 5 and float(columns[5]) == 0)]
     logger.debug(f"Band {band_name}: {len(in_range)} of the filelist's {len(rows)} scans have IDs "
                  f"in [{scan_id_start}, {scan_id_stop}), of which {len(in_range) - len(selected)} "
-                 "are listed as bad or marked in the filelist as holding no usable data.")
+                 "are listed as bad or hold no data.")
     if len(selected) == 0:
         raise ValueError(f"Band {band_name}: scan IDs [{scan_id_start}, {scan_id_stop}) select no "
                          "usable scans.")
@@ -133,8 +135,8 @@ def tod_band_weights(params: Bunch, tod_bands: Sequence[TODBandConfig]) -> list[
     A band's weight is its ``band_weight`` if the parameter file sets one. Otherwise ("auto") it is
     the band's number of detector-samples: the sum of ntod (the filelist's 6th column) over the
     scans it reads (see `select_scans`), times its number of detectors. If any of these scans, in
-    any band, has no known ntod, every band counts its scans instead (number of scans times
-    detectors), so that all bands are weighed on the same scale.
+    any band, has no ntod, every band counts its scans instead (number of scans times detectors),
+    so that all bands are weighed on the same scale.
     """
     if all(band.weight is not None for band in tod_bands):
         return [band.weight for band in tod_bands]
@@ -142,13 +144,13 @@ def tod_band_weights(params: Bunch, tod_bands: Sequence[TODBandConfig]) -> list[
     for band in tod_bands:
         experiment = params.experiments[band.experiment_name]
         rows = select_scans(params, experiment, experiment.bands[band.band_name])
-        # c4-scan-weights writes -1 for an ntod it does not know.
-        ntods.append([float(columns[5]) if len(columns) > 5 else -1.0 for columns in rows])
+        # Rows of Commander3's older, 5-column filelists have no ntod.
+        ntods.append([float(columns[5]) if len(columns) > 5 else 0.0 for columns in rows])
         ndets.append(len(experiment.bands[band.band_name].detectors))
     if all(ntod > 0 for band_ntods in ntods for ntod in band_ntods):
         return [ndet*sum(band_ntods) for ndet, band_ntods in zip(ndets, ntods)]
-    logger.info("Some selected scans have no known ntod in their filelist (column 6, written by "
-                "c4-scan-weights), so the bands are weighed by number of scans times detectors.")
+    logger.info("Some selected scans have no ntod in their filelist (column 6), so the bands are "
+                "weighed by number of scans times detectors.")
     return [ndet*len(band_ntods) for ndet, band_ntods in zip(ndets, ntods)]
 
 
@@ -157,10 +159,12 @@ def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch
     """Read this rank's share of one band's scans.
 
     The band master selects the scans from the filelist (see `select_scans`), and splits them
-    between the ranks by sky position and weight (see `split_by_sky_position`), where
-    ``scan_weights`` picks the weight: the filelist's measured run time ("runtime", the default) or
-    number of samples ("ntod"). Each rank reads its share with the experiment's reader. If the
-    experiment sets ``replace_tod_with_sim``, the TOD is then replaced by a simulation.
+    between the ranks by ntod and pointing-plane normal (see `split_by_sky_position`), both taken
+    from the filelist (columns 4-6, as Commander3's newer converters write them). The split uses
+    only what every selected scan has: if a scan lacks ntod, every scan gets weight 1, and if one
+    lacks a normal, every scan gets the same one. Without both, the scans are split into equal
+    blocks in time. Each rank then reads its share with the experiment's reader. If the experiment
+    sets ``replace_tod_with_sim``, the TOD is then replaced by a simulation.
 
     Args:
         band_comm: The band's MPI communicator; each rank reads a disjoint set of scans.
@@ -177,55 +181,43 @@ def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch
                 "You either misspelled the experiment ID, or your experiment does not yet have a "\
                 "specified TOD reader. See this file for how to add it.")
     band_name = my_band._name
-    rank = band_comm.Get_rank()
-    scopes = (f"experiments.{my_experiment._name}.bands.{band_name}",
-              f"experiments.{my_experiment._name}")
-    scan_weights = resolve_param(params, "scan_weights", scopes, default="runtime",
-                                 legal_values=("runtime", "ntod"))
+    rank, nranks = band_comm.Get_rank(), band_comm.Get_size()
 
-    # The band master selects the scans; the other ranks get them from it, each as (scan ID, path).
-    scans: list[tuple[int, str]] | None = None
+    # The band master selects the scans, each as (scan ID, path), and splits them between the
+    # ranks. A rank's scans need not be contiguous in time; every step that needs time order sorts
+    # by scan ID.
+    scans: list[tuple[int, str]] = []
+    scans_per_rank = None
     if rank == 0:
         selected = select_scans(params, my_experiment, my_band)
         scans = [(int(columns[0]), columns[1].strip('"')) for columns in selected]
-    scans = band_comm.bcast(scans, root=0)
-
-    # The band master splits the scans between the ranks. A rank's scans need not be contiguous in
-    # time; every step that needs time order sorts by scan ID.
-    scan_ranks: NDArray | None = None
-    if rank == 0:
-        # A scan's weight is its measured run time (column 3) or its number of samples (column 6),
-        # and columns 4-5 hold its sky position (theta, phi). Without the run time and position
-        # columns, every scan has weight 1 and the same position, which gives equal blocks of
-        # scans in time. c4-scan-weights writes all of them, and -1 for an ntod it does not know.
-        if scan_weights == "ntod":
-            weights = np.array([float(columns[5]) if len(columns) > 5 else -1.0
-                                for columns in selected])
-            if (weights <= 0).any():
-                raise ValueError(f"Band {band_name}: scan_weights is 'ntod', but the filelist has "
-                                 "no ntod (column 6) for some of the selected scans.")
-        else:
-            weights = np.array([float(columns[2]) if len(columns) > 2 else 1.0
-                                for columns in selected])
-        theta = np.array([float(columns[3]) if len(columns) > 4 else 0.0 for columns in selected])
-        phi = np.array([float(columns[4]) if len(columns) > 4 else 0.0 for columns in selected])
-        nranks = band_comm.Get_size()
+        # Commander3's newer converters write ntod as the 6th column, and theta and phi (the
+        # pointing-plane normal) as 0 for a scan without one. The theta and phi of older, 5-column
+        # filelists are not used: the old converters' method can put them far off.
+        ntod, theta, phi = np.array([[float(columns[5]), float(columns[3]), float(columns[4])]
+                                     if len(columns) > 5 else [0.0, 0.0, 0.0]
+                                     for columns in selected]).T
+        ntod_known = (ntod > 0).all()
+        normal_known = ((theta != 0) | (phi != 0)).all()
+        if not (ntod_known and normal_known):
+            logger.info(f"Band {band_name}: the filelist lacks some scans' ntod or pointing-plane "
+                        "normal (columns 4-6), so the split uses only what every scan has.")
+        weights = ntod if ntod_known else np.ones(len(scans))
+        if not normal_known:
+            theta, phi = np.zeros(len(scans)), np.zeros(len(scans))
         scan_ranks = split_by_sky_position(np.array(hp.ang2vec(theta, phi)), weights, nranks)
-        scans_per_rank = np.bincount(scan_ranks, minlength=nranks)
+        scans_per_rank = [[] for _ in range(nranks)]
+        for scan, scan_rank in zip(scans, scan_ranks):
+            scans_per_rank[scan_rank].append(scan)
+        counts = np.bincount(scan_ranks, minlength=nranks)
         weight_per_rank = np.bincount(scan_ranks, weights, minlength=nranks)
-        logger.info(f"Band {band_name}: split {len(scans)} scans between {nranks} ranks by sky "
-                    f"position and {scan_weights}: {scans_per_rank.min()} to "
-                    f"{scans_per_rank.max()} scans per rank, largest total {scan_weights} "
+        logger.info(f"Band {band_name}: split {len(scans)} scans between {nranks} ranks: "
+                    f"{counts.min()} to {counts.max()} scans per rank, largest total weight "
                     f"{weight_per_rank.max()/weight_per_rank.mean():.2f} x the mean.")
-    scan_ranks = band_comm.bcast(scan_ranks, root=0)
-    my_scans = [scan for scan, scan_rank in zip(scans, scan_ranks) if scan_rank == rank]
+    my_scans = band_comm.scatter(scans_per_rank, root=0)
     reader = experiment_tod_readers[my_experiment.experiment_id](
         band_comm, params, my_experiment, my_band)
     experiment_data = reader.read(my_scans)
-    # The scans the reader kept nothing from, for the chain (see `DetectorGroupTOD`).
-    kept = {scan.scan_id for scan in experiment_data.scans}
-    experiment_data.dropped_scan_ids = np.array(
-        [scan_id for scan_id, _ in my_scans if scan_id not in kept], dtype=np.int64)
 
     if reader.tod_is_simulated:
         replace_tod_with_sim(band_comm, experiment_data, my_band, params, my_experiment.sim_params)

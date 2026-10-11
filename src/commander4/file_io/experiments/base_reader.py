@@ -134,8 +134,9 @@ class TODReader:
             with h5py.File(path, "r") as f:
                 header = self.read_scan_header(f, scan_id)
                 if header is None:
-                    # An empty placeholder scan, as the HFI converter's restart path writes. It is
-                    # recorded as dropped, so `c4-scan-weights` marks it in the filelist.
+                    # An empty placeholder scan, as the HFI converter's restart path writes. A
+                    # filelist with an ntod column marks these with ntod 0, and `select_scans`
+                    # leaves them out; older filelists list them like any other scan.
                     logger.debug(f"Band {self.band._name}: {path} has no data for scan "
                                  f"{scan_id}; the scan is skipped.")
                     continue

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import numpy as np
 import h5py
-import healpy as hp
 from numpy.typing import NDArray
 from mpi4py import MPI
 from pixell.bunch import Bunch
@@ -192,29 +191,6 @@ class TODSamples:
         # files without one (today the simgen and Akari files).
         self.scan_start_time = np.array([scan.start_time for scan in experiment_data.scans],
                                         dtype=np.float64)
-        # Three static values, written to the chain only for `c4-scan-weights`, which puts them in
-        # the filelist that the next run splits its scans by: each scan's number of samples in the
-        # file (before the Fourier cut, shared by its detectors), the scans the reader kept
-        # nothing from, and each scan's sky position.
-        self.scan_ntod = np.array([scan.detectors[0].ntod_original
-                                   for scan in experiment_data.scans], dtype=np.int64)
-        self.dropped_scan_ids = experiment_data.dropped_scan_ids
-        # The sky position (theta, phi) [rad] is the normal of the plane that best fits the first
-        # detector's pointing, on the side the pointing is on. A spinning scan (Planck) traces
-        # rings in one plane, whose normal is the spin axis; a part-ring lies in the same plane, so
-        # this works where the mean pointing direction does not. A scan of a small patch lies close
-        # to the patch's tangent plane, whose normal points at the patch centre.
-        sky_directions = np.zeros((self.nscans, 3))
-        for iscan, scan in enumerate(experiment_data.scans):
-            det = scan.detectors[0]
-            pix = det.get_pix()
-            # About 1000 samples per scan fix the plane to well under an arcminute.
-            vectors = np.array(hp.pix2vec(det.nside, pix[::max(1, len(pix)//1000)]))  # (3, n)
-            # The direction the vectors scatter least along is the eigenvector of their 3x3
-            # covariance with the smallest eigenvalue (eigh sorts them in ascending order).
-            normal = np.linalg.eigh(np.cov(vectors))[1][:, 0]
-            sky_directions[iscan] = normal*np.sign(normal @ vectors.mean(axis=1))
-        self.scan_sky_position = np.column_stack(hp.vec2ang(sky_directions))
 
         # Low-resolution (log-binned) TOD power spectra, written to the chain by default: a shared
         # binned frequency axis plus the binned periodograms of several per-detector-scan TOD views
@@ -439,9 +415,6 @@ class TODSamples:
         # the ranks' scans in rank order, which need not be time order; the per-scan datasets are
         # sorted by scan ID before they are returned.
         scan_ids_global = _gather_scan_distributed_array(band_comm, self.scan_ids, scans_per_rank)
-        # The scans the reader kept nothing from. They have no rows in the per-scan arrays, so
-        # they are gathered as one list of IDs.
-        dropped_scan_ids_per_rank = band_comm.gather(self.dropped_scan_ids, root=0)
 
         # 1. Absolute gain (per-band quantity)
         abs_gain_global = self.abs_gain  # Copies held on each rank, no communication required.
@@ -472,9 +445,6 @@ class TODSamples:
                                                                 scans_per_rank)
         orbital_velocity_global = _gather_scan_distributed_array(band_comm, self.orbital_velocity,
                                                                  scans_per_rank)
-        scan_sky_position_global = _gather_scan_distributed_array(band_comm, self.scan_sky_position,
-                                                                  scans_per_rank)
-        scan_ntod_global = _gather_scan_distributed_array(band_comm, self.scan_ntod, scans_per_rank)
         ncorr_cg_residual_global = _gather_scan_distributed_array(band_comm,
                                                                   self.ncorr_cg_residual,
                                                                   scans_per_rank)
@@ -560,7 +530,6 @@ class TODSamples:
             "abs_gain": abs_gain_global/self.band_unit_factor,
             "detrel_gain": rel_gain_global/self.band_unit_factor,
             "gain_prior": gain_prior_out,
-            "dropped_scan_ids": np.sort(np.concatenate(dropped_scan_ids_per_rank)),
         }
         # The datasets with a scan axis first, written in time order.
         per_scan_arrays: dict[str, NDArray] = {
@@ -573,8 +542,6 @@ class TODSamples:
             "good_fraction": good_fraction_global,
             "scan_start_time": scan_start_time_global,
             "orbital_velocity": orbital_velocity_global,
-            "scan_sky_position": scan_sky_position_global,
-            "scan_ntod": scan_ntod_global,
             "ncorr_cg_residual": ncorr_cg_residual_global,
             "ncorr_cg_niter": ncorr_cg_niter_global,
             "ncorr_converged": ncorr_converged_global,

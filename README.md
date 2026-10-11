@@ -82,9 +82,6 @@ metadata/map_fwhm_arcmin       # beam of maps/observed_sky and maps/rms
 scan_ids           (NSC,)      # int64 scan IDs in time order; the row order of every per-scan array
 det_names          (ND,)       # detector names; the column order of every per-detector array
 scan_start_time    (NSC,)      # scan start time (C3 'MJD'); 0.0 if the reader supplies no time
-scan_sky_position  (NSC,2)     # (theta, phi) [rad] of the scan's spin axis (Planck) or patch centre (ground)
-scan_ntod          (NSC,)      # int64 number of samples in the scan file, before the Fourier cut
-dropped_scan_ids   (NDROP,)    # int64 IDs of scans the reader kept nothing from (no data, or every detector cut)
 orbital_velocity   (NSC,ND,3)  # spacecraft velocity [m/s], what anchors the absolute calibration
 abs_gain           scalar      # absolute gain, one per band
 detrel_gain        (ND,)       # relative gain offset, one per detector (zero-sum)
@@ -100,7 +97,7 @@ chisq_z            (NSC,ND)    # white-noise chi^2 z-score; ~N(0,1) for clean da
 ncorr_cg_residual  (NSC,ND)    # final relative CG residual of the correlated-noise draw
 ncorr_cg_niter     (NSC,ND)    # int32 CG iterations; 0 when the stationary fallback was used
 ncorr_converged    (NSC,ND)    # int8: 1 accepted, 0 failed, -1 no n_corr drawn
-scan_runtime       (NSC,)      # wall time [s] the mapmaking loop spent on the scan this iteration (read by c4-scan-weights)
+scan_runtime       (NSC,)      # wall time [s] the mapmaking loop spent on the scan this iteration
 tod_ps_freqs       (NSC,ND,100)   # log-binned frequency axis shared by the four spectra below
 tod_ps_raw         (NSC,ND,100)   # binned PSD of the raw TOD
 tod_ps_ncorr       (NSC,ND,100)   # ... of the correlated-noise realization
@@ -348,8 +345,6 @@ c4-diff-params path/to/param1.yml path/to/param2.yml  # Prints the difference be
 
 c4-cmb-realizations path/to/output-dir/  # Generate constrained CMB realizations from saved band maps and components.
 
-c4-scan-weights filelist.txt path/to/chains_bands/Exp_Band_chain*_iter*.h5 -o filelist_weighted.txt  # Write measured scan run times and sky positions into a filelist.
-
 c4-generate-stubs  # Manually re-generate the stubs that are automatically during a build (very niche).
 ```
 
@@ -378,15 +373,6 @@ c4-cmb-realizations path/to/output-dir/ --burn-in 100 --n-realizations 10 --mask
 See `c4-cmb-realizations --help` and the
 [module documentation](src/commander4/standalone_tools/constrained_cmb_realizations.py) for details.
 
-### 4.6 Scan weights
-Every band chain file holds the time the mapmaking loop spent on each scan (`scan_runtime`), each scan's sky position (`scan_sky_position`) and number of samples (`scan_ntod`), and the scans the reader kept nothing from (`dropped_scan_ids`). `c4-scan-weights` writes these into a copy of the band's filelist, in Commander3's format `scan_id "path" weight theta phi` plus two columns that Commander3 ignores, `ntod` and `read`:
-```bash
-c4-scan-weights filelist_143.txt chains_bands/PlanckHFI_Planck143GHz_chain*_iter*.h5 -o filelist_143_weighted.txt
-```
-- The weight is the scan's mean run time over all the chain files given, in seconds per iteration. Chain files from several iterations, chains and runs can be combined.
-- `read` is 0 for scans a run found no usable data in (nothing in the file, or every detector flagged or cut at read time), and 1 otherwise. Commander4 leaves out the scans marked 0 before it splits the scans between ranks. The mark depends on the read-time cuts of the run the chains come from; after loosening the cuts, run the tool with `--clear-read-marks`.
-- The rows keep their order. Scans that no chain file covers (bad scans, scans outside the run's scan-ID range) get the median weight and keep their theta, phi, ntod and read columns. An ntod that is not known is written as -1.
-- Point the band's `filelist:` at the new file. Commander4 then splits the scans between the band's ranks by sky position, so that each rank's scans overlap on the sky, and by weight, so that each rank gets about the same run time (`split_by_sky_position` in `file_io/tod_reader.py`). The parameter `scan_weights` picks the weight: the measured run time (`"runtime"`, the default) or the number of samples (`"ntod"`). A filelist without positions and run times gives equal blocks of scans in time.
 
 
 # 5. Benchmarking and optimization

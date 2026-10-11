@@ -637,12 +637,9 @@ experiments:
                               # increase with time, so this selects a stretch of time, whatever
                               # order the filelist rows are in. The range must hold at least one
                               # usable scan. Each bound can be overridden per band. The selected
-                              # scans are split across MPI ranks before reading any TOD files, by
-                              # the weight and sky position in the filelist (see c4-scan-weights).
-    scan_weights: "runtime"   # The weight that splits the scans between ranks, from the filelist:
-                              # "runtime" = measured run time (column 3; weight 1 if the filelist
-                              # has none), "ntod" = number of samples (column 6, required for every
-                              # selected scan). Can be overridden per band.
+                              # scans are split across MPI ranks by ntod and pointing-plane
+                              # normal (see `filelist`), so that each rank's scans overlap on the
+                              # sky.
     mapmaker: "bin"           # Overrides tod_processing.mapmaker for this experiment.
 
     sparse_maps: true         # true = each rank's map buffers and sky-model slice hold
@@ -734,8 +731,15 @@ experiments:
 
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
                               # Text file listing this band's scan files: a count line, then
-                              # one row per scan: scan_id "path" [weight theta phi ntod read].
-                              # Rows with read = 0 are not read; c4-scan-weights writes them.
+                              # one row per scan, as Commander3 writes it:
+                              # scan_id "path" weight theta phi [ntod]. The weight is not used.
+                              # theta and phi are the scan's pointing-plane normal: the normal of
+                              # the plane that best fits its pointing (the spin axis for Planck,
+                              # the patch centre for a small ground-based patch). They are used
+                              # only in rows that also have ntod, which newer converters write;
+                              # 0 marks a value they do not know, and rows with ntod 0 (no data in
+                              # the file) are skipped. Without ntod and normals for every selected
+                              # scan, the scans are split into equal blocks in time.
 
         # lmax: 1535          # C3 BAND_LMAX, as under compsep.bands above. Settable here
                               # or on the experiment. Absent = 3*eval_nside - 1.

@@ -1,5 +1,5 @@
 """The shared TOD reader: what it reads from a standard scan file, and which detector-scans it drops
-(the cuts). Also the sky position `TODSamples` records for each scan read.
+(the cuts). Also how a band's scans are split between its ranks.
 
 The scan files are written by simgen's `write_scan_file`, with plain (uncompressed) pointing so the
 expected pixels and angles are exact. Tests that need flags re-encode them with their own tree.
@@ -16,7 +16,6 @@ from pixell.bunch import Bunch
 import commander4.file_io.tod_reader as tod_reader
 from commander4.compression import huffman
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
-from commander4.data_models.tod_samples import TODSamples
 from commander4.file_io.experiments.base_reader import find_good_fourier_size
 from commander4.parameters.parse import params_from_dict
 from commander4.parameters.schema import enabled_tod_bands
@@ -99,49 +98,6 @@ def test_standard_scan_is_read_by_detector_name(tmp_path: Path) -> None:
         assert det.good_data_mask.all()
 
 
-def read_sky_position(directory: Path, vectors: np.ndarray) -> np.ndarray:
-    """Read a one-detector scan whose pointing follows the (3, ntod) unit ``vectors``, and return
-    the sky position (theta, phi) that `TODSamples` records for it."""
-    ntod, nside = vectors.shape[1], 256
-    assert find_good_fourier_size(ntod) == ntod  # So the reader keeps every sample.
-    path = str(directory / "scan_000001.h5")
-    write_scan_file(path, 1, nside, 10.0, 4096, ntod, np.zeros(3), ["a"],
-                    {"a": hp.vec2pix(nside, *vectors)}, {"a": np.zeros(ntod)},
-                    {"a": np.linspace(1.0, 2.0, ntod, dtype=np.float32)},
-                    {"a": np.array([1e6, 1.0, 0.1, -1.0])}, compress=False)
-    params = make_params(directory, [path], ["a"])
-    params.output, params.gibbs = Bunch(chains=Bunch(include=Bunch())), Bunch()
-    band = params.experiments.Exp.bands.Band
-    band.eval_nside = nside
-    return TODSamples(read(params), params, band, MPI.COMM_SELF, chain=1).scan_sky_position[0]
-
-
-def test_sky_position_of_a_spinning_scan_is_its_spin_axis(tmp_path: Path) -> None:
-    """The detector circles the axis 4.4 times at 88 degrees from it, as Planck LFI does. The last
-    part-ring tilts the mean pointing direction by about 60 degrees, but not the spin axis."""
-    axis = hp.ang2vec(1.0, 2.0)
-    # Two unit vectors at right angles to the axis and to each other span the plane of the rings.
-    u = np.cross(axis, [0.0, 0.0, 1.0])
-    u /= np.linalg.norm(u)
-    v = np.cross(axis, u)
-    angle = np.linspace(0.0, 4.4*2*np.pi, 8192, endpoint=False)
-    opening = np.radians(88.0)
-    vectors = (np.cos(opening)*axis[:, None]
-               + np.sin(opening)*(np.cos(angle)*u[:, None] + np.sin(angle)*v[:, None]))
-
-    np.testing.assert_allclose(read_sky_position(tmp_path, vectors), [1.0, 2.0], atol=1e-2)
-
-
-def test_sky_position_of_a_patch_scan_is_the_patch_centre(tmp_path: Path) -> None:
-    """The detector sweeps back and forth over a 10 x 5 degree patch, as a ground telescope does."""
-    t = np.linspace(0.0, 1.0, 8192)
-    theta = 1.0 + np.radians(5.0)*np.sin(2*np.pi*20*t)  # 20 sweeps of 10 degrees in theta
-    phi = 2.0 + np.radians(5.0)*(t - 0.5)  # while the sky drifts 5 degrees in phi
-
-    np.testing.assert_allclose(read_sky_position(tmp_path, np.array(hp.ang2vec(theta, phi)).T),
-                               [1.0, 2.0], atol=1e-2)
-
-
 def test_bad_detector_scans_and_empty_scans_are_dropped(tmp_path: Path) -> None:
     nan_tod = tod()
     nan_tod[5] = np.nan
@@ -156,22 +112,6 @@ def test_bad_detector_scans_and_empty_scans_are_dropped(tmp_path: Path) -> None:
 
     assert [scan.scan_id for scan in result.scans] == [1]
     assert [det.name for det in result.scans[0].detectors] == ["good"]
-    # Recorded for the chain, so that c4-scan-weights can mark them in the filelist.
-    np.testing.assert_array_equal(result.dropped_scan_ids, [2, 3])
-
-
-def test_scans_the_filelist_marks_as_unusable_are_not_read(tmp_path: Path) -> None:
-    paths = [write_scan(tmp_path, scan_id, {"a": tod()}) for scan_id in range(1, 4)]
-    params = make_params(tmp_path, paths, ["a"])
-    lines = (tmp_path / "filelist.txt").read_text().splitlines()
-    # Columns 6 (ntod) and 7 (read) as c4-scan-weights writes them; scan 2 is marked 0.
-    marked = [f"{line} {NTOD} {0 if line.startswith('2 ') else 1}" for line in lines[1:]]
-    (tmp_path / "filelist.txt").write_text("\n".join([lines[0], *marked]) + "\n")
-
-    result = read(params)
-
-    assert [scan.scan_id for scan in result.scans] == [1, 3]
-    assert len(result.dropped_scan_ids) == 0  # Scan 2 was never given to the reader.
 
 
 def test_parameter_file_overrides_the_flag_cuts(tmp_path: Path) -> None:
@@ -254,44 +194,55 @@ def test_split_keeps_sky_regions_together_and_balances_weight() -> None:
     assert load.max()/load.mean() < 1.1
 
 
-def test_split_without_positions_gives_blocks_in_time() -> None:
-    """A filelist without positions puts every scan at the same place."""
+def test_split_without_normals_gives_blocks_in_time() -> None:
+    """Scans without known pointing-plane normals all get the same one."""
     rank = tod_reader.split_by_sky_position(np.tile([0.0, 0.0, 1.0], (7, 1)), np.ones(7), 3)
 
     np.testing.assert_array_equal(rank, [0, 0, 1, 1, 2, 2, 2])
 
 
-def test_scan_weights_picks_run_time_or_ntod(tmp_path: Path,
-                                            monkeypatch: pytest.MonkeyPatch) -> None:
-    """The split weighs each scan by the filelist's run time (column 3) or ntod (column 6)."""
-    used_weights = []
+def test_split_takes_ntod_and_normals_from_the_filelist(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rows with ntod (column 6) give the split their ntod and pointing-plane normals, and a row
+    with ntod 0 (no data in the file) is skipped. The split uses only what every scan has: without
+    normals every scan gets the same one, and without ntod every scan gets weight 1."""
+    calls = []
 
     def split(vectors: np.ndarray, weights: np.ndarray, nparts: int) -> np.ndarray:
-        used_weights.append(weights.tolist())
+        calls.append((vectors, weights))
         return np.zeros(len(weights), dtype=np.int64)
 
     monkeypatch.setattr(tod_reader, "split_by_sky_position", split)
-    paths = [write_scan(tmp_path, scan_id, {"a": tod()}) for scan_id in range(1, 3)]
+    paths = [write_scan(tmp_path, scan_id, {"a": tod()}) for scan_id in range(1, 4)]
+    with h5py.File(paths[2], "a") as f:
+        del f["000003/common/ntod"]  # A placeholder scan without data, as in some HFI files.
     params = make_params(tmp_path, paths, ["a"])
     filelist = tmp_path / "filelist.txt"
-    filelist.write_text(f'2\n1 "{paths[0]}" 5 0 0 100 1\n2 "{paths[1]}" 7 0 0 300 1\n')
+    filelist.write_text(f'3\n1 "{paths[0]}" 1 0.5 1.0 100\n2 "{paths[1]}" 1 2.5 4.0 300\n'
+                        f'3 "{paths[2]}" 1 0.0 0.0 0\n')
     read(params)
-    params.experiments.Exp.scan_weights = "ntod"
+    # ntod, but no normals (a converter that passes no position).
+    filelist.write_text(f'2\n1 "{paths[0]}" 1 0.0 0.0 100\n2 "{paths[1]}" 1 0.0 0.0 300\n')
     read(params)
-    # c4-scan-weights writes -1 for an ntod it does not know.
-    filelist.write_text(f'2\n1 "{paths[0]}" 5 0 0 100 1\n2 "{paths[1]}" 7 0 0 -1 1\n')
+    # Commander3's older 5-column rows: their theta and phi are not used.
+    filelist.write_text(f'3\n1 "{paths[0]}" 1 0.5 1.0\n2 "{paths[1]}" 1 2.5 4.0\n'
+                        f'3 "{paths[2]}" 1 1.0 2.0\n')
+    read(params)
 
-    assert used_weights == [[5.0, 7.0], [100.0, 300.0]]
-    with pytest.raises(ValueError, match="no ntod"):
-        read(params)
+    (vectors, weights), (no_normals, ntod_weights), (same_vectors, equal_weights) = calls
+    np.testing.assert_allclose(vectors, hp.ang2vec([0.5, 2.5], [1.0, 4.0]))
+    np.testing.assert_array_equal(weights, [100, 300])  # Scan 3, with ntod 0, is left out.
+    assert (no_normals == no_normals[0]).all()
+    np.testing.assert_array_equal(ntod_weights, [100, 300])
+    np.testing.assert_array_equal(equal_weights, [1, 1, 1])
+    assert (same_vectors == same_vectors[0]).all()
 
 
 def test_auto_band_weights_count_detector_samples(tmp_path: Path) -> None:
-    """Band A has 2 detectors and scans of 100 and 300 samples (scan 3 is marked not to be read);
-    band B has 1 detector and one 50-sample scan."""
-    (tmp_path / "a.txt").write_text('3\n1 "a1.h5" 1 0 0 100 1\n2 "a2.h5" 1 0 0 300 1\n'
-                                    '3 "a3.h5" 1 0 0 900 0\n')
-    (tmp_path / "b.txt").write_text('1\n7 "b7.h5" 1 0 0 50 1\n')
+    """Band A has 2 detectors and scans of 100 and 300 samples; band B has 1 detector and one
+    50-sample scan."""
+    (tmp_path / "a.txt").write_text('2\n1 "a1.h5" 1 0 0 100\n2 "a2.h5" 1 0 0 300\n')
+    (tmp_path / "b.txt").write_text('1\n7 "b7.h5" 1 0 0 50\n')
     params = params_from_dict({"experiments": {"Exp": {"enabled": True, "bands": {
         "A": {"enabled": True, "filelist": str(tmp_path / "a.txt"),
               "detectors": {"a": {}, "b": {}}},
@@ -300,20 +251,20 @@ def test_auto_band_weights_count_detector_samples(tmp_path: Path) -> None:
     bands = enabled_tod_bands(params)
 
     assert tod_reader.tod_band_weights(params, bands) == [800.0, 50.0]
-    # Without a known ntod for every scan, every band is weighed by scans times detectors.
-    (tmp_path / "b.txt").write_text('1\n7 "b7.h5"\n')
+    # Without ntod for every scan (here a 5-column row), every band counts scans times detectors.
+    (tmp_path / "b.txt").write_text('1\n7 "b7.h5" 1 0.0 0.0\n')
     assert tod_reader.tod_band_weights(params, bands) == [4, 1]
 
 
 @pytest.mark.skipif(MPI.COMM_WORLD.Get_size() != 2, reason="requires exactly two MPI ranks")
 def test_each_rank_reads_the_scans_of_one_sky_region(tmp_path: Path) -> None:
-    """Scans 1 and 3 point at one region and 2 and 4 at the opposite one, as the filelist says."""
+    """The filelist gives scans 1 and 3 one pointing-plane normal and 2 and 4 the opposite one."""
     comm = MPI.COMM_WORLD
     paths = [write_scan(tmp_path, scan_id, {"a": tod()}) for scan_id in range(1, 5)]
     params = make_params(tmp_path, paths, ["a"])
     lines = (tmp_path / "filelist.txt").read_text().splitlines()
-    position = {1: "0.5 1.0", 2: "2.5 4.0", 3: "0.5 1.0", 4: "2.5 4.0"}
-    rows = [f"{line.split()[0]} {line.split()[1]} 1 {position[int(line.split()[0])]}"
+    normal = {1: "0.5 1.0", 2: "2.5 4.0", 3: "0.5 1.0", 4: "2.5 4.0"}
+    rows = [f"{line.split()[0]} {line.split()[1]} 1 {normal[int(line.split()[0])]} {NTOD}"
             for line in lines[1:]]
     (tmp_path / "filelist.txt").write_text("\n".join([lines[0], *rows]) + "\n")
 

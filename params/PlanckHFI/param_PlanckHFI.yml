@@ -33,7 +33,7 @@ resources:
 output:
   # All output goes here, in the subdirectories logs/, chains_bands/,
   # chains_compsep/ and plots/.
-  dir: "../c4_chains/HFI_balanced-ntod/"
+  dir: "../c4_chains/HFI_balanced-ntod_band-auto-balanced/"
 
   logging:
     console:
@@ -206,7 +206,6 @@ experiments:
     # 880-882, whose tod_v2 files hold no data.
     scan_id_start: 51
     scan_id_stop: 23939
-    scan_weights: "ntod"  # Split scans between ranks by number of samples, not measured run time.
     bad_data_bitmask: 767  # 767 stolen from C3. Previously used flag 515:
                            # Chunk-boundary filler (bit 0) + DPC glitches (bit 1, 100/143 GHz
                            # only) + NPIPE glitches (bit 9, all bands). Masks 10-20% of all
@@ -223,9 +222,8 @@ experiments:
         band_unit: "uK_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
-        # The filelists below hold the scans of the filelists Commander3's HFI runs use (from hke's
-        # param_hfi_multi_v3), with Commander4's weights, sky positions and ntod (c4-scan-weights).
-        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/filelists/hfi/c3_scans/filelist_100.txt"
+        # The filelists Commander3's HFI runs use (hke's param_hfi_multi_v3).
+        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/filelist_100_v2_load.txt"
         detectors:
           100-1a: {gain: 0.1039}
           100-1b: {gain: 0.1158}
@@ -244,7 +242,7 @@ experiments:
         band_unit: "uK_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
-        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/filelists/hfi/c3_scans/filelist_143.txt"
+        filelist: "/mn/stornext/u3/hke/data_hfi/filelist_143.txt"
         detectors:
           143-1a: {gain: 0.1609}
           143-1b: {gain: 0.1462}
@@ -266,7 +264,7 @@ experiments:
         band_unit: "uK_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
-        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/filelists/hfi/c3_scans/filelist_217.txt"
+        filelist: "/mn/stornext/u3/hke/data_hfi/filelist_217.txt"
         detectors:
           217-1: {gain: 0.1077}   # 217-1/2/3/4 are unpolarized SWBs (RIMO polEff 2.1-4.1%).
           217-2: {gain: 0.1061}
@@ -289,7 +287,7 @@ experiments:
         band_unit: "uK_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
-        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/filelists/hfi/c3_scans/filelist_353.txt"
+        filelist: "/mn/stornext/u3/hke/data_hfi/filelist_353.txt"
         detectors:
           353-1: {gain: 0.05152}  # 353-1/2/7/8 are unpolarized SWBs (RIMO polEff 3.4-8.1%).
           353-2: {gain: 0.05753}
@@ -317,7 +315,7 @@ experiments:
         # which are both calibrating against the full sky, not just the orbital dipole.
         processing_masks:
           ncorr: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
-        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/filelists/hfi/c3_scans/filelist_545.txt"
+        filelist: "/mn/stornext/u3/hke/data_hfi/filelist_545.txt"
         detectors:
           545-1: {gain: 45.62}   # All three are unpolarized SWBs (RIMO polEff 4.7-5.9%).
           545-2: {gain: 47.62}
@@ -335,7 +333,7 @@ experiments:
         # Masked for n_corr only, for the same reason as 545 GHz above.
         processing_masks:
           ncorr: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
-        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/filelists/hfi/c3_scans/filelist_857.txt"
+        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/filelist_857_v2.txt"
         detectors:
           857-1: {gain: 57.15}   # All four are unpolarized SWBs (RIMO polEff 6.3-8.6%).
           857-2: {gain: 57.37}
