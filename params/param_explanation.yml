@@ -632,15 +632,17 @@ experiments:
                               # readers: general (the standard format, which simgen
                               # writes), planck_lfi, planck_hfi, akari, SO_LAT, SO_SAT,
                               # litebird_sim_spawndetectors.
-    filelist_idx_start: null  # Optional Python slice bounds on each band's filelist rows,
-    filelist_idx_stop: null   # excluding the header. Zero-based; start included, stop excluded.
-                              # Omitted/null = beginning/end. Negative indices count from the end;
-                              # bounds beyond the filelist are clipped. The slice must be nonempty.
-                              # These are row positions, not the scan IDs in the first column,
-                              # counted after sorting the rows by scan ID (time order), whatever
-                              # order the file has them in.
-                              # Each bound can be overridden per band. The selected rows are
-                              # split evenly across MPI ranks before reading any TOD files.
+    scan_id_start: null       # Optional range of scan IDs (the filelist's first column) to read:
+    scan_id_stop: null        # start included, stop excluded; omitted/null = no bound. Scan IDs
+                              # increase with time, so this selects a stretch of time, whatever
+                              # order the filelist rows are in. The range must hold at least one
+                              # usable scan. Each bound can be overridden per band. The selected
+                              # scans are split across MPI ranks before reading any TOD files, by
+                              # the weight and sky position in the filelist (see c4-scan-weights).
+    scan_weights: "runtime"   # The weight that splits the scans between ranks, from the filelist:
+                              # "runtime" = measured run time (column 3; weight 1 if the filelist
+                              # has none), "ntod" = number of samples (column 6, required for every
+                              # selected scan). Can be overridden per band.
     mapmaker: "bin"           # Overrides tod_processing.mapmaker for this experiment.
 
     sparse_maps: true         # true = each rank's map buffers and sky-model slice hold
@@ -725,14 +727,16 @@ experiments:
         #   ncorr: "/path/to/ncorr_mask.fits"
 
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
-                              # Text file listing this band's scan files, one per line.
+                              # Text file listing this band's scan files: a count line, then
+                              # one row per scan: scan_id "path" [weight theta phi ntod read].
+                              # Rows with read = 0 are not read; c4-scan-weights writes them.
 
         # lmax: 1535          # C3 BAND_LMAX, as under compsep.bands above. Settable here
                               # or on the experiment. Absent = 3*eval_nside - 1.
         # mapmaker: "CG"      # Per-band override of the mapmaker. Band beats experiment
                               # beats tod_processing, for this and several other keys.
-        # filelist_idx_start: 0  # Per-band overrides of either filelist slice bound.
-        # filelist_idx_stop: 45860
+        # scan_id_start: 0    # Per-band overrides of either scan-ID bound.
+        # scan_id_stop: 26862
 
         # initial_noise_params: [100.0, 0.1, -1.0]
                               # [sigma0, fknee, alpha] to start the noise model at, in

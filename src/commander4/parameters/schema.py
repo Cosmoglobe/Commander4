@@ -134,20 +134,6 @@ def enabled_compsep_views(params: Bunch) -> tuple[CompSepViewConfig, ...]:
     return tuple(views)
 
 
-def split_integer_range(length: int, num_parts: int, part: int) -> tuple[int, int]:
-    """Split ``range(length)`` evenly and return one half-open ``[start, stop)`` interval."""
-    if length < 0:
-        raise ValueError("Range length cannot be negative.")
-    if num_parts < 1:
-        raise ValueError("Number of range parts must be at least 1.")
-    if part < 0 or part >= num_parts:
-        raise ValueError(f"Range part {part} is outside [0, {num_parts}).")
-    base_size, remainder = divmod(length, num_parts)
-    start = part * base_size + min(part, remainder)
-    stop = start + base_size + (1 if part < remainder else 0)
-    return start, stop
-
-
 def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any = _NO_DEFAULT,
                   legal_values: Sequence[Any] | None = None,
                   legal_types: type | tuple[type, ...] | None = None,

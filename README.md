@@ -83,6 +83,8 @@ scan_ids           (NSC,)      # int64 scan IDs in time order; the row order of 
 det_names          (ND,)       # detector names; the column order of every per-detector array
 scan_start_time    (NSC,)      # scan start time (C3 'MJD'); 0.0 if the reader supplies no time
 scan_sky_position  (NSC,2)     # (theta, phi) [rad] of the scan's spin axis (Planck) or patch centre (ground)
+scan_ntod          (NSC,)      # int64 number of samples in the scan file, before the Fourier cut
+dropped_scan_ids   (NDROP,)    # int64 IDs of scans the reader kept nothing from (no data, or every detector cut)
 orbital_velocity   (NSC,ND,3)  # spacecraft velocity [m/s], what anchors the absolute calibration
 abs_gain           scalar      # absolute gain, one per band
 detrel_gain        (ND,)       # relative gain offset, one per detector (zero-sum)
@@ -377,13 +379,14 @@ See `c4-cmb-realizations --help` and the
 [module documentation](src/commander4/standalone_tools/constrained_cmb_realizations.py) for details.
 
 ### 4.6 Scan weights
-Every band chain file holds the time the mapmaking loop spent on each scan (`scan_runtime`) and each scan's sky position (`scan_sky_position`). `c4-scan-weights` writes these into a copy of the band's filelist, in Commander3's format `scan_id "path" weight theta phi`:
+Every band chain file holds the time the mapmaking loop spent on each scan (`scan_runtime`), each scan's sky position (`scan_sky_position`) and number of samples (`scan_ntod`), and the scans the reader kept nothing from (`dropped_scan_ids`). `c4-scan-weights` writes these into a copy of the band's filelist, in Commander3's format `scan_id "path" weight theta phi` plus two columns that Commander3 ignores, `ntod` and `read`:
 ```bash
 c4-scan-weights filelist_143.txt chains_bands/PlanckHFI_Planck143GHz_chain*_iter*.h5 -o filelist_143_weighted.txt
 ```
 - The weight is the scan's mean run time over all the chain files given, in seconds per iteration. Chain files from several iterations, chains and runs can be combined.
-- The rows keep their order. Scans that no chain file covers (bad scans, rows outside the run's filelist slice, scans the reader dropped) get the median weight and keep their theta and phi.
-- Point the band's `filelist:` at the new file. Commander4 does not use the new columns yet. Using them to balance the run time between ranks is the next step.
+- `read` is 0 for scans a run found no usable data in (nothing in the file, or every detector flagged or cut at read time), and 1 otherwise. Commander4 leaves out the scans marked 0 before it splits the scans between ranks. The mark depends on the read-time cuts of the run the chains come from; after loosening the cuts, run the tool with `--clear-read-marks`.
+- The rows keep their order. Scans that no chain file covers (bad scans, scans outside the run's scan-ID range) get the median weight and keep their theta, phi, ntod and read columns. An ntod that is not known is written as -1.
+- Point the band's `filelist:` at the new file. Commander4 then splits the scans between the band's ranks by sky position, so that each rank's scans overlap on the sky, and by weight, so that each rank gets about the same run time (`split_by_sky_position` in `file_io/tod_reader.py`). The parameter `scan_weights` picks the weight: the measured run time (`"runtime"`, the default) or the number of samples (`"ntod"`). A filelist without positions and run times gives equal blocks of scans in time.
 
 
 # 5. Benchmarking and optimization

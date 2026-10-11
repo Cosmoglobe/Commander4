@@ -219,7 +219,6 @@ experiments:
     bands:
       SO_SAT_ws0_f090:
         enabled: true
-        filelist_idx_stop: 120          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
@@ -235,7 +234,6 @@ experiments:
 
       SO_SAT_ws0_f150:
         enabled: true
-        filelist_idx_stop: 112          # scans in this band's filelist
         num_tasks: 12
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]

@@ -202,14 +202,17 @@ experiments:
     sparse_maps: true
     experiment_id: "planck_hfi"  # Decides expected data format, what TOD reader is used, etc.
     instrument_file: "/mn/stornext/d23/cmbco/globe/planck/rimo/HFI_instrument_v6.h5"
-    filelist_idx_start: 0
-    filelist_idx_stop: 26424  # Only cold-phase scans (OD 91-974), drop warm-phase scans.
+    # Scans 51-23938 (OD 92-879), the range Commander3's HFI runs use. It also leaves out ODs
+    # 880-882, whose tod_v2 files hold no data.
+    scan_id_start: 51
+    scan_id_stop: 23939
+    scan_weights: "ntod"  # Split scans between ranks by number of samples, not measured run time.
     bad_data_bitmask: 767  # 767 stolen from C3. Previously used flag 515:
                            # Chunk-boundary filler (bit 0) + DPC glitches (bit 1, 100/143 GHz
                            # only) + NPIPE glitches (bit 9, all bands). Masks 10-20% of all
                            # samples. Bit 8 labels a whole chunk, not bad samples: never set it.
                            # NB: This will *mask* all glitches. In the future we want to fit them.
-    min_unmasked_fraction: 0.75  # Read-time cut: drop detector-scans with less unflagged data.
+    min_unmasked_fraction: 0.5  # Read-time cut: drop detector-scans with less unflagged data.
 
     bands:
       Planck143GHz:
@@ -221,7 +224,8 @@ experiments:
         band_unit: "uK_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
-        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/tod_v2/filelist_143.txt"
+        # The scans of Commander3's HFI filelist, with Commander4's columns from c4-scan-weights.
+        filelist: "/mn/stornext/d23/cmbco/jonas/c4_testing/filelists/hfi/c3_scans/filelist_143.txt"
         detectors:
           143-1a: {gain: 0.1609}
           143-1b: {gain: 0.1462}

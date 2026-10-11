@@ -10,12 +10,14 @@ downstream needs to know which one ran.
 Add a new experiment by writing such a subclass and registering it in ``experiment_tod_readers``.
 """
 from mpi4py import MPI
+from numpy.typing import NDArray
 from pixell.bunch import Bunch
+import healpy as hp
 import logging
 import numpy as np
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
-from commander4.parameters.schema import resolve_param, split_integer_range
+from commander4.parameters.schema import resolve_param
 from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.file_io.experiments.base_reader import TODReader
 from commander4.file_io.experiments.akari import AkariReader
@@ -42,18 +44,60 @@ experiment_tod_readers = {
 }
 
 
+def split_by_sky_position(vectors: NDArray, weights: NDArray, nparts: int) -> NDArray:
+    """Assign each scan to one of ``nparts`` ranks: equal total weight per rank, with each rank's
+    scans close together on the sky, so that they overlap and the rank's maps hold few pixels.
+
+    Recursive bisection: sort the scans along the direction in which their sky positions spread
+    most, and cut where the cumulative weight reaches the left side's share of the ranks. Then split
+    each side the same way, until there is one part per rank. The sort keeps the order of scans at
+    the same position, so a filelist without positions gives contiguous blocks of scans in time.
+
+    Args:
+        vectors: (nscans, 3) unit vectors of the scans' sky positions, in time order.
+        weights: (nscans,) cost of each scan, e.g. its measured run time or number of samples.
+        nparts: The number of ranks.
+
+    Returns:
+        (nscans,) the rank of each scan. With more ranks than scans, some ranks get none.
+    """
+    rank = np.zeros(len(weights), dtype=np.int64)
+
+    def split(indices: NDArray, first_rank: int, nranks: int) -> None:
+        """Give the scans ``indices`` to the ``nranks`` ranks from ``first_rank`` on."""
+        if nranks == 1 or len(indices) < 2:
+            rank[indices] = first_rank
+            return
+        # The direction of largest spread: the eigenvector of the positions' 3x3 covariance with the
+        # largest eigenvalue (eigh sorts them in ascending order).
+        direction = np.linalg.eigh(np.cov(vectors[indices].T))[1][:, -1]
+        indices = indices[np.argsort(vectors[indices] @ direction, kind="stable")]
+        nleft = nranks // 2
+        # A scan goes left if more than half of its weight lies before the cut.
+        cut = np.searchsorted(np.cumsum(weights[indices]) - weights[indices]/2,
+                              weights[indices].sum()*nleft/nranks)
+        split(indices[:cut], first_rank, nleft)
+        split(indices[cut:], first_rank + nleft, nranks - nleft)
+
+    split(np.arange(len(weights)), 0, nparts)
+    return rank
+
+
 def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch,
                         my_band: Bunch) -> DetectorGroupTOD:
     """Read this rank's share of one band's scans.
 
     The band master reads the filelist and sorts its rows by scan ID, which is time order. It keeps
-    the sorted rows selected by ``filelist_idx_start`` and ``filelist_idx_stop``, and drops the
-    scans listed in ``bad_PIDs_path``. The remaining scans are split into contiguous blocks, one per
-    rank, and each rank reads its block with the experiment's reader. If the experiment sets
-    ``replace_tod_with_sim``, the TOD is then replaced by a simulation.
+    the scans with IDs from ``scan_id_start`` (included) to ``scan_id_stop`` (excluded), and drops
+    the scans listed in ``bad_PIDs_path`` and those the filelist marks as not to be read (0 in its
+    7th column). It splits the remaining scans between the ranks by sky position and weight (see
+    `split_by_sky_position`), where ``scan_weights`` picks the weight: the filelist's measured run
+    time ("runtime", the default) or number of samples ("ntod"). Each rank reads its share with the
+    experiment's reader. If the experiment sets ``replace_tod_with_sim``, the TOD is then replaced
+    by a simulation.
 
     Args:
-        band_comm: The band's MPI communicator; each rank reads a disjoint block of scans.
+        band_comm: The band's MPI communicator; each rank reads a disjoint set of scans.
         params, my_experiment, my_band: The full parameter file, and this band's experiment and
             band blocks.
 
@@ -70,46 +114,80 @@ def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch
     rank = band_comm.Get_rank()
     scopes = (f"experiments.{my_experiment._name}.bands.{band_name}",
               f"experiments.{my_experiment._name}")
-    filelist_idx_start = resolve_param(params, "filelist_idx_start", scopes, default=None,
-                                       legal_types=(int, type(None)))
-    filelist_idx_stop = resolve_param(params, "filelist_idx_stop", scopes, default=None,
-                                      legal_types=(int, type(None)))
+    scan_id_start = resolve_param(params, "scan_id_start", scopes, default=None,
+                                  legal_types=(int, type(None)))
+    scan_id_stop = resolve_param(params, "scan_id_stop", scopes, default=None,
+                                 legal_types=(int, type(None)))
+    scan_weights = resolve_param(params, "scan_weights", scopes, default="runtime",
+                                 legal_values=("runtime", "ntod"))
 
-    # The band master reads the filelist; the other ranks get the selected scans from it, each as
-    # (scan ID, file path). Scan IDs increase with time, but the rows of a filelist need not (the
-    # LFI filelists are not), so the rows are sorted by scan ID before the slice.
-    # TODO(filelist columns): read the per-scan weight and sky position that `c4-scan-weights`
-    # writes into the columns after the path, for the split below, and later ntod for buffer sizes.
+    # The band master reads the filelist and selects the scans; the other ranks get them from it,
+    # each as (scan ID, file path). Scan IDs increase with time, but the rows of a filelist need
+    # not (the LFI and HFI filelists are not), so the scans are selected and ordered by scan ID.
     scans: list[tuple[int, str]] | None = None
     if rank == 0:
         with open(my_band.filelist) as infile:
             infile.readline()  # The first line holds the number of scans.
-            # Each row is a scan ID, a quoted file path, and three columns that are not used.
+            # Each row is a scan ID, a quoted file path, and optional columns (see c4-scan-weights).
             rows = [line.split() for line in infile if line.strip()]
         rows.sort(key=lambda columns: int(columns[0]))
-        start, stop, _ = slice(filelist_idx_start, filelist_idx_stop).indices(len(rows))
-        bad_scan_ids = set()
+        in_range = [columns for columns in rows
+                    if (scan_id_start is None or int(columns[0]) >= scan_id_start)
+                    and (scan_id_stop is None or int(columns[0]) < scan_id_stop)]
+        skipped_scan_ids = set()
         if "bad_PIDs_path" in my_experiment:
-            bad_scan_ids = {int(scan_id) for scan_id in np.load(my_experiment.bad_PIDs_path)}
-        scans = []
-        for columns in rows[start:stop]:
-            scan_id = int(columns[0])
-            if scan_id not in bad_scan_ids:
-                scans.append((scan_id, columns[1].strip('"')))
-        logger.info(f"Band {band_name}: selected rows [{start}:{max(start, stop)}] of the filelist "
-                    f"sorted by scan ID, {max(0, stop - start)} of {len(rows)} scans, of which "
-                    f"{max(0, stop - start) - len(scans)} are listed as bad.")
+            skipped_scan_ids = {int(scan_id) for scan_id in np.load(my_experiment.bad_PIDs_path)}
+        # Column 7 is 0 for scans that an earlier run found to hold no usable data: nothing in the
+        # file, or every detector flagged or cut at read time.
+        skipped_scan_ids |= {int(columns[0]) for columns in rows
+                             if len(columns) > 6 and columns[6] == "0"}
+        selected = [columns for columns in in_range if int(columns[0]) not in skipped_scan_ids]
+        scans = [(int(columns[0]), columns[1].strip('"')) for columns in selected]
+        logger.info(f"Band {band_name}: {len(in_range)} of the filelist's {len(rows)} scans have "
+                    f"IDs in [{scan_id_start}, {scan_id_stop}), of which "
+                    f"{len(in_range) - len(scans)} are listed as bad or marked in the filelist as "
+                    "holding no usable data.")
     scans = band_comm.bcast(scans, root=0)
     if len(scans) == 0:
-        raise ValueError(f"Band {band_name}: filelist slice "
-                         f"[{filelist_idx_start}:{filelist_idx_stop}] selects no usable scans.")
+        raise ValueError(f"Band {band_name}: scan IDs [{scan_id_start}, {scan_id_stop}) select no "
+                         "usable scans.")
 
-    # TODO(distribution): split by sky position and weight by scan cost. A rank's scans need not
-    # be contiguous in time, since every step that needs time order sorts by scan ID.
-    my_start, my_stop = split_integer_range(len(scans), band_comm.Get_size(), rank)
+    # The band master splits the scans between the ranks. A rank's scans need not be contiguous in
+    # time; every step that needs time order sorts by scan ID.
+    scan_ranks: NDArray | None = None
+    if rank == 0:
+        # A scan's weight is its measured run time (column 3) or its number of samples (column 6),
+        # and columns 4-5 hold its sky position (theta, phi). Without the run time and position
+        # columns, every scan has weight 1 and the same position, which gives equal blocks of
+        # scans in time. c4-scan-weights writes all of them, and -1 for an ntod it does not know.
+        if scan_weights == "ntod":
+            weights = np.array([float(columns[5]) if len(columns) > 5 else -1.0
+                                for columns in selected])
+            if (weights <= 0).any():
+                raise ValueError(f"Band {band_name}: scan_weights is 'ntod', but the filelist has no "
+                                 f"ntod (column 6) for {(weights <= 0).sum()} of the selected scans.")
+        else:
+            weights = np.array([float(columns[2]) if len(columns) > 2 else 1.0
+                                for columns in selected])
+        theta = np.array([float(columns[3]) if len(columns) > 4 else 0.0 for columns in selected])
+        phi = np.array([float(columns[4]) if len(columns) > 4 else 0.0 for columns in selected])
+        nranks = band_comm.Get_size()
+        scan_ranks = split_by_sky_position(np.array(hp.ang2vec(theta, phi)), weights, nranks)
+        scans_per_rank = np.bincount(scan_ranks, minlength=nranks)
+        weight_per_rank = np.bincount(scan_ranks, weights, minlength=nranks)
+        logger.info(f"Band {band_name}: split {len(scans)} scans between {nranks} ranks by sky "
+                    f"position and {scan_weights}: {scans_per_rank.min()} to "
+                    f"{scans_per_rank.max()} scans per rank, largest total {scan_weights} "
+                    f"{weight_per_rank.max()/weight_per_rank.mean():.2f} x the mean.")
+    scan_ranks = band_comm.bcast(scan_ranks, root=0)
+    my_scans = [scan for scan, scan_rank in zip(scans, scan_ranks) if scan_rank == rank]
     reader = experiment_tod_readers[my_experiment.experiment_id](
         band_comm, params, my_experiment, my_band)
-    experiment_data = reader.read(scans[my_start:my_stop])
+    experiment_data = reader.read(my_scans)
+    # The scans the reader kept nothing from, for the chain (see `DetectorGroupTOD`).
+    kept = {scan.scan_id for scan in experiment_data.scans}
+    experiment_data.dropped_scan_ids = np.array(
+        [scan_id for scan_id, _ in my_scans if scan_id not in kept], dtype=np.int64)
 
     if reader.tod_is_simulated:
         replace_tod_with_sim(band_comm, experiment_data, my_band, params, my_experiment.sim_params)

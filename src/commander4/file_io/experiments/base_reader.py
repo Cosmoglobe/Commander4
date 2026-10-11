@@ -24,7 +24,6 @@ where ``<pid>`` is the scan ID as six digits. Entries that only some experiments
 when present. A detector's TOD is Huffman-compressed when it is stored as ``ztod`` rather than
 ``tod``; it is then decoded with the scan's second tree (``hufftree2``, ``huffsymb2``).
 """
-import gc
 import logging
 
 import ducc0.fft
@@ -135,8 +134,8 @@ class TODReader:
             with h5py.File(path, "r") as f:
                 header = self.read_scan_header(f, scan_id)
                 if header is None:
-                    # Some converted files hold empty placeholder scans (about a fifth of the HFI
-                    # 143 GHz filelist). They show in the summary as scans not read.
+                    # An empty placeholder scan, as the HFI converter's restart path writes. It is
+                    # recorded as dropped, so `c4-scan-weights` marks it in the filelist.
                     logger.debug(f"Band {self.band._name}: {path} has no data for scan "
                                  f"{scan_id}; the scan is skipped.")
                     continue
@@ -151,8 +150,6 @@ class TODReader:
             if self.band_comm.Get_rank() == 0 and iscan % max(1, len(scan_list)//5) == 0:
                 logger.debug(f"Reading scans from disk, progress on master rank of band "
                              f"{self.band._name}: {iscan}/{len(scan_list)}")
-            if iscan % 10 == 0:
-                gc.collect()
         if self.max_rms_ratio is not None and not self.tod_is_simulated:
             self.drop_level_outliers(scans)
             scans = [scan for scan in scans if len(scan.detectors) > 0]
@@ -184,7 +181,9 @@ class TODReader:
         ntod = int(scan_common["ntod"][()].item())
         ndet = len(self.det_names)
         header = Bunch(pid=pid, ntod=ntod,
-                       # TODO(fft sizes): use a size chosen for the whole band from a pre-pass.
+                       # TODO(fft sizes): pick from a small set of sizes for the whole band, as
+                       # ducc0 caches only about 10 FFT plans; the filelist's ntod column gives
+                       # every scan's length before reading.
                        ntod_fft=find_good_fourier_size(ntod),
                        fsamp=float(common["fsamp"][()].item()),
                        # The flags are always Huffman-compressed, so this tree is always present.
@@ -264,7 +263,6 @@ class TODReader:
         if tod_is_compressed:
             tod = group["ztod"][()]
         else:
-            # TODO(buffers, read_direct): read straight into a slice of one per-rank buffer.
             tod = group["tod"][:header.ntod_fft].astype(np.float32, copy=False)
         init_scalars = None
         if "scalars" in group:

@@ -34,6 +34,7 @@ class DetectorGroupTOD:
         noise_model (NoisePSD): Noise model for this detector group.
         tf_tau_ms (float|None): Transfer function time constant in milliseconds, or None if no TF.
         hfi_demodulation (bool): Whether this band contains alternating Planck HFI half-cycles.
+        dropped_scan_ids (NDArray): IDs of the scans this rank was given but kept nothing from.
     """
     def __init__(self, scans: list[ScanTOD], experiment_name: str, band_name: str, nside: int,
                  nu: float, fwhm: float, fsamp: float, ndet: int, pols: str, noise_model: NoisePSD, 
@@ -53,6 +54,9 @@ class DetectorGroupTOD:
         # Whether the TOD needs demodulation to be read (Planck HFI stores alternating
         # positive/negative modulation half-cycles.)
         self.hfi_demodulation = hfi_demodulation
+        # No data in the file, or every detector cut at read time. Set by `read_tods_from_file`,
+        # and written to the chain so `c4-scan-weights` can mark them in the filelist.
+        self.dropped_scan_ids = np.zeros(0, dtype=np.int64)
         self.noise_model = noise_model
         # The band's PixelDomain: which pixels this rank's map buffers hold. It depends only on the
         # static pointing, so it is built once at startup (tod/processing.py) and kept for the run.

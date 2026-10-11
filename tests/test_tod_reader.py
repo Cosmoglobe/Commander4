@@ -147,11 +147,30 @@ def test_bad_detector_scans_and_empty_scans_are_dropped(tmp_path: Path) -> None:
     all_flagged = {"flagged": np.full(NTOD, BAD_FLAG, dtype=np.int64)}
     paths = [write_scan(tmp_path, 1, {"good": tod(), "zero": np.zeros(NTOD, np.float32),
                                       "nan": nan_tod, "flagged": tod()}, flags=all_flagged),
-             write_scan(tmp_path, 2, {"zero": np.zeros(NTOD, np.float32)})]
+             write_scan(tmp_path, 2, {"zero": np.zeros(NTOD, np.float32)}),
+             write_scan(tmp_path, 3, {"good": tod()})]
+    with h5py.File(paths[2], "a") as f:
+        del f["000003/common/ntod"]  # A placeholder scan without data, as in some HFI files.
     result = read(make_params(tmp_path, paths, ["good", "zero", "nan", "flagged"]))
 
     assert [scan.scan_id for scan in result.scans] == [1]
     assert [det.name for det in result.scans[0].detectors] == ["good"]
+    # Recorded for the chain, so that c4-scan-weights can mark them in the filelist.
+    np.testing.assert_array_equal(result.dropped_scan_ids, [2, 3])
+
+
+def test_scans_the_filelist_marks_as_unusable_are_not_read(tmp_path: Path) -> None:
+    paths = [write_scan(tmp_path, scan_id, {"a": tod()}) for scan_id in range(1, 4)]
+    params = make_params(tmp_path, paths, ["a"])
+    lines = (tmp_path / "filelist.txt").read_text().splitlines()
+    # Columns 6 (ntod) and 7 (read) as c4-scan-weights writes them; scan 2 is marked 0.
+    marked = [f"{line} {NTOD} {0 if line.startswith('2 ') else 1}" for line in lines[1:]]
+    (tmp_path / "filelist.txt").write_text("\n".join([lines[0], *marked]) + "\n")
+
+    result = read(params)
+
+    assert [scan.scan_id for scan in result.scans] == [1, 3]
+    assert len(result.dropped_scan_ids) == 0  # Scan 2 was never given to the reader.
 
 
 def test_parameter_file_overrides_the_flag_cuts(tmp_path: Path) -> None:
@@ -203,11 +222,11 @@ def test_a_scan_emptied_by_the_level_cut_is_removed(tmp_path: Path) -> None:
     assert [scan.scan_id for scan in result.scans] == [1, 2, 4, 5]
 
 
-def test_filelist_slice_and_bad_scan_ids_select_the_scans(tmp_path: Path) -> None:
-    """The filelist rows are not in time order. The slice counts them in scan-ID order."""
+def test_scan_id_range_and_bad_scan_ids_select_the_scans(tmp_path: Path) -> None:
+    """The filelist rows are not in time order; the scans come out in scan-ID order."""
     paths = [write_scan(tmp_path, scan_id, {"a": tod()}) for scan_id in range(1, 6)]
     np.save(tmp_path / "bad.npy", np.array([3]))
-    params = make_params(tmp_path, paths, ["a"], filelist_idx_start=1, filelist_idx_stop=-1,
+    params = make_params(tmp_path, paths, ["a"], scan_id_start=2, scan_id_stop=5,
                          bad_PIDs_path=str(tmp_path / "bad.npy"))
     lines = (tmp_path / "filelist.txt").read_text().splitlines()
     shuffled = [lines[0]] + [lines[1:][i] for i in (3, 0, 4, 1, 2)]  # scan IDs 4, 1, 5, 2, 3
@@ -216,6 +235,72 @@ def test_filelist_slice_and_bad_scan_ids_select_the_scans(tmp_path: Path) -> Non
     result = read(params)
 
     assert [scan.scan_id for scan in result.scans] == [2, 4]
+
+
+def test_split_keeps_sky_regions_together_and_balances_weight() -> None:
+    """40 scans alternate in time between two opposite sky regions, and are split over 4 ranks."""
+    rng = np.random.default_rng(3)
+    centres = np.array([hp.ang2vec(0.5, 1.0), hp.ang2vec(2.5, 4.0)])
+    region = np.arange(40) % 2
+    vectors = centres[region] + 0.01*rng.normal(size=(40, 3))
+    vectors /= np.linalg.norm(vectors, axis=1)[:, None]
+    weights = np.where(np.arange(40) < 20, 1.0, 3.0)
+
+    rank = tod_reader.split_by_sky_position(vectors, weights, 4)
+
+    assert all(len(set(region[rank == r])) == 1 for r in range(4))
+    load = np.bincount(rank, weights, minlength=4)
+    assert load.max()/load.mean() < 1.1
+
+
+def test_split_without_positions_gives_blocks_in_time() -> None:
+    """A filelist without positions puts every scan at the same place."""
+    rank = tod_reader.split_by_sky_position(np.tile([0.0, 0.0, 1.0], (7, 1)), np.ones(7), 3)
+
+    np.testing.assert_array_equal(rank, [0, 0, 1, 1, 2, 2, 2])
+
+
+def test_scan_weights_picks_run_time_or_ntod(tmp_path: Path,
+                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    """The split weighs each scan by the filelist's run time (column 3) or ntod (column 6)."""
+    used_weights = []
+
+    def split(vectors: np.ndarray, weights: np.ndarray, nparts: int) -> np.ndarray:
+        used_weights.append(weights.tolist())
+        return np.zeros(len(weights), dtype=np.int64)
+
+    monkeypatch.setattr(tod_reader, "split_by_sky_position", split)
+    paths = [write_scan(tmp_path, scan_id, {"a": tod()}) for scan_id in range(1, 3)]
+    params = make_params(tmp_path, paths, ["a"])
+    filelist = tmp_path / "filelist.txt"
+    filelist.write_text(f'2\n1 "{paths[0]}" 5 0 0 100 1\n2 "{paths[1]}" 7 0 0 300 1\n')
+    read(params)
+    params.experiments.Exp.scan_weights = "ntod"
+    read(params)
+    # c4-scan-weights writes -1 for an ntod it does not know.
+    filelist.write_text(f'2\n1 "{paths[0]}" 5 0 0 100 1\n2 "{paths[1]}" 7 0 0 -1 1\n')
+
+    assert used_weights == [[5.0, 7.0], [100.0, 300.0]]
+    with pytest.raises(ValueError, match="no ntod"):
+        read(params)
+
+
+@pytest.mark.skipif(MPI.COMM_WORLD.Get_size() != 2, reason="requires exactly two MPI ranks")
+def test_each_rank_reads_the_scans_of_one_sky_region(tmp_path: Path) -> None:
+    """Scans 1 and 3 point at one region and 2 and 4 at the opposite one, as the filelist says."""
+    comm = MPI.COMM_WORLD
+    paths = [write_scan(tmp_path, scan_id, {"a": tod()}) for scan_id in range(1, 5)]
+    params = make_params(tmp_path, paths, ["a"])
+    lines = (tmp_path / "filelist.txt").read_text().splitlines()
+    position = {1: "0.5 1.0", 2: "2.5 4.0", 3: "0.5 1.0", 4: "2.5 4.0"}
+    rows = [f"{line.split()[0]} {line.split()[1]} 1 {position[int(line.split()[0])]}"
+            for line in lines[1:]]
+    (tmp_path / "filelist.txt").write_text("\n".join([lines[0], *rows]) + "\n")
+
+    result = read(params, comm)
+
+    scan_ids = sorted(scan.scan_id for scan in result.scans)
+    assert sorted(comm.allgather(scan_ids)) == [[1, 3], [2, 4]]
 
 
 def test_simulated_tod_skips_the_tod_value_cuts(tmp_path: Path,

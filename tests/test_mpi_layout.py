@@ -1,4 +1,4 @@
-"""Pure MPI-layout contracts: enabled inventories, rank assignment, and scan intervals."""
+"""Pure MPI-layout contracts: enabled inventories and rank assignment."""
 
 import pytest
 from mpi4py import MPI
@@ -11,7 +11,6 @@ from commander4.parameters.schema import (
     derive_task_counts,
     enabled_compsep_views,
     enabled_tod_bands,
-    split_integer_range,
 )
 
 
@@ -86,35 +85,6 @@ def test_unknown_compsep_polarization_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="polarization"):
         enabled_compsep_views(params)
-
-
-def test_half_open_scan_ranges_cover_every_scan_exactly_once() -> None:
-    intervals = []
-    assigned_scans = []
-    for part in range(3):
-        start, stop = split_integer_range(8, 3, part)
-        intervals.append((start, stop))
-        assigned_scans.extend(range(start, stop))
-
-    assert intervals == [(0, 3), (3, 6), (6, 8)]
-    assert assigned_scans == list(range(8))
-
-
-def test_half_open_scan_ranges_allow_more_ranks_than_scans() -> None:
-    intervals = []
-    for part in range(4):
-        intervals.append(split_integer_range(2, 4, part))
-
-    assert intervals == [(0, 1), (1, 2), (2, 2), (2, 2)]
-
-
-@pytest.mark.parametrize(
-    "length,num_parts,part",
-    [(-1, 1, 0), (1, 0, 0), (1, 1, -1), (1, 1, 1)],
-)
-def test_invalid_scan_range_requests_are_rejected(length: int, num_parts: int, part: int) -> None:
-    with pytest.raises(ValueError):
-        split_integer_range(length, num_parts, part)
 
 
 def test_tod_context_has_no_detector_hierarchy() -> None:

@@ -66,6 +66,8 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2) -> TODSamples:
     s.good_fraction = np.ones((nscans, ndet))
     s.scan_start_time = np.zeros(nscans)
     s.scan_sky_position = np.zeros((nscans, 2))
+    s.scan_ntod = np.zeros(nscans, dtype=np.int64)
+    s.dropped_scan_ids = np.zeros(0, dtype=np.int64)
     s.orbital_velocity = np.zeros((nscans, ndet, 3), dtype=np.float32)
     s.ncorr_cg_residual = np.zeros((nscans, ndet))
     s.ncorr_cg_niter = np.zeros((nscans, ndet), dtype=np.int32)
@@ -111,6 +113,17 @@ def test_per_scan_datasets_are_written_in_time_order() -> None:
     np.testing.assert_array_equal(arrays["scan_ids"], [10, 20, 30, 40])
     np.testing.assert_array_equal(arrays["temporal_gain"][:, 0], [10, 20, 30, 40])
     assert arrays["detrel_gain"].shape == (samples.ndet,)
+
+
+def test_dropped_scan_ids_are_written_sorted() -> None:
+    """They have no rows in the per-scan arrays, so they are written as their own list."""
+    samples = _minimal_tod_samples(nscans=2)
+    samples.dropped_scan_ids = np.array([7, 3], dtype=np.int64)
+
+    arrays = samples.gather_chain_arrays(1)
+
+    np.testing.assert_array_equal(arrays["dropped_scan_ids"], [3, 7])
+    assert len(arrays["scan_ids"]) == 2
 
 
 def test_first_scans_runtime_is_written_as_the_median_of_the_others() -> None:
