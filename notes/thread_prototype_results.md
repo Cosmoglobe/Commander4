@@ -31,7 +31,9 @@ from waiting that disappears, not from faster computing:
 - The computing itself does not get faster. The mapmaker is limited by the node's memory
   bandwidth: once every core is busy, a scan costs the same whichever thread runs it.
 - Fewer ranks also make the far-sidelobe setup and the map gathering faster, and need less node
-  memory: 45% of today's on the subset, 80–90% on the full band, where the TOD itself dominates.
+  memory: 100 GB against 177 GB on the subset (not measured on the full band).
+- 192 × 2 is the right baseline: today's code is 5–50% slower with 384 ranks of 1 core, and no
+  faster with 128 × 3 or larger ranks (§4.2).
 - On the normal (GIL) build the threaded layout is slower than today's (149–155 s against
   123–135 s per pass on the subset).
 
@@ -146,14 +148,33 @@ second pass):
 - **The gain steps are 20–25% faster**: the ranks no longer wait for each other at the gain
   barrier (2.7 s → 1.1 s), and the per-scan work is somewhat cheaper.
 
-Memory, rank average × number of ranks, in the mapmaker step:
+Today's code in other layouts (seconds per pass, first / second):
 
-| Layout | Per rank | Node total | Largest rank (band master) |
-|---|---|---|---|
-| 192 × 2 | 1.28 GB | 246 GB | 39 GB |
-| 24 × 16 | 4.64 GB | 111 GB | 40 GB |
-| 8 × 48 | 12.2 GB | 98 GB | 45 GB |
-| 8 × 48, round-robin | 16.0 GB | 128 GB | 47 GB |
+| Layout | Pass | Gain steps | Far-sidelobe setup | Mapmaker |
+|---|---|---|---|---|
+| 384 × 1 | 212.7 / 186.9 | 24.7 | 71.1 | 88.3 |
+| 192 × 2 | 135.6 / 123.7 | 25.6 | 30.4 | 65.2 |
+| 128 × 3 | 132.1 / 126.0 | 31.9 | 21.9 | 70.0 |
+| 96 × 4 | 139.0 / 134.4 | 36.4 | 18.1 | 77.6 |
+| 48 × 8 | 218.6 / 214.2 | 64.1 | 13.8 | 134.0 |
+
+192 × 2 and 128 × 3 are today's fastest layouts. With fewer, larger ranks the per-scan Python
+and numpy work runs on one core while the others wait; with 1-core ranks too many scans compete
+for cache and memory bandwidth.
+
+Node memory, the highest use during the run minus the idle node, sampled every 5 s:
+
+| Layout | Node memory |
+|---|---|
+| Today's code, 192 × 2 | 177 GB |
+| Today's code, 96 × 4 | 122 GB |
+| Today's code, 48 × 8 | 101 GB |
+| 24 × 16, 8 × 2 workers | 100 GB |
+
+The threaded layout needs 57% of the memory of today's 192 × 2, about what today's code needs
+with 48 large ranks. (The performance reports' per-rank memory, summed over ranks, overstates
+layouts with many ranks: it counts shared memory, such as the 26 GB of far-sidelobe cubes and the
+libraries, once per process.)
 
 Garbage collection is negligible: about 18 collections per rank and run, 0.2 s in total, the
 longest 0.05 s.
