@@ -30,8 +30,9 @@ from waiting that disappears, not from faster computing:
   on the full band (1279–1285 s) and 20–25% on a 2000-scan subset.
 - The computing itself does not get faster. The mapmaker is limited by the node's memory
   bandwidth: once every core is busy, a scan costs the same whichever thread runs it.
-- Fewer ranks also make the far-sidelobe setup and the map gathering faster, and need less node
-  memory: 100 GB against 177 GB on the subset (not measured on the full band).
+- Larger ranks also make the far-sidelobe setup (built by one rank per node with its own cores)
+  and the map gathering faster, and need less node memory: 100 GB against 177 GB on the subset
+  (not measured on the full band).
 - 192 × 2 is the right baseline: today's code is 5–50% slower with 384 ranks of 1 core, and no
   faster with 128 × 3 or larger ranks (§4.2).
 - On the normal (GIL) build the threaded layout is slower than today's (149–155 s against
@@ -87,7 +88,7 @@ on 24 × 16, one with 8 workers per rank and one with none (`scan_threads: 1`, t
 loop). Every dataset of the chain files, in all three iterations, is identical: gains, noise
 parameters, baselines, χ², power spectra, and all maps (34 of 34 datasets; the timing
 `scan_runtime` left out). This needed the fixes in §5.2 and §5.3; before the BLAS fix, the two
-runs differed from iteration 2 on, at the 1e-9 level.
+runs differed from iteration 2 on, at the level of the noise CG's tolerance (§5.3).
 
 **Different numbers of ranks: the same to round-off at first, then slightly apart.** 192 × 2
 against 24 × 16 with 8 workers:
@@ -100,11 +101,13 @@ against 24 × 16 with 8 workers:
 | Sky map, largest relative difference | 9e-10 | 2e-6 | 8e-6 |
 
 The MPI sums over ranks add in another order, so the first differences are at round-off. They
-then grow. The calibrated TOD is float32, so a gain that differs in its last bit rounds some samples
-differently, and later steps carry that on. Still, the largest gain difference is about 0.01
-posterior standard deviations (relative 1.7e-6, against a posterior width of 1.5e-4). With
-today's code the random numbers depend on the rank, so two layouts differ by about one standard
-deviation; the per-scan random streams remove that.
+then grow, but I have not traced where: the absolute gain of iteration 2 already differs by
+1.7e-6, although everything stored from iteration 1 agrees to round-off and no noise CG (§5.3)
+has run before it. (The test data were being rewritten when this was found, so it could not be
+rerun.) Still, the largest gain difference is about 0.01 posterior standard deviations (relative
+1.7e-6, against a posterior width of 1.5e-4). With today's code the random numbers depend on the
+rank, so two layouts differ by about one standard deviation; the per-scan random streams remove
+that.
 
 ### 4.2 Speed
 
@@ -140,10 +143,10 @@ second pass):
   memory. The second core itself helps the FFTs only a little: ducc0 splits a long 1-D FFT (over
   10,000 points) into two factors and shares the sub-FFTs between threads, which makes an
   800,000-point DCT 1.2× faster on 2 threads and 1.6× on 4.
-- **The far-sidelobe setup depends on the number of ranks per node**, not on threads: the 11
-  detector cubes are built by different ranks, with all of each rank's cores. 24 ranks build them
-  in one round (12 s); 8 ranks need two rounds (21–31 s); 192 ranks build them with 2 cores each
-  (29 s).
+- **The far-sidelobe setup depends on the size of one rank**: one rank per node builds all 11
+  detector cubes with its own cores, and the other ranks share them. With 1 core it takes 70 s,
+  with 2 cores 29 s, with 16 cores 12 s, and with 48 cores 19–21 s, where ducc0 apparently stops
+  scaling.
 - **Map gathering is faster with fewer ranks** (4.2 s → 2.6 s).
 - **The gain steps are 20–25% faster**: the ranks no longer wait for each other at the gain
   barrier (2.7 s → 1.1 s), and the per-scan work is somewhat cheaper.
@@ -251,24 +254,41 @@ types, so the lock costs nothing afterwards. This should be reported to numba.
 
 ### 5.2 ducc0 picks a different far-sidelobe kernel for different thread counts
 
-ducc0's `ConvolverPlan` chooses its interpolation kernel from a cost estimate that includes the
-thread count. For lmax = mmax = 256 it oversamples the cube by 1.6 up to 32 threads, by 1.4 at 48,
-and by about 1.25 from 96 on. A plan made with the rank's 48 threads and one made with a worker's
-single thread then disagree, and the cube built by one cannot be read by the other. Without a
+ducc0's `ConvolverPlan` chooses the cube's oversampling σ and the interpolation kernel's width by
+minimizing an estimated cost of building the cube plus interpolating the samples. The estimate
+assumes that interpolation scales perfectly with the thread count and building at most 6×
+(`nufft/nufft_common.h`), so with more threads it picks a smaller cube with a wider kernel. For
+lmax = mmax = 256 and ε = 1e-4: σ = 1.6 up to 32 threads (25.9 GiB of cubes for 11 detectors),
+1.4 at 48 (17.2 GiB) and about 1.25 from 96 on (12.4 GiB). A cube can only be read with the kernel
+it was built for. The prototype built the cubes with the rank's 48 threads and gave the workers a
+second plan with 1 thread (a plan's thread count is fixed, and 24 workers each asking for 48
+threads would swamp the cores), so the two plans disagreed. Without a
 check, every far-sidelobe value would have been silently wrong; with the check the run stopped.
-**This also affects today's code:** with `num_threads` of 48 or more, the far-sidelobe TOD is
-computed with another kernel than with 2 threads (both within the requested accuracy).
+**Today's code is correct, but its results depend on `num_threads`:** with 48 or more threads per
+rank, the far-sidelobe TOD is computed with another kernel than with 2 threads. Both meet the
+requested accuracy: built from the same random sky and beam, the σ = 1.6 and σ = 1.4 cubes give
+values that differ by 2.7e-5 (relative L2 difference; at most 1.6e-4 of the RMS).
 **Fix:** pin the oversampling to 1.6 (`sigma_min=1.6, sigma_max=1.6+1e-6`), which reproduces
 today's 2-thread results exactly, for any thread count.
 
 ### 5.3 OpenBLAS changes results with its thread count
 
 OpenBLAS splits a long dot product between its threads, which changes the order of the additions:
-the same 800,000-sample `np.dot` gives `...214909` on 1 thread and `...21491` on 16. The
-correlated-noise CG takes such dot products, so a run with 1 worker (16 BLAS threads) and one with
-8 workers (1 BLAS thread) differed from iteration 2 on, at the 1e-9 level. **Fix:** TOD ranks
-always get one BLAS thread. ducc0's FFTs and interpolation, numba's per-sample loops and the map
-kernels give identical results for any thread count (checked).
+the same 800,000-sample `np.dot` gives `...214909` on 1 thread and `...21491` on 16, a last-digit
+difference. The correlated-noise CG takes its step sizes from such dot products (pixell's `CG`
+uses `a.dot(b)`), but in float64 that alone does no harm: with the CG's filter in float64, runs on
+1 and 16 BLAS threads stay within 6e-15 of each other over all 64 iterations of a test scan.
+
+What spreads the difference is the CG's Fourier filter, which works in float32, as in
+Commander3. Each iteration rounds the 118,432 gap samples of the test scan to float32. While the
+two runs differ by about 1e-14, that rounding hides the difference, except for a sample that
+happens to lie on a float32 rounding boundary. At iteration 7 one did: the runs then differed by a
+full float32 step (6e-8) in that sample, which more samples followed every iteration. After 64
+iterations the solutions differed by 3.5e-6, below the CG's own tolerance (1e-5). On 8 test scans
+the noise parameters differed by up to 6e-8. Both answers are equally valid; the float32 filter
+was chosen knowing its error. **Fix:** TOD ranks always get one BLAS thread, so the float64
+inputs to the filter are identical. ducc0's FFTs and interpolation, numba's per-sample loops and
+the map kernels give identical results for any thread count (checked).
 
 ### 5.4 Map binning in the main thread became the bottleneck
 
