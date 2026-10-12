@@ -77,6 +77,10 @@ compsep:
 
   mcmc_sampling_groups: {}
 
+  cl_sampling_groups:
+    sample_cmb:
+      comps: [CMB]
+
   bands:
     Band30GHz:
       get_from: SimSat
