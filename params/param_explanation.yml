@@ -434,7 +434,8 @@ compsep:
                               # data as B*Y*a with this beam and NO pixel window.
       freq: 0.408             # [GHz] Band centre. Every SED is evaluated at this single
                               # frequency: C4 has no bandpass integration yet.
-      polarization: "IQU"
+      polarization: "I"       # Intensity only, as in Commander3. The file's Q and U columns
+                              # are copies of I, not polarization data.
       units: "uK_CMB"         # Unit the FILE is in. Converted to uK_RJ on read, which is
                               # what CompSep works in internally. Supported: uK_RJ, mK_RJ,
                               # K_RJ, uK_CMB, mK_CMB, K_CMB, MJy/sr.

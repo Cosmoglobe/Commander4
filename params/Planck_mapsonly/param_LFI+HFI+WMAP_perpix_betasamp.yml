@@ -110,7 +110,7 @@ compsep:
         dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
       fwhm: 60.0  # [arcmin]
       freq: 0.408 # [GHz]
-      polarization: "IQU"
+      polarization: "I"  # The file's Q and U columns are copies of I, not polarization data.
       units: "uK_CMB"
 
     ###### WMAP MAPS ######

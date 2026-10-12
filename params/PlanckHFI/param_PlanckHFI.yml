@@ -1,5 +1,5 @@
 # Parameter file for full TOD processing and CG component separation on Planck HFI TOD data at
-# native resolution.
+# native resolution, with auxiliary maps (Haslam + LFI + WMAP) in the component separation.
 # Includes all six HFI bands and all detectors present in the TOD files.
 
 # ----------------------------------------
@@ -33,7 +33,7 @@ resources:
 output:
   # All output goes here, in the subdirectories logs/, chains_bands/,
   # chains_compsep/ and plots/.
-  dir: "../c4_chains/HFI_balanced-ntod_band-auto-balanced/"
+  dir: "../c4_chains/HFI_compsep/"
 
   logging:
     console:
@@ -126,7 +126,80 @@ tod_processing:
 # ----------------------------------------
 # COMPONENT SEPARATION
 # ----------------------------------------
-compsep: {}
+compsep:
+  double_precision: false
+
+  # CG amplitude sampling groups: each is a conditional constrained realization of its
+  # components' amplitudes, conditioning on the components it does not list.
+  # Commander3's HFI runs split this into three groups (CMB / dust / free-free), each on its own
+  # band subset; one joint group over everything is the simpler and more complete choice.
+  cg_sampling_groups:
+    sample_amps_CG:
+      enabled: true
+      comps: "all"
+      bands: "all"
+      optimize: false   # Constrained realization.
+      max_iter: 100
+      max_iter_pol: 100
+      err_tol: 0.0  # No stopping criterion.
+      preconditioner: JointPreconditioner
+
+  mcmc_sampling_groups: {}  # No spectral-index sampling, as in Commander3's HFI runs.
+
+  bands:
+    ### TOD BANDS ###
+    # These are bands received from the TOD processing, and listed under `experiments`.
+    Planck100GHz:
+      get_from: PlanckHFI
+      enabled: true
+      polarization: "IQU"
+    Planck143GHz:
+      get_from: PlanckHFI
+      enabled: true
+      polarization: "IQU"
+    Planck217GHz:
+      get_from: PlanckHFI
+      enabled: true
+      polarization: "IQU"
+    Planck353GHz:
+      get_from: PlanckHFI
+      enabled: true
+      polarization: "IQU"
+    Planck545GHz:
+      get_from: PlanckHFI
+      enabled: true
+      polarization: "I"
+    Planck857GHz:
+      get_from: PlanckHFI
+      enabled: true
+      polarization: "I"
+
+    ### MAP BANDS ###
+    # Map-only bands, read directly from file. HFI alone cannot separate synchrotron and free-free
+    # from CMB and dust; these low-frequency maps anchor them. Commander3's HFI runs use the same
+    # set, plus WMAP K and W.
+    ###### HASLAM MAP ######
+    Haslam408MHz:
+      enabled: true
+      get_from: "file"
+      eval_nside: 512
+      signal_map:
+        path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_n0512_60arcmin_uK.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      rms_map:
+        type: "rms"
+        path: "/mn/stornext/d16/cmbco/archive/bp/delivery/BP_releases/input/auxcmd3/haslam_rms_n0512_60arcmin_uK_1pct_0.8K.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      fwhm: 60.0  # [arcmin]
+      freq: 0.408 # [GHz]
+      polarization: "I"  # The file's Q and U columns are copies of I, not polarization data.
+      units: "uK_CMB"
+
+    ###### LFI MAPS ######
+    !import "../Planck_mapsonly/maps_LFI.yml"
+
+    ###### WMAP MAPS ######
+    !import "../Planck_mapsonly/maps_WMAP.yml"
 
 
 # ----------------------------------------

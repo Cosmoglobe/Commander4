@@ -44,7 +44,7 @@ You are now ready to run Commander4 (see further down).
 # 2. Running Commander4
 Commander4 has to be run with MPI, and a parameter file has to be indicated using the `-p` argument. Example usage:
 ```
-mpirun -n 28 commander4 -p params/Planck_mapsonly/param_LFI+HFI+WMAP.yml
+mpirun -n 27 commander4 -p params/Planck_mapsonly/param_LFI+HFI+WMAP.yml
 ```
 The number of MPI ranks **must match the parameter file**. To quickly check how many MPI ranks you must use for any given parameter file, you can run `c4-validate-params path/to/params.yml`. The number of ranks needed is split among component separation (which always requires 1 rank per I- and QU-band specified in the `compsep` section of the parameter file) and TOD processing (where any number of ranks can be allocated in the `experiments` section of the parameter file).
 
