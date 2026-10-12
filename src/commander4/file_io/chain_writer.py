@@ -222,7 +222,9 @@ def write_compsep_chain_to_file(comp_list: list[Component] | CompList, params: B
             # so the chain records the sampled spectral indices and everything else needed to
             # evaluate the SED. `nu_ref` may be a per-polarization array, hence no float() cast.
             for param_name in comp.sed_param_names:
-                file[f"comps/{comp.shortname}/sed/{param_name}"] = getattr(comp, param_name)
+                comp_param=getattr(comp,param_name,None)
+                if comp_param is not None:
+                    file[f"comps/{comp.shortname}/sed/{param_name}"] = comp_param
             # The C(l) prior's model parameters (Commander3's Dl_amp/Dl_beta/Dl_theta), not the
             # evaluated spectrum: the evaluated one is reconstructible, and `sigma_l` above already
             # records the realized power. A `None` amplitude means the prior is off (C3 CL_TYPE
