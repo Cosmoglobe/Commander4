@@ -138,6 +138,50 @@ def test_absolute_gain_reuses_filtered_calibrator(
         assert call.kwargs["samprate"] == 1.0
 
 
+def test_temporal_gain_is_solved_in_time_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shuffling a rank's scans gives every scan the same gain, since the solve sorts by scan ID.
+
+    The Wiener prior couples scans that are neighbours in time, so a solve in rank order would
+    pair the wrong scans and change the result.
+    """
+    from commander4.data_models.detector_group_tod import DetectorGroupTOD
+    from commander4.data_models.scan_tod import ScanTOD
+    from commander4.tod.noise.psd import NoisePSDOof
+    import commander4.tod.gain as gain
+
+    rng = np.random.default_rng(5)
+    nscans = 6
+    # One calibration problem per scan, listed by the scan's place in time.
+    calibs = [SimpleNamespace(s_cal=rng.normal(size=500), tod=rng.normal(size=500))
+              for _ in range(nscans)]
+    model = NoisePSDOof()
+    model.is_white = True
+
+    def solve(time_order: np.ndarray) -> np.ndarray:
+        """Temporal gain of each scan, with the rank holding its scans in the given order of their
+        places in time. The scan IDs increase with time, but are not the places themselves."""
+        scan_ids = 100 + 10*time_order
+        scans = [ScanTOD([], 0.0, int(scan_id)) for scan_id in scan_ids]
+        experiment = DetectorGroupTOD(scans, "EXP", "BAND", 1, 100.0, 0.0, 10.0, 1, "I", model)
+        views = [SimpleNamespace(iscan=iscan, idet=0, fsamp=10.0, downsample_factor=1,
+                                 noise_params=np.array([1.0, 0.1, -1.0]),
+                                 get_calib_tod=Mock(return_value=calibs[t]))
+                 for iscan, t in enumerate(time_order)]
+        scan_view = SimpleNamespace(iter_focused=Mock(return_value=iter(views)))
+        monkeypatch.setattr(gain, "TODView", Mock(return_value=scan_view))
+        samples = SimpleNamespace(abs_gain=1.0, rel_gain=np.zeros(1), chain=1, scan_ids=scan_ids,
+                                  temporal_gain=np.zeros((nscans, 1), dtype=np.float32))
+        np.random.seed(7)  # The same fluctuation draws, which the solve makes in time order.
+        return gain.sample_temporal_gain_variations(MPI.COMM_SELF, experiment, samples, None,
+                                                    GainConfig(), 1).temporal_gain[:, 0]
+
+    in_time_order = solve(np.arange(nscans))
+    shuffled_order = np.array([3, 0, 5, 1, 4, 2])
+    shuffled = solve(shuffled_order)
+
+    np.testing.assert_array_equal(shuffled, in_time_order[shuffled_order])
+
+
 # --------------------------------------------------------------------------------------
 # The calibrator a gain term ends up using
 # --------------------------------------------------------------------------------------

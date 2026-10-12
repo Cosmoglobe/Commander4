@@ -125,8 +125,6 @@ class TODSamples:
         # The noise model defines how many parameters per detector-scan (first entry is sigma0).
         self.noise_model = experiment_data.noise_model
         self.npar = self.noise_model.npar
-        self.scan_idx_start = experiment_data.scan_idx_start
-        self.scan_idx_stop = experiment_data.scan_idx_stop
         # C4 works internally in uK_RJ; a band may quote its gain and maps in another unit via
         # `band_unit`. `band_unit_factor` D (= value of 1 uK_RJ in band_unit) converts at the file
         # boundary: brightness maps multiply by D, the gain (brightness in its denominator) divides by
@@ -188,10 +186,9 @@ class TODSamples:
             self.modulation_phase = np.ones((self.nscans, self.ndet), dtype=np.int8)
             self.baselines = np.zeros((self.nscans, self.ndet, 2), dtype=np.float64)
         self.modulation_phase_initialized = False
-        # Per-scan start time, Commander3's `MJD`. The epoch is whatever the experiment reader put
-        # in `ScanTOD.start_time`, so this is MJD only for readers whose files carry one. Today
-        # that is SO_SAT alone; every other reader passes 0.0, which is the "no absolute time
-        # available" value here.
+        # Per-scan start time, Commander3's `MJD`. The reader takes it from the scan file's
+        # `<pid>/common/time`, and passes 0.0, the "no absolute time available" value here, for
+        # files without one (today the simgen and Akari files).
         self.scan_start_time = np.array([scan.start_time for scan in experiment_data.scans],
                                         dtype=np.float64)
 
@@ -224,6 +221,10 @@ class TODSamples:
         self.ncorr_cg_residual = np.full((self.nscans, self.ndet), np.nan)
         self.ncorr_cg_niter = np.full((self.nscans, self.ndet), -1, dtype=np.int32)
         self.ncorr_converged = np.full((self.nscans, self.ndet), -1, dtype=np.int8)
+
+        # Wall time [s] the mapmaking scan loop spent on each scan this iteration. Can be used
+        # by subsequent runs to produce better load balancing.
+        self.scan_runtime = np.zeros(self.nscans, dtype=np.float64)
 
         # The temporal-gain Wiener prior each detector was actually sampled under, as
         # (ndet, 3) = (sigma0, fknee, alpha), Commander3's gain_sigma_0/gain_fknee/gain_alpha.
@@ -410,7 +411,9 @@ class TODSamples:
         ####################################################################
         # Gather the various TOD samples.
         ####################################################################
-        # 0. Unique scan-IDs (per-scan quantity)
+        # 0. Unique scan-IDs (per-scan quantity), which increase with time. The gathers below stack
+        # the ranks' scans in rank order, which need not be time order; the per-scan datasets are
+        # sorted by scan ID before they are returned.
         scan_ids_global = _gather_scan_distributed_array(band_comm, self.scan_ids, scans_per_rank)
 
         # 1. Absolute gain (per-band quantity)
@@ -449,6 +452,14 @@ class TODSamples:
                                                                scans_per_rank)
         ncorr_converged_global = _gather_scan_distributed_array(band_comm, self.ncorr_converged,
                                                                 scans_per_rank)
+        # The first scan each rank processes in `tod2map` also pays one-time Numba compilation cost,
+        # so its runtime is nonsense, so we overwrite it with the median runtime of the other scans.
+        scan_runtime = self.scan_runtime.copy()
+        timed = np.flatnonzero(scan_runtime)
+        if timed.size > 1:
+            scan_runtime[timed[0]] = np.median(scan_runtime[timed[1:]])
+        scan_runtime_global = _gather_scan_distributed_array(band_comm, scan_runtime,
+                                                             scans_per_rank)
 
         # 4b3. Planck HFI alternating-modulation state. Other experiments do not write empty
         # instrument-specific datasets.
@@ -515,13 +526,16 @@ class TODSamples:
         # unconditionally. `det_names` is variable-length UTF-8 for a clean string round-trip; its
         # order is the `idet` axis shared by every per-detector array here.
         arrays: dict[str, NDArray] = {
-            "scan_ids": scan_ids_global,
             "det_names": np.array(self.det_names, dtype=h5py.string_dtype()),
             "abs_gain": abs_gain_global/self.band_unit_factor,
             "detrel_gain": rel_gain_global/self.band_unit_factor,
+            "gain_prior": gain_prior_out,
+        }
+        # The datasets with a scan axis first, written in time order.
+        per_scan_arrays: dict[str, NDArray] = {
+            "scan_ids": scan_ids_global,
             "temporal_gain": temporal_gain_global/self.band_unit_factor,
             "noise_params": noise_params_global,
-            "gain_prior": gain_prior_out,
             "present": present_global,
             "accept": accept_global,
             "chisq_z": chisq_z_global,
@@ -531,6 +545,7 @@ class TODSamples:
             "ncorr_cg_residual": ncorr_cg_residual_global,
             "ncorr_cg_niter": ncorr_cg_niter_global,
             "ncorr_converged": ncorr_converged_global,
+            "scan_runtime": scan_runtime_global,
             "tod_ps_freqs": tod_ps_freqs_global,
             "tod_ps_ncorr": tod_ps_ncorr_global,
             "tod_ps_raw": tod_ps_raw_global,
@@ -539,8 +554,13 @@ class TODSamples:
             "jump_counts": jump_counts_global,
         }
         if modulation_phase_global is not None:
-            arrays["modulation_phase"] = modulation_phase_global
-            arrays["baselines"] = baselines_global
+            per_scan_arrays["modulation_phase"] = modulation_phase_global
+            per_scan_arrays["baselines"] = baselines_global
+        # The ranks had the scans stored in some arbitrary order, so we sort them back to being in
+        # time order, which is scan-ID order.
+        time_order = np.argsort(scan_ids_global)
+        for name, values in per_scan_arrays.items():
+            arrays[name] = values[time_order]
         arrays.update(jump_datasets)
         if write_glitches:
             # Per-detector shapes, identical on every rank, so no communication was needed.

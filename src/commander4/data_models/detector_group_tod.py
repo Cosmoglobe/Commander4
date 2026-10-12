@@ -53,11 +53,6 @@ class DetectorGroupTOD:
         # Whether the TOD needs demodulation to be read (Planck HFI stores alternating
         # positive/negative modulation half-cycles.)
         self.hfi_demodulation = hfi_demodulation
-        # The below values are not known until all ranks are finished reading in data, because some
-        # scans might be rejected. They are set after the fact.
-        self.scan_idx_start: int = 0  # Index of my first scan in a compact indexing.
-        self.scan_idx_stop: int = 0  # Index of my last scan.
-        self.nscans_allranks: int = 0  # Total number of scans across all ranks (on this band).
         self.noise_model = noise_model
         # The band's PixelDomain: which pixels this rank's map buffers hold. It depends only on the
         # static pointing, so it is built once at startup (tod/processing.py) and kept for the run.

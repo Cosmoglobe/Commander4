@@ -241,12 +241,12 @@ experiments:
     enabled: true
     mapmaker: "CG"
     experiment_id: "akari"  # Decides expected data format, what TOD reader is used, etc.
-    num_scans: 11395
     bad_data_bitmask: 2097149 #0b1111111111111111111111111111101
+    min_unmasked_fraction: 0.05  # Read-time cut: drop detector-scans with less unflagged data.
     bands:
       AKARI065:
         enabled: false
-        num_tasks: 64
+        band_weight: 64
         eval_nside: 512
         fwhm: 0.6166 # [arcmin]
         freq: 4996 # [GHz]
@@ -298,7 +298,7 @@ experiments:
             #bandpass_shift: 0.28  # Ghz
       AKARI090:
         enabled: true
-        num_tasks: 64
+        band_weight: 64
         eval_nside: 512
         fwhm: 1 # [arcmin]
         freq: 2141 # [GHz]

@@ -6,7 +6,7 @@
 # GIBBS
 # ----------------------------------------
 gibbs:
-  num_iterations: 20
+  num_iterations: 5
 
   seed: 1995
 
@@ -33,7 +33,7 @@ resources:
 output:
   # All output goes here, in the subdirectories logs/, chains_bands/,
   # chains_compsep/ and plots/.
-  dir: "../c4_chains/HFI/"
+  dir: "../c4_chains/HFI_balanced-ntod_band-auto-balanced/"
 
   logging:
     console:
@@ -76,28 +76,28 @@ tod_processing:
 
   abs_gain:
     enabled: true
-    from_iter: 2
+    from_iter: 1
     calibrate_against: orbital_dipole # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 0.5        # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   rel_gain:
     enabled: true
-    from_iter: 2
+    from_iter: 1
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 0.5        # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   temporal_gain:
     enabled: false
-    from_iter: 2
+    from_iter: 1
     calibrate_against: sky       # "orbital_dipole" | "sky" | "sky_no_dipole"; per-band overridable.
     gap_fill_method: wn         # Gap fill for this gain step: 'wn' | 'fallback' | 'full_cg'.
     downsample_time: 0.5        # [s] Averaging chunk duration for gain-calibration TODs (0 = off).
 
   corr_noise:
     enabled: true
-    from_iter: 2
+    from_iter: 1
     sample_psd_params: true     # Resample noise-model params (needs corr_noise.enabled).
     sample_sigma0: True            # Re-estimate sigma0 from the n_corr-subtracted residual.
     nomono: False                 # Project the per-scan monopole out of n_corr (Fortran "nomono").
@@ -202,25 +202,28 @@ experiments:
     sparse_maps: true
     experiment_id: "planck_hfi"  # Decides expected data format, what TOD reader is used, etc.
     instrument_file: "/mn/stornext/d23/cmbco/globe/planck/rimo/HFI_instrument_v6.h5"
-    filelist_idx_start: 0
-    filelist_idx_stop: 26424  # Only cold-phase scans (OD 91-974), drop warm-phase scans.
+    # Scans 51-23938 (OD 92-879), the range Commander3's HFI runs use. It also leaves out ODs
+    # 880-882, whose tod_v2 files hold no data.
+    scan_id_start: 51
+    scan_id_stop: 23939
     bad_data_bitmask: 767  # 767 stolen from C3. Previously used flag 515:
                            # Chunk-boundary filler (bit 0) + DPC glitches (bit 1, 100/143 GHz
                            # only) + NPIPE glitches (bit 9, all bands). Masks 10-20% of all
                            # samples. Bit 8 labels a whole chunk, not bad samples: never set it.
                            # NB: This will *mask* all glitches. In the future we want to fit them.
+    min_unmasked_fraction: 0.5  # Read-time cut: drop detector-scans with less unflagged data.
 
     bands:
       Planck100GHz:
         enabled: true
-        num_tasks: 176
         eval_nside: 1024
         fwhm: 9.68 # [arcmin]
         freq: 100.0 # [GHz]
         band_unit: "uK_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
-        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/tod_v2/filelist_100.txt"
+        # The filelists Commander3's HFI runs use (hke's param_hfi_multi_v3).
+        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/filelist_100_v2_load.txt"
         detectors:
           100-1a: {gain: 0.1039}
           100-1b: {gain: 0.1158}
@@ -233,14 +236,13 @@ experiments:
 
       Planck143GHz:
         enabled: true
-        num_tasks: 306
         eval_nside: 2048
         fwhm: 7.30 # [arcmin]
         freq: 143.0 # [GHz]
         band_unit: "uK_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
-        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/tod_v2/filelist_143.txt"
+        filelist: "/mn/stornext/u3/hke/data_hfi/filelist_143.txt"
         detectors:
           143-1a: {gain: 0.1609}
           143-1b: {gain: 0.1462}
@@ -256,14 +258,13 @@ experiments:
 
       Planck217GHz:
         enabled: true
-        num_tasks: 364
         eval_nside: 2048
         fwhm: 5.01 # [arcmin]
         freq: 217.0 # [GHz]
         band_unit: "uK_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
-        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/tod_v2/filelist_217.txt"
+        filelist: "/mn/stornext/u3/hke/data_hfi/filelist_217.txt"
         detectors:
           217-1: {gain: 0.1077}   # 217-1/2/3/4 are unpolarized SWBs (RIMO polEff 2.1-4.1%).
           217-2: {gain: 0.1061}
@@ -280,14 +281,13 @@ experiments:
 
       Planck353GHz:
         enabled: true
-        num_tasks: 352
         eval_nside: 2048
         fwhm: 4.9 # [arcmin]
         freq: 353.0 # [GHz]
         band_unit: "uK_CMB"
         polarization: "IQU"
         processing_mask: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
-        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/tod_v2/filelist_353.txt"
+        filelist: "/mn/stornext/u3/hke/data_hfi/filelist_353.txt"
         detectors:
           353-1: {gain: 0.05152}  # 353-1/2/7/8 are unpolarized SWBs (RIMO polEff 3.4-8.1%).
           353-2: {gain: 0.05753}
@@ -304,7 +304,6 @@ experiments:
 
       Planck545GHz:
         enabled: true
-        num_tasks: 62
         eval_nside: 2048
         fwhm: 4.8 # [arcmin]
         freq: 545.0 # [GHz]
@@ -316,7 +315,7 @@ experiments:
         # which are both calibrating against the full sky, not just the orbital dipole.
         processing_masks:
           ncorr: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
-        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/tod_v2/filelist_545.txt"
+        filelist: "/mn/stornext/u3/hke/data_hfi/filelist_545.txt"
         detectors:
           545-1: {gain: 45.62}   # All three are unpolarized SWBs (RIMO polEff 4.7-5.9%).
           545-2: {gain: 47.62}
@@ -326,7 +325,6 @@ experiments:
 
       Planck857GHz:
         enabled: true
-        num_tasks: 84
         eval_nside: 2048
         fwhm: 4.6 # [arcmin]
         freq: 857.0 # [GHz]
@@ -335,7 +333,7 @@ experiments:
         # Masked for n_corr only, for the same reason as 545 GHz above.
         processing_masks:
           ncorr: "/mn/stornext/d5/data/duncanwa/WMAP/data/mask_proc_070_res_v5.fits"
-        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/tod_v2/filelist_857.txt"
+        filelist: "/mn/stornext/d23/cmbco/globe/planck/tod/filelist_857_v2.txt"
         detectors:
           857-1: {gain: 57.15}   # All four are unpolarized SWBs (RIMO polEff 6.3-8.6%).
           857-2: {gain: 57.37}

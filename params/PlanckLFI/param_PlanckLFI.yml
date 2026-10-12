@@ -237,10 +237,14 @@ experiments:
     enabled: true
     mapmaker: "bin"
     experiment_id: "planck_lfi"  # Decides expected data format, what TOD reader is used, etc.
+    bad_data_bitmask: 6111232  # Flag bits that mark a sample unusable.
+    min_unmasked_fraction: 0.75  # Read-time cut: drop detector-scans with less unflagged data.
+    max_rms_ratio: 6.0           # Read-time cut: drop detector-scans whose TOD RMS is above 6x
+                                 # their detector's median (e.g. PID 1, with a -0.19 V offset).
     bands:
       Planck30GHz:
         enabled: true
-        num_tasks: 24
+        band_weight: 24
         eval_nside: 512
         fwhm: 32.4 # [arcmin]
         freq: 28.4 # [GHz]
@@ -259,7 +263,7 @@ experiments:
             bandpass_shift: 0.13
       Planck44GHz:
         enabled: true
-        num_tasks: 42
+        band_weight: 42
         eval_nside: 512
         fwhm: 27.1 # [arcmin]
         freq: 44.1 # [GHz]
@@ -282,7 +286,7 @@ experiments:
             bandpass_shift: -0.05
       Planck70GHz:
         enabled: true
-        num_tasks: 120
+        band_weight: 120
         eval_nside: 1024
         fwhm: 13.3 # [arcmin]
         freq: 70.1 # [GHz]

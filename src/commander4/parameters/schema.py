@@ -13,7 +13,8 @@ A parameter file is seven blocks, each named after the part of the program that 
 They replace the old `general` grab-bag, which mixed MPI resources, Gibbs loop control, TOD
 sampling steps, compsep solver settings and output paths. `notes/proposed_param_layout.yml` shows
 the full layout. This module owns the block list, rejects the old schema loudly, and derives the
-MPI task counts the parameter file no longer states.
+MPI task counts and the split of the TOD tasks between bands, which the parameter file no longer
+states.
 """
 
 import logging
@@ -38,13 +39,12 @@ _NO_DEFAULT = object()
 
 @dataclass(frozen=True)
 class TODBandConfig:
-    """One enabled TOD band and its half-open rank interval on the TOD side."""
+    """One enabled TOD band, and its ``band_weight`` (None for "auto")."""
 
     index: int
     experiment_name: str
     band_name: str
-    rank_start: int
-    rank_stop: int
+    weight: float | None
 
 
 @dataclass(frozen=True)
@@ -63,10 +63,13 @@ def enabled_tod_bands(params: Bunch) -> tuple[TODBandConfig, ...]:
     Band names are routing identifiers between the TOD and CompSep sides, so enabled TOD band
     names must be unique across experiments. This explicit rule is clearer than silently merging
     equal per-experiment band indices into one MPI communicator.
+
+    Each band's ``band_weight`` is a positive number or "auto" (the default), and either every band
+    sets a number or none does: an "auto" weight counts detector-samples, which is not on the scale
+    of numbers set by hand.
     """
     bands = []
     seen_names: dict[str, str] = {}
-    next_rank = 0
     if "experiments" not in params:
         return ()
 
@@ -85,21 +88,39 @@ def enabled_tod_bands(params: Bunch) -> tuple[TODBandConfig, ...]:
                     f"{experiment_name!r}. Band names route MPI messages and must be globally "
                     "unique across enabled experiments."
                 )
-            num_tasks = int(band.num_tasks)
-            if num_tasks < 1:
-                raise ValueError(
-                    f"experiments.{experiment_name}.bands.{band_name}.num_tasks must be at least 1."
-                )
+            weight = band.band_weight if "band_weight" in band else "auto"
+            if weight != "auto" and not (isinstance(weight, (int, float)) and weight > 0):
+                raise ValueError(f"experiments.{experiment_name}.bands.{band_name}.band_weight is "
+                                 f"{weight!r}; expected a positive number or 'auto'.")
             seen_names[band_name] = experiment_name
             bands.append(TODBandConfig(
                 index=len(bands),
                 experiment_name=experiment_name,
                 band_name=band_name,
-                rank_start=next_rank,
-                rank_stop=next_rank + num_tasks,
+                weight=None if weight == "auto" else float(weight),
             ))
-            next_rank += num_tasks
+    if len({band.weight is None for band in bands}) > 1:
+        raise ValueError("Some enabled TOD bands set a number as band_weight, and others use "
+                         "'auto'. Set a number on every band, or on none.")
     return tuple(bands)
+
+
+def split_tod_ranks(weights: Sequence[float], ntask_tod: int) -> list[int]:
+    """The number of TOD ranks of each band, in proportion to the bands' weights.
+
+    Every band gets one rank, and each further rank goes to the band that has the most weight per
+    rank at that point. This gives the smallest possible largest weight per rank, and whole-number
+    weights that sum to ``ntask_tod`` give exactly those numbers.
+
+    Args:
+        weights: Each band's weight, e.g. its number of detector-samples.
+        ntask_tod: The number of TOD ranks, at least one per band.
+    """
+    counts = [1]*len(weights)
+    for _ in range(ntask_tod - len(weights)):
+        busiest = max(range(len(weights)), key=lambda iband: weights[iband]/counts[iband])
+        counts[busiest] += 1
+    return counts
 
 
 def enabled_compsep_views(params: Bunch) -> tuple[CompSepViewConfig, ...]:
@@ -132,20 +153,6 @@ def enabled_compsep_views(params: Bunch) -> tuple[CompSepViewConfig, ...]:
                 identifier=identifier,
             ))
     return tuple(views)
-
-
-def split_integer_range(length: int, num_parts: int, part: int) -> tuple[int, int]:
-    """Split ``range(length)`` evenly and return one half-open ``[start, stop)`` interval."""
-    if length < 0:
-        raise ValueError("Range length cannot be negative.")
-    if num_parts < 1:
-        raise ValueError("Number of range parts must be at least 1.")
-    if part < 0 or part >= num_parts:
-        raise ValueError(f"Range part {part} is outside [0, {num_parts}).")
-    base_size, remainder = divmod(length, num_parts)
-    start = part * base_size + min(part, remainder)
-    stop = start + base_size + (1 if part < remainder else 0)
-    return start, stop
 
 
 def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any = _NO_DEFAULT,
@@ -294,25 +301,26 @@ def compsep_enabled(params: Bunch) -> bool:
 def derive_task_counts(params: Bunch) -> Bunch:
     """MPI task counts, derived from the band configuration rather than stated in the file.
 
-    The TOD total is the sum of `num_tasks` over the enabled bands of enabled experiments; compsep
-    needs exactly one task per enabled band view, one for I and one for QU. Stating these
-    separately is three more numbers to keep in sync, and the most common way to fail a run before
-    it starts.
+    Compsep needs exactly one task per enabled band view, one for I and one for QU. Every other
+    task is a TOD task, and each enabled TOD band needs at least one (see `split_tod_ranks`).
 
     Returns:
-        Bunch with `tod`, `compsep_I`, `compsep_QU` and their sum `total`.
+        Bunch with `tod_bands` (the number of enabled TOD bands), `compsep_I`, `compsep_QU`, and
+        `min_total`, their sum: the smallest number of tasks the run can use.
     """
-    tod_bands = enabled_tod_bands(params)
-    ntask_tod = tod_bands[-1].rank_stop if tod_bands else 0
+    ntod_bands = len(enabled_tod_bands(params))
     compsep_views = enabled_compsep_views(params)
     ntask_I = sum(view.polarization == "I" for view in compsep_views)
     ntask_QU = sum(view.polarization == "QU" for view in compsep_views)
 
-    return Bunch(tod=ntask_tod, compsep_I=ntask_I, compsep_QU=ntask_QU,
-                 total=ntask_tod + ntask_I + ntask_QU)
+    return Bunch(tod_bands=ntod_bands, compsep_I=ntask_I, compsep_QU=ntask_QU,
+                 min_total=ntod_bands + ntask_I + ntask_QU)
 
 
 def task_count_breakdown(counts: Bunch) -> str:
-    """The derived task counts as one line, for the 'wrong mpirun -n' error message."""
-    return (f"{counts.total} = {counts.tod} TOD + {counts.compsep_I} CompSep-I + "
-            f"{counts.compsep_QU} CompSep-QU")
+    """The derived task counts as one line, for the 'wrong mpirun -n' error message.
+
+    Without TOD bands the count is exact; with them, any further tasks go to the TOD bands.
+    """
+    return (f"{'at least ' if counts.tod_bands else ''}{counts.min_total} = {counts.tod_bands} TOD "
+            f"+ {counts.compsep_I} CompSep-I + {counts.compsep_QU} CompSep-QU")

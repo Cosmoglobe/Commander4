@@ -57,7 +57,7 @@ See [params/param_explanation.yml](params/param_explanation.yml) for an exhausti
 
 A parameter file is seven top-level blocks, each named after the part of the program that reads them: `gibbs`, `resources`, `output`, `components`, `experiments`, `tod_processing` and `compsep`.
 
-The MPI task counts are **derived**, not stated: the TOD total is the sum of the per-band `num_tasks` over enabled bands of enabled experiments, and component separation takes one task per enabled `compsep.bands` view (one for I, one for QU). Commander4 reports the total it needs, and `mpirun -n` must match it.
+The MPI task counts are **derived**, not stated: component separation takes one task per enabled `compsep.bands` view (one for I, one for QU), and every other task goes to TOD processing, with at least one per enabled band. The TOD tasks are split between the bands in proportion to each band's `band_weight`: by default (`"auto"`) its number of detector-samples (ntod × detectors, from the filelists), or a number set on every band. Any `mpirun -n` that leaves each band at least one task works.
 
 Parameter files can include other parameter files using `!import 'path/to/file.yml'`. The path is relative to the relevant file, unless it is absolute. `~` and environment variables such as `$HOME` are expanded, as in a shell. Note that the exact content of the imported file is inserted at the exact location of the import, and at the relevant indentation level.
 
@@ -79,7 +79,7 @@ Per-scan sampled quantities at the top level, output maps under `maps/`. `NSC` i
 ```YAML
 metadata/band_unit             # thermodynamic unit of the gains and maps below
 metadata/map_fwhm_arcmin       # beam of maps/observed_sky and maps/rms
-scan_ids           (NSC,)      # int64 scan IDs; the row order of every per-scan array
+scan_ids           (NSC,)      # int64 scan IDs in time order; the row order of every per-scan array
 det_names          (ND,)       # detector names; the column order of every per-detector array
 scan_start_time    (NSC,)      # scan start time (C3 'MJD'); 0.0 if the reader supplies no time
 orbital_velocity   (NSC,ND,3)  # spacecraft velocity [m/s], what anchors the absolute calibration
@@ -97,6 +97,7 @@ chisq_z            (NSC,ND)    # white-noise chi^2 z-score; ~N(0,1) for clean da
 ncorr_cg_residual  (NSC,ND)    # final relative CG residual of the correlated-noise draw
 ncorr_cg_niter     (NSC,ND)    # int32 CG iterations; 0 when the stationary fallback was used
 ncorr_converged    (NSC,ND)    # int8: 1 accepted, 0 failed, -1 no n_corr drawn
+scan_runtime       (NSC,)      # wall time [s] the mapmaking loop spent on the scan this iteration
 tod_ps_freqs       (NSC,ND,100)   # log-binned frequency axis shared by the four spectra below
 tod_ps_raw         (NSC,ND,100)   # binned PSD of the raw TOD
 tod_ps_ncorr       (NSC,ND,100)   # ... of the correlated-noise realization
@@ -193,7 +194,8 @@ src/commander4/
 
   data_models/         # The containers the two sides pass around (band TOD, band maps, pointing, samples).
   file_io/             # Everything that touches disk: chain writing, map reading, and:
-    experiments/       #   One TOD reader per experiment, each module named after its `experiment_id`.
+    experiments/       #   TOD readers: base_reader.py reads the standard scan files. Each other
+                       #   module is named after an `experiment_id` and subclasses it.
   parameters/          # Parameter-file parsing (parse.py) and scoped lookup + validation (schema.py).
   mpi/                 # Communicator setup, and the transfer of maps and sky models between the two sides.
   math_utils/          # SHTs, alm helpers, FFTs, in-place array arithmetic.
@@ -352,7 +354,7 @@ See [`simgen/README.md`](simgen/README.md) for the simulator's parameter format 
 
 ### 4.3 Parameter file validation
 Run `c4-validate-params path/to/param.yml` to get:
-- Info about how many MPI ranks the file is currently configered with, such that you know how many to use with `mpirun -n ...`
+- The smallest number of MPI ranks the file can run with (`mpirun -n ...`): one per TOD band, plus the CompSep ranks.
 - Info about what distribution of threads is optimal for the component separation. If you know how many nodes and cores per node you plan to dedicate to component separation, you can run `c4-validate-params params.yml --compsep-threads-per-node 384 --compsep-nodes 2` to get a proposed distribution, which can be pasted directly into the parameter file.
 
 ### 4.4 Chain plotting
@@ -370,6 +372,7 @@ c4-cmb-realizations path/to/output-dir/ --burn-in 100 --n-realizations 10 --mask
 
 See `c4-cmb-realizations --help` and the
 [module documentation](src/commander4/standalone_tools/constrained_cmb_realizations.py) for details.
+
 
 
 # 5. Benchmarking and optimization

@@ -159,15 +159,14 @@ experiments:
   SimSat:
     enabled: true
     experiment_id: "general"
+    bad_data_bitmask: 6111232  # Flag bits that mark a sample unusable (simgen's standard).
     mapmaker: "bin"
     bands:
       Band100GHz:
         enabled: true
-        num_tasks: 4
         eval_nside: 64
         fwhm: 50.0
         freq: 100.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         polarization: "IQU"
         # [sigma0, fknee, alpha].  sigma0 is the injected truth; fknee and alpha are deliberately
