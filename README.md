@@ -44,7 +44,7 @@ You are now ready to run Commander4 (see further down).
 # 2. Running Commander4
 Commander4 has to be run with MPI, and a parameter file has to be indicated using the `-p` argument. Example usage:
 ```
-mpirun -n 27 commander4 -p params/Planck_mapsonly/param_LFI+HFI+WMAP.yml
+mpirun -n 28 commander4 -p params/Planck_mapsonly/param_LFI+HFI+WMAP.yml
 ```
 The number of MPI ranks **must match the parameter file**. To quickly check how many MPI ranks you must use for any given parameter file, you can run `c4-validate-params path/to/params.yml`. The number of ranks needed is split among component separation (which always requires 1 rank per I- and QU-band specified in the `compsep` section of the parameter file) and TOD processing (where any number of ranks can be allocated in the `experiments` section of the parameter file).
 
@@ -159,7 +159,7 @@ mcmc/<group>/{numstep,n_accept,accept_rate}             # Metropolis-Hastings ac
 mcmc/<group>/params/<comp>            # the accepted parameter value per component
 ```
 
-`gibbs.init_from_chain` restarts from a chain: the TOD side reads the per-scan quantities out of a `chains_bands/` file, and each component's `init_from` reads its alms out of a `chains_compsep/` one.
+The chain files are also what a run restarts from. `gibbs.chain_status: append` continues the chains in `output.dir` after their newest complete iteration, and `gibbs.init_chain: "<dir>[:<iteration>]"` starts new chains from another run (Commander3's `CHAIN_STATUS` and `INIT_CHAIN`). Each class reads back its own sampled state: `TODSamples.read_chain` the gains, noise parameters and accept flags of a `chains_bands/` file, and each component's `read_chain` its amplitudes and sampled spectral parameters from a `chains_compsep/` file. Files are written under a `.tmp` name and renamed when complete, so a crash never leaves a half-written file under its final name. See `notes/chain_initialization.md`.
 
 
 # 3. Development / Contributing
@@ -373,6 +373,11 @@ c4-cmb-realizations path/to/output-dir/ --burn-in 100 --n-realizations 10 --mask
 See `c4-cmb-realizations --help` and the
 [module documentation](src/commander4/standalone_tools/constrained_cmb_realizations.py) for details.
 
+### 4.6 Scan distribution
+Commander4 reads Commander3's filelists, `scan_id "path" weight theta phi`, optionally with each scan's `ntod` as a 6th column, which Commander3 ignores. theta and phi are the scan's pointing-plane normal: the normal of the plane that best fits a detector's pointing over the scan, which is the spin axis for a spinning satellite and the patch centre for a ground-based scan of a small patch. Commander4 splits each band's scans between the band's ranks by this normal, so that each rank's scans overlap on the sky, and by ntod, so that each rank gets about the same amount of data (`split_by_sky_position` in `file_io/tod_reader.py`).
+- The split uses only what every selected row has: without ntod, every scan gets weight 1; without a normal (theta and phi both 0), every scan gets the same one. Without both, the scans are split into equal blocks in time. The theta and phi of 5-column filelists are not used: the older converters' method can put them far off.
+- Rows with ntod 0 mark scans without data in their file, and are skipped.
+- The split of the ranks between bands (`band_weight: "auto"`) uses the filelists' ntod if every band's filelist has it, and otherwise the number of scans times detectors.
 
 
 # 5. Benchmarking and optimization

@@ -1,15 +1,15 @@
-"""Reading a component's initial amplitudes from a chain file or a FITS map.
+"""Reading a component's amplitudes from a FITS map, and picking a view's rows of stored data.
 
-Used by `DiffuseComponent` and `CompList` to initialize from an earlier run (`init_chain_path`) or
-from an external map (`init_from`). The fiddly part these helpers own is deciding which rows of a
-stored (npol, ...) array correspond to the polarization view being initialized.
+`CompList` uses the FITS reader for a component's `init_from` map and its `amp_prior_mean_map`.
+Reading a chain file is each component's own `read_chain`. The fiddly part both share, and which
+lives here, is deciding which rows of a stored (npol, ...) array correspond to the polarization
+view being initialized.
 """
 from __future__ import annotations
 
 import logging
 import typing
 
-import h5py
 import healpy as hp
 import numpy as np
 from numpy.typing import NDArray
@@ -48,27 +48,6 @@ def _pol_row_indices(data: NDArray, eval_pol: str, shortname: str, source_path: 
     return [row_of[channel] for channel in _POL_CHANNELS[eval_pol]]
 
 
-def _read_view_alms_from_chain(comp: DiffuseComponent, chain_path: str) -> NDArray | None:
-    """This view's alms from a compsep chain (``comps/<shortname>/alms``), or None if not present.
-
-    A missing component is logged as an error (but not fatal); a component present without this
-    view's polarization is a benign partial initialization and only debug-logged.
-    """
-    with h5py.File(chain_path, "r") as f:
-        group_path = f"comps/{comp.shortname}"
-        if group_path not in f or "alms" not in f[group_path]:
-            logger.error(f"Component {comp.comp_name!r} (shortname {comp.shortname!r}) not found in "
-                         f"init chain {chain_path!r}; leaving its alms at zero.")
-            return None
-        stored_alms = f[f"{group_path}/alms"][()]
-    rows = _pol_row_indices(stored_alms, comp.eval_pol, comp.shortname, chain_path)
-    if rows is None:
-        logger.debug(f"Init chain {chain_path!r} has no {comp.eval_pol!r} data for component "
-                     f"{comp.comp_name!r}; leaving those alms at zero.")
-        return None
-    return project_alms(np.ascontiguousarray(stored_alms[rows]), comp.lmax)
-
-
 def _read_view_alms_from_fits(comp: DiffuseComponent, fits_path: str) -> NDArray | None:
     """This view's alms from a FITS sky map (transformed), or None if its polarization isn't present.
 
@@ -95,47 +74,3 @@ def _read_view_alms_from_fits(comp: DiffuseComponent, fits_path: str) -> NDArray
     alm_temp = pseudo_alm_to_map_inverse(view_map, nside, effective_lmax,
                             spin = 0 if view_map.shape[0] == 1 else 2, epsilon = 1e-8, maxiter = 5)
     return project_alms(alm_temp, comp.lmax)
-
-
-def _restore_sampled_sed_params_from_chain(comp: DiffuseComponent, chain_path: str) -> None:
-    """Set `comp`'s *sampled* SED parameters from a chain's ``comps/<shortname>/sed/`` group.
-
-    Only parameters the run is configured to *sample* are restored. Fixed ones (``nu_ref``, ``T``)
-    stay under the parameter file's control, so changing one there is not silently overridden by
-    the chain.
-    """
-    if "sample_spectral_index" not in comp.comp_params \
-            or not bool(comp.comp_params.sample_spectral_index):
-        return
-    with h5py.File(chain_path, "r") as f:
-        sed_group = f[f"comps/{comp.shortname}/sed"]
-        # `beta` is currently the only sampled SED parameter, so it is the only one restored.
-        for param_name in comp.sed_param_names:
-            if param_name != "beta":
-                continue
-            value = sed_group[param_name][()]
-            logger.info(f"Component {comp.comp_name!r} ({comp.eval_pol}): restored sampled "
-                        f"{param_name} = {value} from {chain_path!r} (parameter file said "
-                        f"{getattr(comp, param_name)}).")
-            setattr(comp, param_name, float(value))
-
-
-def _load_component_alms(comp: DiffuseComponent, source_path: str) -> None:
-    """Set `comp`'s initial alms from `source_path`, dispatching on its file type.
-
-    ``.h5``/``.hd5`` files are read as compsep chains (alms *and* the sampled SED parameters taken
-    directly); ``.fits`` files are read as sky maps and transformed to alms, and carry no SED
-    information. If the source does not contain this component or its polarization, the alms are
-    left at their initial value (zeros).
-    """
-    lower_path = str(source_path).lower()
-    if lower_path.endswith((".h5", ".hd5")):
-        view_alms = _read_view_alms_from_chain(comp, source_path)
-        _restore_sampled_sed_params_from_chain(comp, source_path)
-    elif lower_path.endswith(".fits"):
-        view_alms = _read_view_alms_from_fits(comp, source_path)
-    else:
-        raise ValueError(f"Unsupported init file {source_path!r} for component "
-                         f"{comp.comp_name!r}: expected a .h5/.hd5 chain or a .fits map.")
-    if view_alms is not None:
-        comp.alms = view_alms.astype(comp.dtype, copy=False)

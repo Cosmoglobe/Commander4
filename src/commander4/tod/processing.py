@@ -7,10 +7,13 @@ iteration starts by reading the config objects defined in `tod/config.py`.
 """
 import numpy as np
 import logging
+import os
 import time
 
 from pixell.bunch import Bunch
 
+from commander4.file_io import paths
+from commander4.file_io.chain_restart import ChainStart
 from commander4.parameters.schema import resolve_param
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
@@ -35,14 +38,16 @@ from commander4.diagnostics.performance import benchmark, bench_summary, bench_r
 logger = logging.getLogger(__name__)
 
 
-def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, DetectorGroupTOD,
-                                                                 TODSamples, TODSamples]:
+def init_tod_processing(mpi_info: Bunch, params: Bunch, start: ChainStart) \
+        -> tuple[Bunch, str, DetectorGroupTOD, TODSamples, TODSamples]:
     """To be run once before starting TOD processing. Determines what data this rank is responsible
-    for, reads other relevant parameter file data, and allocates the TODSamples objects, 
+    for, reads other relevant parameter file data, and allocates the TODSamples objects, which
+    start from a saved sample where `start` names one for this band.
 
     Input:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
         params (Bunch): The full input parameter file.
+        start (ChainStart): Where the two chains start (see `file_io.chain_restart`).
 
     Output:
         mpi_info (Bunch): The data structure containing all MPI relevant data,
@@ -77,6 +82,15 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch) -> tuple[Bunch, str, Det
 
     tod_samples_chain1 = TODSamples(experiment_data, params, my_band, band_comm, 1)
     tod_samples_chain2 = TODSamples(experiment_data, params, my_band, band_comm, 2)
+    # Continue from a saved sample, if the run starts from one and it holds this band. A band the
+    # saved run never wrote keeps its parameter-file start (`resolve_chain_start` warns about it).
+    if start.source_dir is not None:
+        for tod_samples in (tod_samples_chain1, tod_samples_chain2):
+            chain_file = paths.band_chain_file(
+                start.source_dir, experiment_data.experiment_name, experiment_data.band_name,
+                start.source_chain[tod_samples.chain], start.source_iteration)
+            if os.path.exists(chain_file):
+                tod_samples.read_chain(chain_file)
 
     # Build the band's map-distribution PixelDomain once, here:
     # If we're using dense per-rank maps nothing of note is done here.
@@ -235,7 +249,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
         with benchmark("filewrite-band"):
             write_band_chain_to_file(params, chain, iter, experiment_data.experiment_name,
                                      experiment_data.band_name, tod_arrays, maps_to_file,
-                                     tod_samples.band_unit_factor, tod_samples.band_unit)
+                                     tod_samples.band_unit_factor)
 
     with benchmark("end-barrier"):
         tod_comm.Barrier()

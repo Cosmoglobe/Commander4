@@ -11,7 +11,13 @@ from commander4.cli import gibbs_schedule, seed_iteration_rng
 
 
 def test_chains_alternate_within_each_iteration():
-    assert gibbs_schedule(3) == [(1, 1), (2, 1), (1, 2), (2, 2), (1, 3), (2, 3)]
+    assert gibbs_schedule(1, 3) == [(1, 1), (2, 1), (1, 2), (2, 2), (1, 3), (2, 3)]
+
+
+def test_a_continued_chain_samples_only_the_missing_iterations():
+    """`num_iterations` is the chains' total length, as Commander3's NUM_GIBBS_ITER."""
+    assert gibbs_schedule(3, 4) == [(1, 3), (2, 3), (1, 4), (2, 4)]
+    assert gibbs_schedule(5, 4) == []
 
 
 def _mpi_info(side: str = "tod", rank: int = 3) -> Bunch:

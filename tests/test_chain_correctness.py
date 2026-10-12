@@ -9,6 +9,7 @@ from pixell.bunch import Bunch
 
 from commander4.data_models.tod_samples import TODSamples
 from commander4.file_io import paths
+from commander4.units import rj_to_band_unit_factor
 from commander4.file_io.chain_writer import (
     write_band_chain_to_file,
     write_compsep_chain_to_file,
@@ -52,7 +53,8 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2) -> TODSamples:
     s = TODSamples.__new__(TODSamples)
     s.params, s.chain, s.band_comm = _params(), 1, MPI.COMM_SELF
     s.nscans, s.ndet, s.npar = nscans, ndet, 3
-    s.experiment_name, s.band_name = "EXP", "B"
+    s.experiment_name, s.band_name, s.nu = "EXP", "B", 100.0
+    s.hfi_demodulation = False
     s.scan_ids = np.arange(nscans, dtype=np.int64)
     s.det_names = [f"d{i}" for i in range(ndet)]
     s.band_unit_factor, s.band_unit = 1.0, "uK_RJ"
@@ -85,18 +87,51 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2) -> TODSamples:
     return s
 
 
-def test_the_band_file_carries_every_dataset_a_restart_reads_back() -> None:
-    """`TODSamples.__init__` reads these unconditionally, so the gather has to produce them all.
+@pytest.mark.parametrize("hfi", [False, True])
+def test_a_restart_reads_back_the_sampled_state(tmp_path, hfi: bool) -> None:
+    """Gather, write and `read_chain` give back every sampled quantity.
 
-    A dataset dropped from the gather turns a restart into a `KeyError`, which is the whole reason
-    the reader is allowed to be unconditional. This list mirrors the reads in `__init__`.
+    The reading rank holds its scans and lists its detectors in another order than the writer,
+    and the file quotes its gains in uK_CMB: the reader matches scans by ID and detectors by name,
+    and converts the gains back to uK_RJ.
     """
-    read_back = {"scan_ids", "abs_gain", "detrel_gain", "temporal_gain", "noise_params",
-                 "accept", "chisq_z", "good_fraction"}
+    params = _params(str(tmp_path))
+    paths.create_output_dirs(params.output)
+    rng = np.random.default_rng(1)
+    saved = _minimal_tod_samples(nscans=4, ndet=3)
+    saved.band_unit = "uK_CMB"
+    saved.band_unit_factor = rj_to_band_unit_factor(saved.nu, "uK_CMB")
+    saved.abs_gain = 2.0
+    saved.rel_gain = rng.normal(size=3)
+    saved.temporal_gain = rng.normal(size=(4, 3))
+    saved.noise_params = rng.normal(size=(4, 3, saved.npar))
+    saved.accept = rng.random((4, 3)) > 0.5
+    saved.hfi_demodulation = hfi
+    saved.modulation_phase = rng.choice([-1, 1], size=(4, 3)).astype(np.int8)
+    saved.baselines = rng.normal(size=(4, 3, 2))
+    path = _write_band(params, saved.gather_chain_arrays(1),
+                       band_unit_factor=saved.band_unit_factor)
 
-    written = set(_minimal_tod_samples().gather_chain_arrays(1))
+    restored = _minimal_tod_samples(nscans=4, ndet=3)
+    scan_order, det_order = [2, 0, 3, 1], [2, 0, 1]
+    restored.scan_ids = saved.scan_ids[scan_order]
+    restored.det_names = [saved.det_names[i] for i in det_order]
+    restored.hfi_demodulation = hfi
+    restored.modulation_phase = np.ones((4, 3), dtype=np.int8)
+    restored.baselines = np.zeros((4, 3, 2))
+    restored.modulation_phase_initialized = False
+    restored.read_chain(path)
 
-    assert read_back <= written, f"a restart would fail on {sorted(read_back - written)}"
+    assert restored.abs_gain == pytest.approx(saved.abs_gain)
+    np.testing.assert_allclose(restored.rel_gain, saved.rel_gain[det_order])
+    names = ["temporal_gain", "noise_params", "accept"]
+    if hfi:
+        names += ["modulation_phase", "baselines"]
+    for name in names:
+        expected = getattr(saved, name)[scan_order][:, det_order]
+        np.testing.assert_allclose(getattr(restored, name), expected, err_msg=name)
+        assert getattr(restored, name).dtype == expected.dtype, name
+    assert restored.modulation_phase_initialized == hfi
 
 
 def test_per_scan_datasets_are_written_in_time_order() -> None:
@@ -272,6 +307,8 @@ def test_band_file_holds_the_tod_samples_and_the_maps_together(tmp_path) -> None
         assert handle["metadata/map_fwhm_arcmin"][()] == 30.0
         assert "map_fwhm_arcmin" not in handle["maps"]
     assert not (tmp_path / "chains_datamaps").exists()
+    # The file was written under a temporary name and renamed once complete.
+    assert os.listdir(paths.subdir(params, paths.CHAINS_BANDS)) == [os.path.basename(path)]
 
 
 def test_maps_interval_thins_the_group_but_not_the_file(tmp_path) -> None:
@@ -304,7 +341,7 @@ def test_hit_counts_are_summed_when_degraded_and_left_unit_free(tmp_path) -> Non
     paths.create_output_dirs(params.output)
 
     path = _write_band(params, maps_to_file={"nhit": np.full(48, 5, dtype=np.int64)},
-                       band_unit_factor=3.0, band_unit="uK_CMB")
+                       band_unit_factor=3.0)
 
     with h5py.File(path) as handle:
         written = handle["maps/nhit"][:]

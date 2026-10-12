@@ -77,7 +77,6 @@ import matplotlib.pyplot as plt
 
 from commander4.file_io import paths
 from commander4.parameters.bunch import as_bunch_recursive
-from commander4.sky.comp_io import _read_view_alms_from_chain
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import CMB, DiffuseComponent
 from commander4.sky.sky_model import SkyModel
@@ -437,26 +436,23 @@ def _build_intensity_components(params: Bunch, compsep_path: str) -> list[Diffus
     intensity_comps = comp_list.components_for_eval_pol("I")
     with h5py.File(compsep_path, "r") as handle:
         for comp in intensity_comps:
-            alms = _read_view_alms_from_chain(comp, compsep_path)
-            if alms is None:
-                raise ValueError(f"Component {comp.comp_name!r} has no intensity alms in "
-                                 f"{compsep_path!r}.")
-            comp.alms = alms
             group_path = f"comps/{comp.shortname}"
-            for param_name in comp.sed_param_names:
-                dataset = f"{group_path}/sed/{param_name}"
+            required = ["alms", "amp_fwhm_arcmin"]
+            required += [f"sed/{param_name}" for param_name in comp.sed_param_names]
+            for name in required:
+                dataset = f"{group_path}/{name}"
                 if dataset not in handle:
                     raise ValueError(f"Missing component state {dataset!r} in {compsep_path!r}.")
-                # The component resolver expects a Python scalar or an [I, QU] list, whereas
-                # HDF5 supplies numpy scalars/arrays. Select I before evaluating any SED.
-                value = np.asarray(handle[dataset][()]).tolist()
+            # The intensity alms and the beam they carry, read as the component reads its own
+            # chain group. SkyModel subtracts that beam in quadrature from the requested band
+            # beam, so restoring it prevents smoothing the already-smoothed amplitudes twice.
+            comp.read_chain(handle[group_path])
+            # `read_chain` restores only the sampled SED parameters; here the saved values of
+            # all of them define the foregrounds to subtract. The component resolver expects a
+            # Python scalar or an [I, QU] list, whereas HDF5 supplies numpy scalars/arrays.
+            for param_name in comp.sed_param_names:
+                value = np.asarray(handle[f"{group_path}/sed/{param_name}"][()]).tolist()
                 setattr(comp, param_name, comp._per_pol(value))
-            dataset = f"{group_path}/amp_fwhm_arcmin"
-            if dataset not in handle:
-                raise ValueError(f"Missing component state {dataset!r} in {compsep_path!r}.")
-            # SkyModel subtracts this beam in quadrature from the requested band beam.
-            # Restoring it prevents smoothing the already-smoothed amplitudes a second time.
-            comp.amp_fwhm_rad = np.radians(float(handle[dataset][()]) / 60.0)
     return intensity_comps
 
 

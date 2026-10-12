@@ -6,7 +6,9 @@ the interface (`get_sed`, `realize_as_map`, ...) that the samplers call. The con
 next to this file: `diffuse_components.py` and `point_sources.py`.
 """
 from copy import deepcopy
+import logging
 
+import h5py
 import numpy as np
 from mpi4py import MPI
 from pixell.bunch import Bunch
@@ -15,6 +17,8 @@ from commander4.polarization import assert_pol_supported
 from commander4.math_utils.arithmetic import dot, inplace_arr_add,\
         inplace_arr_sub, inplace_arr_prod, inplace_arr_truediv
 from commander4.parameters.schema import resolve_param
+
+logger = logging.getLogger(__name__)
 
 class Component:
     """Abstract base class for every sky component.
@@ -172,6 +176,58 @@ class Component:
         mean that can be read from a sky map.
         """
         return None
+
+    def write_chain(self, group: h5py.Group, band_frequencies: dict[str, float]) -> None:
+        """Write this component's sample into its chain group, `comps/<shortname>/`.
+
+        Writes what every component shares; subclasses add their amplitudes. `band_frequencies`
+        maps each band name to its centre frequency in GHz, for the per-band mixing coefficients.
+        """
+        group["comp_name"] = self.comp_name
+        group["shortname"] = self.shortname
+        # The beam these amplitudes carry, in arcmin. This is 0.0 if the CG compsep was used,
+        # as it solves for the intrinsic sky. However, if the per-pix compsep solver was used,
+        # the sky components are smoothed to this resolution.
+        group["amp_fwhm_arcmin"] = np.degrees(self.amp_fwhm_rad)*60.0
+        # The SED parameters this component type declares (see `sed_param_names`), so the chain
+        # records the sampled spectral indices and everything else needed to evaluate the SED.
+        # `nu_ref` may be a per-polarization array, hence no float() cast. A parameter the
+        # component leaves unset (None) is not written.
+        for param_name in self.sed_param_names:
+            value = getattr(self, param_name)
+            if value is not None:
+                group[f"sed/{param_name}"] = value
+        # The mixing "matrix", C3's mixmat_<comp>_<band>. C4 indices are scalar, so a
+        # component's whole mixing matrix at a band is the single number `get_sed(nu)`.
+        for band_name, nu in band_frequencies.items():
+            group[f"mixing/{band_name}"] = self.get_sed(nu)
+        if self.defined_pol is not None:
+            group["defined_pol"] = self.defined_pol
+        if self.eval_pol is not None:
+            group["eval_pol"] = self.eval_pol
+
+    def read_chain(self, group: h5py.Group) -> None:
+        """Restore this component's sampled state from its chain group, as `write_chain` wrote it.
+
+        Only what a sampler changes is restored. Fixed parameters keep the parameter-file value,
+        so an edit there takes effect when a new run starts from another run's chain. The group
+        holds the joined component (I and QU together), while `self` may be one polarization view.
+
+        This base version restores the amplitudes' beam and `beta`. The spectral-index sampler
+        samples `beta` on any component that has one and sets `sample_spectral_index`, so the
+        same switch decides here. Subclasses add their amplitudes. A subclass with more sampled
+        state (e.g. the spline-node amplitudes of a full-frequency dust model) restores it in its
+        own override, gated by the switch its sampler uses, and rebuilds anything derived from it.
+        """
+        self.amp_fwhm_rad = np.radians(float(group["amp_fwhm_arcmin"][()])/60.0)
+        if hasattr(self, "beta") and "sample_spectral_index" in self.comp_params \
+                and self.comp_params.sample_spectral_index:
+            beta = np.asarray(group["sed/beta"][()])
+            if beta.ndim == 1:  # Joined I and QU views with different values store [I, QU].
+                beta = beta[0 if self.eval_pol == "I" else 1]
+            self.beta = float(beta)
+            logger.debug(f"Component {self.comp_name!r} ({self.eval_pol}): restored sampled "
+                         f"beta = {self.beta}.")
 
     def _apply_array_op(self, other: "Component", arr_op, *, inplace: bool) -> "Component":
         self._assert_consistent_comp(other)

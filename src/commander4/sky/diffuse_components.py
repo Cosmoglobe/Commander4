@@ -4,8 +4,11 @@ A diffuse component stores its amplitudes as spherical-harmonic coefficients and
 spectral energy distribution (SED) per band. `DiffuseComponent` holds everything common to that
 representation; the classes after it differ only in their SED and its spectral parameters.
 """
+import logging
+
 import astropy.constants as c
 import astropy.units as u
+import h5py
 import healpy as hp
 import numpy as np
 import pysm3.units as pysm3u
@@ -15,10 +18,13 @@ from scipy.interpolate import interp1d
 
 from commander4.data_models.band import Band
 from commander4.sky.component import Component
+from commander4.sky.comp_io import _pol_row_indices
 from commander4.polarization import get_npol
 from commander4.math_utils.arithmetic import inplace_scale, inplace_add_scaled_vec
 from commander4.math_utils.alm import project_alms, almxfl, _dot_complex_alm_1D_arrays
 from commander4.math_utils.sht import alm_to_map, map_to_alm, alm_to_map_adjoint, map_to_alm_adjoint
+
+logger = logging.getLogger(__name__)
 
 # Blackbody and thermodynamic-to-brightness conversions shared by the SEDs below.
 A = (2*c.h*u.GHz**3/c.c**2).to('MJy').value
@@ -303,6 +309,40 @@ class DiffuseComponent(Component):
             raise ValueError(f"Component {self.comp_name!r}: prior mean has shape {alms.shape}, "
                              f"expected {(self.npol, self.alm_len_complex)}.")
         self._amp_prior_mean_alms = alms
+
+    def write_chain(self, group: h5py.Group, band_frequencies: dict[str, float]) -> None:
+        """Write the shared component sample (see `Component.write_chain`), plus the alms."""
+        super().write_chain(group, band_frequencies)
+        group["alms"] = self.alms
+        # The realized power spectrum of those alms (Commander3's `sigma_l`) and the lmax they run
+        # to. Free -- alm2cl needs no transform -- and it saves every reader the alm2cl themselves.
+        group["sigma_l"] = self.sigma_l
+        group["lmax"] = self.lmax
+        # The C(l) prior's model parameters (Commander3's Dl_amp/Dl_beta/Dl_theta), not the
+        # evaluated spectrum: the evaluated one is reconstructible, and `sigma_l` above already
+        # records the realized power. A `None` amplitude means the prior is off (C3 CL_TYPE none),
+        # which writes no amplitude, exactly as C3 does.
+        for param_name in self.Cl_prior_param_names:
+            value = getattr(self, param_name)
+            if value is not None:
+                group[f"Cl_prior/{param_name}"] = value
+
+    def read_chain(self, group: h5py.Group) -> None:
+        """Restore the shared sampled state (see `Component.read_chain`), plus this view's alms.
+
+        The stored alms are those of the joined component, so only the rows of this view's
+        polarization are taken, and they are cut or zero-padded to this component's lmax. If the
+        file lacks this view's polarization, the alms keep their current value.
+        """
+        super().read_chain(group)
+        stored_alms = group["alms"][()]
+        rows = _pol_row_indices(stored_alms, self.eval_pol, self.shortname, group.file.filename)
+        if rows is None:
+            logger.debug(f"{group.file.filename!r} has no {self.eval_pol!r} alms for component "
+                         f"{self.comp_name!r}; leaving those alms unchanged.")
+            return
+        view_alms = project_alms(np.ascontiguousarray(stored_alms[rows]), self.lmax)
+        self.alms = view_alms.astype(self.dtype, copy=False)
 
     def _realize_alms_as_map(self, component_alms, nside: int, fwhm: float = 0):
         """Realize component alms as a map.
