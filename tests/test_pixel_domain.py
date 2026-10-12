@@ -55,9 +55,9 @@ class _FakeScanView:
     """Minimal stand-in exposing the only thing PixelDomain.from_view touches: view.pix."""
     def __init__(self, pix_arrays):
         self._pix_arrays = pix_arrays
-    def iter_focused(self, *, accepted_only=False):
+    def map(self, func, *args, step, accepted_only=False):
         for pix in self._pix_arrays:
-            yield _FakeView(pix)
+            yield func(_FakeView(pix), *args)
 
 def test_from_view_numbers_pixels_in_visit_order():
     """Each observed pixel appears once, in the order the detector-scans first reach it."""
@@ -174,9 +174,8 @@ def test_binned_maps_sparse_match_full(pols, response_I_P):
     for domain in (PixelDomain(MPI.COMM_SELF, nside, "full"),
                    PixelDomain.from_view(_FakeScanView([pix]), MPI.COMM_SELF, "sparse", nside)):
         binned = BinnedMapmaker(domain, pols, ["signal", "aux"], count_hits=True)
-        binned.accumulate(2.5, domain.to_local(pix), psi, {"signal": tod, "aux": 2.0*tod},
-                          response_I_P)
-        binned.count_hits(domain.to_local(pix))
+        binned.add_scan(binned.bin_scan(2.5, domain.to_local(pix), psi, np.stack([tod, 2.0*tod]),
+                                        response_I_P))
         binned.finalize()
         results.append(binned)
     full, sparse = results

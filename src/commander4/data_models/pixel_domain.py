@@ -57,6 +57,12 @@ class DistributedMap:
     full: NDArray | None
 
 
+def _visit_order(view) -> NDArray:
+    """The distinct pixels of one detector-scan, in the order the scan first reaches them."""
+    pix, first = np.unique(view.pix, return_index=True)
+    return pix[np.argsort(first)]
+
+
 class PixelDomain:
     """Owns a rank's local pixel set and the MPI that maps local map buffers to a full-sky map.
 
@@ -126,10 +132,7 @@ class PixelDomain:
         # Each detector-scan's distinct pixels, in the order that scan first reaches them, joined in
         # processing order. The first appearance of a pixel in this list is its first visit. The
         # empty array gives a rank without detector-scans an empty domain.
-        visits = [np.zeros(0, dtype=np.int64)]
-        for view in scan_view.iter_focused():
-            pix, first = np.unique(view.pix, return_index=True)
-            visits.append(pix[np.argsort(first)])
+        visits = [np.zeros(0, dtype=np.int64), *scan_view.map(_visit_order, step="pixel-domain")]
         pix, first = np.unique(np.concatenate(visits), return_index=True)
         local_pix = pix[np.argsort(first)]
         return cls(comm, nside, "sparse", local_pix=local_pix)

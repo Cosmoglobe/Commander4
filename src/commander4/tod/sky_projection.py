@@ -7,7 +7,7 @@ kernels are threaded over samples (`prange`): the map is read-only, so each samp
 and every gain step plus the mapmaker re-evaluates them for every detector-scan.
 """
 import logging
-import os
+import threading
 
 import ducc0
 import numpy as np
@@ -17,6 +17,7 @@ from numpy.typing import NDArray
 
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.threads import library_nthreads
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ C = 299792458  # m/s (Speed of light)
 T_CMB_div_C = T_CMB / C
 # Precomputing the conversion factor from 1 uK_CMB to 1 uK_RJ
 uK_CMB_to_uK_RJ_dict = {}
+_unit_lock = threading.Lock()
 
 
 def project_sky_to_tod(det_compsep_map: NDArray[np.floating], pix: NDArray[np.integer],
@@ -127,7 +129,7 @@ def get_s_orb_tod(det: DetectorTOD, experiment: DetectorGroupTOD, pix: NDArray[n
         experiment (DetectorGroupTOD): Experiment-level data (provides nu and nside).
         pix (NDArray[np.integer]): Decompressed pixel indices for this detector.
         nthreads (int, optional): Number of threads for HEALPix operations.
-            Defaults to the OMP_NUM_THREADS environment variable.
+            Defaults to `library_nthreads()`.
 
     Returns:
         NDArray: Orbital dipole signal in uK_RJ, shape ``(npix,)``.
@@ -140,10 +142,12 @@ def get_s_orb_tod(det: DetectorTOD, experiment: DetectorGroupTOD, pix: NDArray[n
     if resp_I == 0.0:  # Polarization-only detectors short-curcuit to no dipole.
         return np.zeros(pix.shape, dtype=np.float32)
 
-    # If nthreads is not set, put it to how many threads OMP has.
-    nthreads = int(os.environ["OMP_NUM_THREADS"]) if nthreads is None else nthreads
-    if experiment.nu not in uK_CMB_to_uK_RJ_dict:
-        uK_CMB_to_uK_RJ_dict[experiment.nu] = (1*pysm3_u.uK_CMB).to(pysm3_u.uK_RJ,
+    nthreads = library_nthreads() if nthreads is None else nthreads
+    # The lock keeps scan workers from filling the dict together: astropy's unit conversions have
+    # not been declared safe to run from several threads at once.
+    with _unit_lock:
+        if experiment.nu not in uK_CMB_to_uK_RJ_dict:
+            uK_CMB_to_uK_RJ_dict[experiment.nu] = (1*pysm3_u.uK_CMB).to(pysm3_u.uK_RJ,
                         equivalencies=pysm3_u.cmb_equivalencies(experiment.nu*pysm3_u.GHz)).value
     geom = ducc0.healpix.Healpix_Base(experiment.nside, "RING")
     LOS_vec = geom.pix2vec(pix, nthreads=nthreads)

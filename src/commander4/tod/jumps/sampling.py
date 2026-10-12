@@ -26,6 +26,28 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _detect_scan_jumps(view: TODView,
+                       jump_detection_cfg: JumpDetectionConfig) -> tuple[JumpEvents, int]:
+    """Detect the jumps of one detector-scan and store them in `tod_samples.jumps`.
+
+    Runs in the scan workers (`TODView.map`). Returns the jumps and the number of flagged regions
+    skipped for lack of valid samples around them.
+    """
+    jumps, num_skipped = JumpEvents.empty(), 0
+    # The sky model is only built where jumps are flagged, which is a small part of the data.
+    if np.any(view.flag & jump_detection_cfg.jump_bitmask):
+        # The sky model may hold a little of the jump itself, but that error is smaller than
+        # taking the sky change across the jump into the offset.
+        sky_tod = view.get_static_sky_tod() + view.get_orbital_dipole_tod()
+        residual = view.raw_tod - view.get_gain() * sky_tod
+        jumps, num_skipped = _detect_jumps(residual, view.flag,
+                                           view.get_mask(proc_mask_type="jump"),
+                                           jump_detection_cfg.window,
+                                           jump_detection_cfg.jump_bitmask)
+    view.tod_samples.jumps[view.iscan, view.idet] = jumps
+    return jumps, num_skipped
+
+
 def sample_jump_detection(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
                           tod_samples: TODSamples, compsep_output: NDArray,
                           jump_detection_cfg: JumpDetectionConfig, iteration: int) -> TODSamples:
@@ -49,19 +71,8 @@ def sample_jump_detection(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD
     offsets_local = []
     jump_counts_local = []
 
-    for view in scan_view.iter_focused():
-        jumps, num_skipped = JumpEvents.empty(), 0
-        # The sky model is only built where jumps are flagged, which is a small part of the data.
-        if np.any(view.flag & jump_detection_cfg.jump_bitmask):
-            # The sky model may hold a little of the jump itself, but that error is smaller than
-            # taking the sky change across the jump into the offset.
-            sky_tod = view.get_static_sky_tod() + view.get_orbital_dipole_tod()
-            residual = view.raw_tod - view.get_gain() * sky_tod
-            jumps, num_skipped = _detect_jumps(residual, view.flag,
-                                               view.get_mask(proc_mask_type="jump"),
-                                               jump_detection_cfg.window,
-                                               jump_detection_cfg.jump_bitmask)
-        tod_samples.jumps[view.iscan, view.idet] = jumps
+    for jumps, num_skipped in scan_view.map(_detect_scan_jumps, jump_detection_cfg,
+                                            step="jumps"):
         jump_counts_local.append(jumps.num_events)
         num_skipped_local += num_skipped
         if jumps.num_events > 0:

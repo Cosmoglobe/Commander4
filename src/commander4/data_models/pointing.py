@@ -7,10 +7,10 @@ detector's focal-plane and polarization-angle offsets, and `PixelPointing` is th
 import numpy as np
 from numpy.typing import NDArray
 import ducc0
-import os
 from pixell.bunch import Bunch
 from pixell import coordsys
 from commander4.backend import compression as cpp_compression
+from commander4.threads import library_nthreads
 
 
 def remap_pix_nside(pix: NDArray[np.integer], nside_from: int, nside_to: int,
@@ -21,11 +21,11 @@ def remap_pix_nside(pix: NDArray[np.integer], nside_from: int, nside_to: int,
         pix: RING pixel indices at ``nside_from``.
         nside_from: The nside the indices are given at.
         nside_to: The nside to convert them to.
-        nthreads: Threads to use; defaults to the OMP_NUM_THREADS environment variable.
+        nthreads: Threads to use; defaults to `library_nthreads()`.
     """
     if nside_from == nside_to:
         return pix
-    nthreads = int(os.environ.get("OMP_NUM_THREADS", 1)) if nthreads is None else nthreads
+    nthreads = library_nthreads() if nthreads is None else nthreads
     geom_from = ducc0.healpix.Healpix_Base(nside_from, "RING")
     geom_to = ducc0.healpix.Healpix_Base(nside_to, "RING")
     return geom_to.ang2pix(geom_from.pix2ang(pix, nthreads=nthreads), nthreads=nthreads)
@@ -128,9 +128,8 @@ class ScanBoresightPointing:
         ptg = np.empty((dec.size, 2), dtype=np.float64)
         ptg[:, 0] = np.pi/2.0 - dec
         ptg[:, 1] = ra
-        nthreads = int(os.environ.get("OMP_NUM_THREADS", 1))
         geom = ducc0.healpix.Healpix_Base(target_nside, "RING")
-        pix = geom.ang2pix(ptg, nthreads=nthreads)
+        pix = geom.ang2pix(ptg, nthreads=library_nthreads())
         psi = psi.astype(np.float32, copy=False)[:self.ntod]
         return pix, psi
 

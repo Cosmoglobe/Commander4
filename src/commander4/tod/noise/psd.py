@@ -42,13 +42,15 @@ def _oof_loglike_grid(frequency_factor: NDArray, grid_factor: NDArray,
     return result
 
 
-def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray) -> float:
+def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray,
+                          rng: np.random.Generator | None = None) -> float:
     """ Performs 1D inversion sampling on a grid. This involves calculating the cumulative
         log-likelihood, normalizing this to be contained in [0,1], drawing a random number in [0,1],
         and matching that to a (interpolated) grid point.
     Args:
         lnL (np.ndarray): Array of log-likelihood values at each grid point.
         grid_points (np.ndarray): The corresponding parameter values for each grid point.
+        rng: Random generator for the draw; None uses the global ``np.random``.
     Returns:
         sample (float): A single random sample drawn from the provided distribution.
     """
@@ -56,7 +58,7 @@ def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray) -> float:
     L = np.exp(lnL)  # Calculate the linear likelihood.
     cdf = np.cumsum(L)  # Cumulative likelihood.
     cdf /= cdf[-1]  # Constrain it to [0,1].
-    u = np.random.uniform(0, 1)
+    u = (np.random if rng is None else rng).uniform(0, 1)
     sample = np.interp(u, cdf, grid_points)  # Find the x-value that matches the y-value we drew.
     return sample
 
@@ -182,7 +184,7 @@ class NoisePSD:
         return out
 
     def sample_params(self, residual: NDArray, noise_params: NDArray, fsamp: float, *,
-                      bin_psd: bool = False) -> NDArray:
+                      bin_psd: bool = False, rng: np.random.Generator | None = None) -> NDArray:
         """Draw a new sample of the model parameters (except ``sigma0`` at index 0).
 
         The fit is performed against the periodogram of the sky-subtracted *residual* TOD (with
@@ -198,6 +200,7 @@ class NoisePSD:
             fsamp: Sampling rate of *residual* (Hz).
             bin_psd: If True, fit a log-binned periodogram (each bin Whittle-weighted by its mode
                 count); if False, fit every Fourier mode in range (default).
+            rng: Random generator for the draws; None uses the global ``np.random``.
         Returns:
             A new ``noise_params`` array with the updated parameter values.
         """
@@ -281,7 +284,7 @@ class NoisePSDOof(NoisePSD):
         return vals
 
     def sample_params(self, residual: NDArray, noise_params: NDArray, fsamp: float, *,
-                      bin_psd: bool = False,
+                      bin_psd: bool = False, rng: np.random.Generator | None = None,
                       n_grid: int = 150, n_burnin: int = 4) -> NDArray:
         """ Draw a sample of (fknee, alpha) for the 1/f model by fitting the *full* PSD
             P(f) = sigma0^2 (1 + (f/fknee)^alpha) to the periodogram of the sky-subtracted
@@ -343,7 +346,7 @@ class NoisePSDOof(NoisePSD):
                 log_L_fknee = _oof_loglike_grid(
                     f**alpha_current, fknee_grid**(-alpha_current), power_scaled, weight,
                 ) + log_prior_fknee
-                fknee_current = float(_inversion_sampler_1d(log_L_fknee, fknee_grid))
+                fknee_current = float(_inversion_sampler_1d(log_L_fknee, fknee_grid, rng))
             # 2. Sample alpha given the new fknee.
             if sample_alpha:
                 f, power_scaled, weight = fit_data[2]
@@ -351,7 +354,7 @@ class NoisePSDOof(NoisePSD):
                     np.log(f) - np.log(fknee_current), alpha_grid, power_scaled, weight,
                     exponentiate=True,
                 ) + log_prior_alpha
-                alpha_current = float(_inversion_sampler_1d(log_L_alpha, alpha_grid))
+                alpha_current = float(_inversion_sampler_1d(log_L_alpha, alpha_grid, rng))
 
         out = np.array(noise_params, dtype=np.float64, copy=True)
         out[1] = fknee_current

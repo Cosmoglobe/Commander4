@@ -4,6 +4,7 @@ The module-level functions (`benchmark`, `start_bench`, `stop_bench`, `bench_sum
 single global instance, which is what callers should use.
 """
 import math
+import threading
 import time
 import logging
 from collections import defaultdict
@@ -45,6 +46,10 @@ class PerfLogger:
     Recording is purely local (no MPI communication). Reporting through `bench_summary(comm)` is
     collective: every rank in `comm` must call it, and rank 0 prints the gathered stats.
 
+    Threads: each thread has its own stack of active frames, and a lock protects the totals. A scan
+    worker (`TODView.map`) files its entries under the tags its caller had open (`set_perf_base`),
+    so their times are summed over the workers and can exceed the wall time of their parent.
+
     Because the module holds a global singleton (`_bench`), always import it by the same absolute
     path, or data recorded through one import will be reported from another.
     """
@@ -64,22 +69,43 @@ class PerfLogger:
         self._path_order = []
         self._path_order_set = set()
 
-        # Stack of currently-active frames, each [tag, t_start_ns, path]. Both the manual
-        # start/stop API and the benchmark() context manager push/pop on this single stack, so
-        # nesting (and the resulting call paths) is tracked uniformly. stop_bench unwinds any
-        # leaked inner frames, so a single unbalanced/non-LIFO call cannot permanently desync the
-        # stack and poison the call paths (hence the report tree) of everything recorded after it.
-        self._stack = []
+        # Per-thread state: `stack` holds the currently-active frames, each [tag, t_start_ns,
+        # path]. Both the manual start/stop API and the benchmark() context manager push/pop on
+        # it, so nesting (and the resulting call paths) is tracked uniformly. stop_bench unwinds
+        # any leaked inner frames, so a single unbalanced/non-LIFO call cannot permanently desync
+        # the stack and poison the call paths (hence the report tree) of everything recorded after
+        # it. `base` is the path every entry of the thread starts with: () except in scan workers.
+        self._local = threading.local()
+        self._lock = threading.Lock()   # Guards data, mem_data and the path order.
+
+    @property
+    def _stack(self) -> list:
+        """The calling thread's active frames."""
+        if not hasattr(self._local, "stack"):
+            self._local.stack = []
+            self._local.base = ()
+        return self._local.stack
+
+    def current_path(self) -> tuple:
+        """The tags the calling thread has open, outermost first."""
+        stack = self._stack
+        return self._local.base + tuple(f[0] for f in stack)
+
+    def set_base(self, path: tuple):
+        """File the calling thread's entries under `path`, as a scan worker does for its caller."""
+        self._stack.clear()
+        self._local.base = path
 
     def reset(self):
         """
         Clears all accumulated timing and memory data, resetting to a clean slate.
-        Any timers that are currently running (via start_bench) are also cancelled.
+        Any timers that the calling thread has running (via start_bench) are also cancelled.
         """
-        self.data.clear()
-        self.mem_data.clear()
-        self._path_order.clear()
-        self._path_order_set.clear()
+        with self._lock:
+            self.data.clear()
+            self.mem_data.clear()
+            self._path_order.clear()
+            self._path_order_set.clear()
         self._stack.clear()
 
     def _register_path(self, path: tuple):
@@ -95,7 +121,7 @@ class PerfLogger:
         tag. The same tag opened under different parents therefore produces distinct, correctly
         nested entries. The returned frame is held by the caller so it can be closed by identity.
         """
-        path = tuple(f[0] for f in self._stack) + (tag,)
+        path = self.current_path() + (tag,)
         frame = [tag, time.perf_counter_ns(), path]
         self._stack.append(frame)
         return frame
@@ -114,11 +140,12 @@ class PerfLogger:
                          f"inner tags {stranded}.")
         _, t_start, path = stack[idx]
         del stack[idx:]
-        entry = self.data[path]
-        if increment_count:
-            entry['count'] += 1
-        entry['total_ns'] += end_ns - t_start
-        self._register_path(path)
+        with self._lock:
+            entry = self.data[path]
+            if increment_count:
+                entry['count'] += 1
+            entry['total_ns'] += end_ns - t_start
+            self._register_path(path)
 
     def _current_path(self, tag: str) -> tuple:
         """Call path for a non-scoping record (increment_count / log_memory).
@@ -129,7 +156,7 @@ class PerfLogger:
         """
         if self._stack and self._stack[-1][0] == tag:
             return self._stack[-1][2]
-        return tuple(f[0] for f in self._stack) + (tag,)
+        return self.current_path() + (tag,)
 
     def benchmark(self, tag: str, increment_count: bool = True):
         """
@@ -184,8 +211,9 @@ class PerfLogger:
             n:   Amount to add (default 1).
         """
         path = self._current_path(tag)
-        self.data[path]['count'] += n
-        self._register_path(path)
+        with self._lock:
+            self.data[path]['count'] += n
+            self._register_path(path)
 
     def log_memory(self, tag: str):
         """
@@ -200,12 +228,13 @@ class PerfLogger:
         """
         path = self._current_path(tag)
         mem_bytes = _get_current_memory_bytes()
-        entry = self.mem_data[path]
-        entry['count'] += 1
-        entry['total_bytes'] += mem_bytes
-        entry['min_bytes'] = min(entry['min_bytes'], mem_bytes)
-        entry['max_bytes'] = max(entry['max_bytes'], mem_bytes)
-        self._register_path(path)
+        with self._lock:
+            entry = self.mem_data[path]
+            entry['count'] += 1
+            entry['total_bytes'] += mem_bytes
+            entry['min_bytes'] = min(entry['min_bytes'], mem_bytes)
+            entry['max_bytes'] = max(entry['max_bytes'], mem_bytes)
+            self._register_path(path)
 
     def bench_summary(self, comm, label: str = "Stats"):
         """
@@ -433,3 +462,5 @@ increment_count = _bench.increment_count # Manually bump a tag's call counter
 log_memory      = _bench.log_memory      # Memory snapshot
 bench_reset     = _bench.reset           # Clear all accumulated data
 bench_summary   = _bench.bench_summary   # Report Generation (timing + memory)
+perf_path       = _bench.current_path    # The calling thread's open tags
+set_perf_base   = _bench.set_base        # File a worker thread's entries under its caller's tags

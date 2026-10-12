@@ -50,6 +50,25 @@ def _warn_about_dipole_calibration(band_comm: MPI.Comm, experiment_data: Detecto
                        "externally determined gain for this band.")
 
 
+def _calibration_terms(view: TODView, target_term: str,
+                       gain_cfg: GainConfig) -> tuple[int, int, float, float]:
+    """Return iscan, idet, s^T N^-1 d and s^T N^-1 s of one detector-scan, for one gain term.
+
+    d is the calibration residual and s the calibrator signal (`TODView.get_calib_tod`). Runs in
+    the scan workers (`TODView.map`).
+    """
+    calib = view.get_calib_tod(target_term, gain_cfg.calibrate_against,
+                               gap_fill_method=gain_cfg.gap_fill_method, rng=view.rng)
+    s_cal = calib.s_cal
+    residual_tod = calib.tod
+    # Calibration TODs are block-averaged, so their true rate is fsamp/downsample_factor;
+    # apply_N_inv needs it to place the 1/f noise weight at the correct frequencies.
+    gain_samprate = view.fsamp / view.downsample_factor
+    N_inv_s = view.experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=gain_samprate)
+    # N^-1 is symmetric, so s^T N^-1 d = (N^-1 s)^T d.
+    return view.iscan, view.idet, np.dot(N_inv_s, residual_tod), np.dot(s_cal, N_inv_s)
+
+
 def _solve_relative_gain_system(s_weights: NDArray, r_weights: NDArray, prev_rel_gain: NDArray,
                                 rng=None) -> NDArray:
     """ Draw relative-gain deviations Delta g_i from the BP7 Sec. 3.4 constrained Gaussian.
@@ -120,20 +139,10 @@ def sample_absolute_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
                         mask_threshold=gain_cfg.mask_threshold)
 
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
-    for view in scan_view.iter_focused(accepted_only=True):
-        calib = view.get_calib_tod("abs", gain_cfg.calibrate_against,
-                                   gap_fill_method=gain_cfg.gap_fill_method)
-        s_cal = calib.s_cal
-        residual_tod = calib.tod
-
-        # Calibration TODs are block-averaged, so their true rate is fsamp/downsample_factor;
-        # apply_N_inv needs it to place the 1/f noise weight at the correct frequencies.
-        gain_samprate = view.fsamp / view.downsample_factor
-        N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=gain_samprate)
-
-        # N^-1 is symmetric, so s^T N^-1 d = (N^-1 s)^T d, giving:
-        sum_s_T_N_inv_d += np.dot(N_inv_s, residual_tod)
-        sum_s_T_N_inv_s += np.dot(s_cal, N_inv_s)
+    for _, _, d_term, s_term in scan_view.map(_calibration_terms, "abs", gain_cfg,
+                                              step="abs-gain", accepted_only=True):
+        sum_s_T_N_inv_d += d_term
+        sum_s_T_N_inv_s += s_term
     stop_bench("eqn-setup")
 
     start_bench("MPI-comm")
@@ -206,22 +215,11 @@ def sample_relative_gain(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
                         mask_threshold=gain_cfg.mask_threshold)
 
     # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
-    for view in scan_view.iter_focused(accepted_only=True):
-        calib = view.get_calib_tod("rel", gain_cfg.calibrate_against,
-                                   gap_fill_method=gain_cfg.gap_fill_method)
-        s_cal = calib.s_cal
-        residual_tod = calib.tod
-        # Calibration TODs are block-averaged, so their true rate is fsamp/downsample_factor;
-        # apply_N_inv needs it to place the 1/f noise weight at the correct frequencies.
-        gain_samprate = view.fsamp / view.downsample_factor
-        N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=gain_samprate)
-
-        s_T_N_inv_s_scan = np.dot(s_cal, N_inv_s)
-        r_T_N_inv_s_scan = np.dot(residual_tod, N_inv_s)
-
+    for _, idet, r_term, s_term in scan_view.map(_calibration_terms, "rel", gain_cfg,
+                                                 step="rel-gain", accepted_only=True):
         # Add the contribution from this scan to the local sum (full-band detector column).
-        local_s_T_N_inv_s[view.idet] += s_T_N_inv_s_scan
-        local_r_T_N_inv_s[view.idet] += r_T_N_inv_s_scan
+        local_s_T_N_inv_s[idet] += s_term
+        local_r_T_N_inv_s[idet] += r_term
     stop_bench("eqn-setup")
 
     ### 2. Intra-Detector Reduction ###
@@ -320,23 +318,10 @@ def sample_temporal_gain_variations(band_comm: MPI.Comm, experiment_data: Detect
     # ringing from the large residual in the galactic plane).
     # Rejected detector-scans (accepted_only) contribute zero weight (A_qq = b_q = 0); the Wiener
     # prior then fills their temporal gain from neighbors.
-    for view in scan_view.iter_focused(accepted_only=True):
-        calib = view.get_calib_tod("temp", gain_cfg.calibrate_against,
-                                   gap_fill_method=gain_cfg.gap_fill_method)
-        s_cal = calib.s_cal
-        residual_tod = calib.tod
-
-        # Calibration TODs are block-averaged, so their true rate is fsamp/downsample_factor;
-        # apply_N_inv needs it to place the 1/f noise weight at the correct frequencies.
-        gain_samprate = view.fsamp / view.downsample_factor
-        N_inv_s = experiment_data.apply_N_inv(s_cal, view.noise_params, samprate=gain_samprate)
-
-        # N^-1 is symmetric, so s^T N^-1 d = (N^-1 s)^T d, giving:
-        b_q = np.dot(N_inv_s, residual_tod)
-        A_qq = np.dot(s_cal, N_inv_s)
-
-        A_qq_local[view.idet, view.iscan] = A_qq
-        b_q_local[view.idet, view.iscan] = b_q
+    for iscan, idet, b_q, A_qq in scan_view.map(_calibration_terms, "temp", gain_cfg,
+                                                step="temporal-gain", accepted_only=True):
+        A_qq_local[idet, iscan] = A_qq
+        b_q_local[idet, iscan] = b_q
 
     # Gather scan counts on all ranks (needed for gather/scatter with varying roots)
     scan_counts = np.array(band_comm.allgather(nscans_local), dtype=int)

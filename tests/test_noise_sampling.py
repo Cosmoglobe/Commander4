@@ -346,7 +346,8 @@ class TestSampleCorrelatedNoise:
         # `sample_correlated_noise` passes a Python float here. That matters: a numpy float64
         # sigma0 would promote the RHS back to float64 on its own and hide a single-precision CG.
         n_corr, _, _, _ = corr_noise_realization_with_gaps(tod.copy(), mask, float(params[0]), C,
-                                                           err_tol=1e-5, max_iter=50, rnd_seed=3)
+                                                           err_tol=1e-5, max_iter=50,
+                                                           rng=np.random.default_rng(3))
         assert seen["rhs"] == np.float64
         assert seen["residual"] == np.float64
         assert seen["operator_out"] == np.float64
@@ -364,10 +365,12 @@ class TestSampleCorrelatedNoise:
         C = m.compute_inv_corr_spectrum(rfftfreq(2*tod.size, d=1.0/fsamp), params)
         _seed_all_rng(7)
         loose, _, _, _ = corr_noise_realization_with_gaps(tod.copy(), mask, params[0], C,
-                                                          err_tol=1e-5, max_iter=50, rnd_seed=3)
+                                                          err_tol=1e-5, max_iter=50,
+                                                          rng=np.random.default_rng(3))
         _seed_all_rng(7)
         tight, _, _, _ = corr_noise_realization_with_gaps(tod.copy(), mask, params[0], C,
-                                                          err_tol=1e-9, max_iter=200, rnd_seed=3)
+                                                          err_tol=1e-9, max_iter=200,
+                                                          rng=np.random.default_rng(3))
         # Both solve the same system with the same random draws, so they may differ only by the
         # accuracy the looser stop allows, and never by the ~1e-3 level that a broken operator
         # or a wrongly-scaled filter would produce.
@@ -386,10 +389,11 @@ class TestSampleCorrelatedNoise:
         tod, mask, params, fsamp = self._setup()
         C = m.compute_inv_corr_spectrum(rfftfreq(2*tod.size, d=1.0/fsamp), params)
         fft, _, n_fft, c_fft = corr_noise_realization_with_gaps(
-            tod.copy(), mask, float(params[0]), C, err_tol=1e-5, max_iter=50, rnd_seed=3)
+            tod.copy(), mask, float(params[0]), C, err_tol=1e-5, max_iter=50,
+            rng=np.random.default_rng(3))
         dct, _, n_dct, c_dct = corr_noise_realization_with_gaps(
-            tod.copy(), mask, float(params[0]), C, err_tol=1e-5, max_iter=50, rnd_seed=3,
-            use_dct=True)
+            tod.copy(), mask, float(params[0]), C, err_tol=1e-5, max_iter=50,
+            rng=np.random.default_rng(3), use_dct=True)
         assert (n_dct, c_dct) == (n_fft, c_fft)          # same CG path, not just a similar answer
         assert np.sqrt(np.mean((dct - fft)**2)) < 1e-5*np.std(fft)
 

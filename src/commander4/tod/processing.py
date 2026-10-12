@@ -152,6 +152,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
 
     far_beam_active = (far_beam_deconvolution_cfg.enabled
                        and iter >= far_beam_deconvolution_cfg.from_iter)
+    tod_samples.iteration = iter   # Keys this iteration's per-scan random numbers (`TODView.rng`).
 
     # Jump corrections must be stored before any later step reads the TOD.
     if jump_detection_cfg.enabled and iter >= jump_detection_cfg.from_iter:

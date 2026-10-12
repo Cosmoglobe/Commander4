@@ -69,7 +69,8 @@ def _band_and_samples(tod: np.ndarray, flag: np.ndarray, pix: np.ndarray, gain: 
                             "I", SimpleNamespace(npar=1, params=np.array([1.0])))
     samples = SimpleNamespace(jumps=empty_jump_grid(1, 1), glitches=empty_glitch_grid(1, 1),
                               accept=np.ones((1, 1), dtype=bool), chain=1, abs_gain=gain,
-                              rel_gain=np.zeros(1), temporal_gain=np.zeros((1, 1)))
+                              rel_gain=np.zeros(1), temporal_gain=np.zeros((1, 1)),
+                              scan_runtime=np.zeros(1))
     band.pixel_domain = PixelDomain(MPI.COMM_SELF, 1, "full")
     return band, samples, detector
 

@@ -118,6 +118,10 @@ class TODSamples:
         self.params = params
         self.band_comm = band_comm
         self.chain = chain
+        # Together with the iteration (set by `process_tod`), these key the per-scan random numbers
+        # (`TODView.rng`), so the draws do not depend on which rank or thread processes a scan.
+        self.seed = int(params.gibbs.seed) if "seed" in params.gibbs else 1995
+        self.iteration = 0
         self.experiment_name = experiment_data.experiment_name
         self.band_name = experiment_data.band_name
         self.ndet = experiment_data.ndet

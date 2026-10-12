@@ -71,7 +71,7 @@ def _fake_tod_samples(sigma0: float = 2.0, ndet: int = 1) -> SimpleNamespace:
         chisq_z=np.full((1, ndet), np.nan), good_fraction=np.full((1, ndet), np.nan),
         TOD_PS_NBIN=100, tod_ps_freqs=empty_ps(), tod_ps_raw=empty_ps(), tod_ps_residual=empty_ps(),
         tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None, residual_tods=None,
-        scan_runtime=np.zeros(1))
+        scan_runtime=np.zeros(1), seed=1995, chain=1, iteration=1, scan_ids=np.zeros(1, int))
 
 
 def _run(band: DetectorGroupTOD, sky_model: np.ndarray, sparse_maps: bool = False,

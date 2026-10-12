@@ -35,8 +35,9 @@ def test_iqu_maps_match_a_numpy_solve() -> None:
     b = {name: np.zeros((NPIX, 3)) for name in binned.names}
     hits = np.zeros(NPIX, dtype=np.int64)
     for pix, psi, weight, tods in _scans(rng):
-        binned.accumulate(weight, pix, psi, tods, (response_I, response_P))
-        binned.count_hits(pix)
+        binned.add_scan(binned.bin_scan(weight, pix, psi,
+                                        np.stack([tods[name] for name in binned.names]),
+                                        (response_I, response_P)))
         # Each sample's pointing row, and its weighted outer product added to its pixel's A.
         rows = np.stack([np.full(pix.size, response_I), response_P*np.cos(2*psi),
                          response_P*np.sin(2*psi)], axis=1)
@@ -65,7 +66,7 @@ def test_intensity_band_divides_by_the_weights() -> None:
     binned = BinnedMapmaker(PixelDomain(MPI.COMM_SELF, NSIDE, "full"), "I", ["signal"])
     cov, rhs = np.zeros(NPIX), np.zeros(NPIX)
     for pix, psi, weight, tods in _scans(rng):
-        binned.accumulate(weight, pix, psi, {"signal": tods["signal"]}, (0.4, 0.0))
+        binned.add_scan(binned.bin_scan(weight, pix, psi, tods["signal"][None, :], (0.4, 0.0)))
         np.add.at(cov, pix, weight*0.4**2)
         np.add.at(rhs, pix, weight*0.4*tods["signal"])
     binned.finalize()
@@ -85,8 +86,8 @@ def test_intensity_only_detector_never_reads_the_polarization_angle() -> None:
     the maps. Its samples constrain I only, so in an IQU band no pixel can be solved."""
     pix = np.array([0, 1, 1, 4])
     binned = BinnedMapmaker(PixelDomain(MPI.COMM_SELF, NSIDE, "full"), "IQU", ["signal"])
-    binned.accumulate(2.5, pix, np.full(pix.size, np.nan),
-                      {"signal": np.array([1.0, 2.0, 3.0, 4.0])}, (1.0, 0.0))
+    binned.add_scan(binned.bin_scan(2.5, pix, np.full(pix.size, np.nan),
+                                    np.array([[1.0, 2.0, 3.0, 4.0]]), (1.0, 0.0)))
     binned.finalize()
 
     expected_II = np.zeros(NPIX)
@@ -101,7 +102,8 @@ def test_weights_alone_without_any_map() -> None:
     """The CG mapmaker bins the weights alone when no aux map is wanted."""
     pix = np.array([0, 3, 3, 7])
     binned = BinnedMapmaker(PixelDomain(MPI.COMM_SELF, NSIDE, "full"), "I", [])
-    binned.accumulate(2.0, pix, np.zeros(pix.size), {}, (0.5, 0.0))
+    binned.add_scan(binned.bin_scan(2.0, pix, np.zeros(pix.size), np.zeros((0, pix.size)),
+                                    (0.5, 0.0)))
     binned.finalize()
 
     expected = np.zeros(NPIX)

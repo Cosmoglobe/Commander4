@@ -109,6 +109,29 @@ def test_binned_map_accumulator_intensity_band_and_no_maps() -> None:
     np.testing.assert_allclose(weights6[0], np.bincount(pix, minlength=NPIX), **TOL)
 
 
+def test_distinct_pixels_lists_pixels_in_first_visit_order() -> None:
+    """Enough distinct pixels that the hash table has to grow several times."""
+    rng = np.random.default_rng(30)
+    pix = rng.integers(0, 10**9, 20000, dtype=np.int64)[rng.integers(0, 20000, 60000)]
+    pixels, index = cpp_mapmaker.distinct_pixels(pix)
+    unique, first = np.unique(pix, return_index=True)
+    np.testing.assert_array_equal(pixels, unique[np.argsort(first)])
+    np.testing.assert_array_equal(pixels[index], pix)
+    empty_pixels, empty_index = cpp_mapmaker.distinct_pixels(np.zeros(0, dtype=np.int64))
+    assert empty_pixels.size == empty_index.size == 0
+
+
+def test_add_to_pixels() -> None:
+    rng = np.random.default_rng(31)
+    target = rng.normal(size=(3, NPIX))   # must be added to, not replaced
+    pix = np.array([5, 0, 11, 7], dtype=np.int64)
+    values = rng.normal(size=(3, pix.size))
+    expected = target.copy()
+    expected[:, pix] += values
+    cpp_mapmaker.add_to_pixels(target, values, pix)
+    np.testing.assert_array_equal(target, expected)
+
+
 @pytest.mark.parametrize("ncomp", [3, 1])
 @pytest.mark.parametrize("response_I, response_P", RESPONSES)
 def test_map2tod(ncomp: int, response_I: float, response_P: float) -> None:
@@ -210,6 +233,7 @@ def test_kernels_reject_out_of_range_pixels(bad_pixel: int) -> None:
         lambda: cpp_mapmaker.binned_map_accumulator(m6, maps3, tods, 1.0, pix, psi,
                                                     response_P=0.0),
         lambda: cpp_mapmaker.binned_map_accumulator(m1, maps1, tods, 1.0, pix, psi),
+        lambda: cpp_mapmaker.add_to_pixels(m3, np.zeros((3, NTOD)), pix),
         lambda: cpp_mapmaker.map2tod(m3, tod_out, pix, psi),
         lambda: cpp_mapmaker.map2tod(m1, tod_out, pix, psi),
         lambda: cpp_mapmaker.tod2map(m3, tod, pix, psi),

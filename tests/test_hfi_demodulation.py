@@ -81,6 +81,7 @@ def _build_hfi_case(phase: int = -1, pulse: np.ndarray | None = None):
         accept=np.ones((1, 1), dtype=bool),
         jumps=empty_jump_grid(1, 1),
         glitches=empty_glitch_grid(1, 1),
+        scan_runtime=np.zeros(1),
     )
     band.pixel_domain = PixelDomain(MPI.COMM_SELF, _NSIDE, "full")
     return band, samples, sky_map, raw_tod, sky_tod

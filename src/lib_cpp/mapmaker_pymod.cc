@@ -20,12 +20,15 @@ using namespace ducc0;
 // read or write other memory. Casting to size_t turns a negative index into a huge one, so a single
 // comparison covers both ends. The check only reads pix, which the loop reads anyway, so it adds
 // no memory traffic and its cost was not measurable even with all cores of a node busy.
+// The kernels release the GIL once their arguments are converted, so that on the normal Python
+// build other threads can run Python code meanwhile.
 
 /** Adds one hit per sample into the hit map: hits[pix[i]] += 1. */
 void Py_hit_accumulator(const NpArr &hits_, const CNpArr &pix_){
     auto hits = to_vmav<double,1>(hits_, "hits");
     auto pix = to_cmav<int64_t,1>(pix_, "pix");
     const size_t npix = hits.shape(0);
+    py::gil_scoped_release release;
     for (size_t i = 0; i < pix.shape(0); i++){
         const int64_t p = pix(i);
         MR_assert(size_t(p) < npix, "pixel index out of range");
@@ -70,6 +73,7 @@ void binned_map_accumulator_T(const NpArr &weights_, const NpArr &maps_, const C
     if (intensity_band || response_P == 0.0){
         // Only intensity is measured (an I-only band, or a detector without polarization response),
         // so only I and II are non-zero, and psi is never read.
+        py::gil_scoped_release release;
         for (size_t i = 0; i < ntod; i++){
             const int64_t p = pix(i);
             MR_assert(size_t(p) < npix, "pixel index out of range");
@@ -81,6 +85,7 @@ void binned_map_accumulator_T(const NpArr &weights_, const NpArr &maps_, const C
     }
     auto psi = to_cmav<double,1>(psi_, "psi");
     MR_assert(psi.shape(0) == ntod, "pix and psi lengths differ");
+    py::gil_scoped_release release;
     for (size_t i = 0; i < ntod; i++){
         // Read the sample into locals before writing: the compiler cannot rule out that a write
         // to the maps changes psi or tods, so it would re-read them and compute cos and sin again.
@@ -114,6 +119,27 @@ void Py_binned_map_accumulator(const NpArr &weights, const NpArr &maps, const CN
                                          response_I, response_P);
     else
         MR_fail("tods must be float32 or float64");
+}
+
+
+/** Adds each column of values to one pixel of target: target[:, pix[j]] += values[:, j].
+ *
+ * Adds a scan's own small maps (`BinnedMapmaker.bin_scan`) to a rank's maps. The pixels of one
+ * call must be distinct, as `distinct_pixels` returns them.
+ */
+void Py_add_to_pixels(const NpArr &target_, const CNpArr &values_, const CNpArr &pix_){
+    auto target = to_vmav<double,2>(target_, "target");
+    auto values = to_cmav<double,2>(values_, "values");
+    auto pix = to_cmav<int64_t,1>(pix_, "pix");
+    const size_t nrows = target.shape(0), npix = target.shape(1), nvalues = pix.shape(0);
+    MR_assert(values.shape(0) == nrows && values.shape(1) == nvalues,
+              "values must have shape (target rows, pixels)");
+    py::gil_scoped_release release;
+    for (size_t j = 0; j < nvalues; j++)
+        MR_assert(size_t(pix(j)) < npix, "pixel index out of range");
+    for (size_t r = 0; r < nrows; r++)
+        for (size_t j = 0; j < nvalues; j++)
+            target(r, pix(j)) += values(r, j);
 }
 
 
@@ -417,6 +443,54 @@ NpArr Py_global_to_local(const CNpArr &table_, const CNpArr &pix_){
     return out_;
 }
 
+/** Lists the distinct pixels of pix in the order they first appear, and each sample's position in
+ * that list, so that pixels[index[i]] == pix[i].
+ *
+ * Lets a scan be binned into small maps over its own pixels (`BinnedMapmaker.bin_scan`). The
+ * pixels go into a hash table like the one of `build_pixel_hash`, holding positions in the list;
+ * the table doubles whenever it gets half full.
+ */
+py::tuple Py_distinct_pixels(const CNpArr &pix_){
+    auto pix = to_cmav<int64_t,1>(pix_, "pix");
+    const size_t ntod = pix.shape(0);
+    auto index_ = make_Pyarr<int64_t>({ntod});
+    auto index = to_vmav<int64_t,1>(index_);
+    vector<int64_t> pixels;
+    {
+    py::gil_scoped_release release;
+    int bits = 10;
+    vector<int64_t> table(size_t(1) << bits, -1);  // a position in `pixels`, or -1 if empty
+    for (size_t i = 0; i < ntod; i++){
+        const int64_t p = pix(i);
+        MR_assert(p >= 0, "pixel index out of range");
+        size_t slot = pixel_hash_slot(uint64_t(p), bits);
+        while (table[slot] >= 0 && pixels[table[slot]] != p)
+            slot = (slot + 1) & (table.size() - 1);
+        if (table[slot] >= 0){
+            index(i) = table[slot];
+            continue;
+        }
+        index(i) = table[slot] = int64_t(pixels.size());
+        pixels.push_back(p);
+        if (2 * pixels.size() > table.size()){
+            bits++;
+            table.assign(size_t(1) << bits, -1);
+            for (size_t k = 0; k < pixels.size(); k++){
+                size_t s = pixel_hash_slot(uint64_t(pixels[k]), bits);
+                while (table[s] >= 0)
+                    s = (s + 1) & (table.size() - 1);
+                table[s] = int64_t(k);
+            }
+        }
+    }
+    }
+    auto pixels_ = make_Pyarr<int64_t>({pixels.size()});
+    auto out = to_vmav<int64_t,1>(pixels_);
+    for (size_t k = 0; k < pixels.size(); k++)
+        out(k) = pixels[k];
+    return py::make_tuple(pixels_, index_);
+}
+
 
 void add_mapmaker(py::module_ &msup)
   {
@@ -433,6 +507,14 @@ void add_mapmaker(py::module_ &msup)
         "band uses weights (1, npix) and maps (nmaps, 1, npix).",
         "weights"_a, "maps"_a, "tods"_a, "weight"_a, "pix"_a, "psi"_a, "response_I"_a=1.0,
         "response_P"_a=1.0);
+  m.def("add_to_pixels", Py_add_to_pixels,
+        "Add each column of values (nrows, n) to one pixel of target (nrows, npix): "
+        "`target[:, pix[j]] += values[:, j]`. The pixels must be distinct.",
+        "target"_a, "values"_a, "pix"_a);
+  m.def("distinct_pixels", Py_distinct_pixels,
+        "Return (pixels, index): the distinct pixels of pix in the order they first appear, and "
+        "the position of each sample's pixel in that list, so that pixels[index] == pix.",
+        "pix"_a);
   m.def("map2tod", Py_map2tod,
         "Read a map (3, npix) or (1, npix) along the pointing into tod: `tod = P map`, where a "
         "sample's pointing row is [response_I, response_P cos(2 psi), response_P sin(2 psi)], or "

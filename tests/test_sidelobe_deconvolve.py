@@ -33,7 +33,8 @@ class FakeBandComm:
 class FakeConvolverPlan:
     """Record the arrays passed to the ducc0 plan without doing an SHT."""
 
-    def __init__(self, lmax: int, kmax: int, epsilon: float, nthreads: int):
+    def __init__(self, lmax: int, kmax: int, sigma_min: float, sigma_max: float, epsilon: float,
+                 nthreads: int):
         self.lmax = lmax
         self.kmax = kmax
         self.epsilon = epsilon
@@ -111,10 +112,11 @@ def test_construct_model_matches_commander3_limits(monkeypatch, pols, stored, us
     # A real single-rank node communicator, so the cubes go through actual MPI shared memory.
     projector.construct_model(FakeBandComm(), MPI.COMM_SELF, sky)
 
-    assert len(plans) == 1
-    assert plans[0].lmax == 100
-    assert plans[0].kmax == 100
+    # The first plan builds the cubes, the second interpolates them with a scan worker's threads.
+    assert len(plans) == 2
+    assert [(plan.lmax, plan.kmax) for plan in plans] == [(100, 100), (100, 100)]
     assert len(plans[0].calls) == len(used)*101
+    assert len(plans[1].calls) == 0
     for component, (slm, blm, mbeam) in zip(used, plans[0].calls):
         isky = ("T", "E", "B").index(component)
         assert np.shares_memory(slm, expected_slm)
@@ -166,7 +168,7 @@ def test_projection_evaluates_every_sample_at_the_ducc_angle() -> None:
     projector = sidelobe.FarBeamProjector.__new__(sidelobe.FarBeamProjector)
     projector.nside = 1
     projector.polangs = np.array([0.3])
-    projector.plan = InterpolationPlan()
+    projector.interp_plan = InterpolationPlan()
     projector.cubes = [np.zeros(1)]
 
     pix = np.arange(13) % hp.nside2npix(1)
@@ -174,7 +176,7 @@ def test_projection_evaluates_every_sample_at_the_ducc_angle() -> None:
     result = projector.get_projection(pix, psi, 0)
 
     assert result.shape == pix.shape
-    assert len(projector.plan.calls) == 1
-    assert projector.plan.calls[0].size == pix.size
+    assert len(projector.interp_plan.calls) == 1
+    assert projector.interp_plan.calls[0].size == pix.size
     expected_psi = np.mod(psi - 0.3, 2*np.pi)
-    assert np.array_equal(projector.plan.calls[0], expected_psi)
+    assert np.array_equal(projector.interp_plan.calls[0], expected_psi)

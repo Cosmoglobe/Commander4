@@ -25,6 +25,12 @@ from commander4.tod.gain import _solve_relative_gain_system
 from commander4.tod.config import GainConfig
 
 
+def _scan_view(views: list) -> SimpleNamespace:
+    """A stand-in for a gain step's `TODView`, whose `map` calls the per-scan function on `views`."""
+    return SimpleNamespace(map=lambda func, *args, step, accepted_only: (func(view, *args)
+                                                                         for view in views))
+
+
 @pytest.mark.parametrize("sampler_name", [
     "sample_absolute_gain", "sample_relative_gain", "sample_temporal_gain_variations",
 ])
@@ -112,8 +118,9 @@ def test_absolute_gain_reuses_filtered_calibrator(
         residual = (0.7 * calibrator + rng.normal(size=length) + 3.5).astype(dtype)
         noise_params = np.array([2.0, 0.1, -1.5])
         calib = SimpleNamespace(s_cal=calibrator, tod=residual)
-        views.append(SimpleNamespace(fsamp=180.0, downsample_factor=180,
-                                     noise_params=noise_params,
+        views.append(SimpleNamespace(iscan=0, idet=0, fsamp=180.0, downsample_factor=180,
+                                     noise_params=noise_params, rng=None,
+                                     experiment_data=experiment,
                                      get_calib_tod=Mock(return_value=calib)))
         # Reference expression before the optimization, using the real mirrored/white operator.
         filtered_data = experiment.apply_N_inv(residual, noise_params, samprate=1.0)
@@ -121,8 +128,7 @@ def test_absolute_gain_reuses_filtered_calibrator(
         numerator += np.dot(calibrator, filtered_data)
         denominator += np.dot(calibrator, filtered_calibrator)
 
-    scan_view = SimpleNamespace(iter_focused=Mock(return_value=iter(views)))
-    monkeypatch.setattr(gain, "TODView", Mock(return_value=scan_view))
+    monkeypatch.setattr(gain, "TODView", Mock(return_value=_scan_view(views)))
     filter_spy = Mock(wraps=experiment.apply_N_inv)
     monkeypatch.setattr(experiment, "apply_N_inv", filter_spy)
     monkeypatch.setattr(gain.np.random, "randn", lambda: 0.37)
@@ -164,11 +170,11 @@ def test_temporal_gain_is_solved_in_time_order(monkeypatch: pytest.MonkeyPatch) 
         scans = [ScanTOD([], 0.0, int(scan_id)) for scan_id in scan_ids]
         experiment = DetectorGroupTOD(scans, "EXP", "BAND", 1, 100.0, 0.0, 10.0, 1, "I", model)
         views = [SimpleNamespace(iscan=iscan, idet=0, fsamp=10.0, downsample_factor=1,
-                                 noise_params=np.array([1.0, 0.1, -1.0]),
+                                 noise_params=np.array([1.0, 0.1, -1.0]), rng=None,
+                                 experiment_data=experiment,
                                  get_calib_tod=Mock(return_value=calibs[t]))
                  for iscan, t in enumerate(time_order)]
-        scan_view = SimpleNamespace(iter_focused=Mock(return_value=iter(views)))
-        monkeypatch.setattr(gain, "TODView", Mock(return_value=scan_view))
+        monkeypatch.setattr(gain, "TODView", Mock(return_value=_scan_view(views)))
         samples = SimpleNamespace(abs_gain=1.0, rel_gain=np.zeros(1), chain=1, scan_ids=scan_ids,
                                   temporal_gain=np.zeros((nscans, 1), dtype=np.float32))
         np.random.seed(7)  # The same fluctuation draws, which the solve makes in time order.

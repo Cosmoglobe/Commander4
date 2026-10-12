@@ -4,13 +4,18 @@ One view is focused on one detector at a time and rebuilt as the scan loop advan
 never holds more than one detector decoded. It also owns block-averaging, so a step that wants a
 coarser sample rate (gain calibration) asks for a view at that rate instead of downsampling by hand.
 """
+import logging
+import time
+import zlib
+from collections.abc import Callable, Iterator
+
 import numpy as np
 import healpy as hp
-import logging
 from numpy.typing import NDArray
 
 from pixell.bunch import Bunch
 
+from commander4 import threads
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.pointing import remap_pix_nside
@@ -57,6 +62,7 @@ class TODView:
         downsample_factor: int = 1,
         proc_mask_type: str = "",
         mask_threshold: float = 0.5,
+        step: str = "",
     ):
         """Initialize a detector-local view over one band's TOD data.
 
@@ -74,6 +80,7 @@ class TODView:
                 the calibration path reads it; ``get_mask`` callers still name their own mask.
             mask_threshold: Fraction of a block's samples that must pass the mask for the block to
                 survive downsampling. Unused at ``downsample_factor == 1``.
+            step: Name of the Gibbs step the view works for. It keys the random numbers (`rng`).
         """
         self.experiment_data = experiment_data
         self.tod_samples = tod_samples
@@ -85,6 +92,7 @@ class TODView:
         self._downsample_factor = int(downsample_factor)
         self._proc_mask_type = proc_mask_type
         self._mask_threshold = float(mask_threshold)
+        self._step = step
         self._iscan: int | None = None
         self._idet: int | None = None
         self._det = None
@@ -104,6 +112,7 @@ class TODView:
         self._static_sky = None
         self._orbital_dipole = None
         self._gap_noise: dict[str, NDArray] = {}
+        self._rng = None
 
     def focus(self, iscan: int, det: DetectorTOD) -> "TODView":
         """Focus the view on one present detector and discard any previous materialization.
@@ -145,6 +154,55 @@ class TODView:
         accept = self.tod_samples.accept if accepted_only else None
         for iscan, det in self.experiment_data.iter_detector_scans(accept):
             yield self.focus(iscan, det)
+
+    def map(self, func: Callable, *args, step: str, accepted_only: bool = False) -> Iterator:
+        """Call `func(view, *args)` for every detector-scan, and yield the results in scan order.
+
+        The calls run on the rank's scan worker threads (`resources.tod.scan_threads`), each on its
+        own view, made like this one and focused on its detector-scan. The results come back in the
+        same order for any number of threads, so anything added up from them is identical to the
+        last bit. With one scan thread the calls run here, one after the other, like
+        `iter_focused`.
+
+        Rules for `func`, since several run at the same time: write to `tod_samples` only at
+        `[view.iscan, view.idet]`, draw random numbers only from `view.rng`, call neither MPI nor
+        `map` (the workers are all busy, so it would wait forever), and return everything else.
+        The time of each call is added to `tod_samples.scan_runtime`.
+
+        Args:
+            func: The work for one detector-scan, called as `func(view, *args)`.
+            step: Name of the Gibbs step; it keys the per-scan random numbers (`rng`).
+            accepted_only: If True, skip detector-scans whose `accept` flag is False.
+        """
+        accept = self.tod_samples.accept if accepted_only else None
+        tasks = list(self.experiment_data.iter_detector_scans(accept))
+
+        def run_one(iscan: int, det: DetectorTOD):
+            view = TODView(self.experiment_data, self.tod_samples, self.compsep_output,
+                           self._downsample_factor, self._proc_mask_type, self._mask_threshold,
+                           step).focus(iscan, det)
+            t0 = time.perf_counter()
+            result = func(view, *args)
+            return result, time.perf_counter() - t0
+
+        for (iscan, _), (result, runtime) in zip(tasks, threads.run_in_order(run_one, tasks)):
+            self.tod_samples.scan_runtime[iscan] += runtime
+            yield result
+
+    @property
+    def rng(self) -> np.random.Generator:
+        """Random numbers for the focused detector-scan in this Gibbs step.
+
+        The generator is seeded from the run seed, chain, iteration, step name, scan ID and
+        detector, so its numbers do not depend on which rank or thread processes the scan. The step
+        name keeps two steps of one iteration from drawing the same numbers.
+        """
+        if self._rng is None:
+            samples = self.tod_samples
+            self._rng = np.random.default_rng(
+                [samples.seed, samples.chain, samples.iteration, zlib.crc32(self._step.encode()),
+                 int(samples.scan_ids[self.iscan]), self.idet])
+        return self._rng
 
     def _require_focus(self):
         """Return the current detector or raise if the view was not focused yet."""
@@ -557,8 +615,8 @@ class TODView:
 
 
     # ------------------------------------------------------------------ gain calibration
-    def _gap_noise_draw(self, method: str,
-                        compsep_output: NDArray | None = None) -> NDArray[np.floating]:
+    def _gap_noise_draw(self, method: str, compsep_output: NDArray | None = None,
+                        rng: np.random.Generator | None = None) -> NDArray[np.floating]:
         """Constrained noise realization at the masked samples of the calibration TOD.
 
         The noise residual ``d - g*(s_sky + s_orb)`` (full gain) is identical for every gain term, so
@@ -578,7 +636,7 @@ class TODView:
         noise_resid = data - self.get_gain(self._ALL_GAIN_TERMS) * (s_sky + s_orb)
         samprate = self.fsamp / self._downsample_factor  # block-averaging downsamples fsamp
         draw = realize_noise_in_gaps(noise_resid, mask, self.experiment_data.noise_model,
-                                     self.noise_params, samprate, self.fsamp, method)
+                                     self.noise_params, samprate, self.fsamp, method, rng=rng)
         self._gap_noise[method] = draw
         return draw
 
@@ -610,7 +668,7 @@ class TODView:
             normal = np.random.normal if rng is None else rng.normal
             filled[gap] = target + normal(0.0, sigma0_effective, target.shape)
         else:
-            draw = self._gap_noise_draw(method, compsep_output=compsep_output)
+            draw = self._gap_noise_draw(method, compsep_output=compsep_output, rng=rng)
             filled[gap] = target + draw[gap]
         return filled
 
@@ -644,7 +702,7 @@ class TODView:
             gap_fill_method: How masked samples are filled when ``fill_masked``: ``'wn'`` (white
                 noise), ``'fallback'`` (stationary 1/f Wiener draw), or ``'full_cg'`` (masked
                 constrained-CG 1/f draw). See ``_fill_masked_calibration_samples``.
-            rng: Optional NumPy generator for the masked-sample white noise (``'wn'`` only).
+            rng: Optional NumPy generator for the masked-sample noise draws.
 
         Returns:
             Bunch with ``tod`` (residual), ``s_cal``, and ``mask``.

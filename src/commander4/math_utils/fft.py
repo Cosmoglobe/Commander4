@@ -7,11 +7,11 @@ and is what `apply_N_inv` and the correlated-noise CG use.
 `forward_dct` / `backward_dct` compute the same mirrored filter through a length-N DCT instead,
 which is an exact reformulation at roughly half the cost. See `forward_dct`.
 """
-import os
-
 import ducc0
 import numpy as np
 from numpy.typing import NDArray
+
+from commander4.threads import library_nthreads
 
 
 def forward_rfft(data:NDArray[np.floating], nthreads:int = None) -> NDArray:
@@ -23,7 +23,7 @@ def forward_rfft(data:NDArray[np.floating], nthreads:int = None) -> NDArray:
             data_f (np.array): The Fourier transform of the input.
                                A complex array of length tod.size//2 + 1.
     """
-    nthreads = int(os.environ.get("OMP_NUM_THREADS", 1)) if nthreads is None else nthreads
+    nthreads = library_nthreads() if nthreads is None else nthreads
     return ducc0.fft.r2c(data, nthreads=nthreads)
 
 def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray:
@@ -37,7 +37,7 @@ def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray:
             data (np.array): A real-valued data array of length ntod.
     """
     # If nthreads is not set, put it to how many threads OMP has been given.
-    nthreads = int(os.environ.get("OMP_NUM_THREADS", 1)) if nthreads is None else nthreads
+    nthreads = library_nthreads() if nthreads is None else nthreads
     # Forward = False makes ducc correctly order the output, as the output order is not
     # symmetric for forward and reverse Fourier when doing rfft as supposed to regular fft.
     # inorm = 2 tells ducc to normalize by dividing by ntod, which is the same as what scipy does.
@@ -67,7 +67,7 @@ def forward_rfft_mirrored(data: NDArray, nthreads: int = None) -> NDArray:
     dt = np.empty(2 * ntod, dtype=data.dtype)
     dt[:ntod] = data
     dt[ntod:] = data[::-1]
-    nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
+    nthreads = library_nthreads() if nthreads is None else nthreads
     return ducc0.fft.r2c(dt, nthreads=nthreads)
 
 
@@ -92,7 +92,7 @@ def backward_rfft_mirrored(data_f: NDArray, ntod: int, nthreads: int = None) -> 
         Real-valued 1-D array of length *ntod*.
     """
     nfft = 2 * ntod
-    nthreads = int(os.environ.get("OMP_NUM_THREADS", "1")) if nthreads is None else nthreads
+    nthreads = library_nthreads() if nthreads is None else nthreads
     dt = ducc0.fft.c2r(data_f, lastsize=nfft, forward=False, nthreads=nthreads, inorm=0)
     return dt[:ntod] / nfft
 
@@ -111,11 +111,11 @@ def forward_dct(data: NDArray[np.floating], nthreads: int | None = None) -> NDAr
 
     Args:
         data: Real-valued 1-D array of length N.
-        nthreads: Number of threads; defaults to the OMP_NUM_THREADS environment variable.
+        nthreads: Number of threads; defaults to `library_nthreads()`.
     Returns:
         Real DCT-II coefficients, length N.
     """
-    nthreads = int(os.environ.get("OMP_NUM_THREADS", 1)) if nthreads is None else nthreads
+    nthreads = library_nthreads() if nthreads is None else nthreads
     return ducc0.fft.dct(data, type=2, nthreads=nthreads)
 
 
@@ -127,9 +127,9 @@ def backward_dct(data_f: NDArray[np.floating], nthreads: int | None = None) -> N
 
     Args:
         data_f: DCT-II coefficients, length N.
-        nthreads: Number of threads; defaults to the OMP_NUM_THREADS environment variable.
+        nthreads: Number of threads; defaults to `library_nthreads()`.
     Returns:
         Real-valued 1-D array of length N.
     """
-    nthreads = int(os.environ.get("OMP_NUM_THREADS", 1)) if nthreads is None else nthreads
+    nthreads = library_nthreads() if nthreads is None else nthreads
     return ducc0.fft.dct(data_f, type=3, inorm=2, nthreads=nthreads)

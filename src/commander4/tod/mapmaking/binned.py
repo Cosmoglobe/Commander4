@@ -10,6 +10,7 @@ The maps are indexed with `pix_local`: local pixel indices into the rank's map b
 """
 import numpy as np
 from numpy.typing import NDArray
+from pixell.bunch import Bunch
 
 from commander4.backend import mapmaker as cpp_mapmaker
 from commander4.data_models.pixel_domain import PixelDomain
@@ -18,9 +19,15 @@ from commander4.data_models.pixel_domain import PixelDomain
 class BinnedMapmaker:
     """All binned maps of one band: the weights P^T N^-1 P and any number of TOD maps P^T N^-1 d.
 
-    Every map of a band is binned with the same per-sample weight, so one `accumulate` call per
-    detector-scan adds the weights and all the TOD maps together, reading the pointing once. The
-    buffers hold this rank's local pixels (`PixelDomain`); `finalize` sums them onto the band
+    Every map of a band is binned with the same per-sample weight, so one pass over a detector-scan
+    bins the weights and all the TOD maps together, reading the pointing once. A detector-scan is
+    added in two steps. `bin_scan` bins it into small maps over its own pixels; it changes nothing
+    shared, so the scan workers run it at the same time (`TODView.map`). `add_scan` then adds these
+    to the rank's maps, in the main thread, one scan after the other. A scan has about 20 samples
+    per pixel, so this second, serial step is short, and the order of the additions, and thus the
+    maps to the last bit, is the same for any number of threads.
+
+    The buffers hold this rank's local pixels (`PixelDomain`); `finalize` sums them onto the band
     master and solves each pixel there. Afterwards the master holds (other ranks hold None):
 
     - `map_cov`: the summed weights, float64. For an IQU or QU band these are the 6 unique elements
@@ -41,22 +48,45 @@ class BinnedMapmaker:
         self._hits = np.zeros(domain.n_local) if count_hits else None
         self.map_cov = self.map_inv_var = self.maps = self.map_nhit = None
 
-    def accumulate(self, weight: float, pix_local: NDArray, psi: NDArray,
-                   tods: dict[str, NDArray], response_I_P: tuple[float, float] = (1.0, 1.0)):
-        """Add one detector-scan: `weight` per sample to the weights, and `weight*tods[name]` to
-        each map. Every TOD has one value per entry of `pix_local` (`TODView.pix_local`)."""
-        pix_local = np.asarray(pix_local, dtype=np.int64)
-        # One row per map, in the order of `names`.
-        tod_rows = (np.stack([tods[name] for name in self.names]) if self.names
-                    else np.zeros((0, pix_local.size), dtype=np.float32))
-        resp_I, resp_P = response_I_P
-        cpp_mapmaker.binned_map_accumulator(self._weights, self._maps, tod_rows, float(weight),
-                                            pix_local, np.asarray(psi, dtype=np.float64),
-                                            response_I=resp_I, response_P=resp_P)
+    def bin_scan(self, weight: float, pix_local: NDArray[np.int64], psi: NDArray,
+                 tod_rows: NDArray, response_I_P: tuple[float, float] = (1.0, 1.0)) -> Bunch:
+        """Bin one detector-scan into maps over its own pixels, for `add_scan`.
 
-    def count_hits(self, pix_local: NDArray):
-        """Add one hit per sample to the hit map."""
-        cpp_mapmaker.hit_accumulator(self._hits, np.asarray(pix_local, dtype=np.int64))
+        Each sample adds `weight` to the weights, and `weight*tod_rows[i]` to map `names[i]`.
+
+        Args:
+            weight: The weight of every sample, the inverse noise variance.
+            pix_local: Local pixel of each sample (`TODView.pix_local`).
+            psi: Polarization angle of each sample.
+            tod_rows: One row per map, in the order of `names`, and one column per sample.
+            response_I_P: The detector's intensity and polarization response.
+
+        Returns:
+            A Bunch with `pix`, the scan's distinct local pixels, and the scan's `weights`, `maps`
+            and `hits` (None without a hit map) at those pixels.
+        """
+        # `index` numbers the scan's pixels from 0, so the small maps hold only those pixels.
+        pix, index = cpp_mapmaker.distinct_pixels(pix_local)
+        weights = np.zeros((self._weights.shape[0], pix.size))
+        maps = np.zeros((len(self.names), self.ncomp, pix.size))
+        resp_I, resp_P = response_I_P
+        cpp_mapmaker.binned_map_accumulator(weights, maps, tod_rows, float(weight), index,
+                                            np.asarray(psi, dtype=np.float64),
+                                            response_I=resp_I, response_P=resp_P)
+        hits = None
+        if self._hits is not None:
+            hits = np.zeros(pix.size)
+            cpp_mapmaker.hit_accumulator(hits, index)
+        return Bunch(pix=pix, weights=weights, maps=maps, hits=hits)
+
+    def add_scan(self, scan: Bunch):
+        """Add a detector-scan binned by `bin_scan` to the rank's maps."""
+        nrows = len(self.names) * self.ncomp   # The maps as one row per map and component.
+        cpp_mapmaker.add_to_pixels(self._weights, scan.weights, scan.pix)
+        cpp_mapmaker.add_to_pixels(self._maps.reshape(nrows, self.domain.n_local),
+                                   scan.maps.reshape(nrows, scan.pix.size), scan.pix)
+        if self._hits is not None:
+            cpp_mapmaker.add_to_pixels(self._hits[None, :], scan.hits[None, :], scan.pix)
 
     def finalize(self):
         """Sum the buffers of all ranks onto the master and solve each pixel there (collective).

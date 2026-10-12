@@ -52,6 +52,11 @@ gibbs:
 resources:
   tod:
     num_threads: 1            # OpenMP/numba threads per TOD rank.
+    scan_threads: 1           # Worker threads per TOD rank that process detector-scans in
+                              # parallel (`TODView.map`); each gets num_threads // scan_threads
+                              # of the cores. 1: no workers, as before. Needs free-threaded Python
+                              # (3.15t, PYTHON_GIL=0) to pay off. Give each worker 2 cores; see
+                              # notes/thread_prototype_results.md for measured layouts.
 
   compsep:
     # Either one integer for every CompSep rank, or a list with one entry per CompSep

@@ -57,7 +57,7 @@ def _fill_masked_region(tod: NDArray, mask: NDArray[np.bool_], i_start: int, i_e
 
 
 @njit(fastmath=True)
-def fill_all_masked(tod: NDArray, mask: NDArray[np.bool_], sigma0: float) -> None:
+def fill_all_masked(tod: NDArray, mask: NDArray[np.bool_], sigma0: float, seed: int = -1) -> None:
     """ Fills all masked (gap) regions in the TOD with linear interpolation and then adds
         Gaussian white noise at the gap-filled positions. Translated from fill_all_masked in
         comm_tod_mod.f90.
@@ -65,7 +65,12 @@ def fill_all_masked(tod: NDArray, mask: NDArray[np.bool_], sigma0: float) -> Non
             tod: TOD array, modified in-place at masked positions.
             mask: Boolean mask (True = valid, False = masked).
             sigma0: White noise standard deviation used for the gap noise realizations.
+            seed: Seed for the white noise, in [0, 2**32). Inside numba, `np.random` has one state
+                per thread, so without a seed the draws depend on which thread runs the call.
+                Negative: leave the state as it is.
     """
+    if seed >= 0:
+        np.random.seed(seed)   # Seeds only the calling thread's numba state.
     ntod   = len(tod)
     in_gap = False
     j_start = 0

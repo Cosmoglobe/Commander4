@@ -34,6 +34,7 @@ from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
+from commander4 import threads
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
@@ -130,24 +131,13 @@ class TODReader:
         """
         scans = []
         fsamp = 0.0
-        for iscan, (scan_id, path) in enumerate(scan_list):
-            with h5py.File(path, "r") as f:
-                header = self.read_scan_header(f, scan_id)
-                if header is None:
-                    # An empty placeholder scan, as the HFI converter's restart path writes. A
-                    # filelist with an ntod column marks these with ntod 0, and `select_scans`
-                    # leaves them out; older filelists list them like any other scan.
-                    logger.debug(f"Band {self.band._name}: {path} has no data for scan "
-                                 f"{scan_id}; the scan is skipped.")
-                    continue
-                fsamp = header.fsamp
-                detectors = []
-                for idet, det_name in enumerate(self.det_names):
-                    det = self.read_detector(f, header, idet, det_name)
-                    if det is not None and self.keep_detector(det):
-                        detectors.append(det)
-            if len(detectors) > 0:
-                scans.append(ScanTOD(detectors, header.start_time, scan_id))
+        # The scans are read by the scan worker threads, in order. h5py runs one HDF5 call at a
+        # time per process, but decoding the flags and checking the TOD run in parallel.
+        for iscan, (scan, scan_fsamp) in enumerate(threads.run_in_order(self.read_scan,
+                                                                         scan_list)):
+            fsamp = max(fsamp, scan_fsamp)
+            if scan is not None:
+                scans.append(scan)
             if self.band_comm.Get_rank() == 0 and iscan % max(1, len(scan_list)//5) == 0:
                 logger.debug(f"Reading scans from disk, progress on master rank of band "
                              f"{self.band._name}: {iscan}/{len(scan_list)}")
@@ -164,6 +154,33 @@ class TODReader:
                                 instrument_filepath=getattr(self.experiment, "instrument_file",
                                                             None),
                                 hfi_demodulation=self.hfi_demodulation)
+
+
+    def read_scan(self, scan_id: int, path: str) -> tuple[ScanTOD | None, float]:
+        """Read one scan file, keeping the detector-scans that pass `keep_detector`.
+
+        Runs in the scan worker threads (`threads.run_in_order`).
+
+        Returns:
+            The scan, or None if it has no data or no detector is kept, and its sample rate (0 for
+            a scan without data).
+        """
+        with h5py.File(path, "r") as f:
+            header = self.read_scan_header(f, scan_id)
+            if header is None:
+                # An empty placeholder scan, as the HFI converter's restart path writes. A
+                # filelist with an ntod column marks these with ntod 0, and `select_scans`
+                # leaves them out; older filelists list them like any other scan.
+                logger.debug(f"Band {self.band._name}: {path} has no data for scan "
+                             f"{scan_id}; the scan is skipped.")
+                return None, 0.0
+            detectors = []
+            for idet, det_name in enumerate(self.det_names):
+                det = self.read_detector(f, header, idet, det_name)
+                if det is not None and self.keep_detector(det):
+                    detectors.append(det)
+        scan = ScanTOD(detectors, header.start_time, scan_id) if detectors else None
+        return scan, header.fsamp
 
 
     def read_scan_header(self, f: h5py.File, scan_id: int) -> Bunch | None:

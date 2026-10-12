@@ -72,11 +72,13 @@ def init_mpi(params: Bunch) -> Bunch:
     # Split the world communicator into a communicator for compsep and one for TOD (with "color"
     # being the keyword for the split).
     nthreads_compsep = params.resources.compsep.num_threads
+    scan_threads = 1  # Worker threads for the scan loops (`TODView.map`); TOD ranks only.
     if worldrank < ntask_tod:
         color = 0
         side = "tod"
         my_num_threads = params.resources.tod.num_threads
         my_num_threads_numba = my_num_threads
+        scan_threads = int(getattr(params.resources.tod, "scan_threads", 1))
 
     else:
         color = 1  # Compsep
@@ -96,14 +98,21 @@ def init_mpi(params: Bunch) -> Bunch:
 
     # It's important to set these environment variables before importing any package that might
     # use them, such as Numpy or Scipy, as they will not apply retroactively!
+    # TOD ranks get one BLAS thread. OpenBLAS splits a long dot product between its threads, which
+    # changes the order of the additions, so the results would depend on the thread layout; and
+    # the count is per process, so every scan worker's call would try to use all of the rank's
+    # cores. The TOD code makes little use of BLAS.
+    blas_threads = 1 if side == "tod" else my_num_threads
     os.environ["OMP_NUM_THREADS"] = f"{my_num_threads}"
-    os.environ["OPENBLAS_NUM_THREADS"] = f"{my_num_threads}" 
-    os.environ["MKL_NUM_THREADS"] = f"{my_num_threads}"
-    os.environ["VECLIB_MAXIMUM_THREADS"] = f"{my_num_threads}"
-    os.environ["NUMEXPR_NUM_THREADS"] = f"{my_num_threads}"
+    os.environ["OPENBLAS_NUM_THREADS"] = f"{blas_threads}"
+    os.environ["MKL_NUM_THREADS"] = f"{blas_threads}"
+    os.environ["VECLIB_MAXIMUM_THREADS"] = f"{blas_threads}"
+    os.environ["NUMEXPR_NUM_THREADS"] = f"{blas_threads}"
     os.environ["NUMBA_NUM_THREADS"] = f"{my_num_threads_numba}"
     # I tried using numba.set_num_threads(x) here instead (or as well) but that
     # resulted in some weirdeties, like many duplicate open file handles even when x=1.
+    from commander4 import threads
+    threads.SCAN_THREADS = scan_threads
 
     if False: # This code should enter production, but threadpoolctl is not yet a dependency.
         import numba
@@ -126,7 +135,8 @@ def init_mpi(params: Bunch) -> Bunch:
     time.sleep(worldrank*1e-5)  # Small sleep to get prints in nice order.
     logger.debug(f"MPI split performed, hi from worldrank {worldrank} (on machine "\
                 f"{MPI.Get_processor_name()}) subcomrank {proc_comm.Get_rank()} from color "\
-                f"{color} of size {proc_comm.Get_size()}. Threads = {my_num_threads}.")
+                f"{color} of size {proc_comm.Get_size()}. Threads = {my_num_threads}, scan "
+                f"threads = {scan_threads}.")
 
     # Determine the world ranks of the respective master tasks for compsep and TOD
     # We ensured that this works by the "key=worldrank" in the split command.

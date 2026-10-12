@@ -13,6 +13,7 @@ from ducc0 import totalconvolve
 from mpi4py import MPI
 from numpy.typing import NDArray
 
+from commander4 import threads
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.math_utils.alm import alm_real2complex_commander3
 from commander4.mpi.shared_memory import SharedArray
@@ -102,11 +103,28 @@ class FarBeamProjector:
                if band_comm.Get_rank() == 0 else None)
         slm = band_comm.bcast(slm, root=0)
 
-        self.plan = totalconvolve.ConvolverPlan(lmax=lmax, kmax=mmax,
-                                                epsilon=self.far_beam_deconvolution_cfg.epsilon,
+        # ducc0 picks the interpolation kernel from a cost estimate that includes the thread count:
+        # for lmax = mmax = 256 it oversamples the cube by 1.6 up to 32 threads, by 1.4 at 48 and
+        # by about 1.25 from 96 on. Fixing the oversampling at 1.6 (the choice for 2 threads) keeps
+        # the kernel, and thus the projected TOD, the same for any number of threads.
+        epsilon = self.far_beam_deconvolution_cfg.epsilon
+        self.plan = totalconvolve.ConvolverPlan(lmax=lmax, kmax=mmax, sigma_min=1.6,
+                                                sigma_max=1.6 + 1e-6, epsilon=epsilon,
                                                 nthreads=self.nthreads)
+        # The same plan for `get_projection`, which scan workers call: a plan's thread count is
+        # fixed when it is made, and a worker gets only its share of the rank's cores.
+        self.interp_plan = totalconvolve.ConvolverPlan(
+            lmax=lmax, kmax=mmax, sigma_min=1.6, sigma_max=1.6 + 1e-6, epsilon=epsilon,
+            nthreads=max(1, self.nthreads // threads.SCAN_THREADS))
         # ducc0 decides a cube shape based on stuff like lmax, mmax, epsilon.
         cube_shape = (self.plan.Npsi(), self.plan.Ntheta(), self.plan.Nphi())
+        # The cube shape holds both the kernel's width and its oversampling factor, so equal
+        # shapes mean the two plans use the same kernel.
+        interp_shape = (self.interp_plan.Npsi(), self.interp_plan.Ntheta(), self.interp_plan.Nphi())
+        if interp_shape != cube_shape:
+            raise RuntimeError(f"The far-beam interpolation plan chose another kernel (cube shape "
+                               f"{interp_shape}) than the plan that builds the cubes "
+                               f"({cube_shape}).")
         if band_comm.Get_rank() == 0:
             gib = len(blms)*np.prod(cube_shape)*8/1024**3
             logger.verbose(f"Far beam: {len(blms)} cubes of shape {cube_shape} ({gib:.1f} GiB) "
@@ -165,7 +183,7 @@ class FarBeamProjector:
         # C3 evaluated every fifth sample and interpolated the gaps to save time. ducc0 is fast
         # enough to evaluate every sample directly, avoiding that approximation.
         res = np.empty(theta.shape[0], dtype=np.float64)
-        self.plan.interpol(self.cubes[idet], 0, 0, theta, phi, psi_beam, res)
+        self.interp_plan.interpol(self.cubes[idet], 0, 0, theta, phi, psi_beam, res)
         return res
 
 
