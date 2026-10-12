@@ -253,9 +253,9 @@ class PixelPointing:
             pix = np.zeros(self.ntod_original, dtype=self.huffman_symbols.dtype)
             pix = cpp_compression.huffman_decode(self.pix_compressed_u8, self.huffman_tree,
                                                  self.huffman_symbols, pix)
-            # The compressed stream stores first differences, so reconstruct the
-            # absolute pixel indices with a cumulative sum.
-            pix = np.cumsum(pix)
+            # The compressed stream stores first differences in the symbol dtype, so reconstruct
+            # the absolute pixel indices with a cumulative sum that wraps in that same dtype.
+            pix = np.cumsum(pix, dtype=pix.dtype).astype(np.int64, copy=False)
         else:
             pix = self.pix_encoded
 
@@ -269,8 +269,9 @@ class PixelPointing:
             psi = cpp_compression.huffman_decode(self.psi_compressed_u8, self.huffman_tree,
                                                  self.huffman_symbols, psi)
             # Commander scan files store first differences of one-based bin numbers. Bin i covers
-            # [(i-1)*width, i*width), so its representative angle is the center (i-0.5)*width.
-            psi_bins = np.cumsum(psi)[:self.ntod]
+            # [(i-1)*width, i*width), so its representative angle is the center (i-0.5)*width. The
+            # differences wrap in the symbol dtype, so the cumulative sum must wrap in it too.
+            psi_bins = np.cumsum(psi, dtype=psi.dtype)[:self.ntod]
             bin_width = np.float32(2*np.pi/self.npsi)
             psi = (psi_bins.astype(np.float32, copy=False) - np.float32(0.5))*bin_width
         else:

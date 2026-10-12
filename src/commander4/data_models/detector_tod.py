@@ -212,7 +212,9 @@ class DetectorTOD:
             with benchmark("huffman"):
                 flag = cpp_compression.huffman_decode(self._flag_encoded,
                                             self._huffman_tree, self._huffman_symbols, flag)
-            flag = np.cumsum(flag)
+            # Specifically cumsum-ing in the flags native units, as SO currently relies on uint8
+            # wrap-around from 255 to 0 in its cummulation.
+            flag = np.cumsum(flag, dtype=flag.dtype).astype(np.int64, copy=False)
         else:
             flag = self._flag_encoded
         return flag[:self.ntod]
