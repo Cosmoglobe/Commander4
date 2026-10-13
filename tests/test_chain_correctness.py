@@ -46,7 +46,8 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2) -> TODSamples:
     """A `TODSamples` carrying only what `gather_chain_arrays` reads, on a one-rank communicator."""
     from mpi4py import MPI
 
-    from commander4.data_models.jump_corrections import JumpCatalog
+    from commander4.tod.glitches.events import empty_glitch_grid
+    from commander4.tod.jumps.events import empty_jump_grid
 
     s = TODSamples.__new__(TODSamples)
     s.params, s.chain, s.band_comm = _params(), 1, MPI.COMM_SELF
@@ -68,12 +69,19 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2) -> TODSamples:
     s.ncorr_cg_residual = np.zeros((nscans, ndet))
     s.ncorr_cg_niter = np.zeros((nscans, ndet), dtype=np.int32)
     s.ncorr_converged = np.zeros((nscans, ndet), dtype=np.int8)
+    s.scan_runtime = np.zeros(nscans)
     for name in ("tod_ps_freqs", "tod_ps_ncorr", "tod_ps_raw", "tod_ps_ncorrsub",
                  "tod_ps_residual"):
         setattr(s, name, np.zeros((nscans, ndet, TODSamples.TOD_PS_NBIN), dtype=np.float32))
     s.ncorr_tods = None
     s.residual_tods = None
-    s.jumps = JumpCatalog.empty(nscans, ndet)
+    s.jumps = empty_jump_grid(nscans, ndet)
+    s.write_jump_events = False
+    s.glitches = empty_glitch_grid(nscans, ndet)
+    s.glitch_template_amps = np.full((ndet, 3, 8), np.nan)
+    s.glitch_template_taus = np.full((ndet, 3, 8), np.nan)
+    s.glitch_events_detected = False
+    s.write_glitch_events = False
     return s
 
 
@@ -84,12 +92,36 @@ def test_the_band_file_carries_every_dataset_a_restart_reads_back() -> None:
     the reader is allowed to be unconditional. This list mirrors the reads in `__init__`.
     """
     read_back = {"scan_ids", "abs_gain", "detrel_gain", "temporal_gain", "noise_params",
-                 "accept", "chisq_z", "good_fraction",
-                 "jump_counts", "jump_locations", "jump_offsets"}
+                 "accept", "chisq_z", "good_fraction"}
 
     written = set(_minimal_tod_samples().gather_chain_arrays(1))
 
     assert read_back <= written, f"a restart would fail on {sorted(read_back - written)}"
+
+
+def test_per_scan_datasets_are_written_in_time_order() -> None:
+    """A rank's scans need not be in time order; the chain rows always are (by scan ID)."""
+    samples = _minimal_tod_samples(nscans=4)
+    samples.scan_ids = np.array([30, 10, 40, 20], dtype=np.int64)
+    samples.temporal_gain = samples.scan_ids[:, None] * np.ones((1, samples.ndet))
+
+    arrays = samples.gather_chain_arrays(1)
+
+    np.testing.assert_array_equal(arrays["scan_ids"], [10, 20, 30, 40])
+    np.testing.assert_array_equal(arrays["temporal_gain"][:, 0], [10, 20, 30, 40])
+    assert arrays["detrel_gain"].shape == (samples.ndet,)
+
+
+def test_first_scans_runtime_is_written_as_the_median_of_the_others() -> None:
+    """The rank's first timed scan also paid one-time costs (Numba compilation), so the chain gets
+    the median of the other timed scans instead. Scan 2 was never processed and stays at zero."""
+    samples = _minimal_tod_samples(nscans=4)
+    samples.scan_runtime = np.array([5.0, 1.0, 0.0, 3.0])
+
+    arrays = samples.gather_chain_arrays(1)
+
+    np.testing.assert_array_equal(arrays["scan_runtime"], [2.0, 1.0, 0.0, 3.0])
+    np.testing.assert_array_equal(samples.scan_runtime, [5.0, 1.0, 0.0, 3.0])  # Kept as measured.
 
 
 def test_hfi_chain_carries_modulation_phase_and_baselines() -> None:
@@ -103,6 +135,40 @@ def test_hfi_chain_carries_modulation_phase_and_baselines() -> None:
 
     np.testing.assert_array_equal(written["modulation_phase"], samples.modulation_phase)
     np.testing.assert_array_equal(written["baselines"], samples.baselines)
+
+
+def test_glitch_events_are_debug_output_written_per_detector_scan(tmp_path) -> None:
+    from commander4.tod.glitches.events import GlitchEvents
+
+    def glitch_names(samples) -> list[str]:
+        return sorted(name for name in samples.gather_chain_arrays(1) if name.startswith("glitch"))
+
+    samples = _minimal_tod_samples()
+    samples.glitch_events_detected = True
+    samples.glitches[2, 1] = GlitchEvents([5, 9], [20, 20], [0, 2], [2.0, 0.5], [5, 9], [5, 9],
+                                          [0, 0], [])
+    assert glitch_names(samples) == []  # Off unless asked for.
+
+    samples.write_glitch_events = True
+    written = samples.gather_chain_arrays(1)
+
+    # Only the detector-scan with events gets a group, named by scan ID and detector name.
+    event_groups = {name.rsplit("/", 1)[0] for name in glitch_names(samples)
+                    if not name.startswith("glitches/template_")}
+    assert event_groups == {"glitches/2/d1"}
+    np.testing.assert_array_equal(written["glitches/2/d1/start"], [5, 9])
+    assert written["glitches/2/d1/shape_params"].size == 0
+    assert written["glitches/template_amps"].shape == (2, 3, 8)
+
+    # The chain writer turns the paths into nested HDF5 groups.
+    params = _params(str(tmp_path))
+    paths.create_output_dirs(params.output)
+    with h5py.File(_write_band(params, written)) as handle:
+        assert handle["glitches/2/d1/type"].dtype == np.int8
+
+    # Nothing is written before the glitch step has run.
+    samples.glitch_events_detected = False
+    assert glitch_names(samples) == []
 
 
 @pytest.mark.parametrize("save_residual", [False, True])

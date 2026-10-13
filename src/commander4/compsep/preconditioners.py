@@ -58,7 +58,7 @@ class DiagonalJointPreconditioner:
         # TODO: Currently the master rank temporarily has to hold ALL inverse-variance bands.
         # It would be easy to re-write this so they send them one-and-one as we make the diagonal.
         all_fwhm_rad = compsep.CompSep_comm.gather(np.deg2rad(compsep.my_band.fwhm/60), root=0)
-        all_map_inv_var = compsep.CompSep_comm.gather(compsep.det_map.inv_n_map, root=0)
+        all_map_inv_var = compsep.CompSep_comm.gather(compsep.det_map.map_inv_var, root=0)
         all_freqs = compsep.CompSep_comm.gather(compsep.my_band.nu, root=0)
 
         # We can now get rid of the ranks that do not hold components.
@@ -196,7 +196,7 @@ class JointPreconditioner:
         # Gather the band-local ingredients needed to build the isotropic approximation. Every rank
         # holds one band, but only the master rank actually assembles the small dense blocks.
         all_fwhm_rad = compsep.CompSep_comm.gather(np.deg2rad(compsep.my_band.fwhm/60), root=0)
-        all_map_inv_var = compsep.CompSep_comm.gather(compsep.det_map.inv_n_map, root=0)
+        all_map_inv_var = compsep.CompSep_comm.gather(compsep.det_map.map_inv_var, root=0)
         all_freqs = compsep.CompSep_comm.gather(compsep.my_band.nu, root=0)
         all_band_lmax = compsep.CompSep_comm.gather(compsep.det_map.lmax, root=0)
 
@@ -223,12 +223,12 @@ class JointPreconditioner:
         # harmonic inner product. For polarization we keep only the trace part of the Stokes-space
         # weight matrix so that the approximation acts sensibly on the two spin-2 harmonic channels.
         band_pol_matrices = []
-        for inv_n_map in all_map_inv_var:
+        for map_inv_var in all_map_inv_var:
             if not self.include_noise:
                 band_pol_matrices.append(np.eye(self.npol, dtype=np.float64))
                 continue
-            npix = inv_n_map.shape[-1]
-            stokes_weights = np.mean(inv_n_map, axis=-1).astype(np.float64, copy=False)
+            npix = map_inv_var.shape[-1]
+            stokes_weights = np.mean(map_inv_var, axis=-1).astype(np.float64, copy=False)
             stokes_weights *= npix/(4*np.pi)
             if self.npol == 1:
                 band_pol_matrices.append(np.array([[stokes_weights[0]]], dtype=np.float64))
@@ -400,7 +400,7 @@ class MixingMatrixPreconditioner(JointPreconditioner):
 # `my_comp_lmax`), and its `__call__` takes a plain alm array rather than a CompList.
 #
 # Note that the isotropic (ell_3 = 0) term of the sum below is exactly the constant weight
-# `mean(inv_n_map) * npix/(4*pi)` that `JointPreconditioner` already uses, so a noise-only variant
+# `mean(map_inv_var) * npix/(4*pi)` that `JointPreconditioner` already uses, so a noise-only variant
 # under that approximation is `JointPreconditioner` with `include_beam` and `include_mixing` off --
 # no Wigner symbols needed. The value of the version below is the ell-dependence beyond that.
 #

@@ -226,7 +226,7 @@ compsep:
         dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
       fwhm: 60.0  # [arcmin]
       freq: 0.408 # [GHz]
-      polarization: "IQU"
+      polarization: "I"  # The file's Q and U columns are copies of I, not polarization data.
       units: "uK_CMB"
 
     ###### WMAP MAPS ######
@@ -311,7 +311,7 @@ components:
     enabled: true
     component_class: "FreeFree"
     params:
-      polarization: "IQU"
+      polarization: "I"  # Free-free emission is unpolarized.
       longname: "Free-Free"
       shortname: "ff"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_ff_amp_BP8.1_v1.fits"
@@ -334,15 +334,17 @@ experiments:
   SO_SAT:
     enabled: true
     experiment_id: "SO_SAT"
-    tod_is_compressed: false   # these files store a plain `tod`, not `ztod`
     mapmaker: "bin"
     sparse_maps: true
     bad_data_bitmask: 0b11111111111111111111111111111111  # Treat all flags as "bad". Is this correct?
     min_unmasked_fraction: 0.1
+    # Harmonic limit of these bands in CompSep. No component goes above l=1500, so higher band
+    # multipoles hold no signal and only make the SHTs slower (default would be 3*nside-1).
+    lmax: 1500
     bands:
       SO_SAT_ws0_f090:
         enabled: true
-        num_tasks: 12
+        band_weight: "auto"
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
         freq: 90.0 # [GHz]
@@ -357,7 +359,7 @@ experiments:
 
       SO_SAT_ws0_f150:
         enabled: true
-        num_tasks: 12
+        band_weight: "auto"
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
         freq: 150.0 # [GHz]
@@ -372,7 +374,7 @@ experiments:
 
       SO_SAT_ws1_f090:
         enabled: true
-        num_tasks: 12
+        band_weight: "auto"
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
         freq: 90.0 # [GHz]
@@ -387,7 +389,7 @@ experiments:
 
       SO_SAT_ws1_f150:
         enabled: true
-        num_tasks: 12
+        band_weight: "auto"
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
         freq: 150.0 # [GHz]
@@ -402,7 +404,7 @@ experiments:
 
       SO_SAT_ws2_f090:
         enabled: true
-        num_tasks: 12
+        band_weight: "auto"
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
         freq: 90.0 # [GHz]
@@ -417,7 +419,7 @@ experiments:
 
       SO_SAT_ws2_f150:
         enabled: true
-        num_tasks: 12
+        band_weight: "auto"
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
         freq: 150.0 # [GHz]
@@ -432,7 +434,7 @@ experiments:
 
       SO_SAT_ws3_f090:
         enabled: true
-        num_tasks: 12
+        band_weight: "auto"
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
         freq: 90.0 # [GHz]
@@ -447,7 +449,7 @@ experiments:
 
       SO_SAT_ws3_f150:
         enabled: true
-        num_tasks: 12
+        band_weight: "auto"
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
         freq: 150.0 # [GHz]
@@ -462,7 +464,7 @@ experiments:
 
       SO_SAT_ws4_f090:
         enabled: true
-        num_tasks: 12
+        band_weight: "auto"
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
         freq: 90.0 # [GHz]
@@ -477,7 +479,7 @@ experiments:
 
       SO_SAT_ws4_f150:
         enabled: true
-        num_tasks: 12
+        band_weight: "auto"
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
         freq: 150.0 # [GHz]
@@ -492,7 +494,7 @@ experiments:
 
       SO_SAT_ws5_f090:
         enabled: true
-        num_tasks: 12
+        band_weight: "auto"
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
         freq: 90.0 # [GHz]
@@ -507,7 +509,7 @@ experiments:
 
       SO_SAT_ws5_f150:
         enabled: true
-        num_tasks: 12
+        band_weight: "auto"
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
         freq: 150.0 # [GHz]
@@ -522,7 +524,7 @@ experiments:
 
       SO_SAT_ws6_f090:
         enabled: true
-        num_tasks: 12
+        band_weight: "auto"
         eval_nside: 512
         fwhm: 30.0 # [arcmin]
         freq: 90.0 # [GHz]
@@ -537,7 +539,7 @@ experiments:
 
       SO_SAT_ws6_f150:
         enabled: true
-        num_tasks: 12
+        band_weight: "auto"
         eval_nside: 1024
         fwhm: 17.0 # [arcmin]
         freq: 150.0 # [GHz]

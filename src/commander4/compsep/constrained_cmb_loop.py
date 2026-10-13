@@ -1,7 +1,7 @@
 """Constrained CMB realizations from multi-band maps, serial version.
 
 Solves the constrained-realization (Wiener filter plus fluctuation) system for the CMB alms given
-several band maps and their RMS. Not yet wired into the Gibbs loop; see
+several band maps and their inverse noise variance. Not yet wired into the Gibbs loop; see
 ``constrained_cmb_loop_mpi`` for the band-distributed variant and
 ``standalone_tools/constrained_cmb_realizations`` for the offline tool built on the same solve.
 """
@@ -40,10 +40,10 @@ def alm2map_adjoint(map, nside, lmax):
 class ConstrainedCMB:
     """The constrained-realization system for the CMB alms, with all bands held on one rank."""
 
-    def __init__(self, map_sky, map_rms, iter):
+    def __init__(self, map_sky, map_inv_var, iter):
         self.iter = iter
         self.map_sky = map_sky
-        self.map_rms = map_rms
+        self.map_inv_var = map_inv_var
         self.nband, self.npix = map_sky.shape
         self.fwhm = 1.0/60.0*np.pi/180.0*np.ones(self.nband)
         self.nside = hp.npix2nside(self.npix)
@@ -82,7 +82,7 @@ class ConstrainedCMB:
         for iband in range(self.nband):
             Ax = hp.smoothalm(x, self.fwhm[iband], inplace=False)
             YAx = alm2map(Ax, self.nside, self.lmax)
-            NYAx = YAx/self.map_rms[iband]**2
+            NYAx = YAx*self.map_inv_var[iband]
             YTNYAx = alm2map_adjoint(NYAx, self.nside, self.lmax)
             ATYTNYAx = hp.smoothalm(YTNYAx, self.fwhm[iband], inplace=False)
             LHS_sum += ATYTNYAx
@@ -96,7 +96,7 @@ class ConstrainedCMB:
         """
         RHS_sum = np.zeros(self.alm_len, dtype=np.complex128)
         for iband in range(self.nband):
-            Nd = self.map_sky[iband]/self.map_rms[iband]**2
+            Nd = self.map_sky[iband]*self.map_inv_var[iband]
             YTNd = alm2map_adjoint(Nd, self.nside, self.lmax)
             ATYTNd = hp.smoothalm(YTNd, self.fwhm[iband], inplace=False)
             RHS_sum += ATYTNd
@@ -116,7 +116,7 @@ class ConstrainedCMB:
 
         for iband in range(self.nband):
             omega1 = np.random.normal(0, 1, self.npix)
-            Nomega1 = omega1/self.map_rms[iband]
+            Nomega1 = omega1*np.sqrt(self.map_inv_var[iband])
             YTNomega1 = alm2map_adjoint(Nomega1, self.nside, self.lmax)
             ATYTNomega1 = hp.smoothalm(YTNomega1, self.fwhm[iband], inplace=False)
             RHS_sum += ATYTNomega1
@@ -175,17 +175,17 @@ def constrained_cmb_loop(comm, compsep_master: int, params: dict):
         if master:
             logger.log(VERBOSE, "CMB: successfully received data.")
         if master:
-            signal_maps, rms_maps = data
+            signal_maps, inv_var_maps = data
             signal_maps = signal_maps[:2]  # Ignore highest frequency band - very dust contaminated.
-            rms_maps = rms_maps[:2]
-            constrained_cmb_solver = ConstrainedCMB(signal_maps, rms_maps, iter)
+            inv_var_maps = inv_var_maps[:2]
+            constrained_cmb_solver = ConstrainedCMB(signal_maps, inv_var_maps, iter)
             logger.log(VERBOSE, "CMB: solving for mean-field map.")
             RHS_mean_field = constrained_cmb_solver.get_RHS_eqn_mean()
             CMB_mean_field_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.LHS_func, RHS_mean_field)
             CMB_mean_field_Cl = hp.alm2cl(CMB_mean_field_alms)
             CMB_mean_field_map = alm2map(CMB_mean_field_alms, constrained_cmb_solver.nside, constrained_cmb_solver.lmax)
 
-            constrained_cmb_solver = ConstrainedCMB(signal_maps, rms_maps, iter)
+            constrained_cmb_solver = ConstrainedCMB(signal_maps, inv_var_maps, iter)
             logger.log(VERBOSE, "CMB: solving for fluctuation map.")
             RHS_fluct = constrained_cmb_solver.get_RHS_eqn_fluct()
             CMB_fluct_alms = constrained_cmb_solver.solve_CG(constrained_cmb_solver.LHS_func, RHS_fluct)

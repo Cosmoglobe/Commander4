@@ -14,8 +14,12 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from mpi4py import MPI
 from pixell.bunch import Bunch
 
+from commander4.data_models.pixel_domain import PixelDomain
+from commander4.tod.glitches.events import empty_glitch_grid
+from commander4.tod.jumps.events import empty_jump_grid
 from commander4.tod.view import TODView
 from commander4.tod.gain import _solve_relative_gain_system
 from commander4.tod.config import GainConfig
@@ -132,6 +136,50 @@ def test_absolute_gain_reuses_filtered_calibrator(
     for call, view in zip(filter_spy.call_args_list, views):
         assert call.args[0] is view.get_calib_tod.return_value.s_cal
         assert call.kwargs["samprate"] == 1.0
+
+
+def test_temporal_gain_is_solved_in_time_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shuffling a rank's scans gives every scan the same gain, since the solve sorts by scan ID.
+
+    The Wiener prior couples scans that are neighbours in time, so a solve in rank order would
+    pair the wrong scans and change the result.
+    """
+    from commander4.data_models.detector_group_tod import DetectorGroupTOD
+    from commander4.data_models.scan_tod import ScanTOD
+    from commander4.tod.noise.psd import NoisePSDOof
+    import commander4.tod.gain as gain
+
+    rng = np.random.default_rng(5)
+    nscans = 6
+    # One calibration problem per scan, listed by the scan's place in time.
+    calibs = [SimpleNamespace(s_cal=rng.normal(size=500), tod=rng.normal(size=500))
+              for _ in range(nscans)]
+    model = NoisePSDOof()
+    model.is_white = True
+
+    def solve(time_order: np.ndarray) -> np.ndarray:
+        """Temporal gain of each scan, with the rank holding its scans in the given order of their
+        places in time. The scan IDs increase with time, but are not the places themselves."""
+        scan_ids = 100 + 10*time_order
+        scans = [ScanTOD([], 0.0, int(scan_id)) for scan_id in scan_ids]
+        experiment = DetectorGroupTOD(scans, "EXP", "BAND", 1, 100.0, 0.0, 10.0, 1, "I", model)
+        views = [SimpleNamespace(iscan=iscan, idet=0, fsamp=10.0, downsample_factor=1,
+                                 noise_params=np.array([1.0, 0.1, -1.0]),
+                                 get_calib_tod=Mock(return_value=calibs[t]))
+                 for iscan, t in enumerate(time_order)]
+        scan_view = SimpleNamespace(iter_focused=Mock(return_value=iter(views)))
+        monkeypatch.setattr(gain, "TODView", Mock(return_value=scan_view))
+        samples = SimpleNamespace(abs_gain=1.0, rel_gain=np.zeros(1), chain=1, scan_ids=scan_ids,
+                                  temporal_gain=np.zeros((nscans, 1), dtype=np.float32))
+        np.random.seed(7)  # The same fluctuation draws, which the solve makes in time order.
+        return gain.sample_temporal_gain_variations(MPI.COMM_SELF, experiment, samples, None,
+                                                    GainConfig(), 1).temporal_gain[:, 0]
+
+    in_time_order = solve(np.arange(nscans))
+    shuffled_order = np.array([3, 0, 5, 1, 4, 2])
+    shuffled = solve(shuffled_order)
+
+    np.testing.assert_array_equal(shuffled, in_time_order[shuffled_order])
 
 
 # --------------------------------------------------------------------------------------
@@ -446,16 +494,15 @@ def _make_real_view(monkeypatch, good=None):
     det = SimpleNamespace(tod=rng.normal(size=NTOD), ntod=NTOD, fsamp=float(FACTOR), nside=1,
                           det_idx_fullband=0, get_pix_psi=lambda: (pix, psi),
                           response_I_P=(1.0, 1.0),
-                          orbital_velocity_m_per_s=np.array([1.0, 0.0, 0.0], dtype=np.float32))
-    experiment_data = SimpleNamespace(scans=[SimpleNamespace(detectors=[det])], nside=1, nu=30.0)
-    no_jump = SimpleNamespace(is_empty=lambda: True)
-    tod_samples = SimpleNamespace(jumps=SimpleNamespace(get=lambda iscan, idet: no_jump),
+                          orbital_velocity_m_per_s=np.array([1.0, 0.0, 0.0], dtype=np.float32),
+                          good_data_mask=np.ones(NTOD, dtype=bool) if good is None else good)
+    experiment_data = SimpleNamespace(scans=[SimpleNamespace(detectors=[det])], nside=1, nu=30.0,
+                                      pixel_domain=PixelDomain(MPI.COMM_SELF, 1, "full"))
+    tod_samples = SimpleNamespace(jumps=empty_jump_grid(1, 1),
+                                  glitches=empty_glitch_grid(1, 1),
                                   abs_gain=2.0, rel_gain=np.array([0.5]),
                                   temporal_gain=np.array([[0.25]]),
                                   accept=np.ones((1, 1), dtype=bool))
-    if good is not None:
-        det._good_data_mask = good          # presence of this attribute enables the flag cut
-        det.good_data_mask = good
     skymap = rng.normal(size=(3, 12))
 
     def make_view(downsample_factor=1, mask_threshold=0.5):

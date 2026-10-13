@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 from mpi4py import MPI
 from numpy.typing import NDArray
+from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
@@ -183,5 +184,5 @@ def _discover_spectral_index_groups(comp_list: CompList,
     return groups
 
 
-def _read_param(container, key: str, default=None):
+def _read_param(container: Bunch, key: str, default=None):
     return container[key] if key in container else default

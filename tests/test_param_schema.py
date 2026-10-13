@@ -12,7 +12,6 @@ from pixell.bunch import Bunch
 
 import numpy as np
 
-from commander4.file_io.experiments.read_utils import apply_noise_priors, apply_noise_fit_range
 from commander4.tod.config import CorrelatedNoiseConfig
 from commander4.tod.noise.psd import NoisePSDOof
 from commander4.parameters.schema import (TOP_LEVEL_BLOCKS, validate_param_schema, compsep_enabled,
@@ -20,8 +19,8 @@ from commander4.parameters.schema import (TOP_LEVEL_BLOCKS, validate_param_schem
                                      resolve_band_lmax)
 
 
-def _band(num_tasks=1, enabled=True, **kw):
-    return Bunch(enabled=enabled, num_tasks=num_tasks, **kw)
+def _band(band_weight=1, enabled=True, **kw):
+    return Bunch(enabled=enabled, band_weight=band_weight, **kw)
 
 
 def _params(compsep_bands=(), tod_bands=(("BandA", 4), ("BandB", 2)), groups=True, **compsep_kw):
@@ -84,26 +83,26 @@ def test_double_precision_accepts_booleans_and_may_be_omitted():
 def test_task_counts_are_derived_from_the_band_configuration():
     params = _params(compsep_bands=(("BandA", "IQU", True), ("BandB", "I", True)))
     counts = derive_task_counts(params)
-    assert (counts.tod, counts.compsep_I, counts.compsep_QU) == (6, 2, 1)
-    assert counts.total == 9
+    assert (counts.tod_bands, counts.compsep_I, counts.compsep_QU) == (2, 2, 1)
+    assert counts.min_total == 5
 
 
 def test_disabled_bands_and_experiments_contribute_nothing():
     params = _params(compsep_bands=(("BandA", "IQU", True), ("BandB", "IQU", False)))
     params.experiments.EXP.bands.BandB.enabled = False
     counts = derive_task_counts(params)
-    assert (counts.tod, counts.compsep_I, counts.compsep_QU, counts.total) == (4, 1, 1, 6)
+    assert (counts.tod_bands, counts.compsep_I, counts.compsep_QU, counts.min_total) == (1, 1, 1, 3)
 
     params.experiments.EXP.enabled = False
-    assert derive_task_counts(params).tod == 0
+    assert derive_task_counts(params).tod_bands == 0
 
 
 def test_tod_only_mode_allocates_no_compsep_ranks():
     """`compsep.enabled: false` is how TOD-only runs are spelled now that the counts are derived."""
     bands = (("BandA", "IQU", True), ("BandB", "IQU", True))
-    assert derive_task_counts(_params(compsep_bands=bands)).total == 6 + 4
+    assert derive_task_counts(_params(compsep_bands=bands)).min_total == 2 + 4
     counts = derive_task_counts(_params(compsep_bands=bands, enabled=False))
-    assert (counts.compsep_I, counts.compsep_QU, counts.total) == (0, 0, 6)
+    assert (counts.compsep_I, counts.compsep_QU, counts.min_total) == (0, 0, 2)
     assert compsep_enabled(_params(compsep_bands=bands)) is True       # defaults to on
     assert compsep_enabled(_params(compsep_bands=bands, enabled=False)) is False
 
@@ -115,10 +114,10 @@ def test_no_enabled_sampling_group_allocates_no_compsep_ranks():
     chi-squared, when TOD-only reaches the same fixed sky model on its own.
     """
     bands = (("BandA", "IQU", True), ("BandB", "IQU", True))
-    assert derive_task_counts(_params(compsep_bands=bands)).total == 6 + 4
+    assert derive_task_counts(_params(compsep_bands=bands)).min_total == 2 + 4
 
     counts = derive_task_counts(_params(compsep_bands=bands, groups=False))
-    assert (counts.compsep_I, counts.compsep_QU, counts.total) == (0, 0, 6)
+    assert (counts.compsep_I, counts.compsep_QU, counts.min_total) == (0, 0, 2)
     assert compsep_enabled(_params(compsep_bands=bands, groups=False)) is False
 
     # A group present but switched off counts as none enabled.
@@ -144,7 +143,7 @@ def test_the_breakdown_names_every_term():
     """The 'wrong mpirun -n' message must be actionable without hand-counting bands."""
     counts = derive_task_counts(_params(compsep_bands=(("BandA", "IQU", True),)))
     text = task_count_breakdown(counts)
-    assert "8" in text and "6" in text and "TOD" in text and "CompSep-I" in text
+    assert text == "at least 4 = 2 TOD + 1 CompSep-I + 1 CompSep-QU"
 
 
 # --------------------------------------------------------------------------------------
@@ -154,7 +153,7 @@ MAPMAKER_SCOPES = ("experiments.EXP.bands.BAND", "experiments.EXP", "tod_process
 
 
 def _mapmaker_params(global_mm=None, exp_mm=None, band_mm=None):
-    band = Bunch(enabled=True, num_tasks=1)
+    band = Bunch(enabled=True)
     if band_mm is not None:
         band.mapmaker = band_mm
     experiment = Bunch(enabled=True, bands=Bunch(BAND=band))
@@ -303,7 +302,7 @@ def test_a_file_band_takes_its_lmax_from_its_compsep_entry():
 
 
 # ===================================================================
-# Noise-PSD prior bounds (experiments/read_utils.apply_noise_priors)
+# Noise-PSD priors and fit range from the parameter file (NoisePSD.apply_param_file)
 # ===================================================================
 
 def _noise_params(band=None, experiment=None, tod_processing=None):
@@ -328,9 +327,10 @@ def _noise_params(band=None, experiment=None, tod_processing=None):
 ])
 def test_noise_fit_limits_are_applied_to_model(limits: dict, expected: list[list[float]]) -> None:
     """YAML limits override only the specified endpoints and survive step-config validation."""
-    params = Bunch(tod_processing=Bunch(corr_noise=Bunch(enabled=True, **limits)))
+    params = _noise_params()
+    params.tod_processing.corr_noise = Bunch(enabled=True, **limits)
     model = NoisePSDOof(nu_fit=[[np.nan, np.nan], [0.1, 3.0], [0.2, 4.0]])
-    apply_noise_fit_range(model, params)
+    model.apply_param_file(params, "EXP", "BandA")
     config = CorrelatedNoiseConfig.from_params(params.tod_processing)
     assert config.enabled
     assert not hasattr(config, "psd_fit_nu_min")
@@ -343,7 +343,7 @@ def test_noise_fit_limits_are_applied_to_model(limits: dict, expected: list[list
 
 def test_noise_fit_limits_default_when_corr_noise_block_absent() -> None:
     model = NoisePSDOof(nu_fit=[[np.nan, np.nan], [0, 3.0], [0, 3.0]])
-    apply_noise_fit_range(model, Bunch(tod_processing=Bunch()))
+    model.apply_param_file(_noise_params(), "EXP", "BandA")
     np.testing.assert_array_equal(model.nu_fit[1:], [[0, 3.0], [0, 3.0]])
 
 
@@ -356,30 +356,28 @@ def test_unknown_noise_fit_key_still_rejected() -> None:
 def test_noise_prior_bounds_left_alone_when_the_parameter_file_is_silent():
     """A reader's instrument-appropriate defaults must survive an unconfigured parameter file."""
     model = NoisePSDOof(P_uni=[[np.nan, np.nan], [0.03, 40.0], [-4.0, -2.0]])
-    apply_noise_priors(model, _noise_params(), "EXP", "BandA")
+    model.apply_param_file(_noise_params(), "EXP", "BandA")
     np.testing.assert_allclose(model.P_uni[1], [0.03, 40.0])
     np.testing.assert_allclose(model.P_uni[2], [-4.0, -2.0])
 
 
 def test_noise_prior_bounds_override_only_the_named_parameters():
     model = NoisePSDOof(P_uni=[[np.nan, np.nan], [0.03, 40.0], [-4.0, -2.0]])
-    apply_noise_priors(model, _noise_params(band={"fknee": [0.001, 5.0]}), "EXP", "BandA")
+    model.apply_param_file(_noise_params(band={"fknee": [0.001, 5.0]}), "EXP", "BandA")
     np.testing.assert_allclose(model.P_uni[1], [0.001, 5.0])
     np.testing.assert_allclose(model.P_uni[2], [-4.0, -2.0])  # untouched
 
 
 def test_noise_prior_bounds_prefer_the_band_over_wider_scopes():
     model = NoisePSDOof()
-    apply_noise_priors(model, _noise_params(band={"fknee": [1.0, 2.0]},
-                                                  experiment={"fknee": [3.0, 4.0]},
-                                                  tod_processing={"fknee": [5.0, 6.0]}),
-                             "EXP", "BandA")
+    model.apply_param_file(_noise_params(band={"fknee": [1.0, 2.0]},
+                                         experiment={"fknee": [3.0, 4.0]},
+                                         tod_processing={"fknee": [5.0, 6.0]}), "EXP", "BandA")
     np.testing.assert_allclose(model.P_uni[1], [1.0, 2.0])
 
     model = NoisePSDOof()
-    apply_noise_priors(model, _noise_params(experiment={"fknee": [3.0, 4.0]},
-                                                  tod_processing={"fknee": [5.0, 6.0]}),
-                             "EXP", "BandA")
+    model.apply_param_file(_noise_params(experiment={"fknee": [3.0, 4.0]},
+                                         tod_processing={"fknee": [5.0, 6.0]}), "EXP", "BandA")
     np.testing.assert_allclose(model.P_uni[1], [3.0, 4.0])
 
 
@@ -387,7 +385,7 @@ def test_noise_prior_bounds_reject_an_unknown_parameter_name():
     """A typo here would otherwise leave the default bounds silently in force."""
     model = NoisePSDOof()
     with pytest.raises(ValueError, match="fkne"):
-        apply_noise_priors(model, _noise_params(band={"fkne": [0.1, 1.0]}), "EXP", "BandA")
+        model.apply_param_file(_noise_params(band={"fkne": [0.1, 1.0]}), "EXP", "BandA")
 
 
 def test_noise_prior_sets_the_informative_prior_from_the_parameter_file():
@@ -395,7 +393,7 @@ def test_noise_prior_sets_the_informative_prior_from_the_parameter_file():
     model = NoisePSDOof()
     params = _noise_params()
     params.experiments.EXP.bands.BandA.noise_prior = Bunch(fknee=[5.0, 0.25], alpha=[-2.0, 0.4])
-    apply_noise_priors(model, params, "EXP", "BandA")
+    model.apply_param_file(params, "EXP", "BandA")
 
     np.testing.assert_allclose(model.P_active[1], [5.0, 0.25])
     np.testing.assert_allclose(model.P_active[2], [-2.0, 0.4])
@@ -408,7 +406,7 @@ def test_a_nonpositive_prior_rms_in_the_parameter_file_freezes_that_parameter():
     model = NoisePSDOof()
     params = _noise_params()
     params.experiments.EXP.bands.BandA.noise_prior = Bunch(fknee=[10.0, -1.0])
-    apply_noise_priors(model, params, "EXP", "BandA")
+    model.apply_param_file(params, "EXP", "BandA")
 
     assert not model.is_sampled(1)
     assert model.is_sampled(2)
@@ -419,4 +417,4 @@ def test_noise_prior_rejects_an_unknown_parameter_name():
     params = _noise_params()
     params.experiments.EXP.bands.BandA.noise_prior = Bunch(alfa=[1.0, 1.0])
     with pytest.raises(ValueError, match="alfa"):
-        apply_noise_priors(model, params, "EXP", "BandA")
+        model.apply_param_file(params, "EXP", "BandA")

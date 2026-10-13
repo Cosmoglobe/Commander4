@@ -1,8 +1,11 @@
 """Per-detector-scan diagnostics recorded into the TOD chain.
 
-The mapmakers call `_record_tod_diagnostics` once per detector-scan, which stores binned power
-spectra of the raw TOD, the residual, and the correlated-noise realization. They are written for
-inspection only - nothing in the sampling reads them back.
+The mapmaking scan loop (`tod2map`) calls `_record_tod_diagnostics` once per detector-scan. It
+stores binned power spectra of the raw TOD, the n_corr-subtracted TOD, the residual and the
+correlated-noise realization, and optionally the full residual and n_corr TODs; these are written
+for inspection only. It also stores the residual's chi-squared z-score, which the data-selection
+veto in the scan loop reads, and it returns the residual TOD, which the loop bins into the residual
+map.
 """
 import numpy as np
 import pixell
@@ -84,7 +87,8 @@ def _record_tod_diagnostics(tod_samples: TODSamples, iscan: int, idet: int, view
     tod_samples.tod_ps_ncorrsub[iscan, idet] = ncorrsub_binned
 
     if tod_samples.residual_tods is not None:
-        # CG mapmaking gap-fills its returned residual in place; preserve observed minus model.
+        # A copy, so the stored residual stays observed minus model whatever the caller does with
+        # the returned array.
         tod_samples.residual_tods[iscan][idet] = residual_tod.astype(np.float32, copy=True)
 
     if n_corr is not None:

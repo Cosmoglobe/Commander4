@@ -68,7 +68,7 @@ class Band:
     @property
     def is_pol(self):
         """Whether the band has polarisation components."""
-        return False if self._alms.shape[0] == 1 else True
+        return self._alms.shape[0] != 1
     
     @property
     def lmax(self):

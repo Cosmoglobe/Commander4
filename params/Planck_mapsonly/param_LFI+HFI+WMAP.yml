@@ -15,13 +15,13 @@ resources:
 
   compsep:
     # Assumes a 384-core node. Adjust with `c4-validate-params` if on a smaller node.
-    num_threads: [1, 1, 1, 1, 1, 1, 1, 1, 4, 26, 26, 25, 25, 25, 25, 1, 1, 1, 1, 1, 1, 1, 1, 8, 51, 51, 51, 51]
+    num_threads: [1, 1, 1, 1, 1, 1, 1, 1, 4, 26, 26, 25, 25, 25, 25, 1, 1, 1, 1, 1, 1, 1, 8, 51, 51, 51, 51]
 
 # ----------------------------------------
 # OUTPUT
 # ----------------------------------------
     # Use this config if you're on a 128-core node:
-    # num_threads: [1, 1, 1, 1, 1, 1, 1, 1, 1, 8, 8, 8, 8, 8, 8, 1, 1, 1, 1, 1, 1, 1, 1, 2, 16, 15, 15, 15]
+    # num_threads: [1, 1, 1, 1, 1, 1, 1, 1, 1, 8, 8, 8, 8, 8, 8, 1, 1, 1, 1, 1, 1, 1, 2, 16, 15, 15, 15]
 
 
 output:
@@ -89,7 +89,7 @@ compsep:
         dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
       fwhm: 60.0  # [arcmin]
       freq: 0.408 # [GHz]
-      polarization: "IQU"
+      polarization: "I"  # The file's Q and U columns are copies of I, not polarization data.
       units: "uK_CMB"
 
     ###### WMAP MAPS ######

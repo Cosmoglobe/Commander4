@@ -1,4 +1,5 @@
-"""Reading band maps and their RMS from FITS files, for runs that skip TOD processing."""
+"""Reading band maps and their RMS from FITS files, for runs that skip TOD processing.
+"""
 import numpy as np
 import healpy as hp
 from astropy.io import fits
@@ -12,14 +13,6 @@ from commander4.data_models.detector_map import DetectorMap
 logger = logging.getLogger(__name__)
 
 POLARIZATION_INDEX = {"I": 0, "Q": 1, "U": 2}
-
-
-def _resample_rms_map(map_rms: np.ndarray, nside_out: int) -> np.ndarray:
-    """Resample an RMS map while preserving its total inverse-variance weight."""
-    inv_var = 1.0 / np.asarray(map_rms, dtype=np.float64)**2
-    inv_var_out = hp.ud_grade(inv_var, nside_out, power=-2)
-    return np.divide(1.0, np.sqrt(inv_var_out), out=np.full_like(inv_var_out, np.inf),
-                     where=inv_var_out > 0.0)
 
 
 def _get_map_info(band: Bunch, maptype: str):
@@ -125,13 +118,14 @@ def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
         my_band (Bunch): A parameter file subset for the band to read from file.
         params (Bunch): Full parameter file, for the common-resolution smoothing settings.
     Returns:
-        detector_map (DetectorMap): Object holding signal map and other relevant data (rms, nu...)
+        detector_map (DetectorMap): Object holding signal map and other relevant data (inverse
+            variance, nu...)
     """
     pols = my_band.polarization
     if pols not in ("I", "QU", "IQU"):
         raise ValueError(f"Specified polarization {pols!r} is not recognized.")
     maps_sky = []
-    maps_rms = []
+    maps_inv_var = []
     rms_map_type = _get_map_info(my_band, "rms")[2]
 
     for pol in pols:
@@ -148,6 +142,10 @@ def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
             map_rms = np.sqrt(map_rms**2 \
                               + (my_band.add_signal_fraction_to_rms*np.nanmean(np.abs(map_sky)))**2)
         # TODO: Figure out how to read covariance maps as opposed to RMS maps.
+        # A pixel with an RMS that is 0, negative (UNSEEN), NaN or infinite is unobserved, and gets
+        # zero inverse variance.
+        map_rms = np.asarray(map_rms, dtype=np.float64)
+        map_inv_var = np.divide(1.0, map_rms**2, out=np.zeros_like(map_rms), where=map_rms > 0)
 
         try:
             nside = hp.npix2nside(map_sky.size)
@@ -159,15 +157,16 @@ def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
             logger.info(f"Converting map {my_band._name} from nside {nside} to "\
                         f"{my_band.eval_nside}.")
             map_sky = hp.ud_grade(map_sky, my_band.eval_nside)
-            map_rms = _resample_rms_map(map_rms, my_band.eval_nside)
+            # power=-2 keeps the map's sum fixed, so merged pixels add their inverse variances.
+            map_inv_var = hp.ud_grade(map_inv_var, my_band.eval_nside, power=-2)
             nside = my_band.eval_nside
 
         maps_sky.append(map_sky)
-        maps_rms.append(map_rms)
+        maps_inv_var.append(map_inv_var)
 
     lmax = resolve_band_lmax(params, my_band._name, None, nside)
-    detmap = DetectorMap(np.array(maps_sky), np.array(maps_rms), my_band.freq, my_band.fwhm, nside,
-                         lmax=lmax)
+    detmap = DetectorMap(np.array(maps_sky), np.array(maps_inv_var), my_band.freq, my_band.fwhm,
+                         nside, lmax=lmax)
     detmap.g0 = 0.0
     detmap.gain = 0.0
     # Smooth to the common analysis resolution on read; 0 leaves the band at its native beam.

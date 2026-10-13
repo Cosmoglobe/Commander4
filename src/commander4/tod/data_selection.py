@@ -148,16 +148,20 @@ def _per_detector_median_mad(stat: NDArray, valid: NDArray,
 
 
 def sample_data_selection(band_comm: MPI.Comm, tod_samples: TODSamples, ds_cfg: Bunch) -> None:
-    """Data-selection sampling step: update the ``accept`` array from this iteration's diagnostics.
+    """Update ``accept`` from this iteration's diagnostics. NOT CALLED at present, and stale.
 
-    Owns all rejection decisions, re-derived here from the per-detector-scan diagnostics recorded
-    in the mapmaking scan loop (good_fraction, chisq_z, sigma0). Two cut families, gated
-    separately: absolute cuts (``min_good_fraction``, ``chisq_abs_threshold``; the in-loop veto in
-    tod2map_* applies these same predicates eagerly so catastrophic scans never even enter the
-    current iteration's maps) and population-relative cuts (two-sided ``outlier_nmad`` MAD cut on
-    chisq_z and sigma0 around per-detector medians, since a dead detector-scan is as suspect as a
-    noisy one). Only detector-scans with fresh diagnostics (processed this iteration) are evaluated;
-    rejection is sticky within a chain.
+    Meant as the data-selection step after mapmaking, re-deriving the rejections from the
+    per-detector-scan diagnostics the scan loop records (good_fraction, chisq_z, sigma0). It has two
+    cut families: the absolute cuts (``min_good_fraction``, ``chisq_abs_threshold``), and
+    population-relative cuts (a two-sided ``outlier_nmad`` MAD cut on chisq_z and sigma0 around
+    per-detector medians, since a dead detector-scan is as suspect as a noisy one). Only
+    detector-scans with fresh diagnostics (processed this iteration) are evaluated, and rejection is
+    sticky within a chain.
+
+    Today the absolute cuts run as vetoes inside the scan loop of `tod2map`, and nothing applies the
+    relative cuts. ``ds_cfg`` must provide ``absolute_active``, ``relative_active`` and
+    ``outlier_nmad``, which `DataSelectionConfig` no longer has, so wiring the relative cuts back in
+    needs those settings first.
     """
     if band_comm.Get_rank() == 0:
         scans_per_rank = np.zeros(band_comm.Get_size(), dtype=np.int64)

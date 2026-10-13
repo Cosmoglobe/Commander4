@@ -6,6 +6,7 @@ data as read from disk; everything the Gibbs chain samples lives in `TODSamples`
 import numpy as np
 from numpy.typing import NDArray
 
+from commander4.data_models.pixel_domain import PixelDomain
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.noise.psd import NoisePSD
 from commander4.math_utils.fft import forward_rfft_mirrored, backward_rfft_mirrored
@@ -52,32 +53,11 @@ class DetectorGroupTOD:
         # Whether the TOD needs demodulation to be read (Planck HFI stores alternating
         # positive/negative modulation half-cycles.)
         self.hfi_demodulation = hfi_demodulation
-        # The below values are not known until all ranks are finished reading in data, because some
-        # scans might be rejected. They are set after the fact.
-        self.scan_idx_start: int = 0  # Index of my first scan in a compact indexing.
-        self.scan_idx_stop: int = 0  # Index of my last scan.
-        self.nscans_allranks: int = 0  # Total number of scans across all ranks (on this band).
         self.noise_model = noise_model
-        self._pixel_domain = None  # Cached PixelDomain (built lazily; pointing is static).
+        # The band's PixelDomain: which pixels this rank's map buffers hold. It depends only on the
+        # static pointing, so it is built once at startup (tod/processing.py) and kept for the run.
+        self.pixel_domain: PixelDomain | None = None
         self.instrument_filepath = instrument_filepath
-
-    def get_pixel_domain(self, scan_view, comm, sparse: bool):
-        """Return the band's map-distribution :class:`PixelDomain`, building and caching it once.
-
-        The domain depends only on the (static) pointing, so it is built once per run and reused
-        across Gibbs iterations. ``sparse=False`` gives the historical full-sky-per-rank layout;
-        ``sparse=True`` restricts each rank's map buffers to its locally-observed pixels.
-        """
-        from commander4.data_models.pixel_domain import PixelDomain
-        mode = "sparse" if sparse else "full"
-        if self._pixel_domain is None or self._pixel_domain.mode != mode:
-            self._pixel_domain = PixelDomain.from_view(scan_view, comm, mode, self.nside)
-        return self._pixel_domain
-
-    @property
-    def pixel_domain(self):
-        """The cached map-distribution :class:`PixelDomain`, or ``None`` if not built yet."""
-        return self._pixel_domain
 
     def iter_detector_scans(self, accept: NDArray | None = None):
         """Iterate over present detector-scans, yielding ``(iscan, det)`` pairs.

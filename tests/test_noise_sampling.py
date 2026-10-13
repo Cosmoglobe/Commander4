@@ -641,12 +641,13 @@ class TestSampleCorrelatedNoise:
     @pytest.mark.parametrize("psd_bin", [False, True])
     def test_configured_model_window_reaches_psd_sampling(self, psd_bin: bool) -> None:
         """The production sampler must respect reader-applied limits on both sides of the band."""
-        params = Bunch(tod_processing=Bunch(corr_noise=Bunch(
-            enabled=True, sample_psd_params=True, sample_sigma0=False, psd_bin=psd_bin,
-            psd_fit_nu_min=1.0, psd_fit_nu_max=2.0)))
+        params = Bunch(experiments=Bunch(EXP=Bunch(bands=Bunch(B=Bunch()))),
+                       tod_processing=Bunch(corr_noise=Bunch(
+                           enabled=True, sample_psd_params=True, sample_sigma0=False,
+                           psd_bin=psd_bin, psd_fit_nu_min=1.0, psd_fit_nu_max=2.0)))
         config = CorrelatedNoiseConfig.from_params(params.tod_processing)
         model = NoisePSDOof()
-        apply_noise_fit_range(model, params)
+        model.apply_param_file(params, "EXP", "B")
         tod = np.random.default_rng(4).normal(size=4096)
         time = np.arange(tod.size) / 8.0
         contaminated = tod + 100 * np.cos(2 * np.pi * 0.5 * time)

@@ -4,6 +4,8 @@ If you are at the ITA cluster (the "owls") load the following modules before ins
 module load intel/oneapi
 module load mpi/latest
 module load compiler/latest  # Only necessary for developers.
+export CXX=icpx  # This will make ALL C++ code compile with Intel. If you don't want that,
+                 # just do `CXX=icpx pip install` when installing Commander4. 
 ```
 Then, make sure you have a sensible Python setup. **The default Python 3.9 installation is not sufficient.**
 
@@ -42,7 +44,7 @@ You are now ready to run Commander4 (see further down).
 # 2. Running Commander4
 Commander4 has to be run with MPI, and a parameter file has to be indicated using the `-p` argument. Example usage:
 ```
-mpirun -n 28 commander4 -p params/Planck_mapsonly/param_LFI+HFI+WMAP.yml
+mpirun -n 27 commander4 -p params/Planck_mapsonly/param_LFI+HFI+WMAP.yml
 ```
 The number of MPI ranks **must match the parameter file**. To quickly check how many MPI ranks you must use for any given parameter file, you can run `c4-validate-params path/to/params.yml`. The number of ranks needed is split among component separation (which always requires 1 rank per I- and QU-band specified in the `compsep` section of the parameter file) and TOD processing (where any number of ranks can be allocated in the `experiments` section of the parameter file).
 
@@ -55,9 +57,9 @@ See [params/param_explanation.yml](params/param_explanation.yml) for an exhausti
 
 A parameter file is seven top-level blocks, each named after the part of the program that reads them: `gibbs`, `resources`, `output`, `components`, `experiments`, `tod_processing` and `compsep`.
 
-The MPI task counts are **derived**, not stated: the TOD total is the sum of the per-band `num_tasks` over enabled bands of enabled experiments, and component separation takes one task per enabled `compsep.bands` view (one for I, one for QU). Commander4 reports the total it needs, and `mpirun -n` must match it.
+The MPI task counts are **derived**, not stated: component separation takes one task per enabled `compsep.bands` view (one for I, one for QU), and every other task goes to TOD processing, with at least one per enabled band. The TOD tasks are split between the bands in proportion to each band's `band_weight`: by default (`"auto"`) its number of detector-samples (ntod × detectors, from the filelists), or a number set on every band. Any `mpirun -n` that leaves each band at least one task works.
 
-Parameter files can include other parameter files using `!import 'path/to/file.yml'`. The path is relative to the relevant file. Note that the exact content of the imported file is inserted at the exact location of the import, and at the relevant indendation level.
+Parameter files can include other parameter files using `!import 'path/to/file.yml'`. The path is relative to the relevant file, unless it is absolute. `~` and environment variables such as `$HOME` are expanded, as in a shell. Note that the exact content of the imported file is inserted at the exact location of the import, and at the relevant indentation level.
 
 ### 2.2 Output
 A run writes everything below the single directory named by `output.dir`, which it creates:
@@ -77,7 +79,7 @@ Per-scan sampled quantities at the top level, output maps under `maps/`. `NSC` i
 ```YAML
 metadata/band_unit             # thermodynamic unit of the gains and maps below
 metadata/map_fwhm_arcmin       # beam of maps/observed_sky and maps/rms
-scan_ids           (NSC,)      # int64 scan IDs; the row order of every per-scan array
+scan_ids           (NSC,)      # int64 scan IDs in time order; the row order of every per-scan array
 det_names          (ND,)       # detector names; the column order of every per-detector array
 scan_start_time    (NSC,)      # scan start time (C3 'MJD'); 0.0 if the reader supplies no time
 orbital_velocity   (NSC,ND,3)  # spacecraft velocity [m/s], what anchors the absolute calibration
@@ -95,14 +97,26 @@ chisq_z            (NSC,ND)    # white-noise chi^2 z-score; ~N(0,1) for clean da
 ncorr_cg_residual  (NSC,ND)    # final relative CG residual of the correlated-noise draw
 ncorr_cg_niter     (NSC,ND)    # int32 CG iterations; 0 when the stationary fallback was used
 ncorr_converged    (NSC,ND)    # int8: 1 accepted, 0 failed, -1 no n_corr drawn
+scan_runtime       (NSC,)      # wall time [s] the mapmaking loop spent on the scan this iteration
 tod_ps_freqs       (NSC,ND,100)   # log-binned frequency axis shared by the four spectra below
 tod_ps_raw         (NSC,ND,100)   # binned PSD of the raw TOD
 tod_ps_ncorr       (NSC,ND,100)   # ... of the correlated-noise realization
 tod_ps_ncorrsub    (NSC,ND,100)   # ... of the TOD with only the correlated noise removed
 tod_ps_residual    (NSC,ND,100)   # ... of the residual (sky, dipole and n_corr all removed)
-jump_counts        (NSC,ND)    # jumps found per detector-scan; indexes the two ragged arrays below
-jump_locations     (M,)        # sample index of each jump, concatenated scan-major
-jump_offsets       (M,)        # amplitude of each jump
+jump_counts        (NSC,ND)    # jumps found per detector-scan
+jumps/<scan_id>/<detector>/locations  (NJ,)  # (opt, DEBUG) first sample after each jump; left out if none
+jumps/<scan_id>/<detector>/offsets    (NJ,)  # (opt, DEBUG) offset in detector units that undoes each jump
+glitches/template_amps  (ND,3,8)  # (opt, DEBUG) per-detector short/long/slow pulse shapes: 8 exponential amplitudes
+glitches/template_taus  (ND,3,8)  # (opt, DEBUG) ... and their time constants [s]
+glitches/<scan_id>/<detector>/    # (opt, DEBUG) the glitch events of one detector-scan; left out if it has none:
+  start            (NEV,)         #   first sample of each event
+  length           (NEV,)         #   samples each event's model spans
+  type             (NEV,)         #   int8: -1 bright, 0 short, 1 long, 2 slow
+  amplitude        (NEV,)         #   pulse amplitude in detector units (1 for bright events)
+  cut_start        (NEV,)         #   samples cut from the data are [cut_start, cut_stop); equal = none
+  cut_stop         (NEV,)
+  shape_param_counts (NEV,)       #   shape parameters per event (0 for template events)
+  shape_params     (K,)           #   bright-event shapes: a1, a2, tau1, tau2, t_dep, spline node values
 tods/<scan_id>/<detector>/ncorr     (ntod,)  # (opt, DEBUG) full n_corr TOD in detector units
 tods/<scan_id>/<detector>/residual  (ntod,)  # (opt, DEBUG) full residual TOD in detector units
 
@@ -164,6 +178,8 @@ src/commander4/
     view.py            #   TODView: the read interface to one detector-scan and every TOD derived from it.
     gain.py            #   Gain sampling (absolute, relative, temporal).
     noise/             #   Correlated-noise realizations, sigma0 estimation, PSD models and their priors.
+    jumps/             #   Jump detection from the flag stream, and the found jumps.
+    glitches/          #   Glitch (cosmic-ray) events and their sampler; placeholders for now.
     mapmaking/         #   binned.py (per-pixel inversion) and cg.py (iterative, deconvolves a transfer function).
 
   compsep/             # === COMPSEP SIDE: solving for component amplitudes and spectral parameters ===
@@ -178,7 +194,8 @@ src/commander4/
 
   data_models/         # The containers the two sides pass around (band TOD, band maps, pointing, samples).
   file_io/             # Everything that touches disk: chain writing, map reading, and:
-    experiments/       #   One TOD reader per experiment, each module named after its `experiment_id`.
+    experiments/       #   TOD readers: base_reader.py reads the standard scan files. Each other
+                       #   module is named after an `experiment_id` and subclasses it.
   parameters/          # Parameter-file parsing (parse.py) and scoped lookup + validation (schema.py).
   mpi/                 # Communicator setup, and the transfer of maps and sky models between the two sides.
   math_utils/          # SHTs, alm helpers, FFTs, in-place array arithmetic.
@@ -311,6 +328,7 @@ def project_to_plane(points: NDArray, normal: NDArray, offset: float = 0.0,
     Returns:
         A tuple of two arrays. The first is (n_points, 3), the projected points. The second
         is (n_points,), the signed distance each point moved, positive along the normal.
+    """
 ```
 
 # 4. Standalone tools
@@ -325,7 +343,7 @@ c4-plot-chain path/to/output-dir/  # Produces a ton of plots from a given chain.
 
 c4-diff-params path/to/param1.yml path/to/param2.yml  # Prints the difference between two parameter files.
 
-c4-cmb-realizations  path/to/chain-dir/  # Generate constrained CMB realizations from chain (non yet fully functional).
+c4-cmb-realizations path/to/output-dir/  # Generate constrained CMB realizations from saved band maps and components.
 
 c4-generate-stubs  # Manually re-generate the stubs that are automatically during a build (very niche).
 ```
@@ -336,13 +354,25 @@ See [`simgen/README.md`](simgen/README.md) for the simulator's parameter format 
 
 ### 4.3 Parameter file validation
 Run `c4-validate-params path/to/param.yml` to get:
-- Info about how many MPI ranks the file is currently configered with, such that you know how many to use with `mpirun -n ...`
+- The smallest number of MPI ranks the file can run with (`mpirun -n ...`): one per TOD band, plus the CompSep ranks.
 - Info about what distribution of threads is optimal for the component separation. If you know how many nodes and cores per node you plan to dedicate to component separation, you can run `c4-validate-params params.yml --compsep-threads-per-node 384 --compsep-nodes 2` to get a proposed distribution, which can be pasted directly into the parameter file.
 
 ### 4.4 Chain plotting
 `c4-plot-chain` creates a whole bunch of plots, both sky maps and various TOD plots, and places them in the chains folder.
 - For experimenst like SO, where per-detector plots are unfeasible, you should add the flag `--detector-plots summary`.
 - The amount of plots can get excessive, so it's recommended to use the flags to plot only specific subsets, such as `--chain`, `--iter`, `--band`.
+
+### 4.5 Constrained CMB realizations
+
+Draw masked CMB realizations from a completed run's saved band maps and components:
+
+```bash
+c4-cmb-realizations path/to/output-dir/ --burn-in 100 --n-realizations 10 --mask mask.fits
+```
+
+See `c4-cmb-realizations --help` and the
+[module documentation](src/commander4/standalone_tools/constrained_cmb_realizations.py) for details.
+
 
 
 # 5. Benchmarking and optimization

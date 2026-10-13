@@ -39,7 +39,7 @@ from commander4.sky.comp_list import complist_dot
 
 LMAX = 4
 NSIDE = 4
-NSAMP = 200
+NSAMP = 100  # Enough to detect the 19% bug described above at about 7 standard errors.
 
 
 def _make_params(sample_amplitudes: bool = True) -> Bunch:
@@ -78,7 +78,7 @@ def _make_comp_list(params: Bunch) -> CompList:
 def _make_det_map(seed: int = 0) -> DetectorMap:
     npix = 12*NSIDE**2
     rng = np.random.default_rng(seed)
-    return DetectorMap(rng.normal(0.0, 1.0, (1, npix)), np.full((1, npix), 3.0),
+    return DetectorMap(rng.normal(0.0, 1.0, (1, npix)), np.full((1, npix), 1.0/3.0**2),
                        nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
 
 
@@ -267,7 +267,7 @@ class TestPriorMean:
 
         # Enormous noise: A^T N^-1 A is negligible against S^-1, so only the prior informs the fit.
         npix = 12*NSIDE**2
-        det_map = DetectorMap(np.full((1, npix), 5.0), np.full((1, npix), 1e8),
+        det_map = DetectorMap(np.full((1, npix), 5.0), np.full((1, npix), 1e-16),
                               nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
         solution = _make_solver(det_map, _make_group(False)).solve(comp_list)
 
@@ -276,7 +276,7 @@ class TestPriorMean:
     def test_prior_mean_enters_the_sampled_solve_too(self, monkeypatch):
         """mu shifts the constrained realization as well, not just the MAP solve."""
         params = _make_params()
-        det_map = DetectorMap(np.zeros((1, 12*NSIDE**2)), np.full((1, 12*NSIDE**2), 1e8),
+        det_map = DetectorMap(np.zeros((1, 12*NSIDE**2)), np.full((1, 12*NSIDE**2), 1e-16),
                               nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
 
         # `amp_prior_mean` is a property, so it can only be patched on the class -- which every
@@ -358,7 +358,9 @@ class TestPriorMeanMap:
         second = _make_solver(det_map, _make_group(False)).solve(comp_list)
 
         np.testing.assert_array_equal(comp_list[0].amp_prior_mean, mu_before)
-        np.testing.assert_allclose(first[0].alms, second[0].alms, rtol=1e-10, atol=1e-12)
+        # The CG stops at err_tol, and threaded SHTs sum in a varying order, so two solves agree
+        # only to roughly the CG tolerance. A corrupted cache would change the answer by order one.
+        np.testing.assert_allclose(first[0].alms, second[0].alms, rtol=1e-4, atol=1e-6)
 
     def test_uninformative_data_recovers_the_prior_map(self, tmp_path):
         """End-to-end: with no data information the solution is the prior-mean map itself."""
@@ -373,7 +375,7 @@ class TestPriorMeanMap:
 
         params = _make_params()
         npix = 12*NSIDE**2
-        det_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1e8),
+        det_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1e-16),
                               nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
         solution = _make_solver(det_map, _make_group(False)).solve(comp_list)
 

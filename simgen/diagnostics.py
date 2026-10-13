@@ -112,7 +112,7 @@ def normal_matrix_rms(normal: NDArray[np.floating], polarization: str) -> NDArra
     makes the polarized values account for each pixel's polarization-angle coverage. Singular or
     ill-conditioned pixels are marked as ``NaN`` because their Stokes parameters are unconstrained.
 
-    This matches Commander4's own map RMS (`WeightsMapmakerIQU.normalize_map`), so the two are
+    This matches Commander4's own map RMS (`BinnedMapmaker.finalize`), so the two are
     directly comparable when scoring a run against the simulation that produced it.
     """
     matrices, good = _well_conditioned_normal_matrices(normal, polarization)

@@ -3,8 +3,11 @@
 # 
 # 18 tasks = 6 TOD + 6 CompSep-I + 6 CompSep-QU.
 #
-# This file is a copy of `simparam_compsep_only.yml` with only the paths changed (the six TOD
-# filelists, the output directory and the log file), so the two analyses are identical.
+# This file is a copy of `simparam_compsep_only.yml` with only the paths (the six TOD filelists,
+# the output directory and the log file), the mapmaker ("CG") and Band30GHz's `tau_ms` changed.
+# So only Band30GHz deconvolves the bolometer response; the other bands are solved as if T = 1,
+# although the simulation applies it to every band. The model TODs (sky model, orbital dipole,
+# far sidelobes) are subtracted without T, a known inconsistency.
 #
 # Includes CG component separation (CMB+Dust+Sync) of 6 Planck-like bands at nside 64.
 # TOD sampling is enabled, but all TOD steps are disabled (i.e. only mapmaking).
@@ -167,16 +170,15 @@ experiments:
   SimSat:
     enabled: true
     experiment_id: "general"
+    bad_data_bitmask: 6111232  # Flag bits that mark a sample unusable (simgen's standard).
     mapmaker: "CG"
-    num_scans: 2400
     bands:
       Band30GHz:
         enabled: true
-        num_tasks: 10
+        band_weight: 10
         eval_nside: 64
         fwhm: 120.0
         freq: 30.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         tau_ms: 150.0
         polarization: "IQU"
@@ -190,11 +192,10 @@ experiments:
 
       Band44GHz:
         enabled: true
-        num_tasks: 10
+        band_weight: 10
         eval_nside: 64
         fwhm: 100.0
         freq: 44.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
@@ -207,11 +208,10 @@ experiments:
 
       Band70GHz:
         enabled: true
-        num_tasks: 10
+        band_weight: 10
         eval_nside: 64
         fwhm: 80.0
         freq: 70.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
@@ -224,11 +224,10 @@ experiments:
 
       Band100GHz:
         enabled: true
-        num_tasks: 10
+        band_weight: 10
         eval_nside: 64
         fwhm: 65.0
         freq: 100.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
@@ -241,11 +240,10 @@ experiments:
 
       Band217GHz:
         enabled: true
-        num_tasks: 10
+        band_weight: 10
         eval_nside: 64
         fwhm: 50.0
         freq: 217.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]
@@ -258,11 +256,10 @@ experiments:
 
       Band353GHz:
         enabled: true
-        num_tasks: 10
+        band_weight: 10
         eval_nside: 64
         fwhm: 40.0
         freq: 353.0
-        fsamp: 32.5
         band_unit: "uK_RJ"
         polarization: "IQU"
         initial_noise_params: [60.0, 0.1, -1.0]

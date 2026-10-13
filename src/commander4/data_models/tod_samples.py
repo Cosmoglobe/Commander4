@@ -16,7 +16,9 @@ import logging
 import typing
 
 from commander4.file_io.chain_writer import should_write_chain
-from commander4.data_models.jump_corrections import JumpCatalog
+from commander4.tod.jumps.events import empty_jump_grid, JUMP_EVENT_FIELDS
+from commander4.tod.glitches.events import empty_glitch_grid, GLITCH_TEMPLATE_TYPES,\
+    GLITCH_TEMPLATE_NEXP, GLITCH_EVENT_FIELDS
 from commander4.units import rj_to_band_unit_factor
 if typing.TYPE_CHECKING:
     from commander4.data_models.detector_group_tod import DetectorGroupTOD
@@ -68,27 +70,30 @@ def _gather_scan_distributed_array(band_comm: MPI.Comm, local_array: NDArray,
         return global_array
 
 
-def _gather_variable_length_1d_array(band_comm: MPI.Comm, local_array: NDArray) -> NDArray | None:
-        """Gather a 1-D array with rank-dependent length onto the root rank."""
-        local_array = np.ascontiguousarray(local_array)
-        local_count = np.array([local_array.size], dtype=np.int64)
+def _gather_event_datasets(band_comm: MPI.Comm, events_grid: NDArray, scan_ids: NDArray,
+                           det_names: list[str], group: str,
+                           fields: tuple[str, ...]) -> dict[str, NDArray]:
+    """Gather each detector-scan's events onto the root as `<group>/<scan_id>/<detector>/<field>`.
 
-        if band_comm.Get_rank() == 0:
-            counts = np.zeros(band_comm.Get_size(), dtype=np.int64)
-        else:
-            counts = None
-        band_comm.Gather(local_count, counts, root=0)
+    Used for the optional debug output of jumps and glitches. Collective over `band_comm`, so
+    every rank must call it. Detector-scans without events are left out. Returns an empty dict on
+    every rank but the root.
+    """
+    local = []
+    for iscan in range(events_grid.shape[0]):
+        for idet in range(events_grid.shape[1]):
+            events = events_grid[iscan, idet]
+            if events.num_events > 0:
+                local.append((scan_ids[iscan], det_names[idet], events))
+    gathered = band_comm.gather(local, root=0)  # None on every rank but the root.
 
-        recvbuf = None
-        global_array = None
-        if band_comm.Get_rank() == 0:
-            displacements = np.cumsum(counts) - counts
-            global_array = np.empty(np.sum(counts), dtype=local_array.dtype)
-            mpi_type = MPI._typedict[local_array.dtype.char]
-            recvbuf = (global_array, counts, displacements, mpi_type)
-
-        band_comm.Gatherv(local_array, recvbuf=recvbuf, root=0)
-        return global_array
+    datasets = {}
+    if gathered is not None:
+        for rank_events in gathered:
+            for scan_id, det_name, events in rank_events:
+                for field in fields:
+                    datasets[f"{group}/{scan_id}/{det_name}/{field}"] = getattr(events, field)
+    return datasets
 
 
 class TODSamples:
@@ -120,8 +125,6 @@ class TODSamples:
         # The noise model defines how many parameters per detector-scan (first entry is sigma0).
         self.noise_model = experiment_data.noise_model
         self.npar = self.noise_model.npar
-        self.scan_idx_start = experiment_data.scan_idx_start
-        self.scan_idx_stop = experiment_data.scan_idx_stop
         # C4 works internally in uK_RJ; a band may quote its gain and maps in another unit via
         # `band_unit`. `band_unit_factor` D (= value of 1 uK_RJ in band_unit) converts at the file
         # boundary: brightness maps multiply by D, the gain (brightness in its denominator) divides by
@@ -142,7 +145,20 @@ class TODSamples:
         # writing them to the chain lets a reader map each array column back to a physical detector.
         # Identical across all ranks of a band (taken from the band's detector list).
         self.det_names = list(my_band.detectors)
-        self.jumps = JumpCatalog.empty(self.nscans, self.ndet)
+        # Jumps per detector-scan, as JumpEvents per [iscan, idet]. Filled by
+        # `tod/jumps/sampling.py`, which finds them again from the data on every pass it runs, so a
+        # restart does not read them back.
+        self.jumps = empty_jump_grid(self.nscans, self.ndet)
+        # Glitch (cosmic-ray) events per detector-scan, and the template shapes that each
+        # detector's short/long/slow events share: (ndet, type, exponential) amplitudes and time
+        # constants in seconds. Filled by `tod/glitches/sampling.py`; empty and NaN until it runs.
+        # Event detection runs once per run, like C3's `first_call`, and the flag records that.
+        # The events are not read back from a chain, so a restart detects them again, as C3 does.
+        self.glitches = empty_glitch_grid(self.nscans, self.ndet)  # GlitchEvents per [iscan, idet]
+        template_shape = (self.ndet, len(GLITCH_TEMPLATE_TYPES), GLITCH_TEMPLATE_NEXP)
+        self.glitch_template_amps = np.full(template_shape, np.nan)
+        self.glitch_template_taus = np.full(template_shape, np.nan)
+        self.glitch_events_detected = False
         # Two distinct per-detector-scan boolean masks over the dense (nscans, ndet) grid:
         #   * present: whether this detector actually has data in this scan. Scans hold only the
         #     detectors present in them (DetectorGroupTOD/ScanTOD are sparse), so a detector missing from
@@ -170,10 +186,9 @@ class TODSamples:
             self.modulation_phase = np.ones((self.nscans, self.ndet), dtype=np.int8)
             self.baselines = np.zeros((self.nscans, self.ndet, 2), dtype=np.float64)
         self.modulation_phase_initialized = False
-        # Per-scan start time, Commander3's `MJD`. The epoch is whatever the experiment reader put
-        # in `ScanTOD.start_time`, so this is MJD only for readers whose files carry one. Today
-        # that is SO_SAT alone; every other reader passes 0.0, which is the "no absolute time
-        # available" value here.
+        # Per-scan start time, Commander3's `MJD`. The reader takes it from the scan file's
+        # `<pid>/common/time`, and passes 0.0, the "no absolute time available" value here, for
+        # files without one (today the simgen and Akari files).
         self.scan_start_time = np.array([scan.start_time for scan in experiment_data.scans],
                                         dtype=np.float64)
 
@@ -207,6 +222,10 @@ class TODSamples:
         self.ncorr_cg_niter = np.full((self.nscans, self.ndet), -1, dtype=np.int32)
         self.ncorr_converged = np.full((self.nscans, self.ndet), -1, dtype=np.int8)
 
+        # Wall time [s] the mapmaking scan loop spent on each scan this iteration. Can be used
+        # by subsequent runs to produce better load balancing.
+        self.scan_runtime = np.zeros(self.nscans, dtype=np.float64)
+
         # The temporal-gain Wiener prior each detector was actually sampled under, as
         # (ndet, 3) = (sigma0, fknee, alpha), Commander3's gain_sigma_0/gain_fknee/gain_alpha.
         # Commander3 samples this prior, while C4 hard-codes it in sample_temporal_gain_variations.
@@ -226,6 +245,11 @@ class TODSamples:
             self.residual_tods = []
             for _ in range(self.nscans):
                 self.residual_tods.append([None] * self.ndet)
+        # Optional DEBUG: the jumps and glitch events of every detector-scan, written but never
+        # read back.
+        self.write_jump_events = bool(getattr(params.output.chains.include, "jump_events", False))
+        self.write_glitch_events = bool(getattr(params.output.chains.include, "glitch_events",
+                                                False))
 
         init_chain_path = getattr(params.gibbs, "init_from_chain", False)
         init_from_chain = bool(init_chain_path)
@@ -322,7 +346,6 @@ class TODSamples:
                 self.accept = f["accept"][local_indices, ...].astype(bool)
                 self.chisq_z = f["chisq_z"][local_indices, ...]
                 self.good_fraction = f["good_fraction"][local_indices, ...]
-                self.jumps = JumpCatalog.from_hdf5(f, local_indices, self.ndet)
                 if self.hfi_demodulation:
                     phase = f["modulation_phase"][local_indices, ...]
                     self.modulation_phase = phase.astype(np.int8)
@@ -388,7 +411,9 @@ class TODSamples:
         ####################################################################
         # Gather the various TOD samples.
         ####################################################################
-        # 0. Unique scan-IDs (per-scan quantity)
+        # 0. Unique scan-IDs (per-scan quantity), which increase with time. The gathers below stack
+        # the ranks' scans in rank order, which need not be time order; the per-scan datasets are
+        # sorted by scan ID before they are returned.
         scan_ids_global = _gather_scan_distributed_array(band_comm, self.scan_ids, scans_per_rank)
 
         # 1. Absolute gain (per-band quantity)
@@ -427,6 +452,14 @@ class TODSamples:
                                                                scans_per_rank)
         ncorr_converged_global = _gather_scan_distributed_array(band_comm, self.ncorr_converged,
                                                                 scans_per_rank)
+        # The first scan each rank processes in `tod2map` also pays one-time Numba compilation cost,
+        # so its runtime is nonsense, so we overwrite it with the median runtime of the other scans.
+        scan_runtime = self.scan_runtime.copy()
+        timed = np.flatnonzero(scan_runtime)
+        if timed.size > 1:
+            scan_runtime[timed[0]] = np.median(scan_runtime[timed[1:]])
+        scan_runtime_global = _gather_scan_distributed_array(band_comm, scan_runtime,
+                                                             scans_per_rank)
 
         # 4b3. Planck HFI alternating-modulation state. Other experiments do not write empty
         # instrument-specific datasets.
@@ -455,12 +488,27 @@ class TODSamples:
             full_tods_global = band_comm.gather(
                 (self.scan_ids, self.ncorr_tods, self.residual_tods), root=0)
 
-        # 5. Jump corrections (per-scan per-detector ragged quantity)
-        jump_counts_local, jump_locations_local, jump_offsets_local = self.jumps.pack()
+        # 5. Jumps: the count per detector-scan always (c4-plot-chain shows it), the jumps
+        # themselves only as optional debug output.
+        jump_counts_local = np.zeros((self.nscans, self.ndet), dtype=np.int64)
+        for iscan in range(self.nscans):
+            for idet in range(self.ndet):
+                jump_counts_local[iscan, idet] = self.jumps[iscan, idet].num_events
         jump_counts_global = _gather_scan_distributed_array(band_comm, jump_counts_local,
                                                             scans_per_rank)
-        jump_locations_global = _gather_variable_length_1d_array(band_comm, jump_locations_local)
-        jump_offsets_global = _gather_variable_length_1d_array(band_comm, jump_offsets_local)
+        jump_datasets = {}
+        if self.write_jump_events:
+            jump_datasets = _gather_event_datasets(band_comm, self.jumps, self.scan_ids,
+                                                   self.det_names, "jumps", JUMP_EVENT_FIELDS)
+
+        # 6. Optional DEBUG: glitch events. Both conditions are the same on every rank, so all
+        # ranks join this collective gather or none do.
+        write_glitches = self.write_glitch_events and self.glitch_events_detected
+        glitch_datasets = {}
+        if write_glitches:
+            glitch_datasets = _gather_event_datasets(band_comm, self.glitches, self.scan_ids,
+                                                     self.det_names, "glitches",
+                                                     GLITCH_EVENT_FIELDS)
         ####################################################################
         # Assemble the datasets, on the band master only.
         ####################################################################
@@ -478,13 +526,16 @@ class TODSamples:
         # unconditionally. `det_names` is variable-length UTF-8 for a clean string round-trip; its
         # order is the `idet` axis shared by every per-detector array here.
         arrays: dict[str, NDArray] = {
-            "scan_ids": scan_ids_global,
             "det_names": np.array(self.det_names, dtype=h5py.string_dtype()),
             "abs_gain": abs_gain_global/self.band_unit_factor,
             "detrel_gain": rel_gain_global/self.band_unit_factor,
+            "gain_prior": gain_prior_out,
+        }
+        # The datasets with a scan axis first, written in time order.
+        per_scan_arrays: dict[str, NDArray] = {
+            "scan_ids": scan_ids_global,
             "temporal_gain": temporal_gain_global/self.band_unit_factor,
             "noise_params": noise_params_global,
-            "gain_prior": gain_prior_out,
             "present": present_global,
             "accept": accept_global,
             "chisq_z": chisq_z_global,
@@ -494,18 +545,28 @@ class TODSamples:
             "ncorr_cg_residual": ncorr_cg_residual_global,
             "ncorr_cg_niter": ncorr_cg_niter_global,
             "ncorr_converged": ncorr_converged_global,
+            "scan_runtime": scan_runtime_global,
             "tod_ps_freqs": tod_ps_freqs_global,
             "tod_ps_ncorr": tod_ps_ncorr_global,
             "tod_ps_raw": tod_ps_raw_global,
             "tod_ps_ncorrsub": tod_ps_ncorrsub_global,
             "tod_ps_residual": tod_ps_residual_global,
             "jump_counts": jump_counts_global,
-            "jump_locations": jump_locations_global,
-            "jump_offsets": jump_offsets_global,
         }
         if modulation_phase_global is not None:
-            arrays["modulation_phase"] = modulation_phase_global
-            arrays["baselines"] = baselines_global
+            per_scan_arrays["modulation_phase"] = modulation_phase_global
+            per_scan_arrays["baselines"] = baselines_global
+        # The ranks had the scans stored in some arbitrary order, so we sort them back to being in
+        # time order, which is scan-ID order.
+        time_order = np.argsort(scan_ids_global)
+        for name, values in per_scan_arrays.items():
+            arrays[name] = values[time_order]
+        arrays.update(jump_datasets)
+        if write_glitches:
+            # Per-detector shapes, identical on every rank, so no communication was needed.
+            arrays["glitches/template_amps"] = self.glitch_template_amps
+            arrays["glitches/template_taus"] = self.glitch_template_taus
+            arrays.update(glitch_datasets)
 
         if full_tods_global is not None:
             for scan_ids, ncorr_tods, residual_tods in full_tods_global:

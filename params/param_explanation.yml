@@ -123,6 +123,14 @@ output:
                                   # after sky, dipole, n_corr, sidelobes and low-level corrections.
                                   # Same residual as maps/res, before masking or CG gap filling.
                                   # Independent of residual_maps and ncorr_tods; very large.
+      jump_events: False          # DEBUG ONLY: the jumps of each detector-scan (locations and
+                                  # offsets), at jumps/<scan_id>/<detector>/. The count per
+                                  # detector-scan, jump_counts, is always written. Never read
+                                  # back: a restart finds the jumps again from the data.
+      glitch_events: False        # DEBUG ONLY: the glitch events of each detector-scan, at
+                                  # glitches/<scan_id>/<detector>/, plus the per-detector
+                                  # template shapes. Only once glitch detection has run.
+                                  # Never read back: a restart detects the glitches again.
 
 # ----------------------------------------
 # TOD PROCESSING
@@ -141,9 +149,21 @@ tod_processing:
     max_iter: 40              # Max CG iterations per band map solve.
     err_tol: 1.0e-6           # Squared relative preconditioned residual at which the solve stops.
 
-  # Jump detection: find and remove sudden offset steps in the TOD. C4 does this by.
-  # Requires the experiment to declare a `jump_bitmask`.
+  # Jump detection: find sudden offset steps in the TOD and remove them. A jump is a stretch of
+  # samples marked with the experiment's `jump_bitmask` in the flag stream, which is therefore
+  # required. Its offset is the difference of the mean residual (TOD minus the current sky model)
+  # just before and just after it.
   jump_detection:
+    enabled: false
+    from_iter: 1
+    window: 10                # Valid samples averaged on each side of a jump. A jump without
+                              # this many valid samples on both sides is left uncorrected.
+
+  # Glitch (cosmic-ray) sampling: find glitch events once, then refit their amplitudes and
+  # shapes every iteration, following Commander3's HFI cosmic-ray model. PLACEHOLDER: the step
+  # runs but finds and removes nothing yet, and logs a warning; the experiment's glitch flag bits
+  # still remove the glitches. Runs after the HFI baselines and before gain.
+  glitches:
     enabled: false
     from_iter: 1
 
@@ -281,9 +301,8 @@ compsep:
 
   double_precision: false     # Work in float64/complex128 rather than float32/complex64.
                               # Optional, false by default. It covers the component alms, the
-                              # band alms, DetectorMap.inv_n_map (and so map_rms, which is
-                              # derived from it), the per-pixel solver's maps, and the
-                              # point-source amplitudes. Map precision is NOT separately
+                              # band alms, DetectorMap.map_inv_var, the per-pixel solver's maps,
+                              # and the point-source amplitudes. Map precision is NOT separately
                               # settable: the SHT returns a map in the precision of the alms it
                               # was given, so alm and map space always match. False halves the
                               # memory and is enough in practice.
@@ -415,7 +434,8 @@ compsep:
                               # data as B*Y*a with this beam and NO pixel window.
       freq: 0.408             # [GHz] Band centre. Every SED is evaluated at this single
                               # frequency: C4 has no bandpass integration yet.
-      polarization: "IQU"
+      polarization: "I"       # Intensity only, as in Commander3. The file's Q and U columns
+                              # are copies of I, not polarization data.
       units: "uK_CMB"         # Unit the FILE is in. Converted to uK_RJ on read, which is
                               # what CompSep works in internally. Supported: uK_RJ, mK_RJ,
                               # K_RJ, uK_CMB, mK_CMB, K_CMB, MJy/sr.
@@ -610,53 +630,57 @@ experiments:
     experiment_id: "planck_lfi"
                               # Selects the TOD reader: one module per experiment in
                               # file_io/experiments/, named after this value. Known
-                              # readers: planck_lfi, akari, SO_LAT, SO_SAT, litebird_sim,
-                              # litebird_sim_spawndetectors, general.
-    filelist_idx_start: null  # Optional Python slice bounds on each band's filelist rows,
-    filelist_idx_stop: null   # excluding the header. Zero-based; start included, stop excluded.
-                              # Omitted/null = beginning/end. Negative indices count from the end;
-                              # bounds beyond the filelist are clipped. The slice must be nonempty.
-                              # These are row positions, not the scan IDs in the first column.
-                              # Each bound can be overridden per band. The selected rows are
-                              # split evenly across MPI ranks before reading any TOD files.
+                              # readers: general (the standard format, which simgen
+                              # writes), planck_lfi, planck_hfi, akari, SO_LAT, SO_SAT,
+                              # litebird_sim_spawndetectors.
+    scan_id_start: null       # Optional range of scan IDs (the filelist's first column) to read:
+    scan_id_stop: null        # start included, stop excluded; omitted/null = no bound. Scan IDs
+                              # increase with time, so this selects a stretch of time, whatever
+                              # order the filelist rows are in. The range must hold at least one
+                              # usable scan. Each bound can be overridden per band. The selected
+                              # scans are split across MPI ranks by ntod and pointing-plane
+                              # normal (see `filelist`), so that each rank's scans overlap on the
+                              # sky.
     mapmaker: "bin"           # Overrides tod_processing.mapmaker for this experiment.
 
-    sparse_maps: false        # true = each rank's map buffers and sky-model slice hold
-                              # only the pixels its own scans observe. Essential for a
-                              # small survey patch at high nside; wasteful for a full-sky
-                              # experiment, where the default full-sky broadcast is
-                              # cheaper.
+    sparse_maps: true         # true = each rank's map buffers and sky-model slice hold
+                              # only the pixels its own scans observe. Faster and smaller
+                              # than full-sky buffers, also for full-sky experiments.
+                              # false = every rank holds full-sky maps; mainly a check.
 
     # instrument_file: "/path/to/instrument.h5"
                               # Required for planck_hfi: reads <detector>/polEff in
                               # percent and sets response_I_P to (1, polEff/100).
                               # Also supplies beam data when far-beam sampling is enabled.
 
-    # tod_is_compressed: true # The TOD itself is Huffman-compressed in the HDF5 files.
-    # pix_is_compressed: true # Likewise for the pixel index stream,
-    # psi_is_compressed: true # and for the polarization angle stream. Each defaults to
-                              # whatever the reader expects for that data format.
+    # Whether the TOD and pointing are Huffman-compressed, the sample rate (common/fsamp) and
+    # the resolution of the stored pixels (common/nside) are all read from the scan files.
 
-    # bad_data_bitmask: 0b11111111111111111111111111111111
-                              # Flag bits that mark a sample unusable: a sample is kept
-                              # only where (flag & bad_data_bitmask) == 0. Honoured by the
-                              # SO_LAT, SO_SAT, akari and planck_hfi readers (planck_hfi
-                              # defaults to 515 when unset); planck_lfi hard-codes its own
-                              # value, so setting it here would do nothing.
+    bad_data_bitmask: 6111232 # Required. Flag bits that mark a sample unusable: a sample is
+                              # kept only where (flag & bad_data_bitmask) == 0. 6111232 is
+                              # the value simgen's files and the LFI files use.
     # jump_bitmask: 0b10      # Flag bit that marks a detected jump. Required whenever
                               # tod_processing.jump_detection is enabled.
     # bad_PIDs_path: "/path/to/badPIDs.npy"
                               # NumPy array of scan IDs to skip entirely at read time.
+    # Read-time cuts. They drop a detector-scan before it ever reaches the samplers, unlike
+    # tod_processing.data_selection, which flags rather than drops, every iteration. A
+    # detector-scan that is unusable (no unflagged sample, or a TOD that is non-finite or
+    # all zero) is always dropped. The thresholds live only here, never in the code.
     # min_unmasked_fraction: 0.0
                               # Drop a detector-scan with less than this fraction of
-                              # unflagged samples at READ time, before it ever reaches the
-                              # samplers. Read by the SO_SAT reader only. Distinct from
-                              # data_selection.min_good_fraction, which flags rather than
-                              # drops, and does so every iteration.
+                              # unflagged samples.
+    # max_rms_ratio: null     # Drop a detector-scan whose TOD RMS (offset included, over
+                              # unflagged samples) is above this many times the median RMS
+                              # of the same detector over the band. null disables the cut.
+                              # Catches broken detector-scans without a threshold in
+                              # detector units. LFI uses 6: normal LFI detector-scans
+                              # stay below 4.3, broken ones (offsets) are above 10.
 
     # Replace the TOD read from disk with a synthetic sky plus noise realization, once at
-    # load. Used by the SO and LiteBIRD readers to test the samplers against a known
-    # truth while keeping the real pointing and flags.
+    # load. Works for every experiment, to test the samplers against a known truth while
+    # keeping the real pointing and flags. The read-time cuts on TOD values (non-finite,
+    # all-zero, amplitude) are then skipped, since the TOD on disk may be all zeros.
     # replace_tod_with_sim: true
     # sim_params:
     #   include_CMB: True
@@ -672,19 +696,20 @@ experiments:
     bands:
       Planck30GHz:
         enabled: true
-        num_tasks: 4          # MPI ranks assigned to this band. The scans are split
-                              # across them. These sum to the TOD task total.
+        band_weight: "auto"   # This band's share of the TOD ranks, i.e. of all MPI tasks that
+                              # CompSep does not take; the band's scans are split across them.
+                              # "auto" (default) = the band's number of detector-samples: ntod
+                              # (filelist column 6) summed over the scans it reads, times its
+                              # detectors. If any band's filelist lacks a scan's ntod, every band
+                              # counts scans times detectors instead. A number = ranks in proportion
+                              # to it, so whole numbers that sum to the TOD task count give exactly
+                              # those counts. Set a number on every enabled band, or on none.
         eval_nside: 512       # Resolution the band map is made at, and the resolution
                               # CompSep then sees.
-        # data_nside: 512     # Resolution the pixel indices are stored at on disk. Read
-                              # by the akari reader only; every other reader takes it from
-                              # common/nside in the HDF5 file.
         fwhm: 32.4            # [arcmin] Gaussian beam.
         freq: 28.4            # [GHz] Effective band centre. Note this is not the nominal
                               # 30.0: the SED is evaluated here, so use the effective
                               # value.
-        # fsamp: 32.5         # [Hz] Sample rate. The planck_lfi reader takes it from the
-                              # data file; readers that do not require it here.
         band_unit: "uK_CMB"  # LFI's file-supplied gains are calibrated per uK_CMB.
         polarization: "IQU"
 
@@ -706,14 +731,23 @@ experiments:
         #   ncorr: "/path/to/ncorr_mask.fits"
 
         filelist: "/mn/stornext/d16/cmbco/bp/mathew/test/filelist_30.txt"
-                              # Text file listing this band's scan files, one per line.
+                              # Text file listing this band's scan files: a count line, then
+                              # one row per scan, as Commander3 writes it:
+                              # scan_id "path" weight theta phi [ntod]. The weight is not used.
+                              # theta and phi are the scan's pointing-plane normal: the normal of
+                              # the plane that best fits its pointing (the spin axis for Planck,
+                              # the patch centre for a small ground-based patch). They are used
+                              # only in rows that also have ntod, which newer converters write;
+                              # 0 marks a value they do not know, and rows with ntod 0 (no data in
+                              # the file) are skipped. Without ntod and normals for every selected
+                              # scan, the scans are split into equal blocks in time.
 
         # lmax: 1535          # C3 BAND_LMAX, as under compsep.bands above. Settable here
                               # or on the experiment. Absent = 3*eval_nside - 1.
         # mapmaker: "CG"      # Per-band override of the mapmaker. Band beats experiment
                               # beats tod_processing, for this and several other keys.
-        # filelist_idx_start: 0  # Per-band overrides of either filelist slice bound.
-        # filelist_idx_stop: 45860
+        # scan_id_start: 0    # Per-band overrides of either scan-ID bound.
+        # scan_id_stop: 26862
 
         # initial_noise_params: [100.0, 0.1, -1.0]
                               # [sigma0, fknee, alpha] to start the noise model at, in
@@ -760,7 +794,6 @@ experiments:
       # CompSep expects and no experiment produces.
       Planck44GHz:
         enabled: false
-        num_tasks: 40
         eval_nside: 512
         fwhm: 27.1
         freq: 44.1

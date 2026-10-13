@@ -16,14 +16,18 @@ from mpi4py import MPI
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_tod import DetectorTOD
+from commander4.tod.glitches.events import empty_glitch_grid
+from commander4.tod.jumps.events import empty_jump_grid
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.data_models.pixel_domain import PixelDomain
 from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.tod_samples import TODSamples
 import commander4.tod.processing as tod_processing
 from commander4.tod.config import MapmakingConfig, CorrelatedNoiseConfig, DataSelectionConfig
-import commander4.tod.mapmaking.binned as binned
+import commander4.tod.mapmaking.tod2map as tod2map_module
 from commander4.tod.sky_projection import get_s_orb_tod
+from commander4.tod.view import TODView
 
 _BITMASK = 1
 _NSIDE = 1
@@ -57,29 +61,36 @@ def _build_band(pix, psi, tod, flag=None,
 
 
 def _fake_tod_samples(sigma0: float = 2.0, ndet: int = 1) -> SimpleNamespace:
-    """Minimal stand-in exposing exactly the fields tod2map_bin / TODView / the diagnostics read."""
-    no_jump = SimpleNamespace(is_empty=lambda: True)
+    """Minimal stand-in exposing exactly the fields tod2map / TODView / the diagnostics read."""
     empty_ps = lambda: np.full((1, ndet, 100), np.nan, dtype=np.float32)
     return SimpleNamespace(
         noise_params=np.full((1, ndet, 1), sigma0), abs_gain=_GAIN, rel_gain=np.zeros(ndet),
-        temporal_gain=np.zeros((1, ndet)), jumps=SimpleNamespace(get=lambda iscan, idet: no_jump),
+        temporal_gain=np.zeros((1, ndet)), jumps=empty_jump_grid(1, ndet),
+        glitches=empty_glitch_grid(1, ndet),
         accept=np.ones((1, ndet), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
         chisq_z=np.full((1, ndet), np.nan), good_fraction=np.full((1, ndet), np.nan),
         TOD_PS_NBIN=100, tod_ps_freqs=empty_ps(), tod_ps_raw=empty_ps(), tod_ps_residual=empty_ps(),
-        tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None, residual_tods=None)
+        tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None, residual_tods=None,
+        scan_runtime=np.zeros(1))
 
 
-def _run(band: DetectorGroupTOD, sky_model: np.ndarray,
-         sparse_maps: bool = False) -> dict[str, np.ndarray]:
+def _run(band: DetectorGroupTOD, sky_model: np.ndarray, sparse_maps: bool = False,
+         tod_samples: SimpleNamespace | None = None) -> dict[str, np.ndarray]:
     mapmaking = MapmakingConfig(
         mapmaker="bin", num_threads=1,
         include_orbital_dipole_maps=False, include_corr_noise_maps=False,
         include_sky_model_maps=False, include_residual_maps=True, include_hit_maps=True,
-        sparse_maps=sparse_maps, common_res_fwhm=0.0,
+        common_res_fwhm=0.0,
     )
-    _, maps = tod_processing.tod2map_bin(
-        MPI.COMM_SELF, band, sky_model, _fake_tod_samples(ndet=band.ndet), 1, mapmaking,
-        CorrelatedNoiseConfig(sample_sigma0=False),
+    if tod_samples is None:
+        tod_samples = _fake_tod_samples(ndet=band.ndet)
+    # As in a real run, the domain is built first and the sky model is handed over at its pixels.
+    band.pixel_domain = PixelDomain.from_view(TODView(band, tod_samples), MPI.COMM_SELF,
+                                              "sparse" if sparse_maps else "full", _NSIDE)
+    sky_local = band.pixel_domain.scatter_from_full(sky_model, ncomp=3)
+    _, maps = tod_processing.tod2map(
+        MPI.COMM_SELF, band, sky_local, tod_samples, 1,
+        mapmaking, CorrelatedNoiseConfig(sample_sigma0=False),
         DataSelectionConfig(),
     )
     return maps
@@ -123,6 +134,20 @@ def test_residual_map_is_zero_for_a_perfect_noiseless_model(monkeypatch):
     # float32 TODs at this signal amplitude, so compare at single precision.
     np.testing.assert_allclose(maps["res"], 0.0, atol=1e-3)
     np.testing.assert_allclose(maps["observed_sky"], sky, rtol=0, atol=1e-3)
+
+
+def test_mapmaking_loop_records_each_scans_wall_time(monkeypatch):
+    """The scan's time in the loop is recorded afresh on every call, not added to the last one."""
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    rng = np.random.default_rng(6)
+    n = 256
+    band = _build_band(rng.integers(0, _NPIX, n), rng.uniform(0.0, np.pi, n), rng.normal(size=n))
+    tod_samples = _fake_tod_samples()
+    tod_samples.scan_runtime[:] = 1e6  # A stale value from an earlier iteration.
+
+    _run(band, np.zeros((3, _NPIX)), tod_samples=tod_samples)
+
+    assert 0.0 < tod_samples.scan_runtime[0] < 1e6
 
 
 def test_response_split_detectors_recover_sky_and_zero_residual(monkeypatch):
@@ -257,18 +282,19 @@ def test_intensity_mapmaker_recovers_signal_rms_and_aux_maps(
         return SimpleNamespace(n_corr=n_corr, noise_params=np.array([2.0]), residual=0.0,
                                niter=0, converged=True, high_var=False)
 
-    monkeypatch.setattr(binned, "sample_correlated_noise", fixed_noise)
-    monkeypatch.setattr(binned, "log_corr_noise_stats", lambda *args: None)
+    monkeypatch.setattr(tod2map_module, "sample_correlated_noise", fixed_noise)
+    monkeypatch.setattr(tod2map_module, "log_corr_noise_stats", lambda *args: None)
     far_beam = SimpleNamespace(get_projection=lambda pix, psi, idet:
                               np.full(pix.size, response_I * sidelobe))
     config = MapmakingConfig(
         mapmaker="bin", num_threads=1, include_orbital_dipole_maps=True,
         include_corr_noise_maps=True, include_sky_model_maps=True, include_residual_maps=True,
         include_sidelobe_maps=True, include_hit_maps=True, include_cov_maps=True,
-        sparse_maps=sparse_maps,
     )
-    detmaps, maps = binned.tod2map_bin(
-        comm, band, sky, samples, 1, config,
+    band.pixel_domain = PixelDomain.from_view(TODView(band, samples), comm,
+                                              "sparse" if sparse_maps else "full", _NSIDE)
+    detmaps, maps = tod2map_module.tod2map(
+        comm, band, band.pixel_domain.scatter_from_full(sky, ncomp=1), samples, 1, config,
         CorrelatedNoiseConfig(enabled=True, sample_sigma0=False),
         DataSelectionConfig(), far_beam,
     )

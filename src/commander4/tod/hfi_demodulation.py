@@ -30,9 +30,10 @@ def _sample_baselines(
 
     Before demodulation, one detector-scan follows
 
-    ``d[p] = baseline[parity] + modulation_sign[parity] * gain * sky[p] + noise[p]``,
+    ``d[p] = baseline[parity] + modulation_sign[parity] * (gain * sky[p] + pulses[p]) + noise[p]``,
 
-    where the signs are ``(+phase, -phase)`` for Python's even/odd indices. With independent white
+    where the signs are ``(+phase, -phase)`` for Python's even/odd indices, and ``pulses`` are the
+    glitch pulses in detector units (zero until glitches are modelled). With independent white
     noise, each constant baseline has posterior mean equal to the masked residual mean and posterior
     standard deviation ``sigma0/sqrt(number of samples)``.
 
@@ -48,10 +49,11 @@ def _sample_baselines(
     for view in scan_view.iter_focused(accepted_only=True):
         # Baselines are instrument parameters, so fit the un-demodulated stream rather than
         # TODView.corrected_tod, which would apply the baselines we are currently trying to sample.
+        # Jumps and glitch baseline steps are already removed from it, as they would bias the fit.
         # C3 uses its n_corr processing mask here: flags and bright masked sky regions do not inform
         # the DC levels.
         mask = view.get_mask(proc_mask_type="ncorr")
-        raw_tod = view.raw_tod
+        raw_tod = view.pre_demodulation_tod
         phase = tod_samples.modulation_phase[view.iscan, view.idet]
         gain = view.get_gain()
 
@@ -62,6 +64,10 @@ def _sample_baselines(
             sky_tod = view.get_static_sky_tod() + view.get_orbital_dipole_tod()
         else:
             sky_tod = np.zeros(raw_tod.size, dtype=raw_tod.dtype)
+        # Glitch pulses are modulated like the sky, so they are removed with it; they are already
+        # in detector units and carry no gain. Left in, their scan average would go into the
+        # baselines, and corrected_tod would then remove it a second time.
+        signal_tod = gain * sky_tod + view.get_glitch_pulse_tod()
 
         previous = tod_samples.baselines[view.iscan, view.idet].copy()
         step = 0.0
@@ -75,10 +81,10 @@ def _sample_baselines(
                 break
 
             # Python parity 0 is Fortran's odd samples. The raw modulation sign is +phase on
-            # parity 0 and -phase on parity 1, so subtract that signed sky before fitting the DC
+            # parity 0 and -phase on parity 1, so subtract that signed signal before fitting the DC
             # level. For white noise, Var(mean) = sigma0^2 / count.
             modulation_sign = phase if parity == 0 else -phase
-            residual = raw_tod[parity::2] - modulation_sign * gain * sky_tod[parity::2]
+            residual = raw_tod[parity::2] - modulation_sign * signal_tod[parity::2]
             posterior_mean = float(np.mean(residual[parity_mask]))
             posterior_sd = view.sigma0 / np.sqrt(count)
             baseline = posterior_mean + float(normal()) * posterior_sd
@@ -104,7 +110,8 @@ def _set_modulation_phase(experiment_data: DetectorGroupTOD, tod_samples: TODSam
     rejected = 0
 
     for view in scan_view.iter_focused(accepted_only=True):
-        raw_tod = view.raw_tod
+        # The same stream the bootstrap baselines were fitted to.
+        raw_tod = view.pre_demodulation_tod
         # Phase identification follows C3's flag cut only, not the processing mask used for baseline
         # fitting. Both members of a pair must be valid. Drop a final unpaired sample for odd-length
         # scans by stopping the first slice at raw_tod.size - 1.

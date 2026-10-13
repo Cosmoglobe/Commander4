@@ -10,7 +10,8 @@ import time
 import logging
 from mpi4py import MPI
 from numpy.typing import NDArray
-from typing import Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING
+from collections.abc import Callable
 from copy import deepcopy
 
 from commander4.data_models.detector_map import DetectorMap
@@ -20,7 +21,7 @@ from commander4.math_utils.sht import alm_to_map_adjoint
 from commander4.sky.comp_list import complist_dot, complist_norm
 from commander4.compsep.dense_matrix_debug import DenseMatrix
 from commander4.compsep.cg_driver import DistributedCG
-import commander4.compsep.preconditioners as preconditioners
+from commander4.compsep import preconditioners
 from commander4.data_models.band import Band
 from commander4.diagnostics.performance import benchmark, log_memory
 
@@ -225,8 +226,8 @@ class CompSepSolver:
         if self.sample_amplitudes:
             # + N^{-1/2} eta_1. Drawn per band and independently on every rank, as it must be:
             # eta_1 is the white-noise realization of *this* band's data. Zero-weight pixels
-            # (unobserved, inv_n_map = 0) get no fluctuation, matching their absence from the LHS.
-            eta_1 = np.random.normal(0.0, 1.0, b_map.shape)*np.sqrt(self.det_map.inv_n_map)
+            # (unobserved, map_inv_var = 0) get no fluctuation, matching their absence from the LHS.
+            eta_1 = np.random.normal(0.0, 1.0, b_map.shape)*np.sqrt(self.det_map.map_inv_var)
             logger.debug(f"RHS |N^-1 d| = {np.mean(np.abs(b_map)):.2e}, "
                          f"|N^-1/2 eta_1| = {np.mean(np.abs(eta_1)):.2e}")
             b_map += eta_1.astype(b_map.dtype, copy=False)

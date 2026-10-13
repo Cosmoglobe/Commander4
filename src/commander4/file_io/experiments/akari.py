@@ -1,13 +1,4 @@
 """TOD reader for AKARI far-infrared survey data (``experiment_id: akari``)."""
-import logging
-import numpy as np
-import healpy as hp
-import os
-import h5py
-import gc
-from pixell.bunch import Bunch
-from numpy.typing import NDArray
-from astropy.io import fits
 from mpi4py import MPI
 from commander4.backend import utils as cpp_utils
 from commander4.data_models.detector_tod import DetectorTOD
@@ -24,24 +15,13 @@ from commander4.file_io.experiments.read_utils import (
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset
 
-logger = logging.getLogger(__name__)
+from commander4.file_io.experiments.base_reader import TODReader
 
-def tod_reader(band_comm: MPI.Comm, my_experiment: Bunch, my_band: Bunch, 
-               all_det_names: list[str],
-               params: Bunch, scan_idx_start: int,
-               scan_idx_stop: int) -> DetectorGroupTOD:
-    """Read this rank's scans for one AKARI band from its HDF5 scan files.
 
-    Args:
-        band_comm: The band's MPI communicator.
-        my_experiment, my_band: The experiment and band parameter blocks.
-        all_det_names: Ordered per-band detector names; a detector's position here is its
-            ``det_idx_fullband`` column in the dense per-detector sample arrays.
-        params: The full parameter file.
-        scan_idx_start, scan_idx_stop: This rank's slice of the band's scan list.
+class AkariReader(TODReader):
+    """AKARI: the standard format, intensity-only, with the initial gain stored as is.
 
-    Returns:
-        The band's `DetectorGroupTOD`, holding only the scans and detectors this rank read.
+    The files carry no orbital velocity, so it is zero.
     """
     oids = []
     pids = []

@@ -49,9 +49,9 @@ def _zero_comp_list() -> CompList:
     return comp_list
 
 
-def _make_group(map_sky, rms, chisq_mask=None) -> _TrivialGroup:
+def _make_group(map_sky, inv_var, chisq_mask=None) -> _TrivialGroup:
     det_map = DetectorMap(np.asarray(map_sky, dtype=np.float64),
-                          np.asarray(rms, dtype=np.float64),
+                          np.asarray(inv_var, dtype=np.float64),
                           nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=2)
     return _TrivialGroup(MPI.COMM_SELF, det_map, _zero_comp_list(), target_pol="I",
                          chisq_active=True, chisq_mask=chisq_mask)
@@ -81,17 +81,17 @@ class TestMaskedLikelihood:
         rms = rng.uniform(0.5, 2.0, (1, NPIX))
         keep = rng.random(NPIX) > 0.5
 
-        group = _make_group(map_sky, rms, chisq_mask=keep.astype(float))
+        group = _make_group(map_sky, 1.0/rms**2, chisq_mask=keep.astype(float))
         expected = -0.5*np.sum((map_sky[0, keep]/rms[0, keep])**2)
         assert group.local_loglike() == pytest.approx(expected)
 
     def test_zero_weight_pixels_contribute_zero_not_nan(self):
-        """Unobserved pixels (inv_n = 0, rms = inf) must not poison the chi-squared."""
+        """Unobserved pixels (map_inv_var = 0) must not poison the chi-squared."""
         map_sky = np.full((1, NPIX), 3.0)
-        rms = np.ones((1, NPIX))
-        rms[0, :6] = np.inf                        # inv_n_map = 0 there
+        inv_var = np.ones((1, NPIX))
+        inv_var[0, :6] = 0.0
 
-        loglike = _make_group(map_sky, rms).local_loglike()
+        loglike = _make_group(map_sky, inv_var).local_loglike()
         assert np.isfinite(loglike)
         assert loglike == pytest.approx(-0.5*(NPIX - 6)*3.0**2)
 

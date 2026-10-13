@@ -4,14 +4,11 @@ The TOD, pointing and flags are usually stored Huffman-compressed and are decomp
 first access, so a band can hold many scans without materializing all of them at once.
 """
 import numpy as np
-import healpy as hp
 from numpy.typing import NDArray
-from pixell.bunch import Bunch
 
-from commander4.backend import utils as cpp_utils
+from commander4.backend import compression as cpp_compression
 from commander4.data_models.pointing import PixelPointing, DetectorBoresightPointing
-from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
-                                               stop_bench, log_memory, increment_count, bench_reset
+from commander4.diagnostics.performance import benchmark, start_bench, stop_bench
 
 
 class DetectorTOD:
@@ -72,8 +69,10 @@ class DetectorTOD:
                 defines none. Used unless a sampling step requests a name in specific_proc_masks.
             specific_proc_masks: Mapping of operation name -> processing-mask HEALPix map for bands
                 that define per-operation masks (empty dict if none).
-            flag_encoded: Flag samples, either decoded or Huffman-encoded, or None.
-            flag_bitmask: Bitmask applied to flags to identify excluded samples.
+            flag_encoded: Flag samples, either decoded or Huffman-encoded. None means no flags;
+                ``flag`` then returns all zeros.
+            bad_data_bitmask: Bitmask applied to flags to identify excluded samples. None means
+                no bad-data cut.
             polang: The polarization angle of this detector relative to the boresight.
             response_I_P: How sensitive this detector is to intensity and to polarization, as a
                 two-element [I, QU] sequence. Only experiments whose files carry a per-detector
@@ -147,6 +146,7 @@ class DetectorTOD:
             self.response_I_P = (1.0, 1.0)
         else:
             self.response_I_P = (float(response_I_P[0]), float(response_I_P[1]))
+        self._good_data_mask = None  # Stays None without flags or bitmask: nothing is cut.
         if flag_encoded is not None and bad_data_bitmask is not None:
             good_data_mask = (self.flag & bad_data_bitmask) == 0
             self._good_data_mask = np.packbits(good_data_mask)
@@ -171,9 +171,9 @@ class DetectorTOD:
         if self._tod_is_compressed:
             tod = np.zeros(self.ntod_original, dtype=self._huffman_symbols2.dtype)
             with benchmark("huffman"):
-                tod[:] = cpp_utils.huffman_decode(self._tod,
-                                        self._huffman_tree2, self._huffman_symbols2, tod)
-            tod[:] = np.cumsum(tod)
+                cpp_compression.huffman_decode(self._tod, self._huffman_tree2,
+                                               self._huffman_symbols2, tod)
+            np.cumsum(tod, out=tod)
             tod = tod.astype(np.float32)
         else:
             tod = self._tod
@@ -205,12 +205,16 @@ class DetectorTOD:
 
     @property
     def flag(self) -> NDArray[np.integer]:
+        if self._flag_encoded is None:  # Built without flags: no sample is flagged.
+            return np.zeros(self.ntod, dtype=np.int64)
         if self._flag_is_compressed:
             flag = np.zeros(self.ntod_original, dtype=self._huffman_symbols.dtype)
             with benchmark("huffman"):
-                flag = cpp_utils.huffman_decode(self._flag_encoded,
+                flag = cpp_compression.huffman_decode(self._flag_encoded,
                                             self._huffman_tree, self._huffman_symbols, flag)
-            flag = np.cumsum(flag)
+            # Specifically cumsum-ing in the flags native units, as SO currently relies on uint8
+            # wrap-around from 255 to 0 in its cummulation.
+            flag = np.cumsum(flag, dtype=flag.dtype).astype(np.int64, copy=False)
         else:
             flag = self._flag_encoded
         return flag[:self.ntod]
@@ -219,6 +223,8 @@ class DetectorTOD:
     @property
     def good_data_mask(self) -> NDArray[np.bool_]:
         """Boolean mask keeping samples that pass the bad-data flag cut."""
+        if self._good_data_mask is None:  # No flags or no bitmask: nothing is cut.
+            return np.ones(self.ntod, dtype=bool)
         mask = np.unpackbits(self._good_data_mask).view(bool)
         if mask.size > self.ntod + 7 or mask.size < self.ntod:
             raise ValueError(f"Mask size {mask.size} doesn't match TOD size {self.ntod}.")

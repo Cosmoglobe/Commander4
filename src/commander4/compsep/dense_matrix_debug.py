@@ -8,12 +8,8 @@ tailored to that same distributed apply, which has not been done.
 import logging
 import numpy as np
 from tqdm import trange
-from pixell import utils
-from mpi4py import MPI
-from mpi4py.MPI import Comm
 from copy import deepcopy
 import scipy
-from collections.abc import Callable
 
 
 class DenseMatrix:

@@ -14,7 +14,7 @@ resources:
     num_threads: 2
 
   compsep:
-    num_threads: [128, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 256, 1, 1, 1, 1, 1, 1, 1, 1, 1, 4, 4, 4, 4]
+    num_threads: [128, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 256, 1, 1, 1, 1, 1, 1, 1, 1, 4, 4, 4, 4]
 
 # ----------------------------------------
 # OUTPUT
@@ -132,7 +132,7 @@ compsep:
         dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
       fwhm: 60.0  # [arcmin]
       freq: 0.408 # [GHz]
-      polarization: "IQU"
+      polarization: "I"  # The file's Q and U columns are copies of I, not polarization data.
       units: "uK_CMB"
 
     ###### WMAP MAPS ######
@@ -239,15 +239,14 @@ experiments:
   SO_LAT:
     enabled: true
     experiment_id: "SO_LAT"
-    tod_is_compressed: true
     mapmaker: "bin"
     sparse_maps: true
     bad_data_bitmask: 0b11111111111111111111111111111111  # Entries in the 32-bit bitmask corresponding to bad data.
+    min_unmasked_fraction: 0.9  # Read-time cut: drop detector-scans with less unflagged data.
     jump_bitmask: 0b00000000000000000000000000000010
     bands:
       SO_LAT_i1ws0_f90:
         enabled: true
-        num_tasks: 233
         eval_nside: 8192
         fwhm: 2.2 # [arcmin]
         freq: 90.0 # [GHz]

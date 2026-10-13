@@ -63,7 +63,8 @@ class TODView:
         Args:
             experiment_data: Static TOD container for the current band.
             tod_samples: Sampled gain and noise parameters for the current chain state.
-            compsep_output: Optional default sky model used by sky-subtraction helpers.
+            compsep_output: Optional default sky model used by sky-subtraction helpers, holding
+                this rank's local pixels (``PixelDomain``).
             downsample_factor: Block-averaging factor applied to every derived TOD/mask the view
                 returns (1 = full resolution). Each operation that needs a coarser rate (e.g. gain
                 calibration) constructs its own view at the desired factor.
@@ -92,8 +93,10 @@ class TODView:
     def _clear_cache(self):
         """Drop all arrays materialized for the current detector."""
         self._raw_tod = None
+        self._pre_demodulation_tod = None
         self._corrected_tod = None
         self._pix = None
+        self._pix_local = None
         self._psi = None
         self._flag = None
         self._ds_indices = None
@@ -283,17 +286,39 @@ class TODView:
         return self._raw_tod
 
     @property
+    def pre_demodulation_tod(self) -> NDArray[np.floating]:
+        """The raw TOD with jumps and glitch baseline steps removed, before HFI demodulation.
+
+        The HFI baseline sampler fits this TOD, since it must not see the baselines it samples. A
+        bright glitch shifts both sample parities alike, so its step is removed here, before
+        demodulation flips the sign of every other sample. Without demodulation, this is
+        `corrected_tod` before the glitch pulses are removed.
+        """
+        if self._pre_demodulation_tod is None:
+            tod = self.raw_tod
+            jumps = self.tod_samples.jumps[self.iscan, self.idet]
+            if jumps.num_events > 0:
+                tod = tod + jumps.offset_tod(self.detector.ntod)
+            glitches = self.tod_samples.glitches[self.iscan, self.idet]
+            if glitches.num_events > 0:
+                tod = tod - glitches.baseline_step_tod(self.detector.ntod, self.fsamp)
+            self._pre_demodulation_tod = tod
+        return self._pre_demodulation_tod
+
+    @property
     def corrected_tod(self) -> NDArray[np.floating]:
         """TOD (in detector units) after low-level corrections, such as jumps or demodulation.
 
         Figures out what low-level corrections are active and applies those to `self.raw_tod`.
-        Currently implemented adjustments include:
+        Currently implemented adjustments include, in this order:
             - Jump corrections, requiring the jump-finding sampling step.
+            - Glitch baseline steps, requiring the glitch sampling step (a placeholder for now).
             - HFI demodulation, requiring the demodulation phase and the baseline sampling steps.
+            - Glitch pulses, see `get_glitch_pulse_tod` (a placeholder for now).
+        The first two make up `pre_demodulation_tod`.
         """
         if self._corrected_tod is None:
-            jump = self.tod_samples.jumps.get(self.iscan, self.idet)
-            corrected = self.raw_tod if jump.is_empty() else jump.apply(self.raw_tod)
+            corrected = self.pre_demodulation_tod
 
             if getattr(self.experiment_data, "hfi_demodulation", False):
                 if not self.tod_samples.modulation_phase_initialized:
@@ -304,6 +329,10 @@ class TODView:
                 corrected[0::2] = phase * (corrected[0::2] - baseline_first)
                 corrected[1::2] = -phase * (corrected[1::2] - baseline_second)
 
+            # After demodulation a glitch has the sign of the sky, like the heat it deposits.
+            if self.tod_samples.glitches[self.iscan, self.idet].num_events > 0:
+                corrected = corrected - self._fullres_glitch_pulses()
+
             self._corrected_tod = corrected
         return self._corrected_tod
 
@@ -313,6 +342,17 @@ class TODView:
         if self._pix is None:
             self._pix, self._psi = self.detector.get_pix_psi()
         return self._pix
+
+    @property
+    def _fullres_pix_local(self) -> NDArray[np.integer]:
+        """Full-rate pointing as local pixel indices, i.e. indices into this rank's map buffers.
+
+        Converted once per detector (``PixelDomain.to_local``) and shared by every map that the
+        detector-scan touches.
+        """
+        if self._pix_local is None:
+            self._pix_local = self.experiment_data.pixel_domain.to_local(self._fullres_pix)
+        return self._pix_local
 
     @property
     def _fullres_psi(self) -> NDArray[np.floating] | NDArray[np.integer]:
@@ -327,6 +367,17 @@ class TODView:
         if self._downsample_factor == 1:
             return self._fullres_pix
         return self._fullres_pix[self._block_indices]
+
+    @property
+    def pix_local(self) -> NDArray[np.integer]:
+        """``pix`` as local pixel indices, for indexing this rank's map buffers (``PixelDomain``).
+
+        Use this, not ``pix``, wherever a map is accumulated or read; ``pix`` stays the global
+        HEALPix index for everything that needs a sky position (masks, dipole, sidelobes).
+        """
+        if self._downsample_factor == 1:
+            return self._fullres_pix_local
+        return self._fullres_pix_local[self._block_indices]
 
     @property
     def psi(self) -> NDArray[np.floating] | NDArray[np.integer]:
@@ -370,9 +421,12 @@ class TODView:
                       proc_mask_type: str = "") -> NDArray[np.bool_]:
         """Combine the bad-data flag cut and a sky processing mask, at the full sampling rate."""
         mask = np.ones(self.detector.ntod, dtype=bool)
-        # Datasets without an explicit flag cut behave as if all samples pass it.
-        if good_data_mask and getattr(self.detector, "_good_data_mask", None) is not None:
+        if good_data_mask:
             mask &= self.detector.good_data_mask
+            # The samples cut around glitches are bad data like flagged samples, so they go too.
+            glitches = self.tod_samples.glitches[self.iscan, self.idet]
+            if glitches.num_events > 0:
+                mask &= glitches.good_sample_mask(self.detector.ntod)
         if proc_mask:
             proc = self._project_processing_mask(proc_mask_type)
             if proc is not None:
@@ -414,14 +468,13 @@ class TODView:
         if sky_model is None:
             raise ValueError("A component-separation sky map must be provided for sky subtraction.")
 
-        # The realized sky model is full-sky (ncomp, npix) on the band master and in non-sparse map
-        # mode, but only (ncomp, n_local) on workers in sparse mode (see
-        # communication._realize_and_distribute_sky). The column count is what tells the two apart.
-        if sky_model.shape[-1] == 12 * self.experiment_data.nside**2:
-            sky_pix = self._fullres_pix
-        else:
-            sky_pix = self.experiment_data.pixel_domain.to_local(self._fullres_pix)
-        sky = self._downsample_mean(project_sky_to_tod(sky_model, sky_pix, psi=self._fullres_psi,
+        # The sky model holds this rank's local pixels, like the map buffers (see PixelDomain). A
+        # full-sky map would still index without error in sparse mode, but at the wrong pixels.
+        if sky_model.shape[-1] != self.experiment_data.pixel_domain.n_local:
+            raise ValueError(f"Sky model has {sky_model.shape[-1]} pixels, but this rank's pixel "
+                             f"domain holds {self.experiment_data.pixel_domain.n_local}.")
+        sky = self._downsample_mean(project_sky_to_tod(sky_model, self._fullres_pix_local,
+                                                       psi=self._fullres_psi,
                                                        response_I_P=self.response_I_P))
         if compsep_output is None:
             self._static_sky = sky
@@ -437,6 +490,31 @@ class TODView:
             full = get_s_orb_tod(self.detector, self.experiment_data, self._fullres_pix)
             self._orbital_dipole = self._downsample_mean(full)
         return self._orbital_dipole
+
+
+    def _fullres_glitch_pulses(self, template_only: bool = False) -> NDArray[np.float32]:
+        """Full-rate glitch pulses of the focused detector-scan; zeros when it has no events."""
+        glitches = self.tod_samples.glitches[self.iscan, self.idet]
+        if glitches.num_events == 0:
+            return np.zeros(self.detector.ntod, dtype=np.float32)
+        template_amps = self.tod_samples.glitch_template_amps[self.idet]
+        template_taus = self.tod_samples.glitch_template_taus[self.idet]
+        return glitches.pulse_tod(self.detector.ntod, template_amps, template_taus, self.fsamp,
+                                template_only)
+
+
+    def get_glitch_pulse_tod(self, template_only: bool = False) -> NDArray[np.floating]:
+        """Evaluate the glitch pulses of the focused detector-scan, in detector units.
+
+        The pulses have the sign of the sky in the demodulated TOD, and ``corrected_tod`` has them
+        all removed already. A fit to the raw HFI TOD must remove them modulated, like the sky.
+        Built at the full rate and block-averaged, like the other model TODs.
+
+        Args:
+            template_only: If True, leave out the bright events. Adding the template pulses back
+                to ``corrected_tod`` gives the data the glitch amplitude sampler fits.
+        """
+        return self._downsample_mean(self._fullres_glitch_pulses(template_only))
 
 
     def get_tod(

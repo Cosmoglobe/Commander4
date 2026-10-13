@@ -73,7 +73,7 @@ class JumpDetectionConfig:
             raise ValueError("jump_detection.enabled must be true or false.")
         if not isinstance(self.window, int) or self.window < 1:
             raise ValueError("jump_detection.window must be an integer of at least 1.")
-        if self.enabled and self.jump_bitmask is None:
+        if self.enabled and (self.jump_bitmask is None or self.jump_bitmask < 1):
             raise ValueError("Jump detection is enabled, but the experiment has no jump_bitmask.")
 
     @classmethod
@@ -81,6 +81,25 @@ class JumpDetectionConfig:
         """Read the jump settings and obtain the bitmask from experiment metadata."""
         block = tod["jump_detection"] if "jump_detection" in tod else {}
         return cls(**block, jump_bitmask=getattr(experiment, "jump_bitmask", None))
+
+
+@dataclass(frozen=True)
+class GlitchConfig:
+    """Glitch (cosmic-ray) sampling switch. The step is a placeholder that changes nothing yet."""
+
+    enabled: bool = False
+    from_iter: int = 1
+
+    def __post_init__(self) -> None:
+        """Check the settings before they are used by a numerical routine."""
+        if not isinstance(self.enabled, bool):
+            raise ValueError("glitches.enabled must be true or false.")
+
+    @classmethod
+    def from_params(cls, tod: Bunch | dict) -> GlitchConfig:
+        """Read the global glitch block, using disabled defaults when it is absent."""
+        block = tod["glitches"] if "glitches" in tod else {}
+        return cls(**block)
 
 
 @dataclass(frozen=True)
@@ -213,7 +232,6 @@ class MapmakingConfig:
     include_sidelobe_maps: bool = False
     include_hit_maps: bool = False
     include_cov_maps: bool = False
-    sparse_maps: bool = False
     common_res_fwhm: float = 0.0
     band_lmax: int | None = None
     cg: CGConfig = field(default_factory=CGConfig)
@@ -244,8 +262,6 @@ class MapmakingConfig:
         return cls(
             mapmaker=mapmaker,
             num_threads=params.resources.tod.num_threads,
-            sparse_maps=resolve_param(params, "sparse_maps", (f"experiments.{exp_name}",),
-                                      default=cls.sparse_maps, legal_types=bool),
             common_res_fwhm=float(getattr(params.compsep, "common_res_fwhm", cls.common_res_fwhm)),
             band_lmax=resolve_band_lmax(params, band_name, exp_name, experiment_data.nside),
             include_orbital_dipole_maps=bool(include["orbital_dipole_maps"]),

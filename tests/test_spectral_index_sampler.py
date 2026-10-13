@@ -43,24 +43,14 @@ class StubComponent:
 
 
 class FakeDetectorMap:
-    def __init__(self, map_sky, map_rms, nu, fwhm, nside, double_precision=True):
+    def __init__(self, map_sky, map_inv_var, nu, fwhm, nside, double_precision=True):
         self.map_sky = np.array(map_sky, dtype=np.float64, copy=True)
-        self._map_rms = np.array(map_rms, dtype=np.float64, copy=True)
+        self.map_inv_var = np.array(map_inv_var, dtype=np.float64, copy=True)
         self.nu = nu
         self.fwhm = fwhm
         self.fwhm_rad = fwhm  # MCMCSamplingGroup.local_loglike realizes the model at this resolution.
         self.nside = nside
         self.double_precision = double_precision
-
-    @property
-    def map_rms(self):
-        return self._map_rms.copy()
-
-    @property
-    def inv_n_map(self):
-        # The real DetectorMap stores inv_n_map and derives map_rms from it; local_loglike whitens
-        # with sqrt(inv_n_map) so that zero-weight pixels do not become a division by infinity.
-        return 1.0/self._map_rms**2
 
     @property
     def pol(self):
@@ -177,8 +167,8 @@ class FakeComponent:
 
 def make_detector_data(component, nu=2.0, nside=1, rms=1.0):
     map_sky = component.get_sky(nu, nside)
-    map_rms = np.full_like(map_sky, rms, dtype=np.float64)
-    return FakeDetectorMap(map_sky, map_rms, nu=nu, fwhm=0.0, nside=nside,
+    map_inv_var = np.full_like(map_sky, 1.0/rms**2, dtype=np.float64)
+    return FakeDetectorMap(map_sky, map_inv_var, nu=nu, fwhm=0.0, nside=nside,
                            double_precision=True)
 
 

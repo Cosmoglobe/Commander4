@@ -25,7 +25,7 @@ def test_end_to_end_transfer_function(tmp_path, compress):
     import yaml
     from simgen import pipeline
     from commander4.math_utils.transfer_func import SinglePole
-    from commander4.backend import utils as cpp_utils
+    from commander4.backend import compression as cpp_compression
 
     tau_ms, fsamp, nside = 15.0, 12.0, 16
     out_dir = str(tmp_path / "sim")
@@ -76,7 +76,7 @@ def test_end_to_end_transfer_function(tmp_path, compress):
             tree = f["000001/common/hufftree"][:]
             symb = f["000001/common/huffsymb"][:]
             enc = np.frombuffer(raw.tobytes(), dtype=np.uint8)
-            diffs = cpp_utils.huffman_decode(enc, tree, symb, np.empty(ntod, dtype=np.int64))
+            diffs = cpp_compression.huffman_decode(enc, tree, symb, np.empty(ntod, dtype=np.int64))
             return np.cumsum(diffs)   # pointing is diff-encoded before Huffman
 
         tod_tf, tod_id = read_tod("det_tf"), read_tod("det_id")
