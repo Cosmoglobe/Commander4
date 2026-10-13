@@ -53,7 +53,11 @@ class TransferFunction(ABC):
     def response(self, freqs_hz: NDArray[np.floating]) -> NDArray[np.complexfloating]:
         """The complex filter ``H(f)`` sampled at the given physical frequencies [Hz]."""
 
-    def apply(self, signal: NDArray[np.floating], fsamp: float) -> NDArray[np.floating]:
+    def apply(self, 
+        signal: NDArray[np.floating],
+        fsamp: float,
+        prior_signal: NDArray[np.floating] | None = None
+    ) -> NDArray[np.floating]:
         """Filter ``signal`` with this transfer function via a mirrored FFT over the scan.
 
         The scan is reflected (``[x, x[::-1]]``, length ``2*ntod``), filtered with ``H`` on the
@@ -64,6 +68,8 @@ class TransferFunction(ABC):
         Args:
             signal: One detector's clean signal TOD (ntod,), before noise.
             fsamp: Sampling rate [Hz], setting the physical frequency grid.
+            prior_signal: Optional noise-free prior TOD (ntod,) used to determine rising vs.
+                falling states for asymmetric TFs. Ignored for linear symmetric TFs.
 
         Returns:
             The filtered TOD, same length and dtype as ``signal``. ``H(0) = 1`` preserves the DC
@@ -111,6 +117,90 @@ class MultiPole(TransferFunction):
         return poles.sum(axis=0) / self.norm
 
 
+class AsymmetricTransferFunction(TransferFunction):
+    """Applies different transfer functions depending on whether the signal is rising or falling.
+
+    Uses a Filter-then-Splice strategy: both `tf_up` and `tf_down` are evaluated independently 
+    over the full scan using mirrored FFTs, and then blended in the time domain using a smooth 
+    rising/falling mask derived from a reference signal.
+    """
+
+    def __init__(
+        self,
+        tf_up: TransferFunction,
+        tf_down: TransferFunction,
+        rel_threshold: float = 0.05,
+    ):
+        """
+        Args:
+            tf_up: TransferFunction to apply when the signal is rising (d/dt > 0).
+            tf_down: TransferFunction to apply when the signal is falling (d/dt < 0).
+            rel_threshold: Hysteresis threshold relative to max(|s_dot|) to prevent rapid 
+                switching ("chattering") near peaks/troughs.
+        """
+        self.tf_up = tf_up
+        self.tf_down = tf_down
+        self.rel_threshold = float(rel_threshold)
+
+    def response(self, freqs_hz: NDArray[np.floating]) -> NDArray[np.complexfloating]:
+        raise NotImplementedError(
+            "AsymmetricTransferFunction is state-dependent and cannot be "
+            "represented by a single frequency response H(f)."
+        )
+
+    def _compute_rising_mask(
+        self, ref_signal: NDArray[np.floating], fsamp: float
+    ) -> NDArray[np.floating]:
+        """Generates a binary state mask (1.0 = rising, 0.0 = falling) with hysteresis."""
+
+        ref_signal = ref_signal.astype(np.float64)
+
+        # Compute smooth derivative s_dot = d/dt
+        s_dot = np.gradient(ref_signal, 1.0 / fsamp)
+
+        # Calculate hysteresis threshold to prevent chatter at peaks/troughs
+        max_abs_dot = np.max(np.abs(s_dot))
+        eps = self.rel_threshold * max_abs_dot if max_abs_dot > 0 else 0.0
+
+        # Construct state mask with hysteresis holding: if the derivative does not change enogh,
+        # depending on the relative threshold defined, the mask will not flip.
+        mask = np.empty(len(ref_signal), dtype=np.float64)
+        curr_state = 1.0  # Default initial state
+        for i in range(len(ref_signal)):
+            if s_dot[i] > eps:
+                curr_state = 1.0
+            elif s_dot[i] < -eps:
+                curr_state = 0.0
+            mask[i] = curr_state
+        return mask
+
+    def apply(
+        self,
+        signal: NDArray[np.floating],
+        fsamp: float,
+        prior_signal: NDArray[np.floating] | None = None,
+    ) -> NDArray[np.floating]:
+        """Applies asymmetric filtering to ``signal``.
+
+        If ``prior_signal`` is provided (e.g. during CG solving), it is used to determine 
+        the rising/falling state mask. If ``prior_signal`` is None (e.g. forward simulations),
+        the mask is derived directly from ``signal``. ``prior_signal`` is assumed to be already
+        correctly smoothed to the telescope FWHM.
+        """
+        # Step 1: Select reference signal for computing rising/falling states
+        ref_signal = prior_signal if prior_signal is not None else signal
+
+        # Step 2: Generate time-domain mask M (1 for rising, 0 for falling)
+        mask = self._compute_rising_mask(ref_signal, fsamp)
+
+        # Step 3: Run full mirrored FFT filtering for both filters
+        filtered_up = self.tf_up.apply(signal, fsamp)
+        filtered_down = self.tf_down.apply(signal, fsamp)
+
+        # Step 4: Time-domain splice
+        filtered = mask * filtered_up + (1.0 - mask) * filtered_down
+        return filtered.astype(signal.dtype, copy=False)
+
 def _tau_sec(spec: Bunch | dict) -> float | None:
     """Read a time constant from a param block, accepting ``tau_sec`` or ``tau_ms`` (None if absent).
 
@@ -132,6 +222,20 @@ def _build_from_node(node: Bunch) -> TransferFunction | None:
     ``tau_ms``/``tau_sec`` gives a ``SinglePole``. A missing or zero time constant means identity, for
     which we return ``None`` (no filtering) so the caller can skip the FFT entirely.
     """
+    #asymmetric TF case
+    if "up" in node:
+        tf_up = _build_from_node(node.up)
+        if "down" in node:
+            tf_down = _build_from_node(node.down)
+            rel_eps = bget(node, "rel_epsilon", None)
+            if rel_eps is not None:
+                return AsymmetricTransferFunction(tf_up, tf_down, rel_threshold=rel_eps)
+            else:
+                return AsymmetricTransferFunction(tf_up, tf_down)
+        else:
+            raise ValueError("If a TF up is defined, a TF down must be defined too.")
+
+    #TF with multi-pole case
     poles = bget(node, "poles", None)
     if poles is not None:
         amps, taus = [], []
@@ -142,6 +246,8 @@ def _build_from_node(node: Bunch) -> TransferFunction | None:
             amps.append(float(bget(pole, "amp", 1.0)))
             taus.append(tau)
         return MultiPole(amps, taus)
+    
+    #Single-pole TF
     tau = _tau_sec(node)
     return SinglePole(tau) if tau else None
 
