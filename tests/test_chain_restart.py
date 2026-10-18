@@ -80,9 +80,11 @@ def test_unfinished_writes_and_unused_bands_do_not_count(tmp_path) -> None:
     assert start.source_iteration == 2
 
 
-def test_append_without_saved_chains_starts_new_ones(tmp_path) -> None:
-    start = resolve_chain_start(_params(tmp_path, chain_status="append"), True, True)
+def test_append_without_saved_chains_starts_new_ones_with_a_warning(tmp_path, caplog) -> None:
+    with caplog.at_level("WARNING"):
+        start = resolve_chain_start(_params(tmp_path, chain_status="append"), True, True)
     assert (start.first_iteration, start.source_dir) == (1, None)
+    assert "holds no complete saved iteration" in caplog.text
 
 
 def test_append_without_saved_chains_falls_back_to_init_chain(tmp_path) -> None:
@@ -93,6 +95,17 @@ def test_append_without_saved_chains_falls_back_to_init_chain(tmp_path) -> None:
     start = resolve_chain_start(params, True, True)
     assert (start.first_iteration, start.source_dir, start.source_iteration) == \
         (1, str(source), 2)
+
+
+def test_append_with_saved_chains_ignores_init_chain_with_a_warning(tmp_path, caplog) -> None:
+    source, output = tmp_path / "source", tmp_path / "out"
+    _save(source, chains=[1], iterations=[1, 2])
+    _save(output, chains=[1], iterations=[1])
+    params = _params(output, chain_status="append", init_chain=str(source))
+    with caplog.at_level("WARNING"):
+        start = resolve_chain_start(params, True, True)
+    assert (start.first_iteration, start.source_dir) == (2, str(output))
+    assert "init_chain" in caplog.text and "ignored" in caplog.text
 
 
 def test_init_chain_takes_the_newest_or_the_named_iteration(tmp_path) -> None:

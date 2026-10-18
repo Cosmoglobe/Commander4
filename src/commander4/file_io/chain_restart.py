@@ -112,9 +112,13 @@ def resolve_chain_start(params: Bunch, tod_active: bool, compsep_active: bool) -
         complete, written_chains, saved_parts = _complete_iterations(output_dir, needed_parts)
         if complete:
             start = ChainStart(complete[0] + 1, output_dir, complete[0])
+            if init_chain:
+                logger.warning(f"gibbs.init_chain ({init_chain}) is ignored because chain_status "\
+                               f"'append' continues the saved chains in {output_dir}.")
         else:
-            logger.info(f"gibbs.chain_status is 'append', but {output_dir} holds no complete "
-                        "saved iteration; starting new chains.")
+            logger.warning(f"gibbs.chain_status is 'append', but {output_dir} holds no complete "
+                           "saved iteration; starting new chains"
+                           + (" from gibbs.init_chain." if init_chain else "."))
     if start.source_dir is None and init_chain:
         # C3's `<file>:<iteration>` form; a bare directory means its newest complete iteration.
         source_dir, _, iteration_text = str(init_chain).rpartition(":")

@@ -42,11 +42,13 @@ gibbs:
   chain_status: new           # C3 CHAIN_STATUS. new: start at iteration 1, overwriting existing
                               # chain files as the run reaches them. append: continue the chains
                               # in output.dir after their newest complete iteration; if there is
-                              # none, start new chains. With append, the same parameter file can
-                              # be resubmitted until the chains reach num_iterations.
+                              # none, start new chains (with a warning). With append, the same
+                              # parameter file can be resubmitted until the chains reach
+                              # num_iterations.
   # init_chain: "../c4_chains/previous_run/"     # C3 INIT_CHAIN. New chains start from this run's
                               # newest complete iteration; "<dir>:<iteration>" picks one. Used
-                              # when no append happens. A component's own `init_from` overrides
+                              # when no append happens (an append that continues saved chains
+                              # ignores it, with a warning). A component's own `init_from` overrides
                               # it for that component; `init_from: null` keeps the parameter-file
                               # start.
 
