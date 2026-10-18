@@ -123,7 +123,7 @@ class TODStep:
       3. Add one line for it in `TODSamples.__init__`.
       4. Call its sampling methods from their place in `process_tod` or `tod2map`.
       5. If it changes the TOD, apply it in `TODView.get_tod`, at its place in the data model,
-         and add its name to `TODView.CORRECTIONS`, so that its own sampler can `keep` it.
+         and add its name to `TODView.MODELS`, so that its own sampler can `keep` it.
     """
 
     def __init__(self, experiment_data: DetectorGroupTOD, params: Bunch, my_band: Bunch,

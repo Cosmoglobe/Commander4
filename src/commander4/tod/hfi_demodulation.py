@@ -159,12 +159,9 @@ class HFIModulation(TODStep):
             mask = view.get_mask(proc_mask_type="ncorr")
             # No sky can be subtracted before the phase is known (see `sample`).
             keep = ("hfi_baselines",)
-            if subtract_sky:
-                residual_tod = view.get_tod(subtract=(("sky", TODView.ALL_GAIN_TERMS),
-                                                      ("orbital_dipole", TODView.ALL_GAIN_TERMS)),
-                                            keep=keep)
-            else:
-                residual_tod = view.get_tod(keep=keep)
+            if not subtract_sky:
+                keep += ("sky", "orbital_dipole")
+            residual_tod = view.get_tod(keep=keep)
 
             phase = self.modulation_phase[view.iscan, view.idet]
             signs = (phase, -phase)
@@ -208,7 +205,7 @@ class HFIModulation(TODStep):
         rejected = 0
 
         for view in scan_view.iter_focused(accepted_only=True):
-            tod = view.get_tod()
+            tod = view.get_tod(keep=("sky", "orbital_dipole"))
             # Phase identification follows C3's flag cut only, not the processing mask used for
             # baseline fitting. Both members of a pair must be valid. Drop a final unpaired sample
             # for odd-length scans by stopping the first slice at tod.size - 1.

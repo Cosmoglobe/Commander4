@@ -7,7 +7,7 @@ experiment's glitch flag bits still do all the work. The model follows Commander
 
 Two kinds of event, stored together in `Glitches.events` (see `events.py`), with C3's names
 [C3: `CR_BRIGHT`, and the faint events of `detect_events`]. `TODView.get_tod` treats them as two
-corrections, "bright_glitches" and "faint_glitches", so they can become two steps:
+models, "bright_glitches" and "faint_glitches", so they can become two steps:
     * Bright events: found once, where the raw residual exceeds 30 sigma. Each gets its own fitted
       pulse and a baseline step, and its worst samples are cut from the data.
     * Faint events (short, long, slow): found once by a matched filter and typed by the lowest
@@ -161,9 +161,9 @@ class Glitches(TODStep):
 
         Let T be the (ntod, nevent) matrix whose columns are the faint events' unit-amplitude
         pulses, and r the data with everything except those pulses removed:
-        ``view.get_tod(subtract=<sky and dipole>, keep=("faint_glitches",))``. With white noise N
-        at the current sigma0, the amplitudes have a Gaussian posterior with mean
-        (T^T N^-1 T)^-1 T^T N^-1 r and covariance (T^T N^-1 T)^-1; a Gibbs step draws from it.
+        ``view.get_tod(keep=("faint_glitches",))``. With white noise N at the current sigma0, the
+        amplitudes have a Gaussian posterior with mean (T^T N^-1 T)^-1 T^T N^-1 r and covariance
+        (T^T N^-1 T)^-1; a Gibbs step draws from it.
         Cut samples are left out. [C3: `comm_tod_cray::fit_amps`; C3 prototype:
         `subtraction.subtract_glitches_from_data`, which takes the mean only.]
 
@@ -180,10 +180,9 @@ class Glitches(TODStep):
         events.
 
         For each type, the residual around every event, with the faint pulses left in
-        (``view.get_tod(subtract=<sky and dipole>, keep=("faint_glitches",))``), is cut out and
-        stacked over events; the sum of exponentials is then refitted to the stack. One
-        detector's scans are spread over the band's ranks, so the stacks are combined over
-        `band_comm`.
+        (``view.get_tod(keep=("faint_glitches",))``), is cut out and stacked over events; the sum
+        of exponentials is then refitted to the stack. One detector's scans are spread over the
+        band's ranks, so the stacks are combined over `band_comm`.
         [C3 prototype: `templates.stacking`, `templates.glitch_estimation`.]
 
         Placeholder: does nothing. It will replace `template_amps` and `template_taus`.
@@ -197,14 +196,14 @@ class Glitches(TODStep):
 def _detect_bright_glitches(view: TODView) -> GlitchEvents:
     """Find the bright glitches of the focused detector-scan and fit each one.
 
-    The search runs on the residual ``view.get_tod(subtract=<sky and dipole>,
-    keep=("bright_glitches",))``. Up to the sign of each sample, that is the raw TOD minus the two
-    parity baselines and the modulated, gain-scaled sky. A sample above 30 sigma starts a
-    candidate, which lasts until the rms over 10 samples falls below 2 sigma. Each candidate gets
-    a joint fit of its own pulse and a baseline step (see `GlitchEvents.pulse_tod` and
-    `baseline_step_tod`). The cut then grows outward, refitting each time, while the squared
-    residual at its edges exceeds 5 sigma^2 or the reduced chi^2 exceeds 2; at the end it widens
-    by two samples on each side. The event is kept when the fit lowers the chi^2.
+    The search runs on the residual ``view.get_tod(keep=("bright_glitches",))``. Up to the sign of
+    each sample, that is the raw TOD minus the two parity baselines and the modulated, gain-scaled
+    sky. A sample above 30 sigma starts a candidate, which lasts until the rms over 10 samples
+    falls below 2 sigma. Each candidate gets a joint fit of its own pulse and a baseline step (see
+    `GlitchEvents.pulse_tod` and `baseline_step_tod`). The cut then grows outward, refitting each
+    time, while the squared residual at its edges exceeds 5 sigma^2 or the reduced chi^2 exceeds
+    2; at the end it widens by two samples on each side. The event is kept when the fit lowers the
+    chi^2.
     [C3: `comm_tod_cray::detect_bright_events`, `cray_event::fit_bright_event_with_baseline`.]
 
     Placeholder: returns no events.
@@ -220,8 +219,8 @@ def _detect_faint_glitches(view: TODView, events: GlitchEvents,
                            template_taus: NDArray[np.floating]) -> GlitchEvents:
     """Find the faint glitches of the focused detector-scan and give each a type.
 
-    A matched filter correlates the residual (the view's TOD, which has the bright events removed
-    already, minus sky and dipole) with the template shape. Peaks with a signal-to-noise above 30
+    A matched filter correlates the residual ``view.get_tod()``, which has the bright events
+    removed already, with the template shape. Peaks with a signal-to-noise above 30
     that lie at least 0.05 s apart become events. Each event then gets one fitted amplitude per
     type, and keeps the type with the lowest chi^2. [C3: `comm_tod_cray::detect_events`,
     `select_cr_type`; C3 prototype: `detection.matched_filter`, `classification.classify_glitches`.]

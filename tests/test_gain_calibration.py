@@ -258,65 +258,54 @@ def test_an_invalid_gap_fill_method_raises():
 # TODView.get_calib_tod
 # --------------------------------------------------------------------------------------
 class _StubView(TODView):
-    """A TODView whose data accessors are stubbed so get_calib_tod can be tested in
-    isolation: it records the ``subtract`` spec passed to ``get_tod`` and supplies fixed
-    sky / orbital-dipole signals."""
+    """A TODView with fixed sky and orbital-dipole signals and fixed gain terms, whose data are
+    ``(g_abs + g_rel + g_temp) * (s_sky + s_orb) + noise``, so get_calib_tod can be tested in
+    isolation."""
 
-    def __init__(self, s_sky, s_orb):
+    GAINS = {"abs": 2.0, "rel": 0.3, "temp": 0.05}
+
+    def __init__(self):
         super().__init__(None, None)
-        self._s_sky = s_sky
-        self._s_orb = s_orb
-        self.captured_subtract = None
+        self.s_sky = np.array([1.0, 2.0, 3.0, 4.0])
+        self.s_orb = np.array([10.0, 20.0, 30.0, 40.0])
+        self.noise = np.array([0.1, -0.2, 0.3, -0.4])
 
     def get_mask(self, good_data_mask=True, proc_mask=True, proc_mask_type=""):
-        return np.ones(self._s_sky.size, dtype=bool)
+        return np.ones(self.s_sky.size, dtype=bool)
 
-    def _static_sky_tod(self, compsep_output=None):
-        return self._s_sky
+    def get_gain(self, gain_terms=TODView.ALL_GAIN_TERMS):
+        return sum(self.GAINS[term] for term in gain_terms)
+
+    def get_sky_tod(self):
+        return self.s_sky
 
     def get_orbital_dipole_tod(self):
-        return self._s_orb
+        return self.s_orb
 
-    def get_tod(self, *, subtract=None, compsep_output=None, **kw):
-        self.captured_subtract = subtract
-        return np.zeros(self._s_sky.size)
-
-
-def _make_stub():
-    return _StubView(np.array([1.0, 2.0, 3.0, 4.0]), np.array([10.0, 20.0, 30.0, 40.0]))
+    def get_tod(self, *, keep=()):
+        """The data minus both signals at the full gain, as the real `get_tod` gives them."""
+        assert keep == ()
+        return self.noise.copy()
 
 
-ALL = ("abs", "rel", "temp")
-
-
-@pytest.mark.parametrize("target,calib,expected_subtract,scal", [
-    # Absolute gain on the orbital dipole: sky removed entirely, dipole keeps the abs term.
-    ("abs", "orbital_dipole",
-     (("sky", ALL), ("orbital_dipole", ("rel", "temp"))), "orb"),
-    # Absolute gain on the whole sky (clean target-gain-preserving form): both signals keep abs.
-    ("abs", "sky",
-     (("sky", ("rel", "temp")), ("orbital_dipole", ("rel", "temp"))), "sky+orb"),
-    # Relative gain on the whole sky: both signals keep the rel term.
-    ("rel", "sky",
-     (("sky", ("abs", "temp")), ("orbital_dipole", ("abs", "temp"))), "sky+orb"),
-    # Temporal gain on the whole sky: both signals keep the temp term.
-    ("temp", "sky",
-     (("sky", ("abs", "rel")), ("orbital_dipole", ("abs", "rel"))), "sky+orb"),
-    # Absolute gain on the static sky only: dipole removed entirely, sky keeps abs.
-    ("abs", "sky_no_dipole",
-     (("sky", ("rel", "temp")), ("orbital_dipole", ALL)), "sky"),
+@pytest.mark.parametrize("target,calib,scal", [
+    ("abs", "orbital_dipole", "orb"),
+    ("abs", "sky", "sky+orb"),
+    ("rel", "sky", "sky+orb"),
+    ("temp", "sky", "sky+orb"),
+    ("abs", "sky_no_dipole", "sky"),
 ])
-def test_get_calib_tod_builds_residual(target, calib, expected_subtract, scal):
-    view = _make_stub()
+def test_get_calib_tod_builds_residual(target, calib, scal):
+    """The residual reduces to (target gain term) * s_cal + noise."""
+    view = _StubView()
     out = view.get_calib_tod(target, calib, fill_masked=False)
-    assert view.captured_subtract == expected_subtract
-    expected_scal = {"orb": view._s_orb, "sky": view._s_sky,
-                     "sky+orb": view._s_sky + view._s_orb}[scal]
+    expected_scal = {"orb": view.s_orb, "sky": view.s_sky, "sky+orb": view.s_sky + view.s_orb}[scal]
     np.testing.assert_allclose(out.s_cal, expected_scal)
+    np.testing.assert_allclose(out.tod, view.GAINS[target] * expected_scal + view.noise)
 
 
 def test_get_calib_tod_rejects_bad_arguments():
-    view = _make_stub()
+    view = _StubView()
     with pytest.raises(ValueError):
         view.get_calib_tod("bogus", "sky")
     with pytest.raises(ValueError):
@@ -348,7 +337,7 @@ class _FillStubView(TODView):
     def get_tod(self, **kwargs): return np.array(self._data, copy=True)
     def get_gain(self, gain_terms=None): return self._gain
     def get_mask(self, good_data_mask=True, proc_mask=True, proc_mask_type=""): return self._mask
-    def _static_sky_tod(self, compsep_output=None): return np.zeros(self._n)
+    def get_sky_tod(self): return np.zeros(self._n)
     def get_orbital_dipole_tod(self): return np.zeros(self._n)
 
 
@@ -365,7 +354,7 @@ def test_gain_gap_fill_methods_replace_masked_samples():
     for method in ("wn", "fallback", "full_cg"):
         view = _FillStubView(n, mask, NoisePSDOof(), params, fsamp=1.0, gain=2.0)
         np.random.seed(0)
-        filled = view._fill_masked_calibration_samples(resid, mask, s_cal, ("abs",), None,
+        filled = view._fill_masked_calibration_samples(resid, mask, s_cal, ("abs",),
                                                        method=method)
         assert np.array_equal(filled[mask], resid[mask])         # valid samples untouched
         assert np.all(np.isfinite(filled))
@@ -387,9 +376,9 @@ def test_gain_gap_fill_realization_is_shared_across_terms():
     resid = np.zeros(n)
     view = _FillStubView(n, mask, NoisePSDOof(), params, fsamp=1.0, gain=1.0)
     np.random.seed(0)
-    a = view._fill_masked_calibration_samples(resid, mask, s_cal, ("abs",), None,
+    a = view._fill_masked_calibration_samples(resid, mask, s_cal, ("abs",),
                                               method="fallback")
-    b = view._fill_masked_calibration_samples(resid, mask, s_cal, ("rel",), None,
+    b = view._fill_masked_calibration_samples(resid, mask, s_cal, ("rel",),
                                               method="fallback")
     # Same gain and cached draw -> identical masked fill across the two terms.
     np.testing.assert_array_equal(a[~mask], b[~mask])
@@ -466,7 +455,7 @@ def _make_real_view(monkeypatch, good=None):
 
     Returns ``make_view(downsample_factor)`` so a test can build views at full *and* downsampled
     resolution over the same detector (the factor is now fixed per view), plus the detector and the
-    full-rate static-sky TOD for the expected-value comparisons. ``good`` is an optional full-rate
+    full-rate sky TOD for the expected-value comparisons. ``good`` is an optional full-rate
     flag cut; without one every sample passes.
     """
     monkeypatch.setenv("OMP_NUM_THREADS", "1")  # Required by get_s_orb_tod.
@@ -500,9 +489,9 @@ def _block_mean(arr):
     return arr[:NBLOCKS*FACTOR].reshape(NBLOCKS, FACTOR).mean(axis=-1)
 
 
-def test_static_sky_downsampling_is_block_average(monkeypatch):
+def test_sky_downsampling_is_block_average(monkeypatch):
     make_view, _, s_full = _make_real_view(monkeypatch)
-    out = make_view(FACTOR)._static_sky_tod()
+    out = make_view(FACTOR).get_sky_tod()
     np.testing.assert_allclose(out, _block_mean(s_full), rtol=2e-5, atol=1e-6)
     # Regression guard: must NOT be the model sampled at the block-center pixels.
     block_centers = np.array([2, 6, 10])
@@ -543,10 +532,11 @@ def test_a_block_survives_on_its_kept_fraction_not_on_being_spotless(monkeypatch
 
 def test_block_average_ignores_flagged_samples_so_a_glitch_cannot_shift_a_kept_block(monkeypatch):
     make_view, det, _ = _make_real_view(monkeypatch, good=_PARTLY_FLAGGED)
-    clean = make_view(FACTOR).get_tod()
+    signals = ("sky", "orbital_dipole")
+    clean = make_view(FACTOR).get_tod(keep=signals)
     # Put a cosmic-ray-sized hit on the one flagged sample of the surviving second block.
     det.tod[7] = 1e6
-    glitched = make_view(FACTOR).get_tod()
+    glitched = make_view(FACTOR).get_tod(keep=signals)
     np.testing.assert_allclose(glitched, clean, rtol=1e-6)
     # The kept block is the mean of its three good samples, not of all four.
     np.testing.assert_allclose(glitched[1], det.tod[4:7].mean(), rtol=1e-6)
@@ -556,7 +546,7 @@ def test_model_is_averaged_over_the_same_samples_as_the_data(monkeypatch):
     # The scan moves during a block, so a model averaged over all samples would not match a data
     # average taken over the good ones alone.
     make_view, _, s_full = _make_real_view(monkeypatch, good=_PARTLY_FLAGGED)
-    out = make_view(FACTOR)._static_sky_tod()
+    out = make_view(FACTOR).get_sky_tod()
     np.testing.assert_allclose(out[1], s_full[4:7].mean(), rtol=2e-5, atol=1e-6)
     assert not np.isclose(out[1], s_full[4:8].mean(), rtol=2e-5, atol=1e-6)
 
@@ -569,16 +559,16 @@ def test_mask_threshold_must_leave_some_sample_in_a_surviving_block(monkeypatch)
         make_view(FACTOR, mask_threshold=-0.1)
 
 
-def test_get_tod_subtracts_each_named_model_and_rejects_anything_else(monkeypatch):
-    """``subtract`` dispatches on the two canonical signal names, and nothing else is accepted."""
+def test_get_tod_removes_each_signal_unless_kept_and_rejects_anything_else(monkeypatch):
     make_view, det, s_full = _make_real_view(monkeypatch)
     view = make_view(1)
     orb = view.get_orbital_dipole_tod()
     gain = 2.75  # abs 2.0 + rel 0.5 + temp 0.25, the fake view's full gain
 
-    np.testing.assert_allclose(view.get_tod(subtract=(("sky", ALL),)),
-                               det.tod - gain*s_full, rtol=2e-5, atol=1e-6)
-    np.testing.assert_allclose(view.get_tod(subtract=(("orbital_dipole", ALL),)),
-                               det.tod - gain*orb, rtol=2e-5, atol=1e-6)
-    with pytest.raises(ValueError, match="Unknown TOD signal"):
-        view.get_tod(subtract=(("orb", ALL),))
+    np.testing.assert_allclose(view.get_tod(), det.tod - gain*(s_full + orb), rtol=2e-5, atol=1e-6)
+    np.testing.assert_allclose(view.get_tod(keep=("orbital_dipole",)), det.tod - gain*s_full,
+                               rtol=2e-5, atol=1e-6)
+    np.testing.assert_allclose(view.get_tod(keep=("sky",)), det.tod - gain*orb,
+                               rtol=2e-5, atol=1e-6)
+    with pytest.raises(ValueError, match="Unknown models"):
+        view.get_tod(keep=("orb",))

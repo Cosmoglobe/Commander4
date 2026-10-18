@@ -66,7 +66,7 @@ def test_view_applies_glitch_cuts_and_leaves_the_placeholder_models_inert() -> N
     view = TODView(band, samples).focus(0, band.scans[0].detectors[0])
 
     # The baseline-step and pulse models are placeholders, so the TOD is unchanged.
-    np.testing.assert_array_equal(view.get_tod(), view.raw_tod)
+    np.testing.assert_array_equal(view.get_tod(keep=("sky", "orbital_dipole")), view.raw_tod)
     np.testing.assert_array_equal(samples.glitches.pulse_tod(view, bright=True, faint=True),
                                   np.zeros(_NTOD))
 

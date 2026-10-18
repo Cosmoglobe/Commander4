@@ -241,10 +241,7 @@ def _estimate_standalone_sigma0(view: TODView, sigma0_method: str) -> float:
     Returns:
         The estimated white-noise level (float).
     """
-    # Read the gain-term list off the instance: TODView itself is a TYPE_CHECKING-only import here
-    # (importing it at runtime would close a cycle through the correlated-noise sampler).
-    residual = view.get_tod(subtract=(("sky", view.ALL_GAIN_TERMS),
-                                      ("orbital_dipole", view.ALL_GAIN_TERMS)))
+    residual = view.get_tod()
     mask = view.get_mask(proc_mask_type="ncorr")
     if sigma0_method == "binned_psd":
         sigma0 = calc_sigma0_binned_psd(residual, mask, view.fsamp)

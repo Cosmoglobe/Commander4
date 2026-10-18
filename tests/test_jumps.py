@@ -89,9 +89,11 @@ def test_sampled_jumps_are_removed_from_the_corrected_tod(monkeypatch) -> None:
     samples.jumps.sample(samples, np.zeros((1, 12)), iteration=1)
 
     np.testing.assert_array_equal(samples.jumps.events[0, 0].locations, [12])
+    # The view has no sky model, so the sky and dipole are kept in.
+    signals = ("sky", "orbital_dipole")
     view = TODView(band, samples).focus(0, detector)
-    np.testing.assert_allclose(view.get_tod(), np.zeros(_NTOD))
-    np.testing.assert_array_equal(view.get_tod(keep=("jumps",)), tod)  # The jump sampler's input.
+    np.testing.assert_allclose(view.get_tod(keep=signals), np.zeros(_NTOD))
+    np.testing.assert_array_equal(view.get_tod(keep=signals + ("jumps",)), tod)
     np.testing.assert_array_equal(view.raw_tod, tod)  # The stored data are never modified.
 
 

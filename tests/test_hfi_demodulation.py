@@ -28,6 +28,8 @@ _NTOD = 2 * _NPAIR
 _GAIN = 2.0
 _SIGMA0 = 2.0
 _BASELINES = np.array([100.0, 200.0])
+# Kept in by the tests of the instrument models, which compare against the demodulated sky.
+_SIGNALS = ("sky", "orbital_dipole")
 
 
 class _ZeroRNG:
@@ -106,7 +108,7 @@ def test_first_pass_finds_phase_then_next_pass_fits_and_demodulates(
 
     view = TODView(band, samples, compsep_output=sky_map).focus(0, band.scans[0].detectors[0])
     np.testing.assert_array_equal(view.raw_tod, raw_tod)
-    np.testing.assert_allclose(view.get_tod(), _GAIN * sky_tod)
+    np.testing.assert_allclose(view.get_tod(keep=_SIGNALS), _GAIN * sky_tod)
 
 
 def test_baseline_sample_includes_c3_white_noise_fluctuation(monkeypatch) -> None:
@@ -141,11 +143,12 @@ def test_baseline_fit_removes_glitch_pulses_like_the_sky(monkeypatch) -> None:
 
     np.testing.assert_allclose(samples.hfi.baselines[0, 0], _BASELINES)
     view = TODView(band, samples, compsep_output=sky_map).focus(0, band.scans[0].detectors[0])
-    np.testing.assert_allclose(view.get_tod(), _GAIN * sky_tod, atol=1e-4)
+    np.testing.assert_allclose(view.get_tod(keep=_SIGNALS), _GAIN * sky_tod, atol=1e-4)
     # The event is faint, so only keeping the faint glitches leaves its pulse in.
-    np.testing.assert_allclose(view.get_tod(keep=("faint_glitches",)), _GAIN * sky_tod + pulse,
-                               atol=1e-4)
-    np.testing.assert_allclose(view.get_tod(keep=("bright_glitches",)), _GAIN * sky_tod, atol=1e-4)
+    np.testing.assert_allclose(view.get_tod(keep=_SIGNALS + ("faint_glitches",)),
+                               _GAIN * sky_tod + pulse, atol=1e-4)
+    np.testing.assert_allclose(view.get_tod(keep=_SIGNALS + ("bright_glitches",)),
+                               _GAIN * sky_tod, atol=1e-4)
 
 
 def _with_jump(samples: SimpleNamespace) -> None:
@@ -171,19 +174,19 @@ def test_get_tod_applies_hfi_demodulation_then_jumps_and_leaves_in_what_it_is_to
 
     view = TODView(band, samples, compsep_output=sky_map).focus(0, band.scans[0].detectors[0])
     np.testing.assert_array_equal(view.raw_tod, raw_tod)
-    np.testing.assert_allclose(view.get_tod(), expected)
+    np.testing.assert_allclose(view.get_tod(keep=_SIGNALS), expected)
 
-    # Each correction named in `keep` stays in the TOD, and every other one is still applied. The
-    # sign flip of the demodulation is always applied.
+    # Each model named in `keep` stays in the TOD, and every other one is still removed. The sign
+    # flip of the demodulation is always applied.
     baselines_kept = raw_tod.copy()
     baselines_kept[0::2] *= -1
     baselines_kept[4:] += 3.0
-    np.testing.assert_allclose(view.get_tod(keep=("hfi_baselines",)), baselines_kept)
+    np.testing.assert_allclose(view.get_tod(keep=_SIGNALS + ("hfi_baselines",)), baselines_kept)
     jumps_kept = raw_tod.copy()
     jumps_kept[0::2] = -(jumps_kept[0::2] - _BASELINES[0])
     jumps_kept[1::2] = jumps_kept[1::2] - _BASELINES[1]
-    np.testing.assert_allclose(view.get_tod(keep=("jumps",)), jumps_kept)
-    with pytest.raises(ValueError, match="Unknown corrections"):
+    np.testing.assert_allclose(view.get_tod(keep=_SIGNALS + ("jumps",)), jumps_kept)
+    with pytest.raises(ValueError, match="Unknown models"):
         view.get_tod(keep=("jump",))
 
 

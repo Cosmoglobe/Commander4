@@ -124,13 +124,9 @@ class Noise(TODStep):
             the new ``noise_params``, and the CG ``residual``, ``niter``, ``converged`` and
             ``high_var``, which the scan loop also sums up for its log.
         """
-        sky_subtracted_TOD = view.get_tod(
-            subtract=(("sky", TODView.ALL_GAIN_TERMS),
-                      ("orbital_dipole", TODView.ALL_GAIN_TERMS)),
-        )
         cfg = self.cfg
         res = sample_correlated_noise(
-            sky_subtracted_TOD, view.get_mask(proc_mask_type="ncorr"),
+            view.get_tod(), view.get_mask(proc_mask_type="ncorr"),
             np.array(view.noise_params, copy=True),
             self.noise_model, view.fsamp, cg_err_tol=cfg.cg.err_tol, cg_max_iter=cfg.cg.max_iter,
             sample_params=cfg.sample_psd_params, sample_sigma0=cfg.sample_sigma0,

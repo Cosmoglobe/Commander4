@@ -89,10 +89,10 @@ class Jumps(TODStep):
         ``flag & experiments.[experiment_name].jump_bitmask``. For each region, the offset is
         estimated from the last ``window`` valid samples before the jump and the first ``window``
         valid samples after it, where validity is defined by the "jump" processing mask. The means
-        are taken of the residual, the TOD with every correction but the jumps applied, minus the
-        gain-scaled sky model and orbital dipole, so a change of the sky across the jump is not
-        taken as part of it. The offset is then added to all later samples whenever a TOD is
-        requested through ``TODView``.
+        are taken of the residual ``get_tod(keep=("jumps",))``, which has every model but the
+        jumps removed, including the gain-scaled sky and orbital dipole, so a change of the sky
+        across the jump is not taken as part of it. The offset is then added to all later samples
+        whenever a TOD is requested through ``TODView``.
         """
         band_comm, experiment_data = tod_samples.band_comm, tod_samples.experiment_data
         jump_bitmask = self.cfg.jump_bitmask
@@ -109,10 +109,7 @@ class Jumps(TODStep):
             if np.any(view.flag & jump_bitmask):
                 # The sky model may hold a little of the jump itself, but that error is smaller
                 # than taking the sky change across the jump into the offset.
-                residual = view.get_tod(subtract=(("sky", TODView.ALL_GAIN_TERMS),
-                                                  ("orbital_dipole", TODView.ALL_GAIN_TERMS)),
-                                        keep=("jumps",))
-                jumps, num_skipped = _detect_jumps(residual, view.flag,
+                jumps, num_skipped = _detect_jumps(view.get_tod(keep=("jumps",)), view.flag,
                                                    view.get_mask(proc_mask_type="jump"),
                                                    self.cfg.window, jump_bitmask)
             self.events[view.iscan, view.idet] = jumps

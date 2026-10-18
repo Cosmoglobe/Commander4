@@ -60,7 +60,7 @@ def test_short_tod_uses_fewer_bins_without_error():
 class _DiagStubView:
     """Stand-in for TODView exposing only what `record_scan` reads, focused on detector-scan (0, 0).
 
-    ``get_tod()`` (no subtract) returns the corrected TOD; ``get_tod(subtract=...)`` returns the
+    ``get_tod(keep=("sky", "orbital_dipole"))`` returns the raw TOD; ``get_tod()`` returns the
     sky+orbital-dipole-subtracted base. Both are fresh copies so the diagnostics helper can subtract
     n_corr in place, mirroring the real TODView contract.
     """
@@ -75,8 +75,8 @@ class _DiagStubView:
     def raw_tod(self):
         return self._raw
 
-    def get_tod(self, *, subtract=None, **kwargs):
-        base = self._raw if subtract is None else self._sky_orb_subtracted
+    def get_tod(self, *, keep=()):
+        base = self._raw if "sky" in keep else self._sky_orb_subtracted
         return np.array(base, copy=True)
 
 

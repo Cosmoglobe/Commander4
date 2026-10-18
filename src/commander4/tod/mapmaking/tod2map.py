@@ -160,7 +160,7 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
         # (1 - T) times them. To be resolved when/if we migrate to the C3-style design (deconvolve
         # the TOD, filter the models with the same regularization kernel).
         with benchmark("misc"):
-            d_sky = view.get_tod(subtract=(("orbital_dipole", TODView.ALL_GAIN_TERMS),))
+            d_sky = view.get_tod(keep=("sky",))
         if corr_noise_active:
             d_sky -= n_corr_est
         # The far-sidelobe projection comes back in uK_RJ, like the sky and orbital-dipole model
