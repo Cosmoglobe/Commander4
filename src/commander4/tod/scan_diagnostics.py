@@ -1,10 +1,9 @@
 """`TODDiagnostics`: per-detector-scan diagnostics written to the TOD chain, for inspection only.
 
-The mapmaking scan loop (`tod2map`) calls `TODDiagnostics.record_scan` once per detector-scan. It
-stores binned power spectra of the raw TOD, the n_corr-subtracted TOD, the residual and the
-correlated-noise realization, and optionally the full residual and n_corr TODs. It returns the
-residual TOD, which the loop judges in its data-selection veto and bins into the residual map.
-None of this is read back on a restart.
+The mapmaking scan loop (`tod2map`) calls `TODDiagnostics.record_scan` once per detector-scan,
+with the noise residual it has built. It stores binned power spectra of the raw TOD, the
+n_corr-subtracted TOD, the residual and the correlated-noise realization, and optionally the full
+residual and n_corr TODs. None of this is read back on a restart.
 """
 import numpy as np
 import pixell
@@ -133,40 +132,27 @@ class TODDiagnostics(TODStep):
                     scan_tods[:] = [None] * len(scan_tods)
 
 
-    def record_scan(self, view: TODView, n_corr: NDArray | None, *,
-                    sidelobe_tod: NDArray | None = None) -> NDArray:
+    def record_scan(self, view: TODView, residual_tod: NDArray, n_corr: NDArray | None) -> None:
         """ Record the diagnostics of the focused detector-scan.
-
-            Builds the noise residual: the corrected TOD (matching mapmaking and n_corr sampling)
-            with the sky model, orbital dipole, correlated noise and, when supplied,
-            ``sidelobe_tod`` (in detector units) all subtracted.
 
             Unless switched off (``tod_ps_freqs is None``), stores the low-resolution log-binned
             power spectra (sharing one binned frequency axis) of four detector-unit TOD views:
               * ``raw``:      the raw detector TOD.
               * ``ncorrsub``: the TOD with every model removed except the sky and the orbital
                               dipole (`TODView.get_tod`), minus the correlated noise.
-              * ``residual``: the noise residual above.
+              * ``residual``: the noise residual.
               * ``ncorr``:    the correlated-noise realization itself, stored only when one was
                               drawn.
             Optional full-TOD collection stores ``n_corr`` and/or the residual as float32.
 
-            Returns:
-                The full-length ``residual`` TOD, in detector units, so the caller can judge it
-                and bin it into the residual map (Commander3's `tod_<freq>_res`) without
-                rebuilding it.
+            Args:
+                residual_tod: The noise residual, in detector units: the TOD with every model,
+                    the correlated noise and the far sidelobes removed (built by `tod2map`).
+                n_corr: The correlated-noise realization, or None when none was drawn.
         """
         iscan, idet = view.iscan, view.idet
-        # A fresh writable copy, so the sidelobes and n_corr are subtracted in place.
-        residual_tod = view.get_tod()
-        if sidelobe_tod is not None:
-            residual_tod -= sidelobe_tod
-        if n_corr is not None:
-            residual_tod -= n_corr
-
         if self.tod_ps_freqs is not None:
             nbin = self.TOD_PS_NBIN
-            # The TOD with only the correlated noise removed, again a fresh writable copy.
             ncorrsub_tod = view.get_tod(keep=("sky", "orbital_dipole"))
             if n_corr is not None:
                 ncorrsub_tod -= n_corr
@@ -183,9 +169,7 @@ class TODDiagnostics(TODStep):
 
         if self.residual_tods is not None:
             # A copy, so the stored residual stays observed minus model whatever the caller does
-            # with the returned array.
+            # with its array.
             self.residual_tods[iscan][idet] = residual_tod.astype(np.float32, copy=True)
         if n_corr is not None and self.ncorr_tods is not None:
             self.ncorr_tods[iscan][idet] = n_corr.astype(np.float32, copy=False)
-
-        return residual_tod

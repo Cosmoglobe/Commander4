@@ -17,7 +17,6 @@ from commander4.tod.jumps.sampling import Jumps
 from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.hfi_demodulation import HFIModulation
-from commander4.tod.scan_diagnostics import TODDiagnostics
 from commander4.tod.view import TODView
 from tod_step_fakes import make_step
 
@@ -190,13 +189,12 @@ def test_get_tod_applies_hfi_demodulation_then_jumps_and_leaves_in_what_it_is_to
         view.get_tod(keep=("jump",))
 
 
-def test_saved_residual_removes_hfi_baselines_sky_and_noise(monkeypatch) -> None:
+def test_residual_removes_hfi_baselines_jumps_and_sky(monkeypatch) -> None:
     monkeypatch.setenv("OMP_NUM_THREADS", "1")
     band, samples, sky_map, _, _ = _build_hfi_case(phase=-1)
     samples.hfi.modulation_phase[0, 0] = -1
     samples.hfi.initialized = True
     samples.hfi.baselines[0, 0] = _BASELINES
-    diagnostics = make_step(TODDiagnostics, 1, 1, residual_tods=True)
     n_corr = np.full(_NTOD, 3.0, dtype=np.float32)
     residual = np.full(_NTOD, 0.5, dtype=np.float32)
     detector = band.scans[0].detectors[0]
@@ -210,6 +208,4 @@ def test_saved_residual_removes_hfi_baselines_sky_and_noise(monkeypatch) -> None
     _with_jump(samples)
     view = TODView(band, samples, compsep_output=sky_map).focus(0, detector)
 
-    diagnostics.record_scan(view, n_corr)
-
-    np.testing.assert_allclose(diagnostics.residual_tods[0][0], residual)
+    np.testing.assert_allclose(view.get_tod() - n_corr, residual, atol=1e-4)

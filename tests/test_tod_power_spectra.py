@@ -60,24 +60,19 @@ def test_short_tod_uses_fewer_bins_without_error():
 class _DiagStubView:
     """Stand-in for TODView exposing only what `record_scan` reads, focused on detector-scan (0, 0).
 
-    ``get_tod(keep=("sky", "orbital_dipole"))`` returns the raw TOD; ``get_tod()`` returns the
-    sky+orbital-dipole-subtracted base. Both are fresh copies so the diagnostics helper can subtract
-    n_corr in place, mirroring the real TODView contract.
+    ``get_tod(keep=("sky", "orbital_dipole"))``, the only TOD `record_scan` asks for, returns a
+    fresh copy of the raw TOD, so the diagnostics can subtract n_corr in place, as from the real
+    TODView.
     """
     iscan, idet = 0, 0
 
-    def __init__(self, raw, sky_orb_subtracted, fsamp=10.0):
-        self._raw = raw
-        self._sky_orb_subtracted = sky_orb_subtracted
+    def __init__(self, raw, fsamp=10.0):
+        self.raw_tod = raw
         self.fsamp = fsamp
 
-    @property
-    def raw_tod(self):
-        return self._raw
-
     def get_tod(self, *, keep=()):
-        base = self._raw if "sky" in keep else self._sky_orb_subtracted
-        return np.array(base, copy=True)
+        assert keep == ("sky", "orbital_dipole")
+        return np.array(self.raw_tod, copy=True)
 
 
 def _ps(tod, fsamp=10.0):
@@ -87,53 +82,45 @@ def _ps(tod, fsamp=10.0):
 def test_record_diagnostics_routes_each_tod_to_its_spectrum():
     rng = np.random.default_rng(7)
     raw = rng.standard_normal(2000)
-    sky_orb_sub = rng.standard_normal(2000)        # stand-in for raw - gain*(sky+orb)
+    residual = rng.standard_normal(2000)
     n_corr = rng.standard_normal(2000)
     ts = make_step(TODDiagnostics, 1, 1)
-    ts.record_scan(_DiagStubView(raw, sky_orb_sub), n_corr)
+    ts.record_scan(_DiagStubView(raw), residual, n_corr)
 
     # Recorded spectra are stored as float32, so compare at single-precision tolerance.
     np.testing.assert_allclose(ts.tod_ps_raw[0, 0], _ps(raw), rtol=1e-5)
     np.testing.assert_allclose(ts.tod_ps_ncorr[0, 0], _ps(n_corr), rtol=1e-5)
     # n_corr removed from raw -> sky + white noise retained.
     np.testing.assert_allclose(ts.tod_ps_ncorrsub[0, 0], _ps(raw - n_corr), rtol=1e-5)
-    # sky, orbital dipole, and n_corr all removed -> noise residual.
-    np.testing.assert_allclose(ts.tod_ps_residual[0, 0], _ps(sky_orb_sub - n_corr), rtol=1e-5)
+    np.testing.assert_allclose(ts.tod_ps_residual[0, 0], _ps(residual), rtol=1e-5)
 
 
 def test_record_diagnostics_without_ncorr():
     rng = np.random.default_rng(8)
     raw = rng.standard_normal(2000)
-    sky_orb_sub = rng.standard_normal(2000)
+    residual = rng.standard_normal(2000)
     ts = make_step(TODDiagnostics, 1, 1)
-    ts.record_scan(_DiagStubView(raw, sky_orb_sub), None)
+    ts.record_scan(_DiagStubView(raw), residual, None)
 
-    # With no n_corr drawn: ncorrsub == raw, residual is just the sky-subtracted TOD, ncorr stays NaN.
+    # With no n_corr drawn: ncorrsub == raw and ncorr stays NaN.
     np.testing.assert_allclose(ts.tod_ps_ncorrsub[0, 0], _ps(raw), rtol=1e-5)
-    np.testing.assert_allclose(ts.tod_ps_residual[0, 0], _ps(sky_orb_sub), rtol=1e-5)
+    np.testing.assert_allclose(ts.tod_ps_residual[0, 0], _ps(residual), rtol=1e-5)
     assert np.isnan(ts.tod_ps_ncorr[0, 0]).all()
 
 
-def test_record_diagnostics_without_power_spectra_still_gives_the_residual():
-    """With the spectra switched off, the data-selection veto and the residual map still need the
-    residual TOD."""
+def test_record_diagnostics_without_power_spectra_writes_none():
     rng = np.random.default_rng(9)
-    raw = rng.standard_normal(2000)
-    sky_orb_sub = rng.standard_normal(2000)
-    n_corr = rng.standard_normal(2000)
     ts = make_step(TODDiagnostics, 1, 1, tod_power_spectra=False)
     assert ts.tod_ps_freqs is None and ts.tod_ps_raw is None
-
-    residual = ts.record_scan(_DiagStubView(raw, sky_orb_sub), n_corr)
-
-    np.testing.assert_allclose(residual, sky_orb_sub - n_corr)
+    ts.record_scan(_DiagStubView(rng.standard_normal(2000)), rng.standard_normal(2000),
+                   rng.standard_normal(2000))
     assert "tod_ps_raw" not in ts.chain_arrays().per_scan
 
 
 def test_start_iteration_forgets_the_full_tods_and_runtimes_of_the_last_iteration() -> None:
     """A detector-scan rejected since, or without an n_corr draw, writes nothing stale."""
     samples = make_step(TODDiagnostics, 1, 1, residual_tods=True, ncorr_tods=True)
-    samples.record_scan(_DiagStubView(np.ones(64), np.ones(64)), np.ones(64))
+    samples.record_scan(_DiagStubView(np.ones(64)), np.ones(64), np.ones(64))
     samples.scan_runtime[:] = 2.0
     samples.start_iteration()
     assert samples.residual_tods == [[None]] and samples.ncorr_tods == [[None]]
@@ -142,22 +129,18 @@ def test_start_iteration_forgets_the_full_tods_and_runtimes_of_the_last_iteratio
 
 @pytest.mark.parametrize("with_ncorr", [False, True])
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_saved_residual_is_full_observed_minus_model(with_ncorr: bool, dtype: type) -> None:
-    """Saving residuals works without n_corr output and survives in-place CG gap filling."""
-    raw = np.arange(128, dtype=dtype)
-    sky_orb_sub = raw - 20.0
+def test_saved_residual_is_a_float32_copy(with_ncorr: bool, dtype: type) -> None:
+    """Saving residuals works without n_corr output and survives in-place CG gap filling of the
+    caller's array."""
+    residual = np.arange(128, dtype=dtype) - 20.0
     n_corr = np.full(128, 2.0, dtype=dtype) if with_ncorr else None
-    sidelobe = np.full(128, 3.0, dtype=dtype)
     samples = make_step(TODDiagnostics, 1, 1, residual_tods=True)
-    residual = samples.record_scan(_DiagStubView(raw, sky_orb_sub), n_corr, sidelobe_tod=sidelobe)
+    samples.record_scan(_DiagStubView(np.arange(128, dtype=dtype)), residual, n_corr)
 
-    expected = sky_orb_sub - sidelobe
-    if n_corr is not None:
-        expected -= n_corr
+    expected = residual.copy()
     saved = samples.residual_tods[0][0]
     assert samples.ncorr_tods is None
     assert saved.dtype == np.float32
     np.testing.assert_array_equal(saved, expected)
-    np.testing.assert_array_equal(residual, expected)
     residual[:] = 0.0
     np.testing.assert_array_equal(saved, expected)

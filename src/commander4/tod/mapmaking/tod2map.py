@@ -137,9 +137,26 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
         if sidelobe_active:
             with benchmark("far-beam-proj"):
                 sl_tod = far_sidelobes.get_projection(pix, psi, view.idet)
+
+        ### THE SKY TOD AND THE NOISE RESIDUAL, in detector units ###
+        # TODO: Known bug with a bolometer transfer function T (`tf_tau_sec`). The data hold
+        # T(sky + orbital dipole + sidelobes), but the models subtracted here and in the other
+        # Gibbs steps are not passed through T, so the residuals and the CG right-hand side keep
+        # (1 - T) times them. To be resolved when/if we migrate to the C3-style design (deconvolve
+        # the TOD, filter the models with the same regularization kernel).
+        # `d_sky` is the data with every model but the sky removed, which the maps are made from.
+        # Removing the sky model as well leaves the noise residual, which data selection judges and
+        # the residual map holds (Commander3's `tod_<freq>_res`). The far-sidelobe projection, like
+        # the sky model, is in uK_RJ, so it is removed at the full gain.
+        with benchmark("misc"):
+            d_sky = view.get_tod(keep=("sky",))
+            if corr_noise_active:
+                d_sky -= n_corr_est
+            if sidelobe_active:
+                d_sky -= gain * sl_tod
+            residual_tod = d_sky - gain * view.get_sky_tod()
         with benchmark("tod-diagnostics"):
-            residual_tod = diagnostics.record_scan(
-                view, n_corr_est, sidelobe_tod=gain * sl_tod if sl_tod is not None else None)
+            diagnostics.record_scan(view, residual_tod, n_corr_est)
 
         ### DATA-SELECTION VETO 2 (catastrophic chi^2), applied in-loop so this iteration's maps
         ### already exclude the scan (the CG operator passes re-read `accept`).
@@ -154,20 +171,6 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
         inv_var = (gain/view.sigma0)**2
 
         ### MAP TODS, in uK_RJ ###
-        # TODO: Known bug with a bolometer transfer function T (`tf_tau_sec`). The data hold
-        # T(sky + orbital dipole + sidelobes), but the models subtracted here and in the other
-        # Gibbs steps are not passed through T, so the residuals and the CG right-hand side keep
-        # (1 - T) times them. To be resolved when/if we migrate to the C3-style design (deconvolve
-        # the TOD, filter the models with the same regularization kernel).
-        with benchmark("misc"):
-            d_sky = view.get_tod(keep=("sky",))
-        if corr_noise_active:
-            d_sky -= n_corr_est
-        # The far-sidelobe projection comes back in uK_RJ, like the sky and orbital-dipole model
-        # TODs, so the map takes it as it is while the detector-unit TOD has it removed at the
-        # full gain.
-        if sidelobe_active:
-            d_sky -= gain * sl_tod
         # The binned maps take only the good samples.
         good = good_data_mask
         tods = {}
@@ -181,8 +184,6 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
         if "sidelobe" in map_names:
             tods["sidelobe"] = sl_tod[good]
         if "res" in map_names:
-            # `residual_tod` is the detector-unit noise residual `record_scan` already built (sky
-            # model, orbital dipole, n_corr and sidelobes all subtracted).
             tods["res"] = residual_tod[good]/gain
 
         ### MAP BINNING ###

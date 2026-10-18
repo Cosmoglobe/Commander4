@@ -1,12 +1,14 @@
 """`TODStep`: what every TOD sampling step has in common.
 
-A sampling step is one class, in its own module, that holds a group of sampled quantities, the
-methods that sample them, and its share of the band chain file. `FarSidelobes` (a model built
-from each iteration's sky) and `TODDiagnostics` (output for inspection) sample nothing, but are
-built and handled the same way.
+A TOD sampling step is one subclass of `TODStep` that holds a group of sampled quantities,
+the methods that sample them, and writing and reading them from a chains file.
+A `TODStep` class doesn't have to do *all* these things, and some of them only use parts of the
+functionality: `FarSidelobes` only de-projects, and doesn't sample,
+while `TODDiagnostics` only exists to write diagnostics data to the chain.
 
-The module also holds the two objects of a step's chain I/O: `ChainArrays`, what a step hands
-over for the chain file, and `SavedBandSample`, what it reads back from.
+This file also contains two data container classes for reading and writing to the chain file:
+ - `ChainArrays`: Data class for what a `TODStep` wants to write to a chain file.
+ - `SavedBandSample`: Data class for what a `TODStep` wants to read from a chain file.
 """
 from __future__ import annotations
 
@@ -24,6 +26,11 @@ from commander4.data_models.detector_group_tod import DetectorGroupTOD
 @dataclass
 class ChainArrays:
     """One step's share of the band chain file on this rank, by dataset name.
+
+    A `TODStep` might contain quantities that are per-band, per-scan, or per-detector-scan.
+    Since scans are distributed acros different ranks this gets a bit more complicated, and this
+    dataclass helps organize the data, holding one dictionary for each of these three types of data.
+    Used only for writing to the chain, see `SavedBandSample` for the "read from chain" equivalent.
 
     Attributes:
         per_scan: Arrays with this rank's scans as the first axis. `TODSamples` gathers them over
@@ -45,9 +52,9 @@ class ChainArrays:
 class SavedBandSample:
     """One rank's part of a band chain file: the arrays cut to this rank's scans and detectors.
 
-    Scans are matched by scan ID and detectors by name, so the MPI layout and the detector order
-    may differ from the run that wrote the file, but every scan and detector of this run must be
-    in it.
+    Helper function for retrieving `TODStep` sampling data from a chain on disk.
+    Scans are matched by scan ID and detectors by name, so the MPI layout and the detector order.
+    Used only for reading from the chain, see `ChainArrays` for the "write to chain" equivalent.
 
     Attributes:
         band_unit: The unit the file quotes its gains and maps in.
