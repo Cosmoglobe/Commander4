@@ -1,6 +1,6 @@
 """The binned mapmaker's residual and hit maps, Commander3's `tod_<freq>_res` and its companion.
 
-`maps/res` is the noise residual `_record_tod_diagnostics` already builds per detector-scan (data
+`maps/res` is the noise residual `TODDiagnostics.record_scan` already builds per detector-scan (data
 minus sky model, orbital dipole and correlated noise), binned with the same inverse-variance
 weights as the signal map. So a TOD that is exactly `gain * sky` must bin to a residual of zero
 while still producing the right signal map -- that is the property these tests pin.
@@ -16,18 +16,17 @@ from mpi4py import MPI
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_tod import DetectorTOD
-from commander4.tod.glitches.events import empty_glitch_grid
-from commander4.tod.jumps.events import empty_jump_grid
+import commander4.tod.noise.sampling as noise_sampling
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pixel_domain import PixelDomain
 from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.tod_samples import TODSamples
 import commander4.tod.processing as tod_processing
-from commander4.tod.config import MapmakingConfig, CorrelatedNoiseConfig, DataSelectionConfig
 import commander4.tod.mapmaking.tod2map as tod2map_module
 from commander4.tod.sky_projection import get_s_orb_tod
 from commander4.tod.view import TODView
+from tod_step_fakes import fake_tod_samples, mapmaking_params
 
 _BITMASK = 1
 _NSIDE = 1
@@ -60,39 +59,16 @@ def _build_band(pix, psi, tod, flag=None,
                             fsamp=1.0, ndet=1, pols="IQU", noise_model=noise_model)
 
 
-def _fake_tod_samples(sigma0: float = 2.0, ndet: int = 1) -> SimpleNamespace:
-    """Minimal stand-in exposing exactly the fields tod2map / TODView / the diagnostics read."""
-    empty_ps = lambda: np.full((1, ndet, 100), np.nan, dtype=np.float32)
-    return SimpleNamespace(
-        noise_params=np.full((1, ndet, 1), sigma0), abs_gain=_GAIN, rel_gain=np.zeros(ndet),
-        temporal_gain=np.zeros((1, ndet)), jumps=empty_jump_grid(1, ndet),
-        glitches=empty_glitch_grid(1, ndet),
-        accept=np.ones((1, ndet), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
-        chisq_z=np.full((1, ndet), np.nan), good_fraction=np.full((1, ndet), np.nan),
-        TOD_PS_NBIN=100, tod_ps_freqs=empty_ps(), tod_ps_raw=empty_ps(), tod_ps_residual=empty_ps(),
-        tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None, residual_tods=None,
-        scan_runtime=np.zeros(1))
-
-
 def _run(band: DetectorGroupTOD, sky_model: np.ndarray, sparse_maps: bool = False,
          tod_samples: SimpleNamespace | None = None) -> dict[str, np.ndarray]:
-    mapmaking = MapmakingConfig(
-        mapmaker="bin", num_threads=1,
-        include_orbital_dipole_maps=False, include_corr_noise_maps=False,
-        include_sky_model_maps=False, include_residual_maps=True, include_hit_maps=True,
-        common_res_fwhm=0.0,
-    )
+    params = mapmaking_params(band, "bin", residual_maps=True, hit_maps=True)
     if tod_samples is None:
-        tod_samples = _fake_tod_samples(ndet=band.ndet)
+        tod_samples = fake_tod_samples(band, sigma0=2.0, abs_gain=_GAIN)
     # As in a real run, the domain is built first and the sky model is handed over at its pixels.
     band.pixel_domain = PixelDomain.from_view(TODView(band, tod_samples), MPI.COMM_SELF,
                                               "sparse" if sparse_maps else "full", _NSIDE)
     sky_local = band.pixel_domain.scatter_from_full(sky_model, ncomp=3)
-    _, maps = tod_processing.tod2map(
-        MPI.COMM_SELF, band, sky_local, tod_samples, 1,
-        mapmaking, CorrelatedNoiseConfig(sample_sigma0=False),
-        DataSelectionConfig(),
-    )
+    _, maps = tod_processing.tod2map(band, tod_samples, sky_local, 1, params)
     return maps
 
 
@@ -108,16 +84,17 @@ def test_residual_tod_parameter_controls_collection(enabled: bool | None) -> Non
     include = Bunch()
     if enabled is not None:
         include.residual_tods = enabled
-    params = Bunch(output=Bunch(chains=Bunch(include=include)), gibbs=Bunch())
     my_band = Bunch(band_unit="uK_RJ", detectors=Bunch(d0=Bunch(gain=_GAIN)))
+    params = Bunch(output=Bunch(chains=Bunch(include=include)), gibbs=Bunch(),
+                   experiments=Bunch(EXP=Bunch(bands=Bunch(B=my_band))))
 
     samples = TODSamples(band, params, my_band, MPI.COMM_SELF, chain=1)
 
-    assert samples.ncorr_tods is None
+    assert samples.diagnostics.ncorr_tods is None
     if enabled:
-        assert samples.residual_tods == [[None]]
+        assert samples.diagnostics.residual_tods == [[None]]
     else:
-        assert samples.residual_tods is None
+        assert samples.diagnostics.residual_tods is None
 
 
 def test_residual_map_is_zero_for_a_perfect_noiseless_model(monkeypatch):
@@ -137,17 +114,19 @@ def test_residual_map_is_zero_for_a_perfect_noiseless_model(monkeypatch):
 
 
 def test_mapmaking_loop_records_each_scans_wall_time(monkeypatch):
-    """The scan's time in the loop is recorded afresh on every call, not added to the last one."""
+    """The scan's time in the loop is recorded afresh every iteration, not added to the last one:
+    `start_iteration`, which `process_tod` calls before the loop, forgets the old one."""
     monkeypatch.setenv("OMP_NUM_THREADS", "1")
     rng = np.random.default_rng(6)
     n = 256
     band = _build_band(rng.integers(0, _NPIX, n), rng.uniform(0.0, np.pi, n), rng.normal(size=n))
-    tod_samples = _fake_tod_samples()
-    tod_samples.scan_runtime[:] = 1e6  # A stale value from an earlier iteration.
+    tod_samples = fake_tod_samples(band, sigma0=2.0, abs_gain=_GAIN)
+    tod_samples.diagnostics.scan_runtime[:] = 1e6  # A stale value from an earlier iteration.
 
+    tod_samples.diagnostics.start_iteration()
     _run(band, np.zeros((3, _NPIX)), tod_samples=tod_samples)
 
-    assert 0.0 < tod_samples.scan_runtime[0] < 1e6
+    assert 0.0 < tod_samples.diagnostics.scan_runtime[0] < 1e6
 
 
 def test_response_split_detectors_recover_sky_and_zero_residual(monkeypatch):
@@ -271,36 +250,31 @@ def test_intensity_mapmaker_recovers_signal_rms_and_aux_maps(
         band.nscans = 0
         counts[:] = 0
     counts = comm.allreduce(counts)
-    samples = _fake_tod_samples()
-    samples.residual_tods = [[None]]
-    samples.ncorr_cg_residual = np.zeros((1, 1))
-    samples.ncorr_cg_niter = np.zeros((1, 1), dtype=np.int32)
-    samples.ncorr_converged = np.zeros((1, 1), dtype=bool)
-    samples.chain = 1
+    samples = fake_tod_samples(band, sigma0=2.0, abs_gain=_GAIN, corr_noise={"enabled": True})
+    samples.band_comm = comm
+    samples.diagnostics.residual_tods = [[None]]
+    samples.noise.noise_model = band.noise_model
+    # A far-sidelobe model that is switched on and already built, of constant pickup.
+    samples.far_sidelobes = SimpleNamespace(cfg=Bunch(enabled=True, from_iter=1),
+                                            get_projection=lambda pix, psi, idet:
+                                            np.full(pix.size, response_I * sidelobe))
 
     def fixed_noise(*args, **kwargs) -> SimpleNamespace:
         return SimpleNamespace(n_corr=n_corr, noise_params=np.array([2.0]), residual=0.0,
                                niter=0, converged=True, high_var=False)
 
-    monkeypatch.setattr(tod2map_module, "sample_correlated_noise", fixed_noise)
+    monkeypatch.setattr(noise_sampling, "sample_correlated_noise", fixed_noise)
     monkeypatch.setattr(tod2map_module, "log_corr_noise_stats", lambda *args: None)
-    far_beam = SimpleNamespace(get_projection=lambda pix, psi, idet:
-                              np.full(pix.size, response_I * sidelobe))
-    config = MapmakingConfig(
-        mapmaker="bin", num_threads=1, include_orbital_dipole_maps=True,
-        include_corr_noise_maps=True, include_sky_model_maps=True, include_residual_maps=True,
-        include_sidelobe_maps=True, include_hit_maps=True, include_cov_maps=True,
-    )
+    params = mapmaking_params(band, "bin", orbital_dipole_maps=True, corr_noise_maps=True,
+                              sky_model_maps=True, residual_maps=True, sidelobe_maps=True,
+                              hit_maps=True, cov_maps=True)
     band.pixel_domain = PixelDomain.from_view(TODView(band, samples), comm,
                                               "sparse" if sparse_maps else "full", _NSIDE)
     detmaps, maps = tod2map_module.tod2map(
-        comm, band, band.pixel_domain.scatter_from_full(sky, ncomp=1), samples, 1, config,
-        CorrelatedNoiseConfig(enabled=True, sample_sigma0=False),
-        DataSelectionConfig(), far_beam,
-    )
+        band, samples, band.pixel_domain.scatter_from_full(sky, ncomp=1), 1, params)
     if band.nscans:
-        np.testing.assert_allclose(samples.residual_tods[0][0], _GAIN * response_I * offset,
-                                   atol=2e-4)
+        np.testing.assert_allclose(samples.diagnostics.residual_tods[0][0],
+                                   _GAIN * response_I * offset, atol=2e-4)
     if comm.rank != 0:
         assert detmaps == maps == {}
         return

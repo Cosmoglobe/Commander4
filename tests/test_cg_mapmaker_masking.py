@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from mpi4py import MPI
+from pixell.bunch import Bunch
 
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
@@ -20,13 +21,15 @@ from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.tod_samples import TODSamples
 from commander4.data_models.pixel_domain import PixelDomain
-from commander4.tod.config import MapmakingConfig
-from commander4.tod.glitches.events import empty_glitch_grid
+from commander4.tod.data_selection import DataSelection
+from commander4.tod.glitches.sampling import Glitches
 from commander4.tod.mapmaking.cg import CGMapmaker
+from tod_step_fakes import make_step
 
 _BITMASK = 1  # one bad-data bit; a flagged sample has (flag & _BITMASK) != 0
-_MAPMAKING_CFG = MapmakingConfig(mapmaker="CG", num_threads=1, include_orbital_dipole_maps=False,
-                                 include_corr_noise_maps=False, include_sky_model_maps=False)
+# What the CG mapmaker reads of the parameter file.
+_PARAMS = Bunch(resources=Bunch(tod=Bunch(num_threads=1)),
+                tod_processing=Bunch(cg_mapmaker=Bunch(max_iter=0, err_tol=1.0e-4)))
 
 
 def _build_band(pix: np.ndarray, bad_idx, nside: int, sigma0: float, pols: str,
@@ -54,10 +57,11 @@ def _build_band(pix: np.ndarray, bad_idx, nside: int, sigma0: float, pols: str,
                        fsamp=fsamp, ndet=1, pols=pols, noise_model=noise_model,
                        tf_tau_sec=tf_tau_sec)
     ts = TODSamples.__new__(TODSamples)
-    ts.accept = np.ones((1, 1), dtype=bool)
-    ts.noise_params = np.full((1, 1, 1), sigma0)
-    ts.abs_gain, ts.rel_gain, ts.temporal_gain = 1.0, np.zeros(1), np.zeros((1, 1))
-    ts.glitches = empty_glitch_grid(1, 1)
+    ts.experiment_data, ts.band_comm = band, MPI.COMM_SELF
+    ts.selection = make_step(DataSelection, 1, 1)
+    ts.noise = SimpleNamespace(noise_params=np.full((1, 1, 1), sigma0))
+    ts.gain = SimpleNamespace(abs_gain=1.0, rel_gain=np.zeros(1), temporal_gain=np.zeros((1, 1)))
+    ts.glitches = make_step(Glitches, 1, 1)
     band.pixel_domain = PixelDomain(MPI.COMM_SELF, nside, "full")
     return band, ts
 
@@ -72,7 +76,7 @@ def test_apply_LHS_I_counts_only_good_samples():
     pix = np.array([0, 1, 2, 5, 4, 6, 7, 9, 8, 10], dtype=np.int64)
     bad_idx = [3, 7]
     band, ts = _build_band(pix, bad_idx, nside, sigma0, "I")
-    cg = CGMapmaker(band, ts, MPI.COMM_SELF, _MAPMAKING_CFG)
+    cg = CGMapmaker(band, ts, _PARAMS)
 
     npix = 12 * nside**2
     m = np.random.default_rng(0).normal(size=(1, npix))
@@ -91,7 +95,7 @@ def test_finalize_RHS_without_accumulation_contributes_zeros():
     nside = 2
     pix = np.array([0, 1, 2, 3], dtype=np.int64)
     band, ts = _build_band(pix, [], nside, 1.0, "I")
-    cg = CGMapmaker(band, ts, MPI.COMM_SELF, _MAPMAKING_CFG)
+    cg = CGMapmaker(band, ts, _PARAMS)
 
     # Deliberately skip accum_to_RHS, mimicking a rank with no accepted detector-scans.
     rhs = cg.finalize_RHS()
@@ -115,7 +119,7 @@ def test_apply_T_identity_is_a_noop():
     nside = 2
     pix = np.arange(12, dtype=np.int64) % (12 * nside**2)
     band, ts = _build_band(pix, [], nside, 1.0, "I")
-    cg = CGMapmaker(band, ts, MPI.COMM_SELF, _MAPMAKING_CFG)
+    cg = CGMapmaker(band, ts, _PARAMS)
     x = np.random.default_rng(0).normal(size=pix.size)
     np.testing.assert_allclose(cg.apply_T(x.copy()), x, atol=1e-12)
     np.testing.assert_allclose(cg.apply_T_adjoint(x.copy()), x, atol=1e-12)
@@ -131,7 +135,7 @@ def test_apply_T_adjoint_is_true_transpose():
     nside = 2
     pix = np.arange(16, dtype=np.int64) % (12 * nside**2)
     band, ts = _build_band(pix, [], nside, 1.0, "I", tf_tau_sec=0.9)
-    cg = CGMapmaker(band, ts, MPI.COMM_SELF, _MAPMAKING_CFG)
+    cg = CGMapmaker(band, ts, _PARAMS)
     n = pix.size
     rng = np.random.default_rng(3)
     x, y = rng.normal(size=n), rng.normal(size=n)
@@ -158,7 +162,7 @@ def test_apply_T_uses_physical_sampling_rate():
 
     def apply_at(fsamp):
         band, ts = _build_band(pix, [], nside, 1.0, "I", fsamp=fsamp, tf_tau_sec=tau)
-        return CGMapmaker(band, ts, MPI.COMM_SELF, _MAPMAKING_CFG).apply_T(x.copy())
+        return CGMapmaker(band, ts, _PARAMS).apply_T(x.copy())
 
     fsamp = 8.0
     ext = np.concatenate([x, x[::-1]])
@@ -178,7 +182,7 @@ def test_apply_LHS_symmetric_with_nontrivial_transfer_function():
     nside, sigma0 = 2, 1.3
     pix = np.array([0, 1, 2, 5, 4, 6, 7, 9, 8, 10], dtype=np.int64)
     band, ts = _build_band(pix, [], nside, sigma0, "I", tf_tau_sec=0.7)
-    cg = CGMapmaker(band, ts, MPI.COMM_SELF, _MAPMAKING_CFG)
+    cg = CGMapmaker(band, ts, _PARAMS)
     npix = 12 * nside**2
     rng = np.random.default_rng(5)
     m1, m2 = rng.normal(size=(1, npix)), rng.normal(size=(1, npix))
@@ -197,7 +201,7 @@ def test_apply_LHS_IQU_with_flags_is_symmetric(tf_tau_sec):
     rng = np.random.default_rng(1)
     psi = rng.uniform(0, np.pi, pix.size)
     band, ts = _build_band(pix, bad_idx, nside, sigma0, "IQU", psi=psi, tf_tau_sec=tf_tau_sec)
-    cg = CGMapmaker(band, ts, MPI.COMM_SELF, _MAPMAKING_CFG)
+    cg = CGMapmaker(band, ts, _PARAMS)
 
     npix = 12 * nside**2
     m1 = rng.normal(size=(3, npix))
@@ -223,7 +227,7 @@ def test_apply_P_adjoint_float32_tod_matches_float64(pols):
     psi = rng.uniform(0, np.pi, pix.size)
     tod = rng.normal(size=pix.size).astype(np.float32)
     band, ts = _build_band(pix, [], nside, 1.0, pols, psi=psi)
-    cg = CGMapmaker(band, ts, MPI.COMM_SELF, _MAPMAKING_CFG)
+    cg = CGMapmaker(band, ts, _PARAMS)
     maps = []
     for scan_tod_arr in [tod.astype(np.float64), tod]:
         out_map = np.zeros((len(pols), 12 * nside**2))

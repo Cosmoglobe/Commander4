@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # A chain file name: `<experiment>_<band>_chainNN_iterNNNN.h5` in `chains_bands/`, and
 # `chainNN_iterNNNN.h5` in `chains_compsep/`. The `.h5.tmp` files of unfinished writes never match.
-_CHAIN_FILE_NAME = re.compile(r"^(?:(.*)_)?chain(\d+)_iter(\d+)\.h5$")
+CHAIN_FILE_NAME = re.compile(r"^(?:(.*)_)?chain(\d+)_iter(\d+)\.h5$")
 
 
 @dataclass
@@ -40,7 +40,7 @@ class ChainStart:
     """Where the two chains of a run start. Resolved once, on the world master, and broadcast."""
 
     first_iteration: int                  # The first iteration this run samples.
-    source_dir: str | None = None         # Run directory of the saved sample; None = parameter file.
+    source_dir: str | None = None         # Directory of the saved sample; None = parameter file.
     source_iteration: int = 0             # Iteration of the saved sample in `source_dir`.
     source_chain: dict[int, int] = field(default_factory=dict)  # Chain here -> saved chain.
 
@@ -56,7 +56,7 @@ def _saved_files(run_dir: str) -> set[tuple[str, int, int]]:
         if not os.path.isdir(directory):
             continue
         for name in os.listdir(directory):
-            match = _CHAIN_FILE_NAME.match(name)
+            match = CHAIN_FILE_NAME.match(name)
             if match is not None:
                 part = match[1] if subdir == paths.CHAINS_BANDS else "compsep"
                 saved.add((part, int(match[2]), int(match[3])))

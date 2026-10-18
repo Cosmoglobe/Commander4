@@ -1,4 +1,5 @@
-"""Project the Commander3 Planck far-sidelobe beams into time-ordered data."""
+"""`FarSidelobes`: the far-sidelobe pickup of each detector, projected into time-ordered data from
+the Commander3 Planck far-sidelobe beams."""
 
 from __future__ import annotations
 
@@ -12,11 +13,13 @@ import numpy as np
 from ducc0 import totalconvolve
 from mpi4py import MPI
 from numpy.typing import NDArray
+from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.math_utils.alm import alm_real2complex_commander3
 from commander4.mpi.shared_memory import SharedArray
-from commander4.tod.config import FarBeamConfig
+from commander4.parameters.schema import read_settings
+from commander4.tod.step import TODStep
 
 
 if TYPE_CHECKING:
@@ -24,28 +27,44 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_BEAM_COMPONENTS = ("T", "E", "B")
+BEAM_COMPONENTS = ("T", "E", "B")
 
 
-class FarBeamProjector:
-    """Precompute one sidelobe-convolution cube per detector and project it to TOD."""
+class FarSidelobes(TODStep):
+    """The far-sidelobe pickup of one band's detectors on one rank.
 
-    def __init__(self, band_comm: MPI.Comm, node_comm: MPI.Comm,
-                 experiment_data: DetectorGroupTOD, tod_samples: TODSamples,
-                 compsep_output_full: NDArray | None, far_beam_deconvolution_cfg: FarBeamConfig):
-        """`compsep_output_full` is the band's full-sky sky map on rank 0, else None: (1, npix)
-        for an intensity-only band, (3, npix) I/Q/U for a polarized one."""
+    Nothing here is sampled or written to the chain. The model of the pickup is one convolution
+    cube per detector, built from the iteration's sky by `build` and released by `free` at the end
+    of the iteration. In between, the mapmaking scan loop subtracts `get_projection` from the TOD.
+
+    Attributes:
+        cfg: The `tod_processing.far_beam_deconvolution` settings: whether and from which iteration
+            the pickup is subtracted, the beam's harmonic limits `lmax` and `mmax` (Commander3 uses
+            100 for both), the ducc0 accuracy `epsilon`, and `beam_norm`, the factor the sidelobe
+            TOD is scaled by (Commander3 uses 2, found by comparison with LevelS).
+        polangs: (ndet,) Polarization angle of each detector, which orients its beam.
+        pols, nside, instrument_file, nthreads: The band's polarizations, map resolution and
+            beam file, and the thread count of the convolution.
+        plan, cubes, shared: The ducc0 convolution plan, and the per-detector cubes in memory
+            shared by the ranks of a node, while a model is built.
+    """
+
+    def __init__(self, experiment_data: DetectorGroupTOD, params: Bunch, my_band: Bunch,
+                 band_comm: MPI.Comm, chain: int):
+        """Read and check the settings and, when the step is enabled, the band's detectors."""
+        self.cfg = read_settings(params, "far_beam_deconvolution", ("tod_processing",),
+                                 {"enabled": False, "from_iter": 1, "lmax": 100, "mmax": 100,
+                                  "epsilon": 1.0e-4, "beam_norm": 2.0})
+        if not self.cfg.enabled:
+            return
         # The T beam always sees the intensity sky, so a band without it cannot be convolved.
         if experiment_data.pols not in ("I", "IQU"):
             raise ValueError(f"Sidelobe convolution needs an I or I/Q/U band, not "
                              f"{experiment_data.pols}.")
         self.pols = experiment_data.pols
-        self.far_beam_deconvolution_cfg = far_beam_deconvolution_cfg
         self.nside = experiment_data.nside
         self.nthreads = int(os.environ.get("OMP_NUM_THREADS", "1"))
         self.instrument_file = experiment_data.instrument_filepath
-        self.detnames = tod_samples.det_names
-
         # Scans can omit detectors. Walk every available detector-scan to fill arrays indexed by
         # det_idx_fullband, the stable position in the band's full detector list.
         self.polangs = np.full(experiment_data.ndet, np.nan)
@@ -54,25 +73,35 @@ class FarBeamProjector:
                 raise ValueError(f"Detector {det.name} has no polang; the sidelobe projection "
                                  f"needs it (the experiment's TOD reader must set it).")
             self.polangs[det.det_idx_fullband] = det.polang
+        self.plan = None
+        self.shared = None
+        self.cubes = []
 
-        self.construct_model(band_comm, node_comm, compsep_output_full)
 
+    def build(self, tod_samples: TODSamples, compsep_output_full: NDArray | None,
+              node_comm: MPI.Comm) -> None:
+        """Build one ducc0 convolution cube for each detector's T/E/B sidelobe beam (collective).
 
-    def construct_model(self, band_comm: MPI.Comm, node_comm: MPI.Comm,
-                        compsep_output_full: NDArray | None) -> None:
-        """Build one ducc0 convolution cube for each detector's T/E/B sidelobe beam."""
+        Args:
+            tod_samples: The band's sampled state, for its communicator and detector names.
+            compsep_output_full: The band's full-sky sky map on rank 0, else None: (1, npix) for an
+                intensity-only band, (3, npix) I/Q/U for a polarized one.
+            node_comm: The band's ranks on this node, which share the cubes. `free` must be called
+                on all of them once the cubes are no longer needed.
+        """
+        band_comm, detnames = tod_samples.band_comm, tod_samples.det_names
         # Each detector has its own beam. Commander3 forms one signal by summing the matching
         # sky/beam component pairs: T_sky*T_beam + E_sky*E_beam + B_sky*B_beam. An intensity-only
         # band has only the T sky, so only its T beam is used.
-        sky_components = _BEAM_COMPONENTS if self.pols == "IQU" else ("T",)
+        sky_components = BEAM_COMPONENTS if self.pols == "IQU" else ("T",)
         with h5py.File(self.instrument_file, "r") as f:
-            file_lmax = int(f[f"{self.detnames[0]}/sllmax"][0])
-            file_mmax = int(f[f"{self.detnames[0]}/slmmax"][0])
+            file_lmax = int(f[f"{detnames[0]}/sllmax"][0])
+            file_mmax = int(f[f"{detnames[0]}/slmmax"][0])
             # Truncate to the configured limits without exceeding what the file contains.
-            lmax = min(self.far_beam_deconvolution_cfg.lmax, file_lmax)
-            mmax = min(self.far_beam_deconvolution_cfg.mmax, file_mmax, lmax)
+            lmax = min(self.cfg.lmax, file_lmax)
+            mmax = min(self.cfg.mmax, file_mmax, lmax)
             blms = []
-            for detname in self.detnames:
+            for detname in detnames:
                 det_lmax = int(f[f"{detname}/sllmax"][0])
                 det_mmax = int(f[f"{detname}/slmmax"][0])
                 if (det_lmax, det_mmax) != (file_lmax, file_mmax):
@@ -90,7 +119,7 @@ class FarBeamProjector:
                 blm = alm_real2complex_commander3(beam_real, lmax, mmax)
                 # The convolution is linear, so scaling the beam once is equivalent to scaling
                 # every projected TOD, and far cheaper.
-                blms.append((components, self.far_beam_deconvolution_cfg.beam_norm * blm))
+                blms.append((components, self.cfg.beam_norm * blm))
 
         # Only rank zero has the full-sky map. Transform there, then give every rank the small alm
         # array needed to build its local detector cubes. iter=0 matches Commander3's single,
@@ -103,7 +132,7 @@ class FarBeamProjector:
         slm = band_comm.bcast(slm, root=0)
 
         self.plan = totalconvolve.ConvolverPlan(lmax=lmax, kmax=mmax,
-                                                epsilon=self.far_beam_deconvolution_cfg.epsilon,
+                                                epsilon=self.cfg.epsilon,
                                                 nthreads=self.nthreads)
         # ducc0 decides a cube shape based on stuff like lmax, mmax, epsilon.
         cube_shape = (self.plan.Npsi(), self.plan.Ntheta(), self.plan.Nphi())
@@ -135,7 +164,7 @@ class FarBeamProjector:
                     # separate component cubes. T is always the first beam component.
                     contribution = np.empty_like(planes)
                     for name, blm_component in zip(components[1:], blm[1:]):
-                        isky = _BEAM_COMPONENTS.index(name)  # row of the T/E/B sky alms
+                        isky = BEAM_COMPONENTS.index(name)  # row of the T/E/B sky alms
                         self.plan.getPlane(slm[isky], blm_component, mbeam, contribution)
                         planes += contribution
                 self.plan.prepPsi(cube)
@@ -172,9 +201,10 @@ class FarBeamProjector:
     def free(self) -> None:
         """Release the shared cubes. Collective over the node communicator.
 
-        Must be called once per constructed projector: mpi4py leaves an unfreed MPI window in
-        place until `MPI_Finalize`, so letting the projector go out of scope instead leaks the
-        whole allocation every Gibbs iteration. `get_projection` cannot be used afterwards.
+        Must be called once after every `build`: mpi4py leaves an unfreed MPI window in place until
+        `MPI_Finalize`, so a model that is not freed leaks the whole allocation every Gibbs
+        iteration. `get_projection` cannot be used afterwards.
         """
         self.cubes = []
         self.shared.free()
+        self.shared = None

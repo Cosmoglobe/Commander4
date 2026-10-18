@@ -85,9 +85,8 @@ def run_tod_side(mpi_info: Bunch, params: Bunch, experiment_data, my_band_tod_id
                            f"starting TOD chain {chain}, iteration {iteration}.")
         seed_iteration_rng(params, mpi_info, chain, iteration)
         t0 = time.time()
-        tod_output, tod_samples_by_chain[chain] = process_tod(
-            mpi_info, experiment_data, tod_samples_by_chain[chain], compsep_output, params,
-            chain, iteration)
+        tod_output = process_tod(mpi_info, experiment_data, tod_samples_by_chain[chain],
+                                 compsep_output, params, iteration)
         if mpi_info.tod.is_master:
             logger.summary(f"Chain {chain}, iteration {iteration} completed TOD-proc in "
                            f"{time.time()-t0:.2f}s).")
@@ -179,8 +178,7 @@ def run_commander4(params: Bunch, params_dict: dict):
         \____/\____/_/ /_/ /_/_/ /_/ /_/\__,_/_/ /_/\__,_/\___/_/        /_/""" + "\033[0m\n")
         logger.summary(f"Writing all output to {paths.resolve_output_dir(params.output)}")
 
-    # Component separation is active iff CompSep ranks were allocated (compsep_master is then a
-    # valid world rank). This single flag replaces the old `perform_compsep` parameter.
+    # Each side is active iff ranks were allocated to it (its master is then a valid world rank).
     tod_active = mpi_info.world.tod_master is not None
     compsep_active = mpi_info.world.compsep_master is not None
 

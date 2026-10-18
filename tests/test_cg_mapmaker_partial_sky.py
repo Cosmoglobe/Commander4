@@ -20,18 +20,15 @@ import pytest
 from mpi4py import MPI
 
 from commander4.data_models.detector_tod import DetectorTOD
-from commander4.tod.glitches.events import empty_glitch_grid
-from commander4.tod.jumps.events import empty_jump_grid
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pixel_domain import PixelDomain
 from commander4.data_models.pointing import PixelPointing
 from commander4.tod.mapmaking.preconditioners import BlockInvNPreconditionerIQU,\
     InvNPreconditionerIQU
-from commander4.tod.config import CGConfig
 import commander4.tod.processing as tod_processing
-from commander4.tod.config import MapmakingConfig, CorrelatedNoiseConfig, DataSelectionConfig
 from commander4.tod.view import TODView
+from tod_step_fakes import fake_tod_samples, mapmaking_params
 
 _NSIDE = 4
 _NPIX = 12 * _NSIDE**2
@@ -87,37 +84,18 @@ def _build_band(pix: np.ndarray, psi: np.ndarray, tod: np.ndarray, pols: str,
                             noise_model=noise_model, tf_tau_sec=tf_tau_sec)
 
 
-def _fake_tod_samples(ndet: int = 1) -> SimpleNamespace:
-    """Minimal stand-in exposing exactly the fields the mapmakers / TODView / diagnostics read."""
-    empty_ps = lambda: np.full((1, ndet, 100), np.nan, dtype=np.float32)
-    return SimpleNamespace(
-        noise_params=np.full((1, ndet, 1), _SIGMA0), abs_gain=1.0, rel_gain=np.zeros(ndet),
-        temporal_gain=np.zeros((1, ndet)), jumps=empty_jump_grid(1, ndet),
-        glitches=empty_glitch_grid(1, ndet),
-        accept=np.ones((1, ndet), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
-        chisq_z=np.full((1, ndet), np.nan), good_fraction=np.full((1, ndet), np.nan),
-        TOD_PS_NBIN=100, tod_ps_freqs=empty_ps(), tod_ps_raw=empty_ps(), tod_ps_residual=empty_ps(),
-        tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None, residual_tods=None,
-        scan_runtime=np.zeros(1))
-
-
 def _run_mapmaker(band: DetectorGroupTOD, mapmaker: str, sparse_maps: bool = False,
                   tod_samples: SimpleNamespace | None = None,
-                  cg: CGConfig = CGConfig(max_iter=20, err_tol=1e-12)) -> dict[str, np.ndarray]:
+                  cg: dict | None = None) -> dict[str, np.ndarray]:
     """Run one of the two mapmakers on `band` and return the maps selected for chain output."""
-    mapmaking = MapmakingConfig(
-        mapmaker=mapmaker, num_threads=1, include_orbital_dipole_maps=False,
-        include_corr_noise_maps=False, include_sky_model_maps=False,
-        common_res_fwhm=0.0, cg=cg)
+    params = mapmaking_params(band, mapmaker, cg=cg)
     ncomp = 3 if "QU" in band.pols else 1
-    tod_samples = _fake_tod_samples() if tod_samples is None else tod_samples
+    tod_samples = fake_tod_samples(band, _SIGMA0) if tod_samples is None else tod_samples
     # As in a real run, the domain is built first and the sky model holds its local pixels.
     band.pixel_domain = PixelDomain.from_view(TODView(band, tod_samples), MPI.COMM_SELF,
                                               "sparse" if sparse_maps else "full", _NSIDE)
     sky = np.zeros((ncomp, band.pixel_domain.n_local))
-    _, maps = tod_processing.tod2map(MPI.COMM_SELF, band, sky, tod_samples, 1, mapmaking,
-                                     CorrelatedNoiseConfig(sample_sigma0=False),
-                                     DataSelectionConfig())
+    _, maps = tod_processing.tod2map(band, tod_samples, sky, 1, params)
     return maps
 
 
@@ -207,11 +185,11 @@ def test_cg_matches_binned_for_flags_and_detectors_with_different_gains_and_resp
     tod[:, flagged] = 1e5
     maps = {}
     for mapmaker in ("CG", "bin"):
-        tod_samples = _fake_tod_samples(ndet=2)
-        tod_samples.rel_gain = gains - tod_samples.abs_gain
-        tod_samples.noise_params[0, :, 0] = sigma0s
         band = _build_band(pix, psi, tod, pols, velocity=(0.0, 0.0, 0.0), responses=responses,
                            flagged=flagged)
+        tod_samples = fake_tod_samples(band, _SIGMA0)
+        tod_samples.gain.rel_gain = gains - tod_samples.gain.abs_gain
+        tod_samples.noise.noise_params[0, :, 0] = sigma0s
         maps[mapmaker] = _run_mapmaker(band, mapmaker, tod_samples=tod_samples)
 
     # Pixel 13 is seen only during the flagged stretch, so neither mapmaker can solve it.
@@ -254,7 +232,7 @@ def test_cg_with_flags_and_a_transfer_function_matches_a_dense_solve(monkeypatch
     tod[flagged] = 1e5
     band = _build_band(pix, psi, tod, "IQU", velocity=(0.0, 0.0, 0.0), flagged=flagged,
                        tf_tau_sec=tau)
-    maps = _run_mapmaker(band, "CG", cg=CGConfig(max_iter=300, err_tol=1e-20))
+    maps = _run_mapmaker(band, "CG", cg={"max_iter": 300, "err_tol": 1e-20})
 
     # The dense solve, over the pixels whose good samples constrain I, Q and U; the rest stay 0.
     P = np.zeros((pix.size, 3, _NPIX))

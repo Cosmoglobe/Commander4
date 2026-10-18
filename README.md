@@ -115,7 +115,7 @@ glitches/<scan_id>/<detector>/    # (opt, DEBUG) the glitch events of one detect
   amplitude        (NEV,)         #   pulse amplitude in detector units (1 for bright events)
   cut_start        (NEV,)         #   samples cut from the data are [cut_start, cut_stop); equal = none
   cut_stop         (NEV,)
-  shape_param_counts (NEV,)       #   shape parameters per event (0 for template events)
+  shape_param_counts (NEV,)       #   shape parameters per event (0 for faint events)
   shape_params     (K,)           #   bright-event shapes: a1, a2, tau1, tau2, t_dep, spline node values
 tods/<scan_id>/<detector>/ncorr     (ntod,)  # (opt, DEBUG) full n_corr TOD in detector units
 tods/<scan_id>/<detector>/residual  (ntod,)  # (opt, DEBUG) full residual TOD in detector units
@@ -159,7 +159,7 @@ mcmc/<group>/{numstep,n_accept,accept_rate}             # Metropolis-Hastings ac
 mcmc/<group>/params/<comp>            # the accepted parameter value per component
 ```
 
-The chain files are also what a run restarts from. `gibbs.chain_status: append` continues the chains in `output.dir` after their newest complete iteration, and `gibbs.init_chain: "<dir>[:<iteration>]"` starts new chains from another run (Commander3's `CHAIN_STATUS` and `INIT_CHAIN`). Each class reads back its own sampled state: `TODSamples.read_chain` the gains, noise parameters and accept flags of a `chains_bands/` file, and each component's `read_chain` its amplitudes and sampled spectral parameters from a `chains_compsep/` file. Files are written under a `.tmp` name and renamed when complete, so a crash never leaves a half-written file under its final name. See `notes/chain_initialization.md`.
+The chain files are also what a run restarts from. `gibbs.chain_status: append` continues the chains in `output.dir` after their newest complete iteration, and `gibbs.init_chain: "<dir>[:<iteration>]"` starts new chains from another run (Commander3's `CHAIN_STATUS` and `INIT_CHAIN`). Each class reads back its own sampled state: each TOD sampling step (`Gain`, `Noise`, `DataSelection`, `HFIModulation`) its part of a `chains_bands/` file, and each component's `read_chain` its amplitudes and sampled spectral parameters from a `chains_compsep/` file. Files are written under a `.tmp` name and renamed when complete, so a crash never leaves a half-written file under its final name. See `notes/chain_initialization.md`.
 
 
 # 3. Development / Contributing
@@ -174,7 +174,7 @@ src/commander4/
 
   tod/                 # === TOD SIDE: one Gibbs iteration over time-ordered data ===
     processing.py      #   Drives the iteration: gain, jumps, correlated noise, mapmaking, data selection.
-    config.py          #   Config dataclasses: defaults, checks, and parameter-file lookup rules.
+    step.py            #   TODStep, the base class of the sampling steps, and their chain I/O objects.
     view.py            #   TODView: the read interface to one detector-scan and every TOD derived from it.
     gain.py            #   Gain sampling (absolute, relative, temporal).
     noise/             #   Correlated-noise realizations, sigma0 estimation, PSD models and their priors.
@@ -209,12 +209,9 @@ tests/                 # pytest suite; run with `pytest` from the repository roo
 notes/                 # Design notes.
 ```
 
-The TOD config is read at the start of each `process_tod` call. The classes in `tod/config.py`
-each own a `from_params` reader and a `__post_init__` method for checking their values. They are
-independent classes with no shared base class. Variables holding a config object are named after
-their parameter-file block with a `_cfg` postfix, e.g. `abs_gain_cfg`. The processing code states
-when each step runs. Data-selection timing is shared by both mapmakers and summary logging through
-`data_selection_status` in `tod/data_selection.py`.
+Each TOD sampling step is one class (a `TODStep`, see `tod/step.py`) that holds its settings, its
+sampled state, the methods that sample it, and its share of the chain file. The steps are created
+and stored in `TODSamples`.
 
 ### 3.2 Output, logs and error handling
 

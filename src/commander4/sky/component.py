@@ -209,15 +209,13 @@ class Component:
     def read_chain(self, group: h5py.Group) -> None:
         """Restore this component's sampled state from its chain group, as `write_chain` wrote it.
 
-        Only what a sampler changes is restored. Fixed parameters keep the parameter-file value,
-        so an edit there takes effect when a new run starts from another run's chain. The group
-        holds the joined component (I and QU together), while `self` may be one polarization view.
+        Only what a sampler changes is restored; fixed parameters keep their parameter-file value,
+        so an edit there takes effect in a run started from another run's chain. The group holds
+        the joined component (I and QU together), while `self` may be one polarization view.
 
-        This base version restores the amplitudes' beam and `beta`. The spectral-index sampler
-        samples `beta` on any component that has one and sets `sample_spectral_index`, so the
-        same switch decides here. Subclasses add their amplitudes. A subclass with more sampled
-        state (e.g. the spline-node amplitudes of a full-frequency dust model) restores it in its
-        own override, gated by the switch its sampler uses, and rebuilds anything derived from it.
+        This base version restores the amplitudes' beam, and `beta` when `sample_spectral_index`
+        is on (the switch of the spectral-index sampler). Subclasses add their amplitudes, and
+        any other sampled state, gated by the switch of the sampler that changes it.
         """
         self.amp_fwhm_rad = np.radians(float(group["amp_fwhm_arcmin"][()])/60.0)
         if hasattr(self, "beta") and "sample_spectral_index" in self.comp_params \

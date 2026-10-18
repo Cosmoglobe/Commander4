@@ -314,8 +314,7 @@ class DiffuseComponent(Component):
         """Write the shared component sample (see `Component.write_chain`), plus the alms."""
         super().write_chain(group, band_frequencies)
         group["alms"] = self.alms
-        # The realized power spectrum of those alms (Commander3's `sigma_l`) and the lmax they run
-        # to. Free -- alm2cl needs no transform -- and it saves every reader the alm2cl themselves.
+        # The realized power spectrum of those alms (Commander3's `sigma_l`) and their lmax.
         group["sigma_l"] = self.sigma_l
         group["lmax"] = self.lmax
         # The C(l) prior's model parameters (Commander3's Dl_amp/Dl_beta/Dl_theta), not the

@@ -1,20 +1,21 @@
-"""Per-detector-scan diagnostics recorded into the TOD chain.
+"""`TODDiagnostics`: per-detector-scan diagnostics written to the TOD chain, for inspection only.
 
-The mapmaking scan loop (`tod2map`) calls `_record_tod_diagnostics` once per detector-scan. It
+The mapmaking scan loop (`tod2map`) calls `TODDiagnostics.record_scan` once per detector-scan. It
 stores binned power spectra of the raw TOD, the n_corr-subtracted TOD, the residual and the
-correlated-noise realization, and optionally the full residual and n_corr TODs; these are written
-for inspection only. It also stores the residual's chi-squared z-score, which the data-selection
-veto in the scan loop reads, and it returns the residual TOD, which the loop bins into the residual
-map.
+correlated-noise realization, and optionally the full residual and n_corr TODs. It returns the
+residual TOD, which the loop judges in its data-selection veto and bins into the residual map.
+None of this is read back on a restart.
 """
 import numpy as np
 import pixell
+from mpi4py import MPI
 from numpy.typing import NDArray
+from pixell.bunch import Bunch
 from scipy.fft import rfftfreq
 
-from commander4.data_models.tod_samples import TODSamples
+from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.math_utils.fft import forward_rfft
-from commander4.tod.data_selection import masked_chisq_z
+from commander4.tod.step import ChainArrays, TODStep
 from commander4.tod.view import TODView
 
 
@@ -45,61 +46,147 @@ def _binned_tod_power_spectrum(tod: NDArray, fsamp: float, nbin: int) -> tuple[N
     return freqs_binned, power_binned
 
 
-def _record_tod_diagnostics(tod_samples: TODSamples, iscan: int, idet: int, view: TODView,
-                            n_corr: NDArray | None, *,
-                            sidelobe_tod: NDArray | None = None) -> NDArray:
-    """ Record per-detector-scan TOD diagnostics into the chain arrays.
+class TODDiagnostics(TODStep):
+    """Per-detector-scan diagnostics of one band on one rank, written to the chain file only.
 
-        Stores the low-resolution log-binned power spectra (sharing one binned frequency axis) of
-        four detector-unit TOD views:
-          * ``raw``:      the raw detector TOD.
-          * ``ncorrsub``: the TOD with only the correlated noise subtracted (sky signal, orbital
-                          dipole, and white noise retained); equals ``raw`` when no n_corr drawn.
-          * ``residual``: the noise residual, with the sky model, orbital dipole, and correlated
-                          noise all subtracted.
-          * ``ncorr``:    the correlated-noise realization itself, stored only when one was drawn.
-        ``ncorrsub`` and ``residual`` use the canonical corrected stream (matching mapmaking and
-        n_corr sampling). The residual also subtracts ``sidelobe_tod`` when supplied, in detector
-        units. Optional full-TOD collection stores ``n_corr`` and/or the residual as float32.
-
-        Returns:
-            The full-length ``residual`` TOD, in detector units, so the caller can bin it into the
-            residual map (Commander3's `tod_<freq>_res`) without rebuilding it.
+    Attributes:
+        tod_ps_freqs, tod_ps_raw, tod_ps_ncorr, tod_ps_ncorrsub, tod_ps_residual:
+            (nscans, ndet, TOD_PS_NBIN) Low-resolution (log-binned) TOD power spectra: a shared
+            binned frequency axis (the bins differ between scans of different length) plus the
+            binned periodograms of four TOD views (see `record_scan`). At 2 kB per detector-scan
+            they are the largest output after the maps, so
+            `output.chains.include.tod_power_spectra: false` switches them off (``None``).
+        ncorr_tods, residual_tods: Optional DEBUG output (`output.chains.include.ncorr_tods` /
+            `residual_tods`): the full correlated-noise and residual TODs, as [iscan][idet] lists
+            of float32 arrays, None where nothing was recorded; ``None`` when switched off.
+        scan_runtime: (nscans,) Wall time [s] the mapmaking scan loop spent on each scan this
+            iteration, measured by `tod2map`, for load balancing in later runs.
     """
-    nbin = tod_samples.TOD_PS_NBIN
-    freqs_binned, raw_binned = _binned_tod_power_spectrum(view.raw_tod, view.fsamp, nbin)
-    tod_samples.tod_ps_freqs[iscan, idet] = freqs_binned
-    tod_samples.tod_ps_raw[iscan, idet] = raw_binned
 
-    # Sky+orbital-dipole-subtracted residual, and the TOD with only the correlated noise removed.
-    # Both are fresh writable copies, so n_corr (when present) is subtracted in place from each.
-    residual_tod = view.get_tod(subtract=(("sky", TODView._ALL_GAIN_TERMS),
-                                          ("orbital_dipole", TODView._ALL_GAIN_TERMS)))
-    if sidelobe_tod is not None:
-        residual_tod -= sidelobe_tod
-    ncorrsub_tod = view.get_tod()
-    if n_corr is not None:
-        residual_tod -= n_corr
-        ncorrsub_tod -= n_corr
-    _, residual_binned = _binned_tod_power_spectrum(residual_tod, view.fsamp, nbin)
-    _, ncorrsub_binned = _binned_tod_power_spectrum(ncorrsub_tod, view.fsamp, nbin)
-    tod_samples.tod_ps_residual[iscan, idet] = residual_binned
-    tod_samples.tod_ps_ncorrsub[iscan, idet] = ncorrsub_binned
+    TOD_PS_NBIN = 100  # Fixed bin count for the low-resolution TOD power spectra.
 
-    if tod_samples.residual_tods is not None:
-        # A copy, so the stored residual stays observed minus model whatever the caller does with
-        # the returned array.
-        tod_samples.residual_tods[iscan][idet] = residual_tod.astype(np.float32, copy=True)
+    def __init__(self, experiment_data: DetectorGroupTOD, params: Bunch, my_band: Bunch,
+                 band_comm: MPI.Comm, chain: int):
+        """Allocate the diagnostics that `params.output.chains.include` asks for."""
+        nscans, ndet = experiment_data.nscans, experiment_data.ndet
+        include = params.output.chains.include
+        self.tod_ps_freqs = self.tod_ps_ncorr = self.tod_ps_raw = None
+        self.tod_ps_ncorrsub = self.tod_ps_residual = None
+        if bool(getattr(include, "tod_power_spectra", True)):
+            ps_shape = (nscans, ndet, self.TOD_PS_NBIN)
+            self.tod_ps_freqs = np.full(ps_shape, np.nan, dtype=np.float32)
+            self.tod_ps_ncorr = np.full(ps_shape, np.nan, dtype=np.float32)
+            self.tod_ps_raw = np.full(ps_shape, np.nan, dtype=np.float32)
+            self.tod_ps_ncorrsub = np.full(ps_shape, np.nan, dtype=np.float32)
+            self.tod_ps_residual = np.full(ps_shape, np.nan, dtype=np.float32)
 
-    if n_corr is not None:
-        _, ncorr_binned = _binned_tod_power_spectrum(n_corr, view.fsamp, nbin)
-        tod_samples.tod_ps_ncorr[iscan, idet] = ncorr_binned
-        if tod_samples.ncorr_tods is not None:
-            tod_samples.ncorr_tods[iscan][idet] = n_corr.astype(np.float32, copy=False)
+        self.ncorr_tods: list[list[NDArray | None]] | None = None
+        if bool(getattr(include, "ncorr_tods", False)):
+            self.ncorr_tods = [[None] * ndet for _ in range(nscans)]
+        self.residual_tods: list[list[NDArray | None]] | None = None
+        if bool(getattr(include, "residual_tods", False)):
+            self.residual_tods = [[None] * ndet for _ in range(nscans)]
 
-    # White-noise-residual chi-squared z-score (uses this iteration's sigma0, sampled just above);
-    # stored to the chain and consumed by the data-selection (accept) cuts.
-    tod_samples.chisq_z[iscan, idet] = masked_chisq_z(
-        residual_tod, view.get_mask(proc_mask=False), view.sigma0)
+        self.scan_runtime = np.zeros(nscans, dtype=np.float64)
 
-    return residual_tod
+
+    def chain_arrays(self) -> ChainArrays:
+        """The scan runtimes and, unless switched off, the power spectra, and the full TODs when
+        asked for (as ``tods/<scan ID>/<detector>/ncorr`` and ``.../residual``). None is read
+        back."""
+        # The first scan each rank processes in `tod2map` also pays one-time Numba compilation
+        # cost, so its runtime is replaced by the median runtime of the other scans.
+        scan_runtime = self.scan_runtime.copy()
+        timed = np.flatnonzero(scan_runtime)
+        if timed.size > 1:
+            scan_runtime[timed[0]] = np.median(scan_runtime[timed[1:]])
+        arrays = ChainArrays(per_scan={"scan_runtime": scan_runtime})
+        if self.tod_ps_freqs is not None:
+            arrays.per_scan.update({
+                "tod_ps_freqs": self.tod_ps_freqs,
+                "tod_ps_raw": self.tod_ps_raw,
+                "tod_ps_ncorr": self.tod_ps_ncorr,
+                "tod_ps_ncorrsub": self.tod_ps_ncorrsub,
+                "tod_ps_residual": self.tod_ps_residual,
+            })
+        if self.ncorr_tods is not None or self.residual_tods is not None:
+            tods_by_detector_scan = {}
+            for name, tods in (("ncorr", self.ncorr_tods), ("residual", self.residual_tods)):
+                if tods is None:
+                    continue
+                for iscan, scan_tods in enumerate(tods):
+                    for idet, tod in enumerate(scan_tods):
+                        if tod is not None:
+                            tods_by_detector_scan.setdefault((iscan, idet), {})[name] = tod
+            arrays.per_detector_scan["tods"] = tods_by_detector_scan
+        return arrays
+
+
+    def start_iteration(self) -> None:
+        """Forget the scan runtimes and the full TODs of the previous iteration, so the chain file
+        only gets those of this one. The power spectra are not reset: a detector-scan rejected
+        since keeps its last ones."""
+        self.scan_runtime[:] = 0.0
+        for tods in (self.residual_tods, self.ncorr_tods):
+            if tods is not None:
+                for scan_tods in tods:
+                    scan_tods[:] = [None] * len(scan_tods)
+
+
+    def record_scan(self, view: TODView, n_corr: NDArray | None, *,
+                    sidelobe_tod: NDArray | None = None) -> NDArray:
+        """ Record the diagnostics of the focused detector-scan.
+
+            Builds the noise residual: the corrected TOD (matching mapmaking and n_corr sampling)
+            with the sky model, orbital dipole, correlated noise and, when supplied,
+            ``sidelobe_tod`` (in detector units) all subtracted.
+
+            Unless switched off (``tod_ps_freqs is None``), stores the low-resolution log-binned
+            power spectra (sharing one binned frequency axis) of four detector-unit TOD views:
+              * ``raw``:      the raw detector TOD.
+              * ``ncorrsub``: the corrected TOD (`TODView.get_tod`) with only the correlated noise
+                              subtracted (sky signal, orbital dipole, and white noise retained).
+              * ``residual``: the noise residual above.
+              * ``ncorr``:    the correlated-noise realization itself, stored only when one was
+                              drawn.
+            Optional full-TOD collection stores ``n_corr`` and/or the residual as float32.
+
+            Returns:
+                The full-length ``residual`` TOD, in detector units, so the caller can judge it
+                and bin it into the residual map (Commander3's `tod_<freq>_res`) without
+                rebuilding it.
+        """
+        iscan, idet = view.iscan, view.idet
+        # A fresh writable copy, so the sidelobes and n_corr are subtracted in place.
+        residual_tod = view.get_tod(subtract=(("sky", TODView.ALL_GAIN_TERMS),
+                                              ("orbital_dipole", TODView.ALL_GAIN_TERMS)))
+        if sidelobe_tod is not None:
+            residual_tod -= sidelobe_tod
+        if n_corr is not None:
+            residual_tod -= n_corr
+
+        if self.tod_ps_freqs is not None:
+            nbin = self.TOD_PS_NBIN
+            # The TOD with only the correlated noise removed, again a fresh writable copy.
+            ncorrsub_tod = view.get_tod()
+            if n_corr is not None:
+                ncorrsub_tod -= n_corr
+            freqs_binned, raw_binned = _binned_tod_power_spectrum(view.raw_tod, view.fsamp, nbin)
+            _, residual_binned = _binned_tod_power_spectrum(residual_tod, view.fsamp, nbin)
+            _, ncorrsub_binned = _binned_tod_power_spectrum(ncorrsub_tod, view.fsamp, nbin)
+            self.tod_ps_freqs[iscan, idet] = freqs_binned
+            self.tod_ps_raw[iscan, idet] = raw_binned
+            self.tod_ps_residual[iscan, idet] = residual_binned
+            self.tod_ps_ncorrsub[iscan, idet] = ncorrsub_binned
+            if n_corr is not None:
+                _, ncorr_binned = _binned_tod_power_spectrum(n_corr, view.fsamp, nbin)
+                self.tod_ps_ncorr[iscan, idet] = ncorr_binned
+
+        if self.residual_tods is not None:
+            # A copy, so the stored residual stays observed minus model whatever the caller does
+            # with the returned array.
+            self.residual_tods[iscan][idet] = residual_tod.astype(np.float32, copy=True)
+        if n_corr is not None and self.ncorr_tods is not None:
+            self.ncorr_tods[iscan][idet] = n_corr.astype(np.float32, copy=False)
+
+        return residual_tod

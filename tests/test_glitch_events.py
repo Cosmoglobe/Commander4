@@ -7,13 +7,15 @@ from mpi4py import MPI
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_tod import DetectorTOD
-from commander4.tod.glitches.events import GlitchEvents, GLITCH_BRIGHT, empty_glitch_grid
+from commander4.tod.glitches.events import GlitchEvents, GLITCH_BRIGHT
 from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.scan_tod import ScanTOD
-from commander4.tod.config import GlitchConfig
-from commander4.tod.glitches.sampling import sample_glitches
-from commander4.tod.jumps.events import empty_jump_grid
+from commander4.tod.data_selection import DataSelection
+from commander4.tod.glitches.sampling import Glitches
+from commander4.tod.hfi_demodulation import HFIModulation
+from commander4.tod.jumps.sampling import Jumps
 from commander4.tod.view import TODView
+from tod_step_fakes import make_step
 
 _NTOD = 20
 
@@ -48,13 +50,14 @@ def _band_and_samples(events: GlitchEvents) -> tuple[DetectorGroupTOD, SimpleNam
     noise_model = SimpleNamespace(npar=1, params=np.array([1.0]))
     band = DetectorGroupTOD([ScanTOD([detector], 0.0, 1)], "EXP", "BAND", 1, 100.0, 10.0, 10.0, 1,
                             "I", noise_model)
-    glitches = empty_glitch_grid(1, 1)
-    glitches[0, 0] = events
-    samples = SimpleNamespace(
-        jumps=empty_jump_grid(1, 1),
-        glitches=glitches, glitch_template_amps=np.zeros((1, 3, 8)),
-        glitch_template_taus=np.ones((1, 3, 8)), glitch_events_detected=False,
-        accept=np.ones((1, 1), dtype=bool))
+    glitches = make_step(Glitches, 1, 1, settings={"glitches": {"enabled": True}})
+    glitches.events[0, 0] = events
+    glitches.template_amps = np.zeros((1, 3, 8))
+    glitches.template_taus = np.ones((1, 3, 8))
+    samples = SimpleNamespace(band_comm=MPI.COMM_SELF, experiment_data=band,
+                              jumps=make_step(Jumps, 1, 1), glitches=glitches,
+                              hfi=make_step(HFIModulation, 1, 1),
+                              selection=make_step(DataSelection, 1, 1))
     return band, samples
 
 
@@ -63,9 +66,9 @@ def test_view_applies_glitch_cuts_and_leaves_the_placeholder_models_inert() -> N
     view = TODView(band, samples).focus(0, band.scans[0].detectors[0])
 
     # The baseline-step and pulse models are placeholders, so the TOD is unchanged.
-    np.testing.assert_array_equal(view.pre_demodulation_tod, view.raw_tod)
-    np.testing.assert_array_equal(view.corrected_tod, view.raw_tod)
-    np.testing.assert_array_equal(view.get_glitch_pulse_tod(), np.zeros(_NTOD))
+    np.testing.assert_array_equal(view.get_tod(), view.raw_tod)
+    np.testing.assert_array_equal(samples.glitches.pulse_tod(view, bright=True, faint=True),
+                                  np.zeros(_NTOD))
 
     # The stored cut is already applied, through the bad-data cut that mapmaking also uses.
     expected = np.ones(_NTOD, dtype=bool)
@@ -76,11 +79,13 @@ def test_view_applies_glitch_cuts_and_leaves_the_placeholder_models_inert() -> N
 
 
 def test_placeholder_sampler_marks_detection_done_and_says_it_does_nothing(caplog) -> None:
-    band, samples = _band_and_samples(GlitchEvents.empty())
-
+    # Switching the placeholder on warns once, at startup.
     with caplog.at_level(logging.WARNING, logger="commander4.tod.glitches.sampling"):
-        sample_glitches(MPI.COMM_SELF, band, samples, None, GlitchConfig(enabled=True))
-
-    assert samples.glitch_events_detected
-    assert samples.glitches[0, 0].num_events == 0
+        make_step(Glitches, 1, 1, settings={"glitches": {"enabled": True}})
     assert "placeholder" in caplog.text
+
+    band, samples = _band_and_samples(GlitchEvents.empty())
+    samples.glitches.sample(samples, None)
+
+    assert samples.glitches.detected
+    assert samples.glitches.events[0, 0].num_events == 0

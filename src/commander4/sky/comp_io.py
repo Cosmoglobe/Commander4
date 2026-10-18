@@ -1,9 +1,8 @@
 """Reading a component's amplitudes from a FITS map, and picking a view's rows of stored data.
 
-`CompList` uses the FITS reader for a component's `init_from` map and its `amp_prior_mean_map`.
-Reading a chain file is each component's own `read_chain`. The fiddly part both share, and which
-lives here, is deciding which rows of a stored (npol, ...) array correspond to the polarization
-view being initialized.
+`CompList` uses the FITS reader for a component's `init_from` map and its `amp_prior_mean_map`;
+each component reads its chain group itself (`read_chain`). Both need the rows of a stored
+(npol, ...) array that belong to a polarization view, which `_pol_row_indices` gives.
 """
 from __future__ import annotations
 
@@ -26,7 +25,7 @@ logger = logging.getLogger(__name__)
 # Stokes channels stored, in order, for each polarization mode. Used to map the rows of a stored
 # (npol, ...) array (whose layout follows its polarization mode) onto the rows an execution view
 # needs. Applies equally to chain alm arrays and FITS maps, since both are laid out by polarization.
-_POL_CHANNELS = {"I": ("I",), "QU": ("Q", "U"), "IQU": ("I", "Q", "U")}
+POL_CHANNELS = {"I": ("I",), "QU": ("Q", "U"), "IQU": ("I", "Q", "U")}
 
 
 def _pol_row_indices(data: NDArray, eval_pol: str, shortname: str, source_path: str):
@@ -42,10 +41,10 @@ def _pol_row_indices(data: NDArray, eval_pol: str, shortname: str, source_path: 
         raise ValueError(
             f"Initial data for component {shortname!r} in {source_path!r} has an unexpected first "
             f"dimension ({nrows}); expected 1 (I), 2 (QU) or 3 (IQU).")
-    row_of = {channel: row for row, channel in enumerate(_POL_CHANNELS[stored_pol])}
-    if any(channel not in row_of for channel in _POL_CHANNELS[eval_pol]):
+    row_of = {channel: row for row, channel in enumerate(POL_CHANNELS[stored_pol])}
+    if any(channel not in row_of for channel in POL_CHANNELS[eval_pol]):
         return None
-    return [row_of[channel] for channel in _POL_CHANNELS[eval_pol]]
+    return [row_of[channel] for channel in POL_CHANNELS[eval_pol]]
 
 
 def _read_view_alms_from_fits(comp: DiffuseComponent, fits_path: str) -> NDArray | None:

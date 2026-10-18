@@ -1,8 +1,9 @@
 """Writing the per-iteration chain files: band samples and maps on the TOD side, components on the
 CompSep side.
 
-What a file holds about each sampled object is decided by that object: `TODSamples` gathers its
-datasets in `gather_chain_arrays`, and each component writes its own group in `write_chain`. The
+What a file holds about each sampled object is decided by that object: each TOD sampling step
+gives its arrays in `chain_arrays`, which `TODSamples.gather_chain_arrays` gathers over the band's
+ranks, and each component writes its own group in `write_chain`. The
 functions here own the file: its name, its metadata, the band maps, and the rule that a file only
 ever appears under its final name once it is complete (it is written as `<name>.tmp` and renamed),
 so a restart never reads a file a crash left half-written.
@@ -32,7 +33,7 @@ CHAIN_KINDS = ("bands", "compsep", "maps")
 #   "count"       a pure sample count: sums when degraded, unit-free.
 #
 # Anything not listed is treated as "brightness", which every sky map here is.
-_MAP_KINDS = {"rms": "rms", "cov": "weight", "nhit": "count"}
+MAP_KINDS = {"rms": "rms", "cov": "weight", "nhit": "count"}
 
 
 def _degrade_map(value: NDArray, kind: str, nside_out: int) -> NDArray:
@@ -123,7 +124,7 @@ def write_band_chain_to_file(params: Bunch, chain: int, iter: int, exp_name: str
     collective gathers — so this function only gates the `maps/` group.
 
     The maps arrive in uK_RJ and are written in the band's `band_unit`, each converted according to
-    its `_MAP_KINDS` entry by `band_unit_factor` D (=1 for uK_RJ). The gains in `tod_arrays` were
+    its `MAP_KINDS` entry by `band_unit_factor` D (=1 for uK_RJ). The gains in `tod_arrays` were
     already divided by D by the gather, gain having brightness in its denominator.
 
     `maps_to_file` also carries the scalar `map_fwhm_arcmin` (see `mapmaking.output`), which is the
@@ -149,7 +150,7 @@ def write_band_chain_to_file(params: Bunch, chain: int, iter: int, exp_name: str
             file[key] = value
         if write_maps:
             for key, value in maps_to_file.items():
-                kind = _MAP_KINDS.get(key, "brightness")
+                kind = MAP_KINDS.get(key, "brightness")
                 # `maps_nside` is a cap: it thins maps that are finer than it, and leaves anything
                 # already coarser alone.
                 if nside_out != "native" and nside_out < hp.npix2nside(value.shape[-1]):

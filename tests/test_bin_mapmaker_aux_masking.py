@@ -17,14 +17,12 @@ import numpy as np
 from mpi4py import MPI
 
 from commander4.data_models.detector_tod import DetectorTOD
-from commander4.tod.glitches.events import empty_glitch_grid
-from commander4.tod.jumps.events import empty_jump_grid
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pixel_domain import PixelDomain
 from commander4.data_models.pointing import PixelPointing
 import commander4.tod.processing as tod_processing
-from commander4.tod.config import MapmakingConfig, CorrelatedNoiseConfig, DataSelectionConfig
+from tod_step_fakes import fake_tod_samples, mapmaking_params
 
 _BITMASK = 1        # one bad-data bit; a flagged sample has (flag & _BITMASK) != 0
 _NSIDE = 1
@@ -50,37 +48,12 @@ def _build_band(pix: np.ndarray, psi: np.ndarray, flag: np.ndarray, tod: np.ndar
                        fsamp=1.0, ndet=1, pols="IQU", noise_model=noise_model)
 
 
-def _fake_tod_samples(sigma0: float = 2.0) -> SimpleNamespace:
-    """Minimal stand-in exposing exactly the fields tod2map / TODView / the diagnostics read."""
-    empty_ps = lambda: np.full((1, 1, 100), np.nan, dtype=np.float32)
-    return SimpleNamespace(
-        noise_params=np.full((1, 1, 1), sigma0), abs_gain=1.5, rel_gain=np.zeros(1),
-        temporal_gain=np.zeros((1, 1)), jumps=empty_jump_grid(1, 1),
-        glitches=empty_glitch_grid(1, 1),
-        accept=np.ones((1, 1), dtype=bool), band_unit_factor=1.0, band_unit="uK_RJ",
-        chisq_z=np.full((1, 1), np.nan), good_fraction=np.full((1, 1), np.nan),
-        TOD_PS_NBIN=100, tod_ps_freqs=empty_ps(), tod_ps_raw=empty_ps(), tod_ps_residual=empty_ps(),
-        tod_ps_ncorrsub=empty_ps(), tod_ps_ncorr=empty_ps(), ncorr_tods=None, residual_tods=None,
-        scan_runtime=np.zeros(1))
-
-
 def _run_bin_mapmaker(band: DetectorGroupTOD) -> dict[str, np.ndarray]:
     """Run binned mapmaking and return the maps selected for chain output."""
-    mapmaking = MapmakingConfig(
-        mapmaker="bin",
-        num_threads=1,
-        include_orbital_dipole_maps=True,
-        include_corr_noise_maps=False,
-        include_sky_model_maps=False,
-        common_res_fwhm=0.0,
-    )
-    correlated_noise = CorrelatedNoiseConfig(sample_sigma0=False)
-    data_selection = DataSelectionConfig()
+    params = mapmaking_params(band, "bin", orbital_dipole_maps=True)
     band.pixel_domain = PixelDomain(MPI.COMM_SELF, _NSIDE, "full")
-    _, maps = tod_processing.tod2map(
-        MPI.COMM_SELF, band, np.zeros((3, _NPIX)), _fake_tod_samples(), 1,
-        mapmaking, correlated_noise, data_selection,
-    )
+    _, maps = tod_processing.tod2map(band, fake_tod_samples(band, sigma0=2.0, abs_gain=1.5),
+                                     np.zeros((3, _NPIX)), 1, params)
     return maps
 
 

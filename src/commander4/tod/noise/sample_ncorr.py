@@ -18,11 +18,12 @@ from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.psd import NoisePSD
 from commander4.tod.noise.sigma0 import calc_sigma0_robust, calc_sigma0_binned_psd
-from commander4.tod.config import SIGMA0_METHODS
 
 from commander4.diagnostics.performance import start_bench, stop_bench, log_memory
 
 logger = logging.getLogger(__name__)
+
+SIGMA0_METHODS = ("pairwise", "binned_psd")
 
 
 def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigma0: float,

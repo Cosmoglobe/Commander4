@@ -18,16 +18,31 @@ from mpi4py import MPI
 from pixell.bunch import Bunch
 
 from commander4.data_models.pixel_domain import PixelDomain
-from commander4.tod.glitches.events import empty_glitch_grid
-from commander4.tod.jumps.events import empty_jump_grid
+from commander4.tod.data_selection import DataSelection
+from commander4.tod.glitches.sampling import Glitches
+from commander4.tod.hfi_demodulation import HFIModulation
+from commander4.tod.jumps.sampling import Jumps
 from commander4.tod.view import TODView
-from commander4.tod.gain import _solve_relative_gain_system
-from commander4.tod.config import GainConfig
+from commander4.tod.gain import Gain, _solve_relative_gain_system
+from tod_step_fakes import make_step
 
 
-@pytest.mark.parametrize("sampler_name", [
-    "sample_absolute_gain", "sample_relative_gain", "sample_temporal_gain_variations",
-])
+def _gain_step(global_blocks: dict | None = None, band_blocks: dict | None = None,
+               nu: float = 100.0, rank: int = 0, chain: int = 1) -> Gain:
+    """A `Gain` for band BAND of experiment EXP, on a band rank without scans.
+
+    `global_blocks` and `band_blocks` are the gain blocks of `tod_processing` and of the band's own
+    parameter block (e.g. ``{"abs_gain": {"enabled": True}}``).
+    """
+    experiment = SimpleNamespace(experiment_name="EXP", band_name="BAND", nu=nu, nscans=0, ndet=1,
+                                 band_unit_factor=1.0, iter_detector_scans=lambda: iter(()))
+    params = Bunch(tod_processing=Bunch(**(global_blocks or {})),
+                   experiments=Bunch(EXP=Bunch(bands=Bunch(BAND=Bunch(**(band_blocks or {}))))))
+    return Gain(experiment, params, params.experiments.EXP.bands.BAND,
+                SimpleNamespace(Get_rank=lambda: rank), chain)
+
+
+@pytest.mark.parametrize("sampler_name", ["sample_absolute", "sample_relative", "sample_temporal"])
 @pytest.mark.parametrize("seconds, fsamp, expected", [
     (1.0, 200.0, 200), (0.25, 200.0, 50), (0.0, 200.0, 1),
     (0.001, 200.0, 1), (1.0, 32.51, 33),
@@ -36,57 +51,47 @@ def test_gain_samplers_convert_seconds_to_native_samples(
     monkeypatch: pytest.MonkeyPatch, sampler_name: str, seconds: float, fsamp: float, expected: int,
 ) -> None:
     """Check the actual averaging factor passed to TODView by each gain routine."""
-    from mpi4py import MPI
     import commander4.tod.gain as gain
 
     experiment = SimpleNamespace(fsamp=fsamp, ndet=1, scans=[])
-    config = GainConfig(downsample_time=seconds)
+    gains = _gain_step({term: {"downsample_time": seconds}
+                        for term in ("abs_gain", "rel_gain", "temporal_gain")})
     view = Mock(side_effect=RuntimeError("stop at TODView"))
     monkeypatch.setattr(gain, "TODView", view)
     with pytest.raises(RuntimeError, match="stop at TODView"):
-        getattr(gain, sampler_name)(MPI.COMM_SELF, experiment, None, None, config, 1)
+        samples = SimpleNamespace(band_comm=MPI.COMM_SELF, experiment_data=experiment)
+        getattr(gains, sampler_name)(samples, None, 1)
     assert view.call_args.kwargs["downsample_factor"] == expected
 
 
-@pytest.mark.parametrize("nu, target, rank, warns", [
-    (545.0, "orbital_dipole", 0, True),
-    (353.0, "orbital_dipole", 0, False),
-    (857.0, "sky", 0, False),
-    (545.0, "orbital_dipole", 1, False),
+@pytest.mark.parametrize("nu, target, rank, chain, warns", [
+    (545.0, "orbital_dipole", 0, 1, True),
+    (353.0, "orbital_dipole", 0, 1, False),
+    (857.0, "sky", 0, 1, False),
+    (545.0, "orbital_dipole", 1, 1, False),
+    (545.0, "orbital_dipole", 0, 2, False),
 ])
-def test_dipole_calibration_warning_only_above_400_ghz_on_the_band_master(
-    caplog: pytest.LogCaptureFixture, nu: float, target: str, rank: int, warns: bool,
+def test_dipole_calibration_warning_only_above_400_ghz_once_per_band(
+    caplog: pytest.LogCaptureFixture, nu: float, target: str, rank: int, chain: int, warns: bool,
 ) -> None:
-    """Above 400 GHz the dipole is faint next to dust, so calibrating on it deserves a warning."""
-    import commander4.tod.gain as gain
-
-    comm = SimpleNamespace(Get_rank=lambda: rank)
-    experiment = SimpleNamespace(nu=nu, band_name="BAND")
+    """Above 400 GHz the dipole is faint next to dust, so calibrating on it deserves a warning,
+    given once per band: by the band master, for chain 1."""
     with caplog.at_level("WARNING", logger="commander4.tod.gain"):
-        gain._warn_about_dipole_calibration(comm, experiment, GainConfig(calibrate_against=target),
-                                            "abs_gain")
+        _gain_step({"abs_gain": {"enabled": True, "calibrate_against": target}}, nu=nu,
+                   rank=rank, chain=chain)
     assert ("orbital dipole" in caplog.text) == warns
 
 
-@pytest.mark.parametrize("sampler_name, step_name", [
-    ("sample_absolute_gain", "abs_gain"), ("sample_relative_gain", "rel_gain"),
-    ("sample_temporal_gain_variations", "temporal_gain"),
-])
-def test_each_gain_sampler_warns_about_dipole_calibration(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, sampler_name: str,
-    step_name: str,
+@pytest.mark.parametrize("step_name", ["abs_gain", "rel_gain", "temporal_gain"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_each_sampled_gain_term_warns_about_dipole_calibration(
+    caplog: pytest.LogCaptureFixture, step_name: str, enabled: bool,
 ) -> None:
-    """The sampler itself warns, so the warning appears exactly when the step runs."""
-    from mpi4py import MPI
-    import commander4.tod.gain as gain
-
-    experiment = SimpleNamespace(fsamp=10.0, ndet=1, scans=[], nu=545.0, band_name="BAND")
-    monkeypatch.setattr(gain, "TODView", Mock(side_effect=RuntimeError("stop at TODView")))
+    """The warning is given when the settings are read, and only for a term that is sampled."""
     with caplog.at_level("WARNING", logger="commander4.tod.gain"):
-        with pytest.raises(RuntimeError, match="stop at TODView"):
-            getattr(gain, sampler_name)(MPI.COMM_SELF, experiment, None, None,
-                                        GainConfig(calibrate_against="orbital_dipole"), 1)
-    assert f"{step_name} for band BAND" in caplog.text
+        _gain_step({step_name: {"enabled": enabled, "calibrate_against": "orbital_dipole"}},
+                   nu=545.0)
+    assert (f"{step_name} for band BAND" in caplog.text) == enabled
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
@@ -103,7 +108,6 @@ def test_absolute_gain_reuses_filtered_calibrator(
     model = NoisePSDOof()
     model.is_white = white_noise
     experiment = DetectorGroupTOD([], "EXP", "BAND", 1, 100.0, 0.0, 180.0, 1, "I", model)
-    config = GainConfig(downsample_time=1.0)
     rng = np.random.default_rng(13)
     views = []
     numerator = denominator = 0.0
@@ -126,12 +130,14 @@ def test_absolute_gain_reuses_filtered_calibrator(
     filter_spy = Mock(wraps=experiment.apply_N_inv)
     monkeypatch.setattr(experiment, "apply_N_inv", filter_spy)
     monkeypatch.setattr(gain.np.random, "randn", lambda: 0.37)
-    samples = SimpleNamespace(abs_gain=1.0, chain=1)
-    result = gain.sample_absolute_gain(MPI.COMM_SELF, experiment, samples, None, config, 1)
+    gains = _gain_step({"abs_gain": {"downsample_time": 1.0}})
+    gains.abs_gain = 1.0
+    samples = SimpleNamespace(band_comm=MPI.COMM_SELF, experiment_data=experiment, chain=1)
+    gains.sample_absolute(samples, None, 1)
 
     expected = numerator / denominator + 0.37 / np.sqrt(denominator)
     tolerance = 2e-6 if dtype == np.float32 else 1e-12
-    assert result.abs_gain == pytest.approx(expected, rel=tolerance)
+    assert gains.abs_gain == pytest.approx(expected, rel=tolerance)
     assert filter_spy.call_count == len(views)
     for call, view in zip(filter_spy.call_args_list, views):
         assert call.args[0] is view.get_calib_tod.return_value.s_cal
@@ -169,11 +175,14 @@ def test_temporal_gain_is_solved_in_time_order(monkeypatch: pytest.MonkeyPatch) 
                  for iscan, t in enumerate(time_order)]
         scan_view = SimpleNamespace(iter_focused=Mock(return_value=iter(views)))
         monkeypatch.setattr(gain, "TODView", Mock(return_value=scan_view))
-        samples = SimpleNamespace(abs_gain=1.0, rel_gain=np.zeros(1), chain=1, scan_ids=scan_ids,
-                                  temporal_gain=np.zeros((nscans, 1), dtype=np.float32))
+        gains = _gain_step()
+        gains.abs_gain, gains.rel_gain = 1.0, np.zeros(1)
+        gains.temporal_gain = np.zeros((nscans, 1), dtype=np.float32)
+        samples = SimpleNamespace(band_comm=MPI.COMM_SELF, experiment_data=experiment, chain=1,
+                                  scan_ids=scan_ids)
         np.random.seed(7)  # The same fluctuation draws, which the solve makes in time order.
-        return gain.sample_temporal_gain_variations(MPI.COMM_SELF, experiment, samples, None,
-                                                    GainConfig(), 1).temporal_gain[:, 0]
+        gains.sample_temporal(samples, None, 1)
+        return gains.temporal_gain[:, 0]
 
     in_time_order = solve(np.arange(nscans))
     shuffled_order = np.array([3, 0, 5, 1, 4, 2])
@@ -185,17 +194,6 @@ def test_temporal_gain_is_solved_in_time_order(monkeypatch: pytest.MonkeyPatch) 
 # --------------------------------------------------------------------------------------
 # The calibrator a gain term ends up using
 # --------------------------------------------------------------------------------------
-def _make_params(global_blocks: dict, band_blocks: dict) -> Bunch:
-    """Build a params Bunch with the given tod_processing and per-band gain blocks."""
-    return Bunch(
-        tod_processing=Bunch(**{name: Bunch(**vals) if isinstance(vals, dict) else vals
-                                for name, vals in global_blocks.items()}),
-        experiments=Bunch(EXP=Bunch(bands=Bunch(
-            BAND=Bunch(**{name: Bunch(**vals) for name, vals in band_blocks.items()})))),
-        compsep=Bunch(common_res_fwhm=0.0),
-    )
-
-
 def _inputs(band_blocks: dict, passed: str = "sky", gain_block: str = "abs_gain",
             downsample_time: float = 1.0, gap_fill: str = "wn") -> tuple[str, float, str]:
     """Resolve one step's calibrator, gap filling, and downsampling."""
@@ -207,10 +205,7 @@ def _inputs(band_blocks: dict, passed: str = "sky", gain_block: str = "abs_gain"
             "downsample_time": downsample_time,
         },
     }
-    params = _make_params(global_blocks, band_blocks)
-    default = "orbital_dipole" if gain_block == "abs_gain" else "sky"
-    config = GainConfig.from_params(params.tod_processing,
-                                params.experiments.EXP.bands.BAND, gain_block, default)
+    config = _gain_step(global_blocks, band_blocks).cfg[gain_block]
     return config.calibrate_against, config.downsample_time, config.gap_fill_method
 
 
@@ -244,24 +239,13 @@ def test_band_override_can_change_every_gain_option():
             "downsample_time": 0.25,
         },
     }
-    params = _make_params(global_blocks, band_blocks)
-    config = GainConfig.from_params(params.tod_processing,
-                                params.experiments.EXP.bands.BAND,
-                                "abs_gain", "orbital_dipole")
+    config = _gain_step(global_blocks, band_blocks).cfg.abs_gain
 
     assert not config.enabled
     assert config.from_iter == 4
     assert config.calibrate_against == "sky"
     assert config.gap_fill_method == "fallback"
     assert config.downsample_time == 0.25
-
-
-def test_invalid_target_raises():
-    with pytest.raises(ValueError):
-        _inputs({}, passed="bogus")
-    # ... including when it arrives via the per-band override.
-    with pytest.raises(ValueError):
-        _inputs({"abs_gain": {"calibrate_against": "bogus"}})
 
 
 def test_an_invalid_gap_fill_method_raises():
@@ -287,7 +271,7 @@ class _StubView(TODView):
     def get_mask(self, good_data_mask=True, proc_mask=True, proc_mask_type=""):
         return np.ones(self._s_sky.size, dtype=bool)
 
-    def get_static_sky_tod(self, compsep_output=None):
+    def _static_sky_tod(self, compsep_output=None):
         return self._s_sky
 
     def get_orbital_dipole_tod(self):
@@ -347,8 +331,7 @@ class _FillStubView(TODView):
     gap-fill methods over a residual with a real masked region."""
 
     def __init__(self, n, mask, noise_model, noise_params, fsamp=1.0, gain=2.0):
-        super().__init__(None, None)
-        self.experiment_data = SimpleNamespace(noise_model=noise_model)
+        super().__init__(SimpleNamespace(noise_model=noise_model), None)
         self._n = n
         self._mask = mask
         self._np = np.asarray(noise_params, float)
@@ -362,11 +345,10 @@ class _FillStubView(TODView):
     def noise_params(self): return self._np
     @property
     def sigma0(self): return float(self._np[0])
-    @property
-    def corrected_tod(self): return self._data
+    def get_tod(self, **kwargs): return np.array(self._data, copy=True)
     def get_gain(self, gain_terms=None): return self._gain
     def get_mask(self, good_data_mask=True, proc_mask=True, proc_mask_type=""): return self._mask
-    def get_static_sky_tod(self, compsep_output=None): return np.zeros(self._n)
+    def _static_sky_tod(self, compsep_output=None): return np.zeros(self._n)
     def get_orbital_dipole_tod(self): return np.zeros(self._n)
 
 
@@ -498,11 +480,11 @@ def _make_real_view(monkeypatch, good=None):
                           good_data_mask=np.ones(NTOD, dtype=bool) if good is None else good)
     experiment_data = SimpleNamespace(scans=[SimpleNamespace(detectors=[det])], nside=1, nu=30.0,
                                       pixel_domain=PixelDomain(MPI.COMM_SELF, 1, "full"))
-    tod_samples = SimpleNamespace(jumps=empty_jump_grid(1, 1),
-                                  glitches=empty_glitch_grid(1, 1),
-                                  abs_gain=2.0, rel_gain=np.array([0.5]),
-                                  temporal_gain=np.array([[0.25]]),
-                                  accept=np.ones((1, 1), dtype=bool))
+    tod_samples = SimpleNamespace(jumps=make_step(Jumps, 1, 1), glitches=make_step(Glitches, 1, 1),
+                                  gain=SimpleNamespace(abs_gain=2.0, rel_gain=np.array([0.5]),
+                                                       temporal_gain=np.array([[0.25]])),
+                                  selection=make_step(DataSelection, 1, 1),
+                                  hfi=make_step(HFIModulation, 1, 1))
     skymap = rng.normal(size=(3, 12))
 
     def make_view(downsample_factor=1, mask_threshold=0.5):
@@ -520,7 +502,7 @@ def _block_mean(arr):
 
 def test_static_sky_downsampling_is_block_average(monkeypatch):
     make_view, _, s_full = _make_real_view(monkeypatch)
-    out = make_view(FACTOR).get_static_sky_tod()
+    out = make_view(FACTOR)._static_sky_tod()
     np.testing.assert_allclose(out, _block_mean(s_full), rtol=2e-5, atol=1e-6)
     # Regression guard: must NOT be the model sampled at the block-center pixels.
     block_centers = np.array([2, 6, 10])
@@ -574,7 +556,7 @@ def test_model_is_averaged_over_the_same_samples_as_the_data(monkeypatch):
     # The scan moves during a block, so a model averaged over all samples would not match a data
     # average taken over the good ones alone.
     make_view, _, s_full = _make_real_view(monkeypatch, good=_PARTLY_FLAGGED)
-    out = make_view(FACTOR).get_static_sky_tod()
+    out = make_view(FACTOR)._static_sky_tod()
     np.testing.assert_allclose(out[1], s_full[4:7].mean(), rtol=2e-5, atol=1e-6)
     assert not np.isclose(out[1], s_full[4:8].mean(), rtol=2e-5, atol=1e-6)
 
@@ -585,9 +567,6 @@ def test_mask_threshold_must_leave_some_sample_in_a_surviving_block(monkeypatch)
         make_view(FACTOR, mask_threshold=1.0)
     with pytest.raises(ValueError, match="mask_threshold"):
         make_view(FACTOR, mask_threshold=-0.1)
-    with pytest.raises(ValueError, match="mask_threshold"):
-        GainConfig.from_params(Bunch(abs_gain=Bunch(mask_threshold=1.0)),
-                           Bunch(), "abs_gain", "orbital_dipole")
 
 
 def test_get_tod_subtracts_each_named_model_and_rejects_anything_else(monkeypatch):

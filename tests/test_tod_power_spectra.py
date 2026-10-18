@@ -3,9 +3,8 @@
 import numpy as np
 import pytest
 
-from commander4.tod import scan_diagnostics
-from commander4.tod.scan_diagnostics import _binned_tod_power_spectrum, _record_tod_diagnostics
-from commander4.data_models.tod_samples import TODSamples
+from commander4.tod.scan_diagnostics import _binned_tod_power_spectrum, TODDiagnostics
+from tod_step_fakes import make_step
 
 
 def test_shape_and_nan_padding():
@@ -56,20 +55,21 @@ def test_short_tod_uses_fewer_bins_without_error():
 
 
 # --------------------------------------------------------------------------------------
-# _record_tod_diagnostics: which TOD view feeds which recorded spectrum
+# TODDiagnostics.record_scan: which TOD view feeds which recorded spectrum
 # --------------------------------------------------------------------------------------
 class _DiagStubView:
-    """Stand-in for TODView exposing only what _record_tod_diagnostics reads.
+    """Stand-in for TODView exposing only what `record_scan` reads, focused on detector-scan (0, 0).
 
     ``get_tod()`` (no subtract) returns the corrected TOD; ``get_tod(subtract=...)`` returns the
     sky+orbital-dipole-subtracted base. Both are fresh copies so the diagnostics helper can subtract
     n_corr in place, mirroring the real TODView contract.
     """
+    iscan, idet = 0, 0
+
     def __init__(self, raw, sky_orb_subtracted, fsamp=10.0):
         self._raw = raw
         self._sky_orb_subtracted = sky_orb_subtracted
         self.fsamp = fsamp
-        self.sigma0 = 1.0  # Read (with get_mask) by the chisq_z diagnostic.
 
     @property
     def raw_tod(self):
@@ -79,24 +79,9 @@ class _DiagStubView:
         base = self._raw if subtract is None else self._sky_orb_subtracted
         return np.array(base, copy=True)
 
-    def get_mask(self, **kwargs):
-        return np.ones(len(self._raw), dtype=bool)
-
-
-def _diag_tod_samples():
-    ts = TODSamples.__new__(TODSamples)          # bypass __init__ (no MPI / data needed)
-    shape = (1, 1, TODSamples.TOD_PS_NBIN)
-    for name in ("tod_ps_freqs", "tod_ps_raw", "tod_ps_ncorr", "tod_ps_ncorrsub",
-                 "tod_ps_residual"):
-        setattr(ts, name, np.full(shape, np.nan, dtype=np.float32))
-    ts.chisq_z = np.full((1, 1), np.nan)
-    ts.ncorr_tods = None
-    ts.residual_tods = None
-    return ts
-
 
 def _ps(tod, fsamp=10.0):
-    return _binned_tod_power_spectrum(tod, fsamp, TODSamples.TOD_PS_NBIN)[1]
+    return _binned_tod_power_spectrum(tod, fsamp, TODDiagnostics.TOD_PS_NBIN)[1]
 
 
 def test_record_diagnostics_routes_each_tod_to_its_spectrum():
@@ -104,8 +89,8 @@ def test_record_diagnostics_routes_each_tod_to_its_spectrum():
     raw = rng.standard_normal(2000)
     sky_orb_sub = rng.standard_normal(2000)        # stand-in for raw - gain*(sky+orb)
     n_corr = rng.standard_normal(2000)
-    ts = _diag_tod_samples()
-    _record_tod_diagnostics(ts, 0, 0, _DiagStubView(raw, sky_orb_sub), n_corr)
+    ts = make_step(TODDiagnostics, 1, 1)
+    ts.record_scan(_DiagStubView(raw, sky_orb_sub), n_corr)
 
     # Recorded spectra are stored as float32, so compare at single-precision tolerance.
     np.testing.assert_allclose(ts.tod_ps_raw[0, 0], _ps(raw), rtol=1e-5)
@@ -120,13 +105,39 @@ def test_record_diagnostics_without_ncorr():
     rng = np.random.default_rng(8)
     raw = rng.standard_normal(2000)
     sky_orb_sub = rng.standard_normal(2000)
-    ts = _diag_tod_samples()
-    _record_tod_diagnostics(ts, 0, 0, _DiagStubView(raw, sky_orb_sub), None)
+    ts = make_step(TODDiagnostics, 1, 1)
+    ts.record_scan(_DiagStubView(raw, sky_orb_sub), None)
 
     # With no n_corr drawn: ncorrsub == raw, residual is just the sky-subtracted TOD, ncorr stays NaN.
     np.testing.assert_allclose(ts.tod_ps_ncorrsub[0, 0], _ps(raw), rtol=1e-5)
     np.testing.assert_allclose(ts.tod_ps_residual[0, 0], _ps(sky_orb_sub), rtol=1e-5)
     assert np.isnan(ts.tod_ps_ncorr[0, 0]).all()
+
+
+def test_record_diagnostics_without_power_spectra_still_gives_the_residual():
+    """With the spectra switched off, the data-selection veto and the residual map still need the
+    residual TOD."""
+    rng = np.random.default_rng(9)
+    raw = rng.standard_normal(2000)
+    sky_orb_sub = rng.standard_normal(2000)
+    n_corr = rng.standard_normal(2000)
+    ts = make_step(TODDiagnostics, 1, 1, tod_power_spectra=False)
+    assert ts.tod_ps_freqs is None and ts.tod_ps_raw is None
+
+    residual = ts.record_scan(_DiagStubView(raw, sky_orb_sub), n_corr)
+
+    np.testing.assert_allclose(residual, sky_orb_sub - n_corr)
+    assert "tod_ps_raw" not in ts.chain_arrays().per_scan
+
+
+def test_start_iteration_forgets_the_full_tods_and_runtimes_of_the_last_iteration() -> None:
+    """A detector-scan rejected since, or without an n_corr draw, writes nothing stale."""
+    samples = make_step(TODDiagnostics, 1, 1, residual_tods=True, ncorr_tods=True)
+    samples.record_scan(_DiagStubView(np.ones(64), np.ones(64)), np.ones(64))
+    samples.scan_runtime[:] = 2.0
+    samples.start_iteration()
+    assert samples.residual_tods == [[None]] and samples.ncorr_tods == [[None]]
+    assert samples.scan_runtime[0] == 0.0
 
 
 @pytest.mark.parametrize("with_ncorr", [False, True])
@@ -137,10 +148,8 @@ def test_saved_residual_is_full_observed_minus_model(with_ncorr: bool, dtype: ty
     sky_orb_sub = raw - 20.0
     n_corr = np.full(128, 2.0, dtype=dtype) if with_ncorr else None
     sidelobe = np.full(128, 3.0, dtype=dtype)
-    samples = _diag_tod_samples()
-    samples.residual_tods = [[None]]
-    residual = _record_tod_diagnostics(
-        samples, 0, 0, _DiagStubView(raw, sky_orb_sub), n_corr, sidelobe_tod=sidelobe)
+    samples = make_step(TODDiagnostics, 1, 1, residual_tods=True)
+    residual = samples.record_scan(_DiagStubView(raw, sky_orb_sub), n_corr, sidelobe_tod=sidelobe)
 
     expected = sky_orb_sub - sidelobe
     if n_corr is not None:

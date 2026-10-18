@@ -121,6 +121,11 @@ output:
       compsep_residual_maps: False  # residuals/<band>_<pol>: full-resolution per-band
                                   # residuals (C3 res_<band>_<postfix>.fits). Gathers
                                   # every band map onto the CompSep master: memory-heavy.
+      tod_power_spectra: True     # tod_ps_*: log-binned power spectra of the raw, residual,
+                                  # n_corr-subtracted and n_corr TODs of every detector-scan.
+                                  # Default True. 2 kB per detector-scan, the largest output
+                                  # after the maps (~0.5 GB per HFI band and iteration). False
+                                  # also skips computing them.
       ncorr_tods: False           # DEBUG ONLY: every correlated-noise TOD, per sample,
                                   # at tods/<scan_id>/<detector>/ncorr. Very large.
       residual_tods: False        # DEBUG ONLY: full observed-minus-model TODs in detector units,
