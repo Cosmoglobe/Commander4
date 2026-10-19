@@ -264,7 +264,6 @@ def test_intensity_mapmaker_recovers_signal_rms_and_aux_maps(
                                niter=0, converged=True, high_var=False)
 
     monkeypatch.setattr(noise_sampling, "sample_correlated_noise", fixed_noise)
-    monkeypatch.setattr(tod2map_module, "log_corr_noise_stats", lambda *args: None)
     params = mapmaking_params(band, "bin", orbital_dipole_maps=True, corr_noise_maps=True,
                               sky_model_maps=True, residual_maps=True, sidelobe_maps=True,
                               hit_maps=True, cov_maps=True)

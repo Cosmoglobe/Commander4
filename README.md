@@ -96,7 +96,8 @@ good_fraction      (NSC,ND)    # unflagged fraction of samples
 chisq_z            (NSC,ND)    # white-noise chi^2 z-score; ~N(0,1) for clean data, NaN if unevaluated
 ncorr_cg_residual  (NSC,ND)    # final relative CG residual of the correlated-noise draw
 ncorr_cg_niter     (NSC,ND)    # int32 CG iterations; 0 when the stationary fallback was used
-ncorr_converged    (NSC,ND)    # int8: 1 accepted, 0 failed, -1 no n_corr drawn
+ncorr_converged    (NSC,ND)    # int8: 1 CG converged, 0 not, -1 no n_corr drawn this iteration
+ncorr_high_var     (NSC,ND)    # int8: 1 variance check failed, 0 passed, -1 no n_corr drawn
 scan_runtime       (NSC,)      # wall time [s] the mapmaking loop spent on the scan this iteration
 tod_ps_freqs       (NSC,ND,100)   # log-binned frequency axis shared by the four spectra below
 tod_ps_raw         (NSC,ND,100)   # binned PSD of the raw TOD

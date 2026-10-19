@@ -8,9 +8,11 @@ when correlated noise is not sampled, sigma0 alone. The numerics live in `sample
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 import numpy as np
 from mpi4py import MPI
+from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
@@ -19,6 +21,9 @@ from commander4.tod.noise.sample_ncorr import sample_correlated_noise, SIGMA0_ME
 from commander4.tod.noise.sigma0 import _estimate_standalone_sigma0
 from commander4.tod.step import ChainArrays, SavedBandSample, TODStep
 from commander4.tod.view import TODView
+
+if TYPE_CHECKING:
+    from commander4.data_models.tod_samples import TODSamples
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +43,13 @@ class Noise(TODStep):
             selects the stationary fallback). `psd_fit_nu_min`/`psd_fit_nu_max` are applied to the
             noise model by `NoisePSD.apply_param_file`.
         noise_model: The band's `NoisePSD`, which defines the parameters.
-        ncorr_cg_residual, ncorr_cg_niter, ncorr_converged: (nscans, ndet) Diagnostics of the
-            correlated-noise CG, written to the chain: the final relative CG residual, the
-            iteration count, and whether the draw was accepted (converged and not variance-capped;
-            -1 = no n_corr drawn yet). The log reports only the band-wide counts of these, so this
-            is what says *which* scans failed.
+        ncorr_cg_residual, ncorr_cg_niter, ncorr_converged, ncorr_high_var: (nscans, ndet)
+            Diagnostics of this iteration's correlated-noise draws, written to the chain: the final
+            relative CG residual, the iteration count, whether the CG converged, and whether the
+            variance check failed (either sends the draw to the stationary fallback). Reset by
+            `start_iteration` (NaN, or -1 for the counts and flags), so a reset entry means "no
+            n_corr drawn this iteration". `log_summary` reports the band-wide counts, so these
+            arrays are what say *which* scans failed.
     """
 
     def __init__(self, experiment_data: DetectorGroupTOD, params: Bunch, my_band: Bunch,
@@ -74,6 +81,7 @@ class Noise(TODStep):
         self.ncorr_cg_residual = np.full((nscans, ndet), np.nan)
         self.ncorr_cg_niter = np.full((nscans, ndet), -1, dtype=np.int32)
         self.ncorr_converged = np.full((nscans, ndet), -1, dtype=np.int8)
+        self.ncorr_high_var = np.full((nscans, ndet), -1, dtype=np.int8)
 
         # Find the first detector in the first scan. Used for checking if default values
         # are present. Default to None in case there are no scans.
@@ -108,6 +116,7 @@ class Noise(TODStep):
             "ncorr_cg_residual": self.ncorr_cg_residual,
             "ncorr_cg_niter": self.ncorr_cg_niter,
             "ncorr_converged": self.ncorr_converged,
+            "ncorr_high_var": self.ncorr_high_var,
         })
 
 
@@ -116,13 +125,19 @@ class Noise(TODStep):
         self.noise_params = saved.per_scan("noise_params").astype(self.noise_params.dtype)
 
 
-    def sample_scan(self, view: TODView) -> Bunch:
+    def start_iteration(self) -> None:
+        """Forget the CG diagnostics of the previous iteration's draws."""
+        self.ncorr_cg_residual[:] = np.nan
+        self.ncorr_cg_niter[:] = -1
+        self.ncorr_converged[:] = -1
+        self.ncorr_high_var[:] = -1
+
+
+    def sample_scan(self, view: TODView) -> NDArray:
         """Draw the correlated noise of the focused detector-scan, and its noise parameters.
 
-        Returns:
-            The result of `sample_correlated_noise`: the realization ``n_corr`` (detector units),
-            the new ``noise_params``, and the CG ``residual``, ``niter``, ``converged`` and
-            ``high_var``, which the scan loop also sums up for its log.
+        Records the new noise parameters and the CG diagnostics of the draw, and returns the
+        realization ``n_corr``, in detector units.
         """
         cfg = self.cfg
         res = sample_correlated_noise(
@@ -135,8 +150,9 @@ class Noise(TODStep):
         self.noise_params[view.iscan, view.idet, :] = res.noise_params
         self.ncorr_cg_residual[view.iscan, view.idet] = res.residual
         self.ncorr_cg_niter[view.iscan, view.idet] = res.niter
-        self.ncorr_converged[view.iscan, view.idet] = res.converged and not res.high_var
-        return res
+        self.ncorr_converged[view.iscan, view.idet] = res.converged
+        self.ncorr_high_var[view.iscan, view.idet] = res.high_var
+        return res.n_corr
 
 
     def sample_sigma0(self, view: TODView) -> None:
@@ -145,3 +161,80 @@ class Noise(TODStep):
         estimate, not in a separate pre-gain pass."""
         self.noise_params[view.iscan, view.idet, 0] = _estimate_standalone_sigma0(
             view, self.cfg.sigma0_method)
+
+
+    def log_summary(self, tod_samples: TODSamples, iteration: int) -> None:
+        """Log one per-band summary of this iteration's correlated-noise draws (collective).
+
+        Reads the CG diagnostics `sample_scan` recorded this iteration and, when the noise-model
+        parameters are sampled, their distributions, per parameter name (skipping sigma0), so the
+        summary adapts to any NoisePSD model.
+        """
+        band_comm, experiment_data = tod_samples.band_comm, tod_samples.experiment_data
+        drawn = self.ncorr_cg_niter >= 0
+        residuals = band_comm.gather(self.ncorr_cg_residual[drawn])
+        niters = band_comm.gather(self.ncorr_cg_niter[drawn])
+        converged = band_comm.gather(self.ncorr_converged[drawn])
+        high_var = band_comm.gather(self.ncorr_high_var[drawn])
+        sampled_params = band_comm.gather(self.noise_params[drawn])
+        if band_comm.Get_rank() != 0:
+            return
+        residuals, niters = np.concatenate(residuals), np.concatenate(niters)
+        converged, high_var = np.concatenate(converged), np.concatenate(high_var)
+        sampled_params = np.concatenate(sampled_params)  # (n_total, npar)
+        n_total = niters.size
+        if n_total == 0:
+            return
+
+        # Bands from different experiments can share a centre frequency, and one experiment can
+        # hold several detector groups, so the log context names the experiment and band.
+        context = (f"Chain {tod_samples.chain} iter{iteration} {experiment_data.experiment_name} "
+                   f"{experiment_data.band_name}")
+
+        # CG and variance sanity check failure rates, as warnings if more than 3% of scans fail.
+        n_failed_conv = int(np.count_nonzero(converged == 0))
+        n_high_var = int(np.count_nonzero(high_var == 1))
+        log_failures = logger.warning if n_failed_conv/n_total > 0.03 else logger.verbose
+        log_failures(f"{context}: noise CG failed for {100*n_failed_conv/n_total:.1f}% of scans "
+                     f"({n_failed_conv}/{n_total}, worst residual = {np.max(residuals):.3e}).")
+        log_high_var = logger.warning if n_high_var/n_total > 0.03 else logger.verbose
+        log_high_var(f"{context}: variance sanity check failed for {100*n_high_var/n_total:.1f}% "
+                     f"of scans ({n_high_var}/{n_total}).")
+
+        # The worst residual and the failure counts are already in the two lines above, so this
+        # line only adds the typical CG behaviour. A residual of 0 means no masked CG ran.
+        cg_residuals = residuals[residuals != 0]
+        median_residual = np.median(cg_residuals) if cg_residuals.size else 0.0
+        logger.info(f"{context}: correlated noise for {n_total} detector-scans, median residual "
+                    f"{median_residual:.2e}, median iterations {np.median(niters):.1f} "
+                    f"(max {np.max(niters):.0f}).")
+        if not self.cfg.sample_psd_params:
+            return
+
+        # Per-parameter distributions (sigma0 at index 0 is reported elsewhere), plus how many
+        # detector-scans ended up sitting on a hard prior bound. A parameter whose true value lies
+        # outside `P_uni` cannot be recovered: every scan rails against the nearest edge and then
+        # reports a tight scatter around it, which reads as a converged answer in the chain. A
+        # genuinely low-fknee detector will also sit near the bound, so this reports rather than
+        # warns; it is the large railed fraction, not the railing itself, that says the bound is
+        # wrong.
+        noise_model = self.noise_model
+        for j in range(1, sampled_params.shape[1]):
+            name = noise_model.param_names[j] if j < len(noise_model.param_names) else f"p{j}"
+            values = sampled_params[:, j]
+            logger.verbose(f"{context}: {name} min {np.nanmin(values):.4f}, 1% "
+                           f"{np.nanpercentile(values, 1):.4f}, mean {np.nanmean(values):.4f}, "
+                           f"99% {np.nanpercentile(values, 99):.4f}, max {np.nanmax(values):.4f}")
+            lo, hi = float(noise_model.P_uni[j, 0]), float(noise_model.P_uni[j, 1])
+            if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+                continue
+            # Within 1% of the bounds' own span counts as "on" the bound, so a grid endpoint drawn
+            # through the inversion sampler's interpolation still registers.
+            tol = 0.01*(hi - lo)
+            n_lo = int(np.count_nonzero(values <= lo + tol))
+            n_hi = int(np.count_nonzero(values >= hi - tol))
+            if n_lo or n_hi:
+                logger.verbose(
+                    f"{context}: {name} on its prior bounds for {n_lo} ({n_lo/n_total:.1%}) "
+                    f"of {n_total} detector-scans at the lower bound {lo:.4g}, and "
+                    f"{n_hi} ({n_hi/n_total:.1%}) at the upper bound {hi:.4g}.")

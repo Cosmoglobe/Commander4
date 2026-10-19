@@ -83,6 +83,7 @@ def _minimal_tod_samples(nscans: int = 3, ndet: int = 2, hfi: bool = False,
     s.noise.ncorr_cg_residual = np.zeros((nscans, ndet))
     s.noise.ncorr_cg_niter = np.zeros((nscans, ndet), dtype=np.int32)
     s.noise.ncorr_converged = np.zeros((nscans, ndet), dtype=np.int8)
+    s.noise.ncorr_high_var = np.zeros((nscans, ndet), dtype=np.int8)
     s.selection = make_step(DataSelection, nscans, ndet)
     s.jumps = make_step(Jumps, nscans, ndet)
     s.hfi = HFIModulation(SimpleNamespace(nscans=nscans, ndet=ndet, hfi_demodulation=hfi),

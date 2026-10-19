@@ -198,8 +198,13 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD, tod_samples:
     if is_master and params.output.chains.include.sky_model_maps:
         maps_to_file["skymodel"] = compsep_output.full
 
+    noise = tod_samples.noise
+    if noise.cfg.enabled and iter >= noise.cfg.from_iter:
+        with benchmark("log-corr-noise-stats"):
+            noise.log_summary(tod_samples, iter)
+
     # Report during data-selection warm-up as well as active-cut iterations.
-    report_selection, apply_cuts = selection.status(iter, tod_samples.noise.cfg)
+    report_selection, apply_cuts = selection.status(iter, noise.cfg)
     if report_selection:
         selection.log_summary(tod_samples, active=apply_cuts, iteration=iter)
 

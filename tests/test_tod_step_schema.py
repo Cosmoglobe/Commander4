@@ -269,7 +269,8 @@ def _pipeline(monkeypatch: pytest.MonkeyPatch, params: Bunch) -> Bunch:
     for name, method in (("jumps", "sample"), ("hfi", "sample"), ("glitches", "sample"),
                          ("gain", "sample_absolute"), ("gain", "sample_relative"),
                          ("gain", "sample_temporal"), ("far_sidelobes", "build"),
-                         ("far_sidelobes", "free"), ("selection", "log_summary")):
+                         ("far_sidelobes", "free"), ("noise", "log_summary"),
+                         ("selection", "log_summary")):
         recorder = Mock()
         setattr(getattr(samples, name), method, recorder)
         calls.attach_mock(recorder, f"{name}.{method}")
@@ -319,6 +320,8 @@ def test_summary_keeps_noise_wait_and_selection_warmup(
                      data_selection={"enabled": True, "from_iter": 3, "until_iter": 4})
     pipeline = _pipeline(monkeypatch, params)
     pipeline.run(iteration)
+    # The noise summary reports every iteration that draws correlated noise.
+    assert pipeline.samples.noise.log_summary.called == (iteration >= 2)
     summary = pipeline.samples.selection.log_summary
     assert summary.called == report
     if report:

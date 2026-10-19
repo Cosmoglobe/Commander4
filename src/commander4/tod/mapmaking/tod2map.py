@@ -22,7 +22,6 @@ from commander4.parameters.schema import resolve_param
 from commander4.tod.mapmaking.binned import BinnedMapmaker
 from commander4.tod.mapmaking.cg import CGMapmaker
 from commander4.tod.mapmaking.output import finalize_band_maps
-from commander4.tod.noise.sample_ncorr import log_corr_noise_stats
 from commander4.tod.view import TODView
 
 
@@ -77,13 +76,6 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
     count_hits = getattr(include, "hit_maps", False)
     binned = BinnedMapmaker(experiment_data.pixel_domain, pols, map_names, count_hits=count_hits)
     cg = CGMapmaker(experiment_data, tod_samples, params) if use_cg else None
-    if corr_noise_active:
-        sampled_params = []
-        residuals = []
-        niters = []
-        num_failed_convergences_ncorr = 0
-        num_too_high_var_ncorr = 0
-        worst_residual_ncorr = 0
     stop_bench("setup")
 
     ### MAIN SCAN LOOP ###
@@ -115,19 +107,8 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
         ### CORRELATED NOISE / SIGMA0 SAMPLING (first, so the weights below use the new sigma0) ###
         n_corr_est = None
         if corr_noise_active:
-            start_bench("ncorr")
-            res = noise.sample_scan(view)
-            n_corr_est = res.n_corr
-            if noise.cfg.sample_psd_params:
-                sampled_params.append(np.array(res.noise_params, copy=True))
-            if not res.converged:
-                num_failed_convergences_ncorr += 1
-            if res.high_var:
-                num_too_high_var_ncorr += 1
-            worst_residual_ncorr = max(worst_residual_ncorr, res.residual)
-            residuals.append(res.residual)
-            niters.append(res.niter)
-            stop_bench("ncorr")
+            with benchmark("ncorr"):
+                n_corr_est = noise.sample_scan(view)
         elif noise.cfg.sample_sigma0:
             # No correlated noise this iteration: estimate sigma0 alone.
             with benchmark("sigma0-samp"):
@@ -201,15 +182,6 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
 
     with benchmark("MPI-sync"):
         band_comm.Barrier()
-
-    ### PRINT NOISE SAMPLING STATS ###
-    if corr_noise_active:
-        with benchmark("log-corr-noise-stats"):
-            log_corr_noise_stats(band_comm, experiment_data,
-                                 sampled_params, residuals, niters, num_failed_convergences_ncorr,
-                                 num_too_high_var_ncorr, worst_residual_ncorr,
-                                 sum(len(s.detectors) for s in experiment_data.scans),
-                                 tod_samples.chain, iteration)
 
     ### GATHER AND SOLVE MAPS ###
     with benchmark("map-gather"):
