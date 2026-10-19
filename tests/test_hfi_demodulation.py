@@ -17,6 +17,7 @@ from commander4.tod.jumps.sampling import Jumps
 from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.hfi_demodulation import HFIModulation
+from commander4.tod.sidelobe_deconvolve import FarSidelobes
 from commander4.tod.view import TODView
 from tod_step_fakes import make_step
 
@@ -84,6 +85,7 @@ def _build_hfi_case(phase: int = -1, pulse: np.ndarray | None = None):
         selection=make_step(DataSelection, 1, 1),
         jumps=make_step(Jumps, 1, 1),
         glitches=make_step(Glitches, 1, 1),
+        far_sidelobes=make_step(FarSidelobes, 1, 1),
     )
     band.pixel_domain = PixelDomain(MPI.COMM_SELF, _NSIDE, "full")
     return band, samples, sky_map, raw_tod, sky_tod

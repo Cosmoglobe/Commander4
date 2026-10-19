@@ -138,22 +138,23 @@ class TODDiagnostics(TODStep):
             Unless switched off (``tod_ps_freqs is None``), stores the low-resolution log-binned
             power spectra (sharing one binned frequency axis) of four detector-unit TOD views:
               * ``raw``:      the raw detector TOD.
-              * ``ncorrsub``: the TOD with every model removed except the sky and the orbital
-                              dipole (`TODView.get_tod`), minus the correlated noise.
+              * ``ncorrsub``: the TOD with every model removed except the sky signal (sky,
+                              orbital dipole and far sidelobes; `TODView.get_tod`), minus the
+                              correlated noise.
               * ``residual``: the noise residual.
               * ``ncorr``:    the correlated-noise realization itself, stored only when one was
                               drawn.
             Optional full-TOD collection stores ``n_corr`` and/or the residual as float32.
 
             Args:
-                residual_tod: The noise residual, in detector units: the TOD with every model,
-                    the correlated noise and the far sidelobes removed (built by `tod2map`).
+                residual_tod: The noise residual, in detector units: the TOD with every model
+                    and the correlated noise removed (built by `tod2map`).
                 n_corr: The correlated-noise realization, or None when none was drawn.
         """
         iscan, idet = view.iscan, view.idet
         if self.tod_ps_freqs is not None:
             nbin = self.TOD_PS_NBIN
-            ncorrsub_tod = view.get_tod(keep=("sky", "orbital_dipole"))
+            ncorrsub_tod = view.get_tod(keep=("sky", "orbital_dipole", "far_sidelobes"))
             if n_corr is not None:
                 ncorrsub_tod -= n_corr
             freqs_binned, raw_binned = _binned_tod_power_spectrum(view.raw_tod, view.fsamp, nbin)

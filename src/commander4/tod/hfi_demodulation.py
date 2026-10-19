@@ -102,7 +102,8 @@ class HFIModulation(TODStep):
         The first pass follows Commander3's bootstrap: sample the two raw parity means without a
         sky subtraction, then demodulate with them and the trial phase +1, and take the sign of the
         sky in the middle four percent of RING pixels as the phase. Later passes subtract the
-        current gain-scaled sky model before drawing the two baselines.
+        current gain-scaled sky signal (sky, orbital dipole and far sidelobes) before drawing the
+        two baselines. Commander3 leaves the far sidelobes in at this step (its `oper_minimal`).
 
         Args:
             tod_samples: The band's sampled state, which the TOD views read. A detector-scan that
@@ -159,8 +160,8 @@ class HFIModulation(TODStep):
             mask = view.get_mask(proc_mask_type="ncorr")
             # No sky can be subtracted before the phase is known (see `sample`).
             keep = ("hfi_baselines",)
-            if not subtract_sky:
-                keep += ("sky", "orbital_dipole")
+            if not subtract_sky:  # The three components that are considered part of the sky.
+                keep += ("sky", "orbital_dipole", "far_sidelobes")
             residual_tod = view.get_tod(keep=keep)
 
             phase = self.modulation_phase[view.iscan, view.idet]
@@ -205,7 +206,7 @@ class HFIModulation(TODStep):
         rejected = 0
 
         for view in scan_view.iter_focused(accepted_only=True):
-            tod = view.get_tod(keep=("sky", "orbital_dipole"))
+            tod = view.get_tod(keep=("sky", "orbital_dipole", "far_sidelobes"))
             # Phase identification follows C3's flag cut only, not the processing mask used for
             # baseline fitting. Both members of a pair must be valid. Drop a final unpaired sample
             # for odd-length scans by stopping the first slice at tod.size - 1.

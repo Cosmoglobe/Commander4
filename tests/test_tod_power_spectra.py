@@ -60,9 +60,9 @@ def test_short_tod_uses_fewer_bins_without_error():
 class _DiagStubView:
     """Stand-in for TODView exposing only what `record_scan` reads, focused on detector-scan (0, 0).
 
-    ``get_tod(keep=("sky", "orbital_dipole"))``, the only TOD `record_scan` asks for, returns a
-    fresh copy of the raw TOD, so the diagnostics can subtract n_corr in place, as from the real
-    TODView.
+    ``get_tod(keep=("sky", "orbital_dipole", "far_sidelobes"))``, the only TOD `record_scan` asks
+    for, returns a fresh copy of the raw TOD, so the diagnostics can subtract n_corr in place, as
+    from the real TODView.
     """
     iscan, idet = 0, 0
 
@@ -71,7 +71,7 @@ class _DiagStubView:
         self.fsamp = fsamp
 
     def get_tod(self, *, keep=()):
-        assert keep == ("sky", "orbital_dipole")
+        assert keep == ("sky", "orbital_dipole", "far_sidelobes")
         return np.array(self.raw_tod, copy=True)
 
 

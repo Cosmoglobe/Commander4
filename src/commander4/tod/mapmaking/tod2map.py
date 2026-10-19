@@ -1,9 +1,9 @@
 """`tod2map`: the per-band scan loop that turns the TOD into maps, for both mapmakers.
 
 Each detector-scan first goes through the per-scan steps of the Gibbs chain (data selection,
-correlated noise and sigma0, far sidelobes, diagnostics), in Commander3's order, and is then added
-to the maps. The binned mapmaker (`BinnedMapmaker`, `mapmaking/binned.py`) solves every map per
-pixel after the loop. The CG mapmaker (`CGMapmaker`, `mapmaking/cg.py`) also uses the binned maps,
+correlated noise and sigma0, diagnostics), in Commander3's order, and is then added to the maps.
+The binned mapmaker (`BinnedMapmaker`, `mapmaking/binned.py`) solves every map per pixel after the
+loop. The CG mapmaker (`CGMapmaker`, `mapmaking/cg.py`) also uses the binned maps,
 for its weights and the aux maps, but solves the sky map iteratively after the loop instead, from
 the right-hand side it adds up during the loop. Both use only the good samples: the binned maps
 leave the flagged ones out, and the CG gives them zero weight.
@@ -92,7 +92,7 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
 
         start_bench("pix-psi")
         good_data_mask = view.get_mask(proc_mask=False)
-        pix, psi = view.pix, view.psi
+        psi = view.psi
         response_I_P = view.response_I_P
         gain = view.get_gain()
         stop_bench("pix-psi")
@@ -114,27 +114,19 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
             with benchmark("sigma0-samp"):
                 noise.sample_sigma0(view)
 
-        sl_tod = None
-        if sidelobe_active:
-            with benchmark("far-beam-proj"):
-                sl_tod = far_sidelobes.get_projection(pix, psi, view.idet)
-
         ### THE SKY TOD AND THE NOISE RESIDUAL, in detector units ###
         # TODO: Known bug with a bolometer transfer function T (`tf_tau_sec`). The data hold
         # T(sky + orbital dipole + sidelobes), but the models subtracted here and in the other
         # Gibbs steps are not passed through T, so the residuals and the CG right-hand side keep
         # (1 - T) times them. To be resolved when/if we migrate to the C3-style design (deconvolve
         # the TOD, filter the models with the same regularization kernel).
-        # `d_sky` is the data with every model but the sky removed, which the maps are made from.
-        # Removing the sky model as well leaves the noise residual, which data selection judges and
-        # the residual map holds (Commander3's `tod_<freq>_res`). The far-sidelobe projection, like
-        # the sky model, is in uK_RJ, so it is removed at the full gain.
+        # `d_sky` is the data with every model but the sky removed (the far sidelobes included),
+        # which the maps are made from. Removing the sky model as well leaves the noise residual,
+        # which data selection judges and the residual map holds (Commander3's `tod_<freq>_res`).
         with benchmark("misc"):
             d_sky = view.get_tod(keep=("sky",))
             if corr_noise_active:
                 d_sky -= n_corr_est
-            if sidelobe_active:
-                d_sky -= gain * sl_tod
             residual_tod = d_sky - gain * view.get_sky_tod()
         with benchmark("tod-diagnostics"):
             diagnostics.record_scan(view, residual_tod, n_corr_est)
@@ -163,7 +155,7 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
         if "corrnoise" in map_names:
             tods["corrnoise"] = (n_corr_est[good]/gain).astype(np.float32, copy=False)
         if "sidelobe" in map_names:
-            tods["sidelobe"] = sl_tod[good]
+            tods["sidelobe"] = view.get_far_sidelobe_tod()[good]
         if "res" in map_names:
             tods["res"] = residual_tod[good]/gain
 

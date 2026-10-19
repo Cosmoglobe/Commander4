@@ -14,6 +14,7 @@ from commander4.tod.glitches.sampling import Glitches
 from commander4.tod.hfi_demodulation import HFIModulation
 from commander4.tod.jumps.events import JumpEvents
 from commander4.tod.jumps.sampling import Jumps, _detect_jumps
+from commander4.tod.sidelobe_deconvolve import FarSidelobes
 from commander4.tod.view import TODView
 from tod_step_fakes import make_step
 
@@ -74,6 +75,7 @@ def _band_and_samples(tod: np.ndarray, flag: np.ndarray, pix: np.ndarray, gain: 
     samples = SimpleNamespace(band_comm=MPI.COMM_SELF, experiment_data=band, chain=1,
                               jumps=jumps, glitches=make_step(Glitches, 1, 1),
                               hfi=make_step(HFIModulation, 1, 1),
+                              far_sidelobes=make_step(FarSidelobes, 1, 1),
                               selection=make_step(DataSelection, 1, 1),
                               gain=SimpleNamespace(abs_gain=gain, rel_gain=np.zeros(1),
                                                    temporal_gain=np.zeros((1, 1))))

@@ -34,8 +34,10 @@ class FarSidelobes(TODStep):
     """The far-sidelobe pickup of one band's detectors on one rank.
 
     Nothing here is sampled or written to the chain. The model of the pickup is one convolution
-    cube per detector, built from the iteration's sky by `build` and released by `free` at the end
-    of the iteration. In between, the mapmaking scan loop subtracts `get_projection` from the TOD.
+    cube per detector, built from the iteration's sky by `build` before the first sampling step,
+    and released by `free` at the end of the iteration. In between, `TODView.get_tod` subtracts
+    `get_projection` from the TOD, so every sampling step and the mapmaker see the TOD without
+    the pickup, as in Commander3, where `s_sl` is part of `s_tot`.
 
     Attributes:
         cfg: The `tod_processing.far_beam_deconvolution` settings: whether and from which iteration
@@ -46,7 +48,8 @@ class FarSidelobes(TODStep):
         pols, nside, instrument_file, nthreads: The band's polarizations, map resolution and
             beam file, and the thread count of the convolution.
         plan, cubes, shared: The ducc0 convolution plan, and the per-detector cubes in memory
-            shared by the ranks of a node, while a model is built.
+            shared by the ranks of a node, while a model is built. `cubes` is empty when no model
+            is built, and `TODView` then takes the pickup to be zero.
     """
 
     def __init__(self, experiment_data: DetectorGroupTOD, params: Bunch, my_band: Bunch,

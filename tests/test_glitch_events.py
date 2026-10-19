@@ -14,6 +14,7 @@ from commander4.tod.data_selection import DataSelection
 from commander4.tod.glitches.sampling import Glitches
 from commander4.tod.hfi_demodulation import HFIModulation
 from commander4.tod.jumps.sampling import Jumps
+from commander4.tod.sidelobe_deconvolve import FarSidelobes
 from commander4.tod.view import TODView
 from tod_step_fakes import make_step
 
@@ -57,6 +58,7 @@ def _band_and_samples(events: GlitchEvents) -> tuple[DetectorGroupTOD, SimpleNam
     samples = SimpleNamespace(band_comm=MPI.COMM_SELF, experiment_data=band,
                               jumps=make_step(Jumps, 1, 1), glitches=glitches,
                               hfi=make_step(HFIModulation, 1, 1),
+                              far_sidelobes=make_step(FarSidelobes, 1, 1),
                               selection=make_step(DataSelection, 1, 1))
     return band, samples
 
@@ -66,7 +68,8 @@ def test_view_applies_glitch_cuts_and_leaves_the_placeholder_models_inert() -> N
     view = TODView(band, samples).focus(0, band.scans[0].detectors[0])
 
     # The baseline-step and pulse models are placeholders, so the TOD is unchanged.
-    np.testing.assert_array_equal(view.get_tod(keep=("sky", "orbital_dipole")), view.raw_tod)
+    np.testing.assert_array_equal(view.get_tod(keep=("sky", "orbital_dipole", "far_sidelobes")),
+                                  view.raw_tod)
     np.testing.assert_array_equal(samples.glitches.pulse_tod(view, bright=True, faint=True),
                                   np.zeros(_NTOD))
 

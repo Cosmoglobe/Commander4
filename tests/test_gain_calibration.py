@@ -22,6 +22,7 @@ from commander4.tod.data_selection import DataSelection
 from commander4.tod.glitches.sampling import Glitches
 from commander4.tod.hfi_demodulation import HFIModulation
 from commander4.tod.jumps.sampling import Jumps
+from commander4.tod.sidelobe_deconvolve import FarSidelobes
 from commander4.tod.view import TODView
 from commander4.tod.gain import Gain, _solve_relative_gain_system
 from tod_step_fakes import make_step
@@ -258,9 +259,9 @@ def test_an_invalid_gap_fill_method_raises():
 # TODView.get_calib_tod
 # --------------------------------------------------------------------------------------
 class _StubView(TODView):
-    """A TODView with fixed sky and orbital-dipole signals and fixed gain terms, whose data are
-    ``(g_abs + g_rel + g_temp) * (s_sky + s_orb) + noise``, so get_calib_tod can be tested in
-    isolation."""
+    """A TODView with fixed sky, orbital-dipole and far-sidelobe signals and fixed gain terms,
+    whose data are ``(g_abs + g_rel + g_temp) * (s_sky + s_orb + s_sl) + noise``, so get_calib_tod
+    can be tested in isolation."""
 
     GAINS = {"abs": 2.0, "rel": 0.3, "temp": 0.05}
 
@@ -268,6 +269,7 @@ class _StubView(TODView):
         super().__init__(None, None)
         self.s_sky = np.array([1.0, 2.0, 3.0, 4.0])
         self.s_orb = np.array([10.0, 20.0, 30.0, 40.0])
+        self.s_sl = np.array([0.5, -0.5, 0.25, -0.25])
         self.noise = np.array([0.1, -0.2, 0.3, -0.4])
 
     def get_mask(self, good_data_mask=True, proc_mask=True, proc_mask_type=""):
@@ -282,24 +284,29 @@ class _StubView(TODView):
     def get_orbital_dipole_tod(self):
         return self.s_orb
 
+    def get_far_sidelobe_tod(self):
+        return self.s_sl
+
     def get_tod(self, *, keep=()):
-        """The data minus both signals at the full gain, as the real `get_tod` gives them."""
+        """The data minus all three signals at the full gain, as the real `get_tod` gives them."""
         assert keep == ()
         return self.noise.copy()
 
 
 @pytest.mark.parametrize("target,calib,scal", [
     ("abs", "orbital_dipole", "orb"),
-    ("abs", "sky", "sky+orb"),
-    ("rel", "sky", "sky+orb"),
-    ("temp", "sky", "sky+orb"),
-    ("abs", "sky_no_dipole", "sky"),
+    ("abs", "sky", "sky+orb+sl"),
+    ("rel", "sky", "sky+orb+sl"),
+    ("temp", "sky", "sky+orb+sl"),
+    ("abs", "sky_no_dipole", "sky+sl"),
 ])
 def test_get_calib_tod_builds_residual(target, calib, scal):
-    """The residual reduces to (target gain term) * s_cal + noise."""
+    """The residual reduces to (target gain term) * s_cal + noise. A calibrator with the sky
+    model has its far-sidelobe pickup as well, as Commander3's `s_tot`."""
     view = _StubView()
     out = view.get_calib_tod(target, calib, fill_masked=False)
-    expected_scal = {"orb": view.s_orb, "sky": view.s_sky, "sky+orb": view.s_sky + view.s_orb}[scal]
+    expected_scal = {"orb": view.s_orb, "sky+sl": view.s_sky + view.s_sl,
+                     "sky+orb+sl": view.s_sky + view.s_orb + view.s_sl}[scal]
     np.testing.assert_allclose(out.s_cal, expected_scal)
     np.testing.assert_allclose(out.tod, view.GAINS[target] * expected_scal + view.noise)
 
@@ -450,13 +457,14 @@ NTOD, FACTOR = 12, 4
 NBLOCKS = NTOD // FACTOR
 
 
-def _make_real_view(monkeypatch, good=None):
+def _make_real_view(monkeypatch, good=None, sidelobe=None):
     """Factory for a TODView over a minimal fake detector, exercising the real downsampling paths.
 
     Returns ``make_view(downsample_factor)`` so a test can build views at full *and* downsampled
     resolution over the same detector (the factor is now fixed per view), plus the detector and the
     full-rate sky TOD for the expected-value comparisons. ``good`` is an optional full-rate
-    flag cut; without one every sample passes.
+    flag cut; without one every sample passes. ``sidelobe`` is an optional full-rate far-sidelobe
+    pickup, given by a model that is switched on and built; without one there is no model.
     """
     monkeypatch.setenv("OMP_NUM_THREADS", "1")  # Required by get_s_orb_tod.
     rng = np.random.default_rng(7)
@@ -473,7 +481,13 @@ def _make_real_view(monkeypatch, good=None):
                                   gain=SimpleNamespace(abs_gain=2.0, rel_gain=np.array([0.5]),
                                                        temporal_gain=np.array([[0.25]])),
                                   selection=make_step(DataSelection, 1, 1),
-                                  hfi=make_step(HFIModulation, 1, 1))
+                                  hfi=make_step(HFIModulation, 1, 1),
+                                  far_sidelobes=make_step(FarSidelobes, 1, 1))
+    if sidelobe is not None:
+        # The projection is asked for at the full rate, like the sky model.
+        tod_samples.far_sidelobes = SimpleNamespace(
+            cfg=Bunch(enabled=True), cubes=[None],
+            get_projection=lambda p, s, idet: sidelobe if p is pix and s is psi else None)
     skymap = rng.normal(size=(3, 12))
 
     def make_view(downsample_factor=1, mask_threshold=0.5):
@@ -560,15 +574,27 @@ def test_mask_threshold_must_leave_some_sample_in_a_surviving_block(monkeypatch)
 
 
 def test_get_tod_removes_each_signal_unless_kept_and_rejects_anything_else(monkeypatch):
-    make_view, det, s_full = _make_real_view(monkeypatch)
+    sl = np.linspace(-1.0, 1.0, NTOD)
+    make_view, det, s_full = _make_real_view(monkeypatch, sidelobe=sl)
     view = make_view(1)
     orb = view.get_orbital_dipole_tod()
     gain = 2.75  # abs 2.0 + rel 0.5 + temp 0.25, the fake view's full gain
 
-    np.testing.assert_allclose(view.get_tod(), det.tod - gain*(s_full + orb), rtol=2e-5, atol=1e-6)
-    np.testing.assert_allclose(view.get_tod(keep=("orbital_dipole",)), det.tod - gain*s_full,
+    np.testing.assert_allclose(view.get_tod(), det.tod - gain*(s_full + orb + sl),
                                rtol=2e-5, atol=1e-6)
-    np.testing.assert_allclose(view.get_tod(keep=("sky",)), det.tod - gain*orb,
+    np.testing.assert_allclose(view.get_tod(keep=("orbital_dipole",)), det.tod - gain*(s_full + sl),
+                               rtol=2e-5, atol=1e-6)
+    np.testing.assert_allclose(view.get_tod(keep=("sky",)), det.tod - gain*(orb + sl),
+                               rtol=2e-5, atol=1e-6)
+    np.testing.assert_allclose(view.get_tod(keep=("far_sidelobes",)), det.tod - gain*(s_full + orb),
                                rtol=2e-5, atol=1e-6)
     with pytest.raises(ValueError, match="Unknown models"):
         view.get_tod(keep=("orb",))
+
+
+def test_far_sidelobes_are_block_averaged_and_zero_without_a_model(monkeypatch):
+    sl = np.linspace(-1.0, 1.0, NTOD)
+    make_view, _, _ = _make_real_view(monkeypatch, sidelobe=sl)
+    np.testing.assert_allclose(make_view(FACTOR).get_far_sidelobe_tod(), _block_mean(sl))
+    make_view, _, _ = _make_real_view(monkeypatch)
+    np.testing.assert_array_equal(make_view(FACTOR).get_far_sidelobe_tod(), np.zeros(NBLOCKS))

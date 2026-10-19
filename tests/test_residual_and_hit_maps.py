@@ -255,11 +255,13 @@ def test_intensity_mapmaker_recovers_signal_rms_and_aux_maps(
     samples.diagnostics.residual_tods = [[None]]
     samples.noise.noise_model = band.noise_model
     # A far-sidelobe model that is switched on and already built, of constant pickup.
-    samples.far_sidelobes = SimpleNamespace(cfg=Bunch(enabled=True, from_iter=1),
+    samples.far_sidelobes = SimpleNamespace(cfg=Bunch(enabled=True, from_iter=1), cubes=[None],
                                             get_projection=lambda pix, psi, idet:
                                             np.full(pix.size, response_I * sidelobe))
 
-    def fixed_noise(*args, **kwargs) -> SimpleNamespace:
+    def fixed_noise(tod, *args, **kwargs) -> SimpleNamespace:
+        # The correlated noise is drawn from a TOD with the far sidelobes removed, like the sky.
+        np.testing.assert_allclose(tod, _GAIN * response_I * offset + n_corr, rtol=1e-5)
         return SimpleNamespace(n_corr=n_corr, noise_params=np.array([2.0]), residual=0.0,
                                niter=0, converged=True, high_var=False)
 

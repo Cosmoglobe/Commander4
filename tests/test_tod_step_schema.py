@@ -289,8 +289,8 @@ def _pipeline(monkeypatch: pytest.MonkeyPatch, params: Bunch) -> Bunch:
 
 @pytest.mark.parametrize("mapmaker", ["bin", "CG"])
 def test_iteration_gates_keep_the_scientific_order(monkeypatch, mapmaker: str) -> None:
-    """The inclusive start applies to jumps, glitches, all three gains, and the far beam, which
-    both mapmakers subtract in their shared scan loop."""
+    """The inclusive start applies to jumps, glitches, all three gains, and the far beam, which is
+    built before every sampling step, since they all have it removed from their TOD."""
     params = _params(mapmaker=mapmaker)
     params.experiments.EXP.jump_bitmask = 1
     for name in ("jump_detection", "glitches", "abs_gain", "rel_gain", "temporal_gain",
@@ -305,8 +305,8 @@ def test_iteration_gates_keep_the_scientific_order(monkeypatch, mapmaker: str) -
     pipeline.calls.reset_mock()
     pipeline.run(3)
     assert [call[0] for call in pipeline.calls.mock_calls] == [
-        "hfi.sample", "jumps.sample", "glitches.sample", "gain.sample_absolute",
-        "gain.sample_relative", "gain.sample_temporal", "far_sidelobes.build",
+        "far_sidelobes.build", "hfi.sample", "jumps.sample", "glitches.sample",
+        "gain.sample_absolute", "gain.sample_relative", "gain.sample_temporal",
         "tod2map", "write_band_chain_to_file", "far_sidelobes.free"]
 
 

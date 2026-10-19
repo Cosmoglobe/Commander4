@@ -2,8 +2,8 @@
 
 `init_tod_processing` sets up the per-band data and sample containers once, and with them every
 sampling step and its settings; `process_tod` runs the sampling steps for a single iteration
-(HFI baselines, jumps, glitches, gain, far sidelobes, correlated noise, mapmaking, data selection)
-and hands the resulting band maps to component separation.
+(far-sidelobe model, HFI baselines, jumps, glitches, gain, correlated noise, mapmaking, data
+selection) and hands the resulting band maps to component separation.
 """
 import logging
 import os
@@ -147,6 +147,15 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD, tod_samples:
     gain, far_sidelobes = tod_samples.gain, tod_samples.far_sidelobes
     selection = tod_samples.selection
 
+    # The far-sidelobe model is built first, since `TODView.get_tod` removes the pickup for every
+    # step below, as Commander3 includes `s_sl` in `s_tot`. One set of sidelobe cubes per node,
+    # shared by every band rank on it. Freed explicitly at the end of this function; going out of
+    # scope does not release an MPI window.
+    far_sidelobes_active = far_sidelobes.cfg.enabled and iter >= far_sidelobes.cfg.from_iter
+    if far_sidelobes_active:
+        with benchmark("far-beam"):
+            far_sidelobes.build(tod_samples, compsep_output.full, mpi_info.band.node_comm)
+
     # HFI baselines use the previous iteration's gain and sigma0, like Commander3. The first pass
     # also determines whether Python's even or odd sample indices carry the positive half-cycle.
     if hfi.cfg.enabled:
@@ -177,15 +186,6 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD, tod_samples:
     if gain.cfg.temporal_gain.enabled and iter >= gain.cfg.temporal_gain.from_iter:
         with benchmark("temp-gain"):
             gain.sample_temporal(tod_samples, compsep_output.local, iter)
-
-
-    # One set of sidelobe cubes per node, shared by every band rank on it, and used by the scan
-    # loop of `tod2map`. Freed explicitly at the end of this function; going out of scope does not
-    # release an MPI window.
-    far_sidelobes_active = far_sidelobes.cfg.enabled and iter >= far_sidelobes.cfg.from_iter
-    if far_sidelobes_active:
-        with benchmark("far-beam"):
-            far_sidelobes.build(tod_samples, compsep_output.full, mpi_info.band.node_comm)
 
 
     # What the scan loop below records is rebuilt from scratch every iteration.
