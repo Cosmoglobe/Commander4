@@ -158,7 +158,7 @@ class NoisePSD:
                         f"sampled={sampled}.")
 
     # All models receive the noise parameters explicitly (rather than reading ``self.params``)
-    # because the live per-scan/per-detector values are stored in ``TODSamples.noise_params``,
+    # because the live per-scan/per-detector values are stored in ``Noise.noise_params``,
     # while a single shared model instance is attached to each ``DetectorGroupTOD``.
     def eval_full(self, freqs: NDArray, noise_params: NDArray) -> NDArray:
         """Evaluate the *full* PSD (white + correlated) at each frequency in *freqs* (Hz)."""

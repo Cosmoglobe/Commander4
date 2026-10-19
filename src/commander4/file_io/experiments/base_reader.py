@@ -85,6 +85,14 @@ class TODReader:
         self.experiment = experiment
         self.band = band
         self.det_names = list(band.detectors)
+        # The unit the band quotes its gains and maps in (see `DetectorGroupTOD.band_unit`).
+        if "band_unit" in band:
+            self.band_unit = band.band_unit
+        else:
+            self.band_unit = "uK_RJ"
+            if band_comm.Get_rank() == 0:
+                logger.warning(f"Band {band._name} has no `band_unit`; assuming uK_RJ. Set it "
+                               "explicitly (e.g. uK_CMB for CMB-calibrated gains) to silence this.")
         self.gain_factor = gain_factor
         self.boresight_pointing = boresight_pointing
         self.hfi_demodulation = hfi_demodulation
@@ -163,7 +171,7 @@ class TODReader:
                                 tf_tau_sec=_tau_sec(self.band),
                                 instrument_filepath=getattr(self.experiment, "instrument_file",
                                                             None),
-                                hfi_demodulation=self.hfi_demodulation)
+                                hfi_demodulation=self.hfi_demodulation, band_unit=self.band_unit)
 
 
     def read_scan_header(self, f: h5py.File, scan_id: int) -> Bunch | None:

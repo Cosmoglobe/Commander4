@@ -18,9 +18,9 @@ alone: T still smears the model over every sample, but flagged data never enters
 side (`accum_to_RHS`) and calls `solve` after the loop.
 """
 import numpy as np
-from mpi4py import MPI
 import logging
 from numpy.typing import NDArray
+from pixell.bunch import Bunch
 
 from commander4.backend import mapmaker as cpp_mapmaker
 from commander4.tod.view import TODView
@@ -32,7 +32,6 @@ from commander4.data_models.tod_samples import TODSamples
 from commander4.math_utils.arithmetic import inplace_scale, dot, norm
 from commander4.math_utils.fft import forward_rfft, backward_rfft
 from commander4.math_utils.transfer_func import SinglePole
-from commander4.tod.config import MapmakingConfig
 
 
 class CGMapmaker:
@@ -43,8 +42,7 @@ class CGMapmaker:
     def __init__(self,
                 detector_tod:DetectorGroupTOD,
                 detector_samples:TODSamples,
-                map_comm:MPI.Comm,
-                mapmaking_cfg:MapmakingConfig,
+                params:Bunch,
                 #optionals:
                 W_mat:NDArray|None = None,
                 CG_check_interval:int = 1):
@@ -53,11 +51,11 @@ class CGMapmaker:
         Args:
             detector_tod: Detector-group TOD data for this band. Its bolometer time constant
                 (`tf_tau_sec`, None for none) sets the transfer function T.
-            detector_samples: Sampled noise and gain parameters for the current chain state.
-            map_comm: MPI communicator shared by ranks contributing to
-                the same output map.
-            mapmaking_cfg: Mapmaking settings: the thread count (FFTs) and the CG iteration limit
-                and tolerance on the squared relative preconditioned residual.
+            detector_samples: Sampled noise and gain parameters for the current chain state. The
+                ranks of its `band_comm` contribute to the same output map.
+            params: The full parameter file: `resources.tod.num_threads` for the FFTs, and
+                `tod_processing.cg_mapmaker`, the CG iteration limit (`max_iter`) and tolerance on
+                the squared relative preconditioned residual (`err_tol`).
             CG_check_interval: Check convergence every this many iterations.
 
         The rank's RHS/LHS buffers hold the pixels of the band's ``PixelDomain``
@@ -69,9 +67,9 @@ class CGMapmaker:
         self.logger = logging.getLogger(__name__)
         self.detector_tod = detector_tod
         self.detector_samples = detector_samples
-        self.map_comm = map_comm
+        self.map_comm = detector_samples.band_comm
         self.ismaster = self.map_comm.Get_rank() == 0
-        self.nthreads = mapmaking_cfg.num_threads
+        self.nthreads = params.resources.tod.num_threads
         # Bolometer transfer function T(f), a function of the frequency in Hz; None means identity.
         self.T_omega = (SinglePole(detector_tod.tf_tau_sec).response
                         if detector_tod.tf_tau_sec is not None else None)
@@ -80,8 +78,8 @@ class CGMapmaker:
         # evaluated on a physical-frequency grid (a `tau` in seconds means seconds, not samples). The
         # CG's own noise model is white, so unlike apply_N_inv this rate is only needed for apply_T.
         self.fsamp = detector_tod.fsamp
-        self.CG_maxiter = mapmaking_cfg.cg.max_iter
-        self.CG_tol = mapmaking_cfg.cg.err_tol
+        self.CG_maxiter = params.tod_processing.cg_mapmaker.max_iter
+        self.CG_tol = params.tod_processing.cg_mapmaker.err_tol
         self.CG_check_interval = CG_check_interval
         self._ncomp = 1 if detector_tod.pols == "I" else 3
         # The same domain the view converts the pointing with, so the two always agree.

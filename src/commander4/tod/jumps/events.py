@@ -1,11 +1,11 @@
 """Container for the jumps found in the TOD.
 
 `JumpEvents` holds the jumps of one detector-scan: sudden offsets of the baseline.
-`TODSamples.jumps` holds one per detector-scan, in an (nscans, ndet) object array made by
-`empty_jump_grid`. The step
-that *finds* the jumps is `sampling.py` next to this file. The number of jumps per detector-scan is
-always written to the chain file; the jumps themselves only as optional debug output. They are not
-read back on restart, since detection finds them again from the data.
+`Jumps.events` holds one per detector-scan, in an (nscans, ndet) object array made by
+`empty_jump_grid`. `Jumps`, the step that *finds* the jumps, is in `sampling.py` next to this file.
+The number of jumps per detector-scan is always written to the chain file; the jumps themselves
+only as optional debug output. They are not read back on restart, since detection finds them again
+from the data.
 """
 from dataclasses import dataclass
 

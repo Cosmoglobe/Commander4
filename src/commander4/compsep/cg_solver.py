@@ -414,5 +414,9 @@ class CompSepSolver:
 
         sol_list = self.solve_CG(self.apply_LHS_matrix, RHS, M=precond,
                              x_true=x_true if self.config.dense_matrix_debug_mode else None)
-
+        # The CG solves for the intrinsic (unsmoothed) sky. The solution is built from copies of
+        # the input components, so reset the beam they carried, which is non-zero if the chain
+        # started from a sample of the per-pixel solver.
+        for comp in sol_list:
+            comp.amp_fwhm_rad = 0.0
         return sol_list

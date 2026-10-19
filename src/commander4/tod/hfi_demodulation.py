@@ -1,186 +1,237 @@
-"""Planck HFI alternating-sample phase, baseline sampling, and demodulation state.
+"""`HFIModulation`: Planck HFI alternating-sample phase and baselines, and the step sampling them.
 
 HFI's raw bolometer stream alternates positive and negative modulation half-cycles. On the first
 Gibbs pass the sign of the first sample parity is identified with Commander3's middle-RING-pixel
-sky cut. Two independent constant baselines, one per parity, are sampled on every pass. ``TODView``
-applies those samples lazily when downstream code requests a processed TOD.
+sky cut. Two independent constant baselines, one per parity, are sampled on every pass.
+`TODView.get_tod` demodulates with them.
 """
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 import healpy as hp
 import numpy as np
 from numpy.typing import NDArray
 from mpi4py import MPI
+from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
-from commander4.data_models.tod_samples import TODSamples
+from commander4.tod.step import ChainArrays, SavedBandSample, TODStep
 from commander4.tod.view import TODView
+
+if TYPE_CHECKING:
+    from commander4.data_models.tod_samples import TODSamples
 
 logger = logging.getLogger(__name__)
 
 
-def _sample_baselines(
-    experiment_data: DetectorGroupTOD,
-    tod_samples: TODSamples,
-    compsep_output: NDArray | None,
-    subtract_sky: bool,
-    rng: np.random.Generator | None,
-) -> NDArray:
-    """Draw the two per-parity constant baselines from their white-noise posteriors.
+class HFIModulation(TODStep):
+    """The HFI modulation state of one band's detector-scans on one rank.
 
-    Before demodulation, one detector-scan follows
+    Enabled only for bands whose reader sets `hfi_demodulation`. Each chain keeps its own, so the
+    two interleaved chains draw independent baselines, and both arrays are restart state.
 
-    ``d[p] = baseline[parity] + modulation_sign[parity] * (gain * sky[p] + pulses[p]) + noise[p]``,
+    Sampled:
+        modulation_phase: (nscans, ndet) +1 or -1: the sign of the half-cycle that Python's even
+            sample indices carry. Identified on the first pass, then fixed.
+        baselines: (nscans, ndet, 2) Constant baseline of the even and of the odd samples, in
+            detector units. Sampled on every pass.
 
-    where the signs are ``(+phase, -phase)`` for Python's even/odd indices, and ``pulses`` are the
-    glitch pulses in detector units (zero until glitches are modelled). With independent white
-    noise, each constant baseline has posterior mean equal to the masked residual mean and posterior
-    standard deviation ``sigma0/sqrt(number of samples)``.
-
-    Returns:
-        Running sums over this rank's accepted detector-scans, for the log line in
-        `sample_hfi_baselines`: the common mode, the modulation half-depth, the step taken in units
-        of the posterior standard deviation, and the number of detector-scans summed over.
+    Attributes:
+        cfg: `enabled`, whether the band's TOD is modulated (`DetectorGroupTOD.hfi_demodulation`).
+        initialized: Whether the phase has been identified yet.
     """
-    scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
-    normal = np.random.normal if rng is None else rng.normal
-    stats = np.zeros(4)
 
-    for view in scan_view.iter_focused(accepted_only=True):
-        # Baselines are instrument parameters, so fit the un-demodulated stream rather than
-        # TODView.corrected_tod, which would apply the baselines we are currently trying to sample.
-        # Jumps and glitch baseline steps are already removed from it, as they would bias the fit.
-        # C3 uses its n_corr processing mask here: flags and bright masked sky regions do not inform
-        # the DC levels.
-        mask = view.get_mask(proc_mask_type="ncorr")
-        raw_tod = view.pre_demodulation_tod
-        phase = tod_samples.modulation_phase[view.iscan, view.idet]
-        gain = view.get_gain()
+    def __init__(self, experiment_data: DetectorGroupTOD, params: Bunch, my_band: Bunch,
+                 band_comm: MPI.Comm, chain: int):
+        self.cfg = Bunch(enabled=experiment_data.hfi_demodulation)
+        if not self.cfg.enabled:
+            return
 
-        # The first pass cannot subtract a sky until it knows which parity is positive. Its raw
-        # parity means provide the bootstrap baselines used by _set_modulation_phase below. Once
-        # the phase is known, later Gibbs passes condition the baselines on the current sky and gain.
-        if subtract_sky:
-            sky_tod = view.get_static_sky_tod() + view.get_orbital_dipole_tod()
-        else:
-            sky_tod = np.zeros(raw_tod.size, dtype=raw_tod.dtype)
-        # Glitch pulses are modulated like the sky, so they are removed with it; they are already
-        # in detector units and carry no gain. Left in, their scan average would go into the
-        # baselines, and corrected_tod would then remove it a second time.
-        signal_tod = gain * sky_tod + view.get_glitch_pulse_tod()
-
-        previous = tod_samples.baselines[view.iscan, view.idet].copy()
-        step = 0.0
-        for parity in range(2):
-            parity_mask = mask[parity::2]
-            count = int(np.count_nonzero(parity_mask))
-            if count == 0:
-                # A missing parity makes demodulation undefined: both half-cycles need their own
-                # baseline. Match C3 by rejecting this detector-scan rather than inventing a value.
-                tod_samples.accept[view.iscan, view.idet] = False
-                break
-
-            # Python parity 0 is Fortran's odd samples. The raw modulation sign is +phase on
-            # parity 0 and -phase on parity 1, so subtract that signed signal before fitting the DC
-            # level. For white noise, Var(mean) = sigma0^2 / count.
-            modulation_sign = phase if parity == 0 else -phase
-            residual = raw_tod[parity::2] - modulation_sign * signal_tod[parity::2]
-            posterior_mean = float(np.mean(residual[parity_mask]))
-            posterior_sd = view.sigma0 / np.sqrt(count)
-            baseline = posterior_mean + float(normal()) * posterior_sd
-            tod_samples.baselines[view.iscan, view.idet, parity] = baseline
-            step += abs(baseline - previous[parity]) / posterior_sd / 2
-
-        if tod_samples.accept[view.iscan, view.idet]:
-            b0, b1 = tod_samples.baselines[view.iscan, view.idet]
-            stats += [(b0 + b1)/2, abs(b0 - b1)/2, step, 1.0]
-
-    return stats
+        nscans, ndet = experiment_data.nscans, experiment_data.ndet
+        # Until the first pass identifies the phase, demodulation flips the odd samples and
+        # subtracts no baselines.
+        self.modulation_phase = np.ones((nscans, ndet), dtype=np.int8)
+        self.baselines = np.zeros((nscans, ndet, 2), dtype=np.float64)
+        self.initialized = False
 
 
-def _set_modulation_phase(experiment_data: DetectorGroupTOD, tod_samples: TODSamples) -> None:
-    """Identify the positive raw parity with Commander3's middle-RING-pixel sky cut.
-
-    After removing the two bootstrap baselines, a bright sky crossing appears with opposite signs in
-    adjacent samples. The sign of ``first - second`` therefore says whether Python parity 0 carries
-    the positive or negative half-cycle. The phase is fixed after this bootstrap and is not sampled
-    again on later Gibbs passes.
-    """
-    scan_view = TODView(experiment_data, tod_samples)
-    rejected = 0
-
-    for view in scan_view.iter_focused(accepted_only=True):
-        # The same stream the bootstrap baselines were fitted to.
-        raw_tod = view.pre_demodulation_tod
-        # Phase identification follows C3's flag cut only, not the processing mask used for baseline
-        # fitting. Both members of a pair must be valid. Drop a final unpaired sample for odd-length
-        # scans by stopping the first slice at raw_tod.size - 1.
-        good = view.get_mask(proc_mask=False)
-        first = slice(0, raw_tod.size - 1, 2)
-        second = slice(1, raw_tod.size, 2)
-        npix = hp.nside2npix(view.detector.nside)
-        pair_mask = good[first] & good[second]
-        # C3 uses the middle four percent of RING pixel numbers as a strong-signal sky strip. This
-        # avoids deciding the sign from noise-dominated samples away from the bright crossing.
-        pair_mask &= view._fullres_pix[first] > 0.48 * npix
-        pair_mask &= view._fullres_pix[first] < 0.52 * npix
-
-        if not pair_mask.any():
-            tod_samples.accept[view.iscan, view.idet] = False
-            rejected += 1
-            continue
-
-        baseline_first, baseline_second = tod_samples.baselines[view.iscan, view.idet]
-        pair_difference = ((raw_tod[first] - baseline_first)
-                           - (raw_tod[second] - baseline_second))
-        # Phase starts at +1. Only negative pair differences need to flip it; TODView.corrected_tod
-        # later applies (+phase, -phase) while subtracting the matching parity baselines.
-        if float(np.mean(pair_difference[pair_mask])) < 0.0:
-            tod_samples.modulation_phase[view.iscan, view.idet] = -1
-
-    tod_samples.modulation_phase_initialized = True
-    if rejected:
-        logger.warning(f"Band {experiment_data.band_name}: rejected {rejected} HFI detector-scans "
-                       "with no valid samples in the modulation-phase sky cut.")
+    def chain_arrays(self) -> ChainArrays:
+        """The phase and the baselines, both per scan and both restart state."""
+        if not self.cfg.enabled:
+            return ChainArrays()
+        return ChainArrays(per_scan={"modulation_phase": self.modulation_phase,
+                                     "baselines": self.baselines})
 
 
-def sample_hfi_baselines(
-    band_comm: MPI.Comm,
-    experiment_data: DetectorGroupTOD,
-    tod_samples: TODSamples,
-    compsep_output: NDArray,
-    rng: np.random.Generator | None = None,
-) -> TODSamples:
-    """Sample HFI baselines for one Gibbs pass and initialize the phase on the first pass.
+    def read_chain(self, saved: SavedBandSample) -> None:
+        """Continue from the phase and the baselines in a band chain file."""
+        if not self.cfg.enabled:
+            return
+        self.modulation_phase = saved.per_scan("modulation_phase").astype(np.int8)
+        self.baselines = saved.per_scan("baselines").astype(self.baselines.dtype)
+        self.initialized = True
 
-    The first pass follows Commander3's bootstrap: sample the two raw parity means without a sky
-    subtraction, then use their baseline-subtracted difference in the middle four percent of RING
-    pixels to identify the positive parity. Later passes subtract the current gain-scaled sky model
-    before drawing the two baselines.
-    """
-    if not tod_samples.hfi_demodulation:
-        return tod_samples
 
-    # The first pass is a two-step bootstrap: fit raw DC levels, then determine phase. Subsequent
-    # passes keep that phase and resample only the baselines conditional on the latest Gibbs state.
-    first_pass = not tod_samples.modulation_phase_initialized
-    stats = _sample_baselines(experiment_data, tod_samples, compsep_output, not first_pass, rng)
-    if first_pass:
-        if band_comm.Get_rank() == 0:
-            logger.info(f"{experiment_data.band_name}: First time doing HFI baseline fitting: "\
-                        "Finding modulation phase.")
-        _set_modulation_phase(experiment_data, tod_samples)
+    def demodulate(self, iscan: int, idet: int, tod: NDArray,
+                   subtract_baselines: bool = True) -> NDArray:
+        """Undo the alternating modulation of one detector-scan's TOD, for `TODView`.
 
-    # Report some stats on the baseline fit.
-    totals = band_comm.reduce(stats, op=MPI.SUM)  # None on every rank but the root.
-    if band_comm.Get_rank() == 0 and totals[3] > 0:
-        common_mode, half_depth, step, nscans = totals
-        message = (f"HFI baselines ({experiment_data.band_name}): common mode "
-                   f"{common_mode/nscans:.5e}, modulation half-depth {half_depth/nscans:.4e}")
-        # If only baselines were sampled they should move by about 1 sigma, but as other things
-        # are moving in the chain it will move by much more in practice.
-        if not first_pass:
-            message += f", moved {step/nscans:.2f} posterior sigma"
-        logger.info(message)
+        Each sample parity has its baseline subtracted and is multiplied by its sign: +phase for
+        Python's even sample indices, -phase for the odd ones. Returns a new array.
 
-    return tod_samples
+        Args:
+            subtract_baselines: False leaves the baselines in, for the residual the baseline fit
+                works on (`TODView.get_tod(keep=("hfi_baselines",))`).
+        """
+        phase = self.modulation_phase[iscan, idet]
+        baseline_first, baseline_second = self.baselines[iscan, idet]
+        if not subtract_baselines:
+            baseline_first = baseline_second = 0.0
+        demodulated = np.array(tod, copy=True)
+        demodulated[0::2] = phase * (demodulated[0::2] - baseline_first)
+        demodulated[1::2] = -phase * (demodulated[1::2] - baseline_second)
+        return demodulated
+
+
+    def sample(self, tod_samples: TODSamples, compsep_output: NDArray,
+               rng: np.random.Generator | None = None) -> None:
+        """Sample HFI baselines for one Gibbs pass and initialize the phase on the first pass.
+
+        The first pass follows Commander3's bootstrap: sample the two raw parity means without a
+        sky subtraction, then demodulate with them and the trial phase +1, and take the sign of the
+        sky in the middle four percent of RING pixels as the phase. Later passes subtract the
+        current gain-scaled sky signal (sky, orbital dipole and far sidelobes) before drawing the
+        two baselines. Commander3 leaves the far sidelobes in at this step (its `oper_minimal`).
+
+        Args:
+            tod_samples: The band's sampled state, which the TOD views read. A detector-scan that
+                cannot be demodulated is rejected in its `selection`.
+        """
+        band_comm, experiment_data = tod_samples.band_comm, tod_samples.experiment_data
+        first_pass = not self.initialized
+        stats = self._sample_baselines(tod_samples, compsep_output, not first_pass, rng)
+        if first_pass:
+            if band_comm.Get_rank() == 0:
+                logger.info(f"{experiment_data.band_name}: First time doing HFI baseline fitting: "\
+                            "Finding modulation phase.")
+            self._set_modulation_phase(tod_samples)
+
+        # Report some stats on the baseline fit.
+        totals = band_comm.reduce(stats, op=MPI.SUM)  # None on every rank but the root.
+        if band_comm.Get_rank() == 0 and totals[3] > 0:
+            common_mode, half_depth, step, nscans = totals
+            message = (f"HFI baselines ({experiment_data.band_name}): common mode "
+                       f"{common_mode/nscans:.5e}, modulation half-depth {half_depth/nscans:.4e}")
+            # If only baselines were sampled they should move by about 1 sigma, but as other
+            # things are moving in the chain it will move by much more in practice.
+            if not first_pass:
+                message += f", moved {step/nscans:.2f} posterior sigma"
+            logger.info(message)
+
+
+    def _sample_baselines(self, tod_samples: TODSamples, compsep_output: NDArray | None,
+                          subtract_sky: bool, rng: np.random.Generator | None) -> NDArray:
+        """Draw the two per-parity constant baselines from their white-noise posteriors.
+
+        Before demodulation, one detector-scan follows
+
+        ``d[p] = baseline[parity] + sign[parity] * (gain * sky[p] + pulses[p] + ...) + noise[p]``,
+
+        where the signs are ``(+phase, -phase)`` for Python's even/odd indices. The residual is the
+        demodulated TOD with every model removed except the baselines, so each sample holds
+        ``sign[parity] * baseline[parity] + noise``. With independent white noise, each baseline
+        has posterior mean ``sign[parity]`` times the masked residual mean of its parity, and
+        posterior standard deviation ``sigma0/sqrt(number of samples)``.
+
+        Returns:
+            Running sums over this rank's accepted detector-scans, for the log line in `sample`:
+            the common mode, the modulation half-depth, the step taken in units of the posterior
+            standard deviation, and the number of detector-scans summed over.
+        """
+        scan_view = TODView(tod_samples.experiment_data, tod_samples, compsep_output=compsep_output)
+        normal = np.random.normal if rng is None else rng.normal
+        stats = np.zeros(4)
+
+        for view in scan_view.iter_focused(accepted_only=True):
+            # C3 uses its n_corr processing mask here: flags and bright masked sky regions do not
+            # inform the DC levels.
+            mask = view.get_mask(proc_mask_type="ncorr")
+            # No sky can be subtracted before the phase is known (see `sample`).
+            keep = ("hfi_baselines",)
+            if not subtract_sky:  # The three components that are considered part of the sky.
+                keep += ("sky", "orbital_dipole", "far_sidelobes")
+            residual_tod = view.get_tod(keep=keep)
+
+            phase = self.modulation_phase[view.iscan, view.idet]
+            signs = (phase, -phase)
+            previous = self.baselines[view.iscan, view.idet].copy()
+            step = 0.0
+            for parity in range(2):
+                parity_mask = mask[parity::2]
+                count = int(np.count_nonzero(parity_mask))
+                if count == 0:
+                    # A missing parity makes demodulation undefined: both half-cycles need their
+                    # own baseline. Match C3 by rejecting this detector-scan rather than inventing
+                    # a value.
+                    tod_samples.selection.accept[view.iscan, view.idet] = False
+                    break
+
+                # Python parity 0 is Fortran's odd samples. For white noise,
+                # Var(mean) = sigma0^2 / count.
+                parity_mean = float(np.mean(residual_tod[parity::2][parity_mask]))
+                posterior_mean = signs[parity] * parity_mean
+                posterior_sd = view.sigma0 / np.sqrt(count)
+                baseline = posterior_mean + float(normal()) * posterior_sd
+                self.baselines[view.iscan, view.idet, parity] = baseline
+                step += abs(baseline - previous[parity]) / posterior_sd / 2
+
+            if tod_samples.selection.accept[view.iscan, view.idet]:
+                b0, b1 = self.baselines[view.iscan, view.idet]
+                stats += [(b0 + b1)/2, abs(b0 - b1)/2, step, 1.0]
+
+        return stats
+
+
+    def _set_modulation_phase(self, tod_samples: TODSamples) -> None:
+        """Identify the positive raw parity with Commander3's middle-RING-pixel sky cut.
+
+        The phase is still the trial value +1 here. Demodulated with it and with the bootstrap
+        baselines, the bright sky in the cut comes out positive if the trial is right, and negative
+        if Python parity 0 carries the negative half-cycle. The phase is fixed after this bootstrap
+        and is not sampled again on later Gibbs passes.
+        """
+        scan_view = TODView(tod_samples.experiment_data, tod_samples)
+        rejected = 0
+
+        for view in scan_view.iter_focused(accepted_only=True):
+            tod = view.get_tod(keep=("sky", "orbital_dipole", "far_sidelobes"))
+            # Phase identification follows C3's flag cut only, not the processing mask used for
+            # baseline fitting. Both members of a pair must be valid. Drop a final unpaired sample
+            # for odd-length scans by stopping the first slice at tod.size - 1.
+            good = view.get_mask(proc_mask=False)
+            first = slice(0, tod.size - 1, 2)
+            second = slice(1, tod.size, 2)
+            npix = hp.nside2npix(view.detector.nside)
+            pair_mask = good[first] & good[second]
+            # C3 uses the middle four percent of RING pixel numbers as a strong-signal sky strip.
+            # This avoids deciding the sign from noise-dominated samples away from the bright
+            # crossing.
+            pair_mask &= view.pix[first] > 0.48 * npix
+            pair_mask &= view.pix[first] < 0.52 * npix
+
+            if not pair_mask.any():
+                tod_samples.selection.accept[view.iscan, view.idet] = False
+                rejected += 1
+                continue
+
+            # The sum of the two demodulated samples of a pair is C3's difference of the two
+            # baseline-subtracted raw samples.
+            if float(np.mean((tod[first] + tod[second])[pair_mask])) < 0.0:
+                self.modulation_phase[view.iscan, view.idet] = -1
+
+        self.initialized = True
+        if rejected:
+            logger.warning(f"Band {tod_samples.experiment_data.band_name}: rejected {rejected} HFI "
+                           "detector-scans with no valid samples in the modulation-phase sky cut.")

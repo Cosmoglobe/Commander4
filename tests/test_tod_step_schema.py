@@ -1,17 +1,25 @@
-"""Parameter lookup and iteration behavior of the TOD processing steps."""
+"""Parameter lookup and iteration behavior of the TOD processing steps.
+
+Each step reads and checks its own settings when it is built, before the Gibbs loop; `process_tod`
+then decides from them which steps run in an iteration.
+"""
 
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import numpy as np
 import pytest
+from mpi4py import MPI
 from pixell.bunch import Bunch
 
 from commander4.data_models.pixel_domain import DistributedMap
-from commander4.tod.data_selection import data_selection_status
-from commander4.tod.config import GainConfig, MapmakingConfig, CGConfig, CorrelatedNoiseConfig
-from commander4.tod.config import JumpDetectionConfig, DataSelectionConfig, FarBeamConfig
-from commander4.tod.config import GlitchConfig
+from commander4.parameters.schema import read_settings
+from commander4.tod.data_selection import DataSelection
+from commander4.tod.gain import Gain
+from commander4.tod.glitches.sampling import Glitches
+from commander4.tod.hfi_demodulation import HFIModulation
+from commander4.tod.jumps.sampling import Jumps
+from commander4.tod.noise.sampling import Noise
+from commander4.tod.sidelobe_deconvolve import FarSidelobes
 
 
 def _params(**steps) -> Bunch:
@@ -42,340 +50,279 @@ def _params(**steps) -> Bunch:
     )
 
 
+# Band BAND of experiment EXP, on a rank without scans: what the steps read when they are built.
 EXPERIMENT = SimpleNamespace(
-    experiment_name="EXP", band_name="BAND", fsamp=20.0, nu=100.0, nside=64,
+    experiment_name="EXP", band_name="BAND", fsamp=20.0, nu=100.0, nside=64, nscans=0, ndet=1,
+    pols="I", hfi_demodulation=False, instrument_filepath=None, band_unit_factor=1.0,
+    noise_model=SimpleNamespace(npar=1), iter_detector_scans=lambda: iter(()),
 )
 
-
-def _gain(step_name: str = "abs_gain", default: str = "orbital_dipole", **steps) -> GainConfig:
-    params = _params(**steps)
-    return GainConfig.from_params(params.tod_processing,
-                              params.experiments.EXP.bands.BAND, step_name, default)
+# The steps that have settings, by their name in `TODSamples`.
+STEP_CLASSES = {"gain": Gain, "noise": Noise, "selection": DataSelection, "jumps": Jumps,
+                "hfi": HFIModulation, "glitches": Glitches, "far_sidelobes": FarSidelobes}
 
 
-def test_documented_defaults_are_owned_by_the_config_classes():
-    params = _params()
-    jump = JumpDetectionConfig.from_params(params.tod_processing, params.experiments.EXP)
-    absolute_gain = _gain()
-    relative_gain = _gain("rel_gain", "sky")
-    temporal_gain = _gain("temporal_gain", "sky")
-    correlated_noise = CorrelatedNoiseConfig.from_params(params.tod_processing)
-    data_selection = DataSelectionConfig.from_params(params.tod_processing)
+def _steps(params: Bunch, experiment: SimpleNamespace = EXPERIMENT) -> SimpleNamespace:
+    """Every step with settings, built from `params` as `TODSamples` builds them."""
+    my_band = params.experiments.EXP.bands.BAND
+    return SimpleNamespace(**{name: step_class(experiment, params, my_band, MPI.COMM_SELF, 1)
+                              for name, step_class in STEP_CLASSES.items()})
 
-    assert jump.window == 10
-    assert absolute_gain.calibrate_against == "orbital_dipole"
-    assert relative_gain.calibrate_against == "sky"
-    assert temporal_gain.calibrate_against == "sky"
-    assert absolute_gain.downsample_time == 1.0
-    assert absolute_gain.gap_fill_method == "wn"
-    assert correlated_noise.sigma0_method == "pairwise"
-    assert correlated_noise.sigma0_decimation == 1
-    assert correlated_noise.sample_sigma0
-    assert not correlated_noise.psd_bin
-    assert correlated_noise.cg.max_iter == 0
-    assert correlated_noise.cg.err_tol == 1.0e-4
-    assert data_selection.chisq_abs_threshold == 1.0e4
-    assert data_selection.min_good_fraction == 0.1
 
-    # The far-beam defaults are the Commander3 convolution limits and its LevelS scale factor.
-    far_beam = FarBeamConfig.from_params(params.tod_processing)
-    assert not far_beam.enabled
+# --------------------------------------------------------------------------------------
+# read_settings
+# --------------------------------------------------------------------------------------
+def test_read_settings_fills_defaults_and_lets_narrower_scopes_override() -> None:
+    params = Bunch(wide=Bunch(block=Bunch(a=2, b="x")), narrow=Bunch(block=Bunch(a=3)))
+    defaults = {"a": 1, "b": "y", "c": 0.5}
+    settings = read_settings(params, "block", ("narrow", "wide"), defaults)
+    assert (settings.a, settings.b, settings.c) == (3, "x", 0.5)
+    # A scope that does not exist, or that has no such block, sets nothing.
+    for name, scope in (("block", "missing.scope"), ("other", "wide")):
+        settings = read_settings(params, name, (scope,), defaults)
+        assert (settings.a, settings.b, settings.c) == (1, "y", 0.5)
+
+
+@pytest.mark.parametrize("value, ok", [
+    (True, False), ("false", False), (3, True), (3.0, False),   # default 1: an int
+])
+def test_read_settings_checks_the_type_of_an_int_setting(value, ok: bool) -> None:
+    params = Bunch(scope=Bunch(block=Bunch(a=value)))
+    if ok:
+        assert read_settings(params, "block", ("scope",), {"a": 1}).a == value
+    else:
+        with pytest.raises(ValueError, match="'scope.block.a' is .*must be a int"):
+            read_settings(params, "block", ("scope",), {"a": 1})
+
+
+def test_read_settings_accepts_an_int_for_a_float_and_anything_for_none() -> None:
+    params = Bunch(scope=Bunch(block=Bunch(a=2, b=[1, 2])))
+    settings = read_settings(params, "block", ("scope",), {"a": 1.0, "b": None})
+    assert settings.a == 2 and settings.b == [1, 2]
+
+
+def test_read_settings_rejects_an_unknown_setting() -> None:
+    params = Bunch(scope=Bunch(block=Bunch(windw=3)))
+    with pytest.raises(ValueError, match="Unknown setting 'scope.block.windw'"):
+        read_settings(params, "block", ("scope",), {"window": 10})
+
+
+# --------------------------------------------------------------------------------------
+# The settings of each step
+# --------------------------------------------------------------------------------------
+def test_documented_defaults_are_set_by_the_steps():
+    steps = _steps(_params())
+
+    assert steps.jumps.cfg.window == 10
+    assert steps.gain.cfg.abs_gain.calibrate_against == "orbital_dipole"
+    assert steps.gain.cfg.rel_gain.calibrate_against == "sky"
+    assert steps.gain.cfg.temporal_gain.calibrate_against == "sky"
+    assert steps.gain.cfg.abs_gain.downsample_time == 1.0
+    assert steps.gain.cfg.abs_gain.gap_fill_method == "wn"
+    noise = steps.noise.cfg
+    assert noise.sigma0_method == "pairwise"
+    assert noise.sigma0_decimation == 1
+    assert noise.sample_sigma0
+    assert not noise.psd_bin
+    assert noise.cg.max_iter == 0
+    assert noise.cg.err_tol == 1.0e-4
+    assert steps.selection.cfg.chisq_abs_threshold == 1.0e4
+    assert steps.selection.cfg.min_good_fraction == 0.1
 
     # Glitch sampling is a placeholder, so it stays off unless asked for.
-    glitches = GlitchConfig.from_params(params.tod_processing)
-    assert not glitches.enabled
-    assert glitches.from_iter == 1
+    assert not steps.glitches.cfg.enabled
+    assert steps.glitches.cfg.from_iter == 1
+
+    # The far-beam defaults are the Commander3 convolution limits and its LevelS scale factor.
+    far_beam = steps.far_sidelobes.cfg
+    assert not far_beam.enabled
     assert far_beam.lmax == 100
     assert far_beam.mmax == 100
     assert far_beam.epsilon == 1.0e-4
     assert far_beam.beam_norm == 2.0
 
 
-def test_each_config_rejects_unknown_fields_in_its_own_block():
-    with pytest.raises(TypeError, match="calibrate_aganist"):
-        _gain(abs_gain={"enabled": True, "calibrate_aganist": "sky"})
-
-    params = _params(jump_detection={"windw": 3})
-    with pytest.raises(TypeError, match="windw"):
-        JumpDetectionConfig.from_params(params.tod_processing, params.experiments.EXP)
-
-    params = _params(data_selection={"minimum_good_fraction": 0.2})
-    with pytest.raises(TypeError, match="minimum_good_fraction"):
-        DataSelectionConfig.from_params(params.tod_processing)
-
+@pytest.mark.parametrize("block, settings, error", [
+    ("abs_gain", {"enabled": True, "calibrate_aganist": "sky"}, "calibrate_aganist"),
+    ("jump_detection", {"windw": 3}, "windw"),
+    ("data_selection", {"minimum_good_fraction": 0.2}, "minimum_good_fraction"),
     # `npoints` was an early far-beam setting that ducc0 makes unnecessary; it must not survive
     # unnoticed in a parameter file.
-    params = _params(far_beam_deconvolution={"npoints": [100, 80, 30]})
-    with pytest.raises(TypeError, match="npoints"):
-        FarBeamConfig.from_params(params.tod_processing)
+    ("far_beam_deconvolution", {"npoints": [100, 80, 30]}, "npoints"),
+    ("glitches", {"threshold": 30}, "threshold"),
+    ("corr_noise", {"cg": Bunch(maxiter=4)}, "maxiter"),
+    # The gains do not end, and nothing optimizes them.
+    ("abs_gain", {"enabled": True, "until_iter": 3}, "until_iter"),
+    ("abs_gain", {"enabled": True, "optimize": True}, "optimize"),
+    # Experiment metadata is not a setting of a step.
+    ("abs_gain", {"sampling_rate": 10.0}, "sampling_rate"),
+    ("jump_detection", {"jump_bitmask": 4}, "jump_bitmask"),
+])
+def test_each_step_rejects_unknown_settings_in_its_own_block(block, settings, error) -> None:
+    with pytest.raises(ValueError, match=f"Unknown setting.*{error}"):
+        _steps(_params(**{block: settings}))
 
 
-def test_far_beam_limits_are_validated():
-    params = _params(far_beam_deconvolution={"enabled": True, "lmax": 50, "mmax": 80})
-    with pytest.raises(ValueError, match="cannot exceed lmax"):
-        FarBeamConfig.from_params(params.tod_processing)
-
-    params = _params(far_beam_deconvolution={"lmax": -1})
-    with pytest.raises(ValueError, match="non-negative integer"):
-        FarBeamConfig.from_params(params.tod_processing)
-
-    # A band-limited beam is legitimate: lmax = mmax = 0 keeps only the monopole.
-    params = _params(far_beam_deconvolution={"enabled": True, "lmax": 0, "mmax": 0})
-    assert FarBeamConfig.from_params(params.tod_processing).enabled
+@pytest.mark.parametrize("block", ["abs_gain", "jump_detection", "corr_noise", "data_selection",
+                                   "far_beam_deconvolution", "glitches"])
+def test_each_step_rejects_a_non_boolean_enabled(block: str) -> None:
+    """A quoted "false" is a non-empty string, so without this check the step would run."""
+    with pytest.raises(ValueError, match="enabled"):
+        _steps(_params(**{block: {"enabled": "false"}}))
 
 
-def test_nested_cg_blocks_validate_their_own_fields():
-    params = _params(corr_noise={"cg": Bunch(maxiter=4)})
-    with pytest.raises(TypeError, match="maxiter"):
-        CorrelatedNoiseConfig.from_params(params.tod_processing)
-
-    params = _params()
-    params.tod_processing.cg_mapmaker.maxiter = 4
-    with pytest.raises(TypeError, match="maxiter"):
-        MapmakingConfig.from_params(params, EXPERIMENT)
-
-
-def test_mapmaking_config_resolves_resources_and_output_selection():
-    params = _params()
-    del params.compsep["common_res_fwhm"]
-    config = MapmakingConfig.from_params(params, EXPERIMENT)
-    assert config.mapmaker == "bin"
-    assert config.num_threads == 1
-    assert config.common_res_fwhm == MapmakingConfig.common_res_fwhm
-    assert config.include_orbital_dipole_maps
-    assert not config.include_corr_noise_maps
-    assert not config.include_sky_model_maps
-    assert config.band_lmax == 3*EXPERIMENT.nside - 1
+@pytest.mark.parametrize("block, settings, error", [
+    ("abs_gain", {"gap_fill_method": "bogus"}, "gap_fill_method"),
+    ("corr_noise", {"sigma0_method": "bogus"}, "sigma0_method"),
+    ("corr_noise", {"sample_psd_params": True}, "sample_psd_params"),
+    ("jump_detection", {"enabled": True}, "jump_bitmask"),
+    ("data_selection", {"from_iter": 4, "until_iter": 3}, "until_iter"),
+])
+def test_settings_that_would_be_ignored_fail_when_the_steps_are_built(block, settings,
+                                                                      error) -> None:
+    """At startup: each of these would otherwise be ignored without a word, or fail late."""
+    with pytest.raises(ValueError, match=error):
+        _steps(_params(**{block: settings}))
 
 
-def test_mapmaking_config_takes_band_lmax_from_band_then_experiment():
-    params = _params()
-    assert MapmakingConfig.from_params(params, EXPERIMENT).band_lmax == 3*EXPERIMENT.nside - 1
-    params.experiments.EXP.lmax = 100
-    assert MapmakingConfig.from_params(params, EXPERIMENT).band_lmax == 100
-    params.experiments.EXP.bands.BAND.lmax = 150
-    assert MapmakingConfig.from_params(params, EXPERIMENT).band_lmax == 150
+@pytest.mark.parametrize("name, block", [("jumps", "jump_detection"), ("hfi", None),
+                                         ("glitches", "glitches"),
+                                         ("far_sidelobes", "far_beam_deconvolution")])
+def test_a_switched_off_step_holds_only_its_settings_and_writes_nothing(name, block) -> None:
+    steps = _steps(_params(**({block: {"enabled": False}} if block else {})))
+    step = getattr(steps, name)
+    assert list(vars(step)) == ["cfg"] and not step.cfg.enabled
+    arrays = step.chain_arrays()
+    assert not (arrays.per_scan or arrays.per_band or arrays.per_detector_scan)
 
 
-def test_each_gain_step_owns_its_gap_fill_and_downsampling():
-    abs_gain_block = {"gap_fill_method": "fallback", "downsample_time": 0.25}
-    absolute_gain = _gain("abs_gain", "orbital_dipole", abs_gain=abs_gain_block)
-    relative_gain = _gain("rel_gain", "sky", abs_gain=abs_gain_block)
-    assert absolute_gain.gap_fill_method == "fallback"
-    assert absolute_gain.downsample_time == 0.25
-    assert relative_gain.gap_fill_method == "wn"
-    assert relative_gain.downsample_time == 1.0
+def test_enabled_jump_detection_takes_the_experiments_bitmask() -> None:
+    params = _params(jump_detection={"enabled": True})
+    params.experiments.EXP.jump_bitmask = 4
+    assert _steps(params).jumps.cfg.jump_bitmask == 4
 
 
-def test_until_iter_and_optimize_are_rejected_where_unsupported():
-    params = _params(data_selection={"enabled": True, "until_iter": 3})
-    DataSelectionConfig.from_params(params.tod_processing)
-
-    with pytest.raises(TypeError, match="until_iter"):
-        _gain(abs_gain={"enabled": True, "until_iter": 3})
-    with pytest.raises(TypeError, match="optimize"):
-        _gain(abs_gain={"enabled": True, "optimize": True})
+def test_each_gain_term_owns_its_settings_and_a_band_overrides_them_one_by_one():
+    params = _params(abs_gain={"gap_fill_method": "fallback", "downsample_time": 0.25})
+    params.experiments.EXP.bands.BAND.abs_gain = Bunch(downsample_time=0.5)
+    gain = _steps(params).gain.cfg
+    assert gain.abs_gain.gap_fill_method == "fallback"
+    assert gain.abs_gain.downsample_time == 0.5
+    assert gain.rel_gain.gap_fill_method == "wn"
+    assert gain.rel_gain.downsample_time == 1.0
 
 
 def test_absent_and_disabled_steps_are_inactive_but_keep_defaults():
-    for config in (_gain(), _gain(abs_gain={"enabled": False})):
-        assert not config.enabled
-        assert config.calibrate_against == "orbital_dipole"
+    for params in (_params(), _params(abs_gain={"enabled": False})):
+        gain = _steps(params).gain.cfg.abs_gain
+        assert not gain.enabled
+        assert gain.calibrate_against == "orbital_dipole"
 
 
+# --------------------------------------------------------------------------------------
+# When data selection reports and cuts
+# --------------------------------------------------------------------------------------
+def _selection_status(iteration: int, **blocks) -> tuple[bool, bool]:
+    steps = _steps(_params(**blocks))
+    return steps.selection.status(iteration, steps.noise.cfg)
 
 
 def test_data_selection_until_iter_is_inclusive():
-    params = _params(
-        corr_noise={"enabled": False},
-        data_selection={"enabled": True, "from_iter": 3, "until_iter": 5},
-    )
-    correlated_noise = CorrelatedNoiseConfig.from_params(params.tod_processing)
-    data_selection = DataSelectionConfig.from_params(params.tod_processing)
-    active = []
-    for iteration in range(1, 8):
-        active.append(data_selection_status(iteration, data_selection, correlated_noise)[1])
+    blocks = dict(corr_noise={"enabled": False},
+                  data_selection={"enabled": True, "from_iter": 3, "until_iter": 5})
+    active = [_selection_status(iteration, **blocks)[1] for iteration in range(1, 8)]
     assert active == [False, False, True, True, True, False, False]
 
 
 def test_data_selection_waits_for_configured_correlated_noise():
-    params = _params(
-        corr_noise={"enabled": True, "from_iter": 5},
-        data_selection={"enabled": True, "from_iter": 1},
-    )
-    correlated_noise = CorrelatedNoiseConfig.from_params(params.tod_processing)
-    data_selection = DataSelectionConfig.from_params(params.tod_processing)
-    assert data_selection_status(4, data_selection, correlated_noise) == (False, False)
-    assert data_selection_status(5, data_selection, correlated_noise) == (True, True)
+    blocks = dict(corr_noise={"enabled": True, "from_iter": 5},
+                  data_selection={"enabled": True, "from_iter": 1})
+    assert _selection_status(4, **blocks) == (False, False)
+    assert _selection_status(5, **blocks) == (True, True)
 
 
 def test_data_selection_reports_during_its_own_warmup():
-    params = _params(
-        corr_noise={"enabled": False},
-        data_selection={"enabled": True, "from_iter": 3},
-    )
-    correlated_noise = CorrelatedNoiseConfig.from_params(params.tod_processing)
-    data_selection = DataSelectionConfig.from_params(params.tod_processing)
-    assert data_selection_status(1, data_selection, correlated_noise) == (True, False)
+    blocks = dict(corr_noise={"enabled": False},
+                  data_selection={"enabled": True, "from_iter": 3})
+    assert _selection_status(1, **blocks) == (True, False)
 
 
-def test_psd_parameter_sampling_requires_correlated_noise_enabled():
-    params = _params(corr_noise={"sample_psd_params": True})
-    with pytest.raises(ValueError, match="sample_psd_params"):
-        CorrelatedNoiseConfig.from_params(params.tod_processing)
-
-
-def test_enabled_jump_detection_requires_an_experiment_bitmask():
-    params = _params(jump_detection={"enabled": True})
-    with pytest.raises(ValueError, match="jump_bitmask"):
-        JumpDetectionConfig.from_params(params.tod_processing, params.experiments.EXP)
-
-
-@pytest.mark.parametrize("config_class, values, error", [
-    (GainConfig, {"mask_threshold": 1.0}, "mask_threshold"),
-    (CGConfig, {"max_iter": -1}, "max_iter"),
-    (CorrelatedNoiseConfig, {"nomono": True, "onlymono": True}, "cannot both be true"),
-    (JumpDetectionConfig, {"enabled": True}, "jump_bitmask"),
-    (DataSelectionConfig, {"from_iter": 4, "until_iter": 3}, "until_iter"),
-    (FarBeamConfig, {"lmax": 50, "mmax": 80}, "cannot exceed lmax"),
-    (MapmakingConfig, {"mapmaker": "invalid", "num_threads": 1,
-                       "include_orbital_dipole_maps": False, "include_corr_noise_maps": False,
-                       "include_sky_model_maps": False}, "mapmaker"),
-])
-def test_direct_construction_validates_scientific_settings(
-    config_class: type, values: dict, error: str,
-) -> None:
-    """Settings built in Python must satisfy the same checks as parameter-file settings."""
-    with pytest.raises(ValueError, match=error):
-        config_class(**values)
-
-
-@pytest.mark.parametrize("config_class", [
-    GainConfig, JumpDetectionConfig, CorrelatedNoiseConfig, DataSelectionConfig, FarBeamConfig,
-    GlitchConfig,
-])
-def test_direct_construction_rejects_a_non_boolean_enabled(config_class: type) -> None:
-    """A quoted "false" is a non-empty string, so without this check the step would run."""
-    with pytest.raises(ValueError, match="enabled"):
-        config_class(enabled="false")
-
-
-@pytest.fixture
-def pipeline(monkeypatch: pytest.MonkeyPatch) -> Bunch:
-    """Run the real iteration driver with numerical steps and file writes recorded as calls."""
+# --------------------------------------------------------------------------------------
+# process_tod
+# --------------------------------------------------------------------------------------
+def _pipeline(monkeypatch: pytest.MonkeyPatch, params: Bunch) -> Bunch:
+    """Run the real iteration driver on steps built from `params`, with their sampling, the
+    mapmaker and the file writes recorded as calls instead of run."""
     import commander4.tod.processing as processing
 
     comm = Mock()
     mpi = Bunch(band=Bunch(comm=comm, node_comm=comm, is_master=True), tod=Bunch(comm=comm))
-    experiment = SimpleNamespace(**vars(EXPERIMENT))
-    samples = SimpleNamespace(hfi_demodulation=True, chisq_z=np.zeros((1, 1)),
-                              good_fraction=np.zeros((1, 1)), residual_tods=None,
-                              gather_chain_arrays=Mock(return_value={}),
-                              band_unit_factor=1.0, band_unit="uK_RJ")
+    samples = _steps(params)
+    samples.chain = 1
+    # The HFI step is switched on, so that its place in the order is checked too (its sampling
+    # is recorded below, so it needs no HFI data).
+    samples.hfi.cfg.enabled = True
+    # The per-iteration resets (over `steps`) are not recorded.
+    samples.steps = []
+    samples.gather_chain_arrays = Mock(return_value={})
     calls = Mock()
-    for name in ("sample_jump_detection", "sample_hfi_baselines", "sample_glitches",
-                 "sample_absolute_gain", "sample_relative_gain",
-                 "sample_temporal_gain_variations"):
-        sampler = Mock(return_value=samples)
-        calls.attach_mock(sampler, name)
-        monkeypatch.setattr(processing, name, sampler)
-    mapmaker = Mock(return_value=({}, {}))
-    calls.attach_mock(mapmaker, "tod2map")
-    monkeypatch.setattr(processing, "tod2map", mapmaker)
-    for name in ("FarBeamProjector", "write_band_chain_to_file", "log_dataselect_summary"):
-        operation = Mock()
+    for name, method in (("jumps", "sample"), ("hfi", "sample"), ("glitches", "sample"),
+                         ("gain", "sample_absolute"), ("gain", "sample_relative"),
+                         ("gain", "sample_temporal"), ("far_sidelobes", "build"),
+                         ("far_sidelobes", "free"), ("noise", "log_summary"),
+                         ("selection", "log_summary")):
+        recorder = Mock()
+        setattr(getattr(samples, name), method, recorder)
+        calls.attach_mock(recorder, f"{name}.{method}")
+    for name in ("tod2map", "write_band_chain_to_file"):
+        operation = Mock(return_value=({}, {})) if name == "tod2map" else Mock()
         calls.attach_mock(operation, name)
         monkeypatch.setattr(processing, name, operation)
     monkeypatch.setattr(processing, "bench_summary", Mock())
-    return Bunch(mpi=mpi, experiment=experiment, samples=samples, calls=calls,
-                 sky=DistributedMap(local=None, full=None), run=processing.process_tod)
+    sky = DistributedMap(local=None, full=None)
+
+    def run(iteration: int) -> None:
+        processing.process_tod(mpi, EXPERIMENT, samples, sky, params, iteration)
+
+    return Bunch(run=run, calls=calls, samples=samples)
 
 
-def test_iteration_gates_keep_the_scientific_order(pipeline: Bunch) -> None:
-    """The inclusive start applies to jumps, glitches, all three gains, and the far beam."""
-    params = _params()
+@pytest.mark.parametrize("mapmaker", ["bin", "CG"])
+def test_iteration_gates_keep_the_scientific_order(monkeypatch, mapmaker: str) -> None:
+    """The inclusive start applies to jumps, glitches, all three gains, and the far beam, which is
+    built before every sampling step, since they all have it removed from their TOD."""
+    params = _params(mapmaker=mapmaker)
     params.experiments.EXP.jump_bitmask = 1
     for name in ("jump_detection", "glitches", "abs_gain", "rel_gain", "temporal_gain",
                  "far_beam_deconvolution"):
         params.tod_processing[name] = Bunch(enabled=True, from_iter=3)
+    pipeline = _pipeline(monkeypatch, params)
 
-    pipeline.run(pipeline.mpi, pipeline.experiment, pipeline.samples, pipeline.sky, params, 1, 2)
+    pipeline.run(2)
     assert [call[0] for call in pipeline.calls.mock_calls] == [
-        "sample_hfi_baselines", "tod2map", "write_band_chain_to_file"]
+        "hfi.sample", "tod2map", "write_band_chain_to_file"]
 
     pipeline.calls.reset_mock()
-    pipeline.run(pipeline.mpi, pipeline.experiment, pipeline.samples, pipeline.sky, params, 2, 3)
+    pipeline.run(3)
     assert [call[0] for call in pipeline.calls.mock_calls] == [
-        "sample_jump_detection", "sample_hfi_baselines", "sample_glitches", "sample_absolute_gain",
-        "sample_relative_gain", "sample_temporal_gain_variations", "FarBeamProjector",
-        "tod2map", "write_band_chain_to_file", "FarBeamProjector().free"]
-
-
-def test_settings_are_read_again_for_each_iteration(pipeline: Bunch) -> None:
-    params = _params(abs_gain={"enabled": True})
-    pipeline.run(pipeline.mpi, pipeline.experiment, pipeline.samples, pipeline.sky, params, 1, 1)
-    first = pipeline.calls.sample_absolute_gain.call_args.args[4]
-    params.experiments.EXP.bands.BAND.abs_gain = Bunch(downsample_time=0.25)
-    pipeline.run(pipeline.mpi, pipeline.experiment, pipeline.samples, pipeline.sky, params, 2, 2)
-    second = pipeline.calls.sample_absolute_gain.call_args.args[4]
-    assert first.downsample_time == 1.0
-    assert second.downsample_time == 0.25
-    assert params.tod_processing.abs_gain.downsample_time == 1.0
-
-
-def test_invalid_later_settings_fail_before_sampling(pipeline: Bunch) -> None:
-    params = _params(abs_gain={"enabled": True}, data_selection={"min_good_fraction": 2.0})
-    with pytest.raises(ValueError, match="min_good_fraction"):
-        pipeline.run(pipeline.mpi, pipeline.experiment, pipeline.samples, pipeline.sky, params, 1, 1)
-    assert pipeline.calls.mock_calls == []
-
-
-def test_cg_gets_the_far_beam_model_once_it_becomes_active(pipeline: Bunch) -> None:
-    """Both mapmakers share the scan loop that subtracts the far sidelobes."""
-    params = _params(mapmaker="CG", far_beam_deconvolution={"enabled": True, "from_iter": 3})
-    pipeline.run(pipeline.mpi, pipeline.experiment, pipeline.samples, pipeline.sky, params, 1, 2)
-    assert pipeline.calls.tod2map.call_args.args[8] is None
-    pipeline.calls.reset_mock()
-    pipeline.run(pipeline.mpi, pipeline.experiment, pipeline.samples, pipeline.sky, params, 1, 3)
-    far_beam_model = pipeline.calls.FarBeamProjector.return_value
-    assert pipeline.calls.tod2map.call_args.args[8] is far_beam_model
+        "far_sidelobes.build", "hfi.sample", "jumps.sample", "glitches.sample",
+        "gain.sample_absolute", "gain.sample_relative", "gain.sample_temporal",
+        "tod2map", "write_band_chain_to_file", "far_sidelobes.free"]
 
 
 @pytest.mark.parametrize("iteration, report, apply_cuts", [
     (1, False, False), (2, True, False), (3, True, True), (4, True, True), (5, True, False),
 ])
 def test_summary_keeps_noise_wait_and_selection_warmup(
-    pipeline: Bunch, iteration: int, report: bool, apply_cuts: bool,
+    monkeypatch, iteration: int, report: bool, apply_cuts: bool,
 ) -> None:
     params = _params(corr_noise={"enabled": True, "from_iter": 2},
                      data_selection={"enabled": True, "from_iter": 3, "until_iter": 4})
-    pipeline.run(pipeline.mpi, pipeline.experiment, pipeline.samples, pipeline.sky, params, 1,
-                 iteration)
-    summary = pipeline.calls.log_dataselect_summary
+    pipeline = _pipeline(monkeypatch, params)
+    pipeline.run(iteration)
+    # The noise summary reports every iteration that draws correlated noise.
+    assert pipeline.samples.noise.log_summary.called == (iteration >= 2)
+    summary = pipeline.samples.selection.log_summary
     assert summary.called == report
     if report:
         assert summary.call_args.kwargs["active"] == apply_cuts
-
-
-def test_mapmaker_precedence_and_required_cg_controls() -> None:
-    params = _params()
-    del params.tod_processing["cg_mapmaker"]
-    assert MapmakingConfig.from_params(params, EXPERIMENT).mapmaker == "bin"
-    params.experiments.EXP.mapmaker = "CG"
-    with pytest.raises(ValueError, match="max_iter and err_tol"):
-        MapmakingConfig.from_params(params, EXPERIMENT)
-    params.tod_processing.cg_mapmaker = Bunch(max_iter=10)
-    with pytest.raises(ValueError, match="max_iter and err_tol"):
-        MapmakingConfig.from_params(params, EXPERIMENT)
-    params.tod_processing.cg_mapmaker.err_tol = 1e-6
-    assert MapmakingConfig.from_params(params, EXPERIMENT).mapmaker == "CG"
-    params.experiments.EXP.bands.BAND.mapmaker = "bin"
-    assert MapmakingConfig.from_params(params, EXPERIMENT).mapmaker == "bin"
-
-
-def test_parameter_blocks_cannot_override_experiment_metadata() -> None:
-    with pytest.raises(TypeError, match="sampling_rate"):
-        _gain(abs_gain={"sampling_rate": 10.0})
-    params = _params(jump_detection={"jump_bitmask": 4})
-    with pytest.raises(TypeError, match="jump_bitmask"):
-        JumpDetectionConfig.from_params(params.tod_processing, params.experiments.EXP)

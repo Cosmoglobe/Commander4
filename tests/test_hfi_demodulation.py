@@ -4,17 +4,22 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from mpi4py import MPI
+from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.pixel_domain import PixelDomain
-from commander4.tod.glitches.events import GlitchEvents, empty_glitch_grid
-from commander4.tod.jumps.events import JumpEvents, empty_jump_grid
+from commander4.tod.data_selection import DataSelection
+from commander4.tod.glitches.events import GlitchEvents
+from commander4.tod.glitches.sampling import Glitches
+from commander4.tod.jumps.events import JumpEvents
+from commander4.tod.jumps.sampling import Jumps
 from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.scan_tod import ScanTOD
-from commander4.tod.hfi_demodulation import sample_hfi_baselines
-from commander4.tod.scan_diagnostics import _record_tod_diagnostics
+from commander4.tod.hfi_demodulation import HFIModulation
+from commander4.tod.sidelobe_deconvolve import FarSidelobes
 from commander4.tod.view import TODView
+from tod_step_fakes import make_step
 
 _NSIDE = 1
 _NPIX = 12
@@ -23,6 +28,8 @@ _NTOD = 2 * _NPAIR
 _GAIN = 2.0
 _SIGMA0 = 2.0
 _BASELINES = np.array([100.0, 200.0])
+# Kept in by the tests of the instrument models, which compare against the demodulated sky.
+_SIGNALS = ("sky", "orbital_dipole")
 
 
 class _ZeroRNG:
@@ -70,17 +77,15 @@ def _build_hfi_case(phase: int = -1, pulse: np.ndarray | None = None):
         10.0, 180.0, 1, "I", noise_model, hfi_demodulation=True,
     )
     samples = SimpleNamespace(
-        hfi_demodulation=True,
-        modulation_phase=np.ones((1, 1), dtype=np.int8),
-        modulation_phase_initialized=False,
-        baselines=np.zeros((1, 1, 2)),
-        noise_params=np.array([[[_SIGMA0]]]),
-        abs_gain=_GAIN,
-        rel_gain=np.zeros(1),
-        temporal_gain=np.zeros((1, 1)),
-        accept=np.ones((1, 1), dtype=bool),
-        jumps=empty_jump_grid(1, 1),
-        glitches=empty_glitch_grid(1, 1),
+        band_comm=MPI.COMM_SELF,
+        experiment_data=band,
+        hfi=HFIModulation(band, Bunch(), None, MPI.COMM_SELF, 1),
+        noise=SimpleNamespace(noise_params=np.array([[[_SIGMA0]]])),
+        gain=SimpleNamespace(abs_gain=_GAIN, rel_gain=np.zeros(1), temporal_gain=np.zeros((1, 1))),
+        selection=make_step(DataSelection, 1, 1),
+        jumps=make_step(Jumps, 1, 1),
+        glitches=make_step(Glitches, 1, 1),
+        far_sidelobes=make_step(FarSidelobes, 1, 1),
     )
     band.pixel_domain = PixelDomain(MPI.COMM_SELF, _NSIDE, "full")
     return band, samples, sky_map, raw_tod, sky_tod
@@ -94,29 +99,29 @@ def test_first_pass_finds_phase_then_next_pass_fits_and_demodulates(
     band, samples, sky_map, raw_tod, sky_tod = _build_hfi_case(phase=phase)
 
     # C3's first pass fits raw parity means and uses them to determine the modulation phase.
-    sample_hfi_baselines(MPI.COMM_SELF, band, samples, sky_map, rng=_ZeroRNG())
-    assert samples.modulation_phase_initialized
-    assert samples.modulation_phase[0, 0] == phase
+    samples.hfi.sample(samples,sky_map, rng=_ZeroRNG())
+    assert samples.hfi.initialized
+    assert samples.hfi.modulation_phase[0, 0] == phase
 
     # Every later Gibbs pass conditions the baseline draw on the current gain-scaled sky model.
-    sample_hfi_baselines(MPI.COMM_SELF, band, samples, sky_map, rng=_ZeroRNG())
-    np.testing.assert_allclose(samples.baselines[0, 0], _BASELINES)
+    samples.hfi.sample(samples,sky_map, rng=_ZeroRNG())
+    np.testing.assert_allclose(samples.hfi.baselines[0, 0], _BASELINES)
 
     view = TODView(band, samples, compsep_output=sky_map).focus(0, band.scans[0].detectors[0])
     np.testing.assert_array_equal(view.raw_tod, raw_tod)
-    np.testing.assert_allclose(view.get_tod(), _GAIN * sky_tod)
+    np.testing.assert_allclose(view.get_tod(keep=_SIGNALS), _GAIN * sky_tod)
 
 
 def test_baseline_sample_includes_c3_white_noise_fluctuation(monkeypatch) -> None:
     monkeypatch.setenv("OMP_NUM_THREADS", "1")
     band, samples, sky_map, _, _ = _build_hfi_case(phase=-1)
-    samples.modulation_phase[0, 0] = -1
-    samples.modulation_phase_initialized = True
+    samples.hfi.modulation_phase[0, 0] = -1
+    samples.hfi.initialized = True
 
-    sample_hfi_baselines(MPI.COMM_SELF, band, samples, sky_map, rng=_SequenceRNG([1.5, -2.0]))
+    samples.hfi.sample(samples,sky_map, rng=_SequenceRNG([1.5, -2.0]))
 
     expected = _BASELINES + np.array([1.5, -2.0]) * _SIGMA0 / np.sqrt(_NPAIR)
-    np.testing.assert_allclose(samples.baselines[0, 0], expected)
+    np.testing.assert_allclose(samples.hfi.baselines[0, 0], expected)
 
 
 def test_baseline_fit_removes_glitch_pulses_like_the_sky(monkeypatch) -> None:
@@ -125,64 +130,84 @@ def test_baseline_fit_removes_glitch_pulses_like_the_sky(monkeypatch) -> None:
     pulse = np.zeros(_NTOD)
     pulse[40:60] = 30.0
     band, samples, sky_map, _, sky_tod = _build_hfi_case(phase=-1, pulse=pulse)
-    samples.modulation_phase[0, 0] = -1
-    samples.modulation_phase_initialized = True
+    samples.hfi.modulation_phase[0, 0] = -1
+    samples.hfi.initialized = True
     # One template event, whose placeholder pulse model is replaced by the known pulse.
-    samples.glitches = empty_glitch_grid(1, 1)
-    samples.glitches[0, 0] = GlitchEvents([40], [20], [0], [30.0], [40], [40], [0], [])
-    samples.glitch_template_amps = np.zeros((1, 3, 8))
-    samples.glitch_template_taus = np.ones((1, 3, 8))
-    monkeypatch.setattr(GlitchEvents, "pulse_tod",
-                        lambda self, ntod, amps, taus, fsamp, template_only=False: pulse)
+    samples.glitches = make_step(Glitches, 1, 1, settings={"glitches": {"enabled": True}})
+    samples.glitches.events[0, 0] = GlitchEvents([40], [20], [0], [30.0], [40], [40], [0], [])
+    samples.glitches.template_amps = np.zeros((1, 3, 8))
+    samples.glitches.template_taus = np.ones((1, 3, 8))
+    monkeypatch.setattr(GlitchEvents, "pulse_tod", lambda self, ntod, amps, taus, fsamp, bright,
+                        faint: pulse if faint else np.zeros(ntod))
 
-    sample_hfi_baselines(MPI.COMM_SELF, band, samples, sky_map, rng=_ZeroRNG())
+    samples.hfi.sample(samples,sky_map, rng=_ZeroRNG())
 
-    np.testing.assert_allclose(samples.baselines[0, 0], _BASELINES)
+    np.testing.assert_allclose(samples.hfi.baselines[0, 0], _BASELINES)
     view = TODView(band, samples, compsep_output=sky_map).focus(0, band.scans[0].detectors[0])
-    np.testing.assert_allclose(view.get_tod(), _GAIN * sky_tod, atol=1e-4)
+    np.testing.assert_allclose(view.get_tod(keep=_SIGNALS), _GAIN * sky_tod, atol=1e-4)
+    # The event is faint, so only keeping the faint glitches leaves its pulse in.
+    np.testing.assert_allclose(view.get_tod(keep=_SIGNALS + ("faint_glitches",)),
+                               _GAIN * sky_tod + pulse, atol=1e-4)
+    np.testing.assert_allclose(view.get_tod(keep=_SIGNALS + ("bright_glitches",)),
+                               _GAIN * sky_tod, atol=1e-4)
 
 
-def test_corrected_tod_applies_jumps_then_hfi_demodulation() -> None:
+def _with_jump(samples: SimpleNamespace) -> None:
+    """Give `samples` one stored jump at sample 4."""
+    samples.jumps = make_step(Jumps, 1, 1, settings={"jump_detection": {"enabled": True}},
+                              experiment={"jump_bitmask": 1})
+    samples.jumps.events[0, 0] = JumpEvents([4], [3.0])
+
+
+def test_get_tod_applies_hfi_demodulation_then_jumps_and_leaves_in_what_it_is_told_to_keep(
+) -> None:
     band, samples, sky_map, raw_tod, _ = _build_hfi_case(phase=-1)
-    samples.modulation_phase[0, 0] = -1
-    samples.modulation_phase_initialized = True
-    samples.baselines[0, 0] = _BASELINES
-    samples.jumps[0, 0] = JumpEvents([4], [3.0])
+    samples.hfi.modulation_phase[0, 0] = -1
+    samples.hfi.initialized = True
+    samples.hfi.baselines[0, 0] = _BASELINES
+    _with_jump(samples)
 
+    # The jump is a step of the demodulated TOD, so it is added after the sign flip.
     expected = raw_tod.copy()
-    expected[4:] += 3.0
     expected[0::2] = -(expected[0::2] - _BASELINES[0])
     expected[1::2] = expected[1::2] - _BASELINES[1]
+    expected[4:] += 3.0
 
     view = TODView(band, samples, compsep_output=sky_map).focus(0, band.scans[0].detectors[0])
     np.testing.assert_array_equal(view.raw_tod, raw_tod)
-    np.testing.assert_allclose(view.corrected_tod, expected)
-    np.testing.assert_allclose(view.get_tod(), expected)
+    np.testing.assert_allclose(view.get_tod(keep=_SIGNALS), expected)
+
+    # Each model named in `keep` stays in the TOD, and every other one is still removed. The sign
+    # flip of the demodulation is always applied.
+    baselines_kept = raw_tod.copy()
+    baselines_kept[0::2] *= -1
+    baselines_kept[4:] += 3.0
+    np.testing.assert_allclose(view.get_tod(keep=_SIGNALS + ("hfi_baselines",)), baselines_kept)
+    jumps_kept = raw_tod.copy()
+    jumps_kept[0::2] = -(jumps_kept[0::2] - _BASELINES[0])
+    jumps_kept[1::2] = jumps_kept[1::2] - _BASELINES[1]
+    np.testing.assert_allclose(view.get_tod(keep=_SIGNALS + ("jumps",)), jumps_kept)
+    with pytest.raises(ValueError, match="Unknown models"):
+        view.get_tod(keep=("jump",))
 
 
-def test_saved_residual_removes_hfi_baselines_sky_and_noise(monkeypatch) -> None:
+def test_residual_removes_hfi_baselines_jumps_and_sky(monkeypatch) -> None:
     monkeypatch.setenv("OMP_NUM_THREADS", "1")
     band, samples, sky_map, _, _ = _build_hfi_case(phase=-1)
-    samples.modulation_phase[0, 0] = -1
-    samples.modulation_phase_initialized = True
-    samples.baselines[0, 0] = _BASELINES
-    samples.TOD_PS_NBIN = 100
-    for name in ("tod_ps_freqs", "tod_ps_raw", "tod_ps_ncorr", "tod_ps_ncorrsub",
-                 "tod_ps_residual"):
-        setattr(samples, name, np.full((1, 1, 100), np.nan, dtype=np.float32))
-    samples.chisq_z = np.full((1, 1), np.nan)
-    samples.ncorr_tods = None
-    samples.residual_tods = [[None]]
+    samples.hfi.modulation_phase[0, 0] = -1
+    samples.hfi.initialized = True
+    samples.hfi.baselines[0, 0] = _BASELINES
     n_corr = np.full(_NTOD, 3.0, dtype=np.float32)
     residual = np.full(_NTOD, 0.5, dtype=np.float32)
     detector = band.scans[0].detectors[0]
-    # Add the noise with the raw modulation signs; the residual is in demodulated detector units.
-    detector._tod[0::2] -= n_corr[0::2] + residual[0::2]
-    detector._tod[1::2] += n_corr[1::2] + residual[1::2]
-    detector._tod[4:] -= 3.0
-    samples.jumps[0, 0] = JumpEvents([4], [3.0])
+    # The jump that `_with_jump` corrects: a step of the demodulated TOD.
+    jump = np.zeros(_NTOD, dtype=np.float32)
+    jump[4:] = -3.0
+    # Add the noise and the jump with the raw modulation signs; the residual is in demodulated
+    # detector units.
+    detector._tod[0::2] -= n_corr[0::2] + residual[0::2] + jump[0::2]
+    detector._tod[1::2] += n_corr[1::2] + residual[1::2] + jump[1::2]
+    _with_jump(samples)
     view = TODView(band, samples, compsep_output=sky_map).focus(0, detector)
 
-    _record_tod_diagnostics(samples, 0, 0, view, n_corr)
-
-    np.testing.assert_allclose(samples.residual_tods[0][0], residual)
+    np.testing.assert_allclose(view.get_tod() - n_corr, residual, atol=1e-4)

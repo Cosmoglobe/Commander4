@@ -90,7 +90,7 @@ def test_instrument_percentages_follow_detector_names_into_sky_projection(
         view = TODView(result, SimpleNamespace(), sky).focus(0, det)
         psi = det.get_psi()
         expected = 2.0 + efficiency * (3.0 * np.cos(2 * psi) + 5.0 * np.sin(2 * psi))
-        np.testing.assert_allclose(view.get_static_sky_tod(), expected, rtol=1e-6)
+        np.testing.assert_allclose(view.get_sky_tod(), expected, rtol=1e-6)
 
 
 def test_efficiency_just_above_the_cutoff_is_kept_as_measured(
@@ -130,7 +130,7 @@ def test_intensity_only_band_reads_without_requiring_psi(
         assert det.response_I_P == pytest.approx((1.0, efficiency))
         sky = np.full((1, 12), 2.0)
         view = TODView(result, SimpleNamespace(), sky).focus(0, det)
-        np.testing.assert_array_equal(view.get_static_sky_tod(), np.full(16, 2.0))
+        np.testing.assert_array_equal(view.get_sky_tod(), np.full(16, 2.0))
 
 
 def test_missing_instrument_efficiency_is_not_assumed_to_be_unity(

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from copy import deepcopy
 
+import h5py
 import numpy as np
 from mpi4py import MPI
 from numpy.typing import NDArray
@@ -17,7 +18,7 @@ from pixell.bunch import Bunch
 
 from commander4.data_models.band import Band
 import commander4.sky as sky
-from commander4.sky.comp_io import _load_component_alms, _read_view_alms_from_fits
+from commander4.sky.comp_io import _read_view_alms_from_fits
 from commander4.sky.component import Component
 from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.polarization import EXECUTION_POLS
@@ -137,29 +138,55 @@ class CompList:
                                                comp_name=component._name, allocate_empty_alms=True))
         return cls(comp_list)
 
-    def load_initial_alms(self, params: Bunch) -> None:
-        """Populate each component's alms with an initial guess read from a file.
+    def write_chain(self, file: h5py.File, band_frequencies: dict[str, float]) -> None:
+        """Write every component's sample into `file`, as one `comps/<shortname>/` group each.
 
-        For every component the source is its own ``init_from`` parameter (inside the component's
-        ``params`` block) if present, otherwise the global ``params.gibbs.init_from_chain``. The
-        source may be a compsep chain (``.h5``/``.hd5``, alms read directly) or a FITS sky map
-        (``.fits``, transformed to alms); the type is decided by the file extension. If neither path
-        is set the alms are left at their allocated value (zeros). Only diffuse (alm-based)
-        components are supported for now.
+        Split I and QU views are joined first, so each component is written once with all its
+        polarization rows. `band_frequencies` maps each band name to its centre frequency in GHz.
         """
-        global_path = params.gibbs.init_from_chain if "init_from_chain" in params.gibbs else None
+        for comp in self.joined():
+            comp.write_chain(file.create_group(f"comps/{comp.shortname}"), band_frequencies)
+
+    def load_initial_state(self, chain_file: str | None, apply_init_from: bool) -> None:
+        """Set each component's starting state from a CompSep chain file or its own `init_from`.
+
+        Per component, the source is its `init_from` parameter if `apply_init_from` is set and the
+        component has one, and `chain_file` otherwise. So `init_from: null` keeps a component at its
+        parameter-file initialization. The file type decides how it is read: a `.h5`/`.hd5` chain
+        file goes through the component's own `read_chain`, and a `.fits` sky map is transformed to
+        diffuse alms. Without a source, a component keeps its parameter-file values and zero
+        amplitudes.
+
+        Args:
+            chain_file: The CompSep chain file this chain starts from, or None.
+            apply_init_from: False when `chain_file` is this chain's own saved state (on
+                `gibbs.chain_status: append`), which must win over the initial guesses.
+        """
         for comp in self.comp_list:
-            has_explicit_path = "init_from" in comp.comp_params
-            source_path = comp.comp_params.init_from if has_explicit_path else global_path
-            if not source_path:
-                continue  # No initial guess requested; leave the allocated zeros.
-            if not isinstance(comp, DiffuseComponent):
-                if has_explicit_path:
-                    raise ValueError(
-                        f"Component {comp.comp_name!r}: 'init_from' is currently only supported "
-                        "for diffuse (alm-based) components.")
+            source = chain_file
+            if apply_init_from and "init_from" in comp.comp_params:
+                source = comp.comp_params.init_from
+            if not source:
                 continue
-            _load_component_alms(comp, source_path)
+            if str(source).lower().endswith(".fits"):
+                if not isinstance(comp, DiffuseComponent):
+                    raise ValueError(f"Component {comp.comp_name!r}: a FITS 'init_from' map only "
+                                     "works for diffuse (alm-based) components.")
+                view_alms = _read_view_alms_from_fits(comp, source)
+                if view_alms is not None:
+                    comp.alms = view_alms.astype(comp.dtype, copy=False)
+            elif str(source).lower().endswith((".h5", ".hd5")):
+                with h5py.File(source, "r") as file:
+                    group_path = f"comps/{comp.shortname}"
+                    if group_path not in file:
+                        logger.error(f"Component {comp.comp_name!r} (shortname "
+                                     f"{comp.shortname!r}) not found in {source!r}; keeping its "
+                                     "parameter-file initialization.")
+                        continue
+                    comp.read_chain(file[group_path])
+            else:
+                raise ValueError(f"Unsupported init file {source!r} for component "
+                                 f"{comp.comp_name!r}: expected a .h5/.hd5 chain or a .fits map.")
 
     def load_amp_prior_means(self) -> None:
         """Populate each component's prior mean mu from its ``amp_prior_mean_map`` parameter.

@@ -4,25 +4,20 @@ The draw solves a constrained-realization system per detector-scan. Masked gaps 
 non-stationary, so it is split (arXiv:2011.06024) into a stationary Fourier-domain part plus a CG
 solve over the gap samples alone, which is far cheaper than a CG over the whole TOD.
 """
-import logging
-
 import numpy as np
 import pixell
 from scipy.fft import rfftfreq
-from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 from commander4.math_utils.fft import forward_rfft_mirrored, backward_rfft_mirrored, forward_dct,\
         backward_dct
-from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.psd import NoisePSD
 from commander4.tod.noise.sigma0 import calc_sigma0_robust, calc_sigma0_binned_psd
-from commander4.tod.config import SIGMA0_METHODS
 
 from commander4.diagnostics.performance import start_bench, stop_bench, log_memory
 
-logger = logging.getLogger(__name__)
+SIGMA0_METHODS = ("pairwise", "binned_psd")
 
 
 def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigma0: float,
@@ -366,94 +361,3 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
 
     return Bunch(n_corr=n_corr, noise_params=noise_params, residual=float(residual),
                  niter=int(niter), converged=bool(converged), high_var=high_var)
-
-
-def log_corr_noise_stats(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
-                         sampled_params: list[NDArray], residuals: list[float],
-                         niters: list[int], n_failed_conv: int, n_high_var: int,
-                         worst_residual: float, n_local_scans: int,
-                         chain: int, iteration: int) -> None:
-    """ Reduce per-detector-scan correlated-noise diagnostics across the band communicator and log
-        a summary on the band master. Parameter distributions are reported per model parameter name
-        (skipping sigma0), so the summary adapts to any NoisePSD model.
-
-    Args:
-        band_comm: Band-level MPI communicator.
-        experiment_data: The detector group being summarized; provides the NoisePSD model
-            (``param_names``, ``P_uni``) and the experiment/band names used to label the log lines.
-        sampled_params: Locally sampled ``noise_params`` arrays (empty if params were not sampled).
-        residuals: Local CG residuals (0 entries are excluded from the summary).
-        niters: Local CG iteration counts.
-        n_failed_conv: Local count of non-converged masked-CG solves.
-        n_high_var: Local count of variance-sanity-check failures.
-        worst_residual: Local worst CG residual.
-        n_local_scans: Local number of detector-scans (for the "out of N" message).
-        chain: Gibbs chain number for log context.
-        iteration: Gibbs iteration number for log context.
-    """
-    n_failed_conv = band_comm.reduce(n_failed_conv, op=MPI.SUM)
-    n_high_var = band_comm.reduce(n_high_var, op=MPI.SUM)
-    worst_residual = band_comm.reduce(worst_residual, op=MPI.MAX)
-    n_total = band_comm.reduce(n_local_scans, op=MPI.SUM)
-    residuals = band_comm.gather(residuals)
-    niters = band_comm.gather(niters)
-    sampled_params = band_comm.gather(sampled_params)
-    if band_comm.Get_rank() != 0:
-        return
-
-    noise_model = experiment_data.noise_model
-    # Bands from different experiments can share a centre frequency, and one experiment can hold
-    # several detector groups, so the log context names the experiment and band, not the frequency.
-    context = (f"Chain {chain} iter{iteration} {experiment_data.experiment_name} "
-               f"{experiment_data.band_name}")
-
-    # Print CG and variance sanity check failure rates (as warnings if >3% of scans).
-    log_failures = logger.warning if n_failed_conv/n_total > 0.03 else logger.verbose
-    log_failures(f"{context}: noise CG failed for {100*n_failed_conv/n_total:.1f}% of scans "
-                 f"({n_failed_conv}/{n_total}, worst residual = {worst_residual:.3e}).")
-    log_high_var = logger.warning if n_high_var/n_total > 0.03 else logger.verbose
-    log_high_var(f"{context}: variance sanity check failed for {100*n_high_var/n_total:.1f}% of "
-                 f"scans ({n_high_var}/{n_total}).")
-
-    residuals = np.concatenate([np.asarray(r, dtype=np.float64) for r in residuals])
-    residuals = residuals[residuals != 0]
-    if residuals.size == 0:
-        residuals = np.array([0.0])
-    niters = np.concatenate([np.asarray(n, dtype=np.float64) for n in niters])
-    if niters.size == 0:
-        niters = np.array([0.0])
-    # The worst residual and the failure counts are already in the two lines above, so this line
-    # only adds the typical CG behaviour.
-    logger.info(f"{context}: correlated noise for {n_total} detector-scans, median residual "
-                f"{np.median(residuals):.2e}, median iterations {np.median(niters):.1f} "
-                f"(max {np.max(niters):.0f}).")
-
-    # Per-parameter distributions (model-agnostic; sigma0 at index 0 is reported elsewhere), plus
-    # how many detector-scans ended up sitting on a hard prior bound. A parameter whose true value
-    # lies outside `P_uni` cannot be recovered: every scan rails against the nearest edge and then
-    # reports a tight scatter around it, which reads as a converged answer in the chain. A genuinely
-    # low-fknee detector will also sit near the bound, so this reports rather than warns; it is the
-    # large railed fraction, not the railing itself, that says the bound is wrong.
-    flat = [p for sub in sampled_params for p in sub]
-    if flat:
-        arr = np.asarray(flat, dtype=np.float64)  # shape (n_sampled_scans, npar)
-        n_sampled = arr.shape[0]
-        for j in range(1, arr.shape[1]):
-            name = noise_model.param_names[j] if j < len(noise_model.param_names) else f"p{j}"
-            values = arr[:, j]
-            logger.verbose(f"{context}: {name} min {np.nanmin(values):.4f}, 1% "
-                           f"{np.nanpercentile(values, 1):.4f}, mean {np.nanmean(values):.4f}, "
-                           f"99% {np.nanpercentile(values, 99):.4f}, max {np.nanmax(values):.4f}")
-            lo, hi = float(noise_model.P_uni[j, 0]), float(noise_model.P_uni[j, 1])
-            if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
-                continue
-            # Within 1% of the bounds' own span counts as "on" the bound, so a grid endpoint drawn
-            # through the inversion sampler's interpolation still registers.
-            tol = 0.01*(hi - lo)
-            n_lo = int(np.count_nonzero(arr[:, j] <= lo + tol))
-            n_hi = int(np.count_nonzero(arr[:, j] >= hi - tol))
-            if n_lo or n_hi:
-                logger.verbose(
-                    f"{context}: {name} on its prior bounds for {n_lo} ({n_lo/n_sampled:.1%}) "
-                    f"of {n_sampled} detector-scans at the lower bound {lo:.4g}, and "
-                    f"{n_hi} ({n_hi/n_sampled:.1%}) at the upper bound {hi:.4g}.")

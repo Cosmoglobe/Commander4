@@ -43,7 +43,7 @@ def _write(tmp_path, diagnostics=None, band_frequencies=None, lmax=4) -> str:
         comp.allocate_empty_alms()
         rng = np.random.default_rng(0)
         comp.alms[:] = rng.normal(size=comp.alms.shape) + 1j*rng.normal(size=comp.alms.shape)
-    write_compsep_chain_to_file(comp_list.joined(), params, chain=1, iter=1,
+    write_compsep_chain_to_file(comp_list, params, chain=1, iter=1,
                                 diagnostics=diagnostics, band_frequencies=band_frequencies)
     return os.path.join(paths.subdir(params, paths.CHAINS_COMPSEP), "chain01_iter0001.h5")
 

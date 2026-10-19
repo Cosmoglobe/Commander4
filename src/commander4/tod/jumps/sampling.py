@@ -1,9 +1,8 @@
-"""Jump detection: finding and correcting sudden baseline offsets in a detector-scan.
+"""`Jumps`: sudden baseline offsets in the detector-scans, and the step that finds them.
 
 C4 samples this every Gibbs iteration (C3 leaves the equivalent commented out). The jumps are
-stored per detector-scan in `TODSamples.jumps` (see `events.py` next to this file), and
-`TODView.pre_demodulation_tod` adds their offsets to every later TOD request, so the data
-themselves are never modified.
+stored per detector-scan in `Jumps.events` (see `events.py`), and `TODView.get_tod` removes them,
+as steps of the demodulated TOD, so the data themselves are never modified.
 """
 from __future__ import annotations
 
@@ -13,11 +12,13 @@ from typing import TYPE_CHECKING
 import numpy as np
 from mpi4py import MPI
 from numpy.typing import NDArray
+from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.diagnostics.performance import log_memory
-from commander4.tod.config import JumpDetectionConfig
-from commander4.tod.jumps.events import JumpEvents
+from commander4.parameters.schema import read_settings, resolve_param
+from commander4.tod.jumps.events import JumpEvents, empty_jump_grid, JUMP_EVENT_FIELDS
+from commander4.tod.step import ChainArrays, TODStep
 from commander4.tod.view import TODView
 
 if TYPE_CHECKING:
@@ -26,74 +27,125 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def sample_jump_detection(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
-                          tod_samples: TODSamples, compsep_output: NDArray,
-                          jump_detection_cfg: JumpDetectionConfig, iteration: int) -> TODSamples:
-    """Detect jump discontinuities from the flag stream and store additive post-jump offsets.
+class Jumps(TODStep):
+    """The jumps of one band's detector-scans on one rank.
 
-    A jump is identified by a contiguous region with a non-zero
-    ``flag & experiments.[experiment_name].jump_bitmask``. For each region, the offset is
-    estimated from the last ``window`` valid samples before the jump and the first ``window``
-    valid samples after it, where validity is defined by the "jump" processing mask. The means
-    are taken of the residual, the raw TOD minus the gain-scaled sky model and orbital dipole, so a
-    change of the sky across the jump is not taken as part of it. The offset is then added to all
-    later samples whenever a TOD is requested through ``TODView``.
+    The jumps are found again from the data on every pass the step runs, so a restart does not
+    read them back.
+
+    Sampled:
+        events: (nscans, ndet) object array holding the `JumpEvents` of each detector-scan.
+
+    Attributes:
+        cfg: The `tod_processing.jump_detection` settings: whether and from which iteration jumps
+            are detected, and the number of samples on each side of a jump its offset is measured
+            from (`window`); plus the experiment's `jump_bitmask`, the flag bits that mark a jump.
+        write_events: Whether the chain file gets the jumps themselves, as optional debug output
+            (`output.chains.include.jump_events`). The number of jumps per detector-scan is always
+            written while detection is on (c4-plot-chain shows it).
     """
-    if experiment_data.hfi_demodulation:
-        raise ValueError(f"Band {experiment_data.band_name}: jump detection does not support HFI "
-                         "demodulation, since the sky model would have to be modulated like the "
-                         "raw TOD.")
-    scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
-    num_applied_local = 0
-    num_skipped_local = 0
-    offsets_local = []
-    jump_counts_local = []
 
-    for view in scan_view.iter_focused():
-        jumps, num_skipped = JumpEvents.empty(), 0
-        # The sky model is only built where jumps are flagged, which is a small part of the data.
-        if np.any(view.flag & jump_detection_cfg.jump_bitmask):
-            # The sky model may hold a little of the jump itself, but that error is smaller than
-            # taking the sky change across the jump into the offset.
-            sky_tod = view.get_static_sky_tod() + view.get_orbital_dipole_tod()
-            residual = view.raw_tod - view.get_gain() * sky_tod
-            jumps, num_skipped = _detect_jumps(residual, view.flag,
-                                               view.get_mask(proc_mask_type="jump"),
-                                               jump_detection_cfg.window,
-                                               jump_detection_cfg.jump_bitmask)
-        tod_samples.jumps[view.iscan, view.idet] = jumps
-        jump_counts_local.append(jumps.num_events)
-        num_skipped_local += num_skipped
-        if jumps.num_events > 0:
-            offsets_local.extend(jumps.offsets.astype(np.float64, copy=False))
-            num_applied_local += jumps.num_events
+    def __init__(self, experiment_data: DetectorGroupTOD, params: Bunch, my_band: Bunch,
+                 band_comm: MPI.Comm, chain: int):
+        self.cfg = read_settings(params, "jump_detection", ("tod_processing",),
+                                 {"enabled": False, "from_iter": 1, "window": 10})
+        if not self.cfg.enabled:
+            return
+        self.cfg.jump_bitmask = resolve_param(params, "jump_bitmask",
+                                              (f"experiments.{experiment_data.experiment_name}",),
+                                              default=None)
+        if self.cfg.jump_bitmask is None or self.cfg.jump_bitmask < 1:
+            raise ValueError("Jump detection is enabled, but the experiment has no jump_bitmask.")
 
-    num_applied = band_comm.reduce(num_applied_local, op=MPI.SUM, root=0)
-    num_skipped = band_comm.reduce(num_skipped_local, op=MPI.SUM, root=0)
-    gathered_offsets = band_comm.gather(np.asarray(offsets_local, dtype=np.float64), root=0)
-    gathered_jump_counts = band_comm.gather(np.asarray(jump_counts_local, dtype=np.int32), root=0)
+        self.events = empty_jump_grid(experiment_data.nscans, experiment_data.ndet)
+        self.write_events = bool(getattr(params.output.chains.include, "jump_events", False))
 
-    if band_comm.Get_rank() == 0:
-        all_jump_counts = np.concatenate(gathered_jump_counts)
-        if all_jump_counts.size > 0:
-            logger.debug(
-                f"Band {experiment_data.band_name} jump counts per detector-scan: "
-                f"min={np.min(all_jump_counts)}, avg={np.mean(all_jump_counts):.2f}, "
-                f"max={np.max(all_jump_counts)} over {all_jump_counts.size} samples."
-            )
-        if num_applied > 0:
-            all_offsets = np.concatenate([arr for arr in gathered_offsets if arr.size > 0])
-            logger.info(f"Chain {tod_samples.chain} iter{iteration} "
-                        f"{experiment_data.band_name} jump detection: applied {num_applied} "
-                        f"offsets, skipped {num_skipped}, median |offset| = "
-                        f"{np.median(np.abs(all_offsets)):.3e}.")
-        elif num_skipped > 0:
-            logger.info(f"Chain {tod_samples.chain} iter{iteration} "
-                        f"{experiment_data.band_name} jump detection skipped {num_skipped} flagged "
-                        "regions because there were not enough valid samples around them.")
 
-    log_memory("jump-detect")
-    return tod_samples
+    def chain_arrays(self) -> ChainArrays:
+        """The number of jumps per detector-scan and, when asked for, the jumps themselves.
+        Neither is read back."""
+        if not self.cfg.enabled:
+            return ChainArrays()
+        nscans, ndet = self.events.shape
+        jump_counts = np.zeros((nscans, ndet), dtype=np.int64)
+        jumps_by_detector_scan = {}
+        for iscan in range(nscans):
+            for idet in range(ndet):
+                events = self.events[iscan, idet]
+                jump_counts[iscan, idet] = events.num_events
+                if events.num_events > 0:
+                    jumps_by_detector_scan[(iscan, idet)] = {
+                        field: getattr(events, field) for field in JUMP_EVENT_FIELDS}
+        arrays = ChainArrays(per_scan={"jump_counts": jump_counts})
+        if self.write_events:
+            arrays.per_detector_scan["jumps"] = jumps_by_detector_scan
+        return arrays
+
+
+    def sample(self, tod_samples: TODSamples, compsep_output: NDArray, iteration: int) -> None:
+        """Detect jump discontinuities from the flag stream and store additive post-jump offsets.
+
+        A jump is identified by a contiguous region with a non-zero
+        ``flag & experiments.[experiment_name].jump_bitmask``. For each region, the offset is
+        estimated from the last ``window`` valid samples before the jump and the first ``window``
+        valid samples after it, where validity is defined by the "jump" processing mask. The means
+        are taken of the residual ``get_tod(keep=("jumps",))``, which has every model but the
+        jumps removed, including the gain-scaled sky and orbital dipole, so a change of the sky
+        across the jump is not taken as part of it. The offset is then added to all later samples
+        whenever a TOD is requested through ``TODView``.
+        """
+        band_comm, experiment_data = tod_samples.band_comm, tod_samples.experiment_data
+        jump_bitmask = self.cfg.jump_bitmask
+        scan_view = TODView(experiment_data, tod_samples, compsep_output=compsep_output)
+        num_applied_local = 0
+        num_skipped_local = 0
+        offsets_local = []
+        jump_counts_local = []
+
+        for view in scan_view.iter_focused():
+            jumps, num_skipped = JumpEvents.empty(), 0
+            # The sky model is only built where jumps are flagged, which is a small part of the
+            # data.
+            if np.any(view.flag & jump_bitmask):
+                # The sky model may hold a little of the jump itself, but that error is smaller
+                # than taking the sky change across the jump into the offset.
+                jumps, num_skipped = _detect_jumps(view.get_tod(keep=("jumps",)), view.flag,
+                                                   view.get_mask(proc_mask_type="jump"),
+                                                   self.cfg.window, jump_bitmask)
+            self.events[view.iscan, view.idet] = jumps
+            jump_counts_local.append(jumps.num_events)
+            num_skipped_local += num_skipped
+            if jumps.num_events > 0:
+                offsets_local.extend(jumps.offsets.astype(np.float64, copy=False))
+                num_applied_local += jumps.num_events
+
+        num_applied = band_comm.reduce(num_applied_local, op=MPI.SUM, root=0)
+        num_skipped = band_comm.reduce(num_skipped_local, op=MPI.SUM, root=0)
+        gathered_offsets = band_comm.gather(np.asarray(offsets_local, dtype=np.float64), root=0)
+        gathered_jump_counts = band_comm.gather(np.asarray(jump_counts_local, dtype=np.int32),
+                                                root=0)
+
+        if band_comm.Get_rank() == 0:
+            all_jump_counts = np.concatenate(gathered_jump_counts)
+            if all_jump_counts.size > 0:
+                logger.debug(
+                    f"Band {experiment_data.band_name} jump counts per detector-scan: "
+                    f"min={np.min(all_jump_counts)}, avg={np.mean(all_jump_counts):.2f}, "
+                    f"max={np.max(all_jump_counts)} over {all_jump_counts.size} samples."
+                )
+            if num_applied > 0:
+                all_offsets = np.concatenate([arr for arr in gathered_offsets if arr.size > 0])
+                logger.info(f"Chain {tod_samples.chain} iter{iteration} "
+                            f"{experiment_data.band_name} jump detection: applied {num_applied} "
+                            f"offsets, skipped {num_skipped}, median |offset| = "
+                            f"{np.median(np.abs(all_offsets)):.3e}.")
+            elif num_skipped > 0:
+                logger.info(f"Chain {tod_samples.chain} iter{iteration} "
+                            f"{experiment_data.band_name} jump detection skipped {num_skipped} "
+                            "flagged regions because there were not enough valid samples around "
+                            "them.")
+
+        log_memory("jump-detect")
 
 
 def _detect_jumps(tod: NDArray[np.floating], flag: NDArray[np.integer],

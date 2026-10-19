@@ -12,8 +12,9 @@ from pixell.bunch import Bunch
 
 import numpy as np
 
-from commander4.tod.config import CorrelatedNoiseConfig
 from commander4.tod.noise.psd import NoisePSDOof
+from commander4.tod.noise.sampling import Noise
+from tod_step_fakes import make_step
 from commander4.parameters.schema import (TOP_LEVEL_BLOCKS, validate_param_schema, compsep_enabled,
                                      derive_task_counts, task_count_breakdown, resolve_param,
                                      resolve_band_lmax)
@@ -326,15 +327,12 @@ def _noise_params(band=None, experiment=None, tod_processing=None):
     ({"psd_fit_nu_min": 0.5, "psd_fit_nu_max": 2.0}, [[0.5, 2.0], [0.5, 2.0]]),
 ])
 def test_noise_fit_limits_are_applied_to_model(limits: dict, expected: list[list[float]]) -> None:
-    """YAML limits override only the specified endpoints and survive step-config validation."""
+    """YAML limits override only the specified endpoints and pass the noise settings check."""
     params = _noise_params()
     params.tod_processing.corr_noise = Bunch(enabled=True, **limits)
     model = NoisePSDOof(nu_fit=[[np.nan, np.nan], [0.1, 3.0], [0.2, 4.0]])
     model.apply_param_file(params, "EXP", "BandA")
-    config = CorrelatedNoiseConfig.from_params(params.tod_processing)
-    assert config.enabled
-    assert not hasattr(config, "psd_fit_nu_min")
-    assert not hasattr(config, "psd_fit_nu_max")
+    assert make_step(Noise, settings=params.tod_processing).cfg.enabled
     np.testing.assert_array_equal(model.nu_fit[1:], expected)
     assert np.isnan(model.nu_fit[0]).all()
     for key, value in limits.items():
@@ -348,9 +346,8 @@ def test_noise_fit_limits_default_when_corr_noise_block_absent() -> None:
 
 
 def test_unknown_noise_fit_key_still_rejected() -> None:
-    params = Bunch(tod_processing=Bunch(corr_noise=Bunch(psd_fit_nu_mxa=2.0)))
-    with pytest.raises(TypeError, match="psd_fit_nu_mxa"):
-        CorrelatedNoiseConfig.from_params(params.tod_processing)
+    with pytest.raises(ValueError, match="psd_fit_nu_mxa"):
+        make_step(Noise, settings={"corr_noise": {"psd_fit_nu_mxa": 2.0}})
 
 
 def test_noise_prior_bounds_left_alone_when_the_parameter_file_is_silent():

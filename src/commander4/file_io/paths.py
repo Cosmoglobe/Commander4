@@ -36,6 +36,18 @@ def subdir(params, name: str) -> str:
     return os.path.join(resolve_output_dir(params.output), name)
 
 
+def band_chain_file(run_dir: str, exp_name: str, band_name: str, chain: int,
+                    iteration: int) -> str:
+    """Path of one band's chain file for one Gibbs sample, below the run directory `run_dir`."""
+    return os.path.join(run_dir, CHAINS_BANDS,
+                        f"{exp_name}_{band_name}_chain{chain:02d}_iter{iteration:04d}.h5")
+
+
+def compsep_chain_file(run_dir: str, chain: int, iteration: int) -> str:
+    """Path of the CompSep chain file for one Gibbs sample, below the run directory `run_dir`."""
+    return os.path.join(run_dir, CHAINS_COMPSEP, f"chain{chain:02d}_iter{iteration:04d}.h5")
+
+
 def log_file_path(output_params, run_id: str) -> str:
     """Full path of the run's standard ``run-<run-id>.log`` file."""
     return os.path.join(resolve_output_dir(output_params), LOGS, f"run-{run_id}.log")

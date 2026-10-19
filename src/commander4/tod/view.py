@@ -4,9 +4,12 @@ One view is focused on one detector at a time and rebuilt as the scan loop advan
 never holds more than one detector decoded. It also owns block-averaging, so a step that wants a
 coarser sample rate (gain calibration) asks for a view at that rate instead of downsampling by hand.
 """
+from __future__ import annotations
+
 import numpy as np
 import healpy as hp
 import logging
+from typing import TYPE_CHECKING
 from numpy.typing import NDArray
 
 from pixell.bunch import Bunch
@@ -14,9 +17,13 @@ from pixell.bunch import Bunch
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.pointing import remap_pix_nside
-from commander4.data_models.tod_samples import TODSamples
+from commander4.diagnostics.performance import benchmark
 from commander4.tod.noise.sample_ncorr import realize_noise_in_gaps
 from commander4.tod.sky_projection import project_sky_to_tod, get_s_orb_tod
+
+# Type hints only: `TODSamples` imports the sampling steps, and they import this module.
+if TYPE_CHECKING:
+    from commander4.data_models.tod_samples import TODSamples
 
 logger = logging.getLogger(__name__)
 
@@ -28,26 +35,34 @@ class TODView:
     always discards the previous detector's cached arrays, which matches the one-detector-at-a-time
     TOD-processing architecture.
 
+    The TODs a view gives:
+      * ``raw_tod``: the data as stored, in detector units.
+      * ``get_tod(keep=...)``: the data minus every model the chain has sampled (HFI baselines,
+        jumps, glitches, the gain-scaled sky, orbital dipole and far sidelobes, ...). This is the
+        TOD to use. A sampling step names its own model in ``keep`` to get its residual, so a new
+        model reaches every step without changes there.
+      * ``get_sky_tod()``, ``get_orbital_dipole_tod()`` and ``get_far_sidelobe_tod()``: the three
+        signal models, in uK_RJ.
+      * The sampling-specific TODs at the bottom of the class, such as ``get_calib_tod``.
+
     Downsampling. The view carries a single ``downsample_factor``, fixed at construction: a step
-    that wants a coarser rate builds its own view at that rate. The ``raw_tod`` / ``corrected_tod``
-    and the *internal* full-rate pointing stay at full resolution, because model TODs must be
-    integrated over each block rather than sampled at its center. Every quantity exposed
-    downstream is at the active resolution:
-    ``pix`` / ``psi`` take block centers, the model and data getters (``get_tod``,
-    ``get_static_sky_tod``, ``get_orbital_dipole_tod``, ``get_calib_tod``) are block-averaged over
+    that wants a coarser rate builds its own view at that rate. ``raw_tod``, the corrected TOD
+    behind ``get_tod`` and the *internal* full-rate pointing stay at full resolution, because model
+    TODs must be integrated over each block rather than sampled at its center. Every quantity
+    exposed downstream is at the active resolution:
+    ``pix`` / ``psi`` take block centers, the model and data getters (``get_tod``, ``get_sky_tod``,
+    ``get_orbital_dipole_tod``, ``get_far_sidelobe_tod``, ``get_calib_tod``) are block-averaged over
     the block's good samples, and ``get_mask`` keeps a block when more than ``mask_threshold`` of
-    its samples pass. ``downsample_factor == 1`` (the default) is a no-op, so callers that never
-    downsample see the full-rate arrays unchanged.
+    its samples pass.
+    ``downsample_factor == 1`` (the default) is a no-op, so callers that never downsample see the
+    full-rate arrays unchanged.
     """
 
-    _ALL_GAIN_TERMS = ("abs", "rel", "temp")
-    # Calibration targets, mapped onto the model signals they span. Sampling a gain term against
-    # one of these reduces the calibration residual to (target gain term) * s_cal + noise.
-    _CALIB_TARGET_SIGNALS = {
-        "orbital_dipole": ("orbital_dipole",),
-        "sky": ("sky", "orbital_dipole"),
-        "sky_no_dipole": ("sky",),
-    }
+    # The three gain terms, for selecting which of them `get_gain` adds up.
+    ALL_GAIN_TERMS = ("abs", "rel", "temp")
+    # The models `get_tod` removes from the data (see there), which its `keep` can leave in.
+    MODELS = ("bright_glitches", "hfi_baselines", "jumps", "faint_glitches", "sky",
+              "orbital_dipole", "far_sidelobes")
 
     def __init__(
         self,
@@ -62,9 +77,10 @@ class TODView:
 
         Args:
             experiment_data: Static TOD container for the current band.
-            tod_samples: Sampled gain and noise parameters for the current chain state.
-            compsep_output: Optional default sky model used by sky-subtraction helpers, holding
-                this rank's local pixels (``PixelDomain``).
+            tod_samples: The current chain state: the samples applied to the TOD (gain, noise,
+                jumps, ...).
+            compsep_output: The band's sky model at this rank's local pixels (``PixelDomain``).
+                Needed by every TOD that has the sky removed.
             downsample_factor: Block-averaging factor applied to every derived TOD/mask the view
                 returns (1 = full resolution). Each operation that needs a coarser rate (e.g. gain
                 calibration) constructs its own view at the desired factor.
@@ -93,16 +109,15 @@ class TODView:
     def _clear_cache(self):
         """Drop all arrays materialized for the current detector."""
         self._raw_tod = None
-        self._pre_demodulation_tod = None
-        self._corrected_tod = None
         self._pix = None
         self._pix_local = None
         self._psi = None
         self._flag = None
         self._ds_indices = None
         self._ds_good = None
-        self._static_sky = None
+        self._sky = None
         self._orbital_dipole = None
+        self._far_sidelobes = None
         self._gap_noise: dict[str, NDArray] = {}
 
     def focus(self, iscan: int, det: DetectorTOD) -> "TODView":
@@ -142,7 +157,7 @@ class TODView:
         Yields:
             TODView: this view, focused on the current present detector-scan.
         """
-        accept = self.tod_samples.accept if accepted_only else None
+        accept = self.tod_samples.selection.accept if accepted_only else None
         for iscan, det in self.experiment_data.iter_detector_scans(accept):
             yield self.focus(iscan, det)
 
@@ -182,7 +197,7 @@ class TODView:
     @property
     def noise_params(self) -> NDArray:
         self._require_focus()
-        return self.tod_samples.noise_params[self._iscan, self._idet]
+        return self.tod_samples.noise.noise_params[self._iscan, self._idet]
 
     @property
     def sigma0(self) -> float:
@@ -193,18 +208,18 @@ class TODView:
         """Whether the focused detector-scan is accepted, i.e. present *and* not flagged as bad
         data. ``accept`` (data quality) is distinct from ``present`` (data exists at all)."""
         self._require_focus()
-        return bool(self.tod_samples.accept[self._iscan, self._idet])
+        return bool(self.tod_samples.selection.accept[self._iscan, self._idet])
 
-    def get_gain(self, gain_terms: tuple[str, ...] = _ALL_GAIN_TERMS) -> float:
+    def get_gain(self, gain_terms: tuple[str, ...] = ALL_GAIN_TERMS) -> float:
         """Return the sum of the selected gain terms; an empty tuple gives zero."""
         gain = 0.0
         for term in gain_terms:
             if term == "abs":
-                gain += self.tod_samples.abs_gain
+                gain += self.tod_samples.gain.abs_gain
             elif term == "rel":
-                gain += self.tod_samples.rel_gain[self.idet]
+                gain += self.tod_samples.gain.rel_gain[self.idet]
             elif term == "temp":
-                gain += self.tod_samples.temporal_gain[self.iscan, self.idet]
+                gain += self.tod_samples.gain.temporal_gain[self.iscan, self.idet]
         return float(gain)
 
 
@@ -280,61 +295,10 @@ class TODView:
     @property
     def raw_tod(self) -> NDArray[np.floating]:
         """The decoded detector TOD exactly as stored, at full resolution.
-        See `self.corrected_tod` for the TOD to use for science. """
+        See `get_tod` for the TOD to use for science. """
         if self._raw_tod is None:
             self._raw_tod = self.detector.tod
         return self._raw_tod
-
-    @property
-    def pre_demodulation_tod(self) -> NDArray[np.floating]:
-        """The raw TOD with jumps and glitch baseline steps removed, before HFI demodulation.
-
-        The HFI baseline sampler fits this TOD, since it must not see the baselines it samples. A
-        bright glitch shifts both sample parities alike, so its step is removed here, before
-        demodulation flips the sign of every other sample. Without demodulation, this is
-        `corrected_tod` before the glitch pulses are removed.
-        """
-        if self._pre_demodulation_tod is None:
-            tod = self.raw_tod
-            jumps = self.tod_samples.jumps[self.iscan, self.idet]
-            if jumps.num_events > 0:
-                tod = tod + jumps.offset_tod(self.detector.ntod)
-            glitches = self.tod_samples.glitches[self.iscan, self.idet]
-            if glitches.num_events > 0:
-                tod = tod - glitches.baseline_step_tod(self.detector.ntod, self.fsamp)
-            self._pre_demodulation_tod = tod
-        return self._pre_demodulation_tod
-
-    @property
-    def corrected_tod(self) -> NDArray[np.floating]:
-        """TOD (in detector units) after low-level corrections, such as jumps or demodulation.
-
-        Figures out what low-level corrections are active and applies those to `self.raw_tod`.
-        Currently implemented adjustments include, in this order:
-            - Jump corrections, requiring the jump-finding sampling step.
-            - Glitch baseline steps, requiring the glitch sampling step (a placeholder for now).
-            - HFI demodulation, requiring the demodulation phase and the baseline sampling steps.
-            - Glitch pulses, see `get_glitch_pulse_tod` (a placeholder for now).
-        The first two make up `pre_demodulation_tod`.
-        """
-        if self._corrected_tod is None:
-            corrected = self.pre_demodulation_tod
-
-            if getattr(self.experiment_data, "hfi_demodulation", False):
-                if not self.tod_samples.modulation_phase_initialized:
-                    raise RuntimeError("HFI TOD requested before modulation phase initialization.")
-                phase = self.tod_samples.modulation_phase[self.iscan, self.idet]
-                baseline_first, baseline_second = self.tod_samples.baselines[self.iscan, self.idet]
-                corrected = np.array(corrected, copy=True)
-                corrected[0::2] = phase * (corrected[0::2] - baseline_first)
-                corrected[1::2] = -phase * (corrected[1::2] - baseline_second)
-
-            # After demodulation a glitch has the sign of the sky, like the heat it deposits.
-            if self.tod_samples.glitches[self.iscan, self.idet].num_events > 0:
-                corrected = corrected - self._fullres_glitch_pulses()
-
-            self._corrected_tod = corrected
-        return self._corrected_tod
 
     @property
     def _fullres_pix(self) -> NDArray[np.integer]:
@@ -424,9 +388,9 @@ class TODView:
         if good_data_mask:
             mask &= self.detector.good_data_mask
             # The samples cut around glitches are bad data like flagged samples, so they go too.
-            glitches = self.tod_samples.glitches[self.iscan, self.idet]
-            if glitches.num_events > 0:
-                mask &= glitches.good_sample_mask(self.detector.ntod)
+            glitches = self.tod_samples.glitches
+            if glitches.cfg.enabled and glitches.events[self.iscan, self.idet].num_events > 0:
+                mask &= glitches.events[self.iscan, self.idet].good_sample_mask(self.detector.ntod)
         if proc_mask:
             proc = self._project_processing_mask(proc_mask_type)
             if proc is not None:
@@ -449,22 +413,88 @@ class TODView:
         return self._downsample_keep(self._fullres_mask(good_data_mask, proc_mask, proc_mask_type))
 
 
-    # ------------------------------------------------------------------ model TODs
-    def get_static_sky_tod(self, compsep_output: NDArray | None = None) -> NDArray[np.floating]:
-        """Evaluate the static sky model along the focused detector pointing.
+    # ------------------------------------------------------------------ the TOD and its models
+    def get_tod(self, *, keep: tuple[str, ...] = ()) -> NDArray[np.floating]:
+        """The focused detector-scan's TOD minus every model the chain has sampled, except those
+        named in `keep`. A new array is returned on every call.
+
+        This is the TOD every sampling step works on, and the one place where the models are
+        removed from `raw_tod`. Their order is that of the data model, since HFI demodulation
+        flips the sign of every other sample: a term removed before it is one the instrument adds
+        to the raw signal, a term removed after it is modulated like the sky.
+            - "bright_glitches", part 1: the baseline steps of the bright glitches. A bright
+              glitch shifts both HFI sample parities alike.
+            - "hfi_baselines": the two parity baselines of HFI demodulation. The sign flip of the
+              demodulation is always applied: it is a fixed property of the data, like the gain.
+            - "jumps": jump corrections (the jump-finding step), which are steps in the
+              demodulated TOD, as in Commander3 (its `s_jump`).
+            - "bright_glitches", part 2, and "faint_glitches": the glitch pulses, which have the
+              sign of the sky after demodulation, like the heat they deposit.
+            - "sky", "orbital_dipole" and "far_sidelobes": the three signal models, times the
+              full gain. They are removed after block-averaging, since their getters are
+              block-averaged already. The far sidelobes are skipped in an iteration without a
+              far-sidelobe model.
+
+        Args:
+            keep: Models to leave in the TOD, from `MODELS`. A sampling step keeps its own model,
+                so its residual has everything removed except that model. It changes only the
+                TOD, not `get_mask`.
+        """
+        unknown = set(keep) - set(self.MODELS)
+        if unknown:
+            raise ValueError(f"Unknown models {sorted(unknown)}; known: {self.MODELS}")
+        iscan, idet, ntod = self.iscan, self.idet, self.detector.ntod
+        jumps, glitches, hfi = (self.tod_samples.jumps, self.tod_samples.glitches,
+                                self.tod_samples.hfi)
+        has_glitches = glitches.cfg.enabled and glitches.events[iscan, idet].num_events > 0
+        remove_jumps = (jumps.cfg.enabled and jumps.events[iscan, idet].num_events > 0
+                        and "jumps" not in keep)
+        remove_bright_glitches = has_glitches and "bright_glitches" not in keep
+        remove_faint_glitches = has_glitches and "faint_glitches" not in keep
+
+        tod = self.raw_tod
+        if remove_bright_glitches:
+            tod = tod - glitches.events[iscan, idet].baseline_step_tod(ntod, self.fsamp)
+        if hfi.cfg.enabled:
+            tod = hfi.demodulate(iscan, idet, tod, subtract_baselines="hfi_baselines" not in keep)
+        if remove_jumps:
+            tod = tod + jumps.events[iscan, idet].offset_tod(ntod)
+        if remove_bright_glitches or remove_faint_glitches:
+            tod = tod - glitches.pulse_tod(self, bright=remove_bright_glitches,
+                                           faint=remove_faint_glitches)
+        tod = np.array(self._downsample_mean(tod), copy=True)
+        if "sky" not in keep:
+            tod -= self.get_gain() * self.get_sky_tod()
+        if "orbital_dipole" not in keep:
+            tod -= self.get_gain() * self.get_orbital_dipole_tod()
+        far_sidelobes = self.tod_samples.far_sidelobes
+        if "far_sidelobes" not in keep and far_sidelobes.cfg.enabled and far_sidelobes.cubes:
+            tod -= self.get_gain() * self.get_far_sidelobe_tod()
+        return tod
+
+
+    def get_orbital_dipole_tod(self) -> NDArray[np.floating]:
+        """Evaluate the orbital dipole for the focused detector at the active resolution.
+
+        Like ``get_sky_tod``, the dipole is built at full rate and block-averaged.
+        """
+        if self._orbital_dipole is None:
+            full = get_s_orb_tod(self.detector, self.experiment_data, self._fullres_pix)
+            self._orbital_dipole = self._downsample_mean(full)
+        return self._orbital_dipole
+
+
+    def get_sky_tod(self) -> NDArray[np.floating]:
+        """Evaluate the view's sky model along the focused detector pointing.
 
         The model is evaluated at the full sampling rate and then block-averaged onto the active
         resolution, integrating the model over the scan path within each block rather than sampling
         it at the block-center pixel. Model and data thereby see the same downsampling transfer
         function, which keeps e.g. gain estimates unbiased.
-
-        Args:
-            compsep_output: Sky model to use instead of the view's own. Only the view's own model
-                is cached, since an override is a one-off.
         """
-        if compsep_output is None and self._static_sky is not None:
-            return self._static_sky
-        sky_model = self.compsep_output if compsep_output is None else compsep_output
+        if self._sky is not None:
+            return self._sky
+        sky_model = self.compsep_output
         if sky_model is None:
             raise ValueError("A component-separation sky map must be provided for sky subtraction.")
 
@@ -473,109 +503,53 @@ class TODView:
         if sky_model.shape[-1] != self.experiment_data.pixel_domain.n_local:
             raise ValueError(f"Sky model has {sky_model.shape[-1]} pixels, but this rank's pixel "
                              f"domain holds {self.experiment_data.pixel_domain.n_local}.")
-        sky = self._downsample_mean(project_sky_to_tod(sky_model, self._fullres_pix_local,
-                                                       psi=self._fullres_psi,
-                                                       response_I_P=self.response_I_P))
-        if compsep_output is None:
-            self._static_sky = sky
-        return sky
+        self._sky = self._downsample_mean(project_sky_to_tod(sky_model, self._fullres_pix_local,
+                                                             psi=self._fullres_psi,
+                                                             response_I_P=self.response_I_P))
+        return self._sky
 
 
-    def get_orbital_dipole_tod(self) -> NDArray[np.floating]:
-        """Evaluate the orbital dipole for the focused detector at the active resolution.
+    def get_far_sidelobe_tod(self) -> NDArray[np.floating]:
+        """The far-sidelobe pickup of the focused detector, in uK_RJ, at the active resolution.
 
-        Like ``get_static_sky_tod``, the dipole is built at full rate and block-averaged.
+        Like ``get_sky_tod``, it is built at full rate and block-averaged. It is zero when no
+        far-sidelobe model is built (`FarSidelobes.build`), i.e. when the step is off or before its
+        `from_iter`.
         """
-        if self._orbital_dipole is None:
-            full = get_s_orb_tod(self.detector, self.experiment_data, self._fullres_pix)
-            self._orbital_dipole = self._downsample_mean(full)
-        return self._orbital_dipole
+        if self._far_sidelobes is None:
+            far_sidelobes = self.tod_samples.far_sidelobes
+            if far_sidelobes.cfg.enabled and far_sidelobes.cubes:
+                with benchmark("far-beam-proj"):
+                    full = far_sidelobes.get_projection(self._fullres_pix, self._fullres_psi,
+                                                        self.idet)
+            else:
+                full = np.zeros(self.detector.ntod)
+            self._far_sidelobes = self._downsample_mean(full)
+        return self._far_sidelobes
 
 
-    def _fullres_glitch_pulses(self, template_only: bool = False) -> NDArray[np.float32]:
-        """Full-rate glitch pulses of the focused detector-scan; zeros when it has no events."""
-        glitches = self.tod_samples.glitches[self.iscan, self.idet]
-        if glitches.num_events == 0:
-            return np.zeros(self.detector.ntod, dtype=np.float32)
-        template_amps = self.tod_samples.glitch_template_amps[self.idet]
-        template_taus = self.tod_samples.glitch_template_taus[self.idet]
-        return glitches.pulse_tod(self.detector.ntod, template_amps, template_taus, self.fsamp,
-                                template_only)
-
-
-    def get_glitch_pulse_tod(self, template_only: bool = False) -> NDArray[np.floating]:
-        """Evaluate the glitch pulses of the focused detector-scan, in detector units.
-
-        The pulses have the sign of the sky in the demodulated TOD, and ``corrected_tod`` has them
-        all removed already. A fit to the raw HFI TOD must remove them modulated, like the sky.
-        Built at the full rate and block-averaged, like the other model TODs.
-
-        Args:
-            template_only: If True, leave out the bright events. Adding the template pulses back
-                to ``corrected_tod`` gives the data the glitch amplitude sampler fits.
-        """
-        return self._downsample_mean(self._fullres_glitch_pulses(template_only))
-
-
-    def get_tod(
-        self,
-        *,
-        subtract: tuple[tuple[str, tuple[str, ...]], ...] | None = None,
-        divide_by_gain: tuple[str, ...] | None = None,
-        compsep_output: NDArray | None = None,
-    ) -> NDArray[np.floating]:
-        """Return a detector-local TOD after doing both optional sky-subtractions, and after
-        last-minute corrections like jump offsets and HFI demodulation.
-
-        Args:
-            subtract: Sequence of ``(signal_name, gain_terms)`` pairs, where the signal is
-                ``"sky"`` or ``"orbital_dipole"``. Each signal is evaluated and subtracted after
-                multiplying it by the selected gain subset.
-            divide_by_gain: Gain terms to divide the final TOD by, or ``None``.
-            compsep_output: Optional sky model override for static-sky subtraction.
-        """
-        tod = np.array(self._downsample_mean(self.corrected_tod), copy=True)
-
-        if subtract is not None:
-            # Every residual this class supports is a linear combination of the two model TODs.
-            for signal_name, gain_terms in subtract:
-                if signal_name == "sky":
-                    signal = self.get_static_sky_tod(compsep_output=compsep_output)
-                elif signal_name == "orbital_dipole":
-                    signal = self.get_orbital_dipole_tod()
-                else:
-                    raise ValueError(f"Unknown TOD signal '{signal_name}'.")
-                tod -= self.get_gain(gain_terms) * signal
-
-        if divide_by_gain is not None:
-            gain = self.get_gain(divide_by_gain)
-            if gain == 0:
-                raise ValueError("Cannot divide TOD by a zero gain.")
-            tod /= gain
-
-        return tod
-
+    # ============================================================================================ #
+    # Sampling-specific TODs: what one sampling step works on, beyond `get_tod`. Each must be built
+    # from `get_tod` (with `keep` for the step's own model, if needed), never from `raw_tod`, so
+    # that every model added later reaches it.
+    # ============================================================================================ #
 
     # ------------------------------------------------------------------ gain calibration
-    def _gap_noise_draw(self, method: str,
-                        compsep_output: NDArray | None = None) -> NDArray[np.floating]:
+    def _gap_noise_draw(self, method: str) -> NDArray[np.floating]:
         """Constrained noise realization at the masked samples of the calibration TOD.
 
-        The noise residual ``d - g*(s_sky + s_orb)`` (full gain) is identical for every gain term, so
-        the 1/f + white gap draw is computed once and shared across the abs/rel/temporal solves
-        (cached per method, at the view's active resolution). ``method`` is ``'fallback'`` or
-        ``'full_cg'``.
+        The noise residual ``get_tod()``, ``d - g*(s_sky + s_orb + s_sl)`` at the full gain, is
+        identical for every gain term, so the 1/f + white gap draw is computed once and shared
+        across the abs/rel/temporal solves (cached per method, at the view's active resolution).
+        ``method`` is ``'fallback'`` or ``'full_cg'``.
         """
         cached = self._gap_noise.get(method)
         if cached is not None:
             return cached
         mask = self.get_mask(proc_mask_type=self._proc_mask_type)
-        s_sky = self.get_static_sky_tod(compsep_output=compsep_output)
-        s_orb = self.get_orbital_dipole_tod()
-        data = self._downsample_mean(self.corrected_tod)
-        # Noise residual: data minus the full sky model at the full gain (true noise at valid
-        # samples; Galactic-plane garbage at masked ones, which the realization replaces).
-        noise_resid = data - self.get_gain(self._ALL_GAIN_TERMS) * (s_sky + s_orb)
+        # True noise at valid samples; Galactic-plane garbage at masked ones, which the
+        # realization replaces.
+        noise_resid = self.get_tod()
         samprate = self.fsamp / self._downsample_factor  # block-averaging downsamples fsamp
         draw = realize_noise_in_gaps(noise_resid, mask, self.experiment_data.noise_model,
                                      self.noise_params, samprate, self.fsamp, method)
@@ -589,9 +563,7 @@ class TODView:
         mask: NDArray[np.bool_],
         signal: NDArray[np.floating],
         gain_terms: tuple[str, ...],
-        rng: np.random.Generator | None,
         method: str = "wn",
-        compsep_output: NDArray | None = None,
     ) -> NDArray[np.floating]:
         """Fill masked calibration samples with the target signal plus a noise realization.
 
@@ -607,11 +579,9 @@ class TODView:
         target = self.get_gain(gain_terms) * signal[gap]
         if method == "wn":
             sigma0_effective = self.sigma0 * np.sqrt(1.0 / self._downsample_factor)
-            normal = np.random.normal if rng is None else rng.normal
-            filled[gap] = target + normal(0.0, sigma0_effective, target.shape)
+            filled[gap] = target + np.random.normal(0.0, sigma0_effective, target.shape)
         else:
-            draw = self._gap_noise_draw(method, compsep_output=compsep_output)
-            filled[gap] = target + draw[gap]
+            filled[gap] = target + self._gap_noise_draw(method)[gap]
         return filled
 
 
@@ -620,61 +590,46 @@ class TODView:
         target_term: str,
         calibrate_against: str,
         *,
-        compsep_output: NDArray | None = None,
         fill_masked: bool = True,
         gap_fill_method: str = "wn",
-        rng: np.random.Generator | None = None,
     ) -> Bunch:
         """Return the residual, calibrator signal, and mask used to sample one gain term.
 
         Everything is returned at the view's active downsample resolution. The detector model is
-        ``d = (g_abs + g_rel + g_temp) * (s_sky + s_orb) + n``. To sample ``target_term`` against a
-        calibrator signal ``s_cal`` (the subset of {static sky, orbital dipole} selected by
-        ``calibrate_against``), each model signal is subtracted with the appropriate gain terms so
-        the residual reduces to ``g_target * s_cal + n``:
-            - signals making up the calibrator keep the target term (only the *other* terms are
-              subtracted), contributing ``g_target * s`` to the residual;
-            - signals outside the calibrator are subtracted in full and thus removed.
+        ``d = (g_abs + g_rel + g_temp) * (s_sky + s_orb + s_sl) + n``, with ``s_sl`` the
+        far-sidelobe pickup. To sample ``target_term`` against a calibrator signal ``s_cal`` (the part of
+        ``s_sky + s_orb + s_sl`` selected by ``calibrate_against``), the residual must reduce to
+        ``g_target * s_cal + n``. It is therefore `get_tod`, which has all three signals removed at
+        the full gain, with ``g_target * s_cal`` added back.
 
         Args:
-            target_term: Gain term being sampled, one of ``_ALL_GAIN_TERMS`` ("abs", "rel", "temp").
+            target_term: Gain term being sampled, one of ``ALL_GAIN_TERMS`` ("abs", "rel", "temp").
             calibrate_against: Calibrator, one of "orbital_dipole", "sky", or "sky_no_dipole".
-            compsep_output: Optional sky-model override for the static-sky term.
             fill_masked: If True, fill masked samples with ``g_target * s_cal`` plus a noise draw.
             gap_fill_method: How masked samples are filled when ``fill_masked``: ``'wn'`` (white
                 noise), ``'fallback'`` (stationary 1/f Wiener draw), or ``'full_cg'`` (masked
                 constrained-CG 1/f draw). See ``_fill_masked_calibration_samples``.
-            rng: Optional NumPy generator for the masked-sample white noise (``'wn'`` only).
 
         Returns:
             Bunch with ``tod`` (residual), ``s_cal``, and ``mask``.
         """
-        if target_term not in self._ALL_GAIN_TERMS:
+        if target_term not in self.ALL_GAIN_TERMS:
             raise ValueError(f"Unknown gain term '{target_term}'; expected one of "
-                             f"{self._ALL_GAIN_TERMS}.")
-        if calibrate_against not in self._CALIB_TARGET_SIGNALS:
-            raise ValueError(f"Unknown calibrate_against '{calibrate_against}'; expected one of "
-                             f"{tuple(self._CALIB_TARGET_SIGNALS)}.")
+                             f"{self.ALL_GAIN_TERMS}.")
+        # The far sidelobes see the sky model, so they are part of every sky calibrator.
+        if calibrate_against == "orbital_dipole":
+            s_cal = self.get_orbital_dipole_tod()
+        elif calibrate_against == "sky":
+            s_cal = self.get_sky_tod() + self.get_orbital_dipole_tod() + self.get_far_sidelobe_tod()
+        elif calibrate_against == "sky_no_dipole":
+            s_cal = self.get_sky_tod() + self.get_far_sidelobe_tod()
+        else:
+            raise ValueError(f"Unknown calibrate_against '{calibrate_against}'; expected "
+                             f"'orbital_dipole', 'sky' or 'sky_no_dipole'.")
 
         mask = self.get_mask(proc_mask_type=self._proc_mask_type)
-        s_sky = self.get_static_sky_tod(compsep_output=compsep_output)
-        s_orb = self.get_orbital_dipole_tod()
-
-        calib_signals = self._CALIB_TARGET_SIGNALS[calibrate_against]
-        other_terms = tuple(t for t in self._ALL_GAIN_TERMS if t != target_term)
-        # Calibrator signals keep the target gain term (subtract only the others); non-calibrator
-        # signals are subtracted in full so they drop out of the residual entirely.
-        subtract = tuple((name, other_terms if name in calib_signals else self._ALL_GAIN_TERMS)
-                         for name in ("sky", "orbital_dipole"))
-        s_cal = np.zeros_like(s_sky)
-        if "sky" in calib_signals:
-            s_cal = s_cal + s_sky
-        if "orbital_dipole" in calib_signals:
-            s_cal = s_cal + s_orb
-
-        tod = self.get_tod(subtract=subtract, compsep_output=compsep_output)
+        tod = self.get_tod() + self.get_gain((target_term,)) * s_cal
         if fill_masked:
-            tod = self._fill_masked_calibration_samples(tod, mask, s_cal, (target_term,), rng,
-                                                        method=gap_fill_method,
-                                                        compsep_output=compsep_output)
+            tod = self._fill_masked_calibration_samples(tod, mask, s_cal, (target_term,),
+                                                        method=gap_fill_method)
         return Bunch(tod=tod, s_cal=s_cal, mask=mask)
