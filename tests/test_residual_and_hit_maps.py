@@ -68,7 +68,8 @@ def _run(band: DetectorGroupTOD, sky_model: np.ndarray, sparse_maps: bool = Fals
     band.pixel_domain = PixelDomain.from_view(TODView(band, tod_samples), MPI.COMM_SELF,
                                               "sparse" if sparse_maps else "full", _NSIDE)
     sky_local = band.pixel_domain.scatter_from_full(sky_model, ncomp=3)
-    _, maps = tod_processing.tod2map(band, tod_samples, sky_local, 1, params)
+    _, maps = tod_processing.tod2map(band, tod_samples, sky_local, 1, params,
+                                     np.random.default_rng(0))
     return maps
 
 
@@ -272,7 +273,8 @@ def test_intensity_mapmaker_recovers_signal_rms_and_aux_maps(
     band.pixel_domain = PixelDomain.from_view(TODView(band, samples), comm,
                                               "sparse" if sparse_maps else "full", _NSIDE)
     detmaps, maps = tod2map_module.tod2map(
-        band, samples, band.pixel_domain.scatter_from_full(sky, ncomp=1), 1, params)
+        band, samples, band.pixel_domain.scatter_from_full(sky, ncomp=1), 1, params,
+        np.random.default_rng(0))
     if band.nscans:
         np.testing.assert_allclose(samples.diagnostics.residual_tods[0][0],
                                    _GAIN * response_I * offset, atol=2e-4)

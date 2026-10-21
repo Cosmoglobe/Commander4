@@ -49,18 +49,18 @@ def gibbs_schedule(first_iteration: int, num_iterations: int) -> list[tuple[int,
             for chain in (1, 2)]
 
 
-def seed_iteration_rng(params: Bunch, mpi_info: Bunch, chain: int, iteration: int) -> int:
-    """Sets unique seed per chain+rank+iteration for numpy's RNG, and returns it.
+def make_iteration_rng(params: Bunch, mpi_info: Bunch, chain: int, iteration: int):
+    """Return the random generator for one chain, iteration, and rank.
+
+    Every random draw of the step is taken from this generator, which is passed down explicitly.
+    The stream depends only on the keys below, so a restarted run reproduces the draws of the
+    original run, provided it uses the same MPI layout. The world rank is unique across the TOD
+    and CompSep sides, so it also separates the two sides.
     """
     import numpy as np
 
     root_seed = int(params.gibbs.seed) if "seed" in params.gibbs else 1995
-    side = 0 if mpi_info.world.side == "tod" else 1
-    seed = int(np.random.SeedSequence(
-        [root_seed, chain, iteration, mpi_info.world.rank, side]
-    ).generate_state(1)[0])
-    np.random.seed(seed)
-    return seed
+    return np.random.default_rng([root_seed, chain, iteration, mpi_info.world.rank])
 
 
 def run_tod_side(mpi_info: Bunch, params: Bunch, experiment_data, my_band_tod_id: str,
@@ -83,10 +83,10 @@ def run_tod_side(mpi_info: Bunch, params: Bunch, experiment_data, my_band_tod_id
         if mpi_info.tod.rank == 0:
             logger.verbose(f"Worldrank {mpi_info.world.rank}, subrank {mpi_info.tod.rank} "
                            f"starting TOD chain {chain}, iteration {iteration}.")
-        seed_iteration_rng(params, mpi_info, chain, iteration)
+        rng = make_iteration_rng(params, mpi_info, chain, iteration)
         t0 = time.time()
         tod_output = process_tod(mpi_info, experiment_data, tod_samples_by_chain[chain],
-                                 compsep_output, params, iteration)
+                                 compsep_output, params, iteration, rng)
         if mpi_info.tod.is_master:
             logger.summary(f"Chain {chain}, iteration {iteration} completed TOD-proc in "
                            f"{time.time()-t0:.2f}s).")
@@ -124,10 +124,10 @@ def run_compsep_side(mpi_info: Bunch, params: Bunch, compsep_state, my_band_comp
         if mpi_info.compsep.rank == 0:
             logger.verbose(f"Worldrank {mpi_info.world.rank}, subrank {mpi_info.compsep.rank} "
                            f"starting CompSep chain {chain}, iteration {iteration}.")
-        seed_iteration_rng(params, mpi_info, chain, iteration)
+        rng = make_iteration_rng(params, mpi_info, chain, iteration)
         t0 = time.time()
         compsep_output = process_compsep(mpi_info, compsep_state, tod_output, iteration, chain,
-                                         params, comp_lists_by_chain[chain])
+                                         params, comp_lists_by_chain[chain], rng)
         if mpi_info.compsep.rank == 0:
             logger.verbose(f"CompSep: Rank {mpi_info.compsep.rank} finished chain {chain}, "
                            f"iteration {iteration} in {time.time()-t0:.2f}s. Sending results.")
@@ -202,10 +202,6 @@ def run_commander4(params: Bunch, params_dict: dict):
         get_local_initial_sky
     from commander4.sky.sky_model import SkyModel
 
-    # Give initialization its own stream. Every chain iteration is reseeded at the orchestration
-    # boundary in run_tod_side or run_compsep_side.
-    seed_iteration_rng(params, mpi_info, chain=0, iteration=0)
-
     ###### Initizatization ######
     # Setting up dictionaries mapping each experiment+band combo to the world rank of the master
     # task for that band (on both the TOD and CompSep sides).
@@ -243,7 +239,7 @@ def run_commander4(params: Bunch, params_dict: dict):
     curr_tod_output = None
     if mpi_info.world.is_master:
         if tod_active and compsep_active:
-            mode = "TOD and component separation"
+            mode = "TOD and CompSep"
         elif tod_active:
             mode = "TOD-only"
         else:

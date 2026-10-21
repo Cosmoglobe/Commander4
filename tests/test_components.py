@@ -276,10 +276,10 @@ def test_load_initial_state_from_fits_map(tmp_path) -> None:
     """
     nside = 8
     lmax = 3
-    np.random.seed(0)
+    rng = np.random.default_rng(0)
     # Distinct I and QU alms, so a wrong row selection would be detectable.
-    alms_I = gaussian_random_alm(lmax, lmax, 0, 1).astype(np.complex128)
-    alms_QU = gaussian_random_alm(lmax, lmax, 2, 2).astype(np.complex128)
+    alms_I = gaussian_random_alm(lmax, lmax, 0, 1, rng).astype(np.complex128)
+    alms_QU = gaussian_random_alm(lmax, lmax, 2, 2, rng).astype(np.complex128)
     iqu_map = np.vstack([alm_to_map(alms_I, nside, lmax, spin=0),
                          alm_to_map(alms_QU, nside, lmax, spin=2)])
     fits_path = tmp_path / "init_map.fits"

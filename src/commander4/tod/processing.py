@@ -9,6 +9,7 @@ import logging
 import os
 import time
 
+import numpy as np
 from pixell.bunch import Bunch
 
 from commander4.file_io import paths
@@ -122,7 +123,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch, start: ChainStart) \
 
 def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD, tod_samples: TODSamples,
                 compsep_output: DistributedMap, params: Bunch,
-                iter: int) -> dict[str, DetectorMap]:
+                iter: int, rng: np.random.Generator) -> dict[str, DetectorMap]:
     """Run one TOD iteration for one band and chain, updating `tod_samples` in place.
 
     The function states the scientific order directly. Each step decides from its own settings
@@ -136,6 +137,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD, tod_samples:
         compsep_output: The band's realized sky model. The samplers and mapmakers read it along
             the pointing, so they get its local form; the far-sidelobe transform and the chain
             output need the whole sky, so they get the master's full-sky form.
+        rng: This rank's random generator for the iteration. Every draw of every step uses it.
 
     Returns:
         The detector maps for component separation.
@@ -160,7 +162,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD, tod_samples:
     # also determines whether Python's even or odd sample indices carry the positive half-cycle.
     if hfi.cfg.enabled:
         with benchmark("hfi-baselines"):
-            hfi.sample(tod_samples, compsep_output.local)
+            hfi.sample(tod_samples, compsep_output.local, rng)
 
     # Jumps are steps of the demodulated TOD, so they are measured once the HFI phase is known, as
     # Commander3 stitches its HFI DC levels after demodulation.
@@ -171,21 +173,21 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD, tod_samples:
     # Glitch detection, performed after HFI demodulation.
     if glitches.cfg.enabled and iter >= glitches.cfg.from_iter:
         with benchmark("glitches"):
-            glitches.sample(tod_samples, compsep_output.local)
+            glitches.sample(tod_samples, compsep_output.local, rng)
 
     # Gain uses the previous iteration's sigma0. The new sigma0 is estimated later, inside the
     # mapmaker scan loop, matching Commander3's gain -> n_corr -> bin_TOD order.
     if gain.cfg.abs_gain.enabled and iter >= gain.cfg.abs_gain.from_iter:
         with benchmark("abs-gain"):
-            gain.sample_absolute(tod_samples, compsep_output.local, iter)
+            gain.sample_absolute(tod_samples, compsep_output.local, iter, rng)
 
     if gain.cfg.rel_gain.enabled and iter >= gain.cfg.rel_gain.from_iter:
         with benchmark("rel-gain"):
-            gain.sample_relative(tod_samples, compsep_output.local, iter)
+            gain.sample_relative(tod_samples, compsep_output.local, iter, rng)
 
     if gain.cfg.temporal_gain.enabled and iter >= gain.cfg.temporal_gain.from_iter:
         with benchmark("temp-gain"):
-            gain.sample_temporal(tod_samples, compsep_output.local, iter)
+            gain.sample_temporal(tod_samples, compsep_output.local, iter, rng)
 
 
     # What the scan loop below records is rebuilt from scratch every iteration.
@@ -194,7 +196,7 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD, tod_samples:
 
     with benchmark("mapmaker"):
         detmap_dict, maps_to_file = tod2map(experiment_data, tod_samples, compsep_output.local,
-                                            iter, params)
+                                            iter, params, rng)
     if is_master and params.output.chains.include.sky_model_maps:
         maps_to_file["skymodel"] = compsep_output.full
 

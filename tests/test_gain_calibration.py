@@ -61,7 +61,7 @@ def test_gain_samplers_convert_seconds_to_native_samples(
     monkeypatch.setattr(gain, "TODView", view)
     with pytest.raises(RuntimeError, match="stop at TODView"):
         samples = SimpleNamespace(band_comm=MPI.COMM_SELF, experiment_data=experiment)
-        getattr(gains, sampler_name)(samples, None, 1)
+        getattr(gains, sampler_name)(samples, None, 1, np.random.default_rng(0))
     assert view.call_args.kwargs["downsample_factor"] == expected
 
 
@@ -130,11 +130,10 @@ def test_absolute_gain_reuses_filtered_calibrator(
     monkeypatch.setattr(gain, "TODView", Mock(return_value=scan_view))
     filter_spy = Mock(wraps=experiment.apply_N_inv)
     monkeypatch.setattr(experiment, "apply_N_inv", filter_spy)
-    monkeypatch.setattr(gain.np.random, "randn", lambda: 0.37)
     gains = _gain_step({"abs_gain": {"downsample_time": 1.0}})
     gains.abs_gain = 1.0
     samples = SimpleNamespace(band_comm=MPI.COMM_SELF, experiment_data=experiment, chain=1)
-    gains.sample_absolute(samples, None, 1)
+    gains.sample_absolute(samples, None, 1, SimpleNamespace(standard_normal=lambda: 0.37))
 
     expected = numerator / denominator + 0.37 / np.sqrt(denominator)
     tolerance = 2e-6 if dtype == np.float32 else 1e-12
@@ -181,8 +180,8 @@ def test_temporal_gain_is_solved_in_time_order(monkeypatch: pytest.MonkeyPatch) 
         gains.temporal_gain = np.zeros((nscans, 1), dtype=np.float32)
         samples = SimpleNamespace(band_comm=MPI.COMM_SELF, experiment_data=experiment, chain=1,
                                   scan_ids=scan_ids)
-        np.random.seed(7)  # The same fluctuation draws, which the solve makes in time order.
-        gains.sample_temporal(samples, None, 1)
+        # The same fluctuation draws, which the solve makes in time order.
+        gains.sample_temporal(samples, None, 1, np.random.default_rng(7))
         return gains.temporal_gain[:, 0]
 
     in_time_order = solve(np.arange(nscans))
@@ -304,7 +303,7 @@ def test_get_calib_tod_builds_residual(target, calib, scal):
     """The residual reduces to (target gain term) * s_cal + noise. A calibrator with the sky
     model has its far-sidelobe pickup as well, as Commander3's `s_tot`."""
     view = _StubView()
-    out = view.get_calib_tod(target, calib, fill_masked=False)
+    out = view.get_calib_tod(target, calib, np.random.default_rng(0), fill_masked=False)
     expected_scal = {"orb": view.s_orb, "sky+sl": view.s_sky + view.s_sl,
                      "sky+orb+sl": view.s_sky + view.s_orb + view.s_sl}[scal]
     np.testing.assert_allclose(out.s_cal, expected_scal)
@@ -313,10 +312,11 @@ def test_get_calib_tod_builds_residual(target, calib, scal):
 
 def test_get_calib_tod_rejects_bad_arguments():
     view = _StubView()
+    rng = np.random.default_rng(0)
     with pytest.raises(ValueError):
-        view.get_calib_tod("bogus", "sky")
+        view.get_calib_tod("bogus", "sky", rng)
     with pytest.raises(ValueError):
-        view.get_calib_tod("abs", "bogus")
+        view.get_calib_tod("abs", "bogus", rng)
 
 
 # --------------------------------------------------------------------------------------
@@ -360,9 +360,8 @@ def test_gain_gap_fill_methods_replace_masked_samples():
     gap = ~mask
     for method in ("wn", "fallback", "full_cg"):
         view = _FillStubView(n, mask, NoisePSDOof(), params, fsamp=1.0, gain=2.0)
-        np.random.seed(0)
         filled = view._fill_masked_calibration_samples(resid, mask, s_cal, ("abs",),
-                                                       method=method)
+                                                       np.random.default_rng(0), method=method)
         assert np.array_equal(filled[mask], resid[mask])         # valid samples untouched
         assert np.all(np.isfinite(filled))
         assert not np.allclose(filled[gap], 0.0)                 # gaps were filled
@@ -382,10 +381,10 @@ def test_gain_gap_fill_realization_is_shared_across_terms():
     s_cal = np.ones(n)
     resid = np.zeros(n)
     view = _FillStubView(n, mask, NoisePSDOof(), params, fsamp=1.0, gain=1.0)
-    np.random.seed(0)
-    a = view._fill_masked_calibration_samples(resid, mask, s_cal, ("abs",),
+    rng = np.random.default_rng(0)
+    a = view._fill_masked_calibration_samples(resid, mask, s_cal, ("abs",), rng,
                                               method="fallback")
-    b = view._fill_masked_calibration_samples(resid, mask, s_cal, ("rel",),
+    b = view._fill_masked_calibration_samples(resid, mask, s_cal, ("rel",), rng,
                                               method="fallback")
     # Same gain and cached draw -> identical masked fill across the two terms.
     np.testing.assert_array_equal(a[~mask], b[~mask])
@@ -432,7 +431,7 @@ def test_relgain_excludes_zero_weight_detectors():
 
 def test_relgain_no_active_detectors_returns_prev_unchanged():
     prev = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-    out = _solve_relative_gain_system(np.zeros(3), np.zeros(3), prev)
+    out = _solve_relative_gain_system(np.zeros(3), np.zeros(3), prev, rng=_ZERO_RNG)
     np.testing.assert_array_equal(out, prev)
 
 
@@ -517,7 +516,8 @@ def test_get_calib_tod_downsampled_end_to_end(monkeypatch):
     # with every term block-averaged with the same kernel.
     make_view, det, s_full = _make_real_view(monkeypatch)
     orb_full = make_view(1).get_orbital_dipole_tod()
-    out = make_view(FACTOR).get_calib_tod("abs", "sky_no_dipole", fill_masked=False)
+    out = make_view(FACTOR).get_calib_tod("abs", "sky_no_dipole", np.random.default_rng(0),
+                                          fill_masked=False)
     np.testing.assert_allclose(out.s_cal, _block_mean(s_full), rtol=2e-5, atol=1e-6)
     expected = _block_mean(det.tod) - 0.75*_block_mean(s_full) - 2.75*_block_mean(orb_full)
     np.testing.assert_allclose(out.tod, expected, rtol=2e-5, atol=1e-6)

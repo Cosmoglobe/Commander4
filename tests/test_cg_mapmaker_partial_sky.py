@@ -95,7 +95,7 @@ def _run_mapmaker(band: DetectorGroupTOD, mapmaker: str, sparse_maps: bool = Fal
     band.pixel_domain = PixelDomain.from_view(TODView(band, tod_samples), MPI.COMM_SELF,
                                               "sparse" if sparse_maps else "full", _NSIDE)
     sky = np.zeros((ncomp, band.pixel_domain.n_local))
-    _, maps = tod_processing.tod2map(band, tod_samples, sky, 1, params)
+    _, maps = tod_processing.tod2map(band, tod_samples, sky, 1, params, np.random.default_rng(0))
     return maps
 
 

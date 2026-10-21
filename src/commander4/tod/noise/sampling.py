@@ -133,17 +133,18 @@ class Noise(TODStep):
         self.ncorr_high_var[:] = -1
 
 
-    def sample_scan(self, view: TODView) -> NDArray:
+    def sample_scan(self, view: TODView, rng: np.random.Generator) -> NDArray:
         """Draw the correlated noise of the focused detector-scan, and its noise parameters.
 
         Records the new noise parameters and the CG diagnostics of the draw, and returns the
-        realization ``n_corr``, in detector units.
+        realization ``n_corr``, in detector units. Every random draw comes from ``rng``.
         """
         cfg = self.cfg
         res = sample_correlated_noise(
             view.get_tod(), view.get_mask(proc_mask_type="ncorr"),
             np.array(view.noise_params, copy=True),
-            self.noise_model, view.fsamp, cg_err_tol=cfg.cg.err_tol, cg_max_iter=cfg.cg.max_iter,
+            self.noise_model, view.fsamp, rng, cg_err_tol=cfg.cg.err_tol,
+            cg_max_iter=cfg.cg.max_iter,
             sample_params=cfg.sample_psd_params, sample_sigma0=cfg.sample_sigma0,
             sigma0_method=cfg.sigma0_method, nomono=cfg.nomono, onlymono=cfg.onlymono,
             sigma0_dec=cfg.sigma0_decimation, psd_bin=cfg.psd_bin, use_dct=cfg.use_dct)

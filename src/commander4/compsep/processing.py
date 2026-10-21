@@ -526,8 +526,11 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
 
 def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
                          detector_data: DetectorMap, comp_list: CompList,
-                         group: CGSamplingGroupConfig | PerPixelSamplingGroupConfig) -> dict:
+                         group: CGSamplingGroupConfig | PerPixelSamplingGroupConfig,
+                         rng: np.random.Generator) -> dict:
     """Run one amplitude group and broadcast its result to every CompSep rank.
+
+    `rng` is this rank's random generator, for the fluctuation terms of the amplitude draw.
 
     Returns:
         On the CompSep master, the CG convergence history of each polarization that was solved,
@@ -552,7 +555,7 @@ def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
                 double_precision=compsep_state.double_precision,
                 nthreads=compsep_state.num_threads,
             )
-            solved_sublist = solver.solve(active_sublist)
+            solved_sublist = solver.solve(active_sublist, rng)
             # The CG runs its scalar recurrence on rank 0 of `solver_comm` and only broadcasts the
             # stopping decision, so that rank alone holds meaningful residuals.
             if solver_comm.Get_rank() == 0:
@@ -562,7 +565,7 @@ def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
             solved_sublist = solve_compsep_perpix(
                 solver_comm, residual_data, active_sublist,
                 double_precision=compsep_state.double_precision,
-                nthreads=compsep_state.num_threads,
+                nthreads=compsep_state.num_threads, rng=rng,
             )
         else:
             raise ValueError(
@@ -594,7 +597,7 @@ def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
 
 def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
                     detector_data: DetectorMap, iter: int, chain: int,
-                    params: Bunch, comp_list: CompList) -> SkyModel:
+                    params: Bunch, comp_list: CompList, rng: np.random.Generator) -> SkyModel:
     """Perform a single component-separation iteration.
 
     Runs the configured CG or per-pixel amplitude groups first, followed by MCMC groups. An MCMC
@@ -605,10 +608,11 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
         compsep_state: Resolved component-separation settings and masks for this rank.
         detector_data (DetectorMap): The detector map for this rank's band, cleaned of all "TOD"
             components (correlated noise and orbital dipole).
-        iter (int): The current Gibbs iteration (used only for printing and seeding).
-        chain (int): The current chain (used only for printing and seeding).
+        iter (int): The current Gibbs iteration (used only for logging and the chain file).
+        chain (int): The current chain (used only for logging and the chain file).
         params (Bunch): The parameters from the input parameter file.
         comp_list (CompList): The full execution-view component list, updated in place.
+        rng: This rank's random generator for the iteration. Every draw of every group uses it.
 
     Returns:
         The full sky realization, wrapping the updated `comp_list`.
@@ -634,7 +638,7 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
     for group in amplitude_groups.values():
         with benchmark(f"amp-{group.name}"):
             cg_stats = _run_amplitude_group(mpi_info, compsep_state, detector_data, comp_list,
-                                            group)
+                                            group, rng)
         if cg_stats:
             sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
         method_label = "CG" if compsep_state.amplitude_method == "cg" else "per-pixel"
@@ -645,7 +649,7 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
             for group_name in group_names:
                 _run_amplitude_group(
                     mpi_info, compsep_state, detector_data, comp_list,
-                    amplitude_groups[group_name])
+                    amplitude_groups[group_name], rng)
 
         chisq_active = _sampling_group_selects_band(
             group.chisq_bands, compsep_state.band_name, compsep_state.band_identifier)
@@ -654,7 +658,8 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
             selected_comps=group.comps, chisq_active=chisq_active,
             chisq_mask=compsep_state.chisq_masks.get(group.name), root=compsep.master)
         with benchmark(f"mcmc-{group.name}"):
-            mcmc_stats = sampler.run(numstep=group.numstep, resolve_amplitudes=resolve_amplitudes)
+            mcmc_stats = sampler.run(numstep=group.numstep, resolve_amplitudes=resolve_amplitudes,
+                                     rng=rng)
         if mcmc_stats:
             sampler_stats.setdefault("mcmc", {})[group.name] = mcmc_stats
         fit = evaluate(f"MCMC group {group.name!r}")

@@ -88,7 +88,7 @@ def test_placeholder_sampler_marks_detection_done_and_says_it_does_nothing(caplo
     assert "placeholder" in caplog.text
 
     band, samples = _band_and_samples(GlitchEvents.empty())
-    samples.glitches.sample(samples, None)
+    samples.glitches.sample(samples, None, np.random.default_rng(0))
 
     assert samples.glitches.detected
     assert samples.glitches.events[0, 0].num_events == 0

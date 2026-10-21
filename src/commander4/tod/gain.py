@@ -38,7 +38,7 @@ ORBITAL_DIPOLE_MAX_FREQ_GHZ = 400.0
 
 
 def _solve_relative_gain_system(s_weights: NDArray, r_weights: NDArray, prev_rel_gain: NDArray,
-                                rng=None) -> NDArray:
+                                rng: np.random.Generator) -> NDArray:
     """ Draw relative-gain deviations Delta g_i from the BP7 Sec. 3.4 constrained Gaussian.
 
         Solves the bordered linear system enforcing ``sum(Delta g_i) = 0`` over the *active*
@@ -52,7 +52,7 @@ def _solve_relative_gain_system(s_weights: NDArray, r_weights: NDArray, prev_rel
         s_weights (NDArray): Per-detector ``sum_scans s^T N^-1 s`` (calibration weight), shape (ndet,).
         r_weights (NDArray): Per-detector ``sum_scans r^T N^-1 s`` (residual projection), shape (ndet,).
         prev_rel_gain (NDArray): Current relative gains, kept for excluded detectors, shape (ndet,).
-        rng: Optional NumPy random generator for the fluctuation term (defaults to ``np.random``).
+        rng: Random generator for the fluctuation term.
 
     Returns:
         NDArray: Full-length (ndet,) float32 relative-gain vector with the active entries resampled.
@@ -60,7 +60,6 @@ def _solve_relative_gain_system(s_weights: NDArray, r_weights: NDArray, prev_rel
     Raises:
         np.linalg.LinAlgError: If the reduced system is singular (left for the caller to handle).
     """
-    rng = np.random if rng is None else rng
     out = np.array(prev_rel_gain, dtype=np.float32)
     idx = np.flatnonzero(np.asarray(s_weights) > 0.0)
     n = idx.size
@@ -217,13 +216,14 @@ class Gain(TODStep):
 
 
     def sample_absolute(self, tod_samples: TODSamples, det_compsep_map: NDArray,
-                        iteration: int) -> None:
+                        iteration: int, rng: np.random.Generator) -> None:
         """ Draw a realization of the absolute gain term, g0, which is constant across all
             detectors and all scans within a band, using the calibrator in ``cfg.abs_gain``.
         Args:
             tod_samples (TODSamples): The band's sampled state, which the TOD views read.
             det_compsep_map (NDArray): The component-separation sky map for the detector.
             iteration: Current Gibbs iteration for log context.
+            rng: This rank's random generator for the gap fills and the draw.
         """
         band_comm, experiment_data = tod_samples.band_comm, tod_samples.experiment_data
         gain_cfg = self.cfg.abs_gain
@@ -240,7 +240,7 @@ class Gain(TODStep):
 
         # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
         for view in scan_view.iter_focused(accepted_only=True):
-            calib = view.get_calib_tod("abs", gain_cfg.calibrate_against,
+            calib = view.get_calib_tod("abs", gain_cfg.calibrate_against, rng,
                                        gap_fill_method=gain_cfg.gap_fill_method)
             s_cal = calib.s_cal
             residual_tod = calib.tod
@@ -271,7 +271,7 @@ class Gain(TODStep):
                              "weight (all detector-scans rejected or zero calibrator): not "
                              "updating.")
             else:
-                eta = np.random.randn()
+                eta = rng.standard_normal()
                 g_mean = sum_s_T_N_inv_d / sum_s_T_N_inv_s
                 g_std = 1.0 / np.sqrt(sum_s_T_N_inv_s)
                 g_sampled = g_mean + eta * g_std
@@ -292,13 +292,14 @@ class Gain(TODStep):
 
 
     def sample_relative(self, tod_samples: TODSamples, det_compsep_map: NDArray,
-                        iteration: int) -> None:
+                        iteration: int, rng: np.random.Generator) -> None:
         """ Samples the detector-dependent relative gain (Delta g_i), with the settings in
             ``cfg.rel_gain``. This function implements the logic from Sec. 3.4 of BP7.
         Args:
             tod_samples (TODSamples): The band's sampled state, which the TOD views read.
             det_compsep_map (NDArray): The component-separation sky map for the detector.
             iteration: Current Gibbs iteration for log context.
+            rng: This rank's random generator for the gap fills and the draw.
         """
         band_comm, experiment_data = tod_samples.band_comm, tod_samples.experiment_data
         gain_cfg = self.cfg.rel_gain
@@ -321,7 +322,7 @@ class Gain(TODStep):
 
         # Skip detector-scans flagged as bad (accepted_only); they carry no gain info.
         for view in scan_view.iter_focused(accepted_only=True):
-            calib = view.get_calib_tod("rel", gain_cfg.calibrate_against,
+            calib = view.get_calib_tod("rel", gain_cfg.calibrate_against, rng,
                                        gap_fill_method=gain_cfg.gap_fill_method)
             s_cal = calib.s_cal
             residual_tod = calib.tod
@@ -362,8 +363,8 @@ class Gain(TODStep):
                              "weight for relative gain; not updating.")
             else:
                 try:
-                    delta_g_samples = _solve_relative_gain_system(local_s_T_N_inv_s,
-                                                                  local_r_T_N_inv_s, self.rel_gain)
+                    delta_g_samples = _solve_relative_gain_system(
+                        local_s_T_N_inv_s, local_r_T_N_inv_s, self.rel_gain, rng)
                     msg = (f"Chain {tod_samples.chain} iter{iteration} "
                            f"{experiment_data.band_name}: solved relative gains for {n_active} "
                            "active detectors")
@@ -392,7 +393,7 @@ class Gain(TODStep):
 
 
     def sample_temporal(self, tod_samples: TODSamples, det_compsep_map: NDArray,
-                        iteration: int) -> None:
+                        iteration: int, rng: np.random.Generator) -> None:
         """ Samples the time-dependent relative gain variations (delta g_qi), with the settings in
             ``cfg.temporal_gain``. This function implements the logic from Sec. 3.5 of the BP7
             paper, using a Wiener filter to smooth the gain solution over time (PIDs). It solves a
@@ -403,6 +404,7 @@ class Gain(TODStep):
             tod_samples (TODSamples): The band's sampled state, which the TOD views read.
             det_compsep_map (NDArray): The sky model at our band.
             iteration: Current Gibbs iteration for log context.
+            rng: This rank's random generator for the gap fills and the draw.
         """
         band_comm, experiment_data = tod_samples.band_comm, tod_samples.experiment_data
         gain_cfg = self.cfg.temporal_gain
@@ -433,7 +435,7 @@ class Gain(TODStep):
         # Rejected detector-scans (accepted_only) contribute zero weight (A_qq = b_q = 0); the
         # Wiener prior then fills their temporal gain from neighbors.
         for view in scan_view.iter_focused(accepted_only=True):
-            calib = view.get_calib_tod("temp", gain_cfg.calibrate_against,
+            calib = view.get_calib_tod("temp", gain_cfg.calibrate_against, rng,
                                        gap_fill_method=gain_cfg.gap_fill_method)
             s_cal = calib.s_cal
             residual_tod = calib.tod
@@ -508,10 +510,10 @@ class Gain(TODStep):
                         return g_inv_v + diag_v
 
                     # Construct RHS of the sampling equation (Eq. 30)
-                    eta1 = np.random.randn(n_scans_total)
+                    eta1 = rng.standard_normal(n_scans_total)
                     fluctuation1 = np.sqrt(np.maximum(A_diag, 0)) * eta1
 
-                    eta2 = np.random.randn(n_scans_total)
+                    eta2 = rng.standard_normal(n_scans_total)
                     fluctuation2 = backward_rfft(forward_rfft(eta2) * prior_ps_inv_sqrt,
                                                  n_scans_total).real
 

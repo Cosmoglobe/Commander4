@@ -535,7 +535,7 @@ class TODView:
     # ============================================================================================ #
 
     # ------------------------------------------------------------------ gain calibration
-    def _gap_noise_draw(self, method: str) -> NDArray[np.floating]:
+    def _gap_noise_draw(self, method: str, rng: np.random.Generator) -> NDArray[np.floating]:
         """Constrained noise realization at the masked samples of the calibration TOD.
 
         The noise residual ``get_tod()``, ``d - g*(s_sky + s_orb + s_sl)`` at the full gain, is
@@ -552,7 +552,7 @@ class TODView:
         noise_resid = self.get_tod()
         samprate = self.fsamp / self._downsample_factor  # block-averaging downsamples fsamp
         draw = realize_noise_in_gaps(noise_resid, mask, self.experiment_data.noise_model,
-                                     self.noise_params, samprate, self.fsamp, method)
+                                     self.noise_params, samprate, self.fsamp, method, rng)
         self._gap_noise[method] = draw
         return draw
 
@@ -563,6 +563,7 @@ class TODView:
         mask: NDArray[np.bool_],
         signal: NDArray[np.floating],
         gain_terms: tuple[str, ...],
+        rng: np.random.Generator,
         method: str = "wn",
     ) -> NDArray[np.floating]:
         """Fill masked calibration samples with the target signal plus a noise realization.
@@ -579,9 +580,9 @@ class TODView:
         target = self.get_gain(gain_terms) * signal[gap]
         if method == "wn":
             sigma0_effective = self.sigma0 * np.sqrt(1.0 / self._downsample_factor)
-            filled[gap] = target + np.random.normal(0.0, sigma0_effective, target.shape)
+            filled[gap] = target + rng.normal(0.0, sigma0_effective, target.shape)
         else:
-            filled[gap] = target + self._gap_noise_draw(method)[gap]
+            filled[gap] = target + self._gap_noise_draw(method, rng)[gap]
         return filled
 
 
@@ -589,6 +590,7 @@ class TODView:
         self,
         target_term: str,
         calibrate_against: str,
+        rng: np.random.Generator,
         *,
         fill_masked: bool = True,
         gap_fill_method: str = "wn",
@@ -605,6 +607,7 @@ class TODView:
         Args:
             target_term: Gain term being sampled, one of ``ALL_GAIN_TERMS`` ("abs", "rel", "temp").
             calibrate_against: Calibrator, one of "orbital_dipole", "sky", or "sky_no_dipole".
+            rng: Random generator for the noise drawn into the masked samples.
             fill_masked: If True, fill masked samples with ``g_target * s_cal`` plus a noise draw.
             gap_fill_method: How masked samples are filled when ``fill_masked``: ``'wn'`` (white
                 noise), ``'fallback'`` (stationary 1/f Wiener draw), or ``'full_cg'`` (masked
@@ -630,6 +633,6 @@ class TODView:
         mask = self.get_mask(proc_mask_type=self._proc_mask_type)
         tod = self.get_tod() + self.get_gain((target_term,)) * s_cal
         if fill_masked:
-            tod = self._fill_masked_calibration_samples(tod, mask, s_cal, (target_term,),
+            tod = self._fill_masked_calibration_samples(tod, mask, s_cal, (target_term,), rng,
                                                         method=gap_fill_method)
         return Bunch(tod=tod, s_cal=s_cal, mask=mask)

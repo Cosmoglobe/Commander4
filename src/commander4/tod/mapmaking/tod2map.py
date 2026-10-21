@@ -26,7 +26,8 @@ from commander4.tod.view import TODView
 
 
 def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_output: NDArray,
-            iteration: int, params: Bunch) -> tuple[dict[str, DetectorMap], dict[str, NDArray]]:
+            iteration: int, params: Bunch,
+            rng: np.random.Generator) -> tuple[dict[str, DetectorMap], dict[str, NDArray]]:
     """Make the band maps from the TOD with the binned or the CG mapmaker (collective).
 
     All ranks of the band's communicator hold TOD of the same band and build its maps together.
@@ -39,6 +40,7 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
         compsep_output: The sky model at this band, at this rank's local pixels.
         iteration: Current Gibbs iteration.
         params: The full parameter file, for the mapmaker and the maps the chain gets.
+        rng: This rank's random generator for the per-scan draws (correlated noise).
 
     Returns:
         The detector maps for component separation and the maps for the chain file (both empty on
@@ -108,7 +110,7 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
         n_corr_est = None
         if corr_noise_active:
             with benchmark("ncorr"):
-                n_corr_est = noise.sample_scan(view)
+                n_corr_est = noise.sample_scan(view, rng)
         elif noise.cfg.sample_sigma0:
             # No correlated noise this iteration: estimate sigma0 alone.
             with benchmark("sigma0-samp"):

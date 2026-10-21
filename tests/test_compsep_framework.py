@@ -181,7 +181,7 @@ def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
     with caplog.at_level(SUMMARY, logger="commander4.compsep.processing"):
         result = process_compsep(
             mpi_info, compsep_state, detector_data, iter=4, chain=2,
-            params=Bunch(), comp_list=CompList([]))
+            params=Bunch(), comp_list=CompList([]), rng=np.random.default_rng(0))
 
     chi2 = np.sum((map_sky / 2.0)**2)
     z_chi2 = (chi2 - map_sky.size) / np.sqrt(2.0 * map_sky.size)
@@ -331,7 +331,8 @@ def test_broken_dense_matrix_debug_path_cannot_be_selected() -> None:
 
 def test_per_pixel_solver_rejects_non_diffuse_components_before_mpi_work() -> None:
     with pytest.raises(ValueError, match="does not support object"):
-        solve_compsep_perpix(None, None, [object()], double_precision=False, nthreads=1)
+        solve_compsep_perpix(None, None, [object()], double_precision=False, nthreads=1,
+                             rng=np.random.default_rng(0))
 
 
 def test_unimplemented_component_classes_are_rejected_during_construction() -> None:
@@ -362,7 +363,8 @@ def test_per_pixel_solver_accepts_resolved_precision() -> None:
         nu=30.0, fwhm=0.0, nside=2,
     )
     result = solve_compsep_perpix(
-        MPI.COMM_SELF, detector_data, comp_list, double_precision=False, nthreads=1)
+        MPI.COMM_SELF, detector_data, comp_list, double_precision=False, nthreads=1,
+        rng=np.random.default_rng(0))
     assert result[0].alms.dtype == np.complex64
     assert np.all(np.isfinite(result[0].alms))
 

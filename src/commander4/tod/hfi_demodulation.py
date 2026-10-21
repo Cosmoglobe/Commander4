@@ -96,7 +96,7 @@ class HFIModulation(TODStep):
 
 
     def sample(self, tod_samples: TODSamples, compsep_output: NDArray,
-               rng: np.random.Generator | None = None) -> None:
+               rng: np.random.Generator) -> None:
         """Sample HFI baselines for one Gibbs pass and initialize the phase on the first pass.
 
         The first pass follows Commander3's bootstrap: sample the two raw parity means without a
@@ -108,6 +108,7 @@ class HFIModulation(TODStep):
         Args:
             tod_samples: The band's sampled state, which the TOD views read. A detector-scan that
                 cannot be demodulated is rejected in its `selection`.
+            rng: This rank's random generator for the baseline draws.
         """
         band_comm, experiment_data = tod_samples.band_comm, tod_samples.experiment_data
         first_pass = not self.initialized
@@ -132,7 +133,7 @@ class HFIModulation(TODStep):
 
 
     def _sample_baselines(self, tod_samples: TODSamples, compsep_output: NDArray | None,
-                          subtract_sky: bool, rng: np.random.Generator | None) -> NDArray:
+                          subtract_sky: bool, rng: np.random.Generator) -> NDArray:
         """Draw the two per-parity constant baselines from their white-noise posteriors.
 
         Before demodulation, one detector-scan follows
@@ -151,7 +152,6 @@ class HFIModulation(TODStep):
             standard deviation, and the number of detector-scans summed over.
         """
         scan_view = TODView(tod_samples.experiment_data, tod_samples, compsep_output=compsep_output)
-        normal = np.random.normal if rng is None else rng.normal
         stats = np.zeros(4)
 
         for view in scan_view.iter_focused(accepted_only=True):
@@ -183,7 +183,7 @@ class HFIModulation(TODStep):
                 parity_mean = float(np.mean(residual_tod[parity::2][parity_mask]))
                 posterior_mean = signs[parity] * parity_mean
                 posterior_sd = view.sigma0 / np.sqrt(count)
-                baseline = posterior_mean + float(normal()) * posterior_sd
+                baseline = posterior_mean + float(rng.normal()) * posterior_sd
                 self.baselines[view.iscan, view.idet, parity] = baseline
                 step += abs(baseline - previous[parity]) / posterior_sd / 2
 

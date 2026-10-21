@@ -7,6 +7,7 @@ then decides from them which steps run in an iteration.
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import numpy as np
 import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
@@ -282,7 +283,8 @@ def _pipeline(monkeypatch: pytest.MonkeyPatch, params: Bunch) -> Bunch:
     sky = DistributedMap(local=None, full=None)
 
     def run(iteration: int) -> None:
-        processing.process_tod(mpi, EXPERIMENT, samples, sky, params, iteration)
+        processing.process_tod(mpi, EXPERIMENT, samples, sky, params, iteration,
+                               np.random.default_rng(0))
 
     return Bunch(run=run, calls=calls, samples=samples)
 

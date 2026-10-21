@@ -42,13 +42,14 @@ def _oof_loglike_grid(frequency_factor: NDArray, grid_factor: NDArray,
     return result
 
 
-def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray) -> float:
+def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray, rng: np.random.Generator) -> float:
     """ Performs 1D inversion sampling on a grid. This involves calculating the cumulative
         log-likelihood, normalizing this to be contained in [0,1], drawing a random number in [0,1],
         and matching that to a (interpolated) grid point.
     Args:
         lnL (np.ndarray): Array of log-likelihood values at each grid point.
         grid_points (np.ndarray): The corresponding parameter values for each grid point.
+        rng: Random generator for the uniform draw.
     Returns:
         sample (float): A single random sample drawn from the provided distribution.
     """
@@ -56,7 +57,7 @@ def _inversion_sampler_1d(lnL: NDArray, grid_points: NDArray) -> float:
     L = np.exp(lnL)  # Calculate the linear likelihood.
     cdf = np.cumsum(L)  # Cumulative likelihood.
     cdf /= cdf[-1]  # Constrain it to [0,1].
-    u = np.random.uniform(0, 1)
+    u = rng.uniform(0, 1)
     sample = np.interp(u, cdf, grid_points)  # Find the x-value that matches the y-value we drew.
     return sample
 
@@ -181,8 +182,8 @@ class NoisePSD:
         out[good] = 1.0 / P_corr[good]
         return out
 
-    def sample_params(self, residual: NDArray, noise_params: NDArray, fsamp: float, *,
-                      bin_psd: bool = False) -> NDArray:
+    def sample_params(self, residual: NDArray, noise_params: NDArray, fsamp: float,
+                      rng: np.random.Generator, *, bin_psd: bool = False) -> NDArray:
         """Draw a new sample of the model parameters (except ``sigma0`` at index 0).
 
         The fit is performed against the periodogram of the sky-subtracted *residual* TOD (with
@@ -196,6 +197,7 @@ class NoisePSD:
             residual: Sky-subtracted residual TOD (white + correlated noise), gaps inpainted.
             noise_params: Current parameter values; ``noise_params[0]`` (sigma0) is held fixed.
             fsamp: Sampling rate of *residual* (Hz).
+            rng: Random generator for the parameter draws.
             bin_psd: If True, fit a log-binned periodogram (each bin Whittle-weighted by its mode
                 count); if False, fit every Fourier mode in range (default).
         Returns:
@@ -280,8 +282,8 @@ class NoisePSDOof(NoisePSD):
         vals[pos] = s0 ** 2 * (freqs[pos] / fk) ** a
         return vals
 
-    def sample_params(self, residual: NDArray, noise_params: NDArray, fsamp: float, *,
-                      bin_psd: bool = False,
+    def sample_params(self, residual: NDArray, noise_params: NDArray, fsamp: float,
+                      rng: np.random.Generator, *, bin_psd: bool = False,
                       n_grid: int = 150, n_burnin: int = 4) -> NDArray:
         """ Draw a sample of (fknee, alpha) for the 1/f model by fitting the *full* PSD
             P(f) = sigma0^2 (1 + (f/fknee)^alpha) to the periodogram of the sky-subtracted
@@ -343,7 +345,7 @@ class NoisePSDOof(NoisePSD):
                 log_L_fknee = _oof_loglike_grid(
                     f**alpha_current, fknee_grid**(-alpha_current), power_scaled, weight,
                 ) + log_prior_fknee
-                fknee_current = float(_inversion_sampler_1d(log_L_fknee, fknee_grid))
+                fknee_current = float(_inversion_sampler_1d(log_L_fknee, fknee_grid, rng))
             # 2. Sample alpha given the new fknee.
             if sample_alpha:
                 f, power_scaled, weight = fit_data[2]
@@ -351,7 +353,7 @@ class NoisePSDOof(NoisePSD):
                     np.log(f) - np.log(fknee_current), alpha_grid, power_scaled, weight,
                     exponentiate=True,
                 ) + log_prior_alpha
-                alpha_current = float(_inversion_sampler_1d(log_L_alpha, alpha_grid))
+                alpha_current = float(_inversion_sampler_1d(log_L_alpha, alpha_grid, rng))
 
         out = np.array(noise_params, dtype=np.float64, copy=True)
         out[1] = fknee_current

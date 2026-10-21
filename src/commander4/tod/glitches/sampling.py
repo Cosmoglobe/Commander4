@@ -120,7 +120,7 @@ class Glitches(TODStep):
 
 
     def sample(self, tod_samples: TODSamples, compsep_output: NDArray,
-               rng: np.random.Generator | None = None) -> None:
+               rng: np.random.Generator) -> None:
         """Find glitch events on the first pass, then resample their amplitudes and shapes.
 
         Detection runs once per run, like C3's `first_call`, so a restart detects the events
@@ -130,7 +130,7 @@ class Glitches(TODStep):
         Args:
             tod_samples: The band's sampled state, which the TOD views read.
             compsep_output: Current sky model, removed from the TOD before any fit.
-            rng: Optional generator for the Gibbs draws.
+            rng: This rank's random generator for the Gibbs draws.
         """
         # Every TOD this view returns has the stored glitch model removed, as for all other steps.
         scan_view = TODView(tod_samples.experiment_data, tod_samples, compsep_output=compsep_output)
@@ -156,7 +156,7 @@ class Glitches(TODStep):
         self._sample_templates(tod_samples.band_comm, scan_view)
 
 
-    def _sample_amplitudes(self, view: TODView, rng: np.random.Generator | None) -> None:
+    def _sample_amplitudes(self, view: TODView, rng: np.random.Generator) -> None:
         """Draw new amplitudes for the faint glitches of the focused detector-scan.
 
         Let T be the (ntod, nevent) matrix whose columns are the faint events' unit-amplitude
@@ -171,7 +171,7 @@ class Glitches(TODStep):
 
         Args:
             view: View focused on one accepted detector-scan.
-            rng: Optional generator for the draw.
+            rng: This rank's random generator for the draw.
         """
 
 

@@ -53,7 +53,7 @@ def _run_bin_mapmaker(band: DetectorGroupTOD) -> dict[str, np.ndarray]:
     params = mapmaking_params(band, "bin", orbital_dipole_maps=True)
     band.pixel_domain = PixelDomain(MPI.COMM_SELF, _NSIDE, "full")
     _, maps = tod_processing.tod2map(band, fake_tod_samples(band, sigma0=2.0, abs_gain=1.5),
-                                     np.zeros((3, _NPIX)), 1, params)
+                                     np.zeros((3, _NPIX)), 1, params, np.random.default_rng(0))
     return maps
 
 
