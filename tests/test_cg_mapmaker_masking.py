@@ -42,15 +42,12 @@ def _build_band(pix: np.ndarray, bad_idx, nside: int, sigma0: float, pols: str,
         psi = np.zeros(ntod, dtype=np.float64)
     flag = np.zeros(ntod, dtype=np.int64)
     flag[list(bad_idx)] = _BITMASK
-    dummy_tree = np.array([0], dtype=np.int64)  # PixelPointing.__init__ does tree.astype, needs non-None
-    pointing = PixelPointing(pix.astype(np.int64), psi.astype(np.float64), dummy_tree, None, None,
-                             nside, nside, ntod, ntod)
+    pointing = PixelPointing(pix.astype(np.int64), psi.astype(np.float64), nside, nside, ntod, ntod)
     proc_mask = np.ones(npix, dtype=bool)  # all-sky processing mask -> full_mask == good_data_mask
     det = DetectorTOD(
         name="d0", det_idx_fullband=0, tod=np.zeros(ntod, dtype=np.float32), pointing=pointing,
-        sampling_rate_hz=1.0, orbital_velocity_m_per_s=None, huffman_tree=None,
-        huffman_symbols=None, default_proc_mask=proc_mask, specific_proc_masks={},
-        flag_encoded=flag, bad_data_bitmask=_BITMASK, flag_is_compressed=False,
+        sampling_rate_hz=1.0, orbital_velocity_m_per_s=None, default_proc_mask=proc_mask,
+        specific_proc_masks={}, flag=flag, bad_data_bitmask=_BITMASK,
     )
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
     band = DetectorGroupTOD([ScanTOD([det], 0.0, 0)], "EXP", "B", nside=nside, nu=0.0, fwhm=0.0,

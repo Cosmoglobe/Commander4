@@ -34,6 +34,7 @@ from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
+from commander4.compression.huffman_decoding import HuffmanCompressedArray
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
@@ -196,7 +197,9 @@ class TODReader:
                        ntod_fft=find_good_fourier_size(ntod),
                        fsamp=float(common["fsamp"][()].item()),
                        # The flags are always Huffman-compressed, so this tree is always present.
-                       huffman_tree=scan_common["hufftree"][()],
+                       # Converted to int64 (what the decoder takes) once here, so that all the
+                       # scan's compressed arrays share one copy.
+                       huffman_tree=scan_common["hufftree"][()].astype(np.int64, copy=False),
                        huffman_symbols=scan_common["huffsymb"][()],
                        huffman_tree2=None, huffman_symbols2=None, data_nside=None, npsi=None,
                        vsun=np.zeros(3), start_time=0.0,
@@ -204,7 +207,7 @@ class TODReader:
                        response_I_P=np.ones((ndet, 2)))
         # A second tree decodes Huffman-compressed TODs.
         if "hufftree2" in scan_common:
-            header.huffman_tree2 = scan_common["hufftree2"][()]
+            header.huffman_tree2 = scan_common["hufftree2"][()].astype(np.int64, copy=False)
             header.huffman_symbols2 = scan_common["huffsymb2"][()]
         if "nside" in common:
             header.data_nside = int(common["nside"][()].item())
@@ -249,17 +252,26 @@ class TODReader:
         if self.boresight_pointing:
             return DetectorBoresightPointing(header.scan_pointing, header.file_idx[idet])
         group = f[f"{header.pid}/{det_name}"]
+        # A compressed array is stored as one opaque byte blob, which h5py reads as numpy.void.
         pix = group["pix"][()]
-        if pix.ndim == 2:  # Some simulations store shape (1, ntod).
+        if isinstance(pix, np.void):
+            pix = HuffmanCompressedArray(pix, header.huffman_tree, header.huffman_symbols,
+                                         header.ntod)
+        elif pix.ndim == 2:  # Some simulations store shape (1, ntod).
             pix = pix[0]
         if "QU" in self.band.polarization:
             psi = group["psi"][()]
-            if psi.ndim == 2:
+            if isinstance(psi, np.void):
+                # Psi is digitized into npsi bins over [0, 2*pi) before compression.
+                psi = HuffmanCompressedArray(psi, header.huffman_tree, header.huffman_symbols,
+                                             header.ntod, nbins=header.npsi, vmin=0.0,
+                                             vmax=2*np.pi)
+            elif psi.ndim == 2:
                 psi = psi[0]
         else:
             psi = np.zeros(header.ntod_fft, dtype=np.float32)
-        return PixelPointing(pix, psi, header.huffman_tree, header.huffman_symbols, header.npsi,
-                             self.band.eval_nside, header.data_nside, header.ntod, header.ntod_fft)
+        return PixelPointing(pix, psi, self.band.eval_nside, header.data_nside, header.ntod,
+                             header.ntod_fft)
 
 
     def read_detector(self, f: h5py.File, header: Bunch, idet: int,
@@ -268,9 +280,9 @@ class TODReader:
         if det_name not in f[header.pid]:
             return None
         group = f[f"{header.pid}/{det_name}"]
-        tod_is_compressed = "ztod" in group
-        if tod_is_compressed:
-            tod = group["ztod"][()]
+        if "ztod" in group:
+            tod = HuffmanCompressedArray(group["ztod"][()], header.huffman_tree2,
+                                         header.huffman_symbols2, header.ntod)
         else:
             tod = group["tod"][:header.ntod_fft].astype(np.float32, copy=False)
         init_scalars = None
@@ -285,16 +297,12 @@ class TODReader:
             pointing=self.read_pointing(f, header, idet, det_name),
             sampling_rate_hz=header.fsamp,
             orbital_velocity_m_per_s=header.vsun,
-            huffman_tree=header.huffman_tree,
-            huffman_symbols=header.huffman_symbols,
-            huffman_tree2=header.huffman_tree2,
-            huffman_symbols2=header.huffman_symbols2,
             default_proc_mask=self.default_mask,
             specific_proc_masks=self.specific_masks,
-            flag_encoded=group["flag"][()],
+            flag=HuffmanCompressedArray(group["flag"][()], header.huffman_tree,
+                                        header.huffman_symbols, header.ntod),
             bad_data_bitmask=self.bad_data_bitmask,
             init_scalars=init_scalars,
-            tod_is_compressed=tod_is_compressed,
             response_I_P=header.response_I_P[idet],
             # DetectorTOD marks a missing angle with None, which the sidelobe model checks for.
             polang=None if np.isnan(polang) else float(polang),

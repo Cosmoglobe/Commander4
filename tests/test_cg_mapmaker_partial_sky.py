@@ -70,13 +70,12 @@ def _build_band(pix: np.ndarray, psi: np.ndarray, tod: np.ndarray, pols: str,
     detectors = []
     for idet, (det_psi, det_tod, response) in enumerate(zip(psi, tod, responses)):
         pointing = PixelPointing(pix.astype(np.int64), det_psi.astype(np.float64),
-                                 np.array([0], np.int64), None, None, _NSIDE, _NSIDE, ntod, ntod)
+                                 _NSIDE, _NSIDE, ntod, ntod)
         detectors.append(DetectorTOD(
             name=f"d{idet}", det_idx_fullband=idet, tod=det_tod.astype(np.float32),
             pointing=pointing, sampling_rate_hz=1.0, orbital_velocity_m_per_s=orbital_velocity,
-            huffman_tree=None, huffman_symbols=None, default_proc_mask=np.ones(_NPIX, bool),
-            specific_proc_masks={}, flag_encoded=flag, bad_data_bitmask=1,
-            flag_is_compressed=False, response_I_P=response,
+            default_proc_mask=np.ones(_NPIX, bool), specific_proc_masks={}, flag=flag,
+            bad_data_bitmask=1, response_I_P=response,
         ))
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))
     return DetectorGroupTOD([ScanTOD(detectors, 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=30.0,

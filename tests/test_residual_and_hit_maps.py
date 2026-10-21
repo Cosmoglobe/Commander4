@@ -43,15 +43,14 @@ def _build_band(pix, psi, tod, flag=None,
     only model term left is the sky projection.
     """
     ntod = pix.size
-    pointing = PixelPointing(pix.astype(np.int64), psi.astype(np.float64), np.array([0], np.int64),
-                             None, None, _NSIDE, _NSIDE, ntod, ntod)
+    pointing = PixelPointing(pix.astype(np.int64), psi.astype(np.float64), _NSIDE, _NSIDE, ntod,
+                             ntod)
     det = DetectorTOD(
         name="d0", det_idx_fullband=0, tod=tod.astype(np.float32), pointing=pointing,
         sampling_rate_hz=1.0, orbital_velocity_m_per_s=np.zeros(3, dtype=np.float32),
-        huffman_tree=None, huffman_symbols=None, default_proc_mask=np.ones(_NPIX, bool),
-        specific_proc_masks={},
-        flag_encoded=(np.zeros(ntod) if flag is None else flag).astype(np.int64),
-        bad_data_bitmask=_BITMASK, flag_is_compressed=False,
+        default_proc_mask=np.ones(_NPIX, bool), specific_proc_masks={},
+        flag=(np.zeros(ntod) if flag is None else flag).astype(np.int64),
+        bad_data_bitmask=_BITMASK,
         response_I_P=response_I_P,
     )
     noise_model = SimpleNamespace(npar=1, params=np.array([np.nan]))

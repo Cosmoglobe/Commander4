@@ -62,14 +62,12 @@ def _build_hfi_case(phase: int = -1, pulse: np.ndarray | None = None):
     raw_tod[0::2] = phase * signal[0::2] + _BASELINES[0]
     raw_tod[1::2] = -phase * signal[1::2] + _BASELINES[1]
 
-    pointing = PixelPointing(pix, psi, np.array([0], dtype=np.int64), None, None,
-                             _NSIDE, _NSIDE, _NTOD, _NTOD)
+    pointing = PixelPointing(pix, psi, _NSIDE, _NSIDE, _NTOD, _NTOD)
     detector = DetectorTOD(
         name="100-1a", det_idx_fullband=0, tod=raw_tod, pointing=pointing,
         sampling_rate_hz=180.0, orbital_velocity_m_per_s=np.zeros(3, dtype=np.float32),
-        huffman_tree=None, huffman_symbols=None, default_proc_mask=np.ones(_NPIX, dtype=bool),
-        specific_proc_masks={}, flag_encoded=np.zeros(_NTOD, dtype=np.int64),
-        bad_data_bitmask=1, flag_is_compressed=False,
+        default_proc_mask=np.ones(_NPIX, dtype=bool), specific_proc_masks={},
+        flag=np.zeros(_NTOD, dtype=np.int64), bad_data_bitmask=1,
     )
     noise_model = SimpleNamespace(npar=1, params=np.array([_SIGMA0]))
     band = DetectorGroupTOD(

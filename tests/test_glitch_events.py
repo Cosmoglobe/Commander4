@@ -39,14 +39,12 @@ def test_good_sample_mask_cuts_half_open_ranges() -> None:
 def _band_and_samples(events: GlitchEvents) -> tuple[DetectorGroupTOD, SimpleNamespace]:
     """A one-scan, one-detector band without demodulation, and samples holding `events`."""
     raw_tod = np.arange(_NTOD, dtype=np.float32)
-    pointing = PixelPointing(np.zeros(_NTOD, dtype=np.int64), np.zeros(_NTOD),
-                             np.array([0], dtype=np.int64), None, None, 1, 1, _NTOD, _NTOD)
+    pointing = PixelPointing(np.zeros(_NTOD, dtype=np.int64), np.zeros(_NTOD), 1, 1, _NTOD, _NTOD)
     detector = DetectorTOD(
         name="det", det_idx_fullband=0, tod=raw_tod, pointing=pointing, sampling_rate_hz=10.0,
-        orbital_velocity_m_per_s=np.zeros(3, dtype=np.float32), huffman_tree=None,
-        huffman_symbols=None, default_proc_mask=np.ones(12, dtype=bool), specific_proc_masks={},
-        flag_encoded=np.zeros(_NTOD, dtype=np.int64), bad_data_bitmask=1,
-        flag_is_compressed=False,
+        orbital_velocity_m_per_s=np.zeros(3, dtype=np.float32),
+        default_proc_mask=np.ones(12, dtype=bool), specific_proc_masks={},
+        flag=np.zeros(_NTOD, dtype=np.int64), bad_data_bitmask=1,
     )
     noise_model = SimpleNamespace(npar=1, params=np.array([1.0]))
     band = DetectorGroupTOD([ScanTOD([detector], 0.0, 1)], "EXP", "BAND", 1, 100.0, 10.0, 10.0, 1,

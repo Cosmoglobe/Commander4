@@ -10,7 +10,7 @@ import ducc0
 import os
 from pixell.bunch import Bunch
 from pixell import coordsys
-from commander4.backend import compression as cpp_compression
+from commander4.compression.huffman_decoding import HuffmanCompressedArray
 
 
 def remap_pix_nside(pix: NDArray[np.integer], nside_from: int, nside_to: int,
@@ -176,19 +176,14 @@ class DetectorBoresightPointing:
 class PixelPointing:
     """Store pixel and polarization-angle pointing for one detector TOD.
 
-    The pointing can be supplied either as decoded 1D arrays or as Huffman-
-    compressed binary payloads. Compressed payloads are kept compact in memory
-    and decoded only on demand in `get_pix()` and `get_psi()`. Pixel samples are
-    stored at `data_nside` and optionally remapped to another output `nside`
-    after decompression.
+    The pix and psi samples are given either as 1D arrays or compressed, in which case they are
+    decoded on demand in `get_pix()` and `get_psi()`. Pixel samples are stored at `data_nside` and
+    optionally remapped to another output `nside` after decoding.
     """
 
     def __init__(self,
-                 pix: bytes | np.void | NDArray[np.integer],
-                 psi: bytes | np.void | NDArray[np.integer] | NDArray[np.floating],
-                 huffman_tree: NDArray | None,
-                 huffman_symbols: NDArray | None,
-                 npsi: int | None,
+                 pix: NDArray[np.integer] | HuffmanCompressedArray,
+                 psi: NDArray[np.floating] | HuffmanCompressedArray,
                  nside: int,
                  data_nside: int,
                  ntod_original: int,
@@ -198,85 +193,39 @@ class PixelPointing:
         self.data_nside = data_nside
         self.ntod_original = ntod_original
         self.ntod = ntod
-        self.pix_encoded = pix
-        self.psi_encoded = psi
-        # C++ decoder accepts only int64 for the tree.
-        self.huffman_tree = huffman_tree.astype(np.int64, copy=False)
-        self.huffman_symbols = huffman_symbols
-        self.npsi = npsi
-        self.pix_is_compressed = isinstance(pix, (bytes, np.void))
-        self.psi_is_compressed = isinstance(psi, (bytes, np.void))
-        # The Huffman decoder consumes uint8 arrays; for HDF5-backed np.void
-        # inputs, frombuffer gives a zero-copy view over the stored payload.
-        self.pix_compressed_u8 = np.frombuffer(pix, dtype=np.uint8) if self.pix_is_compressed else None
-        self.psi_compressed_u8 = np.frombuffer(psi, dtype=np.uint8) if self.psi_is_compressed else None
-        self._test_input()
-
-    
-    def _test_input(self):
+        self.pix = pix
+        self.psi = psi
         if self.ntod > self.ntod_original:
             raise ValueError("ntod cannot exceed ntod_original.")
-        if not self.pix_is_compressed and not isinstance(self.pix_encoded, np.ndarray):
-            raise TypeError("'pix' must be provided as bytes, numpy.void, or a numpy array.")
-        if not self.psi_is_compressed and not isinstance(self.psi_encoded, np.ndarray):
-            raise TypeError("'psi' must be provided as bytes, numpy.void, or a numpy array.")
-        if self.pix_is_compressed:
-            if self.huffman_tree is None or self.huffman_symbols is None:
-                raise ValueError("Compressed pix requires Huffman metadata.")
-        if self.psi_is_compressed:
-            if self.huffman_tree is None or self.huffman_symbols is None:
-                raise ValueError("Compressed psi requires Huffman metadata.")
-            if self.npsi is None:
-                raise ValueError("Compressed psi requires npsi.")
-        if not self.pix_is_compressed:
-            pix_array = np.asarray(self.pix_encoded)
-            if pix_array.ndim != 1:
-                raise ValueError("'pix' must be a 1D array.")
-            if not np.issubdtype(pix_array.dtype, np.integer):
+        if not isinstance(pix, HuffmanCompressedArray):
+            if not isinstance(pix, np.ndarray) or pix.ndim != 1:
+                raise TypeError("'pix' must be a 1D numpy array or a HuffmanCompressedArray.")
+            if not np.issubdtype(pix.dtype, np.integer):
                 raise TypeError("'pix' array must have integer dtype.")
-            if pix_array.size < self.ntod:
-                raise ValueError(f"'pix' length {pix_array.size} is shorter than ntod {self.ntod}.")
-        if not self.psi_is_compressed:
-            psi_array = np.asarray(self.psi_encoded)
-            if psi_array.ndim != 1:
-                raise ValueError("'psi' must be a 1D array.")
-            if (not np.issubdtype(psi_array.dtype, np.integer)
-                    and not np.issubdtype(psi_array.dtype, np.floating)):
-                raise TypeError("'psi' array must have numeric dtype.")
-            if psi_array.size < self.ntod:
-                raise ValueError(f"'psi' length {psi_array.size} is shorter than ntod {self.ntod}.")
+            if pix.size < self.ntod:
+                raise ValueError(f"'pix' length {pix.size} is shorter than ntod {self.ntod}.")
+        if not isinstance(psi, HuffmanCompressedArray):
+            if not isinstance(psi, np.ndarray) or psi.ndim != 1:
+                raise TypeError("'psi' must be a 1D numpy array or a HuffmanCompressedArray.")
+            if not np.issubdtype(psi.dtype, np.floating):
+                raise TypeError("'psi' array must have floating-point dtype.")
+            if psi.size < self.ntod:
+                raise ValueError(f"'psi' length {psi.size} is shorter than ntod {self.ntod}.")
 
     def get_pix(self, nside: int | None = None) -> NDArray[np.integer]:
         """Return HEALPix pixel indices at the requested output nside."""
         target_nside = self.nside if nside is None else nside
-        if self.pix_is_compressed:
-            pix = np.zeros(self.ntod_original, dtype=self.huffman_symbols.dtype)
-            pix = cpp_compression.huffman_decode(self.pix_compressed_u8, self.huffman_tree,
-                                                 self.huffman_symbols, pix)
-            # The compressed stream stores first differences in the symbol dtype, so reconstruct
-            # the absolute pixel indices with a cumulative sum that wraps in that same dtype.
-            pix = np.cumsum(pix, dtype=pix.dtype).astype(np.int64, copy=False)
+        if isinstance(self.pix, HuffmanCompressedArray):
+            pix = self.pix.decode()[:self.ntod].astype(np.int64, copy=False)
         else:
-            pix = self.pix_encoded
-
-        pix = pix[:self.ntod]
+            pix = self.pix[:self.ntod]
         return remap_pix_nside(pix, self.data_nside, target_nside)
 
     def get_psi(self, nside: int | None = None) -> NDArray[np.floating]:
-        """Return polarization angles, converting compressed one-based bins to their centers."""
-        if self.psi_is_compressed:
-            psi = np.zeros(self.ntod_original, dtype=self.huffman_symbols.dtype)
-            psi = cpp_compression.huffman_decode(self.psi_compressed_u8, self.huffman_tree,
-                                                 self.huffman_symbols, psi)
-            # Commander scan files store first differences of one-based bin numbers. Bin i covers
-            # [(i-1)*width, i*width), so its representative angle is the center (i-0.5)*width. The
-            # differences wrap in the symbol dtype, so the cumulative sum must wrap in it too.
-            psi_bins = np.cumsum(psi, dtype=psi.dtype)[:self.ntod]
-            bin_width = np.float32(2*np.pi/self.npsi)
-            psi = (psi_bins.astype(np.float32, copy=False) - np.float32(0.5))*bin_width
-        else:
-            psi = self.psi_encoded
-        return psi[:self.ntod]
+        """Return polarization angles in radians."""
+        if isinstance(self.psi, HuffmanCompressedArray):
+            return self.psi.decode()[:self.ntod]
+        return self.psi[:self.ntod]
 
     def get_pix_psi(self, nside: int | None = None) -> tuple[NDArray, NDArray]:
         return self.get_pix(nside), self.get_psi(nside)
