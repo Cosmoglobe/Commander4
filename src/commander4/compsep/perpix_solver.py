@@ -20,12 +20,14 @@ from commander4.diagnostics.performance import benchmark
 
 def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
                          comp_list: list[Component],
-                         double_precision: bool, nthreads: int) -> list[Component]:
+                         double_precision: bool, nthreads: int,
+                         rng: np.random.Generator) -> list[Component]:
     """ A pixel-by-pixel solver for the component separation problem. Requires uniform nside and a
         common beam across all bands (smoothing to a common resolution is done at the data sources,
         controlled by ``compsep.common_res_fwhm``). This solver ignores beams entirely, so bands
         arriving at differing resolutions are silently mixed; a warning is logged below.
-        The per-pixel solves run on the master rank only, with ``nthreads`` threads.
+        The per-pixel solves run on the master rank only, with ``nthreads`` threads, and draw
+        their fluctuation terms from the master's ``rng``.
     """
     for component in comp_list:
         if not isinstance(component, DiffuseComponent):
@@ -88,7 +90,7 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
             M = np.empty((nband, ncomp))
             for icomp in range(ncomp):
                 M[:, icomp] = comp_list[icomp].get_sed(freqs)
-            rand = np.random.randn(npix, nband)
+            rand = rng.standard_normal((npix, nband))
             # TODO: Should scale M to make solution more well-conditioned, and then adjust
             # solution with the scaling factor used.
             with benchmark("perpix-solve"):

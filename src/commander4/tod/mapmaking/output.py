@@ -6,24 +6,28 @@ the `maps/` group of the band chain file.
 """
 import numpy as np
 from numpy.typing import NDArray
+from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.tod_samples import TODSamples
-from commander4.tod.config import MapmakingConfig
+from commander4.parameters.schema import resolve_band_lmax
 
 
-def finalize_band_maps(map_signal: NDArray, map_inv_var: NDArray, pols: str,
-                       experiment_data: DetectorGroupTOD, mapmaking_cfg: MapmakingConfig,
-                       tod_samples: TODSamples, aux_maps: dict[str, NDArray],
-                       map_nhit: NDArray | None, map_cov: NDArray) -> tuple[dict, dict]:
+def finalize_band_maps(map_signal: NDArray, map_inv_var: NDArray,
+                       experiment_data: DetectorGroupTOD, tod_samples: TODSamples, params: Bunch,
+                       aux_maps: dict[str, NDArray], map_nhit: NDArray | None,
+                       map_cov: NDArray) -> tuple[dict, dict]:
     """Split the solved band maps into `DetectorMap`s, and collect what goes to the chain file.
 
     Args:
         map_signal: Solved sky map, shape (3, npix) with rows I, Q, U, or (1, npix) for an I-only
             band. Solved in float64, and passed on and stored as float32 like the other sky maps.
         map_inv_var: Per-pixel white-noise inverse variance, same shape; 0 where unobserved.
-        pols: Which polarizations this band carries, e.g. "I", "QU" or "IQU".
+        experiment_data: The band's TOD, for its polarizations, frequency and beam.
+        tod_samples: The chain state; the maps carry its absolute gain.
+        params: The full parameter file, for the common resolution (`compsep.common_res_fwhm`, in
+            arcminutes), the band's lmax and whether the chain gets the covariance map.
         aux_maps: Binned debug maps in uK_RJ, keyed by their name in the chain file and shaped
             like `map_signal`; only those the run asked for are present. `sidelobe` is the
             far-sidelobe pickup (Commander3's `tod_<freq>_sl` map), and `res` the noise residual,
@@ -38,9 +42,13 @@ def finalize_band_maps(map_signal: NDArray, map_inv_var: NDArray, pols: str,
         `(detmap_dict, maps_to_file)`. The detector maps are what compsep receives; `maps_to_file`
         is keyed by the name each map takes inside the chain file's `maps/` group. The chain file
         holds the noise as an RMS map, `rms`, which is infinite where unobserved. When
-        `mapmaking.common_res_fwhm` is set, `observed_sky` and `rms` are the smoothed maps that
+        `compsep.common_res_fwhm` is set, `observed_sky` and `rms` are the smoothed maps that
         compsep actually used, and `map_fwhm_arcmin` records the beam they are at.
     """
+    pols = experiment_data.pols
+    include_cov_maps = getattr(params.output.chains.include, "cov_maps", False)
+    band_lmax = resolve_band_lmax(params, experiment_data.band_name,
+                                  experiment_data.experiment_name, experiment_data.nside)
     map_signal = map_signal.astype(np.float32, copy=False)
     # Keep I-only maps small until output. The chain format uses I,Q,U rows and six covariance
     # rows even for I-only bands; absent polarization has zero signal and no weight.
@@ -51,25 +59,23 @@ def finalize_band_maps(map_signal: NDArray, map_inv_var: NDArray, pols: str,
             return padded
         map_signal, map_inv_var = pad_rows(map_signal, 3), pad_rows(map_inv_var, 3)
         aux_maps = {name: pad_rows(values, 3) for name, values in aux_maps.items()}
-        if mapmaking_cfg.include_cov_maps:
+        if include_cov_maps:
             map_cov = pad_rows(map_cov, 6)
 
     detmap_dict_out = {}
     # Degrading to a common analysis resolution happens after mapmaking; 0 leaves the native beam.
-    common_res_fwhm = mapmaking_cfg.common_res_fwhm
+    common_res_fwhm = float(getattr(params.compsep, "common_res_fwhm", 0.0))
     if "I" in pols:
         detmap_I = DetectorMap(map_signal[0,:], map_inv_var[0,:], experiment_data.nu,
-                               experiment_data.fwhm, experiment_data.nside,
-                               lmax=mapmaking_cfg.band_lmax)
-        detmap_I.g0 = tod_samples.abs_gain
+                               experiment_data.fwhm, experiment_data.nside, lmax=band_lmax)
+        detmap_I.g0 = tod_samples.gain.abs_gain
         if common_res_fwhm:
             detmap_I.smooth_to_resolution(common_res_fwhm)
         detmap_dict_out["I"] = detmap_I
     if "QU" in pols:
         detmap_QU = DetectorMap(map_signal[1:3,:], map_inv_var[1:3,:], experiment_data.nu,
-                                experiment_data.fwhm, experiment_data.nside,
-                                lmax=mapmaking_cfg.band_lmax)
-        detmap_QU.g0 = tod_samples.abs_gain
+                                experiment_data.fwhm, experiment_data.nside, lmax=band_lmax)
+        detmap_QU.g0 = tod_samples.gain.abs_gain
         if common_res_fwhm:
             detmap_QU.smooth_to_resolution(common_res_fwhm)
         detmap_dict_out["QU"] = detmap_QU
@@ -100,6 +106,6 @@ def finalize_band_maps(map_signal: NDArray, map_inv_var: NDArray, pols: str,
     maps_to_file.update(aux_maps)
     if map_nhit is not None:
         maps_to_file["nhit"] = map_nhit
-    if mapmaking_cfg.include_cov_maps:
+    if include_cov_maps:
         maps_to_file["cov"] = map_cov
     return detmap_dict_out, maps_to_file

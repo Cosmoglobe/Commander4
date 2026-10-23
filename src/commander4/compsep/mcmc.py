@@ -111,8 +111,8 @@ class MCMCSamplingGroup(ABC):
         """
 
     @abstractmethod
-    def propose(self, current_state) -> tuple[object, bool]:
-        """Draw a candidate state from ``current_state`` (called on ``root`` only).
+    def propose(self, current_state, rng: np.random.Generator) -> tuple[object, bool]:
+        """Draw a candidate state from ``current_state`` with ``rng`` (called on ``root`` only).
 
         Returns ``(proposed_state, in_bounds)``. ``in_bounds=False`` makes ``run`` reject the step
         immediately, without applying the state or evaluating the likelihood.
@@ -162,7 +162,8 @@ class MCMCSamplingGroup(ABC):
         return float(self.comm.allreduce(local, op=MPI.SUM))
 
     # The MH loop itself, identical for every parameter set.
-    def run(self, *, numstep: int, resolve_amplitudes: Callable[[], None]) -> dict:
+    def run(self, *, numstep: int, resolve_amplitudes: Callable[[], None],
+            rng: np.random.Generator) -> dict:
         """Take ``numstep`` joint MH steps, each coupled to an amplitude re-solve.
 
         Called collectively by *all* CompSep ranks. ``resolve_amplitudes`` is a collective callback
@@ -170,6 +171,7 @@ class MCMCSamplingGroup(ABC):
         ``UPDATE_CG_GROUPS``); it runs after each in-bounds proposal so the likelihood sees
         amplitudes conditioned on the proposed parameters. On rejection, both the parameters and all
         component amplitudes (which ``resolve_amplitudes`` may have changed) are reverted.
+        ``rng`` is this rank's random generator; only the root draws from it here.
         NB: It's currently assumed that the `resolve_amplitudes` callback ONLY touches the component
         amplitudes, which are stored in `comp._data`.
 
@@ -192,7 +194,7 @@ class MCMCSamplingGroup(ABC):
                 loglike_current = self.global_loglike()
 
             if self.is_root:
-                proposed_state, in_bounds = self.propose(current_state)
+                proposed_state, in_bounds = self.propose(current_state, rng)
             else:
                 proposed_state, in_bounds = None, None
             proposed_state = self.comm.bcast(proposed_state, root=self.root)
@@ -216,7 +218,7 @@ class MCMCSamplingGroup(ABC):
             if self.is_root:
                 log_accept = (delta_loglike
                               + self.log_prior(proposed_state) - self.log_prior(current_state))
-                accept = log_accept >= 0.0 or np.log(np.random.random()) < log_accept
+                accept = log_accept >= 0.0 or np.log(rng.random()) < log_accept
             else:
                 accept = None
             accept = self.comm.bcast(accept, root=self.root)

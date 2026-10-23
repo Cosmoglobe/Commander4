@@ -200,7 +200,7 @@ class CompSepSolver:
         return comp_list
 
 
-    def calc_RHS(self, comp_list: CompList) -> CompList:
+    def calc_RHS(self, comp_list: CompList, rng: np.random.Generator) -> CompList:
         """ Calculates the right-hand-side b-vector of the Ax=b CompSep equation, overwriting and
             returning `comp_list`:
 
@@ -227,7 +227,7 @@ class CompSepSolver:
             # + N^{-1/2} eta_1. Drawn per band and independently on every rank, as it must be:
             # eta_1 is the white-noise realization of *this* band's data. Zero-weight pixels
             # (unobserved, map_inv_var = 0) get no fluctuation, matching their absence from the LHS.
-            eta_1 = np.random.normal(0.0, 1.0, b_map.shape)*np.sqrt(self.det_map.map_inv_var)
+            eta_1 = rng.normal(0.0, 1.0, b_map.shape)*np.sqrt(self.det_map.map_inv_var)
             logger.debug(f"RHS |N^-1 d| = {np.mean(np.abs(b_map)):.2e}, "
                          f"|N^-1/2 eta_1| = {np.mean(np.abs(eta_1)):.2e}")
             b_map += eta_1.astype(b_map.dtype, copy=False)
@@ -265,7 +265,7 @@ class CompSepSolver:
                     # left-multiplying by S^{1/2} leaves it alone.
                     for ipol in range(self.npol):
                         comp.alms[ipol] += gaussian_random_alm(comp.lmax, comp.lmax,
-                                                               self.spin, 1)[0]
+                                                               self.spin, 1, rng)[0]
                 logger.debug(f"RHS comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
 
         return comp_list
@@ -364,23 +364,22 @@ class CompSepSolver:
         return complist_sol
 
 
-    def solve(self, comp_list:CompList, seed=None) -> CompList:
+    def solve(self, comp_list: CompList, rng: np.random.Generator) -> CompList:
         """Solve  the amplitudes of `comp_list` for this rank's band.
 
         If `sample_amplitudes==True` the solution is a constrained realization, i.e the Wiener mean
         plus two fluctuation terms, i.e. the amplitudes are a draw from the conditional posterior.
         If `sample_amplitudes==False`, only the mean term is used and the result is the
         deterministic maximum a posteriori solution, which is biased low in power.
-        """
-        if seed is not None:
-            # Offset per rank: eta_1 is *this* band's white-noise realization, so an identically
-            # seeded RNG on every rank would make the fluctuation correlated across bands.
-            np.random.seed(seed + self.CompSep_comm.Get_rank())
 
+        `rng` is this rank's random generator. Each rank must have its own stream: eta_1 is *this*
+        band's white-noise realization, so shared draws would correlate the fluctuation across
+        bands.
+        """
         # `calc_RHS` overwrites the CompList it is handed, so comp_list doubles as the RHS buffer
         # (the preconditioner below reads only its metadata, never its alms).
         with benchmark("cg-rhs"):
-            RHS = self.calc_RHS(comp_list)
+            RHS = self.calc_RHS(comp_list, rng)
 
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners",
         # and has the name specified by this sampling group's preconditioner setting.
@@ -414,5 +413,9 @@ class CompSepSolver:
 
         sol_list = self.solve_CG(self.apply_LHS_matrix, RHS, M=precond,
                              x_true=x_true if self.config.dense_matrix_debug_mode else None)
-
+        # The CG solves for the intrinsic (unsmoothed) sky. The solution is built from copies of
+        # the input components, so reset the beam they carried, which is non-zero if the chain
+        # started from a sample of the per-pixel solver.
+        for comp in sol_list:
+            comp.amp_fwhm_rad = 0.0
         return sol_list

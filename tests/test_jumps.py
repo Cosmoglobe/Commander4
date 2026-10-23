@@ -9,11 +9,14 @@ from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.pixel_domain import PixelDomain
 from commander4.data_models.pointing import PixelPointing
 from commander4.data_models.scan_tod import ScanTOD
-from commander4.tod.config import JumpDetectionConfig
-from commander4.tod.glitches.events import empty_glitch_grid
-from commander4.tod.jumps.events import JumpEvents, empty_jump_grid
-from commander4.tod.jumps.sampling import _detect_jumps, sample_jump_detection
+from commander4.tod.data_selection import DataSelection
+from commander4.tod.glitches.sampling import Glitches
+from commander4.tod.hfi_demodulation import HFIModulation
+from commander4.tod.jumps.events import JumpEvents
+from commander4.tod.jumps.sampling import Jumps, _detect_jumps
+from commander4.tod.sidelobe_deconvolve import FarSidelobes
 from commander4.tod.view import TODView
+from tod_step_fakes import make_step
 
 _NTOD = 40
 _JUMP_BIT = 2
@@ -57,24 +60,26 @@ def test_offset_tod_adds_each_offset_from_its_location_on() -> None:
 
 def _band_and_samples(tod: np.ndarray, flag: np.ndarray, pix: np.ndarray, gain: float):
     """A one-scan, one-detector intensity band at nside 1, and samples with only a gain."""
-    pointing = PixelPointing(pix, np.zeros(_NTOD), np.array([0], dtype=np.int64), None, None,
-                             1, 1, _NTOD, _NTOD)
+    pointing = PixelPointing(pix, np.zeros(_NTOD), 1, 1, _NTOD, _NTOD)
     detector = DetectorTOD(
         name="det", det_idx_fullband=0, tod=tod, pointing=pointing, sampling_rate_hz=10.0,
-        orbital_velocity_m_per_s=np.zeros(3, dtype=np.float32), huffman_tree=None,
-        huffman_symbols=None, default_proc_mask=np.ones(12, dtype=bool), specific_proc_masks={},
-        flag_encoded=flag, bad_data_bitmask=1, flag_is_compressed=False,
+        orbital_velocity_m_per_s=np.zeros(3, dtype=np.float32),
+        default_proc_mask=np.ones(12, dtype=bool), specific_proc_masks={}, flag=flag,
+        bad_data_bitmask=1,
     )
     band = DetectorGroupTOD([ScanTOD([detector], 0.0, 1)], "EXP", "BAND", 1, 100.0, 10.0, 10.0, 1,
                             "I", SimpleNamespace(npar=1, params=np.array([1.0])))
-    samples = SimpleNamespace(jumps=empty_jump_grid(1, 1), glitches=empty_glitch_grid(1, 1),
-                              accept=np.ones((1, 1), dtype=bool), chain=1, abs_gain=gain,
-                              rel_gain=np.zeros(1), temporal_gain=np.zeros((1, 1)))
+    jumps = make_step(Jumps, 1, 1, settings={"jump_detection": {"enabled": True, "window": 5}},
+                      experiment={"jump_bitmask": _JUMP_BIT})
+    samples = SimpleNamespace(band_comm=MPI.COMM_SELF, experiment_data=band, chain=1,
+                              jumps=jumps, glitches=make_step(Glitches, 1, 1),
+                              hfi=make_step(HFIModulation, 1, 1),
+                              far_sidelobes=make_step(FarSidelobes, 1, 1),
+                              selection=make_step(DataSelection, 1, 1),
+                              gain=SimpleNamespace(abs_gain=gain, rel_gain=np.zeros(1),
+                                                   temporal_gain=np.zeros((1, 1))))
     band.pixel_domain = PixelDomain(MPI.COMM_SELF, 1, "full")
     return band, samples, detector
-
-
-_CONFIG = JumpDetectionConfig(enabled=True, window=5, jump_bitmask=_JUMP_BIT)
 
 
 def test_sampled_jumps_are_removed_from_the_corrected_tod(monkeypatch) -> None:
@@ -82,11 +87,14 @@ def test_sampled_jumps_are_removed_from_the_corrected_tod(monkeypatch) -> None:
     tod, flag = _step_case()
     band, samples, detector = _band_and_samples(tod, flag, np.zeros(_NTOD, dtype=np.int64), 1.0)
 
-    sample_jump_detection(MPI.COMM_SELF, band, samples, np.zeros((1, 12)), _CONFIG, iteration=1)
+    samples.jumps.sample(samples, np.zeros((1, 12)), iteration=1)
 
-    np.testing.assert_array_equal(samples.jumps[0, 0].locations, [12])
+    np.testing.assert_array_equal(samples.jumps.events[0, 0].locations, [12])
+    # The view has no sky model, so the sky and dipole are kept in.
+    signals = ("sky", "orbital_dipole")
     view = TODView(band, samples).focus(0, detector)
-    np.testing.assert_allclose(view.corrected_tod, np.zeros(_NTOD))
+    np.testing.assert_allclose(view.get_tod(keep=signals), np.zeros(_NTOD))
+    np.testing.assert_array_equal(view.get_tod(keep=signals + ("jumps",)), tod)
     np.testing.assert_array_equal(view.raw_tod, tod)  # The stored data are never modified.
 
 
@@ -102,6 +110,6 @@ def test_a_sky_change_across_the_jump_is_not_taken_as_part_of_it(monkeypatch) ->
     tod = tod + gain * sky_map[0, pix].astype(np.float32)  # The raw step is 5 + 2*10 = 25.
     band, samples, _ = _band_and_samples(tod, flag, pix, gain)
 
-    sample_jump_detection(MPI.COMM_SELF, band, samples, sky_map, _CONFIG, iteration=1)
+    samples.jumps.sample(samples, sky_map, iteration=1)
 
-    np.testing.assert_allclose(samples.jumps[0, 0].offsets, [-5.0])
+    np.testing.assert_allclose(samples.jumps.events[0, 0].offsets, [-5.0])

@@ -10,6 +10,7 @@ from commander4.data_models.pixel_domain import PixelDomain
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.noise.psd import NoisePSD
 from commander4.math_utils.fft import forward_rfft_mirrored, backward_rfft_mirrored
+from commander4.units import rj_to_band_unit_factor
 
 import logging
 logger = logging.getLogger(__name__)
@@ -34,17 +35,25 @@ class DetectorGroupTOD:
         noise_model (NoisePSD): Noise model for this detector group.
         tf_tau_ms (float|None): Transfer function time constant in milliseconds, or None if no TF.
         hfi_demodulation (bool): Whether this band contains alternating Planck HFI half-cycles.
+        band_unit (str): The unit the band quotes its gains and maps in, outside C4 (in the
+            parameter file and the chain files). C4 works internally in uK_RJ.
+        band_unit_factor (float): D, the value of 1 uK_RJ in ``band_unit``. It converts at the
+            file boundary: brightness maps multiply by D, and the gain, with brightness in its
+            denominator, divides by D on writing and multiplies on reading. 1 for uK_RJ. See
+            [[unit_conversions]].
     """
     def __init__(self, scans: list[ScanTOD], experiment_name: str, band_name: str, nside: int,
-                 nu: float, fwhm: float, fsamp: float, ndet: int, pols: str, noise_model: NoisePSD, 
-                 tf_tau_sec: float|None = None, instrument_filepath: str|None = None, 
-                 hfi_demodulation: bool = False):
+                 nu: float, fwhm: float, fsamp: float, ndet: int, pols: str, noise_model: NoisePSD,
+                 tf_tau_sec: float|None = None, instrument_filepath: str|None = None,
+                 hfi_demodulation: bool = False, band_unit: str = "uK_RJ"):
         self.scans = scans
         self.nscans = len(scans)
         self.experiment_name = experiment_name
         self.band_name = band_name
         self.nside = nside
         self.nu = nu
+        self.band_unit = band_unit
+        self.band_unit_factor = rj_to_band_unit_factor(nu, band_unit)
         self.fwhm = fwhm
         self.fsamp = fsamp
         self.ndet = ndet

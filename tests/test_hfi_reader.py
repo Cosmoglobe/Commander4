@@ -13,7 +13,8 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.compression import huffman
+from commander4.compression.huffman_encoding import (build_huffman_tree, huffman_compress_array,
+                                                     preproc_diff)
 from commander4.data_models.pixel_domain import PixelDomain
 from commander4.file_io.experiments.base_reader import UNPOLARIZED_POLEFF_CUTOFF
 from commander4.file_io.experiments.planck_hfi import PlanckHFIReader
@@ -40,9 +41,9 @@ def hfi_inputs(tmp_path: Path) -> Bunch:
         scalars[name] = np.array([1e6, 1.0, 0.1, -1.0])
     write_scan_file(str(scan_path), 42, 1, 180.0, 4096, 16, np.zeros(3), present_names,
                     pixels, angles, tods, scalars)
-    differences = huffman.preproc_diff(np.arange(1, 17, dtype=np.int64))
-    tree, symbols, codes, lengths = huffman.build_huffman_tree([differences])
-    encoded = huffman.huffman_compress_array(differences, codes, lengths)
+    differences = preproc_diff(np.arange(1, 17, dtype=np.int64))
+    tree, symbols, codes, lengths = build_huffman_tree([differences])
+    encoded = huffman_compress_array(differences, codes, lengths)
     with h5py.File(scan_path, "a") as handle:
         handle["000042/common/hufftree2"] = tree
         handle["000042/common/huffsymb2"] = symbols
@@ -90,7 +91,7 @@ def test_instrument_percentages_follow_detector_names_into_sky_projection(
         view = TODView(result, SimpleNamespace(), sky).focus(0, det)
         psi = det.get_psi()
         expected = 2.0 + efficiency * (3.0 * np.cos(2 * psi) + 5.0 * np.sin(2 * psi))
-        np.testing.assert_allclose(view.get_static_sky_tod(), expected, rtol=1e-6)
+        np.testing.assert_allclose(view.get_sky_tod(), expected, rtol=1e-6)
 
 
 def test_efficiency_just_above_the_cutoff_is_kept_as_measured(
@@ -130,7 +131,7 @@ def test_intensity_only_band_reads_without_requiring_psi(
         assert det.response_I_P == pytest.approx((1.0, efficiency))
         sky = np.full((1, 12), 2.0)
         view = TODView(result, SimpleNamespace(), sky).focus(0, det)
-        np.testing.assert_array_equal(view.get_static_sky_tod(), np.full(16, 2.0))
+        np.testing.assert_array_equal(view.get_sky_tod(), np.full(16, 2.0))
 
 
 def test_missing_instrument_efficiency_is_not_assumed_to_be_unity(

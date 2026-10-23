@@ -6,8 +6,10 @@ import healpy as hp
 import numpy as np
 import pytest
 from mpi4py import MPI
+from pixell.bunch import Bunch
 
 import commander4.tod.sidelobe_deconvolve as sidelobe
+from tod_step_fakes import make_step
 
 
 class FakeHDF(dict):
@@ -69,14 +71,20 @@ def _fake_instrument_file(components: tuple[str, ...]) -> FakeHDF:
     return FakeHDF(file_data)
 
 
-def _bare_projector(pols: str = "IQU") -> sidelobe.FarBeamProjector:
-    projector = sidelobe.FarBeamProjector.__new__(sidelobe.FarBeamProjector)
-    projector.pols = pols
-    projector.instrument_file = "instrument.h5"
-    projector.detnames = ["27M"]
-    projector.nthreads = 2
-    projector.far_beam_deconvolution_cfg = sidelobe.FarBeamConfig(enabled=True, lmax=100, mmax=100)
-    return projector
+def _far_sidelobes(pols: str = "IQU") -> sidelobe.FarSidelobes:
+    """An enabled `FarSidelobes` with the default (Commander3) limits, for a band of `pols`."""
+    far_sidelobes = make_step(sidelobe.FarSidelobes,
+                              settings={"far_beam_deconvolution": {"enabled": True}})
+    far_sidelobes.pols = pols
+    far_sidelobes.instrument_file = "instrument.h5"
+    far_sidelobes.nthreads = 2
+    return far_sidelobes
+
+
+def _samples_27m() -> SimpleNamespace:
+    """What `FarSidelobes.build` reads of the band's sampled state: its communicator and
+    detectors."""
+    return SimpleNamespace(band_comm=FakeBandComm(), det_names=["27M"])
 
 
 @pytest.mark.parametrize("pols, stored, used", [
@@ -84,7 +92,7 @@ def _bare_projector(pols: str = "IQU") -> sidelobe.FarBeamProjector:
     ("IQU", ("T",), ("T",)),  # a missing E or B beam is skipped
     ("I", ("T", "E", "B"), ("T",)),  # an intensity band has no E or B sky
 ])
-def test_construct_model_matches_commander3_limits(monkeypatch, pols, stored, used) -> None:
+def test_build_matches_commander3_limits(monkeypatch, pols, stored, used) -> None:
     """Every used T/E/B beam is paired with its own sky component."""
     fake_hdf = _fake_instrument_file(stored)
     plans = []
@@ -106,10 +114,10 @@ def test_construct_model_matches_commander3_limits(monkeypatch, pols, stored, us
     monkeypatch.setattr(sidelobe.totalconvolve, "ConvolverPlan", make_plan)
     monkeypatch.setattr(sidelobe.hp, "map2alm", fake_map2alm)
 
-    projector = _bare_projector(pols)
+    projector = _far_sidelobes(pols)
     sky = np.zeros((len(pols), hp.nside2npix(1)))
     # A real single-rank node communicator, so the cubes go through actual MPI shared memory.
-    projector.construct_model(FakeBandComm(), MPI.COMM_SELF, sky)
+    projector.build(_samples_27m(), sky, MPI.COMM_SELF)
 
     assert len(plans) == 1
     assert plans[0].lmax == 100
@@ -133,25 +141,32 @@ def test_construct_model_matches_commander3_limits(monkeypatch, pols, stored, us
     assert projector.cubes == []
 
 
-def test_init_rejects_a_band_without_intensity_and_a_detector_without_polang(monkeypatch) -> None:
-    monkeypatch.setattr(sidelobe.FarBeamProjector, "construct_model", lambda *args: None)
+@pytest.mark.parametrize("enabled", [False, True])
+def test_startup_rejects_a_band_without_intensity_and_a_detector_without_polang(
+    enabled: bool,
+) -> None:
+    """Only when the step is switched on: other bands need neither."""
     det = SimpleNamespace(name="27M", det_idx_fullband=0, polang=None)
     band = SimpleNamespace(pols="IQU", nside=1, instrument_filepath="instrument.h5", ndet=1,
                            iter_detector_scans=lambda: [(0, det)])
-    tod_samples = SimpleNamespace(det_names=["27M"])
-    cfg = sidelobe.FarBeamConfig(enabled=True)
+    params = Bunch(tod_processing=Bunch(far_beam_deconvolution=Bunch(enabled=enabled)))
+    if not enabled:
+        sidelobe.FarSidelobes(band, params, None, MPI.COMM_SELF, 1)
+        band.pols = "QU"
+        sidelobe.FarSidelobes(band, params, None, MPI.COMM_SELF, 1)
+        return
     with pytest.raises(ValueError, match="27M has no polang"):
-        sidelobe.FarBeamProjector(None, None, band, tod_samples, None, cfg)
+        sidelobe.FarSidelobes(band, params, None, MPI.COMM_SELF, 1)
     band.pols = "QU"
     with pytest.raises(ValueError, match="needs an I or I/Q/U band"):
-        sidelobe.FarBeamProjector(None, None, band, tod_samples, None, cfg)
+        sidelobe.FarSidelobes(band, params, None, MPI.COMM_SELF, 1)
 
 
-def test_construct_model_requires_the_T_beam(monkeypatch) -> None:
+def test_build_requires_the_T_beam(monkeypatch) -> None:
     fake_hdf = _fake_instrument_file(("E", "B"))
     monkeypatch.setattr(sidelobe.h5py, "File", lambda *args, **kwargs: fake_hdf)
     with pytest.raises(ValueError, match="No sidelobe T beam for 27M"):
-        _bare_projector().construct_model(FakeBandComm(), MPI.COMM_SELF, None)
+        _far_sidelobes().build(_samples_27m(), None, MPI.COMM_SELF)
 
 
 def test_projection_evaluates_every_sample_at_the_ducc_angle() -> None:
@@ -163,7 +178,7 @@ def test_projection_evaluates_every_sample_at_the_ducc_angle() -> None:
             self.calls.append(psi.copy())
             res[:] = theta + phi + psi
 
-    projector = sidelobe.FarBeamProjector.__new__(sidelobe.FarBeamProjector)
+    projector = sidelobe.FarSidelobes.__new__(sidelobe.FarSidelobes)
     projector.nside = 1
     projector.polangs = np.array([0.3])
     projector.plan = InterpolationPlan()

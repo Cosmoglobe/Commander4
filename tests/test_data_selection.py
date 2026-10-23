@@ -11,7 +11,8 @@ from types import SimpleNamespace
 import numpy as np
 from mpi4py import MPI
 
-from commander4.tod.data_selection import masked_chisq_z, log_dataselect_summary
+from commander4.tod.data_selection import DataSelection, masked_chisq_z
+from tod_step_fakes import make_step
 
 
 def test_chisq_z_white_noise_is_standard_normal():
@@ -49,22 +50,17 @@ def test_chisq_z_undefined_cases_are_nan():
 
 
 def _stub_samples(chisq_z, good_fraction):
-    """Minimal TODSamples stand-in with the attributes log_dataselect_summary touches."""
+    """Minimal TODSamples stand-in with the attributes `DataSelection.log_summary` touches."""
     nscans, ndet = chisq_z.shape
-    return SimpleNamespace(nscans=nscans, ndet=ndet, chisq_z=chisq_z,
-                           good_fraction=good_fraction,
-                           present=np.ones((nscans, ndet), dtype=bool),
-                           accept=np.ones((nscans, ndet), dtype=bool), band_name="test-band",
-                           chain=1)
+    selection = make_step(DataSelection, nscans, ndet, settings={"data_selection": {
+        "enabled": True, "chisq_abs_threshold": 1.0e4, "min_good_fraction": 0.1}})
+    selection.chisq_z, selection.good_fraction = chisq_z, good_fraction
+    return SimpleNamespace(band_comm=MPI.COMM_SELF, selection=selection, chain=1,
+                           experiment_data=SimpleNamespace(nscans=nscans, band_name="test-band"),
+                           present=np.ones((nscans, ndet), dtype=bool))
 
 
-def _cfg(**overrides):
-    cfg = dict(enabled=True, chisq_abs_threshold=1.0e4, min_good_fraction=0.1)
-    cfg.update(overrides)
-    return SimpleNamespace(**cfg)
-
-
-def test_log_dataselect_summary_counts_veto_rejections(caplog):
+def test_log_summary_counts_veto_rejections(caplog):
     rng = np.random.default_rng(3)
     nscans, ndet = 200, 2
     z = rng.normal(0.0, 30.0, (nscans, ndet))  # SO-like healthy bulk
@@ -74,12 +70,49 @@ def test_log_dataselect_summary_counts_veto_rejections(caplog):
     z[2, 1] = 130.0                    # marginal noise-model mismatch: not counted as rejected
     z[3, 0] = gf[3, 0] = np.nan        # rejected in an earlier iteration: stale, not re-counted
     stub = _stub_samples(z, gf)
-    stub.accept[3, 0] = False
+    stub.selection.accept[3, 0] = False
 
     with caplog.at_level(logging.INFO, logger="commander4.tod.data_selection"):
-        log_dataselect_summary(MPI.COMM_SELF, stub, _cfg(), active=True, iteration=2)
+        stub.selection.log_summary(stub, active=True, iteration=2)
     assert "rejected 2 detector-scans" in caplog.text
     assert "low-good-fraction: 1" in caplog.text
     assert "|chisq_z| > 1e+04: 1" in caplog.text
     # Reporting only: the vetoes in the mapmaking loop own accept, the summary never touches it.
-    assert stub.accept[0, 0] and stub.accept[1, 0]
+    assert stub.selection.accept[0, 0] and stub.selection.accept[1, 0]
+
+
+class _VetoView:
+    """Stand-in for a TODView focused on detector-scan (1, 0), with what the vetoes read."""
+    iscan, idet, sigma0 = 1, 0, 1.0
+
+    def get_mask(self, **kwargs):
+        return np.ones(1000, dtype=bool)
+
+
+def test_vetoes_record_their_diagnostic_and_reject_only_when_active():
+    """Both vetoes always record what they judge; they reject only while the cuts are active."""
+    settings = {"data_selection": {"min_good_fraction": 0.5, "chisq_abs_threshold": 10.0}}
+    noisy = np.random.default_rng(4).normal(0.0, 3.0, 1000)  # sigma0 = 1 is far too small
+    for active in (False, True):
+        selection = make_step(DataSelection, 2, 1, settings=settings)
+        assert not selection.veto_low_good_fraction(_VetoView(), np.ones(10, dtype=bool), active)
+        assert selection.good_fraction[1, 0] == 1.0
+        rejected = selection.veto_low_good_fraction(_VetoView(), np.arange(10) < 2, active)
+        assert rejected == active and selection.accept[1, 0] == (not active)
+        assert selection.good_fraction[1, 0] == 0.2
+
+        selection = make_step(DataSelection, 2, 1, settings=settings)
+        rejected = selection.veto_high_chisq(_VetoView(), noisy, active)
+        assert rejected == active and selection.accept[1, 0] == (not active)
+        assert selection.chisq_z[1, 0] == masked_chisq_z(noisy, np.ones(1000, dtype=bool), 1.0)
+
+
+def test_start_iteration_forgets_the_diagnostics_but_not_the_rejections():
+    """Rejection is sticky within a chain; the diagnostics are rebuilt every iteration."""
+    selection = make_step(DataSelection, 2, 1)
+    selection.chisq_z[:] = 1.0
+    selection.good_fraction[:] = 1.0
+    selection.accept[0, 0] = False
+    selection.start_iteration()
+    assert np.isnan(selection.chisq_z).all() and np.isnan(selection.good_fraction).all()
+    np.testing.assert_array_equal(selection.accept[:, 0], [False, True])

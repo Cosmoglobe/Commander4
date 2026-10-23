@@ -4,30 +4,25 @@ The draw solves a constrained-realization system per detector-scan. Masked gaps 
 non-stationary, so it is split (arXiv:2011.06024) into a stationary Fourier-domain part plus a CG
 solve over the gap samples alone, which is far cheaper than a CG over the whole TOD.
 """
-import logging
-
 import numpy as np
 import pixell
 from scipy.fft import rfftfreq
-from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 from commander4.math_utils.fft import forward_rfft_mirrored, backward_rfft_mirrored, forward_dct,\
         backward_dct
-from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.psd import NoisePSD
 from commander4.tod.noise.sigma0 import calc_sigma0_robust, calc_sigma0_binned_psd
-from commander4.tod.config import SIGMA0_METHODS
 
 from commander4.diagnostics.performance import start_bench, stop_bench, log_memory
 
-logger = logging.getLogger(__name__)
+SIGMA0_METHODS = ("pairwise", "binned_psd")
 
 
 def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigma0: float,
-                                     C_corr_inv: NDArray, err_tol=1e-6, max_iter=100,
-                                     rnd_seed=None, use_dct=False) -> NDArray:
+                                     C_corr_inv: NDArray, rng: np.random.Generator, err_tol=1e-6,
+                                     max_iter=100, use_dct=False) -> NDArray:
     """Calculate a constrained realization of correlated noise when some samples are masked.
 
     Given a TOD array, a boolean mask array, and a power spectrum prior, calculates a constrained
@@ -49,9 +44,9 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
         mask (nsamp,): A boolean array where False indices indicates missing or masked data.
         sigma0: The stationary white noise level of the data.
         C_corr_inv (nfft,): The inverse covariance of the TOD we want to sample.
+        rng: Random generator for the two fluctuation terms of the realization.
         err_tol: The error tolerance for the CG search.
         max_iter: Maximum iterations used by the CG search.
-        rnd_seed: Seed for drawing random numbers during the realization.
         use_dct: Compute the mirrored filter as a length-nsamp DCT instead of a length-2*nsamp
             FFT. This is an exact reformulation (see `math_utils.fft.forward_dct`), not an
             approximation, and roughly halves the transform cost.
@@ -91,10 +86,8 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
     # Everything except the central and expensive FFT filters stay float64 for precision.
     M_inv_f64 = 1.0 / ( (1/sigma0**2) + C_corr_inv)  # The stationary LHS operator.
     M_inv = M_inv_f64[:nfilt].astype(np.float32)
-    if rnd_seed is not None:
-        np.random.seed(rnd_seed)
-    omega_2 = np.random.randn(ntod)
-    omega_3 = np.random.randn(ntod)
+    omega_2 = rng.standard_normal(ntod)
+    omega_3 = rng.standard_normal(ntod)
 
     C_wn_timedomain = np.ones(ntod, dtype=np.float64)*sigma0**2
     C_wn_timedomain[masked_indices] = np.inf
@@ -155,8 +148,9 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
 
 
 def inefficient_corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_],
-                                                 sigma0: float, C_corr_inv: NDArray, err_tol=1e-12,
-                                                 max_iter=300, rnd_seed=None) -> NDArray:
+                                                 sigma0: float, C_corr_inv: NDArray,
+                                                 rng: np.random.Generator, err_tol=1e-12,
+                                                 max_iter=300) -> NDArray:
     """ A simpler and less efficient implementation of the function
         'corr_noise_realization_with_gaps'. This function performs the 'full' straight-forward CG
         search. Should only be used to test the proper function. Note also that the error tolerance
@@ -172,10 +166,8 @@ def inefficient_corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.
     C_wn_timedomain = np.ones(Ntod)*sigma0**2
     C_wn_timedomain[~mask] = np.inf
 
-    if rnd_seed is not None:
-        np.random.seed(rnd_seed)
-    omega_2 = np.random.randn(Ntod)
-    omega_3 = np.random.randn(Ntod)
+    omega_2 = rng.standard_normal(Ntod)
+    omega_3 = rng.standard_normal(Ntod)
 
     b_full = TOD/C_wn_timedomain + omega_2/np.sqrt(C_wn_timedomain)\
            + apply_filter(omega_3, np.sqrt(C_corr_inv))
@@ -191,8 +183,9 @@ def inefficient_corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.
 
 
 def realize_noise_in_gaps(noise_resid: NDArray, mask: NDArray[np.bool_], noise_model: NoisePSD,
-                          noise_params: NDArray, samprate: float, fsamp: float, method: str, *,
-                          cg_err_tol: float = 1e-6, cg_max_iter: int = 100) -> NDArray:
+                          noise_params: NDArray, samprate: float, fsamp: float, method: str,
+                          rng: np.random.Generator, *, cg_err_tol: float = 1e-6,
+                          cg_max_iter: int = 100) -> NDArray:
     """ Replace the masked samples of a noise residual with a constrained 1/f + white realization.
 
         Used by the gain samplers, whose calibration residuals are block-averaged to *samprate* (Hz)
@@ -217,6 +210,7 @@ def realize_noise_in_gaps(noise_resid: NDArray, mask: NDArray[np.bool_], noise_m
             ``'full_cg'`` (masked constrained CG, with the stationary draw as a
             non-convergence/high-variance fallback). ``'wn'`` is handled by the caller and never
             reaches this function.
+        rng: Random generator for the gap realization.
         cg_err_tol, cg_max_iter: CG controls for ``method='full_cg'``.
     Returns:
         A float64 copy of *noise_resid* with the masked samples replaced by the constrained draw.
@@ -230,21 +224,22 @@ def realize_noise_in_gaps(noise_resid: NDArray, mask: NDArray[np.bool_], noise_m
     freq = rfftfreq(2 * out.size, d=1.0/samprate)  # mirrored-FFT grid at the downsampled rate
     C_corr_inv = noise_model.compute_inv_corr_spectrum(freq, params)
 
-    fill_all_masked(out, mask, sigma0)  # linear+white seed for the CG / stationary solve
+    fill_all_masked(out, mask, sigma0, rng)  # linear+white seed for the CG / stationary solve
+    full_mask = np.ones_like(mask)
     if method == "fallback":
-        n_corr, *_ = corr_noise_realization_with_gaps(out, np.ones_like(mask), sigma0, C_corr_inv)
+        n_corr, *_ = corr_noise_realization_with_gaps(out, full_mask, sigma0, C_corr_inv, rng)
     elif method == "full_cg":
         n_corr, _, _, converged = corr_noise_realization_with_gaps(
-            out, mask, sigma0, C_corr_inv, err_tol=cg_err_tol, max_iter=cg_max_iter)
+            out, mask, sigma0, C_corr_inv, rng, err_tol=cg_err_tol, max_iter=cg_max_iter)
         resid = (out - n_corr) * mask
         if not converged or np.dot(resid, resid) > np.dot(out*mask, out*mask):
-            n_corr, *_ = corr_noise_realization_with_gaps(out, np.ones_like(mask), sigma0, C_corr_inv)
+            n_corr, *_ = corr_noise_realization_with_gaps(out, full_mask, sigma0, C_corr_inv, rng)
     else:
         raise ValueError(f"method must be 'fallback' or 'full_cg', got {method!r}.")
 
     # Masked residual = constrained correlated draw + a fresh white realization.
     gap = ~mask
-    out[gap] = n_corr[gap] + sigma0 * np.random.standard_normal(int(np.count_nonzero(gap)))
+    out[gap] = n_corr[gap] + sigma0 * rng.standard_normal(int(np.count_nonzero(gap)))
     return out
 
 
@@ -255,7 +250,8 @@ def _estimate_sigma0(residual: NDArray, n_corr: NDArray, mask: NDArray[np.bool_]
 
 
 def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params: NDArray,
-                            noise_model: NoisePSD, fsamp: float, *, cg_err_tol: float,
+                            noise_model: NoisePSD, fsamp: float, rng: np.random.Generator, *,
+                            cg_err_tol: float,
                             cg_max_iter: int, sample_params: bool, sample_sigma0: bool = True,
                             sigma0_method: str = "pairwise",
                             nomono: bool = False, onlymono: bool = False, sigma0_dec: int = 1,
@@ -274,6 +270,7 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
         noise_params: Current noise parameters; ``noise_params[0]`` is sigma0 (used for the CG).
         noise_model: NoisePSD model providing ``compute_inv_corr_spectrum`` and ``sample_params``.
         fsamp: Sampling rate of the TOD (Hz).
+        rng: Random generator for the gap inpainting, the realization, and the PSD parameters.
         cg_err_tol: CG convergence tolerance (relative residual).
         cg_max_iter: Maximum CG iterations for the masked-gap solve. If 0, the masked-gap CG is
             skipped and the stationary (full-mask) Wiener solution is returned directly.
@@ -320,7 +317,7 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
     freq = rfftfreq(2 * Ntod, d=1.0/fsamp)  # Mirrored-FFT grid: nfft=2*Ntod -> length Ntod+1.
     C_corr_inv = noise_model.compute_inv_corr_spectrum(freq, noise_params)
     # Inpaint masked regions: seeds the CG warm-start and feeds the stationary fallback solve.
-    fill_all_masked(tod, mask, sigma0)
+    fill_all_masked(tod, mask, sigma0, rng)
     if nomono and mask.any():
         tod = tod - np.mean(tod[mask])  # Solve for a mean-zero correlated noise component.
     stop_bench("ncorr-samp-setup")
@@ -330,10 +327,10 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
     if cg_max_iter == 0:
         # User requested no CG steps: use the stationary (full-mask) Wiener solution directly.
         n_corr, residual, niter, converged = corr_noise_realization_with_gaps(
-            tod, np.ones_like(mask), sigma0, C_corr_inv, use_dct=use_dct)
+            tod, np.ones_like(mask), sigma0, C_corr_inv, rng, use_dct=use_dct)
     else:
         n_corr, residual, niter, converged = corr_noise_realization_with_gaps(
-            tod, mask, sigma0, C_corr_inv, err_tol=cg_err_tol, max_iter=cg_max_iter,
+            tod, mask, sigma0, C_corr_inv, rng, err_tol=cg_err_tol, max_iter=cg_max_iter,
             use_dct=use_dct)
         # Sanity check: the residual (data minus n_corr) should not carry more power than data.
         resid = (tod - n_corr) * mask
@@ -341,7 +338,7 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
         if high_var or not converged:
             # Fall back to the stationary solution that ignores the gaps.
             n_corr, _, _, _ = corr_noise_realization_with_gaps(
-                tod, np.ones_like(mask), sigma0, C_corr_inv, use_dct=use_dct)
+                tod, np.ones_like(mask), sigma0, C_corr_inv, rng, use_dct=use_dct)
 
     if nomono and mask.any():
         n_corr = n_corr - np.mean(n_corr[mask])
@@ -360,100 +357,10 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
         residual_tod = tod.copy()
         ngap = int(np.count_nonzero(~mask))
         if ngap > 0:
-            residual_tod[~mask] = n_corr[~mask] + float(noise_params[0]) * np.random.randn(ngap)
-        noise_params = noise_model.sample_params(residual_tod, noise_params, fsamp, bin_psd=psd_bin)
+            residual_tod[~mask] = n_corr[~mask] + float(noise_params[0]) * rng.standard_normal(ngap)
+        noise_params = noise_model.sample_params(residual_tod, noise_params, fsamp, rng,
+                                                 bin_psd=psd_bin)
     stop_bench("ncorr-psd-samp")
 
     return Bunch(n_corr=n_corr, noise_params=noise_params, residual=float(residual),
                  niter=int(niter), converged=bool(converged), high_var=high_var)
-
-
-def log_corr_noise_stats(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD,
-                         sampled_params: list[NDArray], residuals: list[float],
-                         niters: list[int], n_failed_conv: int, n_high_var: int,
-                         worst_residual: float, n_local_scans: int,
-                         chain: int, iteration: int) -> None:
-    """ Reduce per-detector-scan correlated-noise diagnostics across the band communicator and log
-        a summary on the band master. Parameter distributions are reported per model parameter name
-        (skipping sigma0), so the summary adapts to any NoisePSD model.
-
-    Args:
-        band_comm: Band-level MPI communicator.
-        experiment_data: The detector group being summarized; provides the NoisePSD model
-            (``param_names``, ``P_uni``) and the experiment/band names used to label the log lines.
-        sampled_params: Locally sampled ``noise_params`` arrays (empty if params were not sampled).
-        residuals: Local CG residuals (0 entries are excluded from the summary).
-        niters: Local CG iteration counts.
-        n_failed_conv: Local count of non-converged masked-CG solves.
-        n_high_var: Local count of variance-sanity-check failures.
-        worst_residual: Local worst CG residual.
-        n_local_scans: Local number of detector-scans (for the "out of N" message).
-        chain: Gibbs chain number for log context.
-        iteration: Gibbs iteration number for log context.
-    """
-    n_failed_conv = band_comm.reduce(n_failed_conv, op=MPI.SUM)
-    n_high_var = band_comm.reduce(n_high_var, op=MPI.SUM)
-    worst_residual = band_comm.reduce(worst_residual, op=MPI.MAX)
-    n_total = band_comm.reduce(n_local_scans, op=MPI.SUM)
-    residuals = band_comm.gather(residuals)
-    niters = band_comm.gather(niters)
-    sampled_params = band_comm.gather(sampled_params)
-    if band_comm.Get_rank() != 0:
-        return
-
-    noise_model = experiment_data.noise_model
-    # Bands from different experiments can share a centre frequency, and one experiment can hold
-    # several detector groups, so the log context names the experiment and band, not the frequency.
-    context = (f"Chain {chain} iter{iteration} {experiment_data.experiment_name} "
-               f"{experiment_data.band_name}")
-
-    # Print CG and variance sanity check failure rates (as warnings if >3% of scans).
-    log_failures = logger.warning if n_failed_conv/n_total > 0.03 else logger.verbose
-    log_failures(f"{context}: noise CG failed for {100*n_failed_conv/n_total:.1f}% of scans "
-                 f"({n_failed_conv}/{n_total}, worst residual = {worst_residual:.3e}).")
-    log_high_var = logger.warning if n_high_var/n_total > 0.03 else logger.verbose
-    log_high_var(f"{context}: variance sanity check failed for {100*n_high_var/n_total:.1f}% of "
-                 f"scans ({n_high_var}/{n_total}).")
-
-    residuals = np.concatenate([np.asarray(r, dtype=np.float64) for r in residuals])
-    residuals = residuals[residuals != 0]
-    if residuals.size == 0:
-        residuals = np.array([0.0])
-    niters = np.concatenate([np.asarray(n, dtype=np.float64) for n in niters])
-    if niters.size == 0:
-        niters = np.array([0.0])
-    # The worst residual and the failure counts are already in the two lines above, so this line
-    # only adds the typical CG behaviour.
-    logger.info(f"{context}: correlated noise for {n_total} detector-scans, median residual "
-                f"{np.median(residuals):.2e}, median iterations {np.median(niters):.1f} "
-                f"(max {np.max(niters):.0f}).")
-
-    # Per-parameter distributions (model-agnostic; sigma0 at index 0 is reported elsewhere), plus
-    # how many detector-scans ended up sitting on a hard prior bound. A parameter whose true value
-    # lies outside `P_uni` cannot be recovered: every scan rails against the nearest edge and then
-    # reports a tight scatter around it, which reads as a converged answer in the chain. A genuinely
-    # low-fknee detector will also sit near the bound, so this reports rather than warns; it is the
-    # large railed fraction, not the railing itself, that says the bound is wrong.
-    flat = [p for sub in sampled_params for p in sub]
-    if flat:
-        arr = np.asarray(flat, dtype=np.float64)  # shape (n_sampled_scans, npar)
-        n_sampled = arr.shape[0]
-        for j in range(1, arr.shape[1]):
-            name = noise_model.param_names[j] if j < len(noise_model.param_names) else f"p{j}"
-            values = arr[:, j]
-            logger.verbose(f"{context}: {name} min {np.nanmin(values):.4f}, 1% "
-                           f"{np.nanpercentile(values, 1):.4f}, mean {np.nanmean(values):.4f}, "
-                           f"99% {np.nanpercentile(values, 99):.4f}, max {np.nanmax(values):.4f}")
-            lo, hi = float(noise_model.P_uni[j, 0]), float(noise_model.P_uni[j, 1])
-            if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
-                continue
-            # Within 1% of the bounds' own span counts as "on" the bound, so a grid endpoint drawn
-            # through the inversion sampler's interpolation still registers.
-            tol = 0.01*(hi - lo)
-            n_lo = int(np.count_nonzero(arr[:, j] <= lo + tol))
-            n_hi = int(np.count_nonzero(arr[:, j] >= hi - tol))
-            if n_lo or n_hi:
-                logger.verbose(
-                    f"{context}: {name} on its prior bounds for {n_lo} ({n_lo/n_sampled:.1%}) "
-                    f"of {n_sampled} detector-scans at the lower bound {lo:.4g}, and "
-                    f"{n_hi} ({n_hi/n_sampled:.1%}) at the upper bound {hi:.4g}.")

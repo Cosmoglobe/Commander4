@@ -57,7 +57,8 @@ def _fill_masked_region(tod: NDArray, mask: NDArray[np.bool_], i_start: int, i_e
 
 
 @njit(fastmath=True)
-def fill_all_masked(tod: NDArray, mask: NDArray[np.bool_], sigma0: float) -> None:
+def fill_all_masked(tod: NDArray, mask: NDArray[np.bool_], sigma0: float,
+                    rng: np.random.Generator) -> None:
     """ Fills all masked (gap) regions in the TOD with linear interpolation and then adds
         Gaussian white noise at the gap-filled positions. Translated from fill_all_masked in
         comm_tod_mod.f90.
@@ -65,6 +66,8 @@ def fill_all_masked(tod: NDArray, mask: NDArray[np.bool_], sigma0: float) -> Non
             tod: TOD array, modified in-place at masked positions.
             mask: Boolean mask (True = valid, False = masked).
             sigma0: White noise standard deviation used for the gap noise realizations.
+            rng: Random generator for the gap noise. Numba draws from it directly, advancing the
+                caller's generator (Numba's own `np.random` state is separate and never seeded).
     """
     ntod   = len(tod)
     in_gap = False
@@ -75,7 +78,7 @@ def fill_all_masked(tod: NDArray, mask: NDArray[np.bool_], sigma0: float) -> Non
                 j_end  = j - 1
                 _fill_masked_region(tod, mask, j_start, j_end)
                 for k in range(j_start, j_end + 1):
-                    tod[k] += sigma0 * np.random.randn()
+                    tod[k] += sigma0 * rng.standard_normal()
                 in_gap = False
         else:
             if not in_gap:
@@ -85,5 +88,5 @@ def fill_all_masked(tod: NDArray, mask: NDArray[np.bool_], sigma0: float) -> Non
         j_end = ntod - 1
         _fill_masked_region(tod, mask, j_start, j_end)
         for k in range(j_start, j_end + 1):
-            tod[k] += sigma0 * np.random.randn()
+            tod[k] += sigma0 * rng.standard_normal()
 

@@ -52,7 +52,7 @@ def test_likelihood_grids_match_original(weighted: bool) -> None:
 
 
 def _reference_draw(model: NoisePSDOof, tod: np.ndarray, start: np.ndarray,
-                    fsamp: float, binned: bool) -> np.ndarray:
+                    fsamp: float, binned: bool, rng: np.random.Generator) -> np.ndarray:
     """Original likelihood and sampling sequence, retained as a scientific regression reference."""
     freqs = rfftfreq(tod.size, d=1.0 / fsamp)
     power = np.abs(forward_rfft(tod))**2 / tod.size
@@ -77,7 +77,7 @@ def _reference_draw(model: NoisePSDOof, tod: np.ndarray, start: np.ndarray,
             residual = np.log(p)[:, None] - np.log(spectrum)
             loglike = np.sum(weights[:, None] * (residual - np.exp(residual)), axis=0)
             posterior = loglike + model.log_prior(parameter, grid)
-            result[parameter] = _inversion_sampler_1d(posterior, grid)
+            result[parameter] = _inversion_sampler_1d(posterior, grid, rng)
     return result
 
 
@@ -100,14 +100,12 @@ def test_parameter_draws_and_rng_sequence_match_original(
     coefficients[0] = 0.0
     tod = np.fft.irfft(coefficients, ntod).astype(dtype)
     for seed in range(3):
-        np.random.seed(seed)
-        reference = _reference_draw(model, tod, start, fsamp, binned)
-        next_random = np.random.random()
-        np.random.seed(seed)
-        actual = model.sample_params(tod, start, fsamp, bin_psd=binned)
+        reference_rng, actual_rng = np.random.default_rng(seed), np.random.default_rng(seed)
+        reference = _reference_draw(model, tod, start, fsamp, binned, reference_rng)
+        actual = model.sample_params(tod, start, fsamp, actual_rng, bin_psd=binned)
         tolerance = 2e-6 if dtype == np.float32 else 1e-10
         np.testing.assert_allclose(actual, reference, rtol=tolerance, atol=tolerance * 0.01)
-        assert np.random.random() == next_random
+        assert actual_rng.random() == reference_rng.random()
 
 
 @pytest.mark.parametrize("binned", [False, True])
@@ -119,10 +117,9 @@ def test_fit_ignores_power_outside_model_window(binned: bool) -> None:
     time = np.arange(tod.size) / 8.0
     contaminated = tod + 100 * np.cos(2 * np.pi * 0.5 * time)
     contaminated += 100 * np.cos(2 * np.pi * 3.0 * time) + 100
-    np.random.seed(19)
-    expected = model.sample_params(tod, start, 8.0, bin_psd=binned)
-    np.random.seed(19)
-    actual = model.sample_params(contaminated, start, 8.0, bin_psd=binned)
+    expected = model.sample_params(tod, start, 8.0, np.random.default_rng(19), bin_psd=binned)
+    actual = model.sample_params(contaminated, start, 8.0, np.random.default_rng(19),
+                                 bin_psd=binned)
     np.testing.assert_allclose(actual, expected, rtol=1e-9, atol=1e-11)
 
 
@@ -130,14 +127,16 @@ def test_fit_ignores_power_outside_model_window(binned: bool) -> None:
 def test_invalid_model_window_raises(window: list[float]) -> None:
     model = NoisePSDOof(nu_fit=[[np.nan, np.nan], window, [0, 2]])
     with pytest.raises(ValueError, match="Invalid nu_fit range for fknee"):
-        model.sample_params(np.ones(128), np.array([1.0, 0.1, -1.5]), 8.0)
+        model.sample_params(np.ones(128), np.array([1.0, 0.1, -1.5]), 8.0,
+                            np.random.default_rng(0))
 
 
 @pytest.mark.parametrize("binned", [False, True])
 def test_empty_model_window_raises(binned: bool) -> None:
     model = NoisePSDOof(nu_fit=[[np.nan, np.nan], [5, 6], [0, 2]])
     with pytest.raises(ValueError, match="no positive Fourier modes"):
-        model.sample_params(np.ones(128), np.array([1.0, 0.1, -1.5]), 8.0, bin_psd=binned)
+        model.sample_params(np.ones(128), np.array([1.0, 0.1, -1.5]), 8.0,
+                            np.random.default_rng(0), bin_psd=binned)
 
 
 def test_model_copies_windows_and_skips_fixed_parameter_window() -> None:
@@ -146,7 +145,7 @@ def test_model_copies_windows_and_skips_fixed_parameter_window() -> None:
     windows[2] = [10, 20]
     np.testing.assert_array_equal(model.nu_fit[2], [0, np.inf])
     start = np.array([1.0, 0.1, -1.5])
-    result = model.sample_params(np.ones(128), start, 8.0)
+    result = model.sample_params(np.ones(128), start, 8.0, np.random.default_rng(0))
     assert result[1] == start[1]
     assert np.all(np.isfinite(result))
 
