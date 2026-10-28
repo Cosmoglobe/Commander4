@@ -10,6 +10,7 @@ from commander4.data_models.pixel_domain import PixelDomain
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.tod.noise.psd import NoisePSD
 from commander4.math_utils.fft import forward_rfft_mirrored, backward_rfft_mirrored
+from commander4.math_utils.transfer_func import TransferFunction
 
 import logging
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ class DetectorGroupTOD:
     """
     def __init__(self, scans: list[ScanTOD], experiment_name: str, band_name: str, nside: int,
                  nu: float, fwhm: float, fsamp: float, ndet: int, pols: str, noise_model: NoisePSD, 
-                 tf_tau_sec: float|None = None, instrument_filepath: str|None = None, 
+                 tf: TransferFunction|None = None, instrument_filepath: str|None = None, 
                  hfi_demodulation: bool = False):
         self.scans = scans
         self.nscans = len(scans)
@@ -49,7 +50,7 @@ class DetectorGroupTOD:
         self.fsamp = fsamp
         self.ndet = ndet
         self.pols = pols
-        self.tf_tau_sec = tf_tau_sec
+        self.tf = tf
         # Whether the TOD needs demodulation to be read (Planck HFI stores alternating
         # positive/negative modulation half-cycles.)
         self.hfi_demodulation = hfi_demodulation

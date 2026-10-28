@@ -62,7 +62,7 @@ simulation:
   npsi: 4096
   orbital_dipole: true
   compress: true
-  debug_output_dir: "../c4_sims/simgen_transfunc_debug/"
+  debug_output_dir: "../c4_sims/simgen_transfunc_asymm/debug"
 
   pointing:
     strategy: "planck_scan"

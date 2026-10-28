@@ -46,6 +46,7 @@ class CGMapmaker:
                 map_comm:MPI.Comm,
                 mapmaking_cfg:MapmakingConfig,
                 #optionals:
+                compsep_output: NDArray | None = None,
                 W_mat:NDArray|None = None,
                 CG_check_interval:int = 1):
         """Initialise the CG mapmaker.
@@ -72,9 +73,8 @@ class CGMapmaker:
         self.map_comm = map_comm
         self.ismaster = self.map_comm.Get_rank() == 0
         self.nthreads = mapmaking_cfg.num_threads
-        # Bolometer transfer function T(f), a function of the frequency in Hz; None means identity.
-        self.T_omega = (SinglePole(detector_tod.tf_tau_sec).response
-                        if detector_tod.tf_tau_sec is not None else None)
+        # Bolometer transfer function T(f)
+        self.TF = detector_tod.tf
         self.W_mat = W_mat
         # Native sampling rate [Hz] of the mapmaking TODs, so the transfer function T_omega(omega) is
         # evaluated on a physical-frequency grid (a `tau` in seconds means seconds, not samples). The
@@ -89,7 +89,7 @@ class CGMapmaker:
         self._nloc = self.domain.n_local
         # View over the band's detector-scans, used to access pointing (pix/psi) when applying the
         # pointing matrix and its adjoint.
-        self._scan_view = TODView(detector_tod, detector_samples)
+        self._scan_view = TODView(detector_tod, detector_samples, compsep_output=compsep_output)
         self._rhs_loca_map = None
         # The full-sky RHS and solution exist only on the master, and only once `finalize_RHS` and
         # `solve` produce them; the iterate is scattered to the ranks each iteration (apply_LHS).
@@ -150,50 +150,53 @@ class CGMapmaker:
         scan_tod_arr[~good_mask] = 0.0
         return scan_tod_arr
 
-    def _apply_T(self, scan_tod_arr, adjoint=False):
-        """Apply the transfer-function operator T (or its transpose T^T) to one scan; returns a new
-        length-N array.
+    # def _apply_T(self, scan_tod_arr, adjoint=False):
+    #     """Apply the transfer-function operator T (or its transpose T^T) to one scan; returns a new
+    #     length-N array.
 
-        The forward operator is ``T = R F^-1 diag(H) F E`` where ``E`` reflect-extends the scan to
-        length ``2N`` (``x -> [x, x[::-1]]``), ``H = T_omega`` is the filter evaluated on the ``2N``
-        frequency grid, and ``R`` restricts back to the first ``N`` samples. The grid is in physical
-        Hz (``rfftfreq(2N, d=1/fsamp)``), so ``T_omega`` sees true frequencies and a time constant
-        is in seconds, not samples. Mirroring makes the scan boundary continuous so a causal ``H`` does
-        not wrap the scan's end onto its start (matching ``apply_N_inv`` and the simulator that bakes
-        ``H`` in).
+    #     The forward operator is ``T = R F^-1 diag(H) F E`` where ``E`` reflect-extends the scan to
+    #     length ``2N`` (``x -> [x, x[::-1]]``), ``H = T_omega`` is the filter evaluated on the ``2N``
+    #     frequency grid, and ``R`` restricts back to the first ``N`` samples. The grid is in physical
+    #     Hz (``rfftfreq(2N, d=1/fsamp)``), so ``T_omega`` sees true frequencies and a time constant
+    #     is in seconds, not samples. Mirroring makes the scan boundary continuous so a causal ``H`` does
+    #     not wrap the scan's end onto its start (matching ``apply_N_inv`` and the simulator that bakes
+    #     ``H`` in).
 
-        The transpose is ``T^T = E^T F^-1 diag(H*) F R^T``: ``R^T`` zero-pads (``x -> [x, 0]``), the
-        filter is **conjugated** (``H*``; a frequency flip is *not* the transpose for a non-trivial
-        ``H``), and ``E^T`` folds the mirror back (``v -> v[:N] + v[N:][::-1]``). Implementing the two
-        directions as this exact adjoint pair keeps the mapmaking operator ``P^T T^T N^-1 T P``
-        symmetric, so the CG solve stays well-posed. At ``T_omega = 1`` both reduce to the identity.
-        """
-        if self.T_omega is None:
-            return np.ascontiguousarray(scan_tod_arr, dtype=np.float64)
-        n = scan_tod_arr.shape[-1]
-        freqs = np.fft.rfftfreq(2 * n, d=1.0 / self.fsamp)  # physical frequency grid [Hz]
-        if adjoint:
-            ext = np.concatenate([scan_tod_arr, np.zeros_like(scan_tod_arr)])  # R^T: zero-pad
-            filt = np.conj(self.T_omega(freqs))                               # H*
-        else:
-            ext = np.concatenate([scan_tod_arr, scan_tod_arr[::-1]])          # E: reflect-extend
-            filt = self.T_omega(freqs)                                        # H
-        out = backward_rfft(forward_rfft(ext, nthreads=self.nthreads) * filt, 2 * n,
-                            nthreads=self.nthreads)
-        if adjoint:
-            return out[:n] + out[n:][::-1]                                    # E^T: fold the mirror back
-        return np.ascontiguousarray(out[:n])                                 # R: keep the first N samples
+    #     The transpose is ``T^T = E^T F^-1 diag(H*) F R^T``: ``R^T`` zero-pads (``x -> [x, 0]``), the
+    #     filter is **conjugated** (``H*``; a frequency flip is *not* the transpose for a non-trivial
+    #     ``H``), and ``E^T`` folds the mirror back (``v -> v[:N] + v[N:][::-1]``). Implementing the two
+    #     directions as this exact adjoint pair keeps the mapmaking operator ``P^T T^T N^-1 T P``
+    #     symmetric, so the CG solve stays well-posed. At ``T_omega = 1`` both reduce to the identity.
+    #     """
+    #     if self.T_omega is None:
+    #         return np.ascontiguousarray(scan_tod_arr, dtype=np.float64)
+    #     n = scan_tod_arr.shape[-1]
+    #     freqs = np.fft.rfftfreq(2 * n, d=1.0 / self.fsamp)  # physical frequency grid [Hz]
+    #     if adjoint:
+    #         ext = np.concatenate([scan_tod_arr, np.zeros_like(scan_tod_arr)])  # R^T: zero-pad
+    #         filt = np.conj(self.T_omega(freqs))                               # H*
+    #     else:
+    #         ext = np.concatenate([scan_tod_arr, scan_tod_arr[::-1]])          # E: reflect-extend
+    #         filt = self.T_omega(freqs)                                        # H
+    #     out = backward_rfft(forward_rfft(ext, nthreads=self.nthreads) * filt, 2 * n,
+    #                         nthreads=self.nthreads)
+    #     if adjoint:
+    #         return out[:n] + out[n:][::-1]                                    # E^T: fold the mirror back
+    #     return np.ascontiguousarray(out[:n])                                 # R: keep the first N samples
 
-    def apply_T(self, scan_tod_arr):
+    def apply_T(self, scan_tod_arr: NDArray, sky_model_tod: NDArray | None = None):
         """Apply the transfer-function operator ``T = R F^-1 diag(T_omega) F E`` to one scan.
 
         ``T_omega`` is the (Hermitian-symmetric) filter ``H(omega)``; the mirrored FFT (reflect-extend
         to ``2N``, filter, keep the first ``N`` samples) suppresses boundary wrap-around. Returns a new
         array of the same length; see ``_apply_T`` for the full definition.
         """
-        return self._apply_T(scan_tod_arr, adjoint=False)
+        if self.TF is None:
+            return scan_tod_arr
+        else:
+            return self.TF.apply(scan_tod_arr, self.fsamp, adjoint=False, nthreads=self.nthreads, prior_signal=sky_model_tod)
 
-    def apply_T_adjoint(self, scan_tod_arr):
+    def apply_T_adjoint(self, scan_tod_arr, sky_model_tod: NDArray | None = None):
         """Apply the transpose ``T^T`` of the transfer-function operator to one scan.
 
         This is the exact numerical transpose of ``apply_T``: zero-pad, filter with the **conjugated**
@@ -202,7 +205,10 @@ class CGMapmaker:
         non-trivial ``T_omega``, and hence keeps ``P^T T^T N^-1 T P`` symmetric. Returns a new array
         of the same length; see ``_apply_T``.
         """
-        return self._apply_T(scan_tod_arr, adjoint=True)
+        if self.TF is None:
+            return scan_tod_arr
+        else:
+            return self.TF.apply(scan_tod_arr, self.fsamp, adjoint=True, nthreads=self.nthreads, prior_signal=sky_model_tod)
 
     def apply_W(self, scan_tod_arr):
         """
@@ -236,7 +242,7 @@ class CGMapmaker:
         if self._rhs_loca_map is None:
             #if not done already, allocate memory for local maps
             self._rhs_loca_map = np.zeros((self._ncomp, self._nloc))
-
+        sky_model_tod = None if self._scan_view.compsep_output is None else view.get_static_sky_tod()
         # Guard against pathological scans that slip past read-in: an empty scan crashes the FFT,
         # and a single non-finite good sample is spread across the whole scan by apply_T (and then
         # across every pixel that scan hits), making the CG residual NaN. Readers should discard
@@ -253,7 +259,7 @@ class CGMapmaker:
         # W^T N^-1 d
         scan_tod_arr = self.apply_W_adjoint(scan_tod_arr)
         # T^T W^T N^-1 d
-        scan_tod_arr = self.apply_T_adjoint(scan_tod_arr)
+        scan_tod_arr = self.apply_T_adjoint(scan_tod_arr, sky_model_tod=sky_model_tod)
         # P^T T^T W^T N^-1 d
         self._rhs_loca_map = self.apply_P_adjoint(scan_tod_arr, self._rhs_loca_map, view.pix_local,
                                                   view.psi, view.response_I_P)
@@ -297,12 +303,15 @@ class CGMapmaker:
             response_I_P = view.response_I_P
             inv_var = (view.get_gain()/view.sigma0)**2  # as in accum_to_RHS and the binned weights
             good_mask = view.get_mask(proc_mask=False)
+            # We avoid useless sly model projection when there is no compsep output passed 
+            # (i.e. TF is symmetric and do not need it)
+            sky_model_tod = None if self._scan_view.compsep_output is None else view.get_static_sky_tod()
             scan_tod_arr_aux = np.zeros(pix_local.shape[0], dtype=np.float64)  # full-length, as RHS
             #P m
             scan_tod_arr_aux = self.apply_P(local_in, scan_tod_arr_aux, pix_local, psi,
                                             response_I_P)
             #T P m
-            scan_tod_arr_aux = self.apply_T(scan_tod_arr_aux)
+            scan_tod_arr_aux = self.apply_T(scan_tod_arr_aux, sky_model_tod=sky_model_tod)
             #W T P m
             scan_tod_arr_aux = self.apply_W(scan_tod_arr_aux)
             #N^-1 W T P m
@@ -310,7 +319,7 @@ class CGMapmaker:
             #W^T N^-1 W T P m
             scan_tod_arr_aux = self.apply_W_adjoint(scan_tod_arr_aux)
             #T^T W^T N^-1 W T P m
-            scan_tod_arr_aux = self.apply_T_adjoint(scan_tod_arr_aux)
+            scan_tod_arr_aux = self.apply_T_adjoint(scan_tod_arr_aux, sky_model_tod=sky_model_tod)
             #P^T T^T W^T N^-1 W T P m
             out_local = self.apply_P_adjoint(scan_tod_arr_aux, out_local, pix_local, psi,
                                              response_I_P)

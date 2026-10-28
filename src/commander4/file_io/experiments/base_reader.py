@@ -41,7 +41,7 @@ from commander4.data_models.pointing import (PixelPointing, ScanBoresightPointin
                                              DetectorBoresightPointing)
 from commander4.parameters.schema import resolve_param
 from commander4.tod.noise.psd import NoisePSD, NoisePSDOof
-from commander4.math_utils.transfer_func import _tau_sec
+from commander4.math_utils.transfer_func import _tau_sec, _build_from_node
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +160,7 @@ class TODReader:
         return DetectorGroupTOD(scans, self.experiment._name, self.band._name,
                                 self.band.eval_nside, self.band.freq, self.band.fwhm, fsamp,
                                 len(self.det_names), self.band.polarization, self.noise_model,
-                                tf_tau_sec=_tau_sec(self.band),
+                                tf=_build_from_node(self.band.transfer_function),
                                 instrument_filepath=getattr(self.experiment, "instrument_file",
                                                             None),
                                 hfi_demodulation=self.hfi_demodulation)

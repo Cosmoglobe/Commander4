@@ -77,7 +77,8 @@ def tod2map(band_comm: MPI.Comm, experiment_data: DetectorGroupTOD, compsep_outp
         map_names.append("res")
     binned = BinnedMapmaker(experiment_data.pixel_domain, pols, map_names,
                             count_hits=mapmaking_cfg.include_hit_maps)
-    cg = CGMapmaker(experiment_data, tod_samples, band_comm, mapmaking_cfg) if use_cg else None
+    cg = CGMapmaker(experiment_data, tod_samples, band_comm, 
+                    mapmaking_cfg, compsep_output=compsep_output) if use_cg else None
     if corr_noise_active:
         sampled_params = []
         residuals = []

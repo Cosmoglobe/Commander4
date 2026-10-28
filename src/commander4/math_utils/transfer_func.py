@@ -40,7 +40,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
-
+from commander4.math_utils.fft import forward_rfft, backward_rfft
 from simgen.config import bget
 
 logger = logging.getLogger(__name__)
@@ -56,14 +56,25 @@ class TransferFunction(ABC):
     def apply(self, 
         signal: NDArray[np.floating],
         fsamp: float,
-        prior_signal: NDArray[np.floating] | None = None
+        prior_signal: NDArray[np.floating] | None = None,
+        adjoint = False,
+        nthreads = 1
     ) -> NDArray[np.floating]:
         """Filter ``signal`` with this transfer function via a mirrored FFT over the scan.
 
-        The scan is reflected (``[x, x[::-1]]``, length ``2*ntod``), filtered with ``H`` on the
-        ``2*ntod`` frequency grid, and the first ``ntod`` samples are returned, matching C4's
-        ``forward_rfft_mirrored``/``backward_rfft_mirrored`` so the CG mapmaker deconvolves the same
-        operator. The reflection keeps the causal kernel from wrapping the scan's end onto its start.
+        The forward operator is ``T = R F^-1 diag(H) F E`` where ``E`` reflect-extends the scan to
+        length ``2N`` (``x -> [x, x[::-1]]``), ``H = T_omega`` is the filter evaluated on the ``2N``
+        frequency grid, and ``R`` restricts back to the first ``N`` samples. The grid is in physical
+        Hz (``rfftfreq(2N, d=1/fsamp)``), so ``T_omega`` sees true frequencies and a time constant
+        is in seconds, not samples. Mirroring makes the scan boundary continuous so a causal ``H`` does
+        not wrap the scan's end onto its start (matching ``apply_N_inv`` and the simulator that bakes
+        ``H`` in).
+
+        The transpose is ``T^T = E^T F^-1 diag(H*) F R^T``: ``R^T`` zero-pads (``x -> [x, 0]``), the
+        filter is **conjugated** (``H*``; a frequency flip is *not* the transpose for a non-trivial
+        ``H``), and ``E^T`` folds the mirror back (``v -> v[:N] + v[N:][::-1]``). Implementing the two
+        directions as this exact adjoint pair keeps the mapmaking operator ``P^T T^T N^-1 T P``
+        symmetric, so the CG solve stays well-posed. At ``T_omega = 1`` both reduce to the identity.
 
         Args:
             signal: One detector's clean signal TOD (ntod,), before noise.
@@ -76,10 +87,19 @@ class TransferFunction(ABC):
             level (and hence the gain calibration) up to the small mirrored-boundary effect.
         """
         n = signal.shape[-1]
-        ext = np.concatenate([signal.astype(np.float64), signal[::-1].astype(np.float64)])
         freqs = np.fft.rfftfreq(2 * n, d=1.0 / fsamp)
-        filtered = np.fft.irfft(np.fft.rfft(ext) * self.response(freqs), n=2 * n)[:n]
-        return filtered.astype(signal.dtype, copy=False)
+
+        if adjoint:
+            ext = np.concatenate([signal, np.zeros_like(signal)])           # R^T: zero-pad
+            filt = np.conj(self.response(freqs))                            # H*
+        else:
+            ext = np.concatenate([signal, signal[::-1]])                    # E: reflect-extend
+            filt = self.response(freqs)                                     # H 
+        out = backward_rfft(forward_rfft(ext, nthreads=nthreads) * filt, 2 * n,
+                                    nthreads=nthreads)
+        if adjoint:
+            return out[:n] + out[n:][::-1]                                  # E^T: fold the mirror back
+        return np.ascontiguousarray(out[:n])                                # R: keep the first N samples
 
 
 class SinglePole(TransferFunction):
@@ -174,11 +194,59 @@ class AsymmetricTransferFunction(TransferFunction):
             mask[i] = curr_state
         return mask
 
+    def _apply(
+        self,
+        signal: NDArray[np.floating],
+        fsamp: float,
+        prior_signal: NDArray[np.floating] | None = None,
+        nthreads = 1
+    ) -> NDArray[np.floating]:
+        """Applies asymmetric filtering to ``signal``. First filters then masks.
+        """
+        # Generate time-domain mask M (1 for rising, 0 for falling)
+        ref_signal = prior_signal if prior_signal is not None else signal
+        mask = self._compute_rising_mask(ref_signal, fsamp)
+
+        # Run full mirrored FFT filtering for both filters
+        filtered_up = self.tf_up.apply(signal, fsamp, adjoint=False, nthreads=nthreads)
+        filtered_down = self.tf_down.apply(signal, fsamp, adjoint=False, nthreads=nthreads)
+
+        # Apply mask in time domain
+        filtered = mask * filtered_up + (1.0 - mask) * filtered_down
+        return filtered.astype(signal.dtype, copy=False)
+
+    def _apply_adjoint(
+        self,
+        signal: NDArray[np.floating],
+        fsamp: float,
+        prior_signal: NDArray[np.floating] | None = None,
+        nthreads = 1
+    ) -> NDArray[np.floating]:
+        """Applies adjoint of asymmetric filtering to ``signal``. First masks then filters.
+        """
+        # Generate time-domain mask M (1 for rising, 0 for falling)
+        ref_signal = prior_signal if prior_signal is not None else signal
+        mask = self._compute_rising_mask(ref_signal, fsamp)
+
+        #Mask input signal first
+        masked_up = mask * signal.astype(np.float64)
+        masked_down = (1.0 - mask) * signal.astype(np.float64)
+
+        # Apply adjoints of the corresponding TFs
+        trans_up = self.tf_up.apply(masked_up, fsamp, adjoint=True, nthreads=nthreads)
+        trans_down = self.tf_down.apply(masked_down, fsamp, adjoint=True, nthreads=nthreads)
+
+        # Combine
+        res = trans_up + trans_down
+        return res.astype(signal.dtype, copy=False)
+
     def apply(
         self,
         signal: NDArray[np.floating],
         fsamp: float,
         prior_signal: NDArray[np.floating] | None = None,
+        adjoint = False,
+        nthreads = 1
     ) -> NDArray[np.floating]:
         """Applies asymmetric filtering to ``signal``.
 
@@ -186,20 +254,23 @@ class AsymmetricTransferFunction(TransferFunction):
         the rising/falling state mask. If ``prior_signal`` is None (e.g. forward simulations),
         the mask is derived directly from ``signal``. ``prior_signal`` is assumed to be already
         correctly smoothed to the telescope FWHM.
+
+        In the adjoint operator, masking is applied before.
         """
-        # Step 1: Select reference signal for computing rising/falling states
-        ref_signal = prior_signal if prior_signal is not None else signal
-
-        # Step 2: Generate time-domain mask M (1 for rising, 0 for falling)
-        mask = self._compute_rising_mask(ref_signal, fsamp)
-
-        # Step 3: Run full mirrored FFT filtering for both filters
-        filtered_up = self.tf_up.apply(signal, fsamp)
-        filtered_down = self.tf_down.apply(signal, fsamp)
-
-        # Step 4: Time-domain splice
-        filtered = mask * filtered_up + (1.0 - mask) * filtered_down
-        return filtered.astype(signal.dtype, copy=False)
+        if adjoint:
+            return self._apply_adjoint(
+                        signal=signal, 
+                        fsamp=fsamp, 
+                        prior_signal=prior_signal, 
+                        nthreads=nthreads
+                        )
+        else:
+            return self._apply(
+                        signal=signal, 
+                        fsamp=fsamp, 
+                        prior_signal=prior_signal, 
+                        nthreads=nthreads
+                        )
 
 def _tau_sec(spec: Bunch | dict) -> float | None:
     """Read a time constant from a param block, accepting ``tau_sec`` or ``tau_ms`` (None if absent).
@@ -222,6 +293,9 @@ def _build_from_node(node: Bunch) -> TransferFunction | None:
     ``tau_ms``/``tau_sec`` gives a ``SinglePole``. A missing or zero time constant means identity, for
     which we return ``None`` (no filtering) so the caller can skip the FFT entirely.
     """
+    enabled = bget(node, "enabled", True)
+    if not enabled:
+        return None
     #asymmetric TF case
     if "up" in node:
         tf_up = _build_from_node(node.up)
