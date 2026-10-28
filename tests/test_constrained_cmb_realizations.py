@@ -746,7 +746,7 @@ def saved_component_sample(request: pytest.FixtureRequest, tmp_path: Path) -> tu
         else:
             comp.nu_ref = 40.0 if comp.eval_pol == "I" else 30.0
             comp.beta = -2.6 if comp.eval_pol == "I" else -3.3
-    write_compsep_chain_to_file(comp_list.joined(), params, chain=1, iter=1)
+    write_compsep_chain_to_file(comp_list, params, chain=1, iter=1)
     chain_path = str(tmp_path / "chains_compsep/chain01_iter0001.h5")
     return params, chain_path, intrinsic
 

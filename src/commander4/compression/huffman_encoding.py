@@ -1,12 +1,13 @@
-"""Huffman coding of TOD, pointing and flag arrays, as stored in the experiment scan files.
+"""Huffman encoding of TOD, pointing and flag arrays, for writing scan files and for simulations.
 
-The compression is not ours: the reader has to decode what the file already contains. Decoding is
-numba-compiled because it runs once per detector-scan over the full sample count.
+Writes the format described in `huffman_decoding.py`. Commander4 itself only decodes; this module
+is used by the ``simgen`` writer and by readers that build compressed arrays on the fly.
 """
 import numpy as np
 import heapq
 from numba import njit, types
 from numba.typed import Dict
+
 
 class LeafNode:
     """A node in the Huffman tree, ordered by weight with `node_number` breaking ties.

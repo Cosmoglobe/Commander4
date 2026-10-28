@@ -14,7 +14,8 @@ from mpi4py import MPI
 from pixell.bunch import Bunch
 
 import commander4.file_io.tod_reader as tod_reader
-from commander4.compression import huffman
+from commander4.compression.huffman_encoding import (build_huffman_tree, huffman_compress_array,
+                                                     preproc_diff)
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.file_io.experiments.base_reader import find_good_fourier_size
 from commander4.parameters.parse import params_from_dict
@@ -39,17 +40,17 @@ def write_scan(directory: Path, scan_id: int, tods: dict[str, np.ndarray],
                     tods, scalars, compress=False)
     if flags is not None:
         pid = f"{scan_id:06d}"
-        diffs = {name: huffman.preproc_diff(flags.get(name, np.zeros(NTOD, dtype=np.int64)))
+        diffs = {name: preproc_diff(flags.get(name, np.zeros(NTOD, dtype=np.int64)))
                  for name in names}
-        tree, symbols, codes, lengths = huffman.build_huffman_tree(list(diffs.values()))
+        tree, symbols, codes, lengths = build_huffman_tree(list(diffs.values()))
         with h5py.File(path, "a") as f:
             del f[f"{pid}/common/hufftree"], f[f"{pid}/common/huffsymb"]
             f[f"{pid}/common/hufftree"] = tree.astype(np.int64)
             f[f"{pid}/common/huffsymb"] = symbols
             for name in names:
                 del f[f"{pid}/{name}/flag"]
-                f[f"{pid}/{name}/flag"] = np.void(huffman.huffman_compress_array(diffs[name], codes,
-                                                                                 lengths))
+                f[f"{pid}/{name}/flag"] = np.void(huffman_compress_array(diffs[name], codes,
+                                                                         lengths))
     return path
 
 
@@ -96,6 +97,33 @@ def test_standard_scan_is_read_by_detector_name(tmp_path: Path) -> None:
         assert det.polang == polang
         np.testing.assert_array_equal(det.orbital_velocity_m_per_s, [1.0, 2.0, 3.0])
         assert det.good_data_mask.all()
+
+
+def test_compressed_pointing_is_decoded_with_one_shared_tree(tmp_path: Path) -> None:
+    """All detectors of a scan share one int64 tree, also when the file stores it as int32 (as the
+    SO LAT files do), and the compressed psi decodes to the centers of its 4096 bins."""
+    names = ["a", "b"]
+    pix = np.arange(NTOD) % 12
+    psi = np.linspace(0.0, np.pi, NTOD)
+    path = str(tmp_path / "scan_000001.h5")
+    write_scan_file(path, 1, 1, 10.0, 4096, NTOD, np.zeros(3), names,
+                    {name: pix for name in names}, {name: psi for name in names},
+                    {name: tod() for name in names},
+                    {name: np.array([1e6, 1.0, 0.1, -1.0]) for name in names})
+    with h5py.File(path, "a") as f:
+        tree = f["000001/common/hufftree"][()]
+        del f["000001/common/hufftree"]
+        f["000001/common/hufftree"] = tree.astype(np.int32)
+    a, b = read(make_params(tmp_path, [path], names)).scans[0].detectors
+
+    # The bins as the writer computes them (`preproc_digitize_and_diff`), then their centers.
+    bins = np.floor((psi % (2.0*np.pi))*(4096/(2.0*np.pi))) + 1
+    for det in (a, b):
+        np.testing.assert_array_equal(det.get_pix(), pix[:NTOD_FFT])
+        np.testing.assert_allclose(det.get_psi(), ((bins - 0.5)*2*np.pi/4096)[:NTOD_FFT],
+                                   rtol=1e-6)
+    assert a.pointing.pix.tree.dtype == np.int64
+    assert a.pointing.pix.tree is a.pointing.psi.tree is b.pointing.pix.tree
 
 
 def test_bad_detector_scans_and_empty_scans_are_dropped(tmp_path: Path) -> None:

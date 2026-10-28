@@ -1,5 +1,13 @@
 """Writing the per-iteration chain files: band samples and maps on the TOD side, components on the
-CompSep side."""
+CompSep side.
+
+What a file holds about each sampled object is decided by that object: each TOD sampling step
+gives its arrays in `chain_arrays`, which `TODSamples.gather_chain_arrays` gathers over the band's
+ranks, and each component writes its own group in `write_chain`. The
+functions here own the file: its name, its metadata, the band maps, and the rule that a file only
+ever appears under its final name once it is complete (it is written as `<name>.tmp` and renamed),
+so a restart never reads a file a crash left half-written.
+"""
 import os
 import h5py
 import numpy as np
@@ -10,7 +18,6 @@ from pixell.bunch import Bunch
 
 from commander4.file_io import paths
 from commander4.sky.comp_list import CompList
-from commander4.sky.component import Component
 
 # What `output.chains.interval` can thin. `bands` and `compsep` gate a whole file; `maps` gates
 # only the `maps/` group inside the band file, because the maps are orders of magnitude larger
@@ -26,7 +33,7 @@ CHAIN_KINDS = ("bands", "compsep", "maps")
 #   "count"       a pure sample count: sums when degraded, unit-free.
 #
 # Anything not listed is treated as "brightness", which every sky map here is.
-_MAP_KINDS = {"rms": "rms", "cov": "weight", "nhit": "count"}
+MAP_KINDS = {"rms": "rms", "cov": "weight", "nhit": "count"}
 
 
 def _degrade_map(value: NDArray, kind: str, nside_out: int) -> NDArray:
@@ -107,17 +114,17 @@ def should_write_chain(params: Bunch, kind: str, iter: int) -> bool:
 
 def write_band_chain_to_file(params: Bunch, chain: int, iter: int, exp_name: str, band_name: str,
                              tod_arrays: dict[str, NDArray], maps_to_file: dict,
-                             band_unit_factor: float = 1.0, band_unit: str = "uK_RJ") -> None:
+                             band_unit_factor: float = 1.0) -> None:
     """Write one band's Gibbs sample: the per-scan TOD samples and the output maps, in one file.
 
-    The sampled parameters land at the top level (where `TODSamples` reads them back from for
-    `gibbs.init_from_chain`), debug TODs under `tods/<scan_id>/<detector>/`, and maps under `maps/`.
-    Keys in `tod_arrays` are dataset paths; h5py creates their groups. The caller decides if the file is
-    written at all — `TODSamples.gather_chain_arrays` owns that gate, because it has to be applied
-    before its collective gathers — so this function only gates the `maps/` group.
+    `tod_arrays` is what `TODSamples.gather_chain_arrays` collected: the sampled state that
+    `TODSamples.read_chain` reads back on a restart, plus diagnostics and debug TODs. Its keys are
+    dataset paths; h5py creates their groups. The caller decides if the file is written at all —
+    `TODSamples.gather_chain_arrays` owns that gate, because it has to be applied before its
+    collective gathers — so this function only gates the `maps/` group.
 
     The maps arrive in uK_RJ and are written in the band's `band_unit`, each converted according to
-    its `_MAP_KINDS` entry by `band_unit_factor` D (=1 for uK_RJ). The gains in `tod_arrays` were
+    its `MAP_KINDS` entry by `band_unit_factor` D (=1 for uK_RJ). The gains in `tod_arrays` were
     already divided by D by the gather, gain having brightness in its denominator.
 
     `maps_to_file` also carries the scalar `map_fwhm_arcmin` (see `mapmaking.output`), which is the
@@ -127,35 +134,31 @@ def write_band_chain_to_file(params: Bunch, chain: int, iter: int, exp_name: str
     """
     chains = params.output.chains
     nside_out = getattr(chains, "maps_nside", "native")
-    chain_dir = paths.subdir(params, paths.CHAINS_BANDS)
-    filename = f"{exp_name}_{band_name}_chain{chain:02d}_iter{iter:04d}.h5"
-    chain_file = os.path.join(chain_dir, filename)
+    chain_file = paths.band_chain_file(paths.resolve_output_dir(params.output), exp_name,
+                                       band_name, chain, iter)
 
     write_maps = should_write_chain(params, "maps", iter)
     maps_to_file = dict(maps_to_file)
     map_fwhm_arcmin = maps_to_file.pop("map_fwhm_arcmin", None)
 
-    with h5py.File(chain_file, "w") as file:
+    with h5py.File(chain_file + ".tmp", "w") as file:
         file["metadata/datetime"] = datetime.datetime.now().isoformat()
         file["metadata/parameter_file_as_string"] = params.parameter_file_as_string
-        # Thermodynamic unit the written maps and gains are expressed in (maps are brightnesses in
-        # band_unit; gain is [detector units]/band_unit).
-        file["metadata/band_unit"] = band_unit
         if write_maps and map_fwhm_arcmin is not None:
             file["metadata/map_fwhm_arcmin"] = map_fwhm_arcmin
         for key, value in tod_arrays.items():
             file[key] = value
-        if not write_maps:
-            return
-        for key, value in maps_to_file.items():
-            kind = _MAP_KINDS.get(key, "brightness")
-            # `maps_nside` is a cap: it thins maps that are finer than it, and leaves anything
-            # already coarser alone.
-            if nside_out != "native" and nside_out < hp.npix2nside(value.shape[-1]):
-                value = _degrade_map(value, kind, nside_out)
-            if band_unit_factor != 1.0:
-                value = _to_band_unit(value, kind, band_unit_factor)
-            file[f"maps/{key}"] = value
+        if write_maps:
+            for key, value in maps_to_file.items():
+                kind = MAP_KINDS.get(key, "brightness")
+                # `maps_nside` is a cap: it thins maps that are finer than it, and leaves anything
+                # already coarser alone.
+                if nside_out != "native" and nside_out < hp.npix2nside(value.shape[-1]):
+                    value = _degrade_map(value, kind, nside_out)
+                if band_unit_factor != 1.0:
+                    value = _to_band_unit(value, kind, band_unit_factor)
+                file[f"maps/{key}"] = value
+    os.replace(chain_file + ".tmp", chain_file)
 
 
 def _write_nested(group: h5py.Group, tree: dict) -> None:
@@ -173,10 +176,13 @@ def _write_nested(group: h5py.Group, tree: dict) -> None:
             group[str(key)] = value
 
 
-def write_compsep_chain_to_file(comp_list: list[Component] | CompList, params: Bunch,
-                                chain: int, iter: int, diagnostics: dict | None = None,
-                                band_frequencies: dict[str, float] | None = None):
+def write_compsep_chain_to_file(comp_list: CompList, params: Bunch, chain: int, iter: int,
+                                diagnostics: dict | None = None,
+                                band_frequencies: dict[str, float] | None = None) -> None:
     """Write one component-separation sample: the components, and how well they fit the data.
+
+    Each component writes its own `comps/<shortname>/` group (`CompList.write_chain`), which is
+    what `CompList.load_initial_state` reads back on a restart.
 
     `diagnostics` is the goodness-of-fit and sampler bookkeeping `process_compsep` collected for
     this iteration -- see `compsep.chisq.collect_fit_diagnostics` for its shape. C3 spreads the same
@@ -188,54 +194,10 @@ def write_compsep_chain_to_file(comp_list: list[Component] | CompList, params: B
     """
     if chain not in params.output.chains.write or not should_write_chain(params, "compsep", iter):
         return
-    chain_dir = paths.subdir(params, paths.CHAINS_COMPSEP)
-    chain_file = os.path.join(chain_dir, f"chain{chain:02d}_iter{iter:04d}.h5")
-    components = comp_list.components if isinstance(comp_list, CompList) else comp_list
-    with h5py.File(chain_file, "w") as file:
+    chain_file = paths.compsep_chain_file(paths.resolve_output_dir(params.output), chain, iter)
+    with h5py.File(chain_file + ".tmp", "w") as file:
         file["metadata/datetime"] = datetime.datetime.now().isoformat()
         file["metadata/parameter_file_as_string"] = params.parameter_file_as_string
         _write_nested(file, diagnostics or {})
-        seen_shortnames = set()
-        for comp in components:
-            if comp.shortname in seen_shortnames:
-                raise ValueError(f"Duplicate component shortname '{comp.shortname}' in compsep chain.")
-            seen_shortnames.add(comp.shortname)
-            # Diffuse components carry their amplitudes as alms; point sources carry one amplitude
-            # per source instead and have no `alms` at all, so each is written under the name that
-            # says what it is rather than forcing the point sources into an alm-shaped dataset.
-            if hasattr(comp, "alms"):
-                file[f"comps/{comp.shortname}/alms"] = comp.alms
-                # The realized power spectrum of those alms (Commander3's `sigma_l`) and the lmax
-                # they run to. Free -- alm2cl needs no transform -- and it saves every reader the
-                # alm2cl themselves.
-                file[f"comps/{comp.shortname}/sigma_l"] = comp.sigma_l
-                file[f"comps/{comp.shortname}/lmax"] = comp.lmax
-            else:
-                file[f"comps/{comp.shortname}/source_amps"] = comp._data
-            file[f"comps/{comp.shortname}/comp_name"] = comp.comp_name
-            file[f"comps/{comp.shortname}/shortname"] = comp.shortname
-            # The beam these amplitudes carry, in arcmin. This is 0.0 if the CG compsep was used,
-            # as it solves for the intrinsic sky. However, if the per-pix compsep solver was used,
-            # the sky components are smoothed to this resolution.
-            file[f"comps/{comp.shortname}/amp_fwhm_arcmin"] = np.degrees(comp.amp_fwhm_rad)*60.0
-            # The SED parameters this component type declares (see `Component.sed_param_names`),
-            # so the chain records the sampled spectral indices and everything else needed to
-            # evaluate the SED. `nu_ref` may be a per-polarization array, hence no float() cast.
-            for param_name in comp.sed_param_names:
-                file[f"comps/{comp.shortname}/sed/{param_name}"] = getattr(comp, param_name)
-            # The C(l) prior's model parameters (Commander3's Dl_amp/Dl_beta/Dl_theta), not the
-            # evaluated spectrum: the evaluated one is reconstructible, and `sigma_l` above already
-            # records the realized power. A `None` amplitude means the prior is off (C3 CL_TYPE
-            # none), which writes nothing at all, exactly as C3 does.
-            for param_name in comp.Cl_prior_param_names:
-                value = getattr(comp, param_name)
-                if value is not None:
-                    file[f"comps/{comp.shortname}/Cl_prior/{param_name}"] = value
-            # The mixing "matrix", C3's mixmat_<comp>_<band>. C4 indices are scalar, so a
-            # component's whole mixing matrix at a band is the single number `get_sed(nu)`.
-            for band_name, nu in (band_frequencies or {}).items():
-                file[f"comps/{comp.shortname}/mixing/{band_name}"] = comp.get_sed(nu)
-            if comp.defined_pol is not None:
-                file[f"comps/{comp.shortname}/defined_pol"] = comp.defined_pol
-            if comp.eval_pol is not None:
-                file[f"comps/{comp.shortname}/eval_pol"] = comp.eval_pol
+        comp_list.write_chain(file, band_frequencies or {})
+    os.replace(chain_file + ".tmp", chain_file)

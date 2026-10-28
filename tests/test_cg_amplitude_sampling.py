@@ -90,11 +90,12 @@ def realizations():
 
     map_params = _make_params()
     map_solver = _make_solver(det_map, _make_group(False), comm)
-    x_map = map_solver.solve(_make_comp_list(map_params), seed=0)
+    x_map = map_solver.solve(_make_comp_list(map_params), np.random.default_rng(0))
 
     params = _make_params()
     solver = _make_solver(det_map, _make_group(True), comm)
-    samples = [solver.solve(_make_comp_list(params), seed=1000 + i) for i in range(NSAMP)]
+    samples = [solver.solve(_make_comp_list(params), np.random.default_rng(1000 + i))
+               for i in range(NSAMP)]
     return solver, x_map, samples
 
 
@@ -105,22 +106,18 @@ def _ndof(comp_list: CompList) -> int:
 
 def test_gaussian_random_alm_is_white_under_the_alm_inner_product():
     """E[<eta,eta>] must equal the number of real degrees of freedom, not twice it."""
-    rng_state = np.random.get_state()
-    np.random.seed(20260811)
-    try:
-        for lmax, spin in ((6, 0), (10, 0), (6, 2)):
-            # The ncomp axis doubles as the sample axis, so this is one vectorized draw.
-            draws = gaussian_random_alm(lmax, lmax, spin, 4000)
-            nm0 = lmax + 1
-            # <a,a> for the convention of `_dot_complex_alm_1D_arrays`; m=0 entries are real.
-            norms = (draws[:, :nm0].real**2).sum(-1) + 2.0*(np.abs(draws[:, nm0:])**2).sum(-1)
-            # Spin-s fields have no l < s multipoles; those alms are zeroed, removing s^2 dof.
-            expected = (lmax + 1)**2 - spin**2
-            assert norms.mean() == pytest.approx(expected, rel=0.03), (lmax, spin)
-            # Cross-check the vectorized norm against the numba routine the solver actually uses.
-            assert _dot_complex_alm_1D_arrays(draws[0], draws[0], lmax) == pytest.approx(norms[0])
-    finally:
-        np.random.set_state(rng_state)
+    rng = np.random.default_rng(20260811)
+    for lmax, spin in ((6, 0), (10, 0), (6, 2)):
+        # The ncomp axis doubles as the sample axis, so this is one vectorized draw.
+        draws = gaussian_random_alm(lmax, lmax, spin, 4000, rng)
+        nm0 = lmax + 1
+        # <a,a> for the convention of `_dot_complex_alm_1D_arrays`; m=0 entries are real.
+        norms = (draws[:, :nm0].real**2).sum(-1) + 2.0*(np.abs(draws[:, nm0:])**2).sum(-1)
+        # Spin-s fields have no l < s multipoles; those alms are zeroed, removing s^2 dof.
+        expected = (lmax + 1)**2 - spin**2
+        assert norms.mean() == pytest.approx(expected, rel=0.03), (lmax, spin)
+        # Cross-check the vectorized norm against the numba routine the solver actually uses.
+        assert _dot_complex_alm_1D_arrays(draws[0], draws[0], lmax) == pytest.approx(norms[0])
 
 
 def test_constrained_realization_covariance_is_inverse_LHS(realizations):
@@ -162,15 +159,15 @@ def test_sample_amplitudes_toggle_controls_randomness():
 
     map_params = _make_params()
     map_solver = _make_solver(det_map, _make_group(False), comm)
-    first = map_solver.solve(_make_comp_list(map_params), seed=1)
-    second = map_solver.solve(_make_comp_list(map_params), seed=2)
+    first = map_solver.solve(_make_comp_list(map_params), np.random.default_rng(1))
+    second = map_solver.solve(_make_comp_list(map_params), np.random.default_rng(2))
     for comp_a, comp_b in zip(first, second):
         np.testing.assert_allclose(comp_a.alms, comp_b.alms, rtol=1e-10, atol=1e-12)
 
     params = _make_params()
     solver = _make_solver(det_map, _make_group(True), comm)
-    sampled_a = solver.solve(_make_comp_list(params), seed=1)
-    sampled_b = solver.solve(_make_comp_list(params), seed=2)
+    sampled_a = solver.solve(_make_comp_list(params), np.random.default_rng(1))
+    sampled_b = solver.solve(_make_comp_list(params), np.random.default_rng(2))
     assert not np.allclose(sampled_a[0].alms, sampled_b[0].alms)
     # ... and it must not coincide with the MAP solution either.
     assert not np.allclose(sampled_a[0].alms, first[0].alms)
@@ -269,7 +266,8 @@ class TestPriorMean:
         npix = 12*NSIDE**2
         det_map = DetectorMap(np.full((1, npix), 5.0), np.full((1, npix), 1e-16),
                               nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
-        solution = _make_solver(det_map, _make_group(False)).solve(comp_list)
+        solver = _make_solver(det_map, _make_group(False))
+        solution = solver.solve(comp_list, np.random.default_rng(0))
 
         np.testing.assert_allclose(solution[0].alms, mu, rtol=1e-4, atol=1e-6)
 
@@ -282,12 +280,13 @@ class TestPriorMean:
         # `amp_prior_mean` is a property, so it can only be patched on the class -- which every
         # component instance shares. The unpatched control therefore has to run first.
         unshifted = _make_solver(det_map, _make_group(True)).solve(
-            self._comp_list_with_prior(params), seed=5)
+            self._comp_list_with_prior(params), np.random.default_rng(5))
 
         comp_list = self._comp_list_with_prior(params)
         mu = np.full(comp_list[0].alms.shape, 50.0 + 0j)
         self._patch_prior_mean(monkeypatch, comp_list[0], mu)
-        shifted = _make_solver(det_map, _make_group(True)).solve(comp_list, seed=5)
+        shifted = _make_solver(det_map, _make_group(True)).solve(comp_list,
+                                                                 np.random.default_rng(5))
 
         # Same seed, so the eta draws are identical and the difference is exactly the mu term.
         np.testing.assert_allclose(shifted[0].alms - unshifted[0].alms, mu, rtol=1e-4, atol=1e-6)
@@ -354,8 +353,10 @@ class TestPriorMeanMap:
         # Solve the *same* component objects twice, as the Gibbs loop does across iterations.
         params = _make_params()
         det_map = _make_det_map()
-        first = _make_solver(det_map, _make_group(False)).solve(comp_list)
-        second = _make_solver(det_map, _make_group(False)).solve(comp_list)
+        first = _make_solver(det_map, _make_group(False)).solve(comp_list,
+                                                                np.random.default_rng(0))
+        second = _make_solver(det_map, _make_group(False)).solve(comp_list,
+                                                                 np.random.default_rng(0))
 
         np.testing.assert_array_equal(comp_list[0].amp_prior_mean, mu_before)
         # The CG stops at err_tol, and threaded SHTs sum in a varying order, so two solves agree
@@ -377,7 +378,8 @@ class TestPriorMeanMap:
         npix = 12*NSIDE**2
         det_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1e-16),
                               nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
-        solution = _make_solver(det_map, _make_group(False)).solve(comp_list)
+        solver = _make_solver(det_map, _make_group(False))
+        solution = solver.solve(comp_list, np.random.default_rng(0))
 
         np.testing.assert_allclose(solution[0].alms, mu, rtol=1e-4, atol=1e-6)
 

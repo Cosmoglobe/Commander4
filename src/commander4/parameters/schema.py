@@ -34,7 +34,7 @@ TOP_LEVEL_BLOCKS = ("gibbs", "resources", "output", "components", "experiments",
                     "compsep")
 
 # Variable used to identify lack of default. Not using "None" because its a common default.
-_NO_DEFAULT = object()
+NO_DEFAULT = object()
 
 
 @dataclass(frozen=True)
@@ -155,7 +155,7 @@ def enabled_compsep_views(params: Bunch) -> tuple[CompSepViewConfig, ...]:
     return tuple(views)
 
 
-def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any = _NO_DEFAULT,
+def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any = NO_DEFAULT,
                   legal_values: Sequence[Any] | None = None,
                   legal_types: type | tuple[type, ...] | None = None,
                   raise_on_missing_scope: bool = True):
@@ -221,11 +221,55 @@ def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any =
                 # logger.debug(f"Resolved '{key}' = {block[key]!r} from {source}.")
                 return checked(block[key], f"from {source}")
     searched = [scope if scope else "the given parameter block" for scope in scopes]
-    if default is _NO_DEFAULT:
+    if default is NO_DEFAULT:
         raise ValueError(f"'{key}' is not set in any of {searched}, and has no default. Set "
                          f"it in one of them; the first that defines it wins.")
     # logger.debug(f"'{key}' is not set in any of {searched}; using default {default!r}.")
     return checked(default, "the default")
+
+
+def read_settings(params: Bunch, name: str, scopes: Sequence[str],
+                  defaults: dict[str, Any]) -> Bunch:
+    """The settings block `name`, with `defaults` for every setting it leaves out.
+
+    The sibling of `resolve_param` for a whole block of settings. `scopes` are dotted paths into
+    `params`, most specific first, and each setting comes from the most specific scope whose `name`
+    block sets it, so a band can override single settings of a global block::
+
+        read_settings(params, "abs_gain", (f"experiments.{exp}.bands.{band}", "tod_processing"),
+                      {"enabled": False, "from_iter": 1, ...})
+
+    A scope that does not exist sets nothing. Every setting must have a default, so a misspelled
+    setting fails at startup instead of being ignored. A setting whose default is a bool, int,
+    float or str must have that type (an int is accepted for a float); a default of None accepts
+    any value.
+
+    Raises:
+        ValueError: for a setting without a default, or with the wrong type.
+    """
+    settings = Bunch(**defaults)
+    # The widest scope first, so that each narrower one overrides it.
+    for scope in reversed(scopes):
+        block = params
+        for part in (scope.split(".") if scope else ()):
+            block = block[part] if part in block else Bunch()
+        if name not in block:
+            continue
+        for key, value in block[name].items():
+            location = f"{scope}.{name}.{key}" if scope else f"{name}.{key}"
+            if key not in defaults:
+                raise ValueError(f"Unknown setting '{location}'. The known settings of '{name}' "
+                                 f"are {list(defaults)}.")
+            default = defaults[key]
+            if isinstance(default, (bool, int, float, str)):
+                legal_types = (int, float) if isinstance(default, float) else type(default)
+                # bool is a subclass of int in Python, so it has to be told apart explicitly.
+                if (not isinstance(value, legal_types)
+                        or isinstance(value, bool) != isinstance(default, bool)):
+                    raise ValueError(f"'{location}' is {value!r}, but must be a "
+                                     f"{type(default).__name__}.")
+            settings[key] = value
+    return settings
 
 
 def resolve_band_lmax(params: Bunch, band_name: str, experiment: str | None, nside: int) -> int:

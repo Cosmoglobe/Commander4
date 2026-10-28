@@ -7,13 +7,12 @@ from commander4.sky.comp_list import CompList
 def build_initial_sky_model(params: Bunch) -> "SkyModel":
     """Construct the initial sky model directly from the parameter file.
 
-    Builds the full component list, loads each component's initial alms (from its ``init_from`` or
-    the global ``init_chain_path``, else zeros), and wraps it in a SkyModel. This is rank-agnostic
-    and performs no MPI, so it is used both by CompSep ranks and (when no CompSep ranks exist) by
-    the TOD band masters to construct the initial sky locally.
+    Builds the full component list, loads each component's initial state from its ``init_from``
+    (else zero amplitudes), and wraps it in a SkyModel. This is rank-agnostic and performs no MPI.
+    It is the fixed sky of a TOD-only run, which the TOD band masters construct locally.
     """
     comp_list = CompList.init_from_params(params.components, params)
-    comp_list.load_initial_alms(params)
+    comp_list.load_initial_state(None, apply_init_from=True)
     return SkyModel(comp_list)
 
 

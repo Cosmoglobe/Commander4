@@ -4,6 +4,7 @@ A point-source component stores one amplitude per source and paints it onto the 
 band beam, so its map/alm operations are unrelated to the diffuse machinery. The helpers at the top
 do that painting and its adjoint over the cached per-source beam discs.
 """
+import h5py
 import healpy as hp
 import numpy as np
 import pysm3.units as pysm3u
@@ -67,6 +68,24 @@ class PointSourcesComponent(Component):
     @property
     def npol(self) -> int:
         return 1
+
+    def write_chain(self, group: h5py.Group, band_frequencies: dict[str, float]) -> None:
+        """Write the shared component sample (see `Component.write_chain`), plus the amplitudes.
+
+        One amplitude per source. Positions and spectral indices come from the source catalogue,
+        so they are not written.
+        """
+        super().write_chain(group, band_frequencies)
+        group["source_amps"] = self._data
+
+    def read_chain(self, group: h5py.Group) -> None:
+        """Restore the shared sampled state (see `Component.read_chain`), plus the amplitudes.
+
+        The catalogue must list the same sources, in the same order, as the run that wrote the
+        chain.
+        """
+        super().read_chain(group)
+        self._data[:] = group["source_amps"][()]
 
 class RadioSources(PointSourcesComponent):
     """Radio point sources, each a power law with its own spectral index.

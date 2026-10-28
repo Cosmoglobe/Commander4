@@ -9,6 +9,7 @@ Hastings (`mcmc`). The `*Config` dataclasses here validate each group's paramete
 import numpy as np
 import healpy as hp
 import logging
+import os
 from copy import deepcopy
 from dataclasses import dataclass, fields
 from numbers import Integral, Real
@@ -25,6 +26,8 @@ from commander4.compsep.cg_solver import CompSepSolver
 from commander4.compsep.chisq import ChisqResult, collect_fit_diagnostics, evaluate_chi2
 from commander4.compsep.perpix_solver import solve_compsep_perpix
 from commander4.compsep.spectral_index import SpectralIndexSamplingGroup
+from commander4.file_io import paths
+from commander4.file_io.chain_restart import ChainStart
 from commander4.file_io.chain_writer import write_compsep_chain_to_file
 from commander4.polarization import get_execution_band_id, EXECUTION_POLS
 from commander4.parameters.schema import resolve_band_lmax, resolve_param
@@ -406,8 +409,8 @@ def _build_conditional_residual(detector_data: DetectorMap, comp_list: CompList,
     return residual
 
 
-def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
-    -> tuple[CompList, Bunch, str, Bunch, CompSepState]:
+def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
+    -> tuple[dict[int, CompList], Bunch, str, Bunch, CompSepState]:
     """Set up the rank-local execution view for component separation.
 
     Each CompSep rank owns exactly one execution view of one band. The global CompSep rank space is
@@ -417,10 +420,11 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     Args:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
         params (Bunch): The parameters from the input parameter file.
+        start (ChainStart): Where the two chains start (see `file_io.chain_restart`).
 
     Returns:
-        comp_list (CompList): The full execution-view component list, identical on all CompSep
-            ranks.
+        comp_lists_by_chain (dict[int, CompList]): Each chain's full execution-view component
+            list, initialized and identical on all CompSep ranks.
         mpi_info (Bunch): `mpi_info`, extended with this rank's band name/identifier and the
             band-master dictionaries.
         band_identifier (str): Unique string for the band execution view this rank is working on.
@@ -486,13 +490,26 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
         include_residual_maps=bool(getattr(include, "compsep_residual_maps", False)),
     )
 
-    # Load the initial component alms (from each component's init_from / init_chain_path, else
-    # zeros). Done identically on every CompSep rank so comp_list starts globally consistent.
-    # Likewise for the Gaussian amplitude prior's mean mu (each component's amp_prior_mean_map,
-    # else a zero-mean prior). Read once here; the CG applies S^{-1/2} on every solve.
+    # Read the Gaussian amplitude prior's mean mu (each component's amp_prior_mean_map, else a
+    # zero-mean prior) once here; the CG applies S^{-1/2} on every solve. Then give each chain
+    # its own copy of the list and its starting state: a saved sample if the run starts from one,
+    # else each component's init_from (else zeros). Done identically on every CompSep rank so the
+    # lists start globally consistent.
     with benchmark("fileread-compsep"):
-        comp_list.load_initial_alms(params)
         comp_list.load_amp_prior_means()
+        comp_lists_by_chain = {}
+        for chain in (1, 2):
+            chain_file = None
+            if start.source_dir is not None:
+                chain_file = paths.compsep_chain_file(start.source_dir, start.source_chain[chain],
+                                                      start.source_iteration)
+                if not os.path.exists(chain_file):
+                    chain_file = None  # The saved run has no sky (`resolve_chain_start` warned).
+            # On `chain_status: append` the saved sky is this chain's own state, which must win
+            # over the initial guesses in `init_from`.
+            apply_init_from = chain_file is None or start.first_iteration == 1
+            comp_lists_by_chain[chain] = deepcopy(comp_list)
+            comp_lists_by_chain[chain].load_initial_state(chain_file, apply_init_from)
 
     data_world = (band_identifier, mpi_info.world.rank)
     data_compsep = (band_identifier, mpi_info.compsep.rank)
@@ -503,14 +520,17 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch)\
     mpi_info.world.compsep_band_masters = world_band_masters_dict
     mpi_info.compsep.compsep_band_masters = compsep_band_masters_dict
 
-    return comp_list, mpi_info, band_identifier, my_band, compsep_state
+    return comp_lists_by_chain, mpi_info, band_identifier, my_band, compsep_state
 
 
 
 def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
                          detector_data: DetectorMap, comp_list: CompList,
-                         group: CGSamplingGroupConfig | PerPixelSamplingGroupConfig) -> dict:
+                         group: CGSamplingGroupConfig | PerPixelSamplingGroupConfig,
+                         rng: np.random.Generator) -> dict:
     """Run one amplitude group and broadcast its result to every CompSep rank.
+
+    `rng` is this rank's random generator, for the fluctuation terms of the amplitude draw.
 
     Returns:
         On the CompSep master, the CG convergence history of each polarization that was solved,
@@ -535,7 +555,7 @@ def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
                 double_precision=compsep_state.double_precision,
                 nthreads=compsep_state.num_threads,
             )
-            solved_sublist = solver.solve(active_sublist)
+            solved_sublist = solver.solve(active_sublist, rng)
             # The CG runs its scalar recurrence on rank 0 of `solver_comm` and only broadcasts the
             # stopping decision, so that rank alone holds meaningful residuals.
             if solver_comm.Get_rank() == 0:
@@ -545,7 +565,7 @@ def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
             solved_sublist = solve_compsep_perpix(
                 solver_comm, residual_data, active_sublist,
                 double_precision=compsep_state.double_precision,
-                nthreads=compsep_state.num_threads,
+                nthreads=compsep_state.num_threads, rng=rng,
             )
         else:
             raise ValueError(
@@ -577,7 +597,7 @@ def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
 
 def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
                     detector_data: DetectorMap, iter: int, chain: int,
-                    params: Bunch, comp_list: CompList) -> SkyModel:
+                    params: Bunch, comp_list: CompList, rng: np.random.Generator) -> SkyModel:
     """Perform a single component-separation iteration.
 
     Runs the configured CG or per-pixel amplitude groups first, followed by MCMC groups. An MCMC
@@ -588,10 +608,11 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
         compsep_state: Resolved component-separation settings and masks for this rank.
         detector_data (DetectorMap): The detector map for this rank's band, cleaned of all "TOD"
             components (correlated noise and orbital dipole).
-        iter (int): The current Gibbs iteration (used only for printing and seeding).
-        chain (int): The current chain (used only for printing and seeding).
+        iter (int): The current Gibbs iteration (used only for logging and the chain file).
+        chain (int): The current chain (used only for logging and the chain file).
         params (Bunch): The parameters from the input parameter file.
         comp_list (CompList): The full execution-view component list, updated in place.
+        rng: This rank's random generator for the iteration. Every draw of every group uses it.
 
     Returns:
         The full sky realization, wrapping the updated `comp_list`.
@@ -617,7 +638,7 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
     for group in amplitude_groups.values():
         with benchmark(f"amp-{group.name}"):
             cg_stats = _run_amplitude_group(mpi_info, compsep_state, detector_data, comp_list,
-                                            group)
+                                            group, rng)
         if cg_stats:
             sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
         method_label = "CG" if compsep_state.amplitude_method == "cg" else "per-pixel"
@@ -628,7 +649,7 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
             for group_name in group_names:
                 _run_amplitude_group(
                     mpi_info, compsep_state, detector_data, comp_list,
-                    amplitude_groups[group_name])
+                    amplitude_groups[group_name], rng)
 
         chisq_active = _sampling_group_selects_band(
             group.chisq_bands, compsep_state.band_name, compsep_state.band_identifier)
@@ -637,7 +658,8 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
             selected_comps=group.comps, chisq_active=chisq_active,
             chisq_mask=compsep_state.chisq_masks.get(group.name), root=compsep.master)
         with benchmark(f"mcmc-{group.name}"):
-            mcmc_stats = sampler.run(numstep=group.numstep, resolve_amplitudes=resolve_amplitudes)
+            mcmc_stats = sampler.run(numstep=group.numstep, resolve_amplitudes=resolve_amplitudes,
+                                     rng=rng)
         if mcmc_stats:
             sampler_stats.setdefault("mcmc", {})[group.name] = mcmc_stats
         fit = evaluate(f"MCMC group {group.name!r}")
@@ -648,7 +670,7 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
     if compsep.rank == compsep.master:
         diagnostics = {**fit_tree, **sampler_stats}
         with benchmark("filewrite-compsep"):
-            write_compsep_chain_to_file(comp_list.joined(), params, chain, iter, diagnostics,
+            write_compsep_chain_to_file(comp_list, params, chain, iter, diagnostics,
                                         band_frequencies)
         chi2 = fit_tree["chi2"]
         logger.summary(f"Chain {chain}, iteration {iter} complete: chi2={chi2['total']:.6e}, "

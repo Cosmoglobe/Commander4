@@ -25,25 +25,32 @@
 # Commander4 always runs TWO Gibbs chains in parallel, because the TOD and CompSep sides live on
 # disjoint MPI ranks.
 gibbs:
-  num_iterations: 10          # Number of additional Gibbs iterations to perform.
+  num_iterations: 10          # Total length of the chains (C3 NUM_GIBBS_ITER). A run that
+                              # appends to saved chains samples only the iterations missing.
 
   seed: 1995                  # Master RNG seed. Re-running with the same seed and the
-                              # same parameters reproduces the chain.
+                              # same parameters reproduces the chain. Seeds are set per
+                              # chain and iteration, so an appended run continues the same
+                              # random numbers, given the same number of MPI ranks.
 
-  # One startup policy for fresh runs, initialization from saved values, and continuation.
-  # start:
-  #   mode: new                # Default. Start numbering and sampling schedules at iteration 1.
-  #   source: "../c4_chains/previous_run/"  # Optional for new; omit for a fresh initialization.
-  #   iteration: latest        # Newest common complete saved sample; or an explicit integer.
-  #   chain: matching          # 1->1, 2->2. Use 1 or 2 to seed both new chains from one source.
-  #   load: [tod, amplitudes, spectral_parameters]  # Any subset; default is all three.
-  #
-  # To continue output.dir instead, use only:
-  # start:
-  #   mode: resume             # Restore both chains; start at the saved iteration + 1.
-  # Resume needs both chains saved and all required state. Initial-guess overrides are ignored.
-  # Later incomplete output is reported, never moved or overwritten. num_iterations above is
-  # always the number of iterations to execute in this invocation.
+  # Where the chains start. Both are optional; without them a run starts from the parameter file.
+  # A saved sample is the ordinary chain files, which always hold the sampled state (gains, noise
+  # parameters, accept flags, component amplitudes and the sampled spectral parameters). Fixed
+  # parameters always come from this file. A chain that was never written (see
+  # output.chains.write) restarts from a written one; a band or sky the saved run never wrote
+  # starts from this file.
+  chain_status: new           # C3 CHAIN_STATUS. new: start at iteration 1, overwriting existing
+                              # chain files as the run reaches them. append: continue the chains
+                              # in output.dir after their newest complete iteration; if there is
+                              # none, start new chains (with a warning). With append, the same
+                              # parameter file can be resubmitted until the chains reach
+                              # num_iterations.
+  # init_chain: "../c4_chains/previous_run/"     # C3 INIT_CHAIN. New chains start from this run's
+                              # newest complete iteration; "<dir>:<iteration>" picks one. Used
+                              # when no append happens (an append that continues saved chains
+                              # ignores it, with a warning). A component's own `init_from` overrides
+                              # it for that component; `init_from: null` keeps the parameter-file
+                              # start.
 
 # ----------------------------------------
 # RESOURCES
@@ -116,6 +123,11 @@ output:
       compsep_residual_maps: False  # residuals/<band>_<pol>: full-resolution per-band
                                   # residuals (C3 res_<band>_<postfix>.fits). Gathers
                                   # every band map onto the CompSep master: memory-heavy.
+      tod_power_spectra: True     # tod_ps_*: log-binned power spectra of the raw, residual,
+                                  # n_corr-subtracted and n_corr TODs of every detector-scan.
+                                  # Default True. 2 kB per detector-scan, the largest output
+                                  # after the maps (~0.5 GB per HFI band and iteration). False
+                                  # also skips computing them.
       ncorr_tods: False           # DEBUG ONLY: every correlated-noise TOD, per sample,
                                   # at tods/<scan_id>/<detector>/ncorr. Very large.
       residual_tods: False        # DEBUG ONLY: full observed-minus-model TODs in detector units,
@@ -515,8 +527,10 @@ components:
 
       # Initialise the amplitudes from a map instead of from zero. A FITS map is read at
       # its own nside and converted from `units` at `nu_ref`; a chains_compsep/ file is
-      # read as alms, already in uK_RJ. Starting from a sensible sky lets the gain steps,
-      # which calibrate against the sky model, work from iteration one.
+      # read as alms, already in uK_RJ, plus the sampled spectral parameters. Starting from
+      # a sensible sky lets the gain steps, which calibrate against the sky model, work
+      # from iteration one. Overrides gibbs.init_chain for this component, but not the
+      # saved state of an appended chain.
       # init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_cmb_amp_BP8.1_v1.fits"
       # units: "uK_CMB"       # Unit of that init file. Only read alongside init_from.
 

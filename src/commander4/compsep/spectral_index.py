@@ -68,11 +68,12 @@ class SpectralIndexSamplingGroup(MCMCSamplingGroup):
         # `beta` is shared across an IQU component's views, so reading the first view suffices.
         return {group.name: float(group.components[0].beta) for group in self._groups}
 
-    def propose(self, current_state: dict[str, float]) -> tuple[dict[str, float], bool]:
+    def propose(self, current_state: dict[str, float],
+                rng: np.random.Generator) -> tuple[dict[str, float], bool]:
         proposed = {}
         in_bounds = True
         for group in self._groups:
-            value = float(np.random.normal(current_state[group.name], group.proposal_sigma))
+            value = float(rng.normal(current_state[group.name], group.proposal_sigma))
             proposed[group.name] = value
             if group.bounds is not None and not group.bounds[0] <= value <= group.bounds[1]:
                 in_bounds = False

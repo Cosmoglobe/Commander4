@@ -15,7 +15,7 @@ from commander4.diagnostics.performance import benchmark
 
 
 # MPI elementary datatypes for the float buffers exchanged by the collectives below.
-_NUMPY_TO_MPI_DTYPE = {np.dtype(np.float64): MPI.DOUBLE, np.dtype(np.float32): MPI.FLOAT}
+NUMPY_TO_MPI_DTYPE = {np.dtype(np.float64): MPI.DOUBLE, np.dtype(np.float32): MPI.FLOAT}
 
 # Map distribution across the ranks of a band communicator.
 #
@@ -192,7 +192,7 @@ class PixelDomain:
             return buf
 
         counts, displs = self._recvcounts, self._displs
-        mpi_dtype = _NUMPY_TO_MPI_DTYPE[np.dtype(dtype)]
+        mpi_dtype = NUMPY_TO_MPI_DTYPE[np.dtype(dtype)]
         local = np.empty((ncomp, self.n_local), dtype=dtype)
         received = np.empty(self.n_local, dtype=dtype)
         for c in range(ncomp):

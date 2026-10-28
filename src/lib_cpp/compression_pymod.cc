@@ -22,14 +22,32 @@ template<typename T> static void huffman_decode_T(const CNpArr &bytes_,
   auto out = to_vmav<T,1>(out_);
   {
   py::gil_scoped_release release;
-  MR_assert((tree.shape(0)&1)==1, "bad tree size");
-  size_t n_internal = (tree.shape(0)-1)/2;
-  cmav<int64_t,2> lrnodes(&tree(1), {2, n_internal},
-    {tree.stride(0)*ptrdiff_t(n_internal),tree.stride(0)});
   size_t nsymb = symb.shape(0);
   size_t nout = out.shape(0);
-  size_t startnode = nsymb + n_internal;
+  // Nodes 1..nsymb are the symbols and nsymb+1..2*nsymb-1 the internal nodes. The tree array is
+  // [root, left children, right children] of the internal nodes, and the root is the last node.
+  // Checking every child index here means the loop below can never read outside the tree.
+  MR_assert(nsymb>=1, "no symbols");
+  MR_assert(tree.shape(0)==2*nsymb-1, "tree size does not match the number of symbols");
+  MR_assert(tree(0)==int64_t(2*nsymb-1), "tree root is not node 2*nsymb-1");
+  for (size_t i=1; i<tree.shape(0); ++i)
+    MR_assert((tree(i)>=1) && (tree(i)<int64_t(2*nsymb-1)), "tree child index out of range");
+  // The first byte holds the number of padding bits after the last code word: 1..8 from the
+  // Commander3 writer, 0..7 from the SO writer.
+  MR_assert(bytes.shape(0)>=1, "empty bit stream");
+  MR_assert(bytes(0)<=8, "bad padding byte");
+  MR_assert(bytes.shape(0)*8>=size_t(8+bytes(0)), "bit stream shorter than its padding");
   size_t nbits = bytes.shape(0)*8 - 8 - bytes(0);
+  if (nsymb==1)  // A one-symbol tree has no internal nodes; every sample is coded as one 0 bit.
+    {
+    MR_assert(nbits==nout, "bit stream length does not match the size of 'out'");
+    for (size_t i=0; i<nout; ++i) out(i) = symb(0);
+    return;
+    }
+  size_t n_internal = nsymb-1;
+  cmav<int64_t,2> lrnodes(&tree(1), {2, n_internal},
+    {tree.stride(0)*ptrdiff_t(n_internal),tree.stride(0)});
+  size_t startnode = nsymb + n_internal;
   size_t node = startnode;
   size_t pos=0;
   for (size_t i=8; i<nbits+8; ++i)
@@ -45,6 +63,7 @@ template<typename T> static void huffman_decode_T(const CNpArr &bytes_,
       }
     }
   MR_assert(pos==nout, "out array is too large");
+  MR_assert(node==startnode, "bit stream ends inside a code word");
   }
   }
 
@@ -93,6 +112,8 @@ Returns
 -------
 numpy.ndarray(ndata,), dtype identical to that of symb)
     the uncompressed data array, identical to `out`
+
+Raises RuntimeError if the tree does not match the symbols, or the bit stream is malformed.
 )""";
 
 void add_compression(py::module_ &msup)

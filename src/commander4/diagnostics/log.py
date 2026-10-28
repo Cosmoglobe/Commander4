@@ -97,8 +97,8 @@ class ColorFormatter(C4Formatter):
         CRITICAL - bold red
     """
 
-    _RESET  = '\033[0m'
-    _COLORS = {
+    RESET  = '\033[0m'
+    COLORS = {
         logging.DEBUG:    '\033[90m',   # Dark gray (bright-black)
         VERBOSE:          '\033[2m',    # Dim / faint
         logging.INFO:     '',           # Default, no color code
@@ -110,8 +110,8 @@ class ColorFormatter(C4Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         message = super().format(record)
-        color = self._COLORS.get(record.levelno, '')
-        return f'{color}{message}{self._RESET}' if color else message
+        color = self.COLORS.get(record.levelno, '')
+        return f'{color}{message}{self.RESET}' if color else message
 
 
 def init_loggers(logger_params, log_file_path: str | None = None,

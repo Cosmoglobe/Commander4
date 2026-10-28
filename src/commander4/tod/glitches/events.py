@@ -1,9 +1,8 @@
 """Containers for the glitch (cosmic-ray) events found in the TOD.
 
-`GlitchEvents` holds the glitch events of one detector-scan. `TODSamples.glitches` holds one per
-detector-scan, in an (nscans, ndet) object array made by `empty_glitch_grid`. The sampler that
-*finds* the events is `sampling.py` next to this file, which also describes the model and where
-each part of it is applied. The events go to the chain file only as optional debug output, and
+`GlitchEvents` holds the glitch events of one detector-scan; `Glitches.events` (in `sampling.py`,
+which also describes the model) holds one per detector-scan, in an (nscans, ndet) object array
+made by `empty_glitch_grid`. The events go to the chain file only as optional debug output, and
 are not read back on restart.
 
 In the TOD, each event is a pulse: the bolometer's fast rise and slow decay after a cosmic-ray hit.
@@ -12,9 +11,9 @@ Two kinds of event share one container, told apart by `type` [C3: `comm_tod_cray
     * Bright events (`GLITCH_BRIGHT`): each has its own fitted pulse and a baseline step, and its
       worst samples are cut from the data. Their parameters are stored per event in
       `shape_params`.
-    * Template events (short, long, slow): every event of one type in one detector shares a pulse
-      shape, scaled by the event's own `amplitude`. The shapes are stored per detector on
-      `TODSamples`.
+    * Faint events (short, long, slow): every event of one type in one detector shares a template
+      pulse shape, scaled by the event's own `amplitude`. The shapes are stored per detector on
+      `Glitches`.
 
 The two models (`baseline_step_tod`, `pulse_tod`) are placeholders that return zeros; the storage
 and the cuts are complete.
@@ -26,8 +25,8 @@ from numpy.typing import NDArray
 
 # Type code of bright events. They have no template, so their code is outside the template rows.
 GLITCH_BRIGHT = -1
-# Template glitch types. The type code of each is its position here, which is also its row in the
-# per-detector template arrays on `TODSamples`.
+# Template types of the faint glitches. The type code of each is its position here, which is also
+# its row in the per-detector template arrays on `Glitches`.
 GLITCH_TEMPLATE_TYPES = ("short", "long", "slow")
 # Exponentials per template shape, as in the Planck glitch parameters C3's prototype starts from.
 GLITCH_TEMPLATE_NEXP = 8
@@ -49,7 +48,7 @@ class GlitchEvents:
             is part of their shape parameters.
         cut_start: (nevent,) First sample cut from the data because of each event.
         cut_stop: (nevent,) One past the last cut sample; equal to `cut_start` if none.
-        shape_param_counts: (nevent,) Number of shape parameters of each event; 0 for template
+        shape_param_counts: (nevent,) Number of shape parameters of each event; 0 for faint
             events.
         shape_params: (sum(shape_param_counts),) Shape parameters, concatenated over events. A
             bright event holds (a1, a2, tau1, tau2, t_dep, spline node values...), times in seconds.
@@ -124,17 +123,18 @@ class GlitchEvents:
         return np.zeros(ntod, dtype=np.float32)
 
     def pulse_tod(self, ntod: int, template_amps: NDArray[np.floating],
-                  template_taus: NDArray[np.floating], fsamp: float,
-                  template_only: bool = False) -> NDArray[np.float32]:
+                  template_taus: NDArray[np.floating], fsamp: float, bright: bool,
+                  faint: bool) -> NDArray[np.float32]:
         """Return the glitch pulses, to remove from the demodulated TOD.
 
         A cosmic ray heats the bolometer like sky signal does, so its pulse is modulated like the
         sky and, after demodulation, has the sign of the sky. A bright event uses its own shape
         ``a1 (exp(-t/tau1) - exp(-t/tau0)) + a2 (exp(-t/tau2) - exp(-t/tau0))``, with t counted from
-        t_dep and a fixed rise time tau0 = 2 ms [C3: `cray_event%build_cr_template`]. A template
-        event uses the detector's shape for its type, a sum of exponentials scaled to a peak of 1,
-        times the event's `amplitude` [C3 prototype: `templates.glitch_model_func`]. Each pulse
-        spans `length` samples from `start`. [C3: `comm_tod_cray::generate` -> `s_cray`.]
+        t_dep and a fixed rise time tau0 = 2 ms [C3: `cray_event%build_cr_template`]. A faint
+        event uses the detector's template shape for its type, a sum of exponentials scaled to a
+        peak of 1, times the event's `amplitude` [C3 prototype: `templates.glitch_model_func`].
+        Each pulse spans `length` samples from `start`. [C3: `comm_tod_cray::generate` ->
+        `s_cray`.]
 
         Placeholder: returns zeros.
 
@@ -143,7 +143,8 @@ class GlitchEvents:
             template_amps: (ntype, nexp) This detector's template amplitudes, one row per type.
             template_taus: (ntype, nexp) The matching time constants in seconds.
             fsamp: Sampling rate in Hz.
-            template_only: If True, leave out the bright events.
+            bright: Whether to include the pulses of the bright events.
+            faint: Whether to include the pulses of the faint events.
 
         Returns:
             (ntod,) The summed pulses in detector units, with the sign of the sky.

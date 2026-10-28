@@ -7,7 +7,9 @@ import pytest
 
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.pointing import PixelPointing
-from commander4.compression import huffman
+from commander4.compression.huffman_decoding import HuffmanCompressedArray
+from commander4.compression.huffman_encoding import (build_huffman_tree, huffman_compress_array,
+                                                     preproc_diff)
 from commander4.tod.sky_projection import get_s_orb_tod, project_sky_to_tod
 
 
@@ -15,8 +17,7 @@ def _pointing(ntod_original: int = 8, ntod: int = 6) -> PixelPointing:
     pixels = np.arange(ntod_original, dtype=np.int64)
     psi = np.linspace(0.0, np.pi, ntod_original, dtype=np.float64)
     return PixelPointing(
-        pixels, psi, np.array([0], dtype=np.int64), None, None,
-        nside=1, data_nside=1, ntod_original=ntod_original, ntod=ntod,
+        pixels, psi, nside=1, data_nside=1, ntod_original=ntod_original, ntod=ntod,
     )
 
 
@@ -32,13 +33,10 @@ def _detector(
         pointing=pointing,
         sampling_rate_hz=32.5,
         orbital_velocity_m_per_s=orbital_velocity_m_per_s,
-        huffman_tree=None,
-        huffman_symbols=None,
         default_proc_mask=None,
         specific_proc_masks={},
-        flag_encoded=np.zeros(pointing.ntod_original, dtype=np.int64),
+        flag=np.zeros(pointing.ntod_original, dtype=np.int64),
         bad_data_bitmask=1,
-        flag_is_compressed=False,
         response_I_P=response_I_P,
     )
 
@@ -65,18 +63,17 @@ def test_constructor_stores_intensity_and_polarization_response(
 
 def test_compressed_psi_bins_decode_to_bin_centers() -> None:
     bins = np.array([1, 2, 8, 4], dtype=np.int64)
-    differences = huffman.preproc_diff(bins)
-    tree, symbols, codes, lengths = huffman.build_huffman_tree([differences])
-    encoded = huffman.huffman_compress_array(differences, codes, lengths)
-    pointing = PixelPointing(
-        np.arange(bins.size), encoded, tree, symbols, npsi=8, nside=1, data_nside=1,
-        ntod_original=bins.size, ntod=bins.size,
-    )
+    differences = preproc_diff(bins)
+    tree, symbols, codes, lengths = build_huffman_tree([differences])
+    psi = HuffmanCompressedArray(
+        huffman_compress_array(differences, codes, lengths), tree, symbols, bins.size,
+        nbins=8, vmin=0.0, vmax=2*np.pi)
+    pointing = PixelPointing(np.arange(bins.size), psi, nside=1, data_nside=1,
+                             ntod_original=bins.size, ntod=bins.size)
 
-    bin_width = np.float32(2*np.pi/8)
-    expected = (bins.astype(np.float32) - np.float32(0.5))*bin_width
+    expected = (bins - 0.5)*2*np.pi/8
 
-    np.testing.assert_array_equal(pointing.get_psi(), expected)
+    np.testing.assert_allclose(pointing.get_psi(), expected, rtol=1e-6)
 
 
 def test_physical_arguments_have_explicit_units() -> None:

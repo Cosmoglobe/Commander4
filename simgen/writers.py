@@ -12,7 +12,8 @@ import h5py
 import numpy as np
 from numpy.typing import NDArray
 
-from commander4.compression import huffman
+from commander4.compression.huffman_encoding import (build_huffman_tree, huffman_compress_array,
+                                                     preproc_diff, preproc_digitize_and_diff)
 
 logger = logging.getLogger(__name__)
 
@@ -44,18 +45,18 @@ def write_scan_file(path: str, pid: int, data_nside: int, fsamp: float, npsi: in
     """
     # The flag stream (all zeros -> first differences all zero) is always Huffman-encoded; its
     # symbol set (just 0) is what the per-scan tree must cover at minimum.
-    flag_diff = huffman.preproc_diff(np.zeros(ntod, dtype=np.int64))
+    flag_diff = preproc_diff(np.zeros(ntod, dtype=np.int64))
     tree_inputs = [flag_diff]
     pix_diff, psi_diff = {}, {}
     if compress:
         # Diff-encode each detector's pointing too, so one shared tree covers pix, psi and flag.
         for name in det_names:
-            pix_diff[name] = huffman.preproc_diff(det_pix[name].astype(np.int64, copy=False))
-            psi_diff[name] = huffman.preproc_digitize_and_diff(
+            pix_diff[name] = preproc_diff(det_pix[name].astype(np.int64, copy=False))
+            psi_diff[name] = preproc_digitize_and_diff(
                 det_psi[name].astype(np.float64, copy=False), npsi)
             tree_inputs += [pix_diff[name], psi_diff[name]]
-    hufftree, huffsymb, sym_codes, sym_lengths = huffman.build_huffman_tree(tree_inputs)
-    flag_enc = huffman.huffman_compress_array(flag_diff, sym_codes, sym_lengths)
+    hufftree, huffsymb, sym_codes, sym_lengths = build_huffman_tree(tree_inputs)
+    flag_enc = huffman_compress_array(flag_diff, sym_codes, sym_lengths)
 
     pidg = f"{pid:06d}"
     with h5py.File(path, "w") as f:
@@ -76,10 +77,10 @@ def write_scan_file(path: str, pid: int, data_nside: int, fsamp: float, npsi: in
             if compress:
                 # Store compressed payloads as opaque scalars so they read back as numpy.void; the
                 # reader (PixelPointing) detects compression by this type.
-                f[f"{g}/pix"] = np.void(huffman.huffman_compress_array(pix_diff[name], sym_codes,
-                                                                       sym_lengths))
-                f[f"{g}/psi"] = np.void(huffman.huffman_compress_array(psi_diff[name], sym_codes,
-                                                                       sym_lengths))
+                f[f"{g}/pix"] = np.void(huffman_compress_array(pix_diff[name], sym_codes,
+                                                               sym_lengths))
+                f[f"{g}/psi"] = np.void(huffman_compress_array(psi_diff[name], sym_codes,
+                                                               sym_lengths))
             else:
                 # Plain arrays: int32 pixel indices (at data_nside) and float32 psi in radians.
                 f[f"{g}/pix"] = det_pix[name].astype(np.int32, copy=False)

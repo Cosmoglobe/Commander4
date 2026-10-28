@@ -187,6 +187,11 @@ def make_iqu_components(beta=1.5, amplitude=2.0, bounds=(1.0, 2.0), proposal_sig
     return comp_i, comp_qu
 
 
+def _fixed_rng(proposal: float) -> types.SimpleNamespace:
+    """A stand-in generator whose proposal is always `proposal` and whose uniform draw is 0.5."""
+    return types.SimpleNamespace(normal=lambda loc, scale: proposal, random=lambda: 0.5)
+
+
 def _make_group(detector_data, comp_list, target_pol="I"):
     """Build a single-rank SpectralIndexSamplingGroup over `comp_list` on COMM_SELF."""
     return spectral_index_sampler.SpectralIndexSamplingGroup(
@@ -203,7 +208,7 @@ class TestSampleSpectralIndicesMH:
     the likelihood is either monkeypatched per step (``local_loglike``) or, in the integration test,
     left as the real whitened-residual chi-squared."""
 
-    def test_out_of_bounds_rejects_without_resolve(self, monkeypatch):
+    def test_out_of_bounds_rejects_without_resolve(self):
         comp_i, comp_qu = make_iqu_components()
         detector_data = make_detector_data(comp_i)
         group = _make_group(detector_data, FakeCompList([comp_i, comp_qu]))
@@ -212,9 +217,7 @@ class TestSampleSpectralIndicesMH:
             raise AssertionError("resolve_amplitudes must not run for out-of-bounds proposals")
 
         # Proposal 2.5 is outside the (1.0, 2.0) bounds -> rejected before the amplitude re-solve.
-        monkeypatch.setattr(np.random, "normal", lambda loc, scale: 2.5)
-
-        group.run(numstep=1, resolve_amplitudes=fail_if_called)
+        group.run(numstep=1, resolve_amplitudes=fail_if_called, rng=_fixed_rng(2.5))
 
         assert comp_i.beta == pytest.approx(1.5)
         assert comp_qu.beta == pytest.approx(1.5)
@@ -231,10 +234,8 @@ class TestSampleSpectralIndicesMH:
         # loglike drops on the proposal and random() forces a reject; state must be fully reverted.
         loglikes = iter([0.0, -5.0])
         monkeypatch.setattr(group, "local_loglike", lambda: next(loglikes))
-        monkeypatch.setattr(np.random, "normal", lambda loc, scale: 1.6)
-        monkeypatch.setattr(np.random, "random", lambda: 0.5)
 
-        group.run(numstep=1, resolve_amplitudes=resolve)
+        group.run(numstep=1, resolve_amplitudes=resolve, rng=_fixed_rng(1.6))
 
         assert comp_i.beta == pytest.approx(1.5)
         assert comp_qu.beta == pytest.approx(1.5)
@@ -251,16 +252,14 @@ class TestSampleSpectralIndicesMH:
         # loglike rises on the proposal -> accepted; the proposed beta and re-solved alms are kept.
         loglikes = iter([0.0, 2.0])
         monkeypatch.setattr(group, "local_loglike", lambda: next(loglikes))
-        monkeypatch.setattr(np.random, "normal", lambda loc, scale: 1.6)
-        monkeypatch.setattr(np.random, "random", lambda: 0.5)
 
-        group.run(numstep=1, resolve_amplitudes=resolve)
+        group.run(numstep=1, resolve_amplitudes=resolve, rng=_fixed_rng(1.6))
 
         assert comp_i.beta == pytest.approx(1.6)
         assert comp_qu.beta == pytest.approx(1.6)
         np.testing.assert_allclose(comp_i.alms, np.array([[9.0]]))
 
-    def test_single_rank_integration_uses_real_likelihood(self, monkeypatch):
+    def test_single_rank_integration_uses_real_likelihood(self):
         comp_i, comp_qu = make_iqu_components(beta=1.0, amplitude=2.0)
 
         target_map = np.full((1, 12), 8.0, dtype=np.float64)
@@ -272,10 +271,7 @@ class TestSampleSpectralIndicesMH:
             target_amplitude = detector_data.map_sky[0, 0] / (detector_data.nu**comp_i.beta)
             comp_i.alms = np.array([[target_amplitude]])
 
-        monkeypatch.setattr(np.random, "normal", lambda loc, scale: 1.5)
-        monkeypatch.setattr(np.random, "random", lambda: 0.5)
-
-        group.run(numstep=1, resolve_amplitudes=resolve)
+        group.run(numstep=1, resolve_amplitudes=resolve, rng=_fixed_rng(1.5))
 
         # The proposed beta=1.5 gives a perfect fit (higher likelihood), so it is accepted.
         assert comp_i.beta == pytest.approx(1.5)

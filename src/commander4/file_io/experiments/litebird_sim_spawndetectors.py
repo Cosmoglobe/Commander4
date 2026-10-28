@@ -8,7 +8,9 @@ import h5py
 import numpy as np
 from pixell.bunch import Bunch
 
-import commander4.compression.huffman as huffman
+from commander4.compression.huffman_decoding import HuffmanCompressedArray
+from commander4.compression.huffman_encoding import (build_huffman_tree, huffman_compress_array,
+                                                     preproc_diff, preproc_digitize_and_diff)
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.pointing import PixelPointing
 from commander4.file_io.experiments.base_reader import TODReader
@@ -54,13 +56,15 @@ class SpawnDetectorsReader(TODReader):
         """
         psi = header.psi.copy()
         psi += PSI_OFFSETS[idet % PSI_OFFSETS.size]
-        psi = huffman.preproc_digitize_and_diff(psi, NPSI)
-        pix = huffman.preproc_diff(header.pix)
-        tree, symbols, sym_codes, sym_lengths = huffman.build_huffman_tree([pix, psi])
-        pointing = PixelPointing(huffman.huffman_compress_array(pix, sym_codes, sym_lengths),
-                                 huffman.huffman_compress_array(psi, sym_codes, sym_lengths),
-                                 tree, symbols, NPSI, self.band.eval_nside, header.data_nside,
-                                 header.ntod_fft, header.ntod_fft)
+        psi = preproc_digitize_and_diff(psi, NPSI)
+        pix = preproc_diff(header.pix)
+        tree, symbols, sym_codes, sym_lengths = build_huffman_tree([pix, psi])
+        n = header.ntod_fft
+        pix = HuffmanCompressedArray(huffman_compress_array(pix, sym_codes, sym_lengths), tree,
+                                     symbols, n)
+        psi = HuffmanCompressedArray(huffman_compress_array(psi, sym_codes, sym_lengths), tree,
+                                     symbols, n, nbins=NPSI, vmin=0.0, vmax=2*np.pi)
+        pointing = PixelPointing(pix, psi, self.band.eval_nside, header.data_nside, n, n)
         return DetectorTOD(
             name=det_name,
             det_idx_fullband=idet,
@@ -68,8 +72,6 @@ class SpawnDetectorsReader(TODReader):
             pointing=pointing,
             sampling_rate_hz=header.fsamp,
             orbital_velocity_m_per_s=header.vsun,
-            huffman_tree=tree,
-            huffman_symbols=symbols,
             default_proc_mask=self.default_mask,
             specific_proc_masks=self.specific_masks,
         )
