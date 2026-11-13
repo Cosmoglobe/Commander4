@@ -27,13 +27,25 @@ def smooth_signal_map_noiseweighted(map_signal: NDArray, map_inv_var: NDArray,
     less) and the result is renormalized by the smoothed weights. Used to bring a band to a coarser
     common beam.
 
+    `map_signal` and `map_inv_var` have shape (npix,) for intensity, or (2, npix) for Q and U.
+    Q and U are one spin-2 field, so they are smoothed together through E and B, with the same
+    Gaussian window on both. That is the beam `DetectorMap.apply_B` puts on the model, so smoothed
+    data and model stay consistent; smoothing Q and U as two scalar maps would not be.
+
     A band covering only part of the sky has zero weight outside its footprint, and far enough from
     it the smoothed weight is zero (or slightly negative, from beam ringing) as well. Those pixels
     are left at zero rather than divided into a NaN: they are unobserved, which the paired
     ``smooth_inv_var_map_noiseweighted`` records as zero inverse variance.
     """
-    smoothed_weight = hp.smoothing(map_inv_var, fwhm=fwhm_rad)
-    smoothed_signal = hp.smoothing(map_signal*map_inv_var, fwhm=fwhm_rad)
+    weighted = map_signal*map_inv_var
+    if map_signal.ndim == 1:
+        smoothed_signal = hp.smoothing(weighted, fwhm=fwhm_rad)
+        smoothed_weight = hp.smoothing(map_inv_var, fwhm=fwhm_rad)
+    else:
+        npix = map_signal.shape[-1]
+        window = hp.gauss_beam(fwhm_rad, lmax=3*hp.npix2nside(npix) - 1)
+        smoothed_signal = hp.smoothing([np.zeros(npix), *weighted], beam_window=window)[1:]
+        smoothed_weight = np.array([hp.smoothing(w, fwhm=fwhm_rad) for w in map_inv_var])
     observed = smoothed_weight > 0.0
     return np.divide(smoothed_signal, smoothed_weight, out=np.zeros_like(smoothed_signal),
                      where=observed)
@@ -165,16 +177,14 @@ class DetectorMap:
                            f"band's beam of {self.fwhm} arcmin; leaving the band unchanged.")
             return
         extra_fwhm_rad = np.deg2rad(np.sqrt(target_fwhm_arcmin**2 - self.fwhm**2)/60.0)
-        sky_dtype, inv_dtype = self.map_sky.dtype, self.map_inv_var.dtype
-        smoothed_sky = np.empty(self.map_sky.shape, dtype=np.float64)
-        smoothed_inv_var = np.empty(self.map_inv_var.shape, dtype=np.float64)
-        for ipol in range(self.npol):
-            smoothed_sky[ipol] = smooth_signal_map_noiseweighted(
-                self.map_sky[ipol], self.map_inv_var[ipol], extra_fwhm_rad)
-            smoothed_inv_var[ipol] = smooth_inv_var_map_noiseweighted(self.map_inv_var[ipol],
-                                                                    extra_fwhm_rad)
-        self.map_sky = smoothed_sky.astype(sky_dtype, copy=False)
-        self.map_inv_var = smoothed_inv_var.astype(inv_dtype, copy=False)
+        sky, inv_var = self.map_sky.astype(np.float64), self.map_inv_var.astype(np.float64)
+        # Intensity is smoothed as one scalar map, Q and U together as one spin-2 field.
+        smoothed_sky = smooth_signal_map_noiseweighted(sky[0] if self.npol == 1 else sky,
+                                                       inv_var[0] if self.npol == 1 else inv_var,
+                                                       extra_fwhm_rad)
+        smoothed_inv_var = [smooth_inv_var_map_noiseweighted(w, extra_fwhm_rad) for w in inv_var]
+        self.map_sky = np.reshape(smoothed_sky, sky.shape).astype(self.map_sky.dtype, copy=False)
+        self.map_inv_var = np.array(smoothed_inv_var).astype(self.map_inv_var.dtype, copy=False)
         self.fwhm = target_fwhm_arcmin
         self._beam_Cl = hp.gauss_beam(self.fwhm_rad, self.lmax)
 
