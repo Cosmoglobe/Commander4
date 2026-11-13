@@ -11,8 +11,8 @@ A parameter file is seven blocks, each named after the part of the program that 
     compsep         what the component-separation side does with the resulting maps
 
 They replace the old `general` grab-bag, which mixed MPI resources, Gibbs loop control, TOD
-sampling steps, compsep solver settings and output paths. `notes/proposed_param_layout.yml` shows
-the full layout. This module owns the block list, rejects the old schema loudly, and derives the
+sampling steps, compsep solver settings and output paths. `params/param_explanation.yml` shows
+the full layout, with every key explained. This module owns the block list, rejects the old schema loudly, and derives the
 MPI task counts and the split of the TOD tasks between bands, which the parameter file no longer
 states.
 """

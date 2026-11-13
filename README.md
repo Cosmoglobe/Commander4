@@ -160,7 +160,7 @@ mcmc/<group>/{numstep,n_accept,accept_rate}             # Metropolis-Hastings ac
 mcmc/<group>/params/<comp>            # the accepted parameter value per component
 ```
 
-The chain files are also what a run restarts from. `gibbs.chain_status: append` continues the chains in `output.dir` after their newest complete iteration, and `gibbs.init_chain: "<dir>[:<iteration>]"` starts new chains from another run (Commander3's `CHAIN_STATUS` and `INIT_CHAIN`). Each class reads back its own sampled state: each TOD sampling step (`Gain`, `Noise`, `DataSelection`, `HFIModulation`) its part of a `chains_bands/` file, and each component's `read_chain` its amplitudes and sampled spectral parameters from a `chains_compsep/` file. Files are written under a `.tmp` name and renamed when complete, so a crash never leaves a half-written file under its final name. See `notes/chain_initialization.md`.
+The chain files are also what a run restarts from. `gibbs.chain_status: append` continues the chains in `output.dir` after their newest complete iteration, and `gibbs.init_chain: "<dir>[:<iteration>]"` starts new chains from another run (Commander3's `CHAIN_STATUS` and `INIT_CHAIN`). Each class reads back its own sampled state: each TOD sampling step (`Gain`, `Noise`, `DataSelection`, `HFIModulation`) its part of a `chains_bands/` file, and each component's `read_chain` its amplitudes and sampled spectral parameters from a `chains_compsep/` file. Files are written under a `.tmp` name and renamed when complete, so a crash never leaves a half-written file under its final name. See [docs/chain_initialization.md](docs/chain_initialization.md).
 
 
 # 3. Development / Contributing
@@ -207,7 +207,7 @@ src/commander4/
 simgen/                # Standalone TOD simulator installed as c4-simgen; kept outside standalone_tools/.
 params/                # Parameter files, grouped by instrument.
 tests/                 # pytest suite; run with `pytest` from the repository root.
-notes/                 # Design notes.
+docs/                  # Documentation of how the code works.
 ```
 
 Each TOD sampling step is one class (a `TODStep`, see `tod/step.py`) that holds its settings, its
