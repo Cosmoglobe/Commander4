@@ -93,11 +93,27 @@ class SkyComponent(ABC):
             "or set simulation.write_component_truth_maps: false.")
 
 
+def _synthesize(alms: NDArray, nside: int, fwhm_rad: float = 0.0) -> NDArray[np.float32]:
+    """IQU map at `nside` from TEB `alms`, Gaussian-smoothed and cut at the band limit 3*nside-1.
+
+    This is the B*Y*a model Commander4 fits: the same Gaussian window multiplies T, E and B, as in
+    `DetectorMap.apply_B` (healpy's own `fwhm` smoothing gives E and B a slightly different spin-2
+    window), there is no pixel window, and nothing above the band limit is left to fold into it.
+    Smoothing at a finer nside and averaging pixels down with `ud_grade` would break all three.
+    """
+    lmax_in = hp.Alm.getlmax(alms.shape[-1])
+    lmax = min(lmax_in, 3*nside - 1)
+    window = hp.gauss_beam(fwhm_rad, lmax=lmax)
+    alms = [hp.almxfl(hp.resize_alm(alm, lmax_in, lmax_in, lmax, lmax), window) for alm in alms]
+    return hp.alm2map(alms, nside, lmax=lmax, pixwin=False).astype(np.float32)
+
+
 class DiffuseComponent(SkyComponent):
     """Foreground with a PySM3-preset (or FITS) spatial template scaled by a C4 SED.
 
-    The IQU template is realized once at the component's reference frequency, then for each band it
-    is beam-smoothed, downgraded to the band nside and multiplied by the C4 ``get_sed(band.freq)``.
+    The IQU template is realized once at the component's reference frequency and turned into alms;
+    for each band they are beam-smoothed, synthesized at the band nside (see `_synthesize`) and
+    multiplied by the C4 ``get_sed(band.freq)``.
     """
     def __init__(self, comp_cfg: Bunch, global_params: Bunch):
         super().__init__(comp_cfg, global_params)
@@ -106,6 +122,7 @@ class DiffuseComponent(SkyComponent):
         self.template_cfg = bget(comp_cfg.params, "template", Bunch())
         self.units = bget(global_params, "units", "uK_RJ")
         self._template_iqu: NDArray | None = None   # (3, npix_base), uK_RJ, unsmoothed
+        self._alms: NDArray | None = None           # (3, nalm), TEB alms of the template
 
     def _template(self) -> NDArray:
         if self._template_iqu is not None:
@@ -127,14 +144,20 @@ class DiffuseComponent(SkyComponent):
         self._template_iqu = iqu
         return iqu
 
+    def _template_alms(self) -> NDArray:
+        """The template's TEB alms, up to the band limit of the template's nside (the transform
+        `hp.smoothing` would make, done once for all bands)."""
+        if self._alms is None:
+            self._alms = hp.map2alm(self._template().astype(np.float64))
+        return self._alms
+
     def band_map(self, band) -> NDArray[np.floating]:
-        template = self._template()
-        smoothed = hp.smoothing(template, fwhm=band.fwhm_rad)
-        m = hp.ud_grade(smoothed, band.eval_nside).astype(np.float32) * self.c4.get_sed(band.freq)
-        return _select_pol(m, band.polarization)
+        m = _synthesize(self._template_alms(), band.eval_nside, band.fwhm_rad)
+        return _select_pol(m * self.c4.get_sed(band.freq), band.polarization)
 
     def truth_map(self, nside: int) -> NDArray[np.floating]:
         # The template is already realized at nu_ref in the run's unit, so it *is* the amplitude.
+        # Kept in pixel space: a round trip through alms up to 3*nside-1 is only good to ~1 %.
         return hp.ud_grade(self._template(), nside).astype(np.float32)
 
 
@@ -189,9 +212,7 @@ class CMBComponent(SkyComponent):
 
     def band_map(self, band) -> NDArray[np.floating]:
         import pysm3.units as u
-        alms = self._build_alms()
-        smoothed = hp.smoothalm(alms, fwhm=band.fwhm_rad, inplace=False)
-        cmb = hp.alm2map(smoothed, band.eval_nside, pixwin=False).astype(np.float32)  # uK_CMB
+        cmb = _synthesize(self._build_alms(), band.eval_nside, band.fwhm_rad)  # uK_CMB
         cmb = (cmb * u.uK_CMB).to(u.Unit(band.units),
                                   equivalencies=u.cmb_equivalencies(band.freq * u.GHz)).value
         return _select_pol(np.asarray(cmb, dtype=np.float32), band.polarization)

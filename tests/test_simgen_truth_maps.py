@@ -72,8 +72,9 @@ def _band(freq: float, fwhm: float, nside: int = NSIDE) -> dict:
 def test_diffuse_truth_map_is_the_band_map_amplitude(tmp_path):
     """beam(truth) * SED must reproduce band_map for a template-based foreground.
 
-    The band's ``eval_nside`` equals ``general.nside``, so the ``ud_grade`` in both paths is the
-    identity and the two sides are comparable to float32 rounding rather than to a tolerance.
+    The beam is Commander4's: one Gaussian window on T, E and B (`DetectorMap.apply_B`). The band's
+    ``eval_nside`` equals ``general.nside``, so both sides make the same transforms and agree to
+    float32 rounding.
     """
     from simgen.instrument import build_bands
     from simgen.sky import build_components
@@ -86,12 +87,41 @@ def test_diffuse_truth_map_is_the_band_map_amplitude(tmp_path):
 
     truth = comp.truth_map(NSIDE)
     assert truth.shape == (3, hp.nside2npix(NSIDE))
-    # Exactly the operations band_map applies, but starting from the truth map.
-    expected = hp.smoothing(truth, fwhm=band.fwhm_rad).astype(np.float32) * comp.c4.get_sed(217.0)
-
-    np.testing.assert_allclose(comp.band_map(band), expected, rtol=1e-5, atol=1e-5)
+    window = hp.gauss_beam(band.fwhm_rad, lmax=3*NSIDE - 1)
+    smoothed_truth = hp.smoothing(truth, beam_window=window).astype(np.float32)
+    np.testing.assert_allclose(comp.band_map(band), smoothed_truth * comp.c4.get_sed(217.0),
+                               rtol=1e-5, atol=1e-5)
     # The SED at 217 GHz is far from unity, so this is not a vacuous comparison.
-    assert not np.allclose(comp.band_map(band), hp.smoothing(truth, fwhm=band.fwhm_rad))
+    assert not np.allclose(comp.band_map(band), smoothed_truth)
+
+
+def test_band_map_below_the_template_nside_is_the_band_limited_model(tmp_path):
+    """A band at half the template nside is B*Y*a of the template's alms, cut at its own band limit.
+
+    This is what Commander4 fits. Smoothing at the template nside and averaging pixels down with
+    `ud_grade` adds a pixel window and folds in power above the band limit, a large error here.
+    """
+    from simgen.instrument import build_bands
+    from simgen.sky import build_components
+
+    template_path = str(tmp_path / "dust_template.fits")
+    template = _write_smooth_iqu_template(template_path)
+    band_nside = NSIDE//2
+    band_lmax = 3*band_nside - 1
+    params = _params({"ThermalDust": _dust_cfg(template_path)},
+                     {"B353": _band(353.0, 120.0, nside=band_nside)})
+    comp = build_components(params)[0]
+    band = build_bands(params)[0]
+
+    # The template's alms (up to 3*NSIDE-1), cut at the band limit, beam-smoothed, synthesized.
+    window = hp.gauss_beam(band.fwhm_rad, lmax=band_lmax)
+    alms = [hp.resize_alm(alm, 3*NSIDE - 1, 3*NSIDE - 1, band_lmax, band_lmax)
+            for alm in hp.map2alm(template.astype(np.float64))]
+    expected = hp.alm2map([hp.almxfl(alm, window) for alm in alms], band_nside, lmax=band_lmax)
+    np.testing.assert_allclose(comp.band_map(band), expected*comp.c4.get_sed(353.0),
+                               rtol=1e-5, atol=1e-5)
+    averaged = hp.ud_grade(hp.smoothing(template, beam_window=window), band_nside)
+    assert np.abs(averaged - expected).max() > 0.05*expected.std()
 
 
 def test_diffuse_truth_map_is_the_template_at_nu_ref(tmp_path):

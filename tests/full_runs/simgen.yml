@@ -2,9 +2,10 @@
 # nside 16, 24 scans of 30 min at 8 Hz, three bands. The Planck-like scan is sped up (one anti-Sun
 # turn per day, fast precession) so that the 12 hours of data hit every pixel.
 # Band353 is intensity only, at nside 8; its TOD is not analysed: the test turns its binned map into
-# a file band. Its beam is wide and its noise high on purpose: simgen makes the nside-8 foregrounds
-# by averaging nside-16 pixels, which the B*Y*a model of CompSep does not describe, so at a narrow
-# beam and a signal-to-noise of ~800 that mismatch alone gives a reduced chi^2 in the thousands.
+# a file band. Its beam is wide and its noise high on purpose. Commander4 realizes the components
+# up to their own lmax (47) when it evaluates chi^2 at nside 8, above the band's limit of 23
+# (notes/C4_issues.md, C10), and run B regrids this map to nside 16; at a narrow beam and a
+# signal-to-noise of ~800 either one gives a reduced chi^2 in the thousands.
 # All paths are relative to the working directory the test runs in.
 general:
   nside: 16
