@@ -148,7 +148,16 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD, tod_samples:
     hfi, jumps, glitches = tod_samples.hfi, tod_samples.jumps, tod_samples.glitches
     gain, far_sidelobes = tod_samples.gain, tod_samples.far_sidelobes
     selection = tod_samples.selection
+    noise = tod_samples.noise
 
+    # Run the "start of iteration" cleanup on every TOD step.
+    for step in tod_samples.steps:
+        step.start_iteration()
+
+    ###############################################################################################
+    ### Part 1 : Execute all "stand-alone" TOD sampling steps.                                  ###
+    ### These are the ones that can run in isolation from start to finish.                      ###
+    ###############################################################################################
     # The far-sidelobe model is built first, since `TODView.get_tod` removes the pickup for every
     # step below, as Commander3 includes `s_sl` in `s_tot`. One set of sidelobe cubes per node,
     # shared by every band rank on it. Freed explicitly at the end of this function; going out of
@@ -189,18 +198,20 @@ def process_tod(mpi_info: Bunch, experiment_data: DetectorGroupTOD, tod_samples:
         with benchmark("temp-gain"):
             gain.sample_temporal(tod_samples, compsep_output.local, iter, rng)
 
-
-    # What the scan loop below records is rebuilt from scratch every iteration.
-    for step in tod_samples.steps:
-        step.start_iteration()
-
+    ###############################################################################################
+    ### Part 2 : Execute the mapmaking loop, including the sampling steps it contains.          ###
+    ### Some sampling steps are inside the mapmaking loop, because they sample a quantity that  ###
+    ### is too large to store, or need information only available inside this loop, etc.        ###
+    ###############################################################################################
     with benchmark("mapmaker"):
         detmap_dict, maps_to_file = tod2map(experiment_data, tod_samples, compsep_output.local,
                                             iter, params, rng)
     if is_master and params.output.chains.include.sky_model_maps:
         maps_to_file["skymodel"] = compsep_output.full
 
-    noise = tod_samples.noise
+    ###############################################################################################
+    ### Part 3 : Cleanup, logging, and communication                                            ###
+    ###############################################################################################
     if noise.cfg.enabled and iter >= noise.cfg.from_iter:
         with benchmark("log-corr-noise-stats"):
             noise.log_summary(tod_samples, iter)

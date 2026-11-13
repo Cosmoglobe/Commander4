@@ -100,8 +100,9 @@ class TODStep:
     it, and its share of the band chain file.
 
     `TODSamples` creates every step alike, before the Gibbs loop, and calls `chain_arrays` and
-    `read_chain` on each for the chain file; `process_tod` calls `start_iteration` on each before
-    the mapmaking scan loop. The defaults below do nothing, so a step overrides only what it uses.
+    `read_chain` on each for the chain file; `process_tod` calls `start_iteration` on each at the
+    beginning of the Gibbs iteration. The defaults below do nothing, so a step overrides only what
+    it uses.
 
     The constructor reads the step's settings into ``self.cfg`` (`parameters.schema.read_settings`)
     and checks them, so a bad setting fails at startup. A step's docstring lists the quantities the
