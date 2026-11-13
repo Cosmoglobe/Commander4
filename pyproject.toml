@@ -38,7 +38,7 @@ dependencies = [
 # Development-only tools, not installed for users. Install with `pip install -e . --group test`
 # (needs pip >= 25.1).
 [dependency-groups]
-test = ["pytest", "pytest-xdist"]
+test = ["pytest", "pytest-xdist", "coverage", "pytest-cov"]
 
 # Install Commander4 and its standalone tools as commands on PATH.
 [project.scripts]
@@ -54,6 +54,21 @@ c4-simgen = "simgen.__main__:main"
 # default `python_files` glob (test_*.py) is what makes the file naming there matter.
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# With `-n`, tests marked `xdist_group` share one worker (test_full_runs.py makes its simulation
+# once that way); the others are spread as usual.
+addopts = "--dist loadgroup"
+markers = ["full_run: runs Commander4 under mpirun (~70 s); skip with -m 'not full_run'"]
+
+# Code coverage: `pytest -n 16 --cov`. `patch = subprocess` also measures the Python processes the
+# tests start, including every MPI rank of the full runs; `parallel` gives each its own data file.
+[tool.coverage.run]
+source_pkgs = ["commander4", "simgen"]
+parallel = true
+patch = ["subprocess"]
+omit = ["*/_cmdr4_backend/*"]
+
+[tool.coverage.report]
+skip_empty = true
 
 [tool.scikit-build]
 # Keep it simple: CMake builds the extension, scikit-build-core packages the Python

@@ -1,0 +1,153 @@
+# Full-run test B: CompSep only, on file bands (simgen's binned maps of all three bands, written by
+# test_full_runs.py into sim_maps/), 5 MPI tasks. Covers what run A does not: the per-pixel
+# solver with common-resolution smoothing, double precision, an MCMC group that keeps the
+# amplitudes fixed and has a restricted chi^2, and starting the chains from run A's chains
+# (gibbs.init_chain). Paths are relative to the test's working directory.
+gibbs:
+  num_iterations: 2
+  seed: 1995
+  chain_status: new
+  init_chain: "out_A:1"
+
+resources:
+  tod:
+    num_threads: 1
+  compsep:
+    num_threads: 1
+
+output:
+  dir: "out_B"
+  logging:
+    console:
+      level: "info"
+    file:
+      level: "verbose"
+  profiling: false
+  plots:
+    enabled: true
+  chains:
+    write: [1]
+    interval:
+      bands: 1
+      compsep: 1
+      maps: 1
+    maps_nside: "native"
+    nside_chisq: 16
+    include:
+      chisq_map: true
+      compsep_residual_maps: true
+
+tod_processing: {}
+
+compsep:
+  enabled: true
+  double_precision: true
+  common_res_fwhm: 660.0
+  per_pixel_sampling_groups:
+    all_amps:
+      enabled: true
+      comps: "all"
+      bands: "all"
+  mcmc_sampling_groups:
+    dust_beta:
+      enabled: true
+      parameters: spectral_indices
+      comps: [ThermalDust]
+      update_amplitude_groups: []
+      numstep: 2
+      chisq_bands: [Band100, Band353]
+      chisq_mask: "sim_maps/chisq_mask.fits"
+  bands:
+    Band030:
+      get_from: "file"
+      enabled: true
+      eval_nside: 16
+      signal_map:
+        path: "sim_maps/Band030_map.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      rms_map:
+        type: "rms"
+        path: "sim_maps/Band030_rms.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      fwhm: 300.0
+      freq: 30.0
+      polarization: "IQU"
+      units: "uK_RJ"
+    Band100:
+      get_from: "file"
+      enabled: true
+      eval_nside: 16
+      signal_map:
+        path: "sim_maps/Band100_map.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      rms_map:
+        type: "rms"
+        path: "sim_maps/Band100_rms.fits"
+        dataset_names: ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
+      fwhm: 240.0
+      freq: 100.0
+      polarization: "IQU"
+      units: "uK_RJ"
+    # The file is at nside 8; the per-pixel solver needs one nside, so the reader regrids it.
+    Band353:
+      get_from: "file"
+      enabled: true
+      eval_nside: 16
+      signal_map:
+        path: "sim_maps/Band353_map.fits"
+        dataset_names: ["TEMPERATURE", null, null]
+      rms_map:
+        type: "rms"
+        path: "sim_maps/Band353_rms.fits"
+        dataset_names: ["TEMPERATURE", null, null]
+      fwhm: 600.0
+      freq: 353.0
+      polarization: "I"
+      units: "uK_RJ"
+
+# No init_from: the amplitudes and the dust index come from run A's chain.
+# The CMB is intensity only: with two polarized bands, the per-pixel solver (which has no prior)
+# cannot separate three polarized components, and the QU fit then fails (reduced chi^2 ~60).
+components:
+  CMB:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "I"
+      longname: "CMB"
+      shortname: "cmb"
+      lmax: 47
+      spatially_varying_MM: false
+      Cl_prior_amplitude: null
+  ThermalDust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      longname: "Thermal-Dust"
+      shortname: "dust"
+      lmax: 47
+      spatially_varying_MM: false
+      Cl_prior_amplitude: null
+      beta: 1.60
+      T: 20
+      nu_ref: 353
+      units: "uK_RJ"
+      sample_spectral_index: true
+      spectral_index_proposal_sigma: 0.02
+      spectral_index_bounds: [1.0, 2.5]
+  Synchrotron:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      longname: "Synchrotron"
+      shortname: "sync"
+      lmax: 47
+      spatially_varying_MM: false
+      Cl_prior_amplitude: null
+      beta: -3.1
+      nu_ref: 30
+      units: "uK_RJ"
+
+experiments: {}
