@@ -20,7 +20,7 @@ from commander4.data_models.band import Band
 from commander4.sky.component import Component
 from commander4.sky.comp_io import _pol_row_indices
 from commander4.polarization import get_npol
-from commander4.math_utils.arithmetic import inplace_scale, inplace_add_scaled_vec
+from commander4.math_utils.arithmetic import inplace_scale
 from commander4.math_utils.alm import project_alms, almxfl, _dot_complex_alm_1D_arrays
 from commander4.math_utils.sht import alm_to_map, map_to_alm, alm_to_map_adjoint, map_to_alm_adjoint
 
@@ -343,35 +343,34 @@ class DiffuseComponent(Component):
         view_alms = project_alms(np.ascontiguousarray(stored_alms[rows]), self.lmax)
         self.alms = view_alms.astype(self.dtype, copy=False)
 
-    def _realize_alms_as_map(self, component_alms, nside: int, fwhm: float = 0):
-        """Realize component alms as a map.
+    def get_component_map(self, nside: int, fwhm: float = 0.0, lmin: int = 0) -> NDArray:
+        """The amplitude map at `nside`, smoothed by a Gaussian beam of `fwhm` radians.
 
-        Joined `IQU` components still need separate intensity and spin-2 synthesis calls, since
-        DUCC does not accept a 3-row alm block in one call.
+        For plotting, where there is no band: the alms are cut at min(lmax, 3*nside - 1), and the
+        beam is one window on every Stokes row, as in `comp2band`. Multipoles below `lmin` are left
+        out. A band's sky is made by `SkyModel.get_sky_at_nu` instead, through `comp2band`.
         """
-        component_alms = hp.smoothalm(component_alms, fwhm, inplace=False)
-        if self.eval_pol != "IQU":
-            return alm_to_map(component_alms, nside, self.lmax, spin=self.spin)
-        intensity_map = alm_to_map(component_alms[:1], nside, self.lmax, spin=0)
-        pol_map = alm_to_map(component_alms[1:], nside, self.lmax, spin=2)
-        return np.concatenate((intensity_map, pol_map), axis=0)
-
-    def get_component_map(self, nside:int, fwhm:int=0):
-        component_alms = self.alms
-        if component_alms is None:
+        if self.alms is None:
             raise ValueError("component_alms property not set.")
-        return self._realize_alms_as_map(component_alms, nside, fwhm)
+        lmax = min(self.lmax, 3*nside - 1)
+        window = hp.gauss_beam(fwhm, lmax=lmax)
+        window[:lmin] = 0.0
+        alms = np.array([almxfl(alm, window) for alm in project_alms(self.alms, lmax)])
+        if self.eval_pol != "IQU":
+            return alm_to_map(alms, nside, lmax, spin=self.spin)
+        # A joined IQU component needs separate spin-0 and spin-2 synthesis calls.
+        return np.concatenate((alm_to_map(alms[:1], nside, lmax, spin=0),
+                               alm_to_map(alms[1:], nside, lmax, spin=2)), axis=0)
 
-    def get_sky(self, nu, nside, fwhm=0):
-        """ Realize this component at a beam-resolution `fwhm` (radians), scaled by its SED at `nu`.
-            Note that if the component amplitudes already carry beam-smoothing (which happens when
-            the per-pix common-resolution amplitude solver is used), only the effective fwhm
-            difference is applied.
+    def get_sky(self, nu: float, nside: int, fwhm: float = 0.0) -> NDArray:
+        """The component map at frequency `nu`, seen through a beam of `fwhm` radians, for plotting.
+
+        Amplitudes that already carry a beam (`amp_fwhm_rad`) get only the rest of it. A band's sky
+        is made by `SkyModel.get_sky_at_nu` instead, which also cuts at the band lmax.
         """
-        target_fwhm = 0.0 if fwhm is None else fwhm
-        applied_fwhm = np.sqrt(max(target_fwhm**2 - self.amp_fwhm_rad**2, 0.0))
+        applied_fwhm = np.sqrt(max(fwhm**2 - self.amp_fwhm_rad**2, 0.0))
         return self.get_component_map(nside, applied_fwhm)*self.get_sed(nu)
-    
+
     def get_sed(self, nu):
         raise NotImplementedError(f"{type(self).__name__}.get_sed() is not implemented.")
 
@@ -384,47 +383,62 @@ class DiffuseComponent(Component):
             res += _dot_complex_alm_1D_arrays(self._data[ipol], other._data[ipol], self.lmax)
         return res
 
-    def project_comp_to_band(self, band:Band, nthreads: int = 1):
-        """Project the component to the given band in-place, summing its contribution into the alms
-           array of the passed band object.
+    def _band_beam(self, band: Band) -> NDArray:
+        """The band's Gaussian beam window, up to the band lmax.
 
-        NB: this function does not include the beam smoothing.
+        Amplitudes that already carry a beam (`amp_fwhm_rad`, from the per-pixel solver) get only
+        the rest of it: Gaussian beams multiply, so their widths add in quadrature.
         """
-        if self.is_pol != band.is_pol:
-            raise ValueError("Band and component polarization must match.")
+        fwhm = np.sqrt(max(np.deg2rad(band.fwhm/60.0)**2 - self.amp_fwhm_rad**2, 0.0))
+        return hp.gauss_beam(fwhm, lmax=band.lmax)
 
-        alm_in_band_space = project_alms(self.alms, band.lmax)
-        if self.spatially_varying_MM:  # If this component's mixing matrix is pixel-dependent.
-            # Y a
-            comp_map = alm_to_map(alm_in_band_space, band.nside, band.lmax, spin=self.spin,
-                                  nthreads=nthreads)
-            # M Y a
-            for ipol in range(self.npol):
-                inplace_scale(comp_map[ipol], self.get_sed(band.nu)) 
-            # Y^-1 M Y a
-            band.alms = map_to_alm(comp_map, band.nside, band.lmax, spin=self.spin, out=band.alms,
-                                   acc=True, nthreads=nthreads)
+    def comp2band(self, band: Band, nthreads: int = 1):
+        """Add this component to the band's alms: B Y^-1 M Y a (C3's `evalBand`).
+
+        The alms are cut at the band lmax (or zero-padded up to it), scaled to the band frequency
+        by the mixing matrix M, and smoothed by the band beam B. A joined IQU component (as in the
+        sky model handed to TOD processing) gives its T row to an intensity band and its E and B
+        rows to a polarization band.
+        """
+        alms = self.alms
+        if self.eval_pol == "IQU":
+            alms = alms[1:] if band.is_pol else alms[:1]
+        if (alms.shape[0] == 2) != band.is_pol:
+            raise ValueError("Band and component polarization must match.")
+        spin = 2 if band.is_pol else 0
+        alms = project_alms(alms, band.lmax)
+        if self.spatially_varying_MM:  # The mixing matrix is pixel-dependent: Y^-1 M Y a.
+            comp_map = alm_to_map(alms, band.nside, band.lmax, spin=spin, nthreads=nthreads)
+            for ipol in range(len(comp_map)):
+                inplace_scale(comp_map[ipol], self.get_sed(band.nu))
+            alms = map_to_alm(comp_map, band.nside, band.lmax, spin=spin, nthreads=nthreads)
         else:
-            for ipol in range(self.npol):
-                inplace_add_scaled_vec(band.alms[ipol], alm_in_band_space[ipol],
-                                       self.get_sed(band.nu))
+            # M a. The SED is cast to the precision of the alms: a NumPy double would raise
+            # single-precision alms to double precision, and everything after would run slower.
+            alms = alms*np.asarray(self.get_sed(band.nu), dtype=alms.real.dtype)
+        beam = self._band_beam(band)
+        for ipol in range(len(alms)):
+            # B M a. `alms` is a new array in both branches above, so it can be changed in place.
+            band.alms[ipol] += almxfl(alms[ipol], beam, inplace=True)
         return band.alms
 
-    def eval_comp_from_band(self, band:Band, nthreads: int = 1, inplace=True):
-        """Evaluate the band's alm contribution to the component, storing it in-place by default,
-           and return it.
+    def band2comp(self, band: Band, nthreads: int = 1, inplace=True):
+        """The transpose of `comp2band`: Y^T M^T Y^-1^T B^T applied to the band's alms
+        (C3's `projectBand`). Stores the result in this component by default and returns it.
 
-        All the contributions will be summed to the total proper amplitudes by the master node.
-
-        NB: this function does not include the beam smoothing.
+        Each rank evaluates its own band; the master sums the contributions of all bands.
         """
         if self.is_pol != band.is_pol:
             raise ValueError("Band and component polarization must match.")
+        beam = self._band_beam(band)
+        tmp_alm = band.alms.copy()
+        for ipol in range(self.npol):
+            almxfl(tmp_alm[ipol], beam, inplace=True)  # B^T a (B^T = B: diagonal in l).
 
         if self.spatially_varying_MM:  # If this component's mixing matrix is pixel-dependent.
             # Y^-1^T B^T a
-            band_map = map_to_alm_adjoint(band.alms, band.nside, band.lmax, spin=self.spin, out=None,
-                                          nthreads=nthreads)
+            band_map = map_to_alm_adjoint(tmp_alm, band.nside, band.lmax, spin=self.spin,
+                                          out=None, nthreads=nthreads)
 
             # M^T Y^-1 B^T a
             for ipol in range(self.npol):
@@ -433,12 +447,10 @@ class DiffuseComponent(Component):
             # Y^T M^T Y^-1^T B^T a
             tmp_alm = alm_to_map_adjoint(band_map, band.nside, band.lmax, spin=self.spin, out=None,
                                          nthreads=nthreads)
-
         else:
-            tmp_alm = band.alms.copy()
-            for ipol in range(self.npol):
+            for ipol in range(self.npol):  # M^T B^T a
                 inplace_scale(tmp_alm[ipol], self.get_sed(band.nu))
-            
+
         # Project alm from band to component lmax.
         contrib_to_comp_alm = project_alms(tmp_alm, self.lmax)
         
@@ -489,18 +501,8 @@ class CMB(DiffuseComponent):
         return cmb_to_rj(nu) / cmb_to_rj(self.nu_ref)
     
     def get_sky_anisotropies(self, nu, nside, fwhm=0):
-        if self.alms is None:
-            raise ValueError("component_alms property not set.")
-        component_alms = self.alms.copy()
-        # Zero out monopole (l=0)
-        component_alms[:,hp.Alm.getidx(self.lmax, 0, 0)] = 0.0 + 0.0j
-        # Zero out the dipole (l=1)
-        for m in range(2):  # m = 0, 1
-            component_alms[:,hp.Alm.getidx(self.lmax, 1, m)] = 0.0 + 0.0j
-        # Zero out the quadrupole (l=2)
-        for m in range(3):  # m = 0, 1, 2
-            component_alms[:,hp.Alm.getidx(self.lmax, 2, m)] = 0.0 + 0.0j
-        return self._realize_alms_as_map(component_alms, nside, fwhm) * self.get_sed(nu)
+        """The CMB map at `nu` without monopole, dipole and quadrupole, for plotting."""
+        return self.get_component_map(nside, fwhm, lmin=3) * self.get_sed(nu)
 
 
 class ThermalDust(DiffuseComponent):

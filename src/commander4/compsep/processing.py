@@ -339,7 +339,7 @@ def _validate_mcmc_sampled_components(mcmc_groups: dict[str, MCMCSamplingGroupCo
 def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
     """Report component multipoles that no band can constrain.
 
-    `Component.project_comp_to_band` truncates a component to the band's lmax, so a component
+    `Component.comp2band` truncates a component to the band's lmax, so a component
     multipole above *every* enabled band's lmax never meets the data. In a constrained realization
     (`optimize: false`) the CG solver then draws it straight from the C(l) prior, which is usually
     set orders of magnitude above the true signal, so the amplitudes come back dominated by prior
@@ -402,7 +402,8 @@ def _build_conditional_residual(detector_data: DetectorMap, comp_list: CompList,
         return detector_data
     band_pol = "QU" if detector_data.pol else "I"
     fixed_sky = SkyModel(CompList(fixed_comps)).get_sky_at_nu(
-        detector_data.nu, detector_data.nside, band_pol, fwhm=detector_data.fwhm_rad)
+        detector_data.nu, detector_data.nside, band_pol, fwhm=detector_data.fwhm_rad,
+        lmax=detector_data.lmax)
     residual = deepcopy(detector_data)
     residual.map_sky = detector_data.map_sky - fixed_sky.astype(detector_data.map_sky.dtype,
                                                                 copy=False)

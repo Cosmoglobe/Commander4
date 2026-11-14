@@ -50,6 +50,7 @@ class FakeDetectorMap:
         self.fwhm = fwhm
         self.fwhm_rad = fwhm  # MCMCSamplingGroup.local_loglike realizes the model at this resolution.
         self.nside = nside
+        self.lmax = 3*nside - 1
         self.double_precision = double_precision
 
     @property
@@ -61,7 +62,7 @@ class FakeSkyModel:
     def __init__(self, components):
         self._components = components
 
-    def get_sky_at_nu(self, nu, nside, pols_required, fwhm=None):
+    def get_sky_at_nu(self, nu, nside, pols_required, fwhm=None, lmax=None):
         npix = 12 * nside**2
         if pols_required == "I":
             skymap = np.zeros((1, npix), dtype=np.float64)

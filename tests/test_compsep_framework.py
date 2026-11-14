@@ -1,5 +1,6 @@
 from copy import deepcopy
 
+import healpy as hp
 import numpy as np
 import pytest
 from mpi4py import MPI
@@ -23,7 +24,9 @@ from commander4.compsep.processing import (
 from commander4.compsep.chisq import evaluate_chi2
 from commander4.diagnostics.log import SUMMARY
 from commander4.mpi.transfer import _get_compsep_sender_id_for_tod_band, _should_send_compsep_result
+from commander4.data_models.band import Band
 from commander4.data_models.detector_map import DetectorMap
+from commander4.math_utils.alm import _dot_complex_alm_1D_arrays
 from commander4.sky.comp_list import CompList
 from commander4.sky.sky_model import SkyModel
 from commander4.compsep.perpix_solver import solve_compsep_perpix
@@ -37,12 +40,12 @@ def _make_compsep(ntask_compsep_qu: int = 1, ntask_compsep_i: int = 1) -> Bunch:
     return Bunch(nside=2, double_precision=False)
 
 
-def _make_component_cfg(polarization: str = "IQU") -> Bunch:
+def _make_component_cfg(polarization: str = "IQU", lmax: int = 2) -> Bunch:
     return Bunch(
         enabled=True,
         component_class="CMB",
         params=Bunch(
-            lmax=2,
+            lmax=lmax,
             polarization=polarization,
             shortname="cmb",
             spatially_varying_MM=False,
@@ -51,9 +54,10 @@ def _make_component_cfg(polarization: str = "IQU") -> Bunch:
     )
 
 
-def _make_comp_list(polarization: str = "IQU", ntask_compsep_qu: int = 1) -> CompList:
+def _make_comp_list(polarization: str = "IQU", ntask_compsep_qu: int = 1,
+                    lmax: int = 2) -> CompList:
     params = Bunch(compsep=_make_compsep(ntask_compsep_qu))
-    cmb = _make_component_cfg(polarization)
+    cmb = _make_component_cfg(polarization, lmax)
     object.__setattr__(cmb, "_name", "cmb")
     components = Bunch({"cmb": cmb})
     return CompList.init_from_params(components, params)
@@ -150,7 +154,7 @@ def test_iteration_chi2_uses_all_observed_map_samples() -> None:
 
     class ZeroSky:
         def get_sky_at_nu(self, nu: float, nside: int, pols_required: str,
-                          fwhm: float | None = None) -> np.ndarray:
+                          fwhm: float | None = None, lmax: int | None = None) -> np.ndarray:
             return np.zeros_like(map_sky)
 
     fit = evaluate_chi2(mpi_info.compsep, detector_data, ZeroSky(), band_name="Planck30GHz",
@@ -460,9 +464,9 @@ def test_build_conditional_residual_is_noop_when_no_component_is_fixed() -> None
         detector_data, comp_list, "I", active) is detector_data
 
 
-def test_get_sky_removes_amp_fwhm_by_quadrature() -> None:
-    # get_sky realizes a component at a *target* band resolution, removing the beam already carried
-    # by its amplitudes (amp_fwhm_rad) via applied = sqrt(target^2 - amp_fwhm_rad^2).
+def test_band_sky_removes_amp_fwhm_by_quadrature() -> None:
+    # A band sky applies only the part of the band beam that the amplitudes do not already carry
+    # (amp_fwhm_rad, from the per-pixel solver): applied = sqrt(target^2 - amp_fwhm_rad^2).
     comp = next(c for c in _make_multi_comp_list().split_for_eval_pol("I") if c.comp_name == "CMB")
     comp.alms = np.full_like(comp.alms, 2.0 + 0.0j)  # power at all l so smoothing is non-trivial
     nu, nside, target = 30.0, 2, 0.5  # target beam in radians
@@ -470,22 +474,57 @@ def test_get_sky_removes_amp_fwhm_by_quadrature() -> None:
     # Sanity: at this target the beam actually changes the map, so the cases below are distinguishable.
     assert not np.allclose(comp.get_component_map(nside, target), comp.get_component_map(nside, 0.0))
 
-    # Deconvolved amplitudes (amp_fwhm_rad=0) -> apply the full target beam.
-    comp.amp_fwhm_rad = 0.0
-    np.testing.assert_allclose(comp.get_sky(nu, nside, target),
-                               comp.get_component_map(nside, target)*sed)
-    # Partially pre-smoothed amplitudes -> apply the quadrature remainder.
-    comp.amp_fwhm_rad = 0.3
-    np.testing.assert_allclose(comp.get_sky(nu, nside, target),
-                               comp.get_component_map(nside, np.sqrt(target**2 - 0.3**2))*sed)
-    # Amplitudes already at the band resolution -> no extra smoothing.
-    comp.amp_fwhm_rad = target
-    np.testing.assert_allclose(comp.get_sky(nu, nside, target),
-                               comp.get_component_map(nside, 0.0)*sed)
-    # Amplitudes coarser than the target -> clamp to 0 rather than take a sqrt of a negative.
-    comp.amp_fwhm_rad = 2*target
-    np.testing.assert_allclose(comp.get_sky(nu, nside, target),
-                               comp.get_component_map(nside, 0.0)*sed)
+    # Deconvolved amplitudes get the full beam, partly smoothed ones the quadrature remainder, and
+    # amplitudes already at the band resolution none.
+    for amp_fwhm, applied in ((0.0, target), (0.3, np.sqrt(target**2 - 0.3**2)), (target, 0.0)):
+        comp.amp_fwhm_rad = amp_fwhm
+        np.testing.assert_allclose(
+            SkyModel(CompList([comp])).get_sky_at_nu(nu, nside, "I", fwhm=target),
+            comp.get_component_map(nside, applied)*sed, rtol=1e-5, atol=1e-5)
+
+
+def _random_alms(lmax: int, rng: np.random.Generator) -> np.ndarray:
+    """Random complex alms of one Stokes row, real at m = 0 (the first lmax + 1 entries)."""
+    alms = rng.standard_normal(hp.Alm.getsize(lmax)) + 1j*rng.standard_normal(hp.Alm.getsize(lmax))
+    alms[:lmax + 1] = alms[:lmax + 1].real
+    return alms[None, :]
+
+
+def test_band_sky_is_cut_at_the_band_lmax() -> None:
+    """The sky realized for a band holds nothing above the band lmax, as in the CG operator
+    (C3's evalBand): a component with a higher lmax is cut, not folded into the band."""
+    comp = _make_comp_list("I", lmax=23)[0]
+    comp.alms = _random_alms(23, np.random.default_rng(1)).astype(comp.alms.dtype)
+    nu, nside, band_lmax, fwhm = 30.0, 4, 7, np.deg2rad(5.0)
+
+    sky = SkyModel(CompList([comp])).get_sky_at_nu(nu, nside, "I", fwhm=fwhm, lmax=band_lmax)
+
+    alms = hp.resize_alm(comp.alms[0].astype(complex), 23, 23, band_lmax, band_lmax)
+    expected = hp.alm2map(hp.almxfl(alms, hp.gauss_beam(fwhm, lmax=band_lmax)), nside,
+                          lmax=band_lmax)*comp.get_sed(nu)
+    np.testing.assert_allclose(sky[0], expected, atol=1e-4*expected.std())
+
+
+@pytest.mark.parametrize("band_lmax", [5, 11])  # Below and above the component lmax of 8.
+def test_band2comp_is_the_transpose_of_comp2band(band_lmax: int) -> None:
+    """<comp2band(x), y> = <x, band2comp(y)>, with the beam, the lmax cut and the SED included."""
+    rng = np.random.default_rng(2)
+    comp = _make_comp_list("I", lmax=8)[0]
+    comp.alms = _random_alms(8, rng).astype(comp.alms.dtype)
+    nside = 4
+    detector_data = DetectorMap(np.zeros((1, 12*nside**2)), np.ones((1, 12*nside**2)), nu=30.0,
+                                fwhm=600.0, nside=nside, lmax=band_lmax)
+    band = Band.init_from_detector(detector_data, double_precision=True)
+
+    x = comp.alms.astype(complex)
+    comp_x = CompList([comp]).comp2band(band).astype(complex)
+    y = _random_alms(band_lmax, rng)
+    band.alms = y.copy()
+    transpose_y = comp.band2comp(band, inplace=False).astype(complex)
+
+    lhs = _dot_complex_alm_1D_arrays(comp_x[0], y[0], band_lmax)
+    rhs = _dot_complex_alm_1D_arrays(x[0], transpose_y[0], 8)
+    assert lhs == pytest.approx(rhs, rel=1e-5)
 
 
 def test_discover_spectral_index_groups_groups_iqu_views_and_respects_selection() -> None:

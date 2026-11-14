@@ -96,9 +96,10 @@ class SkyComponent(ABC):
 def _synthesize(alms: NDArray, nside: int, fwhm_rad: float = 0.0) -> NDArray[np.float32]:
     """IQU map at `nside` from TEB `alms`, Gaussian-smoothed and cut at the band limit 3*nside-1.
 
-    This is the B*Y*a model Commander4 fits: the same Gaussian window multiplies T, E and B, as in
-    `DetectorMap.apply_B` (healpy's own `fwhm` smoothing gives E and B a slightly different spin-2
-    window), there is no pixel window, and nothing above the band limit is left to fold into it.
+    This is the B*Y*a model C4 fits: the same Gaussian window multiplies T, E and B, as in
+    `DiffuseComponent.comp2band` (healpy's own `fwhm` smoothing gives E and B a slightly different
+    spin-2 window), there is no pixel window, and nothing above the band limit is left to fold into
+    it.
     Smoothing at a finer nside and averaging pixels down with `ud_grade` would break all three.
     """
     lmax_in = hp.Alm.getlmax(alms.shape[-1])

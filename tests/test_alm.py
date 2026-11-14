@@ -7,7 +7,7 @@ import pytest
 from commander4.math_utils.alm import (alm_complex2real, alm_real2complex,
                                        alm_complex2real_commander3,
                                        alm_real2complex_commander3, alm_dot_product,
-                                       project_alms_mmax, get_mmax, nalm)
+                                       project_alms_mmax, get_mmax, nalm, almxfl)
 
 
 def random_complex_alms(lmax: int, mmax: int, seed: int = 0) -> np.ndarray:
@@ -118,3 +118,18 @@ def test_mmax_projection_is_its_own_adjoint(mmax_in: int, mmax_out: int) -> None
     lhs = alm_dot_product(project_alms_mmax(a, lmax, mmax_in, mmax_out), b, lmax)
     rhs = alm_dot_product(a, project_alms_mmax(b, lmax, mmax_out, mmax_in), lmax)
     assert lhs == pytest.approx(rhs)
+
+
+@pytest.mark.parametrize("lmax, mmax, dtype", [(7, 7, np.complex64), (40, 40, np.complex128),
+                                               (40, 13, np.complex128)])
+def test_almxfl_matches_healpy(lmax: int, mmax: int, dtype: type) -> None:
+    """`almxfl` scales every (l, m) coefficient by `fl[l]`, also when mmax < lmax."""
+    rng = np.random.default_rng(0)
+    nalm = hp.Alm.getsize(lmax, mmax)
+    alm = (rng.normal(size=nalm) + 1j*rng.normal(size=nalm)).astype(dtype)
+    fl = rng.uniform(0.1, 1.0, lmax + 1)
+
+    scaled = almxfl(alm, fl, lmax=lmax, mmax=mmax)
+    assert scaled.dtype == dtype
+    np.testing.assert_allclose(scaled, hp.almxfl(alm.astype(np.complex128), fl, mmax=mmax),
+                               rtol=1e-6)

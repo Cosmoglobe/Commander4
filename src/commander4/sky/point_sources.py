@@ -210,10 +210,10 @@ class RadioSources(PointSourcesComponent):
         """ Returns the sky at frequency `nu` (GHz) from the point sources, at a certain `nside`,
             observed through a Gaussian beam of `fwhm` **radians**.
 
-        The beam is applied by painting each source through it, so unlike a `DiffuseComponent` there
-        is no separate smoothing step: `fwhm` selects the beam the sources are painted with. The
-        unit matches `DiffuseComponent.get_sky`, because `SkyModel.get_sky_at_nu` calls both through
-        the same interface and passes the band's `fwhm_rad`.
+        The beam is applied by painting each source through it: `fwhm` selects the beam the sources
+        are painted with. `SkyModel.get_sky_at_nu` adds this map, in pixel space, to the diffuse
+        components it builds through `comp2band` (as C3's `compute_residual` adds point
+        sources), so the unit is uK_RJ at `nu`, like theirs.
         """
         self.compute_pix_beams(fwhm, nside)
         map = np.zeros((1, hp.nside2npix(nside)),
@@ -258,11 +258,10 @@ class RadioSources(PointSourcesComponent):
                                    self._data[0,:], sed_s=self.get_sed(nu))
         self._data *= self.mJysr_to_uKRJ
 
-    def project_comp_to_band(self, band:Band, nthreads: int = 1):
-        """ Project the point sources contribution to the given band in-place, summing it into the
-            alm array of the band object.
+    def comp2band(self, band:Band, nthreads: int = 1):
+        """ Add the point sources to the band's alms (C3's `evalBand`).
 
-        NB: this function does not include the beam smoothing.
+        The band beam is included: each source is painted through it.
         """
         if band.is_pol:
             raise ValueError("Point-source components can only be projected to intensity bands.")
@@ -280,14 +279,12 @@ class RadioSources(PointSourcesComponent):
         
         return band.alms
 
-    def eval_comp_from_band(self, band:Band, nthreads: int = 1):
-        """ Evaluate the band's alm contribution to the point sources' amplitudes, storing it in
-            `_data` as well as returning it.
+    def band2comp(self, band:Band, nthreads: int = 1):
+        """ The transpose of `comp2band` (C3's `projectBand`): the band's alm contribution
+            to the point sources' amplitudes, stored in `_data` and returned.
 
-        All the contributions will be summed to the total proper amplitudes when reducing on the
-        master node.
-
-        NB: this function does not include the beam smoothing.
+        The band beam is included, through the painted beam profiles. All the contributions will be
+        summed to the total proper amplitudes when reducing on the master node.
         """
         if band.is_pol:
             raise ValueError("Point-source components can only be evaluated from intensity bands.")

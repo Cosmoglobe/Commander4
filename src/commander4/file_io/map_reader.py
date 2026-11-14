@@ -156,7 +156,14 @@ def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
         if "eval_nside" in my_band and nside != my_band.eval_nside:
             logger.info(f"Converting map {my_band._name} from nside {nside} to "\
                         f"{my_band.eval_nside}.")
-            map_sky = hp.ud_grade(map_sky, my_band.eval_nside)
+            # Merged pixels are combined in their inverse-variance-weighted mean, whose inverse
+            # variance is the sum below. Unobserved pixels (zero weight) contribute no signal, even
+            # a NaN one; a merged pixel with no weight at all is left at zero signal.
+            weight = hp.ud_grade(map_inv_var, my_band.eval_nside)
+            weighted_sky = hp.ud_grade(np.where(map_inv_var > 0, map_sky*map_inv_var, 0.0),
+                                       my_band.eval_nside)
+            map_sky = np.divide(weighted_sky, weight, out=np.zeros_like(weighted_sky),
+                                where=weight > 0)
             # power=-2 keeps the map's sum fixed, so merged pixels add their inverse variances.
             map_inv_var = hp.ud_grade(map_inv_var, my_band.eval_nside, power=-2)
             nside = my_band.eval_nside

@@ -8,7 +8,7 @@ from math import sqrt
 
 import healpy as hp
 import numpy as np
-from numba import njit
+from numba import njit, prange
 from numpy.typing import NDArray
 
 from commander4.math_utils.arithmetic import dot, inplace_scale_add, inplace_add_scaled_vec
@@ -119,47 +119,19 @@ def gaussian_random_alm(lmax: int, mmax: int, spin: int, ncomp: int,
     return res
 
 
-@njit(cache=True, fastmath=True)
+@njit(cache=True, fastmath=True, parallel=True)
 def _almxfl_numba(res, lmax, mmax, fl):
-    ofs = 0
-    for m in range(mmax+1):
-        next = ofs + lmax + 1 - m
-        res[ofs:next] *= fl[m:lmax+1]
-        ofs = next
+    for m in prange(mmax + 1):
+        ofs = m*(lmax + 1) - m*(m - 1)//2  # Where the m block starts in healpy's alm ordering.
+        res[ofs:ofs + lmax + 1 - m] *= fl[m:lmax + 1]
 
 def almxfl(alm, fl, lmax=None, mmax=None, inplace=False):
+    """Multiply the 1D array `alm` by the per-multipole window `fl` (as `hp.almxfl`)."""
     res = alm if inplace else alm.copy()
     lmax = hp.Alm.getlmax(alm.shape[-1]) if lmax is None else lmax
     mmax = lmax if mmax is None else mmax
     _almxfl_numba(res, lmax, mmax, fl)
     return res
-
-# Parallel implementation of almxfl. Feel free to optimize.
-
-# @njit(parallel=True, cache=True, fastmath=True)
-# def _almxfl_numba_schedule(alm, lmax, mmax, m_offsets,  fl,  num_threads, inplace=False):
-#     res = alm if inplace else alm.copy()
-
-#     for thread_idx in prange(num_threads):
-#         for m in range(thread_idx, mmax + 1, num_threads):
-#             start = m_offsets[m]
-#             end = m_offsets[m+1]
-#             num_l = lmax + 1 - m
-#             res[start:end] *= fl[m : m + num_l]
-#     return res
-
-
-# def almxfl(alm, fl, lmax=None, mmax=None, inplace=False):
-#     res = alm if inplace else alm.copy()
-#     lmax = hp.Alm.getlmax(alm.shape[-1]) if lmax is None else lmax
-#     mmax = lmax if mmax is None else mmax
-#     m_offsets = np.zeros(mmax + 2, dtype=np.int64)
-#     for m in range(mmax + 1):
-#         m_offsets[m+1] = m_offsets[m] + (lmax - m + 1)
-#     n_threads = numba.get_num_threads()
-
-#     _almxfl_numba_schedule(alm, lmax, mmax, m_offsets, fl, n_threads, inplace=True)
-#     return res
 
 
 @njit(cache=True, fastmath=True)

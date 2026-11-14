@@ -9,7 +9,6 @@ import numpy as np
 import time
 import logging
 from mpi4py import MPI
-from numpy.typing import NDArray
 from typing import TYPE_CHECKING
 from collections.abc import Callable
 from copy import deepcopy
@@ -93,39 +92,6 @@ class CompSepSolver:
         self.sample_amplitudes = not group.optimize
     
 
-    def project_all_comps_to_band(self, comp_list_in: CompList,
-                                  band_out:Band) -> NDArray[np.complexfloating]:
-        """
-        Projects all the components in `comp_list_in`, overwriting the `band_out` object's alms. 
-
-        It also applies the beam operator.
-
-        In Commander4 notation, applies A matrix, from comp list to band alms.
-        """
-        comp_list_in.project_comp_to_band(band_out, nthreads=self.nthreads)
-        # B Y^-1 M Y a
-        alm_out = self.det_map.apply_B(band_out.alms)
-        return alm_out
-
-
-    def eval_all_comps_from_band(self, band_in:Band,
-                                 comp_list_out:CompList) -> CompList:
-        """ Evaluates the band_in's contribution to all the comp_list_out objects, and stores them
-            in-place. 
-
-            It also applies the beam operator.
-            
-            In Commander4 notation, applies A_adj matrix, from band alms to comp list.
-        """
-
-        # B^T a
-        self.det_map.apply_B(band_in.alms)
-        
-        # Y^T M^T Y^-1^T B^T a
-        comp_list_out.eval_comp_from_band(band_in, nthreads=self.nthreads)
-        return comp_list_out
-
-
     def apply_LHS_matrix(self, comp_list_in: CompList) -> CompList:
         #This a_in should become a list of Component objects instead. 
         """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of
@@ -156,7 +122,7 @@ class CompSepSolver:
 
         # B Y^-1 M Y S^{1/2} a
         with benchmark("lhs-project"):
-            self.project_all_comps_to_band(comp_list, self.my_band)
+            comp_list.comp2band(self.my_band, nthreads=self.nthreads)
 
         # Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         with benchmark("lhs-inv-N"):
@@ -165,7 +131,7 @@ class CompSepSolver:
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         with benchmark("lhs-eval"):
-            self.eval_all_comps_from_band(self.my_band, comp_list)
+            comp_list.band2comp(self.my_band, nthreads=self.nthreads)
 
         # Accumulate solution on master
         with benchmark("lhs-accum"):
@@ -240,7 +206,7 @@ class CompSepSolver:
         b_band.alms = b_alm.astype(b_band.alms.dtype, copy=False)
 
         # (Y^T M^T Y^-1^T B^T) Y^T (...)
-        self.eval_all_comps_from_band(b_band, comp_list)
+        comp_list.band2comp(b_band, nthreads=self.nthreads)
 
         # Accumulate on master and apply the prior there: S^{1/2} Y^T M^T Y^-1^T B^T Y^T (...)
         for comp in comp_list:

@@ -396,19 +396,19 @@ class CompList:
         return requests
 
     # CompSep solver functions
-    def eval_comp_from_band(self, band_in:Band, nthreads:int=1):
-        """ Evaluates the band_in's contribution to all the comp_list_out objects, and stores them
-            in-place.
+    def band2comp(self, band_in:Band, nthreads:int=1):
+        """ The transpose of `comp2band`: stores band_in's contribution in each component, in place.
         """
         for comp in self.comp_list:
-            comp.eval_comp_from_band(band_in, nthreads=nthreads)
-    
-    def project_comp_to_band(self, band_out:Band, nthreads:int=1) -> NDArray[np.complexfloating]:
-        """ Projects all the components in this list, overwriting the `band_out` object's alms.
+            comp.band2comp(band_in, nthreads=nthreads)
+
+    def comp2band(self, band_out:Band, nthreads:int=1) -> NDArray[np.complexfloating]:
+        """ Sums all components into the `band_out` object's alms, overwriting them, beam included.
         """
-        band_out.alms = np.zeros_like(band_out.alms)
+        band_out.alms[:] = 0
         for comp in self.comp_list:
-            comp.project_comp_to_band(band_out, nthreads=nthreads)
+            comp.comp2band(band_out, nthreads=nthreads)
+        return band_out.alms
 
     def apply_Cl_prior_sqrt(self):
         """ Applies to each component its own C_l prior square root (S^{1/2}), acting on its alms.

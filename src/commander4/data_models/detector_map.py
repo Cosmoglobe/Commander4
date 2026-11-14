@@ -13,7 +13,6 @@ import healpy as hp
 from copy import deepcopy
 from numpy.typing import NDArray
 from commander4.math_utils.arithmetic import inplace_arr_prod
-from commander4.math_utils.alm import almxfl
 from commander4.math_utils.sht import alm_to_map, alm_to_map_adjoint
 
 logger = logging.getLogger(__name__)
@@ -29,7 +28,7 @@ def smooth_signal_map_noiseweighted(map_signal: NDArray, map_inv_var: NDArray,
 
     `map_signal` and `map_inv_var` have shape (npix,) for intensity, or (2, npix) for Q and U.
     Q and U are one spin-2 field, so they are smoothed together through E and B, with the same
-    Gaussian window on both. That is the beam `DetectorMap.apply_B` puts on the model, so smoothed
+    Gaussian window on both. That is the beam `comp2band` puts on the model, so smoothed
     data and model stay consistent; smoothing Q and U as two scalar maps would not be.
 
     A band covering only part of the sky has zero weight outside its footprint, and far enough from
@@ -132,11 +131,10 @@ class DetectorMap:
         self.fwhm = fwhm #stored in arcmin
         self.nside = nside
         # The band's harmonic bandlimit. Components are truncated to this lmax on their way into
-        # the band (Component.project_comp_to_band), so any component multipole above it is
+        # the band (Component.comp2band), so any component multipole above it is
         # invisible to the data and left to the C(l) prior alone; compsep_processing's
         # _validate_component_lmax reports that at startup.
         self.lmax = (3*nside - 1) if lmax is None else lmax
-        self._beam_Cl = hp.gauss_beam(np.deg2rad(fwhm/60.0), self.lmax)
         self.double_precision = double_precision
         self.map_inv_var = map_inv_var.astype(np.float64 if double_precision else np.float32,
                                               copy=False)
@@ -186,7 +184,6 @@ class DetectorMap:
         self.map_sky = np.reshape(smoothed_sky, sky.shape).astype(self.map_sky.dtype, copy=False)
         self.map_inv_var = np.array(smoothed_inv_var).astype(self.map_inv_var.dtype, copy=False)
         self.fwhm = target_fwhm_arcmin
-        self._beam_Cl = hp.gauss_beam(self.fwhm_rad, self.lmax)
 
     def apply_inv_N_map(self, map: NDArray, inplace = True):
         """
@@ -219,14 +216,6 @@ class DetectorMap:
         a_out = alm_to_map_adjoint(a_out, self.nside, self.lmax, spin=self.spin, nthreads=nthreads)
 
         return a_out
-
-    def apply_B(self, a: NDArray):
-        """ Applies in-place the beam operator in harmonic space to a set of alm `a`,
-            which are also returned.
-        """
-        for ipol in range(self.npol):
-            almxfl(a[ipol], self._beam_Cl, inplace=True)
-        return a
 
     @property
     def blm(self):

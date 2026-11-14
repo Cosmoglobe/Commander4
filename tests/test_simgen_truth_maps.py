@@ -72,7 +72,7 @@ def _band(freq: float, fwhm: float, nside: int = NSIDE) -> dict:
 def test_diffuse_truth_map_is_the_band_map_amplitude(tmp_path):
     """beam(truth) * SED must reproduce band_map for a template-based foreground.
 
-    The beam is Commander4's: one Gaussian window on T, E and B (`DetectorMap.apply_B`). The band's
+    The beam is C4's: one Gaussian window on T, E and B (`comp2band`). The band's
     ``eval_nside`` equals ``general.nside``, so both sides make the same transforms and agree to
     float32 rounding.
     """
@@ -98,7 +98,7 @@ def test_diffuse_truth_map_is_the_band_map_amplitude(tmp_path):
 def test_band_map_below_the_template_nside_is_the_band_limited_model(tmp_path):
     """A band at half the template nside is B*Y*a of the template's alms, cut at its own band limit.
 
-    This is what Commander4 fits. Smoothing at the template nside and averaging pixels down with
+    This is what C4 fits. Smoothing at the template nside and averaging pixels down with
     `ud_grade` adds a pixel window and folds in power above the band limit, a large error here.
     """
     from simgen.instrument import build_bands
