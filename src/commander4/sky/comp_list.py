@@ -215,6 +215,10 @@ class CompList:
                 raise ValueError(
                     f"Component {comp.comp_name!r}: 'amp_prior_mean_map' must be a .fits sky map, "
                     f"but got {source_path!r}.")
+            if comp.Cl_prior_amplitude is None:
+                raise ValueError(
+                    f"Component {comp.comp_name!r} ({comp.eval_pol}): 'amp_prior_mean_map' needs a "
+                    "prior to be the mean of, but 'Cl_prior_amplitude' is null (no prior).")
             view_alms = _read_view_alms_from_fits(comp, source_path)
             if view_alms is not None:
                 comp.amp_prior_mean = view_alms.astype(comp.dtype, copy=False)

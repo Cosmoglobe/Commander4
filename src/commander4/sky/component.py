@@ -42,6 +42,11 @@ class Component:
     # parameters, not the evaluated spectrum. Empty for components that carry no such prior.
     Cl_prior_param_names: tuple[str, ...] = ()
 
+    # Amplitude of the C(l) prior. None means no prior on the amplitudes: the CG solver then leaves
+    # out every prior term (C3's `CL_TYPE = none`). `DiffuseComponent` reads it from the parameter
+    # file.
+    Cl_prior_amplitude = None
+
     @classmethod
     def _assert_legal_pol(cls, pol: str | None, *, role: str, required: bool = False) -> None:
         if pol is None:

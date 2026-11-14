@@ -512,10 +512,13 @@ components:
       #     D_l = amplitude * (l/l_pivot)^beta * max(exp(-l(l+1)sigma^2), 1e-10)
       #     C_l = 2*pi*D_l / (l(l+1))
       # with sigma from Cl_prior_FWHM. It subsumes C3's `power_law` (FWHM = 0) and
-      # `gauss` (beta = 0) types. Setting Cl_prior_amplitude to null switches the prior
-      # off entirely (S = identity), which is what most files here do.
+      # `gauss` (beta = 0) types. Setting Cl_prior_amplitude to null gives the component
+      # no prior at all (C3's `CL_TYPE = none`), which is what most files here do: the
+      # amplitudes then follow the data alone, and a multipole that no band constrains
+      # stays at zero.
       # Each entry is a scalar, or an [I, QU] pair.
-      Cl_prior_amplitude: [1.0e+6, 1.0e+4]   # D_l at l_pivot, in uK_RJ^2 at nu_ref.
+      Cl_prior_amplitude: [1.0e+6, 1.0e+4]   # D_l at l_pivot, in `units`^2 (C3's COMP_UNIT;
+                                             # uK_RJ at nu_ref when `units` is not set).
       Cl_prior_beta: [0.0, -0.5]             # Power-law slope of D_l.
       Cl_prior_l_pivot: 20                   # Multipole the amplitude is quoted at.
       Cl_prior_FWHM: 0.0                     # [arcmin] Gaussian rolloff of D_l; 0 = off.
@@ -532,7 +535,8 @@ components:
       # from iteration one. Overrides gibbs.init_chain for this component, but not the
       # saved state of an appended chain.
       # init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_cmb_amp_BP8.1_v1.fits"
-      # units: "uK_CMB"       # Unit of that init file. Only read alongside init_from.
+      # units: "uK_CMB"       # C3's COMP_UNIT: the unit of that init file, of the prior
+                              # mean map and of Cl_prior_amplitude. Default: uK_RJ.
 
   ThermalDust:
     enabled: true
@@ -543,7 +547,7 @@ components:
       shortname: "dust"
       lmax: 1024
       spatially_varying_MM: False
-      Cl_prior_amplitude: null   # No C(l) prior: S is the identity for this component.
+      Cl_prior_amplitude: null   # No C(l) prior for this component.
 
       # --- SED parameters (modified blackbody) ---
       beta: 1.56              # Emissivity index.

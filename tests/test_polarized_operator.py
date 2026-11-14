@@ -55,6 +55,9 @@ class _DummyCompSep:
 
 
 class _DummyDiffuseComp:
+    # Any value but None: the component has a prior. Its C_l is one (see `P_Cl_prior_inv`).
+    Cl_prior_amplitude = 1.0
+
     def __init__(self, lmax: int, npol: int):
         self.lmax = lmax
         self.npol = npol
@@ -163,6 +166,24 @@ def test_preconditioner_variants_build_the_block_their_name_claims():
                         err_msg=f"{name} does not build the block its name claims")
         # A preconditioner must stay positive definite to be usable by CG at all.
         assert np.all(np.linalg.eigvalsh(block_inv) > 0.0), f"{name} block is not positive definite"
+
+
+def test_joint_preconditioner_has_no_prior_term_for_a_component_without_a_prior():
+    """C3's `CL_TYPE = none`: such a component gets no identity on its diagonal. Above the band
+    lmax nothing constrains it, and the preconditioner must leave it untouched (zero) there."""
+    comp_lmax, band_lmax, nside = 10, 8, 8
+    compsep = _DummyCompSep(map_inv_var=np.full((1, 12*nside**2), 2.0), lmax=band_lmax)
+    compsep.my_band.fwhm = 60.0   # arcmin
+    comps = [_SEDDiffuseComp(lmax=comp_lmax, npol=1, sed=sed) for sed in (1.0, 3.0)]
+    comps[0].Cl_prior_amplitude = None
+    precond = JointPreconditioner(compsep, _DummyCompList(comps))
+
+    noise_weight = 2.0 * 12*nside**2/(4*np.pi)
+    beam_squared = hp.gauss_beam(np.deg2rad(60.0/60), lmax=band_lmax)[4]**2
+    mixing = np.array([1.0, 3.0])
+    expected = np.diag([0.0, 1.0]) + beam_squared*noise_weight*np.outer(mixing, mixing)
+    assert_allclose(precond.ell_block_data[4][3], np.linalg.inv(expected), rtol=1e-10)
+    assert_allclose(precond.ell_block_data[9][3], np.diag([0.0, 1.0]), atol=1e-12)
 
 
 @pytest.mark.parametrize(

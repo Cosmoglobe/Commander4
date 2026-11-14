@@ -73,8 +73,8 @@ class DiffuseComponent(Component):
                 "by the C3-equivalent 'Cl_prior_*' parameters, which are defined in D_l space "
                 "(see DiffuseComponent.P_Cl_prior). Update the parameter file.")
         # C(l) prior (C3 'power_law_gauss' equivalent, see P_Cl_prior). Each parameter may be a
-        # scalar or an [I, QU] pair, resolved per execution view like nu_ref; amplitude None
-        # disables the prior.
+        # scalar or an [I, QU] pair, resolved per execution view like nu_ref; amplitude None means
+        # no prior (C3's `CL_TYPE = none`).
         self.Cl_prior_amplitude = self._per_pol(comp_params.Cl_prior_amplitude)
         self.Cl_prior_beta = self._per_pol(
             comp_params.Cl_prior_beta if "Cl_prior_beta" in comp_params else 0.0)
@@ -87,8 +87,9 @@ class DiffuseComponent(Component):
         # always set it that way too).
         self.Cl_prior_l_apod = self._per_pol(
             comp_params.Cl_prior_l_apod if "Cl_prior_l_apod" in comp_params else self.lmax)
-        # Unit of an init_from sky map for this component (None -> assume it is already in
-        # `amplitude_unit`). Only used when reading FITS init maps, not compsep chains.
+        # C3's COMP_UNIT: the unit of what the parameter file gives for this component, which is
+        # an init_from sky map, the prior mean map and `Cl_prior_amplitude` (None -> they are
+        # already in `amplitude_unit`). Compsep chains are always in `amplitude_unit`.
         self.units = comp_params.units if "units" in comp_params else None
         # Cached prior mean mu, filled from `amp_prior_mean_map` by CompList.load_amp_prior_means;
         # None means a zero-mean prior. See the amp_prior_mean property.
@@ -203,7 +204,7 @@ class DiffuseComponent(Component):
         """Prior angular power spectrum C_l for this component's amplitude alms.
 
         This is the S in the CG system (1 + S^{1/2} A^T N^-1 A S^{1/2}). It is a Gaussian prior
-        constraining the alms to N(0, C_l). Equivalent to C3's 'power_law_gauss' (comm_cl_mod.f90),
+        constraining the alms to N(mu, C_l). Equivalent to C3's 'power_law_gauss' (comm_cl_mod.f90),
         which contains its 'power_law' (FWHM=0) and 'gauss' (beta=0) types as special cases.
         Defined in D_l space, where CMB-like spectra are roughly flat:
 
@@ -212,8 +213,13 @@ class DiffuseComponent(Component):
 
         where sigma is the Gaussian width of Cl_prior_FWHM (arcmin; 0 disables the rolloff). The
         1e-10 floor (relative to the power law) keeps C_l strictly positive so 1/C_l is safe for the
-        preconditioners. Units are (uK_RJ @ nu_ref)^2, i.e. the units of the alms themselves (C3
-        instead defines the prior in the component's native unit and converts internally).
+        preconditioners. As in C3, `Cl_prior_amplitude` is given in the component's `units` squared
+        (C3's COMP_UNIT; uK_RJ if unset). The returned C_l is in (uK_RJ at nu_ref)^2, the unit of
+        the alms.
+
+        With `Cl_prior_amplitude: null` the component has no prior (C3's `CL_TYPE = none`). This
+        returns ones, so that the S^{1/2} scaling does nothing, and the CG solver leaves out the
+        prior terms: the "1 +" above, the prior mean and the prior draw.
 
         f_apod is C3's high-l apodization (`get_Cl_apod` in comm_cl_mod.f90, parameter COMP_L_APOD):
         unity up to l_apod, then exp(-ln(1000) (l-l_apod)^2 / (lmax-l_apod+1)^2), an amplitude taper
@@ -227,7 +233,10 @@ class DiffuseComponent(Component):
         sigma = np.deg2rad(self.Cl_prior_FWHM / 60.0) / np.sqrt(8.0 * np.log(2.0))
         ells = np.arange(1, self.lmax + 1)
         Dl = np.empty(self.lmax + 1)
-        Dl[1:] = self.Cl_prior_amplitude * (ells / self.Cl_prior_l_pivot)**self.Cl_prior_beta \
+        # `init_map_to_amplitude(1.0)` is the factor from `units` to uK_RJ at nu_ref. It enters
+        # squared, because D_l is a power.
+        amplitude = self.Cl_prior_amplitude * self.init_map_to_amplitude(1.0)**2
+        Dl[1:] = amplitude * (ells / self.Cl_prior_l_pivot)**self.Cl_prior_beta \
             * np.maximum(np.exp(-ells * (ells + 1) * sigma**2), 1e-10)
         Dl[0] = Dl[1]
         Cl = np.empty(self.lmax + 1)

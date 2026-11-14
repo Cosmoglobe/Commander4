@@ -49,7 +49,7 @@ def _make_component_cfg(polarization: str = "IQU", lmax: int = 2) -> Bunch:
             polarization=polarization,
             shortname="cmb",
             spatially_varying_MM=False,
-            Cl_prior_amplitude=None,  # identity prior (C_l = 1)
+            Cl_prior_amplitude=None,  # no prior
         ),
     )
 
@@ -75,7 +75,7 @@ def _make_multi_comp_list() -> CompList:
             polarization="IQU",
             shortname="dust",
             spatially_varying_MM=False,
-            Cl_prior_amplitude=None,  # identity prior (C_l = 1)
+            Cl_prior_amplitude=None,  # no prior
         ),
     )
     object.__setattr__(dust, "_name", "ThermalDust")
@@ -87,7 +87,7 @@ def _make_multi_comp_list() -> CompList:
             polarization="I",
             shortname="ff",
             spatially_varying_MM=False,
-            Cl_prior_amplitude=None,  # identity prior (C_l = 1)
+            Cl_prior_amplitude=None,  # no prior
         ),
     )
     object.__setattr__(ff, "_name", "FreeFree")

@@ -17,10 +17,11 @@ Both are sensitive to the relative normalization of eta_1 and eta_2: an eta_2 dr
 correct variance (the pre-2026-08 `gaussian_random_alm` bug) inflates the first by tr(M^-1)/ndof,
 about 19% for the configuration used here.
 
-The components use an identity C_l prior (S = I) so that the solver's returned amplitudes
-a = S^{1/2}x coincide with x, letting the tests apply M directly to the returned CompList. The
-prior-mean tests below deliberately do the opposite and use a *non-flat* prior, because S^{-1/2}
-is the identity under a flat one and would hide both a wrong exponent and a corrupted mu cache.
+The statistical tests run twice: with a C_l prior, and without one (`Cl_prior_amplitude: null`,
+C3's `CL_TYPE = none`). Without a prior M = A^T N^-1 A, there is no eta_2, and the identity above
+still holds. The solver returns amplitudes a = S^{1/2}x, so the tests scale them back to x before
+they apply M. The prior-mean tests below use a prior that is far from flat, so that a wrong
+exponent of S or a corrupted mu cache shows.
 """
 
 import healpy as hp
@@ -63,11 +64,11 @@ def _make_solver(det_map: DetectorMap, group: CGSamplingGroupConfig,
     return CompSepSolver(det_map, comm, group, double_precision=True, nthreads=1)
 
 
-def _make_comp_list(params: Bunch) -> CompList:
-    """A single intensity CMB component with an identity C_l prior (Cl_prior_amplitude=None)."""
+def _make_comp_list(params: Bunch, Cl_prior_amplitude: float | None = None) -> CompList:
+    """A single intensity CMB component, by default without a C_l prior."""
     cmb = Bunch(enabled=True, component_class="CMB",
                 params=Bunch(lmax=LMAX, polarization="I", shortname="cmb",
-                             spatially_varying_MM=False, Cl_prior_amplitude=None))
+                             spatially_varying_MM=False, Cl_prior_amplitude=Cl_prior_amplitude))
     object.__setattr__(cmb, "_name", "CMB")
     comp_list = CompList.init_from_params(Bunch({"CMB": cmb}), params)
     for comp in comp_list:
@@ -82,20 +83,25 @@ def _make_det_map(seed: int = 0) -> DetectorMap:
                        nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
 
 
-@pytest.fixture(scope="module")
-def realizations():
-    """Draw NSAMP constrained realizations plus the corresponding MAP solution."""
+# A prior amplitude of 1 gives a prior weight per alm that is comparable to the data weight of
+# `_make_det_map`, so both terms of M matter.
+@pytest.fixture(scope="module", params=[None, 1.0], ids=["no prior", "with prior"])
+def realizations(request):
+    """Draw NSAMP constrained realizations plus the corresponding MAP solution, all as x."""
     det_map = _make_det_map()
     comm = MPI.COMM_SELF
 
-    map_params = _make_params()
-    map_solver = _make_solver(det_map, _make_group(False), comm)
-    x_map = map_solver.solve(_make_comp_list(map_params), np.random.default_rng(0))
+    def solve_for_x(solver: CompSepSolver, seed: int) -> CompList:
+        """One solve, scaled back from the amplitudes a = S^{1/2}x to the variable x."""
+        solution = solver.solve(_make_comp_list(_make_params(), request.param),
+                                np.random.default_rng(seed))
+        for comp in solution:
+            comp.apply_Cl_prior_inv_sqrt(comp.alms)
+        return solution
 
-    params = _make_params()
+    x_map = solve_for_x(_make_solver(det_map, _make_group(False), comm), 0)
     solver = _make_solver(det_map, _make_group(True), comm)
-    samples = [solver.solve(_make_comp_list(params), np.random.default_rng(1000 + i))
-               for i in range(NSAMP)]
+    samples = [solve_for_x(solver, 1000 + i) for i in range(NSAMP)]
     return solver, x_map, samples
 
 
@@ -171,6 +177,24 @@ def test_sample_amplitudes_toggle_controls_randomness():
     assert not np.allclose(sampled_a[0].alms, sampled_b[0].alms)
     # ... and it must not coincide with the MAP solution either.
     assert not np.allclose(sampled_a[0].alms, first[0].alms)
+
+
+def test_without_a_prior_the_solution_is_the_data_alone():
+    """With `Cl_prior_amplitude: null` (C3's `CL_TYPE = none`) nothing pulls the amplitudes towards
+    zero, however little the data weigh. Here the data weight per alm is about 1e-5, so a prior of
+    amplitude 1 returns almost nothing of the input."""
+    rng = np.random.default_rng(4)
+    input_alms = gaussian_random_alm(LMAX, LMAX, 0, 1, rng)
+    sky = alm_to_map(input_alms, NSIDE, LMAX, spin=0, nthreads=1)
+    det_map = DetectorMap(sky, np.full(sky.shape, 1.0e-6), nu=100.0, fwhm=0.0, nside=NSIDE,
+                          double_precision=True, lmax=LMAX)
+    solver = _make_solver(det_map, _make_group(sample_amplitudes=False))
+
+    no_prior = solver.solve(_make_comp_list(_make_params()), rng)[0]
+    np.testing.assert_allclose(no_prior.alms*no_prior.get_sed(100.0), input_alms, rtol=1e-5,
+                               atol=1e-8)
+    tight_prior = solver.solve(_make_comp_list(_make_params(), Cl_prior_amplitude=1.0), rng)[0]
+    assert np.abs(tight_prior.alms).max() < 1e-3*np.abs(no_prior.alms).max()
 
 
 def test_optimize_defaults_to_off_so_the_solver_samples():
@@ -299,13 +323,14 @@ class TestPriorMeanMap:
     def _comp_list(tmp_path, prior_map=None, flat_prior=True, **extra) -> CompList:
         """A single-component list, optionally with `amp_prior_mean_map` written to `tmp_path`.
 
-        `flat_prior=False` gives a genuinely non-flat C_l prior (S != I). That matters wherever the
-        S^{-1/2} of the prior-mean term must actually do something: with the default flat prior
-        S^{-1/2} is the identity, and a test would not notice it being applied to the wrong array.
+        `flat_prior=False` gives a C_l prior that is far from flat. That matters wherever the
+        S^{-1/2} of the prior-mean term must actually do something: with the default prior
+        S^{-1/2} is close to one, and a test would hardly notice it being applied to the wrong
+        array.
         """
         params = _make_params()
         fields = dict(lmax=LMAX, polarization="I", shortname="cmb", spatially_varying_MM=False,
-                      Cl_prior_amplitude=None)
+                      Cl_prior_amplitude=1.0)
         if not flat_prior:
             fields.update(Cl_prior_amplitude=1.0e3, Cl_prior_beta=-2.0, Cl_prior_l_pivot=2)
         fields.update(extra)

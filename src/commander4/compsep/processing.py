@@ -351,6 +351,9 @@ def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
     the taper is still near unity where it starts and only suppresses the far tail; no protection
     at all is an error. Both are logged rather than raised, since the run is still meaningful for
     the multipoles the data do constrain and a hard failure would be unhelpful mid-chain.
+
+    A component without a prior (`Cl_prior_amplitude: null`) is not reported: its unconstrained
+    multipoles stay at zero.
     """
     band_lmaxes = {}
     for band_str in params.compsep.bands:
@@ -367,7 +370,8 @@ def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
     highest_band = at_highest[0] if len(at_highest) == 1 else f"{len(at_highest)} bands"
 
     for comp in comp_list.joined():
-        if not isinstance(comp, DiffuseComponent) or comp.lmax <= highest_lmax:
+        if not isinstance(comp, DiffuseComponent) or comp.lmax <= highest_lmax \
+                or comp.Cl_prior_amplitude is None:
             continue
         unseen = f"l = {highest_lmax + 1}-{comp.lmax}"
         context = (f"Component {comp.comp_name!r} has lmax = {comp.lmax}, above the highest band "

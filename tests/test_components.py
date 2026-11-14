@@ -28,7 +28,7 @@ def _make_component_cfg(polarization: str = "IQU") -> Bunch:
             polarization=polarization,
             shortname="cmb",
             spatially_varying_MM=False,
-            Cl_prior_amplitude=None,  # identity prior (C_l = 1)
+            Cl_prior_amplitude=None,  # no prior
         ),
     )
 
@@ -464,12 +464,25 @@ def test_P_Cl_prior_l_apod_tapers_to_1e_minus_6_in_power_at_lmax() -> None:
 
 
 def test_P_Cl_prior_none_amplitude_gives_identity() -> None:
-    # Cl_prior_amplitude=None: C_l = 1, i.e. no S^{1/2} scaling in the CG reparameterization
-    # (the C3 CL_TYPE 'none' analogue).
+    # Cl_prior_amplitude=None: no prior (C3's CL_TYPE 'none'). The S^{1/2} scaling of the CG
+    # reparameterization then does nothing; the CG solver leaves out the prior terms itself.
     comp = ThermalDust(_dust_params(lmax=8), _make_compsep(), eval_pol="I", comp_name="dust")
 
     np.testing.assert_array_equal(comp.P_Cl_prior, np.ones(9))
     np.testing.assert_array_equal(comp.P_Cl_prior_inv, np.ones(9))
+
+
+def test_P_Cl_prior_amplitude_is_given_in_the_component_units() -> None:
+    """As C3's COMP_UNIT: an amplitude in uK_CMB^2 is converted to uK_RJ^2 at the view's nu_ref."""
+    in_rj = ThermalDust(_dust_params(lmax=8, Cl_prior_amplitude=100.0), _make_compsep(),
+                        eval_pol="QU", comp_name="dust")
+    in_cmb = ThermalDust(_dust_params(lmax=8, Cl_prior_amplitude=100.0, units="uK_CMB"),
+                         _make_compsep(), eval_pol="QU", comp_name="dust")
+
+    # dT_RJ/dT_CMB = x^2 e^x/(e^x - 1)^2, with x = h nu/(k T_CMB), at the QU nu_ref of 353 GHz.
+    x = 6.62607015e-34*353.0e9/(1.380649e-23*2.7255)
+    cmb_to_rj = x**2*np.exp(x)/np.expm1(x)**2
+    np.testing.assert_allclose(in_cmb.P_Cl_prior, in_rj.P_Cl_prior*cmb_to_rj**2, rtol=1e-4)
 
 
 def test_old_smoothing_prior_params_are_rejected() -> None:

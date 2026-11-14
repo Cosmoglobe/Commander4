@@ -97,6 +97,8 @@ class CompSepSolver:
         """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of
             the Ax=b system for global component separation. The full A matrix is:
             (1 + S^{1/2} Y^T M^T Y^-1^T B^T N^-1 B Y^-1 M Y S^{1/2}).
+            For a component without a prior (`Cl_prior_amplitude: null`, C3's `CL_TYPE = none`)
+            the "1 +" is left out and S = 1.
             This function should be called by all ranks holding a frequency map, even if they do
             not hold a compoenent, as they are still needed to compute the LHS operation.
             Args:
@@ -155,8 +157,9 @@ class CompSepSolver:
                     # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
                     comp = comp_list.components[icomp]
                     comp.apply_Cl_prior_sqrt(comp.alms)
-                    # Adds input vector to output, since (1 + S^{1/2}...)a = a + (S^{1/2}...)a
-                    comp += comp_list_in.components[icomp]
+                    # The prior term adds the input vector: (1 + S^{1/2}...)a = a + (S^{1/2}...)a.
+                    if comp.Cl_prior_amplitude is not None:
+                        comp += comp_list_in.components[icomp]
             else: # Worker ranks just wait for all their sends to complete.
                 if not use_blocking:
                     for icomp in range(len(comp_list)):
@@ -182,7 +185,8 @@ class CompSepSolver:
             and the operator between there and the component alms is linear, so one adjoint SHT, one
             MPI reduce and one prior application serve both terms. The prior mean mu and the prior
             fluctuation eta_2 need none of that (they live directly in the component alm space)
-            so they are added afterwards, on the rank that holds the accumulated result.
+            so they are added afterwards, on the rank that holds the accumulated result. A component
+            without a prior (`Cl_prior_amplitude: null`) gets neither of the two.
         """
         #FIXME: how will eta_2 work for point sources?
         myrank = self.CompSep_comm.Get_rank()
@@ -216,6 +220,8 @@ class CompSepSolver:
 
         if myrank == 0:
             for comp in comp_list:
+                if comp.Cl_prior_amplitude is None:
+                    continue  # No prior: no prior mean and no prior draw.
                 # + S^{-1/2} mu, the prior mean. Added whether or not we are sampling: unlike the
                 # eta terms this belongs to the *mean* solution, so a non-zero prior mean shifts the
                 # Wiener filter itself and must be present in the MAP solve too. mu is an alm

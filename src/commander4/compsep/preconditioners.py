@@ -99,10 +99,14 @@ class DiagonalJointPreconditioner:
                 A_diag += M_fc**2 * beam_op_complex * mean_weights
 
             hp.almxfl(A_diag, comp_list[icomp].P_Cl_prior, inplace=True)
-            # +1 because of the re-writing of the LHS equation with a S^{1/2} scaling.
-            A_diag += 1
-            # Regularize the final operator to avoid division by zero
-            self.A_diag_inv_list.append(1.0/A_diag)
+            # +1 from the prior term, after the re-writing of the LHS equation with a S^{1/2}
+            # scaling. A component without a prior has no such term.
+            if comp_list[icomp].Cl_prior_amplitude is not None:
+                A_diag += 1
+            # Without a prior, a multipole that no band constrains has a zero diagonal.
+            # The preconditioner leaves it untouched (0).
+            self.A_diag_inv_list.append(np.divide(1.0, A_diag, out=np.zeros_like(A_diag),
+                                                  where=A_diag != 0))
 
     def __call__(self, a_complist: CompList) -> CompList:
         if not self.is_master:
@@ -257,6 +261,8 @@ class JointPreconditioner:
             comp.P_Cl_prior_inv.astype(np.float64, copy=False)
             for comp in diffuse_comps
         ]
+        # A component without a prior has no prior term (the D_ell^(-2) below); its D_ell is 1.
+        has_prior = np.array([comp.Cl_prior_amplitude is not None for comp in diffuse_comps])
 
         self.ell_block_data = [None] * (max_lmax + 1)
         for ell in range(max_lmax + 1):
@@ -285,7 +291,8 @@ class JointPreconditioner:
             #
             # rather than inverting I + D_ell K_ell D_ell directly. This keeps the block numerically
             # stable when the C_l prior is large and D_ell contains huge values.
-            system_block = np.kron(np.eye(self.npol, dtype=np.float64), np.diag(active_prior_inv))
+            system_block = np.kron(np.eye(self.npol, dtype=np.float64),
+                                   np.diag(active_prior_inv * has_prior[active_local]))
             for iband in range(nband):
                 # A band contributes only while it has support at this ell.
                 if ell > all_band_lmax[iband]:
@@ -311,6 +318,12 @@ class JointPreconditioner:
             eig_floor = np.finfo(np.float64).eps * max(1.0, eigvals[-1]) * system_block.shape[0]
             eigvals = np.clip(eigvals, eig_floor, None)
             block_inv = (eigvecs / eigvals) @ eigvecs.T
+            # A component without a prior that no band constrains at this ell has an all-zero row.
+            # The preconditioner leaves it untouched (0) instead of scaling it by the inverse of
+            # the eigenvalue floor.
+            unconstrained = np.diag(system_block) == 0
+            block_inv[unconstrained, :] = 0.0
+            block_inv[:, unconstrained] = 0.0
 
             self.ell_block_data[ell] = (
                 active_global,
