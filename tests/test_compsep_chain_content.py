@@ -72,7 +72,8 @@ def test_the_cl_prior_parameters_are_recorded(tmp_path) -> None:
         prior = f["comps/cmb/Cl_prior"]
         assert f["comps/cmb/Cl_prior/Cl_prior_amplitude"][()] == pytest.approx(1e3)
         assert f["comps/cmb/Cl_prior/Cl_prior_beta"][()] == pytest.approx(-0.5)
-        assert {"Cl_prior_FWHM", "Cl_prior_l_pivot", "Cl_prior_l_apod"} <= set(prior.keys())
+        assert {"Cl_prior_FWHM", "Cl_prior_l_pivot", "Cl_prior_l_apod",
+                "Cl_prior_l_tighten"} <= set(prior.keys())
 
 
 def test_a_disabled_cl_prior_writes_nothing(tmp_path) -> None:

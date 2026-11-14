@@ -463,6 +463,27 @@ def test_P_Cl_prior_l_apod_tapers_to_1e_minus_6_in_power_at_lmax() -> None:
     assert np.all(comp.P_Cl_prior > 0)                        # 1/C_l stays finite
 
 
+def test_P_Cl_prior_l_tighten_shrinks_the_prior_below_it() -> None:
+    # get_Cl_apod (comm_cl_mod.f90) with COMP_AMP_PRIOR_LMAX: below that multipole the factor on
+    # S^{1/2} is (0.5 (cos(pi (max(l, 1) - l_tighten) / l_tighten) + 1))^2. The prior is C_l * f^2.
+    params = _dust_params(lmax=100, Cl_prior_amplitude=1.0, Cl_prior_l_tighten=60)
+    comp = ThermalDust(params, _make_compsep(), eval_pol="I", comp_name="dust")
+    untightened = ThermalDust(_dust_params(lmax=100, Cl_prior_amplitude=1.0), _make_compsep(),
+                              eval_pol="I", comp_name="dust")
+    assert untightened.Cl_prior_l_tighten == 0                # The default: no tightening.
+
+    ells = np.arange(101)
+    c3_factor = (0.5*(np.cos(np.pi*(np.maximum(ells, 1) - 60)/60) + 1))**2
+    c3_factor[60:] = 1.0
+    np.testing.assert_allclose(comp.P_Cl_prior, untightened.P_Cl_prior * c3_factor**2)
+    f = comp.Cl_prior_apodization
+    np.testing.assert_array_equal(f[60:], np.ones(41))        # Untouched from l_tighten up.
+    assert np.all(np.diff(f[1:61]) > 0.0)                     # Tighter towards the large scales.
+    assert np.isclose(f[30]**2, 1.0/16.0)                     # The variance at half of l_tighten.
+    assert f[0] == f[1]
+    assert np.all(comp.P_Cl_prior > 0)                        # 1/C_l stays finite
+
+
 def test_P_Cl_prior_none_amplitude_gives_identity() -> None:
     # Cl_prior_amplitude=None: no prior (C3's CL_TYPE 'none'). The S^{1/2} scaling of the CG
     # reparameterization then does nothing; the CG solver leaves out the prior terms itself.

@@ -408,6 +408,37 @@ class TestPriorMeanMap:
 
         np.testing.assert_allclose(solution[0].alms, mu, rtol=1e-4, atol=1e-6)
 
+    def test_a_tightened_prior_holds_the_solution_to_the_prior_map(self, tmp_path):
+        """End-to-end: `Cl_prior_l_tighten` far above lmax pins every multipole to the prior map.
+
+        The prior is loose and the data are precise, so without the tightening the solution
+        follows the data. With `Cl_prior_l_tighten` = 4000 the prior variance is scaled by
+        sin^8(pi l / 8000), below 1e-22 for l <= 4, and the solution is the prior map.
+        """
+        nside = 16
+        rng = np.random.default_rng(5)
+        prior_map = hp.alm2map(hp.map2alm(rng.normal(0.0, 1.0, hp.nside2npix(nside)),
+                                          lmax=LMAX), nside)
+        npix = 12*NSIDE**2
+        data_alms = gaussian_random_alm(LMAX, LMAX, 0, 1, np.random.default_rng(6))
+        data_map = alm_to_map(data_alms, NSIDE, LMAX, spin=0, nthreads=1)
+        det_map = DetectorMap(data_map, np.full((1, npix), 1e6),
+                              nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
+
+        solutions = {}
+        for l_tighten in (0, 4000):
+            comp_list = self._comp_list(tmp_path, prior_map=prior_map, Cl_prior_amplitude=1.0e3,
+                                        Cl_prior_l_tighten=l_tighten)
+            comp_list.load_amp_prior_means()
+            mu = comp_list[0].amp_prior_mean
+            solver = _make_solver(det_map, _make_group(False))
+            solutions[l_tighten] = solver.solve(comp_list, np.random.default_rng(0))[0].alms
+        sed = comp_list[0].get_sed(100.0)
+
+        np.testing.assert_allclose(solutions[0]*sed, data_alms, rtol=1e-3, atol=1e-3)
+        np.testing.assert_allclose(solutions[4000], mu, rtol=1e-6, atol=1e-8)
+        assert not np.allclose(data_alms/sed, mu, atol=0.1)  # The two cases are far apart.
+
     def test_rejects_a_non_fits_prior_mean(self, tmp_path):
         comp_list = self._comp_list(tmp_path, amp_prior_mean_map="/some/chain.h5")
         with pytest.raises(ValueError, match="must be a .fits sky map"):

@@ -527,6 +527,18 @@ components:
                                              # prior stops deciding modes on its own.
                                              # Default = this component's lmax, where the
                                              # taper does nothing.
+      # Cl_prior_l_tighten: 1024             # C3's COMP_AMP_PRIOR_LMAX. Below it the prior
+                                             # C_l is multiplied by sin^8(pi*l/(2*l_tighten)),
+                                             # which is 1 at l_tighten and almost 0 at l = 1.
+                                             # The large scales are then held to the prior
+                                             # mean (`amp_prior_mean_map`, or zero without
+                                             # one), and the data only decide the small
+                                             # scales. Default = 0, no tightening.
+                                             # Use it with `err_tol: 0.0` in the CG group:
+                                             # the held multipoles dominate the CG residual
+                                             # and converge in one step, so any other
+                                             # `err_tol` stops the CG before the small
+                                             # scales are solved.
 
       # Initialise the amplitudes from a map instead of from zero. A FITS map is read at
       # its own nside and converted from `units` at `nu_ref`; a chains_compsep/ file is

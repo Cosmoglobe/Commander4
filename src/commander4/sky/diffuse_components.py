@@ -87,6 +87,10 @@ class DiffuseComponent(Component):
         # always set it that way too).
         self.Cl_prior_l_apod = self._per_pol(
             comp_params.Cl_prior_l_apod if "Cl_prior_l_apod" in comp_params else self.lmax)
+        # C3's COMP_AMP_PRIOR_LMAX: the multipole below which the prior is tightened, so that the
+        # large scales are held to the prior mean. 0 means no tightening.
+        self.Cl_prior_l_tighten = self._per_pol(
+            comp_params.Cl_prior_l_tighten if "Cl_prior_l_tighten" in comp_params else 0)
         # C3's COMP_UNIT: the unit of what the parameter file gives for this component, which is
         # an init_from sky map, the prior mean map and `Cl_prior_amplitude` (None -> they are
         # already in `amplitude_unit`). Compsep chains are always in `amplitude_unit`.
@@ -180,7 +184,7 @@ class DiffuseComponent(Component):
         return self._data.dtype
 
     Cl_prior_param_names = ("Cl_prior_amplitude", "Cl_prior_beta", "Cl_prior_FWHM",
-                            "Cl_prior_l_pivot", "Cl_prior_l_apod")
+                            "Cl_prior_l_pivot", "Cl_prior_l_apod", "Cl_prior_l_tighten")
 
     @property
     def alm_len_complex(self):
@@ -227,6 +231,10 @@ class DiffuseComponent(Component):
         highest band lmax keeps a component whose lmax exceeds what the data can see from filling
         those multipoles with a full-strength prior draw. It defaults to the component lmax, where
         the taper does nothing.
+
+        f_apod also holds the low-l tightening of `Cl_prior_l_tighten` (C3's COMP_AMP_PRIOR_LMAX):
+        below that multipole C_l shrinks towards zero, which holds the large scales to the prior
+        mean (`amp_prior_mean_map`, or zero without one). See `Cl_prior_apodization`.
         """
         if self.Cl_prior_amplitude is None:
             return np.ones(self.lmax + 1)
@@ -251,11 +259,18 @@ class DiffuseComponent(Component):
         Unity up to `Cl_prior_l_apod`, then a Gaussian taper falling to 1e-3 at the component lmax.
         Only C3's positive-`l_apod` branch (the high-l taper) is implemented; C3's negative branch
         suppresses the *low* multipoles instead, which is a separate feature.
+
+        Below `Cl_prior_l_tighten` the factor is also multiplied by sin^4(pi l / (2 l_tighten)).
+        This is 1 at l_tighten and close to 0 at l = 1, so the prior gets tighter towards the
+        large scales: the variance C_l is scaled by sin^8, which is 1/16 at half of l_tighten.
         """
         ells = np.arange(self.lmax + 1)
         l_apod = min(self.Cl_prior_l_apod, self.lmax)
         f = np.exp(-np.log(1e3) * (ells - l_apod)**2 / (self.lmax - l_apod + 1)**2)
         f[:l_apod + 1] = 1.0
+        # l = 0 gets the factor of l = 1, as in C3, so that C_l stays above zero.
+        tightened = ells < self.Cl_prior_l_tighten
+        f[tightened] *= np.sin(0.5*np.pi*np.maximum(ells[tightened], 1)/self.Cl_prior_l_tighten)**4
         return f
 
     @property
