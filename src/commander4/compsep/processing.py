@@ -606,7 +606,8 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
     """Perform a single component-separation iteration.
 
     Runs the configured CG or per-pixel amplitude groups first, followed by MCMC groups. An MCMC
-    group may re-run named amplitude groups between proposal and accept/reject.
+    group may re-run named amplitude groups between proposal and accept/reject. When there are MCMC
+    groups, the amplitude groups run once more after them, as in C3.
 
     Args:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
@@ -632,7 +633,8 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
     # The fit after the most recent sampling step. Each step's evaluation both logs its own
     # diagnostic and, being the state after that step, doubles as the final fit once the last one
     # has run, so the chain costs no extra sky realization. This function (`process_compsep`) is
-    # only called if one of the two loops below execute, so `fit` is guaranteed to be defined later.
+    # only called if there is at least one amplitude or MCMC group, so `fit` is guaranteed to be
+    # defined later.
     fit: ChisqResult
 
     def evaluate(label: str | None = None) -> ChisqResult:
@@ -640,14 +642,23 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
                              compsep_state.target_pol, compsep_state.nside_chisq, label=label,
                              keep_residual=compsep_state.include_residual_maps)
 
-    for group in amplitude_groups.values():
-        with benchmark(f"amp-{group.name}"):
-            cg_stats = _run_amplitude_group(mpi_info, compsep_state, detector_data, comp_list,
-                                            group, rng)
-        if cg_stats:
-            sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
-        method_label = "CG" if compsep_state.amplitude_method == "cg" else "per-pixel"
-        fit = evaluate(f"{method_label} group {group.name!r}")
+    def run_amplitude_groups() -> ChisqResult | None:
+        """Solve every amplitude group in order. Returns the fit after the last group."""
+        group_fit = None
+        for group in amplitude_groups.values():
+            with benchmark(f"amp-{group.name}"):
+                cg_stats = _run_amplitude_group(mpi_info, compsep_state, detector_data, comp_list,
+                                                group, rng)
+            if cg_stats:
+                sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
+            method_label = "CG" if compsep_state.amplitude_method == "cg" else "per-pixel"
+            group_fit = evaluate(f"{method_label} group {group.name!r}")
+        return group_fit
+
+    # The Gibbs order of C3 (commander.f90): the amplitudes, the spectral parameters, and then the
+    # amplitudes again, so that the chain holds amplitudes solved at the final spectral parameters.
+    if amplitude_groups:
+        fit = run_amplitude_groups()
 
     for group in mcmc_groups.values():
         def resolve_amplitudes(group_names=group.update_amplitude_groups):
@@ -668,6 +679,9 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
         if mcmc_stats:
             sampler_stats.setdefault("mcmc", {})[group.name] = mcmc_stats
         fit = evaluate(f"MCMC group {group.name!r}")
+
+    if mcmc_groups and amplitude_groups:
+        fit = run_amplitude_groups()
 
     with benchmark("chain-gather"):
         fit_tree, band_frequencies = collect_fit_diagnostics(compsep, fit,

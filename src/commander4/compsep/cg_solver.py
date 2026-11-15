@@ -19,7 +19,7 @@ from commander4.math_utils.alm import gaussian_random_alm
 from commander4.math_utils.sht import alm_to_map_adjoint
 from commander4.sky.comp_list import complist_dot, complist_norm
 from commander4.compsep.dense_matrix_debug import DenseMatrix
-from commander4.compsep.cg_driver import DistributedCG
+from commander4.math_utils.cg_driver import DistributedCG
 from commander4.compsep import preconditioners
 from commander4.data_models.band import Band
 from commander4.diagnostics.performance import benchmark, log_memory
@@ -243,7 +243,7 @@ class CompSepSolver:
         return comp_list
 
 
-    def solve_CG(self, LHS: Callable, RHS: CompList, x0 = None, M = None,
+    def solve_CG(self, LHS: Callable, RHS: CompList, M: Callable, x0 = None,
                  x_true = None) -> CompList:
         """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG.
             Assumes that both x and b are in alm space.
@@ -252,7 +252,7 @@ class CompSepSolver:
                 LHS (callable): A function/callable taking x as argument and returning Ax.
                 RHS (list): A list of alm-vectors representing the right-hand-side of the equation.
                 x0 (list): Initial guess for x as list of alm-vectors for each component (optional).
-                M (callable): Preconditioner: A callable which approximates A^-1 (optional).
+                M (callable): Preconditioner: A callable which approximates A^-1.
                 x_true (np.array): True solution for x, in order to print the true error (optional).
             Returns:
                 m_bestfit (list): The resulting best-fit solution, for the component held by this
@@ -267,12 +267,7 @@ class CompSepSolver:
         master = self.CompSep_comm.Get_rank() == 0
         mycomp = self.CompSep_comm.Get_rank()
 
-        mydot = complist_dot
-        
-        if M is None:
-            CG_solver = DistributedCG(LHS, RHS, master, dot=mydot, x0=x0, destroy_b=True)
-        else:
-            CG_solver = DistributedCG(LHS, RHS, master, dot=mydot, x0=x0, M=M, destroy_b=True)
+        CG_solver = DistributedCG(LHS, RHS, master, x0=x0, M=M, destroy_b=True)
         self.CG_residuals = np.zeros(max_iter)
         if x_true is not None:
             if master:
@@ -318,7 +313,8 @@ class CompSepSolver:
                 if master and self.config.err_tol > 0.0:
                     logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
                 stop_CG = True
-            if CG_solver.err < self.config.err_tol:
+            # Stop if either err_tol or 1e-30 is reached.
+            if CG_solver.err < max(self.config.err_tol, 1e-30):
                 stop_CG = True
             stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
         self.CG_residuals = self.CG_residuals[:iter]
@@ -347,7 +343,17 @@ class CompSepSolver:
         `rng` is this rank's random generator. Each rank must have its own stream: eta_1 is *this*
         band's white-noise realization, so shared draws would correlate the fluctuation across
         bands.
+
+        The CG starts from the amplitudes that `comp_list` holds on entry.
         """
+        # Set starting guess to x0 = S^{-1/2} a. It is copied, because `calc_RHS` overwrites
+        # `comp_list`. Only the master's values are used; the other ranks need the list as a buffer
+        # of the right shape.
+        x0 = deepcopy(comp_list)
+        if self.my_rank == 0:
+            for comp in x0:
+                comp.apply_Cl_prior_inv_sqrt(comp.alms)
+
         # `calc_RHS` overwrites the CompList it is handed, so comp_list doubles as the RHS buffer
         # (the preconditioner below reads only its metadata, never its alms).
         with benchmark("cg-rhs"):
@@ -383,7 +389,7 @@ class CompSepSolver:
             dense_matrix.print_sing_vals()
             dense_matrix.print_matrix_diag()
 
-        sol_list = self.solve_CG(self.apply_LHS_matrix, RHS, M=precond,
+        sol_list = self.solve_CG(self.apply_LHS_matrix, RHS, x0=x0, M=precond,
                              x_true=x_true if self.config.dense_matrix_debug_mode else None)
         # The CG solves for the intrinsic (unsmoothed) sky. The solution is built from copies of
         # the input components, so reset the beam they carried, which is non-zero if the chain

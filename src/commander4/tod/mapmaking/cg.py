@@ -24,7 +24,7 @@ from pixell.bunch import Bunch
 
 from commander4.backend import mapmaker as cpp_mapmaker
 from commander4.tod.view import TODView
-from commander4.compsep.cg_driver import DistributedCGArray
+from commander4.math_utils.cg_driver import DistributedCG
 from commander4.tod.mapmaking.preconditioners import InvNPreconditionerI,\
     BlockInvNPreconditionerIQU
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
@@ -337,12 +337,7 @@ class CGMapmaker:
         else:
             M = None
 
-        CG_solver = DistributedCGArray(self.apply_LHS,
-                                       RHS_map,
-                                       ismaster,
-                                       M = M,
-                                       dot = dot,
-                                       destroy_b=True)
+        CG_solver = DistributedCG(self.apply_LHS, RHS_map, ismaster, M=M, destroy_b=True)
 
         # Every collective below has to be entered by all ranks, so the two conditions guarding one
         # are made rank-independent up front: the iteration index already is, and whether a true

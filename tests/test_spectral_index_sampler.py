@@ -260,6 +260,32 @@ class TestSampleSpectralIndicesMH:
         assert comp_qu.beta == pytest.approx(1.6)
         np.testing.assert_allclose(comp_i.alms, np.array([[9.0]]))
 
+    def test_the_reference_after_acceptance_is_the_accepted_solve(self):
+        """The step after an accepted one compares against the accepted amplitudes themselves.
+
+        The data are 8 at nu = 2. Step 1 goes from beta = 1 to 1.5 with an exact amplitude fit and
+        is accepted. Step 2 proposes beta = 1.6 with a fit that is off by 1, which lowers the
+        log-likelihood by 6. The uniform draw of 0.5 rejects anything that lowers it by more than
+        0.69, so step 2 is rejected and the exact fit of step 1 comes back.
+        """
+        comp_i, comp_qu = make_iqu_components(beta=1.0, amplitude=2.0)
+        target_map = np.full((1, 12), 8.0, dtype=np.float64)
+        detector_data = FakeDetectorMap(target_map, np.ones_like(target_map), nu=2.0,
+                                        fwhm=0.0, nside=1, double_precision=True)
+        group = _make_group(detector_data, FakeCompList([comp_i, comp_qu]))
+        offsets = iter([0.0, 1.0])  # Offset of the model from the data in the two solves.
+
+        def resolve():
+            comp_i.alms = np.array([[(8.0 + next(offsets)) / detector_data.nu**comp_i.beta]])
+
+        proposals = iter([1.5, 1.6])
+        rng = types.SimpleNamespace(normal=lambda loc, scale: next(proposals), random=lambda: 0.5)
+        stats = group.run(numstep=2, resolve_amplitudes=resolve, rng=rng)
+
+        assert stats["n_accept"] == 1
+        assert comp_i.beta == pytest.approx(1.5)
+        np.testing.assert_allclose(comp_i.alms, np.array([[8.0 / 2.0**1.5]]))
+
     def test_single_rank_integration_uses_real_likelihood(self):
         comp_i, comp_qu = make_iqu_components(beta=1.0, amplitude=2.0)
 

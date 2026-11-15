@@ -197,6 +197,55 @@ def test_without_a_prior_the_solution_is_the_data_alone():
     assert np.abs(tight_prior.alms).max() < 1e-3*np.abs(no_prior.alms).max()
 
 
+def test_the_cg_starts_from_the_amplitudes_it_is_given():
+    """The CG starts from the amplitudes in the component list (C3's default), not from zero.
+
+    One iteration that starts at the converged solution stays there, and its error, which is
+    measured against the right-hand side, is tiny. One iteration from zero gets nowhere near.
+    """
+    det_map = _make_det_map()
+    converged = _make_solver(det_map, _make_group(sample_amplitudes=False)).solve(
+        _make_comp_list(_make_params(), Cl_prior_amplitude=1.0), np.random.default_rng(0))[0].alms
+    one_iteration = CGSamplingGroupConfig(
+        name="one", optimize=True, max_iter=1, max_iter_pol=1, err_tol=0.0,
+        preconditioner="NoPreconditioner", dense_matrix_debug_mode=False)
+
+    from_zero_solver = _make_solver(det_map, one_iteration)
+    from_zero = from_zero_solver.solve(_make_comp_list(_make_params(), Cl_prior_amplitude=1.0),
+                                       np.random.default_rng(0))[0].alms
+    assert np.abs(from_zero - converged).max() > 1e-2*np.abs(converged).max()
+    assert from_zero_solver.CG_residuals[0] > 1e-6
+
+    warm_list = _make_comp_list(_make_params(), Cl_prior_amplitude=1.0)
+    warm_list[0].alms[:] = converged
+    warm_solver = _make_solver(det_map, one_iteration)
+    warm = warm_solver.solve(warm_list, np.random.default_rng(0))[0].alms
+    np.testing.assert_allclose(warm, converged, rtol=1e-5, atol=1e-6*np.abs(converged).max())
+    assert warm_solver.CG_residuals[0] < 1e-10
+
+
+def test_a_fixed_number_of_iterations_stops_when_the_residual_vanishes():
+    """`err_tol: 0.0` asks for `max_iter` iterations, but the CG stops once the error is below
+    1e-30. In single precision the squared residual would otherwise underflow to zero, and the
+    next step would divide by it."""
+    npix = 12*NSIDE**2
+    rng = np.random.default_rng(0)
+    det_map = DetectorMap(rng.normal(0.0, 1.0, (1, npix)), np.full((1, npix), 1.0/3.0**2),
+                          nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=False, lmax=LMAX)
+    params = Bunch(resources=Bunch(compsep=Bunch(num_threads=1)),
+                   compsep=Bunch(double_precision=False))
+    group = CGSamplingGroupConfig(
+        name="fixed", optimize=True, max_iter=300, max_iter_pol=300, err_tol=0.0,
+        preconditioner="NoPreconditioner", dense_matrix_debug_mode=False)
+    solver = CompSepSolver(det_map, MPI.COMM_SELF, group, double_precision=False, nthreads=1)
+
+    solution = solver.solve(_make_comp_list(params, Cl_prior_amplitude=1.0), rng)
+
+    assert np.isfinite(solution[0].alms).all()
+    assert len(solver.CG_residuals) < 300
+    assert solver.CG_residuals[-1] < 1e-30
+
+
 def test_optimize_defaults_to_off_so_the_solver_samples():
     """A group with no `optimize` entry draws a constrained realization (C3 behaviour)."""
     solver = _make_solver(_make_det_map(), CGSamplingGroupConfig(name="default"))

@@ -170,7 +170,9 @@ class MCMCSamplingGroup(ABC):
         that re-solves the amplitude (CG) sampling groups this MCMC group is coupled to (C3's
         ``UPDATE_CG_GROUPS``); it runs after each in-bounds proposal so the likelihood sees
         amplitudes conditioned on the proposed parameters. On rejection, both the parameters and all
-        component amplitudes (which ``resolve_amplitudes`` may have changed) are reverted.
+        component amplitudes (which ``resolve_amplitudes`` may have changed) are reverted. On
+        acceptance the re-solved amplitudes are kept. (C3's ``sample_specind_mh_pol`` solves them
+        once more there, to get more CG iterations; here that is left out on purpose.)
         ``rng`` is this rank's random generator; only the root draws from it here.
         NB: It's currently assumed that the `resolve_amplitudes` callback ONLY touches the component
         amplitudes, which are stored in `comp._data`.
