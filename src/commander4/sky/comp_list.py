@@ -407,9 +407,12 @@ class CompList:
             comp.band2comp(band_in, nthreads=nthreads)
 
     def comp2band(self, band_out:Band, nthreads:int=1) -> NDArray[np.complexfloating]:
-        """ Sums all components into the `band_out` object's alms, overwriting them, beam included.
+        """ Sums all components into `band_out`, overwriting it, beam included. Diffuse components
+            go into its alms, point sources into its pixel map. Returns the alms.
         """
         band_out.alms[:] = 0
+        if band_out.map is not None:
+            band_out.map[:] = 0
         for comp in self.comp_list:
             comp.comp2band(band_out, nthreads=nthreads)
         return band_out.alms

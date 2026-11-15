@@ -224,6 +224,37 @@ def test_the_cg_starts_from_the_amplitudes_it_is_given():
     assert warm_solver.CG_residuals[0] < 1e-10
 
 
+def test_the_lhs_couples_a_diffuse_component_and_point_sources_symmetrically(tmp_path):
+    """<x, A y> = <A x, y> for x a CMB alm vector and y point-source amplitudes. The sources enter
+    the band in pixel space, so this checks that they are added to Y(alms) before N^-1 and read
+    back from the same map after it."""
+    from commander4.sky import RadioSources
+    with open(tmp_path / "radio.dat", "w") as handle:
+        handle.write("# Glon(deg) Glat(deg) I(mJy) alpha_I\n0.0 0.0 1.0 -0.7\n40.0 20.0 1.0 -0.5\n")
+    params = _make_params()
+    source_params = Bunch(shortname="radsources", nu_0=30.0,
+                          template_path=str(tmp_path/"radio.dat"))
+    rng = np.random.default_rng(0)
+    vectors = []
+    for random_comp in (0, 1):
+        comps = _make_comp_list(params, Cl_prior_amplitude=1.0).components
+        comps.append(RadioSources(source_params, params.compsep, comp_name="radsources"))
+        comps[1].amps[:] = 0.0
+        if random_comp == 0:
+            comps[0].amps[:] = gaussian_random_alm(LMAX, LMAX, 0, 1, rng)
+        else:
+            comps[1].amps[:] = rng.normal(0.0, 1e6, comps[1].amps.shape)
+        vectors.append(CompList(comps))
+    x, y = vectors
+    solver = _make_solver(_make_det_map(), _make_group())
+
+    x_Ay = complist_dot(x, solver.apply_LHS_matrix(y))
+    Ax_y = complist_dot(solver.apply_LHS_matrix(x), y)
+
+    assert x_Ay != 0.0
+    assert x_Ay == pytest.approx(Ax_y, rel=1e-5)
+
+
 def test_a_fixed_number_of_iterations_stops_when_the_residual_vanishes():
     """`err_tol: 0.0` asks for `max_iter` iterations, but the CG stops once the residual is zero
     to machine precision. In single precision this happens long before 300 iterations, and the

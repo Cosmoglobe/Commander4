@@ -1,41 +1,17 @@
 """Point-source components: amplitudes living on discrete sky positions rather than in alms.
 
 A point-source component stores one amplitude per source and paints it onto the sky through the
-band beam, so its map/alm operations are unrelated to the diffuse machinery. The helpers at the top
-do that painting and its adjoint over the cached per-source beam discs.
+band beam, so its map/alm operations are unrelated to the diffuse machinery.
 """
 import h5py
 import healpy as hp
 import numpy as np
 import pysm3.units as pysm3u
-from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.data_models.band import Band
 from commander4.sky.component import Component
 from commander4.sky.beams import gauss_beam, get_gauss_beam_radius
-from commander4.math_utils.sht import map_to_alm, map_to_alm_adjoint
-
-
-def _project_sources_to_map(skymap: NDArray, pixel_discs: list[NDArray],
-                            beam_discs: list[NDArray], amps: NDArray,
-                            sed_s: NDArray | None = None) -> NDArray:
-    """Add each beam-painted source to ``skymap``; source discs may overlap."""
-    scales = amps if sed_s is None else amps*sed_s
-    for pixels, beam, scale in zip(pixel_discs, beam_discs, scales):
-        # query_disc returns unique pixels within one source. The outer loop is sequential, so
-        # sources whose discs overlap accumulate rather than overwrite one another.
-        skymap[pixels] += beam*scale
-    return skymap
-
-def _evaluate_sources_from_map(skymap: NDArray, pixel_discs: list[NDArray],
-                               beam_discs: list[NDArray], amps: NDArray,
-                               sed_s: NDArray | None = None) -> NDArray:
-    """Evaluate the adjoint beam projection for every source into ``amps``."""
-    sed = np.ones(amps.size) if sed_s is None else sed_s
-    for src_i, (pixels, beam) in enumerate(zip(pixel_discs, beam_discs)):
-        amps[src_i] = np.dot(skymap[pixels], beam)*sed[src_i]
-    return amps
 
 
 class PointSourcesComponent(Component):
@@ -218,86 +194,54 @@ class RadioSources(PointSourcesComponent):
         self.compute_pix_beams(fwhm, nside)
         map = np.zeros((1, hp.nside2npix(nside)),
                        dtype=np.float64 if self.double_prec else np.float32)
-        _project_sources_to_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                                self.amps[0,:], self.get_sed(nu))
-        map *= self.mJysr_to_uKRJ
+        scales = self.amps[0]*self.get_sed(nu)*self.mJysr_to_uKRJ
+        for pixels, beam, scale in zip(self.pix_disc_idx_list, self.beam_disc_val_list, scales):
+            map[0, pixels] += beam*scale  # Overlapping sources add up: the loop is sequential.
         return map
 
     def get_component_map(self, nside:int, fwhm:float=0.0):
         """ This component's *amplitude* map at a certain `nside` and `fwhm` (radians), in uK_RJ at
             `nu_ref`.
 
-        No SED is applied, so the result is frequency-independent, which is why the mJy/sr to uK_RJ
-        conversion is evaluated at the component's own reference frequency. That matches what a
+        This is the sky at `nu_ref`, where the SED is 1 for every source. That matches what a
         `DiffuseComponent` returns here: its alms are likewise stored in uK_RJ referenced to
         `nu_ref`, with `get_sed(nu)` carrying the amplitude to any other frequency.
         """
-        self.compute_pix_beams(fwhm, nside)
-        map = np.zeros((1, hp.nside2npix(nside)),
-                       dtype=np.float64 if self.double_prec else np.float32)
-        _project_sources_to_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                                self.amps[0,:])
-        map *= self.mJysr_to_uKRJ
-        return map
+        return self.get_sky(self.nu_ref, nside, fwhm)
     
-    def _project_to_band_map(self, map:NDArray, nu:float):
-        """ Computes the point source contribution in uK_RJ for the band's frequency and beam, and
-            sums it into `map`, which must have shape [1, npix].
-        """
-        _project_sources_to_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                                self.amps[0,:], sed_s=self.get_sed(nu))
-        map *= self.mJysr_to_uKRJ
-    
-    def _eval_from_band_map(self, map, nu):
-        """ Computes the amplitude contribution from the local band to each point source, given
-            `map`, which must have shape [1, npix].
-
-        All the contributions will be summed to the total proper amplitudes by the master node.
-        """
-        _evaluate_sources_from_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                                   self.amps[0,:], sed_s=self.get_sed(nu))
-        self.amps *= self.mJysr_to_uKRJ
-
     def comp2band(self, band:Band, nthreads: int = 1):
-        """ Add the point sources to the band's alms (C3's `evalBand`).
+        """ Add the point sources to the band's pixel map `band.map`.
 
-        The band beam is included: each source is painted through it.
+        Each source is painted through the band beam, in uK_RJ at the band frequency. The sources
+        are added in pixel space, as in C3, so they are not cut at the band lmax. `band.map` is
+        allocated here if no component has written to it yet.
         """
         if band.is_pol:
             raise ValueError("Point-source components can only be projected to intensity bands.")
         band_fwhm_r, band_nside = np.deg2rad(band.fwhm/60.0), band.nside
         self.compute_pix_beams(band_fwhm_r, band_nside)  # No-op unless the band has changed.
-
-        # The point-source equivalent of: M Y a
-        ps_map = np.zeros((1,hp.nside2npix(band_nside)),   # Empty band map
-                          dtype=np.float64 if self.double_prec else np.float32)
-        self._project_to_band_map(ps_map, band.nu)
-
-        # Y^-1 M Y a
-        map_to_alm(ps_map, band_nside, band.lmax, spin=0, out=band.alms, acc=True,
-                   nthreads=nthreads)
-        
-        return band.alms
+        if band.map is None:
+            band.map = np.zeros((1, hp.nside2npix(band_nside)), dtype=band.alms.real.dtype)
+        # The unit factor goes into the per-source scale, not onto the map, because the map may
+        # already hold other components.
+        scales = self.amps[0]*self.get_sed(band.nu)*self.mJysr_to_uKRJ
+        for pixels, beam, scale in zip(self.pix_disc_idx_list, self.beam_disc_val_list, scales):
+            band.map[0, pixels] += beam*scale  # Overlapping sources add up: the loop is sequential.
+        return band.map
 
     def band2comp(self, band:Band, nthreads: int = 1):
-        """ The transpose of `comp2band` (C3's `projectBand`): the band's alm contribution
-            to the point sources' amplitudes, stored in `amps` and returned.
+        """ The transpose of `comp2band`: reads the band's pixel map into the amplitudes, stored in
+        `amps` and returned.
 
-        The band beam is included, through the painted beam profiles. All the contributions will be
-        summed to the total proper amplitudes when reducing on the master node.
+        All the contributions will be summed to the total amplitudes when reducing on the master.
         """
         if band.is_pol:
             raise ValueError("Point-source components can only be evaluated from intensity bands.")
         band_fwhm_r, band_nside = np.deg2rad(band.fwhm/60.0), band.nside
         self.compute_pix_beams(band_fwhm_r, band_nside)  # No-op unless the band has changed.
-
-        # Y^-1^T B^T a
-        band_map = map_to_alm_adjoint(band.alms, band.nside, band.lmax, spin=0, out=None,
-                                      nthreads=nthreads)
-
-        # M^T Y^-1 B^T a
-        self._eval_from_band_map(band_map, band.nu)  # Updates self.amps in place.
-
+        scales = self.get_sed(band.nu)*self.mJysr_to_uKRJ
+        for i, (pixels, beam) in enumerate(zip(self.pix_disc_idx_list, self.beam_disc_val_list)):
+            self.amps[0, i] = np.dot(band.map[0, pixels], beam)*scales[i]
         return self.amps
 
     def apply_Cl_prior_sqrt(self, alms):

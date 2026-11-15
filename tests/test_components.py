@@ -800,6 +800,43 @@ def test_radio_sources_take_fwhm_in_radians_like_diffuse_components(tmp_path) ->
     assert np.count_nonzero(painted) > np.count_nonzero(as_arcmin)
 
 
+def test_radio_sources_are_added_to_the_band_in_pixel_space(tmp_path) -> None:
+    """`comp2band` paints the sources into `band.map`, not into the alms, so no flux is cut at the
+    band lmax. `band2comp` is its transpose: <comp2band(x), y> = <x, band2comp(y)>."""
+    from commander4.data_models.band import Band
+    template = tmp_path / "radio.dat"
+    _write_radio_source_table(template)
+    source = _make_radio_sources(template, nu_ref=30.0)
+    nside = 16
+    band = Band(np.zeros((1, hp.Alm.getsize(3*nside - 1)), dtype=np.complex128), 30.0, 120.0, nside)
+    x = source.amps.copy()
+
+    painted = source.comp2band(band).copy()
+
+    assert np.all(band.alms == 0)
+    # At nu_ref the SED is 1, and the beam integrates to 1: the map holds the full flux.
+    assert _map_integral(painted, nside) == pytest.approx(x[0, 0]*source.mJysr_to_uKRJ, rel=1e-5)
+    y = np.random.default_rng(0).normal(size=band.map.shape)
+    band.map = y
+    transpose_y = source.band2comp(band).copy()
+    assert np.sum(painted*y) == pytest.approx(np.sum(x*transpose_y), rel=1e-5)
+
+
+def test_overlapping_radio_sources_add_up(tmp_path) -> None:
+    """Two sources at the same position paint the same map as one source with their summed flux.
+
+    A vectorized `map[all_pixels] += values` would silently keep only one of the repeated pixels.
+    """
+    pair, single = tmp_path / "pair.dat", tmp_path / "single.dat"
+    with open(pair, "w") as handle:
+        handle.write("# Glon(deg) Glat(deg) I(mJy) alpha_I\n0.0 0.0 2000.0 -0.7\n0.0 0.0 3000.0 -0.7\n")
+    _write_radio_source_table(single, flux_mjy=5000.0)
+    fwhm = np.deg2rad(5.0)
+    pair_map = _make_radio_sources(pair).get_sky(nu=44.0, nside=16, fwhm=fwhm)
+    single_map = _make_radio_sources(single).get_sky(nu=44.0, nside=16, fwhm=fwhm)
+    np.testing.assert_allclose(pair_map, single_map, rtol=1e-6)
+
+
 def _sky_model_at_amp_fwhm(amp_fwhm_rad):
     """A two-component sky model whose amplitudes carry `amp_fwhm_rad` of smoothing."""
     from commander4.sky.sky_model import SkyModel

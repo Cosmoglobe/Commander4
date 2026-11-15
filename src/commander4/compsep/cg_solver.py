@@ -16,7 +16,7 @@ from copy import deepcopy
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
 from commander4.math_utils.alm import gaussian_random_alm
-from commander4.math_utils.sht import alm_to_map_adjoint
+from commander4.math_utils.sht import alm_to_map, alm_to_map_adjoint
 from commander4.sky.comp_list import complist_dot, complist_norm
 from commander4.compsep.dense_matrix_debug import DenseMatrix
 from commander4.math_utils.cg_driver import DistributedCG
@@ -98,7 +98,8 @@ class CompSepSolver:
             the Ax=b system for global component separation. The full A matrix is:
             (1 + S^{1/2} Y^T M^T Y^-1^T B^T N^-1 B Y^-1 M Y S^{1/2}).
             For a component without a prior (`Cl_prior_amplitude: null`, C3's `CL_TYPE = none`)
-            the "1 +" is left out and S = 1.
+            the "1 +" is left out and S = 1. For point sources, `B Y^-1 M Y` is replaced by painting
+            the sources into the band map, and the Y and Y^T around N^-1 are left out.
             This function should be called by all ranks holding a frequency map, even if they do
             not hold a compoenent, as they are still needed to compute the LHS operation.
             Args:
@@ -126,10 +127,20 @@ class CompSepSolver:
         with benchmark("lhs-project"):
             comp_list.comp2band(self.my_band, nthreads=self.nthreads)
 
-        # Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
+        # Y^T N^-1 Y B Y^-1 M Y S^{1/2} a. Point sources are added in pixel space, as in C3:
+        # comp2band painted them into `band.map` (None without point sources), and they read
+        # N^-1 (...) back from it. Diffuse components go through Y and Y^T.
         with benchmark("lhs-inv-N"):
-            self.my_band.alms = self.det_map.apply_inv_N_alm(self.my_band.alms,
-                                                             nthreads=self.nthreads)
+            band, det_map = self.my_band, self.det_map
+            band_map = alm_to_map(band.alms, det_map.nside, det_map.lmax, spin=det_map.spin,
+                                  nthreads=self.nthreads)
+            if band.map is not None:
+                band_map += band.map
+            det_map.apply_inv_N_map(band_map)
+            if band.map is not None:
+                band.map = band_map
+            band.alms = alm_to_map_adjoint(band_map, det_map.nside, det_map.lmax,
+                                           spin=det_map.spin, nthreads=self.nthreads)
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         with benchmark("lhs-eval"):
@@ -208,6 +219,8 @@ class CompSepSolver:
         b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin,
                                    nthreads=self.nthreads)
         b_band.alms = b_alm.astype(b_band.alms.dtype, copy=False)
+        # Point sources read the pixel map itself, as in the LHS.
+        b_band.map = b_map
 
         # (Y^T M^T Y^-1^T B^T) Y^T (...)
         comp_list.band2comp(b_band, nthreads=self.nthreads)
