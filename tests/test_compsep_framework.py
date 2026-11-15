@@ -6,9 +6,9 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
+from commander4.compsep.amplitude_sampling import _build_conditional_residual
 from commander4.compsep.processing import (
     MCMC_GROUP_DEFAULTS,
-    _build_conditional_residual,
     _validate_mcmc_sampled_components,
     _validate_component_lmax,
     process_compsep,
@@ -135,15 +135,16 @@ def test_iteration_chi2_uses_all_observed_map_samples() -> None:
     map_inv_var = np.full_like(map_sky, 1.0/2.0**2)
     map_inv_var[0, -1] = 0.0  # An unobserved pixel.
     detector_data = DetectorMap(map_sky, map_inv_var, nu=30.0, fwhm=60.0, nside=1)
-    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0))
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0),
+                     band=Bunch(name="Planck30GHz", polarization="I"))
+    cfg = Bunch(nside_chisq=1, include_residual_maps=False)
 
     class ZeroSky:
         def get_sky_at_nu(self, nu: float, nside: int, pols_required: str,
                           fwhm: float | None = None, lmax: int | None = None) -> np.ndarray:
             return np.zeros_like(map_sky)
 
-    fit = evaluate_chi2(mpi_info.compsep, detector_data, ZeroSky(), band_name="Planck30GHz",
-                        pol="I", nside_chisq=1)
+    fit = evaluate_chi2(mpi_info, cfg, detector_data, ZeroSky())
 
     assert fit.total == pytest.approx(np.sum((map_sky[0, :-1] / 2.0)**2))
     assert fit.ndof == 11

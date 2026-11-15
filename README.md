@@ -184,7 +184,8 @@ src/commander4/
     mapmaking/         #   binned.py (per-pixel inversion) and cg.py (iterative, deconvolves a transfer function).
 
   compsep/             # === COMPSEP SIDE: solving for component amplitudes and spectral parameters ===
-    processing.py      #   Drives the iteration and validates the sampling groups.
+    processing.py      #   Reads the sampling groups, and drives the iteration in Gibbs order.
+    amplitude_sampling.py  # Samples the amplitudes of one sampling group, with one of the two solvers below.
     cg_solver.py       #   The global CG amplitude solve; perpix_solver.py is the common-resolution alternative.
     mcmc.py            #   Metropolis-Hastings machinery; spectral_index.py is its one concrete user.
     preconditioners.py #   Preconditioners for the compsep CG (the mapmaker's live in tod/mapmaking/).

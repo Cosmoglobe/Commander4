@@ -66,38 +66,35 @@ class ChisqResult(NamedTuple):
     band: BandFit
 
 
-def evaluate_chi2(compsep: Bunch, detector_data: DetectorMap, sky_model: SkyModel,
-                  band_name: str, pol: str, nside_chisq: int, label: str | None = None,
-                  keep_residual: bool = False) -> ChisqResult:
+def evaluate_chi2(mpi_info: Bunch, cfg: Bunch, detector_data: DetectorMap, sky_model: SkyModel,
+                  label: str | None = None) -> ChisqResult:
     """Whiten this band's residual against the current sky model and reduce it over all bands.
 
     Called collectively by every CompSep rank: the two allreduces at the end make `total` and `ndof`
     the all-band values on all of them.
 
     Args:
-        compsep: The CompSep MPI info (`comm`, `rank`, `master`).
+        mpi_info: The MPI data of this rank. `compsep` and `band` are used.
+        cfg: The settings of component separation. `nside_chisq` is the resolution of the
+            chi-squared map (C3's `NSIDE_CHISQ`). With `include_residual_maps`, the result also
+            keeps the full-resolution `data - model` map, for the chain's residual maps.
         detector_data: This rank's band map, its inverse-noise map and its beam.
         sky_model: The model to fit, realized at the band's frequency and resolution.
-        band_name: Name of this rank's band, recorded in the returned `BandFit`.
-        pol: Execution polarization of this rank's view, ``I`` or ``QU``.
-        nside_chisq: Resolution of the chi-squared map (Commander3's `NSIDE_CHISQ`). It should be
-            at or below the coarsest band nside, since the map only ever sums z^2 into its pixels.
         label: When given, the name of the sampling step just taken; logs a per-band and an all-band
             fit summary under it. `None` evaluates silently.
-        keep_residual: Also keep the full-resolution `data - model` map, which is what the chain's
-            optional per-band residual maps are built from.
     """
+    compsep = mpi_info.compsep
     band_pol = "QU" if detector_data.pol else "I"
     sky_at_band = sky_model.get_sky_at_nu(detector_data.nu, detector_data.nside, band_pol,
                                           fwhm=detector_data.fwhm_rad, lmax=detector_data.lmax)
     pol_names = ["Q", "U"] if detector_data.pol else ["I"]
-    npix, npix_chisq = detector_data.map_sky.shape[-1], hp.nside2npix(nside_chisq)
+    npix, npix_chisq = detector_data.map_sky.shape[-1], hp.nside2npix(cfg.nside_chisq)
     # ud_grade averages, so scaling by how many fine pixels fall in a coarse one turns the average
     # into the sum over them that Commander3's chisq map accumulates (comm_output_mod.f90).
     subpixels_per_chisq_pixel = npix // npix_chisq
 
     chi2_map = np.zeros((3, npix_chisq))
-    residual = np.zeros_like(detector_data.map_sky) if keep_residual else None
+    residual = np.zeros_like(detector_data.map_sky) if cfg.include_residual_maps else None
     chi2_local, ndof_local = 0.0, 0
     for ipol in range(detector_data.npol):
         # An unobserved pixel has zero inverse-noise weight, and contributes no degree of freedom.
@@ -112,7 +109,7 @@ def evaluate_chi2(compsep: Bunch, detector_data: DetectorMap, sky_model: SkyMode
         z2_full = np.zeros(npix)
         z2_full[observed] = z**2
         chi2_row = 0 if band_pol == "I" else 1 + ipol
-        chi2_map[chi2_row] += hp.ud_grade(z2_full, nside_chisq)*subpixels_per_chisq_pixel
+        chi2_map[chi2_row] += hp.ud_grade(z2_full, cfg.nside_chisq)*subpixels_per_chisq_pixel
 
         if label is not None:
             logger.verbose(f"Fit after {label} on rank {compsep.rank} for pol={pol_names[ipol]} "
@@ -124,9 +121,9 @@ def evaluate_chi2(compsep: Bunch, detector_data: DetectorMap, sky_model: SkyMode
     if label is not None and compsep.rank == compsep.master:
         logger.info(f"Fit after {label}, all bands: chi2={total:.6e}, ndof={ndof}, "
                     f"red.chi2={total/ndof:.4f}")
-    band = BandFit(band_name=band_name, pol=pol, nu=float(detector_data.nu),
-                   chi2=float(chi2_local), ndof=int(ndof_local), chi2_map=chi2_map,
-                   residual=residual)
+    band = BandFit(band_name=mpi_info.band.name, pol=mpi_info.band.polarization,
+                   nu=float(detector_data.nu), chi2=float(chi2_local), ndof=int(ndof_local),
+                   chi2_map=chi2_map, residual=residual)
     return ChisqResult(total=total, ndof=ndof, band=band)
 
 
