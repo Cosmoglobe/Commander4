@@ -376,10 +376,12 @@ class DiffuseComponent(Component):
     def get_sed(self, nu):
         raise NotImplementedError(f"{type(self).__name__}.get_sed() is not implemented.")
 
-    # Overrides the base-class dot product: diffuse-component amps holds complex alms, whose inner
-    # product must account for the m>0 coefficients each standing for two real degrees of freedom.
-    def __matmul__(self, other):
-        self._assert_consistent_comp(other)
+    def dot(self, other: "DiffuseComponent") -> float:
+        """The dot product of this component's alms with those of `other`, the same view.
+
+        The alms are complex and stored for m >= 0 only, so each m > 0 coefficient stands for two
+        real numbers and is counted twice.
+        """
         res = 0.0
         for ipol in range(self.npol):
             res += _dot_complex_alm_1D_arrays(self.amps[ipol], other.amps[ipol], self.lmax)

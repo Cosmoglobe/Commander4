@@ -1,9 +1,9 @@
 """The abstract base class every sky component inherits from.
 
 `Component` owns the parts shared by every component regardless of how it is represented on the
-sky: the amplitude buffer and its arithmetic, the polarization view, the parameter unpacking, and
-the interface (`get_sed`, `realize_as_map`, ...) that the samplers call. The concrete families live
-next to this file: `diffuse_components.py` and `point_sources.py`.
+sky: the amplitude buffer, the polarization view, the parameter unpacking, and the interface
+(`get_sed`, `realize_as_map`, ...) that the samplers call. The concrete families live next to this
+file: `diffuse_components.py` and `point_sources.py`.
 """
 from copy import deepcopy
 import logging
@@ -14,8 +14,7 @@ from mpi4py import MPI
 from pixell.bunch import Bunch
 
 from commander4.polarization import assert_pol_supported
-from commander4.math_utils.arithmetic import dot, inplace_arr_add,\
-        inplace_arr_sub, inplace_arr_prod, inplace_arr_truediv
+from commander4.math_utils import arithmetic
 from commander4.parameters.schema import resolve_param
 
 logger = logging.getLogger(__name__)
@@ -23,8 +22,8 @@ logger = logging.getLogger(__name__)
 class Component:
     """Abstract base class for every sky component.
 
-    Holds the amplitude buffer and its arithmetic, the polarization view, and the interface the
-    samplers call. Concrete families are defined in `diffuse_components.py` and `point_sources.py`.
+    Holds the amplitude buffer, the polarization view, and the interface the samplers call.
+    Concrete families are defined in `diffuse_components.py` and `point_sources.py`.
     """
 
     default_shortname = "comp"
@@ -88,77 +87,14 @@ class Component:
         # deconvolved components. Only non-zero if the common-resolution per-pix solver was used.
         self.amp_fwhm_rad = 0.0
 
-    @property
-    def logical_id(self) -> str:
-        return self.comp_name
-
-    @property
-    def logical_key(self) -> tuple[type["Component"], str]:
-        return (type(self), self.logical_id)
-
-    @property
-    def execution_key(self) -> tuple[type["Component"], str, str | None]:
-        return (type(self), self.logical_id, self.eval_pol)
-
-    @property
-    def is_split_view(self) -> bool:
-        return self.defined_pol == "IQU" and self.eval_pol in ("I", "QU")
-
-    @property
-    def execution_label(self) -> str:
-        if self.eval_pol is None or not self.is_split_view:
-            return self.shortname
-        return f"{self.shortname}[{self.eval_pol}]"
-
-    def _assert_consistent_comp(self, other: "Component") -> None:
-        if not isinstance(other, Component):
-            raise TypeError("Both operands must be Component objects.")
-        if type(self) is not type(other):
-            raise TypeError("Both operands must be of the same Component type.")
-        mismatched = [
-            attr for attr in (
-                "comp_name",
-                "shortname",
-                "defined_pol",
-                "eval_pol",
-            )
-            if getattr(self, attr) != getattr(other, attr)
-        ]
-        if mismatched:
-            raise ValueError(
-                "Components must represent the same execution view. "
-                f"Mismatched fields: {', '.join(mismatched)}"
-            )
-        if self.amps is None or other.amps is None:
-            raise ValueError("Cannot operate on Components with no data.")
-        if self.amps.shape != other.amps.shape:
-            raise ValueError("Data arrays of the two Components must match in size.")
-
     def join_split_views(self, other: "Component") -> "Component":
-        if not isinstance(other, Component):
-            raise TypeError("Can only join Component objects.")
-        if type(self) is not type(other):
-            raise TypeError("Split views must be of the same Component type.")
-        if self.defined_pol != "IQU" or other.defined_pol != "IQU":
-            raise ValueError("Only IQU-defined components can be joined.")
-        if not self.is_split_view or not other.is_split_view:
-            raise ValueError("Only split component views can be joined.")
+        """Join the I view and the QU view of one IQU component into a new component.
+
+        The result has `eval_pol` "IQU" and all three polarization rows in `amps`.
+        """
         if {self.eval_pol, other.eval_pol} != {"I", "QU"}:
             raise ValueError("Joining requires one intensity view and one QU view.")
-        mismatched = [
-            attr for attr in ("comp_name", "shortname", "defined_pol")
-            if getattr(self, attr) != getattr(other, attr)
-        ]
-        if mismatched:
-            raise ValueError(
-                "Split views must refer to the same logical component. "
-                f"Mismatched fields: {', '.join(mismatched)}"
-            )
-        if self.amps is None or other.amps is None:
-            raise ValueError("Cannot join split views with no data.")
         intensity_comp, pol_comp = (self, other) if self.eval_pol == "I" else (other, self)
-        if intensity_comp.amps.shape[1:] != pol_comp.amps.shape[1:]:
-            raise ValueError("Split views must have compatible alm dimensions.")
         joined = deepcopy(intensity_comp)
         joined.eval_pol = joined.defined_pol
         joined.amps = np.concatenate((intensity_comp.amps, pol_comp.amps), axis=0)
@@ -234,52 +170,19 @@ class Component:
             logger.debug(f"Component {self.comp_name!r} ({self.eval_pol}): restored sampled "
                          f"beta = {self.beta}.")
 
-    def _apply_array_op(self, other: "Component", arr_op, *, inplace: bool) -> "Component":
-        self._assert_consistent_comp(other)
-        target = self if inplace else deepcopy(self)
-        arr_op(target.amps, other.amps)
-        return target
+    def dot(self, other: "Component") -> float:
+        """The dot product of this component's amplitudes with those of `other`.
 
-    def __add__(self, other):
-        return self._apply_array_op(other, inplace_arr_add, inplace=False)
-    
-    def __iadd__(self, other):
-        return self._apply_array_op(other, inplace_arr_add, inplace=True)
-    
-    def __sub__(self, other):
-        return self._apply_array_op(other, inplace_arr_sub, inplace=False)
-    
-    def __isub__(self, other):
-        return self._apply_array_op(other, inplace_arr_sub, inplace=True)
-    
-    def __mul__(self, other):
-        return self._apply_array_op(other, inplace_arr_prod, inplace=False)
-    
-    def __imul__(self, other):
-        return self._apply_array_op(other, inplace_arr_prod, inplace=True)
-    
-    def __truediv__(self, other):
-        return self._apply_array_op(other, inplace_arr_truediv, inplace=False)
-    
-    def __itruediv__(self, other):
-        return self._apply_array_op(other, inplace_arr_truediv, inplace=True)
-    
-    def __matmul__(self, other):
-        self._assert_consistent_comp(other)
-        return dot(self.amps, other.amps)
+        `other` must be the same view of the same component. The CG uses this through
+        `CompList.dot`. This is the plain dot product; `DiffuseComponent` has its own, for alms.
+        """
+        return float(arithmetic.dot(self.amps, other.amps))
 
     def bcast_data_blocking(self, comm:MPI.Comm, root=0):
         """Broadcast the component's data array from the root MPI rank."""
         if not isinstance(self.amps, np.ndarray):
             raise RuntimeError("Component data must be allocated as an array before broadcast.")
         comm.Bcast(self.amps, root=root)
-
-    def bcast_data_non_blocking(self, comm:MPI.Comm, root=0):
-        """As `bcast_data_blocking`, but returns the MPI request instead of waiting on it."""
-        if not isinstance(self.amps, np.ndarray):
-            raise RuntimeError("Component data must be allocated as an array before broadcast.")
-        req = comm.Ibcast(self.amps, root=root)
-        return req
 
     def accum_data_blocking(self, comm:MPI.Comm, root=0):
         """Sum the component's data array across the communicator onto the root rank."""
@@ -297,25 +200,3 @@ class Component:
         send, recv = (MPI.IN_PLACE, self.amps) if myrank == root else (self.amps, None)
         req = comm.Ireduce(send, recv, op=MPI.SUM, root=root)
         return req
-
-    def __array_function__(self, func, types, args, kwargs):
-        # Lets numpy functions such as np.zeros_like dispatch onto Component.
-        if not all(issubclass(t, Component) for t in types):
-            return NotImplemented
-
-        if func is np.zeros_like:
-            return self._zeros_like(*args, **kwargs)
-
-        return NotImplemented
-
-    def _zeros_like(self, other, dtype=None, order='K', subok=True, shape=None):
-        zeros = np.zeros_like(
-            other.amps,
-            dtype=dtype,
-            order=order,
-            subok=subok,
-            shape=shape,
-        )
-        out = deepcopy(other)
-        out.amps = zeros
-        return out

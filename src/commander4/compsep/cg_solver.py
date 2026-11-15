@@ -11,14 +11,11 @@ import logging
 from mpi4py import MPI
 from typing import TYPE_CHECKING
 from collections.abc import Callable
-from copy import deepcopy
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
 from commander4.math_utils.alm import gaussian_random_alm
 from commander4.math_utils.sht import alm_to_map, alm_to_map_adjoint
-from commander4.sky.comp_list import complist_dot, complist_norm
-from commander4.compsep.dense_matrix_debug import DenseMatrix
 from commander4.math_utils.cg_driver import DistributedCG
 from commander4.compsep import preconditioners
 from commander4.data_models.band import Band
@@ -109,11 +106,12 @@ class CompSepSolver:
                                array if this MPI rank does not hold a component.                               
         """
         myrank = self.CompSep_comm.Get_rank()
-        
-        comp_list = deepcopy(comp_list_in)
+
+        comp_list = comp_list_in.copy()
         if myrank == 0:  # this task actually holds a component
             # S^{1/2} a
-            comp_list.apply_Cl_prior_sqrt()
+            for comp in comp_list:
+                comp.apply_Cl_prior_sqrt(comp.amps)
 
         # Spread initial a to all ranks from master.
         # NB: For some stupid reason the non-blocking mpi4py calls do not have 64-bit length support
@@ -121,11 +119,17 @@ class CompSepSolver:
         # for >2GB arrays. In the future we should probably implement chunking instead.
 
         with benchmark("lhs-bcast"):
-            comp_list.bcast_data_blocking(self.CompSep_comm)
+            for comp in comp_list:
+                comp.bcast_data_blocking(self.CompSep_comm)
 
-        # B Y^-1 M Y S^{1/2} a
+        # B Y^-1 M Y S^{1/2} a. Each component adds itself to the emptied band: a diffuse component
+        # to its alms, point sources to its pixel map.
         with benchmark("lhs-project"):
-            comp_list.comp2band(self.my_band, nthreads=self.nthreads)
+            self.my_band.alms[:] = 0
+            if self.my_band.map is not None:
+                self.my_band.map[:] = 0
+            for comp in comp_list:
+                comp.comp2band(self.my_band, nthreads=self.nthreads)
 
         # Y^T N^-1 Y B Y^-1 M Y S^{1/2} a. Point sources are added in pixel space, as in C3:
         # comp2band painted them into `band.map` (None without point sources), and they read
@@ -144,7 +148,8 @@ class CompSepSolver:
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         with benchmark("lhs-eval"):
-            comp_list.band2comp(self.my_band, nthreads=self.nthreads)
+            for comp in comp_list:
+                comp.band2comp(self.my_band, nthreads=self.nthreads)
 
         # Accumulate solution on master
         with benchmark("lhs-accum"):
@@ -153,10 +158,10 @@ class CompSepSolver:
             if use_blocking:
                 logger.debug(f"Using blocking CompSep communication for array size "
                              f"{biggest_size_bytes:.2e} B.")
-                comp_list.accum_data_blocking(self.CompSep_comm)
-
+                for comp in comp_list:
+                    comp.accum_data_blocking(self.CompSep_comm)
             else:
-                requests = comp_list.accum_data_non_blocking(self.CompSep_comm)
+                requests = [comp.accum_data_non_blocking(self.CompSep_comm) for comp in comp_list]
 
             if myrank == 0:
                 for icomp in range(len(comp_list)):
@@ -166,11 +171,11 @@ class CompSepSolver:
                         # Wait until all data for component icomp has been received.
                         MPI.Request.Wait(requests[icomp])
                     # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
-                    comp = comp_list.components[icomp]
+                    comp = comp_list[icomp]
                     comp.apply_Cl_prior_sqrt(comp.amps)
                     # The prior term adds the input vector: (1 + S^{1/2}...)a = a + (S^{1/2}...)a.
                     if comp.Cl_prior_amplitude is not None:
-                        comp += comp_list_in.components[icomp]
+                        comp.amps += comp_list_in[icomp].amps
             else: # Worker ranks just wait for all their sends to complete.
                 if not use_blocking:
                     for icomp in range(len(comp_list)):
@@ -223,7 +228,8 @@ class CompSepSolver:
         b_band.map = b_map
 
         # (Y^T M^T Y^-1^T B^T) Y^T (...)
-        comp_list.band2comp(b_band, nthreads=self.nthreads)
+        for comp in comp_list:
+            comp.band2comp(b_band, nthreads=self.nthreads)
 
         # Accumulate on master and apply the prior there: S^{1/2} Y^T M^T Y^-1^T B^T Y^T (...)
         for comp in comp_list:
@@ -256,8 +262,7 @@ class CompSepSolver:
         return comp_list
 
 
-    def solve_CG(self, LHS: Callable, RHS: CompList, M: Callable, x0 = None,
-                 x_true = None) -> CompList:
+    def solve_CG(self, LHS: Callable, RHS: CompList, M: Callable, x0 = None) -> CompList:
         """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG.
             Assumes that both x and b are in alm space.
 
@@ -266,7 +271,6 @@ class CompSepSolver:
                 RHS (list): A list of alm-vectors representing the right-hand-side of the equation.
                 x0 (list): Initial guess for x as list of alm-vectors for each component (optional).
                 M (callable): Preconditioner: A callable which approximates A^-1.
-                x_true (np.array): True solution for x, in order to print the true error (optional).
             Returns:
                 m_bestfit (list): The resulting best-fit solution, for the component held by this
                                   rank, as a list of alm-vectors for each component.
@@ -278,15 +282,9 @@ class CompSepSolver:
 
         checkpt_int = 30
         master = self.CompSep_comm.Get_rank() == 0
-        mycomp = self.CompSep_comm.Get_rank()
 
         CG_solver = DistributedCG(LHS, RHS, master, x0=x0, M=M, destroy_b=True)
         self.CG_residuals = np.zeros(max_iter)
-        if x_true is not None:
-            if master:
-                self.xtrue_A_xtrue = complist_dot(x_true, LHS(x_true))
-            else:
-                LHS(CompList([]))
         if master:
             logger.verbose(f"{'QU' if self.det_map.pol else 'Intensity'} CG starting up.")
         iter = 0
@@ -299,28 +297,12 @@ class CompSepSolver:
             log_memory("cg-iter")
             self.CG_residuals[iter] = CG_solver.err
             iter += 1
-            if iter%checkpt_int == 0:
-                if master:
-                    logger.verbose(
-                        f"{'QU' if self.det_map.pol else 'Intensity'} CG iter {iter:3d} - "
-                        f"Squared residual {np.mean(self.CG_residuals[iter-checkpt_int:iter]):.6e} "
-                        f"({(time.time() - t0)/checkpt_int:.2f}s/iter)")
-                    t0 = time.time()
-                    if x_true is not None:
-                        CG_errors_true = complist_norm(CG_solver.x - x_true)/complist_norm(x_true)
-                        A_residual = LHS([x - y for x,y in zip(CG_solver.x, x_true)])
-                        #A_residual = np.concatenate(A_residual, axis=-1)
-                        CG_Anorm_error = complist_dot([x - y for x,y in zip(CG_solver.x, x_true)],
-                                                      A_residual)
-                        # A-norm error is only defined for the full vector.
-                        logger.verbose(f"CG iter {iter:3d} - True A-norm error: "
-                                     f"{CG_Anorm_error:.3e}")
-                        # We can print the individual component L2 errors.
-                        logger.verbose(f"CG iter {iter:3d} - {self.comp_list[mycomp].comp_name} - "
-                                     f"True L2 error: {CG_errors_true:.3e}")
-                else:
-                    if x_true is not None:
-                        LHS(CompList([]))  # Matching LHS call for the calculation of LHS(CG_solver.x-x_true).
+            if iter%checkpt_int == 0 and master:
+                logger.verbose(
+                    f"{'QU' if self.det_map.pol else 'Intensity'} CG iter {iter:3d} - "
+                    f"Squared residual {np.mean(self.CG_residuals[iter-checkpt_int:iter]):.6e} "
+                    f"({(time.time() - t0)/checkpt_int:.2f}s/iter)")
+                t0 = time.time()
             if iter >= max_iter:
                 # Only log warning if err_tol != 0, as this means user wants to do max_iter.
                 if master and self.config.err_tol > 0.0:
@@ -364,7 +346,7 @@ class CompSepSolver:
         # Set starting guess to x0 = S^{-1/2} a. It is copied, because `calc_RHS` overwrites
         # `comp_list`. Only the master's values are used; the other ranks need the list as a buffer
         # of the right shape.
-        x0 = deepcopy(comp_list)
+        x0 = comp_list.copy()
         if self.my_rank == 0:
             for comp in x0:
                 comp.apply_Cl_prior_inv_sqrt(comp.amps)
@@ -379,30 +361,4 @@ class CompSepSolver:
         with benchmark("cg-precond-init"):
             precond = getattr(preconditioners, self.config.preconditioner)(self, comp_list)
 
-        # For testing preconditioner with a true solution as reference,
-        # first solving for exact solution with dense matrix math.
-        if self.config.dense_matrix_debug_mode:
-            M_A_matrix = lambda a : self.apply_LHS_matrix(precond(a))
-
-            # Testing the initial LHS (A) matrix
-            dense_matrix = DenseMatrix(self, self.apply_LHS_matrix, "A")
-            dense_matrix.test_matrix_hermitian()
-            dense_matrix.print_sing_vals()
-            dense_matrix.test_matrix_eigenvalues()
-            dense_matrix.print_matrix_diag()
-
-            # Testing the preconditioning matrix (M) alone
-            dense_matrix = DenseMatrix(self, precond, "M")
-            dense_matrix.test_matrix_hermitian()  # Preconditioner matrix needs to be Hermitian.
-            dense_matrix.test_matrix_eigenvalues()  # and to have positive and real eigenvalues
-
-            # Testing the combined preconditioned system (MA)
-            # (this combined matrix will generally not be Hermitian positive-definite).
-            dense_matrix = DenseMatrix(self, M_A_matrix, "MA")
-            x_true = dense_matrix.solve_by_inversion(precond(RHS))
-            # Check how much singular values (condition number) of preconditioned system improved.
-            dense_matrix.print_sing_vals()
-            dense_matrix.print_matrix_diag()
-
-        return self.solve_CG(self.apply_LHS_matrix, RHS, x0=x0, M=precond,
-                             x_true=x_true if self.config.dense_matrix_debug_mode else None)
+        return self.solve_CG(self.apply_LHS_matrix, RHS, x0=x0, M=precond)

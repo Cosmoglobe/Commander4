@@ -381,7 +381,7 @@ def _components_for_pol(comp_list: list[Component], npol: int) -> list[Component
     """The components whose polarization view matches the maps being plotted.
 
     Maps are plotted one execution view at a time, so `npol` is 1 for an I map and 2 for a QU one,
-    and the components are filtered to the matching view. This is `CompList.components_for_eval_pol`
+    and the components are filtered to the matching view. This is `CompList.split_for_eval_pol`
     written out, because the chain plotter builds a plain list rather than a `CompList`.
     """
     target_pol = "QU" if npol > 1 else "I"

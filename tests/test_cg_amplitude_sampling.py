@@ -36,7 +36,6 @@ from commander4.sky.comp_list import CompList
 from commander4.compsep.cg_solver import CompSepSolver
 from commander4.math_utils.alm import gaussian_random_alm, _dot_complex_alm_1D_arrays
 from commander4.math_utils.sht import alm_to_map
-from commander4.sky.comp_list import complist_dot
 
 LMAX = 4
 NSIDE = 4
@@ -55,7 +54,7 @@ def _make_group(sample_amplitudes: bool = True) -> CGSamplingGroupConfig:
     return CGSamplingGroupConfig(
         name="test", optimize=not sample_amplitudes,
         max_iter=300, max_iter_pol=300, err_tol=1e-14,
-        preconditioner="NoPreconditioner", dense_matrix_debug_mode=False,
+        preconditioner="NoPreconditioner",
     )
 
 
@@ -133,8 +132,9 @@ def test_constrained_realization_covariance_is_inverse_LHS(realizations):
 
     quad = []
     for sample in samples:
-        delta = sample - x_map
-        quad.append(complist_dot(delta, solver.apply_LHS_matrix(delta)))
+        delta = sample.copy()
+        delta.add_scaled(x_map, -1.0)
+        quad.append(delta.dot(solver.apply_LHS_matrix(delta)))
 
     mean = np.mean(quad)
     # Each term is a sum of ndof chi2(1) variables, so the standard error is sqrt(2*ndof/NSAMP).
@@ -147,14 +147,13 @@ def test_constrained_realization_mean_is_the_MAP_solution(realizations):
     solver, x_map, samples = realizations
     ndof = _ndof(x_map)
 
-    mean_sample = samples[0] - x_map
-    for sample in samples[1:]:
-        mean_sample += sample - x_map
-    for comp in mean_sample:
-        comp.amps[:] /= len(samples)
+    mean_sample = x_map.zeros_like()
+    for sample in samples:
+        mean_sample.add_scaled(sample, 1.0/len(samples))
+    mean_sample.add_scaled(x_map, -1.0)
 
     # <xbar-x_MAP, M(xbar-x_MAP)> is chi2(ndof)/NSAMP; allow a generous upper bound.
-    quad = complist_dot(mean_sample, solver.apply_LHS_matrix(mean_sample))*len(samples)
+    quad = mean_sample.dot(solver.apply_LHS_matrix(mean_sample))*len(samples)
     assert quad < ndof + 5.0*np.sqrt(2.0*ndof), f"mean deviates from MAP: chi2={quad:.1f}"
 
 
@@ -208,7 +207,7 @@ def test_the_cg_starts_from_the_amplitudes_it_is_given():
         _make_comp_list(_make_params(), Cl_prior_amplitude=1.0), np.random.default_rng(0))[0].amps
     one_iteration = CGSamplingGroupConfig(
         name="one", optimize=True, max_iter=1, max_iter_pol=1, err_tol=0.0,
-        preconditioner="NoPreconditioner", dense_matrix_debug_mode=False)
+        preconditioner="NoPreconditioner")
 
     from_zero_solver = _make_solver(det_map, one_iteration)
     from_zero = from_zero_solver.solve(_make_comp_list(_make_params(), Cl_prior_amplitude=1.0),
@@ -264,8 +263,8 @@ def test_the_lhs_couples_a_diffuse_component_and_point_sources_symmetrically(tmp
     x, y = vectors
     solver = _make_solver(_make_det_map(), _make_group())
 
-    x_Ay = complist_dot(x, solver.apply_LHS_matrix(y))
-    Ax_y = complist_dot(solver.apply_LHS_matrix(x), y)
+    x_Ay = x.dot(solver.apply_LHS_matrix(y))
+    Ax_y = solver.apply_LHS_matrix(x).dot(y)
 
     assert x_Ay != 0.0
     assert x_Ay == pytest.approx(Ax_y, rel=1e-5)
@@ -283,7 +282,7 @@ def test_a_fixed_number_of_iterations_stops_when_the_residual_vanishes():
                    compsep=Bunch(double_precision=False))
     group = CGSamplingGroupConfig(
         name="fixed", optimize=True, max_iter=300, max_iter_pol=300, err_tol=0.0,
-        preconditioner="NoPreconditioner", dense_matrix_debug_mode=False)
+        preconditioner="NoPreconditioner")
     solver = CompSepSolver(det_map, MPI.COMM_SELF, group, double_precision=False, nthreads=1)
 
     solution = solver.solve(_make_comp_list(params, Cl_prior_amplitude=1.0), rng)

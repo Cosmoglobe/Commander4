@@ -328,11 +328,6 @@ def test_sampling_group_configs_reject_fields_owned_by_other_methods() -> None:
         MCMCSamplingGroupConfig.from_block("mcmc", Bunch(parameters="gain"))
 
 
-def test_broken_dense_matrix_debug_path_cannot_be_selected() -> None:
-    with pytest.raises(ValueError, match="unsupported dense-matrix"):
-        CGSamplingGroupConfig.from_block("cg", Bunch(dense_matrix_debug_mode=True))
-
-
 def test_per_pixel_solver_rejects_non_diffuse_components_before_mpi_work() -> None:
     with pytest.raises(ValueError, match="does not support object"):
         solve_compsep_perpix(None, None, [object()], double_precision=False, nthreads=1,
@@ -517,7 +512,9 @@ def test_band2comp_is_the_transpose_of_comp2band(band_lmax: int) -> None:
     band = Band.init_from_detector(detector_data, double_precision=True)
 
     x = comp.amps.astype(complex)
-    comp_x = CompList([comp]).comp2band(band).astype(complex)
+    band.alms[:] = 0
+    comp.comp2band(band)
+    comp_x = band.alms.astype(complex)
     y = _random_alms(band_lmax, rng)
     band.alms = y.copy()
     transpose_y = comp.band2comp(band, inplace=False).astype(complex)

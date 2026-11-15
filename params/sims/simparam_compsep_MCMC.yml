@@ -112,7 +112,6 @@ compsep:
       max_iter_pol: 300
       err_tol: 0.0
       preconditioner: JointPreconditioner
-      dense_matrix_debug_mode: false
 
   # Dust and synchrotron beta are proposed jointly (one group, one Metropolis accept/reject on the
   # joint chi^2), with the amplitude group re-solved between proposal and decision.

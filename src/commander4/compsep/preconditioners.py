@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import numpy as np
 import healpy as hp
-from copy import deepcopy
 
 from commander4.sky.diffuse_components import DiffuseComponent
 
@@ -41,7 +40,7 @@ class NoPreconditioner:
         pass
 
     def __call__(self, complist: CompList):
-        return deepcopy(complist)
+        return complist.copy()
 
 
 
@@ -117,8 +116,7 @@ class DiagonalJointPreconditioner:
         if not self.is_master:
             return a_complist
 
-        # Need to parse the list to make copy, as the list.copy() is a shallow copy.
-        a_complist_out = deepcopy(a_complist)
+        a_complist_out = a_complist.copy()
         for icomp in range(len(a_complist)):
             #comp_lmax = self.compsep.lmax_per_comp[icomp]
             if isinstance(a_complist[icomp], DiffuseComponent):
@@ -348,8 +346,7 @@ class JointPreconditioner:
         if not self.is_master:
             return a_complist
 
-        # Need to parse the list to make copy, as the list.copy() is a shallow copy.
-        a_complist_out = deepcopy(a_complist)
+        a_complist_out = a_complist.copy()
         for ell_data in self.ell_block_data:
             if ell_data is None:
                 continue

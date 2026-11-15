@@ -136,7 +136,6 @@ compsep:
       max_iter_pol: 120
       err_tol: 0.0
       preconditioner: JointPreconditioner #NoiseOnlyPreconditioner #FullPreconditioner #MixingMatrixPreconditioner #BeamOnlyPreconditioner #
-      dense_matrix_debug_mode: false  # Solve system first with dense matrix math, for debugging CG. Very slow for nside>32.
 
   mcmc_sampling_groups: {}
 

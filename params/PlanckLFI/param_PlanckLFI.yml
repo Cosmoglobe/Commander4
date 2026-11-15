@@ -119,7 +119,6 @@ compsep:
       max_iter_pol: 100
       err_tol: 0.0  # No stopping criterium.
       preconditioner: JointPreconditioner #NoiseOnlyPreconditioner #FullPreconditioner #MixingMatrixPreconditioner #BeamOnlyPreconditioner #
-      dense_matrix_debug_mode: false
 
   mcmc_sampling_groups: {}
 

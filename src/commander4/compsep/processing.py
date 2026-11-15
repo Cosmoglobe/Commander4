@@ -93,7 +93,6 @@ class CGSamplingGroupConfig(SamplingGroupConfig):
     max_iter_pol: int = 200
     err_tol: float = 1.0e-8
     preconditioner: str = "JointPreconditioner"
-    dense_matrix_debug_mode: bool = False
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -107,16 +106,8 @@ class CGSamplingGroupConfig(SamplingGroupConfig):
         if not isinstance(self.err_tol, Real) or not np.isfinite(self.err_tol) or self.err_tol < 0:
             raise ValueError(f"CG sampling group {self.name!r} err_tol must be non-negative and "
                              "finite.")
-        if (not isinstance(self.optimize, bool)
-                or not isinstance(self.dense_matrix_debug_mode, bool)):
-            raise ValueError(
-                f"CG sampling group {self.name!r} boolean options must be true or false.")
-        if self.dense_matrix_debug_mode:
-            raise ValueError(
-                f"CG sampling group {self.name!r} selects the unsupported dense-matrix debug mode: "
-                "commander4.compsep.dense_matrix_debug predates the CompList-based CG driver and "
-                "builds its unit vectors as plain arrays, so the solve crashes as soon as the "
-                "operator is applied. Leave dense_matrix_debug_mode off until it is ported.")
+        if not isinstance(self.optimize, bool):
+            raise ValueError(f"CG sampling group {self.name!r} optimize must be true or false.")
 
 @dataclass(frozen=True)
 class PerPixelSamplingGroupConfig(SamplingGroupConfig):
@@ -440,9 +431,6 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
                  f"{mpi_info.processor_name}), dedicated to band {mpi_info.compsep.rank}.")
 
     comp_list = CompList.init_from_params(params.components, params)
-    comp_names = [comp.comp_name for comp in comp_list.joined()]
-    if len(comp_names) != len(set(comp_names)):
-        raise ValueError(f"Duplicate component names found in CompSep setup: {comp_names}.")
 
     # MPI setup already selected this rank's execution view from the same inventory used to count
     # tasks. Only the parameter block needs copying because its polarization is narrowed to I or QU.
@@ -575,7 +563,11 @@ def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
         else:
             raise ValueError(
                 f"Unknown amplitude sampling method {compsep_state.amplitude_method!r}.")
-        active_sublist.copy_matching_data_from(solved_sublist)
+        # The solver returns the same views in the same order. Their amplitudes go into the
+        # components of the chain, together with the beam those amplitudes carry.
+        for comp, solved_comp in zip(active_sublist, solved_sublist):
+            np.copyto(comp.amps, solved_comp.amps)
+            comp.amp_fwhm_rad = solved_comp.amp_fwhm_rad
         solver_comm.Free()
 
     any_active = compsep.comm.allreduce(1 if should_solve else 0, op=MPI.SUM)

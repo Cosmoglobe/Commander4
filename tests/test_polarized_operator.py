@@ -7,6 +7,7 @@ from numpy.testing import assert_allclose
 from commander4.data_models.detector_map import DetectorMap
 from commander4.compsep import preconditioners
 from commander4.compsep.preconditioners import JointPreconditioner
+from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.math_utils.alm import alm_dot_product
 
@@ -85,25 +86,11 @@ class _NonDiffuseComp:
         self.amps = np.full((1, 3), 5.0)
 
 
-class _DummyCompList:
-    def __init__(self, comps):
-        self._comps = comps
-
-    def __len__(self):
-        return len(self._comps)
-
-    def __getitem__(self, index):
-        return self._comps[index]
-
-    def __iter__(self):
-        return iter(self._comps)
-
-
 def test_diagonal_preconditioner_gives_each_component_its_own_diagonal():
     # A non-diffuse component placed first must not shift the diagonals of the ones after it.
     lmax, npix = 4, 12*4**2
     compsep = _DummyCompSep(map_inv_var=np.full((1, npix), 2.0), lmax=lmax)
-    comp_list = _DummyCompList([_NonDiffuseComp(), _DummyDiffuseComp(lmax=lmax, npol=1)])
+    comp_list = CompList([_NonDiffuseComp(), _DummyDiffuseComp(lmax=lmax, npol=1)])
     comp_list[1].amps[:] = 1.0
 
     result = preconditioners.DiagonalJointPreconditioner(compsep, comp_list)(comp_list)
@@ -131,7 +118,7 @@ def test_joint_preconditioner_uses_trace_weight_for_spin2_channels():
         np.full(npix, 0.25, dtype=np.float64),
     ])
     compsep = _DummyCompSep(map_inv_var=map_inv_var, lmax=16)
-    comp_list = _DummyCompList([_DummyDiffuseComp(lmax=16, npol=2)])
+    comp_list = CompList([_DummyDiffuseComp(lmax=16, npol=2)])
 
     precond = JointPreconditioner(compsep, comp_list)
     _, _, _, block_inv = precond.ell_block_data[4]
@@ -155,7 +142,7 @@ def _single_band_precond_block(preconditioner_name: str, ell: int):
     map_inv_var = np.full((1, 12*nside**2), 2.0, dtype=np.float64)
     compsep = _DummyCompSep(map_inv_var=map_inv_var, lmax=lmax)
     compsep.my_band.fwhm = 60.0   # arcmin
-    comp_list = _DummyCompList([_SEDDiffuseComp(lmax=lmax, npol=1, sed=sed) for sed in (1.0, 3.0)])
+    comp_list = CompList([_SEDDiffuseComp(lmax=lmax, npol=1, sed=sed) for sed in (1.0, 3.0)])
     precond = getattr(preconditioners, preconditioner_name)(compsep, comp_list)
     return precond, precond.ell_block_data[ell][3], comp_list
 
@@ -196,7 +183,7 @@ def test_joint_preconditioner_has_no_prior_term_for_a_component_without_a_prior(
     compsep.my_band.fwhm = 60.0   # arcmin
     comps = [_SEDDiffuseComp(lmax=comp_lmax, npol=1, sed=sed) for sed in (1.0, 3.0)]
     comps[0].Cl_prior_amplitude = None
-    precond = JointPreconditioner(compsep, _DummyCompList(comps))
+    precond = JointPreconditioner(compsep, CompList(comps))
 
     noise_weight = 2.0 * 12*nside**2/(4*np.pi)
     beam_squared = hp.gauss_beam(np.deg2rad(60.0/60), lmax=band_lmax)[4]**2

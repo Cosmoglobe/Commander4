@@ -1,5 +1,3 @@
-from copy import deepcopy
-
 import h5py
 import healpy as hp
 import numpy as np
@@ -11,7 +9,6 @@ from commander4.sky.diffuse_components import CMB, ThermalDust
 from commander4.sky.point_sources import PointSourcesComponent
 from commander4.math_utils.alm import gaussian_random_alm
 from commander4.math_utils.sht import alm_to_map
-from commander4.sky.comp_list import complist_dot, complist_norm
 
 
 def _make_compsep(ntask_compsep_qu: int = 1, ntask_compsep_i: int = 1) -> Bunch:
@@ -47,21 +44,6 @@ def _make_named_component_cfg(shortname: str, polarization: str = "IQU") -> Bunc
     return cfg
 
 
-def _make_multi_comp_list() -> CompList:
-    params = Bunch(compsep=_make_compsep())
-    cmb = _make_named_component_cfg("cmb", "IQU")
-    object.__setattr__(cmb, "_name", "cmb")
-    dust = _make_named_component_cfg("dust", "IQU")
-    object.__setattr__(dust, "_name", "dust")
-    components = Bunch(
-        {
-            "cmb": cmb,
-            "dust": dust,
-        }
-    )
-    return CompList.init_from_params(components, params)
-
-
 def test_init_from_params_builds_all_defined_pol_views() -> None:
     # Construction is independent of the MPI/compsep layout: an IQU component always yields both an
     # I and a QU view, even when zero compsep ranks are configured.
@@ -84,7 +66,6 @@ def test_complist_split_preserves_names_and_join_restores_logical_component() ->
     assert [comp.comp_name for comp in comp_list] == ["cmb", "cmb"]
     assert [comp.shortname for comp in comp_list] == ["cmb", "cmb"]
     assert [comp.eval_pol for comp in comp_list] == ["I", "QU"]
-    assert [comp.is_split_view for comp in comp_list] == [True, True]
 
     comp_list[0].amps[:] = 1.0 + 0.0j
     comp_list[1].amps[:] = 2.0 + 0.0j
@@ -94,71 +75,50 @@ def test_complist_split_preserves_names_and_join_restores_logical_component() ->
     assert joined[0].comp_name == "cmb"
     assert joined[0].shortname == "cmb"
     assert joined[0].eval_pol == "IQU"
-    assert not joined[0].is_split_view
     assert np.all(joined[0].amps[0] == 1.0 + 0.0j)
     assert np.all(joined[0].amps[1:] == 2.0 + 0.0j)
 
 
-def test_component_itruediv_divides_data() -> None:
-    comp_list = _make_comp_list("I")
-    comp = comp_list[0]
-    other = deepcopy(comp)
-    comp.amps[:] = 6.0 + 0.0j
-    other.amps[:] = 3.0 + 0.0j
-
-    comp /= other
-
-    assert np.all(comp.amps == 2.0 + 0.0j)
-
-
-def test_complist_add_returns_full_complist() -> None:
+def test_complist_copy_has_its_own_amplitudes_and_shares_the_rest() -> None:
+    """A CG vector is a copy of the list. It must not change the original's amplitudes, and it
+    must not duplicate what the components hold besides them."""
     comp_list = _make_comp_list("IQU")
-    for idx, comp in enumerate(comp_list, start=1):
-        comp.amps[:] = idx + 0.0j
-
-    summed = comp_list + comp_list
-
-    assert isinstance(summed, CompList)
-    assert len(summed) == 2
-    assert np.all(summed[0].amps == 2.0 + 0.0j)
-    assert np.all(summed[1].amps == 4.0 + 0.0j)
-
-
-def test_complist_norm_is_the_square_root_of_the_self_dot_product() -> None:
-    """`complist_norm` must return |x|, not |x|^2, so a ratio of two is a relative L2 error."""
-    comp_list = _make_comp_list("IQU")
-    for idx, comp in enumerate(comp_list, start=1):
-        comp.amps[:] = idx + 0.0j
-
-    self_dot = complist_dot(comp_list, comp_list)
-
-    assert self_dot > 0.0
-    assert complist_norm(comp_list) == pytest.approx(np.sqrt(self_dot))
-
-
-def test_complist_norm_ratio_scales_linearly_with_the_perturbation() -> None:
-    """The CG diagnostic divides two norms and reports it as an L2 error, so it must be linear."""
-    truth = _make_comp_list("IQU")
-    for comp in truth:
+    for comp in comp_list:
         comp.amps[:] = 1.0 + 0.0j
-    perturbed = deepcopy(truth)
-    for comp in perturbed:
-        comp.amps[:] = 1.1 + 0.0j  # a uniform 10% deviation
 
-    relative_error = complist_norm(perturbed - truth)/complist_norm(truth)
+    copied = comp_list.copy()
+    zeros = comp_list.zeros_like()
+    for comp in copied:
+        comp.amps[:] = 5.0 + 0.0j
 
-    assert relative_error == pytest.approx(0.1, rel=1e-6)
+    assert [comp.eval_pol for comp in copied] == ["I", "QU"]
+    assert all(np.all(comp.amps == 1.0 + 0.0j) for comp in comp_list)
+    assert all(np.all(comp.amps == 0.0) for comp in zeros)
+    assert all(new.comp_params is old.comp_params for new, old in zip(copied, comp_list))
 
 
-def test_complist_ops_require_matching_execution_views() -> None:
+def test_complist_vector_arithmetic_acts_on_every_component() -> None:
+    x = _make_comp_list("IQU")
+    y = x.copy()
+    for value, (comp_x, comp_y) in enumerate(zip(x, y), start=1):
+        comp_x.amps[:] = value + 0.0j        # 1 in the I view, 2 in the QU view.
+        comp_y.amps[:] = 10.0*value + 0.0j
+
+    x.add_scaled(y, 0.5)                     # x = x + 0.5*y = 6*value
+    assert np.all(x[0].amps == 6.0 + 0.0j) and np.all(x[1].amps == 12.0 + 0.0j)
+    x.scale_and_add(y, 2.0)                  # x = 2*x + y = 22*value
+    assert np.all(x[0].amps == 22.0 + 0.0j) and np.all(x[1].amps == 44.0 + 0.0j)
+
+
+def test_complist_dot_counts_each_real_number_of_the_alms_once() -> None:
+    """With every alm equal to 1, the dot product is the number of real numbers behind the alms
+    that the solver uses: (lmax+1)^2 per polarization row. Here lmax = 1, and the QU view has two
+    rows, so I and QU together give 4 + 2*4."""
     comp_list = _make_comp_list("IQU")
-    other = deepcopy(comp_list)
-    other.comp_list.reverse()
+    for comp in comp_list:
+        comp.amps[:] = 1.0 + 0.0j
 
-    with pytest.raises(ValueError, match="same execution views"):
-        _ = comp_list + other
-    with pytest.raises(ValueError, match="same execution views"):
-        _ = complist_dot(comp_list, other)
+    assert comp_list.dot(comp_list) == pytest.approx(12.0)
 
 
 def test_complist_split_for_eval_pol_rejects_invalid_polarization() -> None:
@@ -184,34 +144,16 @@ def test_complist_split_for_eval_pol_returns_requested_execution_view() -> None:
     assert qu_only[0].eval_pol == "QU"
 
 
-def test_complist_constructor_rejects_duplicate_unsplit_comp_names() -> None:
-    comp = _make_comp_list("I")[0]
-    duplicate = deepcopy(comp)
+def test_init_from_params_rejects_one_shortname_for_two_components() -> None:
+    """The chain stores each component under its shortname."""
+    params = Bunch(compsep=_make_compsep())
+    cmb = _make_named_component_cfg("same", "IQU")
+    object.__setattr__(cmb, "_name", "cmb")
+    dust = _make_named_component_cfg("same", "I")
+    object.__setattr__(dust, "_name", "dust")
 
-    with pytest.raises(ValueError, match="Duplicate logical component"):
-        CompList([comp, duplicate])
-
-
-def test_complist_constructor_rejects_reused_shortname_for_distinct_comp_names() -> None:
-    comp = _make_comp_list("I")[0]
-    other = deepcopy(comp)
-    other.comp_name = "dust"
-
-    with pytest.raises(ValueError, match="Shortname"):
-        CompList([comp, other])
-
-
-def test_copy_matching_data_from_leaves_omitted_components_unchanged() -> None:
-    comp_list = _make_multi_comp_list()
-    intensity = comp_list.split_for_eval_pol("I")
-    original_other = intensity[1].amps.copy()
-    updated_subset = CompList([deepcopy(intensity[0])])
-    updated_subset[0].amps[:] = 7.0 + 0.0j
-
-    intensity.copy_matching_data_from(updated_subset)
-
-    assert np.all(intensity[0].amps == 7.0 + 0.0j)
-    assert np.array_equal(intensity[1].amps, original_other)
+    with pytest.raises(ValueError, match="Shortname 'same' is used for both 'cmb' and 'dust'"):
+        CompList.init_from_params(Bunch({"cmb": cmb, "dust": dust}), params)
 
 
 def _make_list(*configs: tuple[str, str]) -> CompList:
