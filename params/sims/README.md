@@ -212,7 +212,7 @@ which describes it and the truth it injects. Generate the TODs first, then run t
 18 tasks = 6 TOD + 6 CompSep-I + 6 CompSep-QU.
 
 FEATURE UNDER TEST: `compsep.mcmc_sampling_groups` with `parameters: spectral_indices`, the
-Metropolis-Hastings sampler in `compsep/spectral_index.py`, which re-solves the CG amplitude
+Metropolis-Hastings sampler in `compsep/spectral_sampling.py`, which re-solves the CG amplitude
 groups named in `update_amplitude_groups` between proposal and accept/reject.
 
 STARTS AWAY FROM THE TRUTH AT: beta_dust 1.45 (truth 1.54), beta_sync -3.25 (truth -3.10), several

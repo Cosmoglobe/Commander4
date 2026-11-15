@@ -1,7 +1,7 @@
 """Tests for the MCMC sampling-group chi-squared mask (C3's MCMC_SAMPLING_GROUP_CHISQ_MASK).
 
-The mask restricts which pixels enter the MH accept/reject likelihood. It is not a data
-mask: it never touches the noise model or the amplitude solve, only `local_loglike`.
+The mask restricts which pixels enter the accept/reject chi-squared of the sampler. It is not a
+data mask: it never touches the noise model or the amplitude solve.
 """
 
 import healpy as hp
@@ -11,31 +11,16 @@ from mpi4py import MPI
 from pixell.bunch import Bunch
 
 from commander4.compsep.processing import _read_chisq_masks
+from commander4.compsep.spectral_sampling import chi2_of_chisq_bands, resolve_chisq_mask
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
-from commander4.compsep.mcmc import MCMCSamplingGroup, resolve_chisq_mask
+from commander4.sky.sky_model import SkyModel
 
 NSIDE = 2
 NPIX = 12*NSIDE**2
 
 
-class _TrivialGroup(MCMCSamplingGroup):
-    """Concrete MCMCSamplingGroup with no parameters, to exercise the base-class likelihood."""
-
-    def has_parameters(self) -> bool:
-        return False
-
-    def capture_state(self):
-        return {}
-
-    def propose(self, current_state):
-        return {}, True
-
-    def apply_state(self, state) -> None:
-        pass
-
-
-def _zero_comp_list() -> CompList:
+def _zero_sky_model() -> SkyModel:
     """A single CMB component with zero alms, so the realized sky model is identically zero."""
     params = Bunch(compsep=Bunch(nside=NSIDE, double_precision=True,
                                  MPI_config=Bunch(ntask_compsep_I=1, ntask_compsep_QU=1)))
@@ -46,15 +31,18 @@ def _zero_comp_list() -> CompList:
     comp_list = CompList.init_from_params(Bunch({"CMB": cmb}), params)
     for comp in comp_list:
         comp.amps[:] = 0.0
-    return comp_list
+    return SkyModel(comp_list)
 
 
-def _make_group(map_sky, inv_var, chisq_mask=None) -> _TrivialGroup:
+def _chi2(map_sky, inv_var, keep=slice(None), chisq_bands=("Band100",)) -> float:
+    """The sampler's chi-squared of one band map against a zero sky, on one rank."""
     det_map = DetectorMap(np.asarray(map_sky, dtype=np.float64),
                           np.asarray(inv_var, dtype=np.float64),
                           nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=2)
-    return _TrivialGroup(MPI.COMM_SELF, det_map, _zero_comp_list(), target_pol="I",
-                         chisq_active=True, chisq_mask=chisq_mask)
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF),
+                     band=Bunch(name="Band100", identifier="Band100_I"))
+    group = Bunch(chisq_bands=list(chisq_bands))
+    return chi2_of_chisq_bands(mpi_info, group, det_map, _zero_sky_model(), keep)
 
 
 class TestResolveChisqMask:
@@ -74,16 +62,15 @@ class TestResolveChisqMask:
         assert keep.sum() == NPIX - 4
 
 
-class TestMaskedLikelihood:
-    def test_masked_likelihood_equals_explicit_partial_sum(self):
+class TestMaskedChi2:
+    def test_masked_chi2_equals_explicit_partial_sum(self):
         rng = np.random.default_rng(7)
         map_sky = rng.normal(0.0, 2.0, (1, NPIX))
         rms = rng.uniform(0.5, 2.0, (1, NPIX))
         keep = rng.random(NPIX) > 0.5
 
-        group = _make_group(map_sky, 1.0/rms**2, chisq_mask=keep.astype(float))
-        expected = -0.5*np.sum((map_sky[0, keep]/rms[0, keep])**2)
-        assert group.local_loglike() == pytest.approx(expected)
+        expected = np.sum((map_sky[0, keep]/rms[0, keep])**2)
+        assert _chi2(map_sky, 1.0/rms**2, keep=keep) == pytest.approx(expected)
 
     def test_zero_weight_pixels_contribute_zero_not_nan(self):
         """Unobserved pixels (map_inv_var = 0) must not poison the chi-squared."""
@@ -91,9 +78,13 @@ class TestMaskedLikelihood:
         inv_var = np.ones((1, NPIX))
         inv_var[0, :6] = 0.0
 
-        loglike = _make_group(map_sky, inv_var).local_loglike()
-        assert np.isfinite(loglike)
-        assert loglike == pytest.approx(-0.5*(NPIX - 6)*3.0**2)
+        assert _chi2(map_sky, inv_var) == pytest.approx((NPIX - 6)*3.0**2)
+
+    def test_a_band_outside_chisq_bands_contributes_nothing(self):
+        map_sky = np.full((1, NPIX), 3.0)
+        assert _chi2(map_sky, np.ones((1, NPIX)), chisq_bands=["OtherBand"]) == 0.0
+        # A group can also name this rank's view of the band.
+        assert _chi2(map_sky, np.ones((1, NPIX)), chisq_bands=["Band100_I"]) == NPIX*3.0**2
 
 
 class TestReadChisqMasks:

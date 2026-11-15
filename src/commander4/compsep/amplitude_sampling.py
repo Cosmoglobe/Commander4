@@ -37,10 +37,7 @@ def _build_conditional_residual(detector_data: DetectorMap, comp_list: CompList,
                    if comp.comp_name not in active_names]
     if not fixed_comps:
         return detector_data
-    band_pol = "QU" if detector_data.pol else "I"
-    fixed_sky = SkyModel(CompList(fixed_comps)).get_sky_at_nu(
-        detector_data.nu, detector_data.nside, band_pol, fwhm=detector_data.fwhm_rad,
-        lmax=detector_data.lmax)
+    fixed_sky = SkyModel(CompList(fixed_comps)).get_sky_at_band(detector_data)
     residual = deepcopy(detector_data)
     residual.map_sky = detector_data.map_sky - fixed_sky.astype(detector_data.map_sky.dtype,
                                                                 copy=False)

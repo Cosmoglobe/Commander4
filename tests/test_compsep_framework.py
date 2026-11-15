@@ -23,8 +23,6 @@ from commander4.math_utils.alm import _dot_complex_alm_1D_arrays
 from commander4.sky.comp_list import CompList
 from commander4.sky.sky_model import SkyModel
 from commander4.compsep.perpix_solver import solve_compsep_perpix
-from commander4.compsep.spectral_index import (
-    _discover_spectral_index_groups, SpectralIndexGroup, SpectralIndexSamplingGroup)
 from commander4.polarization import get_execution_band_id, get_execution_band_ids
 
 
@@ -139,12 +137,7 @@ def test_iteration_chi2_uses_all_observed_map_samples() -> None:
                      band=Bunch(name="Planck30GHz", polarization="I"))
     cfg = Bunch(nside_chisq=1, include_residual_maps=False)
 
-    class ZeroSky:
-        def get_sky_at_nu(self, nu: float, nside: int, pols_required: str,
-                          fwhm: float | None = None, lmax: int | None = None) -> np.ndarray:
-            return np.zeros_like(map_sky)
-
-    fit = evaluate_chi2(mpi_info, cfg, detector_data, ZeroSky())
+    fit = evaluate_chi2(mpi_info, cfg, detector_data, SkyModel(CompList([])))  # A zero sky.
 
     assert fit.total == pytest.approx(np.sum((map_sky[0, :-1] / 2.0)**2))
     assert fit.ndof == 11
@@ -162,9 +155,9 @@ def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
     mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0),
                      band=Bunch(name="Planck30GHz", identifier="Planck30GHz_I", polarization="I"))
     # Compsep only runs with at least one enabled group, so use one that samples nothing (its
-    # component list is empty): the group loop still runs, and its evaluation is the final fit.
+    # `beta` is empty): the group loop still runs, and its evaluation is the final fit.
     noop = Bunch(**MCMC_GROUP_DEFAULTS)
-    noop.name, noop.chisq_bands, noop.chisq_mask_map = "noop", ["Planck30GHz"], None
+    noop.name, noop.beta, noop.chisq_bands, noop.chisq_mask_map = "noop", {}, ["Planck30GHz"], None
     cfg = Bunch(cg_sampling_groups={}, amplitude_groups={}, mcmc_sampling_groups={"noop": noop},
                 nside_chisq=1, include_chisq_map=True, include_residual_maps=False)
     monkeypatch.setattr(
@@ -185,7 +178,8 @@ def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
 
 def _make_group_params(**sampling_group_sections) -> Bunch:
     """A parameter file with three components, one IQU band, and the given sampling groups."""
-    components = Bunch({name: Bunch(enabled=True) for name in ("CMB", "ThermalDust", "FreeFree")})
+    components = Bunch({name: Bunch(enabled=True, params=Bunch())
+                        for name in ("CMB", "ThermalDust", "FreeFree")})
     bands = Bunch({"Planck30GHz": Bunch(enabled=True, polarization="IQU")})
     return Bunch(components=components, compsep=Bunch(bands=bands, **sampling_group_sections))
 
@@ -273,9 +267,8 @@ def test_gibbs_chains_have_independent_component_state() -> None:
     assert all(comp_1 is not comp_2 for comp_1, comp_2 in zip(chain_components[1],
                                                               chain_components[2]))
 
-    sampler = SpectralIndexSamplingGroup.__new__(SpectralIndexSamplingGroup)
-    sampler._groups = _discover_spectral_index_groups(chain_components[1], ["Synchrotron"])
-    sampler.apply_state({"sync": -2.8})
+    for comp in chain_1_sync:
+        comp.beta = -2.8
     chain_1_sync[0].amps[:] = 4.0 + 2.0j
     chain_1_sync[0].amp_fwhm_rad = 0.25
 
@@ -489,39 +482,25 @@ def test_band2comp_is_the_transpose_of_comp2band(band_lmax: int) -> None:
     assert lhs == pytest.approx(rhs, rel=1e-5)
 
 
-def test_discover_spectral_index_groups_groups_iqu_views_and_respects_selection() -> None:
-    comp_list = _make_spectral_comp_list()
+def test_mcmc_group_holds_the_sampler_settings_of_its_components() -> None:
+    params = _make_group_params(mcmc_sampling_groups=Bunch(
+        all=Bunch(), only_dust=Bunch(comps=["ThermalDust"])))
+    params.components.ThermalDust.params = Bunch(
+        sample_spectral_index=True, spectral_index_proposal_sigma=0.01,
+        spectral_index_prior=Bunch(type="gaussian", mean=1.5, rms=0.1))
+    params.components.FreeFree.params = Bunch(
+        sample_spectral_index=True, spectral_index_proposal_sigma=0.02,
+        spectral_index_bounds=[-4.0, -2.0])
+    groups = read_sampling_groups(params).mcmc_sampling_groups
 
-    # All selected: one group per logical component (the I/QU views of each are grouped together).
-    all_groups = _discover_spectral_index_groups(comp_list, None)
-    assert sorted(g.name for g in all_groups) == ["dust", "sync"]
-    sync_group = next(g for g in all_groups if g.name == "sync")
-    assert {comp.eval_pol for comp in sync_group.components} == {"I", "QU"}
-    assert sync_group.bounds == (-4.0, -2.0)
-
-    # Restricting to one component yields only that component's group.
-    only_sync = _discover_spectral_index_groups(comp_list, ["Synchrotron"])
-    assert [g.name for g in only_sync] == ["sync"]
-
-
-def test_discover_spectral_index_groups_reads_gaussian_prior() -> None:
-    groups = {g.name: g for g in _discover_spectral_index_groups(_make_spectral_comp_list(), None)}
-    assert groups["dust"].prior == (1.5, 0.1)  # gaussian prior parsed as (mean, rms)
-    assert groups["sync"].prior is None        # no prior block -> flat prior
-
-
-def test_spectral_index_gaussian_log_prior_matches_formula() -> None:
-    # Construct the sampler without MPI: log_prior only reads self._groups, so bypass __init__.
-    sampler = SpectralIndexSamplingGroup.__new__(SpectralIndexSamplingGroup)
-    sampler._groups = [
-        SpectralIndexGroup("sync", components=(), proposal_sigma=0.1, bounds=None, prior=(-3.0, 0.2)),
-        SpectralIndexGroup("dust", components=(), proposal_sigma=0.1, bounds=None, prior=None),
-    ]
-    # Group at its prior mean and the flat group both contribute 0.
-    assert sampler.log_prior({"sync": -3.0, "dust": 1.5}) == 0.0
-    # Off-mean group contributes -0.5 ((beta-mean)/rms)^2; flat group still 0.
-    np.testing.assert_allclose(sampler.log_prior({"sync": -3.4, "dust": 1.5}),
-                               -0.5*((-3.4 + 3.0)/0.2)**2)
+    # "all" takes every component that sets `sample_spectral_index` (CMB does not).
+    assert list(groups["all"].beta) == ["ThermalDust", "FreeFree"]
+    assert list(groups["only_dust"].beta) == ["ThermalDust"]
+    dust, freefree = groups["all"].beta["ThermalDust"], groups["all"].beta["FreeFree"]
+    assert (dust.proposal_sigma, dust.bounds, dust.prior_mean, dust.prior_rms) \
+        == (0.01, None, 1.5, 0.1)
+    assert (freefree.proposal_sigma, freefree.bounds, freefree.prior_mean, freefree.prior_rms) \
+        == (0.02, [-4.0, -2.0], None, None)
 
 
 # --- component lmax vs band lmax ------------------------------------------------------------

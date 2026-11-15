@@ -187,7 +187,7 @@ src/commander4/
     processing.py      #   Reads the sampling groups, and drives the iteration in Gibbs order.
     amplitude_sampling.py  # Samples the amplitudes of one sampling group, with one of the two solvers below.
     cg_solver.py       #   The global CG amplitude solve; perpix_solver.py is the common-resolution alternative.
-    mcmc.py            #   Metropolis-Hastings machinery; spectral_index.py is its one concrete user.
+    spectral_sampling.py   # Metropolis sampling of the spectral indices of one sampling group.
     preconditioners.py #   Preconditioners for the compsep CG (the mapmaker's live in tod/mapmaking/).
 
   sky/                 # The sky model that compsep solves for and the TOD side subtracts.

@@ -84,9 +84,7 @@ def evaluate_chi2(mpi_info: Bunch, cfg: Bunch, detector_data: DetectorMap, sky_m
             fit summary under it. `None` evaluates silently.
     """
     compsep = mpi_info.compsep
-    band_pol = "QU" if detector_data.pol else "I"
-    sky_at_band = sky_model.get_sky_at_nu(detector_data.nu, detector_data.nside, band_pol,
-                                          fwhm=detector_data.fwhm_rad, lmax=detector_data.lmax)
+    sky_at_band = sky_model.get_sky_at_band(detector_data)
     pol_names = ["Q", "U"] if detector_data.pol else ["I"]
     npix, npix_chisq = detector_data.map_sky.shape[-1], hp.nside2npix(cfg.nside_chisq)
     # ud_grade averages, so scaling by how many fine pixels fall in a coarse one turns the average
@@ -108,7 +106,7 @@ def evaluate_chi2(mpi_info: Bunch, cfg: Bunch, detector_data: DetectorMap, sky_m
 
         z2_full = np.zeros(npix)
         z2_full[observed] = z**2
-        chi2_row = 0 if band_pol == "I" else 1 + ipol
+        chi2_row = 1 + ipol if detector_data.pol else 0
         chi2_map[chi2_row] += hp.ud_grade(z2_full, cfg.nside_chisq)*subpixels_per_chisq_pixel
 
         if label is not None:

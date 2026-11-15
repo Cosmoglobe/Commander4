@@ -1,8 +1,10 @@
 """`SkyModel`: a component list plus the operations that realize it as a sky map at a frequency."""
 import healpy as hp
 import numpy as np
+from numpy.typing import NDArray
 from pixell.bunch import Bunch
 from commander4.data_models.band import Band
+from commander4.data_models.detector_map import DetectorMap
 from commander4.math_utils.sht import alm_to_map
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
@@ -40,6 +42,15 @@ class SkyModel:
         The per-pixel solver instead returns amplitudes at `compsep.common_res_fwhm`.
         """
         return max((comp.amp_fwhm_rad for comp in self._components), default=0.0)
+
+    def get_sky_at_band(self, band_map: DetectorMap) -> NDArray:
+        """The realized sky as one band map sees it: at its frequency, resolution, beam and lmax.
+
+        The result has the shape of `band_map.map_sky`, so `band_map.map_sky` minus it is the
+        residual of the band.
+        """
+        return self.get_sky_at_nu(band_map.nu, band_map.nside, "QU" if band_map.pol else "I",
+                                  fwhm=band_map.fwhm_rad, lmax=band_map.lmax)
 
     def get_sky_at_nu(self, nu, nside, pols_required, fwhm=None, lmax=None):
         """Get the realized sky of a band: its frequency, resolution, beam and lmax.

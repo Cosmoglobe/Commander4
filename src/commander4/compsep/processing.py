@@ -4,8 +4,8 @@
 parameter file once; `process_compsep` runs one iteration's sampling groups over the band maps
 received from TOD processing. A *sampling group* names a set of components and bands to be sampled
 together. An amplitude group is solved with CG or per pixel (`amplitude_sampling`), and an MCMC
-group with Metropolis-Hastings (`mcmc`). The settings of a group are a plain `Bunch`, with the
-names of the parameter file (`read_sampling_groups`).
+group with Metropolis steps (`spectral_sampling`). The settings of a group are a plain `Bunch`,
+with the names of the parameter file (`read_sampling_groups`).
 """
 import numpy as np
 import healpy as hp
@@ -22,7 +22,7 @@ from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.sky.sky_model import SkyModel
 from commander4.compsep.amplitude_sampling import sample_amplitudes
 from commander4.compsep.chisq import collect_fit_diagnostics, evaluate_chi2
-from commander4.compsep.spectral_index import SpectralIndexSamplingGroup
+from commander4.compsep.spectral_sampling import sample_spectral_params
 from commander4.file_io import paths
 from commander4.file_io.chain_restart import ChainStart
 from commander4.file_io.chain_writer import write_compsep_chain_to_file
@@ -64,7 +64,8 @@ def read_sampling_groups(params: Bunch) -> Bunch:
     `per_pixel_sampling_groups` and `mcmc_sampling_groups` are each a dict from group name to the
     settings of that group. A group also holds its own `name`, and its `comps`, `bands` and
     `chisq_bands` are lists of names. `amplitude_groups` is the CG groups or the per-pixel groups,
-    whichever the run uses.
+    whichever the run uses. An MCMC group also holds `beta`: the components whose beta it samples,
+    each with the settings of its sampler.
     """
     comp_names = [name for name in params.components if params.components[name].enabled]
     # A group can name a whole band ("Planck30GHz") or one view of it ("Planck30GHz_QU").
@@ -107,12 +108,31 @@ def read_sampling_groups(params: Bunch) -> Bunch:
             raise ValueError(f"'{section}.parameters' is {group.parameters!r}, but only "
                              "'spectral_indices' is implemented.")
         group.name = name
-        # `comps` stays None for "all": the sampler then takes every component that sets
+        # `comps` stays None for "all": the group then takes every component that sets
         # `sample_spectral_index`.
         if group.comps == "all":
             group.comps = None
         if group.comps is not None:
             group.comps = names_or_all(group.comps, comp_names, f"{section}.comps")
+        # `beta` holds the components whose beta the group samples, each with the settings of its
+        # sampler: `proposal_sigma`, the hard `bounds`, and the Gaussian prior `prior_mean` and
+        # `prior_rms` (None for no bounds or no prior). The component blocks set them.
+        group.beta = {}
+        for comp_name in comp_names:
+            comp_params = params.components[comp_name].params
+            if (group.comps is not None and comp_name not in group.comps) \
+                    or "sample_spectral_index" not in comp_params \
+                    or not comp_params.sample_spectral_index:
+                continue
+            settings = Bunch(proposal_sigma=comp_params.spectral_index_proposal_sigma,
+                             bounds=None, prior_mean=None, prior_rms=None)
+            if "spectral_index_bounds" in comp_params:
+                settings.bounds = comp_params.spectral_index_bounds
+            if "spectral_index_prior" in comp_params \
+                    and comp_params.spectral_index_prior is not None:
+                settings.prior_mean = comp_params.spectral_index_prior.mean
+                settings.prior_rms = comp_params.spectral_index_prior.rms
+            group.beta[comp_name] = settings
         group.chisq_bands = names_or_all(group.chisq_bands, band_names, f"{section}.chisq_bands")
         unknown = sorted(set(group.update_amplitude_groups) - set(cfg.amplitude_groups))
         if unknown:
@@ -339,7 +359,7 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, detector_data: DetectorMap, ite
     Returns:
         The full sky realization, wrapping the updated `comp_list`.
     """
-    compsep, band = mpi_info.compsep, mpi_info.band
+    compsep = mpi_info.compsep
     sky_model = SkyModel(comp_list)
     method = "CG" if cfg.cg_sampling_groups else "per-pixel"
     # Sampler bookkeeping for the chain: C3's nonlin-samples_*.dat and its CG residual logging. A
@@ -360,20 +380,9 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, detector_data: DetectorMap, ite
                             label=f"{method} group {group.name!r}")
 
     for group in cfg.mcmc_sampling_groups.values():
-        # The sampler calls this between a proposal and its accept/reject decision.
-        def resolve_amplitudes(group_names=group.update_amplitude_groups):
-            for group_name in group_names:
-                sample_amplitudes(mpi_info, cfg, cfg.amplitude_groups[group_name], detector_data,
-                                  comp_list, rng)
-
-        chisq_active = band.name in group.chisq_bands or band.identifier in group.chisq_bands
-        sampler = SpectralIndexSamplingGroup(
-            compsep.comm, detector_data, comp_list, target_pol=band.polarization,
-            selected_comps=group.comps, chisq_active=chisq_active,
-            chisq_mask=group.chisq_mask_map, root=compsep.master)
         with benchmark(f"mcmc-{group.name}"):
-            mcmc_stats = sampler.run(numstep=group.numstep, resolve_amplitudes=resolve_amplitudes,
-                                     rng=rng)
+            mcmc_stats = sample_spectral_params(mpi_info, cfg, group, detector_data, comp_list,
+                                                rng)
         if mcmc_stats:
             sampler_stats.setdefault("mcmc", {})[group.name] = mcmc_stats
         fit = evaluate_chi2(mpi_info, cfg, detector_data, sky_model,
