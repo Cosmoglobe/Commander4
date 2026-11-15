@@ -542,20 +542,22 @@ def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
     if should_solve:
         residual_data = _build_conditional_residual(
             detector_data, comp_list, compsep_state.target_pol, active_sublist)
+        # Both solvers leave their solution in the components of `active_sublist`, which are the
+        # chain's own components.
         if compsep_state.amplitude_method == "cg":
             solver = CompSepSolver(
                 residual_data, solver_comm, group,
                 double_precision=compsep_state.double_precision,
                 nthreads=compsep_state.num_threads,
             )
-            solved_sublist = solver.solve(active_sublist, rng)
+            solver.solve(active_sublist, rng)
             # The CG runs its scalar recurrence on rank 0 of `solver_comm` and only broadcasts the
             # stopping decision, so that rank alone holds meaningful residuals.
             if solver_comm.Get_rank() == 0:
                 cg_stats = {"cg_residuals": np.asarray(solver.CG_residuals),
                             "n_iter": len(solver.CG_residuals)}
         elif compsep_state.amplitude_method == "per_pixel":
-            solved_sublist = solve_compsep_perpix(
+            solve_compsep_perpix(
                 solver_comm, residual_data, active_sublist,
                 double_precision=compsep_state.double_precision,
                 nthreads=compsep_state.num_threads, rng=rng,
@@ -563,11 +565,6 @@ def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
         else:
             raise ValueError(
                 f"Unknown amplitude sampling method {compsep_state.amplitude_method!r}.")
-        # The solver returns the same views in the same order. Their amplitudes go into the
-        # components of the chain, together with the beam those amplitudes carry.
-        for comp, solved_comp in zip(active_sublist, solved_sublist):
-            np.copyto(comp.amps, solved_comp.amps)
-            comp.amp_fwhm_rad = solved_comp.amp_fwhm_rad
         solver_comm.Free()
 
     any_active = compsep.comm.allreduce(1 if should_solve else 0, op=MPI.SUM)

@@ -223,6 +223,20 @@ def test_the_cg_starts_from_the_amplitudes_it_is_given():
     assert warm_solver.CG_residuals[0] < 1e-10
 
 
+def test_solve_leaves_the_solution_in_the_components_it_is_given():
+    """The Gibbs loop hands the chain's own components to the solver, and reads the solution from
+    them afterwards."""
+    comp_list = _make_comp_list(_make_params(), Cl_prior_amplitude=1.0)
+    amps = comp_list[0].amps
+    solver = _make_solver(_make_det_map(), _make_group(sample_amplitudes=False))
+
+    returned = solver.solve(comp_list, np.random.default_rng(0))
+
+    assert returned is comp_list
+    assert comp_list[0].amps is amps  # The same array, so other views of it see the solution.
+    assert np.abs(amps).max() > 0.0   # It was zero on entry.
+
+
 def test_the_cg_applies_the_full_band_beam_to_amplitudes_from_a_per_pixel_chain():
     """Amplitudes from a per-pixel chain carry a beam (`amp_fwhm_rad`). The CG must still fit the
     unsmoothed sky through the full band beam, so the solution does not depend on that beam."""
@@ -470,18 +484,18 @@ class TestPriorMeanMap:
         comp_list.load_amp_prior_means()
         mu_before = comp_list[0].amp_prior_mean.copy()
 
-        # Solve the *same* component objects twice, as the Gibbs loop does across iterations.
-        params = _make_params()
+        # Solve the *same* component objects twice, as the Gibbs loop does across iterations. The
+        # solution is left in `comp_list`, so the first one is copied before the second solve.
         det_map = _make_det_map()
-        first = _make_solver(det_map, _make_group(False)).solve(comp_list,
-                                                                np.random.default_rng(0))
-        second = _make_solver(det_map, _make_group(False)).solve(comp_list,
-                                                                 np.random.default_rng(0))
+        _make_solver(det_map, _make_group(False)).solve(comp_list, np.random.default_rng(0))
+        first = comp_list[0].amps.copy()
+        _make_solver(det_map, _make_group(False)).solve(comp_list, np.random.default_rng(0))
+        second = comp_list[0].amps
 
         np.testing.assert_array_equal(comp_list[0].amp_prior_mean, mu_before)
         # The CG stops at err_tol, and threaded SHTs sum in a varying order, so two solves agree
         # only to roughly the CG tolerance. A corrupted cache would change the answer by order one.
-        np.testing.assert_allclose(first[0].amps, second[0].amps, rtol=1e-4, atol=1e-6)
+        np.testing.assert_allclose(first, second, rtol=1e-4, atol=1e-6)
 
     def test_uninformative_data_recovers_the_prior_map(self, tmp_path):
         """End-to-end: with no data information the solution is the prior-mean map itself."""

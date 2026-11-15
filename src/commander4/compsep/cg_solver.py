@@ -33,7 +33,7 @@ class CompSepSolver:
     """ Class for performing global component separation using the preconditioned conjugate gradient
         method. After initializing the class, the solve() method should be called to perform the
         component separation. Note that the solve() method will in-place update (as well as return)
-        the 'comp_list' argument passed to the constructor.
+        the 'comp_list' argument passed to it.
 
         The component separation problem is an Ax = b equation on the form
         (S^-1 + Y^T M^T Y^-1^T N^-1 B M Y) a
@@ -327,7 +327,10 @@ class CompSepSolver:
 
 
     def solve(self, comp_list: CompList, rng: np.random.Generator) -> CompList:
-        """Solve  the amplitudes of `comp_list` for this rank's band.
+        """Solve the amplitudes of `comp_list` for this rank's band, in place.
+
+        The CG starts from the amplitudes that `comp_list` holds on entry, and leaves the solution
+        in them. The same list is returned.
 
         If `sample_amplitudes==True` the solution is a constrained realization, i.e the Wiener mean
         plus two fluctuation terms, i.e. the amplitudes are a draw from the conditional posterior.
@@ -337,28 +340,27 @@ class CompSepSolver:
         `rng` is this rank's random generator. Each rank must have its own stream: eta_1 is *this*
         band's white-noise realization, so shared draws would correlate the fluctuation across
         bands.
-
-        The CG starts from the amplitudes that `comp_list` holds on entry.
         """
         # Set comp beams to 0 (in theory they could be non-zero if the per-pix solver has ran).
         for comp in comp_list:
             comp.amp_fwhm_rad = 0.0
-        # Set starting guess to x0 = S^{-1/2} a. It is copied, because `calc_RHS` overwrites
-        # `comp_list`. Only the master's values are used; the other ranks need the list as a buffer
-        # of the right shape.
-        x0 = comp_list.copy()
+        # `comp_list` is the solution vector of the CG: it starts as the guess and ends as the
+        # solution. The CG works in x = S^{-1/2} a, so the guess is scaled here, and `solve_CG`
+        # scales the solution back. Only the master's values are used; the other ranks need the
+        # list as a buffer of the right shape.
         if self.my_rank == 0:
-            for comp in x0:
+            for comp in comp_list:
                 comp.apply_Cl_prior_inv_sqrt(comp.amps)
 
-        # `calc_RHS` overwrites the CompList it is handed, so comp_list doubles as the RHS buffer
-        # (the preconditioner below reads only its metadata, never its alms).
+        # `calc_RHS` overwrites the list it is handed, so it gets a new one.
         with benchmark("cg-rhs"):
-            RHS = self.calc_RHS(comp_list, rng)
+            RHS = self.calc_RHS(comp_list.zeros_like(), rng)
 
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners",
-        # and has the name specified by this sampling group's preconditioner setting.
+        # and has the name specified by this sampling group's preconditioner setting. It reads only
+        # the settings of the components, never their amplitudes.
         with benchmark("cg-precond-init"):
             precond = getattr(preconditioners, self.config.preconditioner)(self, comp_list)
 
-        return self.solve_CG(self.apply_LHS_matrix, RHS, x0=x0, M=precond)
+        self.solve_CG(self.apply_LHS_matrix, RHS, x0=comp_list, M=precond)
+        return comp_list
