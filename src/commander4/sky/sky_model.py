@@ -80,7 +80,8 @@ class SkyModel:
         for view, rows, spin in (("I", slice(0, 1), 0), ("QU", slice(nrows - 2, nrows), 2)):
             if view[0] not in pols_required:
                 continue
-            band = Band(np.zeros((len(view), hp.Alm.getsize(lmax)), dtype=np.complex128), nu,
+            # Single precision, like `skymap`, which the result goes into.
+            band = Band(np.zeros((len(view), hp.Alm.getsize(lmax)), dtype=np.complex64), nu,
                         np.degrees(fwhm)*60.0, nside)
             for comp in diffuse:
                 if comp.eval_pol in (view, "IQU"):

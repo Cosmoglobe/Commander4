@@ -146,6 +146,10 @@ def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
         # zero inverse variance.
         map_rms = np.asarray(map_rms, dtype=np.float64)
         map_inv_var = np.divide(1.0, map_rms**2, out=np.zeros_like(map_rms), where=map_rms > 0)
+        # A signal pixel that is UNSEEN or NaN is unobserved too, whatever its RMS says.
+        unseen = ~np.isfinite(map_sky) | (map_sky == hp.UNSEEN)
+        map_sky = np.where(unseen, 0.0, map_sky)
+        map_inv_var[unseen] = 0.0
 
         try:
             nside = hp.npix2nside(map_sky.size)

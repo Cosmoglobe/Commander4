@@ -625,11 +625,11 @@ class SpinningDust(DiffuseComponent):
 
     The template is the Cold Neutral Medium model, which peaks at 30 GHz. It is shifted in
     frequency so its peak lands at `nu_peak` (`comp_params.nu_peak`), which is the one shape
-    parameter; `nu_0` only sets where the amplitude map is normalized.
+    parameter; `nu_ref` (`comp_params.nu_0`) only sets where the amplitude map is normalized.
     """
 
     default_shortname = "spin-dust"
-    sed_param_names = ("nu_peak_eval", "nu_peak_ref", "nu_0")
+    sed_param_names = ("nu_peak_eval", "nu_peak_ref", "nu_ref")
 
     def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_amps=False,
                  shortname = None, eval_pol = None, comp_name: str | None = None):
@@ -646,7 +646,7 @@ class SpinningDust(DiffuseComponent):
         freqs, SED = np.loadtxt(comp_params.template_path).T
         self.nu_peak_ref = 30.0  # Peak frequency of the template as tabulated.
         self.nu_peak_eval = comp_params.nu_peak
-        self.nu_0 = comp_params.nu_0  # Reference frequency for the amplitude map in GHz
+        self.nu_ref = comp_params.nu_0  # Reference frequency for the amplitude map in GHz
 
         # Interpolate in log-log space, where the template is smooth and spans many decades.
         log_nu = np.log(freqs)
@@ -661,7 +661,7 @@ class SpinningDust(DiffuseComponent):
     def get_sed(self, nu: float|NDArray[np.floating]):
         """Calculates the spinning dust SED scaling factor.
 
-        Scales an amplitude map from its reference frequency `nu_0` to the target frequency `nu`.
+        Scales an amplitude map from its reference frequency `nu_ref` to the target frequency `nu`.
 
         Args:
             nu (float|array): Frequency at which to get the SED, in GHz.
@@ -673,13 +673,13 @@ class SpinningDust(DiffuseComponent):
         SED_eval = self._get_template_emissivity(nu_shifted_eval)
 
         # Denominator: template evaluated at the shifted reference frequency for normalization
-        nu_shifted_ref = self.nu_0 * self.nu_peak_ref / self.nu_peak_eval
+        nu_shifted_ref = self.nu_ref * self.nu_peak_ref / self.nu_peak_eval
         SED_ref = self._get_template_emissivity(nu_shifted_ref)
 
         # Shifting the SED spectrum from the reference frequency to the given peak frequency.
         SED_at_eval_freq = SED_eval / SED_ref
 
         # Converting from intensity to brightness temperature.
-        SED_uK_RJ = (self.nu_0 / nu)**2 * SED_at_eval_freq
+        SED_uK_RJ = (self.nu_ref / nu)**2 * SED_at_eval_freq
         return SED_uK_RJ
     

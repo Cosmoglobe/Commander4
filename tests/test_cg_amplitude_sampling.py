@@ -224,6 +224,22 @@ def test_the_cg_starts_from_the_amplitudes_it_is_given():
     assert warm_solver.CG_residuals[0] < 1e-10
 
 
+def test_the_cg_applies_the_full_band_beam_to_amplitudes_from_a_per_pixel_chain():
+    """Amplitudes from a per-pixel chain carry a beam (`amp_fwhm_rad`). The CG must still fit the
+    unsmoothed sky through the full band beam, so the solution does not depend on that beam."""
+    npix = 12*NSIDE**2
+    det_map = DetectorMap(np.random.default_rng(0).normal(0.0, 1.0, (1, npix)),
+                          np.full((1, npix), 1.0/3.0**2), nu=100.0, fwhm=600.0, nside=NSIDE,
+                          double_precision=True, lmax=LMAX)
+    solver = _make_solver(det_map, _make_group(sample_amplitudes=False))
+    sharp = solver.solve(_make_comp_list(_make_params()), np.random.default_rng(0))
+    smoothed_input = _make_comp_list(_make_params())
+    smoothed_input[0].amp_fwhm_rad = np.deg2rad(8.0)
+    from_per_pixel = solver.solve(smoothed_input, np.random.default_rng(0))
+    np.testing.assert_allclose(from_per_pixel[0].amps, sharp[0].amps, rtol=1e-6)
+    assert from_per_pixel[0].amp_fwhm_rad == 0.0
+
+
 def test_the_lhs_couples_a_diffuse_component_and_point_sources_symmetrically(tmp_path):
     """<x, A y> = <A x, y> for x a CMB alm vector and y point-source amplitudes. The sources enter
     the band in pixel space, so this checks that they are added to Y(alms) before N^-1 and read

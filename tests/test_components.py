@@ -556,6 +556,26 @@ def test_cmb_init_map_to_amplitude_converts_uK_CMB_at_nu_ref() -> None:
     assert np.allclose(out, expected)
 
 
+def test_spinning_dust_converts_its_units_at_nu_0(tmp_path) -> None:
+    """The parameter `nu_0` is the reference frequency (`nu_ref`) for the unit conversion, as for
+    every other component. A prior given in uK_CMB^2 then works too."""
+    import pysm3.units as pysm3u
+    from commander4.sky import SpinningDust
+
+    template = tmp_path / "spdust.dat"
+    np.savetxt(template, np.column_stack([np.logspace(0, 3, 50), np.ones(50)]))
+    params = Bunch(polarization="I", shortname="ame", spatially_varying_MM=False,
+                   Cl_prior_amplitude=100.0, lmax=4, units="uK_CMB", template_path=str(template),
+                   nu_peak=30.0, nu_0=22.0)
+    object.__setattr__(params, "_name", "ame")
+    ame = SpinningDust(params, _make_compsep(), eval_pol="I", comp_name="ame")
+
+    cmb_to_rj = (1*pysm3u.uK_CMB).to(pysm3u.uK_RJ,
+                                     equivalencies=pysm3u.cmb_equivalencies(22.0*pysm3u.GHz)).value
+    assert ame.init_map_to_amplitude(1.0) == pytest.approx(cmb_to_rj)
+    assert np.all(np.isfinite(ame.P_Cl_prior))
+
+
 def test_cmb_get_sed_is_unity_at_nu_ref_and_ratio_elsewhere() -> None:
     import pysm3.units as pysm3u
 
@@ -601,7 +621,7 @@ def test_every_component_class_declares_its_sed_parameters() -> None:
     from commander4.sky import CMB, FreeFree, Synchrotron, ThermalDust, SpinningDust, RadioSources
     expected = {CMB: ("nu_ref",), ThermalDust: ("beta", "T", "nu_ref"),
                 Synchrotron: ("beta", "nu_ref"), FreeFree: ("T", "nu_ref"),
-                SpinningDust: ("nu_peak_eval", "nu_peak_ref", "nu_0"), RadioSources: ("nu_ref",)}
+                SpinningDust: ("nu_peak_eval", "nu_peak_ref", "nu_ref"), RadioSources: ("nu_ref",)}
     for cls, names in expected.items():
         assert cls.sed_param_names == names, cls.__name__
 
