@@ -49,14 +49,14 @@ class PointSourcesComponent(Component):
 
     def __init__(self, comp_params: Bunch, global_params: Bunch, *,
                  shortname: str | None = None, comp_name: str | None = None,
-                 eval_pol: str | None = None, allocate_empty_alms: bool = False):
+                 eval_pol: str | None = None, allocate_empty_amps: bool = False):
         super().__init__(
             comp_params,
             global_params,
             shortname=shortname,
             comp_name=comp_name,
             eval_pol="I" if eval_pol is None else eval_pol,
-            allocate_empty_alms=allocate_empty_alms,
+            allocate_empty_amps=allocate_empty_amps,
         )
         self.defined_pol = "I"
         self.eval_pol = "I"
@@ -76,7 +76,7 @@ class PointSourcesComponent(Component):
         so they are not written.
         """
         super().write_chain(group, band_frequencies)
-        group["source_amps"] = self._data
+        group["source_amps"] = self.amps
 
     def read_chain(self, group: h5py.Group) -> None:
         """Restore the shared sampled state (see `Component.read_chain`), plus the amplitudes.
@@ -85,7 +85,7 @@ class PointSourcesComponent(Component):
         chain.
         """
         super().read_chain(group)
-        self._data[:] = group["source_amps"][()]
+        self.amps[:] = group["source_amps"][()]
 
 class RadioSources(PointSourcesComponent):
     """Radio point sources, each a power law with its own spectral index.
@@ -102,14 +102,14 @@ class RadioSources(PointSourcesComponent):
 
     def __init__(self, comp_params: Bunch, global_params: Bunch, *,
                  shortname: str | None = None, comp_name: str | None = None,
-                 eval_pol: str | None = None, allocate_empty_alms: bool = False):
+                 eval_pol: str | None = None, allocate_empty_amps: bool = False):
         super().__init__(
             comp_params,
             global_params,
             shortname=shortname,
             comp_name=comp_name,
             eval_pol=eval_pol,
-            allocate_empty_alms=allocate_empty_alms,
+            allocate_empty_amps=allocate_empty_amps,
         )
         self.nu_ref = comp_params.nu_0  # Reference frequency (GHz)
         # Flux density to brightness temperature, evaluated once at `nu_ref` (C3's `getScale`).
@@ -119,13 +119,13 @@ class RadioSources(PointSourcesComponent):
         self.mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ,
                             equivalencies=pysm3u.cmb_equivalencies(self.nu_ref*pysm3u.GHz))
         ps_bunch = self.read_dat_to_bunch(comp_params.template_path)
-        self._data = np.array(ps_bunch['I(mJy)'], dtype=np.float32).reshape((1,-1))  # Amplitudes
+        self.amps = np.array(ps_bunch['I(mJy)'], dtype=np.float32).reshape((1,-1))  # Amplitudes
         self.alpha_arr = np.array(ps_bunch['alpha_I'], dtype=np.float32)  # Spectral indices
         self.lonlat_arr = np.array((ps_bunch['Glon(deg)'], ps_bunch['Glat(deg)']),
                                    dtype=np.float32).T  # Per-source coordinates
         del ps_bunch
         if self.alpha_arr.shape[0] != self.lonlat_arr.shape[0]\
-        or self.alpha_arr.shape[0] != self._data.shape[1]:
+        or self.alpha_arr.shape[0] != self.amps.shape[1]:
             raise RuntimeError("Point Source tabulated data must be uniform in length.")
 
         # Ragged per-source beam discs, cached because they depend only on the band resolution and
@@ -219,7 +219,7 @@ class RadioSources(PointSourcesComponent):
         map = np.zeros((1, hp.nside2npix(nside)),
                        dtype=np.float64 if self.double_prec else np.float32)
         _project_sources_to_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                                self._data[0,:], self.get_sed(nu))
+                                self.amps[0,:], self.get_sed(nu))
         map *= self.mJysr_to_uKRJ
         return map
 
@@ -236,7 +236,7 @@ class RadioSources(PointSourcesComponent):
         map = np.zeros((1, hp.nside2npix(nside)),
                        dtype=np.float64 if self.double_prec else np.float32)
         _project_sources_to_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                                self._data[0,:])
+                                self.amps[0,:])
         map *= self.mJysr_to_uKRJ
         return map
     
@@ -245,7 +245,7 @@ class RadioSources(PointSourcesComponent):
             sums it into `map`, which must have shape [1, npix].
         """
         _project_sources_to_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                                self._data[0,:], sed_s=self.get_sed(nu))
+                                self.amps[0,:], sed_s=self.get_sed(nu))
         map *= self.mJysr_to_uKRJ
     
     def _eval_from_band_map(self, map, nu):
@@ -255,8 +255,8 @@ class RadioSources(PointSourcesComponent):
         All the contributions will be summed to the total proper amplitudes by the master node.
         """
         _evaluate_sources_from_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                                   self._data[0,:], sed_s=self.get_sed(nu))
-        self._data *= self.mJysr_to_uKRJ
+                                   self.amps[0,:], sed_s=self.get_sed(nu))
+        self.amps *= self.mJysr_to_uKRJ
 
     def comp2band(self, band:Band, nthreads: int = 1):
         """ Add the point sources to the band's alms (C3's `evalBand`).
@@ -281,7 +281,7 @@ class RadioSources(PointSourcesComponent):
 
     def band2comp(self, band:Band, nthreads: int = 1):
         """ The transpose of `comp2band` (C3's `projectBand`): the band's alm contribution
-            to the point sources' amplitudes, stored in `_data` and returned.
+            to the point sources' amplitudes, stored in `amps` and returned.
 
         The band beam is included, through the painted beam profiles. All the contributions will be
         summed to the total proper amplitudes when reducing on the master node.
@@ -296,16 +296,16 @@ class RadioSources(PointSourcesComponent):
                                       nthreads=nthreads)
 
         # M^T Y^-1 B^T a
-        self._eval_from_band_map(band_map, band.nu)  # Updates self._data in place.
+        self._eval_from_band_map(band_map, band.nu)  # Updates self.amps in place.
 
-        return self._data
+        return self.amps
 
     def apply_Cl_prior_sqrt(self, alms):
-        """ A dummy for point sources: the input is simply returned.
+        """ A dummy for point sources (S = 1): the input is simply returned.
 
-        NB: point-source support in compsep is unfinished and awaiting review. In particular these
-        components expose no ``alms`` attribute, so the ``comp.apply_Cl_prior_sqrt(comp.alms)``
-        calls in the CG solver would not reach this dummy for a point source in the first place.
+        Point sources have no amplitude prior (`Cl_prior_amplitude` is None), as in C3, where the
+        per-source prior `P_x` is switched off. Point-source support in the CG is unfinished; see
+        C4_issues.md, K4.
         """
         return alms
 
@@ -315,4 +315,4 @@ class RadioSources(PointSourcesComponent):
         return alms
 
     def __repr__(self):
-        return f"Radio Source \n amps: {self._data}"
+        return f"Radio Source \n amps: {self.amps}"

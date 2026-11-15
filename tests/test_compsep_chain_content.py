@@ -40,9 +40,9 @@ def _write(tmp_path, diagnostics=None, band_frequencies=None, lmax=4) -> str:
     paths.create_output_dirs(params.output)
     comp_list = _comp_list(lmax)
     for comp in comp_list.components:
-        comp.allocate_empty_alms()
+        comp.allocate_empty_amps()
         rng = np.random.default_rng(0)
-        comp.alms[:] = rng.normal(size=comp.alms.shape) + 1j*rng.normal(size=comp.alms.shape)
+        comp.amps[:] = rng.normal(size=comp.amps.shape) + 1j*rng.normal(size=comp.amps.shape)
     write_compsep_chain_to_file(comp_list, params, chain=1, iter=1,
                                 diagnostics=diagnostics, band_frequencies=band_frequencies)
     return os.path.join(paths.subdir(params, paths.CHAINS_COMPSEP), "chain01_iter0001.h5")
@@ -88,7 +88,7 @@ def test_a_disabled_cl_prior_writes_nothing(tmp_path) -> None:
         Bunch({"cmb": cmb}),
         Bunch(compsep=Bunch(bands=Bunch(), double_precision=True, ntask_compsep_QU=1)))
     for comp in comp_list.components:
-        comp.allocate_empty_alms()
+        comp.allocate_empty_amps()
     write_compsep_chain_to_file(comp_list, params, chain=1, iter=1)
 
     path = os.path.join(paths.subdir(params, paths.CHAINS_COMPSEP), "chain01_iter0001.h5")

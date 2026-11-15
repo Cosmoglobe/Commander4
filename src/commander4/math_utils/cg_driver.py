@@ -70,20 +70,30 @@ class DistributedCG:
             self.p = np.zeros_like(b)
 
     def step(self):
-        """Take one CG step, which updates ``x``, ``i`` and ``err``."""
+        """Take one CG step, which updates ``x``, ``i`` and ``err``.
+
+        ``err`` becomes exactly 0 when the residual is zero to machine precision. The solution
+        cannot improve after that, and further steps change nothing.
+        """
         # Full vectors: p, Ap, x, r, z. Ap and z not in memory at the
         # same time. Total memory cost: 4 vectors + 1 temporary = 5 vectors
-        Ap = self.A(self.p)
-        if self.is_master:  # The rest of the CG iteration is done by the master alone.
-            alpha = self.rz/self.dot(self.p, Ap)
-            self.add_scaled(self.x, self.p, alpha)  # x += alpha*p
-            self.add_scaled(self.r, Ap, -alpha)     # r -= alpha*Ap
-            del Ap
-            z       = self.M(self.r)
-            next_rz = self.dot(self.r, z)
-            self.err = next_rz/self.rz0
-            beta = next_rz/self.rz
-            self.rz = next_rz
-            self.scale_add(self.p, z, beta)         # p = beta*p + z
-
         self.i += 1
+        Ap = self.A(self.p)
+        if not self.is_master:  # The rest of the CG iteration is done by the master alone.
+            return
+        pAp = self.dot(self.p, Ap)
+        if pAp == 0.0:
+            # The residual is zero to machine precision: p = 0, or A p is too small to represent.
+            # Stop here, because alpha below would divide by zero.
+            self.err = 0.0
+            return
+        alpha = self.rz/pAp
+        self.add_scaled(self.x, self.p, alpha)  # x += alpha*p
+        self.add_scaled(self.r, Ap, -alpha)     # r -= alpha*Ap
+        del Ap
+        z       = self.M(self.r)
+        next_rz = self.dot(self.r, z)
+        self.err = next_rz/self.rz0
+        beta = next_rz/self.rz
+        self.rz = next_rz
+        self.scale_add(self.p, z, beta)         # p = beta*p + z

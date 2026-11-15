@@ -365,7 +365,8 @@ class CGMapmaker:
                     self.logger.debug(f"CG iter {i:3d} - True A-norm error: {CG_Anorm_error:.3e} "
                                       f"- True L2 error: {CG_L2_error:.3e}")
             # Only the master updates CG_solver.err, so the stopping decision has to be broadcast.
-            converged = self.map_comm.bcast(CG_solver.err < self.CG_tol, root=0)
+            # `<=`: err is exactly 0 once the CG has converged to machine precision.
+            converged = self.map_comm.bcast(CG_solver.err <= self.CG_tol, root=0)
             if converged:
                 break
         self._map_signal = CG_solver.x

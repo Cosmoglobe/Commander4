@@ -735,7 +735,7 @@ def saved_component_sample(request: pytest.FixtureRequest, tmp_path: Path) -> tu
             intrinsic[comp.shortname] = alm.copy()
         else:
             alm *= 3.0  # Distinct QU amplitudes expose accidental row selection.
-        comp.alms[:] = hp.almxfl(alm, hp.gauss_beam(amp_fwhm, lmax=lmax))
+        comp.amps[:] = hp.almxfl(alm, hp.gauss_beam(amp_fwhm, lmax=lmax))
         comp.amp_fwhm_rad = amp_fwhm
         if comp.shortname == "cmb":
             comp.nu_ref = 100.0 if comp.eval_pol == "I" else 217.0
@@ -764,7 +764,7 @@ def test_component_restoration_matches_saved_seds_and_beams(saved_component_samp
         for name, value in expected_seds[comp.shortname].items():
             assert getattr(comp, name) == pytest.approx(value)
         expected_alm = hp.almxfl(intrinsic[comp.shortname], hp.gauss_beam(np.radians(6.0), lmax=8))
-        np.testing.assert_allclose(comp.alms[0], expected_alm, atol=1e-12)
+        np.testing.assert_allclose(comp.amps[0], expected_alm, atol=1e-12)
 
 
 def test_iteration_subtracts_saved_foregrounds_without_double_smoothing(

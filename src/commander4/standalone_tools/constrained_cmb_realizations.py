@@ -531,7 +531,7 @@ def _load_iteration(params: Bunch, iteration: int, compsep_path: str,
         logger.info(f"iter {iteration}: read {band} ({nu:g} GHz, {stored_unit}) at nside {nside}.")
 
     # Chain CMB amplitudes are uK_RJ at their reference frequency, including for spectrum plots.
-    cmb_alms = np.ascontiguousarray(cmb_comps[0].alms[0]).astype(np.complex128)
+    cmb_alms = np.ascontiguousarray(cmb_comps[0].amps[0]).astype(np.complex128)
     cmb_alms *= rj_to_band_unit_factor(cmb_comps[0].nu_ref, "uK_CMB")
     return Bunch(signal_maps=signal_maps, ivar_maps=ivar_maps,
                  beam_sizes=np.array(beam_sizes), cmb_alms=cmb_alms, lmax=cmb_comps[0].lmax)

@@ -134,7 +134,7 @@ class FakeComponent:
         self.comp_params = comp_params
         self.comp_name = comp_params["shortname"]
         self.beta = beta
-        self.alms = self._make_alms(amplitude)
+        self.amps = self._make_alms(amplitude)
 
     @property
     def is_pol(self):
@@ -148,20 +148,12 @@ class FakeComponent:
     def _make_alms(amplitude, npol=1):
         return np.full((npol, 1), amplitude, dtype=np.float64)
 
-    @property
-    def alms(self):
-        return self._data
-
-    @alms.setter
-    def alms(self, alms):
-        self._data = np.array(alms, dtype=np.float64, copy=True)
-
     def get_sed(self, nu):
         return np.asarray(nu, dtype=np.float64)**self.beta
 
     def get_sky(self, nu, nside, fwhm=0.0):
         npix = 12 * nside**2
-        amplitude = float(self.alms[0, 0])
+        amplitude = float(self.amps[0, 0])
         base = np.full((self.npol, npix), amplitude, dtype=np.float64)
         return base * self.get_sed(nu)
 
@@ -184,7 +176,7 @@ def make_iqu_components(beta=1.5, amplitude=2.0, bounds=(1.0, 2.0), proposal_sig
     comp_i = FakeComponent("dust_I", "I", beta, amplitude, comp_params=shared_params)
     comp_qu = FakeComponent("dust_QU", "QU", beta, amplitude,
                             comp_params=shared_params)
-    comp_qu.alms = FakeComponent._make_alms(amplitude, npol=2)
+    comp_qu.amps = FakeComponent._make_alms(amplitude, npol=2)
     return comp_i, comp_qu
 
 
@@ -222,7 +214,7 @@ class TestSampleSpectralIndicesMH:
 
         assert comp_i.beta == pytest.approx(1.5)
         assert comp_qu.beta == pytest.approx(1.5)
-        np.testing.assert_allclose(comp_i.alms, np.array([[2.0]]))
+        np.testing.assert_allclose(comp_i.amps, np.array([[2.0]]))
 
     def test_rejection_restores_parameters_and_alms(self, monkeypatch):
         comp_i, comp_qu = make_iqu_components()
@@ -230,7 +222,7 @@ class TestSampleSpectralIndicesMH:
         group = _make_group(detector_data, FakeCompList([comp_i, comp_qu]))
 
         def resolve():  # The coupled amplitude re-solve mutates the shared component amplitudes.
-            comp_i.alms = np.array([[9.0]])
+            comp_i.amps = np.array([[9.0]])
 
         # loglike drops on the proposal and random() forces a reject; state must be fully reverted.
         loglikes = iter([0.0, -5.0])
@@ -240,7 +232,7 @@ class TestSampleSpectralIndicesMH:
 
         assert comp_i.beta == pytest.approx(1.5)
         assert comp_qu.beta == pytest.approx(1.5)
-        np.testing.assert_allclose(comp_i.alms, np.array([[2.0]]))
+        np.testing.assert_allclose(comp_i.amps, np.array([[2.0]]))
 
     def test_acceptance_keeps_proposed_parameters_and_alms(self, monkeypatch):
         comp_i, comp_qu = make_iqu_components()
@@ -248,7 +240,7 @@ class TestSampleSpectralIndicesMH:
         group = _make_group(detector_data, FakeCompList([comp_i, comp_qu]))
 
         def resolve():
-            comp_i.alms = np.array([[9.0]])
+            comp_i.amps = np.array([[9.0]])
 
         # loglike rises on the proposal -> accepted; the proposed beta and re-solved alms are kept.
         loglikes = iter([0.0, 2.0])
@@ -258,7 +250,7 @@ class TestSampleSpectralIndicesMH:
 
         assert comp_i.beta == pytest.approx(1.6)
         assert comp_qu.beta == pytest.approx(1.6)
-        np.testing.assert_allclose(comp_i.alms, np.array([[9.0]]))
+        np.testing.assert_allclose(comp_i.amps, np.array([[9.0]]))
 
     def test_the_reference_after_acceptance_is_the_accepted_solve(self):
         """The step after an accepted one compares against the accepted amplitudes themselves.
@@ -276,7 +268,7 @@ class TestSampleSpectralIndicesMH:
         offsets = iter([0.0, 1.0])  # Offset of the model from the data in the two solves.
 
         def resolve():
-            comp_i.alms = np.array([[(8.0 + next(offsets)) / detector_data.nu**comp_i.beta]])
+            comp_i.amps = np.array([[(8.0 + next(offsets)) / detector_data.nu**comp_i.beta]])
 
         proposals = iter([1.5, 1.6])
         rng = types.SimpleNamespace(normal=lambda loc, scale: next(proposals), random=lambda: 0.5)
@@ -284,7 +276,7 @@ class TestSampleSpectralIndicesMH:
 
         assert stats["n_accept"] == 1
         assert comp_i.beta == pytest.approx(1.5)
-        np.testing.assert_allclose(comp_i.alms, np.array([[8.0 / 2.0**1.5]]))
+        np.testing.assert_allclose(comp_i.amps, np.array([[8.0 / 2.0**1.5]]))
 
     def test_single_rank_integration_uses_real_likelihood(self):
         comp_i, comp_qu = make_iqu_components(beta=1.0, amplitude=2.0)
@@ -296,11 +288,11 @@ class TestSampleSpectralIndicesMH:
 
         def resolve():  # Fit the amplitude exactly to the proposed index so the residual vanishes.
             target_amplitude = detector_data.map_sky[0, 0] / (detector_data.nu**comp_i.beta)
-            comp_i.alms = np.array([[target_amplitude]])
+            comp_i.amps = np.array([[target_amplitude]])
 
         group.run(numstep=1, resolve_amplitudes=resolve, rng=_fixed_rng(1.5))
 
         # The proposed beta=1.5 gives a perfect fit (higher likelihood), so it is accepted.
         assert comp_i.beta == pytest.approx(1.5)
         assert comp_qu.beta == pytest.approx(1.5)
-        np.testing.assert_allclose(comp_i.alms, np.array([[8.0 / (2.0**1.5)]]))
+        np.testing.assert_allclose(comp_i.amps, np.array([[8.0 / (2.0**1.5)]]))

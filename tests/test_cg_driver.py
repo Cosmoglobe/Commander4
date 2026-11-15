@@ -14,6 +14,19 @@ def test_cg_reports_the_squared_relative_preconditioned_residual() -> None:
     assert solver.err == pytest.approx(1.0/9.0)
 
 
+def test_a_step_after_exact_convergence_reports_zero_error_and_changes_nothing() -> None:
+    # 2 x = 1 is solved exactly by the first step (x = 1/2, r = 0). The second step then has
+    # p = 0 and p.Ap = 0, where alpha would divide by zero.
+    solver = DistributedCG(lambda value: 2.0*value, np.ones(1), is_master=True)
+
+    solver.step()
+    solver.step()
+
+    assert solver.err == 0.0
+    np.testing.assert_array_equal(solver.x, [0.5])
+    assert solver.i == 2
+
+
 def test_with_a_starting_guess_the_error_is_relative_to_the_right_hand_side() -> None:
     diagonal = np.array([1.0, 2.0, 3.0])
     b = np.ones(3)

@@ -349,8 +349,8 @@ compsep:
                               # criterion": always run max_iter. That is what every
                               # real-data file here uses, because the CG residual is not a
                               # reliable convergence measure for a constrained
-                              # realization. (The CG still stops below 1e-30, where
-                              # nothing is left to solve.) Each solve starts from the
+                              # realization. (The CG still stops when the residual is
+                              # zero to machine precision.) Each solve starts from the
                               # current amplitudes, as in C3, so later Gibbs iterations
                               # need fewer CG iterations than the first.
       preconditioner: JointPreconditioner

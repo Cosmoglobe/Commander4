@@ -39,7 +39,7 @@ def test_plotter_draws_a_diffuse_component_at_a_band_frequency() -> None:
     cmb_I = _build_component_list(_cmb_params())[0]
     rng = np.random.default_rng(1)
     nalm = hp.Alm.getsize(cmb_I.lmax)
-    cmb_I.alms = (rng.normal(size=(1, nalm)) + 1j*rng.normal(size=(1, nalm))).astype(np.complex64)
+    cmb_I.amps = (rng.normal(size=(1, nalm)) + 1j*rng.normal(size=(1, nalm))).astype(np.complex64)
 
     at_100GHz = plotting._get_component_map(cmb_I, 100.0, 4, npol=1, ipol=0,
                                             smoothing_scale_radians=0.0)

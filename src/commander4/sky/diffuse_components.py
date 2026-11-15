@@ -54,7 +54,7 @@ class DiffuseComponent(Component):
     amplitude_unit = "uK_RJ"
 
     def __init__(self, comp_params: Bunch, global_params: Bunch,
-                 allocate_empty_alms=False, eval_pol:None|str=None,
+                 allocate_empty_amps=False, eval_pol:None|str=None,
                  comp_name: str | None = None, shortname: str | None = None):
         super().__init__(
             comp_params,
@@ -62,7 +62,7 @@ class DiffuseComponent(Component):
             shortname=shortname,
             comp_name=comp_name,
             eval_pol=eval_pol,
-            allocate_empty_alms=allocate_empty_alms,
+            allocate_empty_amps=allocate_empty_amps,
         )
         self.spatially_varying_MM = comp_params.spatially_varying_MM
         self.lmax = comp_params.lmax
@@ -98,9 +98,9 @@ class DiffuseComponent(Component):
         # Cached prior mean mu, filled from `amp_prior_mean_map` by CompList.load_amp_prior_means;
         # None means a zero-mean prior. See the amp_prior_mean property.
         self._amp_prior_mean_alms = None
-        self._data = None  # Alm data is not allocated by default.
-        if allocate_empty_alms:
-            self.allocate_empty_alms()
+        self.amps = None  # Alm data is not allocated by default.
+        if allocate_empty_amps:
+            self.allocate_empty_amps()
 
     def _per_pol(self, value):
         """Resolve a scalar-or-``[I, QU]`` parameter to this view's value (I -> first entry)."""
@@ -155,33 +155,11 @@ class DiffuseComponent(Component):
         else:
             raise ValueError("Specific polarization undefined, or set as IQU.")
 
-    @property
-    def alms(self):
-        if self._data is None:
-            raise ValueError("Trying to access un-initialized diffuse component alms.")
-        return self._data
-
-    @alms.setter
-    def alms(self, alms):
-        if alms.ndim == 2:
-            if alms.shape[0] == self.npol:
-                self._data = alms
-            else:
-                raise ValueError("Trying to set alms with wrong first axis length "
-                                 f"{alms.shape[0]} != 1 or 2")
-        else:
-            raise ValueError("Trying to set alms with unexpected number of dimensions: "
-                             f"{alms.ndim} != 2")
-    
-    def allocate_empty_alms(self):
+    def allocate_empty_amps(self):
         """ Allocates a zeroed alm array of the correct shape. Useful for e.g. MPI receiving.
         """
-        self._data = np.zeros((self.npol, self.alm_len_complex),
-                               dtype = (np.complex128 if self.double_prec else np.complex64))
-            
-    @property
-    def dtype(self):
-        return self._data.dtype
+        self.amps = np.zeros((self.npol, self.alm_len_complex),
+                             dtype = (np.complex128 if self.double_prec else np.complex64))
 
     Cl_prior_param_names = ("Cl_prior_amplitude", "Cl_prior_beta", "Cl_prior_FWHM",
                             "Cl_prior_l_pivot", "Cl_prior_l_apod", "Cl_prior_l_tighten")
@@ -200,7 +178,7 @@ class DiffuseComponent(Component):
         """
         # healpy's alm2cl only accepts complex128, while the alms are complex64 unless
         # `compsep.double_precision` is set.
-        alms = np.ascontiguousarray(self.alms, dtype=np.complex128)
+        alms = np.ascontiguousarray(self.amps, dtype=np.complex128)
         return np.array([hp.alm2cl(alms[ipol], lmax=self.lmax) for ipol in range(alms.shape[0])])
 
     @property
@@ -281,7 +259,7 @@ class DiffuseComponent(Component):
     def __repr__(self):
         return f"Diffuse Component {self.shortname}, with polarization: {self.eval_pol}"\
                 f" (originally defined as {self.defined_pol})" \
-                f"\n   lmax = {self.lmax} \n   alms: {self.alms}"
+                f"\n   lmax = {self.lmax} \n   alms: {self.amps}"
 
     def apply_Cl_prior_sqrt(self, alms: NDArray[np.complexfloating]) \
             -> NDArray[np.complexfloating]:
@@ -290,7 +268,7 @@ class DiffuseComponent(Component):
         The target is always explicit, so that scaling the component's own amplitudes and scaling
         something else that lives in its alm space read differently at the call site. To apply this
         to the component's own alms (the usual case, the CG's a = S^{1/2}x reparameterization)
-        call ``comp.apply_Cl_prior_sqrt(comp.alms)``.
+        call ``comp.apply_Cl_prior_sqrt(comp.amps)``.
         """
         prior_sqrt = np.sqrt(self.P_Cl_prior)
         for ipol in range(self.npol):
@@ -302,7 +280,7 @@ class DiffuseComponent(Component):
         """Multiplies `alms` by S^{-1/2}, in place, and returns them; the inverse of the above.
 
         Same contract as `apply_Cl_prior_sqrt`, including the explicit target: use
-        ``comp.apply_Cl_prior_inv_sqrt(comp.alms)`` to act on the component's own amplitudes.
+        ``comp.apply_Cl_prior_inv_sqrt(comp.amps)`` to act on the component's own amplitudes.
         P_Cl_prior is strictly positive by construction (it carries a 1e-10 floor), so the inversion
         needs no guard.
         """
@@ -337,7 +315,7 @@ class DiffuseComponent(Component):
     def write_chain(self, group: h5py.Group, band_frequencies: dict[str, float]) -> None:
         """Write the shared component sample (see `Component.write_chain`), plus the alms."""
         super().write_chain(group, band_frequencies)
-        group["alms"] = self.alms
+        group["alms"] = self.amps
         # The realized power spectrum of those alms (Commander3's `sigma_l`) and their lmax.
         group["sigma_l"] = self.sigma_l
         group["lmax"] = self.lmax
@@ -365,7 +343,7 @@ class DiffuseComponent(Component):
                          f"{self.comp_name!r}; leaving those alms unchanged.")
             return
         view_alms = project_alms(np.ascontiguousarray(stored_alms[rows]), self.lmax)
-        self.alms = view_alms.astype(self.dtype, copy=False)
+        self.amps = view_alms.astype(self.amps.dtype, copy=False)
 
     def get_component_map(self, nside: int, fwhm: float = 0.0, lmin: int = 0) -> NDArray:
         """The amplitude map at `nside`, smoothed by a Gaussian beam of `fwhm` radians.
@@ -374,12 +352,12 @@ class DiffuseComponent(Component):
         beam is one window on every Stokes row, as in `comp2band`. Multipoles below `lmin` are left
         out. A band's sky is made by `SkyModel.get_sky_at_nu` instead, through `comp2band`.
         """
-        if self.alms is None:
+        if self.amps is None:
             raise ValueError("component_alms property not set.")
         lmax = min(self.lmax, 3*nside - 1)
         window = hp.gauss_beam(fwhm, lmax=lmax)
         window[:lmin] = 0.0
-        alms = np.array([almxfl(alm, window) for alm in project_alms(self.alms, lmax)])
+        alms = np.array([almxfl(alm, window) for alm in project_alms(self.amps, lmax)])
         if self.eval_pol != "IQU":
             return alm_to_map(alms, nside, lmax, spin=self.spin)
         # A joined IQU component needs separate spin-0 and spin-2 synthesis calls.
@@ -398,13 +376,13 @@ class DiffuseComponent(Component):
     def get_sed(self, nu):
         raise NotImplementedError(f"{type(self).__name__}.get_sed() is not implemented.")
 
-    # Overrides the base-class dot product: diffuse-component _data holds complex alms, whose inner
+    # Overrides the base-class dot product: diffuse-component amps holds complex alms, whose inner
     # product must account for the m>0 coefficients each standing for two real degrees of freedom.
     def __matmul__(self, other):
         self._assert_consistent_comp(other)
         res = 0.0
         for ipol in range(self.npol):
-            res += _dot_complex_alm_1D_arrays(self._data[ipol], other._data[ipol], self.lmax)
+            res += _dot_complex_alm_1D_arrays(self.amps[ipol], other.amps[ipol], self.lmax)
         return res
 
     def _band_beam(self, band: Band) -> NDArray:
@@ -424,7 +402,7 @@ class DiffuseComponent(Component):
         sky model handed to TOD processing) gives its T row to an intensity band and its E and B
         rows to a polarization band.
         """
-        alms = self.alms
+        alms = self.amps
         if self.eval_pol == "IQU":
             alms = alms[1:] if band.is_pol else alms[:1]
         if (alms.shape[0] == 2) != band.is_pol:
@@ -479,7 +457,7 @@ class DiffuseComponent(Component):
         contrib_to_comp_alm = project_alms(tmp_alm, self.lmax)
         
         if inplace:
-            self.alms = contrib_to_comp_alm
+            self.amps = contrib_to_comp_alm
 
         return contrib_to_comp_alm
     
@@ -494,12 +472,12 @@ class CMB(DiffuseComponent):
     # `nu_ref` (default 1 GHz, where uK_RJ ~= uK_CMB). `get_sed` is therefore the *ratio* of the
     # thermodynamic-to-RJ conversion at `nu` relative to `nu_ref`.
 
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_amps=False,
                  shortname = None, eval_pol = None, comp_name: str | None = None):
         super().__init__(
             comp_params,
             global_params,
-            allocate_empty_alms=allocate_empty_alms,
+            allocate_empty_amps=allocate_empty_amps,
             eval_pol=eval_pol,
             comp_name=comp_name,
             shortname=shortname,
@@ -535,12 +513,12 @@ class ThermalDust(DiffuseComponent):
     default_shortname = "term-dust"
     sed_param_names = ("beta", "T", "nu_ref")
 
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_amps=False,
                  shortname = None, eval_pol = None, comp_name: str | None = None):
         super().__init__(
             comp_params,
             global_params,
-            allocate_empty_alms=allocate_empty_alms,
+            allocate_empty_amps=allocate_empty_amps,
             eval_pol=eval_pol,
             comp_name=comp_name,
             shortname=shortname,
@@ -569,12 +547,12 @@ class Synchrotron(DiffuseComponent):
     default_shortname = "sync"
     sed_param_names = ("beta", "nu_ref")
 
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_amps=False,
                  shortname = None, eval_pol = None, comp_name: str | None = None):
         super().__init__(
             comp_params,
             global_params,
-            allocate_empty_alms=allocate_empty_alms,
+            allocate_empty_amps=allocate_empty_amps,
             eval_pol=eval_pol,
             comp_name=comp_name,
             shortname=shortname,
@@ -600,12 +578,12 @@ class FreeFree(DiffuseComponent):
     default_shortname = "ff"
     sed_param_names = ("T", "nu_ref")
 
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_amps=False,
                  shortname = None, eval_pol = None, comp_name: str | None = None):
         super().__init__(
             comp_params,
             global_params,
-            allocate_empty_alms=allocate_empty_alms,
+            allocate_empty_amps=allocate_empty_amps,
             eval_pol=eval_pol,
             comp_name=comp_name,
             shortname=shortname,
@@ -653,12 +631,12 @@ class SpinningDust(DiffuseComponent):
     default_shortname = "spin-dust"
     sed_param_names = ("nu_peak_eval", "nu_peak_ref", "nu_0")
 
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_alms=False,
+    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_amps=False,
                  shortname = None, eval_pol = None, comp_name: str | None = None):
         super().__init__(
             comp_params,
             global_params,
-            allocate_empty_alms=allocate_empty_alms,
+            allocate_empty_amps=allocate_empty_amps,
             eval_pol=eval_pol,
             comp_name=comp_name,
             shortname=shortname,

@@ -310,12 +310,12 @@ def test_gibbs_chains_have_independent_component_state() -> None:
     sampler = SpectralIndexSamplingGroup.__new__(SpectralIndexSamplingGroup)
     sampler._groups = _discover_spectral_index_groups(chain_components[1], ["Synchrotron"])
     sampler.apply_state({"sync": -2.8})
-    chain_1_sync[0].alms[:] = 4.0 + 2.0j
+    chain_1_sync[0].amps[:] = 4.0 + 2.0j
     chain_1_sync[0].amp_fwhm_rad = 0.25
 
     assert all(comp.beta == -2.8 for comp in chain_1_sync)
     assert all(comp.beta == -3.1 for comp in chain_2_sync)
-    assert np.all(chain_2_sync[0].alms == 0.0)
+    assert np.all(chain_2_sync[0].amps == 0.0)
     assert chain_2_sync[0].amp_fwhm_rad == 0.0
 
 
@@ -369,8 +369,8 @@ def test_per_pixel_solver_accepts_resolved_precision() -> None:
     result = solve_compsep_perpix(
         MPI.COMM_SELF, detector_data, comp_list, double_precision=False, nthreads=1,
         rng=np.random.default_rng(0))
-    assert result[0].alms.dtype == np.complex64
-    assert np.all(np.isfinite(result[0].alms))
+    assert result[0].amps.dtype == np.complex64
+    assert np.all(np.isfinite(result[0].amps))
 
 
 def test_validate_mcmc_amplitude_group_dependencies() -> None:
@@ -434,7 +434,7 @@ def test_mcmc_group_selecting_all_components_ignores_fixed_ones_silently(caplog)
 def test_build_conditional_residual_subtracts_only_fixed_components() -> None:
     comp_list = _make_multi_comp_list()  # CMB, ThermalDust, FreeFree (all intensity views exist)
     for comp in comp_list.split_for_eval_pol("I"):
-        comp.alms = np.full_like(comp.alms, 3.0 + 0.0j)
+        comp.amps = np.full_like(comp.amps, 3.0 + 0.0j)
 
     nside = 2
     npix = 12 * nside**2
@@ -468,7 +468,7 @@ def test_band_sky_removes_amp_fwhm_by_quadrature() -> None:
     # A band sky applies only the part of the band beam that the amplitudes do not already carry
     # (amp_fwhm_rad, from the per-pixel solver): applied = sqrt(target^2 - amp_fwhm_rad^2).
     comp = next(c for c in _make_multi_comp_list().split_for_eval_pol("I") if c.comp_name == "CMB")
-    comp.alms = np.full_like(comp.alms, 2.0 + 0.0j)  # power at all l so smoothing is non-trivial
+    comp.amps = np.full_like(comp.amps, 2.0 + 0.0j)  # power at all l so smoothing is non-trivial
     nu, nside, target = 30.0, 2, 0.5  # target beam in radians
     sed = comp.get_sed(nu)
     # Sanity: at this target the beam actually changes the map, so the cases below are distinguishable.
@@ -494,12 +494,12 @@ def test_band_sky_is_cut_at_the_band_lmax() -> None:
     """The sky realized for a band holds nothing above the band lmax, as in the CG operator
     (C3's evalBand): a component with a higher lmax is cut, not folded into the band."""
     comp = _make_comp_list("I", lmax=23)[0]
-    comp.alms = _random_alms(23, np.random.default_rng(1)).astype(comp.alms.dtype)
+    comp.amps = _random_alms(23, np.random.default_rng(1)).astype(comp.amps.dtype)
     nu, nside, band_lmax, fwhm = 30.0, 4, 7, np.deg2rad(5.0)
 
     sky = SkyModel(CompList([comp])).get_sky_at_nu(nu, nside, "I", fwhm=fwhm, lmax=band_lmax)
 
-    alms = hp.resize_alm(comp.alms[0].astype(complex), 23, 23, band_lmax, band_lmax)
+    alms = hp.resize_alm(comp.amps[0].astype(complex), 23, 23, band_lmax, band_lmax)
     expected = hp.alm2map(hp.almxfl(alms, hp.gauss_beam(fwhm, lmax=band_lmax)), nside,
                           lmax=band_lmax)*comp.get_sed(nu)
     np.testing.assert_allclose(sky[0], expected, atol=1e-4*expected.std())
@@ -510,13 +510,13 @@ def test_band2comp_is_the_transpose_of_comp2band(band_lmax: int) -> None:
     """<comp2band(x), y> = <x, band2comp(y)>, with the beam, the lmax cut and the SED included."""
     rng = np.random.default_rng(2)
     comp = _make_comp_list("I", lmax=8)[0]
-    comp.alms = _random_alms(8, rng).astype(comp.alms.dtype)
+    comp.amps = _random_alms(8, rng).astype(comp.amps.dtype)
     nside = 4
     detector_data = DetectorMap(np.zeros((1, 12*nside**2)), np.ones((1, 12*nside**2)), nu=30.0,
                                 fwhm=600.0, nside=nside, lmax=band_lmax)
     band = Band.init_from_detector(detector_data, double_precision=True)
 
-    x = comp.alms.astype(complex)
+    x = comp.amps.astype(complex)
     comp_x = CompList([comp]).comp2band(band).astype(complex)
     y = _random_alms(band_lmax, rng)
     band.alms = y.copy()

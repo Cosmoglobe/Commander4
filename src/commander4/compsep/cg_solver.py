@@ -137,7 +137,7 @@ class CompSepSolver:
 
         # Accumulate solution on master
         with benchmark("lhs-accum"):
-            biggest_size_bytes = np.max([comp._data.nbytes for comp in comp_list])
+            biggest_size_bytes = np.max([comp.amps.nbytes for comp in comp_list])
             use_blocking = biggest_size_bytes > MPI_LIMIT_32BIT
             if use_blocking:
                 logger.debug(f"Using blocking CompSep communication for array size "
@@ -156,7 +156,7 @@ class CompSepSolver:
                         MPI.Request.Wait(requests[icomp])
                     # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
                     comp = comp_list.components[icomp]
-                    comp.apply_Cl_prior_sqrt(comp.alms)
+                    comp.apply_Cl_prior_sqrt(comp.amps)
                     # The prior term adds the input vector: (1 + S^{1/2}...)a = a + (S^{1/2}...)a.
                     if comp.Cl_prior_amplitude is not None:
                         comp += comp_list_in.components[icomp]
@@ -216,7 +216,7 @@ class CompSepSolver:
         for comp in comp_list:
             comp.accum_data_blocking(self.CompSep_comm)
             if myrank == 0:
-                comp.apply_Cl_prior_sqrt(comp.alms)
+                comp.apply_Cl_prior_sqrt(comp.amps)
 
         if myrank == 0:
             for comp in comp_list:
@@ -230,15 +230,15 @@ class CompSepSolver:
                 # zero-mean prior therefore costs one None check, not a full-size scale-and-add.
                 amp_prior_mean = comp.amp_prior_mean
                 if amp_prior_mean is not None:
-                    comp.alms += comp.apply_Cl_prior_inv_sqrt(amp_prior_mean)
+                    comp.amps += comp.apply_Cl_prior_inv_sqrt(amp_prior_mean)
                 if self.sample_amplitudes:
                     # + eta_2, the prior's own fluctuation. In the preconditioned variable it enters
                     # unmodified: substituting a = S^{1/2}x into the S^{-1/2}eta_2 term and
                     # left-multiplying by S^{1/2} leaves it alone.
                     for ipol in range(self.npol):
-                        comp.alms[ipol] += gaussian_random_alm(comp.lmax, comp.lmax,
+                        comp.amps[ipol] += gaussian_random_alm(comp.lmax, comp.lmax,
                                                                self.spin, 1, rng)[0]
-                logger.debug(f"RHS comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
+                logger.debug(f"RHS comp-{comp.shortname}: {np.mean(np.abs(comp.amps)):.2e}")
 
         return comp_list
 
@@ -313,8 +313,7 @@ class CompSepSolver:
                 if master and self.config.err_tol > 0.0:
                     logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
                 stop_CG = True
-            # Stop if either err_tol or 1e-30 is reached.
-            if CG_solver.err < max(self.config.err_tol, 1e-30):
+            if CG_solver.err <= self.config.err_tol:
                 stop_CG = True
             stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
         self.CG_residuals = self.CG_residuals[:iter]
@@ -326,7 +325,7 @@ class CompSepSolver:
         complist_sol = CG_solver.x
         for comp in complist_sol:
             if master:
-                comp.apply_Cl_prior_sqrt(comp.alms)
+                comp.apply_Cl_prior_sqrt(comp.amps)
             comp.bcast_data_blocking(self.CompSep_comm)
 
         return complist_sol
@@ -352,7 +351,7 @@ class CompSepSolver:
         x0 = deepcopy(comp_list)
         if self.my_rank == 0:
             for comp in x0:
-                comp.apply_Cl_prior_inv_sqrt(comp.alms)
+                comp.apply_Cl_prior_inv_sqrt(comp.amps)
 
         # `calc_RHS` overwrites the CompList it is handed, so comp_list doubles as the RHS buffer
         # (the preconditioner below reads only its metadata, never its alms).

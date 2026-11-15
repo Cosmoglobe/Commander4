@@ -86,8 +86,8 @@ def test_complist_split_preserves_names_and_join_restores_logical_component() ->
     assert [comp.eval_pol for comp in comp_list] == ["I", "QU"]
     assert [comp.is_split_view for comp in comp_list] == [True, True]
 
-    comp_list[0].alms[:] = 1.0 + 0.0j
-    comp_list[1].alms[:] = 2.0 + 0.0j
+    comp_list[0].amps[:] = 1.0 + 0.0j
+    comp_list[1].amps[:] = 2.0 + 0.0j
     joined = comp_list.joined()
 
     assert len(joined) == 1
@@ -95,40 +95,40 @@ def test_complist_split_preserves_names_and_join_restores_logical_component() ->
     assert joined[0].shortname == "cmb"
     assert joined[0].eval_pol == "IQU"
     assert not joined[0].is_split_view
-    assert np.all(joined[0].alms[0] == 1.0 + 0.0j)
-    assert np.all(joined[0].alms[1:] == 2.0 + 0.0j)
+    assert np.all(joined[0].amps[0] == 1.0 + 0.0j)
+    assert np.all(joined[0].amps[1:] == 2.0 + 0.0j)
 
 
 def test_component_itruediv_divides_data() -> None:
     comp_list = _make_comp_list("I")
     comp = comp_list[0]
     other = deepcopy(comp)
-    comp.alms[:] = 6.0 + 0.0j
-    other.alms[:] = 3.0 + 0.0j
+    comp.amps[:] = 6.0 + 0.0j
+    other.amps[:] = 3.0 + 0.0j
 
     comp /= other
 
-    assert np.all(comp.alms == 2.0 + 0.0j)
+    assert np.all(comp.amps == 2.0 + 0.0j)
 
 
 def test_complist_add_returns_full_complist() -> None:
     comp_list = _make_comp_list("IQU")
     for idx, comp in enumerate(comp_list, start=1):
-        comp.alms[:] = idx + 0.0j
+        comp.amps[:] = idx + 0.0j
 
     summed = comp_list + comp_list
 
     assert isinstance(summed, CompList)
     assert len(summed) == 2
-    assert np.all(summed[0].alms == 2.0 + 0.0j)
-    assert np.all(summed[1].alms == 4.0 + 0.0j)
+    assert np.all(summed[0].amps == 2.0 + 0.0j)
+    assert np.all(summed[1].amps == 4.0 + 0.0j)
 
 
 def test_complist_norm_is_the_square_root_of_the_self_dot_product() -> None:
     """`complist_norm` must return |x|, not |x|^2, so a ratio of two is a relative L2 error."""
     comp_list = _make_comp_list("IQU")
     for idx, comp in enumerate(comp_list, start=1):
-        comp.alms[:] = idx + 0.0j
+        comp.amps[:] = idx + 0.0j
 
     self_dot = complist_dot(comp_list, comp_list)
 
@@ -140,10 +140,10 @@ def test_complist_norm_ratio_scales_linearly_with_the_perturbation() -> None:
     """The CG diagnostic divides two norms and reports it as an L2 error, so it must be linear."""
     truth = _make_comp_list("IQU")
     for comp in truth:
-        comp.alms[:] = 1.0 + 0.0j
+        comp.amps[:] = 1.0 + 0.0j
     perturbed = deepcopy(truth)
     for comp in perturbed:
-        comp.alms[:] = 1.1 + 0.0j  # a uniform 10% deviation
+        comp.amps[:] = 1.1 + 0.0j  # a uniform 10% deviation
 
     relative_error = complist_norm(perturbed - truth)/complist_norm(truth)
 
@@ -204,14 +204,14 @@ def test_complist_constructor_rejects_reused_shortname_for_distinct_comp_names()
 def test_copy_matching_data_from_leaves_omitted_components_unchanged() -> None:
     comp_list = _make_multi_comp_list()
     intensity = comp_list.split_for_eval_pol("I")
-    original_other = intensity[1].alms.copy()
+    original_other = intensity[1].amps.copy()
     updated_subset = CompList([deepcopy(intensity[0])])
-    updated_subset[0].alms[:] = 7.0 + 0.0j
+    updated_subset[0].amps[:] = 7.0 + 0.0j
 
     intensity.copy_matching_data_from(updated_subset)
 
-    assert np.all(intensity[0].alms == 7.0 + 0.0j)
-    assert np.array_equal(intensity[1].alms, original_other)
+    assert np.all(intensity[0].amps == 7.0 + 0.0j)
+    assert np.array_equal(intensity[1].amps, original_other)
 
 
 def _make_list(*configs: tuple[str, str]) -> CompList:
@@ -234,7 +234,7 @@ def _write_chain(path, comp_list: CompList) -> str:
 def test_load_initial_state_reads_and_splits_from_chain(tmp_path) -> None:
     source = _make_list(("cmb", "IQU"), ("ff", "I"))
     for i, comp in enumerate(source):
-        comp.alms[:] = np.arange(comp.alms.size).reshape(comp.alms.shape) + 10*i
+        comp.amps[:] = np.arange(comp.amps.size).reshape(comp.amps.shape) + 10*i
     chain = _write_chain(tmp_path / "init_chain.h5", source)
 
     comp_list = _make_list(("cmb", "IQU"), ("ff", "I"))
@@ -243,7 +243,7 @@ def test_load_initial_state_reads_and_splits_from_chain(tmp_path) -> None:
     # The chain holds the joined IQU alms; each view gets back exactly its own rows.
     for comp, saved in zip(comp_list, source):
         assert (comp.comp_name, comp.eval_pol) == (saved.comp_name, saved.eval_pol)
-        assert np.array_equal(comp.alms, saved.alms)
+        assert np.array_equal(comp.amps, saved.amps)
 
 
 def test_per_component_init_from_wins_only_for_a_new_chain(tmp_path) -> None:
@@ -252,17 +252,17 @@ def test_per_component_init_from_wins_only_for_a_new_chain(tmp_path) -> None:
     source = _make_list(("cmb", "IQU"))
     global_chain = _write_chain(tmp_path / "global.h5", source)
     for comp in source:
-        comp.alms[:] = 5.0
+        comp.amps[:] = 5.0
     special_chain = _write_chain(tmp_path / "special.h5", source)
 
     comp_list = _make_list(("cmb", "IQU"))
     for comp in comp_list:
         comp.comp_params.init_from = special_chain
     comp_list.load_initial_state(global_chain, apply_init_from=True)
-    assert all(np.all(comp.alms == 5.0) for comp in comp_list)
+    assert all(np.all(comp.amps == 5.0) for comp in comp_list)
 
     comp_list.load_initial_state(global_chain, apply_init_from=False)
-    assert all(np.all(comp.alms == 0.0) for comp in comp_list)
+    assert all(np.all(comp.amps == 0.0) for comp in comp_list)
 
 
 def test_load_initial_state_from_fits_map(tmp_path) -> None:
@@ -297,8 +297,8 @@ def test_load_initial_state_from_fits_map(tmp_path) -> None:
     comp_list.load_initial_state(None, apply_init_from=True)
 
     views = {(comp.comp_name, comp.eval_pol): comp for comp in comp_list}
-    assert np.allclose(views[("cmb", "I")].alms, alms_I, rtol=1e-6, atol=1e-7)
-    assert np.allclose(views[("cmb", "QU")].alms, alms_QU, rtol=1e-6, atol=1e-7)
+    assert np.allclose(views[("cmb", "I")].amps, alms_I, rtol=1e-6, atol=1e-7)
+    assert np.allclose(views[("cmb", "QU")].amps, alms_QU, rtol=1e-6, atol=1e-7)
 
 
 def test_load_initial_state_rejects_unknown_extension(tmp_path) -> None:
@@ -313,15 +313,15 @@ def test_load_initial_state_partial_source_leaves_missing_pol_zero(tmp_path) -> 
     # An intensity-only chain initializes the I view; the IQU component's QU view stays at zero
     # rather than erroring (so e.g. I-from-chain + QU-from-zero works).
     source = _make_list(("cmb", "I"))
-    source[0].alms[:] = np.arange(source[0].alms.size) + 1
+    source[0].amps[:] = np.arange(source[0].amps.size) + 1
     chain = _write_chain(tmp_path / "intensity_only.h5", source)
 
     comp_list = _make_list(("cmb", "IQU"))
     comp_list.load_initial_state(chain, apply_init_from=True)
 
     views = {(comp.comp_name, comp.eval_pol): comp for comp in comp_list}
-    assert np.array_equal(views[("cmb", "I")].alms, source[0].alms)
-    assert np.all(views[("cmb", "QU")].alms == 0)
+    assert np.array_equal(views[("cmb", "I")].amps, source[0].amps)
+    assert np.all(views[("cmb", "QU")].amps == 0)
 
 
 def test_load_initial_state_missing_component_logs_error_and_continues(tmp_path, caplog) -> None:
@@ -332,7 +332,7 @@ def test_load_initial_state_missing_component_logs_error_and_continues(tmp_path,
     with caplog.at_level("ERROR"):
         comp_list.load_initial_state(chain, apply_init_from=True)  # must not raise
 
-    assert all(np.all(comp.alms == 0) for comp in comp_list)
+    assert all(np.all(comp.amps == 0) for comp in comp_list)
     assert "not found" in caplog.text
 
 
@@ -340,7 +340,7 @@ def test_init_from_null_keeps_the_parameter_file_start(tmp_path) -> None:
     """`init_from: null` opts one component out of the chain a new run starts from."""
     source = _make_list(("cmb", "IQU"))
     for comp in source:
-        comp.alms[:] = 5.0
+        comp.amps[:] = 5.0
     chain = _write_chain(tmp_path / "chain.h5", source)
 
     comp_list = _make_list(("cmb", "IQU"))
@@ -348,7 +348,7 @@ def test_init_from_null_keeps_the_parameter_file_start(tmp_path) -> None:
         comp.comp_params.init_from = None
     comp_list.load_initial_state(chain, apply_init_from=True)
 
-    assert all(np.all(comp.alms == 0) for comp in comp_list)
+    assert all(np.all(comp.amps == 0) for comp in comp_list)
 
 
 def _dust_params(**overrides) -> Bunch:
@@ -696,12 +696,12 @@ def test_radio_source_amplitudes_round_trip_through_a_chain(tmp_path) -> None:
     template = tmp_path / "radio.dat"
     _write_radio_source_table(template)
     source = CompList([_make_radio_sources(template)])
-    source[0]._data[:] = 1234.0
+    source[0].amps[:] = 1234.0
     chain = _write_chain(tmp_path / "chain.h5", source)
 
     comp_list = CompList([_make_radio_sources(template)])
     comp_list.load_initial_state(chain, apply_init_from=False)
-    assert np.all(comp_list[0]._data == 1234.0)
+    assert np.all(comp_list[0].amps == 1234.0)
 
 
 def _map_integral(sky_map, nside):

@@ -135,7 +135,7 @@ class CompList:
                     f"Unrecognized polarization in parameter file for component {component_str}")
             for eval_pol in EXECUTION_POLS[component_pol]:
                 comp_list.append(component_cls(component.params, params.compsep, eval_pol=eval_pol,
-                                               comp_name=component._name, allocate_empty_alms=True))
+                                               comp_name=component._name, allocate_empty_amps=True))
         return cls(comp_list)
 
     def write_chain(self, file: h5py.File, band_frequencies: dict[str, float]) -> None:
@@ -174,7 +174,7 @@ class CompList:
                                      "works for diffuse (alm-based) components.")
                 view_alms = _read_view_alms_from_fits(comp, source)
                 if view_alms is not None:
-                    comp.alms = view_alms.astype(comp.dtype, copy=False)
+                    comp.amps = view_alms.astype(comp.amps.dtype, copy=False)
             elif str(source).lower().endswith((".h5", ".hd5")):
                 with h5py.File(source, "r") as file:
                     group_path = f"comps/{comp.shortname}"
@@ -221,7 +221,7 @@ class CompList:
                     "prior to be the mean of, but 'Cl_prior_amplitude' is null (no prior).")
             view_alms = _read_view_alms_from_fits(comp, source_path)
             if view_alms is not None:
-                comp.amp_prior_mean = view_alms.astype(comp.dtype, copy=False)
+                comp.amp_prior_mean = view_alms.astype(comp.amps.dtype, copy=False)
                 logger.info(f"Component {comp.comp_name!r} ({comp.eval_pol}): prior mean read from "
                             f"{source_path!r}.")
 
@@ -260,7 +260,7 @@ class CompList:
             if other_comp is None:
                 continue
             comp._assert_consistent_comp(other_comp)
-            np.copyto(comp._data, other_comp._data)
+            np.copyto(comp.amps, other_comp.amps)
             comp.amp_fwhm_rad = other_comp.amp_fwhm_rad
 
     def broadcast_pol_views(self, comm: MPI.Comm, *, eval_pol: str, source: int) -> None:
@@ -421,7 +421,7 @@ class CompList:
         prior and its own alms, so there is no single array a list-level call could scale.
         """
         for comp in self.comp_list:
-            comp.apply_Cl_prior_sqrt(comp.alms)
+            comp.apply_Cl_prior_sqrt(comp.amps)
 
     def inplace_add_scaled(self, list_other, scalar):
         """ `list_inplace += scalar*list_other`
@@ -429,7 +429,7 @@ class CompList:
         self._assert_consistent_comps(list_other)
         
         for ci, co in zip(self.comp_list, list_other.comp_list):
-            inplace_add_scaled_vec(ci._data, co._data, scalar)
+            inplace_add_scaled_vec(ci.amps, co.amps, scalar)
     
     def inplace_scale_and_add(self, list_other, scalar):
         """ `list_inplace = scalar*list_inplace + list_other`
@@ -437,7 +437,7 @@ class CompList:
         self._assert_consistent_comps(list_other)
 
         for ci, co in zip(self.comp_list, list_other.comp_list):
-            inplace_scale_add(ci._data, co._data, scalar)
+            inplace_scale_add(ci.amps, co.amps, scalar)
 
 
 # These functions are common array operations, but made to work on the comp-lists, which are
@@ -451,7 +451,7 @@ def inplace_complist_add_scaled_array(list_inplace:list[Component], list_other:l
         raise ValueError("Component lists must match in length.")
     
     for ci, co in zip(list_inplace, list_other):
-        inplace_add_scaled_vec(ci._data, co._data, scalar)
+        inplace_add_scaled_vec(ci.amps, co.amps, scalar)
 
 def inplace_complist_scale_and_add(list_inplace:list[Component], list_other:list[Component], scalar):
     """ `list_inplace = scalar*list_inplace + list_other`
@@ -460,7 +460,7 @@ def inplace_complist_scale_and_add(list_inplace:list[Component], list_other:list
         raise ValueError("Component lists must match in length.")
 
     for ci, co in zip(list_inplace, list_other):
-        inplace_scale_add(ci._data, co._data, scalar)
+        inplace_scale_add(ci.amps, co.amps, scalar)
 
 def complist_dot(comp_list1:CompList, comp_list2:CompList) -> float:
     """ `dot(comp_list1, comp_list2)`. Calculates the correct dot product between two lists of

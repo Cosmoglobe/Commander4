@@ -72,7 +72,7 @@ def _make_comp_list(params: Bunch, Cl_prior_amplitude: float | None = None) -> C
     object.__setattr__(cmb, "_name", "CMB")
     comp_list = CompList.init_from_params(Bunch({"CMB": cmb}), params)
     for comp in comp_list:
-        comp.alms[:] = 0.0
+        comp.amps[:] = 0.0
     return comp_list
 
 
@@ -96,7 +96,7 @@ def realizations(request):
         solution = solver.solve(_make_comp_list(_make_params(), request.param),
                                 np.random.default_rng(seed))
         for comp in solution:
-            comp.apply_Cl_prior_inv_sqrt(comp.alms)
+            comp.apply_Cl_prior_inv_sqrt(comp.amps)
         return solution
 
     x_map = solve_for_x(_make_solver(det_map, _make_group(False), comm), 0)
@@ -151,7 +151,7 @@ def test_constrained_realization_mean_is_the_MAP_solution(realizations):
     for sample in samples[1:]:
         mean_sample += sample - x_map
     for comp in mean_sample:
-        comp.alms[:] /= len(samples)
+        comp.amps[:] /= len(samples)
 
     # <xbar-x_MAP, M(xbar-x_MAP)> is chi2(ndof)/NSAMP; allow a generous upper bound.
     quad = complist_dot(mean_sample, solver.apply_LHS_matrix(mean_sample))*len(samples)
@@ -168,15 +168,15 @@ def test_sample_amplitudes_toggle_controls_randomness():
     first = map_solver.solve(_make_comp_list(map_params), np.random.default_rng(1))
     second = map_solver.solve(_make_comp_list(map_params), np.random.default_rng(2))
     for comp_a, comp_b in zip(first, second):
-        np.testing.assert_allclose(comp_a.alms, comp_b.alms, rtol=1e-10, atol=1e-12)
+        np.testing.assert_allclose(comp_a.amps, comp_b.amps, rtol=1e-10, atol=1e-12)
 
     params = _make_params()
     solver = _make_solver(det_map, _make_group(True), comm)
     sampled_a = solver.solve(_make_comp_list(params), np.random.default_rng(1))
     sampled_b = solver.solve(_make_comp_list(params), np.random.default_rng(2))
-    assert not np.allclose(sampled_a[0].alms, sampled_b[0].alms)
+    assert not np.allclose(sampled_a[0].amps, sampled_b[0].amps)
     # ... and it must not coincide with the MAP solution either.
-    assert not np.allclose(sampled_a[0].alms, first[0].alms)
+    assert not np.allclose(sampled_a[0].amps, first[0].amps)
 
 
 def test_without_a_prior_the_solution_is_the_data_alone():
@@ -191,10 +191,10 @@ def test_without_a_prior_the_solution_is_the_data_alone():
     solver = _make_solver(det_map, _make_group(sample_amplitudes=False))
 
     no_prior = solver.solve(_make_comp_list(_make_params()), rng)[0]
-    np.testing.assert_allclose(no_prior.alms*no_prior.get_sed(100.0), input_alms, rtol=1e-5,
+    np.testing.assert_allclose(no_prior.amps*no_prior.get_sed(100.0), input_alms, rtol=1e-5,
                                atol=1e-8)
     tight_prior = solver.solve(_make_comp_list(_make_params(), Cl_prior_amplitude=1.0), rng)[0]
-    assert np.abs(tight_prior.alms).max() < 1e-3*np.abs(no_prior.alms).max()
+    assert np.abs(tight_prior.amps).max() < 1e-3*np.abs(no_prior.amps).max()
 
 
 def test_the_cg_starts_from_the_amplitudes_it_is_given():
@@ -205,29 +205,29 @@ def test_the_cg_starts_from_the_amplitudes_it_is_given():
     """
     det_map = _make_det_map()
     converged = _make_solver(det_map, _make_group(sample_amplitudes=False)).solve(
-        _make_comp_list(_make_params(), Cl_prior_amplitude=1.0), np.random.default_rng(0))[0].alms
+        _make_comp_list(_make_params(), Cl_prior_amplitude=1.0), np.random.default_rng(0))[0].amps
     one_iteration = CGSamplingGroupConfig(
         name="one", optimize=True, max_iter=1, max_iter_pol=1, err_tol=0.0,
         preconditioner="NoPreconditioner", dense_matrix_debug_mode=False)
 
     from_zero_solver = _make_solver(det_map, one_iteration)
     from_zero = from_zero_solver.solve(_make_comp_list(_make_params(), Cl_prior_amplitude=1.0),
-                                       np.random.default_rng(0))[0].alms
+                                       np.random.default_rng(0))[0].amps
     assert np.abs(from_zero - converged).max() > 1e-2*np.abs(converged).max()
     assert from_zero_solver.CG_residuals[0] > 1e-6
 
     warm_list = _make_comp_list(_make_params(), Cl_prior_amplitude=1.0)
-    warm_list[0].alms[:] = converged
+    warm_list[0].amps[:] = converged
     warm_solver = _make_solver(det_map, one_iteration)
-    warm = warm_solver.solve(warm_list, np.random.default_rng(0))[0].alms
+    warm = warm_solver.solve(warm_list, np.random.default_rng(0))[0].amps
     np.testing.assert_allclose(warm, converged, rtol=1e-5, atol=1e-6*np.abs(converged).max())
     assert warm_solver.CG_residuals[0] < 1e-10
 
 
 def test_a_fixed_number_of_iterations_stops_when_the_residual_vanishes():
-    """`err_tol: 0.0` asks for `max_iter` iterations, but the CG stops once the error is below
-    1e-30. In single precision the squared residual would otherwise underflow to zero, and the
-    next step would divide by it."""
+    """`err_tol: 0.0` asks for `max_iter` iterations, but the CG stops once the residual is zero
+    to machine precision. In single precision this happens long before 300 iterations, and the
+    next step would otherwise divide by zero."""
     npix = 12*NSIDE**2
     rng = np.random.default_rng(0)
     det_map = DetectorMap(rng.normal(0.0, 1.0, (1, npix)), np.full((1, npix), 1.0/3.0**2),
@@ -241,9 +241,9 @@ def test_a_fixed_number_of_iterations_stops_when_the_residual_vanishes():
 
     solution = solver.solve(_make_comp_list(params, Cl_prior_amplitude=1.0), rng)
 
-    assert np.isfinite(solution[0].alms).all()
+    assert np.isfinite(solution[0].amps).all()
     assert len(solver.CG_residuals) < 300
-    assert solver.CG_residuals[-1] < 1e-30
+    assert solver.CG_residuals[-1] == 0.0
 
 
 def test_optimize_defaults_to_off_so_the_solver_samples():
@@ -270,7 +270,7 @@ class TestPriorScalingContract:
     """`apply_Cl_prior_sqrt` and `apply_Cl_prior_inv_sqrt` are an exact pair sharing one contract.
 
     Both scale an explicitly given alm array by S^{+-1/2} in place and return it, so the call site
-    always says what is being scaled -- `comp.apply_Cl_prior_sqrt(comp.alms)` for the component's
+    always says what is being scaled -- `comp.apply_Cl_prior_sqrt(comp.amps)` for the component's
     own amplitudes. Uses a non-flat prior throughout, since under S = I both operations are the
     identity and prove nothing.
     """
@@ -282,22 +282,22 @@ class TestPriorScalingContract:
     def test_round_trip_on_a_supplied_array_is_the_identity(self):
         comp = self._comp()
         rng = np.random.default_rng(21)
-        alms = (rng.normal(size=comp.alms.shape) + 1j*rng.normal(size=comp.alms.shape))
+        alms = (rng.normal(size=comp.amps.shape) + 1j*rng.normal(size=comp.amps.shape))
         original = alms.copy()
         comp.apply_Cl_prior_inv_sqrt(comp.apply_Cl_prior_sqrt(alms))
         np.testing.assert_allclose(alms, original, rtol=1e-10, atol=1e-12)
 
     def test_supplied_array_is_scaled_and_own_alms_are_untouched(self):
-        """Passing an array must not touch self._data."""
+        """Passing an array must not touch self.amps."""
         comp = self._comp()
-        comp.alms[:] = 1.0
-        own_before = comp.alms.copy()
-        supplied = np.ones_like(comp.alms)
+        comp.amps[:] = 1.0
+        own_before = comp.amps.copy()
+        supplied = np.ones_like(comp.amps)
 
         returned = comp.apply_Cl_prior_sqrt(supplied)
         assert returned is supplied                    # in place, and handed back
         assert not np.allclose(supplied, own_before)
-        np.testing.assert_array_equal(comp.alms, own_before)
+        np.testing.assert_array_equal(comp.amps, own_before)
 
 class TestPriorMean:
     """The S^{-1/2} mu term. mu is zero today, so these drive it via a patched `amp_prior_mean`.
@@ -318,20 +318,20 @@ class TestPriorMean:
         object.__setattr__(cmb, "_name", "CMB")
         comp_list = CompList.init_from_params(Bunch({"CMB": cmb}), params)
         for comp in comp_list:
-            comp.alms[:] = 0.0
+            comp.amps[:] = 0.0
         return comp_list
 
     @staticmethod
     def _patch_prior_mean(monkeypatch, comp, mu):
         monkeypatch.setattr(type(comp), "amp_prior_mean",
-                            property(lambda self: mu.astype(self.dtype, copy=True)))
+                            property(lambda self: mu.astype(self.amps.dtype, copy=True)))
 
     def test_uninformative_data_returns_the_prior_mean(self, monkeypatch):
         params = _make_params()
         comp_list = self._comp_list_with_prior(params)
         rng = np.random.default_rng(3)
-        mu = rng.normal(0.0, 1.0, comp_list[0].alms.shape) \
-            + 1j*rng.normal(0.0, 1.0, comp_list[0].alms.shape)
+        mu = rng.normal(0.0, 1.0, comp_list[0].amps.shape) \
+            + 1j*rng.normal(0.0, 1.0, comp_list[0].amps.shape)
         mu[:, :LMAX + 1] = mu[:, :LMAX + 1].real     # m = 0 alms are real
         self._patch_prior_mean(monkeypatch, comp_list[0], mu)
 
@@ -342,7 +342,7 @@ class TestPriorMean:
         solver = _make_solver(det_map, _make_group(False))
         solution = solver.solve(comp_list, np.random.default_rng(0))
 
-        np.testing.assert_allclose(solution[0].alms, mu, rtol=1e-4, atol=1e-6)
+        np.testing.assert_allclose(solution[0].amps, mu, rtol=1e-4, atol=1e-6)
 
     def test_prior_mean_enters_the_sampled_solve_too(self, monkeypatch):
         """mu shifts the constrained realization as well, not just the MAP solve."""
@@ -356,13 +356,13 @@ class TestPriorMean:
             self._comp_list_with_prior(params), np.random.default_rng(5))
 
         comp_list = self._comp_list_with_prior(params)
-        mu = np.full(comp_list[0].alms.shape, 50.0 + 0j)
+        mu = np.full(comp_list[0].amps.shape, 50.0 + 0j)
         self._patch_prior_mean(monkeypatch, comp_list[0], mu)
         shifted = _make_solver(det_map, _make_group(True)).solve(comp_list,
                                                                  np.random.default_rng(5))
 
         # Same seed, so the eta draws are identical and the difference is exactly the mu term.
-        np.testing.assert_allclose(shifted[0].alms - unshifted[0].alms, mu, rtol=1e-4, atol=1e-6)
+        np.testing.assert_allclose(shifted[0].amps - unshifted[0].amps, mu, rtol=1e-4, atol=1e-6)
 
 
 class TestPriorMeanMap:
@@ -391,7 +391,7 @@ class TestPriorMeanMap:
         object.__setattr__(cmb, "_name", "CMB")
         comp_list = CompList.init_from_params(Bunch({"CMB": cmb}), params)
         for comp in comp_list:
-            comp.alms[:] = 0.0
+            comp.amps[:] = 0.0
         return comp_list
 
     def test_defaults_to_none_without_the_parameter(self, tmp_path):
@@ -435,7 +435,7 @@ class TestPriorMeanMap:
         np.testing.assert_array_equal(comp_list[0].amp_prior_mean, mu_before)
         # The CG stops at err_tol, and threaded SHTs sum in a varying order, so two solves agree
         # only to roughly the CG tolerance. A corrupted cache would change the answer by order one.
-        np.testing.assert_allclose(first[0].alms, second[0].alms, rtol=1e-4, atol=1e-6)
+        np.testing.assert_allclose(first[0].amps, second[0].amps, rtol=1e-4, atol=1e-6)
 
     def test_uninformative_data_recovers_the_prior_map(self, tmp_path):
         """End-to-end: with no data information the solution is the prior-mean map itself."""
@@ -455,7 +455,7 @@ class TestPriorMeanMap:
         solver = _make_solver(det_map, _make_group(False))
         solution = solver.solve(comp_list, np.random.default_rng(0))
 
-        np.testing.assert_allclose(solution[0].alms, mu, rtol=1e-4, atol=1e-6)
+        np.testing.assert_allclose(solution[0].amps, mu, rtol=1e-4, atol=1e-6)
 
     def test_a_tightened_prior_holds_the_solution_to_the_prior_map(self, tmp_path):
         """End-to-end: `Cl_prior_l_tighten` far above lmax pins every multipole to the prior map.
@@ -481,7 +481,7 @@ class TestPriorMeanMap:
             comp_list.load_amp_prior_means()
             mu = comp_list[0].amp_prior_mean
             solver = _make_solver(det_map, _make_group(False))
-            solutions[l_tighten] = solver.solve(comp_list, np.random.default_rng(0))[0].alms
+            solutions[l_tighten] = solver.solve(comp_list, np.random.default_rng(0))[0].amps
         sed = comp_list[0].get_sed(100.0)
 
         np.testing.assert_allclose(solutions[0]*sed, data_alms, rtol=1e-3, atol=1e-3)
@@ -496,4 +496,5 @@ class TestPriorMeanMap:
     def test_setter_rejects_a_wrongly_shaped_mu(self, tmp_path):
         comp = self._comp_list(tmp_path)[0]
         with pytest.raises(ValueError, match="prior mean has shape"):
-            comp.amp_prior_mean = np.zeros((comp.npol, comp.alm_len_complex + 1), dtype=comp.dtype)
+            comp.amp_prior_mean = np.zeros((comp.npol, comp.alm_len_complex + 1),
+                                           dtype=comp.amps.dtype)

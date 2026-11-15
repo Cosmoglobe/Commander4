@@ -291,11 +291,11 @@ def test_truth_map_is_readable_as_a_commander4_init_map(tmp_path):
                         spatially_varying_MM=False, Cl_prior_amplitude=None,
                         beta=1.54, T=20.0, nu_ref=353.0, units="uK_RJ")
     object.__setattr__(comp_params, "_name", "ThermalDust")
-    c4_comp = ThermalDust(comp_params, global_params, allocate_empty_alms=True, eval_pol="I",
+    c4_comp = ThermalDust(comp_params, global_params, allocate_empty_amps=True, eval_pol="I",
                           comp_name="ThermalDust")
 
-    c4_comp.alms = _read_view_alms_from_fits(c4_comp, truth_path).astype(c4_comp.dtype)
+    c4_comp.amps = _read_view_alms_from_fits(c4_comp, truth_path).astype(c4_comp.amps.dtype)
 
-    recovered = hp.alm2map(c4_comp.alms[0].astype(np.complex128), NSIDE, lmax=c4_comp.lmax)
+    recovered = hp.alm2map(c4_comp.amps[0].astype(np.complex128), NSIDE, lmax=c4_comp.lmax)
     truth_I = comp.truth_map(NSIDE)[0]
     assert np.std(recovered - truth_I) < 1e-3 * np.std(truth_I)

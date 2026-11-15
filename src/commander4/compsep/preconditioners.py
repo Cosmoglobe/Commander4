@@ -24,6 +24,8 @@ import numpy as np
 import healpy as hp
 from copy import deepcopy
 
+from commander4.sky.diffuse_components import DiffuseComponent
+
 import typing
 # Only import when performing type checking, avoiding circular import during normal runtime.
 if typing.TYPE_CHECKING:
@@ -69,13 +71,16 @@ class DiagonalJointPreconditioner:
         ncomp = len(comp_list)
         self.A_diag_inv_list = []
         for icomp in range(ncomp):
-            if not hasattr(comp_list[icomp], "alms"): #FIXME: for now workaround to exclude point sources
+            # FIXME: point sources are left out (identity). See C4_issues.md, K4. The list keeps one
+            # entry per component, so that `__call__` can index it by component.
+            if not isinstance(comp_list[icomp], DiffuseComponent):
+                self.A_diag_inv_list.append(None)
                 continue
             # Construct the full mixing matrix M on all ranks
             M = np.empty((nband, ncomp), dtype=np.float64)
             for jcomp in range(ncomp):
                 comp = comp_list[jcomp]
-                if not hasattr(comp, "alms"): #FIXME: for now workaround to exclude point sources
+                if not isinstance(comp, DiffuseComponent):
                     continue
                 M[:, jcomp] = comp.get_sed(np.array(all_freqs, dtype=np.float64))
 
@@ -116,9 +121,9 @@ class DiagonalJointPreconditioner:
         a_complist_out = deepcopy(a_complist)
         for icomp in range(len(a_complist)):
             #comp_lmax = self.compsep.lmax_per_comp[icomp]
-            if hasattr(a_complist[icomp], "alms"):
+            if isinstance(a_complist[icomp], DiffuseComponent):
                 # Apply the already calculated diagonal preconditioner.
-                a_complist_out[icomp].alms *= self.A_diag_inv_list[icomp]
+                a_complist_out[icomp].amps *= self.A_diag_inv_list[icomp]
             else:
                 pass
  
@@ -212,7 +217,7 @@ class JointPreconditioner:
         nband = len(all_fwhm_rad)
         # Restrict the preconditioner to components represented by diffuse harmonic alms.
         diffuse_comp_indices = [
-            icomp for icomp, comp in enumerate(comp_list) if hasattr(comp, "alms")
+            icomp for icomp, comp in enumerate(comp_list) if isinstance(comp, DiffuseComponent)
         ]
         if not diffuse_comp_indices:
             return
@@ -350,14 +355,14 @@ class JointPreconditioner:
                 continue
             active_global, alm_indices, block_prior_inv_sqrt, block_inv = ell_data
             nmodes = alm_indices[0].size
-            coeff_dtype = a_complist_out[active_global[0]].alms.dtype
+            coeff_dtype = a_complist_out[active_global[0]].amps.dtype
 
             # Stack all active component coefficients for this ell into one dense array.
             coeffs = np.empty((self.npol * len(active_global), nmodes), dtype=coeff_dtype)
             for ipol in range(self.npol):
                 offset = ipol * len(active_global)
                 for iactive, icomp in enumerate(active_global):
-                    coeffs[offset + iactive] = a_complist_out[icomp].alms[
+                    coeffs[offset + iactive] = a_complist_out[icomp].amps[
                         ipol, alm_indices[iactive]
                     ]
 
@@ -371,7 +376,7 @@ class JointPreconditioner:
             for ipol in range(self.npol):
                 offset = ipol * len(active_global)
                 for iactive, icomp in enumerate(active_global):
-                    a_complist_out[icomp].alms[ipol, alm_indices[iactive]] = coeffs[
+                    a_complist_out[icomp].amps[ipol, alm_indices[iactive]] = coeffs[
                         offset + iactive
                     ]
  
