@@ -6,31 +6,25 @@ solved on separate MPI ranks. `CompList` holds four kinds of method, and nothing
 - building the views from the parameter file (`init_from_params`),
 - reorganizing them (`split_for_eval_pol`, `joined`),
 - the vector arithmetic of the CG (`zeros_like`, `copy`, `dot`, `add_scaled`, `scale_and_add`),
-- files and MPI (`write_chain`, `load_initial_state`, `load_amp_prior_means`,
-  `broadcast_pol_views`).
+- writing the chain and keeping the MPI ranks in step (`write_chain`, `broadcast_pol_views`).
 
-Physics that acts on one component at a time (`comp2band`, the C_l prior, ...) is not passed down
-through the list: the code that needs it loops over the components itself.
+Work on one component at a time (`comp2band`, the C_l prior, loading its starting state, ...) is
+not passed down through the list: the code that needs it loops over the components itself.
 """
 from __future__ import annotations
 
 import copy
-import logging
 
 import h5py
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
 import commander4.sky as sky
-from commander4.sky.comp_io import _read_view_alms_from_fits
 from commander4.sky.component import Component
-from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.polarization import EXECUTION_POLS
 from commander4.polarization import assert_pol_supported
 from commander4.math_utils.arithmetic import inplace_scale_add, inplace_add_scaled_vec
 from commander4.parameters.schema import resolve_param
-
-logger = logging.getLogger(__name__)
 
 
 class CompList:
@@ -162,7 +156,7 @@ class CompList:
         for comp, other_comp in zip(self.components, other.components):
             inplace_scale_add(comp.amps, other_comp.amps, scalar)
 
-    # ----- Files and MPI -----
+    # ----- The chain file and MPI -----
 
     def write_chain(self, file: h5py.File, band_frequencies: dict[str, float]) -> None:
         """Write every component's sample into `file`, as one `comps/<shortname>/` group each.
@@ -172,84 +166,6 @@ class CompList:
         """
         for comp in self.joined():
             comp.write_chain(file.create_group(f"comps/{comp.shortname}"), band_frequencies)
-
-    def load_initial_state(self, chain_file: str | None, apply_init_from: bool) -> None:
-        """Set each component's starting state from a CompSep chain file or its own `init_from`.
-
-        Per component, the source is its `init_from` parameter if `apply_init_from` is set and the
-        component has one, and `chain_file` otherwise. So `init_from: null` keeps a component at its
-        parameter-file initialization. The file type decides how it is read: a `.h5`/`.hd5` chain
-        file goes through the component's own `read_chain`, and a `.fits` sky map is transformed to
-        diffuse alms. Without a source, a component keeps its parameter-file values and zero
-        amplitudes.
-
-        Args:
-            chain_file: The CompSep chain file this chain starts from, or None.
-            apply_init_from: False when `chain_file` is this chain's own saved state (on
-                `gibbs.chain_status: append`), which must win over the initial guesses.
-        """
-        for comp in self.components:
-            source = chain_file
-            if apply_init_from and "init_from" in comp.comp_params:
-                source = comp.comp_params.init_from
-            if not source:
-                continue
-            if str(source).lower().endswith(".fits"):
-                if not isinstance(comp, DiffuseComponent):
-                    raise ValueError(f"Component {comp.comp_name!r}: a FITS 'init_from' map only "
-                                     "works for diffuse (alm-based) components.")
-                view_alms = _read_view_alms_from_fits(comp, source)
-                if view_alms is not None:
-                    comp.amps = view_alms.astype(comp.amps.dtype, copy=False)
-            elif str(source).lower().endswith((".h5", ".hd5")):
-                with h5py.File(source, "r") as file:
-                    group_path = f"comps/{comp.shortname}"
-                    if group_path not in file:
-                        logger.error(f"Component {comp.comp_name!r} (shortname "
-                                     f"{comp.shortname!r}) not found in {source!r}; keeping its "
-                                     "parameter-file initialization.")
-                        continue
-                    comp.read_chain(file[group_path])
-            else:
-                raise ValueError(f"Unsupported init file {source!r} for component "
-                                 f"{comp.comp_name!r}: expected a .h5/.hd5 chain or a .fits map.")
-
-    def load_amp_prior_means(self) -> None:
-        """Populate each component's prior mean mu from its ``amp_prior_mean_map`` parameter.
-
-        This is C3's ``COMP_AMP_PRIOR_MAP``: a FITS sky map giving the mean of the Gaussian
-        amplitude prior a ~ N(mu, S). It goes through the same conversion as an ``init_from`` map
-        (unit conversion at the component's reference frequency, truncation to l = 3*nside-1, and
-        the iterative LSMR inverse SHT), because mu and the amplitudes live in the same space and
-        must be treated identically. C3 instead uses a single non-iterative `YtW` analysis here,
-        which is the less accurate of the two on a HEALPix grid.
-
-        Read once and cached on the component (C3 likewise transforms its mu once, at component
-        initialization). The S^{-1/2} that turns mu into a right-hand-side term is *not* applied
-        here but per solve, since the prior S may change between Gibbs iterations while mu does not.
-        """
-        for comp in self.components:
-            source_path = comp.comp_params.amp_prior_mean_map \
-                if "amp_prior_mean_map" in comp.comp_params else None
-            if not source_path:
-                continue  # Zero-mean prior.
-            if not isinstance(comp, DiffuseComponent):
-                raise ValueError(
-                    f"Component {comp.comp_name!r}: 'amp_prior_mean_map' is only supported for "
-                    "diffuse (alm-based) components.")
-            if not str(source_path).lower().endswith(".fits"):
-                raise ValueError(
-                    f"Component {comp.comp_name!r}: 'amp_prior_mean_map' must be a .fits sky map, "
-                    f"but got {source_path!r}.")
-            if comp.Cl_prior_amplitude is None:
-                raise ValueError(
-                    f"Component {comp.comp_name!r} ({comp.eval_pol}): 'amp_prior_mean_map' needs a "
-                    "prior to be the mean of, but 'Cl_prior_amplitude' is null (no prior).")
-            view_alms = _read_view_alms_from_fits(comp, source_path)
-            if view_alms is not None:
-                comp.amp_prior_mean = view_alms.astype(comp.amps.dtype, copy=False)
-                logger.info(f"Component {comp.comp_name!r} ({comp.eval_pol}): prior mean read from "
-                            f"{source_path!r}.")
 
     def broadcast_pol_views(self, comm: MPI.Comm, *, eval_pol: str, source: int) -> None:
         """Broadcast all execution views of `eval_pol` from `source` to every rank in `comm`.

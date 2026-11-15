@@ -180,7 +180,8 @@ def test_load_initial_state_reads_and_splits_from_chain(tmp_path) -> None:
     chain = _write_chain(tmp_path / "init_chain.h5", source)
 
     comp_list = _make_list(("cmb", "IQU"), ("ff", "I"))
-    comp_list.load_initial_state(chain, apply_init_from=True)
+    for comp in comp_list:
+        comp.load_initial_state(chain, apply_init_from=True)
 
     # The chain holds the joined IQU alms; each view gets back exactly its own rows.
     for comp, saved in zip(comp_list, source):
@@ -200,10 +201,12 @@ def test_per_component_init_from_wins_only_for_a_new_chain(tmp_path) -> None:
     comp_list = _make_list(("cmb", "IQU"))
     for comp in comp_list:
         comp.comp_params.init_from = special_chain
-    comp_list.load_initial_state(global_chain, apply_init_from=True)
+    for comp in comp_list:
+        comp.load_initial_state(global_chain, apply_init_from=True)
     assert all(np.all(comp.amps == 5.0) for comp in comp_list)
 
-    comp_list.load_initial_state(global_chain, apply_init_from=False)
+    for comp in comp_list:
+        comp.load_initial_state(global_chain, apply_init_from=False)
     assert all(np.all(comp.amps == 0.0) for comp in comp_list)
 
 
@@ -236,7 +239,8 @@ def test_load_initial_state_from_fits_map(tmp_path) -> None:
     params = Bunch(compsep=compsep, components=Bunch({"cmb": cmb}))
 
     comp_list = CompList.init_from_params(params.components, params)
-    comp_list.load_initial_state(None, apply_init_from=True)
+    for comp in comp_list:
+        comp.load_initial_state(None, apply_init_from=True)
 
     views = {(comp.comp_name, comp.eval_pol): comp for comp in comp_list}
     assert np.allclose(views[("cmb", "I")].amps, alms_I, rtol=1e-6, atol=1e-7)
@@ -248,7 +252,8 @@ def test_load_initial_state_rejects_unknown_extension(tmp_path) -> None:
     for comp in comp_list:
         comp.comp_params.init_from = str(tmp_path / "init_map.txt")
     with pytest.raises(ValueError, match="expected a .h5/.hd5 chain or a .fits map"):
-        comp_list.load_initial_state(None, apply_init_from=True)
+        for comp in comp_list:
+            comp.load_initial_state(None, apply_init_from=True)
 
 
 def test_load_initial_state_partial_source_leaves_missing_pol_zero(tmp_path) -> None:
@@ -259,7 +264,8 @@ def test_load_initial_state_partial_source_leaves_missing_pol_zero(tmp_path) -> 
     chain = _write_chain(tmp_path / "intensity_only.h5", source)
 
     comp_list = _make_list(("cmb", "IQU"))
-    comp_list.load_initial_state(chain, apply_init_from=True)
+    for comp in comp_list:
+        comp.load_initial_state(chain, apply_init_from=True)
 
     views = {(comp.comp_name, comp.eval_pol): comp for comp in comp_list}
     assert np.array_equal(views[("cmb", "I")].amps, source[0].amps)
@@ -272,7 +278,8 @@ def test_load_initial_state_missing_component_logs_error_and_continues(tmp_path,
 
     comp_list = _make_list(("cmb", "IQU"))
     with caplog.at_level("ERROR"):
-        comp_list.load_initial_state(chain, apply_init_from=True)  # must not raise
+        for comp in comp_list:
+            comp.load_initial_state(chain, apply_init_from=True)  # must not raise
 
     assert all(np.all(comp.amps == 0) for comp in comp_list)
     assert "not found" in caplog.text
@@ -288,7 +295,8 @@ def test_init_from_null_keeps_the_parameter_file_start(tmp_path) -> None:
     comp_list = _make_list(("cmb", "IQU"))
     for comp in comp_list:
         comp.comp_params.init_from = None
-    comp_list.load_initial_state(chain, apply_init_from=True)
+    for comp in comp_list:
+        comp.load_initial_state(chain, apply_init_from=True)
 
     assert all(np.all(comp.amps == 0) for comp in comp_list)
 
@@ -609,7 +617,8 @@ def test_restarting_from_a_chain_restores_a_sampled_spectral_index(tmp_path):
     """Continuing a chain must continue its MH index walk, not reset beta to the start value."""
     comp_list, chain = _saved_dust_chain(tmp_path, sample_spectral_index=True)
     assert all(comp.beta == 1.54 for comp in comp_list)
-    comp_list.load_initial_state(chain, apply_init_from=False)
+    for comp in comp_list:
+        comp.load_initial_state(chain, apply_init_from=False)
 
     for comp in comp_list:
         assert comp.beta == pytest.approx(1.5311)   # sampled: taken from the chain
@@ -621,7 +630,8 @@ def test_a_fixed_spectral_index_is_not_restored_from_a_chain(tmp_path):
     """Without `sample_spectral_index`, beta stays a parameter-file setting the chain cannot
     override."""
     comp_list, chain = _saved_dust_chain(tmp_path, sample_spectral_index=False)
-    comp_list.load_initial_state(chain, apply_init_from=False)
+    for comp in comp_list:
+        comp.load_initial_state(chain, apply_init_from=False)
     assert all(comp.beta == 1.54 for comp in comp_list)
 
 
@@ -633,7 +643,8 @@ def test_the_amplitudes_beam_is_restored_from_a_chain(tmp_path):
     chain = _write_chain(tmp_path / "chain.h5", source)
 
     comp_list = _make_list(("cmb", "IQU"))
-    comp_list.load_initial_state(chain, apply_init_from=False)
+    for comp in comp_list:
+        comp.load_initial_state(chain, apply_init_from=False)
     assert all(comp.amp_fwhm_rad == pytest.approx(np.radians(1.0)) for comp in comp_list)
 
 
@@ -662,7 +673,8 @@ def test_radio_source_amplitudes_round_trip_through_a_chain(tmp_path) -> None:
     chain = _write_chain(tmp_path / "chain.h5", source)
 
     comp_list = CompList([_make_radio_sources(template)])
-    comp_list.load_initial_state(chain, apply_init_from=False)
+    for comp in comp_list:
+        comp.load_initial_state(chain, apply_init_from=False)
     assert np.all(comp_list[0].amps == 1234.0)
 
 

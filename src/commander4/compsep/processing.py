@@ -489,7 +489,8 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
     # else each component's init_from (else zeros). Done identically on every CompSep rank so the
     # lists start globally consistent.
     with benchmark("fileread-compsep"):
-        comp_list.load_amp_prior_means()
+        for comp in comp_list:
+            comp.load_amp_prior_mean()
         comp_lists_by_chain = {}
         for chain in (1, 2):
             chain_file = None
@@ -502,7 +503,8 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
             # over the initial guesses in `init_from`.
             apply_init_from = chain_file is None or start.first_iteration == 1
             comp_lists_by_chain[chain] = deepcopy(comp_list)
-            comp_lists_by_chain[chain].load_initial_state(chain_file, apply_init_from)
+            for comp in comp_lists_by_chain[chain]:
+                comp.load_initial_state(chain_file, apply_init_from)
 
     data_world = (band_identifier, mpi_info.world.rank)
     data_compsep = (band_identifier, mpi_info.compsep.rank)

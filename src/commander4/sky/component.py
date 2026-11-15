@@ -170,6 +170,54 @@ class Component:
             logger.debug(f"Component {self.comp_name!r} ({self.eval_pol}): restored sampled "
                          f"beta = {self.beta}.")
 
+    def load_initial_state(self, chain_file: str | None, apply_init_from: bool) -> None:
+        """Set this component's starting state from a CompSep chain file or its own `init_from`.
+
+        The source is the `init_from` parameter if `apply_init_from` is set and the component has
+        one, and `chain_file` otherwise. So `init_from: null` keeps the component at its
+        parameter-file initialization. The file type decides how it is read: a `.h5`/`.hd5` chain
+        file goes through `read_chain`, and a `.fits` sky map through `read_amps_from_map`. Without
+        a source, the component keeps its parameter-file values and zero amplitudes.
+
+        Args:
+            chain_file: The CompSep chain file this chain starts from, or None.
+            apply_init_from: False when `chain_file` is this chain's own saved state (on
+                `gibbs.chain_status: append`), which must win over the initial guesses.
+        """
+        source = chain_file
+        if apply_init_from and "init_from" in self.comp_params:
+            source = self.comp_params.init_from
+        if not source:
+            return
+        if str(source).lower().endswith(".fits"):
+            self.read_amps_from_map(source)
+        elif str(source).lower().endswith((".h5", ".hd5")):
+            with h5py.File(source, "r") as file:
+                group_path = f"comps/{self.shortname}"
+                if group_path not in file:
+                    logger.error(f"Component {self.comp_name!r} (shortname {self.shortname!r}) "
+                                 f"not found in {source!r}; keeping its parameter-file "
+                                 "initialization.")
+                    return
+                self.read_chain(file[group_path])
+        else:
+            raise ValueError(f"Unsupported init file {source!r} for component "
+                             f"{self.comp_name!r}: expected a .h5/.hd5 chain or a .fits map.")
+
+    def read_amps_from_map(self, map_file: str) -> None:
+        """Set the amplitudes from a FITS sky map. Only diffuse components can do this."""
+        raise ValueError(f"Component {self.comp_name!r}: a FITS 'init_from' map only works for "
+                         "diffuse (alm-based) components.")
+
+    def load_amp_prior_mean(self) -> None:
+        """Read the mean of the amplitude prior from the `amp_prior_mean_map` parameter.
+
+        Only diffuse components have such a prior, so here the parameter must be unset.
+        """
+        if "amp_prior_mean_map" in self.comp_params and self.comp_params.amp_prior_mean_map:
+            raise ValueError(f"Component {self.comp_name!r}: 'amp_prior_mean_map' is only "
+                             "supported for diffuse (alm-based) components.")
+
     def dot(self, other: "Component") -> float:
         """The dot product of this component's amplitudes with those of `other`.
 

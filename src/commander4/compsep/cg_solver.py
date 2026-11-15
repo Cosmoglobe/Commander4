@@ -10,7 +10,6 @@ import time
 import logging
 from mpi4py import MPI
 from typing import TYPE_CHECKING
-from collections.abc import Callable
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
@@ -90,25 +89,27 @@ class CompSepSolver:
     
 
     def apply_LHS_matrix(self, comp_list_in: CompList) -> CompList:
-        #This a_in should become a list of Component objects instead. 
-        """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of
-            the Ax=b system for global component separation. The full A matrix is:
-            (1 + S^{1/2} Y^T M^T Y^-1^T B^T N^-1 B Y^-1 M Y S^{1/2}).
-            For a component without a prior (`Cl_prior_amplitude: null`, C3's `CL_TYPE = none`)
-            the "1 +" is left out and S = 1. For point sources, `B Y^-1 M Y` is replaced by painting
-            the sources into the band map, and the Y and Y^T around N^-1 are left out.
-            This function should be called by all ranks holding a frequency map, even if they do
-            not hold a compoenent, as they are still needed to compute the LHS operation.
-            Args:
-                comp_list_in (CompList): List of Components contributing to the local band
-            Returns:
-                Aa (np.array): The result of applying A to the input alms. Will return a zero-sized
-                               array if this MPI rank does not hold a component.                               
+        """Apply A, the left-hand side of the Ax=b system, to the vector `comp_list_in`.
+
+        The full A matrix is (1 + S^{1/2} Y^T M^T Y^-1^T B^T N^-1 B Y^-1 M Y S^{1/2}).
+        For a component without a prior (`Cl_prior_amplitude: null`, C3's `CL_TYPE = none`)
+        the "1 +" is left out and S = 1. For point sources, `B Y^-1 M Y` is replaced by painting
+        the sources into the band map, and the Y and Y^T around N^-1 are left out.
+
+        Every rank of the solver's communicator must call this, because each rank applies the
+        part of A that belongs to its band.
+
+        Args:
+            comp_list_in: The vector to apply A to. It is not changed. Only the master's
+                amplitudes are used; on the other ranks the list only gives the shapes.
+        Returns:
+            On the master, a new list holding A applied to the input. On the other ranks, an
+            empty list.
         """
         myrank = self.CompSep_comm.Get_rank()
 
         comp_list = comp_list_in.copy()
-        if myrank == 0:  # this task actually holds a component
+        if myrank == 0:  # Only the master holds the values of the vector.
             # S^{1/2} a
             for comp in comp_list:
                 comp.apply_Cl_prior_sqrt(comp.amps)
@@ -245,7 +246,7 @@ class CompSepSolver:
                 # eta terms this belongs to the *mean* solution, so a non-zero prior mean shifts the
                 # Wiener filter itself and must be present in the MAP solve too. mu is an alm
                 # vector, None unless the component sets `amp_prior_mean_map` (read as a sky map
-                # and transformed once at startup by CompList.load_amp_prior_means); the usual
+                # and transformed once at startup by `load_amp_prior_mean`); the usual
                 # zero-mean prior therefore costs one None check, not a full-size scale-and-add.
                 amp_prior_mean = comp.amp_prior_mean
                 if amp_prior_mean is not None:
@@ -262,75 +263,16 @@ class CompSepSolver:
         return comp_list
 
 
-    def solve_CG(self, LHS: Callable, RHS: CompList, M: Callable, x0 = None) -> CompList:
-        """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG.
-            Assumes that both x and b are in alm space.
-
-            Args:
-                LHS (callable): A function/callable taking x as argument and returning Ax.
-                RHS (list): A list of alm-vectors representing the right-hand-side of the equation.
-                x0 (list): Initial guess for x as list of alm-vectors for each component (optional).
-                M (callable): Preconditioner: A callable which approximates A^-1.
-            Returns:
-                m_bestfit (list): The resulting best-fit solution, for the component held by this
-                                  rank, as a list of alm-vectors for each component.
-        """
-        if self.det_map.pol:
-            max_iter = self.config.max_iter_pol
-        else:
-            max_iter = self.config.max_iter
-
-        checkpt_int = 30
-        master = self.CompSep_comm.Get_rank() == 0
-
-        CG_solver = DistributedCG(LHS, RHS, master, x0=x0, M=M, destroy_b=True)
-        self.CG_residuals = np.zeros(max_iter)
-        if master:
-            logger.verbose(f"{'QU' if self.det_map.pol else 'Intensity'} CG starting up.")
-        iter = 0
-        t0 = time.time()
-        stop_CG = False
-        while not stop_CG:
-            # Counted per step, so the report's N column is the number of CG iterations taken.
-            with benchmark("cg-iter"):
-                CG_solver.step()
-            log_memory("cg-iter")
-            self.CG_residuals[iter] = CG_solver.err
-            iter += 1
-            if iter%checkpt_int == 0 and master:
-                logger.verbose(
-                    f"{'QU' if self.det_map.pol else 'Intensity'} CG iter {iter:3d} - "
-                    f"Squared residual {np.mean(self.CG_residuals[iter-checkpt_int:iter]):.6e} "
-                    f"({(time.time() - t0)/checkpt_int:.2f}s/iter)")
-                t0 = time.time()
-            if iter >= max_iter:
-                # Only log warning if err_tol != 0, as this means user wants to do max_iter.
-                if master and self.config.err_tol > 0.0:
-                    logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
-                stop_CG = True
-            if CG_solver.err <= self.config.err_tol:
-                stop_CG = True
-            stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
-        self.CG_residuals = self.CG_residuals[:iter]
-        if master:
-            logger.info(f"{'QU' if self.det_map.pol else 'Intensity'} CG finished after {iter} "\
-                        f"iterations with a squared residual of {CG_solver.err:.3e} "\
-                        f"(err tol = {self.config.err_tol})")
-
-        complist_sol = CG_solver.x
-        for comp in complist_sol:
-            if master:
-                comp.apply_Cl_prior_sqrt(comp.amps)
-            comp.bcast_data_blocking(self.CompSep_comm)
-
-        return complist_sol
-
-
     def solve(self, comp_list: CompList, rng: np.random.Generator) -> CompList:
-        """Solve the amplitudes of `comp_list` for this rank's band, in place.
+        """Solve the amplitudes of `comp_list` for this rank's band, in place, with the CG.
 
         The CG starts from the amplitudes that `comp_list` holds on entry, and leaves the solution
-        in them. The same list is returned.
+        in them. The same list is returned. It stops at the sampling group's `err_tol`, or after
+        `max_iter` iterations (`max_iter_pol` for QU). `self.CG_residuals` then holds the error
+        after each iteration.
+
+        Every rank of the solver's communicator must call this. Rank 0 (the master) runs the CG,
+        and the other ranks apply their band's part of the operator.
 
         If `sample_amplitudes==True` the solution is a constrained realization, i.e the Wiener mean
         plus two fluctuation terms, i.e. the amplitudes are a draw from the conditional posterior.
@@ -341,14 +283,18 @@ class CompSepSolver:
         band's white-noise realization, so shared draws would correlate the fluctuation across
         bands.
         """
+        master = self.my_rank == 0
+        pol_name = "QU" if self.det_map.pol else "Intensity"
+        max_iter = self.config.max_iter_pol if self.det_map.pol else self.config.max_iter
+
         # Set comp beams to 0 (in theory they could be non-zero if the per-pix solver has ran).
         for comp in comp_list:
             comp.amp_fwhm_rad = 0.0
         # `comp_list` is the solution vector of the CG: it starts as the guess and ends as the
-        # solution. The CG works in x = S^{-1/2} a, so the guess is scaled here, and `solve_CG`
-        # scales the solution back. Only the master's values are used; the other ranks need the
+        # solution. The CG works in x = S^{-1/2} a, so the guess is scaled here, and the solution
+        # is scaled back at the end. Only the master's values are used; the other ranks need the
         # list as a buffer of the right shape.
-        if self.my_rank == 0:
+        if master:
             for comp in comp_list:
                 comp.apply_Cl_prior_inv_sqrt(comp.amps)
 
@@ -362,5 +308,45 @@ class CompSepSolver:
         with benchmark("cg-precond-init"):
             precond = getattr(preconditioners, self.config.preconditioner)(self, comp_list)
 
-        self.solve_CG(self.apply_LHS_matrix, RHS, x0=comp_list, M=precond)
+        # The CG changes `comp_list` (its x) and `RHS` (its residual) in place.
+        CG_solver = DistributedCG(self.apply_LHS_matrix, RHS, master, x0=comp_list, M=precond,
+                                  destroy_b=True)
+        self.CG_residuals = np.zeros(max_iter)
+        if master:
+            logger.verbose(f"{pol_name} CG starting up.")
+        checkpt_int = 30
+        iter = 0
+        t0 = time.time()
+        stop_CG = False
+        while not stop_CG:
+            # Counted per step, so the report's N column is the number of CG iterations taken.
+            with benchmark("cg-iter"):
+                CG_solver.step()
+            log_memory("cg-iter")
+            self.CG_residuals[iter] = CG_solver.err
+            iter += 1
+            if iter%checkpt_int == 0 and master:
+                logger.verbose(
+                    f"{pol_name} CG iter {iter:3d} - "
+                    f"Squared residual {np.mean(self.CG_residuals[iter-checkpt_int:iter]):.6e} "
+                    f"({(time.time() - t0)/checkpt_int:.2f}s/iter)")
+                t0 = time.time()
+            if iter >= max_iter:
+                # Only log warning if err_tol != 0, as this means user wants to do max_iter.
+                if master and self.config.err_tol > 0.0:
+                    logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
+                stop_CG = True
+            if CG_solver.err <= self.config.err_tol:
+                stop_CG = True
+            stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
+        self.CG_residuals = self.CG_residuals[:iter]
+        if master:
+            logger.info(f"{pol_name} CG finished after {iter} iterations with a squared residual "
+                        f"of {CG_solver.err:.3e} (err tol = {self.config.err_tol})")
+
+        # a = S^{1/2} x on the master, which then sends the solution to the other ranks.
+        for comp in comp_list:
+            if master:
+                comp.apply_Cl_prior_sqrt(comp.amps)
+            comp.bcast_data_blocking(self.CompSep_comm)
         return comp_list

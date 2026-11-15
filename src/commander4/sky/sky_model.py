@@ -16,7 +16,8 @@ def build_initial_sky_model(params: Bunch) -> "SkyModel":
     It is the fixed sky of a TOD-only run, which the TOD band masters construct locally.
     """
     comp_list = CompList.init_from_params(params.components, params)
-    comp_list.load_initial_state(None, apply_init_from=True)
+    for comp in comp_list:
+        comp.load_initial_state(None, apply_init_from=True)
     return SkyModel(comp_list)
 
 

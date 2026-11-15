@@ -1,7 +1,7 @@
 """Reading a component's amplitudes from a FITS map, and picking a view's rows of stored data.
 
-`CompList` uses the FITS reader for a component's `init_from` map and its `amp_prior_mean_map`;
-each component reads its chain group itself (`read_chain`). Both need the rows of a stored
+A diffuse component uses the FITS reader for its `init_from` map and its `amp_prior_mean_map`,
+and reads its chain group itself (`read_chain`). Both need the rows of a stored
 (npol, ...) array that belong to a polarization view, which `_pol_row_indices` gives.
 """
 from __future__ import annotations

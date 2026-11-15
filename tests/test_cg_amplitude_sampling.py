@@ -465,7 +465,8 @@ class TestPriorMeanMap:
         smooth_map = hp.alm2map(hp.map2alm(rng.normal(0.0, 1.0, hp.nside2npix(nside)),
                                            lmax=LMAX), nside)
         comp_list = self._comp_list(tmp_path, prior_map=smooth_map)
-        comp_list.load_amp_prior_means()
+        for comp in comp_list:
+            comp.load_amp_prior_mean()
 
         mu = comp_list[0].amp_prior_mean
         assert not np.allclose(mu, 0.0)
@@ -481,7 +482,8 @@ class TestPriorMeanMap:
         nside = 16
         prior_map = np.full(hp.nside2npix(nside), 4.0)
         comp_list = self._comp_list(tmp_path, prior_map=prior_map, flat_prior=False)
-        comp_list.load_amp_prior_means()
+        for comp in comp_list:
+            comp.load_amp_prior_mean()
         mu_before = comp_list[0].amp_prior_mean.copy()
 
         # Solve the *same* component objects twice, as the Gibbs loop does across iterations. The
@@ -505,7 +507,8 @@ class TestPriorMeanMap:
                                           lmax=LMAX), nside)
         # Non-flat prior, so the round trip through S^{-1/2} ... S^{1/2} is a real cancellation.
         comp_list = self._comp_list(tmp_path, prior_map=prior_map, flat_prior=False)
-        comp_list.load_amp_prior_means()
+        for comp in comp_list:
+            comp.load_amp_prior_mean()
         mu = comp_list[0].amp_prior_mean
 
         params = _make_params()
@@ -538,7 +541,8 @@ class TestPriorMeanMap:
         for l_tighten in (0, 4000):
             comp_list = self._comp_list(tmp_path, prior_map=prior_map, Cl_prior_amplitude=1.0e3,
                                         Cl_prior_l_tighten=l_tighten)
-            comp_list.load_amp_prior_means()
+            for comp in comp_list:
+                comp.load_amp_prior_mean()
             mu = comp_list[0].amp_prior_mean
             solver = _make_solver(det_map, _make_group(False))
             solutions[l_tighten] = solver.solve(comp_list, np.random.default_rng(0))[0].amps
@@ -551,7 +555,8 @@ class TestPriorMeanMap:
     def test_rejects_a_non_fits_prior_mean(self, tmp_path):
         comp_list = self._comp_list(tmp_path, amp_prior_mean_map="/some/chain.h5")
         with pytest.raises(ValueError, match="must be a .fits sky map"):
-            comp_list.load_amp_prior_means()
+            for comp in comp_list:
+                comp.load_amp_prior_mean()
 
     def test_setter_rejects_a_wrongly_shaped_mu(self, tmp_path):
         comp = self._comp_list(tmp_path)[0]

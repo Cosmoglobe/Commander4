@@ -18,7 +18,7 @@ from scipy.interpolate import interp1d
 
 from commander4.data_models.band import Band
 from commander4.sky.component import Component
-from commander4.sky.comp_io import _pol_row_indices
+from commander4.sky.comp_io import _pol_row_indices, _read_view_alms_from_fits
 from commander4.polarization import get_npol
 from commander4.math_utils.arithmetic import inplace_scale
 from commander4.math_utils.alm import project_alms, almxfl, _dot_complex_alm_1D_arrays
@@ -95,7 +95,7 @@ class DiffuseComponent(Component):
         # an init_from sky map, the prior mean map and `Cl_prior_amplitude` (None -> they are
         # already in `amplitude_unit`). Compsep chains are always in `amplitude_unit`.
         self.units = comp_params.units if "units" in comp_params else None
-        # Cached prior mean mu, filled from `amp_prior_mean_map` by CompList.load_amp_prior_means;
+        # Cached prior mean mu, filled from `amp_prior_mean_map` by `load_amp_prior_mean`;
         # None means a zero-mean prior. See the amp_prior_mean property.
         self._amp_prior_mean_alms = None
         self.amps = None  # Alm data is not allocated by default.
@@ -311,6 +311,47 @@ class DiffuseComponent(Component):
             raise ValueError(f"Component {self.comp_name!r}: prior mean has shape {alms.shape}, "
                              f"expected {(self.npol, self.alm_len_complex)}.")
         self._amp_prior_mean_alms = alms
+
+    def load_amp_prior_mean(self) -> None:
+        """Read the prior mean mu from the `amp_prior_mean_map` parameter, if it is set.
+
+        This is C3's ``COMP_AMP_PRIOR_MAP``: a FITS sky map giving the mean of the Gaussian
+        amplitude prior a ~ N(mu, S). It goes through the same conversion as an ``init_from`` map
+        (unit conversion at the component's reference frequency, truncation to l = 3*nside-1, and
+        the iterative LSMR inverse SHT), because mu and the amplitudes live in the same space and
+        must be treated identically. C3 instead uses a single non-iterative `YtW` analysis here,
+        which is the less accurate of the two on a HEALPix grid.
+
+        Read once and cached (C3 likewise transforms its mu once, at component initialization).
+        The S^{-1/2} that turns mu into a right-hand-side term is *not* applied here but per solve,
+        since the prior S may change between Gibbs iterations while mu does not.
+        """
+        source_path = self.comp_params.amp_prior_mean_map \
+            if "amp_prior_mean_map" in self.comp_params else None
+        if not source_path:
+            return  # Zero-mean prior.
+        if not str(source_path).lower().endswith(".fits"):
+            raise ValueError(
+                f"Component {self.comp_name!r}: 'amp_prior_mean_map' must be a .fits sky map, "
+                f"but got {source_path!r}.")
+        if self.Cl_prior_amplitude is None:
+            raise ValueError(
+                f"Component {self.comp_name!r} ({self.eval_pol}): 'amp_prior_mean_map' needs a "
+                "prior to be the mean of, but 'Cl_prior_amplitude' is null (no prior).")
+        view_alms = _read_view_alms_from_fits(self, source_path)
+        if view_alms is not None:
+            self.amp_prior_mean = view_alms.astype(self.amps.dtype, copy=False)
+            logger.info(f"Component {self.comp_name!r} ({self.eval_pol}): prior mean read from "
+                        f"{source_path!r}.")
+
+    def read_amps_from_map(self, map_file: str) -> None:
+        """Set this view's alms from a FITS sky map, given in the component's `units`.
+
+        If the map lacks this view's polarization, the alms keep their current value.
+        """
+        view_alms = _read_view_alms_from_fits(self, map_file)
+        if view_alms is not None:
+            self.amps = view_alms.astype(self.amps.dtype, copy=False)
 
     def write_chain(self, group: h5py.Group, band_frequencies: dict[str, float]) -> None:
         """Write the shared component sample (see `Component.write_chain`), plus the alms."""
