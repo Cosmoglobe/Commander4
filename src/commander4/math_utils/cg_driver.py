@@ -68,7 +68,9 @@ class DistributedCG:
                 self.rz0 = float(self.rz)  # Here r = b.
             self.p   = z
         else:
-            self.p = zeros_like(b)
+            # The other ranks pass `p` to A only as a work buffer, and never use `r`. So the two
+            # share one vector.
+            self.p = self.r
 
     def step(self):
         """Take one CG step, which updates ``x``, ``i`` and ``err``.

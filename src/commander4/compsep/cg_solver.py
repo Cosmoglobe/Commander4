@@ -100,15 +100,21 @@ class CompSepSolver:
         part of A that belongs to its band.
 
         Args:
-            comp_list_in: The vector to apply A to. It is not changed. Only the master's
-                amplitudes are used; on the other ranks the list only gives the shapes.
+            comp_list_in: The vector to apply A to. Only the master's amplitudes are used, and
+                they are not changed. On the other ranks the list is a work buffer, and its
+                amplitudes are overwritten.
         Returns:
             On the master, a new list holding A applied to the input. On the other ranks, an
             empty list.
         """
         myrank = self.CompSep_comm.Get_rank()
 
-        comp_list = comp_list_in.copy()
+        # `comp_list` is the "working" copy of the components. For the master rank we must retain
+        # the original `comp_list_in`, because master adds the (1 + ...) part of the LHS equation,
+        # and because the CG uses the vector again after this call.
+        # The worker ranks are free to destroy their `comp_list_in`, so we point `comp_list` at it.
+        comp_list = comp_list_in.copy() if myrank==0 else comp_list_in
+
         if myrank == 0:  # Only the master holds the values of the vector.
             # S^{1/2} a
             for comp in comp_list:
@@ -187,8 +193,8 @@ class CompSepSolver:
 
 
     def calc_RHS(self, comp_list: CompList, rng: np.random.Generator) -> CompList:
-        """ Calculates the right-hand-side b-vector of the Ax=b CompSep equation, overwriting and
-            returning `comp_list`:
+        """ Calculates the right-hand-side b-vector of the Ax=b CompSep equation, and returns it as
+            a new list with the same components as `comp_list`, which is not changed:
 
                 b = S^{1/2} A^T (N^-1 d + N^{-1/2} eta_1) + S^{-1/2} mu + eta_2,
 
@@ -229,17 +235,18 @@ class CompSepSolver:
         b_band.map = b_map
 
         # (Y^T M^T Y^-1^T B^T) Y^T (...)
-        for comp in comp_list:
+        RHS = comp_list.zeros_like()
+        for comp in RHS:
             comp.band2comp(b_band, nthreads=self.nthreads)
 
         # Accumulate on master and apply the prior there: S^{1/2} Y^T M^T Y^-1^T B^T Y^T (...)
-        for comp in comp_list:
+        for comp in RHS:
             comp.accum_data_blocking(self.CompSep_comm)
             if myrank == 0:
                 comp.apply_Cl_prior_sqrt(comp.amps)
 
         if myrank == 0:
-            for comp in comp_list:
+            for comp in RHS:
                 if comp.Cl_prior_amplitude is None:
                     continue  # No prior: no prior mean and no prior draw.
                 # + S^{-1/2} mu, the prior mean. Added whether or not we are sampling: unlike the
@@ -260,7 +267,7 @@ class CompSepSolver:
                                                                self.spin, 1, rng)[0]
                 logger.debug(f"RHS comp-{comp.shortname}: {np.mean(np.abs(comp.amps)):.2e}")
 
-        return comp_list
+        return RHS
 
 
     def solve(self, comp_list: CompList, rng: np.random.Generator) -> CompList:
@@ -298,9 +305,8 @@ class CompSepSolver:
             for comp in comp_list:
                 comp.apply_Cl_prior_inv_sqrt(comp.amps)
 
-        # `calc_RHS` overwrites the list it is handed, so it gets a new one.
         with benchmark("cg-rhs"):
-            RHS = self.calc_RHS(comp_list.zeros_like(), rng)
+            RHS = self.calc_RHS(comp_list, rng)
 
         # Initialize the precondidioner class, which is in the module "solvers.preconditioners",
         # and has the name specified by this sampling group's preconditioner setting. It reads only
