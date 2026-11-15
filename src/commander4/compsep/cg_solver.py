@@ -358,6 +358,9 @@ class CompSepSolver:
 
         The CG starts from the amplitudes that `comp_list` holds on entry.
         """
+        # Set comp beams to 0 (in theory they could be non-zero if the per-pix solver has ran).
+        for comp in comp_list:
+            comp.amp_fwhm_rad = 0.0
         # Set starting guess to x0 = S^{-1/2} a. It is copied, because `calc_RHS` overwrites
         # `comp_list`. Only the master's values are used; the other ranks need the list as a buffer
         # of the right shape.
@@ -401,11 +404,5 @@ class CompSepSolver:
             dense_matrix.print_sing_vals()
             dense_matrix.print_matrix_diag()
 
-        sol_list = self.solve_CG(self.apply_LHS_matrix, RHS, x0=x0, M=precond,
+        return self.solve_CG(self.apply_LHS_matrix, RHS, x0=x0, M=precond,
                              x_true=x_true if self.config.dense_matrix_debug_mode else None)
-        # The CG solves for the intrinsic (unsmoothed) sky. The solution is built from copies of
-        # the input components, so reset the beam they carried, which is non-zero if the chain
-        # started from a sample of the per-pixel solver.
-        for comp in sol_list:
-            comp.amp_fwhm_rad = 0.0
-        return sol_list
