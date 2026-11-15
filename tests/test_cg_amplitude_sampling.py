@@ -30,7 +30,7 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.compsep.processing import CGSamplingGroupConfig
+from commander4.compsep.processing import CG_GROUP_DEFAULTS
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
 from commander4.compsep.cg_solver import CompSepSolver
@@ -49,16 +49,16 @@ def _make_params(sample_amplitudes: bool = True) -> Bunch:
     )
 
 
-def _make_group(sample_amplitudes: bool = True) -> CGSamplingGroupConfig:
+def _make_group(sample_amplitudes: bool = True) -> Bunch:
     """A CG sampling group. `optimize` is `sample_amplitudes` inverted."""
-    return CGSamplingGroupConfig(
+    return Bunch(
         name="test", optimize=not sample_amplitudes,
         max_iter=300, max_iter_pol=300, err_tol=1e-14,
         preconditioner="NoPreconditioner",
     )
 
 
-def _make_solver(det_map: DetectorMap, group: CGSamplingGroupConfig,
+def _make_solver(det_map: DetectorMap, group: Bunch,
                  comm: MPI.Comm = MPI.COMM_SELF) -> CompSepSolver:
     return CompSepSolver(det_map, comm, group, double_precision=True, nthreads=1)
 
@@ -205,7 +205,7 @@ def test_the_cg_starts_from_the_amplitudes_it_is_given():
     det_map = _make_det_map()
     converged = _make_solver(det_map, _make_group(sample_amplitudes=False)).solve(
         _make_comp_list(_make_params(), Cl_prior_amplitude=1.0), np.random.default_rng(0))[0].amps
-    one_iteration = CGSamplingGroupConfig(
+    one_iteration = Bunch(
         name="one", optimize=True, max_iter=1, max_iter_pol=1, err_tol=0.0,
         preconditioner="NoPreconditioner")
 
@@ -294,7 +294,7 @@ def test_a_fixed_number_of_iterations_stops_when_the_residual_vanishes():
                           nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=False, lmax=LMAX)
     params = Bunch(resources=Bunch(compsep=Bunch(num_threads=1)),
                    compsep=Bunch(double_precision=False))
-    group = CGSamplingGroupConfig(
+    group = Bunch(
         name="fixed", optimize=True, max_iter=300, max_iter_pol=300, err_tol=0.0,
         preconditioner="NoPreconditioner")
     solver = CompSepSolver(det_map, MPI.COMM_SELF, group, double_precision=False, nthreads=1)
@@ -308,7 +308,7 @@ def test_a_fixed_number_of_iterations_stops_when_the_residual_vanishes():
 
 def test_optimize_defaults_to_off_so_the_solver_samples():
     """A group with no `optimize` entry draws a constrained realization (C3 behaviour)."""
-    solver = _make_solver(_make_det_map(), CGSamplingGroupConfig(name="default"))
+    solver = _make_solver(_make_det_map(), Bunch(**CG_GROUP_DEFAULTS))
     assert solver.sample_amplitudes is True
 
 

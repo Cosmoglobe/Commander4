@@ -10,7 +10,7 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.compsep.processing import MCMCSamplingGroupConfig, _read_chisq_masks
+from commander4.compsep.processing import _read_chisq_masks
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
 from commander4.compsep.mcmc import MCMCSamplingGroup, resolve_chisq_mask
@@ -104,9 +104,9 @@ class TestReadChisqMasks:
         hp.write_map(str(path), mask, overwrite=True)
 
         groups = {
-            "with_mask": MCMCSamplingGroupConfig(name="with_mask", chisq_mask=str(path)),
-            "without_mask": MCMCSamplingGroupConfig(name="without_mask"),
-            "empty_mask": MCMCSamplingGroupConfig(name="empty_mask", chisq_mask=""),
+            "with_mask": Bunch(name="with_mask", chisq_mask=str(path)),
+            "without_mask": Bunch(name="without_mask", chisq_mask=None),
+            "empty_mask": Bunch(name="empty_mask", chisq_mask=""),
         }
         masks = _read_chisq_masks(MPI.COMM_SELF, groups)
 

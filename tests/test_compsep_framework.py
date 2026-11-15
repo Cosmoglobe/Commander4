@@ -7,19 +7,12 @@ from mpi4py import MPI
 from pixell.bunch import Bunch
 
 from commander4.compsep.processing import (
-    CGSamplingGroupConfig,
-    MCMCSamplingGroupConfig,
-    PerPixelSamplingGroupConfig,
+    MCMC_GROUP_DEFAULTS,
     _build_conditional_residual,
-    _filter_sampling_group_components,
-    _read_sampling_groups,
-    resolve_sampling_groups,
-    _sampling_group_selects_band,
-    _validate_sampling_group_dependencies,
-    _validate_sampling_group_references,
     _validate_mcmc_sampled_components,
     _validate_component_lmax,
     process_compsep,
+    read_sampling_groups,
 )
 from commander4.compsep.chisq import evaluate_chi2
 from commander4.diagnostics.log import SUMMARY
@@ -137,14 +130,6 @@ def test_joined_skymodel_realizes_iqu_components() -> None:
     assert np.all(np.isfinite(sky))
 
 
-def _chain_output_state(**overrides) -> Bunch:
-    """The chain-output fields of `CompSepState` that the chi-squared path reads."""
-    state = Bunch(band_name="Planck30GHz", target_pol="I", nside_chisq=1,
-                  include_chisq_map=True, include_residual_maps=False)
-    state.update(overrides)
-    return state
-
-
 def test_iteration_chi2_uses_all_observed_map_samples() -> None:
     map_sky = np.arange(1.0, 13.0).reshape(1, -1)
     map_inv_var = np.full_like(map_sky, 1.0/2.0**2)
@@ -173,18 +158,20 @@ def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
     map_sky = np.arange(1.0, 13.0).reshape(1, -1)
     map_inv_var = np.full_like(map_sky, 1.0/2.0**2)
     detector_data = DetectorMap(map_sky, map_inv_var, nu=30.0, fwhm=60.0, nside=1)
-    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0))
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0),
+                     band=Bunch(name="Planck30GHz", identifier="Planck30GHz_I", polarization="I"))
     # Compsep only runs with at least one enabled group, so use one that samples nothing (its
     # component list is empty): the group loop still runs, and its evaluation is the final fit.
-    compsep_state = _chain_output_state(
-        amplitude_groups={}, mcmc_groups={"noop": MCMCSamplingGroupConfig(name="noop")},
-        band_identifier="Planck30GHz_I", chisq_masks={})
+    noop = Bunch(**MCMC_GROUP_DEFAULTS)
+    noop.name, noop.chisq_bands, noop.chisq_mask_map = "noop", ["Planck30GHz"], None
+    cfg = Bunch(cg_sampling_groups={}, amplitude_groups={}, mcmc_sampling_groups={"noop": noop},
+                nside_chisq=1, include_chisq_map=True, include_residual_maps=False)
     monkeypatch.setattr(
         "commander4.compsep.processing.write_compsep_chain_to_file", lambda *args: None)
 
     with caplog.at_level(SUMMARY, logger="commander4.compsep.processing"):
         result = process_compsep(
-            mpi_info, compsep_state, detector_data, iter=4, chain=2,
+            mpi_info, cfg, detector_data, iter=4, chain=2,
             params=Bunch(), comp_list=CompList([]), rng=np.random.default_rng(0))
 
     chi2 = np.sum((map_sky / 2.0)**2)
@@ -195,76 +182,54 @@ def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
     assert f"z={z_chi2:.3f}" in caplog.text
 
 
-def test_sampling_group_component_filter_matches_comp_names_and_preserves_pol_split() -> None:
-    comp_list = _make_multi_comp_list()
-
-    intensity = _filter_sampling_group_components(
-        comp_list.split_for_eval_pol("I"),
-        ["ThermalDust", "FreeFree"],
-    )
-    polarization = _filter_sampling_group_components(
-        comp_list.split_for_eval_pol("QU"),
-        ["ThermalDust", "FreeFree"],
-    )
-
-    assert [comp.comp_name for comp in intensity] == ["ThermalDust", "FreeFree"]
-    assert [comp.eval_pol for comp in intensity] == ["I", "I"]
-    assert [comp.comp_name for comp in polarization] == ["ThermalDust"]
-    assert [comp.eval_pol for comp in polarization] == ["QU"]
+def _make_group_params(**sampling_group_sections) -> Bunch:
+    """A parameter file with three components, one IQU band, and the given sampling groups."""
+    components = Bunch({name: Bunch(enabled=True) for name in ("CMB", "ThermalDust", "FreeFree")})
+    bands = Bunch({"Planck30GHz": Bunch(enabled=True, polarization="IQU")})
+    return Bunch(components=components, compsep=Bunch(bands=bands, **sampling_group_sections))
 
 
-def test_sampling_group_band_filter_accepts_base_and_execution_ids() -> None:
-    assert _sampling_group_selects_band(["Planck30GHz"], "Planck30GHz", "Planck30GHz_I")
-    assert _sampling_group_selects_band(["Planck30GHz_I"], "Planck30GHz", "Planck30GHz_I")
-    assert not _sampling_group_selects_band(["Planck44GHz"], "Planck30GHz", "Planck30GHz_I")
+def test_sampling_group_gets_defaults_and_all_names() -> None:
+    params = _make_group_params(cg_sampling_groups=Bunch(
+        all=Bunch(comps="all", bands="all"), missing=Bunch()))
+    groups = read_sampling_groups(params).cg_sampling_groups
+
+    # "all" and a setting that is left out both select everything.
+    for name in ("all", "missing"):
+        assert groups[name].name == name
+        assert groups[name].comps == ["CMB", "ThermalDust", "FreeFree"]
+        assert groups[name].bands == ["Planck30GHz", "Planck30GHz_I", "Planck30GHz_QU"]
+        assert groups[name].max_iter == 200 and groups[name].optimize is False
 
 
-def test_group_reference_validation_rejects_unknown_names() -> None:
-    comp_list = _make_multi_comp_list()  # CMB, ThermalDust, FreeFree
-    params = Bunch(compsep=Bunch(bands=Bunch(
-        {"Planck30GHz": Bunch(enabled=True, polarization="IQU")})))
+def test_sampling_group_names_components_and_bands_or_views() -> None:
+    params = _make_group_params(cg_sampling_groups=Bunch(
+        selected=Bunch(comps=["CMB"], bands=["Planck30GHz_QU"])))
+    cfg = read_sampling_groups(params)
 
-    # Valid references (component name + execution-view band id) pass silently.
-    valid = CGSamplingGroupConfig.from_block(
-        "g", Bunch(comps=["CMB"], bands=["Planck30GHz_QU"]))
-    _validate_sampling_group_references({"g": valid}, comp_list, params)
-
-    with pytest.raises(ValueError, match="unknown component"):
-        invalid = CGSamplingGroupConfig.from_block("g", Bunch(comps=["DoesNotExist"]))
-        _validate_sampling_group_references({"g": invalid}, comp_list, params)
-
-    with pytest.raises(ValueError, match="unknown band"):
-        invalid = CGSamplingGroupConfig.from_block("g", Bunch(bands=["NoSuchBand"]))
-        _validate_sampling_group_references({"g": invalid}, comp_list, params)
+    assert cfg.cg_sampling_groups["selected"].comps == ["CMB"]
+    assert cfg.cg_sampling_groups["selected"].bands == ["Planck30GHz_QU"]
+    assert cfg.amplitude_groups is cfg.cg_sampling_groups
 
 
-def test_group_configs_normalize_all_and_explicit_selections() -> None:
-    all_names = CGSamplingGroupConfig.from_block("all", Bunch(comps="all", bands="all"))
-    selected = CGSamplingGroupConfig.from_block(
-        "selected", Bunch(comps=["CMB"], bands=["Planck30GHz"]))
-    assert all_names.comps is None and all_names.bands is None
-    assert selected.comps == ("CMB",)
-    assert selected.bands == ("Planck30GHz",)
+def test_sampling_group_with_an_unknown_name_is_rejected() -> None:
+    with pytest.raises(ValueError, match="g.comps' names unknown"):
+        read_sampling_groups(_make_group_params(
+            cg_sampling_groups=Bunch(g=Bunch(comps=["DoesNotExist"]))))
+    with pytest.raises(ValueError, match="g.bands' names unknown"):
+        read_sampling_groups(_make_group_params(
+            per_pixel_sampling_groups=Bunch(g=Bunch(bands=["NoSuchBand"]))))
+    with pytest.raises(ValueError, match="g.chisq_bands' names unknown"):
+        read_sampling_groups(_make_group_params(
+            mcmc_sampling_groups=Bunch(g=Bunch(chisq_bands=["NoSuchBand"]))))
+    with pytest.raises(ValueError, match="must be a list of names"):
+        read_sampling_groups(_make_group_params(cg_sampling_groups=Bunch(g=Bunch(comps="CMB"))))
 
 
-def test_group_reference_validation_accepts_all_and_missing() -> None:
-    comp_list = _make_multi_comp_list()
-    params = Bunch(compsep=Bunch(bands=Bunch(
-        {"Planck30GHz": Bunch(enabled=True, polarization="IQU")})))
-
-    # "all" and omitted entries select everything and must not be checked against names.
-    groups = {
-        "all": CGSamplingGroupConfig.from_block("all", Bunch(comps="all", bands="all")),
-        "missing": CGSamplingGroupConfig.from_block("missing", Bunch()),
-    }
-    _validate_sampling_group_references(groups, comp_list, params)
-
-
-def test_read_sampling_groups_filters_disabled_groups() -> None:
-    params = Bunch(compsep=Bunch(cg_sampling_groups=Bunch(
-        active=Bunch(enabled=True), disabled=Bunch(enabled=False))))
-    groups = _read_sampling_groups(params, "cg_sampling_groups", CGSamplingGroupConfig)
-    assert list(groups) == ["active"]
+def test_disabled_sampling_groups_are_left_out() -> None:
+    params = _make_group_params(cg_sampling_groups=Bunch(
+        active=Bunch(enabled=True), disabled=Bunch(enabled=False)))
+    assert list(read_sampling_groups(params).cg_sampling_groups) == ["active"]
 
 
 def _make_spectral_comp_list() -> CompList:
@@ -319,13 +284,19 @@ def test_gibbs_chains_have_independent_component_state() -> None:
     assert chain_2_sync[0].amp_fwhm_rad == 0.0
 
 
-def test_sampling_group_configs_reject_fields_owned_by_other_methods() -> None:
+def test_sampling_groups_reject_settings_of_other_methods() -> None:
     with pytest.raises(ValueError, match="sample_class"):
-        CGSamplingGroupConfig.from_block("cg", Bunch(sample_class="amplitude_sampler_CG"))
+        read_sampling_groups(_make_group_params(
+            cg_sampling_groups=Bunch(cg=Bunch(sample_class="amplitude_sampler_CG"))))
     with pytest.raises(ValueError, match="max_iter"):
-        PerPixelSamplingGroupConfig.from_block("pixels", Bunch(max_iter=10))
+        read_sampling_groups(_make_group_params(
+            per_pixel_sampling_groups=Bunch(pixels=Bunch(max_iter=10))))
     with pytest.raises(ValueError, match="parameters"):
-        MCMCSamplingGroupConfig.from_block("mcmc", Bunch(parameters="gain"))
+        read_sampling_groups(_make_group_params(
+            mcmc_sampling_groups=Bunch(mcmc=Bunch(parameters="gain"))))
+    with pytest.raises(ValueError, match="must be a int"):
+        read_sampling_groups(_make_group_params(
+            cg_sampling_groups=Bunch(cg=Bunch(max_iter=2.5))))
 
 
 def test_per_pixel_solver_rejects_non_diffuse_components_before_mpi_work() -> None:
@@ -347,12 +318,10 @@ def test_unimplemented_component_classes_are_rejected_during_construction() -> N
 
 
 def test_cg_and_per_pixel_groups_are_mutually_exclusive() -> None:
-    params = Bunch(compsep=Bunch(
-        cg_sampling_groups=Bunch(cg=Bunch()),
-        per_pixel_sampling_groups=Bunch(pixels=Bunch()),
-    ))
+    params = _make_group_params(cg_sampling_groups=Bunch(cg=Bunch()),
+                                per_pixel_sampling_groups=Bunch(pixels=Bunch()))
     with pytest.raises(ValueError, match="mutually exclusive"):
-        resolve_sampling_groups(params)
+        read_sampling_groups(params)
 
 
 def test_per_pixel_solver_accepts_resolved_precision() -> None:
@@ -368,22 +337,18 @@ def test_per_pixel_solver_accepts_resolved_precision() -> None:
     assert np.all(np.isfinite(result[0].amps))
 
 
-def test_validate_mcmc_amplitude_group_dependencies() -> None:
-    comp_list = _make_multi_comp_list()  # CMB, ThermalDust, FreeFree
-    params = Bunch(compsep=Bunch(bands=Bunch(
-        {"Planck30GHz": Bunch(enabled=True, polarization="IQU")})))
+def test_mcmc_group_must_name_enabled_amplitude_groups() -> None:
+    amplitudes = Bunch(amps=Bunch(comps=["CMB"]), off=Bunch(enabled=False))
+    valid = read_sampling_groups(_make_group_params(
+        cg_sampling_groups=amplitudes, mcmc_sampling_groups=Bunch(
+            beta=Bunch(comps=["ThermalDust"], update_amplitude_groups=["amps"]))))
+    assert valid.mcmc_sampling_groups["beta"].update_amplitude_groups == ["amps"]
 
-    amplitudes = {"amps": CGSamplingGroupConfig.from_block("amps", Bunch(comps=["CMB"]))}
-    mcmc = {"beta": MCMCSamplingGroupConfig.from_block(
-        "beta", Bunch(comps=["ThermalDust"], update_amplitude_groups=["amps"]))}
-    _validate_sampling_group_references(amplitudes, comp_list, params)
-    _validate_sampling_group_references(mcmc, comp_list, params)
-    _validate_sampling_group_dependencies(amplitudes, mcmc)
-
-    invalid = {"beta": MCMCSamplingGroupConfig.from_block(
-        "beta", Bunch(update_amplitude_groups=["does_not_exist"]))}
-    with pytest.raises(ValueError, match="unknown or disabled amplitude group"):
-        _validate_sampling_group_dependencies(amplitudes, invalid)
+    for group_name in ("does_not_exist", "off"):
+        with pytest.raises(ValueError, match="unknown or disabled amplitude group"):
+            read_sampling_groups(_make_group_params(
+                cg_sampling_groups=amplitudes, mcmc_sampling_groups=Bunch(
+                    beta=Bunch(update_amplitude_groups=[group_name]))))
 
 
 def _disable_spectral_index_sampling(comp_list: CompList, comp_name: str) -> None:
@@ -396,8 +361,7 @@ def _disable_spectral_index_sampling(comp_list: CompList, comp_name: str) -> Non
 def test_mcmc_group_naming_a_fixed_component_is_an_error(caplog) -> None:
     comp_list = _make_spectral_comp_list()
     _disable_spectral_index_sampling(comp_list, "ThermalDust")
-    groups = {"beta": MCMCSamplingGroupConfig.from_block(
-        "beta", Bunch(comps=["Synchrotron", "ThermalDust"]))}
+    groups = {"beta": Bunch(name="beta", comps=["Synchrotron", "ThermalDust"])}
     with caplog.at_level("WARNING"):
         _validate_mcmc_sampled_components(groups, comp_list)
     assert "ERROR" in caplog.text and "'ThermalDust'" in caplog.text
@@ -409,8 +373,7 @@ def test_mcmc_group_with_every_component_fixed_reports_the_empty_group(caplog) -
     comp_list = _make_spectral_comp_list()
     _disable_spectral_index_sampling(comp_list, "Synchrotron")
     _disable_spectral_index_sampling(comp_list, "ThermalDust")
-    groups = {"beta": MCMCSamplingGroupConfig.from_block(
-        "beta", Bunch(comps=["Synchrotron", "ThermalDust"]))}
+    groups = {"beta": Bunch(name="beta", comps=["Synchrotron", "ThermalDust"])}
     with caplog.at_level("WARNING"):
         _validate_mcmc_sampled_components(groups, comp_list)
     assert "no component left to sample" in caplog.text
@@ -420,7 +383,7 @@ def test_mcmc_group_selecting_all_components_ignores_fixed_ones_silently(caplog)
     # `comps: all` means "every sampleable component", so skipping a fixed one is intended.
     comp_list = _make_spectral_comp_list()
     _disable_spectral_index_sampling(comp_list, "ThermalDust")
-    groups = {"beta": MCMCSamplingGroupConfig.from_block("beta", Bunch(comps="all"))}
+    groups = {"beta": Bunch(name="beta", comps=None)}
     with caplog.at_level("WARNING"):
         _validate_mcmc_sampled_components(groups, comp_list)
     assert caplog.text == ""
@@ -437,7 +400,8 @@ def test_build_conditional_residual_subtracts_only_fixed_components() -> None:
         map_sky=np.full((1, npix), 7.0), map_inv_var=np.ones((1, npix)), nu=30.0, fwhm=60.0,
         nside=nside)
 
-    active = _filter_sampling_group_components(comp_list.split_for_eval_pol("I"), ["CMB"])
+    active = CompList([comp for comp in comp_list.split_for_eval_pol("I")
+                       if comp.comp_name == "CMB"])
     residual = _build_conditional_residual(detector_data, comp_list, "I", active)
 
     # The fixed components (everything but CMB) are exactly what should have been subtracted.
@@ -452,7 +416,7 @@ def test_build_conditional_residual_subtracts_only_fixed_components() -> None:
 
 def test_build_conditional_residual_is_noop_when_no_component_is_fixed() -> None:
     comp_list = _make_multi_comp_list()
-    active = _filter_sampling_group_components(comp_list.split_for_eval_pol("I"), None)  # all comps
+    active = comp_list.split_for_eval_pol("I")  # All components.
     detector_data = DetectorMap(
         map_sky=np.ones((1, 48)), map_inv_var=np.ones((1, 48)), nu=30.0, fwhm=60.0, nside=2)
     assert _build_conditional_residual(

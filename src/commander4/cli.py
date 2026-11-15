@@ -106,7 +106,7 @@ def run_tod_side(mpi_info: Bunch, params: Bunch, experiment_data, my_band_tod_id
                            f"{chain}, iter {iteration}.")
 
 
-def run_compsep_side(mpi_info: Bunch, params: Bunch, compsep_state, my_band_compsep_id: str,
+def run_compsep_side(mpi_info: Bunch, params: Bunch, compsep_cfg, my_band_compsep_id: str,
                      my_band, comp_lists_by_chain: dict, tod_output, first_iteration: int) -> None:
     """Walk the component-separation half of the Gibbs loop.
     Args:
@@ -126,7 +126,7 @@ def run_compsep_side(mpi_info: Bunch, params: Bunch, compsep_state, my_band_comp
                            f"starting CompSep chain {chain}, iteration {iteration}.")
         rng = make_iteration_rng(params, mpi_info, chain, iteration)
         t0 = time.time()
-        compsep_output = process_compsep(mpi_info, compsep_state, tod_output, iteration, chain,
+        compsep_output = process_compsep(mpi_info, compsep_cfg, tod_output, iteration, chain,
                                          params, comp_lists_by_chain[chain], rng)
         if mpi_info.compsep.rank == 0:
             logger.verbose(f"CompSep: Rank {mpi_info.compsep.rank} finished chain {chain}, "
@@ -207,7 +207,7 @@ def run_commander4(params: Bunch, params_dict: dict):
     # task for that band (on both the TOD and CompSep sides).
     world_compsep_band_masters_dict = None
     world_tod_band_masters_dict = None
-    compsep_state = None
+    compsep_cfg = None
     comp_lists_by_chain = None
     if mpi_info.world.side == "tod":
         mpi_info, my_band_tod_id, experiment_data, tod_samples_chain1, tod_samples_chain2\
@@ -222,7 +222,7 @@ def run_commander4(params: Bunch, params_dict: dict):
         # TODO: This means two copies of per-component amplitude alms are held in memory at all
         # times. Under the current design this is needed for sampling steps where some components
         # are excluded, but their amplitudes are still needed to evaluate the relevant chi2.
-        comp_lists_by_chain, mpi_info, my_band_compsep_id, my_band, compsep_state = \
+        comp_lists_by_chain, mpi_info, my_band_compsep_id, my_band, compsep_cfg = \
             init_compsep_processing(mpi_info, params, start)
 
     if mpi_info.world.tod_master is not None:
@@ -273,7 +273,7 @@ def run_commander4(params: Bunch, params_dict: dict):
                          mpi_info.world.tod_band_masters)
         curr_tod_output = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
                                       my_band_compsep_id, curr_tod_output, params)
-        run_compsep_side(mpi_info, params, compsep_state, my_band_compsep_id, my_band,
+        run_compsep_side(mpi_info, params, compsep_cfg, my_band_compsep_id, my_band,
                          comp_lists_by_chain, curr_tod_output, start.first_iteration)
 
     # stop compsep machinery

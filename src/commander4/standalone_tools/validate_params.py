@@ -10,6 +10,7 @@ from commander4.file_io.tod_reader import experiment_tod_readers
 from commander4.parameters.parse import load_params
 from commander4.parameters.schema import (
     TOP_LEVEL_BLOCKS,
+    compsep_enabled,
     derive_task_counts,
     enabled_compsep_views,
     enabled_tod_bands,
@@ -351,10 +352,10 @@ def validate_parameter_file(
     _validate_components(params)
     _validate_experiments(params)
     enabled_compsep_views(params)
-    if "compsep" in params:
-        from commander4.compsep.processing import resolve_sampling_groups
+    if compsep_enabled(params):  # As in a run: a TOD-only run does not read the sampling groups.
+        from commander4.compsep.processing import read_sampling_groups
 
-        resolve_sampling_groups(params)
+        read_sampling_groups(params)
     counts = derive_task_counts(params)
     if counts.min_total < 1:
         raise ValueError("The parameter file enables no TOD bands or CompSep views.")

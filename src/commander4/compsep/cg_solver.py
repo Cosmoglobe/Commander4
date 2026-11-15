@@ -9,7 +9,7 @@ import numpy as np
 import time
 import logging
 from mpi4py import MPI
-from typing import TYPE_CHECKING
+from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
@@ -19,9 +19,6 @@ from commander4.math_utils.cg_driver import DistributedCG
 from commander4.compsep import preconditioners
 from commander4.data_models.band import Band
 from commander4.diagnostics.performance import benchmark, log_memory
-
-if TYPE_CHECKING:
-    from commander4.compsep.processing import CGSamplingGroupConfig
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +44,14 @@ class CompSepSolver:
             = S^{1/2} Y^T M^T {Y^{-1}}^T B^T N^{-1} d
             + S^{1/2}A^TN^{-1/2} eta_1 + S^{-1/2} mu + eta_2.
     """
-    def __init__(self, det_map: DetectorMap, CompSep_comm: MPI.Comm,
-                 group: "CGSamplingGroupConfig", double_precision: bool,
-                 nthreads: int):
+    def __init__(self, det_map: DetectorMap, CompSep_comm: MPI.Comm, group: Bunch,
+                 double_precision: bool, nthreads: int):
         """
         Args:
             det_map: This rank's band data (the conditional residual for this sampling group).
             CompSep_comm: The communicator of the ranks collaborating on this solve.
-            group: Validated solver settings for this CG sampling group.
+            group: The settings of this CG sampling group (`compsep.cg_sampling_groups.<name>`
+                in the parameter file, with defaults filled in).
             double_precision: Whether maps and alms use double precision.
             nthreads: Number of computational threads used on this rank.
         """
