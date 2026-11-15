@@ -1,7 +1,11 @@
 """`SkyModel`: a component list plus the operations that realize it as a sky map at a frequency."""
+import healpy as hp
 import numpy as np
 from pixell.bunch import Bunch
+from commander4.data_models.band import Band
+from commander4.math_utils.sht import alm_to_map
 from commander4.sky.comp_list import CompList
+from commander4.sky.diffuse_components import DiffuseComponent
 
 
 def build_initial_sky_model(params: Bunch) -> "SkyModel":
@@ -36,8 +40,13 @@ class SkyModel:
         """
         return max((comp.amp_fwhm_rad for comp in self._components), default=0.0)
 
-    def get_sky_at_nu(self, nu, nside, pols_required, fwhm=None):
-        """Get the realized sky at some frequency and fwhm resolution.
+    def get_sky_at_nu(self, nu, nside, pols_required, fwhm=None, lmax=None):
+        """Get the realized sky of a band: its frequency, resolution, beam and lmax.
+
+        Diffuse components go through `comp2band`, the CG solver's own operator (cut at the band
+        lmax, mixing matrix, beam), and are then synthesized at `nside`, as C3's `evalBand` does:
+        the sky compared with a band's data is exactly the model the amplitudes were solved for.
+        Point sources are painted in pixel space and added, as in C3's `compute_residual`.
 
         The component list may be either the split execution list used during CompSep (`I` and
         `QU` views) or a joined logical list containing `IQU` components.
@@ -45,6 +54,8 @@ class SkyModel:
         Args:
             fwhm: Beam to realize the sky through, in radians. `None` asks for the sharpest this
                 model can give, which is `amp_fwhm_rad` (normally 0.0).
+            lmax: The band lmax (`DetectorMap.lmax`). `None` means `3*nside - 1`, the default band
+                lmax.
 
         Raises:
             ValueError: If `fwhm` is finer than `amp_fwhm_rad`.
@@ -58,34 +69,26 @@ class SkyModel:
                 f"amplitudes already carry {np.degrees(amp_fwhm)*60:.4g} arcmin of smoothing and "
                 f"cannot be realized any sharper. Pass fwhm=None for the sharpest available, or "
                 f"max(wanted, model.amp_fwhm_rad) if a coarser sky is acceptable.")
-        npix = 12*nside**2
-
-        if pols_required == "I":
-            skymap = np.zeros((1, npix), dtype=np.float32)
-        elif pols_required == "QU":
-            skymap = np.zeros((2, npix), dtype=np.float32)
-        elif pols_required == "IQU":
-            skymap = np.zeros((3, npix), dtype=np.float32)
-        else:
+        if pols_required not in ("I", "QU", "IQU"):
             raise ValueError("Unrecognized polarization string")
-
-        for component in self._components:
-            if component.eval_pol == "I":
-                if pols_required in ("I", "IQU"):
-                    skymap[0] += component.get_sky(nu, nside, fwhm)[0]
-            elif component.eval_pol == "QU":
-                if pols_required == "QU":
-                    skymap += component.get_sky(nu, nside, fwhm)
-                elif pols_required == "IQU":
-                    skymap[1:] += component.get_sky(nu, nside, fwhm)
-            elif component.eval_pol == "IQU":
-                component_sky = component.get_sky(nu, nside, fwhm)
-                if pols_required == "I":
-                    skymap[0] += component_sky[0]
-                elif pols_required == "QU":
-                    skymap += component_sky[1:]
-                else:
-                    skymap += component_sky
-            else:
-                raise ValueError(f"Unsupported component polarization '{component.eval_pol}'.")
+        lmax = 3*nside - 1 if lmax is None else lmax
+        nrows = len(pols_required)
+        skymap = np.zeros((nrows, 12*nside**2), dtype=np.float32)
+        diffuse = [comp for comp in self._components if isinstance(comp, DiffuseComponent)]
+        # One band per view: intensity (map row 0, spin 0) and polarization (the last two rows,
+        # spin 2). A joined IQU component contributes to both.
+        for view, rows, spin in (("I", slice(0, 1), 0), ("QU", slice(nrows - 2, nrows), 2)):
+            if view[0] not in pols_required:
+                continue
+            # Single precision, like `skymap`, which the result goes into.
+            band = Band(np.zeros((len(view), hp.Alm.getsize(lmax)), dtype=np.complex64), nu,
+                        np.degrees(fwhm)*60.0, nside)
+            for comp in diffuse:
+                if comp.eval_pol in (view, "IQU"):
+                    comp.comp2band(band)
+            skymap[rows] += alm_to_map(band.alms, nside, lmax, spin=spin)
+        if "I" in pols_required:
+            for comp in self._components:  # Point sources.
+                if not isinstance(comp, DiffuseComponent) and comp.eval_pol == "I":
+                    skymap[0] += comp.get_sky(nu, nside, fwhm)[0]
         return skymap

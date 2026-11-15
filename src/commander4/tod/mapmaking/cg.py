@@ -24,7 +24,7 @@ from pixell.bunch import Bunch
 
 from commander4.backend import mapmaker as cpp_mapmaker
 from commander4.tod.view import TODView
-from commander4.compsep.cg_driver import DistributedCGArray
+from commander4.math_utils.cg_driver import DistributedCG
 from commander4.tod.mapmaking.preconditioners import InvNPreconditionerI,\
     BlockInvNPreconditionerIQU
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
@@ -337,12 +337,7 @@ class CGMapmaker:
         else:
             M = None
 
-        CG_solver = DistributedCGArray(self.apply_LHS,
-                                       RHS_map,
-                                       ismaster,
-                                       M = M,
-                                       dot = dot,
-                                       destroy_b=True)
+        CG_solver = DistributedCG(self.apply_LHS, RHS_map, ismaster, M=M, destroy_b=True)
 
         # Every collective below has to be entered by all ranks, so the two conditions guarding one
         # are made rank-independent up front: the iteration index already is, and whether a true
@@ -370,7 +365,8 @@ class CGMapmaker:
                     self.logger.debug(f"CG iter {i:3d} - True A-norm error: {CG_Anorm_error:.3e} "
                                       f"- True L2 error: {CG_L2_error:.3e}")
             # Only the master updates CG_solver.err, so the stopping decision has to be broadcast.
-            converged = self.map_comm.bcast(CG_solver.err < self.CG_tol, root=0)
+            # `<=`: err is exactly 0 once the CG has converged to machine precision.
+            converged = self.map_comm.bcast(CG_solver.err <= self.CG_tol, root=0)
             if converged:
                 break
         self._map_signal = CG_solver.x

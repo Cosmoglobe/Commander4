@@ -109,7 +109,7 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
                 input_map = np.array([comp_maps[0][icomp]], dtype=real_dtype)
             comp_alms = curvedsky.map2alm_healpix(input_map, niter=3, spin=spin,
                                                   lmax=comp_list[icomp].lmax)
-            comp_list[icomp].alms = comp_alms.astype(complex_dtype, copy=False)
+            comp_list[icomp].amps = comp_alms.astype(complex_dtype, copy=False)
             # These amplitudes are component maps at the data resolution; record that beam so the
             # forward model applies no extra smoothing when predicting a band at this resolution.
             comp_list[icomp].amp_fwhm_rad = detector_data.fwhm_rad

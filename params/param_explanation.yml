@@ -344,11 +344,15 @@ compsep:
                               # unless you specifically want the mean map.
       max_iter: 100           # CG iteration cap for the intensity solve,
       max_iter_pol: 100       # and for the polarization solve, which usually needs fewer.
-      err_tol: 0.0            # Squared relative preconditioned residual for early stopping. 0.0
-                              # means "no stopping criterion": always run max_iter. That
-                              # is what every real-data file here uses, because the CG
-                              # residual is not a reliable convergence measure for a
-                              # constrained realization.
+      err_tol: 0.0            # Squared preconditioned residual, relative to that of the
+                              # right-hand side, for early stopping. 0.0 means "no stopping
+                              # criterion": always run max_iter. That is what every
+                              # real-data file here uses, because the CG residual is not a
+                              # reliable convergence measure for a constrained
+                              # realization. (The CG still stops when the residual is
+                              # zero to machine precision.) Each solve starts from the
+                              # current amplitudes, as in C3, so later Gibbs iterations
+                              # need fewer CG iterations than the first.
       preconditioner: JointPreconditioner
                               # Working choices: JointPreconditioner (best),
                               # DiagonalJointPreconditioner (cheaper), NoPreconditioner.
@@ -370,12 +374,14 @@ compsep:
   # --- Non-linear sampling --------------------------------------------------------------
   # Metropolis-Hastings over spectral indices. Each proposal re-solves the amplitude
   # groups named below, then accepts or rejects on the resulting chi^2; a rejected step
-  # reverts both the indices and every amplitude. Amplitude groups always run first.
+  # reverts both the indices and every amplitude. The order is that of C3: all amplitude
+  # groups, the MCMC groups, and then all amplitude groups again.
   mcmc_sampling_groups:
     sample_spectral_indices:
-      enabled: false          # Off here: it multiplies the runtime by `numstep` CG solves
-                              # per iteration. Set true, plus `sample_spectral_index` on
-                              # each component below, to sample indices.
+      enabled: false          # Off here: it adds `numstep` CG solves per iteration, and
+                              # one more of every amplitude group at the end. Set true,
+                              # plus `sample_spectral_index` on each component below, to
+                              # sample indices.
       parameters: spectral_indices
       comps: [ThermalDust, Synchrotron]
                               # Components whose index is proposed. Each MUST also set
@@ -512,10 +518,13 @@ components:
       #     D_l = amplitude * (l/l_pivot)^beta * max(exp(-l(l+1)sigma^2), 1e-10)
       #     C_l = 2*pi*D_l / (l(l+1))
       # with sigma from Cl_prior_FWHM. It subsumes C3's `power_law` (FWHM = 0) and
-      # `gauss` (beta = 0) types. Setting Cl_prior_amplitude to null switches the prior
-      # off entirely (S = identity), which is what most files here do.
+      # `gauss` (beta = 0) types. Setting Cl_prior_amplitude to null gives the component
+      # no prior at all (C3's `CL_TYPE = none`), which is what most files here do: the
+      # amplitudes then follow the data alone, and a multipole that no band constrains
+      # stays at zero.
       # Each entry is a scalar, or an [I, QU] pair.
-      Cl_prior_amplitude: [1.0e+6, 1.0e+4]   # D_l at l_pivot, in uK_RJ^2 at nu_ref.
+      Cl_prior_amplitude: [1.0e+6, 1.0e+4]   # D_l at l_pivot, in `units`^2 (C3's COMP_UNIT;
+                                             # uK_RJ at nu_ref when `units` is not set).
       Cl_prior_beta: [0.0, -0.5]             # Power-law slope of D_l.
       Cl_prior_l_pivot: 20                   # Multipole the amplitude is quoted at.
       Cl_prior_FWHM: 0.0                     # [arcmin] Gaussian rolloff of D_l; 0 = off.
@@ -524,6 +533,18 @@ components:
                                              # prior stops deciding modes on its own.
                                              # Default = this component's lmax, where the
                                              # taper does nothing.
+      # Cl_prior_l_tighten: 1024             # C3's COMP_AMP_PRIOR_LMAX. Below it the prior
+                                             # C_l is multiplied by sin^8(pi*l/(2*l_tighten)),
+                                             # which is 1 at l_tighten and almost 0 at l = 1.
+                                             # The large scales are then held to the prior
+                                             # mean (`amp_prior_mean_map`, or zero without
+                                             # one), and the data only decide the small
+                                             # scales. Default = 0, no tightening.
+                                             # Use it with `err_tol: 0.0` in the CG group:
+                                             # the held multipoles dominate the CG residual
+                                             # and converge in one step, so any other
+                                             # `err_tol` stops the CG before the small
+                                             # scales are solved.
 
       # Initialise the amplitudes from a map instead of from zero. A FITS map is read at
       # its own nside and converted from `units` at `nu_ref`; a chains_compsep/ file is
@@ -532,7 +553,8 @@ components:
       # from iteration one. Overrides gibbs.init_chain for this component, but not the
       # saved state of an appended chain.
       # init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_cmb_amp_BP8.1_v1.fits"
-      # units: "uK_CMB"       # Unit of that init file. Only read alongside init_from.
+      # units: "uK_CMB"       # C3's COMP_UNIT: the unit of that init file, of the prior
+                              # mean map and of Cl_prior_amplitude. Default: uK_RJ.
 
   ThermalDust:
     enabled: true
@@ -543,7 +565,7 @@ components:
       shortname: "dust"
       lmax: 1024
       spatially_varying_MM: False
-      Cl_prior_amplitude: null   # No C(l) prior: S is the identity for this component.
+      Cl_prior_amplitude: null   # No C(l) prior for this component.
 
       # --- SED parameters (modified blackbody) ---
       beta: 1.56              # Emissivity index.

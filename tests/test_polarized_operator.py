@@ -7,6 +7,7 @@ from numpy.testing import assert_allclose
 from commander4.data_models.detector_map import DetectorMap
 from commander4.compsep import preconditioners
 from commander4.compsep.preconditioners import JointPreconditioner
+from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.math_utils.alm import alm_dot_product
 
 
@@ -54,19 +55,20 @@ class _DummyCompSep:
         self.my_band = _DummyBand(nu=100.0, fwhm=0.0)
 
 
-class _DummyDiffuseComp:
+class _DummyDiffuseComp(DiffuseComponent):
+    """Only what the preconditioners read. `DiffuseComponent.__init__` is skipped, because it needs
+    a parameter file; the class is inherited so that the preconditioners treat it as diffuse."""
+    # Any value but None: the component has a prior. Its C_l is one (see `P_Cl_prior_inv`).
+    Cl_prior_amplitude = 1.0
+
     def __init__(self, lmax: int, npol: int):
         self.lmax = lmax
-        self.npol = npol
-        self._alms = np.zeros((npol, hp.Alm.getsize(lmax)), dtype=np.complex128)
+        self.eval_pol = "I" if npol == 1 else "QU"
+        self.amps = np.zeros((npol, hp.Alm.getsize(lmax)), dtype=np.complex128)
 
     @property
-    def alms(self) -> np.ndarray:
-        return self._alms
-
-    @alms.setter
-    def alms(self, value: np.ndarray) -> None:
-        self._alms = value
+    def P_Cl_prior(self) -> np.ndarray:
+        return np.ones(self.lmax + 1, dtype=np.float64)
 
     @property
     def P_Cl_prior_inv(self) -> np.ndarray:
@@ -74,6 +76,13 @@ class _DummyDiffuseComp:
 
     def get_sed(self, nu: float) -> float:
         return 1.0
+
+
+class _NonDiffuseComp:
+    """Stands in for a point-source component, which the preconditioners leave unchanged."""
+
+    def __init__(self):
+        self.amps = np.full((1, 3), 5.0)
 
 
 class _DummyCompList:
@@ -88,6 +97,20 @@ class _DummyCompList:
 
     def __iter__(self):
         return iter(self._comps)
+
+
+def test_diagonal_preconditioner_gives_each_component_its_own_diagonal():
+    # A non-diffuse component placed first must not shift the diagonals of the ones after it.
+    lmax, npix = 4, 12*4**2
+    compsep = _DummyCompSep(map_inv_var=np.full((1, npix), 2.0), lmax=lmax)
+    comp_list = _DummyCompList([_NonDiffuseComp(), _DummyDiffuseComp(lmax=lmax, npol=1)])
+    comp_list[1].amps[:] = 1.0
+
+    result = preconditioners.DiagonalJointPreconditioner(compsep, comp_list)(comp_list)
+
+    # Unit SED, no beam, C_l = 1: the diagonal is 1 (prior) + the mean weight per steradian.
+    assert_allclose(result[1].amps, 1.0/(1.0 + 2.0*npix/(4*np.pi)), rtol=1e-12)
+    assert_allclose(result[0].amps, 5.0)
 
 
 def test_spin2_equal_qu_weights_have_small_cross_channel_leakage():
@@ -165,6 +188,24 @@ def test_preconditioner_variants_build_the_block_their_name_claims():
         assert np.all(np.linalg.eigvalsh(block_inv) > 0.0), f"{name} block is not positive definite"
 
 
+def test_joint_preconditioner_has_no_prior_term_for_a_component_without_a_prior():
+    """C3's `CL_TYPE = none`: such a component gets no identity on its diagonal. Above the band
+    lmax nothing constrains it, and the preconditioner must leave it untouched (zero) there."""
+    comp_lmax, band_lmax, nside = 10, 8, 8
+    compsep = _DummyCompSep(map_inv_var=np.full((1, 12*nside**2), 2.0), lmax=band_lmax)
+    compsep.my_band.fwhm = 60.0   # arcmin
+    comps = [_SEDDiffuseComp(lmax=comp_lmax, npol=1, sed=sed) for sed in (1.0, 3.0)]
+    comps[0].Cl_prior_amplitude = None
+    precond = JointPreconditioner(compsep, _DummyCompList(comps))
+
+    noise_weight = 2.0 * 12*nside**2/(4*np.pi)
+    beam_squared = hp.gauss_beam(np.deg2rad(60.0/60), lmax=band_lmax)[4]**2
+    mixing = np.array([1.0, 3.0])
+    expected = np.diag([0.0, 1.0]) + beam_squared*noise_weight*np.outer(mixing, mixing)
+    assert_allclose(precond.ell_block_data[4][3], np.linalg.inv(expected), rtol=1e-10)
+    assert_allclose(precond.ell_block_data[9][3], np.diag([0.0, 1.0]), atol=1e-12)
+
+
 @pytest.mark.parametrize(
     "preconditioner_name",
     ["JointPreconditioner", "BeamOnlyPreconditioner", "MixingMatrixPreconditioner"],
@@ -172,9 +213,9 @@ def test_preconditioner_variants_build_the_block_their_name_claims():
 def test_preconditioner_variants_apply_to_a_complist(preconditioner_name: str):
     """Every selectable preconditioner takes and returns a CompList, not a bare alm array."""
     precond, _, comp_list = _single_band_precond_block(preconditioner_name, ell=4)
-    comp_list[0].alms[:] = 1.0
+    comp_list[0].amps[:] = 1.0
     result = precond(comp_list)
     assert len(result) == len(comp_list)
-    assert result[0].alms.shape == comp_list[0].alms.shape
+    assert result[0].amps.shape == comp_list[0].amps.shape
     # The preconditioner must actually change the amplitudes, not silently pass them through.
-    assert not np.allclose(result[0].alms, comp_list[0].alms)
+    assert not np.allclose(result[0].amps, comp_list[0].amps)

@@ -45,7 +45,7 @@ def _zero_comp_list() -> CompList:
     object.__setattr__(cmb, "_name", "CMB")
     comp_list = CompList.init_from_params(Bunch({"CMB": cmb}), params)
     for comp in comp_list:
-        comp.alms[:] = 0.0
+        comp.amps[:] = 0.0
     return comp_list
 
 

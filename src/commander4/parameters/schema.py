@@ -277,9 +277,10 @@ def resolve_band_lmax(params: Bunch, band_name: str, experiment: str | None, nsi
 
     This is C4's equivalent of C3's `BAND_LMAX`, which is likewise stated per band. It is the lmax
     of the band's `DetectorMap`, and thereby the highest multipole at which any component can be
-    compared against this band's data: `Component.project_comp_to_band` truncates the component
-    alms to it. `3*nside - 1` is the full bandlimit of a HEALPix map at this resolution, so the
-    default lets a band constrain everything its own pixelization can carry.
+    compared against this band's data: `Component.comp2band` truncates the component alms to it,
+    both in the CG solver and in every realized band sky (`SkyModel.get_sky_at_nu`). `3*nside - 1`
+    is the full bandlimit of a HEALPix map at this resolution, so the default lets a band constrain
+    everything its own pixelization can carry.
 
     Args:
         band_name: Key of the band under `compsep.bands` (and under its experiment, if it has one).

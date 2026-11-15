@@ -8,12 +8,15 @@ class Band:
     """Holds spherical-harmonic coefficients (alms) and metadata for a frequency band.
 
     The ``alms`` are stored behind a validated property (with setter), while
-    ``nu``, ``fwhm``, and ``nside`` are plain public attributes.
+    ``nu``, ``fwhm``, ``nside`` and ``map`` are plain public attributes.
 
     Attributes:
         nu (float): Band centre frequency in GHz.
         fwhm (float): Beam FWHM in arcminutes.
         nside (int): HEALPix nside associated with this band.
+        map: The part of the band that lives in pixel space, shape ``(npol, npix)``: point
+            sources, which are added as pixels rather than as alms (as in C3). None until a
+            point-source component writes to it.
     """
     def __init__(self, alms: NDArray[np.complexfloating], nu: float, fwhm: float, nside: int):
         """Construct a Band.
@@ -28,6 +31,7 @@ class Band:
         self.nu = nu
         self.fwhm = fwhm #stored in arcmin
         self.nside = nside
+        self.map = None
 
     @classmethod
     def init_from_detector(cls, det_map:DetectorMap, double_precision:bool=False):

@@ -150,7 +150,7 @@ class MCMCSamplingGroup(ABC):
         band_pol = "QU" if self.detector_data.pol else "I"
         model_sky = SkyModel(self.comp_list.split_for_eval_pol(self.target_pol)).get_sky_at_nu(
             self.detector_data.nu, self.detector_data.nside, band_pol,
-            fwhm=self.detector_data.fwhm_rad)
+            fwhm=self.detector_data.fwhm_rad, lmax=self.detector_data.lmax)
         pix = slice(None) if self.chisq_mask is None else self.chisq_mask
         residual = self.detector_data.map_sky[:, pix] - model_sky[:, pix]
         whitened_residual = residual*np.sqrt(self.detector_data.map_inv_var[:, pix])
@@ -170,10 +170,12 @@ class MCMCSamplingGroup(ABC):
         that re-solves the amplitude (CG) sampling groups this MCMC group is coupled to (C3's
         ``UPDATE_CG_GROUPS``); it runs after each in-bounds proposal so the likelihood sees
         amplitudes conditioned on the proposed parameters. On rejection, both the parameters and all
-        component amplitudes (which ``resolve_amplitudes`` may have changed) are reverted.
+        component amplitudes (which ``resolve_amplitudes`` may have changed) are reverted. On
+        acceptance the re-solved amplitudes are kept. (C3's ``sample_specind_mh_pol`` solves them
+        once more there, to get more CG iterations; here that is left out on purpose.)
         ``rng`` is this rank's random generator; only the root draws from it here.
         NB: It's currently assumed that the `resolve_amplitudes` callback ONLY touches the component
-        amplitudes, which are stored in `comp._data`.
+        amplitudes, which are stored in `comp.amps`.
 
         Returns the acceptance record for the chain file (C3's ``nonlin-samples_*.dat``): the number
         of steps taken and accepted, and the final state of each sampled parameter. Empty when this
@@ -188,7 +190,7 @@ class MCMCSamplingGroup(ABC):
         for step in range(numstep):
             # Buffer every component's amplitudes (both polarizations) so a rejected step can be
             # undone even though `resolve_amplitudes` re-solves an arbitrary subset of them.
-            amp_buffer = [comp._data.copy() for comp in self.comp_list]
+            amp_buffer = [comp.amps.copy() for comp in self.comp_list]
             current_state = self.capture_state()
             with benchmark("mcmc-loglike"):
                 loglike_current = self.global_loglike()
@@ -234,7 +236,7 @@ class MCMCSamplingGroup(ABC):
                 self.apply_state(current_state)
                 for comp, saved in zip(self.comp_list, amp_buffer):
                     # Copies the previous amplitude data back into `comp`, as the step was rejected.
-                    np.copyto(comp._data, saved)
+                    np.copyto(comp.amps, saved)
 
         if self.is_root:
             logger.info(f"MCMC group finished: {n_accept}/{numstep} proposals accepted.")

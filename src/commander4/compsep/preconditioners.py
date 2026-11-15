@@ -24,6 +24,8 @@ import numpy as np
 import healpy as hp
 from copy import deepcopy
 
+from commander4.sky.diffuse_components import DiffuseComponent
+
 import typing
 # Only import when performing type checking, avoiding circular import during normal runtime.
 if typing.TYPE_CHECKING:
@@ -69,13 +71,16 @@ class DiagonalJointPreconditioner:
         ncomp = len(comp_list)
         self.A_diag_inv_list = []
         for icomp in range(ncomp):
-            if not hasattr(comp_list[icomp], "alms"): #FIXME: for now workaround to exclude point sources
+            # FIXME: point sources are left out (identity). See C4_issues.md, K4. The list keeps one
+            # entry per component, so that `__call__` can index it by component.
+            if not isinstance(comp_list[icomp], DiffuseComponent):
+                self.A_diag_inv_list.append(None)
                 continue
             # Construct the full mixing matrix M on all ranks
             M = np.empty((nband, ncomp), dtype=np.float64)
             for jcomp in range(ncomp):
                 comp = comp_list[jcomp]
-                if not hasattr(comp, "alms"): #FIXME: for now workaround to exclude point sources
+                if not isinstance(comp, DiffuseComponent):
                     continue
                 M[:, jcomp] = comp.get_sed(np.array(all_freqs, dtype=np.float64))
 
@@ -99,10 +104,14 @@ class DiagonalJointPreconditioner:
                 A_diag += M_fc**2 * beam_op_complex * mean_weights
 
             hp.almxfl(A_diag, comp_list[icomp].P_Cl_prior, inplace=True)
-            # +1 because of the re-writing of the LHS equation with a S^{1/2} scaling.
-            A_diag += 1
-            # Regularize the final operator to avoid division by zero
-            self.A_diag_inv_list.append(1.0/A_diag)
+            # +1 from the prior term, after the re-writing of the LHS equation with a S^{1/2}
+            # scaling. A component without a prior has no such term.
+            if comp_list[icomp].Cl_prior_amplitude is not None:
+                A_diag += 1
+            # Without a prior, a multipole that no band constrains has a zero diagonal.
+            # The preconditioner leaves it untouched (0).
+            self.A_diag_inv_list.append(np.divide(1.0, A_diag, out=np.zeros_like(A_diag),
+                                                  where=A_diag != 0))
 
     def __call__(self, a_complist: CompList) -> CompList:
         if not self.is_master:
@@ -112,9 +121,9 @@ class DiagonalJointPreconditioner:
         a_complist_out = deepcopy(a_complist)
         for icomp in range(len(a_complist)):
             #comp_lmax = self.compsep.lmax_per_comp[icomp]
-            if hasattr(a_complist[icomp], "alms"):
+            if isinstance(a_complist[icomp], DiffuseComponent):
                 # Apply the already calculated diagonal preconditioner.
-                a_complist_out[icomp].alms *= self.A_diag_inv_list[icomp]
+                a_complist_out[icomp].amps *= self.A_diag_inv_list[icomp]
             else:
                 pass
  
@@ -208,7 +217,7 @@ class JointPreconditioner:
         nband = len(all_fwhm_rad)
         # Restrict the preconditioner to components represented by diffuse harmonic alms.
         diffuse_comp_indices = [
-            icomp for icomp, comp in enumerate(comp_list) if hasattr(comp, "alms")
+            icomp for icomp, comp in enumerate(comp_list) if isinstance(comp, DiffuseComponent)
         ]
         if not diffuse_comp_indices:
             return
@@ -257,6 +266,8 @@ class JointPreconditioner:
             comp.P_Cl_prior_inv.astype(np.float64, copy=False)
             for comp in diffuse_comps
         ]
+        # A component without a prior has no prior term (the D_ell^(-2) below); its D_ell is 1.
+        has_prior = np.array([comp.Cl_prior_amplitude is not None for comp in diffuse_comps])
 
         self.ell_block_data = [None] * (max_lmax + 1)
         for ell in range(max_lmax + 1):
@@ -285,7 +296,8 @@ class JointPreconditioner:
             #
             # rather than inverting I + D_ell K_ell D_ell directly. This keeps the block numerically
             # stable when the C_l prior is large and D_ell contains huge values.
-            system_block = np.kron(np.eye(self.npol, dtype=np.float64), np.diag(active_prior_inv))
+            system_block = np.kron(np.eye(self.npol, dtype=np.float64),
+                                   np.diag(active_prior_inv * has_prior[active_local]))
             for iband in range(nband):
                 # A band contributes only while it has support at this ell.
                 if ell > all_band_lmax[iband]:
@@ -311,6 +323,12 @@ class JointPreconditioner:
             eig_floor = np.finfo(np.float64).eps * max(1.0, eigvals[-1]) * system_block.shape[0]
             eigvals = np.clip(eigvals, eig_floor, None)
             block_inv = (eigvecs / eigvals) @ eigvecs.T
+            # A component without a prior that no band constrains at this ell has an all-zero row.
+            # The preconditioner leaves it untouched (0) instead of scaling it by the inverse of
+            # the eigenvalue floor.
+            unconstrained = np.diag(system_block) == 0
+            block_inv[unconstrained, :] = 0.0
+            block_inv[:, unconstrained] = 0.0
 
             self.ell_block_data[ell] = (
                 active_global,
@@ -337,14 +355,14 @@ class JointPreconditioner:
                 continue
             active_global, alm_indices, block_prior_inv_sqrt, block_inv = ell_data
             nmodes = alm_indices[0].size
-            coeff_dtype = a_complist_out[active_global[0]].alms.dtype
+            coeff_dtype = a_complist_out[active_global[0]].amps.dtype
 
             # Stack all active component coefficients for this ell into one dense array.
             coeffs = np.empty((self.npol * len(active_global), nmodes), dtype=coeff_dtype)
             for ipol in range(self.npol):
                 offset = ipol * len(active_global)
                 for iactive, icomp in enumerate(active_global):
-                    coeffs[offset + iactive] = a_complist_out[icomp].alms[
+                    coeffs[offset + iactive] = a_complist_out[icomp].amps[
                         ipol, alm_indices[iactive]
                     ]
 
@@ -358,7 +376,7 @@ class JointPreconditioner:
             for ipol in range(self.npol):
                 offset = ipol * len(active_global)
                 for iactive, icomp in enumerate(active_global):
-                    a_complist_out[icomp].alms[ipol, alm_indices[iactive]] = coeffs[
+                    a_complist_out[icomp].amps[ipol, alm_indices[iactive]] = coeffs[
                         offset + iactive
                     ]
  

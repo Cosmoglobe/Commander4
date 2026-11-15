@@ -42,6 +42,9 @@ tod_processing: {}
 compsep:
   enabled: true
   double_precision: true
+  # Wide on purpose: the per-pixel solution is stored as alms up to 3*nside - 1, a round trip that
+  # is poor near that limit. At 360 arcmin the intensity bands give reduced chi^2
+  # of 13-24; at 660 they fit.
   common_res_fwhm: 660.0
   per_pixel_sampling_groups:
     all_amps:
@@ -88,19 +91,19 @@ compsep:
       freq: 100.0
       polarization: "IQU"
       units: "uK_RJ"
-    # The file is at nside 8; the per-pixel solver needs one nside, so the reader regrids it.
+    # simgen's nside-16 copy of Band353: the per-pixel solver needs one nside for all bands.
     Band353:
       get_from: "file"
       enabled: true
       eval_nside: 16
       signal_map:
-        path: "sim_maps/Band353_map.fits"
+        path: "sim_maps/Band353_16_map.fits"
         dataset_names: ["TEMPERATURE", null, null]
       rms_map:
         type: "rms"
-        path: "sim_maps/Band353_rms.fits"
+        path: "sim_maps/Band353_16_rms.fits"
         dataset_names: ["TEMPERATURE", null, null]
-      fwhm: 600.0
+      fwhm: 200.0
       freq: 353.0
       polarization: "I"
       units: "uK_RJ"

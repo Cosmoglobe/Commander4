@@ -108,7 +108,7 @@ def test_detector_map_smooth_to_resolution_on_a_patch():
 def test_q_and_u_are_smoothed_as_one_spin2_field():
     """Smoothing Q and U must equal putting the Gaussian window on E and B, which is what the
     CompSep beam operator does to the model. Smoothing Q and U as two scalar maps misses this by
-    about the map rms (C4_issues C7); the 1 % left is the accuracy of the map-to-alm transform."""
+    about the map rms; the 1 % left is the accuracy of the map-to-alm transform."""
     lmax = 3*NSIDE - 1
     np.random.seed(3)
     cl = np.zeros(lmax + 1)

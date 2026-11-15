@@ -1,4 +1,4 @@
-"""Full runs of Commander4 under `mpirun`, on a tiny simgen simulation.
+"""Full runs of C4 under `mpirun`, on a tiny simgen simulation.
 
 The unit tests leave the joins untested: MPI layout, the hand-over between the TOD and CompSep
 sides, chain writing and restart. These tests start the real program. There are three setups, each
@@ -93,7 +93,7 @@ def workdir(tmp_path_factory) -> Path:
     (workdir / "sim_maps").mkdir()
     rng = np.random.default_rng(5)
     columns = ["TEMPERATURE", "Q-POLARISATION", "U-POLARISATION"]
-    for band in ["Band030", "Band100", "Band353"]:
+    for band in ["Band030", "Band100", "Band353", "Band353_16"]:
         with h5py.File(workdir / "sim_debug" / f"{band}_diagnostics.h5", "r") as f:
             rms = f["maps/rms_white_noise"][()]
             signal = f["maps/sky"][()] + rms*rng.standard_normal(rms.shape)
@@ -134,9 +134,12 @@ def test_joint_run(run_A: Path) -> None:
         assert 0.1 < np.median(sample["noise_params"][..., 1]) < 0.4, band
         assert sample["accept"].all(), band
     # Below 1 is expected: three components at lmax = 3*nside - 1 have about as many free
-    # parameters as the maps have pixels, so the model also fits part of the noise.
+    # parameters as the maps have pixels, so the model also fits part of the noise. Band353
+    # (nside 8, signal-to-noise ~250) guards the band lmax cut of the realized sky: a sky realized
+    # above the band lmax gives it a reduced chi^2 of ~12000.
     sky = read_chain_file(run_A / "chains_compsep" / "chain01_iter0002.h5")
-    assert 0.2 < sky["chi2/reduced"] < 2.0
+    for view in ("Band030_I", "Band030_QU", "Band100_I", "Band100_QU", "Band353_I"):
+        assert 0.2 < sky[f"chi2/bands/{view}/reduced"] < 2.0, view
     assert 1.0 <= sky["comps/dust/sed/beta"] <= 2.5
 
 

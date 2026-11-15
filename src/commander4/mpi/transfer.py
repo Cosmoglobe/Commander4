@@ -74,7 +74,8 @@ def _realize_and_distribute_sky(sky_model, experiment_data: DetectorGroupTOD,
         # used with common-resolution smoothing, in which case the sky carries an intrinsic
         # resolution `amp_fwhm_rad`, and we simply have to use that, even though it's wrong.
         fwhm = max(np.deg2rad(experiment_data.fwhm / 60.0), sky_model.amp_fwhm_rad)
-        full_map = sky_model.get_sky_at_nu(experiment_data.nu, experiment_data.nside, pols, fwhm)
+        full_map = sky_model.get_sky_at_nu(experiment_data.nu, experiment_data.nside, pols, fwhm,
+                                           lmax=experiment_data.lmax)
     else:
         full_map = None
     local_map = experiment_data.pixel_domain.scatter_from_full(full_map, ncomp, dtype=np.float32)

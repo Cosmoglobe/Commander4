@@ -108,8 +108,8 @@ compsep:
       comps: [CMB]
       bands: "all"
       optimize: false
-      max_iter: 20
-      max_iter_pol: 20
+      max_iter: 100
+      max_iter_pol: 100
       err_tol: 0.0
       preconditioner: JointPreconditioner
     foreground_amps:
@@ -117,8 +117,8 @@ compsep:
       comps: [ThermalDust, Synchrotron]
       bands: "all"
       optimize: true
-      max_iter: 20
-      max_iter_pol: 20
+      max_iter: 100
+      max_iter_pol: 100
       err_tol: 1.0e-10
       preconditioner: DiagonalJointPreconditioner
   mcmc_sampling_groups:
@@ -150,7 +150,7 @@ compsep:
         type: "rms"
         path: "sim_maps/Band353_rms.fits"
         dataset_names: ["TEMPERATURE", null, null]
-      fwhm: 600.0
+      fwhm: 200.0
       freq: 353.0
       polarization: "I"
       units: "uK_RJ"

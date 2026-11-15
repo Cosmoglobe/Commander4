@@ -28,6 +28,8 @@ class DetectorGroupTOD:
         experiment_name (str): Experiment identifier (e.g. ``'PlanckLFI'``).
         band_name (str): Band identifier (e.g. ``'30GHz'``).
         nside (int): HEALPix nside for map evaluation.
+        lmax (int|None): The band lmax (`resolve_band_lmax`), up to which the sky model is
+            realized for this band. None means `3*nside - 1`.
         nu (float): Band centre frequency in GHz.
         fwhm (float): Beam FWHM in arcminutes.
         ndet (int): Number of detectors per scan.
@@ -45,12 +47,13 @@ class DetectorGroupTOD:
     def __init__(self, scans: list[ScanTOD], experiment_name: str, band_name: str, nside: int,
                  nu: float, fwhm: float, fsamp: float, ndet: int, pols: str, noise_model: NoisePSD,
                  tf_tau_sec: float|None = None, instrument_filepath: str|None = None,
-                 hfi_demodulation: bool = False, band_unit: str = "uK_RJ"):
+                 hfi_demodulation: bool = False, band_unit: str = "uK_RJ", lmax: int | None = None):
         self.scans = scans
         self.nscans = len(scans)
         self.experiment_name = experiment_name
         self.band_name = band_name
         self.nside = nside
+        self.lmax = lmax
         self.nu = nu
         self.band_unit = band_unit
         self.band_unit_factor = rj_to_band_unit_factor(nu, band_unit)

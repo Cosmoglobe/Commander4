@@ -199,7 +199,7 @@ src/commander4/
                        #   module is named after an `experiment_id` and subclasses it.
   parameters/          # Parameter-file parsing (parse.py) and scoped lookup + validation (schema.py).
   mpi/                 # Communicator setup, and the transfer of maps and sky models between the two sides.
-  math_utils/          # SHTs, alm helpers, FFTs, in-place array arithmetic.
+  math_utils/          # SHTs, alm helpers, FFTs, in-place array arithmetic, the CG iteration.
   diagnostics/         # Logging, performance profiling, and the plots written alongside a chain.
   standalone_tools/    # Command-line tools installed alongside commander4 (e.g. c4-plot-chain).
   backend/             # Loader for the compiled C/C++ backend built from src/lib_cpp/.

@@ -42,6 +42,11 @@ class Component:
     # parameters, not the evaluated spectrum. Empty for components that carry no such prior.
     Cl_prior_param_names: tuple[str, ...] = ()
 
+    # Amplitude of the C(l) prior. None means no prior on the amplitudes: the CG solver then leaves
+    # out every prior term (C3's `CL_TYPE = none`). `DiffuseComponent` reads it from the parameter
+    # file.
+    Cl_prior_amplitude = None
+
     @classmethod
     def _assert_legal_pol(cls, pol: str | None, *, role: str, required: bool = False) -> None:
         if pol is None:
@@ -55,7 +60,7 @@ class Component:
 
     def __init__(self, comp_params: Bunch, global_params: Bunch, *,
                  shortname: str | None = None, comp_name: str | None = None,
-                 eval_pol: str | None = None, allocate_empty_alms: bool = False):
+                 eval_pol: str | None = None, allocate_empty_amps: bool = False):
         self.comp_params = comp_params
         self.global_params = global_params
         self.shortname = (
@@ -76,7 +81,9 @@ class Component:
         # Look for "double_precision" in the parameter Bunch given.
         self.double_prec = resolve_param(global_params, "double_precision", ("",),
                                          default=False, legal_types=bool)
-        self._data = None
+        # The amplitudes the CompSep solves for, as one array: alms of shape (npol, nalm) for a
+        # diffuse component, one value per source for point sources. None until allocated.
+        self.amps = None
         # FWHM beam of the component. If the CG solver was used, this will be 0, as it solves for
         # deconvolved components. Only non-zero if the common-resolution per-pix solver was used.
         self.amp_fwhm_rad = 0.0
@@ -122,9 +129,9 @@ class Component:
                 "Components must represent the same execution view. "
                 f"Mismatched fields: {', '.join(mismatched)}"
             )
-        if self._data is None or other._data is None:
+        if self.amps is None or other.amps is None:
             raise ValueError("Cannot operate on Components with no data.")
-        if self._data.shape != other._data.shape:
+        if self.amps.shape != other.amps.shape:
             raise ValueError("Data arrays of the two Components must match in size.")
 
     def join_split_views(self, other: "Component") -> "Component":
@@ -147,14 +154,14 @@ class Component:
                 "Split views must refer to the same logical component. "
                 f"Mismatched fields: {', '.join(mismatched)}"
             )
-        if self._data is None or other._data is None:
+        if self.amps is None or other.amps is None:
             raise ValueError("Cannot join split views with no data.")
         intensity_comp, pol_comp = (self, other) if self.eval_pol == "I" else (other, self)
-        if intensity_comp._data.shape[1:] != pol_comp._data.shape[1:]:
+        if intensity_comp.amps.shape[1:] != pol_comp.amps.shape[1:]:
             raise ValueError("Split views must have compatible alm dimensions.")
         joined = deepcopy(intensity_comp)
         joined.eval_pol = joined.defined_pol
-        joined._data = np.concatenate((intensity_comp._data, pol_comp._data), axis=0)
+        joined.amps = np.concatenate((intensity_comp.amps, pol_comp.amps), axis=0)
 
         # The joined view is deep-copied from the intensity view, so any SED or C(l)-prior parameter
         # given per polarization (`nu_ref: [I, QU]` is common) would otherwise silently keep only
@@ -230,7 +237,7 @@ class Component:
     def _apply_array_op(self, other: "Component", arr_op, *, inplace: bool) -> "Component":
         self._assert_consistent_comp(other)
         target = self if inplace else deepcopy(self)
-        arr_op(target._data, other._data)
+        arr_op(target.amps, other.amps)
         return target
 
     def __add__(self, other):
@@ -259,35 +266,35 @@ class Component:
     
     def __matmul__(self, other):
         self._assert_consistent_comp(other)
-        return dot(self._data, other._data)
+        return dot(self.amps, other.amps)
 
     def bcast_data_blocking(self, comm:MPI.Comm, root=0):
         """Broadcast the component's data array from the root MPI rank."""
-        if not isinstance(self._data, np.ndarray):
+        if not isinstance(self.amps, np.ndarray):
             raise RuntimeError("Component data must be allocated as an array before broadcast.")
-        comm.Bcast(self._data, root=root)
+        comm.Bcast(self.amps, root=root)
 
     def bcast_data_non_blocking(self, comm:MPI.Comm, root=0):
         """As `bcast_data_blocking`, but returns the MPI request instead of waiting on it."""
-        if not isinstance(self._data, np.ndarray):
+        if not isinstance(self.amps, np.ndarray):
             raise RuntimeError("Component data must be allocated as an array before broadcast.")
-        req = comm.Ibcast(self._data, root=root)
+        req = comm.Ibcast(self.amps, root=root)
         return req
 
     def accum_data_blocking(self, comm:MPI.Comm, root=0):
         """Sum the component's data array across the communicator onto the root rank."""
-        if not isinstance(self._data, np.ndarray):
+        if not isinstance(self.amps, np.ndarray):
             raise RuntimeError("Component data must be allocated as an array before accumulation.")
         myrank=comm.Get_rank()
-        send, recv = (MPI.IN_PLACE, self._data) if myrank == root else (self._data, None)
+        send, recv = (MPI.IN_PLACE, self.amps) if myrank == root else (self.amps, None)
         comm.Reduce(send, recv, op=MPI.SUM, root=root)
 
     def accum_data_non_blocking(self, comm:MPI.Comm, root=0):
         """As `accum_data_blocking`, but returns the MPI request instead of waiting on it."""
-        if not isinstance(self._data, np.ndarray):
+        if not isinstance(self.amps, np.ndarray):
             raise RuntimeError("Component data must be allocated as an array before accumulation.")
         myrank=comm.Get_rank()
-        send, recv = (MPI.IN_PLACE, self._data) if myrank == root else (self._data, None)
+        send, recv = (MPI.IN_PLACE, self.amps) if myrank == root else (self.amps, None)
         req = comm.Ireduce(send, recv, op=MPI.SUM, root=root)
         return req
 
@@ -303,12 +310,12 @@ class Component:
 
     def _zeros_like(self, other, dtype=None, order='K', subok=True, shape=None):
         zeros = np.zeros_like(
-            other._data,
+            other.amps,
             dtype=dtype,
             order=order,
             subok=subok,
             shape=shape,
         )
         out = deepcopy(other)
-        out._data = zeros
+        out.amps = zeros
         return out

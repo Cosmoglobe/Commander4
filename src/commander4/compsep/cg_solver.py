@@ -9,7 +9,6 @@ import numpy as np
 import time
 import logging
 from mpi4py import MPI
-from numpy.typing import NDArray
 from typing import TYPE_CHECKING
 from collections.abc import Callable
 from copy import deepcopy
@@ -17,10 +16,10 @@ from copy import deepcopy
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
 from commander4.math_utils.alm import gaussian_random_alm
-from commander4.math_utils.sht import alm_to_map_adjoint
+from commander4.math_utils.sht import alm_to_map, alm_to_map_adjoint
 from commander4.sky.comp_list import complist_dot, complist_norm
 from commander4.compsep.dense_matrix_debug import DenseMatrix
-from commander4.compsep.cg_driver import DistributedCG
+from commander4.math_utils.cg_driver import DistributedCG
 from commander4.compsep import preconditioners
 from commander4.data_models.band import Band
 from commander4.diagnostics.performance import benchmark, log_memory
@@ -93,44 +92,14 @@ class CompSepSolver:
         self.sample_amplitudes = not group.optimize
     
 
-    def project_all_comps_to_band(self, comp_list_in: CompList,
-                                  band_out:Band) -> NDArray[np.complexfloating]:
-        """
-        Projects all the components in `comp_list_in`, overwriting the `band_out` object's alms. 
-
-        It also applies the beam operator.
-
-        In Commander4 notation, applies A matrix, from comp list to band alms.
-        """
-        comp_list_in.project_comp_to_band(band_out, nthreads=self.nthreads)
-        # B Y^-1 M Y a
-        alm_out = self.det_map.apply_B(band_out.alms)
-        return alm_out
-
-
-    def eval_all_comps_from_band(self, band_in:Band,
-                                 comp_list_out:CompList) -> CompList:
-        """ Evaluates the band_in's contribution to all the comp_list_out objects, and stores them
-            in-place. 
-
-            It also applies the beam operator.
-            
-            In Commander4 notation, applies A_adj matrix, from band alms to comp list.
-        """
-
-        # B^T a
-        self.det_map.apply_B(band_in.alms)
-        
-        # Y^T M^T Y^-1^T B^T a
-        comp_list_out.eval_comp_from_band(band_in, nthreads=self.nthreads)
-        return comp_list_out
-
-
     def apply_LHS_matrix(self, comp_list_in: CompList) -> CompList:
         #This a_in should become a list of Component objects instead. 
         """ Applies the A matrix to inputed component alms a, where A represents the entire LHS of
             the Ax=b system for global component separation. The full A matrix is:
             (1 + S^{1/2} Y^T M^T Y^-1^T B^T N^-1 B Y^-1 M Y S^{1/2}).
+            For a component without a prior (`Cl_prior_amplitude: null`, C3's `CL_TYPE = none`)
+            the "1 +" is left out and S = 1. For point sources, `B Y^-1 M Y` is replaced by painting
+            the sources into the band map, and the Y and Y^T around N^-1 are left out.
             This function should be called by all ranks holding a frequency map, even if they do
             not hold a compoenent, as they are still needed to compute the LHS operation.
             Args:
@@ -156,20 +125,30 @@ class CompSepSolver:
 
         # B Y^-1 M Y S^{1/2} a
         with benchmark("lhs-project"):
-            self.project_all_comps_to_band(comp_list, self.my_band)
+            comp_list.comp2band(self.my_band, nthreads=self.nthreads)
 
-        # Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
+        # Y^T N^-1 Y B Y^-1 M Y S^{1/2} a. Point sources are added in pixel space, as in C3:
+        # comp2band painted them into `band.map` (None without point sources), and they read
+        # N^-1 (...) back from it. Diffuse components go through Y and Y^T.
         with benchmark("lhs-inv-N"):
-            self.my_band.alms = self.det_map.apply_inv_N_alm(self.my_band.alms,
-                                                             nthreads=self.nthreads)
+            band, det_map = self.my_band, self.det_map
+            band_map = alm_to_map(band.alms, det_map.nside, det_map.lmax, spin=det_map.spin,
+                                  nthreads=self.nthreads)
+            if band.map is not None:
+                band_map += band.map
+            det_map.apply_inv_N_map(band_map)
+            if band.map is not None:
+                band.map = band_map
+            band.alms = alm_to_map_adjoint(band_map, det_map.nside, det_map.lmax,
+                                           spin=det_map.spin, nthreads=self.nthreads)
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         with benchmark("lhs-eval"):
-            self.eval_all_comps_from_band(self.my_band, comp_list)
+            comp_list.band2comp(self.my_band, nthreads=self.nthreads)
 
         # Accumulate solution on master
         with benchmark("lhs-accum"):
-            biggest_size_bytes = np.max([comp._data.nbytes for comp in comp_list])
+            biggest_size_bytes = np.max([comp.amps.nbytes for comp in comp_list])
             use_blocking = biggest_size_bytes > MPI_LIMIT_32BIT
             if use_blocking:
                 logger.debug(f"Using blocking CompSep communication for array size "
@@ -188,9 +167,10 @@ class CompSepSolver:
                         MPI.Request.Wait(requests[icomp])
                     # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
                     comp = comp_list.components[icomp]
-                    comp.apply_Cl_prior_sqrt(comp.alms)
-                    # Adds input vector to output, since (1 + S^{1/2}...)a = a + (S^{1/2}...)a
-                    comp += comp_list_in.components[icomp]
+                    comp.apply_Cl_prior_sqrt(comp.amps)
+                    # The prior term adds the input vector: (1 + S^{1/2}...)a = a + (S^{1/2}...)a.
+                    if comp.Cl_prior_amplitude is not None:
+                        comp += comp_list_in.components[icomp]
             else: # Worker ranks just wait for all their sends to complete.
                 if not use_blocking:
                     for icomp in range(len(comp_list)):
@@ -216,7 +196,8 @@ class CompSepSolver:
             and the operator between there and the component alms is linear, so one adjoint SHT, one
             MPI reduce and one prior application serve both terms. The prior mean mu and the prior
             fluctuation eta_2 need none of that (they live directly in the component alm space)
-            so they are added afterwards, on the rank that holds the accumulated result.
+            so they are added afterwards, on the rank that holds the accumulated result. A component
+            without a prior (`Cl_prior_amplitude: null`) gets neither of the two.
         """
         #FIXME: how will eta_2 work for point sources?
         myrank = self.CompSep_comm.Get_rank()
@@ -238,18 +219,22 @@ class CompSepSolver:
         b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin,
                                    nthreads=self.nthreads)
         b_band.alms = b_alm.astype(b_band.alms.dtype, copy=False)
+        # Point sources read the pixel map itself, as in the LHS.
+        b_band.map = b_map
 
         # (Y^T M^T Y^-1^T B^T) Y^T (...)
-        self.eval_all_comps_from_band(b_band, comp_list)
+        comp_list.band2comp(b_band, nthreads=self.nthreads)
 
         # Accumulate on master and apply the prior there: S^{1/2} Y^T M^T Y^-1^T B^T Y^T (...)
         for comp in comp_list:
             comp.accum_data_blocking(self.CompSep_comm)
             if myrank == 0:
-                comp.apply_Cl_prior_sqrt(comp.alms)
+                comp.apply_Cl_prior_sqrt(comp.amps)
 
         if myrank == 0:
             for comp in comp_list:
+                if comp.Cl_prior_amplitude is None:
+                    continue  # No prior: no prior mean and no prior draw.
                 # + S^{-1/2} mu, the prior mean. Added whether or not we are sampling: unlike the
                 # eta terms this belongs to the *mean* solution, so a non-zero prior mean shifts the
                 # Wiener filter itself and must be present in the MAP solve too. mu is an alm
@@ -258,20 +243,20 @@ class CompSepSolver:
                 # zero-mean prior therefore costs one None check, not a full-size scale-and-add.
                 amp_prior_mean = comp.amp_prior_mean
                 if amp_prior_mean is not None:
-                    comp.alms += comp.apply_Cl_prior_inv_sqrt(amp_prior_mean)
+                    comp.amps += comp.apply_Cl_prior_inv_sqrt(amp_prior_mean)
                 if self.sample_amplitudes:
                     # + eta_2, the prior's own fluctuation. In the preconditioned variable it enters
                     # unmodified: substituting a = S^{1/2}x into the S^{-1/2}eta_2 term and
                     # left-multiplying by S^{1/2} leaves it alone.
                     for ipol in range(self.npol):
-                        comp.alms[ipol] += gaussian_random_alm(comp.lmax, comp.lmax,
+                        comp.amps[ipol] += gaussian_random_alm(comp.lmax, comp.lmax,
                                                                self.spin, 1, rng)[0]
-                logger.debug(f"RHS comp-{comp.shortname}: {np.mean(np.abs(comp._data)):.2e}")
+                logger.debug(f"RHS comp-{comp.shortname}: {np.mean(np.abs(comp.amps)):.2e}")
 
         return comp_list
 
 
-    def solve_CG(self, LHS: Callable, RHS: CompList, x0 = None, M = None,
+    def solve_CG(self, LHS: Callable, RHS: CompList, M: Callable, x0 = None,
                  x_true = None) -> CompList:
         """ Solves the equation Ax=b for x given A (LHS) and b (RHS) using CG.
             Assumes that both x and b are in alm space.
@@ -280,7 +265,7 @@ class CompSepSolver:
                 LHS (callable): A function/callable taking x as argument and returning Ax.
                 RHS (list): A list of alm-vectors representing the right-hand-side of the equation.
                 x0 (list): Initial guess for x as list of alm-vectors for each component (optional).
-                M (callable): Preconditioner: A callable which approximates A^-1 (optional).
+                M (callable): Preconditioner: A callable which approximates A^-1.
                 x_true (np.array): True solution for x, in order to print the true error (optional).
             Returns:
                 m_bestfit (list): The resulting best-fit solution, for the component held by this
@@ -295,12 +280,7 @@ class CompSepSolver:
         master = self.CompSep_comm.Get_rank() == 0
         mycomp = self.CompSep_comm.Get_rank()
 
-        mydot = complist_dot
-        
-        if M is None:
-            CG_solver = DistributedCG(LHS, RHS, master, dot=mydot, x0=x0, destroy_b=True)
-        else:
-            CG_solver = DistributedCG(LHS, RHS, master, dot=mydot, x0=x0, M=M, destroy_b=True)
+        CG_solver = DistributedCG(LHS, RHS, master, x0=x0, M=M, destroy_b=True)
         self.CG_residuals = np.zeros(max_iter)
         if x_true is not None:
             if master:
@@ -346,7 +326,7 @@ class CompSepSolver:
                 if master and self.config.err_tol > 0.0:
                     logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
                 stop_CG = True
-            if CG_solver.err < self.config.err_tol:
+            if CG_solver.err <= self.config.err_tol:
                 stop_CG = True
             stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
         self.CG_residuals = self.CG_residuals[:iter]
@@ -358,7 +338,7 @@ class CompSepSolver:
         complist_sol = CG_solver.x
         for comp in complist_sol:
             if master:
-                comp.apply_Cl_prior_sqrt(comp.alms)
+                comp.apply_Cl_prior_sqrt(comp.amps)
             comp.bcast_data_blocking(self.CompSep_comm)
 
         return complist_sol
@@ -375,7 +355,20 @@ class CompSepSolver:
         `rng` is this rank's random generator. Each rank must have its own stream: eta_1 is *this*
         band's white-noise realization, so shared draws would correlate the fluctuation across
         bands.
+
+        The CG starts from the amplitudes that `comp_list` holds on entry.
         """
+        # Set comp beams to 0 (in theory they could be non-zero if the per-pix solver has ran).
+        for comp in comp_list:
+            comp.amp_fwhm_rad = 0.0
+        # Set starting guess to x0 = S^{-1/2} a. It is copied, because `calc_RHS` overwrites
+        # `comp_list`. Only the master's values are used; the other ranks need the list as a buffer
+        # of the right shape.
+        x0 = deepcopy(comp_list)
+        if self.my_rank == 0:
+            for comp in x0:
+                comp.apply_Cl_prior_inv_sqrt(comp.amps)
+
         # `calc_RHS` overwrites the CompList it is handed, so comp_list doubles as the RHS buffer
         # (the preconditioner below reads only its metadata, never its alms).
         with benchmark("cg-rhs"):
@@ -411,11 +404,5 @@ class CompSepSolver:
             dense_matrix.print_sing_vals()
             dense_matrix.print_matrix_diag()
 
-        sol_list = self.solve_CG(self.apply_LHS_matrix, RHS, M=precond,
+        return self.solve_CG(self.apply_LHS_matrix, RHS, x0=x0, M=precond,
                              x_true=x_true if self.config.dense_matrix_debug_mode else None)
-        # The CG solves for the intrinsic (unsmoothed) sky. The solution is built from copies of
-        # the input components, so reset the beam they carried, which is non-zero if the chain
-        # started from a sample of the per-pixel solver.
-        for comp in sol_list:
-            comp.amp_fwhm_rad = 0.0
-        return sol_list

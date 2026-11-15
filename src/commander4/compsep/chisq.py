@@ -88,8 +88,8 @@ def evaluate_chi2(compsep: Bunch, detector_data: DetectorMap, sky_model: SkyMode
             optional per-band residual maps are built from.
     """
     band_pol = "QU" if detector_data.pol else "I"
-    sky_at_band = sky_model.get_sky_at_nu(
-        detector_data.nu, detector_data.nside, band_pol, fwhm=detector_data.fwhm_rad)
+    sky_at_band = sky_model.get_sky_at_nu(detector_data.nu, detector_data.nside, band_pol,
+                                          fwhm=detector_data.fwhm_rad, lmax=detector_data.lmax)
     pol_names = ["Q", "U"] if detector_data.pol else ["I"]
     npix, npix_chisq = detector_data.map_sky.shape[-1], hp.nside2npix(nside_chisq)
     # ud_grade averages, so scaling by how many fine pixels fall in a coarse one turns the average

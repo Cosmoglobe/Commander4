@@ -72,7 +72,7 @@ def _band(freq: float, fwhm: float, nside: int = NSIDE) -> dict:
 def test_diffuse_truth_map_is_the_band_map_amplitude(tmp_path):
     """beam(truth) * SED must reproduce band_map for a template-based foreground.
 
-    The beam is Commander4's: one Gaussian window on T, E and B (`DetectorMap.apply_B`). The band's
+    The beam is C4's: one Gaussian window on T, E and B (`comp2band`). The band's
     ``eval_nside`` equals ``general.nside``, so both sides make the same transforms and agree to
     float32 rounding.
     """
@@ -98,7 +98,7 @@ def test_diffuse_truth_map_is_the_band_map_amplitude(tmp_path):
 def test_band_map_below_the_template_nside_is_the_band_limited_model(tmp_path):
     """A band at half the template nside is B*Y*a of the template's alms, cut at its own band limit.
 
-    This is what Commander4 fits. Smoothing at the template nside and averaging pixels down with
+    This is what C4 fits. Smoothing at the template nside and averaging pixels down with
     `ud_grade` adds a pixel window and folds in power above the band limit, a large error here.
     """
     from simgen.instrument import build_bands
@@ -291,11 +291,11 @@ def test_truth_map_is_readable_as_a_commander4_init_map(tmp_path):
                         spatially_varying_MM=False, Cl_prior_amplitude=None,
                         beta=1.54, T=20.0, nu_ref=353.0, units="uK_RJ")
     object.__setattr__(comp_params, "_name", "ThermalDust")
-    c4_comp = ThermalDust(comp_params, global_params, allocate_empty_alms=True, eval_pol="I",
+    c4_comp = ThermalDust(comp_params, global_params, allocate_empty_amps=True, eval_pol="I",
                           comp_name="ThermalDust")
 
-    c4_comp.alms = _read_view_alms_from_fits(c4_comp, truth_path).astype(c4_comp.dtype)
+    c4_comp.amps = _read_view_alms_from_fits(c4_comp, truth_path).astype(c4_comp.amps.dtype)
 
-    recovered = hp.alm2map(c4_comp.alms[0].astype(np.complex128), NSIDE, lmax=c4_comp.lmax)
+    recovered = hp.alm2map(c4_comp.amps[0].astype(np.complex128), NSIDE, lmax=c4_comp.lmax)
     truth_I = comp.truth_map(NSIDE)[0]
     assert np.std(recovered - truth_I) < 1e-3 * np.std(truth_I)

@@ -339,7 +339,7 @@ def _validate_mcmc_sampled_components(mcmc_groups: dict[str, MCMCSamplingGroupCo
 def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
     """Report component multipoles that no band can constrain.
 
-    `Component.project_comp_to_band` truncates a component to the band's lmax, so a component
+    `Component.comp2band` truncates a component to the band's lmax, so a component
     multipole above *every* enabled band's lmax never meets the data. In a constrained realization
     (`optimize: false`) the CG solver then draws it straight from the C(l) prior, which is usually
     set orders of magnitude above the true signal, so the amplitudes come back dominated by prior
@@ -351,6 +351,9 @@ def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
     the taper is still near unity where it starts and only suppresses the far tail; no protection
     at all is an error. Both are logged rather than raised, since the run is still meaningful for
     the multipoles the data do constrain and a hard failure would be unhelpful mid-chain.
+
+    A component without a prior (`Cl_prior_amplitude: null`) is not reported: its unconstrained
+    multipoles stay at zero.
     """
     band_lmaxes = {}
     for band_str in params.compsep.bands:
@@ -367,7 +370,8 @@ def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
     highest_band = at_highest[0] if len(at_highest) == 1 else f"{len(at_highest)} bands"
 
     for comp in comp_list.joined():
-        if not isinstance(comp, DiffuseComponent) or comp.lmax <= highest_lmax:
+        if not isinstance(comp, DiffuseComponent) or comp.lmax <= highest_lmax \
+                or comp.Cl_prior_amplitude is None:
             continue
         unseen = f"l = {highest_lmax + 1}-{comp.lmax}"
         context = (f"Component {comp.comp_name!r} has lmax = {comp.lmax}, above the highest band "
@@ -402,7 +406,8 @@ def _build_conditional_residual(detector_data: DetectorMap, comp_list: CompList,
         return detector_data
     band_pol = "QU" if detector_data.pol else "I"
     fixed_sky = SkyModel(CompList(fixed_comps)).get_sky_at_nu(
-        detector_data.nu, detector_data.nside, band_pol, fwhm=detector_data.fwhm_rad)
+        detector_data.nu, detector_data.nside, band_pol, fwhm=detector_data.fwhm_rad,
+        lmax=detector_data.lmax)
     residual = deepcopy(detector_data)
     residual.map_sky = detector_data.map_sky - fixed_sky.astype(detector_data.map_sky.dtype,
                                                                 copy=False)
@@ -601,7 +606,8 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
     """Perform a single component-separation iteration.
 
     Runs the configured CG or per-pixel amplitude groups first, followed by MCMC groups. An MCMC
-    group may re-run named amplitude groups between proposal and accept/reject.
+    group may re-run named amplitude groups between proposal and accept/reject. When there are MCMC
+    groups, the amplitude groups run once more after them, as in C3.
 
     Args:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
@@ -627,7 +633,8 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
     # The fit after the most recent sampling step. Each step's evaluation both logs its own
     # diagnostic and, being the state after that step, doubles as the final fit once the last one
     # has run, so the chain costs no extra sky realization. This function (`process_compsep`) is
-    # only called if one of the two loops below execute, so `fit` is guaranteed to be defined later.
+    # only called if there is at least one amplitude or MCMC group, so `fit` is guaranteed to be
+    # defined later.
     fit: ChisqResult
 
     def evaluate(label: str | None = None) -> ChisqResult:
@@ -635,14 +642,23 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
                              compsep_state.target_pol, compsep_state.nside_chisq, label=label,
                              keep_residual=compsep_state.include_residual_maps)
 
-    for group in amplitude_groups.values():
-        with benchmark(f"amp-{group.name}"):
-            cg_stats = _run_amplitude_group(mpi_info, compsep_state, detector_data, comp_list,
-                                            group, rng)
-        if cg_stats:
-            sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
-        method_label = "CG" if compsep_state.amplitude_method == "cg" else "per-pixel"
-        fit = evaluate(f"{method_label} group {group.name!r}")
+    def run_amplitude_groups() -> ChisqResult | None:
+        """Solve every amplitude group in order. Returns the fit after the last group."""
+        group_fit = None
+        for group in amplitude_groups.values():
+            with benchmark(f"amp-{group.name}"):
+                cg_stats = _run_amplitude_group(mpi_info, compsep_state, detector_data, comp_list,
+                                                group, rng)
+            if cg_stats:
+                sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
+            method_label = "CG" if compsep_state.amplitude_method == "cg" else "per-pixel"
+            group_fit = evaluate(f"{method_label} group {group.name!r}")
+        return group_fit
+
+    # The Gibbs order of C3 (commander.f90): the amplitudes, the spectral parameters, and then the
+    # amplitudes again, so that the chain holds amplitudes solved at the final spectral parameters.
+    if amplitude_groups:
+        fit = run_amplitude_groups()
 
     for group in mcmc_groups.values():
         def resolve_amplitudes(group_names=group.update_amplitude_groups):
@@ -663,6 +679,9 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
         if mcmc_stats:
             sampler_stats.setdefault("mcmc", {})[group.name] = mcmc_stats
         fit = evaluate(f"MCMC group {group.name!r}")
+
+    if mcmc_groups and amplitude_groups:
+        fit = run_amplitude_groups()
 
     with benchmark("chain-gather"):
         fit_tree, band_frequencies = collect_fit_diagnostics(compsep, fit,
