@@ -20,7 +20,7 @@ from commander4.sky.sky_model import SkyModel
 logger = logging.getLogger(__name__)
 
 
-def _build_conditional_residual(band_map: DetectorMap, comp_list: CompList, target_pol: str,
+def _build_conditional_residual(band_map: DetectorMap, comp_list: CompList, pol: str,
                                 active_sublist: CompList) -> DetectorMap:
     """Subtract the components held fixed by a sampling group from this band's map.
 
@@ -33,7 +33,7 @@ def _build_conditional_residual(band_map: DetectorMap, comp_list: CompList, targ
     fixed.
     """
     active_names = {comp.comp_name for comp in active_sublist}
-    fixed_comps = [comp for comp in comp_list.split_for_eval_pol(target_pol)
+    fixed_comps = [comp for comp in comp_list.split_for_pol(pol)
                    if comp.comp_name not in active_names]
     if not fixed_comps:
         return band_map
@@ -66,7 +66,7 @@ def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: Detec
     compsep, band = mpi_info.compsep, mpi_info.band
     # This rank solves if the group names its band, and at least one component of this rank's
     # polarization.
-    active_sublist = CompList([comp for comp in comp_list if comp.eval_pol == band.polarization
+    active_sublist = CompList([comp for comp in comp_list if comp.pol == band.polarization
                                and comp.comp_name in group.comps])
     should_solve = band.name in group.bands and len(active_sublist) > 0
 
@@ -100,11 +100,11 @@ def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: Detec
         return {}
 
     # The lowest-ranked solver for each polarization owns the authoritative result.
-    for eval_pol in ("I", "QU"):
-        solved_here = should_solve and band.polarization == eval_pol
+    for pol in ("I", "QU"):
+        solved_here = should_solve and band.polarization == pol
         source = compsep.comm.allreduce(compsep.rank if solved_here else compsep.size, op=MPI.MIN)
         if source < compsep.size:
-            comp_list.broadcast_pol_views(compsep.comm, eval_pol=eval_pol, source=source)
+            comp_list.broadcast_pol_views(compsep.comm, pol=pol, source=source)
 
     # `solver_comm` never spans more than one polarization, so exactly one rank per polarization
     # filled `cg_stats` above and the rest are empty. I and QU are separate solves that converge

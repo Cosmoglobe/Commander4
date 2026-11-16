@@ -171,7 +171,6 @@ An overview the most important directories and files. This is not exhaustive.
 src/commander4/
   cli.py               # Entry point. Splits MPI into a TOD side and a compsep side, runs the Gibbs loop.
   units.py             # Brightness-unit conversions (uK_RJ / uK_CMB / MJy/sr).
-  polarization.py      # The I / QU / IQU vocabulary shared by both sides.
 
   tod/                 # === TOD SIDE: one Gibbs iteration over time-ordered data ===
     processing.py      #   Drives the iteration: gain, jumps, correlated noise, mapmaking, data selection.

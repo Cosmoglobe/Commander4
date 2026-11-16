@@ -85,7 +85,7 @@ def evaluate_chi2(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, sky_model:
     """
     compsep = mpi_info.compsep
     sky_at_band = sky_model.get_sky_at_band(band_map)
-    pol_names = ["Q", "U"] if band_map.pol else ["I"]
+    pol_names = ["Q", "U"] if band_map.pol == "QU" else ["I"]
     npix, npix_chisq = band_map.map_sky.shape[-1], hp.nside2npix(cfg.nside_chisq)
     # ud_grade averages, so scaling by how many fine pixels fall in a coarse one turns the average
     # into the sum over them that Commander3's chisq map accumulates (comm_output_mod.f90).
@@ -106,7 +106,7 @@ def evaluate_chi2(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, sky_model:
 
         z2_full = np.zeros(npix)
         z2_full[observed] = z**2
-        chi2_row = 1 + ipol if band_map.pol else 0
+        chi2_row = 1 + ipol if band_map.pol == "QU" else 0
         chi2_map[chi2_row] += hp.ud_grade(z2_full, cfg.nside_chisq)*subpixels_per_chisq_pixel
 
         if label is not None:

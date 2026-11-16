@@ -433,7 +433,7 @@ def _build_intensity_components(params: Bunch, compsep_path: str) -> list[Diffus
     Missing state is an error: initial parameter values cannot replace a saved Gibbs sample.
     """
     comp_list = CompList.init_from_params(params)
-    intensity_comps = comp_list.split_for_eval_pol("I")
+    intensity_comps = comp_list.split_for_pol("I")
     with h5py.File(compsep_path, "r") as handle:
         for comp in intensity_comps:
             group_path = f"comps/{comp.shortname}"

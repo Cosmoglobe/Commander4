@@ -14,7 +14,6 @@ from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pixel_domain import DistributedMap
 from commander4.file_io.map_reader import read_data_map_from_file
-from commander4.polarization import get_execution_band_id
 from commander4.sky.sky_model import build_initial_sky_model
 
 logger = logging.getLogger(__name__)
@@ -27,12 +26,9 @@ def _get_compsep_sender_id_for_tod_band(todproc_my_band_id: str,
     For bands that have both intensity and QU execution views, the intensity rank sends the
     already reassembled `SkyModel`. QU-only bands fall back to their `_QU` identifier.
     """
-    intensity_key = get_execution_band_id(todproc_my_band_id, "I")
-    if intensity_key in senders:
-        return intensity_key
-    pol_key = get_execution_band_id(todproc_my_band_id, "QU")
-    if pol_key in senders:
-        return pol_key
+    for view_name in (f"{todproc_my_band_id}_I", f"{todproc_my_band_id}_QU"):
+        if view_name in senders:
+            return view_name
     raise KeyError(f"No CompSep sender found for TOD band '{todproc_my_band_id}'.")
 
 
@@ -42,10 +38,7 @@ def _should_send_compsep_result(compsep_my_band_id: str,
     if destinations is None or compsep_my_band_id not in destinations:
         return False
     if compsep_my_band_id.endswith("_QU"):
-        paired_intensity_id = get_execution_band_id(
-            compsep_my_band_id.removesuffix("_QU"),
-            "I",
-        )
+        paired_intensity_id = compsep_my_band_id.removesuffix("_QU") + "_I"
         if paired_intensity_id in destinations:
             return False
     return True
@@ -144,7 +137,7 @@ def send_tod(mpi_info: Bunch, tod_map_dict: dict[DetectorMap], todproc_my_band_i
         logger.debug(f"CompSep band masters: {mpi_info.world.compsep_band_masters}")
     if mpi_info.band.is_master:
         for pol, detector_map in tod_map_dict.items():
-            target_band = get_execution_band_id(todproc_my_band_id, pol)
+            target_band = f"{todproc_my_band_id}_{pol}"
             if target_band in receivers.keys():
                 mpi_info.world.comm.send(detector_map, dest=receivers[target_band])
             else:

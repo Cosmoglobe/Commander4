@@ -22,7 +22,6 @@ from commander4.math_utils.alm import _dot_complex_alm_1D_arrays
 from commander4.sky.comp_list import CompList
 from commander4.sky.sky_model import SkyModel
 from commander4.compsep.perpix_solver import solve_compsep_perpix
-from commander4.polarization import get_execution_band_id, get_execution_band_ids
 
 
 def _make_compsep(ntask_compsep_qu: int = 1, ntask_compsep_i: int = 1) -> Bunch:
@@ -83,12 +82,6 @@ def _make_multi_comp_list() -> CompList:
         }
     )
     return CompList.init_from_params(Bunch(components=components, compsep=_make_compsep()))
-
-
-def test_execution_band_id_helpers_use_plain_band_names() -> None:
-    assert get_execution_band_id("90GHz", "I") == "90GHz_I"
-    assert get_execution_band_id("353GHz", "QU") == "353GHz_QU"
-    assert get_execution_band_ids("90GHz", "IQU") == ("90GHz_I", "90GHz_QU")
 
 
 def test_tod_receive_source_prefers_intensity_and_falls_back_to_qu() -> None:
@@ -339,7 +332,7 @@ def test_mcmc_group_must_name_enabled_amplitude_groups() -> None:
 
 def test_build_conditional_residual_subtracts_only_fixed_components() -> None:
     comp_list = _make_multi_comp_list()  # CMB, ThermalDust, FreeFree (all intensity views exist)
-    for comp in comp_list.split_for_eval_pol("I"):
+    for comp in comp_list.split_for_pol("I"):
         comp.amps = np.full_like(comp.amps, 3.0 + 0.0j)
 
     nside = 2
@@ -348,12 +341,12 @@ def test_build_conditional_residual_subtracts_only_fixed_components() -> None:
         map_sky=np.full((1, npix), 7.0), map_inv_var=np.ones((1, npix)), nu=30.0, fwhm=60.0,
         nside=nside)
 
-    active = CompList([comp for comp in comp_list.split_for_eval_pol("I")
+    active = CompList([comp for comp in comp_list.split_for_pol("I")
                        if comp.comp_name == "CMB"])
     residual = _build_conditional_residual(band_map, comp_list, "I", active)
 
     # The fixed components (everything but CMB) are exactly what should have been subtracted.
-    fixed = [c for c in comp_list.split_for_eval_pol("I") if c.comp_name != "CMB"]
+    fixed = [c for c in comp_list.split_for_pol("I") if c.comp_name != "CMB"]
     fixed_sky = SkyModel(CompList(fixed)).get_sky_at_nu(30.0, nside, "I", fwhm=band_map.fwhm_rad)
     assert residual is not band_map
     assert np.any(fixed_sky != 0.0)  # subtraction is non-trivial
@@ -364,7 +357,7 @@ def test_build_conditional_residual_subtracts_only_fixed_components() -> None:
 
 def test_build_conditional_residual_is_noop_when_no_component_is_fixed() -> None:
     comp_list = _make_multi_comp_list()
-    active = comp_list.split_for_eval_pol("I")  # All components.
+    active = comp_list.split_for_pol("I")  # All components.
     band_map = DetectorMap(
         map_sky=np.ones((1, 48)), map_inv_var=np.ones((1, 48)), nu=30.0, fwhm=60.0, nside=2)
     assert _build_conditional_residual(
@@ -374,7 +367,7 @@ def test_build_conditional_residual_is_noop_when_no_component_is_fixed() -> None
 def test_band_sky_removes_amp_fwhm_by_quadrature() -> None:
     # A band sky applies only the part of the band beam that the amplitudes do not already carry
     # (amp_fwhm_rad, from the per-pixel solver): applied = sqrt(target^2 - amp_fwhm_rad^2).
-    comp = next(c for c in _make_multi_comp_list().split_for_eval_pol("I") if c.comp_name == "CMB")
+    comp = next(c for c in _make_multi_comp_list().split_for_pol("I") if c.comp_name == "CMB")
     comp.amps = np.full_like(comp.amps, 2.0 + 0.0j)  # power at all l so smoothing is non-trivial
     nu, nside, target = 30.0, 2, 0.5  # target beam in radians
     sed = comp.get_sed(nu)

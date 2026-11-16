@@ -84,7 +84,7 @@ class DetectorMap:
     """Holds a sky map and associated metadata for a single detector or band.
 
     Stores the sky signal map, inverse noise variance map, beam properties, and
-    resolution parameters. Derived quantities such as ``pol`` and ``spin`` are computed on the fly
+    resolution parameters. Derived quantities like ``pol`` and ``spin`` are computed on the fly
     via properties.
 
     Attributes:
@@ -145,20 +145,19 @@ class DetectorMap:
         return np.deg2rad(self.fwhm/60.0)
     
     @property
-    def pol(self):
-        """Whether the map is polarised (True for Q/U, False for I only)."""
-        #polarization: True->Q/U, False->I
-        return len(self.map_sky) != 1
-    
-    @property
-    def spin(self):
-        """Spin weight of the map (2 for polarised, 0 for intensity)."""
-        return 2 if self.pol else 0
+    def pol(self) -> str:
+        """The polarization of the map: "I" for one map row, "QU" for two."""
+        return "I" if len(self.map_sky) == 1 else "QU"
 
     @property
-    def npol(self):
+    def spin(self) -> int:
+        """Spin weight of the map (2 for "QU", 0 for "I")."""
+        return 0 if self.pol == "I" else 2
+
+    @property
+    def npol(self) -> int:
         """Number of polarisation components (1 or 2)."""
-        return len(self.map_sky) # 2 if self.pol else 1
+        return len(self.map_sky)
 
     def smooth_to_resolution(self, target_fwhm_arcmin: float) -> None:
         """Noise-weighted in-place smoothing of this band to a target Gaussian beam.

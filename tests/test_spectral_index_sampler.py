@@ -80,7 +80,7 @@ def test_a_better_fit_is_accepted_on_both_views_of_the_component():
     stats = sample_spectral_params(mpi_info, cfg, group, band_map, comp_list,
                                    _fixed_rng([TRUE_BETA]))
 
-    assert [comp.eval_pol for comp in comp_list] == ["I", "QU"]
+    assert [comp.pol for comp in comp_list] == ["I", "QU"]
     assert [comp.beta for comp in comp_list] == [TRUE_BETA, TRUE_BETA]
     assert stats == {"numstep": 1, "n_accept": 1, "accept_rate": 1.0,
                      "params": {"sync": TRUE_BETA}}

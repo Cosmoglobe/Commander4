@@ -729,21 +729,21 @@ def saved_component_sample(request: pytest.FixtureRequest, tmp_path: Path) -> tu
         alm[hp.Alm.getidx(lmax, 8, 3)] = 20.0 + 10.0j
         alm[hp.Alm.getidx(lmax, 4, 0)] = 10.0
         amp_fwhm = np.radians(6.0)
-        if comp.eval_pol == "I":
+        if comp.pol == "I":
             intrinsic[comp.shortname] = alm.copy()
         else:
             alm *= 3.0  # Distinct QU amplitudes expose accidental row selection.
         comp.amps[:] = hp.almxfl(alm, hp.gauss_beam(amp_fwhm, lmax=lmax))
         comp.amp_fwhm_rad = amp_fwhm
         if comp.shortname == "cmb":
-            comp.nu_ref = 100.0 if comp.eval_pol == "I" else 217.0
+            comp.nu_ref = 100.0 if comp.pol == "I" else 217.0
         elif comp.shortname == "dust":
-            comp.nu_ref = 70.0 if comp.eval_pol == "I" else 353.0
-            comp.beta = 1.9 if comp.eval_pol == "I" else 1.3
-            comp.T = 24.0 if comp.eval_pol == "I" else 18.0
+            comp.nu_ref = 70.0 if comp.pol == "I" else 353.0
+            comp.beta = 1.9 if comp.pol == "I" else 1.3
+            comp.T = 24.0 if comp.pol == "I" else 18.0
         else:
-            comp.nu_ref = 40.0 if comp.eval_pol == "I" else 30.0
-            comp.beta = -2.6 if comp.eval_pol == "I" else -3.3
+            comp.nu_ref = 40.0 if comp.pol == "I" else 30.0
+            comp.beta = -2.6 if comp.pol == "I" else -3.3
     write_compsep_chain_to_file(comp_list, params, chain=1, iter=1)
     chain_path = str(tmp_path / "chains_compsep/chain01_iter0001.h5")
     return params, chain_path, intrinsic
@@ -757,7 +757,7 @@ def test_component_restoration_matches_saved_seds_and_beams(saved_component_samp
                      "dust": {"nu_ref": 70.0, "beta": 1.9, "T": 24.0},
                      "sync": {"nu_ref": 40.0, "beta": -2.6}}
     for comp in restored:
-        assert comp.eval_pol == "I"
+        assert comp.pol == "I"
         assert comp.amp_fwhm_rad == pytest.approx(np.radians(6.0))
         for name, value in expected_seds[comp.shortname].items():
             assert getattr(comp, name) == pytest.approx(value)

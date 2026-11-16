@@ -21,7 +21,7 @@ from commander4.data_models.pixel_domain import DistributedMap, PixelDomain
 from commander4.data_models.tod_samples import TODSamples
 from commander4.tod.view import TODView
 from commander4.tod.mapmaking.tod2map import tod2map
-from commander4.polarization import get_execution_band_ids
+from commander4.parameters.schema import EXECUTION_POLS
 from commander4.file_io.tod_reader import read_tods_from_file
 from commander4.file_io.chain_writer import write_band_chain_to_file
 from commander4.diagnostics.performance import benchmark, bench_summary, bench_reset
@@ -107,10 +107,11 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch, start: ChainStart) \
     all_data_world = mpi_info.tod.comm.allgather(data_world)
     all_data_tod = mpi_info.tod.comm.allgather(data_tod)
 
+    # One entry per view of each band: (band name, world rank of the band master, polarization).
     world_band_masters_dict = {
-        execution_band_id: item[1]
+        f"{item[0]}_{pol}": item[1]
         for item in all_data_world if item is not None
-        for execution_band_id in get_execution_band_ids(item[0], item[2])
+        for pol in EXECUTION_POLS[item[2]]
     }
     tod_band_masters_dict = {item[0]: item[1] for item in all_data_tod if item is not None}
     mpi_info['world']['tod_band_masters'] = world_band_masters_dict

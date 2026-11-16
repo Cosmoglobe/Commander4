@@ -46,8 +46,6 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, band_map: DetectorMap,
         real_dtype = np.float32
 
     npol = band_map.npol
-    pol = band_map.pol
-    spin = 2 if pol else 0
     map_sky = band_map.map_sky
     band_freq = band_map.nu
     map_inv_var = band_map.map_inv_var  # Zero where unobserved.
@@ -67,7 +65,7 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, band_map: DetectorMap,
 
     nside = band_map.nside
     npix = 12*nside**2
-    comp_maps = [None, None] if pol else [None]
+    comp_maps = [None]*npol
     if proc_comm.Get_rank() == 0:  # Unfortunately, only master rank does the work.
         map_shapes = np.array([_map.shape for _map in all_map_sky])
         if not np.all(map_shapes == map_shapes[0]):
@@ -103,11 +101,9 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, band_map: DetectorMap,
     comp_maps = proc_comm.bcast(comp_maps, root=0)
     with benchmark("perpix-alm"):
         for icomp in range(ncomp):
-            if pol:
-                input_map = np.array([comp_maps[0][icomp], comp_maps[1][icomp]], dtype=real_dtype)
-            else:
-                input_map = np.array([comp_maps[0][icomp]], dtype=real_dtype)
-            comp_alms = curvedsky.map2alm_healpix(input_map, niter=3, spin=spin,
+            input_map = np.array([comp_maps[ipol][icomp] for ipol in range(npol)],
+                                 dtype=real_dtype)
+            comp_alms = curvedsky.map2alm_healpix(input_map, niter=3, spin=band_map.spin,
                                                   lmax=comp_list[icomp].lmax)
             comp_list[icomp].amps = comp_alms.astype(complex_dtype, copy=False)
             # These amplitudes are component maps at the data resolution; record that beam so the

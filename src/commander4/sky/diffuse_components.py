@@ -19,7 +19,6 @@ from scipy.interpolate import interp1d
 from commander4.data_models.band import Band
 from commander4.sky.component import Component
 from commander4.sky.comp_io import _pol_row_indices, _read_view_alms_from_fits
-from commander4.polarization import get_npol
 from commander4.math_utils.arithmetic import inplace_scale
 from commander4.math_utils.alm import project_alms, almxfl, _dot_complex_alm_1D_arrays
 from commander4.math_utils.sht import alm_to_map, map_to_alm, alm_to_map_adjoint, map_to_alm_adjoint
@@ -73,9 +72,9 @@ class DiffuseComponent(Component):
     # (at the component's reference frequency); chain alms are already stored in it.
     amplitude_unit = "uK_RJ"
 
-    def __init__(self, params: Bunch, comp_name: str, eval_pol: str):
+    def __init__(self, params: Bunch, comp_name: str, pol: str):
         """One polarization view of the component `comp_name`, with its alms set to zero."""
-        super().__init__(params, comp_name, eval_pol)
+        super().__init__(params, comp_name, pol)
         self.lmax = self.cfg.lmax
         # The C(l) prior parameters are attributes, as the SED parameters, because they are
         # resolved to this view's value and written to the chain.
@@ -106,27 +105,6 @@ class DiffuseComponent(Component):
             pysm3u.Unit(self.amplitude_unit),
             equivalencies=pysm3u.cmb_equivalencies(self.nu_ref*pysm3u.GHz)).value
         return sky_map * factor
-
-    @property
-    def npol(self):
-        return get_npol(self.eval_pol)
-
-    @property
-    def spin(self):
-        if self.eval_pol == "I":
-            return 0
-        if self.eval_pol in ("QU", "IQU"):
-            return 2
-        raise ValueError(f"Unsupported polarization '{self.eval_pol}'.")
-    
-    @property
-    def is_pol(self):
-        if self.eval_pol == "I":
-            return False
-        elif self.eval_pol == "QU":
-            return True
-        else:
-            raise ValueError("Specific polarization undefined, or set as IQU.")
 
     Cl_prior_param_names = ("Cl_prior_amplitude", "Cl_prior_beta", "Cl_prior_FWHM",
                             "Cl_prior_l_pivot", "Cl_prior_l_apod", "Cl_prior_l_tighten")
@@ -224,7 +202,7 @@ class DiffuseComponent(Component):
         return 1.0 / self.P_Cl_prior
 
     def __repr__(self):
-        return f"Diffuse Component {self.shortname}, with polarization: {self.eval_pol}"\
+        return f"Diffuse Component {self.shortname}, with polarization: {self.pol}"\
                 f" (originally defined as {self.cfg.polarization})" \
                 f"\n   lmax = {self.lmax} \n   alms: {self.amps}"
 
@@ -302,12 +280,12 @@ class DiffuseComponent(Component):
                 f"but got {source_path!r}.")
         if self.Cl_prior_amplitude is None:
             raise ValueError(
-                f"Component {self.comp_name!r} ({self.eval_pol}): 'amp_prior_mean_map' needs a "
+                f"Component {self.comp_name!r} ({self.pol}): 'amp_prior_mean_map' needs a "
                 "prior to be the mean of, but 'Cl_prior_amplitude' is null (no prior).")
         view_alms = _read_view_alms_from_fits(self, source_path)
         if view_alms is not None:
             self.amp_prior_mean = view_alms.astype(self.amps.dtype, copy=False)
-            logger.info(f"Component {self.comp_name!r} ({self.eval_pol}): prior mean read from "
+            logger.info(f"Component {self.comp_name!r} ({self.pol}): prior mean read from "
                         f"{source_path!r}.")
 
     def read_amps_from_map(self, map_file: str) -> None:
@@ -344,9 +322,9 @@ class DiffuseComponent(Component):
         """
         super().read_chain(group, restore_beta)
         stored_alms = group["alms"][()]
-        rows = _pol_row_indices(stored_alms, self.eval_pol, self.shortname, group.file.filename)
+        rows = _pol_row_indices(stored_alms, self.pol, self.shortname, group.file.filename)
         if rows is None:
-            logger.debug(f"{group.file.filename!r} has no {self.eval_pol!r} alms for component "
+            logger.debug(f"{group.file.filename!r} has no {self.pol!r} alms for component "
                          f"{self.comp_name!r}; leaving those alms unchanged.")
             return
         view_alms = project_alms(np.ascontiguousarray(stored_alms[rows]), self.lmax)
@@ -365,7 +343,7 @@ class DiffuseComponent(Component):
         window = hp.gauss_beam(fwhm, lmax=lmax)
         window[:lmin] = 0.0
         alms = np.array([almxfl(alm, window) for alm in project_alms(self.amps, lmax)])
-        if self.eval_pol != "IQU":
+        if self.pol != "IQU":
             return alm_to_map(alms, nside, lmax, spin=self.spin)
         # A joined IQU component needs separate spin-0 and spin-2 synthesis calls.
         return np.concatenate((alm_to_map(alms[:1], nside, lmax, spin=0),
@@ -412,11 +390,11 @@ class DiffuseComponent(Component):
         rows to a polarization band.
         """
         alms = self.amps
-        if self.eval_pol == "IQU":
-            alms = alms[1:] if band.is_pol else alms[:1]
-        if (alms.shape[0] == 2) != band.is_pol:
+        if self.pol == "IQU":
+            alms = alms[1:] if band.pol == "QU" else alms[:1]
+        elif self.pol != band.pol:
             raise ValueError("Band and component polarization must match.")
-        spin = 2 if band.is_pol else 0
+        spin = 0 if band.pol == "I" else 2
         alms = project_alms(alms, band.lmax)
         if self.cfg.spatially_varying_MM:  # The mixing matrix is pixel-dependent: Y^-1 M Y a.
             comp_map = alm_to_map(alms, band.nside, band.lmax, spin=spin, nthreads=nthreads)
@@ -439,7 +417,7 @@ class DiffuseComponent(Component):
 
         Each rank evaluates its own band; the master sums the contributions of all bands.
         """
-        if self.is_pol != band.is_pol:
+        if self.pol != band.pol:
             raise ValueError("Band and component polarization must match.")
         beam = self._band_beam(band)
         tmp_alm = band.alms.copy()
@@ -590,9 +568,9 @@ class SpinningDust(DiffuseComponent):
                 "nu_peak": None, "nu_0": None}
     sed_param_names = ("nu_peak_eval", "nu_peak_ref", "nu_ref")
 
-    def __init__(self, params: Bunch, comp_name: str, eval_pol: str):
+    def __init__(self, params: Bunch, comp_name: str, pol: str):
         """One polarization view of the component `comp_name`, with its template read."""
-        super().__init__(params, comp_name, eval_pol)
+        super().__init__(params, comp_name, pol)
         # Two-column SpDust2 template: frequency (GHz) and emissivity (proportional to intensity).
         freqs, SED = np.loadtxt(self.cfg.template_path).T
         self.nu_peak_ref = 30.0  # Peak frequency of the template as tabulated.

@@ -4,7 +4,7 @@ A component defined for IQU is stored as two views, one for I and one for QU, be
 solved on separate MPI ranks. `CompList` holds four kinds of method, and nothing else:
 
 - building the views from the parameter file (`init_from_params`),
-- reorganizing them (`split_for_eval_pol`, `joined`),
+- reorganizing them (`split_for_pol`, `joined`),
 - the vector arithmetic of the CG (`zeros_like`, `copy`, `dot`, `add_scaled`, `scale_and_add`),
 - writing the chain and keeping the MPI ranks in step (`write_chain`, `broadcast_pol_views`).
 
@@ -21,8 +21,7 @@ from pixell.bunch import Bunch
 
 import commander4.sky as sky
 from commander4.sky.component import Component
-from commander4.polarization import EXECUTION_POLS
-from commander4.polarization import assert_pol_supported
+from commander4.parameters.schema import EXECUTION_POLS
 from commander4.math_utils.arithmetic import inplace_scale_add, inplace_add_scaled_vec
 
 
@@ -69,8 +68,8 @@ class CompList:
                     or component.params.polarization not in EXECUTION_POLS):
                 raise ValueError(f"'components.{comp_name}.params.polarization' must be "
                                  f"one of {list(EXECUTION_POLS)}.")
-            for eval_pol in EXECUTION_POLS[component.params.polarization]:
-                comp = component_cls(params, comp_name, eval_pol)
+            for pol in EXECUTION_POLS[component.params.polarization]:
+                comp = component_cls(params, comp_name, pol)
                 comp_list.append(comp)
             # The chain stores each component under its shortname, so two components cannot
             # share one.
@@ -83,13 +82,12 @@ class CompList:
 
     # ----- Reorganizing -----
 
-    def split_for_eval_pol(self, target_pol: str) -> CompList:
+    def split_for_pol(self, pol: str) -> CompList:
         """Return the views evaluated for one polarization, "I" or "QU".
 
         The returned list holds the same component objects as this one, not copies.
         """
-        assert_pol_supported(target_pol)
-        return CompList([comp for comp in self.components if comp.eval_pol == target_pol])
+        return CompList([comp for comp in self.components if comp.pol == pol])
 
     def joined(self) -> CompList:
         """Return one component per component name, with the I and QU views of each joined.
@@ -165,14 +163,14 @@ class CompList:
         for comp in self.joined():
             comp.write_chain(file.create_group(f"comps/{comp.shortname}"), band_frequencies)
 
-    def broadcast_pol_views(self, comm: MPI.Comm, *, eval_pol: str, source: int) -> None:
-        """Broadcast all execution views of `eval_pol` from `source` to every rank in `comm`.
+    def broadcast_pol_views(self, comm: MPI.Comm, *, pol: str, source: int) -> None:
+        """Broadcast all execution views of `pol` from `source` to every rank in `comm`.
 
         Used after a sampling step: only the ranks that actually solved a given polarization hold
         the updated component data, so broadcasting that polarization's views from one authoritative
         `source` rank restores a globally consistent component list.
         """
-        for comp in self.split_for_eval_pol(eval_pol):
+        for comp in self.split_for_pol(pol):
             comp.bcast_data_blocking(comm, root=source)
             # The amplitudes' resolution travels with them: the solving rank's value is authoritative.
             comp.amp_fwhm_rad = comm.bcast(comp.amp_fwhm_rad, root=source)

@@ -24,9 +24,12 @@ from collections.abc import Sequence
 
 from pixell.bunch import Bunch
 
-from commander4.polarization import EXECUTION_POLS, get_execution_band_id
-
 logger = logging.getLogger(__name__)
+
+# The views that a `polarization` setting of a band or a component gives. C4 runs one view at a
+# time. The view of a band is named `<band>_<view>`, for example `030GHz_I` and `030GHz_QU`. The
+# MPI routing between the TOD side and the CompSep side uses these names.
+EXECUTION_POLS = {"I": ("I",), "QU": ("QU",), "IQU": ("I", "QU")}
 
 # The legal top-level entries in the YAML parameter file. Explicitly stating them allows us to
 # catch misspelled entries
@@ -139,9 +142,7 @@ def enabled_compsep_views(params: Bunch) -> tuple[CompSepViewConfig, ...]:
                 f"one of {sorted(EXECUTION_POLS)}."
             )
         for polarization in EXECUTION_POLS[band.polarization]:
-            views_by_pol[polarization].append(
-                (band_name, get_execution_band_id(band_name, polarization))
-            )
+            views_by_pol[polarization].append((band_name, f"{band_name}_{polarization}"))
 
     views = []
     for polarization in ("I", "QU"):

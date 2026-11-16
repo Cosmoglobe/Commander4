@@ -55,19 +55,19 @@ class Component:
     # file.
     Cl_prior_amplitude = None
 
-    def __init__(self, params: Bunch, comp_name: str, eval_pol: str):
+    def __init__(self, params: Bunch, comp_name: str, pol: str):
         """One polarization view of the component `comp_name` of the parameter file.
 
         Args:
             params: The full parameter file.
             comp_name: The name of the component's block under `components`.
-            eval_pol: The view to make, "I" or "QU". A component defined for IQU has both.
+            pol: The view to make, "I" or "QU". A component defined for IQU has both.
         """
-        if eval_pol not in self.legal_pols:
+        if pol not in self.legal_pols:
             raise ValueError(f"Component {comp_name!r}: a {type(self).__name__} has no "
-                             f"{eval_pol!r} view. Its views are {self.legal_pols!r}.")
+                             f"{pol!r} view. Its views are {self.legal_pols!r}.")
         self.comp_name = comp_name
-        self.eval_pol = eval_pol
+        self.pol = pol
         self.cfg = read_settings(params, "params", (f"components.{comp_name}",), self.DEFAULTS)
         self.shortname = self.cfg.shortname
         # `init_from: null` and a left-out `init_from` mean different things (see
@@ -93,19 +93,19 @@ class Component:
     def _per_pol(self, value):
         """This view's value of a setting given as one value or as a pair [I, QU]."""
         if isinstance(value, (list, tuple)):
-            return value[0] if self.eval_pol == "I" else value[1]
+            return value[0] if self.pol == "I" else value[1]
         return value
 
     def join_split_views(self, other: "Component") -> "Component":
         """Join the I view and the QU view of one IQU component into a new component.
 
-        The result has `eval_pol` "IQU" and all three polarization rows in `amps`.
+        The result has `pol` "IQU" and all three polarization rows in `amps`.
         """
-        if {self.eval_pol, other.eval_pol} != {"I", "QU"}:
+        if {self.pol, other.pol} != {"I", "QU"}:
             raise ValueError("Joining requires one intensity view and one QU view.")
-        intensity_comp, pol_comp = (self, other) if self.eval_pol == "I" else (other, self)
+        intensity_comp, pol_comp = (self, other) if self.pol == "I" else (other, self)
         joined = deepcopy(intensity_comp)
-        joined.eval_pol = joined.cfg.polarization
+        joined.pol = joined.cfg.polarization
         joined.amps = np.concatenate((intensity_comp.amps, pol_comp.amps), axis=0)
 
         # The joined view is deep-copied from the intensity view, so any SED or C(l)-prior parameter
@@ -118,6 +118,16 @@ class Component:
             if not np.array_equal(i_value, qu_value):
                 setattr(joined, param_name, np.array([i_value, qu_value]))
         return joined
+
+    @property
+    def npol(self) -> int:
+        """The number of polarization rows in `amps`: one per letter of `pol` ("I", "QU", "IQU")."""
+        return len(self.pol)
+
+    @property
+    def spin(self) -> int:
+        """The spin of the harmonic transforms: 0 for "I", 2 for "QU" and "IQU"."""
+        return 0 if self.pol == "I" else 2
 
     @property
     def amp_prior_mean(self):
@@ -154,7 +164,7 @@ class Component:
         for band_name, nu in band_frequencies.items():
             group[f"mixing/{band_name}"] = self.get_sed(nu)
         group["defined_pol"] = self.cfg.polarization
-        group["eval_pol"] = self.eval_pol
+        group["eval_pol"] = self.pol
 
     def read_chain(self, group: h5py.Group, restore_beta: bool) -> None:
         """Restore this component's sampled state from its chain group, as `write_chain` wrote it.
@@ -171,9 +181,9 @@ class Component:
         if restore_beta:
             beta = np.asarray(group["sed/beta"][()])
             if beta.ndim == 1:  # Joined I and QU views with different values store [I, QU].
-                beta = beta[0 if self.eval_pol == "I" else 1]
+                beta = beta[0 if self.pol == "I" else 1]
             self.beta = float(beta)
-            logger.debug(f"Component {self.comp_name!r} ({self.eval_pol}): restored sampled "
+            logger.debug(f"Component {self.comp_name!r} ({self.pol}): restored sampled "
                          f"beta = {self.beta}.")
 
     def load_initial_state(self, chain_file: str | None, apply_init_from: bool,

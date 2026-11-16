@@ -51,7 +51,7 @@ def test_init_from_params_builds_all_defined_pol_views() -> None:
     comp_list = CompList.init_from_params(_make_params(
         cmb=_make_named_component_cfg("cmb", "IQU"), ff=_make_named_component_cfg("ff", "I")))
 
-    assert [(comp.comp_name, comp.eval_pol) for comp in comp_list] == [
+    assert [(comp.comp_name, comp.pol) for comp in comp_list] == [
         ("cmb", "I"), ("cmb", "QU"), ("ff", "I")]
 
 
@@ -60,7 +60,7 @@ def test_complist_split_preserves_names_and_join_restores_logical_component() ->
 
     assert [comp.comp_name for comp in comp_list] == ["cmb", "cmb"]
     assert [comp.shortname for comp in comp_list] == ["cmb", "cmb"]
-    assert [comp.eval_pol for comp in comp_list] == ["I", "QU"]
+    assert [comp.pol for comp in comp_list] == ["I", "QU"]
 
     comp_list[0].amps[:] = 1.0 + 0.0j
     comp_list[1].amps[:] = 2.0 + 0.0j
@@ -69,7 +69,7 @@ def test_complist_split_preserves_names_and_join_restores_logical_component() ->
     assert len(joined) == 1
     assert joined[0].comp_name == "cmb"
     assert joined[0].shortname == "cmb"
-    assert joined[0].eval_pol == "IQU"
+    assert joined[0].pol == "IQU"
     assert np.all(joined[0].amps[0] == 1.0 + 0.0j)
     assert np.all(joined[0].amps[1:] == 2.0 + 0.0j)
 
@@ -86,7 +86,7 @@ def test_complist_copy_has_its_own_amplitudes_and_shares_the_rest() -> None:
     for comp in copied:
         comp.amps[:] = 5.0 + 0.0j
 
-    assert [comp.eval_pol for comp in copied] == ["I", "QU"]
+    assert [comp.pol for comp in copied] == ["I", "QU"]
     assert all(np.all(comp.amps == 1.0 + 0.0j) for comp in comp_list)
     assert all(np.all(comp.amps == 0.0) for comp in zeros)
     assert all(new.cfg is old.cfg for new, old in zip(copied, comp_list))
@@ -116,27 +116,20 @@ def test_complist_dot_counts_each_real_number_of_the_alms_once() -> None:
     assert comp_list.dot(comp_list) == pytest.approx(12.0)
 
 
-def test_complist_split_for_eval_pol_rejects_invalid_polarization() -> None:
-    comp_list = _make_comp_list("IQU")
-
-    with pytest.raises(ValueError, match="Unsupported polarization string 'bad'"):
-        comp_list.split_for_eval_pol("bad")
-
-
-def test_point_sources_component_rejects_non_intensity_eval_pol() -> None:
+def test_point_sources_component_rejects_non_intensity_pol() -> None:
     params = _make_params(ps=Bunch(params=Bunch(polarization="I", shortname="ps")))
 
     with pytest.raises(ValueError, match="a PointSourcesComponent has no 'QU' view"):
         PointSourcesComponent(params, "ps", "QU")
 
 
-def test_complist_split_for_eval_pol_returns_requested_execution_view() -> None:
+def test_complist_split_for_pol_returns_requested_execution_view() -> None:
     comp_list = _make_comp_list("IQU")
 
-    qu_only = comp_list.split_for_eval_pol("QU")
+    qu_only = comp_list.split_for_pol("QU")
 
     assert len(qu_only) == 1
-    assert qu_only[0].eval_pol == "QU"
+    assert qu_only[0].pol == "QU"
 
 
 def test_init_from_params_rejects_one_shortname_for_two_components() -> None:
@@ -180,7 +173,7 @@ def test_load_initial_state_reads_and_splits_from_chain(tmp_path) -> None:
 
     # The chain holds the joined IQU alms; each view gets back exactly its own rows.
     for comp, saved in zip(comp_list, source):
-        assert (comp.comp_name, comp.eval_pol) == (saved.comp_name, saved.eval_pol)
+        assert (comp.comp_name, comp.pol) == (saved.comp_name, saved.pol)
         assert np.array_equal(comp.amps, saved.amps)
 
 
@@ -234,7 +227,7 @@ def test_load_initial_state_from_fits_map(tmp_path) -> None:
     for comp in comp_list:
         comp.load_initial_state(None, apply_init_from=True, restore_beta=False)
 
-    views = {(comp.comp_name, comp.eval_pol): comp for comp in comp_list}
+    views = {(comp.comp_name, comp.pol): comp for comp in comp_list}
     assert np.allclose(views[("cmb", "I")].amps, alms_I, rtol=1e-6, atol=1e-7)
     assert np.allclose(views[("cmb", "QU")].amps, alms_QU, rtol=1e-6, atol=1e-7)
 
@@ -257,7 +250,7 @@ def test_load_initial_state_partial_source_leaves_missing_pol_zero(tmp_path) -> 
     for comp in comp_list:
         comp.load_initial_state(chain, apply_init_from=True, restore_beta=False)
 
-    views = {(comp.comp_name, comp.eval_pol): comp for comp in comp_list}
+    views = {(comp.comp_name, comp.pol): comp for comp in comp_list}
     assert np.array_equal(views[("cmb", "I")].amps, source[0].amps)
     assert np.all(views[("cmb", "QU")].amps == 0)
 
@@ -299,10 +292,10 @@ def _dust_params(**overrides) -> Bunch:
     return params
 
 
-def _dust(eval_pol: str, **overrides) -> ThermalDust:
+def _dust(pol: str, **overrides) -> ThermalDust:
     """One view of a thermal dust component. `overrides` are settings of its `params` block."""
     params = _make_params(dust=Bunch(params=_dust_params(**overrides)))
-    return ThermalDust(params, "dust", eval_pol)
+    return ThermalDust(params, "dust", pol)
 
 
 def test_diffuse_component_resolves_per_pol_reference_frequency() -> None:
@@ -360,8 +353,8 @@ def test_P_Cl_prior_gaussian_rolloff_floors_at_1e_minus_10() -> None:
 
 def test_P_Cl_prior_resolves_per_pol_lists() -> None:
     # Like nu_ref, every Cl_prior parameter can be an [I, QU] pair resolved per execution view.
-    def make(eval_pol):
-        return _dust(eval_pol, lmax=4, Cl_prior_amplitude=[2.0, 8.0], Cl_prior_beta=[0.0, -0.5],
+    def make(pol):
+        return _dust(pol, lmax=4, Cl_prior_amplitude=[2.0, 8.0], Cl_prior_beta=[0.0, -0.5],
                      Cl_prior_FWHM=[0.0, 10.0])
 
     dust_I, dust_QU = make("I"), make("QU")

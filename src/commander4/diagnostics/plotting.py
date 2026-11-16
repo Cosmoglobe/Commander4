@@ -381,11 +381,11 @@ def _components_for_pol(comp_list: list[Component], npol: int) -> list[Component
     """The components whose polarization view matches the maps being plotted.
 
     Maps are plotted one execution view at a time, so `npol` is 1 for an I map and 2 for a QU one,
-    and the components are filtered to the matching view. This is `CompList.split_for_eval_pol`
+    and the components are filtered to the matching view. This is `CompList.split_for_pol`
     written out, because the chain plotter builds a plain list rather than a `CompList`.
     """
-    target_pol = "QU" if npol > 1 else "I"
-    return [comp for comp in comp_list if comp.eval_pol == target_pol]
+    pol = "QU" if npol > 1 else "I"
+    return [comp for comp in comp_list if comp.pol == pol]
 
 
 def _ensure_2d_map(map_data: np.ndarray | None) -> np.ndarray | None:
@@ -447,13 +447,13 @@ def _get_component_map(
     npix = 12 * nside**2
     use_raw = not np.isfinite(freq)
     if npol == 1:
-        if component.is_pol:
+        if component.pol == "QU":
             return np.zeros((npix,))
         if use_raw:
             return component.get_component_map(nside, fwhm=smoothing_scale_radians)[0]
         return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[0]
 
-    if component.is_pol:
+    if component.pol == "QU":
         if use_raw:
             return component.get_component_map(nside, fwhm=smoothing_scale_radians)[ipol]
         return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[ipol]

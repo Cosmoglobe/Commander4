@@ -23,14 +23,6 @@ class PointSourcesComponent(Component):
     DEFAULTS = {**Component.DEFAULTS, "shortname": "pnt"}
     legal_pols: tuple[str, ...] = ("I",)
 
-    @property
-    def is_pol(self) -> bool:
-        return False
-    
-    @property
-    def npol(self) -> int:
-        return 1
-
     def write_chain(self, group: h5py.Group, band_frequencies: dict[str, float]) -> None:
         """Write the shared component sample (see `Component.write_chain`), plus the amplitudes.
 
@@ -65,9 +57,9 @@ class RadioSources(PointSourcesComponent):
     # with the template rather than in every iteration of the chain.
     sed_param_names = ("nu_ref",)
 
-    def __init__(self, params: Bunch, comp_name: str, eval_pol: str):
+    def __init__(self, params: Bunch, comp_name: str, pol: str):
         """The component `comp_name`, with its sources read from the `template_path` table."""
-        super().__init__(params, comp_name, eval_pol)
+        super().__init__(params, comp_name, pol)
         self.nu_ref = self.cfg.nu_0  # Reference frequency (GHz)
         # Flux density to brightness temperature, evaluated once at `nu_ref` (C3's `getScale`).
         # This factor must NOT be re-evaluated at the band frequency: `get_sed` already carries the
@@ -197,7 +189,7 @@ class RadioSources(PointSourcesComponent):
         are added in pixel space, as in C3, so they are not cut at the band lmax. `band.map` is
         allocated here if no component has written to it yet.
         """
-        if band.is_pol:
+        if band.pol == "QU":
             raise ValueError("Point-source components can only be projected to intensity bands.")
         band_fwhm_r, band_nside = np.deg2rad(band.fwhm/60.0), band.nside
         self.compute_pix_beams(band_fwhm_r, band_nside)  # No-op unless the band has changed.
@@ -216,7 +208,7 @@ class RadioSources(PointSourcesComponent):
 
         All the contributions will be summed to the total amplitudes when reducing on the master.
         """
-        if band.is_pol:
+        if band.pol == "QU":
             raise ValueError("Point-source components can only be evaluated from intensity bands.")
         band_fwhm_r, band_nside = np.deg2rad(band.fwhm/60.0), band.nside
         self.compute_pix_beams(band_fwhm_r, band_nside)  # No-op unless the band has changed.

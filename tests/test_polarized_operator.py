@@ -64,7 +64,7 @@ class _DummyDiffuseComp(DiffuseComponent):
 
     def __init__(self, lmax: int, npol: int):
         self.lmax = lmax
-        self.eval_pol = "I" if npol == 1 else "QU"
+        self.pol = "I" if npol == 1 else "QU"
         self.amps = np.zeros((npol, hp.Alm.getsize(lmax)), dtype=np.complex128)
 
     @property

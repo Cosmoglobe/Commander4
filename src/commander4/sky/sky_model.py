@@ -50,7 +50,7 @@ class SkyModel:
         The result has the shape of `band_map.map_sky`, so `band_map.map_sky` minus it is the
         residual of the band.
         """
-        return self.get_sky_at_nu(band_map.nu, band_map.nside, "QU" if band_map.pol else "I",
+        return self.get_sky_at_nu(band_map.nu, band_map.nside, band_map.pol,
                                   fwhm=band_map.fwhm_rad, lmax=band_map.lmax)
 
     def get_sky_at_nu(self, nu, nside, pols_required, fwhm=None, lmax=None):
@@ -97,11 +97,11 @@ class SkyModel:
             band = Band(np.zeros((len(view), hp.Alm.getsize(lmax)), dtype=np.complex64), nu,
                         np.degrees(fwhm)*60.0, nside)
             for comp in diffuse:
-                if comp.eval_pol in (view, "IQU"):
+                if comp.pol in (view, "IQU"):
                     comp.comp2band(band)
             skymap[rows] += alm_to_map(band.alms, nside, lmax, spin=spin)
         if "I" in pols_required:
             for comp in self._components:  # Point sources.
-                if not isinstance(comp, DiffuseComponent) and comp.eval_pol == "I":
+                if not isinstance(comp, DiffuseComponent) and comp.pol == "I":
                     skymap[0] += comp.get_sky(nu, nside, fwhm)[0]
         return skymap

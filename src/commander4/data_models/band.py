@@ -39,10 +39,9 @@ class Band:
         Initialize a Band class object with the metadata from band_map and an empty set of alms.
         """
         alm_len_complex = ((band_map.lmax+1)*(band_map.lmax+2))//2
-        npol = 2 if band_map.pol else 1
         dtype = np.complex128 if double_precision else np.complex64
-        return cls(np.zeros((npol, alm_len_complex), dtype=dtype), band_map.nu, band_map.fwhm,
-                   band_map.nside)
+        return cls(np.zeros((band_map.npol, alm_len_complex), dtype=dtype), band_map.nu,
+                   band_map.fwhm, band_map.nside)
 
     @property
     def alms(self):
@@ -70,9 +69,9 @@ class Band:
                                 f"{alms.ndim} != 2")
             
     @property
-    def is_pol(self):
-        """Whether the band has polarisation components."""
-        return self._alms.shape[0] != 1
+    def pol(self) -> str:
+        """The polarization of the band: "I" for one alm row, "QU" for two."""
+        return "I" if self._alms.shape[0] == 1 else "QU"
     
     @property
     def lmax(self):

@@ -75,8 +75,7 @@ class CompSepSolver:
         # For simplicity all array will have shapes (1, ...) for non-polarization
         # (and then (2, ...) for polarization).
         self.npol = band_map.npol
-        self.pol = band_map.pol
-        self.spin = 2 if self.pol else 0
+        self.spin = band_map.spin
 
         self.nthreads = nthreads
 
@@ -288,8 +287,8 @@ class CompSepSolver:
         bands.
         """
         master = self.my_rank == 0
-        pol_name = "QU" if self.band_map.pol else "Intensity"
-        max_iter = self.config.max_iter_pol if self.band_map.pol else self.config.max_iter
+        pol_name = "QU" if self.band_map.pol == "QU" else "Intensity"
+        max_iter = self.config.max_iter_pol if self.band_map.pol == "QU" else self.config.max_iter
 
         # Set comp beams to 0 (in theory they could be non-zero if the per-pix solver has ran).
         for comp in comp_list:
