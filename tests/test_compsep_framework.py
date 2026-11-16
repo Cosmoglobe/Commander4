@@ -6,7 +6,7 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.compsep.amplitude_sampling import _build_conditional_residual
+from commander4.compsep.amplitude_sampling import sample_amplitudes
 from commander4.compsep.processing import (
     MCMC_GROUP_DEFAULTS,
     _validate_component_lmax,
@@ -323,38 +323,39 @@ def test_mcmc_group_must_name_enabled_amplitude_groups() -> None:
                     mcmc=Bunch(beta=_dust_beta_block(), update_amplitude_groups=[group_name]))))
 
 
-def test_build_conditional_residual_subtracts_only_fixed_components() -> None:
+def test_an_amplitude_group_is_solved_against_the_band_minus_the_fixed_components() -> None:
+    """A group that names only CMB fits CMB to the band map minus the other components' sky.
+
+    The band map holds the sky of all three components. Solved against that residual, the CG
+    gives back the CMB amplitudes it was made from; solved against the full map, it would not.
+    The fixed components and the band map itself are left as they were.
+    """
     comp_list = _make_multi_comp_list()  # CMB, ThermalDust, FreeFree (all intensity views exist)
-    for comp in comp_list.split_for_pol("I"):
-        comp.amps = np.full_like(comp.amps, 3.0 + 0.0j)
+    rng = np.random.default_rng(3)
+    for comp in comp_list.split_for_pol("I"):  # Real alms, so they are valid at m = 0 too.
+        comp.amps[:] = rng.normal(0.0, 1.0, comp.amps.shape)
+    npix = 12*2**2
+    band_map = DetectorMap(np.zeros((1, npix)), np.ones((1, npix)), nu=30.0, fwhm=0.0, nside=2)
+    band_map.map_sky = comp_list.get_sky_at_band(band_map).astype(np.float64)
+    band_sky = band_map.map_sky.copy()
+    true_amps = [comp.amps.copy() for comp in comp_list]
+    cmb = comp_list.split_for_pol("I")[0]
+    cmb.amps[:] = 0.0
 
-    nside = 2
-    npix = 12 * nside**2
-    band_map = DetectorMap(
-        map_sky=np.full((1, npix), 7.0), map_inv_var=np.ones((1, npix)), nu=30.0, fwhm=60.0,
-        nside=nside)
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, is_master=True),
+                     band=Bunch(name="Planck30GHz", polarization="I"))
+    group = Bunch(name="cmb", comps=["CMB"], bands=["Planck30GHz"], optimize=True, max_iter=100,
+                  max_iter_pol=100, err_tol=1.0e-10, preconditioner="NoPreconditioner",
+                  solver_ranks={"I": [0], "QU": []}, solver_comm=MPI.COMM_SELF)
+    cfg = Bunch(cg_sampling_groups={"cmb": group}, double_precision=False, num_threads=1)
 
-    active = CompList([comp for comp in comp_list.split_for_pol("I")
-                       if comp.comp_name == "CMB"])
-    residual = _build_conditional_residual(band_map, comp_list, "I", active)
+    sample_amplitudes(mpi_info, cfg, group, band_map, comp_list, np.random.default_rng(0))
 
-    # The fixed components (everything but CMB) are exactly what should have been subtracted.
-    fixed = [c for c in comp_list.split_for_pol("I") if c.comp_name != "CMB"]
-    fixed_sky = CompList(fixed).get_sky_at_nu(30.0, nside, "I", fwhm=band_map.fwhm_rad)
-    assert residual is not band_map
-    assert np.any(fixed_sky != 0.0)  # subtraction is non-trivial
-    np.testing.assert_allclose(residual.map_sky, band_map.map_sky - fixed_sky, rtol=1e-5)
-    # The original map is left untouched.
-    np.testing.assert_array_equal(band_map.map_sky, np.full((1, npix), 7.0))
-
-
-def test_build_conditional_residual_is_noop_when_no_component_is_fixed() -> None:
-    comp_list = _make_multi_comp_list()
-    active = comp_list.split_for_pol("I")  # All components.
-    band_map = DetectorMap(
-        map_sky=np.ones((1, 48)), map_inv_var=np.ones((1, 48)), nu=30.0, fwhm=60.0, nside=2)
-    assert _build_conditional_residual(
-        band_map, comp_list, "I", active) is band_map
+    assert cmb.comp_name == "CMB"
+    np.testing.assert_allclose(cmb.amps, true_amps[0], atol=1e-3)
+    for comp, amps in zip(comp_list[1:], true_amps[1:]):
+        np.testing.assert_array_equal(comp.amps, amps)
+    np.testing.assert_array_equal(band_map.map_sky, band_sky)
 
 
 def test_band_sky_removes_amp_fwhm_by_quadrature() -> None:

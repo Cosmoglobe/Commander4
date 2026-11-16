@@ -4,8 +4,8 @@ An amplitude group names the components and the bands of one solve. `sample_ampl
 other components fixed, lets the ranks of the group's bands solve, and gives every CompSep rank
 the new amplitudes.
 """
+import copy
 import logging
-from copy import deepcopy
 
 import numpy as np
 from pixell.bunch import Bunch
@@ -16,30 +16,6 @@ from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
 
 logger = logging.getLogger(__name__)
-
-
-def _build_conditional_residual(band_map: DetectorMap, comp_list: CompList, pol: str,
-                                active_sublist: CompList) -> DetectorMap:
-    """Subtract the components held fixed by a sampling group from this band's map.
-
-    A sampling group that solves only a subset of components must be conditioned on the rest: the
-    fixed components' projected signal is removed from the data so the active components are fit
-    to the residual rather than the full observed sky (C3's ``compute_residual`` convention).
-    The fixed signal is realized at this band's data resolution; each fixed component removes its
-    own ``amp_fwhm_rad`` (deconvolved CG vs. data-resolution per-pixel) so the subtraction matches
-    the data and the solvers' data model. Returns `band_map` unchanged when no component is
-    fixed.
-    """
-    active_names = {comp.comp_name for comp in active_sublist}
-    fixed_comps = [comp for comp in comp_list.split_for_pol(pol)
-                   if comp.comp_name not in active_names]
-    if not fixed_comps:
-        return band_map
-    fixed_sky = CompList(fixed_comps).get_sky_at_band(band_map)
-    residual = deepcopy(band_map)
-    residual.map_sky = band_map.map_sky - fixed_sky.astype(band_map.map_sky.dtype,
-                                                           copy=False)
-    return residual
 
 
 def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: DetectorMap,
@@ -71,8 +47,17 @@ def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: Detec
     if compsep.rank in group.solver_ranks[band.polarization]:
         active_sublist = CompList([comp for comp in comp_list if comp.pol == band.polarization
                                    and comp.comp_name in group.comps])
-        residual_map = _build_conditional_residual(
-            band_map, comp_list, band.polarization, active_sublist)
+        # The group is solved conditioned on the components it does not name (C3's
+        # `compute_residual`): their sky at this band is subtracted from the band map, and the
+        # solvers fit the group's components to what is left. The shallow copy shares the noise
+        # map and the band settings with `band_map`; only its sky map is new.
+        fixed_comps = CompList([comp for comp in comp_list if comp.pol == band.polarization
+                                and comp.comp_name not in group.comps])
+        residual_map = band_map
+        if len(fixed_comps) > 0:
+            fixed_sky = fixed_comps.get_sky_at_band(band_map)
+            residual_map = copy.copy(band_map)
+            residual_map.map_sky = band_map.map_sky - fixed_sky.astype(band_map.map_sky.dtype)
         # Both solvers leave their solution in the components of `active_sublist`, which are the
         # chain's own components.
         if cfg.cg_sampling_groups:
