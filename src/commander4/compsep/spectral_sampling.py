@@ -9,10 +9,8 @@ here, make the lines marked "beta" below general. Do not copy the loop.
 """
 import logging
 
-import healpy as hp
 import numpy as np
 from mpi4py import MPI
-from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.compsep.amplitude_sampling import sample_amplitudes
@@ -23,39 +21,23 @@ from commander4.sky.comp_list import CompList
 logger = logging.getLogger(__name__)
 
 
-def resolve_chisq_mask(mask_map: NDArray | None, nside: int) -> NDArray[np.bool_] | None:
-    """Convert a raw HEALPix mask to a boolean keep-mask at `nside`, or None for full sky.
-
-    Follows C3's ``compute_chisq(maskpath=...)`` convention: ud_grade to the evaluation resolution,
-    then threshold at 0.5, so a partially-covered coarse pixel is kept only if more than half of it
-    was. True means "include this pixel in the chi-squared". A mask that keeps everything returns
-    None, so the likelihood takes the cheaper full-sky path.
-    """
-    if mask_map is None:
-        return None
-    mask_map = np.asarray(mask_map, dtype=np.float64)
-    if hp.npix2nside(mask_map.size) != nside:
-        mask_map = hp.ud_grade(mask_map, nside)
-    keep = mask_map > 0.5
-    return None if keep.all() else keep
-
-
 def chi2_of_chisq_bands(mpi_info: Bunch, group: Bunch, band_map: DetectorMap,
-                        comp_list: CompList, keep: NDArray[np.bool_] | slice) -> float:
+                        comp_list: CompList) -> float:
     """The chi-squared that an MCMC group judges a proposal by. Every CompSep rank calls it.
 
     It is the sum of ((data - model)/sigma)^2 over the bands in `group.chisq_bands`, as C3's
     ``compute_chisq``. The model is the sky of all components in `comp_list`, so the components
-    that the group does not sample enter it too. `keep` selects the pixels of this rank's band
-    that count (the group's `chisq_mask`).
+    that the group does not sample enter it too. Only the pixels in `group.chisq_pixels` count
+    (those the group's `chisq_mask` keeps, set at start-up).
     """
     band = mpi_info.band
     chi2 = 0.0
     if band.name in group.chisq_bands:
         model_sky = comp_list.get_sky_at_band(band_map)
-        residual = band_map.map_sky[:, keep] - model_sky[:, keep]
+        pixels = group.chisq_pixels
+        residual = band_map.map_sky[:, pixels] - model_sky[:, pixels]
         # An unobserved pixel has zero inverse variance, and adds nothing.
-        whitened_residual = residual*np.sqrt(band_map.map_inv_var[:, keep])
+        whitened_residual = residual*np.sqrt(band_map.map_inv_var[:, pixels])
         chi2 = float(np.sum(whitened_residual**2))
     return float(mpi_info.compsep.comm.allreduce(chi2, op=MPI.SUM))
 
@@ -88,10 +70,6 @@ def sample_spectral_params(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: 
         steps taken and accepted, and the final beta of each sampled component, by its shortname.
     """
     compsep = mpi_info.compsep
-    # The pixels of this band that enter the chi-squared: all, or those the group's mask keeps.
-    keep = resolve_chisq_mask(group.chisq_mask_map, band_map.nside)
-    if keep is None:
-        keep = slice(None)
     # The component objects of each sampled component: its I view and its QU view, which share
     # one beta.
     views = {name: [comp for comp in comp_list if comp.comp_name == name] for name in group.beta}
@@ -103,7 +81,7 @@ def sample_spectral_params(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: 
         old_betas = {name: float(views[name][0].beta) for name in group.beta}  # beta
         old_amps = [comp.amps.copy() for comp in comp_list]
         with benchmark("mcmc-loglike"):
-            old_chi2 = chi2_of_chisq_bands(mpi_info, group, band_map, comp_list, keep)
+            old_chi2 = chi2_of_chisq_bands(mpi_info, group, band_map, comp_list)
 
         # The master proposes a Gaussian step from the current value of each beta. A step that
         # leaves the hard bounds of any beta is rejected at once, without a solve (C3's p_uni).
@@ -130,7 +108,7 @@ def sample_spectral_params(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: 
                 sample_amplitudes(mpi_info, cfg, cfg.amplitude_groups[group_name], band_map,
                                   comp_list, rng)
         with benchmark("mcmc-loglike"):
-            new_chi2 = chi2_of_chisq_bands(mpi_info, group, band_map, comp_list, keep)
+            new_chi2 = chi2_of_chisq_bands(mpi_info, group, band_map, comp_list)
 
         # The Metropolis rule: accept with probability min(1, P_new/P_old). The proposal is
         # symmetric, so log(P_new/P_old) is the difference of -chi2/2 plus the difference of the

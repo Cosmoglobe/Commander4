@@ -139,7 +139,8 @@ def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
     # Compsep only runs with at least one enabled group, so use one that samples nothing (its
     # `beta` is empty): the group loop still runs, and its evaluation is the final fit.
     noop = Bunch(**MCMC_GROUP_DEFAULTS)
-    noop.name, noop.beta, noop.chisq_bands, noop.chisq_mask_map = "noop", {}, ["Planck30GHz"], None
+    noop.name, noop.beta, noop.chisq_bands = "noop", {}, ["Planck30GHz"]
+    noop.chisq_pixels = slice(None)
     cfg = Bunch(cg_sampling_groups={}, amplitude_groups={}, mcmc_sampling_groups={"noop": noop},
                 nside_chisq=1, include_chisq_map=True, include_residual_maps=False)
     monkeypatch.setattr(

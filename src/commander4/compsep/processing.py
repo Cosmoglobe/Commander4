@@ -134,31 +134,26 @@ def read_sampling_groups(params: Bunch) -> Bunch:
     return cfg
 
 
-def _read_chisq_masks(compsep_comm: MPI.Comm, mcmc_groups: dict[str, Bunch]) -> dict[str, NDArray]:
-    """Read each MCMC group's optional ``chisq_mask`` HEALPix file once, and broadcast it.
+def _read_chisq_mask(compsep_comm: MPI.Comm, path: str, nside: int) -> NDArray[np.bool_]:
+    """The pixels at `nside` that an MCMC group's chi-squared mask keeps (True = kept).
 
     This is C3's ``MCMC_SAMPLING_GROUP_CHISQ_MASK``: one mask per sampling group, applied to every
     band in that group's chi-squared, restricting which sky the accept/reject decision sees. It is
     deliberately *not* a per-band data mask: it does not enter the amplitude solve or the noise
     model, only the MCMC likelihood.
 
-    Read at native resolution and kept as-is; `resolve_chisq_mask` ud_grades and thresholds it to
-    each band's nside when the sampling group is built. Only field 0 is read (as on the TOD side),
-    so a single mask applies to both Q and U for polarization bands.
-
-    Returns:
-        Mapping from group name to its raw mask map, omitting groups that define no mask.
+    The CompSep master reads the file and broadcasts it. As in C3's ``compute_chisq``, the mask is
+    brought to `nside` and thresholded at 0.5, so a coarse pixel is kept only if more than half of
+    it was. Only field 0 is read (as on the TOD side), so one mask applies to Q and U alike.
     """
-    masks: dict[str, NDArray] = {}
+    mask = None
     if compsep_comm.Get_rank() == 0:
-        for group_name in mcmc_groups:
-            group = mcmc_groups[group_name]
-            if not group.chisq_mask:
-                continue
-            masks[group_name] = hp.read_map(group.chisq_mask, field=0, dtype=np.float64)
-            logger.info(f"CompSep: read chisq mask for MCMC group {group_name!r} from "
-                        f"{group.chisq_mask} (fsky = {np.mean(masks[group_name] > 0.5):.3f}).")
-    return compsep_comm.bcast(masks, root=0)
+        mask = hp.read_map(path, field=0, dtype=np.float64)
+        logger.info(f"CompSep: read chisq mask {path} (fsky = {np.mean(mask > 0.5):.3f}).")
+    mask = compsep_comm.bcast(mask, root=0)
+    if hp.npix2nside(mask.size) != nside:
+        mask = hp.ud_grade(mask, nside)
+    return mask > 0.5
 
 
 def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
@@ -252,10 +247,17 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
     cfg.nside_chisq = int(getattr(chains, "nside_chisq", 256))
     cfg.include_chisq_map = bool(getattr(chains.include, "chisq_map", False))
     cfg.include_residual_maps = bool(getattr(chains.include, "compsep_residual_maps", False))
-    # Each MCMC group's chi-squared mask, as the map in its `chisq_mask` file (None without one).
-    chisq_masks = _read_chisq_masks(mpi_info.compsep.comm, cfg.mcmc_sampling_groups)
+    # The pixels of this rank's band that enter each MCMC group's chi-squared: those its
+    # `chisq_mask` keeps, or all of them without a mask. The band map arrives at the band's
+    # `eval_nside` (TOD bands: in the experiment block; map bands: in the compsep block).
+    my_band = params.compsep.bands[mpi_info.band.name]
+    if my_band.get_from != "file":
+        my_band = params.experiments[my_band.get_from].bands[mpi_info.band.name]
     for group in cfg.mcmc_sampling_groups.values():
-        group.chisq_mask_map = chisq_masks.get(group.name)
+        group.chisq_pixels = slice(None)
+        if group.chisq_mask:
+            group.chisq_pixels = _read_chisq_mask(mpi_info.compsep.comm, group.chisq_mask,
+                                                  my_band.eval_nside)
     # The CompSep ranks that solve each amplitude group, by polarization, and the communicator they
     # solve on. A rank solves if the group names its band and a component of its polarization. View
     # i of `enabled_compsep_views` runs on CompSep rank i, so every rank knows this for all ranks.

@@ -59,7 +59,7 @@ def _make_setup(start_beta: float = TRUE_BETA, **beta_settings):
     settings = Bunch(proposal_sigma=0.1, bounds=None, prior_mean=None, prior_rms=None)
     settings.update(beta_settings)
     group = Bunch(name="betas", beta={"Synchrotron": settings}, update_amplitude_groups=[],
-                  numstep=1, chisq_bands=["Band60"], chisq_mask_map=None)
+                  numstep=1, chisq_bands=["Band60"], chisq_pixels=slice(None))
     return mpi_info, cfg, group, band_map, comp_list
 
 
