@@ -20,7 +20,7 @@ from commander4.sky.sky_model import SkyModel
 logger = logging.getLogger(__name__)
 
 
-def _build_conditional_residual(detector_data: DetectorMap, comp_list: CompList, target_pol: str,
+def _build_conditional_residual(band_map: DetectorMap, comp_list: CompList, target_pol: str,
                                 active_sublist: CompList) -> DetectorMap:
     """Subtract the components held fixed by a sampling group from this band's map.
 
@@ -29,22 +29,22 @@ def _build_conditional_residual(detector_data: DetectorMap, comp_list: CompList,
     to the residual rather than the full observed sky (C3's ``compute_residual`` convention).
     The fixed signal is realized at this band's data resolution; each fixed component removes its
     own ``amp_fwhm_rad`` (deconvolved CG vs. data-resolution per-pixel) so the subtraction matches
-    the data and the solvers' data model. Returns `detector_data` unchanged when no component is
+    the data and the solvers' data model. Returns `band_map` unchanged when no component is
     fixed.
     """
     active_names = {comp.comp_name for comp in active_sublist}
     fixed_comps = [comp for comp in comp_list.split_for_eval_pol(target_pol)
                    if comp.comp_name not in active_names]
     if not fixed_comps:
-        return detector_data
-    fixed_sky = SkyModel(CompList(fixed_comps)).get_sky_at_band(detector_data)
-    residual = deepcopy(detector_data)
-    residual.map_sky = detector_data.map_sky - fixed_sky.astype(detector_data.map_sky.dtype,
-                                                                copy=False)
+        return band_map
+    fixed_sky = SkyModel(CompList(fixed_comps)).get_sky_at_band(band_map)
+    residual = deepcopy(band_map)
+    residual.map_sky = band_map.map_sky - fixed_sky.astype(band_map.map_sky.dtype,
+                                                           copy=False)
     return residual
 
 
-def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, detector_data: DetectorMap,
+def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: DetectorMap,
                       comp_list: CompList, rng: np.random.Generator) -> dict:
     """Sample the amplitudes of one amplitude group. Every CompSep rank calls it.
 
@@ -54,7 +54,7 @@ def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, detector_data: 
         mpi_info: The MPI data of this rank (`compsep` and `band` are used).
         cfg: The settings of component separation, from `init_compsep_processing`.
         group: The settings of the group to solve, one of `cfg.amplitude_groups`.
-        detector_data: This rank's band map.
+        band_map: This rank's band map.
         comp_list: The full component list of the chain.
         rng: This rank's random generator, for the fluctuation terms of the amplitude draw.
 
@@ -73,12 +73,12 @@ def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, detector_data: 
     cg_stats: dict = {}
     solver_comm = compsep.subcomm.Split(0 if should_solve else MPI.UNDEFINED, key=compsep.rank)
     if should_solve:
-        residual_data = _build_conditional_residual(
-            detector_data, comp_list, band.polarization, active_sublist)
+        residual_map = _build_conditional_residual(
+            band_map, comp_list, band.polarization, active_sublist)
         # Both solvers leave their solution in the components of `active_sublist`, which are the
         # chain's own components.
         if cfg.cg_sampling_groups:
-            solver = CompSepSolver(residual_data, solver_comm, group,
+            solver = CompSepSolver(residual_map, solver_comm, group,
                                    double_precision=cfg.double_precision,
                                    nthreads=cfg.num_threads)
             solver.solve(active_sublist, rng)
@@ -88,7 +88,7 @@ def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, detector_data: 
                 cg_stats = {"cg_residuals": np.asarray(solver.CG_residuals),
                             "n_iter": len(solver.CG_residuals)}
         else:
-            solve_compsep_perpix(solver_comm, residual_data, active_sublist,
+            solve_compsep_perpix(solver_comm, residual_map, active_sublist,
                                  double_precision=cfg.double_precision,
                                  nthreads=cfg.num_threads, rng=rng)
         solver_comm.Free()

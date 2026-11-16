@@ -448,15 +448,15 @@ class DiffuseComponent(Component):
 
         if self.cfg.spatially_varying_MM:  # If this component's mixing matrix is pixel-dependent.
             # Y^-1^T B^T a
-            band_map = map_to_alm_adjoint(tmp_alm, band.nside, band.lmax, spin=self.spin,
-                                          out=None, nthreads=nthreads)
+            pix_map = map_to_alm_adjoint(tmp_alm, band.nside, band.lmax, spin=self.spin,
+                                         out=None, nthreads=nthreads)
 
             # M^T Y^-1 B^T a
             for ipol in range(self.npol):
-                inplace_scale(band_map[ipol], self.get_sed(band.nu))
+                inplace_scale(pix_map[ipol], self.get_sed(band.nu))
 
             # Y^T M^T Y^-1^T B^T a
-            tmp_alm = alm_to_map_adjoint(band_map, band.nside, band.lmax, spin=self.spin, out=None,
+            tmp_alm = alm_to_map_adjoint(pix_map, band.nside, band.lmax, spin=self.spin, out=None,
                                          nthreads=nthreads)
         else:
             for ipol in range(self.npol):  # M^T B^T a

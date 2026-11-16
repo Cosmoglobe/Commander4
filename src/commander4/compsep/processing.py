@@ -300,7 +300,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
     return comp_lists_by_chain, mpi_info, band_identifier, my_band, cfg
 
 
-def process_compsep(mpi_info: Bunch, cfg: Bunch, detector_data: DetectorMap, iter: int, chain: int,
+def process_compsep(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, iter: int, chain: int,
                     params: Bunch, comp_list: CompList, rng: np.random.Generator) -> SkyModel:
     """One Gibbs iteration of component separation. Every CompSep rank calls it.
 
@@ -311,8 +311,8 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, detector_data: DetectorMap, ite
     Args:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
         cfg (Bunch): The settings of component separation, from `init_compsep_processing`.
-        detector_data (DetectorMap): The detector map for this rank's band, cleaned of all "TOD"
-            components (correlated noise and orbital dipole).
+        band_map (DetectorMap): This rank's band map, cleaned of all "TOD" components
+            (correlated noise and orbital dipole).
         iter (int): The current Gibbs iteration (used only for logging and the chain file).
         chain (int): The current chain (used only for logging and the chain file).
         params (Bunch): The parameters from the input parameter file.
@@ -336,27 +336,26 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, detector_data: DetectorMap, ite
     # amplitudes again, so that the chain holds amplitudes solved at the final spectral parameters.
     for group in cfg.amplitude_groups.values():
         with benchmark(f"amp-{group.name}"):
-            cg_stats = sample_amplitudes(mpi_info, cfg, group, detector_data, comp_list, rng)
+            cg_stats = sample_amplitudes(mpi_info, cfg, group, band_map, comp_list, rng)
         if cg_stats:
             sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
-        fit = evaluate_chi2(mpi_info, cfg, detector_data, sky_model,
+        fit = evaluate_chi2(mpi_info, cfg, band_map, sky_model,
                             label=f"{method} group {group.name!r}")
 
     for group in cfg.mcmc_sampling_groups.values():
         with benchmark(f"mcmc-{group.name}"):
-            mcmc_stats = sample_spectral_params(mpi_info, cfg, group, detector_data, comp_list,
-                                                rng)
+            mcmc_stats = sample_spectral_params(mpi_info, cfg, group, band_map, comp_list, rng)
         sampler_stats.setdefault("mcmc", {})[group.name] = mcmc_stats
-        fit = evaluate_chi2(mpi_info, cfg, detector_data, sky_model,
+        fit = evaluate_chi2(mpi_info, cfg, band_map, sky_model,
                             label=f"MCMC group {group.name!r}")
 
     if cfg.mcmc_sampling_groups:
         for group in cfg.amplitude_groups.values():
             with benchmark(f"amp-{group.name}"):
-                cg_stats = sample_amplitudes(mpi_info, cfg, group, detector_data, comp_list, rng)
+                cg_stats = sample_amplitudes(mpi_info, cfg, group, band_map, comp_list, rng)
             if cg_stats:
                 sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
-            fit = evaluate_chi2(mpi_info, cfg, detector_data, sky_model,
+            fit = evaluate_chi2(mpi_info, cfg, band_map, sky_model,
                                 label=f"{method} group {group.name!r}")
 
     with benchmark("chain-gather"):

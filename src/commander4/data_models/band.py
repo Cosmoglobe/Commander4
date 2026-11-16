@@ -34,15 +34,15 @@ class Band:
         self.map = None
 
     @classmethod
-    def init_from_detector(cls, det_map:DetectorMap, double_precision:bool=False):
+    def init_from_detector(cls, band_map:DetectorMap, double_precision:bool=False):
         """
-        Initialize a Band class object with the metadata from det_map and an empty set of alms.
+        Initialize a Band class object with the metadata from band_map and an empty set of alms.
         """
-        alm_len_complex = ((det_map.lmax+1)*(det_map.lmax+2))//2
-        npol = 2 if det_map.pol else 1
+        alm_len_complex = ((band_map.lmax+1)*(band_map.lmax+2))//2
+        npol = 2 if band_map.pol else 1
         dtype = np.complex128 if double_precision else np.complex64
-        return cls(np.zeros((npol, alm_len_complex), dtype=dtype), det_map.nu, det_map.fwhm,
-                   det_map.nside)
+        return cls(np.zeros((npol, alm_len_complex), dtype=dtype), band_map.nu, band_map.fwhm,
+                   band_map.nside)
 
     @property
     def alms(self):

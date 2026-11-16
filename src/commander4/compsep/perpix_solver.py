@@ -18,7 +18,7 @@ from commander4.data_models.detector_map import DetectorMap
 from commander4.diagnostics.performance import benchmark
 
 
-def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
+def solve_compsep_perpix(proc_comm: MPI.Comm, band_map: DetectorMap,
                          comp_list: list[Component],
                          double_precision: bool, nthreads: int,
                          rng: np.random.Generator) -> list[Component]:
@@ -45,16 +45,16 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
         complex_dtype = np.complex64
         real_dtype = np.float32
 
-    npol = detector_data.npol
-    pol = detector_data.pol
+    npol = band_map.npol
+    pol = band_map.pol
     spin = 2 if pol else 0
-    map_sky = detector_data.map_sky
-    band_freq = detector_data.nu
-    map_inv_var = detector_data.map_inv_var  # Zero where unobserved.
+    map_sky = band_map.map_sky
+    band_freq = band_map.nu
+    map_inv_var = band_map.map_inv_var  # Zero where unobserved.
 
     # This solver has no beam model, so all bands should already share one resolution (smoothed at
     # ingest via compsep.common_res_fwhm); differing FWHMs silently mix resolutions, so warn.
-    all_fwhm = proc_comm.allgather(detector_data.fwhm)
+    all_fwhm = proc_comm.allgather(band_map.fwhm)
     if not np.allclose(all_fwhm, all_fwhm[0]):
         logger.warning(f"Per-pixel solver received bands at differing resolutions {all_fwhm}; the "
                        "result mixes resolutions. Set compsep.common_res_fwhm to a common beam.")
@@ -65,7 +65,7 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
         all_map_sky = proc_comm.gather(map_sky, root=0)
         all_map_inv_var = proc_comm.gather(map_inv_var, root=0)
 
-    nside = detector_data.nside
+    nside = band_map.nside
     npix = 12*nside**2
     comp_maps = [None, None] if pol else [None]
     if proc_comm.Get_rank() == 0:  # Unfortunately, only master rank does the work.
@@ -112,6 +112,6 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, detector_data: DetectorMap,
             comp_list[icomp].amps = comp_alms.astype(complex_dtype, copy=False)
             # These amplitudes are component maps at the data resolution; record that beam so the
             # forward model applies no extra smoothing when predicting a band at this resolution.
-            comp_list[icomp].amp_fwhm_rad = detector_data.fwhm_rad
+            comp_list[icomp].amp_fwhm_rad = band_map.fwhm_rad
 
     return comp_list

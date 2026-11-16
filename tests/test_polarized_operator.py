@@ -52,7 +52,7 @@ class _DummyBand:
 class _DummyCompSep:
     def __init__(self, map_inv_var: np.ndarray, lmax: int):
         self.CompSep_comm = MPI.COMM_SELF
-        self.det_map = _DummyDetectorMap(map_inv_var, lmax)
+        self.band_map = _DummyDetectorMap(map_inv_var, lmax)
         self.my_band = _DummyBand(nu=100.0, fwhm=0.0)
 
 

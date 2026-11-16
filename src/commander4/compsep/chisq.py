@@ -66,7 +66,7 @@ class ChisqResult(NamedTuple):
     band: BandFit
 
 
-def evaluate_chi2(mpi_info: Bunch, cfg: Bunch, detector_data: DetectorMap, sky_model: SkyModel,
+def evaluate_chi2(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, sky_model: SkyModel,
                   label: str | None = None) -> ChisqResult:
     """Whiten this band's residual against the current sky model and reduce it over all bands.
 
@@ -78,27 +78,27 @@ def evaluate_chi2(mpi_info: Bunch, cfg: Bunch, detector_data: DetectorMap, sky_m
         cfg: The settings of component separation. `nside_chisq` is the resolution of the
             chi-squared map (C3's `NSIDE_CHISQ`). With `include_residual_maps`, the result also
             keeps the full-resolution `data - model` map, for the chain's residual maps.
-        detector_data: This rank's band map, its inverse-noise map and its beam.
+        band_map: This rank's band map, its inverse-noise map and its beam.
         sky_model: The model to fit, realized at the band's frequency and resolution.
         label: When given, the name of the sampling step just taken; logs a per-band and an all-band
             fit summary under it. `None` evaluates silently.
     """
     compsep = mpi_info.compsep
-    sky_at_band = sky_model.get_sky_at_band(detector_data)
-    pol_names = ["Q", "U"] if detector_data.pol else ["I"]
-    npix, npix_chisq = detector_data.map_sky.shape[-1], hp.nside2npix(cfg.nside_chisq)
+    sky_at_band = sky_model.get_sky_at_band(band_map)
+    pol_names = ["Q", "U"] if band_map.pol else ["I"]
+    npix, npix_chisq = band_map.map_sky.shape[-1], hp.nside2npix(cfg.nside_chisq)
     # ud_grade averages, so scaling by how many fine pixels fall in a coarse one turns the average
     # into the sum over them that Commander3's chisq map accumulates (comm_output_mod.f90).
     subpixels_per_chisq_pixel = npix // npix_chisq
 
     chi2_map = np.zeros((3, npix_chisq))
-    residual = np.zeros_like(detector_data.map_sky) if cfg.include_residual_maps else None
+    residual = np.zeros_like(band_map.map_sky) if cfg.include_residual_maps else None
     chi2_local, ndof_local = 0.0, 0
-    for ipol in range(detector_data.npol):
+    for ipol in range(band_map.npol):
         # An unobserved pixel has zero inverse-noise weight, and contributes no degree of freedom.
-        observed = detector_data.map_inv_var[ipol] > 0
-        full_residual = detector_data.map_sky[ipol] - sky_at_band[ipol]
-        z = full_residual[observed]*np.sqrt(detector_data.map_inv_var[ipol][observed])
+        observed = band_map.map_inv_var[ipol] > 0
+        full_residual = band_map.map_sky[ipol] - sky_at_band[ipol]
+        z = full_residual[observed]*np.sqrt(band_map.map_inv_var[ipol][observed])
         chi2_local += np.sum(z**2, dtype=np.float64)
         ndof_local += z.size
         if residual is not None:
@@ -106,12 +106,12 @@ def evaluate_chi2(mpi_info: Bunch, cfg: Bunch, detector_data: DetectorMap, sky_m
 
         z2_full = np.zeros(npix)
         z2_full[observed] = z**2
-        chi2_row = 1 + ipol if detector_data.pol else 0
+        chi2_row = 1 + ipol if band_map.pol else 0
         chi2_map[chi2_row] += hp.ud_grade(z2_full, cfg.nside_chisq)*subpixels_per_chisq_pixel
 
         if label is not None:
             logger.verbose(f"Fit after {label} on rank {compsep.rank} for pol={pol_names[ipol]} "
-                           f"({detector_data.nu}GHz): mean|z|={np.mean(np.abs(z)):.3f}, "
+                           f"({band_map.nu}GHz): mean|z|={np.mean(np.abs(z)):.3f}, "
                            f"red.chi2={np.mean(z**2):.3f} (ndof={z.size}).")
 
     total = float(compsep.comm.allreduce(chi2_local, op=MPI.SUM))
@@ -120,7 +120,7 @@ def evaluate_chi2(mpi_info: Bunch, cfg: Bunch, detector_data: DetectorMap, sky_m
         logger.info(f"Fit after {label}, all bands: chi2={total:.6e}, ndof={ndof}, "
                     f"red.chi2={total/ndof:.4f}")
     band = BandFit(band_name=mpi_info.band.name, pol=mpi_info.band.polarization,
-                   nu=float(detector_data.nu), chi2=float(chi2_local), ndof=int(ndof_local),
+                   nu=float(band_map.nu), chi2=float(chi2_local), ndof=int(ndof_local),
                    chi2_map=chi2_map, residual=residual)
     return ChisqResult(total=total, ndof=ndof, band=band)
 

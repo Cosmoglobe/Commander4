@@ -44,11 +44,11 @@ class CompSepSolver:
             = S^{1/2} Y^T M^T {Y^{-1}}^T B^T N^{-1} d
             + S^{1/2}A^TN^{-1/2} eta_1 + S^{-1/2} mu + eta_2.
     """
-    def __init__(self, det_map: DetectorMap, CompSep_comm: MPI.Comm, group: Bunch,
+    def __init__(self, band_map: DetectorMap, CompSep_comm: MPI.Comm, group: Bunch,
                  double_precision: bool, nthreads: int):
         """
         Args:
-            det_map: This rank's band data (the conditional residual for this sampling group).
+            band_map: This rank's band data (the conditional residual for this sampling group).
             CompSep_comm: The communicator of the ranks collaborating on this solve.
             group: The settings of this CG sampling group (`compsep.cg_sampling_groups.<name>`
                 in the parameter file, with defaults filled in).
@@ -57,10 +57,10 @@ class CompSepSolver:
         """
         self.CompSep_comm = CompSep_comm
         self.my_rank = CompSep_comm.Get_rank()
-        self.det_map = det_map
+        self.band_map = band_map
         self.config = group
         self.double_precision = double_precision
-        self.my_band = Band.init_from_detector(det_map = det_map,
+        self.my_band = Band.init_from_detector(band_map = band_map,
                                                double_precision = double_precision)
 
         if not double_precision:
@@ -74,8 +74,8 @@ class CompSepSolver:
 
         # For simplicity all array will have shapes (1, ...) for non-polarization
         # (and then (2, ...) for polarization).
-        self.npol = det_map.npol
-        self.pol = det_map.pol
+        self.npol = band_map.npol
+        self.pol = band_map.pol
         self.spin = 2 if self.pol else 0
 
         self.nthreads = nthreads
@@ -139,16 +139,16 @@ class CompSepSolver:
         # comp2band painted them into `band.map` (None without point sources), and they read
         # N^-1 (...) back from it. Diffuse components go through Y and Y^T.
         with benchmark("lhs-inv-N"):
-            band, det_map = self.my_band, self.det_map
-            band_map = alm_to_map(band.alms, det_map.nside, det_map.lmax, spin=det_map.spin,
-                                  nthreads=self.nthreads)
+            band, band_map = self.my_band, self.band_map
+            pix_map = alm_to_map(band.alms, band_map.nside, band_map.lmax, spin=band_map.spin,
+                                 nthreads=self.nthreads)
             if band.map is not None:
-                band_map += band.map
-            det_map.apply_inv_N_map(band_map)
+                pix_map += band.map
+            band_map.apply_inv_N_map(pix_map)
             if band.map is not None:
-                band.map = band_map
-            band.alms = alm_to_map_adjoint(band_map, det_map.nside, det_map.lmax,
-                                           spin=det_map.spin, nthreads=self.nthreads)
+                band.map = pix_map
+            band.alms = alm_to_map_adjoint(pix_map, band_map.nside, band_map.lmax,
+                                           spin=band_map.spin, nthreads=self.nthreads)
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         with benchmark("lhs-eval"):
@@ -212,18 +212,18 @@ class CompSepSolver:
         myrank = self.CompSep_comm.Get_rank()
 
         # N^-1 d
-        b_map = self.det_map.apply_inv_N_map(self.det_map.map_sky, inplace=False)
+        b_map = self.band_map.apply_inv_N_map(self.band_map.map_sky, inplace=False)
         if self.sample_amplitudes:
             # + N^{-1/2} eta_1. Drawn per band and independently on every rank, as it must be:
             # eta_1 is the white-noise realization of *this* band's data. Zero-weight pixels
             # (unobserved, map_inv_var = 0) get no fluctuation, matching their absence from the LHS.
-            eta_1 = rng.normal(0.0, 1.0, b_map.shape)*np.sqrt(self.det_map.map_inv_var)
+            eta_1 = rng.normal(0.0, 1.0, b_map.shape)*np.sqrt(self.band_map.map_inv_var)
             logger.debug(f"RHS |N^-1 d| = {np.mean(np.abs(b_map)):.2e}, "
                          f"|N^-1/2 eta_1| = {np.mean(np.abs(eta_1)):.2e}")
             b_map += eta_1.astype(b_map.dtype, copy=False)
 
         # Y^T (N^-1 d + N^{-1/2} eta_1)
-        b_band = Band.init_from_detector(det_map=self.det_map,
+        b_band = Band.init_from_detector(band_map=self.band_map,
                                          double_precision=self.double_precision)
         b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin,
                                    nthreads=self.nthreads)
@@ -288,8 +288,8 @@ class CompSepSolver:
         bands.
         """
         master = self.my_rank == 0
-        pol_name = "QU" if self.det_map.pol else "Intensity"
-        max_iter = self.config.max_iter_pol if self.det_map.pol else self.config.max_iter
+        pol_name = "QU" if self.band_map.pol else "Intensity"
+        max_iter = self.config.max_iter_pol if self.band_map.pol else self.config.max_iter
 
         # Set comp beams to 0 (in theory they could be non-zero if the per-pix solver has ran).
         for comp in comp_list:
