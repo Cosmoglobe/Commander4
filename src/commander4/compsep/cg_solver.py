@@ -60,8 +60,9 @@ class CompSepSolver:
         self.band_map = band_map
         self.config = group
         self.double_precision = double_precision
-        self.my_band = Band.init_from_detector(band_map = band_map,
-                                               double_precision = double_precision)
+        # This rank's band in harmonic space: the alms (and the pixel map of the point sources)
+        # that the components are projected to and read back from in each CG iteration.
+        self.band_alms = Band.init_from_detector(band_map, double_precision=double_precision)
 
         if not double_precision:
             self.float_dtype = np.float32
@@ -127,31 +128,31 @@ class CompSepSolver:
         # B Y^-1 M Y S^{1/2} a. Each component adds itself to the emptied band: a diffuse component
         # to its alms, point sources to its pixel map.
         with benchmark("lhs-project"):
-            self.my_band.alms[:] = 0
-            if self.my_band.map is not None:
-                self.my_band.map[:] = 0
+            self.band_alms.alms[:] = 0
+            if self.band_alms.map is not None:
+                self.band_alms.map[:] = 0
             for comp in comp_list:
-                comp.comp2band(self.my_band, nthreads=self.nthreads)
+                comp.comp2band(self.band_alms, nthreads=self.nthreads)
 
         # Y^T N^-1 Y B Y^-1 M Y S^{1/2} a. Point sources are added in pixel space, as in C3:
-        # comp2band painted them into `band.map` (None without point sources), and they read
+        # comp2band painted them into `band_alms.map` (None without point sources), and they read
         # N^-1 (...) back from it. Diffuse components go through Y and Y^T.
         with benchmark("lhs-inv-N"):
-            band, band_map = self.my_band, self.band_map
-            pix_map = alm_to_map(band.alms, band_map.nside, band_map.lmax, spin=band_map.spin,
+            band_alms, band_map = self.band_alms, self.band_map
+            pix_map = alm_to_map(band_alms.alms, band_map.nside, band_map.lmax, spin=band_map.spin,
                                  nthreads=self.nthreads)
-            if band.map is not None:
-                pix_map += band.map
+            if band_alms.map is not None:
+                pix_map += band_alms.map
             band_map.apply_inv_N_map(pix_map)
-            if band.map is not None:
-                band.map = pix_map
-            band.alms = alm_to_map_adjoint(pix_map, band_map.nside, band_map.lmax,
-                                           spin=band_map.spin, nthreads=self.nthreads)
+            if band_alms.map is not None:
+                band_alms.map = pix_map
+            band_alms.alms = alm_to_map_adjoint(pix_map, band_map.nside, band_map.lmax,
+                                                spin=band_map.spin, nthreads=self.nthreads)
 
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         with benchmark("lhs-eval"):
             for comp in comp_list:
-                comp.band2comp(self.my_band, nthreads=self.nthreads)
+                comp.band2comp(self.band_alms, nthreads=self.nthreads)
 
         # Accumulate solution on master
         with benchmark("lhs-accum"):
@@ -222,8 +223,8 @@ class CompSepSolver:
         # Y^T (N^-1 d + N^{-1/2} eta_1)
         b_band = Band.init_from_detector(band_map=self.band_map,
                                          double_precision=self.double_precision)
-        b_alm = alm_to_map_adjoint(b_map, self.my_band.nside, self.my_band.lmax, spin=self.spin,
-                                   nthreads=self.nthreads)
+        b_alm = alm_to_map_adjoint(b_map, self.band_alms.nside, self.band_alms.lmax,
+                                   spin=self.spin, nthreads=self.nthreads)
         b_band.alms = b_alm.astype(b_band.alms.dtype, copy=False)
         # Point sources read the pixel map itself, as in the LHS.
         b_band.map = b_map

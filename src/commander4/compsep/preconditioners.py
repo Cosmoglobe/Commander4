@@ -58,9 +58,9 @@ class DiagonalJointPreconditioner:
         # Gather all necessary per-band information from all ranks (all ranks hold a band).
         # TODO: Currently the master rank temporarily has to hold ALL inverse-variance bands.
         # It would be easy to re-write this so they send them one-and-one as we make the diagonal.
-        all_fwhm_rad = compsep.CompSep_comm.gather(np.deg2rad(compsep.my_band.fwhm/60), root=0)
+        all_fwhm_rad = compsep.CompSep_comm.gather(np.deg2rad(compsep.band_alms.fwhm/60), root=0)
         all_map_inv_var = compsep.CompSep_comm.gather(compsep.band_map.map_inv_var, root=0)
-        all_freqs = compsep.CompSep_comm.gather(compsep.my_band.nu, root=0)
+        all_freqs = compsep.CompSep_comm.gather(compsep.band_alms.nu, root=0)
 
         # We can now get rid of the ranks that do not hold components.
         if not self.is_master:
@@ -202,9 +202,9 @@ class JointPreconditioner:
 
         # Gather the band-local ingredients needed to build the isotropic approximation. Every rank
         # holds one band, but only the master rank actually assembles the small dense blocks.
-        all_fwhm_rad = compsep.CompSep_comm.gather(np.deg2rad(compsep.my_band.fwhm/60), root=0)
+        all_fwhm_rad = compsep.CompSep_comm.gather(np.deg2rad(compsep.band_alms.fwhm/60), root=0)
         all_map_inv_var = compsep.CompSep_comm.gather(compsep.band_map.map_inv_var, root=0)
-        all_freqs = compsep.CompSep_comm.gather(compsep.my_band.nu, root=0)
+        all_freqs = compsep.CompSep_comm.gather(compsep.band_alms.nu, root=0)
         all_band_lmax = compsep.CompSep_comm.gather(compsep.band_map.lmax, root=0)
 
         # Worker ranks participate in the gather above, but the actual block construction is done
