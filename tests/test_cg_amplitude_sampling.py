@@ -68,8 +68,8 @@ def _make_comp_list(params: Bunch, Cl_prior_amplitude: float | None = None) -> C
     cmb = Bunch(enabled=True, component_class="CMB",
                 params=Bunch(lmax=LMAX, polarization="I", shortname="cmb",
                              spatially_varying_MM=False, Cl_prior_amplitude=Cl_prior_amplitude))
-    object.__setattr__(cmb, "_name", "CMB")
-    comp_list = CompList.init_from_params(Bunch({"CMB": cmb}), params)
+    comp_list = CompList.init_from_params(Bunch(components=Bunch(CMB=cmb),
+                                                compsep=params.compsep))
     for comp in comp_list:
         comp.amps[:] = 0.0
     return comp_list
@@ -261,13 +261,14 @@ def test_the_lhs_couples_a_diffuse_component_and_point_sources_symmetrically(tmp
     with open(tmp_path / "radio.dat", "w") as handle:
         handle.write("# Glon(deg) Glat(deg) I(mJy) alpha_I\n0.0 0.0 1.0 -0.7\n40.0 20.0 1.0 -0.5\n")
     params = _make_params()
-    source_params = Bunch(shortname="radsources", nu_0=30.0,
-                          template_path=str(tmp_path/"radio.dat"))
+    source = Bunch(params=Bunch(polarization="I", nu_0=30.0,
+                                template_path=str(tmp_path/"radio.dat")))
+    source_params = Bunch(components=Bunch(radsources=source), compsep=params.compsep)
     rng = np.random.default_rng(0)
     vectors = []
     for random_comp in (0, 1):
         comps = _make_comp_list(params, Cl_prior_amplitude=1.0).components
-        comps.append(RadioSources(source_params, params.compsep, comp_name="radsources"))
+        comps.append(RadioSources(source_params, "radsources", "I"))
         comps[1].amps[:] = 0.0
         if random_comp == 0:
             comps[0].amps[:] = gaussian_random_alm(LMAX, LMAX, 0, 1, rng)
@@ -375,8 +376,8 @@ class TestPriorMean:
                     params=Bunch(lmax=LMAX, polarization="I", shortname="cmb",
                                  spatially_varying_MM=False, Cl_prior_amplitude=1.0e3,
                                  Cl_prior_beta=-2.0, Cl_prior_l_pivot=2))
-        object.__setattr__(cmb, "_name", "CMB")
-        comp_list = CompList.init_from_params(Bunch({"CMB": cmb}), params)
+        comp_list = CompList.init_from_params(Bunch(components=Bunch(CMB=cmb),
+                                                    compsep=params.compsep))
         for comp in comp_list:
             comp.amps[:] = 0.0
         return comp_list
@@ -448,8 +449,8 @@ class TestPriorMeanMap:
             hp.write_map(str(path), prior_map, overwrite=True)
             fields["amp_prior_mean_map"] = str(path)
         cmb = Bunch(enabled=True, component_class="CMB", params=Bunch(**fields))
-        object.__setattr__(cmb, "_name", "CMB")
-        comp_list = CompList.init_from_params(Bunch({"CMB": cmb}), params)
+        comp_list = CompList.init_from_params(Bunch(components=Bunch(CMB=cmb),
+                                                    compsep=params.compsep))
         for comp in comp_list:
             comp.amps[:] = 0.0
         return comp_list

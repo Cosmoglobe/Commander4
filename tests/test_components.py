@@ -30,12 +30,13 @@ def _make_component_cfg(polarization: str = "IQU") -> Bunch:
     )
 
 
-def _make_comp_list(polarization: str = "IQU", ntask_compsep_qu: int = 1) -> CompList:
-    params = Bunch(compsep=_make_compsep(ntask_compsep_qu))
-    cmb = _make_component_cfg(polarization)
-    object.__setattr__(cmb, "_name", "cmb")
-    components = Bunch({"cmb": cmb})
-    return CompList.init_from_params(components, params)
+def _make_params(**components: Bunch) -> Bunch:
+    """A parameter file with the given component blocks, by component name."""
+    return Bunch(components=Bunch(**components), compsep=_make_compsep())
+
+
+def _make_comp_list(polarization: str = "IQU") -> CompList:
+    return CompList.init_from_params(_make_params(cmb=_make_component_cfg(polarization)))
 
 
 def _make_named_component_cfg(shortname: str, polarization: str = "IQU") -> Bunch:
@@ -47,14 +48,8 @@ def _make_named_component_cfg(shortname: str, polarization: str = "IQU") -> Bunc
 def test_init_from_params_builds_all_defined_pol_views() -> None:
     # Construction is independent of the MPI/compsep layout: an IQU component always yields both an
     # I and a QU view, even when zero compsep ranks are configured.
-    params = Bunch(compsep=_make_compsep(ntask_compsep_qu=0, ntask_compsep_i=0))
-    cmb = _make_named_component_cfg("cmb", "IQU")
-    object.__setattr__(cmb, "_name", "cmb")
-    ff = _make_named_component_cfg("ff", "I")
-    object.__setattr__(ff, "_name", "ff")
-    components = Bunch({"cmb": cmb, "ff": ff})
-
-    comp_list = CompList.init_from_params(components, params)
+    comp_list = CompList.init_from_params(_make_params(
+        cmb=_make_named_component_cfg("cmb", "IQU"), ff=_make_named_component_cfg("ff", "I")))
 
     assert [(comp.comp_name, comp.eval_pol) for comp in comp_list] == [
         ("cmb", "I"), ("cmb", "QU"), ("ff", "I")]
@@ -94,7 +89,7 @@ def test_complist_copy_has_its_own_amplitudes_and_shares_the_rest() -> None:
     assert [comp.eval_pol for comp in copied] == ["I", "QU"]
     assert all(np.all(comp.amps == 1.0 + 0.0j) for comp in comp_list)
     assert all(np.all(comp.amps == 0.0) for comp in zeros)
-    assert all(new.comp_params is old.comp_params for new, old in zip(copied, comp_list))
+    assert all(new.cfg is old.cfg for new, old in zip(copied, comp_list))
 
 
 def test_complist_vector_arithmetic_acts_on_every_component() -> None:
@@ -129,10 +124,10 @@ def test_complist_split_for_eval_pol_rejects_invalid_polarization() -> None:
 
 
 def test_point_sources_component_rejects_non_intensity_eval_pol() -> None:
-    params = Bunch(shortname="ps")
+    params = _make_params(ps=Bunch(params=Bunch(polarization="I", shortname="ps")))
 
-    with pytest.raises(ValueError, match="does not support evaluation polarization 'QU'"):
-        PointSourcesComponent(params, _make_compsep(), comp_name="ps", eval_pol="QU")
+    with pytest.raises(ValueError, match="a PointSourcesComponent has no 'QU' view"):
+        PointSourcesComponent(params, "ps", "QU")
 
 
 def test_complist_split_for_eval_pol_returns_requested_execution_view() -> None:
@@ -146,24 +141,24 @@ def test_complist_split_for_eval_pol_returns_requested_execution_view() -> None:
 
 def test_init_from_params_rejects_one_shortname_for_two_components() -> None:
     """The chain stores each component under its shortname."""
-    params = Bunch(compsep=_make_compsep())
-    cmb = _make_named_component_cfg("same", "IQU")
-    object.__setattr__(cmb, "_name", "cmb")
-    dust = _make_named_component_cfg("same", "I")
-    object.__setattr__(dust, "_name", "dust")
+    params = _make_params(cmb=_make_named_component_cfg("same", "IQU"),
+                          dust=_make_named_component_cfg("same", "I"))
 
     with pytest.raises(ValueError, match="Shortname 'same' is used for both 'cmb' and 'dust'"):
-        CompList.init_from_params(Bunch({"cmb": cmb, "dust": dust}), params)
+        CompList.init_from_params(params)
 
 
-def _make_list(*configs: tuple[str, str]) -> CompList:
-    """A component list of CMB-class components, one per (name, polarization), with lmax 1."""
+def _make_list(*configs: tuple[str, str], **settings) -> CompList:
+    """A component list of CMB-class components, one per (name, polarization), with lmax 1.
+
+    `settings` are further settings for the `params` block of every component.
+    """
     components = Bunch()
     for name, polarization in configs:
-        cfg = _make_named_component_cfg(name, polarization)
-        object.__setattr__(cfg, "_name", name)
-        components[name] = cfg
-    return CompList.init_from_params(components, Bunch(compsep=_make_compsep()))
+        components[name] = _make_named_component_cfg(name, polarization)
+        for key, value in settings.items():
+            components[name].params[key] = value
+    return CompList.init_from_params(Bunch(components=components, compsep=_make_compsep()))
 
 
 def _write_chain(path, comp_list: CompList) -> str:
@@ -198,9 +193,7 @@ def test_per_component_init_from_wins_only_for_a_new_chain(tmp_path) -> None:
         comp.amps[:] = 5.0
     special_chain = _write_chain(tmp_path / "special.h5", source)
 
-    comp_list = _make_list(("cmb", "IQU"))
-    for comp in comp_list:
-        comp.comp_params.init_from = special_chain
+    comp_list = _make_list(("cmb", "IQU"), init_from=special_chain)
     for comp in comp_list:
         comp.load_initial_state(global_chain, apply_init_from=True, restore_beta=False)
     assert all(np.all(comp.amps == 5.0) for comp in comp_list)
@@ -234,11 +227,10 @@ def test_load_initial_state_from_fits_map(tmp_path) -> None:
     compsep.double_precision = True  # So component alms keep the map's precision.
     cmb = _make_named_component_cfg("cmb", "IQU")
     cmb.params.lmax = lmax
-    object.__setattr__(cmb, "_name", "cmb")
     cmb.params.init_from = str(fits_path)
     params = Bunch(compsep=compsep, components=Bunch({"cmb": cmb}))
 
-    comp_list = CompList.init_from_params(params.components, params)
+    comp_list = CompList.init_from_params(params)
     for comp in comp_list:
         comp.load_initial_state(None, apply_init_from=True, restore_beta=False)
 
@@ -248,9 +240,7 @@ def test_load_initial_state_from_fits_map(tmp_path) -> None:
 
 
 def test_load_initial_state_rejects_unknown_extension(tmp_path) -> None:
-    comp_list = _make_list(("cmb", "IQU"))
-    for comp in comp_list:
-        comp.comp_params.init_from = str(tmp_path / "init_map.txt")
+    comp_list = _make_list(("cmb", "IQU"), init_from=str(tmp_path / "init_map.txt"))
     with pytest.raises(ValueError, match="expected a .h5/.hd5 chain or a .fits map"):
         for comp in comp_list:
             comp.load_initial_state(None, apply_init_from=True, restore_beta=False)
@@ -293,9 +283,7 @@ def test_init_from_null_keeps_the_parameter_file_start(tmp_path) -> None:
         comp.amps[:] = 5.0
     chain = _write_chain(tmp_path / "chain.h5", source)
 
-    comp_list = _make_list(("cmb", "IQU"))
-    for comp in comp_list:
-        comp.comp_params.init_from = None
+    comp_list = _make_list(("cmb", "IQU"), init_from=None)
     for comp in comp_list:
         comp.load_initial_state(chain, apply_init_from=True, restore_beta=False)
 
@@ -308,15 +296,18 @@ def _dust_params(**overrides) -> Bunch:
                    beta=1.5, T=20.0, nu_ref=[857.0, 353.0], units="uK_RJ")
     for key, value in overrides.items():
         params[key] = value
-    object.__setattr__(params, "_name", "dust")
     return params
 
 
+def _dust(eval_pol: str, **overrides) -> ThermalDust:
+    """One view of a thermal dust component. `overrides` are settings of its `params` block."""
+    params = _make_params(dust=Bunch(params=_dust_params(**overrides)))
+    return ThermalDust(params, "dust", eval_pol)
+
+
 def test_diffuse_component_resolves_per_pol_reference_frequency() -> None:
-    compsep = _make_compsep()
-    gibbs = Bunch()
-    dust_I = ThermalDust(_dust_params(), compsep, eval_pol="I", comp_name="dust")
-    dust_QU = ThermalDust(_dust_params(), compsep, eval_pol="QU", comp_name="dust")
+    dust_I = _dust("I")
+    dust_QU = _dust("QU")
 
     # nu_ref = [nu_I, nu_QU]: each view picks its own entry.
     assert dust_I.nu_ref == 857.0
@@ -327,10 +318,8 @@ def test_diffuse_component_resolves_per_pol_reference_frequency() -> None:
 
 
 def test_scalar_reference_frequency_is_shared_by_both_polarizations() -> None:
-    compsep = _make_compsep()
-    gibbs = Bunch()
-    dust_I = ThermalDust(_dust_params(nu_ref=545.0), compsep, eval_pol="I", comp_name="dust")
-    dust_QU = ThermalDust(_dust_params(nu_ref=545.0), compsep, eval_pol="QU", comp_name="dust")
+    dust_I = _dust("I", nu_ref=545.0)
+    dust_QU = _dust("QU", nu_ref=545.0)
 
     # A scalar nu_ref applies to both I and QU.
     assert dust_I.nu_ref == 545.0 and dust_QU.nu_ref == 545.0
@@ -339,9 +328,8 @@ def test_scalar_reference_frequency_is_shared_by_both_polarizations() -> None:
 def test_P_Cl_prior_flat_Dl_falls_as_ell_squared_in_Cl() -> None:
     # C3 convention (comm_cl_mod.f90): the prior is defined in D_l space, so a flat amplitude
     # "roof" corresponds to C_l = 2*pi*amp/(l(l+1)), with C_0 := D_0 := D_1.
-    params = _dust_params(lmax=16, Cl_prior_amplitude=100.0, Cl_prior_beta=0.0,
-                          Cl_prior_l_pivot=50, Cl_prior_FWHM=0.0)
-    comp = ThermalDust(params, _make_compsep(), eval_pol="I", comp_name="dust")
+    comp = _dust("I", lmax=16, Cl_prior_amplitude=100.0, Cl_prior_beta=0.0, Cl_prior_l_pivot=50,
+                 Cl_prior_FWHM=0.0)
 
     ells = np.arange(1, 17)
     np.testing.assert_allclose(comp.P_Cl_prior[1:], 100.0 * 2 * np.pi / (ells * (ells + 1)))
@@ -349,9 +337,8 @@ def test_P_Cl_prior_flat_Dl_falls_as_ell_squared_in_Cl() -> None:
 
 
 def test_P_Cl_prior_power_law_pivot_and_tilt() -> None:
-    params = _dust_params(lmax=100, Cl_prior_amplitude=7.0, Cl_prior_beta=-0.5,
-                          Cl_prior_l_pivot=10, Cl_prior_FWHM=0.0)
-    comp = ThermalDust(params, _make_compsep(), eval_pol="I", comp_name="dust")
+    comp = _dust("I", lmax=100, Cl_prior_amplitude=7.0, Cl_prior_beta=-0.5, Cl_prior_l_pivot=10,
+                 Cl_prior_FWHM=0.0)
 
     # D_l equals the amplitude at the pivot, and scales as (l/l_pivot)^beta away from it.
     assert np.isclose(comp.P_Cl_prior[10], 7.0 * 2 * np.pi / (10 * 11))
@@ -361,8 +348,7 @@ def test_P_Cl_prior_power_law_pivot_and_tilt() -> None:
 
 def test_P_Cl_prior_gaussian_rolloff_floors_at_1e_minus_10() -> None:
     # 600 arcmin FWHM: at l=100 the exponential is ~1e-24, far below C3's relative 1e-10 floor.
-    params = _dust_params(lmax=100, Cl_prior_amplitude=1.0, Cl_prior_FWHM=600.0)
-    comp = ThermalDust(params, _make_compsep(), eval_pol="I", comp_name="dust")
+    comp = _dust("I", lmax=100, Cl_prior_amplitude=1.0, Cl_prior_FWHM=600.0)
 
     sigma = np.deg2rad(10.0) / np.sqrt(8 * np.log(2))
     np.testing.assert_allclose(comp.P_Cl_prior[5], np.exp(-30 * sigma**2) * 2 * np.pi / 30)
@@ -375,9 +361,8 @@ def test_P_Cl_prior_gaussian_rolloff_floors_at_1e_minus_10() -> None:
 def test_P_Cl_prior_resolves_per_pol_lists() -> None:
     # Like nu_ref, every Cl_prior parameter can be an [I, QU] pair resolved per execution view.
     def make(eval_pol):
-        params = _dust_params(lmax=4, Cl_prior_amplitude=[2.0, 8.0], Cl_prior_beta=[0.0, -0.5],
-                              Cl_prior_FWHM=[0.0, 10.0])
-        return ThermalDust(params, _make_compsep(), eval_pol=eval_pol, comp_name="dust")
+        return _dust(eval_pol, lmax=4, Cl_prior_amplitude=[2.0, 8.0], Cl_prior_beta=[0.0, -0.5],
+                     Cl_prior_FWHM=[0.0, 10.0])
 
     dust_I, dust_QU = make("I"), make("QU")
     assert (dust_I.Cl_prior_amplitude, dust_I.Cl_prior_beta, dust_I.Cl_prior_FWHM) == (2.0, 0.0, 0.0)
@@ -388,8 +373,7 @@ def test_P_Cl_prior_resolves_per_pol_lists() -> None:
 def test_P_Cl_prior_l_apod_defaults_to_no_taper() -> None:
     # C3's own parameter files nearly always set COMP_L_APOD equal to COMP_AMP_LMAX, which makes
     # get_Cl_apod unity everywhere; that is our default too.
-    params = _dust_params(lmax=32, Cl_prior_amplitude=1.0)
-    comp = ThermalDust(params, _make_compsep(), eval_pol="I", comp_name="dust")
+    comp = _dust("I", lmax=32, Cl_prior_amplitude=1.0)
 
     assert comp.Cl_prior_l_apod == 32
     np.testing.assert_array_equal(comp.Cl_prior_apodization, np.ones(33))
@@ -398,10 +382,8 @@ def test_P_Cl_prior_l_apod_defaults_to_no_taper() -> None:
 def test_P_Cl_prior_l_apod_tapers_to_1e_minus_6_in_power_at_lmax() -> None:
     # get_Cl_apod (comm_cl_mod.f90): unity up to l_apod, then a Gaussian reaching exp(-ln(1000))
     # in amplitude at lmax, i.e. 1e-6 in power. The prior enters as C_l * f^2.
-    params = _dust_params(lmax=100, Cl_prior_amplitude=1.0, Cl_prior_l_apod=50)
-    comp = ThermalDust(params, _make_compsep(), eval_pol="I", comp_name="dust")
-    unapodized = ThermalDust(_dust_params(lmax=100, Cl_prior_amplitude=1.0), _make_compsep(),
-                             eval_pol="I", comp_name="dust")
+    comp = _dust("I", lmax=100, Cl_prior_amplitude=1.0, Cl_prior_l_apod=50)
+    unapodized = _dust("I", lmax=100, Cl_prior_amplitude=1.0)
 
     f = comp.Cl_prior_apodization
     np.testing.assert_array_equal(f[:51], np.ones(51))
@@ -417,10 +399,8 @@ def test_P_Cl_prior_l_apod_tapers_to_1e_minus_6_in_power_at_lmax() -> None:
 def test_P_Cl_prior_l_tighten_shrinks_the_prior_below_it() -> None:
     # get_Cl_apod (comm_cl_mod.f90) with COMP_AMP_PRIOR_LMAX: below that multipole the factor on
     # S^{1/2} is (0.5 (cos(pi (max(l, 1) - l_tighten) / l_tighten) + 1))^2. The prior is C_l * f^2.
-    params = _dust_params(lmax=100, Cl_prior_amplitude=1.0, Cl_prior_l_tighten=60)
-    comp = ThermalDust(params, _make_compsep(), eval_pol="I", comp_name="dust")
-    untightened = ThermalDust(_dust_params(lmax=100, Cl_prior_amplitude=1.0), _make_compsep(),
-                              eval_pol="I", comp_name="dust")
+    comp = _dust("I", lmax=100, Cl_prior_amplitude=1.0, Cl_prior_l_tighten=60)
+    untightened = _dust("I", lmax=100, Cl_prior_amplitude=1.0)
     assert untightened.Cl_prior_l_tighten == 0                # The default: no tightening.
 
     ells = np.arange(101)
@@ -438,7 +418,7 @@ def test_P_Cl_prior_l_tighten_shrinks_the_prior_below_it() -> None:
 def test_P_Cl_prior_none_amplitude_gives_identity() -> None:
     # Cl_prior_amplitude=None: no prior (C3's CL_TYPE 'none'). The S^{1/2} scaling of the CG
     # reparameterization then does nothing; the CG solver leaves out the prior terms itself.
-    comp = ThermalDust(_dust_params(lmax=8), _make_compsep(), eval_pol="I", comp_name="dust")
+    comp = _dust("I", lmax=8)
 
     np.testing.assert_array_equal(comp.P_Cl_prior, np.ones(9))
     np.testing.assert_array_equal(comp.P_Cl_prior_inv, np.ones(9))
@@ -446,10 +426,8 @@ def test_P_Cl_prior_none_amplitude_gives_identity() -> None:
 
 def test_P_Cl_prior_amplitude_is_given_in_the_component_units() -> None:
     """As C3's COMP_UNIT: an amplitude in uK_CMB^2 is converted to uK_RJ^2 at the view's nu_ref."""
-    in_rj = ThermalDust(_dust_params(lmax=8, Cl_prior_amplitude=100.0), _make_compsep(),
-                        eval_pol="QU", comp_name="dust")
-    in_cmb = ThermalDust(_dust_params(lmax=8, Cl_prior_amplitude=100.0, units="uK_CMB"),
-                         _make_compsep(), eval_pol="QU", comp_name="dust")
+    in_rj = _dust("QU", lmax=8, Cl_prior_amplitude=100.0)
+    in_cmb = _dust("QU", lmax=8, Cl_prior_amplitude=100.0, units="uK_CMB")
 
     # dT_RJ/dT_CMB = x^2 e^x/(e^x - 1)^2, with x = h nu/(k T_CMB), at the QU nu_ref of 353 GHz.
     x = 6.62607015e-34*353.0e9/(1.380649e-23*2.7255)
@@ -459,15 +437,23 @@ def test_P_Cl_prior_amplitude_is_given_in_the_component_units() -> None:
 
 def test_old_smoothing_prior_params_are_rejected() -> None:
     # The old C_l-space 'smoothing_prior_*' parameters changed semantics; fail loudly on stale files.
-    with pytest.raises(ValueError, match=r"smoothing_prior_\*"):
-        ThermalDust(_dust_params(smoothing_prior_amplitude=1.0e7), _make_compsep(),
-                    eval_pol="I", comp_name="dust")
+    with pytest.raises(ValueError, match="Unknown setting 'components.dust.params.smoothing_prior"):
+        _dust("I", smoothing_prior_amplitude=1.0e7)
+
+
+def test_a_component_setting_that_is_left_out_or_misspelled_fails_at_startup() -> None:
+    """The settings of a component are those in the `DEFAULTS` of its class."""
+    with pytest.raises(ValueError, match="'components.dust.params.T' must be set"):
+        _dust("I", T=None)
+    with pytest.raises(ValueError, match="Unknown setting 'components.dust.params.betta'"):
+        _dust("I", betta=1.6)
+    with pytest.raises(ValueError, match="'components.dust.params.polarization' must be one of"):
+        CompList.init_from_params(_make_params(dust=Bunch(
+            enabled=True, component_class="ThermalDust", params=_dust_params(polarization="P"))))
 
 
 def test_init_map_to_amplitude_is_noop_when_units_match() -> None:
-    compsep = _make_compsep()
-    gibbs = Bunch()
-    dust = ThermalDust(_dust_params(units="uK_RJ"), compsep, eval_pol="I", comp_name="dust")
+    dust = _dust("I", units="uK_RJ")
     arr = np.ones((1, 12))
 
     # uK_RJ already equals the dust amplitude unit, so the same array is returned untouched.
@@ -477,10 +463,7 @@ def test_init_map_to_amplitude_is_noop_when_units_match() -> None:
 def test_init_map_to_amplitude_converts_to_amplitude_unit() -> None:
     import pysm3.units as pysm3u
 
-    compsep = _make_compsep()
-    gibbs = Bunch()
-    dust = ThermalDust(_dust_params(units="uK_CMB", nu_ref=100.0), compsep,
-                       eval_pol="I", comp_name="dust")
+    dust = _dust("I", units="uK_CMB", nu_ref=100.0)
     expected = (1 * pysm3u.Unit("uK_CMB")).to(
         pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(100.0 * pysm3u.GHz)).value
 
@@ -492,11 +475,9 @@ def test_init_map_to_amplitude_converts_to_amplitude_unit() -> None:
 def test_cmb_init_map_to_amplitude_converts_uK_CMB_at_nu_ref() -> None:
     import pysm3.units as pysm3u
 
-    compsep = _make_compsep()
-    gibbs = Bunch()
-    cmb_params = _make_component_cfg("IQU").params
-    cmb_params.units = "uK_CMB"
-    cmb = CMB(cmb_params, compsep, eval_pol="I", comp_name="cmb")
+    cmb_cfg = _make_component_cfg("IQU")
+    cmb_cfg.params.units = "uK_CMB"
+    cmb = CMB(_make_params(cmb=cmb_cfg), "cmb", "I")
 
     # CMB amplitudes are stored in uK_RJ referenced to nu_ref (default 1 GHz), so a uK_CMB disk map
     # is converted to uK_RJ at nu_ref.
@@ -518,8 +499,7 @@ def test_spinning_dust_converts_its_units_at_nu_0(tmp_path) -> None:
     params = Bunch(polarization="I", shortname="ame", spatially_varying_MM=False,
                    Cl_prior_amplitude=100.0, lmax=4, units="uK_CMB", template_path=str(template),
                    nu_peak=30.0, nu_0=22.0)
-    object.__setattr__(params, "_name", "ame")
-    ame = SpinningDust(params, _make_compsep(), eval_pol="I", comp_name="ame")
+    ame = SpinningDust(_make_params(ame=Bunch(params=params)), "ame", "I")
 
     cmb_to_rj = (1*pysm3u.uK_CMB).to(pysm3u.uK_RJ,
                                      equivalencies=pysm3u.cmb_equivalencies(22.0*pysm3u.GHz)).value
@@ -530,11 +510,9 @@ def test_spinning_dust_converts_its_units_at_nu_0(tmp_path) -> None:
 def test_cmb_get_sed_is_unity_at_nu_ref_and_ratio_elsewhere() -> None:
     import pysm3.units as pysm3u
 
-    compsep = _make_compsep()
-    gibbs = Bunch()
-    cmb_params = _make_component_cfg("IQU").params
-    cmb_params.nu_ref = 100.0
-    cmb = CMB(cmb_params, compsep, eval_pol="I", comp_name="cmb")
+    cmb_cfg = _make_component_cfg("IQU")
+    cmb_cfg.params.nu_ref = 100.0
+    cmb = CMB(_make_params(cmb=cmb_cfg), "cmb", "I")
 
     # The SED is normalized to 1 at the reference frequency and is the ratio of the
     # thermodynamic-to-RJ conversion elsewhere.
@@ -563,7 +541,6 @@ def _make_dust_cfg(nu_ref, polarization: str = "IQU") -> Bunch:
             nu_ref=nu_ref,
         ),
     )
-    object.__setattr__(cfg, "_name", "dust")
     return cfg
 
 
@@ -579,8 +556,7 @@ def test_every_component_class_declares_its_sed_parameters() -> None:
 
 def test_sed_parameters_are_readable_off_a_joined_component() -> None:
     """The names the chain writer stores must all resolve on the component it is handed."""
-    params = Bunch(compsep=_make_compsep())
-    comp_list = CompList.init_from_params(Bunch({"dust": _make_dust_cfg(353.0)}), params)
+    comp_list = CompList.init_from_params(_make_params(dust=_make_dust_cfg(353.0)))
     dust = comp_list.joined()[0]
 
     stored = {name: getattr(dust, name) for name in dust.sed_param_names}
@@ -593,8 +569,7 @@ def test_joining_restores_a_per_polarization_nu_ref() -> None:
     Joining deep-copies the intensity view, whose `nu_ref` has already been resolved by `_per_pol`,
     so without care an Akari-style `[857, 353]` would be recorded in the chain as 857.
     """
-    params = Bunch(compsep=_make_compsep())
-    comp_list = CompList.init_from_params(Bunch({"dust": _make_dust_cfg([857.0, 353.0])}), params)
+    comp_list = CompList.init_from_params(_make_params(dust=_make_dust_cfg([857.0, 353.0])))
 
     assert [comp.nu_ref for comp in comp_list] == [857.0, 353.0]  # the split views
     np.testing.assert_array_equal(comp_list.joined()[0].nu_ref, [857.0, 353.0])
@@ -605,12 +580,12 @@ def test_joining_restores_a_per_polarization_nu_ref() -> None:
 def _saved_dust_chain(tmp_path) -> tuple[CompList, str]:
     """A dust chain whose beta, T and nu_ref all differ from `_make_dust_cfg`, and a fresh list
     to read it into."""
-    cfg = _make_dust_cfg(353.0)
-    source = CompList.init_from_params(Bunch({"dust": cfg}), Bunch(compsep=_make_compsep()))
+    params = _make_params(dust=_make_dust_cfg(353.0))
+    source = CompList.init_from_params(params)
     for comp in source:
         comp.beta, comp.T, comp.nu_ref = 1.5311, 25.0, 217.0
     chain = _write_chain(tmp_path / "chain01_iter0007.h5", source)
-    return CompList.init_from_params(Bunch({"dust": cfg}), Bunch(compsep=_make_compsep())), chain
+    return CompList.init_from_params(params), chain
 
 
 def test_restarting_from_a_chain_restores_a_sampled_spectral_index(tmp_path):
@@ -661,8 +636,8 @@ def _write_radio_source_table(path, glon=0.0, glat=0.0, flux_mjy=1000.0, alpha=-
 
 def _make_radio_sources(template_path, nu_ref=30.0):
     from commander4.sky import RadioSources
-    cfg = Bunch(shortname="radsources", nu_0=nu_ref, template_path=str(template_path))
-    return RadioSources(cfg, _make_compsep(), comp_name="radsources")
+    cfg = Bunch(polarization="I", nu_0=nu_ref, template_path=str(template_path))
+    return RadioSources(_make_params(radsources=Bunch(params=cfg)), "radsources", "I")
 
 
 def test_radio_source_amplitudes_round_trip_through_a_chain(tmp_path) -> None:

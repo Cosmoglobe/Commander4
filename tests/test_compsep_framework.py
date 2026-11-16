@@ -46,17 +46,13 @@ def _make_component_cfg(polarization: str = "IQU", lmax: int = 2) -> Bunch:
 
 def _make_comp_list(polarization: str = "IQU", ntask_compsep_qu: int = 1,
                     lmax: int = 2) -> CompList:
-    params = Bunch(compsep=_make_compsep(ntask_compsep_qu))
     cmb = _make_component_cfg(polarization, lmax)
-    object.__setattr__(cmb, "_name", "cmb")
-    components = Bunch({"cmb": cmb})
-    return CompList.init_from_params(components, params)
+    return CompList.init_from_params(Bunch(components=Bunch(cmb=cmb),
+                                           compsep=_make_compsep(ntask_compsep_qu)))
 
 
 def _make_multi_comp_list() -> CompList:
-    params = Bunch(compsep=_make_compsep())
     cmb = _make_component_cfg("IQU")
-    object.__setattr__(cmb, "_name", "CMB")
     dust = Bunch(
         enabled=True,
         component_class="CMB",
@@ -68,7 +64,6 @@ def _make_multi_comp_list() -> CompList:
             Cl_prior_amplitude=None,  # no prior
         ),
     )
-    object.__setattr__(dust, "_name", "ThermalDust")
     ff = Bunch(
         enabled=True,
         component_class="CMB",
@@ -80,7 +75,6 @@ def _make_multi_comp_list() -> CompList:
             Cl_prior_amplitude=None,  # no prior
         ),
     )
-    object.__setattr__(ff, "_name", "FreeFree")
     components = Bunch(
         {
             "CMB": cmb,
@@ -88,7 +82,7 @@ def _make_multi_comp_list() -> CompList:
             "FreeFree": ff,
         }
     )
-    return CompList.init_from_params(components, params)
+    return CompList.init_from_params(Bunch(components=components, compsep=_make_compsep()))
 
 
 def test_execution_band_id_helpers_use_plain_band_names() -> None:
@@ -197,18 +191,22 @@ def test_sampling_group_gets_defaults_and_all_names() -> None:
     for name in ("all", "missing"):
         assert groups[name].name == name
         assert groups[name].comps == ["CMB", "ThermalDust", "FreeFree"]
-        assert groups[name].bands == ["Planck30GHz", "Planck30GHz_I", "Planck30GHz_QU"]
+        assert groups[name].bands == ["Planck30GHz"]
         assert groups[name].max_iter == 200 and groups[name].optimize is False
 
 
-def test_sampling_group_names_components_and_bands_or_views() -> None:
+def test_sampling_group_names_components_and_bands() -> None:
     params = _make_group_params(cg_sampling_groups=Bunch(
-        selected=Bunch(comps=["CMB"], bands=["Planck30GHz_QU"])))
+        selected=Bunch(comps=["CMB"], bands=["Planck30GHz"])))
     cfg = read_sampling_groups(params)
 
     assert cfg.cg_sampling_groups["selected"].comps == ["CMB"]
-    assert cfg.cg_sampling_groups["selected"].bands == ["Planck30GHz_QU"]
+    assert cfg.cg_sampling_groups["selected"].bands == ["Planck30GHz"]
     assert cfg.amplitude_groups is cfg.cg_sampling_groups
+    # A group names a whole band, not one polarization view of it.
+    with pytest.raises(ValueError, match="selected.bands' names unknown"):
+        read_sampling_groups(_make_group_params(cg_sampling_groups=Bunch(
+            selected=Bunch(comps=["CMB"], bands=["Planck30GHz_QU"]))))
 
 
 def test_sampling_group_with_an_unknown_name_is_rejected() -> None:
@@ -233,7 +231,6 @@ def test_disabled_sampling_groups_are_left_out() -> None:
 
 
 def _make_spectral_comp_list() -> CompList:
-    params = Bunch(compsep=_make_compsep())
     sync = Bunch(
         enabled=True,
         component_class="Synchrotron",
@@ -241,7 +238,6 @@ def _make_spectral_comp_list() -> CompList:
             lmax=2, polarization="IQU", shortname="sync", spatially_varying_MM=False,
             Cl_prior_amplitude=None, beta=-3.1, nu_ref=30.0),
     )
-    object.__setattr__(sync, "_name", "Synchrotron")
     dust = Bunch(
         enabled=True,
         component_class="ThermalDust",
@@ -249,8 +245,8 @@ def _make_spectral_comp_list() -> CompList:
             lmax=2, polarization="IQU", shortname="dust", spatially_varying_MM=False,
             Cl_prior_amplitude=None, beta=1.56, T=20.0, nu_ref=545.0),
     )
-    object.__setattr__(dust, "_name", "ThermalDust")
-    return CompList.init_from_params(Bunch({"Synchrotron": sync, "ThermalDust": dust}), params)
+    return CompList.init_from_params(Bunch(
+        components=Bunch(Synchrotron=sync, ThermalDust=dust), compsep=_make_compsep()))
 
 
 def test_gibbs_chains_have_independent_component_state() -> None:
@@ -260,11 +256,8 @@ def test_gibbs_chains_have_independent_component_state() -> None:
     chain_1_sync = [comp for comp in chain_components[1] if comp.comp_name == "Synchrotron"]
     chain_2_sync = [comp for comp in chain_components[2] if comp.comp_name == "Synchrotron"]
 
-    # I and QU are two execution views of one component. They keep their shared configuration
-    # inside a chain, while the complete component objects are independent between chains.
-    assert chain_1_sync[0].comp_params is chain_1_sync[1].comp_params
-    assert chain_2_sync[0].comp_params is chain_2_sync[1].comp_params
-    assert chain_1_sync[0].comp_params is not chain_2_sync[0].comp_params
+    # The component objects of the two chains are independent, with their settings.
+    assert chain_1_sync[0].cfg is not chain_2_sync[0].cfg
     assert all(comp_1 is not comp_2 for comp_1, comp_2 in zip(chain_components[1],
                                                               chain_components[2]))
 
@@ -306,10 +299,8 @@ def test_unimplemented_component_classes_are_rejected_during_construction() -> N
         component_class="TemplateComponent",
         params=Bunch(polarization="I"),
     )
-    object.__setattr__(component, "_name", "Template")
-
     with pytest.raises(NotImplementedError, match="not implemented"):
-        CompList.init_from_params(Bunch(Template=component), Bunch(compsep=Bunch()))
+        CompList.init_from_params(Bunch(components=Bunch(Template=component), compsep=Bunch()))
 
 
 def test_cg_and_per_pixel_groups_are_mutually_exclusive() -> None:
@@ -487,13 +478,13 @@ def _lmax_check_params(comp_lmax: int, band_nside: int = 64, l_apod: int | None 
     comp.params.Cl_prior_amplitude = 1.0e+8
     if l_apod is not None:
         comp.params.Cl_prior_l_apod = l_apod
-    object.__setattr__(comp, "_name", "CMB")
     params = Bunch(
+        components=Bunch(CMB=comp),
         compsep=Bunch(nside=band_nside, double_precision=False,
                       bands=Bunch(BandA=Bunch(enabled=True, get_from="EXP", polarization="I"))),
         experiments=Bunch(EXP=Bunch(bands=Bunch(BandA=Bunch(eval_nside=band_nside)))),
     )
-    return CompList.init_from_params(Bunch({"CMB": comp}), params), params
+    return CompList.init_from_params(params), params
 
 
 def test_component_lmax_within_the_band_lmax_is_silent(caplog) -> None:

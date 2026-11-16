@@ -17,7 +17,7 @@ def build_initial_sky_model(params: Bunch) -> "SkyModel":
     (else zero amplitudes), and wraps it in a SkyModel. This is rank-agnostic and performs no MPI.
     It is the fixed sky of a TOD-only run, which the TOD band masters construct locally.
     """
-    comp_list = CompList.init_from_params(params.components, params)
+    comp_list = CompList.init_from_params(params)
     for comp in comp_list:
         # Nothing samples beta in a TOD-only run, so beta is that of the parameter file.
         comp.load_initial_state(None, apply_init_from=True, restore_beta=False)

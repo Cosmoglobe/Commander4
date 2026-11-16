@@ -63,7 +63,6 @@ def _validate_components(params) -> None:
     from commander4.sky.component import Component
     from commander4.sky.diffuse_components import (
         CMB,
-        DiffuseComponent,
         FreeFree,
         SpinningDust,
         Synchrotron,
@@ -113,28 +112,12 @@ def _validate_components(params) -> None:
                 "corresponding 'Cl_prior_*' settings."
             )
 
-        common_fields = {"polarization", "longname", "shortname"}
-        diffuse_fields = {
-            "lmax", "spatially_varying_MM", "Cl_prior_amplitude", "Cl_prior_beta",
-            "Cl_prior_FWHM", "Cl_prior_l_pivot", "Cl_prior_l_apod", "Cl_prior_l_tighten", "units",
-            "init_from", "amp_prior_mean_map",
-        }
-        class_fields = {
-            CMB: {"nu_ref"},
-            ThermalDust: {"beta", "T", "nu_ref"},
-            Synchrotron: {"beta", "nu_ref"},
-            FreeFree: {"T", "nu_ref"},
-            SpinningDust: {"template_path", "nu_peak", "nu_0"},
-            RadioSources: {"template_path", "nu_0"},
-        }
-        allowed_fields = common_fields | class_fields[component_class]
-        if issubclass(component_class, DiffuseComponent):
-            allowed_fields |= diffuse_fields
-        unknown = sorted(set(component_params) - allowed_fields)
+        # Each component class lists the settings it accepts in its `DEFAULTS`.
+        unknown = sorted(set(component_params) - set(component_class.DEFAULTS))
         if unknown:
             raise ValueError(
                 f"components.{component_name}.params has unused field(s) {unknown}. "
-                f"{component.component_class} accepts {sorted(allowed_fields)}."
+                f"{component.component_class} accepts {sorted(component_class.DEFAULTS)}."
             )
 
 

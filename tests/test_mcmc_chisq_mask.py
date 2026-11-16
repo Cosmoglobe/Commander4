@@ -22,13 +22,11 @@ NPIX = 12*NSIDE**2
 
 def _zero_sky_model() -> SkyModel:
     """A single CMB component with zero alms, so the realized sky model is identically zero."""
-    params = Bunch(compsep=Bunch(nside=NSIDE, double_precision=True,
-                                 MPI_config=Bunch(ntask_compsep_I=1, ntask_compsep_QU=1)))
     cmb = Bunch(enabled=True, component_class="CMB",
                 params=Bunch(lmax=2, polarization="I", shortname="cmb",
                              spatially_varying_MM=False, Cl_prior_amplitude=None))
-    object.__setattr__(cmb, "_name", "CMB")
-    comp_list = CompList.init_from_params(Bunch({"CMB": cmb}), params)
+    comp_list = CompList.init_from_params(Bunch(components=Bunch(CMB=cmb),
+                                                compsep=Bunch(double_precision=True)))
     for comp in comp_list:
         comp.amps[:] = 0.0
     return SkyModel(comp_list)
@@ -83,8 +81,6 @@ class TestMaskedChi2:
     def test_a_band_outside_chisq_bands_contributes_nothing(self):
         map_sky = np.full((1, NPIX), 3.0)
         assert _chi2(map_sky, np.ones((1, NPIX)), chisq_bands=["OtherBand"]) == 0.0
-        # A group can also name this rank's view of the band.
-        assert _chi2(map_sky, np.ones((1, NPIX)), chisq_bands=["Band100_I"]) == NPIX*3.0**2
 
 
 class TestReadChisqMasks:

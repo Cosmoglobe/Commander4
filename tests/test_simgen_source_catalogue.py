@@ -25,11 +25,11 @@ def _simgen_sources(beta=0.0):
 
 
 def _radio_sources(catalogue_path):
-    cfg = Bunch(_name="RadioSources", polarization="I", longname="RadioSources",
-                shortname="radsources", template_path=str(catalogue_path), nu_0=NU_REF,
-                lmax="full", smoothing_scale=0, sample_alphas=False)
-    return RadioSources(cfg, Bunch(nside=NSIDE, double_precision=True, lmax=3*NSIDE-1,
-                                   polarization="I"))
+    cfg = Bunch(polarization="I", longname="RadioSources", shortname="radsources",
+                template_path=str(catalogue_path), nu_0=NU_REF)
+    params = Bunch(components=Bunch(RadioSources=Bunch(params=cfg)),
+                   compsep=Bunch(double_precision=True))
+    return RadioSources(params, "RadioSources", "I")
 
 
 @pytest.fixture

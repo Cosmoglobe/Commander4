@@ -64,12 +64,11 @@ def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, detector_data: 
         method, which is a direct solve with no history to report.
     """
     compsep, band = mpi_info.compsep, mpi_info.band
-    # This rank solves if the group names its band (or its view of the band), and at least one
-    # component of this rank's polarization.
-    band_is_active = band.name in group.bands or band.identifier in group.bands
+    # This rank solves if the group names its band, and at least one component of this rank's
+    # polarization.
     active_sublist = CompList([comp for comp in comp_list if comp.eval_pol == band.polarization
                                and comp.comp_name in group.comps])
-    should_solve = band_is_active and len(active_sublist) > 0
+    should_solve = band.name in group.bands and len(active_sublist) > 0
 
     cg_stats: dict = {}
     solver_comm = compsep.subcomm.Split(0 if should_solve else MPI.UNDEFINED, key=compsep.rank)

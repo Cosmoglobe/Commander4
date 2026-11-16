@@ -24,7 +24,6 @@ from commander4.sky.component import Component
 from commander4.polarization import EXECUTION_POLS
 from commander4.polarization import assert_pol_supported
 from commander4.math_utils.arithmetic import inplace_scale_add, inplace_add_scaled_vec
-from commander4.parameters.schema import resolve_param
 
 
 class CompList:
@@ -49,30 +48,29 @@ class CompList:
     # ----- Building -----
 
     @classmethod
-    def init_from_params(cls, components:Bunch, params:Bunch):
-        # Build the full logical component list: every enabled component contributes one execution
-        # view per polarization it defines (I, QU, or both for an IQU component). Construction is
-        # deliberately independent of the MPI/compsep layout: a view whose polarization is not
-        # actually solved or used in a given run stays inert at its initial value.
-        resolve_param(params, "double_precision", ("compsep",), default=False, legal_types=bool)
+    def init_from_params(cls, params: Bunch) -> CompList:
+        """The views of every enabled component under `components` in the parameter file.
+
+        A component has one view per polarization it is defined for: I, QU, or both for IQU. The
+        list does not depend on the MPI layout: a view whose polarization the run does not solve
+        stays at its starting value.
+        """
         comp_list = []
         comp_name_of_shortname = {}
-        for component_str in components:
-            component = components[component_str]
+        for comp_name in params.components:
+            component = params.components[comp_name]
             if not component.enabled:
                 continue
             component_cls = getattr(sky, component.component_class, None)
             if not isinstance(component_cls, type) or not issubclass(component_cls, Component):
                 raise ValueError(f"Unknown component_class {component.component_class!r} for "
-                                 f"component {component._name!r}.")
-            component_pol = component.params.polarization if "polarization" in component.params \
-                else "I"
-            if component_pol not in EXECUTION_POLS:
-                raise ValueError(
-                    f"Unrecognized polarization in parameter file for component {component_str}")
-            for eval_pol in EXECUTION_POLS[component_pol]:
-                comp = component_cls(component.params, params.compsep, eval_pol=eval_pol,
-                                     comp_name=component._name, allocate_empty_amps=True)
+                                 f"component {comp_name!r}.")
+            if ("polarization" not in component.params
+                    or component.params.polarization not in EXECUTION_POLS):
+                raise ValueError(f"'components.{comp_name}.params.polarization' must be "
+                                 f"one of {list(EXECUTION_POLS)}.")
+            for eval_pol in EXECUTION_POLS[component.params.polarization]:
+                comp = component_cls(params, comp_name, eval_pol)
                 comp_list.append(comp)
             # The chain stores each component under its shortname, so two components cannot
             # share one.

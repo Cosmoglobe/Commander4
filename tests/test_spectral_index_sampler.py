@@ -39,9 +39,8 @@ def _make_setup(start_beta: float = TRUE_BETA, **beta_settings):
     sync = Bunch(enabled=True, component_class="Synchrotron",
                  params=Bunch(lmax=LMAX, polarization="IQU", shortname="sync", nu_ref=30.0,
                               spatially_varying_MM=False, Cl_prior_amplitude=None, beta=TRUE_BETA))
-    object.__setattr__(sync, "_name", "Synchrotron")
-    comp_list = CompList.init_from_params(Bunch({"Synchrotron": sync}),
-                                          Bunch(compsep=Bunch(double_precision=True)))
+    comp_list = CompList.init_from_params(Bunch(components=Bunch(Synchrotron=sync),
+                                                compsep=Bunch(double_precision=True)))
     comp_list[0].amps[:] = 1.0  # The I view. Real alms, so they are valid at m = 0 too.
 
     npix = 12*NSIDE**2

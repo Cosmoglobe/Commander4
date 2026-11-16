@@ -20,22 +20,8 @@ class PointSourcesComponent(Component):
     Intensity only: point sources are unpolarized in the current model.
     """
 
-    default_shortname = "pscomp"
+    DEFAULTS = {**Component.DEFAULTS, "shortname": "pnt"}
     legal_pols: tuple[str, ...] = ("I",)
-
-    def __init__(self, comp_params: Bunch, global_params: Bunch, *,
-                 shortname: str | None = None, comp_name: str | None = None,
-                 eval_pol: str | None = None, allocate_empty_amps: bool = False):
-        super().__init__(
-            comp_params,
-            global_params,
-            shortname=shortname,
-            comp_name=comp_name,
-            eval_pol="I" if eval_pol is None else eval_pol,
-            allocate_empty_amps=allocate_empty_amps,
-        )
-        self.defined_pol = "I"
-        self.eval_pol = "I"
 
     @property
     def is_pol(self) -> bool:
@@ -69,32 +55,27 @@ class RadioSources(PointSourcesComponent):
     Positions, flux amplitudes and spectral indices all come from the `template_path` table.
     """
 
-    default_shortname = "radsources"
+    # `template_path` is the table of the sources, and `nu_0` the reference frequency in GHz
+    # (`self.nu_ref`).
+    DEFAULTS = {**PointSourcesComponent.DEFAULTS, "shortname": "rdpnt",
+                "template_path": None, "nu_0": None}
     amplitude_unit = "mJy"
     # `alpha_arr` is deliberately absent from the SED parameter names: it is one spectral index per
     # source, read from `template_path` alongside the source positions and amplitudes, so it belongs
     # with the template rather than in every iteration of the chain.
     sed_param_names = ("nu_ref",)
 
-    def __init__(self, comp_params: Bunch, global_params: Bunch, *,
-                 shortname: str | None = None, comp_name: str | None = None,
-                 eval_pol: str | None = None, allocate_empty_amps: bool = False):
-        super().__init__(
-            comp_params,
-            global_params,
-            shortname=shortname,
-            comp_name=comp_name,
-            eval_pol=eval_pol,
-            allocate_empty_amps=allocate_empty_amps,
-        )
-        self.nu_ref = comp_params.nu_0  # Reference frequency (GHz)
+    def __init__(self, params: Bunch, comp_name: str, eval_pol: str):
+        """The component `comp_name`, with its sources read from the `template_path` table."""
+        super().__init__(params, comp_name, eval_pol)
+        self.nu_ref = self.cfg.nu_0  # Reference frequency (GHz)
         # Flux density to brightness temperature, evaluated once at `nu_ref` (C3's `getScale`).
         # This factor must NOT be re-evaluated at the band frequency: `get_sed` already carries the
         # full frequency dependence, including the nu^-2 of the RJ relation (hence its `alpha - 2`).
         # Applying the conversion at `nu` as well would scale the sources as nu^(alpha-4).
         self.mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ,
                             equivalencies=pysm3u.cmb_equivalencies(self.nu_ref*pysm3u.GHz))
-        ps_bunch = self.read_dat_to_bunch(comp_params.template_path)
+        ps_bunch = self.read_dat_to_bunch(self.cfg.template_path)
         self.amps = np.array(ps_bunch['I(mJy)'], dtype=np.float32).reshape((1,-1))  # Amplitudes
         self.alpha_arr = np.array(ps_bunch['alpha_I'], dtype=np.float32)  # Spectral indices
         self.lonlat_arr = np.array((ps_bunch['Glon(deg)'], ps_bunch['Glat(deg)']),

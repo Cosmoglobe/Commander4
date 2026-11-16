@@ -721,7 +721,7 @@ def saved_component_sample(request: pytest.FixtureRequest, tmp_path: Path) -> tu
     params = as_bunch_recursive(config)
     params.parameter_file_as_string = yaml.safe_dump(config)
     (tmp_path / "chains_compsep").mkdir()
-    comp_list = cr.CompList.init_from_params(params.components, params)
+    comp_list = cr.CompList.init_from_params(params)
     intrinsic = {}
     for comp in comp_list:
         alm = np.zeros(hp.Alm.getsize(lmax), dtype=complex)

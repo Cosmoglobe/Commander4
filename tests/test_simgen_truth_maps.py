@@ -285,14 +285,12 @@ def test_truth_map_is_readable_as_a_commander4_init_map(tmp_path):
     write_component_truth_maps(str(tmp_path), [comp], NSIDE, "uK_RJ")
     truth_path = str(tmp_path / "truth_ThermalDust.fits")
 
-    global_params = Bunch(nside=NSIDE, double_precision=False,
-                          MPI_config=Bunch(ntask_compsep_I=1, ntask_compsep_QU=1))
     comp_params = Bunch(polarization="IQU", shortname="dust", lmax=3 * NSIDE - 1,
                         spatially_varying_MM=False, Cl_prior_amplitude=None,
                         beta=1.54, T=20.0, nu_ref=353.0, units="uK_RJ")
-    object.__setattr__(comp_params, "_name", "ThermalDust")
-    c4_comp = ThermalDust(comp_params, global_params, allocate_empty_amps=True, eval_pol="I",
-                          comp_name="ThermalDust")
+    c4_params = Bunch(components=Bunch(ThermalDust=Bunch(params=comp_params)),
+                      compsep=Bunch(double_precision=False))
+    c4_comp = ThermalDust(c4_params, "ThermalDust", "I")
 
     c4_comp.amps = _read_view_alms_from_fits(c4_comp, truth_path).astype(c4_comp.amps.dtype)
 

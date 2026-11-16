@@ -13,9 +13,8 @@ import numpy as np
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.polarization import assert_pol_supported
 from commander4.math_utils import arithmetic
-from commander4.parameters.schema import resolve_param
+from commander4.parameters.schema import read_settings, resolve_param
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +25,19 @@ class Component:
     Concrete families are defined in `diffuse_components.py` and `point_sources.py`.
     """
 
-    default_shortname = "comp"
-    legal_pols: tuple[str, ...] = ("I", "QU", "IQU")
-    requires_defined_pol = False
+    # The settings of the component's `params` block in the parameter file, with their defaults.
+    # `self.cfg` holds them under the same names. Each subclass has its own `DEFAULTS`, written as
+    # `{**Parent.DEFAULTS, ...}`: a copy of the parent's settings, with the listed ones added or
+    # replaced. So the dict of a class lists every setting it accepts.
+    # A default of None accepts any value. A default written as a pair [I, QU] marks a setting
+    # that is either one value for both polarization views, or such a pair.
+    DEFAULTS = {"polarization": None,  # "I", "QU" or "IQU". Must be set.
+                "shortname": "comp",   # The name of the component in the chain file.
+                "longname": None,      # The name of the component in plot titles.
+                "init_from": None}     # A chain file or a sky map to start from.
+
+    # The polarization views ("I", "QU") that this kind of component can have.
+    legal_pols: tuple[str, ...] = ("I", "QU")
 
     # Names of the instance attributes defining this component's SED. The compsep chain writer
     # stores each under `comps/<shortname>/sed/`, so a chain describes its own SED without the
@@ -46,46 +55,46 @@ class Component:
     # file.
     Cl_prior_amplitude = None
 
-    @classmethod
-    def _assert_legal_pol(cls, pol: str | None, *, role: str, required: bool = False) -> None:
-        if pol is None:
-            if required:
-                raise ValueError(f"{cls.__name__} requires a defined polarization mode.")
-            return
-        assert_pol_supported(pol)
-        if pol not in cls.legal_pols:
-            raise ValueError(f"{cls.__name__} does not support {role} polarization {pol!r}. "
-                             f"Allowed polarizations: {cls.legal_pols!r}.")
+    def __init__(self, params: Bunch, comp_name: str, eval_pol: str):
+        """One polarization view of the component `comp_name` of the parameter file.
 
-    def __init__(self, comp_params: Bunch, global_params: Bunch, *,
-                 shortname: str | None = None, comp_name: str | None = None,
-                 eval_pol: str | None = None, allocate_empty_amps: bool = False):
-        self.comp_params = comp_params
-        self.global_params = global_params
-        self.shortname = (
-            shortname
-            if shortname is not None
-            else comp_params.shortname if "shortname" in comp_params
-            else self.default_shortname
-        )
-        self.comp_name = comp_params._name if comp_name is None else comp_name
-        self.defined_pol = comp_params.polarization if "polarization" in comp_params else None
-        type(self)._assert_legal_pol(
-            self.defined_pol,
-            role="defined",
-            required=type(self).requires_defined_pol,
-        )
-        self.eval_pol = self.defined_pol if eval_pol is None else eval_pol
-        type(self)._assert_legal_pol(self.eval_pol, role="evaluation")
-        # Look for "double_precision" in the parameter Bunch given.
-        self.double_prec = resolve_param(global_params, "double_precision", ("",),
+        Args:
+            params: The full parameter file.
+            comp_name: The name of the component's block under `components`.
+            eval_pol: The view to make, "I" or "QU". A component defined for IQU has both.
+        """
+        if eval_pol not in self.legal_pols:
+            raise ValueError(f"Component {comp_name!r}: a {type(self).__name__} has no "
+                             f"{eval_pol!r} view. Its views are {self.legal_pols!r}.")
+        self.comp_name = comp_name
+        self.eval_pol = eval_pol
+        self.cfg = read_settings(params, "params", (f"components.{comp_name}",), self.DEFAULTS)
+        self.shortname = self.cfg.shortname
+        # `init_from: null` and a left-out `init_from` mean different things (see
+        # `load_initial_state`), and `self.cfg` holds None for both.
+        self.has_init_from = "init_from" in params.components[comp_name].params
+        self.double_prec = resolve_param(params, "double_precision", ("compsep",),
                                          default=False, legal_types=bool)
+        # The SED parameters are attributes, because a sampler can change them. They start at the
+        # values of the parameter file. SpinningDust and RadioSources have other names for theirs
+        # in the parameter file, and set them in their own `__init__`.
+        for name in self.sed_param_names:
+            if name in self.cfg:
+                if self.cfg[name] is None:
+                    raise ValueError(f"'components.{comp_name}.params.{name}' must be set.")
+                setattr(self, name, self._per_pol(self.cfg[name]))
         # The amplitudes the CompSep solves for, as one array: alms of shape (npol, nalm) for a
-        # diffuse component, one value per source for point sources. None until allocated.
+        # diffuse component, one value per source for point sources. The subclass allocates it.
         self.amps = None
         # FWHM beam of the component. If the CG solver was used, this will be 0, as it solves for
         # deconvolved components. Only non-zero if the common-resolution per-pix solver was used.
         self.amp_fwhm_rad = 0.0
+
+    def _per_pol(self, value):
+        """This view's value of a setting given as one value or as a pair [I, QU]."""
+        if isinstance(value, (list, tuple)):
+            return value[0] if self.eval_pol == "I" else value[1]
+        return value
 
     def join_split_views(self, other: "Component") -> "Component":
         """Join the I view and the QU view of one IQU component into a new component.
@@ -96,7 +105,7 @@ class Component:
             raise ValueError("Joining requires one intensity view and one QU view.")
         intensity_comp, pol_comp = (self, other) if self.eval_pol == "I" else (other, self)
         joined = deepcopy(intensity_comp)
-        joined.eval_pol = joined.defined_pol
+        joined.eval_pol = joined.cfg.polarization
         joined.amps = np.concatenate((intensity_comp.amps, pol_comp.amps), axis=0)
 
         # The joined view is deep-copied from the intensity view, so any SED or C(l)-prior parameter
@@ -144,10 +153,8 @@ class Component:
         # component's whole mixing matrix at a band is the single number `get_sed(nu)`.
         for band_name, nu in band_frequencies.items():
             group[f"mixing/{band_name}"] = self.get_sed(nu)
-        if self.defined_pol is not None:
-            group["defined_pol"] = self.defined_pol
-        if self.eval_pol is not None:
-            group["eval_pol"] = self.eval_pol
+        group["defined_pol"] = self.cfg.polarization
+        group["eval_pol"] = self.eval_pol
 
     def read_chain(self, group: h5py.Group, restore_beta: bool) -> None:
         """Restore this component's sampled state from its chain group, as `write_chain` wrote it.
@@ -187,8 +194,8 @@ class Component:
                 sets beta; otherwise beta keeps its parameter-file value.
         """
         source = chain_file
-        if apply_init_from and "init_from" in self.comp_params:
-            source = self.comp_params.init_from
+        if apply_init_from and self.has_init_from:
+            source = self.cfg.init_from
         if not source:
             return
         if str(source).lower().endswith(".fits"):
@@ -214,11 +221,8 @@ class Component:
     def load_amp_prior_mean(self) -> None:
         """Read the mean of the amplitude prior from the `amp_prior_mean_map` parameter.
 
-        Only diffuse components have such a prior, so here the parameter must be unset.
+        Only diffuse components have such a prior and such a parameter, so this does nothing.
         """
-        if "amp_prior_mean_map" in self.comp_params and self.comp_params.amp_prior_mean_map:
-            raise ValueError(f"Component {self.comp_name!r}: 'amp_prior_mean_map' is only "
-                             "supported for diffuse (alm-based) components.")
 
     def dot(self, other: "Component") -> float:
         """The dot product of this component's amplitudes with those of `other`.

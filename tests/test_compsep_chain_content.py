@@ -29,10 +29,8 @@ def _comp_list(lmax: int = 4) -> CompList:
                 params=Bunch(lmax=lmax, polarization="IQU", shortname="cmb",
                              spatially_varying_MM=False, Cl_prior_amplitude=1e3,
                              Cl_prior_beta=-0.5, nu_ref=100.0))
-    object.__setattr__(cmb, "_name", "CMB")
-    params = Bunch(compsep=Bunch(bands=Bunch(), double_precision=True,
-                                 ntask_compsep_QU=1))
-    return CompList.init_from_params(Bunch({"cmb": cmb}), params)
+    return CompList.init_from_params(Bunch(
+        components=Bunch(CMB=cmb), compsep=Bunch(bands=Bunch(), double_precision=True)))
 
 
 def _write(tmp_path, diagnostics=None, band_frequencies=None, lmax=4) -> str:
@@ -40,7 +38,6 @@ def _write(tmp_path, diagnostics=None, band_frequencies=None, lmax=4) -> str:
     paths.create_output_dirs(params.output)
     comp_list = _comp_list(lmax)
     for comp in comp_list.components:
-        comp.allocate_empty_amps()
         rng = np.random.default_rng(0)
         comp.amps[:] = rng.normal(size=comp.amps.shape) + 1j*rng.normal(size=comp.amps.shape)
     write_compsep_chain_to_file(comp_list, params, chain=1, iter=1,
@@ -83,12 +80,8 @@ def test_a_disabled_cl_prior_writes_nothing(tmp_path) -> None:
     cmb = Bunch(enabled=True, component_class="CMB",
                 params=Bunch(lmax=2, polarization="I", shortname="cmb",
                              spatially_varying_MM=False, Cl_prior_amplitude=None, nu_ref=100.0))
-    object.__setattr__(cmb, "_name", "CMB")
-    comp_list = CompList.init_from_params(
-        Bunch({"cmb": cmb}),
-        Bunch(compsep=Bunch(bands=Bunch(), double_precision=True, ntask_compsep_QU=1)))
-    for comp in comp_list.components:
-        comp.allocate_empty_amps()
+    comp_list = CompList.init_from_params(Bunch(
+        components=Bunch(CMB=cmb), compsep=Bunch(bands=Bunch(), double_precision=True)))
     write_compsep_chain_to_file(comp_list, params, chain=1, iter=1)
 
     path = os.path.join(paths.subdir(params, paths.CHAINS_COMPSEP), "chain01_iter0001.h5")

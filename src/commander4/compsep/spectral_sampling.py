@@ -52,7 +52,7 @@ def chi2_of_chisq_bands(mpi_info: Bunch, group: Bunch, detector_data: DetectorMa
     """
     band = mpi_info.band
     chi2 = 0.0
-    if band.name in group.chisq_bands or band.identifier in group.chisq_bands:
+    if band.name in group.chisq_bands:
         model_sky = sky_model.get_sky_at_band(detector_data)
         residual = detector_data.map_sky[:, keep] - model_sky[:, keep]
         # An unobserved pixel has zero inverse variance, and adds nothing.

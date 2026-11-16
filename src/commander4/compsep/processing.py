@@ -26,7 +26,6 @@ from commander4.compsep.spectral_sampling import sample_spectral_params
 from commander4.file_io import paths
 from commander4.file_io.chain_restart import ChainStart
 from commander4.file_io.chain_writer import write_compsep_chain_to_file
-from commander4.polarization import get_execution_band_id, EXECUTION_POLS
 from commander4.parameters.schema import read_settings, resolve_band_lmax, resolve_param
 from commander4.diagnostics.performance import benchmark, bench_summary, bench_reset
 
@@ -71,14 +70,7 @@ def read_sampling_groups(params: Bunch) -> Bunch:
     whose beta it samples to the settings of that sampler (`BETA_DEFAULTS`).
     """
     comp_names = [name for name in params.components if params.components[name].enabled]
-    # A group can name a whole band ("Planck30GHz") or one view of it ("Planck30GHz_QU").
-    band_names = []
-    for band_name in params.compsep.bands:
-        band = params.compsep.bands[band_name]
-        if band.enabled:
-            band_names.append(band_name)
-            for pol in EXECUTION_POLS[band.polarization]:
-                band_names.append(get_execution_band_id(band_name, pol))
+    band_names = [name for name in params.compsep.bands if params.compsep.bands[name].enabled]
 
     cfg = Bunch(cg_sampling_groups={}, per_pixel_sampling_groups={}, mcmc_sampling_groups={})
     for section, defaults in (("cg_sampling_groups", CG_GROUP_DEFAULTS),
@@ -238,7 +230,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
     logger.debug(f"CompSep: Hello from CompSep-rank {mpi_info.compsep.rank} (on machine "
                  f"{mpi_info.processor_name}), dedicated to band {mpi_info.compsep.rank}.")
 
-    comp_list = CompList.init_from_params(params.components, params)
+    comp_list = CompList.init_from_params(params)
 
     # MPI setup already selected this rank's execution view from the same inventory used to count
     # tasks. Only the parameter block needs copying because its polarization is narrowed to I or QU.
