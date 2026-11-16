@@ -111,19 +111,17 @@ def retrieve_map_from_fits_file(band: Bunch, pol: str, maptype: str):
 
 
 
-def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
+def read_data_map_from_file(my_band: Bunch, pols: str, params: Bunch) -> DetectorMap:
     """ Reads the map data for a given band from disk. Used for bands that do not have a TOD
         processing component. The map is smoothed to the common resolution on read (when enabled).
     Args:
         my_band (Bunch): A parameter file subset for the band to read from file.
+        pols (str): The Stokes maps to read: "I", "QU" or "IQU".
         params (Bunch): Full parameter file, for the common-resolution smoothing settings.
     Returns:
         detector_map (DetectorMap): Object holding signal map and other relevant data (inverse
             variance, nu...)
     """
-    pols = my_band.polarization
-    if pols not in ("I", "QU", "IQU"):
-        raise ValueError(f"Specified polarization {pols!r} is not recognized.")
     maps_sky = []
     maps_inv_var = []
     rms_map_type = _get_map_info(my_band, "rms")[2]

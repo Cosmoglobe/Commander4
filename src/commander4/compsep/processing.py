@@ -204,12 +204,11 @@ def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
 
 
 def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
-    -> tuple[dict[int, CompList], Bunch, str, Bunch, Bunch]:
-    """Set up the rank-local execution view for component separation.
+    -> tuple[dict[int, CompList], Bunch]:
+    """Build the components and read the settings of component separation, on one CompSep rank.
 
-    Each CompSep rank owns exactly one execution view of one band. The global CompSep rank space is
-    split into a contiguous intensity block (ranks ``[0, QU_master)``) followed by a contiguous QU
-    block (ranks ``[QU_master, size)``), and we match the current rank against those two streams.
+    Each CompSep rank works on one view of one band (`mpi_info.band`, set by the MPI setup). This
+    function also adds the band-master dictionaries of the CompSep side to `mpi_info`.
 
     Args:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
@@ -219,27 +218,14 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
     Returns:
         comp_lists_by_chain (dict[int, CompList]): Each chain's full execution-view component
             list, initialized and identical on all CompSep ranks.
-        mpi_info (Bunch): `mpi_info`, extended with this rank's band name/identifier and the
-            band-master dictionaries.
-        band_identifier (str): Unique string for the band execution view this rank is working on.
-        my_band (Bunch): The parameter-file subset for the band this rank is working on.
         cfg (Bunch): The settings of component separation: the sampling groups (see
             `read_sampling_groups`), `double_precision`, this rank's `num_threads`, and the
             chain-output settings `nside_chisq`, `include_chisq_map` and `include_residual_maps`.
     """
-    logger.debug(f"CompSep: Hello from CompSep-rank {mpi_info.compsep.rank} (on machine "
-                 f"{mpi_info.processor_name}), dedicated to band {mpi_info.compsep.rank}.")
+    logger.debug(f"CompSep rank {mpi_info.compsep.rank} (on machine {mpi_info.processor_name}) "
+                 f"handles view {mpi_info.band.identifier}.")
 
     comp_list = CompList.init_from_params(params)
-
-    # MPI setup already selected this rank's execution view from the same inventory used to count
-    # tasks. Only the parameter block needs copying because its polarization is narrowed to I or QU.
-    band_name = mpi_info.band.name
-    band_identifier = mpi_info.band.identifier
-    my_band = deepcopy(params.compsep.bands[band_name])
-    my_band.identifier = band_identifier
-    my_band.polarization = mpi_info.band.polarization
-    logger.debug(f"Rank {mpi_info.compsep.rank} handles CompSep view {band_identifier}.")
 
     cfg = read_sampling_groups(params)
     if mpi_info.compsep.is_master:  # One report, not one per band.
@@ -288,16 +274,13 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
                 comp.load_initial_state(chain_file, apply_init_from,
                                         restore_beta=comp.comp_name in sampled_betas)
 
-    data_world = (band_identifier, mpi_info.world.rank)
-    data_compsep = (band_identifier, mpi_info.compsep.rank)
-    all_data_world = mpi_info.compsep.comm.allgather(data_world)
-    all_data_compsep = mpi_info.compsep.comm.allgather(data_compsep)
-    world_band_masters_dict = {item[0]: item[1] for item in all_data_world if item is not None}
-    compsep_band_masters_dict = {item[0]: item[1] for item in all_data_compsep if item is not None}
-    mpi_info.world.compsep_band_masters = world_band_masters_dict
-    mpi_info.compsep.compsep_band_masters = compsep_band_masters_dict
+    # The rank of each view's master, by view name: its world rank and its CompSep rank.
+    all_ranks = mpi_info.compsep.comm.allgather(
+        (mpi_info.band.identifier, mpi_info.world.rank, mpi_info.compsep.rank))
+    mpi_info.world.compsep_band_masters = {item[0]: item[1] for item in all_ranks}
+    mpi_info.compsep.compsep_band_masters = {item[0]: item[2] for item in all_ranks}
 
-    return comp_lists_by_chain, mpi_info, band_identifier, my_band, cfg
+    return comp_lists_by_chain, cfg
 
 
 def process_compsep(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, iter: int, chain: int,

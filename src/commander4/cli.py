@@ -106,19 +106,26 @@ def run_tod_side(mpi_info: Bunch, params: Bunch, experiment_data, my_band_tod_id
                            f"{chain}, iter {iteration}.")
 
 
-def run_compsep_side(mpi_info: Bunch, params: Bunch, compsep_cfg, my_band_compsep_id: str,
-                     my_band, comp_lists_by_chain: dict, band_map, first_iteration: int) -> None:
+def run_compsep_side(mpi_info: Bunch, params: Bunch, cfg: Bunch, comp_lists_by_chain: dict,
+                     first_iteration: int) -> None:
     """Walk the component-separation half of the Gibbs loop.
     Args:
+        cfg: The settings of component separation, from `init_compsep_processing`.
         comp_lists_by_chain: Per-chain component lists, updated in place. Each chain needs its own,
             since a `Component` carries the currently sampled amplitudes and spectral parameters.
-        band_map: This rank's band map of the first TOD sample, already received.
         first_iteration: The first iteration this run samples.
     """
     from commander4.compsep.processing import process_compsep
     from commander4.mpi.transfer import receive_tod, send_compsep
+    from commander4.sky.sky_model import SkyModel
 
     logger = logging.getLogger(__name__)
+    # Send each chain's initial sky model to the TOD side, and then get the first band map: the
+    # same order (sky out, band map in) as at the end of each step of the loop below.
+    for chain in (1, 2):
+        send_compsep(mpi_info, SkyModel(comp_lists_by_chain[chain]))
+    band_map = receive_tod(mpi_info, None, params)
+
     schedule = gibbs_schedule(first_iteration, params.gibbs.num_iterations)
     for step, (chain, iteration) in enumerate(schedule):
         if mpi_info.compsep.is_master:
@@ -126,20 +133,18 @@ def run_compsep_side(mpi_info: Bunch, params: Bunch, compsep_cfg, my_band_compse
                            f"starting CompSep chain {chain}, iteration {iteration}.")
         rng = make_iteration_rng(params, mpi_info, chain, iteration)
         t0 = time.time()
-        compsep_output = process_compsep(mpi_info, compsep_cfg, band_map, iteration, chain,
+        compsep_output = process_compsep(mpi_info, cfg, band_map, iteration, chain,
                                          params, comp_lists_by_chain[chain], rng)
         if mpi_info.compsep.is_master:
             logger.verbose(f"CompSep: Rank {mpi_info.compsep.rank} finished chain {chain}, "
                            f"iteration {iteration} in {time.time()-t0:.2f}s. Sending results.")
         if step == len(schedule) - 1:
             continue
-        send_compsep(mpi_info, my_band_compsep_id, compsep_output,
-                     mpi_info.world.tod_band_masters)
+        send_compsep(mpi_info, compsep_output)
         logger.debug(f"CompSep rank {mpi_info.compsep.rank} finished sending results for chain "
                      f"{chain}, iter {iteration}. Waiting for TOD results.")
         t0 = time.time()
-        band_map = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
-                               my_band_compsep_id, band_map, params)
+        band_map = receive_tod(mpi_info, band_map, params)
         logger.debug(f"CompSep rank {mpi_info.compsep.rank} received TOD results for chain "
                      f"{chain}, iter {iteration} (waiting+receiving = {time.time()-t0:.1f}s).")
 
@@ -198,17 +203,13 @@ def run_commander4(params: Bunch, params_dict: dict):
     # Import the numerical pipeline after init_mpi has configured this rank's thread counts.
     from commander4.tod.processing import init_tod_processing
     from commander4.compsep.processing import init_compsep_processing
-    from commander4.mpi.transfer import receive_tod, receive_compsep, send_compsep,\
-        get_local_initial_sky
-    from commander4.sky.sky_model import SkyModel
+    from commander4.mpi.transfer import receive_compsep, get_local_initial_sky
 
     ###### Initizatization ######
     # Setting up dictionaries mapping each experiment+band combo to the world rank of the master
     # task for that band (on both the TOD and CompSep sides).
     world_compsep_band_masters_dict = None
     world_tod_band_masters_dict = None
-    compsep_cfg = None
-    comp_lists_by_chain = None
     if mpi_info.world.side == "tod":
         mpi_info, my_band_tod_id, experiment_data, tod_samples_chain1, tod_samples_chain2\
                                                     = init_tod_processing(mpi_info, params, start)
@@ -222,8 +223,7 @@ def run_commander4(params: Bunch, params_dict: dict):
         # TODO: This means two copies of per-component amplitude alms are held in memory at all
         # times. Under the current design this is needed for sampling steps where some components
         # are excluded, but their amplitudes are still needed to evaluate the relevant chi2.
-        comp_lists_by_chain, mpi_info, my_band_compsep_id, my_band, compsep_cfg = \
-            init_compsep_processing(mpi_info, params, start)
+        comp_lists_by_chain, compsep_cfg = init_compsep_processing(mpi_info, params, start)
 
     if mpi_info.world.tod_master is not None:
         # All processes, both compsep and tod, need the world-specific band master dict.
@@ -236,7 +236,6 @@ def run_commander4(params: Bunch, params_dict: dict):
         mpi_info['world']['compsep_band_masters'] = world_compsep_band_masters_dict
 
     ###### Exchanging the initial sky model ######
-    band_map = None
     if mpi_info.world.is_master:
         if tod_active and compsep_active:
             mode = "TOD and CompSep"
@@ -266,15 +265,7 @@ def run_commander4(params: Bunch, params_dict: dict):
                      compsep_active, start.first_iteration)
 
     elif mpi_info.world.side == "compsep":
-        # Send each chain's initial sky model to TOD before receiving the first TOD output,
-        # mirroring the process_compsep -> send_compsep -> receive_tod order used inside the loop.
-        for chain in (1, 2):
-            send_compsep(mpi_info, my_band_compsep_id, SkyModel(comp_lists_by_chain[chain]),
-                         mpi_info.world.tod_band_masters)
-        band_map = receive_tod(mpi_info, mpi_info.world.tod_band_masters, my_band,
-                               my_band_compsep_id, band_map, params)
-        run_compsep_side(mpi_info, params, compsep_cfg, my_band_compsep_id, my_band,
-                         comp_lists_by_chain, band_map, start.first_iteration)
+        run_compsep_side(mpi_info, params, compsep_cfg, comp_lists_by_chain, start.first_iteration)
 
     # stop compsep machinery
     if mpi_info.world.is_master and compsep_active:

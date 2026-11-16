@@ -149,42 +149,33 @@ def send_tod(mpi_info: Bunch, tod_map_dict: dict[DetectorMap], todproc_my_band_i
 # ON COMPSEP SIDE
 ###########################################################
 
-def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep_band_id: str,
-                band_map: DetectorMap|None, params: Bunch) -> DetectorMap:
-    """ MPI-receive the results from the TOD processing (used in conjunction with send_tod).
+def receive_tod(mpi_info: Bunch, band_map: DetectorMap|None, params: Bunch) -> DetectorMap:
+    """Return this CompSep rank's band map of the next iteration (the counterpart of `send_tod`).
 
-    Input:
+    A band with `get_from: file` reads its map on the first call, and keeps it after that. Any
+    other band receives its map from the TOD side.
+
+    Args:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
-        senders: (dict[str->int]): A dictionary mapping a string uniquely identifying each
-                 band to the world rank of the sender task (on the CompSep side).
-        my_band (Bunch): The section of the parameter file corresponding to this CompSep band,
-                 as a "Bunch" type, it also has an 'identifier' field.
-        compsep_band_id (str): The string uniquely indentifying the band+pol of this
-                 rank (example: '30GHz_I').
         band_map (DetectorMap): This rank's band map of the previous iteration. None before
-                 the first iteration. A map from file is read once and returned unchanged after.
-        params (Bunch): Full parameter file, forwarded to the file reader for common-res smoothing.
-
-    Returns:
-        data (list of DetectorMaps): nbands (DetectorMap)
+                 the first iteration.
+        params (Bunch): The full parameter file.
     """
-    my_compsep_rank = mpi_info.compsep.rank
+    band = mpi_info.band
+    my_band = params.compsep.bands[band.name]
     if my_band.get_from == "file":
         if band_map is None:
-            logger.info(f"CompSep: Rank {my_compsep_rank} reading static map data from file.")
-            band_map = read_data_map_from_file(my_band, params)
-        else:
-            logger.debug(f"CompSep: Rank {my_compsep_rank} already has static map data.")
+            logger.info(f"CompSep: Rank {mpi_info.compsep.rank} reading static map data from file.")
+            band_map = read_data_map_from_file(my_band, band.polarization, params)
     else:
-        logger.debug(f"CompSep: Rank {my_compsep_rank} receiving TOD data for "
-                     f"{compsep_band_id} from world rank {senders[compsep_band_id]}.")
-        band_map = mpi_info.world.comm.recv(source=senders[compsep_band_id])
-    
-    
+        sender = mpi_info.world.tod_band_masters[band.identifier]
+        logger.debug(f"CompSep: Rank {mpi_info.compsep.rank} receiving TOD data for "
+                     f"{band.identifier} from world rank {sender}.")
+        band_map = mpi_info.world.comm.recv(source=sender)
     return band_map
 
-def send_compsep(mpi_info: Bunch, compsep_my_band_id: str, sky_model,
-                 destinations: dict[str, int]|None) -> None:
+
+def send_compsep(mpi_info: Bunch, sky_model) -> None:
     """Send the CompSep sky model back to TOD when this execution view owns the return path.
 
     Before this boundary, ``process_compsep`` broadcasts every polarization view solved by a
@@ -198,12 +189,10 @@ def send_compsep(mpi_info: Bunch, compsep_my_band_id: str, sky_model,
 
     Args:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
-        compsep_my_band_id (str): The string uniquely indentifying the band+pol of this
-                      rank (example: '30GHz_I').
         sky_model: The realized sky model object for this Gibbs sample.
-        destinations (dict[str->int]): A dictionary mapping the string in 'compsep_my_band_id' to
-                                       the world rank of the destination task (on the TOD side)
-                                       (This is the same as is found in mpi_info)
     """
-    if _should_send_compsep_result(compsep_my_band_id, destinations):
-        mpi_info.world.comm.send(sky_model, dest=destinations[compsep_my_band_id])
+    # Maps a view name (example: '30GHz_I') to the world rank of the band's master on the TOD
+    # side. Empty when the run has no TOD side.
+    destinations = mpi_info.world.tod_band_masters
+    if _should_send_compsep_result(mpi_info.band.identifier, destinations):
+        mpi_info.world.comm.send(sky_model, dest=destinations[mpi_info.band.identifier])

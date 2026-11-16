@@ -26,7 +26,7 @@ def _read_band(path: Path, rms: np.ndarray, eval_nside: int | None = None,
     if eval_nside is not None:
         band["eval_nside"] = eval_nside
     params = as_bunch_recursive({"compsep": {"bands": {"b30": {}}}})
-    return read_data_map_from_file(as_bunch_recursive(band, name="b30"), params)
+    return read_data_map_from_file(as_bunch_recursive(band, name="b30"), "I", params)
 
 
 def test_rms_maps_are_read_as_inverse_variance(tmp_path: Path) -> None:
