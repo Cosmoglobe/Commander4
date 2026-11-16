@@ -118,8 +118,12 @@ compsep:
   mcmc_sampling_groups:
     sample_spectral_indices:
       enabled: true
-      parameters: spectral_indices
-      comps: [Synchrotron, ThermalDust]
+      # The components whose beta the group samples. `proposal_sigma` is the step length in beta
+      # and `bounds` the hard limits. `prior_mean` and `prior_rms` are an optional Gaussian prior
+      # (C3's p_gauss), here wide enough to be non-informative relative to the data.
+      beta:
+        ThermalDust: {proposal_sigma: 0.01, bounds: [1.0, 2.2], prior_mean: 1.55, prior_rms: 0.3}
+        Synchrotron: {proposal_sigma: 0.01, bounds: [-4.0, -2.2], prior_mean: -3.1, prior_rms: 0.3}
       update_amplitude_groups: [sample_amps_CG]
       numstep: 1
       # Optional: restrict the accept/reject chi^2 to a subset of the bands.
@@ -185,13 +189,6 @@ components:
       Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
       Cl_prior_l_pivot: 50
       beta: 1.45                            # start value; simulated truth is 1.54
-      sample_spectral_index: true
-      spectral_index_proposal_sigma: 0.01   # MH step in beta
-      spectral_index_bounds: [1.0, 2.2]     # hard (uniform-prior) limits
-      spectral_index_prior:                 # optional soft prior (C3's p_gauss); wide enough to
-        type: gaussian                      # be non-informative relative to the data here
-        mean: 1.55
-        rms: 0.3
       T: 20
       nu_ref: 353
       units: "uK_RJ"
@@ -209,13 +206,6 @@ components:
       Cl_prior_l_pivot: 50
       Cl_prior_FWHM: 30.0                   # arcmin
       beta: -3.25                           # start value; simulated truth is -3.10
-      sample_spectral_index: true
-      spectral_index_proposal_sigma: 0.01
-      spectral_index_bounds: [-4.0, -2.2]
-      spectral_index_prior:
-        type: gaussian
-        mean: -3.1
-        rms: 0.3
       nu_ref: 30
       units: "uK_RJ"
       lmax: 191

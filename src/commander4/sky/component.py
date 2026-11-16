@@ -149,20 +149,19 @@ class Component:
         if self.eval_pol is not None:
             group["eval_pol"] = self.eval_pol
 
-    def read_chain(self, group: h5py.Group) -> None:
+    def read_chain(self, group: h5py.Group, restore_beta: bool) -> None:
         """Restore this component's sampled state from its chain group, as `write_chain` wrote it.
 
         Only what a sampler changes is restored; fixed parameters keep their parameter-file value,
         so an edit there takes effect in a run started from another run's chain. The group holds
         the joined component (I and QU together), while `self` may be one polarization view.
 
-        This base version restores the amplitudes' beam, and `beta` when `sample_spectral_index`
-        is on (the switch of the spectral-index sampler). Subclasses add their amplitudes, and
-        any other sampled state, gated by the switch of the sampler that changes it.
+        This base version restores the amplitudes' beam, and `beta` when `restore_beta` is set
+        (the run samples this component's beta in an MCMC sampling group). Subclasses add their
+        amplitudes, and any other sampled state.
         """
         self.amp_fwhm_rad = np.radians(float(group["amp_fwhm_arcmin"][()])/60.0)
-        if hasattr(self, "beta") and "sample_spectral_index" in self.comp_params \
-                and self.comp_params.sample_spectral_index:
+        if restore_beta:
             beta = np.asarray(group["sed/beta"][()])
             if beta.ndim == 1:  # Joined I and QU views with different values store [I, QU].
                 beta = beta[0 if self.eval_pol == "I" else 1]
@@ -170,7 +169,8 @@ class Component:
             logger.debug(f"Component {self.comp_name!r} ({self.eval_pol}): restored sampled "
                          f"beta = {self.beta}.")
 
-    def load_initial_state(self, chain_file: str | None, apply_init_from: bool) -> None:
+    def load_initial_state(self, chain_file: str | None, apply_init_from: bool,
+                           restore_beta: bool) -> None:
         """Set this component's starting state from a CompSep chain file or its own `init_from`.
 
         The source is the `init_from` parameter if `apply_init_from` is set and the component has
@@ -183,6 +183,8 @@ class Component:
             chain_file: The CompSep chain file this chain starts from, or None.
             apply_init_from: False when `chain_file` is this chain's own saved state (on
                 `gibbs.chain_status: append`), which must win over the initial guesses.
+            restore_beta: True when the run samples this component's beta. A chain file then also
+                sets beta; otherwise beta keeps its parameter-file value.
         """
         source = chain_file
         if apply_init_from and "init_from" in self.comp_params:
@@ -199,7 +201,7 @@ class Component:
                                  f"not found in {source!r}; keeping its parameter-file "
                                  "initialization.")
                     return
-                self.read_chain(file[group_path])
+                self.read_chain(file[group_path], restore_beta)
         else:
             raise ValueError(f"Unsupported init file {source!r} for component "
                              f"{self.comp_name!r}: expected a .h5/.hd5 chain or a .fits map.")

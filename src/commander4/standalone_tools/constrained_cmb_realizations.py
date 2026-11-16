@@ -446,9 +446,9 @@ def _build_intensity_components(params: Bunch, compsep_path: str) -> list[Diffus
             # The intensity alms and the beam they carry, read as the component reads its own
             # chain group. SkyModel subtracts that beam in quadrature from the requested band
             # beam, so restoring it prevents smoothing the already-smoothed amplitudes twice.
-            comp.read_chain(handle[group_path])
-            # `read_chain` restores only the sampled SED parameters; here the saved values of
-            # all of them define the foregrounds to subtract. The component resolver expects a
+            comp.read_chain(handle[group_path], restore_beta=False)
+            # `read_chain` restores no SED parameter here; the saved values of all of them
+            # define the foregrounds to subtract. The component resolver expects a
             # Python scalar or an [I, QU] list, whereas HDF5 supplies numpy scalars/arrays.
             for param_name in comp.sed_param_names:
                 value = np.asarray(handle[f"{group_path}/sed/{param_name}"][()]).tolist()

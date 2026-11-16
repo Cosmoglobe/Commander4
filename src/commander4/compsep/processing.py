@@ -38,9 +38,12 @@ CG_GROUP_DEFAULTS = {"enabled": True, "comps": None, "bands": None, "optimize": 
                      "max_iter": 200, "max_iter_pol": 200, "err_tol": 1.0e-8,
                      "preconditioner": "JointPreconditioner"}
 PER_PIXEL_GROUP_DEFAULTS = {"enabled": True, "comps": None, "bands": None}
-MCMC_GROUP_DEFAULTS = {"enabled": True, "parameters": "spectral_indices", "comps": None,
-                       "update_amplitude_groups": [], "numstep": 1, "chisq_bands": None,
-                       "chisq_mask": None}
+MCMC_GROUP_DEFAULTS = {"enabled": True, "beta": None, "update_amplitude_groups": [], "numstep": 1,
+                       "chisq_bands": None, "chisq_mask": None}
+# The settings of one component in the `beta` block of an MCMC group: the step length of the
+# proposal, the hard bounds [lowest, highest], and the mean and rms of a Gaussian prior. None is
+# no bounds or no prior. `proposal_sigma` must be set.
+BETA_DEFAULTS = {"proposal_sigma": None, "bounds": None, "prior_mean": None, "prior_rms": None}
 
 
 def names_or_all(names: list[str] | str | None, known_names: list[str],
@@ -64,8 +67,8 @@ def read_sampling_groups(params: Bunch) -> Bunch:
     `per_pixel_sampling_groups` and `mcmc_sampling_groups` are each a dict from group name to the
     settings of that group. A group also holds its own `name`, and its `comps`, `bands` and
     `chisq_bands` are lists of names. `amplitude_groups` is the CG groups or the per-pixel groups,
-    whichever the run uses. An MCMC group also holds `beta`: the components whose beta it samples,
-    each with the settings of its sampler.
+    whichever the run uses. The `beta` of an MCMC group is a dict from the name of each component
+    whose beta it samples to the settings of that sampler (`BETA_DEFAULTS`).
     """
     comp_names = [name for name in params.components if params.components[name].enabled]
     # A group can name a whole band ("Planck30GHz") or one view of it ("Planck30GHz_QU").
@@ -104,35 +107,22 @@ def read_sampling_groups(params: Bunch) -> Bunch:
         group = read_settings(params, name, ("compsep.mcmc_sampling_groups",), MCMC_GROUP_DEFAULTS)
         if not group.enabled:
             continue
-        if group.parameters != "spectral_indices":
-            raise ValueError(f"'{section}.parameters' is {group.parameters!r}, but only "
-                             "'spectral_indices' is implemented.")
         group.name = name
-        # `comps` stays None for "all": the group then takes every component that sets
-        # `sample_spectral_index`.
-        if group.comps == "all":
-            group.comps = None
-        if group.comps is not None:
-            group.comps = names_or_all(group.comps, comp_names, f"{section}.comps")
-        # `beta` holds the components whose beta the group samples, each with the settings of its
-        # sampler: `proposal_sigma`, the hard `bounds`, and the Gaussian prior `prior_mean` and
-        # `prior_rms` (None for no bounds or no prior). The component blocks set them.
-        group.beta = {}
-        for comp_name in comp_names:
-            comp_params = params.components[comp_name].params
-            if (group.comps is not None and comp_name not in group.comps) \
-                    or "sample_spectral_index" not in comp_params \
-                    or not comp_params.sample_spectral_index:
-                continue
-            settings = Bunch(proposal_sigma=comp_params.spectral_index_proposal_sigma,
-                             bounds=None, prior_mean=None, prior_rms=None)
-            if "spectral_index_bounds" in comp_params:
-                settings.bounds = comp_params.spectral_index_bounds
-            if "spectral_index_prior" in comp_params \
-                    and comp_params.spectral_index_prior is not None:
-                settings.prior_mean = comp_params.spectral_index_prior.mean
-                settings.prior_rms = comp_params.spectral_index_prior.rms
-            group.beta[comp_name] = settings
+        # The `beta` block names the components whose beta the group samples, each with the
+        # settings of its sampler. The betas are proposed in the order of the block.
+        if not group.beta:
+            raise ValueError(f"'{section}.beta' must name the components whose beta to sample.")
+        beta = {}
+        for comp_name in names_or_all(list(group.beta), comp_names, f"{section}.beta"):
+            beta[comp_name] = read_settings(params, comp_name, (f"compsep.{section}.beta",),
+                                            BETA_DEFAULTS)
+            if beta[comp_name].proposal_sigma is None:
+                raise ValueError(f"'{section}.beta.{comp_name}.proposal_sigma' must be set.")
+            # A prior with only one of its two numbers would be left out without a message.
+            if (beta[comp_name].prior_mean is None) != (beta[comp_name].prior_rms is None):
+                raise ValueError(f"'{section}.beta.{comp_name}' must set both 'prior_mean' and "
+                                 "'prior_rms', or neither.")
+        group.beta = beta
         group.chisq_bands = names_or_all(group.chisq_bands, band_names, f"{section}.chisq_bands")
         unknown = sorted(set(group.update_amplitude_groups) - set(cfg.amplitude_groups))
         if unknown:
@@ -168,30 +158,6 @@ def _read_chisq_masks(compsep_comm: MPI.Comm, mcmc_groups: dict[str, Bunch]) -> 
             logger.info(f"CompSep: read chisq mask for MCMC group {group_name!r} from "
                         f"{group.chisq_mask} (fsky = {np.mean(masks[group_name] > 0.5):.3f}).")
     return compsep_comm.bcast(masks, root=0)
-
-
-def _validate_mcmc_sampled_components(mcmc_groups: dict[str, Bunch], comp_list: CompList) -> None:
-    """Report components an MCMC group names that have spectral-index sampling switched off.
-    """
-    sampling_off = set()
-    for comp in comp_list.joined():
-        if "sample_spectral_index" not in comp.comp_params \
-                or not bool(comp.comp_params.sample_spectral_index):
-            sampling_off.add(comp.comp_name)
-
-    for group in mcmc_groups.values():
-        if group.comps is None:
-            continue
-        ignored = sorted(set(group.comps) & sampling_off)
-        if ignored:
-            logger.error(
-                f"MCMC sampling group {group.name!r} names component(s) {ignored}, but they do not "
-                "set 'sample_spectral_index: true' in their own params block, so their spectral "
-                "indices are held fixed and the group ignores them. Set the flag on each component "
-                "you want sampled, or drop it from the group's 'comps'.")
-            if not set(group.comps) - sampling_off:
-                logger.error(f"MCMC sampling group {group.name!r} has no component left to sample "
-                             "and will do nothing.")
 
 
 def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
@@ -285,7 +251,6 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
 
     cfg = read_sampling_groups(params)
     if mpi_info.compsep.rank == mpi_info.compsep.master:  # One report, not one per band.
-        _validate_mcmc_sampled_components(cfg.mcmc_sampling_groups, comp_list)
         _validate_component_lmax(comp_list, params)
     cfg.double_precision = resolve_param(
         params, "double_precision", ("compsep",), default=False, legal_types=bool)
@@ -301,6 +266,11 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
     chisq_masks = _read_chisq_masks(mpi_info.compsep.comm, cfg.mcmc_sampling_groups)
     for group in cfg.mcmc_sampling_groups.values():
         group.chisq_mask_map = chisq_masks.get(group.name)
+    # The components whose beta an MCMC group samples. Only they take beta from a saved chain; a
+    # beta that is not sampled keeps the value of the parameter file.
+    sampled_betas = set()
+    for group in cfg.mcmc_sampling_groups.values():
+        sampled_betas.update(group.beta)
 
     # Read the Gaussian amplitude prior's mean mu (each component's amp_prior_mean_map, else a
     # zero-mean prior) once here; the CG applies S^{-1/2} on every solve. Then give each chain
@@ -323,7 +293,8 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
             apply_init_from = chain_file is None or start.first_iteration == 1
             comp_lists_by_chain[chain] = deepcopy(comp_list)
             for comp in comp_lists_by_chain[chain]:
-                comp.load_initial_state(chain_file, apply_init_from)
+                comp.load_initial_state(chain_file, apply_init_from,
+                                        restore_beta=comp.comp_name in sampled_betas)
 
     data_world = (band_identifier, mpi_info.world.rank)
     data_compsep = (band_identifier, mpi_info.compsep.rank)
@@ -383,8 +354,7 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, detector_data: DetectorMap, ite
         with benchmark(f"mcmc-{group.name}"):
             mcmc_stats = sample_spectral_params(mpi_info, cfg, group, detector_data, comp_list,
                                                 rng)
-        if mcmc_stats:
-            sampler_stats.setdefault("mcmc", {})[group.name] = mcmc_stats
+        sampler_stats.setdefault("mcmc", {})[group.name] = mcmc_stats
         fit = evaluate_chi2(mpi_info, cfg, detector_data, sky_model,
                             label=f"MCMC group {group.name!r}")
 

@@ -54,13 +54,13 @@ class PointSourcesComponent(Component):
         super().write_chain(group, band_frequencies)
         group["source_amps"] = self.amps
 
-    def read_chain(self, group: h5py.Group) -> None:
+    def read_chain(self, group: h5py.Group, restore_beta: bool) -> None:
         """Restore the shared sampled state (see `Component.read_chain`), plus the amplitudes.
 
         The catalogue must list the same sources, in the same order, as the run that wrote the
         chain.
         """
-        super().read_chain(group)
+        super().read_chain(group, restore_beta)
         self.amps[:] = group["source_amps"][()]
 
 class RadioSources(PointSourcesComponent):

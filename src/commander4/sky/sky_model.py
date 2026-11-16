@@ -19,7 +19,8 @@ def build_initial_sky_model(params: Bunch) -> "SkyModel":
     """
     comp_list = CompList.init_from_params(params.components, params)
     for comp in comp_list:
-        comp.load_initial_state(None, apply_init_from=True)
+        # Nothing samples beta in a TOD-only run, so beta is that of the parameter file.
+        comp.load_initial_state(None, apply_init_from=True, restore_beta=False)
     return SkyModel(comp_list)
 
 

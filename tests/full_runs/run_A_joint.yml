@@ -124,8 +124,8 @@ compsep:
   mcmc_sampling_groups:
     dust_beta:
       enabled: true
-      parameters: spectral_indices
-      comps: [ThermalDust]
+      beta:
+        ThermalDust: {proposal_sigma: 0.02, bounds: [1.0, 2.5], prior_mean: 1.55, prior_rms: 0.2}
       update_amplitude_groups: [foreground_amps]
       numstep: 1
   bands:
@@ -188,10 +188,6 @@ components:
       nu_ref: 353
       units: "uK_RJ"
       init_from: "sim_debug/truth_ThermalDust.fits"
-      sample_spectral_index: true
-      spectral_index_proposal_sigma: 0.02
-      spectral_index_bounds: [1.0, 2.5]
-      spectral_index_prior: {type: gaussian, mean: 1.55, rms: 0.2}
   Synchrotron:
     enabled: true
     component_class: "Synchrotron"

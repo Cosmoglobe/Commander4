@@ -75,9 +75,10 @@ def sample_spectral_params(mpi_info: Bunch, cfg: Bunch, group: Bunch, detector_d
     Args:
         mpi_info: The MPI data of this rank (`compsep` and `band` are used).
         cfg: The settings of component separation, from `init_compsep_processing`.
-        group: The settings of the group, one of `cfg.mcmc_sampling_groups`. `group.beta` maps the
-            name of each sampled component to its `proposal_sigma`, its hard `bounds`, and its
-            Gaussian prior `prior_mean` and `prior_rms` (None for no bounds or no prior).
+        group: The settings of the group, one of `cfg.mcmc_sampling_groups`. `group.beta` is the
+            `beta` block of the parameter file: it maps the name of each sampled component to its
+            `proposal_sigma`, its hard `bounds`, and its Gaussian prior `prior_mean` and
+            `prior_rms` (None for no bounds or no prior).
         detector_data: This rank's band map.
         comp_list: The full component list of the chain, updated in place.
         rng: This rank's random generator. The master draws the proposals and the decisions from
@@ -86,15 +87,9 @@ def sample_spectral_params(mpi_info: Bunch, cfg: Bunch, group: Bunch, detector_d
     Returns:
         The acceptance record for the chain file (C3's ``nonlin-samples_*.dat``): the number of
         steps taken and accepted, and the final beta of each sampled component, by its shortname.
-        Empty when the group samples nothing.
     """
     compsep = mpi_info.compsep
     is_master = compsep.rank == compsep.master
-    if not group.beta:
-        if is_master:
-            logger.verbose(f"MCMC group {group.name!r} has nothing to sample; skipping.")
-        return {}
-
     sky_model = SkyModel(comp_list)
     # The pixels of this band that enter the chi-squared: all, or those the group's mask keeps.
     keep = resolve_chisq_mask(group.chisq_mask_map, detector_data.nside)

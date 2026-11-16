@@ -441,7 +441,7 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
             "Dust": {"enabled": True, "component_class": "ThermalDust", "params": {
                 "polarization": "I", "shortname": "dust", "lmax": lmax,
                 "spatially_varying_MM": False, "Cl_prior_amplitude": None,
-                "nu_ref": 100.0, "beta": 1.54, "T": 20.0, "sample_spectral_index": True,
+                "nu_ref": 100.0, "beta": 1.54, "T": 20.0,
             }},
         },
         "compsep": {"double_precision": True},
@@ -716,8 +716,6 @@ def saved_component_sample(request: pytest.FixtureRequest, tmp_path: Path) -> tu
             "polarization": request.param, "shortname": shortname, "lmax": lmax,
             "spatially_varying_MM": False, "Cl_prior_amplitude": None, **sed,
         }}
-    # Dust is sampled; sync is fixed. Offline restoration must use both saved states.
-    components["Dust"]["params"]["sample_spectral_index"] = True
     config = {"components": components, "compsep": {"double_precision": True},
               "output": {"dir": str(tmp_path), "chains": {"write": [1]}}}
     params = as_bunch_recursive(config)

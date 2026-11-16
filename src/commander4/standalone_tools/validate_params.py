@@ -119,14 +119,10 @@ def _validate_components(params) -> None:
             "Cl_prior_FWHM", "Cl_prior_l_pivot", "Cl_prior_l_apod", "Cl_prior_l_tighten", "units",
             "init_from", "amp_prior_mean_map",
         }
-        spectral_index_fields = {
-            "sample_spectral_index", "spectral_index_bounds", "spectral_index_prior",
-            "spectral_index_proposal_sigma",
-        }
         class_fields = {
             CMB: {"nu_ref"},
-            ThermalDust: {"beta", "T", "nu_ref"} | spectral_index_fields,
-            Synchrotron: {"beta", "nu_ref"} | spectral_index_fields,
+            ThermalDust: {"beta", "T", "nu_ref"},
+            Synchrotron: {"beta", "nu_ref"},
             FreeFree: {"T", "nu_ref"},
             SpinningDust: {"template_path", "nu_peak", "nu_0"},
             RadioSources: {"template_path", "nu_0"},

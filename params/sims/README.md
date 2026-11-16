@@ -211,17 +211,17 @@ which describes it and the truth it injects. Generate the TODs first, then run t
     cd ..   && mpirun -n 18 commander4 -p params/sims/simparam_compsep_MCMC.yml
 18 tasks = 6 TOD + 6 CompSep-I + 6 CompSep-QU.
 
-FEATURE UNDER TEST: `compsep.mcmc_sampling_groups` with `parameters: spectral_indices`, the
-Metropolis-Hastings sampler in `compsep/spectral_sampling.py`, which re-solves the CG amplitude
-groups named in `update_amplitude_groups` between proposal and accept/reject.
+FEATURE UNDER TEST: `compsep.mcmc_sampling_groups` with a `beta` block, the Metropolis-Hastings
+sampler in `compsep/spectral_sampling.py`, which re-solves the CG amplitude groups named in
+`update_amplitude_groups` between proposal and accept/reject.
 
 STARTS AWAY FROM THE TRUTH AT: beta_dust 1.45 (truth 1.54), beta_sync -3.25 (truth -3.10), several
 proposal widths out, so a working sampler has to walk back and then scatter around the truth.
 
 WHAT TO CHECK: the sampled spectral indices in `<output_dir>/chains_compsep/`, and the MH
 acceptance rate logged each iteration. Walking to the truth and then mixing at roughly 0.2-0.5
-acceptance is the pass condition; a chain that sticks means `spectral_index_proposal_sigma` is too
-large, one that random-walks without converging means it is too small.
+acceptance is the pass condition; a chain that sticks means `proposal_sigma` is too large, one
+that random-walks without converging means it is too small.
 
 NOTE that the amplitude fluctuations (the CG group's `optimize: false`) make the MH likelihood
 stochastic, since each proposal is evaluated against a freshly drawn amplitude realization. This

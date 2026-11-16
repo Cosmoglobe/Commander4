@@ -369,14 +369,14 @@ class DiffuseComponent(Component):
             if value is not None:
                 group[f"Cl_prior/{param_name}"] = value
 
-    def read_chain(self, group: h5py.Group) -> None:
+    def read_chain(self, group: h5py.Group, restore_beta: bool) -> None:
         """Restore the shared sampled state (see `Component.read_chain`), plus this view's alms.
 
         The stored alms are those of the joined component, so only the rows of this view's
         polarization are taken, and they are cut or zero-padded to this component's lmax. If the
         file lacks this view's polarization, the alms keep their current value.
         """
-        super().read_chain(group)
+        super().read_chain(group, restore_beta)
         stored_alms = group["alms"][()]
         rows = _pol_row_indices(stored_alms, self.eval_pol, self.shortname, group.file.filename)
         if rows is None:

@@ -81,8 +81,12 @@ compsep:
   mcmc_sampling_groups:
     sample_spectral_indices:
       enabled: true
-      parameters: spectral_indices
-      comps: [Synchrotron, ThermalDust]
+      # The components whose beta the group samples. `proposal_sigma` is the step length in beta.
+      # `bounds` are hard limits (a proposal outside is rejected). `prior_mean` and `prior_rms`
+      # are an optional Gaussian prior (omit both for a flat prior).
+      beta:
+        ThermalDust: {proposal_sigma: 0.01, bounds: [1.0, 2.5], prior_mean: 1.56, prior_rms: 0.1}
+        Synchrotron: {proposal_sigma: 0.01, bounds: [-4.0, -2.0]}
       update_amplitude_groups: [sample_amps_CG]
       numstep: 1
 
@@ -151,14 +155,6 @@ components:
       nu_ref: 545.0
       lmax: 4096
       spatially_varying_MM: False
-      # Spectral index samplign stuff.
-      sample_spectral_index: True
-      spectral_index_proposal_sigma: 0.01
-      spectral_index_bounds: [1.0, 2.5]  # hard uniform limits (rejected outside)
-      spectral_index_prior:              # optional soft Gaussian prior (omit for a flat prior)
-        type: "gaussian"
-        mean: 1.56
-        rms: 0.1
 
   Synchrotron:
     enabled: true
@@ -172,10 +168,6 @@ components:
       nu_ref: 30
       lmax: 1024
       spatially_varying_MM: False
-      # Spectral index samplign stuff.
-      sample_spectral_index: True
-      spectral_index_proposal_sigma: 0.01
-      spectral_index_bounds: [-4.0, -2.0]
 
   FreeFree:
     enabled: false

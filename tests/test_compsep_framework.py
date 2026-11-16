@@ -9,7 +9,6 @@ from pixell.bunch import Bunch
 from commander4.compsep.amplitude_sampling import _build_conditional_residual
 from commander4.compsep.processing import (
     MCMC_GROUP_DEFAULTS,
-    _validate_mcmc_sampled_components,
     _validate_component_lmax,
     process_compsep,
     read_sampling_groups,
@@ -184,6 +183,11 @@ def _make_group_params(**sampling_group_sections) -> Bunch:
     return Bunch(components=components, compsep=Bunch(bands=bands, **sampling_group_sections))
 
 
+def _dust_beta_block() -> Bunch:
+    """The smallest `beta` block of an MCMC group: one component with a step length."""
+    return Bunch(ThermalDust=Bunch(proposal_sigma=0.01))
+
+
 def test_sampling_group_gets_defaults_and_all_names() -> None:
     params = _make_group_params(cg_sampling_groups=Bunch(
         all=Bunch(comps="all", bands="all"), missing=Bunch()))
@@ -216,7 +220,8 @@ def test_sampling_group_with_an_unknown_name_is_rejected() -> None:
             per_pixel_sampling_groups=Bunch(g=Bunch(bands=["NoSuchBand"]))))
     with pytest.raises(ValueError, match="g.chisq_bands' names unknown"):
         read_sampling_groups(_make_group_params(
-            mcmc_sampling_groups=Bunch(g=Bunch(chisq_bands=["NoSuchBand"]))))
+            mcmc_sampling_groups=Bunch(g=Bunch(beta=_dust_beta_block(),
+                                               chisq_bands=["NoSuchBand"]))))
     with pytest.raises(ValueError, match="must be a list of names"):
         read_sampling_groups(_make_group_params(cg_sampling_groups=Bunch(g=Bunch(comps="CMB"))))
 
@@ -234,9 +239,7 @@ def _make_spectral_comp_list() -> CompList:
         component_class="Synchrotron",
         params=Bunch(
             lmax=2, polarization="IQU", shortname="sync", spatially_varying_MM=False,
-            Cl_prior_amplitude=None, beta=-3.1, nu_ref=30.0,
-            sample_spectral_index=True, spectral_index_proposal_sigma=0.02,
-            spectral_index_bounds=[-4.0, -2.0]),
+            Cl_prior_amplitude=None, beta=-3.1, nu_ref=30.0),
     )
     object.__setattr__(sync, "_name", "Synchrotron")
     dust = Bunch(
@@ -244,9 +247,7 @@ def _make_spectral_comp_list() -> CompList:
         component_class="ThermalDust",
         params=Bunch(
             lmax=2, polarization="IQU", shortname="dust", spatially_varying_MM=False,
-            Cl_prior_amplitude=None, beta=1.56, T=20.0,
-            nu_ref=545.0, sample_spectral_index=True, spectral_index_proposal_sigma=0.01,
-            spectral_index_prior=Bunch(type="gaussian", mean=1.5, rms=0.1)),
+            Cl_prior_amplitude=None, beta=1.56, T=20.0, nu_ref=545.0),
     )
     object.__setattr__(dust, "_name", "ThermalDust")
     return CompList.init_from_params(Bunch({"Synchrotron": sync, "ThermalDust": dust}), params)
@@ -335,52 +336,14 @@ def test_mcmc_group_must_name_enabled_amplitude_groups() -> None:
     amplitudes = Bunch(amps=Bunch(comps=["CMB"]), off=Bunch(enabled=False))
     valid = read_sampling_groups(_make_group_params(
         cg_sampling_groups=amplitudes, mcmc_sampling_groups=Bunch(
-            beta=Bunch(comps=["ThermalDust"], update_amplitude_groups=["amps"]))))
-    assert valid.mcmc_sampling_groups["beta"].update_amplitude_groups == ["amps"]
+            mcmc=Bunch(beta=_dust_beta_block(), update_amplitude_groups=["amps"]))))
+    assert valid.mcmc_sampling_groups["mcmc"].update_amplitude_groups == ["amps"]
 
     for group_name in ("does_not_exist", "off"):
         with pytest.raises(ValueError, match="unknown or disabled amplitude group"):
             read_sampling_groups(_make_group_params(
                 cg_sampling_groups=amplitudes, mcmc_sampling_groups=Bunch(
-                    beta=Bunch(update_amplitude_groups=[group_name]))))
-
-
-def _disable_spectral_index_sampling(comp_list: CompList, comp_name: str) -> None:
-    """Turn `sample_spectral_index` off on every execution view of one component."""
-    for comp in comp_list:
-        if comp.comp_name == comp_name:
-            comp.comp_params.sample_spectral_index = False
-
-
-def test_mcmc_group_naming_a_fixed_component_is_an_error(caplog) -> None:
-    comp_list = _make_spectral_comp_list()
-    _disable_spectral_index_sampling(comp_list, "ThermalDust")
-    groups = {"beta": Bunch(name="beta", comps=["Synchrotron", "ThermalDust"])}
-    with caplog.at_level("WARNING"):
-        _validate_mcmc_sampled_components(groups, comp_list)
-    assert "ERROR" in caplog.text and "'ThermalDust'" in caplog.text
-    assert "Synchrotron" not in caplog.text  # It is sampled, so it is not reported.
-    assert "no component left to sample" not in caplog.text
-
-
-def test_mcmc_group_with_every_component_fixed_reports_the_empty_group(caplog) -> None:
-    comp_list = _make_spectral_comp_list()
-    _disable_spectral_index_sampling(comp_list, "Synchrotron")
-    _disable_spectral_index_sampling(comp_list, "ThermalDust")
-    groups = {"beta": Bunch(name="beta", comps=["Synchrotron", "ThermalDust"])}
-    with caplog.at_level("WARNING"):
-        _validate_mcmc_sampled_components(groups, comp_list)
-    assert "no component left to sample" in caplog.text
-
-
-def test_mcmc_group_selecting_all_components_ignores_fixed_ones_silently(caplog) -> None:
-    # `comps: all` means "every sampleable component", so skipping a fixed one is intended.
-    comp_list = _make_spectral_comp_list()
-    _disable_spectral_index_sampling(comp_list, "ThermalDust")
-    groups = {"beta": Bunch(name="beta", comps=None)}
-    with caplog.at_level("WARNING"):
-        _validate_mcmc_sampled_components(groups, comp_list)
-    assert caplog.text == ""
+                    mcmc=Bunch(beta=_dust_beta_block(), update_amplitude_groups=[group_name]))))
 
 
 def test_build_conditional_residual_subtracts_only_fixed_components() -> None:
@@ -482,25 +445,34 @@ def test_band2comp_is_the_transpose_of_comp2band(band_lmax: int) -> None:
     assert lhs == pytest.approx(rhs, rel=1e-5)
 
 
-def test_mcmc_group_holds_the_sampler_settings_of_its_components() -> None:
-    params = _make_group_params(mcmc_sampling_groups=Bunch(
-        all=Bunch(), only_dust=Bunch(comps=["ThermalDust"])))
-    params.components.ThermalDust.params = Bunch(
-        sample_spectral_index=True, spectral_index_proposal_sigma=0.01,
-        spectral_index_prior=Bunch(type="gaussian", mean=1.5, rms=0.1))
-    params.components.FreeFree.params = Bunch(
-        sample_spectral_index=True, spectral_index_proposal_sigma=0.02,
-        spectral_index_bounds=[-4.0, -2.0])
-    groups = read_sampling_groups(params).mcmc_sampling_groups
+def test_mcmc_group_reads_its_beta_block() -> None:
+    params = _make_group_params(mcmc_sampling_groups=Bunch(mcmc=Bunch(beta=Bunch(
+        FreeFree=Bunch(proposal_sigma=0.02, bounds=[-4.0, -2.0]),
+        ThermalDust=Bunch(proposal_sigma=0.01, prior_mean=1.5, prior_rms=0.1)))))
+    beta = read_sampling_groups(params).mcmc_sampling_groups["mcmc"].beta
 
-    # "all" takes every component that sets `sample_spectral_index` (CMB does not).
-    assert list(groups["all"].beta) == ["ThermalDust", "FreeFree"]
-    assert list(groups["only_dust"].beta) == ["ThermalDust"]
-    dust, freefree = groups["all"].beta["ThermalDust"], groups["all"].beta["FreeFree"]
-    assert (dust.proposal_sigma, dust.bounds, dust.prior_mean, dust.prior_rms) \
-        == (0.01, None, 1.5, 0.1)
-    assert (freefree.proposal_sigma, freefree.bounds, freefree.prior_mean, freefree.prior_rms) \
+    # The betas are proposed in the order of the block, not in the order of the components.
+    assert list(beta) == ["FreeFree", "ThermalDust"]
+    # A setting that is left out is None: no bounds, or no prior.
+    assert (beta["FreeFree"].proposal_sigma, beta["FreeFree"].bounds,
+            beta["FreeFree"].prior_mean, beta["FreeFree"].prior_rms) \
         == (0.02, [-4.0, -2.0], None, None)
+    assert (beta["ThermalDust"].proposal_sigma, beta["ThermalDust"].bounds,
+            beta["ThermalDust"].prior_mean, beta["ThermalDust"].prior_rms) \
+        == (0.01, None, 1.5, 0.1)
+
+
+@pytest.mark.parametrize("beta_block, message", [
+    (None, "beta' must name the components"),                           # No `beta` block.
+    (Bunch(NoSuchComp=Bunch(proposal_sigma=0.01)), "beta' names unknown"),
+    (Bunch(ThermalDust=Bunch(bounds=[1.0, 2.0])), "proposal_sigma' must be set"),
+    (Bunch(ThermalDust=Bunch(proposal_sigma=0.01, prior=1.5)), "Unknown setting"),
+    (Bunch(ThermalDust=Bunch(proposal_sigma=0.01, prior_mean=1.5)), "both 'prior_mean' and"),
+])
+def test_mcmc_group_with_a_wrong_beta_block_fails_at_startup(beta_block, message) -> None:
+    group = Bunch() if beta_block is None else Bunch(beta=beta_block)
+    with pytest.raises(ValueError, match=message):
+        read_sampling_groups(_make_group_params(mcmc_sampling_groups=Bunch(mcmc=group)))
 
 
 # --- component lmax vs band lmax ------------------------------------------------------------
