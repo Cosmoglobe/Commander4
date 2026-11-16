@@ -145,8 +145,8 @@ def collect_fit_diagnostics(compsep: Bunch, result: ChisqResult, include_chisq_m
     # Commander3's chisq_<postfix>.fits: z^2 from every band added into one low-resolution map.
     chi2_map_total = np.zeros_like(result.band.chi2_map) if compsep.is_master else None
     compsep.comm.Reduce(np.ascontiguousarray(result.band.chi2_map), chi2_map_total, op=MPI.SUM,
-                        root=compsep.master)
-    per_band = compsep.comm.gather(result.band, root=compsep.master)
+                        root=0)
+    per_band = compsep.comm.gather(result.band, root=0)
     if not compsep.is_master:
         return {}, {}
 

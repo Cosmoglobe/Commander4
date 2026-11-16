@@ -16,6 +16,7 @@ from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
+import commander4.sky as sky
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
@@ -91,6 +92,14 @@ def read_sampling_groups(params: Bunch) -> Bunch:
                          "configure only one method.")
     cfg.amplitude_groups = cfg.cg_sampling_groups if cfg.cg_sampling_groups \
         else cfg.per_pixel_sampling_groups
+    # The per-pixel solver fits component maps pixel by pixel, so it has no model of point sources.
+    for group in cfg.per_pixel_sampling_groups.values():
+        for comp_name in group.comps:
+            component_class = getattr(sky, params.components[comp_name].component_class)
+            if not issubclass(component_class, DiffuseComponent):
+                raise ValueError(f"'per_pixel_sampling_groups.{group.name}.comps' names "
+                                 f"{comp_name!r}, a {component_class.__name__}. The per-pixel "
+                                 "solver handles only diffuse components.")
 
     if "mcmc_sampling_groups" not in params.compsep:
         return cfg
@@ -301,8 +310,9 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
     return comp_lists_by_chain, cfg
 
 
-def process_compsep(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, iter: int, chain: int,
-                    params: Bunch, comp_list: CompList, rng: np.random.Generator) -> None:
+def process_compsep(mpi_info: Bunch, cfg: Bunch, params: Bunch, band_map: DetectorMap,
+                    comp_list: CompList, chain: int, iteration: int,
+                    rng: np.random.Generator) -> None:
     """One Gibbs iteration of component separation. Every CompSep rank calls it.
 
     Runs the amplitude groups (CG or per-pixel) first, followed by the MCMC groups. An MCMC group
@@ -312,12 +322,12 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, iter: in
     Args:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
         cfg (Bunch): The settings of component separation, from `init_compsep_processing`.
+        params (Bunch): The parameters from the input parameter file (for the chain file).
         band_map (DetectorMap): This rank's band map, cleaned of all "TOD" components
             (correlated noise and orbital dipole).
-        iter (int): The current Gibbs iteration (used only for logging and the chain file).
-        chain (int): The current chain (used only for logging and the chain file).
-        params (Bunch): The parameters from the input parameter file.
         comp_list (CompList): The full execution-view component list, updated in place.
+        chain (int): The current chain (used only for logging and the chain file).
+        iteration (int): The current Gibbs iteration (used only for logging and the chain file).
         rng: This rank's random generator for the iteration. Every draw of every group uses it.
     """
     compsep = mpi_info.compsep
@@ -325,9 +335,6 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, iter: in
     # Sampler bookkeeping for the chain: C3's nonlin-samples_*.dat and its CG residual logging. A
     # tier that sampled nothing adds no key, so this mirrors the file it ends up in.
     sampler_stats: dict = {}
-    # `fit` is the fit after the most recent sampling step. Each evaluation logs the fit after its
-    # step, and the last one is also the final fit that the chain file stores. A run has at least
-    # one amplitude or MCMC group, so `fit` is always set.
 
     # The Gibbs order of C3 (commander.f90): the amplitudes, the spectral parameters, and then the
     # amplitudes again, so that the chain holds amplitudes solved at the final spectral parameters.
@@ -336,6 +343,9 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, iter: in
             cg_stats = sample_amplitudes(mpi_info, cfg, group, band_map, comp_list, rng)
         if cg_stats:
             sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
+        # `fit` is the fit after the most recent sampling step. Each evaluation logs it, and the
+        # last one is the final fit that the chain file stores. A run has at least one amplitude
+        # or MCMC group, so `fit` is always set.
         fit = evaluate_chi2(mpi_info, cfg, band_map, comp_list,
                             label=f"{method} group {group.name!r}")
 
@@ -360,10 +370,10 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, iter: in
     if compsep.is_master:
         diagnostics = {**fit_tree, **sampler_stats}
         with benchmark("filewrite-compsep"):
-            write_compsep_chain_to_file(comp_list, params, chain, iter, diagnostics,
+            write_compsep_chain_to_file(comp_list, params, chain, iteration, diagnostics,
                                         band_frequencies)
         chi2 = fit_tree["chi2"]
-        logger.summary(f"Chain {chain}, iteration {iter} complete: chi2={chi2['total']:.6e}, "
+        logger.summary(f"Chain {chain}, iteration {iteration} complete: chi2={chi2['total']:.6e}, "
                        f"ndof={chi2['ndof']}, red.chi2={chi2['reduced']:.4f}, z={chi2['z']:.3f}.")
 
     with benchmark("end-barrier"):

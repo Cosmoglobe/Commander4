@@ -115,7 +115,7 @@ def sample_spectral_params(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: 
                 bounds = group.beta[name].bounds
                 if bounds is not None and not bounds[0] <= new_betas[name] <= bounds[1]:
                     in_bounds = False
-        new_betas, in_bounds = compsep.comm.bcast((new_betas, in_bounds), root=compsep.master)
+        new_betas, in_bounds = compsep.comm.bcast((new_betas, in_bounds), root=0)
         if not in_bounds:
             if compsep.is_master:
                 logger.verbose(f"MCMC step {step+1}/{group.numstep}: proposal out of bounds, "
@@ -148,7 +148,7 @@ def sample_spectral_params(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: 
             accept = log_accept >= 0.0 or np.log(rng.random()) < log_accept
             logger.info(f"MCMC step {step+1}/{group.numstep}: dchi2={new_chi2 - old_chi2:.3e} "
                         f"[{'ACCEPT' if accept else 'reject'}] ({old_betas} -> {new_betas}).")
-        accept = compsep.comm.bcast(accept, root=compsep.master)
+        accept = compsep.comm.bcast(accept, root=0)
 
         if accept:
             n_accept += 1

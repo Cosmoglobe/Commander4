@@ -49,7 +49,7 @@ def _make_setup(start_beta: float = TRUE_BETA, **beta_settings):
     for comp in comp_list:
         comp.beta = start_beta
 
-    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0, is_master=True, size=1),
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, is_master=True),
                      band=Bunch(name="Band60", identifier="Band60_I", polarization="I"))
     # The one rank solves the I view; no rank holds a QU band.
     amps = Bunch(name="amps", comps=["Synchrotron"], bands=["Band60"],

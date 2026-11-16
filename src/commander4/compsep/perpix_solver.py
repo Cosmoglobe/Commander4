@@ -12,7 +12,6 @@ from mpi4py import MPI
 from pixell import curvedsky
 
 from commander4.sky.component import Component
-from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.backend import compsep as cpp_compsep
 from commander4.data_models.detector_map import DetectorMap
 from commander4.diagnostics.performance import benchmark
@@ -28,29 +27,15 @@ def solve_compsep_perpix(solver_comm: MPI.Comm, band_map: DetectorMap,
         controlled by ``compsep.common_res_fwhm``). This solver ignores beams entirely, so bands
         arriving at differing resolutions are silently mixed; a warning is logged below.
         The per-pixel solves run on the master rank only, with ``nthreads`` threads, and draw
-        their fluctuation terms from the master's ``rng``.
+        their fluctuation terms from the master's ``rng``. All components must be diffuse
+        (`read_sampling_groups` checks this at start-up).
     """
-    for component in comp_list:
-        if not isinstance(component, DiffuseComponent):
-            raise ValueError(
-                f"Per-pixel component separation does not support "
-                f"{type(component).__name__} components."
-            )
     logger = logging.getLogger(__name__)
     is_master = solver_comm.Get_rank() == 0
     if is_master:
         logger.verbose("Starting pixel-by-pixel component separation.")
-    if double_precision:
-        complex_dtype = np.complex128
-        real_dtype = np.float64
-    else:
-        complex_dtype = np.complex64
-        real_dtype = np.float32
-
-    npol = band_map.npol
-    map_sky = band_map.map_sky
-    band_freq = band_map.nu
-    map_inv_var = band_map.map_inv_var  # Zero where unobserved.
+    complex_dtype = np.complex128 if double_precision else np.complex64
+    real_dtype = np.float64 if double_precision else np.float32
 
     # This solver has no beam model, so all bands should already share one resolution (smoothed at
     # ingest via compsep.common_res_fwhm); differing FWHMs silently mix resolutions, so warn.
@@ -61,49 +46,40 @@ def solve_compsep_perpix(solver_comm: MPI.Comm, band_map: DetectorMap,
 
     ncomp = len(comp_list)
     with benchmark("perpix-gather"):
-        all_freq = solver_comm.gather(band_freq, root=0)
-        all_map_sky = solver_comm.gather(map_sky, root=0)
-        all_map_inv_var = solver_comm.gather(map_inv_var, root=0)
+        freqs = np.array(solver_comm.gather(band_map.nu, root=0))
+        all_map_sky = solver_comm.gather(band_map.map_sky, root=0)
+        all_map_inv_var = solver_comm.gather(band_map.map_inv_var, root=0)  # 0 where unobserved.
 
-    nside = band_map.nside
-    npix = 12*nside**2
-    comp_maps = [None]*npol
+    npix = 12*band_map.nside**2
+    comp_maps = [None]*band_map.npol
     if is_master:  # Unfortunately, only master rank does the work.
         map_shapes = np.array([_map.shape for _map in all_map_sky])
         if not np.all(map_shapes == map_shapes[0]):
             raise ValueError("Per-pixel solver requires all maps to have the same shape, but "
                              f"received {map_shapes}.")
-        for ipol in range(npol):
+        # The mixing matrix: one row per band, one column per component.
+        M = np.empty((len(freqs), ncomp))
+        for icomp in range(ncomp):
+            M[:, icomp] = comp_list[icomp].get_sed(freqs)
+        for ipol in range(band_map.npol):
             t0 = time.time()
-            freqs = []
-            maps_sky = []
-            maps_inv_var = []
-            for iband in range(len(all_freq)):
-                if all_map_sky[iband][ipol] is not None:
-                    freqs.append(all_freq[iband])
-                    maps_sky.append(all_map_sky[iband][ipol])
-                    maps_inv_var.append(all_map_inv_var[iband][ipol])
-            freqs = np.array(freqs)
-            maps_sky = np.array(maps_sky)
-            maps_inv_var = np.array(maps_inv_var)
-            nband = len(freqs)
-            M = np.empty((nband, ncomp))
-            for icomp in range(ncomp):
-                M[:, icomp] = comp_list[icomp].get_sed(freqs)
-            rand = rng.standard_normal((npix, nband))
+            # This Stokes row of every band, shape (nband, npix).
+            maps_sky = np.array([band_sky[ipol] for band_sky in all_map_sky], dtype=np.float64)
+            maps_inv_var = np.array([band_inv_var[ipol] for band_inv_var in all_map_inv_var],
+                                    dtype=np.float64)
+            rand = rng.standard_normal((npix, len(freqs)))
             # TODO: Should scale M to make solution more well-conditioned, and then adjust
             # solution with the scaling factor used.
             with benchmark("perpix-solve"):
-                comp_maps[ipol] = cpp_compsep.solve_perpix(
-                    maps_sky.astype(np.float64, copy=False),
-                    maps_inv_var.astype(np.float64, copy=False), M, rand, nthreads)
-            logger.info(f"Finished pixel-by-pixel component separation in {time.time()-t0:.2f}s "\
-                        f"for polarization {ipol+1} of {npol}.")
+                comp_maps[ipol] = cpp_compsep.solve_perpix(maps_sky, maps_inv_var, M, rand,
+                                                           nthreads)
+            logger.info(f"Finished pixel-by-pixel component separation in {time.time()-t0:.2f}s "
+                        f"for polarization {ipol+1} of {band_map.npol}.")
 
     comp_maps = solver_comm.bcast(comp_maps, root=0)
     with benchmark("perpix-alm"):
         for icomp in range(ncomp):
-            input_map = np.array([comp_maps[ipol][icomp] for ipol in range(npol)],
+            input_map = np.array([comp_maps[ipol][icomp] for ipol in range(band_map.npol)],
                                  dtype=real_dtype)
             comp_alms = curvedsky.map2alm_healpix(input_map, niter=3, spin=band_map.spin,
                                                   lmax=comp_list[icomp].lmax)

@@ -132,8 +132,8 @@ def run_compsep_side(mpi_info: Bunch, params: Bunch, cfg: Bunch, comp_lists_by_c
                            f"starting CompSep chain {chain}, iteration {iteration}.")
         rng = make_iteration_rng(params, mpi_info, chain, iteration)
         t0 = time.time()
-        process_compsep(mpi_info, cfg, band_map, iteration, chain, params,
-                        comp_lists_by_chain[chain], rng)
+        process_compsep(mpi_info, cfg, params, band_map, comp_lists_by_chain[chain], chain,
+                        iteration, rng)
         if mpi_info.compsep.is_master:
             logger.verbose(f"CompSep: Rank {mpi_info.compsep.rank} finished chain {chain}, "
                            f"iteration {iteration} in {time.time()-t0:.2f}s. Sending results.")

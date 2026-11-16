@@ -115,7 +115,7 @@ def test_iteration_chi2_uses_all_observed_map_samples() -> None:
     map_inv_var = np.full_like(map_sky, 1.0/2.0**2)
     map_inv_var[0, -1] = 0.0  # An unobserved pixel.
     band_map = DetectorMap(map_sky, map_inv_var, nu=30.0, fwhm=60.0, nside=1)
-    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0, is_master=True),
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, is_master=True),
                      band=Bunch(name="Planck30GHz", polarization="I"))
     cfg = Bunch(nside_chisq=1, include_residual_maps=False)
 
@@ -134,7 +134,7 @@ def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
     map_sky = np.arange(1.0, 13.0).reshape(1, -1)
     map_inv_var = np.full_like(map_sky, 1.0/2.0**2)
     band_map = DetectorMap(map_sky, map_inv_var, nu=30.0, fwhm=60.0, nside=1)
-    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0, is_master=True),
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, is_master=True),
                      band=Bunch(name="Planck30GHz", identifier="Planck30GHz_I", polarization="I"))
     # Compsep only runs with at least one enabled group, so use one that samples nothing (its
     # `beta` is empty): the group loop still runs, and its evaluation is the final fit.
@@ -146,8 +146,8 @@ def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
         "commander4.compsep.processing.write_compsep_chain_to_file", lambda *args: None)
 
     with caplog.at_level(SUMMARY, logger="commander4.compsep.processing"):
-        process_compsep(mpi_info, cfg, band_map, iter=4, chain=2, params=Bunch(),
-                        comp_list=CompList([]), rng=np.random.default_rng(0))
+        process_compsep(mpi_info, cfg, Bunch(), band_map, CompList([]), chain=2, iteration=4,
+                        rng=np.random.default_rng(0))
 
     chi2 = np.sum((map_sky / 2.0)**2)
     z_chi2 = (chi2 - map_sky.size) / np.sqrt(2.0 * map_sky.size)
@@ -158,7 +158,7 @@ def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
 
 def _make_group_params(**sampling_group_sections) -> Bunch:
     """A parameter file with three components, one IQU band, and the given sampling groups."""
-    components = Bunch({name: Bunch(enabled=True, params=Bunch())
+    components = Bunch({name: Bunch(enabled=True, component_class="CMB", params=Bunch())
                         for name in ("CMB", "ThermalDust", "FreeFree")})
     bands = Bunch({"Planck30GHz": Bunch(enabled=True, polarization="IQU")})
     return Bunch(components=components, compsep=Bunch(bands=bands, **sampling_group_sections))
@@ -274,10 +274,14 @@ def test_sampling_groups_reject_settings_of_other_methods() -> None:
             cg_sampling_groups=Bunch(cg=Bunch(max_iter=2.5))))
 
 
-def test_per_pixel_solver_rejects_non_diffuse_components_before_mpi_work() -> None:
-    with pytest.raises(ValueError, match="does not support object"):
-        solve_compsep_perpix(None, None, [object()], double_precision=False, nthreads=1,
-                             rng=np.random.default_rng(0))
+def test_a_per_pixel_group_with_point_sources_is_rejected_at_start_up() -> None:
+    params = _make_group_params(per_pixel_sampling_groups=Bunch(pixels=Bunch()))
+    params.components.FreeFree.component_class = "RadioSources"
+    with pytest.raises(ValueError, match="'FreeFree', a RadioSources"):
+        read_sampling_groups(params)
+    # A per-pixel group that leaves the point sources out is fine.
+    params.compsep.per_pixel_sampling_groups.pixels.comps = ["CMB", "ThermalDust"]
+    assert list(read_sampling_groups(params).per_pixel_sampling_groups) == ["pixels"]
 
 
 def test_unimplemented_component_classes_are_rejected_during_construction() -> None:
