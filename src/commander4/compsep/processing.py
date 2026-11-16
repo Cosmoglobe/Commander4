@@ -25,7 +25,8 @@ from commander4.compsep.spectral_sampling import sample_spectral_params
 from commander4.file_io import paths
 from commander4.file_io.chain_restart import ChainStart
 from commander4.file_io.chain_writer import write_compsep_chain_to_file
-from commander4.parameters.schema import read_settings, resolve_band_lmax, resolve_param
+from commander4.parameters.schema import enabled_compsep_views, read_settings, resolve_band_lmax,\
+    resolve_param
 from commander4.diagnostics.performance import benchmark, bench_summary, bench_reset
 
 logger = logging.getLogger(__name__)
@@ -220,6 +221,9 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
         cfg (Bunch): The settings of component separation: the sampling groups (see
             `read_sampling_groups`), `double_precision`, this rank's `num_threads`, and the
             chain-output settings `nside_chisq`, `include_chisq_map` and `include_residual_maps`.
+            Each amplitude group also gets `solver_ranks`, the CompSep ranks that solve it per
+            polarization ({"I": [...], "QU": [...]}), and `solver_comm`, their communicator
+            (`MPI.COMM_NULL` on the other ranks).
     """
     logger.debug(f"CompSep rank {mpi_info.compsep.rank} (on machine {mpi_info.processor_name}) "
                  f"handles view {mpi_info.band.identifier}.")
@@ -243,6 +247,21 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
     chisq_masks = _read_chisq_masks(mpi_info.compsep.comm, cfg.mcmc_sampling_groups)
     for group in cfg.mcmc_sampling_groups.values():
         group.chisq_mask_map = chisq_masks.get(group.name)
+    # The CompSep ranks that solve each amplitude group, by polarization, and the communicator they
+    # solve on. A rank solves if the group names its band and a component of its polarization. View
+    # i of `enabled_compsep_views` runs on CompSep rank i, so every rank knows this for all ranks.
+    views = enabled_compsep_views(params)
+    for group in cfg.amplitude_groups.values():
+        group.solver_ranks = {}
+        for pol in ("I", "QU"):
+            has_comps = any(comp.pol == pol and comp.comp_name in group.comps for comp in comp_list)
+            group.solver_ranks[pol] = [view.rank for view in views if has_comps and
+                                       view.polarization == pol and view.band_name in group.bands]
+        # One communicator per polarization (`subcomm` is split by polarization), so the I and QU
+        # views of a group are two separate solves.
+        is_solver = mpi_info.compsep.rank in group.solver_ranks[mpi_info.band.polarization]
+        group.solver_comm = mpi_info.compsep.subcomm.Split(0 if is_solver else MPI.UNDEFINED,
+                                                           key=mpi_info.compsep.rank)
     # The components whose beta an MCMC group samples. Only they take beta from a saved chain; a
     # beta that is not sampled keeps the value of the parameter file.
     sampled_betas = set()

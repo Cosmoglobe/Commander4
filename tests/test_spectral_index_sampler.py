@@ -49,10 +49,11 @@ def _make_setup(start_beta: float = TRUE_BETA, **beta_settings):
     for comp in comp_list:
         comp.beta = start_beta
 
-    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, subcomm=MPI.COMM_SELF, rank=0, master=0,
-                                   is_master=True, size=1),
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0, is_master=True, size=1),
                      band=Bunch(name="Band60", identifier="Band60_I", polarization="I"))
-    amps = Bunch(name="amps", comps=["Synchrotron"], bands=["Band60"])
+    # The one rank solves the I view; no rank holds a QU band.
+    amps = Bunch(name="amps", comps=["Synchrotron"], bands=["Band60"],
+                 solver_ranks={"I": [0], "QU": []}, solver_comm=MPI.COMM_SELF)
     cfg = Bunch(cg_sampling_groups={}, per_pixel_sampling_groups={"amps": amps},
                 amplitude_groups={"amps": amps}, double_precision=True, num_threads=1)
     settings = Bunch(proposal_sigma=0.1, bounds=None, prior_mean=None, prior_rms=None)
