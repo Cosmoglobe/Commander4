@@ -84,7 +84,7 @@ def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: Detec
             solver.solve(active_sublist, rng)
             # The CG runs its scalar recurrence on rank 0 of `solver_comm` and only broadcasts the
             # stopping decision, so that rank alone holds meaningful residuals.
-            if solver_comm.Get_rank() == 0:
+            if solver.is_master:
                 cg_stats = {"cg_residuals": np.asarray(solver.CG_residuals),
                             "n_iter": len(solver.CG_residuals)}
         else:
@@ -95,7 +95,7 @@ def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: Detec
 
     any_active = compsep.comm.allreduce(1 if should_solve else 0, op=MPI.SUM)
     if not any_active:
-        if compsep.rank == compsep.master:
+        if compsep.is_master:
             logger.verbose(f"Sampling group {group.name!r} had no active band/component overlap.")
         return {}
 

@@ -116,7 +116,7 @@ def evaluate_chi2(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, sky_model:
 
     total = float(compsep.comm.allreduce(chi2_local, op=MPI.SUM))
     ndof = int(compsep.comm.allreduce(ndof_local, op=MPI.SUM))
-    if label is not None and compsep.rank == compsep.master:
+    if label is not None and compsep.is_master:
         logger.info(f"Fit after {label}, all bands: chi2={total:.6e}, ndof={ndof}, "
                     f"red.chi2={total/ndof:.4f}")
     band = BandFit(band_name=mpi_info.band.name, pol=mpi_info.band.polarization,
@@ -142,14 +142,12 @@ def collect_fit_diagnostics(compsep: Bunch, result: ChisqResult, include_chisq_m
         band name to its centre frequency in GHz, which is what lets the chain writer record a
         mixing coefficient per band.
     """
-    is_master = compsep.rank == compsep.master
-
     # Commander3's chisq_<postfix>.fits: z^2 from every band added into one low-resolution map.
-    chi2_map_total = np.zeros_like(result.band.chi2_map) if is_master else None
+    chi2_map_total = np.zeros_like(result.band.chi2_map) if compsep.is_master else None
     compsep.comm.Reduce(np.ascontiguousarray(result.band.chi2_map), chi2_map_total, op=MPI.SUM,
                         root=compsep.master)
     per_band = compsep.comm.gather(result.band, root=compsep.master)
-    if not is_master:
+    if not compsep.is_master:
         return {}, {}
 
     chi2: dict = {"total": result.total, "ndof": result.ndof, "bands": {}}

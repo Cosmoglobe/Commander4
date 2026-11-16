@@ -56,7 +56,7 @@ class CompSepSolver:
             nthreads: Number of computational threads used on this rank.
         """
         self.CompSep_comm = CompSep_comm
-        self.my_rank = CompSep_comm.Get_rank()
+        self.is_master = CompSep_comm.Get_rank() == 0
         self.band_map = band_map
         self.config = group
         self.double_precision = double_precision
@@ -103,15 +103,14 @@ class CompSepSolver:
             On the master, a new list holding A applied to the input. On the other ranks, an
             empty list.
         """
-        myrank = self.CompSep_comm.Get_rank()
 
         # `comp_list` is the "working" copy of the components. For the master rank we must retain
         # the original `comp_list_in`, because master adds the (1 + ...) part of the LHS equation,
         # and because the CG uses the vector again after this call.
         # The worker ranks are free to destroy their `comp_list_in`, so we point `comp_list` at it.
-        comp_list = comp_list_in.copy() if myrank==0 else comp_list_in
+        comp_list = comp_list_in.copy() if self.is_master else comp_list_in
 
-        if myrank == 0:  # Only the master holds the values of the vector.
+        if self.is_master:  # Only the master holds the values of the vector.
             # S^{1/2} a
             for comp in comp_list:
                 comp.apply_Cl_prior_sqrt(comp.amps)
@@ -166,7 +165,7 @@ class CompSepSolver:
             else:
                 requests = [comp.accum_data_non_blocking(self.CompSep_comm) for comp in comp_list]
 
-            if myrank == 0:
+            if self.is_master:
                 for icomp in range(len(comp_list)):
                     # Since we used non-blocking reduce, master rank can start working on components
                     # as they are received instead of waiting for all to be received.
@@ -208,7 +207,6 @@ class CompSepSolver:
             without a prior (`Cl_prior_amplitude: null`) gets neither of the two.
         """
         #FIXME: how will eta_2 work for point sources?
-        myrank = self.CompSep_comm.Get_rank()
 
         # N^-1 d
         b_map = self.band_map.apply_inv_N_map(self.band_map.map_sky, inplace=False)
@@ -238,10 +236,10 @@ class CompSepSolver:
         # Accumulate on master and apply the prior there: S^{1/2} Y^T M^T Y^-1^T B^T Y^T (...)
         for comp in RHS:
             comp.accum_data_blocking(self.CompSep_comm)
-            if myrank == 0:
+            if self.is_master:
                 comp.apply_Cl_prior_sqrt(comp.amps)
 
-        if myrank == 0:
+        if self.is_master:
             for comp in RHS:
                 if comp.Cl_prior_amplitude is None:
                     continue  # No prior: no prior mean and no prior draw.
@@ -286,7 +284,6 @@ class CompSepSolver:
         band's white-noise realization, so shared draws would correlate the fluctuation across
         bands.
         """
-        master = self.my_rank == 0
         pol_name = "QU" if self.band_map.pol == "QU" else "Intensity"
         max_iter = self.config.max_iter_pol if self.band_map.pol == "QU" else self.config.max_iter
 
@@ -297,7 +294,7 @@ class CompSepSolver:
         # solution. The CG works in x = S^{-1/2} a, so the guess is scaled here, and the solution
         # is scaled back at the end. Only the master's values are used; the other ranks need the
         # list as a buffer of the right shape.
-        if master:
+        if self.is_master:
             for comp in comp_list:
                 comp.apply_Cl_prior_inv_sqrt(comp.amps)
 
@@ -311,10 +308,10 @@ class CompSepSolver:
             precond = getattr(preconditioners, self.config.preconditioner)(self, comp_list)
 
         # The CG changes `comp_list` (its x) and `RHS` (its residual) in place.
-        CG_solver = DistributedCG(self.apply_LHS_matrix, RHS, master, x0=comp_list, M=precond,
-                                  destroy_b=True)
+        CG_solver = DistributedCG(self.apply_LHS_matrix, RHS, self.is_master, x0=comp_list,
+                                  M=precond, destroy_b=True)
         self.CG_residuals = np.zeros(max_iter)
-        if master:
+        if self.is_master:
             logger.verbose(f"{pol_name} CG starting up.")
         checkpt_int = 30
         iter = 0
@@ -327,7 +324,7 @@ class CompSepSolver:
             log_memory("cg-iter")
             self.CG_residuals[iter] = CG_solver.err
             iter += 1
-            if iter%checkpt_int == 0 and master:
+            if iter%checkpt_int == 0 and self.is_master:
                 logger.verbose(
                     f"{pol_name} CG iter {iter:3d} - "
                     f"Squared residual {np.mean(self.CG_residuals[iter-checkpt_int:iter]):.6e} "
@@ -335,20 +332,20 @@ class CompSepSolver:
                 t0 = time.time()
             if iter >= max_iter:
                 # Only log warning if err_tol != 0, as this means user wants to do max_iter.
-                if master and self.config.err_tol > 0.0:
+                if self.is_master and self.config.err_tol > 0.0:
                     logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
                 stop_CG = True
             if CG_solver.err <= self.config.err_tol:
                 stop_CG = True
             stop_CG = self.CompSep_comm.bcast(stop_CG, root=0)
         self.CG_residuals = self.CG_residuals[:iter]
-        if master:
+        if self.is_master:
             logger.info(f"{pol_name} CG finished after {iter} iterations with a squared residual "
                         f"of {CG_solver.err:.3e} (err tol = {self.config.err_tol})")
 
         # a = S^{1/2} x on the master, which then sends the solution to the other ranks.
         for comp in comp_list:
-            if master:
+            if self.is_master:
                 comp.apply_Cl_prior_sqrt(comp.amps)
             comp.bcast_data_blocking(self.CompSep_comm)
         return comp_list

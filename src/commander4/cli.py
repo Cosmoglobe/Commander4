@@ -80,7 +80,7 @@ def run_tod_side(mpi_info: Bunch, params: Bunch, experiment_data, my_band_tod_id
 
     logger = logging.getLogger(__name__)
     for chain, iteration in gibbs_schedule(first_iteration, params.gibbs.num_iterations):
-        if mpi_info.tod.rank == 0:
+        if mpi_info.tod.is_master:
             logger.verbose(f"Worldrank {mpi_info.world.rank}, subrank {mpi_info.tod.rank} "
                            f"starting TOD chain {chain}, iteration {iteration}.")
         rng = make_iteration_rng(params, mpi_info, chain, iteration)
@@ -121,14 +121,14 @@ def run_compsep_side(mpi_info: Bunch, params: Bunch, compsep_cfg, my_band_compse
     logger = logging.getLogger(__name__)
     schedule = gibbs_schedule(first_iteration, params.gibbs.num_iterations)
     for step, (chain, iteration) in enumerate(schedule):
-        if mpi_info.compsep.rank == 0:
+        if mpi_info.compsep.is_master:
             logger.verbose(f"Worldrank {mpi_info.world.rank}, subrank {mpi_info.compsep.rank} "
                            f"starting CompSep chain {chain}, iteration {iteration}.")
         rng = make_iteration_rng(params, mpi_info, chain, iteration)
         t0 = time.time()
         compsep_output = process_compsep(mpi_info, compsep_cfg, band_map, iteration, chain,
                                          params, comp_lists_by_chain[chain], rng)
-        if mpi_info.compsep.rank == 0:
+        if mpi_info.compsep.is_master:
             logger.verbose(f"CompSep: Rank {mpi_info.compsep.rank} finished chain {chain}, "
                            f"iteration {iteration} in {time.time()-t0:.2f}s. Sending results.")
         if step == len(schedule) - 1:

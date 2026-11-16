@@ -242,7 +242,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
     logger.debug(f"Rank {mpi_info.compsep.rank} handles CompSep view {band_identifier}.")
 
     cfg = read_sampling_groups(params)
-    if mpi_info.compsep.rank == mpi_info.compsep.master:  # One report, not one per band.
+    if mpi_info.compsep.is_master:  # One report, not one per band.
         _validate_component_lmax(comp_list, params)
     cfg.double_precision = resolve_param(
         params, "double_precision", ("compsep",), default=False, legal_types=bool)
@@ -360,7 +360,7 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, iter: in
 
     with benchmark("chain-gather"):
         fit_tree, band_frequencies = collect_fit_diagnostics(compsep, fit, cfg.include_chisq_map)
-    if compsep.rank == compsep.master:
+    if compsep.is_master:
         diagnostics = {**fit_tree, **sampler_stats}
         with benchmark("filewrite-compsep"):
             write_compsep_chain_to_file(comp_list, params, chain, iter, diagnostics,

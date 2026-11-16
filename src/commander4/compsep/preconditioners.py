@@ -53,7 +53,7 @@ class DiagonalJointPreconditioner:
     """
     def __init__(self, compsep: CompSepSolver, comp_list:CompList):
         self.compsep = compsep
-        self.is_master = compsep.CompSep_comm.Get_rank() == 0
+        self.is_master = compsep.is_master
 
         # Gather all necessary per-band information from all ranks (all ranks hold a band).
         # TODO: Currently the master rank temporarily has to hold ALL inverse-variance bands.
@@ -196,7 +196,7 @@ class JointPreconditioner:
 
     def __init__(self, compsep: CompSepSolver, comp_list:CompList):
         self.compsep = compsep
-        self.is_master = compsep.CompSep_comm.Get_rank() == 0
+        self.is_master = compsep.is_master
         self.ell_block_data = []
         self.npol = 0
 

@@ -89,7 +89,6 @@ def sample_spectral_params(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: 
         steps taken and accepted, and the final beta of each sampled component, by its shortname.
     """
     compsep = mpi_info.compsep
-    is_master = compsep.rank == compsep.master
     sky_model = SkyModel(comp_list)
     # The pixels of this band that enter the chi-squared: all, or those the group's mask keeps.
     keep = resolve_chisq_mask(group.chisq_mask_map, band_map.nside)
@@ -111,7 +110,7 @@ def sample_spectral_params(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: 
         # The master proposes a Gaussian step from the current value of each beta. A step that
         # leaves the hard bounds of any beta is rejected at once, without a solve (C3's p_uni).
         new_betas, in_bounds = None, True
-        if is_master:
+        if compsep.is_master:
             new_betas = {name: float(rng.normal(old_betas[name], group.beta[name].proposal_sigma))
                          for name in group.beta}
             for name in group.beta:
@@ -120,7 +119,7 @@ def sample_spectral_params(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: 
                     in_bounds = False
         new_betas, in_bounds = compsep.comm.bcast((new_betas, in_bounds), root=compsep.master)
         if not in_bounds:
-            if is_master:
+            if compsep.is_master:
                 logger.verbose(f"MCMC step {step+1}/{group.numstep}: proposal out of bounds, "
                                f"rejected ({new_betas}).")
             continue
@@ -140,7 +139,7 @@ def sample_spectral_params(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: 
         # log priors. A Gaussian prior is -0.5 ((beta - mean)/rms)^2 (C3's p_gauss); its
         # normalization is the same before and after, and drops out.
         accept = None
-        if is_master:
+        if compsep.is_master:
             old_log_prior, new_log_prior = 0.0, 0.0
             for name in group.beta:
                 prior_mean, prior_rms = group.beta[name].prior_mean, group.beta[name].prior_rms
@@ -162,7 +161,7 @@ def sample_spectral_params(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: 
             for comp, saved in zip(comp_list, old_amps):
                 np.copyto(comp.amps, saved)
 
-    if is_master:
+    if compsep.is_master:
         logger.info(f"MCMC group {group.name!r} finished: {n_accept}/{group.numstep} proposals "
                     "accepted.")
     final_betas = {views[name][0].shortname: float(views[name][0].beta) for name in group.beta}

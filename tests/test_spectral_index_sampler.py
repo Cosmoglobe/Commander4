@@ -51,7 +51,7 @@ def _make_setup(start_beta: float = TRUE_BETA, **beta_settings):
         comp.beta = start_beta
 
     mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, subcomm=MPI.COMM_SELF, rank=0, master=0,
-                                   size=1),
+                                   is_master=True, size=1),
                      band=Bunch(name="Band60", identifier="Band60_I", polarization="I"))
     amps = Bunch(name="amps", comps=["Synchrotron"], bands=["Band60"])
     cfg = Bunch(cg_sampling_groups={}, per_pixel_sampling_groups={"amps": amps},

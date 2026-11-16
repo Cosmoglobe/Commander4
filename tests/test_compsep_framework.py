@@ -119,7 +119,7 @@ def test_iteration_chi2_uses_all_observed_map_samples() -> None:
     map_inv_var = np.full_like(map_sky, 1.0/2.0**2)
     map_inv_var[0, -1] = 0.0  # An unobserved pixel.
     band_map = DetectorMap(map_sky, map_inv_var, nu=30.0, fwhm=60.0, nside=1)
-    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0),
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0, is_master=True),
                      band=Bunch(name="Planck30GHz", polarization="I"))
     cfg = Bunch(nside_chisq=1, include_residual_maps=False)
 
@@ -138,7 +138,7 @@ def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
     map_sky = np.arange(1.0, 13.0).reshape(1, -1)
     map_inv_var = np.full_like(map_sky, 1.0/2.0**2)
     band_map = DetectorMap(map_sky, map_inv_var, nu=30.0, fwhm=60.0, nside=1)
-    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0),
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, master=0, is_master=True),
                      band=Bunch(name="Planck30GHz", identifier="Planck30GHz_I", polarization="I"))
     # Compsep only runs with at least one enabled group, so use one that samples nothing (its
     # `beta` is empty): the group loop still runs, and its evaluation is the final fit.

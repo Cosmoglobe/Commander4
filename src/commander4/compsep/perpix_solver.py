@@ -36,7 +36,8 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, band_map: DetectorMap,
                 f"{type(component).__name__} components."
             )
     logger = logging.getLogger(__name__)
-    if proc_comm.Get_rank() == 0:
+    is_master = proc_comm.Get_rank() == 0
+    if is_master:
         logger.verbose("Starting pixel-by-pixel component separation.")
     if double_precision:
         complex_dtype = np.complex128
@@ -66,7 +67,7 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, band_map: DetectorMap,
     nside = band_map.nside
     npix = 12*nside**2
     comp_maps = [None]*npol
-    if proc_comm.Get_rank() == 0:  # Unfortunately, only master rank does the work.
+    if is_master:  # Unfortunately, only master rank does the work.
         map_shapes = np.array([_map.shape for _map in all_map_sky])
         if not np.all(map_shapes == map_shapes[0]):
             raise ValueError("Per-pixel solver requires all maps to have the same shape, but "
