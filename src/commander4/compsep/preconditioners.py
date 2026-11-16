@@ -36,7 +36,7 @@ class NoPreconditioner:
     """ Preconditioner for the case where no preconditioner is used.
         Returns the input array unchanged.
     """
-    def __init__(self, compsep: CompSepSolver, complist: CompList):
+    def __init__(self, solver: CompSepSolver, complist: CompList):
         pass
 
     def __call__(self, complist: CompList):
@@ -51,16 +51,15 @@ class DiagonalJointPreconditioner:
         #TODO: 1. Get Wigner 3j stuff to work to get full N-diagonal. 2. Get the full mixing matrix
         # stuff implemented.
     """
-    def __init__(self, compsep: CompSepSolver, comp_list:CompList):
-        self.compsep = compsep
-        self.is_master = compsep.is_master
+    def __init__(self, solver: CompSepSolver, comp_list:CompList):
+        self.is_master = solver.is_master
 
         # Gather all necessary per-band information from all ranks (all ranks hold a band).
         # TODO: Currently the master rank temporarily has to hold ALL inverse-variance bands.
         # It would be easy to re-write this so they send them one-and-one as we make the diagonal.
-        all_fwhm_rad = compsep.CompSep_comm.gather(np.deg2rad(compsep.band_alms.fwhm/60), root=0)
-        all_map_inv_var = compsep.CompSep_comm.gather(compsep.band_map.map_inv_var, root=0)
-        all_freqs = compsep.CompSep_comm.gather(compsep.band_alms.nu, root=0)
+        all_fwhm_rad = solver.solver_comm.gather(np.deg2rad(solver.band_alms.fwhm/60), root=0)
+        all_map_inv_var = solver.solver_comm.gather(solver.band_map.map_inv_var, root=0)
+        all_freqs = solver.solver_comm.gather(solver.band_alms.nu, root=0)
 
         # We can now get rid of the ranks that do not hold components.
         if not self.is_master:
@@ -194,18 +193,17 @@ class JointPreconditioner:
     include_noise = True
     include_mixing = True
 
-    def __init__(self, compsep: CompSepSolver, comp_list:CompList):
-        self.compsep = compsep
-        self.is_master = compsep.is_master
+    def __init__(self, solver: CompSepSolver, comp_list:CompList):
+        self.is_master = solver.is_master
         self.ell_block_data = []
         self.npol = 0
 
         # Gather the band-local ingredients needed to build the isotropic approximation. Every rank
         # holds one band, but only the master rank actually assembles the small dense blocks.
-        all_fwhm_rad = compsep.CompSep_comm.gather(np.deg2rad(compsep.band_alms.fwhm/60), root=0)
-        all_map_inv_var = compsep.CompSep_comm.gather(compsep.band_map.map_inv_var, root=0)
-        all_freqs = compsep.CompSep_comm.gather(compsep.band_alms.nu, root=0)
-        all_band_lmax = compsep.CompSep_comm.gather(compsep.band_map.lmax, root=0)
+        all_fwhm_rad = solver.solver_comm.gather(np.deg2rad(solver.band_alms.fwhm/60), root=0)
+        all_map_inv_var = solver.solver_comm.gather(solver.band_map.map_inv_var, root=0)
+        all_freqs = solver.solver_comm.gather(solver.band_alms.nu, root=0)
+        all_band_lmax = solver.solver_comm.gather(solver.band_map.lmax, root=0)
 
         # Worker ranks participate in the gather above, but the actual block construction is done
         # only on the master rank.
@@ -420,32 +418,32 @@ class MixingMatrixPreconditioner(JointPreconditioner):
 # no Wigner symbols needed. The value of the version below is the ell-dependence beyond that.
 #
 # class NoiseOnlyPreconditioner:
-#     def __init__(self, compsep: CompSepSolver):
+#     def __init__(self, solver: CompSepSolver):
 #         import py3nj
-#         self.compsep = compsep
-#         mycomp = compsep.CompSep_comm.Get_rank()
+#         self.solver = solver
+#         mycomp = solver.solver_comm.Get_rank()
 #
 #         # Since the noise-map has no component-dependence (while the A-matrix does), we simply
 #         # have the same weights per component, and use the average of the band-weights.
-#         w = compsep.map_inv_var
+#         w = solver.map_inv_var
 #         w_alm = None
 #         # The different components have different lmax, so we loop over each.
-#         for icomp in range(compsep.ncomp):
-#             lmax = compsep.lmax_per_comp[icomp]
+#         for icomp in range(solver.ncomp):
+#             lmax = solver.lmax_per_comp[icomp]
 #             # Create alms at the specific lmax used by this component.
 #             temp_w_alm = hp.map2alm(w, lmax=lmax)
 #             if mycomp == icomp:
 #                 # Reduce to the rank holding this component.
-#                 w_alm = compsep.CompSep_comm.reduce(temp_w_alm, op=MPI.SUM, root=icomp)
-#                 w_alm /= compsep.CompSep_comm.Get_size()
+#                 w_alm = solver.solver_comm.reduce(temp_w_alm, op=MPI.SUM, root=icomp)
+#                 w_alm /= solver.solver_comm.Get_size()
 #             else:
 #                 # Reduce to the rank holding this component.
-#                 compsep.CompSep_comm.reduce(temp_w_alm, op=MPI.SUM, root=icomp)
+#                 solver.solver_comm.reduce(temp_w_alm, op=MPI.SUM, root=icomp)
 #
-#         if mycomp >= compsep.ncomp:
+#         if mycomp >= solver.ncomp:
 #             return
 #
-#         self.my_comp_lmax = compsep.my_comp_lmax
+#         self.my_comp_lmax = solver.my_comp_lmax
 #         # Not the same as the real-valued alms.
 #         my_alm_len_complex = ((self.my_comp_lmax+1)*(self.my_comp_lmax+2))//2
 #         self.YTNY = np.zeros(my_alm_len_complex, dtype=np.complex128)
@@ -469,10 +467,10 @@ class MixingMatrixPreconditioner(JointPreconditioner):
 #                 self.YTNY[idx] += np.sum(value)
 #
 #     def __call__(self, a_array: NDArray):
-#         compsep = self.compsep
-#         mycomp = compsep.CompSep_comm.Get_rank()
+#         solver = self.solver
+#         mycomp = solver.solver_comm.Get_rank()
 #
-#         if mycomp >= compsep.ncomp:  # nothing to do
+#         if mycomp >= solver.ncomp:  # nothing to do
 #             return a_array
 #         # Convert from real to complex alms, apply the Y^T N^-1 Y matrix, and then convert back.
 #         a_array_out = alm_real2complex(a_array, self.my_comp_lmax)

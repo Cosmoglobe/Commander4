@@ -18,7 +18,7 @@ from commander4.data_models.detector_map import DetectorMap
 from commander4.diagnostics.performance import benchmark
 
 
-def solve_compsep_perpix(proc_comm: MPI.Comm, band_map: DetectorMap,
+def solve_compsep_perpix(solver_comm: MPI.Comm, band_map: DetectorMap,
                          comp_list: list[Component],
                          double_precision: bool, nthreads: int,
                          rng: np.random.Generator) -> list[Component]:
@@ -36,7 +36,7 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, band_map: DetectorMap,
                 f"{type(component).__name__} components."
             )
     logger = logging.getLogger(__name__)
-    is_master = proc_comm.Get_rank() == 0
+    is_master = solver_comm.Get_rank() == 0
     if is_master:
         logger.verbose("Starting pixel-by-pixel component separation.")
     if double_precision:
@@ -53,16 +53,16 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, band_map: DetectorMap,
 
     # This solver has no beam model, so all bands should already share one resolution (smoothed at
     # ingest via compsep.common_res_fwhm); differing FWHMs silently mix resolutions, so warn.
-    all_fwhm = proc_comm.allgather(band_map.fwhm)
+    all_fwhm = solver_comm.allgather(band_map.fwhm)
     if not np.allclose(all_fwhm, all_fwhm[0]):
         logger.warning(f"Per-pixel solver received bands at differing resolutions {all_fwhm}; the "
                        "result mixes resolutions. Set compsep.common_res_fwhm to a common beam.")
 
     ncomp = len(comp_list)
     with benchmark("perpix-gather"):
-        all_freq = proc_comm.gather(band_freq, root=0)
-        all_map_sky = proc_comm.gather(map_sky, root=0)
-        all_map_inv_var = proc_comm.gather(map_inv_var, root=0)
+        all_freq = solver_comm.gather(band_freq, root=0)
+        all_map_sky = solver_comm.gather(map_sky, root=0)
+        all_map_inv_var = solver_comm.gather(map_inv_var, root=0)
 
     nside = band_map.nside
     npix = 12*nside**2
@@ -99,7 +99,7 @@ def solve_compsep_perpix(proc_comm: MPI.Comm, band_map: DetectorMap,
             logger.info(f"Finished pixel-by-pixel component separation in {time.time()-t0:.2f}s "\
                         f"for polarization {ipol+1} of {npol}.")
 
-    comp_maps = proc_comm.bcast(comp_maps, root=0)
+    comp_maps = solver_comm.bcast(comp_maps, root=0)
     with benchmark("perpix-alm"):
         for icomp in range(ncomp):
             input_map = np.array([comp_maps[ipol][icomp] for ipol in range(npol)],

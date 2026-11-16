@@ -4,8 +4,8 @@ Three things here would otherwise fail late or silently: a parameter file still 
 old `general` layout (every key would resolve to something else, or to nothing), the MPI task counts
 that used to be stated and are now computed, and which mapmaker a band ends up using.
 
-The `optimize` / `sample_amplitudes` polarity is pinned in test_cg_amplitude_sampling.py, next to
-the solver whose behaviour it actually changes.
+The polarity of `optimize` is pinned in test_cg_amplitude_sampling.py, next to the solver whose
+behaviour it actually changes.
 """
 import pytest
 from pixell.bunch import Bunch
