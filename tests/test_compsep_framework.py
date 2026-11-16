@@ -303,11 +303,10 @@ def test_per_pixel_solver_accepts_resolved_precision() -> None:
         map_sky=np.ones((1, 48)), map_inv_var=np.ones((1, 48)),
         nu=30.0, fwhm=0.0, nside=2,
     )
-    result = solve_compsep_perpix(
-        MPI.COMM_SELF, band_map, comp_list, double_precision=False, nthreads=1,
-        rng=np.random.default_rng(0))
-    assert result[0].amps.dtype == np.complex64
-    assert np.all(np.isfinite(result[0].amps))
+    solve_compsep_perpix(MPI.COMM_SELF, band_map, comp_list, double_precision=False, nthreads=1,
+                         rng=np.random.default_rng(0))
+    assert comp_list[0].amps.dtype == np.complex64
+    assert np.all(np.isfinite(comp_list[0].amps))
 
 
 def test_mcmc_group_must_name_enabled_amplitude_groups() -> None:

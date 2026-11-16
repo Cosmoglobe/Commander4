@@ -21,8 +21,9 @@ from commander4.diagnostics.performance import benchmark
 def solve_compsep_perpix(solver_comm: MPI.Comm, band_map: DetectorMap,
                          comp_list: list[Component],
                          double_precision: bool, nthreads: int,
-                         rng: np.random.Generator) -> list[Component]:
-    """ A pixel-by-pixel solver for the component separation problem. Requires uniform nside and a
+                         rng: np.random.Generator) -> None:
+    """ A pixel-by-pixel solver for the component separation problem, which leaves the solution in
+        the components of `comp_list`, on every rank of `solver_comm`. Requires uniform nside and a
         common beam across all bands (smoothing to a common resolution is done at the data sources,
         controlled by ``compsep.common_res_fwhm``). This solver ignores beams entirely, so bands
         arriving at differing resolutions are silently mixed; a warning is logged below.
@@ -110,5 +111,3 @@ def solve_compsep_perpix(solver_comm: MPI.Comm, band_map: DetectorMap,
             # These amplitudes are component maps at the data resolution; record that beam so the
             # forward model applies no extra smoothing when predicting a band at this resolution.
             comp_list[icomp].amp_fwhm_rad = band_map.fwhm_rad
-
-    return comp_list

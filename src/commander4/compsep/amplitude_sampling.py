@@ -79,12 +79,11 @@ def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: Detec
             solver = CompSepSolver(residual_map, group.solver_comm, group,
                                    double_precision=cfg.double_precision,
                                    nthreads=cfg.num_threads)
-            solver.solve(active_sublist, rng)
+            residuals = solver.solve(active_sublist, rng)
             # The CG runs its scalar recurrence on rank 0 of `solver_comm` and only broadcasts the
             # stopping decision, so that rank alone holds meaningful residuals.
             if solver.is_master:
-                cg_stats = {"cg_residuals": np.asarray(solver.CG_residuals),
-                            "n_iter": len(solver.CG_residuals)}
+                cg_stats = {"cg_residuals": np.asarray(residuals), "n_iter": len(residuals)}
         else:
             solve_compsep_perpix(group.solver_comm, residual_map, active_sublist,
                                  double_precision=cfg.double_precision,

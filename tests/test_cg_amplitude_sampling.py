@@ -92,8 +92,8 @@ def realizations(request):
 
     def solve_for_x(solver: CompSepSolver, seed: int) -> CompList:
         """One solve, scaled back from the amplitudes a = S^{1/2}x to the variable x."""
-        solution = solver.solve(_make_comp_list(_make_params(), request.param),
-                                np.random.default_rng(seed))
+        solution = _make_comp_list(_make_params(), request.param)
+        solver.solve(solution, np.random.default_rng(seed))
         for comp in solution:
             comp.apply_Cl_prior_inv_sqrt(comp.amps)
         return solution
@@ -166,17 +166,16 @@ def test_optimize_controls_randomness():
     band_map = _make_band_map()
     comm = MPI.COMM_SELF
 
-    map_params = _make_params()
+    first, second, sampled_a, sampled_b = [_make_comp_list(_make_params()) for _ in range(4)]
     map_solver = _make_solver(band_map, _make_group(optimize=True), comm)
-    first = map_solver.solve(_make_comp_list(map_params), np.random.default_rng(1))
-    second = map_solver.solve(_make_comp_list(map_params), np.random.default_rng(2))
+    map_solver.solve(first, np.random.default_rng(1))
+    map_solver.solve(second, np.random.default_rng(2))
     for comp_a, comp_b in zip(first, second):
         np.testing.assert_allclose(comp_a.amps, comp_b.amps, rtol=1e-10, atol=1e-12)
 
-    params = _make_params()
     solver = _make_solver(band_map, _make_group(optimize=False), comm)
-    sampled_a = solver.solve(_make_comp_list(params), np.random.default_rng(1))
-    sampled_b = solver.solve(_make_comp_list(params), np.random.default_rng(2))
+    solver.solve(sampled_a, np.random.default_rng(1))
+    solver.solve(sampled_b, np.random.default_rng(2))
     assert not np.allclose(sampled_a[0].amps, sampled_b[0].amps)
     # ... and it must not coincide with the MAP solution either.
     assert not np.allclose(sampled_a[0].amps, first[0].amps)
@@ -193,10 +192,12 @@ def test_without_a_prior_the_solution_is_the_data_alone():
                            double_precision=True, lmax=LMAX)
     solver = _make_solver(band_map, _make_group(optimize=True))
 
-    no_prior = solver.solve(_make_comp_list(_make_params()), rng)[0]
+    no_prior = _make_comp_list(_make_params())[0]
+    solver.solve(CompList([no_prior]), rng)
     np.testing.assert_allclose(no_prior.amps*no_prior.get_sed(100.0), input_alms, rtol=1e-5,
                                atol=1e-8)
-    tight_prior = solver.solve(_make_comp_list(_make_params(), Cl_prior_amplitude=1.0), rng)[0]
+    tight_prior = _make_comp_list(_make_params(), Cl_prior_amplitude=1.0)[0]
+    solver.solve(CompList([tight_prior]), rng)
     assert np.abs(tight_prior.amps).max() < 1e-3*np.abs(no_prior.amps).max()
 
 
@@ -207,24 +208,23 @@ def test_the_cg_starts_from_the_amplitudes_it_is_given():
     measured against the right-hand side, is tiny. One iteration from zero gets nowhere near.
     """
     band_map = _make_band_map()
-    converged = _make_solver(band_map, _make_group(optimize=True)).solve(
-        _make_comp_list(_make_params(), Cl_prior_amplitude=1.0), np.random.default_rng(0))[0].amps
+    converged, from_zero, warm = [_make_comp_list(_make_params(), Cl_prior_amplitude=1.0)
+                                  for _ in range(3)]
+    _make_solver(band_map, _make_group(optimize=True)).solve(converged, np.random.default_rng(0))
     one_iteration = Bunch(
         name="one", optimize=True, max_iter=1, max_iter_pol=1, err_tol=0.0,
         preconditioner="NoPreconditioner")
 
-    from_zero_solver = _make_solver(band_map, one_iteration)
-    from_zero = from_zero_solver.solve(_make_comp_list(_make_params(), Cl_prior_amplitude=1.0),
-                                       np.random.default_rng(0))[0].amps
-    assert np.abs(from_zero - converged).max() > 1e-2*np.abs(converged).max()
-    assert from_zero_solver.CG_residuals[0] > 1e-6
+    residuals = _make_solver(band_map, one_iteration).solve(from_zero, np.random.default_rng(0))
+    assert np.abs(from_zero[0].amps - converged[0].amps).max() > \
+        1e-2*np.abs(converged[0].amps).max()
+    assert residuals[0] > 1e-6
 
-    warm_list = _make_comp_list(_make_params(), Cl_prior_amplitude=1.0)
-    warm_list[0].amps[:] = converged
-    warm_solver = _make_solver(band_map, one_iteration)
-    warm = warm_solver.solve(warm_list, np.random.default_rng(0))[0].amps
-    np.testing.assert_allclose(warm, converged, rtol=1e-5, atol=1e-6*np.abs(converged).max())
-    assert warm_solver.CG_residuals[0] < 1e-10
+    warm[0].amps[:] = converged[0].amps
+    residuals = _make_solver(band_map, one_iteration).solve(warm, np.random.default_rng(0))
+    np.testing.assert_allclose(warm[0].amps, converged[0].amps, rtol=1e-5,
+                               atol=1e-6*np.abs(converged[0].amps).max())
+    assert residuals[0] < 1e-10
 
 
 def test_solve_leaves_the_solution_in_the_components_it_is_given():
@@ -234,9 +234,8 @@ def test_solve_leaves_the_solution_in_the_components_it_is_given():
     amps = comp_list[0].amps
     solver = _make_solver(_make_band_map(), _make_group(optimize=True))
 
-    returned = solver.solve(comp_list, np.random.default_rng(0))
+    solver.solve(comp_list, np.random.default_rng(0))
 
-    assert returned is comp_list
     assert comp_list[0].amps is amps  # The same array, so other views of it see the solution.
     assert np.abs(amps).max() > 0.0   # It was zero on entry.
 
@@ -249,10 +248,10 @@ def test_the_cg_applies_the_full_band_beam_to_amplitudes_from_a_per_pixel_chain(
                            np.full((1, npix), 1.0/3.0**2), nu=100.0, fwhm=600.0, nside=NSIDE,
                            double_precision=True, lmax=LMAX)
     solver = _make_solver(band_map, _make_group(optimize=True))
-    sharp = solver.solve(_make_comp_list(_make_params()), np.random.default_rng(0))
-    smoothed_input = _make_comp_list(_make_params())
-    smoothed_input[0].amp_fwhm_rad = np.deg2rad(8.0)
-    from_per_pixel = solver.solve(smoothed_input, np.random.default_rng(0))
+    sharp, from_per_pixel = _make_comp_list(_make_params()), _make_comp_list(_make_params())
+    solver.solve(sharp, np.random.default_rng(0))
+    from_per_pixel[0].amp_fwhm_rad = np.deg2rad(8.0)
+    solver.solve(from_per_pixel, np.random.default_rng(0))
     np.testing.assert_allclose(from_per_pixel[0].amps, sharp[0].amps, rtol=1e-6)
     assert from_per_pixel[0].amp_fwhm_rad == 0.0
 
@@ -304,11 +303,12 @@ def test_a_fixed_number_of_iterations_stops_when_the_residual_vanishes():
         preconditioner="NoPreconditioner")
     solver = CompSepSolver(band_map, MPI.COMM_SELF, group, double_precision=False, nthreads=1)
 
-    solution = solver.solve(_make_comp_list(params, Cl_prior_amplitude=1.0), rng)
+    solution = _make_comp_list(params, Cl_prior_amplitude=1.0)
+    residuals = solver.solve(solution, rng)
 
     assert np.isfinite(solution[0].amps).all()
-    assert len(solver.CG_residuals) < 300
-    assert solver.CG_residuals[-1] == 0.0
+    assert len(residuals) < 300
+    assert residuals[-1] == 0.0
 
 
 def test_optimize_defaults_to_off_so_the_solver_samples():
@@ -389,10 +389,10 @@ class TestPriorMean:
         npix = 12*NSIDE**2
         band_map = DetectorMap(np.full((1, npix), 5.0), np.full((1, npix), 1e-16),
                                nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
-        solver = _make_solver(band_map, _make_group(optimize=True))
-        solution = solver.solve(comp_list, np.random.default_rng(0))
+        _make_solver(band_map, _make_group(optimize=True)).solve(comp_list,
+                                                                 np.random.default_rng(0))
 
-        np.testing.assert_allclose(solution[0].amps, mu, rtol=1e-4, atol=1e-6)
+        np.testing.assert_allclose(comp_list[0].amps, mu, rtol=1e-4, atol=1e-6)
 
     def test_prior_mean_enters_the_sampled_solve_too(self, monkeypatch):
         """mu shifts the constrained realization as well, not just the MAP solve."""
@@ -402,13 +402,14 @@ class TestPriorMean:
 
         # `amp_prior_mean` is a property, so it can only be patched on the class -- which every
         # component instance shares. The unpatched control therefore has to run first.
-        unshifted = _make_solver(band_map, _make_group(optimize=False)).solve(
-            self._comp_list_with_prior(params), np.random.default_rng(5))
+        unshifted = self._comp_list_with_prior(params)
+        _make_solver(band_map, _make_group(optimize=False)).solve(unshifted,
+                                                                  np.random.default_rng(5))
 
-        comp_list = self._comp_list_with_prior(params)
-        mu = np.full(comp_list[0].amps.shape, 50.0 + 0j)
-        self._patch_prior_mean(monkeypatch, comp_list[0], mu)
-        shifted = _make_solver(band_map, _make_group(optimize=False)).solve(comp_list,
+        shifted = self._comp_list_with_prior(params)
+        mu = np.full(shifted[0].amps.shape, 50.0 + 0j)
+        self._patch_prior_mean(monkeypatch, shifted[0], mu)
+        _make_solver(band_map, _make_group(optimize=False)).solve(shifted,
                                                                   np.random.default_rng(5))
 
         # Same seed, so the eta draws are identical and the difference is exactly the mu term.
@@ -505,10 +506,10 @@ class TestPriorMeanMap:
         npix = 12*NSIDE**2
         band_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1e-16),
                                nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)
-        solver = _make_solver(band_map, _make_group(optimize=True))
-        solution = solver.solve(comp_list, np.random.default_rng(0))
+        _make_solver(band_map, _make_group(optimize=True)).solve(comp_list,
+                                                                 np.random.default_rng(0))
 
-        np.testing.assert_allclose(solution[0].amps, mu, rtol=1e-4, atol=1e-6)
+        np.testing.assert_allclose(comp_list[0].amps, mu, rtol=1e-4, atol=1e-6)
 
     def test_a_tightened_prior_holds_the_solution_to_the_prior_map(self, tmp_path):
         """End-to-end: `Cl_prior_l_tighten` far above lmax pins every multipole to the prior map.
@@ -534,8 +535,9 @@ class TestPriorMeanMap:
             for comp in comp_list:
                 comp.load_amp_prior_mean()
             mu = comp_list[0].amp_prior_mean
-            solver = _make_solver(band_map, _make_group(optimize=True))
-            solutions[l_tighten] = solver.solve(comp_list, np.random.default_rng(0))[0].amps
+            _make_solver(band_map, _make_group(optimize=True)).solve(comp_list,
+                                                                     np.random.default_rng(0))
+            solutions[l_tighten] = comp_list[0].amps
         sed = comp_list[0].get_sed(100.0)
 
         np.testing.assert_allclose(solutions[0]*sed, data_alms, rtol=1e-3, atol=1e-3)

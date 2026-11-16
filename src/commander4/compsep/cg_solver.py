@@ -247,13 +247,13 @@ class CompSepSolver:
         return RHS
 
 
-    def solve(self, comp_list: CompList, rng: np.random.Generator) -> CompList:
+    def solve(self, comp_list: CompList, rng: np.random.Generator) -> list[float]:
         """Solve the amplitudes of `comp_list` for this rank's band, in place, with the CG.
 
         The CG starts from the amplitudes that `comp_list` holds on entry, and leaves the solution
-        in them. The same list is returned. It stops at the sampling group's `err_tol`, or after
-        `max_iter` iterations (`max_iter_pol` for QU). `self.CG_residuals` then holds the error
-        after each iteration.
+        in them. It stops at the sampling group's `err_tol`, or after `max_iter` iterations
+        (`max_iter_pol` for QU). Returns the squared residual after each iteration; only the
+        master's values are meaningful.
 
         Every rank of the solver's communicator must call this. Rank 0 (the master) runs the CG,
         and the other ranks apply their band's part of the operator.
@@ -293,42 +293,35 @@ class CompSepSolver:
         # The CG changes `comp_list` (its x) and `RHS` (its residual) in place.
         CG_solver = DistributedCG(self.apply_LHS_matrix, RHS, self.is_master, x0=comp_list,
                                   M=precond, destroy_b=True)
-        self.CG_residuals = np.zeros(max_iter)
         if self.is_master:
             logger.verbose(f"{pol_name} CG starting up.")
         checkpt_int = 30
-        iter = 0
+        residuals = []
         t0 = time.time()
-        stop_CG = False
-        while not stop_CG:
+        for iteration in range(1, max_iter + 1):
             # Counted per step, so the report's N column is the number of CG iterations taken.
             with benchmark("cg-iter"):
                 CG_solver.step()
             log_memory("cg-iter")
-            self.CG_residuals[iter] = CG_solver.err
-            iter += 1
-            if iter%checkpt_int == 0 and self.is_master:
-                logger.verbose(
-                    f"{pol_name} CG iter {iter:3d} - "
-                    f"Squared residual {np.mean(self.CG_residuals[iter-checkpt_int:iter]):.6e} "
-                    f"({(time.time() - t0)/checkpt_int:.2f}s/iter)")
+            residuals.append(CG_solver.err)
+            if iteration%checkpt_int == 0 and self.is_master:
+                logger.verbose(f"{pol_name} CG iter {iteration:3d} - Squared residual "
+                               f"{np.mean(residuals[-checkpt_int:]):.6e} "
+                               f"({(time.time() - t0)/checkpt_int:.2f}s/iter)")
                 t0 = time.time()
-            if iter >= max_iter:
-                # Only log warning if err_tol != 0, as this means user wants to do max_iter.
-                if self.is_master and self.group.err_tol > 0.0:
-                    logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
-                stop_CG = True
-            if CG_solver.err <= self.group.err_tol:
-                stop_CG = True
-            stop_CG = self.solver_comm.bcast(stop_CG, root=0)
-        self.CG_residuals = self.CG_residuals[:iter]
+            # Only the master holds the error, so it decides for all ranks.
+            if self.solver_comm.bcast(CG_solver.err <= self.group.err_tol, root=0):
+                break
         if self.is_master:
-            logger.info(f"{pol_name} CG finished after {iter} iterations with a squared residual "
-                        f"of {CG_solver.err:.3e} (err tol = {self.group.err_tol})")
+            # With err_tol 0 the user asks for exactly max_iter iterations, so that is no warning.
+            if self.group.err_tol > 0.0 and CG_solver.err > self.group.err_tol:
+                logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
+            logger.info(f"{pol_name} CG finished after {len(residuals)} iterations with a squared "
+                        f"residual of {CG_solver.err:.3e} (err tol = {self.group.err_tol})")
 
         # a = S^{1/2} x on the master, which then sends the solution to the other ranks.
         for comp in comp_list:
             if self.is_master:
                 comp.apply_Cl_prior_sqrt(comp.amps)
             comp.bcast_data_blocking(self.solver_comm)
-        return comp_list
+        return residuals
