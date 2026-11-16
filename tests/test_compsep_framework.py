@@ -20,7 +20,6 @@ from commander4.data_models.band import Band
 from commander4.data_models.detector_map import DetectorMap
 from commander4.math_utils.alm import _dot_complex_alm_1D_arrays
 from commander4.sky.comp_list import CompList
-from commander4.sky.sky_model import SkyModel
 from commander4.compsep.perpix_solver import solve_compsep_perpix
 
 
@@ -104,11 +103,8 @@ def test_should_send_compsep_result_skips_qu_when_i_sender_exists() -> None:
     assert not _should_send_compsep_result("Unused_I", None)
 
 
-def test_joined_skymodel_realizes_iqu_components() -> None:
-    comp_list = _make_comp_list("IQU")
-    joined = comp_list.joined()
-
-    sky = SkyModel(joined).get_sky_at_nu(30.0, 2, "IQU", fwhm=0.0)
+def test_joined_comp_list_realizes_iqu_components() -> None:
+    sky = _make_comp_list("IQU").joined().get_sky_at_nu(30.0, 2, "IQU", fwhm=0.0)
 
     assert sky.shape == (3, 48)
     assert np.all(np.isfinite(sky))
@@ -123,7 +119,7 @@ def test_iteration_chi2_uses_all_observed_map_samples() -> None:
                      band=Bunch(name="Planck30GHz", polarization="I"))
     cfg = Bunch(nside_chisq=1, include_residual_maps=False)
 
-    fit = evaluate_chi2(mpi_info, cfg, band_map, SkyModel(CompList([])))  # A zero sky.
+    fit = evaluate_chi2(mpi_info, cfg, band_map, CompList([]))  # A zero sky.
 
     assert fit.total == pytest.approx(np.sum((map_sky[0, :-1] / 2.0)**2))
     assert fit.ndof == 11
@@ -150,13 +146,11 @@ def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
         "commander4.compsep.processing.write_compsep_chain_to_file", lambda *args: None)
 
     with caplog.at_level(SUMMARY, logger="commander4.compsep.processing"):
-        result = process_compsep(
-            mpi_info, cfg, band_map, iter=4, chain=2,
-            params=Bunch(), comp_list=CompList([]), rng=np.random.default_rng(0))
+        process_compsep(mpi_info, cfg, band_map, iter=4, chain=2, params=Bunch(),
+                        comp_list=CompList([]), rng=np.random.default_rng(0))
 
     chi2 = np.sum((map_sky / 2.0)**2)
     z_chi2 = (chi2 - map_sky.size) / np.sqrt(2.0 * map_sky.size)
-    assert isinstance(result, SkyModel)
     assert "Chain 2, iteration 4 complete" in caplog.text
     assert f"chi2={chi2:.6e}" in caplog.text
     assert f"z={z_chi2:.3f}" in caplog.text
@@ -347,7 +341,7 @@ def test_build_conditional_residual_subtracts_only_fixed_components() -> None:
 
     # The fixed components (everything but CMB) are exactly what should have been subtracted.
     fixed = [c for c in comp_list.split_for_pol("I") if c.comp_name != "CMB"]
-    fixed_sky = SkyModel(CompList(fixed)).get_sky_at_nu(30.0, nside, "I", fwhm=band_map.fwhm_rad)
+    fixed_sky = CompList(fixed).get_sky_at_nu(30.0, nside, "I", fwhm=band_map.fwhm_rad)
     assert residual is not band_map
     assert np.any(fixed_sky != 0.0)  # subtraction is non-trivial
     np.testing.assert_allclose(residual.map_sky, band_map.map_sky - fixed_sky, rtol=1e-5)
@@ -379,7 +373,7 @@ def test_band_sky_removes_amp_fwhm_by_quadrature() -> None:
     for amp_fwhm, applied in ((0.0, target), (0.3, np.sqrt(target**2 - 0.3**2)), (target, 0.0)):
         comp.amp_fwhm_rad = amp_fwhm
         np.testing.assert_allclose(
-            SkyModel(CompList([comp])).get_sky_at_nu(nu, nside, "I", fwhm=target),
+            CompList([comp]).get_sky_at_nu(nu, nside, "I", fwhm=target),
             comp.get_component_map(nside, applied)*sed, rtol=1e-5, atol=1e-5)
 
 
@@ -397,7 +391,7 @@ def test_band_sky_is_cut_at_the_band_lmax() -> None:
     comp.amps = _random_alms(23, np.random.default_rng(1)).astype(comp.amps.dtype)
     nu, nside, band_lmax, fwhm = 30.0, 4, 7, np.deg2rad(5.0)
 
-    sky = SkyModel(CompList([comp])).get_sky_at_nu(nu, nside, "I", fwhm=fwhm, lmax=band_lmax)
+    sky = CompList([comp]).get_sky_at_nu(nu, nside, "I", fwhm=fwhm, lmax=band_lmax)
 
     alms = hp.resize_alm(comp.amps[0].astype(complex), 23, 23, band_lmax, band_lmax)
     expected = hp.alm2map(hp.almxfl(alms, hp.gauss_beam(fwhm, lmax=band_lmax)), nside,

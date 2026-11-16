@@ -160,7 +160,7 @@ class RadioSources(PointSourcesComponent):
             observed through a Gaussian beam of `fwhm` **radians**.
 
         The beam is applied by painting each source through it: `fwhm` selects the beam the sources
-        are painted with. `SkyModel.get_sky_at_nu` adds this map, in pixel space, to the diffuse
+        are painted with. `CompList.get_sky_at_nu` adds this map, in pixel space, to the diffuse
         components it builds through `comp2band` (as C3's `compute_residual` adds point
         sources), so the unit is uK_RJ at `nu`, like theirs.
         """

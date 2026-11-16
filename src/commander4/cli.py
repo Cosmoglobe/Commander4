@@ -117,13 +117,12 @@ def run_compsep_side(mpi_info: Bunch, params: Bunch, cfg: Bunch, comp_lists_by_c
     """
     from commander4.compsep.processing import process_compsep
     from commander4.mpi.transfer import receive_tod, send_compsep
-    from commander4.sky.sky_model import SkyModel
 
     logger = logging.getLogger(__name__)
-    # Send each chain's initial sky model to the TOD side, and then get the first band map: the
+    # Send each chain's initial components to the TOD side, and then get the first band map: the
     # same order (sky out, band map in) as at the end of each step of the loop below.
     for chain in (1, 2):
-        send_compsep(mpi_info, SkyModel(comp_lists_by_chain[chain]))
+        send_compsep(mpi_info, comp_lists_by_chain[chain])
     band_map = receive_tod(mpi_info, None, params)
 
     schedule = gibbs_schedule(first_iteration, params.gibbs.num_iterations)
@@ -133,14 +132,14 @@ def run_compsep_side(mpi_info: Bunch, params: Bunch, cfg: Bunch, comp_lists_by_c
                            f"starting CompSep chain {chain}, iteration {iteration}.")
         rng = make_iteration_rng(params, mpi_info, chain, iteration)
         t0 = time.time()
-        compsep_output = process_compsep(mpi_info, cfg, band_map, iteration, chain,
-                                         params, comp_lists_by_chain[chain], rng)
+        process_compsep(mpi_info, cfg, band_map, iteration, chain, params,
+                        comp_lists_by_chain[chain], rng)
         if mpi_info.compsep.is_master:
             logger.verbose(f"CompSep: Rank {mpi_info.compsep.rank} finished chain {chain}, "
                            f"iteration {iteration} in {time.time()-t0:.2f}s. Sending results.")
         if step == len(schedule) - 1:
             continue
-        send_compsep(mpi_info, compsep_output)
+        send_compsep(mpi_info, comp_lists_by_chain[chain])
         logger.debug(f"CompSep rank {mpi_info.compsep.rank} finished sending results for chain "
                      f"{chain}, iter {iteration}. Waiting for TOD results.")
         t0 = time.time()

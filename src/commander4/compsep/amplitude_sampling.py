@@ -15,7 +15,6 @@ from commander4.compsep.cg_solver import CompSepSolver
 from commander4.compsep.perpix_solver import solve_compsep_perpix
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
-from commander4.sky.sky_model import SkyModel
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +36,7 @@ def _build_conditional_residual(band_map: DetectorMap, comp_list: CompList, pol:
                    if comp.comp_name not in active_names]
     if not fixed_comps:
         return band_map
-    fixed_sky = SkyModel(CompList(fixed_comps)).get_sky_at_band(band_map)
+    fixed_sky = CompList(fixed_comps).get_sky_at_band(band_map)
     residual = deepcopy(band_map)
     residual.map_sky = band_map.map_sky - fixed_sky.astype(band_map.map_sky.dtype,
                                                            copy=False)

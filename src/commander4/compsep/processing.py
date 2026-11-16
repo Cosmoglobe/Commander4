@@ -19,7 +19,6 @@ from pixell.bunch import Bunch
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
-from commander4.sky.sky_model import SkyModel
 from commander4.compsep.amplitude_sampling import sample_amplitudes
 from commander4.compsep.chisq import collect_fit_diagnostics, evaluate_chi2
 from commander4.compsep.spectral_sampling import sample_spectral_params
@@ -284,7 +283,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
 
 
 def process_compsep(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, iter: int, chain: int,
-                    params: Bunch, comp_list: CompList, rng: np.random.Generator) -> SkyModel:
+                    params: Bunch, comp_list: CompList, rng: np.random.Generator) -> None:
     """One Gibbs iteration of component separation. Every CompSep rank calls it.
 
     Runs the amplitude groups (CG or per-pixel) first, followed by the MCMC groups. An MCMC group
@@ -301,12 +300,8 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, iter: in
         params (Bunch): The parameters from the input parameter file.
         comp_list (CompList): The full execution-view component list, updated in place.
         rng: This rank's random generator for the iteration. Every draw of every group uses it.
-
-    Returns:
-        The full sky realization, wrapping the updated `comp_list`.
     """
     compsep = mpi_info.compsep
-    sky_model = SkyModel(comp_list)
     method = "CG" if cfg.cg_sampling_groups else "per-pixel"
     # Sampler bookkeeping for the chain: C3's nonlin-samples_*.dat and its CG residual logging. A
     # tier that sampled nothing adds no key, so this mirrors the file it ends up in.
@@ -322,14 +317,14 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, iter: in
             cg_stats = sample_amplitudes(mpi_info, cfg, group, band_map, comp_list, rng)
         if cg_stats:
             sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
-        fit = evaluate_chi2(mpi_info, cfg, band_map, sky_model,
+        fit = evaluate_chi2(mpi_info, cfg, band_map, comp_list,
                             label=f"{method} group {group.name!r}")
 
     for group in cfg.mcmc_sampling_groups.values():
         with benchmark(f"mcmc-{group.name}"):
             mcmc_stats = sample_spectral_params(mpi_info, cfg, group, band_map, comp_list, rng)
         sampler_stats.setdefault("mcmc", {})[group.name] = mcmc_stats
-        fit = evaluate_chi2(mpi_info, cfg, band_map, sky_model,
+        fit = evaluate_chi2(mpi_info, cfg, band_map, comp_list,
                             label=f"MCMC group {group.name!r}")
 
     if cfg.mcmc_sampling_groups:
@@ -338,7 +333,7 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, iter: in
                 cg_stats = sample_amplitudes(mpi_info, cfg, group, band_map, comp_list, rng)
             if cg_stats:
                 sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
-            fit = evaluate_chi2(mpi_info, cfg, band_map, sky_model,
+            fit = evaluate_chi2(mpi_info, cfg, band_map, comp_list,
                                 label=f"{method} group {group.name!r}")
 
     with benchmark("chain-gather"):
@@ -357,5 +352,3 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, iter: in
 
     bench_summary(compsep.comm, label="CompSep")
     bench_reset()
-
-    return sky_model

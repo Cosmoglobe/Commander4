@@ -23,7 +23,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
-from commander4.sky.sky_model import SkyModel
+from commander4.sky.comp_list import CompList
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ class ChisqResult(NamedTuple):
     band: BandFit
 
 
-def evaluate_chi2(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, sky_model: SkyModel,
+def evaluate_chi2(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, comp_list: CompList,
                   label: str | None = None) -> ChisqResult:
     """Whiten this band's residual against the current sky model and reduce it over all bands.
 
@@ -79,12 +79,12 @@ def evaluate_chi2(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap, sky_model:
             chi-squared map (C3's `NSIDE_CHISQ`). With `include_residual_maps`, the result also
             keeps the full-resolution `data - model` map, for the chain's residual maps.
         band_map: This rank's band map, its inverse-noise map and its beam.
-        sky_model: The model to fit, realized at the band's frequency and resolution.
+        comp_list: The components of the model to fit.
         label: When given, the name of the sampling step just taken; logs a per-band and an all-band
             fit summary under it. `None` evaluates silently.
     """
     compsep = mpi_info.compsep
-    sky_at_band = sky_model.get_sky_at_band(band_map)
+    sky_at_band = comp_list.get_sky_at_band(band_map)
     pol_names = ["Q", "U"] if band_map.pol == "QU" else ["I"]
     npix, npix_chisq = band_map.map_sky.shape[-1], hp.nside2npix(cfg.nside_chisq)
     # ud_grade averages, so scaling by how many fine pixels fall in a coarse one turns the average

@@ -14,7 +14,6 @@ from pixell.bunch import Bunch
 from commander4.compsep.spectral_sampling import sample_spectral_params
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
-from commander4.sky.sky_model import SkyModel
 
 NSIDE, LMAX, NU, TRUE_BETA = 4, 8, 60.0, -3.0
 
@@ -46,7 +45,7 @@ def _make_setup(start_beta: float = TRUE_BETA, **beta_settings):
     npix = 12*NSIDE**2
     band_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1.0e4), nu=NU, fwhm=0.0,
                            nside=NSIDE, double_precision=True, lmax=LMAX)
-    band_map.map_sky = SkyModel(comp_list).get_sky_at_band(band_map).astype(np.float64)
+    band_map.map_sky = comp_list.get_sky_at_band(band_map).astype(np.float64)
     for comp in comp_list:
         comp.beta = start_beta
 

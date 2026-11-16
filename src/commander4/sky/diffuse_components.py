@@ -335,7 +335,7 @@ class DiffuseComponent(Component):
 
         For plotting, where there is no band: the alms are cut at min(lmax, 3*nside - 1), and the
         beam is one window on every Stokes row, as in `comp2band`. Multipoles below `lmin` are left
-        out. A band's sky is made by `SkyModel.get_sky_at_nu` instead, through `comp2band`.
+        out. A band's sky is made by `CompList.get_sky_at_nu` instead, through `comp2band`.
         """
         if self.amps is None:
             raise ValueError("component_alms property not set.")
@@ -353,7 +353,7 @@ class DiffuseComponent(Component):
         """The component map at frequency `nu`, seen through a beam of `fwhm` radians, for plotting.
 
         Amplitudes that already carry a beam (`amp_fwhm_rad`) get only the rest of it. A band's sky
-        is made by `SkyModel.get_sky_at_nu` instead, which also cuts at the band lmax.
+        is made by `CompList.get_sky_at_nu` instead, which also cuts at the band lmax.
         """
         applied_fwhm = np.sqrt(max(fwhm**2 - self.amp_fwhm_rad**2, 0.0))
         return self.get_component_map(nside, applied_fwhm)*self.get_sed(nu)

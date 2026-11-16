@@ -1,10 +1,11 @@
 """`CompList`: an ordered list of component views, which the CG can use as a vector.
 
 A component defined for IQU is stored as two views, one for I and one for QU, because the two are
-solved on separate MPI ranks. `CompList` holds four kinds of method, and nothing else:
+solved on separate MPI ranks. `CompList` holds five kinds of method, and nothing else:
 
 - building the views from the parameter file (`init_from_params`),
 - reorganizing them (`split_for_pol`, `joined`),
+- the sky that all the components together give at a band (`get_sky_at_band`, `get_sky_at_nu`),
 - the vector arithmetic of the CG (`zeros_like`, `copy`, `dot`, `add_scaled`, `scale_and_add`),
 - writing the chain and keeping the MPI ranks in step (`write_chain`, `broadcast_pol_views`).
 
@@ -16,13 +17,20 @@ from __future__ import annotations
 import copy
 
 import h5py
+import healpy as hp
+import numpy as np
 from mpi4py import MPI
+from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 import commander4.sky as sky
+from commander4.data_models.band import Band
+from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.component import Component
+from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.parameters.schema import EXECUTION_POLS
 from commander4.math_utils.arithmetic import inplace_scale_add, inplace_add_scaled_vec
+from commander4.math_utils.sht import alm_to_map
 
 
 class CompList:
@@ -106,6 +114,71 @@ class CompList:
             else:
                 joined_components.append(views[0].join_split_views(views[1]))
         return CompList(joined_components)
+
+    # ----- The sky at a band -----
+
+    def get_sky_at_band(self, band_map: DetectorMap) -> NDArray:
+        """The sky as one band map sees it: at its frequency, resolution, beam and lmax.
+
+        The result has the shape of `band_map.map_sky`, so `band_map.map_sky` minus it is the
+        residual of the band.
+        """
+        return self.get_sky_at_nu(band_map.nu, band_map.nside, band_map.pol,
+                                  fwhm=band_map.fwhm_rad, lmax=band_map.lmax)
+
+    def get_sky_at_nu(self, nu: float, nside: int, pols_required: str, fwhm: float | None = None,
+                      lmax: int | None = None) -> NDArray:
+        """The sky of all components at one frequency, resolution, beam and lmax.
+
+        Diffuse components go through `comp2band`, the CG solver's own operator (cut at the band
+        lmax, mixing matrix, beam), and are then synthesized at `nside`, as C3's `evalBand` does:
+        the sky compared with a band's data is exactly the model the amplitudes were solved for.
+        Point sources are painted in pixel space and added, as in C3's `compute_residual`.
+
+        The list may be the split views used during CompSep (`I` and `QU`) or a joined list
+        with `IQU` components.
+
+        Args:
+            pols_required: The Stokes rows of the result: "I", "QU" or "IQU".
+            fwhm: Beam to realize the sky through, in radians. `None` asks for the sharpest the
+                amplitudes can give: the largest `amp_fwhm_rad` of the components (normally 0.0).
+            lmax: The band lmax (`DetectorMap.lmax`). `None` means `3*nside - 1`, the default band
+                lmax.
+
+        Raises:
+            ValueError: If `fwhm` is finer than the beam the amplitudes already carry.
+        """
+        # The beam the amplitudes carry: 0.0 after the CG solver, which gives a deconvolved sky,
+        # and `compsep.common_res_fwhm` after the per-pixel solver.
+        amp_fwhm = max((comp.amp_fwhm_rad for comp in self.components), default=0.0)
+        if fwhm is None:
+            fwhm = amp_fwhm
+        elif fwhm < amp_fwhm and not np.isclose(fwhm, amp_fwhm):
+            raise ValueError(
+                f"Asked for the sky at a beam of {np.degrees(fwhm)*60:.4g} arcmin, but these "
+                f"amplitudes already carry {np.degrees(amp_fwhm)*60:.4g} arcmin of smoothing and "
+                f"cannot be realized any sharper. Pass fwhm=None for the sharpest available.")
+        lmax = 3*nside - 1 if lmax is None else lmax
+        nrows = len(pols_required)
+        skymap = np.zeros((nrows, 12*nside**2), dtype=np.float32)
+        diffuse = [comp for comp in self.components if isinstance(comp, DiffuseComponent)]
+        # One band per view: intensity (map row 0, spin 0) and polarization (the last two rows,
+        # spin 2). A joined IQU component contributes to both.
+        for view, rows, spin in (("I", slice(0, 1), 0), ("QU", slice(nrows - 2, nrows), 2)):
+            if view[0] not in pols_required:
+                continue
+            # Single precision, like `skymap`, which the result goes into.
+            band = Band(np.zeros((len(view), hp.Alm.getsize(lmax)), dtype=np.complex64), nu,
+                        np.degrees(fwhm)*60.0, nside)
+            for comp in diffuse:
+                if comp.pol in (view, "IQU"):
+                    comp.comp2band(band)
+            skymap[rows] += alm_to_map(band.alms, nside, lmax, spin=spin)
+        if "I" in pols_required:
+            for comp in self.components:  # Point sources.
+                if not isinstance(comp, DiffuseComponent) and comp.pol == "I":
+                    skymap[0] += comp.get_sky(nu, nside, fwhm)[0]
+        return skymap
 
     # ----- The vector arithmetic of the CG -----
     # Two lists that are combined must hold the same views in the same order. Every CG vector is

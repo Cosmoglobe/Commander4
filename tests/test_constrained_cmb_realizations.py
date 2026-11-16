@@ -626,11 +626,7 @@ def test_cli_uses_thermodynamic_units_throughout(
         handle["comps/dust/sed/nu_ref"] = 353.0
         handle["comps/dust/amp_fwhm_arcmin"] = 0.0
     components = cr._build_intensity_components(as_bunch_recursive(params), str(chain_path))
-    foregrounds = []
-    for component in components:
-        if not isinstance(component, cr.CMB):
-            foregrounds.append(component)
-    foreground_sky = cr.SkyModel(foregrounds)
+    foregrounds = cr.CompList([comp for comp in components if not isinstance(comp, cr.CMB)])
     signal_maps = []
     ivar_maps = []
     beam_sizes = []
@@ -639,7 +635,7 @@ def test_cli_uses_thermodynamic_units_throughout(
         cmb_map = cr.alm2map(hp.almxfl(cmb_alm, hp.gauss_beam(beam, lmax=lmax)), nside, lmax)
         noise = np.linspace(-0.2, 0.2, npix)
         rms = np.linspace(0.5, 1.5, npix)
-        foreground_rj = foreground_sky.get_sky_at_nu(nu, nside, "I", fwhm=beam)[0]
+        foreground_rj = foregrounds.get_sky_at_nu(nu, nside, "I", fwhm=beam)[0]
         observed_cmb = cmb_map + noise + foreground_rj.astype(float) * rj_to_band_unit_factor(
             nu, "uK_CMB")
         unit = stored_unit
@@ -797,7 +793,7 @@ def test_iteration_subtracts_saved_foregrounds_without_double_smoothing(
         expected_maps.append(expected)
     loaded = cr._load_iteration(params, 1, chain_path, band_files, band_freqs)
     for actual, expected in zip(loaded.signal_maps, expected_maps):
-        # SkyModel accumulates foregrounds in float32.
+        # `get_sky_at_nu` accumulates foregrounds in float32.
         np.testing.assert_allclose(actual, expected, rtol=0, atol=5e-5)
     stored_cmb = hp.almxfl(intrinsic["cmb"], hp.gauss_beam(np.radians(6.0), lmax=8))
     np.testing.assert_allclose(loaded.cmb_alms,

@@ -14,14 +14,13 @@ from commander4.compsep.processing import _read_chisq_masks
 from commander4.compsep.spectral_sampling import chi2_of_chisq_bands, resolve_chisq_mask
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
-from commander4.sky.sky_model import SkyModel
 
 NSIDE = 2
 NPIX = 12*NSIDE**2
 
 
-def _zero_sky_model() -> SkyModel:
-    """A single CMB component with zero alms, so the realized sky model is identically zero."""
+def _zero_sky() -> CompList:
+    """A single CMB component with zero alms, so the realized sky is identically zero."""
     cmb = Bunch(enabled=True, component_class="CMB",
                 params=Bunch(lmax=2, polarization="I", shortname="cmb",
                              spatially_varying_MM=False, Cl_prior_amplitude=None))
@@ -29,7 +28,7 @@ def _zero_sky_model() -> SkyModel:
                                                 compsep=Bunch(double_precision=True)))
     for comp in comp_list:
         comp.amps[:] = 0.0
-    return SkyModel(comp_list)
+    return comp_list
 
 
 def _chi2(map_sky, inv_var, keep=slice(None), chisq_bands=("Band100",)) -> float:
@@ -40,7 +39,7 @@ def _chi2(map_sky, inv_var, keep=slice(None), chisq_bands=("Band100",)) -> float
     mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF),
                      band=Bunch(name="Band100", identifier="Band100_I"))
     group = Bunch(chisq_bands=list(chisq_bands))
-    return chi2_of_chisq_bands(mpi_info, group, band_map, _zero_sky_model(), keep)
+    return chi2_of_chisq_bands(mpi_info, group, band_map, _zero_sky(), keep)
 
 
 class TestResolveChisqMask:
