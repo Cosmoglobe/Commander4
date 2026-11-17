@@ -22,8 +22,6 @@ from commander4.diagnostics.performance import benchmark, log_memory
 
 logger = logging.getLogger(__name__)
 
-MPI_LIMIT_32BIT = 2**31 - 1
-
 
 class CompSepSolver:
     """ Class for performing global component separation using the preconditioned conjugate gradient
@@ -99,13 +97,9 @@ class CompSepSolver:
                 comp.apply_Cl_prior_sqrt(comp.amps)
 
         # Spread initial a to all ranks from master.
-        # NB: For some stupid reason the non-blocking mpi4py calls do not have 64-bit length support
-        # and are therefore limited to <2GB arrays... We have to fallback to blocking communication
-        # for >2GB arrays. In the future we should probably implement chunking instead.
-
         with benchmark("lhs-bcast"):
             for comp in comp_list:
-                comp.bcast_data_blocking(self.solver_comm)
+                comp.bcast_data(self.solver_comm)
 
         # B Y^-1 M Y S^{1/2} a. Each component adds itself to the emptied band: a diffuse component
         # to its alms, point sources to its pixel map.
@@ -136,25 +130,13 @@ class CompSepSolver:
             for comp in comp_list:
                 comp.band2comp(self.band_alms, nthreads=self.nthreads)
 
-        # Accumulate solution on master
+        # Accumulate the result on the master. The reduces are non-blocking, so the master can work
+        # on each component as soon as it has arrived, while later ones are still on their way.
         with benchmark("lhs-accum"):
-            biggest_size_bytes = np.max([comp.amps.nbytes for comp in comp_list])
-            use_blocking = biggest_size_bytes > MPI_LIMIT_32BIT
-            if use_blocking:
-                logger.debug(f"Using blocking CompSep communication for array size "
-                             f"{biggest_size_bytes:.2e} B.")
-                for comp in comp_list:
-                    comp.accum_data_blocking(self.solver_comm)
-            else:
-                requests = [comp.accum_data_non_blocking(self.solver_comm) for comp in comp_list]
-
+            requests = [comp.accum_data_non_blocking(self.solver_comm) for comp in comp_list]
             if self.is_master:
                 for icomp in range(len(comp_list)):
-                    # Since we used non-blocking reduce, master rank can start working on components
-                    # as they are received instead of waiting for all to be received.
-                    if not use_blocking:
-                        # Wait until all data for component icomp has been received.
-                        MPI.Request.Wait(requests[icomp])
+                    requests[icomp].Wait()
                     # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
                     comp = comp_list[icomp]
                     comp.apply_Cl_prior_sqrt(comp.amps)
@@ -162,9 +144,7 @@ class CompSepSolver:
                     if comp.Cl_prior_amplitude is not None:
                         comp.amps += comp_list_in[icomp].amps
             else: # Worker ranks just wait for all their sends to complete.
-                if not use_blocking:
-                    for icomp in range(len(comp_list)):
-                        MPI.Request.Wait(requests[icomp])
+                MPI.Request.Waitall(requests)
                 comp_list = CompList([])
 
         return comp_list
@@ -323,5 +303,5 @@ class CompSepSolver:
         for comp in comp_list:
             if self.is_master:
                 comp.apply_Cl_prior_sqrt(comp.amps)
-            comp.bcast_data_blocking(self.solver_comm)
+            comp.bcast_data(self.solver_comm)
         return residuals

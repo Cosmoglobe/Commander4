@@ -18,6 +18,7 @@ from commander4.parameters.schema import read_settings, resolve_param
 
 logger = logging.getLogger(__name__)
 
+
 class Component:
     """Abstract base class for every sky component.
 
@@ -242,25 +243,24 @@ class Component:
         """
         return float(arithmetic.dot(self.amps, other.amps))
 
-    def bcast_data_blocking(self, comm:MPI.Comm, root=0):
+    def bcast_data(self, comm:MPI.Comm, root=0):
         """Broadcast the component's data array from the root MPI rank."""
-        if not isinstance(self.amps, np.ndarray):
-            raise RuntimeError("Component data must be allocated as an array before broadcast.")
+        # Blocking on purpose: Intel MPI 2021's non-blocking broadcast fails for arrays above 2 GB
+        # (see aux/intel_mpi_ibcast_2gb/).
         comm.Bcast(self.amps, root=root)
 
     def accum_data_blocking(self, comm:MPI.Comm, root=0):
         """Sum the component's data array across the communicator onto the root rank."""
-        if not isinstance(self.amps, np.ndarray):
-            raise RuntimeError("Component data must be allocated as an array before accumulation.")
-        myrank=comm.Get_rank()
-        send, recv = (MPI.IN_PLACE, self.amps) if myrank == root else (self.amps, None)
+        send, recv = (MPI.IN_PLACE, self.amps) if comm.Get_rank() == root else (self.amps, None)
         comm.Reduce(send, recv, op=MPI.SUM, root=root)
 
-    def accum_data_non_blocking(self, comm:MPI.Comm, root=0):
-        """As `accum_data_blocking`, but returns the MPI request instead of waiting on it."""
-        if not isinstance(self.amps, np.ndarray):
-            raise RuntimeError("Component data must be allocated as an array before accumulation.")
-        myrank=comm.Get_rank()
-        send, recv = (MPI.IN_PLACE, self.amps) if myrank == root else (self.amps, None)
-        req = comm.Ireduce(send, recv, op=MPI.SUM, root=root)
-        return req
+    def accum_data_non_blocking(self, comm:MPI.Comm, root=0) -> MPI.Request:
+        """Start summing the component's data array onto the root rank, and return its request.
+
+        The root must `Wait` on the request before it reads `amps`.
+        """
+        # The non-blocking reduce works for arrays above 2 GB too: mpi4py >= 4 calls the MPI-4
+        # large-count routine (MPI_Ireduce_c). Only the non-blocking broadcast has a 2 GB problem
+        # (see `bcast_data`).
+        send, recv = (MPI.IN_PLACE, self.amps) if comm.Get_rank() == root else (self.amps, None)
+        return comm.Ireduce(send, recv, op=MPI.SUM, root=root)

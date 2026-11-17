@@ -244,7 +244,7 @@ class CompList:
         `source` rank restores a globally consistent component list.
         """
         for comp in self.split_for_pol(pol):
-            comp.bcast_data_blocking(comm, root=source)
+            comp.bcast_data(comm, root=source)
             # The amplitudes' resolution travels with them: the solving rank's value is authoritative.
             comp.amp_fwhm_rad = comm.bcast(comp.amp_fwhm_rad, root=source)
             # FIXME: The above feels fragile: if we add more attributes that could change during
