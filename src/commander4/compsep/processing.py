@@ -212,7 +212,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
     """Build the components and read the settings of component separation, on one CompSep rank.
 
     Each CompSep rank works on one view of one band (`mpi_info.band`, set by the MPI setup). This
-    function also adds the band-master dictionaries of the CompSep side to `mpi_info`.
+    function also adds `mpi_info.world.compsep_band_masters`, the world rank of each CompSep view.
 
     Args:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
@@ -303,11 +303,9 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
                 comp.load_initial_state(chain_file, apply_init_from,
                                         restore_beta=comp.comp_name in sampled_betas)
 
-    # The rank of each view's master, by view name: its world rank and its CompSep rank.
-    all_ranks = mpi_info.compsep.comm.allgather(
-        (mpi_info.band.identifier, mpi_info.world.rank, mpi_info.compsep.rank))
-    mpi_info.world.compsep_band_masters = {item[0]: item[1] for item in all_ranks}
-    mpi_info.compsep.compsep_band_masters = {item[0]: item[2] for item in all_ranks}
+    # The world rank of each view, by view name, for the exchange with the TOD side.
+    mpi_info.world.compsep_band_masters = dict(mpi_info.compsep.comm.allgather(
+        (mpi_info.band.identifier, mpi_info.world.rank)))
 
     return comp_lists_by_chain, cfg
 
