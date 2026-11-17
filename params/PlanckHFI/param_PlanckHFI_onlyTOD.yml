@@ -138,7 +138,6 @@ components:
     component_class: "CMB"
     params:
       polarization: "IQU"
-      longname: "CMB"
       shortname: "cmb"
       init_from: "/mn/stornext/d5/data/duncanwa/WMAP/data/COM_CMB_IQU-smica_2048_R3.00_full_uK_14amin_dip.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
@@ -149,7 +148,6 @@ components:
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      longname: "Thermal-Dust"
       shortname: "dust"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
@@ -164,7 +162,6 @@ components:
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      longname: "Synchrotron"
       shortname: "sync"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
@@ -178,7 +175,6 @@ components:
     component_class: "FreeFree"
     params:
       polarization: "I"
-      longname: "Free-Free"
       shortname: "ff"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_ff_amp_BP8.1_v1.fits"
       Cl_prior_amplitude: null  # No amplitude prior.

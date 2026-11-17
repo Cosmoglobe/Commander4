@@ -588,7 +588,7 @@ def plot_combo_maps(
                 comp_map,
                 hold=True,
                 cmap="RdBu_r",
-                title=f"{component.cfg.longname} {pol_names[ipol]} at {nu:.2f} GHz",
+                title=f"{component.comp_name} {pol_names[ipol]} at {nu:.2f} GHz",
                 min=limdown,
                 max=limup,
             )
@@ -852,7 +852,7 @@ def plot_components(
                 comp_map,
                 cmap="RdBu_r",
                 title=(
-                    f"{component.cfg.longname} {pol_names[ipol]} at {nu:.2f} GHz, "
+                    f"{component.comp_name} {pol_names[ipol]} at {nu:.2f} GHz, "
                     f"det {detector}, chain {chain}, iter {iteration}"
                 ),
                 min=limdown,
@@ -873,7 +873,7 @@ def plot_components(
             Cl = hp.alm2cl(hp.map2alm(comp_map))
             Dl = Z * Cl
             plt.figure()
-            plt.plot(ells, Dl, label=component.cfg.longname)
+            plt.plot(ells, Dl, label=component.comp_name)
             plt.xscale("log")
             if np.any(Dl > 0):
                 plt.yscale("log")
@@ -890,7 +890,7 @@ def plot_components(
             plt.close()
 
             plt.figure()
-            plt.plot(ells, Cl, label=component.cfg.longname)
+            plt.plot(ells, Cl, label=component.comp_name)
             plt.xscale("log")
             if np.any(Cl > 0):
                 plt.yscale("log")

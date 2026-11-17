@@ -149,7 +149,6 @@ components:
     component_class: "CMB"
     params:
       polarization: "IQU"
-      longname: "CMB"
       shortname: "cmb"
       Cl_prior_amplitude: [1.0e+6, 1.0e+4]  # D_l at l_pivot [I, QU]; uK_RJ^2 (~uK_CMB^2 at 1 GHz)
       Cl_prior_beta: [0.0, -0.5]
@@ -162,7 +161,6 @@ components:
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      longname: "Thermal-Dust"
       shortname: "dust"
       Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
       Cl_prior_l_pivot: 50
@@ -177,7 +175,6 @@ components:
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      longname: "Synchrotron"
       shortname: "sync"
       Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
       Cl_prior_l_pivot: 50

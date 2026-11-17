@@ -110,7 +110,6 @@ components:
     component_class: "CMB"
     params:
       polarization: "IQU"
-      longname: "CMB"
       shortname: "cmb"
       init_from: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_100-1_npipe_02048_fullres_full_T.fits"
       units: "uK_CMB"
@@ -133,7 +132,6 @@ components:
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      longname: "Thermal-Dust"
       shortname: "dust"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1.fits"
       # BP8.1 dust ('gauss' Cl model): T roof 1e7 uK_RJ^2 at BP's 545 GHz reference, scaled by the
@@ -152,7 +150,6 @@ components:
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      longname: "Synchrotron"
       shortname: "sync"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1.fits"
       # BP8.1 synch ('gauss' Cl model): the T roof is effectively off (1e20; the Haslam-scale
@@ -171,7 +168,6 @@ components:
     component_class: "FreeFree"
     params:
       polarization: "I"
-      longname: "Free-Free"
       shortname: "ff"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_ff_amp_BP8.1_v1.fits"
       # BP8.1 free-free ('power_law_gauss' Cl model): rising D_l ~ l^2 roof (1e3 at l=50, 40 GHz)

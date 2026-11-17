@@ -135,7 +135,6 @@ components:
     component_class: "CMB"
     params:
       polarization: "IQU"
-      longname: "CMB"
       shortname: "cmb"
       Cl_prior_amplitude: null  # No amplitude prior.
       # Optional mean mu of the Gaussian amplitude prior a ~ N(mu, S), as a FITS sky map (C3's
@@ -150,7 +149,6 @@ components:
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      longname: "Thermal-Dust"
       shortname: "dust"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: 1.56
@@ -163,7 +161,6 @@ components:
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      longname: "Synchrotron"
       shortname: "sync"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: -3.1
@@ -175,7 +172,6 @@ components:
     component_class: "FreeFree"
     params:
       polarization: "I"
-      longname: "Free-Free"
       shortname: "ff"
       Cl_prior_amplitude: null  # No amplitude prior.
       T: 7000
@@ -187,7 +183,6 @@ components:
     component_class: "RadioSources"
     params:
       polarization: "I"
-      longname: "RadioSources"
       shortname: "radsources"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
       nu_0: 30.0  # Ghz
@@ -197,7 +192,6 @@ components:
     component_class: "SpinningDust"
     params:
       polarization: "I"
-      longname: "SpinningDust"
       shortname: "sdust"
       Cl_prior_amplitude: null  # No amplitude prior.
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"

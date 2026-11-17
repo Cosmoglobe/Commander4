@@ -138,7 +138,6 @@ components:
     component_class: "CMB"
     params:
       polarization: "IQU"
-      longname: "CMB"
       shortname: "cmb"
       # Start the chain at the simulated sky, so the very first TOD iteration already has the right
       # sky model and n_corr never sees an unsubtracted signal.  This is simgen's component truth

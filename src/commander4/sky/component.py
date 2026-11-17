@@ -34,7 +34,6 @@ class Component:
     # that is either one value for both polarization views, or such a pair.
     DEFAULTS = {"polarization": None,  # "I", "QU" or "IQU". Must be set.
                 "shortname": "comp",   # The name of the component in the chain file.
-                "longname": None,      # The name of the component in plot titles.
                 "init_from": None}     # A chain file or a sky map to start from.
 
     # The polarization views ("I", "QU") that this kind of component can have.

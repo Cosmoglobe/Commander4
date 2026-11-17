@@ -117,7 +117,6 @@ components:
     component_class: "CMB"
     params:
       polarization: "I"
-      longname: "CMB"
       shortname: "cmb"
       lmax: 47
       Cl_prior_amplitude: null
@@ -126,7 +125,6 @@ components:
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      longname: "Thermal-Dust"
       shortname: "dust"
       lmax: 47
       Cl_prior_amplitude: null
@@ -139,7 +137,6 @@ components:
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      longname: "Synchrotron"
       shortname: "sync"
       lmax: 47
       Cl_prior_amplitude: null

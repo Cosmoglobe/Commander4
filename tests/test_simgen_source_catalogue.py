@@ -25,7 +25,7 @@ def _simgen_sources(beta=0.0):
 
 
 def _radio_sources(catalogue_path):
-    cfg = Bunch(polarization="I", longname="RadioSources", shortname="radsources",
+    cfg = Bunch(polarization="I", shortname="radsources",
                 template_path=str(catalogue_path), nu_0=NU_REF)
     params = Bunch(components=Bunch(RadioSources=Bunch(params=cfg)),
                    compsep=Bunch(double_precision=True))

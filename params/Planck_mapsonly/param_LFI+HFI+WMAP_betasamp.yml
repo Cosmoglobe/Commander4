@@ -136,7 +136,6 @@ components:
     component_class: "CMB"
     params:
       polarization: "IQU"
-      longname: "CMB"
       shortname: "cmb"
       Cl_prior_amplitude: null  # No amplitude prior.
       lmax: 2048
@@ -146,7 +145,6 @@ components:
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      longname: "Thermal-Dust"
       shortname: "dust"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: 1.56
@@ -159,7 +157,6 @@ components:
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      longname: "Synchrotron"
       shortname: "sync"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: -3.1
@@ -171,7 +168,6 @@ components:
     component_class: "FreeFree"
     params:
       polarization: "I"
-      longname: "Free-Free"
       shortname: "ff"
       Cl_prior_amplitude: null  # No amplitude prior.
       T: 7000

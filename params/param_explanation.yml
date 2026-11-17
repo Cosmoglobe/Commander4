@@ -503,7 +503,6 @@ components:
                               # RadioSources.
     params:
       polarization: "IQU"     # Which Stokes parameters this component is defined in.
-      longname: "CMB"         # Human-readable name, used in logs and plots.
       shortname: "cmb"        # Short name, used as the group key in the chain file.
       lmax: 1024              # Required. Band limit of this component's alms. Keep it at
                               # or below the largest band `lmax` in the run: a multipole
@@ -559,7 +558,6 @@ components:
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      longname: "Thermal-Dust"
       shortname: "dust"
       lmax: 1024
       Cl_prior_amplitude: null   # No C(l) prior for this component.
@@ -583,7 +581,6 @@ components:
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      longname: "Synchrotron"
       shortname: "sync"
       lmax: 512
       Cl_prior_amplitude: null
@@ -598,7 +595,6 @@ components:
     params:
       polarization: "I"       # Free-free emission is essentially unpolarized, so solving
                               # it in QU would add a component the data cannot constrain.
-      longname: "Free-Free"
       shortname: "ff"
       lmax: 512
       Cl_prior_amplitude: null
@@ -612,7 +608,6 @@ components:
     component_class: "SpinningDust"
     params:
       polarization: "I"
-      longname: "SpinningDust"
       shortname: "sdust"
       lmax: 1000
       Cl_prior_amplitude: null
@@ -630,7 +625,6 @@ components:
     component_class: "RadioSources"
     params:
       polarization: "I"
-      longname: "RadioSources"
       shortname: "radsources"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
                               # The source catalogue: position and flux per source.
