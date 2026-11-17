@@ -753,14 +753,16 @@ def test_radio_sources_are_added_to_the_band_in_pixel_space(tmp_path) -> None:
     band = Band(np.zeros((1, hp.Alm.getsize(3*nside - 1)), dtype=np.complex128), 30.0, 120.0, nside)
     x = source.amps.copy()
 
-    painted = source.comp2band(band).copy()
+    source.comp2band(band)
+    painted = band.map.copy()
 
     assert np.all(band.alms == 0)
     # At nu_ref the SED is 1, and the beam integrates to 1: the map holds the full flux.
     assert _map_integral(painted, nside) == pytest.approx(x[0, 0]*source.mJysr_to_uKRJ, rel=1e-5)
     y = np.random.default_rng(0).normal(size=band.map.shape)
     band.map = y
-    transpose_y = source.band2comp(band).copy()
+    source.band2comp(band)
+    transpose_y = source.amps.copy()
     assert np.sum(painted*y) == pytest.approx(np.sum(x*transpose_y), rel=1e-5)
 
 

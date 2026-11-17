@@ -409,11 +409,10 @@ class DiffuseComponent(Component):
         for ipol in range(len(alms)):
             # B M a. `alms` is a new array in both branches above, so it can be changed in place.
             band.alms[ipol] += almxfl(alms[ipol], beam, inplace=True)
-        return band.alms
 
-    def band2comp(self, band: Band, nthreads: int = 1, inplace=True):
+    def band2comp(self, band: Band, nthreads: int = 1):
         """The transpose of `comp2band`: Y^T M^T Y^-1^T B^T applied to the band's alms
-        (C3's `projectBand`). Stores the result in this component by default and returns it.
+        (C3's `projectBand`). The result replaces `amps`.
 
         Each rank evaluates its own band; the master sums the contributions of all bands.
         """
@@ -441,12 +440,7 @@ class DiffuseComponent(Component):
                 inplace_scale(tmp_alm[ipol], self.get_sed(band.nu))
 
         # Project alm from band to component lmax.
-        contrib_to_comp_alm = project_alms(tmp_alm, self.lmax)
-        
-        if inplace:
-            self.amps = contrib_to_comp_alm
-
-        return contrib_to_comp_alm
+        self.amps = project_alms(tmp_alm, self.lmax)
     
 
 

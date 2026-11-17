@@ -200,11 +200,9 @@ class RadioSources(PointSourcesComponent):
         scales = self.amps[0]*self.get_sed(band.nu)*self.mJysr_to_uKRJ
         for pixels, beam, scale in zip(self.pix_disc_idx_list, self.beam_disc_val_list, scales):
             band.map[0, pixels] += beam*scale  # Overlapping sources add up: the loop is sequential.
-        return band.map
 
     def band2comp(self, band:Band, nthreads: int = 1):
-        """ The transpose of `comp2band`: reads the band's pixel map into the amplitudes, stored in
-        `amps` and returned.
+        """ The transpose of `comp2band`: reads the band's pixel map into the amplitudes `amps`.
 
         All the contributions will be summed to the total amplitudes when reducing on the master.
         """
@@ -215,7 +213,6 @@ class RadioSources(PointSourcesComponent):
         scales = self.get_sed(band.nu)*self.mJysr_to_uKRJ
         for i, (pixels, beam) in enumerate(zip(self.pix_disc_idx_list, self.beam_disc_val_list)):
             self.amps[0, i] = np.dot(band.map[0, pixels], beam)*scales[i]
-        return self.amps
 
     def apply_Cl_prior_sqrt(self, alms):
         """ A dummy for point sources (S = 1): the input is simply returned.

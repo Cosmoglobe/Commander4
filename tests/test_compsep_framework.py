@@ -421,7 +421,8 @@ def test_band2comp_is_the_transpose_of_comp2band(band_lmax: int) -> None:
     comp_x = band.alms.astype(complex)
     y = _random_alms(band_lmax, rng)
     band.alms = y.copy()
-    transpose_y = comp.band2comp(band, inplace=False).astype(complex)
+    comp.band2comp(band)
+    transpose_y = comp.amps.astype(complex)
 
     lhs = _dot_complex_alm_1D_arrays(comp_x[0], y[0], band_lmax)
     rhs = _dot_complex_alm_1D_arrays(x[0], transpose_y[0], 8)
