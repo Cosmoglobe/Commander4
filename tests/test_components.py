@@ -1,3 +1,5 @@
+import warnings
+
 import h5py
 import healpy as hp
 import numpy as np
@@ -719,6 +721,19 @@ def test_radio_sources_beam_narrower_than_a_pixel_still_paints_the_source(tmp_pa
 
     assert np.count_nonzero(narrow) == 1
     assert _map_integral(narrow, 16) == pytest.approx(_map_integral(resolved, 16), rel=1e-4)
+
+
+def test_radio_sources_with_a_zero_beam_paint_one_pixel_without_warnings(tmp_path) -> None:
+    """A band with `fwhm` 0 (the default of `get_component_map`) gives the delta limit directly,
+    without a division by zero in the Gaussian."""
+    template = tmp_path / "radio.dat"
+    _write_radio_source_table(template)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        point = _make_radio_sources(template).get_component_map(nside=16, fwhm_rad=0.0)
+    narrow = _make_radio_sources(template).get_component_map(nside=16, fwhm_rad=np.deg2rad(1/60))
+
+    np.testing.assert_array_equal(point, narrow)
 
 
 def test_radio_sources_take_fwhm_in_radians_like_diffuse_components(tmp_path) -> None:

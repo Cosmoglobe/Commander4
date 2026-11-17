@@ -123,20 +123,22 @@ class RadioSources(PointSourcesComponent):
             self.beam_disc_val_list = []
             # Compute the beam disc for each source; these stay fixed until the band changes.
             for i in range(self.lonlat_arr.shape[0]):
-                # `inclusive` keeps every pixel the disc touches, so a disc smaller than a pixel
-                # still selects the pixels around the source rather than none at all.
-                disc_pix_i_s = hp.query_disc(self.band_eval_nside, hp.ang2vec(self.lonlat_arr[i,0],
-                        self.lonlat_arr[i,1], lonlat=True),
-                        get_gauss_beam_radius(self.band_fwhm_rad), inclusive=True)
-                beam_disc = gauss_beam(hp.rotator.angdist(self.lonlat_arr[i,:],
-                            hp.pix2ang(self.band_eval_nside, disc_pix_i_s, lonlat=True),
-                            lonlat=True), self.band_fwhm_rad)
-                beam_integral = beam_disc.sum()*pixel_area
+                beam_integral = 0.0
+                if self.band_fwhm_rad > 0.0:  # A zero beam would divide by zero in `gauss_beam`.
+                    # `inclusive` keeps every pixel the disc touches, so a disc smaller than a pixel
+                    # still selects the pixels around the source rather than none at all.
+                    disc_pix_i_s = hp.query_disc(self.band_eval_nside,
+                            hp.ang2vec(self.lonlat_arr[i,0], self.lonlat_arr[i,1], lonlat=True),
+                            get_gauss_beam_radius(self.band_fwhm_rad), inclusive=True)
+                    beam_disc = gauss_beam(hp.rotator.angdist(self.lonlat_arr[i,:],
+                                hp.pix2ang(self.band_eval_nside, disc_pix_i_s, lonlat=True),
+                                lonlat=True), self.band_fwhm_rad)
+                    beam_integral = beam_disc.sum()*pixel_area
                 if beam_integral > 0.0:
                     beam_disc = beam_disc/beam_integral
                 else:
-                    # Beam far below the pixel scale: every pixel centre sits in the far tail, so
-                    # put the whole source in the single pixel containing it (the delta limit).
+                    # A zero beam, or one far below the pixel scale (every pixel centre sits in the
+                    # far tail): put the whole source in the pixel containing it (the delta limit).
                     disc_pix_i_s = np.array([hp.ang2pix(self.band_eval_nside,
                             self.lonlat_arr[i,0], self.lonlat_arr[i,1], lonlat=True)])
                     beam_disc = np.array([1.0/pixel_area])
