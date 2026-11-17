@@ -164,7 +164,7 @@ def test_compsep_context_uses_the_inventory_view() -> None:
 
     assert result.band.name == "Band"
     assert result.band.identifier == "Band_QU"
-    assert result.band.polarization == "QU"
+    assert result.band.pol == "QU"
     assert result.band.comm == MPI.COMM_SELF
 
 

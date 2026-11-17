@@ -270,7 +270,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
                                        view.polarization == pol and view.band_name in group.bands]
         # One communicator per polarization (`subcomm` is split by polarization), so the I and QU
         # views of a group are two separate solves.
-        is_solver = mpi_info.compsep.rank in group.solver_ranks[mpi_info.band.polarization]
+        is_solver = mpi_info.compsep.rank in group.solver_ranks[mpi_info.band.pol]
         group.solver_comm = mpi_info.compsep.subcomm.Split(0 if is_solver else MPI.UNDEFINED,
                                                            key=mpi_info.compsep.rank)
     # The components whose beta an MCMC group samples. Only they take beta from a saved chain; a

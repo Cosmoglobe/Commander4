@@ -243,24 +243,25 @@ class Component:
         """
         return float(arithmetic.dot(self.amps, other.amps))
 
-    def bcast_data(self, comm:MPI.Comm, root=0):
-        """Broadcast the component's data array from the root MPI rank."""
+    def bcast_amps(self, comm:MPI.Comm, root=0):
+        """Broadcast the component's amplitudes from the root MPI rank."""
         # Blocking on purpose: Intel MPI 2021's non-blocking broadcast fails for arrays above 2 GB
         # (see aux/intel_mpi_ibcast_2gb/).
         comm.Bcast(self.amps, root=root)
 
-    def accum_data_blocking(self, comm:MPI.Comm, root=0):
-        """Sum the component's data array across the communicator onto the root rank."""
+    def reduce_amps(self, comm:MPI.Comm, root=0):
+        """Sum the component's amplitudes across the communicator onto the root rank."""
         send, recv = (MPI.IN_PLACE, self.amps) if comm.Get_rank() == root else (self.amps, None)
         comm.Reduce(send, recv, op=MPI.SUM, root=root)
 
-    def accum_data_non_blocking(self, comm:MPI.Comm, root=0) -> MPI.Request:
-        """Start summing the component's data array onto the root rank, and return its request.
+    def ireduce_amps(self, comm:MPI.Comm, root=0) -> MPI.Request:
+        """Start summing the component's amplitudes onto the root rank (non-blocking), and return
+        its request.
 
         The root must `Wait` on the request before it reads `amps`.
         """
         # The non-blocking reduce works for arrays above 2 GB too: mpi4py >= 4 calls the MPI-4
         # large-count routine (MPI_Ireduce_c). Only the non-blocking broadcast has a 2 GB problem
-        # (see `bcast_data`).
+        # (see `bcast_amps`).
         send, recv = (MPI.IN_PLACE, self.amps) if comm.Get_rank() == root else (self.amps, None)
         return comm.Ireduce(send, recv, op=MPI.SUM, root=root)

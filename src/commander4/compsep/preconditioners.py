@@ -55,6 +55,7 @@ class DiagonalJointPreconditioner:
         all_fwhm_rad = solver_comm.gather(band_map.fwhm_rad, root=0)
         all_map_inv_var = solver_comm.gather(band_map.map_inv_var, root=0)
         all_freqs = solver_comm.gather(band_map.nu, root=0)
+        all_band_lmax = solver_comm.gather(band_map.lmax, root=0)
 
         # We can now get rid of the ranks that do not hold components.
         if not self.is_master:
@@ -86,6 +87,8 @@ class DiagonalJointPreconditioner:
                 # Calculate beam operator for this frequency band
                 beam_window_squared = hp.gauss_beam(all_fwhm_rad[iband],
                                                     lmax=comp_list[icomp].lmax)**2
+                # A band only sees the component up to its own lmax (`comp2band` truncates there).
+                beam_window_squared[all_band_lmax[iband] + 1:] = 0.0
                 beam_op_complex = hp.almxfl(np.ones(hp.Alm.getsize(comp_list[icomp].lmax),
                                                     dtype=np.complex128), beam_window_squared)
 

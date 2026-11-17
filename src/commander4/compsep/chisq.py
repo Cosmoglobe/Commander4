@@ -72,9 +72,11 @@ def collect_fit_diagnostics(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap,
     compsep = mpi_info.compsep
     residual = band_map.map_sky - comp_list.get_sky_at_band(band_map)
     npix, npix_chisq = band_map.map_sky.shape[-1], hp.nside2npix(cfg.nside_chisq)
-    # ud_grade averages, so scaling by how many fine pixels fall in a coarse one turns the average
-    # into the sum over them that Commander3's chisq map accumulates (comm_output_mod.f90).
-    subpixels_per_chisq_pixel = npix // npix_chisq
+    # ud_grade averages, so scaling by how many band pixels fall in a chi-squared pixel turns the
+    # average into the sum over them that Commander3's chisq map accumulates (comm_output_mod.f90).
+    # For a band coarser than the chi-squared map the factor is below 1: each band pixel's z^2 is
+    # spread evenly over the chi-squared pixels inside it, so the map's total is kept either way.
+    subpixels_per_chisq_pixel = npix/npix_chisq
 
     # z^2 in `nside_chisq` pixels. Row 0 is intensity and rows 1-2 are Q/U, so summing an I view
     # and a QU view of the same sky cannot make them collide.
@@ -93,7 +95,7 @@ def collect_fit_diagnostics(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap,
     # Commander3's chisq_<postfix>.fits: z^2 from every band added into one low-resolution map.
     chi2_map_total = np.zeros_like(chi2_map) if compsep.is_master else None
     compsep.comm.Reduce(chi2_map, chi2_map_total, op=MPI.SUM, root=0)
-    band_fit = Bunch(name=mpi_info.band.name, pol=mpi_info.band.polarization,
+    band_fit = Bunch(name=mpi_info.band.name, pol=mpi_info.band.pol,
                      nu=float(band_map.nu), chi2=float(chi2_band), ndof=ndof_band,
                      residual=residual if cfg.include_residual_maps else None)
     band_fits = compsep.comm.gather(band_fit, root=0)

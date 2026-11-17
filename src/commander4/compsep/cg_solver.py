@@ -98,7 +98,7 @@ class CompSepSolver:
         # Spread initial a to all ranks from master.
         with benchmark("lhs-bcast"):
             for comp in comp_list:
-                comp.bcast_data(self.solver_comm)
+                comp.bcast_amps(self.solver_comm)
 
         # B Y^-1 M Y S^{1/2} a. Each component adds itself to the emptied band: a diffuse component
         # to its alms, point sources to its pixel map.
@@ -132,7 +132,7 @@ class CompSepSolver:
         # Accumulate the result on the master. The reduces are non-blocking, so the master can work
         # on each component as soon as it has arrived, while later ones are still on their way.
         with benchmark("lhs-accum"):
-            requests = [comp.accum_data_non_blocking(self.solver_comm) for comp in comp_list]
+            requests = [comp.ireduce_amps(self.solver_comm) for comp in comp_list]
             if self.is_master:
                 for icomp in range(len(comp_list)):
                     requests[icomp].Wait()
@@ -196,7 +196,7 @@ class CompSepSolver:
 
         # Accumulate on master and apply the prior there: S^{1/2} Y^T M^T Y^-1^T B^T Y^T (...)
         for comp in RHS:
-            comp.accum_data_blocking(self.solver_comm)
+            comp.reduce_amps(self.solver_comm)
             if self.is_master:
                 comp.apply_Cl_prior_sqrt(comp.amps)
 
@@ -300,5 +300,5 @@ class CompSepSolver:
         for comp in comp_list:
             if self.is_master:
                 comp.apply_Cl_prior_sqrt(comp.amps)
-            comp.bcast_data(self.solver_comm)
+            comp.bcast_amps(self.solver_comm)
         return residuals

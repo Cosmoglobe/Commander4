@@ -44,14 +44,14 @@ def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: Detec
         return {}
 
     cg_stats: dict = {}
-    if compsep.rank in group.solver_ranks[band.polarization]:
-        active_sublist = CompList([comp for comp in comp_list if comp.pol == band.polarization
+    if compsep.rank in group.solver_ranks[band.pol]:
+        active_sublist = CompList([comp for comp in comp_list if comp.pol == band.pol
                                    and comp.comp_name in group.comps])
         # The group is solved conditioned on the components it does not name (C3's
         # `compute_residual`): their sky at this band is subtracted from the band map, and the
         # solvers fit the group's components to what is left. The shallow copy shares the noise
         # map and the band settings with `band_map`; only its sky map is new.
-        fixed_comps = CompList([comp for comp in comp_list if comp.pol == band.polarization
+        fixed_comps = CompList([comp for comp in comp_list if comp.pol == band.pol
                                 and comp.comp_name not in group.comps])
         residual_map = band_map
         if len(fixed_comps) > 0:

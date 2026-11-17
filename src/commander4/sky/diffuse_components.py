@@ -556,6 +556,13 @@ class SpinningDust(DiffuseComponent):
         self.nu_peak_ref = 30.0  # Peak frequency of the template as tabulated.
         self.nu_peak_eval = self.cfg.nu_peak
         self.nu_ref = self.cfg.nu_0  # Reference frequency for the amplitude map in GHz
+        # The SED is normalized by the template at `nu_ref`, shifted to the peak frequency. Outside
+        # the tabulated range the template is zero, and the SED would divide by zero.
+        nu_ref_shifted = self.nu_ref*self.nu_peak_ref/self.nu_peak_eval
+        if not freqs.min() <= nu_ref_shifted <= freqs.max():
+            raise ValueError(f"{comp_name}: nu_0 = {self.nu_ref} GHz, shifted to the template's "
+                             f"peak, is {nu_ref_shifted:.3g} GHz, outside the template range "
+                             f"{freqs.min():.3g}-{freqs.max():.3g} GHz ({self.cfg.template_path}).")
 
         # Interpolate in log-log space, where the template is smooth and spans many decades.
         log_nu = np.log(freqs)

@@ -244,7 +244,7 @@ def init_mpi_compsep(mpi_info: Bunch, params: Bunch) -> Bunch:
     mpi_info.band = Bunch(
         name=view.band_name,
         identifier=view.identifier,
-        polarization=view.polarization,
+        pol=view.polarization,
         comm=MPI.COMM_SELF,
         size=1,
         rank=0,

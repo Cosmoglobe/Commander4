@@ -9,7 +9,7 @@ from commander4.compsep import preconditioners
 from commander4.compsep.preconditioners import JointPreconditioner
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
-from commander4.math_utils.alm import alm_dot_product
+from commander4.math_utils.alm import _dot_complex_alm_1D_arrays
 
 
 def _spin2_cross_channel_leakage(q_rms: float, u_rms: float, nside: int, lmax: int) -> float:
@@ -32,8 +32,8 @@ def _spin2_cross_channel_leakage(q_rms: float, u_rms: float, nside: int, lmax: i
     alm[0, hp.Alm.getidx(lmax, min(10, lmax), min(2, lmax))] = 1.0
     transformed = detector_map.apply_inv_N_alm(alm, nthreads=1, inplace=False)
 
-    main_norm = np.sqrt(alm_dot_product(transformed[0], transformed[0], lmax))
-    cross_norm = np.sqrt(alm_dot_product(transformed[1], transformed[1], lmax))
+    main_norm = np.sqrt(_dot_complex_alm_1D_arrays(transformed[0], transformed[0], lmax))
+    cross_norm = np.sqrt(_dot_complex_alm_1D_arrays(transformed[1], transformed[1], lmax))
     return float(cross_norm / main_norm)
 
 
@@ -88,6 +88,21 @@ def test_diagonal_preconditioner_gives_each_component_its_own_diagonal():
     # Unit SED, no beam, C_l = 1: the diagonal is 1 (prior) + the mean weight per steradian.
     assert_allclose(result[1].amps, 1.0/(1.0 + 2.0*npix/(4*np.pi)), rtol=1e-12)
     assert_allclose(result[0].amps, 5.0)
+
+
+def test_diagonal_preconditioner_has_only_the_prior_above_the_band_lmax():
+    # The band sees the component only up to its own lmax, as in `comp2band`.
+    comp_lmax, band_lmax, npix = 6, 3, 12*4**2
+    band_map = _band_map(np.full((1, npix), 2.0), lmax=band_lmax)
+    comp_list = CompList([_DummyDiffuseComp(lmax=comp_lmax, npol=1)])
+    comp_list[0].amps[:] = 1.0
+
+    result = preconditioners.DiagonalJointPreconditioner(MPI.COMM_SELF, band_map, comp_list)(
+        comp_list)
+
+    ell = hp.Alm.getlm(comp_lmax)[0]
+    assert_allclose(result[0].amps[0, ell <= band_lmax], 1.0/(1.0 + 2.0*npix/(4*np.pi)), rtol=1e-12)
+    assert_allclose(result[0].amps[0, ell > band_lmax], 1.0, rtol=1e-12)
 
 
 def test_spin2_equal_qu_weights_have_small_cross_channel_leakage():

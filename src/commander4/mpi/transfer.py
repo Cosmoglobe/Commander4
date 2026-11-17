@@ -170,7 +170,7 @@ def receive_tod(mpi_info: Bunch, band_map: DetectorMap|None, params: Bunch) -> D
     if my_band.get_from == "file":
         if band_map is None:
             logger.info(f"CompSep: Rank {mpi_info.compsep.rank} reading static map data from file.")
-            band_map = read_data_map_from_file(my_band, band.polarization, params)
+            band_map = read_data_map_from_file(my_band, band.pol, params)
     else:
         sender = mpi_info.world.tod_band_masters[band.identifier]
         logger.debug(f"CompSep: Rank {mpi_info.compsep.rank} receiving TOD data for "

@@ -502,6 +502,18 @@ def test_spinning_dust_converts_its_units_at_nu_0(tmp_path) -> None:
     assert np.all(np.isfinite(ame.P_Cl_prior))
 
 
+def test_spinning_dust_rejects_a_reference_frequency_outside_its_template(tmp_path) -> None:
+    """The SED divides by the template at `nu_0`, which is zero outside the tabulated range."""
+    from commander4.sky import SpinningDust
+
+    template = tmp_path / "spdust.dat"
+    np.savetxt(template, np.column_stack([np.logspace(0, 2, 50), np.ones(50)]))  # 1-100 GHz.
+    params = Bunch(polarization="I", shortname="ame", lmax=4, template_path=str(template),
+                   nu_peak=30.0, nu_0=200.0)
+    with pytest.raises(ValueError, match="outside the template range"):
+        SpinningDust(_make_params(ame=Bunch(params=params)), "ame", "I")
+
+
 def test_cmb_get_sed_is_unity_at_nu_ref_and_ratio_elsewhere() -> None:
     import pysm3.units as pysm3u
 
