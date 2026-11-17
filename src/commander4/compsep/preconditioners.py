@@ -57,7 +57,7 @@ class DiagonalJointPreconditioner:
         # Gather all necessary per-band information from all ranks (all ranks hold a band).
         # TODO: Currently the master rank temporarily has to hold ALL inverse-variance bands.
         # It would be easy to re-write this so they send them one-and-one as we make the diagonal.
-        all_fwhm_rad = solver.solver_comm.gather(np.deg2rad(solver.band_alms.fwhm/60), root=0)
+        all_fwhm_rad = solver.solver_comm.gather(solver.band_alms.fwhm_rad, root=0)
         all_map_inv_var = solver.solver_comm.gather(solver.band_map.map_inv_var, root=0)
         all_freqs = solver.solver_comm.gather(solver.band_alms.nu, root=0)
 
@@ -199,7 +199,7 @@ class JointPreconditioner:
 
         # Gather the band-local ingredients needed to build the isotropic approximation. Every rank
         # holds one band, but only the master rank actually assembles the small dense blocks.
-        all_fwhm_rad = solver.solver_comm.gather(np.deg2rad(solver.band_alms.fwhm/60), root=0)
+        all_fwhm_rad = solver.solver_comm.gather(solver.band_alms.fwhm_rad, root=0)
         all_map_inv_var = solver.solver_comm.gather(solver.band_map.map_inv_var, root=0)
         all_freqs = solver.solver_comm.gather(solver.band_alms.nu, root=0)
         all_band_lmax = solver.solver_comm.gather(solver.band_map.lmax, root=0)

@@ -321,8 +321,8 @@ class DiffuseComponent(Component):
         view_alms = project_alms(np.ascontiguousarray(stored_alms[rows]), self.lmax)
         self.amps = view_alms.astype(self.amps.dtype, copy=False)
 
-    def get_component_map(self, nside: int, fwhm: float = 0.0, lmin: int = 0) -> NDArray:
-        """The amplitude map at `nside`, smoothed by a Gaussian beam of `fwhm` radians.
+    def get_component_map(self, nside: int, fwhm_rad: float = 0.0, lmin: int = 0) -> NDArray:
+        """The amplitude map at `nside`, smoothed by a Gaussian beam of `fwhm_rad` radians.
 
         For plotting, where there is no band: the alms are cut at min(lmax, 3*nside - 1), and the
         beam is one window on every Stokes row, as in `comp2band`. Multipoles below `lmin` are left
@@ -331,7 +331,7 @@ class DiffuseComponent(Component):
         if self.amps is None:
             raise ValueError("component_alms property not set.")
         lmax = min(self.lmax, 3*nside - 1)
-        window = hp.gauss_beam(fwhm, lmax=lmax)
+        window = hp.gauss_beam(fwhm_rad, lmax=lmax)
         window[:lmin] = 0.0
         alms = np.array([almxfl(alm, window) for alm in project_alms(self.amps, lmax)])
         if self.pol != "IQU":
@@ -340,14 +340,14 @@ class DiffuseComponent(Component):
         return np.concatenate((alm_to_map(alms[:1], nside, lmax, spin=0),
                                alm_to_map(alms[1:], nside, lmax, spin=2)), axis=0)
 
-    def get_sky(self, nu: float, nside: int, fwhm: float = 0.0) -> NDArray:
-        """The component map at frequency `nu`, seen through a beam of `fwhm` radians, for plotting.
+    def get_sky(self, nu: float, nside: int, fwhm_rad: float = 0.0) -> NDArray:
+        """The component map at frequency `nu`, seen through a beam of `fwhm_rad`, for plotting.
 
         Amplitudes that already carry a beam (`amp_fwhm_rad`) get only the rest of it. A band's sky
         is made by `CompList.get_sky_at_nu` instead, which also cuts at the band lmax.
         """
-        applied_fwhm = np.sqrt(max(fwhm**2 - self.amp_fwhm_rad**2, 0.0))
-        return self.get_component_map(nside, applied_fwhm)*self.get_sed(nu)
+        applied_fwhm_rad = np.sqrt(max(fwhm_rad**2 - self.amp_fwhm_rad**2, 0.0))
+        return self.get_component_map(nside, applied_fwhm_rad)*self.get_sed(nu)
 
     def get_sed(self, nu):
         raise NotImplementedError(f"{type(self).__name__}.get_sed() is not implemented.")
@@ -369,8 +369,8 @@ class DiffuseComponent(Component):
         Amplitudes that already carry a beam (`amp_fwhm_rad`, from the per-pixel solver) get only
         the rest of it: Gaussian beams multiply, so their widths add in quadrature.
         """
-        fwhm = np.sqrt(max(np.deg2rad(band.fwhm/60.0)**2 - self.amp_fwhm_rad**2, 0.0))
-        return hp.gauss_beam(fwhm, lmax=band.lmax)
+        fwhm_rad = np.sqrt(max(band.fwhm_rad**2 - self.amp_fwhm_rad**2, 0.0))
+        return hp.gauss_beam(fwhm_rad, lmax=band.lmax)
 
     def comp2band(self, band: Band, nthreads: int = 1):
         """Add this component to the band's alms: B Y^-1 M Y a (C3's `evalBand`).
@@ -461,9 +461,9 @@ class CMB(DiffuseComponent):
                 pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(f*u.GHz)).value
         return cmb_to_rj(nu) / cmb_to_rj(self.nu_ref)
     
-    def get_sky_anisotropies(self, nu, nside, fwhm=0):
+    def get_sky_anisotropies(self, nu, nside, fwhm_rad=0.0):
         """The CMB map at `nu` without monopole, dipole and quadrupole, for plotting."""
-        return self.get_component_map(nside, fwhm, lmin=3) * self.get_sed(nu)
+        return self.get_component_map(nside, fwhm_rad, lmin=3) * self.get_sed(nu)
 
 
 class ThermalDust(DiffuseComponent):

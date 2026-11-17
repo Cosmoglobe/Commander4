@@ -450,13 +450,13 @@ def _get_component_map(
         if component.pol == "QU":
             return np.zeros((npix,))
         if use_raw:
-            return component.get_component_map(nside, fwhm=smoothing_scale_radians)[0]
-        return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[0]
+            return component.get_component_map(nside, fwhm_rad=smoothing_scale_radians)[0]
+        return component.get_sky(freq, nside, fwhm_rad=smoothing_scale_radians)[0]
 
     if component.pol == "QU":
         if use_raw:
-            return component.get_component_map(nside, fwhm=smoothing_scale_radians)[ipol]
-        return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[ipol]
+            return component.get_component_map(nside, fwhm_rad=smoothing_scale_radians)[ipol]
+        return component.get_sky(freq, nside, fwhm_rad=smoothing_scale_radians)[ipol]
     return np.zeros((npix,))
 
 
@@ -578,7 +578,7 @@ def plot_combo_maps(
                 cmb_maps = component.get_sky_anisotropies(
                     nu,
                     nside,
-                    fwhm=beam_radians,
+                    fwhm_rad=beam_radians,
                 )
                 cmb_map_anisotropies = cmb_maps[ipol if npol > 1 else 0]
             residual -= comp_map

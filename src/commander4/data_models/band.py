@@ -13,18 +13,18 @@ class Band:
             or two (QU).
         lmax (int): Maximum multipole of the alms.
         nu (float): Band centre frequency in GHz.
-        fwhm (float): Beam FWHM in arcminutes.
+        fwhm_rad (float): Beam FWHM in radians.
         nside (int): HEALPix nside associated with this band.
         map: The part of the band that lives in pixel space, shape ``(npol, npix)``: point
             sources, which are added as pixels rather than as alms (as in C3). None until a
             point-source component writes to it.
     """
-    def __init__(self, alms: NDArray[np.complexfloating], nu: float, fwhm: float, nside: int):
-        """Construct a Band from its alms, centre frequency (GHz), FWHM (arcmin) and nside."""
+    def __init__(self, alms: NDArray[np.complexfloating], nu: float, fwhm_rad: float, nside: int):
+        """Construct a Band from its alms, centre frequency (GHz), FWHM (radians) and nside."""
         self.alms = alms
         self.lmax = hp.Alm.getlmax(alms.shape[1])
         self.nu = nu
-        self.fwhm = fwhm
+        self.fwhm_rad = fwhm_rad
         self.nside = nside
         self.map = None
 
@@ -33,7 +33,7 @@ class Band:
         """A Band with the metadata of `band_map` and alms of zeros."""
         dtype = np.complex128 if double_precision else np.complex64
         return cls(np.zeros((band_map.npol, hp.Alm.getsize(band_map.lmax)), dtype=dtype),
-                   band_map.nu, band_map.fwhm, band_map.nside)
+                   band_map.nu, band_map.fwhm_rad, band_map.nside)
 
     @property
     def pol(self) -> str:

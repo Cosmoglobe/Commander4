@@ -124,10 +124,10 @@ class CompList:
         residual of the band.
         """
         return self.get_sky_at_nu(band_map.nu, band_map.nside, band_map.pol,
-                                  fwhm=band_map.fwhm_rad, lmax=band_map.lmax)
+                                  fwhm_rad=band_map.fwhm_rad, lmax=band_map.lmax)
 
-    def get_sky_at_nu(self, nu: float, nside: int, pols_required: str, fwhm: float | None = None,
-                      lmax: int | None = None) -> NDArray:
+    def get_sky_at_nu(self, nu: float, nside: int, pols_required: str,
+                      fwhm_rad: float | None = None, lmax: int | None = None) -> NDArray:
         """The sky of all components at one frequency, resolution, beam and lmax.
 
         Diffuse components go through `comp2band`, the CG solver's own operator (cut at the band
@@ -140,24 +140,25 @@ class CompList:
 
         Args:
             pols_required: The Stokes rows of the result: "I", "QU" or "IQU".
-            fwhm: Beam to realize the sky through, in radians. `None` asks for the sharpest the
+            fwhm_rad: Beam to realize the sky through, in radians. `None` asks for the sharpest the
                 amplitudes can give: the largest `amp_fwhm_rad` of the components (normally 0.0).
             lmax: The band lmax (`DetectorMap.lmax`). `None` means `3*nside - 1`, the default band
                 lmax.
 
         Raises:
-            ValueError: If `fwhm` is finer than the beam the amplitudes already carry.
+            ValueError: If `fwhm_rad` is finer than the beam the amplitudes already carry.
         """
         # The beam the amplitudes carry: 0.0 after the CG solver, which gives a deconvolved sky,
         # and `compsep.common_res_fwhm` after the per-pixel solver.
-        amp_fwhm = max((comp.amp_fwhm_rad for comp in self.components), default=0.0)
-        if fwhm is None:
-            fwhm = amp_fwhm
-        elif fwhm < amp_fwhm and not np.isclose(fwhm, amp_fwhm):
+        amp_fwhm_rad = max((comp.amp_fwhm_rad for comp in self.components), default=0.0)
+        if fwhm_rad is None:
+            fwhm_rad = amp_fwhm_rad
+        elif fwhm_rad < amp_fwhm_rad and not np.isclose(fwhm_rad, amp_fwhm_rad):
             raise ValueError(
-                f"Asked for the sky at a beam of {np.degrees(fwhm)*60:.4g} arcmin, but these "
-                f"amplitudes already carry {np.degrees(amp_fwhm)*60:.4g} arcmin of smoothing and "
-                f"cannot be realized any sharper. Pass fwhm=None for the sharpest available.")
+                f"Asked for the sky at a beam of {np.degrees(fwhm_rad)*60:.4g} arcmin, but these "
+                f"amplitudes already carry {np.degrees(amp_fwhm_rad)*60:.4g} arcmin of smoothing "
+                f"and cannot be realized any sharper. Pass fwhm_rad=None for the sharpest "
+                f"available.")
         lmax = 3*nside - 1 if lmax is None else lmax
         nrows = len(pols_required)
         skymap = np.zeros((nrows, 12*nside**2), dtype=np.float32)
@@ -169,7 +170,7 @@ class CompList:
                 continue
             # Single precision, like `skymap`, which the result goes into.
             band = Band(np.zeros((len(view), hp.Alm.getsize(lmax)), dtype=np.complex64), nu,
-                        np.degrees(fwhm)*60.0, nside)
+                        fwhm_rad, nside)
             for comp in diffuse:
                 if comp.pol in (view, "IQU"):
                     comp.comp2band(band)
@@ -177,7 +178,7 @@ class CompList:
         if "I" in pols_required:
             for comp in self.components:  # Point sources.
                 if not isinstance(comp, DiffuseComponent) and comp.pol == "I":
-                    skymap[0] += comp.get_sky(nu, nside, fwhm)[0]
+                    skymap[0] += comp.get_sky(nu, nside, fwhm_rad)[0]
         return skymap
 
     # ----- The vector arithmetic of the CG -----

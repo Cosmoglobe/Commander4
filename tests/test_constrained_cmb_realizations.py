@@ -635,7 +635,7 @@ def test_cli_uses_thermodynamic_units_throughout(
         cmb_map = cr.alm2map(hp.almxfl(cmb_alm, hp.gauss_beam(beam, lmax=lmax)), nside, lmax)
         noise = np.linspace(-0.2, 0.2, npix)
         rms = np.linspace(0.5, 1.5, npix)
-        foreground_rj = foregrounds.get_sky_at_nu(nu, nside, "I", fwhm=beam)[0]
+        foreground_rj = foregrounds.get_sky_at_nu(nu, nside, "I", fwhm_rad=beam)[0]
         observed_cmb = cmb_map + noise + foreground_rj.astype(float) * rj_to_band_unit_factor(
             nu, "uK_CMB")
         unit = stored_unit

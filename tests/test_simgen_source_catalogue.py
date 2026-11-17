@@ -66,7 +66,7 @@ def test_total_brightness_survives_the_round_trip(catalogue):
     band = Bunch(freq=217.0, eval_nside=NSIDE, fwhm_rad=beam_rad, polarization="I")
     sim_map = comp.band_map(band)[0]
     # `get_sky` takes the beam in radians, as `CompList.get_sky_at_nu` passes it to both families.
-    c4_map = _radio_sources(path).get_sky(band.freq, NSIDE, fwhm=beam_rad)[0]
+    c4_map = _radio_sources(path).get_sky(band.freq, NSIDE, fwhm_rad=beam_rad)[0]
     assert c4_map.sum() == pytest.approx(sim_map.sum(), rel=1e-3)
 
 

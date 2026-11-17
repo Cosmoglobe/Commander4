@@ -44,9 +44,9 @@ class _DummyDetectorMap:
 
 
 class _DummyBand:
-    def __init__(self, nu: float, fwhm: float):
+    def __init__(self, nu: float, fwhm_rad: float):
         self.nu = nu
-        self.fwhm = fwhm
+        self.fwhm_rad = fwhm_rad
 
 
 class _DummySolver:
@@ -55,7 +55,7 @@ class _DummySolver:
         self.solver_comm = MPI.COMM_SELF
         self.is_master = True
         self.band_map = _DummyDetectorMap(map_inv_var, lmax)
-        self.band_alms = _DummyBand(nu=100.0, fwhm=0.0)
+        self.band_alms = _DummyBand(nu=100.0, fwhm_rad=0.0)
 
 
 class _DummyDiffuseComp(DiffuseComponent):
@@ -143,7 +143,7 @@ def _single_band_precond_block(preconditioner_name: str, ell: int):
     lmax, nside = 8, 8
     map_inv_var = np.full((1, 12*nside**2), 2.0, dtype=np.float64)
     solver = _DummySolver(map_inv_var=map_inv_var, lmax=lmax)
-    solver.band_alms.fwhm = 60.0   # arcmin
+    solver.band_alms.fwhm_rad = np.deg2rad(1.0)
     comp_list = CompList([_SEDDiffuseComp(lmax=lmax, npol=1, sed=sed) for sed in (1.0, 3.0)])
     precond = getattr(preconditioners, preconditioner_name)(solver,comp_list)
     return precond, precond.ell_block_data[ell][3], comp_list
@@ -182,7 +182,7 @@ def test_joint_preconditioner_has_no_prior_term_for_a_component_without_a_prior(
     lmax nothing constrains it, and the preconditioner must leave it untouched (zero) there."""
     comp_lmax, band_lmax, nside = 10, 8, 8
     solver = _DummySolver(map_inv_var=np.full((1, 12*nside**2), 2.0), lmax=band_lmax)
-    solver.band_alms.fwhm = 60.0   # arcmin
+    solver.band_alms.fwhm_rad = np.deg2rad(1.0)
     comps = [_SEDDiffuseComp(lmax=comp_lmax, npol=1, sed=sed) for sed in (1.0, 3.0)]
     comps[0].Cl_prior_amplitude = None
     precond = JointPreconditioner(solver,CompList(comps))

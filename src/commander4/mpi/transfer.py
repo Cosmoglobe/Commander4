@@ -66,10 +66,10 @@ def _realize_and_distribute_sky(comp_list: CompList | None, experiment_data: Det
         # This detectors FWHM is used to realize the sky model, unless the per-pixel solver was
         # used with common-resolution smoothing, in which case the sky carries an intrinsic
         # resolution `amp_fwhm_rad`, and we simply have to use that, even though it's wrong.
-        fwhm = max([np.deg2rad(experiment_data.fwhm/60.0)]
-                   + [comp.amp_fwhm_rad for comp in comp_list])
-        full_map = comp_list.get_sky_at_nu(experiment_data.nu, experiment_data.nside, pols, fwhm,
-                                           lmax=experiment_data.lmax)
+        fwhm_rad = max([np.deg2rad(experiment_data.fwhm/60.0)]
+                       + [comp.amp_fwhm_rad for comp in comp_list])
+        full_map = comp_list.get_sky_at_nu(experiment_data.nu, experiment_data.nside, pols,
+                                           fwhm_rad, lmax=experiment_data.lmax)
     else:
         full_map = None
     local_map = experiment_data.pixel_domain.scatter_from_full(full_map, ncomp, dtype=np.float32)

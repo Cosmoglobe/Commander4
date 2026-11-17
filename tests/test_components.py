@@ -657,8 +657,8 @@ def test_radio_sources_component_map_scales_with_the_reference_frequency(tmp_pat
     _write_radio_source_table(template)
 
     beam = np.deg2rad(2.0)
-    low = _make_radio_sources(template, nu_ref=30.0).get_component_map(nside=64, fwhm=beam)
-    high = _make_radio_sources(template, nu_ref=60.0).get_component_map(nside=64, fwhm=beam)
+    low = _make_radio_sources(template, nu_ref=30.0).get_component_map(nside=64, fwhm_rad=beam)
+    high = _make_radio_sources(template, nu_ref=60.0).get_component_map(nside=64, fwhm_rad=beam)
 
     assert low.max() > 0.0
     assert high.max() == pytest.approx(low.max()/4.0, rel=1e-5)
@@ -684,9 +684,9 @@ def test_radio_sources_sky_equals_amplitude_times_sed(tmp_path) -> None:
     _write_radio_source_table(template)
     comp = _make_radio_sources(template, nu_ref=30.0)
 
-    amplitude = comp.get_component_map(nside=64, fwhm=np.deg2rad(2.0))
+    amplitude = comp.get_component_map(nside=64, fwhm_rad=np.deg2rad(2.0))
     for nu in (30.0, 100.0, 353.0):
-        sky = comp.get_sky(nu, nside=64, fwhm=np.deg2rad(2.0))
+        sky = comp.get_sky(nu, nside=64, fwhm_rad=np.deg2rad(2.0))
         expected = amplitude*comp.get_sed(nu)[0]
         assert sky == pytest.approx(expected, rel=1e-5)
 
@@ -697,7 +697,7 @@ def test_radio_sources_conserve_flux_across_resolutions(tmp_path) -> None:
     _write_radio_source_table(template)
 
     integrals = [_map_integral(_make_radio_sources(template).get_component_map(
-                     nside=n, fwhm=np.deg2rad(1.0)), n)
+                     nside=n, fwhm_rad=np.deg2rad(1.0)), n)
                  for n in (16, 64, 256)]
 
     assert integrals[0] > 0.0
@@ -714,8 +714,8 @@ def test_radio_sources_beam_narrower_than_a_pixel_still_paints_the_source(tmp_pa
     _write_radio_source_table(template)
     comp = _make_radio_sources(template)
 
-    narrow = comp.get_component_map(nside=16, fwhm=np.deg2rad(1.0/60))
-    resolved = _make_radio_sources(template).get_component_map(nside=16, fwhm=np.deg2rad(1.0))
+    narrow = comp.get_component_map(nside=16, fwhm_rad=np.deg2rad(1.0/60))
+    resolved = _make_radio_sources(template).get_component_map(nside=16, fwhm_rad=np.deg2rad(1.0))
 
     assert np.count_nonzero(narrow) == 1
     assert _map_integral(narrow, 16) == pytest.approx(_map_integral(resolved, 16), rel=1e-4)
@@ -732,13 +732,13 @@ def test_radio_sources_take_fwhm_in_radians_like_diffuse_components(tmp_path) ->
     template = tmp_path / "radio.dat"
     _write_radio_source_table(template)
     one_degree = np.deg2rad(1.0)
-    painted = _make_radio_sources(template).get_component_map(nside=64, fwhm=one_degree)
+    painted = _make_radio_sources(template).get_component_map(nside=64, fwhm_rad=one_degree)
 
     # A one-degree beam at nside 64 (55' pixels) must cover more than the source's own pixel.
     assert np.count_nonzero(painted) > 1
     # And it must be broader than what the old arcmin reading of the same number would give.
     as_arcmin = _make_radio_sources(template).get_component_map(nside=64,
-                                                                fwhm=np.deg2rad(1.0/60))
+                                                                fwhm_rad=np.deg2rad(1.0/60))
     assert np.count_nonzero(painted) > np.count_nonzero(as_arcmin)
 
 
@@ -750,7 +750,8 @@ def test_radio_sources_are_added_to_the_band_in_pixel_space(tmp_path) -> None:
     _write_radio_source_table(template)
     source = _make_radio_sources(template, nu_ref=30.0)
     nside = 16
-    band = Band(np.zeros((1, hp.Alm.getsize(3*nside - 1)), dtype=np.complex128), 30.0, 120.0, nside)
+    band = Band(np.zeros((1, hp.Alm.getsize(3*nside - 1)), dtype=np.complex128), 30.0,
+                np.deg2rad(2.0), nside)
     x = source.amps.copy()
 
     source.comp2band(band)
@@ -776,8 +777,8 @@ def test_overlapping_radio_sources_add_up(tmp_path) -> None:
         handle.write("# Glon(deg) Glat(deg) I(mJy) alpha_I\n0.0 0.0 2000.0 -0.7\n0.0 0.0 3000.0 -0.7\n")
     _write_radio_source_table(single, flux_mjy=5000.0)
     fwhm = np.deg2rad(5.0)
-    pair_map = _make_radio_sources(pair).get_sky(nu=44.0, nside=16, fwhm=fwhm)
-    single_map = _make_radio_sources(single).get_sky(nu=44.0, nside=16, fwhm=fwhm)
+    pair_map = _make_radio_sources(pair).get_sky(nu=44.0, nside=16, fwhm_rad=fwhm)
+    single_map = _make_radio_sources(single).get_sky(nu=44.0, nside=16, fwhm_rad=fwhm)
     np.testing.assert_allclose(pair_map, single_map, rtol=1e-6)
 
 
@@ -795,14 +796,14 @@ def test_the_sky_is_only_as_sharp_as_the_coarsest_component() -> None:
     comp_list[0].amp_fwhm_rad = np.deg2rad(100.0/60)
 
     with pytest.raises(ValueError, match="cannot be realized any sharper"):
-        comp_list.get_sky_at_nu(100.0, 2, "I", fwhm=np.deg2rad(30.0/60))
+        comp_list.get_sky_at_nu(100.0, 2, "I", fwhm_rad=np.deg2rad(30.0/60))
 
 
 def test_deconvolved_amplitudes_can_be_realized_at_any_beam() -> None:
     """The CG solver leaves `amp_fwhm_rad` zero, so nothing is out of reach."""
     comp_list = _comp_list_at_amp_fwhm(0.0)
     for fwhm in (0.0, np.deg2rad(1.0), None):
-        assert comp_list.get_sky_at_nu(100.0, 2, "I", fwhm=fwhm).shape == (1, 12*2**2)
+        assert comp_list.get_sky_at_nu(100.0, 2, "I", fwhm_rad=fwhm).shape == (1, 12*2**2)
 
 
 def test_asking_for_a_sharper_sky_than_the_amplitudes_hold_is_refused() -> None:
@@ -811,15 +812,15 @@ def test_asking_for_a_sharper_sky_than_the_amplitudes_hold_is_refused() -> None:
     comp_list = _comp_list_at_amp_fwhm(np.deg2rad(100.0/60))
 
     with pytest.raises(ValueError, match="cannot be realized any sharper"):
-        comp_list.get_sky_at_nu(100.0, 2, "I", fwhm=np.deg2rad(30.0/60))
+        comp_list.get_sky_at_nu(100.0, 2, "I", fwhm_rad=np.deg2rad(30.0/60))
 
 
 def test_none_means_the_sharpest_these_amplitudes_can_give() -> None:
     """The way for a caller to say "best available" without naming a number."""
     comp_list = _comp_list_at_amp_fwhm(np.deg2rad(100.0/60))
 
-    at_none = comp_list.get_sky_at_nu(100.0, 2, "I", fwhm=None)
-    at_amp = comp_list.get_sky_at_nu(100.0, 2, "I", fwhm=np.deg2rad(100.0/60))
+    at_none = comp_list.get_sky_at_nu(100.0, 2, "I", fwhm_rad=None)
+    at_amp = comp_list.get_sky_at_nu(100.0, 2, "I", fwhm_rad=np.deg2rad(100.0/60))
 
     assert np.array_equal(at_none, at_amp)
 
@@ -828,4 +829,5 @@ def test_the_amplitudes_own_beam_is_not_treated_as_too_sharp() -> None:
     """`amp_fwhm_rad` is set from a band's own fwhm, so equality here must not trip the check."""
     comp_list = _comp_list_at_amp_fwhm(np.deg2rad(100.0/60))
 
-    assert comp_list.get_sky_at_nu(100.0, 2, "I", fwhm=np.deg2rad(100.0/60)).shape == (1, 12*2**2)
+    sky = comp_list.get_sky_at_nu(100.0, 2, "I", fwhm_rad=np.deg2rad(100.0/60))
+    assert sky.shape == (1, 12*2**2)

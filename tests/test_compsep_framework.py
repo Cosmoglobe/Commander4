@@ -104,7 +104,7 @@ def test_should_send_compsep_result_skips_qu_when_i_sender_exists() -> None:
 
 
 def test_joined_comp_list_realizes_iqu_components() -> None:
-    sky = _make_comp_list("IQU").joined().get_sky_at_nu(30.0, 2, "IQU", fwhm=0.0)
+    sky = _make_comp_list("IQU").joined().get_sky_at_nu(30.0, 2, "IQU", fwhm_rad=0.0)
 
     assert sky.shape == (3, 48)
     assert np.all(np.isfinite(sky))
@@ -379,7 +379,7 @@ def test_band_sky_removes_amp_fwhm_by_quadrature() -> None:
     for amp_fwhm, applied in ((0.0, target), (0.3, np.sqrt(target**2 - 0.3**2)), (target, 0.0)):
         comp.amp_fwhm_rad = amp_fwhm
         np.testing.assert_allclose(
-            CompList([comp]).get_sky_at_nu(nu, nside, "I", fwhm=target),
+            CompList([comp]).get_sky_at_nu(nu, nside, "I", fwhm_rad=target),
             comp.get_component_map(nside, applied)*sed, rtol=1e-5, atol=1e-5)
 
 
@@ -397,7 +397,7 @@ def test_band_sky_is_cut_at_the_band_lmax() -> None:
     comp.amps = _random_alms(23, np.random.default_rng(1)).astype(comp.amps.dtype)
     nu, nside, band_lmax, fwhm = 30.0, 4, 7, np.deg2rad(5.0)
 
-    sky = CompList([comp]).get_sky_at_nu(nu, nside, "I", fwhm=fwhm, lmax=band_lmax)
+    sky = CompList([comp]).get_sky_at_nu(nu, nside, "I", fwhm_rad=fwhm, lmax=band_lmax)
 
     alms = hp.resize_alm(comp.amps[0].astype(complex), 23, 23, band_lmax, band_lmax)
     expected = hp.alm2map(hp.almxfl(alms, hp.gauss_beam(fwhm, lmax=band_lmax)), nside,

@@ -513,7 +513,7 @@ def _load_iteration(params: Bunch, iteration: int, compsep_path: str,
         rms *= band_to_uK_CMB
         # Condition on this Gibbs sample's foregrounds. Foreground uncertainty is represented
         # by processing multiple Gibbs samples, not by perturbing foregrounds within a CMB draw.
-        foreground = foreground_comps.get_sky_at_nu(nu, nside, "I", fwhm=beam)[0]
+        foreground = foreground_comps.get_sky_at_nu(nu, nside, "I", fwhm_rad=beam)[0]
         observed -= foreground.astype(np.float64) * rj_to_uK_CMB
         ivar = np.zeros_like(rms)
         valid = rms > 0

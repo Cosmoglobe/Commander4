@@ -82,7 +82,7 @@ class RadioSources(PointSourcesComponent):
         self.pix_disc_idx_list = None
         self.beam_disc_val_list = None
         self.band_eval_nside = None  # nside the cached discs were computed at.
-        self.band_fwhm_r = None      # Beam FWHM (radians) used for the cached discs.
+        self.band_fwhm_rad = None    # Beam FWHM (radians) used for the cached discs.
 
     def read_dat_to_bunch(self, file_path):
         """ Reads a .dat point source raw table and stores it in a Bunch object which is returned.
@@ -101,7 +101,7 @@ class RadioSources(PointSourcesComponent):
         rows = np.array(rows)       
         return Bunch(zip(head,[rows[:,i] for i in range(rows.shape[1])]))
 
-    def compute_pix_beams(self, band_fwhm_r, band_nside, recompute=False):
+    def compute_pix_beams(self, band_fwhm_rad, band_nside, recompute=False):
         """ Computes the map-space beam values around every point source, for the given band nside
             and FWHM, updating the per-source beam arrays and the band members in place.
 
@@ -113,12 +113,12 @@ class RadioSources(PointSourcesComponent):
         If `recompute` is True the computation always runs; otherwise it runs only when the beam
         lists are uninitialized or the band specs have changed.
         """
-        if band_fwhm_r != self.band_fwhm_r \
+        if band_fwhm_rad != self.band_fwhm_rad \
         or band_nside != self.band_eval_nside \
         or self.pix_disc_idx_list is None \
         or self.beam_disc_val_list is None \
         or recompute:
-            self.band_fwhm_r = band_fwhm_r
+            self.band_fwhm_rad = band_fwhm_rad
             self.band_eval_nside = band_nside
             pixel_area = hp.nside2pixarea(band_nside)
             self.pix_disc_idx_list = []
@@ -128,11 +128,11 @@ class RadioSources(PointSourcesComponent):
                 # `inclusive` keeps every pixel the disc touches, so a disc smaller than a pixel
                 # still selects the pixels around the source rather than none at all.
                 disc_pix_i_s = hp.query_disc(self.band_eval_nside, hp.ang2vec(self.lonlat_arr[i,0],
-                        self.lonlat_arr[i,1], lonlat=True), get_gauss_beam_radius(self.band_fwhm_r),
-                        inclusive=True)
+                        self.lonlat_arr[i,1], lonlat=True),
+                        get_gauss_beam_radius(self.band_fwhm_rad), inclusive=True)
                 beam_disc = gauss_beam(hp.rotator.angdist(self.lonlat_arr[i,:],
                             hp.pix2ang(self.band_eval_nside, disc_pix_i_s, lonlat=True),
-                            lonlat=True), self.band_fwhm_r)
+                            lonlat=True), self.band_fwhm_rad)
                 beam_integral = beam_disc.sum()*pixel_area
                 if beam_integral > 0.0:
                     beam_disc = beam_disc/beam_integral
@@ -155,16 +155,16 @@ class RadioSources(PointSourcesComponent):
         """
         return (nu/self.nu_ref)**(self.alpha_arr - 2)
 
-    def get_sky(self, nu:float, nside:int, fwhm:float=0.0):
+    def get_sky(self, nu:float, nside:int, fwhm_rad:float=0.0):
         """ Returns the sky at frequency `nu` (GHz) from the point sources, at a certain `nside`,
-            observed through a Gaussian beam of `fwhm` **radians**.
+            observed through a Gaussian beam of `fwhm_rad` radians.
 
-        The beam is applied by painting each source through it: `fwhm` selects the beam the sources
-        are painted with. `CompList.get_sky_at_nu` adds this map, in pixel space, to the diffuse
-        components it builds through `comp2band` (as C3's `compute_residual` adds point
+        The beam is applied by painting each source through it: `fwhm_rad` selects the beam the
+        sources are painted with. `CompList.get_sky_at_nu` adds this map, in pixel space, to the
+        diffuse components it builds through `comp2band` (as C3's `compute_residual` adds point
         sources), so the unit is uK_RJ at `nu`, like theirs.
         """
-        self.compute_pix_beams(fwhm, nside)
+        self.compute_pix_beams(fwhm_rad, nside)
         map = np.zeros((1, hp.nside2npix(nside)),
                        dtype=np.float64 if self.double_prec else np.float32)
         scales = self.amps[0]*self.get_sed(nu)*self.mJysr_to_uKRJ
@@ -172,15 +172,15 @@ class RadioSources(PointSourcesComponent):
             map[0, pixels] += beam*scale  # Overlapping sources add up: the loop is sequential.
         return map
 
-    def get_component_map(self, nside:int, fwhm:float=0.0):
-        """ This component's *amplitude* map at a certain `nside` and `fwhm` (radians), in uK_RJ at
+    def get_component_map(self, nside:int, fwhm_rad:float=0.0):
+        """ This component's *amplitude* map at a certain `nside` and `fwhm_rad`, in uK_RJ at
             `nu_ref`.
 
         This is the sky at `nu_ref`, where the SED is 1 for every source. That matches what a
         `DiffuseComponent` returns here: its alms are likewise stored in uK_RJ referenced to
         `nu_ref`, with `get_sed(nu)` carrying the amplitude to any other frequency.
         """
-        return self.get_sky(self.nu_ref, nside, fwhm)
+        return self.get_sky(self.nu_ref, nside, fwhm_rad)
     
     def comp2band(self, band:Band, nthreads: int = 1):
         """ Add the point sources to the band's pixel map `band.map`.
@@ -191,10 +191,9 @@ class RadioSources(PointSourcesComponent):
         """
         if band.pol == "QU":
             raise ValueError("Point-source components can only be projected to intensity bands.")
-        band_fwhm_r, band_nside = np.deg2rad(band.fwhm/60.0), band.nside
-        self.compute_pix_beams(band_fwhm_r, band_nside)  # No-op unless the band has changed.
+        self.compute_pix_beams(band.fwhm_rad, band.nside)  # No-op unless the band has changed.
         if band.map is None:
-            band.map = np.zeros((1, hp.nside2npix(band_nside)), dtype=band.alms.real.dtype)
+            band.map = np.zeros((1, hp.nside2npix(band.nside)), dtype=band.alms.real.dtype)
         # The unit factor goes into the per-source scale, not onto the map, because the map may
         # already hold other components.
         scales = self.amps[0]*self.get_sed(band.nu)*self.mJysr_to_uKRJ
@@ -208,8 +207,7 @@ class RadioSources(PointSourcesComponent):
         """
         if band.pol == "QU":
             raise ValueError("Point-source components can only be evaluated from intensity bands.")
-        band_fwhm_r, band_nside = np.deg2rad(band.fwhm/60.0), band.nside
-        self.compute_pix_beams(band_fwhm_r, band_nside)  # No-op unless the band has changed.
+        self.compute_pix_beams(band.fwhm_rad, band.nside)  # No-op unless the band has changed.
         scales = self.get_sed(band.nu)*self.mJysr_to_uKRJ
         for i, (pixels, beam) in enumerate(zip(self.pix_disc_idx_list, self.beam_disc_val_list)):
             self.amps[0, i] = np.dot(band.map[0, pixels], beam)*scales[i]
