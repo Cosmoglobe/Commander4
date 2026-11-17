@@ -21,7 +21,7 @@ from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.compsep.amplitude_sampling import sample_amplitudes
-from commander4.compsep.chisq import collect_fit_diagnostics, evaluate_chi2
+from commander4.compsep.chisq import collect_fit_diagnostics, log_fit
 from commander4.compsep.spectral_sampling import sample_spectral_params
 from commander4.file_io import paths
 from commander4.file_io.chain_restart import ChainStart
@@ -343,18 +343,13 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, params: Bunch, band_map: Detect
             cg_stats = sample_amplitudes(mpi_info, cfg, group, band_map, comp_list, rng)
         if cg_stats:
             sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
-        # `fit` is the fit after the most recent sampling step. Each evaluation logs it, and the
-        # last one is the final fit that the chain file stores. A run has at least one amplitude
-        # or MCMC group, so `fit` is always set.
-        fit = evaluate_chi2(mpi_info, cfg, band_map, comp_list,
-                            label=f"{method} group {group.name!r}")
+        log_fit(mpi_info, band_map, comp_list, label=f"{method} group {group.name!r}")
 
     for group in cfg.mcmc_sampling_groups.values():
         with benchmark(f"mcmc-{group.name}"):
             mcmc_stats = sample_spectral_params(mpi_info, cfg, group, band_map, comp_list, rng)
         sampler_stats.setdefault("mcmc", {})[group.name] = mcmc_stats
-        fit = evaluate_chi2(mpi_info, cfg, band_map, comp_list,
-                            label=f"MCMC group {group.name!r}")
+        log_fit(mpi_info, band_map, comp_list, label=f"MCMC group {group.name!r}")
 
     if cfg.mcmc_sampling_groups:
         for group in cfg.amplitude_groups.values():
@@ -362,11 +357,11 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, params: Bunch, band_map: Detect
                 cg_stats = sample_amplitudes(mpi_info, cfg, group, band_map, comp_list, rng)
             if cg_stats:
                 sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
-            fit = evaluate_chi2(mpi_info, cfg, band_map, comp_list,
-                                label=f"{method} group {group.name!r}")
+            log_fit(mpi_info, band_map, comp_list, label=f"{method} group {group.name!r}")
 
+    # The fit of the final sky model, for the chain file.
     with benchmark("chain-gather"):
-        fit_tree, band_frequencies = collect_fit_diagnostics(compsep, fit, cfg.include_chisq_map)
+        fit_tree, band_frequencies = collect_fit_diagnostics(mpi_info, cfg, band_map, comp_list)
     if compsep.is_master:
         diagnostics = {**fit_tree, **sampler_stats}
         with benchmark("filewrite-compsep"):

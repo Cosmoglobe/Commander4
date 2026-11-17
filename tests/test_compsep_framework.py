@@ -13,7 +13,7 @@ from commander4.compsep.processing import (
     process_compsep,
     read_sampling_groups,
 )
-from commander4.compsep.chisq import evaluate_chi2
+from commander4.compsep.chisq import collect_fit_diagnostics
 from commander4.diagnostics.log import SUMMARY
 from commander4.mpi.transfer import _get_compsep_sender_id_for_tod_band, _should_send_compsep_result
 from commander4.data_models.band import Band
@@ -117,17 +117,18 @@ def test_iteration_chi2_uses_all_observed_map_samples() -> None:
     band_map = DetectorMap(map_sky, map_inv_var, nu=30.0, fwhm=60.0, nside=1)
     mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, is_master=True),
                      band=Bunch(name="Planck30GHz", polarization="I"))
-    cfg = Bunch(nside_chisq=1, include_residual_maps=False)
+    cfg = Bunch(nside_chisq=1, include_chisq_map=True, include_residual_maps=False)
 
-    fit = evaluate_chi2(mpi_info, cfg, band_map, CompList([]))  # A zero sky.
+    fit_tree, _ = collect_fit_diagnostics(mpi_info, cfg, band_map, CompList([]))  # A zero sky.
 
-    assert fit.total == pytest.approx(np.sum((map_sky[0, :-1] / 2.0)**2))
-    assert fit.ndof == 11
+    chi2 = fit_tree["chi2"]
+    assert chi2["total"] == pytest.approx(np.sum((map_sky[0, :-1] / 2.0)**2))
+    assert chi2["ndof"] == 11
     # The band's own contribution is the whole chi-squared here (one band), and the chi-squared map
-    # only redistributes z^2 over pixels, so it must carry exactly the same total.
-    assert fit.band.chi2 == pytest.approx(fit.total)
-    assert fit.band.chi2_map.sum() == pytest.approx(fit.total)
-    assert fit.band.chi2_map[1:].sum() == 0.0  # An intensity view fills row 0 only.
+    # only redistributes z^2 over pixels, so it must carry the same total.
+    assert chi2["bands"]["Planck30GHz_I"]["chi2"] == pytest.approx(chi2["total"])
+    assert chi2["map"].sum() == pytest.approx(chi2["total"])
+    assert chi2["map"][1:].sum() == 0.0  # An intensity view fills row 0 only.
 
 
 def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
@@ -137,7 +138,7 @@ def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
     mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, is_master=True),
                      band=Bunch(name="Planck30GHz", identifier="Planck30GHz_I", polarization="I"))
     # Compsep only runs with at least one enabled group, so use one that samples nothing (its
-    # `beta` is empty): the group loop still runs, and its evaluation is the final fit.
+    # `beta` is empty). The fit of the unchanged (zero) sky is then the final fit.
     noop = Bunch(**MCMC_GROUP_DEFAULTS)
     noop.name, noop.beta, noop.chisq_bands = "noop", {}, ["Planck30GHz"]
     noop.chisq_pixels = slice(None)
