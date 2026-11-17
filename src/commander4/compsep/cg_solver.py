@@ -58,7 +58,6 @@ class CompSepSolver:
         self.is_master = solver_comm.Get_rank() == 0
         self.band_map = band_map
         self.group = group
-        self.double_precision = double_precision
         self.nthreads = nthreads
         # This rank's band in harmonic space: the alms (and the pixel map of the point sources)
         # that the components are projected to and read back from in each CG iteration.
@@ -183,11 +182,10 @@ class CompSepSolver:
             b_map += eta_1.astype(b_map.dtype, copy=False)
 
         # Y^T (N^-1 d + N^{-1/2} eta_1)
-        b_band = Band.init_from_detector(band_map=self.band_map,
-                                         double_precision=self.double_precision)
-        b_alm = alm_to_map_adjoint(b_map, self.band_alms.nside, self.band_alms.lmax,
+        b_alm = alm_to_map_adjoint(b_map, self.band_map.nside, self.band_map.lmax,
                                    spin=self.band_map.spin, nthreads=self.nthreads)
-        b_band.alms = b_alm.astype(b_band.alms.dtype, copy=False)
+        b_band = Band(b_alm.astype(self.band_alms.alms.dtype, copy=False), self.band_map.nu,
+                      self.band_map.fwhm_rad, self.band_map.nside)
         # Point sources read the pixel map itself, as in the LHS.
         b_band.map = b_map
 
@@ -247,7 +245,7 @@ class CompSepSolver:
         band's white-noise realization, so shared draws would correlate the fluctuation across
         bands.
         """
-        pol_name = "QU" if self.band_map.pol == "QU" else "Intensity"
+        pol_name = self.band_map.pol
         max_iter = self.group.max_iter_pol if self.band_map.pol == "QU" else self.group.max_iter
 
         # Set comp beams to 0 (in theory they could be non-zero if the per-pix solver has ran).

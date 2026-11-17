@@ -74,8 +74,8 @@ class Component:
         # `init_from: null` and a left-out `init_from` mean different things (see
         # `load_initial_state`), and `self.cfg` holds None for both.
         self.has_init_from = "init_from" in params.components[comp_name].params
-        self.double_prec = resolve_param(params, "double_precision", ("compsep",),
-                                         default=False, legal_types=bool)
+        self.double_precision = resolve_param(params, "double_precision", ("compsep",),
+                                              default=False, legal_types=bool)
         # The SED parameters are attributes, because a sampler can change them. They start at the
         # values of the parameter file. SpinningDust and RadioSources have other names for theirs
         # in the parameter file, and set them in their own `__init__`.

@@ -553,5 +553,5 @@ class TestPriorMeanMap:
     def test_setter_rejects_a_wrongly_shaped_mu(self, tmp_path):
         comp = self._comp_list(tmp_path)[0]
         with pytest.raises(ValueError, match="prior mean has shape"):
-            comp.amp_prior_mean = np.zeros((comp.npol, comp.alm_len_complex + 1),
+            comp.amp_prior_mean = np.zeros((comp.npol, hp.Alm.getsize(comp.lmax) + 1),
                                            dtype=comp.amps.dtype)

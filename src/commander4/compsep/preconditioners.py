@@ -62,6 +62,13 @@ class DiagonalJointPreconditioner:
 
         nband = len(all_fwhm_rad)
         ncomp = len(comp_list)
+        # The mixing matrix M, one row per band and one column per component. The columns of
+        # point-source components stay zero and are not used.
+        M = np.zeros((nband, ncomp), dtype=np.float64)
+        for icomp in range(ncomp):
+            if isinstance(comp_list[icomp], DiffuseComponent):
+                M[:, icomp] = comp_list[icomp].get_sed(np.array(all_freqs, dtype=np.float64))
+
         self.A_diag_inv_list = []
         for icomp in range(ncomp):
             # FIXME: point sources are left out (identity). See C4_issues.md, K4. The list keeps one
@@ -69,16 +76,9 @@ class DiagonalJointPreconditioner:
             if not isinstance(comp_list[icomp], DiffuseComponent):
                 self.A_diag_inv_list.append(None)
                 continue
-            # Construct the full mixing matrix M on all ranks
-            M = np.empty((nband, ncomp), dtype=np.float64)
-            for jcomp in range(ncomp):
-                comp = comp_list[jcomp]
-                if not isinstance(comp, DiffuseComponent):
-                    continue
-                M[:, jcomp] = comp.get_sed(np.array(all_freqs, dtype=np.float64))
 
             # This is our estimate of the inverse of A, which serves as a preconditioner for A.
-            A_diag = np.zeros(comp_list[icomp].alm_len_complex, dtype=np.complex128)
+            A_diag = np.zeros(hp.Alm.getsize(comp_list[icomp].lmax), dtype=np.complex128)
             # Loop over all frequency bands to build the diagonal term
             for iband in range(nband):
                 M_fc = M[iband, icomp]
@@ -86,7 +86,7 @@ class DiagonalJointPreconditioner:
                 # Calculate beam operator for this frequency band
                 beam_window_squared = hp.gauss_beam(all_fwhm_rad[iband],
                                                     lmax=comp_list[icomp].lmax)**2
-                beam_op_complex = hp.almxfl(np.ones(comp_list[icomp].alm_len_complex,
+                beam_op_complex = hp.almxfl(np.ones(hp.Alm.getsize(comp_list[icomp].lmax),
                                                     dtype=np.complex128), beam_window_squared)
 
                 mean_weights = np.mean(all_map_inv_var[iband])

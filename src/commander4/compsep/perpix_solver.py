@@ -7,18 +7,20 @@ amplitudes it produces carry the common beam rather than being deconvolved.
 """
 import time
 import logging
+import healpy as hp
 import numpy as np
 from mpi4py import MPI
 from pixell import curvedsky
 
-from commander4.sky.component import Component
+from commander4.sky.comp_list import CompList
 from commander4.backend import compsep as cpp_compsep
 from commander4.data_models.detector_map import DetectorMap
 from commander4.diagnostics.performance import benchmark
 
+logger = logging.getLogger(__name__)
 
-def solve_compsep_perpix(solver_comm: MPI.Comm, band_map: DetectorMap,
-                         comp_list: list[Component],
+
+def solve_compsep_perpix(solver_comm: MPI.Comm, band_map: DetectorMap, comp_list: CompList,
                          double_precision: bool, nthreads: int,
                          rng: np.random.Generator) -> None:
     """ A pixel-by-pixel solver for the component separation problem, which leaves the solution in
@@ -30,7 +32,6 @@ def solve_compsep_perpix(solver_comm: MPI.Comm, band_map: DetectorMap,
         their fluctuation terms from the master's ``rng``. All components must be diffuse
         (`read_sampling_groups` checks this at start-up).
     """
-    logger = logging.getLogger(__name__)
     is_master = solver_comm.Get_rank() == 0
     if is_master:
         logger.verbose("Starting pixel-by-pixel component separation.")
@@ -50,7 +51,7 @@ def solve_compsep_perpix(solver_comm: MPI.Comm, band_map: DetectorMap,
         all_map_sky = solver_comm.gather(band_map.map_sky, root=0)
         all_map_inv_var = solver_comm.gather(band_map.map_inv_var, root=0)  # 0 where unobserved.
 
-    npix = 12*band_map.nside**2
+    npix = hp.nside2npix(band_map.nside)
     comp_maps = [None]*band_map.npol
     if is_master:  # Unfortunately, only master rank does the work.
         map_shapes = np.array([_map.shape for _map in all_map_sky])

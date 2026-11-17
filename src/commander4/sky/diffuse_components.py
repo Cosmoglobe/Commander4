@@ -80,8 +80,8 @@ class DiffuseComponent(Component):
         # Cached prior mean mu, filled from `amp_prior_mean_map` by `load_amp_prior_mean`;
         # None means a zero-mean prior. See the amp_prior_mean property.
         self._amp_prior_mean_alms = None
-        self.amps = np.zeros((self.npol, self.alm_len_complex),
-                             dtype=np.complex128 if self.double_prec else np.complex64)
+        self.amps = np.zeros((self.npol, hp.Alm.getsize(self.lmax)),
+                             dtype=np.complex128 if self.double_precision else np.complex64)
 
     def init_map_to_amplitude(self, sky_map: NDArray) -> NDArray:
         """Convert an init sky map (in the `units` setting) to this component's amplitude unit.
@@ -99,10 +99,6 @@ class DiffuseComponent(Component):
 
     Cl_prior_param_names = ("Cl_prior_amplitude", "Cl_prior_beta", "Cl_prior_FWHM",
                             "Cl_prior_l_pivot", "Cl_prior_l_apod", "Cl_prior_l_tighten")
-
-    @property
-    def alm_len_complex(self):
-        return ((self.lmax+1)*(self.lmax+2))//2
 
     @property
     def sigma_l(self) -> NDArray[np.floating]:
@@ -243,9 +239,9 @@ class DiffuseComponent(Component):
 
     @amp_prior_mean.setter
     def amp_prior_mean(self, alms: NDArray[np.complexfloating]) -> None:
-        if alms.shape != (self.npol, self.alm_len_complex):
+        if alms.shape != self.amps.shape:
             raise ValueError(f"Component {self.comp_name!r}: prior mean has shape {alms.shape}, "
-                             f"expected {(self.npol, self.alm_len_complex)}.")
+                             f"expected {self.amps.shape}.")
         self._amp_prior_mean_alms = alms
 
     def load_amp_prior_mean(self) -> None:

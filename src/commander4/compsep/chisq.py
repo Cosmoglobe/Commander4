@@ -93,15 +93,15 @@ def collect_fit_diagnostics(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap,
     # Commander3's chisq_<postfix>.fits: z^2 from every band added into one low-resolution map.
     chi2_map_total = np.zeros_like(chi2_map) if compsep.is_master else None
     compsep.comm.Reduce(chi2_map, chi2_map_total, op=MPI.SUM, root=0)
-    band = Bunch(name=mpi_info.band.name, pol=mpi_info.band.polarization, nu=float(band_map.nu),
-                 chi2=float(chi2_band), ndof=ndof_band,
-                 residual=residual if cfg.include_residual_maps else None)
-    per_band = compsep.comm.gather(band, root=0)
+    band_fit = Bunch(name=mpi_info.band.name, pol=mpi_info.band.polarization,
+                     nu=float(band_map.nu), chi2=float(chi2_band), ndof=ndof_band,
+                     residual=residual if cfg.include_residual_maps else None)
+    band_fits = compsep.comm.gather(band_fit, root=0)
     if not compsep.is_master:
         return {}, {}
 
-    total = sum(band.chi2 for band in per_band)
-    ndof = sum(band.ndof for band in per_band)
+    total = sum(band_fit.chi2 for band_fit in band_fits)
+    ndof = sum(band_fit.ndof for band_fit in band_fits)
     chi2: dict = {"total": total, "ndof": ndof, "bands": {}}
     chi2["reduced"] = total/ndof if ndof > 0 else float("nan")
     # Commander3's fg_ind_mean.dat also reports the chi-squared as a z-score, which is what says
@@ -113,14 +113,14 @@ def collect_fit_diagnostics(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap,
 
     residuals: dict = {}
     band_frequencies: dict[str, float] = {}
-    for band in per_band:
-        view_name = f"{band.name}_{band.pol}"
+    for band_fit in band_fits:
+        view_name = f"{band_fit.name}_{band_fit.pol}"
         chi2["bands"][view_name] = {
-            "chi2": band.chi2, "ndof": band.ndof, "nu": band.nu,
-            "reduced": band.chi2/band.ndof if band.ndof > 0 else float("nan")}
-        band_frequencies[band.name] = band.nu
-        if band.residual is not None:
-            residuals[view_name] = band.residual.astype(np.float32)
+            "chi2": band_fit.chi2, "ndof": band_fit.ndof, "nu": band_fit.nu,
+            "reduced": band_fit.chi2/band_fit.ndof if band_fit.ndof > 0 else float("nan")}
+        band_frequencies[band_fit.name] = band_fit.nu
+        if band_fit.residual is not None:
+            residuals[view_name] = band_fit.residual.astype(np.float32)
 
     fit_tree: dict = {"chi2": chi2}
     if residuals:

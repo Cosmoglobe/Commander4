@@ -101,7 +101,7 @@ class RadioSources(PointSourcesComponent):
         rows = np.array(rows)       
         return Bunch(zip(head,[rows[:,i] for i in range(rows.shape[1])]))
 
-    def compute_pix_beams(self, band_fwhm_rad, band_nside, recompute=False):
+    def compute_pix_beams(self, band_fwhm_rad, band_nside):
         """ Computes the map-space beam values around every point source, for the given band nside
             and FWHM, updating the per-source beam arrays and the band members in place.
 
@@ -110,14 +110,12 @@ class RadioSources(PointSourcesComponent):
         a pixel loses essentially all of its flux, because `gauss_beam` is then evaluated only at
         pixel centres that all sit far out in the beam's tail.
 
-        If `recompute` is True the computation always runs; otherwise it runs only when the beam
-        lists are uninitialized or the band specs have changed.
+        The computation runs only when the beam lists are uninitialized or the band has changed.
         """
         if band_fwhm_rad != self.band_fwhm_rad \
         or band_nside != self.band_eval_nside \
         or self.pix_disc_idx_list is None \
-        or self.beam_disc_val_list is None \
-        or recompute:
+        or self.beam_disc_val_list is None:
             self.band_fwhm_rad = band_fwhm_rad
             self.band_eval_nside = band_nside
             pixel_area = hp.nside2pixarea(band_nside)
@@ -144,9 +142,6 @@ class RadioSources(PointSourcesComponent):
                     beam_disc = np.array([1.0/pixel_area])
                 self.pix_disc_idx_list.append(np.asarray(disc_pix_i_s, dtype=np.int64))
                 self.beam_disc_val_list.append(np.asarray(beam_disc, dtype=np.float64))
-            return True
-        else:
-            return False
 
     def get_sed(self, nu:float):
         """ Returns one SED value per source, evaluated at `nu` relative to `nu_ref` (both GHz).
@@ -166,7 +161,7 @@ class RadioSources(PointSourcesComponent):
         """
         self.compute_pix_beams(fwhm_rad, nside)
         map = np.zeros((1, hp.nside2npix(nside)),
-                       dtype=np.float64 if self.double_prec else np.float32)
+                       dtype=np.float64 if self.double_precision else np.float32)
         scales = self.amps[0]*self.get_sed(nu)*self.mJysr_to_uKRJ
         for pixels, beam, scale in zip(self.pix_disc_idx_list, self.beam_disc_val_list, scales):
             map[0, pixels] += beam*scale  # Overlapping sources add up: the loop is sequential.

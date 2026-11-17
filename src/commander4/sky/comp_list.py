@@ -161,7 +161,7 @@ class CompList:
                 f"available.")
         lmax = 3*nside - 1 if lmax is None else lmax
         nrows = len(pols_required)
-        skymap = np.zeros((nrows, 12*nside**2), dtype=np.float32)
+        skymap = np.zeros((nrows, hp.nside2npix(nside)), dtype=np.float32)
         diffuse = [comp for comp in self.components if isinstance(comp, DiffuseComponent)]
         # One band per view: intensity (map row 0, spin 0) and polarization (the last two rows,
         # spin 2). A joined IQU component contributes to both.

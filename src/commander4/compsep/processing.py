@@ -340,9 +340,9 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, params: Bunch, band_map: Detect
     # amplitudes again, so that the chain holds amplitudes solved at the final spectral parameters.
     for group in cfg.amplitude_groups.values():
         with benchmark(f"amp-{group.name}"):
-            cg_stats = sample_amplitudes(mpi_info, cfg, group, band_map, comp_list, rng)
-        if cg_stats:
-            sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
+            amp_stats = sample_amplitudes(mpi_info, cfg, group, band_map, comp_list, rng)
+        if amp_stats:
+            sampler_stats.setdefault("amplitude_groups", {})[group.name] = amp_stats
         log_fit(mpi_info, band_map, comp_list, label=f"{method} group {group.name!r}")
 
     for group in cfg.mcmc_sampling_groups.values():
@@ -354,9 +354,9 @@ def process_compsep(mpi_info: Bunch, cfg: Bunch, params: Bunch, band_map: Detect
     if cfg.mcmc_sampling_groups:
         for group in cfg.amplitude_groups.values():
             with benchmark(f"amp-{group.name}"):
-                cg_stats = sample_amplitudes(mpi_info, cfg, group, band_map, comp_list, rng)
-            if cg_stats:
-                sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
+                amp_stats = sample_amplitudes(mpi_info, cfg, group, band_map, comp_list, rng)
+            if amp_stats:
+                sampler_stats.setdefault("amplitude_groups", {})[group.name] = amp_stats
             log_fit(mpi_info, band_map, comp_list, label=f"{method} group {group.name!r}")
 
     # The fit of the final sky model, for the chain file.
