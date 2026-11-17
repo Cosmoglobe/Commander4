@@ -107,7 +107,6 @@ components:
       longname: "CMB"
       shortname: "cmb"
       lmax: 47
-      spatially_varying_MM: false
       Cl_prior_amplitude: null
       init_from: "sim_debug/truth_CMB.fits"
       units: "uK_RJ"
@@ -119,7 +118,6 @@ components:
       longname: "Thermal-Dust"
       shortname: "dust"
       lmax: 47
-      spatially_varying_MM: false
       Cl_prior_amplitude: null
       beta: 1.54
       T: 20
@@ -134,7 +132,6 @@ components:
       longname: "Synchrotron"
       shortname: "sync"
       lmax: 47
-      spatially_varying_MM: false
       Cl_prior_amplitude: null
       beta: -3.1
       nu_ref: 30

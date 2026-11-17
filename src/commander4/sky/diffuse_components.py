@@ -40,7 +40,6 @@ class DiffuseComponent(Component):
     DEFAULTS = {
         **Component.DEFAULTS,
         "lmax": None,                   # The highest multipole of the alms. Must be set.
-        "spatially_varying_MM": False,  # Whether the mixing matrix differs between pixels.
         # C3's COMP_UNIT: the unit of what the parameter file gives for this component, which is
         # an init_from sky map, the prior mean map and `Cl_prior_amplitude`. None means that they
         # are in `amplitude_unit`. Compsep chains are always in `amplitude_unit`.
@@ -381,15 +380,17 @@ class DiffuseComponent(Component):
             raise ValueError("Band and component polarization must match.")
         spin = 0 if band.pol == "I" else 2
         alms = project_alms(alms, band.lmax)
-        if self.cfg.spatially_varying_MM:  # The mixing matrix is pixel-dependent: Y^-1 M Y a.
+        sed = self.get_sed(band.nu)
+        # The SED is one number when the spectral parameters are the same over the whole sky, and a
+        # map (at the band's nside) when they vary between pixels. Then M acts in pixel space.
+        if np.ndim(sed) > 0:  # Y^-1 M Y a
             comp_map = alm_to_map(alms, band.nside, band.lmax, spin=spin, nthreads=nthreads)
-            for ipol in range(len(comp_map)):
-                inplace_scale(comp_map[ipol], self.get_sed(band.nu))
+            comp_map *= sed
             alms = map_to_alm(comp_map, band.nside, band.lmax, spin=spin, nthreads=nthreads)
         else:
-            # M a. The SED is cast to the precision of the alms: a NumPy double would raise
+            # M a. `float` keeps the precision of the alms: a NumPy float64 would raise
             # single-precision alms to double precision, and everything after would run slower.
-            alms = alms*np.asarray(self.get_sed(band.nu), dtype=alms.real.dtype)
+            alms = alms*float(sed)
         beam = self._band_beam(band)
         for ipol in range(len(alms)):
             # B M a. `alms` is a new array in both branches above, so it can be changed in place.
@@ -408,21 +409,18 @@ class DiffuseComponent(Component):
         for ipol in range(self.npol):
             almxfl(tmp_alm[ipol], beam, inplace=True)  # B^T a (B^T = B: diagonal in l).
 
-        if self.cfg.spatially_varying_MM:  # If this component's mixing matrix is pixel-dependent.
+        sed = self.get_sed(band.nu)
+        if np.ndim(sed) > 0:  # The SED varies between pixels (see `comp2band`).
             # Y^-1^T B^T a
             pix_map = map_to_alm_adjoint(tmp_alm, band.nside, band.lmax, spin=self.spin,
                                          out=None, nthreads=nthreads)
-
-            # M^T Y^-1 B^T a
-            for ipol in range(self.npol):
-                inplace_scale(pix_map[ipol], self.get_sed(band.nu))
-
+            pix_map *= sed  # M^T Y^-1^T B^T a
             # Y^T M^T Y^-1^T B^T a
             tmp_alm = alm_to_map_adjoint(pix_map, band.nside, band.lmax, spin=self.spin, out=None,
                                          nthreads=nthreads)
         else:
             for ipol in range(self.npol):  # M^T B^T a
-                inplace_scale(tmp_alm[ipol], self.get_sed(band.nu))
+                inplace_scale(tmp_alm[ipol], sed)
 
         # Project alm from band to component lmax.
         self.amps = project_alms(tmp_alm, self.lmax)

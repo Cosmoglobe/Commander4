@@ -144,7 +144,6 @@ components:
       # SHT -- then enters the CG right-hand side as S^{-1/2} mu. Omitted means a zero-mean prior.
       # amp_prior_mean_map: "/path/to/cmb_prior_mean.fits"
       lmax: 1024
-      spatially_varying_MM: False
 
   ThermalDust:
     enabled: true
@@ -158,7 +157,6 @@ components:
       T: 20
       nu_ref: 545
       lmax: 1024
-      spatially_varying_MM: False
 
   Synchrotron:
     enabled: true
@@ -171,7 +169,6 @@ components:
       beta: -3.1
       nu_ref: 30
       lmax: 512
-      spatially_varying_MM: False
 
   FreeFree:
     enabled: true
@@ -184,7 +181,6 @@ components:
       T: 7000
       nu_ref: 40
       lmax: 512
-      spatially_varying_MM: False
 
   RadioSources:
     enabled: False
@@ -208,7 +204,6 @@ components:
       nu_peak: 25.3  # Ghz
       nu_0: 22.0  # Ghz
       lmax: 1000
-      spatially_varying_MM: False
 
 # ----------------------------------------
 # EXPERIMENTS

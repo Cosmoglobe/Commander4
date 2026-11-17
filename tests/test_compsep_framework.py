@@ -36,7 +36,6 @@ def _make_component_cfg(polarization: str = "IQU", lmax: int = 2) -> Bunch:
             lmax=lmax,
             polarization=polarization,
             shortname="cmb",
-            spatially_varying_MM=False,
             Cl_prior_amplitude=None,  # no prior
         ),
     )
@@ -58,7 +57,6 @@ def _make_multi_comp_list() -> CompList:
             lmax=2,
             polarization="IQU",
             shortname="dust",
-            spatially_varying_MM=False,
             Cl_prior_amplitude=None,  # no prior
         ),
     )
@@ -69,7 +67,6 @@ def _make_multi_comp_list() -> CompList:
             lmax=2,
             polarization="I",
             shortname="ff",
-            spatially_varying_MM=False,
             Cl_prior_amplitude=None,  # no prior
         ),
     )
@@ -225,14 +222,14 @@ def _make_spectral_comp_list() -> CompList:
         enabled=True,
         component_class="Synchrotron",
         params=Bunch(
-            lmax=2, polarization="IQU", shortname="sync", spatially_varying_MM=False,
+            lmax=2, polarization="IQU", shortname="sync", 
             Cl_prior_amplitude=None, beta=-3.1, nu_ref=30.0),
     )
     dust = Bunch(
         enabled=True,
         component_class="ThermalDust",
         params=Bunch(
-            lmax=2, polarization="IQU", shortname="dust", spatially_varying_MM=False,
+            lmax=2, polarization="IQU", shortname="dust", 
             Cl_prior_amplitude=None, beta=1.56, T=20.0, nu_ref=545.0),
     )
     return CompList.init_from_params(Bunch(
@@ -406,13 +403,19 @@ def test_band_sky_is_cut_at_the_band_lmax() -> None:
     np.testing.assert_allclose(sky[0], expected, atol=1e-4*expected.std())
 
 
+@pytest.mark.parametrize("sed_per_pixel", [False, True], ids=["one SED", "SED per pixel"])
 @pytest.mark.parametrize("band_lmax", [5, 11])  # Below and above the component lmax of 8.
-def test_band2comp_is_the_transpose_of_comp2band(band_lmax: int) -> None:
-    """<comp2band(x), y> = <x, band2comp(y)>, with the beam, the lmax cut and the SED included."""
+def test_band2comp_is_the_transpose_of_comp2band(band_lmax: int, sed_per_pixel: bool) -> None:
+    """<comp2band(x), y> = <x, band2comp(y)>, with the beam, the lmax cut and the SED included.
+
+    An SED that is a map takes the pixel-space path of both methods."""
     rng = np.random.default_rng(2)
     comp = _make_comp_list("I", lmax=8)[0]
     comp.amps = _random_alms(8, rng).astype(comp.amps.dtype)
     nside = 4
+    if sed_per_pixel:
+        sed_map = rng.uniform(0.5, 2.0, 12*nside**2)
+        comp.get_sed = lambda nu: sed_map
     band_map = DetectorMap(np.zeros((1, 12*nside**2)), np.ones((1, 12*nside**2)), nu=30.0,
                            fwhm=600.0, nside=nside, lmax=band_lmax)
     band = Band.init_from_detector(band_map, double_precision=True)

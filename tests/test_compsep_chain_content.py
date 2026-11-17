@@ -27,7 +27,7 @@ def _comp_list(lmax: int = 4) -> CompList:
     """One IQU CMB component with a power-law C(l) prior, at a small lmax."""
     cmb = Bunch(enabled=True, component_class="CMB",
                 params=Bunch(lmax=lmax, polarization="IQU", shortname="cmb",
-                             spatially_varying_MM=False, Cl_prior_amplitude=1e3,
+                             Cl_prior_amplitude=1e3,
                              Cl_prior_beta=-0.5, nu_ref=100.0))
     return CompList.init_from_params(Bunch(
         components=Bunch(CMB=cmb), compsep=Bunch(bands=Bunch(), double_precision=True)))
@@ -79,7 +79,7 @@ def test_a_disabled_cl_prior_writes_nothing(tmp_path) -> None:
     paths.create_output_dirs(params.output)
     cmb = Bunch(enabled=True, component_class="CMB",
                 params=Bunch(lmax=2, polarization="I", shortname="cmb",
-                             spatially_varying_MM=False, Cl_prior_amplitude=None, nu_ref=100.0))
+                             Cl_prior_amplitude=None, nu_ref=100.0))
     comp_list = CompList.init_from_params(Bunch(
         components=Bunch(CMB=cmb), compsep=Bunch(bands=Bunch(), double_precision=True)))
     write_compsep_chain_to_file(comp_list, params, chain=1, iter=1)

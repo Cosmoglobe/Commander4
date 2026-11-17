@@ -140,7 +140,6 @@ components:
       shortname: "cmb"
       Cl_prior_amplitude: null  # No amplitude prior.
       lmax: 2048
-      spatially_varying_MM: False
 
   ThermalDust:
     enabled: true
@@ -154,7 +153,6 @@ components:
       T: 20
       nu_ref: 545.0
       lmax: 4096
-      spatially_varying_MM: False
 
   Synchrotron:
     enabled: true
@@ -167,7 +165,6 @@ components:
       beta: -3.1
       nu_ref: 30
       lmax: 1024
-      spatially_varying_MM: False
 
   FreeFree:
     enabled: false
@@ -180,7 +177,6 @@ components:
       T: 7000
       nu_ref: 40
       lmax: 1024
-      spatially_varying_MM: False
 
 # ----------------------------------------
 # EXPERIMENTS

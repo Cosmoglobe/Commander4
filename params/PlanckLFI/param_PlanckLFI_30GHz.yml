@@ -159,7 +159,6 @@ components:
       shortname: "cmb"
       Cl_prior_amplitude: null  # No amplitude prior.
       lmax: 1024
-      spatially_varying_MM: False
 
   ThermalDust:
     enabled: true
@@ -174,7 +173,6 @@ components:
       nu_ref: [857, 353]  # [I, QU]
       units: "uK_RJ"
       lmax: 1024
-      spatially_varying_MM: False
 
   Synchrotron:
     enabled: true
@@ -188,7 +186,6 @@ components:
       nu_ref: [0.408, 30]  # [I, QU]
       units: "uK_RJ"
       lmax: 512
-      spatially_varying_MM: False
 
   FreeFree:
     enabled: true
@@ -202,7 +199,6 @@ components:
       nu_ref: 40
       units: "uK_RJ"
       lmax: 512
-      spatially_varying_MM: False
 
   RadioSources:
     enabled: False
@@ -226,7 +222,6 @@ components:
       nu_peak: 25.3  # Ghz
       nu_0: 22.0  # Ghz
       lmax: 1000
-      spatially_varying_MM: False
 
 # ----------------------------------------
 # EXPERIMENTS

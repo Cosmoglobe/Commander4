@@ -510,10 +510,6 @@ components:
                               # above every band's limit meets no data at all, and a
                               # constrained realization then draws it from the C(l) prior
                               # alone, which with a loose prior means junk.
-      spatially_varying_MM: False
-                              # Whether the mixing matrix varies across the sky. No
-                              # component returns a map-valued SED yet, so this is False
-                              # everywhere.
 
       # --- The C(l) prior, S ---
       # Fixed, not sampled. C3's `power_law_gauss` model written in D_l space:
@@ -566,7 +562,6 @@ components:
       longname: "Thermal-Dust"
       shortname: "dust"
       lmax: 1024
-      spatially_varying_MM: False
       Cl_prior_amplitude: null   # No C(l) prior for this component.
 
       # --- SED parameters (modified blackbody) ---
@@ -591,7 +586,6 @@ components:
       longname: "Synchrotron"
       shortname: "sync"
       lmax: 512
-      spatially_varying_MM: False
       Cl_prior_amplitude: null
       beta: -3.1              # Power-law index in RJ units.
       nu_ref: [0.408, 30]     # Intensity anchored at Haslam's 408 MHz, polarization at
@@ -607,7 +601,6 @@ components:
       longname: "Free-Free"
       shortname: "ff"
       lmax: 512
-      spatially_varying_MM: False
       Cl_prior_amplitude: null
       T: 7000                 # [K] Electron temperature.
       nu_ref: 40              # [GHz] Scalar reference: one value for every polarization.
@@ -622,7 +615,6 @@ components:
       longname: "SpinningDust"
       shortname: "sdust"
       lmax: 1000
-      spatially_varying_MM: False
       Cl_prior_amplitude: null
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
                               # The tabulated SED shape, as a two-column text file.

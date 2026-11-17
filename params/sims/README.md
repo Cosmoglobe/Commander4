@@ -121,8 +121,8 @@ recover and are switched off in every file here except where noted:
   `data_selection.chisq_abs_threshold` never fires. `simparam_corrnoise.yml` and
   `simparam_patch.yml` still enable data selection, but only as a diagnostic: the reported
   `chisq_z` quantiles measure how well the sampled noise model whitens the residual.
-- **Spatially varying spectral indices.** `simgen` scales one template by a scalar SED, so
-  `spatially_varying_MM` and per-pixel index sampling see a constant-index sky. (This is also why
+- **Spatially varying spectral indices.** `simgen` scales one template by a scalar SED, so a
+  pixel-dependent mixing matrix and per-pixel index sampling see a constant-index sky. (This is also why
   the truth maps are a single map per component rather than a map per parameter.)
 - **Bolometer transfer functions end to end.** The CG mapmaker deconvolves one single-pole T per
   band, but the model TODs are subtracted without T (see the transfer-function pair above).

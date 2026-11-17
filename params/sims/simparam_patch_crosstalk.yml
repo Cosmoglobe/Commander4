@@ -151,7 +151,6 @@ components:
       Cl_prior_beta: [0.0, -0.5]
       Cl_prior_l_pivot: 20
       lmax: 383
-      spatially_varying_MM: False
 
   ThermalDust:
     enabled: true
@@ -168,7 +167,6 @@ components:
       nu_ref: 353
       units: "uK_RJ"
       lmax: 383
-      spatially_varying_MM: False
 
   Synchrotron:
     enabled: true
@@ -191,7 +189,6 @@ components:
       amp_prior_mean_map: "../c4_sims/simgen_patch_debug/truth_Synchrotron.fits"
       units: "uK_RJ"
       lmax: 383
-      spatially_varying_MM: False
 
 # ----------------------------------------
 # EXPERIMENTS

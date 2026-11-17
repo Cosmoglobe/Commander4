@@ -216,7 +216,6 @@ components:
       init_from: "/mn/stornext/d5/data/duncanwa/WMAP/data/COM_CMB_IQU-smica_2048_R3.00_full_uK_14amin_dip.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
       lmax: 1024
-      spatially_varying_MM: False
 
   ThermalDust:
     enabled: true
@@ -232,7 +231,6 @@ components:
       nu_ref: [857, 353]  # [I, QU]
       units: "uK_RJ"
       lmax: 1024
-      spatially_varying_MM: False
 
   Synchrotron:
     enabled: true
@@ -247,7 +245,6 @@ components:
       nu_ref: [0.408, 30]  # [I, QU]
       units: "uK_RJ"
       lmax: 512
-      spatially_varying_MM: False
 
   FreeFree:
     enabled: true
@@ -262,7 +259,6 @@ components:
       nu_ref: 40
       units: "uK_RJ"
       lmax: 512
-      spatially_varying_MM: False
 
 
 # ----------------------------------------

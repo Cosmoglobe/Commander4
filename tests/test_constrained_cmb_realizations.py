@@ -138,7 +138,7 @@ def test_cli_uses_component_lmax(
     params = {
         "components": {"CMB": {"enabled": True, "component_class": "CMB", "params": {
             "polarization": "I", "shortname": "cmb", "lmax": lmax,
-            "spatially_varying_MM": False, "Cl_prior_amplitude": None,
+            "Cl_prior_amplitude": None,
         }}},
         "compsep": {"double_precision": True},
         "experiments": {"Sim": {"bands": {"Band100": {"freq": 100.0}}}},
@@ -436,11 +436,11 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
         "components": {
             "CMB": {"enabled": True, "component_class": "CMB", "params": {
                 "polarization": "I", "shortname": "cmb", "lmax": lmax,
-                "spatially_varying_MM": False, "Cl_prior_amplitude": None,
+                "Cl_prior_amplitude": None,
             }},
             "Dust": {"enabled": True, "component_class": "ThermalDust", "params": {
                 "polarization": "I", "shortname": "dust", "lmax": lmax,
-                "spatially_varying_MM": False, "Cl_prior_amplitude": None,
+                "Cl_prior_amplitude": None,
                 "nu_ref": 100.0, "beta": 1.54, "T": 20.0,
             }},
         },
@@ -593,12 +593,12 @@ def test_cli_uses_thermodynamic_units_throughout(
         "components": {
             "CMB": {"enabled": True, "component_class": "CMB", "params": {
                 "polarization": "I", "shortname": "cmb", "lmax": lmax, "nu_ref": cmb_ref,
-                "spatially_varying_MM": False, "Cl_prior_amplitude": None,
+                "Cl_prior_amplitude": None,
             }},
             "Dust": {"enabled": True, "component_class": "ThermalDust", "params": {
                 "polarization": "I", "shortname": "dust", "lmax": lmax,
                 "nu_ref": 353.0, "beta": 1.54, "T": 20.0,
-                "spatially_varying_MM": False, "Cl_prior_amplitude": None,
+                "Cl_prior_amplitude": None,
             }},
         },
         "compsep": {"double_precision": True},
@@ -710,7 +710,7 @@ def saved_component_sample(request: pytest.FixtureRequest, tmp_path: Path) -> tu
     ]:
         components[name] = {"enabled": True, "component_class": component_class, "params": {
             "polarization": request.param, "shortname": shortname, "lmax": lmax,
-            "spatially_varying_MM": False, "Cl_prior_amplitude": None, **sed,
+            "Cl_prior_amplitude": None, **sed,
         }}
     config = {"components": components, "compsep": {"double_precision": True},
               "output": {"dir": str(tmp_path), "chains": {"write": [1]}}}

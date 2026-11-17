@@ -26,7 +26,6 @@ def _make_component_cfg(polarization: str = "IQU") -> Bunch:
             lmax=1,
             polarization=polarization,
             shortname="cmb",
-            spatially_varying_MM=False,
             Cl_prior_amplitude=None,  # no prior
         ),
     )
@@ -286,7 +285,7 @@ def test_init_from_null_keeps_the_parameter_file_start(tmp_path) -> None:
 
 
 def _dust_params(**overrides) -> Bunch:
-    params = Bunch(polarization="IQU", shortname="dust", spatially_varying_MM=False,
+    params = Bunch(polarization="IQU", shortname="dust", 
                    Cl_prior_amplitude=None, lmax=2,
                    beta=1.5, T=20.0, nu_ref=[857.0, 353.0], units="uK_RJ")
     for key, value in overrides.items():
@@ -491,7 +490,7 @@ def test_spinning_dust_converts_its_units_at_nu_0(tmp_path) -> None:
 
     template = tmp_path / "spdust.dat"
     np.savetxt(template, np.column_stack([np.logspace(0, 3, 50), np.ones(50)]))
-    params = Bunch(polarization="I", shortname="ame", spatially_varying_MM=False,
+    params = Bunch(polarization="I", shortname="ame", 
                    Cl_prior_amplitude=100.0, lmax=4, units="uK_CMB", template_path=str(template),
                    nu_peak=30.0, nu_0=22.0)
     ame = SpinningDust(_make_params(ame=Bunch(params=params)), "ame", "I")
@@ -541,7 +540,6 @@ def _make_dust_cfg(nu_ref, polarization: str = "IQU") -> Bunch:
             lmax=1,
             polarization=polarization,
             shortname="dust",
-            spatially_varying_MM=False,
             Cl_prior_amplitude=None,
             beta=1.54,
             T=20.0,

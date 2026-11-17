@@ -4,7 +4,7 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.diagnostics import log as _log  # Registers custom logging methods.
+from commander4.diagnostics import log as _log  # noqa: F401 (registers logger.summary etc.)
 from commander4.mpi.setup import init_mpi, init_mpi_compsep, init_mpi_tod
 from commander4.parameters.schema import (
     TODBandConfig,

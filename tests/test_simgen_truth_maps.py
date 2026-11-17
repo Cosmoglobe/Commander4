@@ -286,7 +286,7 @@ def test_truth_map_is_readable_as_a_commander4_init_map(tmp_path):
     truth_path = str(tmp_path / "truth_ThermalDust.fits")
 
     comp_params = Bunch(polarization="IQU", shortname="dust", lmax=3 * NSIDE - 1,
-                        spatially_varying_MM=False, Cl_prior_amplitude=None,
+                        Cl_prior_amplitude=None,
                         beta=1.54, T=20.0, nu_ref=353.0, units="uK_RJ")
     c4_params = Bunch(components=Bunch(ThermalDust=Bunch(params=comp_params)),
                       compsep=Bunch(double_precision=False))

@@ -128,7 +128,6 @@ components:
       Cl_prior_l_pivot: 20
       units: "uK_RJ"
       lmax: 191
-      spatially_varying_MM: False
 
   ThermalDust:
     enabled: true
@@ -144,7 +143,6 @@ components:
       nu_ref: 353
       units: "uK_RJ"
       lmax: 191
-      spatially_varying_MM: False
 
   Synchrotron:
     enabled: true
@@ -160,7 +158,6 @@ components:
       nu_ref: 30
       units: "uK_RJ"
       lmax: 191
-      spatially_varying_MM: False
 
 # ----------------------------------------
 # EXPERIMENTS

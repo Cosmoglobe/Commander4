@@ -67,7 +67,7 @@ def _make_comp_list(params: Bunch, Cl_prior_amplitude: float | None = None) -> C
     """A single intensity CMB component, by default without a C_l prior."""
     cmb = Bunch(enabled=True, component_class="CMB",
                 params=Bunch(lmax=LMAX, polarization="I", shortname="cmb",
-                             spatially_varying_MM=False, Cl_prior_amplitude=Cl_prior_amplitude))
+                             Cl_prior_amplitude=Cl_prior_amplitude))
     comp_list = CompList.init_from_params(Bunch(components=Bunch(CMB=cmb),
                                                 compsep=params.compsep))
     for comp in comp_list:
@@ -363,7 +363,7 @@ class TestPriorMean:
         """A component with a genuinely non-flat C_l prior, so S != I."""
         cmb = Bunch(enabled=True, component_class="CMB",
                     params=Bunch(lmax=LMAX, polarization="I", shortname="cmb",
-                                 spatially_varying_MM=False, Cl_prior_amplitude=1.0e3,
+                                 Cl_prior_amplitude=1.0e3,
                                  Cl_prior_beta=-2.0, Cl_prior_l_pivot=2))
         comp_list = CompList.init_from_params(Bunch(components=Bunch(CMB=cmb),
                                                     compsep=params.compsep))
@@ -429,7 +429,7 @@ class TestPriorMeanMap:
         array.
         """
         params = _make_params()
-        fields = dict(lmax=LMAX, polarization="I", shortname="cmb", spatially_varying_MM=False,
+        fields = dict(lmax=LMAX, polarization="I", shortname="cmb", 
                       Cl_prior_amplitude=1.0)
         if not flat_prior:
             fields.update(Cl_prior_amplitude=1.0e3, Cl_prior_beta=-2.0, Cl_prior_l_pivot=2)
@@ -502,7 +502,6 @@ class TestPriorMeanMap:
             comp.load_amp_prior_mean()
         mu = comp_list[0].amp_prior_mean
 
-        params = _make_params()
         npix = 12*NSIDE**2
         band_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1e-16),
                                nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=LMAX)

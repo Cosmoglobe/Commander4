@@ -176,8 +176,6 @@ def read_data_map_from_file(my_band: Bunch, pols: str, params: Bunch) -> Detecto
     lmax = resolve_band_lmax(params, my_band._name, None, nside)
     detmap = DetectorMap(np.array(maps_sky), np.array(maps_inv_var), my_band.freq, my_band.fwhm,
                          nside, lmax=lmax)
-    detmap.g0 = 0.0
-    detmap.gain = 0.0
     # Smooth to the common analysis resolution on read; 0 leaves the band at its native beam.
     common_res_fwhm = float(resolve_param(params, "common_res_fwhm", ("compsep",), default=0.0))
     if common_res_fwhm:

@@ -174,7 +174,6 @@ components:
       Cl_prior_l_pivot: 20
       Cl_prior_FWHM: 1.5  # arcmin; optional Gaussian rolloff of D_l, 0 = off
       lmax: 8000
-      spatially_varying_MM: False
 
   ThermalDust:
     enabled: true
@@ -194,7 +193,6 @@ components:
       nu_ref: [857, 353]  # [I, QU]
       units: "uK_RJ"
       lmax: 3000
-      spatially_varying_MM: False
 
   Synchrotron:
     enabled: true
@@ -214,7 +212,6 @@ components:
       nu_ref: [0.408, 30]  # [I, QU]
       units: "uK_RJ"
       lmax: 1500
-      spatially_varying_MM: False
 
   FreeFree:
     enabled: true
@@ -234,7 +231,6 @@ components:
       nu_ref: 40
       units: "uK_RJ"
       lmax: 1500
-      spatially_varying_MM: False
 
 # ----------------------------------------
 # EXPERIMENTS

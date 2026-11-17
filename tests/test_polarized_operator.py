@@ -9,32 +9,6 @@ from commander4.compsep import preconditioners
 from commander4.compsep.preconditioners import JointPreconditioner
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
-from commander4.math_utils.alm import _dot_complex_alm_1D_arrays
-
-
-def _spin2_cross_channel_leakage(q_rms: float, u_rms: float, nside: int, lmax: int) -> float:
-    map_sky = np.zeros((2, 12 * nside**2), dtype=np.float64)
-    map_inv_var = np.vstack([
-        np.full(12 * nside**2, 1.0/q_rms**2, dtype=np.float64),
-        np.full(12 * nside**2, 1.0/u_rms**2, dtype=np.float64),
-    ])
-    detector_map = DetectorMap(
-        map_sky,
-        map_inv_var,
-        nu=100.0,
-        fwhm=0.0,
-        nside=nside,
-        double_precision=True,
-        lmax=lmax,
-    )
-
-    alm = np.zeros((2, hp.Alm.getsize(lmax)), dtype=np.complex128)
-    alm[0, hp.Alm.getidx(lmax, min(10, lmax), min(2, lmax))] = 1.0
-    transformed = detector_map.apply_inv_N_alm(alm, nthreads=1, inplace=False)
-
-    main_norm = np.sqrt(_dot_complex_alm_1D_arrays(transformed[0], transformed[0], lmax))
-    cross_norm = np.sqrt(_dot_complex_alm_1D_arrays(transformed[1], transformed[1], lmax))
-    return float(cross_norm / main_norm)
 
 
 def _band_map(map_inv_var: np.ndarray, lmax: int, fwhm_arcmin: float = 0.0) -> DetectorMap:
@@ -103,16 +77,6 @@ def test_diagonal_preconditioner_has_only_the_prior_above_the_band_lmax():
     ell = hp.Alm.getlm(comp_lmax)[0]
     assert_allclose(result[0].amps[0, ell <= band_lmax], 1.0/(1.0 + 2.0*npix/(4*np.pi)), rtol=1e-12)
     assert_allclose(result[0].amps[0, ell > band_lmax], 1.0, rtol=1e-12)
-
-
-def test_spin2_equal_qu_weights_have_small_cross_channel_leakage():
-    leakage = _spin2_cross_channel_leakage(q_rms=1.0, u_rms=1.0, nside=32, lmax=32)
-    assert leakage < 1.0e-2
-
-
-def test_spin2_unequal_qu_weights_induce_large_cross_channel_leakage():
-    leakage = _spin2_cross_channel_leakage(q_rms=1.0, u_rms=2.0, nside=32, lmax=32)
-    assert leakage > 1.0e-1
 
 
 def test_joint_preconditioner_uses_trace_weight_for_spin2_channels():

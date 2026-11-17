@@ -18,7 +18,6 @@ def _cmb_params() -> Bunch:
             longname="CMB",
             shortname="cmb",
             lmax=11,
-            spatially_varying_MM=False,
             Cl_prior_amplitude=None,
         ),
     )
