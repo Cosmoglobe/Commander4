@@ -128,7 +128,7 @@ def run_compsep_side(mpi_info: Bunch, params: Bunch, cfg: Bunch, comp_lists_by_c
     schedule = gibbs_schedule(first_iteration, params.gibbs.num_iterations)
     for step, (chain, iteration) in enumerate(schedule):
         if mpi_info.compsep.is_master:
-            logger.verbose(f"Worldrank {mpi_info.world.rank}, subrank {mpi_info.compsep.rank} "
+            logger.verbose(f"Worldrank {mpi_info.world.rank}, CompSep rank {mpi_info.compsep.rank} "
                            f"starting CompSep chain {chain}, iteration {iteration}.")
         rng = make_iteration_rng(params, mpi_info, chain, iteration)
         t0 = time.time()

@@ -132,8 +132,8 @@ class DetectorMap:
         self.nside = nside
         # The band's harmonic bandlimit. Components are truncated to this lmax on their way into
         # the band (Component.comp2band), so any component multipole above it is
-        # invisible to the data and left to the C(l) prior alone; compsep_processing's
-        # _validate_component_lmax reports that at startup.
+        # invisible to the data and left to the C(l) prior alone; `_validate_component_lmax` in
+        # compsep/processing.py reports that at startup.
         self.lmax = (3*nside - 1) if lmax is None else lmax
         self.double_precision = double_precision
         self.map_inv_var = map_inv_var.astype(np.float64 if double_precision else np.float32,

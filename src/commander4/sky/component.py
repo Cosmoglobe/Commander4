@@ -2,8 +2,8 @@
 
 `Component` owns the parts shared by every component regardless of how it is represented on the
 sky: the amplitude buffer, the polarization view, the parameter unpacking, and the interface
-(`get_sed`, `realize_as_map`, ...) that the samplers call. The concrete families live next to this
-file: `diffuse_components.py` and `point_sources.py`.
+(`get_sed`, `comp2band`, `band2comp`, ...) that the samplers call. The concrete families live next
+to this file: `diffuse_components.py` and `point_sources.py`.
 """
 from copy import deepcopy
 import logging

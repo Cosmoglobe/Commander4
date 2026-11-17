@@ -328,8 +328,6 @@ class DiffuseComponent(Component):
         beam is one window on every Stokes row, as in `comp2band`. Multipoles below `lmin` are left
         out. A band's sky is made by `CompList.get_sky_at_nu` instead, through `comp2band`.
         """
-        if self.amps is None:
-            raise ValueError("component_alms property not set.")
         lmax = min(self.lmax, 3*nside - 1)
         window = hp.gauss_beam(fwhm_rad, lmax=lmax)
         window[:lmin] = 0.0
@@ -482,7 +480,8 @@ class ThermalDust(DiffuseComponent):
         Returns:
             The SED scaling factor (float or np.ndarray).
         """
-        # Modified blackbody, in uK_CMB
+        # Modified blackbody, as a ratio of RJ brightness temperatures: nu^beta B_nu(T), divided
+        # by the nu^2 of the RJ relation, and normalized to 1 at nu_ref.
         x = (h_over_k*nu)/(self.T)
         x0 = (h_over_k*self.nu_ref)/(self.T)
         return (nu / self.nu_ref)**(self.beta + 1.0) * np.expm1(x0) / np.expm1(x)

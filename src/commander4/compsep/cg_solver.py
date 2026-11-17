@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 class CompSepSolver:
     """ Class for performing global component separation using the preconditioned conjugate gradient
         method. After initializing the class, the solve() method should be called to perform the
-        component separation. Note that the solve() method will in-place update (as well as return)
-        the 'comp_list' argument passed to it.
+        component separation. solve() leaves the solution in the 'comp_list' argument passed to it,
+        and returns the CG residuals.
 
         The component separation problem is an Ax = b equation on the form
         (S^-1 + Y^T M^T Y^-1^T N^-1 B M Y) a

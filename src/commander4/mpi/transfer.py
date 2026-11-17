@@ -182,7 +182,7 @@ def receive_tod(mpi_info: Bunch, band_map: DetectorMap|None, params: Bunch) -> D
 def send_compsep(mpi_info: Bunch, comp_list: CompList) -> None:
     """Send the CompSep components back to TOD when this execution view owns the return path.
 
-    Before this boundary, ``process_compsep`` broadcasts every polarization view solved by a
+    Before this boundary, ``sample_amplitudes`` broadcasts every polarization view solved by a
     sampling group across the CompSep communicator. Every rank therefore holds the same complete
     component list, with both I and QU amplitudes; this function performs no additional QU-to-I
     transfer.
