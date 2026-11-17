@@ -12,35 +12,30 @@ needs `py3nj`, which is not a dependency, and its author recorded that it never 
 noise diagonal in testing.
 
 A sampling group names its preconditioner as a string and it is looked up here by name, so a name
-that is not a class in this module fails when the solver builds it.
+that is not a class in this module fails when the solver builds it. Every preconditioner is built
+from the same three arguments: the solver's communicator, this rank's band map, and the component
+list of the solve. Every rank of the communicator builds it, and only rank 0 applies it.
 
 (The CG *mapmaker* has its own family, in `tod/mapmaking/preconditioners.py`.)
 """
-# `from __future__ import annotations` defers evaluation of type hints, which together with the
-# TYPE_CHECKING guard below breaks a circular import.
-from __future__ import annotations
-
 import numpy as np
 import healpy as hp
+from mpi4py import MPI
 
+from commander4.data_models.detector_map import DetectorMap
+from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
-
-import typing
-# Only import when performing type checking, avoiding circular import during normal runtime.
-if typing.TYPE_CHECKING:
-    from commander4.compsep.cg_solver import CompSepSolver
-    from commander4.sky.comp_list import CompList
 
 
 class NoPreconditioner:
     """ Preconditioner for the case where no preconditioner is used.
         Returns the input array unchanged.
     """
-    def __init__(self, solver: CompSepSolver, complist: CompList):
+    def __init__(self, solver_comm: MPI.Comm, band_map: DetectorMap, comp_list: CompList):
         pass
 
-    def __call__(self, complist: CompList):
-        return complist.copy()
+    def __call__(self, comp_list: CompList):
+        return comp_list.copy()
 
 
 
@@ -51,15 +46,15 @@ class DiagonalJointPreconditioner:
         #TODO: 1. Get Wigner 3j stuff to work to get full N-diagonal. 2. Get the full mixing matrix
         # stuff implemented.
     """
-    def __init__(self, solver: CompSepSolver, comp_list:CompList):
-        self.is_master = solver.is_master
+    def __init__(self, solver_comm: MPI.Comm, band_map: DetectorMap, comp_list: CompList):
+        self.is_master = solver_comm.Get_rank() == 0
 
         # Gather all necessary per-band information from all ranks (all ranks hold a band).
         # TODO: Currently the master rank temporarily has to hold ALL inverse-variance bands.
         # It would be easy to re-write this so they send them one-and-one as we make the diagonal.
-        all_fwhm_rad = solver.solver_comm.gather(solver.band_alms.fwhm_rad, root=0)
-        all_map_inv_var = solver.solver_comm.gather(solver.band_map.map_inv_var, root=0)
-        all_freqs = solver.solver_comm.gather(solver.band_alms.nu, root=0)
+        all_fwhm_rad = solver_comm.gather(band_map.fwhm_rad, root=0)
+        all_map_inv_var = solver_comm.gather(band_map.map_inv_var, root=0)
+        all_freqs = solver_comm.gather(band_map.nu, root=0)
 
         # We can now get rid of the ranks that do not hold components.
         if not self.is_master:
@@ -111,19 +106,17 @@ class DiagonalJointPreconditioner:
             self.A_diag_inv_list.append(np.divide(1.0, A_diag, out=np.zeros_like(A_diag),
                                                   where=A_diag != 0))
 
-    def __call__(self, a_complist: CompList) -> CompList:
+    def __call__(self, comp_list: CompList) -> CompList:
         if not self.is_master:
-            return a_complist
+            return comp_list
 
-        a_complist_out = a_complist.copy()
-        for icomp in range(len(a_complist)):
-            if isinstance(a_complist[icomp], DiffuseComponent):
+        comp_list_out = comp_list.copy()
+        for icomp in range(len(comp_list)):
+            if isinstance(comp_list[icomp], DiffuseComponent):
                 # Apply the already calculated diagonal preconditioner.
-                a_complist_out[icomp].amps *= self.A_diag_inv_list[icomp]
-            else:
-                pass
- 
-        return a_complist_out
+                comp_list_out[icomp].amps *= self.A_diag_inv_list[icomp]
+
+        return comp_list_out
 
 
 class JointPreconditioner:
@@ -192,17 +185,17 @@ class JointPreconditioner:
     include_noise = True
     include_mixing = True
 
-    def __init__(self, solver: CompSepSolver, comp_list:CompList):
-        self.is_master = solver.is_master
+    def __init__(self, solver_comm: MPI.Comm, band_map: DetectorMap, comp_list: CompList):
+        self.is_master = solver_comm.Get_rank() == 0
         self.ell_block_data = []
         self.npol = 0
 
         # Gather the band-local ingredients needed to build the isotropic approximation. Every rank
         # holds one band, but only the master rank actually assembles the small dense blocks.
-        all_fwhm_rad = solver.solver_comm.gather(solver.band_alms.fwhm_rad, root=0)
-        all_map_inv_var = solver.solver_comm.gather(solver.band_map.map_inv_var, root=0)
-        all_freqs = solver.solver_comm.gather(solver.band_alms.nu, root=0)
-        all_band_lmax = solver.solver_comm.gather(solver.band_map.lmax, root=0)
+        all_fwhm_rad = solver_comm.gather(band_map.fwhm_rad, root=0)
+        all_map_inv_var = solver_comm.gather(band_map.map_inv_var, root=0)
+        all_freqs = solver_comm.gather(band_map.nu, root=0)
+        all_band_lmax = solver_comm.gather(band_map.lmax, root=0)
 
         # Worker ranks participate in the gather above, but the actual block construction is done
         # only on the master rank.
@@ -332,7 +325,7 @@ class JointPreconditioner:
                 block_inv,
             )
 
-    def __call__(self, a_complist: CompList) -> CompList:
+    def __call__(self, comp_list: CompList) -> CompList:
         """Apply the preconditioner to a component list on the master rank.
 
         For each ell we gather all active component coefficients for all polarization channels into
@@ -341,24 +334,23 @@ class JointPreconditioner:
         result is scattered back into the component alms.
         """
         if not self.is_master:
-            return a_complist
+            return comp_list
 
-        a_complist_out = a_complist.copy()
+        comp_list_out = comp_list.copy()
         for ell_data in self.ell_block_data:
             if ell_data is None:
                 continue
             active_global, alm_indices, block_prior_inv_sqrt, block_inv = ell_data
             nmodes = alm_indices[0].size
-            coeff_dtype = a_complist_out[active_global[0]].amps.dtype
+            coeff_dtype = comp_list_out[active_global[0]].amps.dtype
 
             # Stack all active component coefficients for this ell into one dense array.
             coeffs = np.empty((self.npol * len(active_global), nmodes), dtype=coeff_dtype)
             for ipol in range(self.npol):
                 offset = ipol * len(active_global)
                 for iactive, icomp in enumerate(active_global):
-                    coeffs[offset + iactive] = a_complist_out[icomp].amps[
-                        ipol, alm_indices[iactive]
-                    ]
+                    coeffs[offset + iactive] = comp_list_out[icomp].amps[ipol,
+                                                                         alm_indices[iactive]]
 
             # Apply D_ell^(-1) A_ell^(-1) D_ell^(-1) in the same similarity-transformed basis used
             # during construction.
@@ -370,11 +362,9 @@ class JointPreconditioner:
             for ipol in range(self.npol):
                 offset = ipol * len(active_global)
                 for iactive, icomp in enumerate(active_global):
-                    a_complist_out[icomp].amps[ipol, alm_indices[iactive]] = coeffs[
-                        offset + iactive
-                    ]
- 
-        return a_complist_out
+                    comp_list_out[icomp].amps[ipol, alm_indices[iactive]] = coeffs[offset + iactive]
+
+        return comp_list_out
 
 
 class BeamOnlyPreconditioner(JointPreconditioner):
@@ -404,9 +394,9 @@ class MixingMatrixPreconditioner(JointPreconditioner):
 
 
 # `NoiseOnlyPreconditioner` -- a preconditioner accounting only for the diagonal of the noise
-# covariance, A = Y^T N^-1 Y. Left here as a starting point rather than ported, for two reasons:
-# its author noted it never reproduced the diagonal in testing, and it needs `py3nj` for the
-# Wigner 3j symbols, which is neither installed nor a declared dependency. The body below is the
+# covariance, A = Y^T N^-1 Y. Left here as a starting point. It never reproduced the diagonal in
+# testing, and it needs `py3nj` for the Wigner 3j symbols, which is neither installed nor a
+# declared dependency. The body below is the
 # original, written against the pre-CompList solver: it takes one component per rank, reads
 # `CompSepSolver` attributes that no longer exist (`map_inv_var`, `ncomp`, `lmax_per_comp`,
 # `my_comp_lmax`), and its `__call__` takes a plain alm array rather than a CompList.

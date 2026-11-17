@@ -264,11 +264,10 @@ class CompSepSolver:
         with benchmark("cg-rhs"):
             RHS = self.calc_RHS(comp_list, rng)
 
-        # Initialize the precondidioner class, which is in the module "solvers.preconditioners",
-        # and has the name specified by this sampling group's preconditioner setting. It reads only
-        # the settings of the components, never their amplitudes.
+        # Find the chosen preconditioner, as named in the parameter file.
         with benchmark("cg-precond-init"):
-            precond = getattr(preconditioners, self.group.preconditioner)(self, comp_list)
+            precond = getattr(preconditioners, self.group.preconditioner)(
+                self.solver_comm, self.band_map, comp_list)
 
         # The CG changes `comp_list` (its x) and `RHS` (its residual) in place.
         CG_solver = DistributedCG(self.apply_LHS_matrix, RHS, self.is_master, x0=comp_list,

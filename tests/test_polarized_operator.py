@@ -37,25 +37,12 @@ def _spin2_cross_channel_leakage(q_rms: float, u_rms: float, nside: int, lmax: i
     return float(cross_norm / main_norm)
 
 
-class _DummyDetectorMap:
-    def __init__(self, map_inv_var: np.ndarray, lmax: int):
-        self.map_inv_var = map_inv_var
-        self.lmax = lmax
-
-
-class _DummyBand:
-    def __init__(self, nu: float, fwhm_rad: float):
-        self.nu = nu
-        self.fwhm_rad = fwhm_rad
-
-
-class _DummySolver:
-    """Only what the preconditioners read from a `CompSepSolver`."""
-    def __init__(self, map_inv_var: np.ndarray, lmax: int):
-        self.solver_comm = MPI.COMM_SELF
-        self.is_master = True
-        self.band_map = _DummyDetectorMap(map_inv_var, lmax)
-        self.band_alms = _DummyBand(nu=100.0, fwhm_rad=0.0)
+def _band_map(map_inv_var: np.ndarray, lmax: int, fwhm_arcmin: float = 0.0) -> DetectorMap:
+    """A 100 GHz band with the given inverse-noise map; its sky map, which the preconditioners do
+    not read, is zero."""
+    nside = hp.npix2nside(map_inv_var.shape[-1])
+    return DetectorMap(np.zeros_like(map_inv_var), map_inv_var, nu=100.0, fwhm=fwhm_arcmin,
+                       nside=nside, double_precision=True, lmax=lmax)
 
 
 class _DummyDiffuseComp(DiffuseComponent):
@@ -91,11 +78,12 @@ class _NonDiffuseComp:
 def test_diagonal_preconditioner_gives_each_component_its_own_diagonal():
     # A non-diffuse component placed first must not shift the diagonals of the ones after it.
     lmax, npix = 4, 12*4**2
-    solver = _DummySolver(map_inv_var=np.full((1, npix), 2.0), lmax=lmax)
+    band_map = _band_map(np.full((1, npix), 2.0), lmax=lmax)
     comp_list = CompList([_NonDiffuseComp(), _DummyDiffuseComp(lmax=lmax, npol=1)])
     comp_list[1].amps[:] = 1.0
 
-    result = preconditioners.DiagonalJointPreconditioner(solver,comp_list)(comp_list)
+    precond = preconditioners.DiagonalJointPreconditioner(MPI.COMM_SELF, band_map, comp_list)
+    result = precond(comp_list)
 
     # Unit SED, no beam, C_l = 1: the diagonal is 1 (prior) + the mean weight per steradian.
     assert_allclose(result[1].amps, 1.0/(1.0 + 2.0*npix/(4*np.pi)), rtol=1e-12)
@@ -119,10 +107,9 @@ def test_joint_preconditioner_uses_trace_weight_for_spin2_channels():
         np.full(npix, 1.0, dtype=np.float64),
         np.full(npix, 0.25, dtype=np.float64),
     ])
-    solver = _DummySolver(map_inv_var=map_inv_var, lmax=16)
     comp_list = CompList([_DummyDiffuseComp(lmax=16, npol=2)])
 
-    precond = JointPreconditioner(solver,comp_list)
+    precond = JointPreconditioner(MPI.COMM_SELF, _band_map(map_inv_var, lmax=16), comp_list)
     _, _, _, block_inv = precond.ell_block_data[4]
 
     assert_allclose(block_inv, np.eye(2) * block_inv[0, 0], rtol=1e-12, atol=1e-12)
@@ -142,10 +129,9 @@ def _single_band_precond_block(preconditioner_name: str, ell: int):
     """Build one preconditioner over a single 60' band with two differently-mixing components."""
     lmax, nside = 8, 8
     map_inv_var = np.full((1, 12*nside**2), 2.0, dtype=np.float64)
-    solver = _DummySolver(map_inv_var=map_inv_var, lmax=lmax)
-    solver.band_alms.fwhm_rad = np.deg2rad(1.0)
+    band_map = _band_map(map_inv_var, lmax=lmax, fwhm_arcmin=60.0)
     comp_list = CompList([_SEDDiffuseComp(lmax=lmax, npol=1, sed=sed) for sed in (1.0, 3.0)])
-    precond = getattr(preconditioners, preconditioner_name)(solver,comp_list)
+    precond = getattr(preconditioners, preconditioner_name)(MPI.COMM_SELF, band_map, comp_list)
     return precond, precond.ell_block_data[ell][3], comp_list
 
 
@@ -181,11 +167,10 @@ def test_joint_preconditioner_has_no_prior_term_for_a_component_without_a_prior(
     """C3's `CL_TYPE = none`: such a component gets no identity on its diagonal. Above the band
     lmax nothing constrains it, and the preconditioner must leave it untouched (zero) there."""
     comp_lmax, band_lmax, nside = 10, 8, 8
-    solver = _DummySolver(map_inv_var=np.full((1, 12*nside**2), 2.0), lmax=band_lmax)
-    solver.band_alms.fwhm_rad = np.deg2rad(1.0)
+    band_map = _band_map(np.full((1, 12*nside**2), 2.0), lmax=band_lmax, fwhm_arcmin=60.0)
     comps = [_SEDDiffuseComp(lmax=comp_lmax, npol=1, sed=sed) for sed in (1.0, 3.0)]
     comps[0].Cl_prior_amplitude = None
-    precond = JointPreconditioner(solver,CompList(comps))
+    precond = JointPreconditioner(MPI.COMM_SELF, band_map, CompList(comps))
 
     noise_weight = 2.0 * 12*nside**2/(4*np.pi)
     beam_squared = hp.gauss_beam(np.deg2rad(60.0/60), lmax=band_lmax)[4]**2
