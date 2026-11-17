@@ -117,7 +117,6 @@ class DiagonalJointPreconditioner:
 
         a_complist_out = a_complist.copy()
         for icomp in range(len(a_complist)):
-            #comp_lmax = self.compsep.lmax_per_comp[icomp]
             if isinstance(a_complist[icomp], DiffuseComponent):
                 # Apply the already calculated diagonal preconditioner.
                 a_complist_out[icomp].amps *= self.A_diag_inv_list[icomp]

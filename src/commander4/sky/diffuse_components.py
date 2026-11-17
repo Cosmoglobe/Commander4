@@ -25,17 +25,8 @@ from commander4.math_utils.sht import alm_to_map, map_to_alm, alm_to_map_adjoint
 
 logger = logging.getLogger(__name__)
 
-# Blackbody and thermodynamic-to-brightness conversions shared by the SEDs below.
-A = (2*c.h*u.GHz**3/c.c**2).to('MJy').value
+# h/k_B in GHz^-1 K, for the blackbody of the thermal-dust SED.
 h_over_k = (c.h/c.k_B/(1*u.K)).to('GHz-1').value
-h_over_kTCMB = (c.h/c.k_B/(2.7255*u.K)).to('GHz-1').value
-def blackbody(nu, T):
-    return A*nu**3/np.expm1(nu*h_over_k/T)
-def g(nu):
-    # From uK_CMB to MJy/sr
-    x = nu*h_over_kTCMB
-    return np.expm1(x)**2/(x**4*np.exp(x))
-
 
 
 class DiffuseComponent(Component):
