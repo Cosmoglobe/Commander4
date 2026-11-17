@@ -13,7 +13,6 @@ import healpy as hp
 from copy import deepcopy
 from numpy.typing import NDArray
 from commander4.math_utils.arithmetic import inplace_arr_prod
-from commander4.math_utils.sht import alm_to_map, alm_to_map_adjoint
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +94,6 @@ class DetectorMap:
         fwhm (float): Beam full-width-at-half-maximum in arcminutes.
         nside (int): HEALPix nside of the map.
         lmax (int): Maximum multipole for harmonic transforms.
-        double_precision (bool): Whether the inverse noise map is stored in float64.
     """
     def __init__(self, map_sky:NDArray, map_inv_var:NDArray, nu:float, fwhm:float, nside:int,
                  double_precision:bool=False, lmax:int|None = None):
@@ -135,7 +133,6 @@ class DetectorMap:
         # invisible to the data and left to the C(l) prior alone; `_validate_component_lmax` in
         # compsep/processing.py reports that at startup.
         self.lmax = (3*nside - 1) if lmax is None else lmax
-        self.double_precision = double_precision
         self.map_inv_var = map_inv_var.astype(np.float64 if double_precision else np.float32,
                                               copy=False)
 
@@ -194,41 +191,3 @@ class DetectorMap:
             inplace_arr_prod(map_out[ipol,:], self.map_inv_var[ipol,:])
 
         return map_out
-
-    def apply_inv_N_alm(self, a: NDArray, nthreads:int = 1, inplace = True):
-        """
-        Applies the inverse noise variance matrix to a set of alm `a` and returns the result.
-
-        """
-        if a.shape[0] != self.npol:
-            raise ValueError("Can not apply inv_N to alms with different polarization")
-
-        a_out = a if inplace else deepcopy(a)
-
-        # Y a
-        a_out = alm_to_map(a_out, self.nside, self.lmax, spin=self.spin, nthreads=nthreads)
-
-        # N^-1 Y a
-        self.apply_inv_N_map(a_out)
-
-        # Y^T N^-1 Y a
-        a_out = alm_to_map_adjoint(a_out, self.nside, self.lmax, spin=self.spin, nthreads=nthreads)
-
-        return a_out
-
-    @property
-    def blm(self):
-        """Returns the spherical harmonic coefficients of the beam associated
-           with the detector, plus lmax and mmax. One component for
-           temperature-only, three components for polarization."""
-        raise NotImplementedError()
-
-    @property
-    def noiseProperties(self):
-        """Returns parameters describing the noise properties of the detector. TBD"""
-        raise NotImplementedError()
-
-    @property
-    def bandShape(self):
-        """Returns some description of the band's frequency response. TBD."""
-        raise NotImplementedError()
