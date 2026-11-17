@@ -464,7 +464,7 @@ class ThermalDust(DiffuseComponent):
     """Thermal dust, a modified blackbody with emissivity index `beta` and temperature `T`."""
 
     # `T` is the dust temperature in K, and `nu_ref` the reference frequency in GHz.
-    DEFAULTS = {**DiffuseComponent.DEFAULTS, "shortname": "term-dust", "beta": None, "T": None,
+    DEFAULTS = {**DiffuseComponent.DEFAULTS, "shortname": "dust", "beta": None, "T": None,
                 "nu_ref": None}
     sed_param_names = ("beta", "T", "nu_ref")
 
