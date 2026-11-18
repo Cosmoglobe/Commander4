@@ -85,8 +85,8 @@ compsep:
       # `bounds` are hard limits (a proposal outside is rejected). `prior_mean` and `prior_rms`
       # are an optional Gaussian prior (omit both for a flat prior).
       beta:
-        ThermalDust: {proposal_sigma: 0.01, bounds: [1.0, 2.5], prior_mean: 1.56, prior_rms: 0.1}
-        Synchrotron: {proposal_sigma: 0.01, bounds: [-4.0, -2.0]}
+        dust: {proposal_sigma: 0.01, bounds: [1.0, 2.5], prior_mean: 1.56, prior_rms: 0.1}
+        sync: {proposal_sigma: 0.01, bounds: [-4.0, -2.0]}
       update_amplitude_groups: [sample_amps_CG]
       numstep: 1
 
@@ -131,44 +131,40 @@ compsep:
 # COMPONENTS
 # ----------------------------------------
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      shortname: "cmb"
       Cl_prior_amplitude: null  # No amplitude prior.
       lmax: 2048
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      shortname: "dust"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: 1.56
       T: 20
       nu_ref: 545.0
       lmax: 4096
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      shortname: "sync"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: -3.1
       nu_ref: 30
       lmax: 1024
 
-  FreeFree:
+  ff:
     enabled: false
     component_class: "FreeFree"
     params:
       polarization: "I"
-      shortname: "ff"
       Cl_prior_amplitude: null  # No amplitude prior.
       T: 7000
       nu_ref: 40

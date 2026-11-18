@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 POL_CHANNELS = {"I": ("I",), "QU": ("Q", "U"), "IQU": ("I", "Q", "U")}
 
 
-def _pol_row_indices(data: NDArray, pol: str, shortname: str, source_path: str):
+def _pol_row_indices(data: NDArray, pol: str, comp_name: str, source_path: str):
     """Row indices in a stored (npol, ...) array for `pol`'s Stokes channels.
 
     The stored polarization mode is inferred from the number of rows (1=I, 2=QU, 3=IQU). Returns
@@ -39,7 +39,7 @@ def _pol_row_indices(data: NDArray, pol: str, shortname: str, source_path: str):
     stored_pol = {1: "I", 2: "QU", 3: "IQU"}.get(nrows)
     if stored_pol is None:
         raise ValueError(
-            f"Initial data for component {shortname!r} in {source_path!r} has an unexpected first "
+            f"Initial data for component {comp_name!r} in {source_path!r} has an unexpected first "
             f"dimension ({nrows}); expected 1 (I), 2 (QU) or 3 (IQU).")
     row_of = {channel: row for row, channel in enumerate(POL_CHANNELS[stored_pol])}
     if any(channel not in row_of for channel in POL_CHANNELS[pol]):
@@ -58,7 +58,7 @@ def _read_view_alms_from_fits(comp: DiffuseComponent, fits_path: str) -> NDArray
     are sky maps living in the component's own amplitude space and must be read identically.
     """
     sky_map = np.atleast_2d(hp.read_map(fits_path, field=None))
-    rows = _pol_row_indices(sky_map, comp.pol, comp.shortname, fits_path)
+    rows = _pol_row_indices(sky_map, comp.pol, comp.comp_name, fits_path)
     if rows is None:
         logger.debug(f"Map {fits_path!r} has no {comp.pol!r} data for component "
                      f"{comp.comp_name!r}; leaving those alms at zero.")

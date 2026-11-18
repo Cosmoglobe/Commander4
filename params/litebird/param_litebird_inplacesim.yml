@@ -144,44 +144,40 @@ compsep:
 # COMPONENTS
 # ----------------------------------------
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      shortname: "cmb"
       Cl_prior_amplitude: null  # No amplitude prior.
       lmax: 1024
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU" #I Q U
-      shortname: "dust"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: 1.56
       T: 20
       nu_ref: 545
       lmax: 1024
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU" #I Q U
-      shortname: "sync"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: -3.1
       nu_ref: 30
       lmax: 1024
 
-  FreeFree:
+  ff:
     enabled: false
     component_class: "FreeFree"
     params:
       polarization: "I"
-      shortname: "ff"
       Cl_prior_amplitude: null  # No amplitude prior.
       T: 7000
       nu_ref: 40

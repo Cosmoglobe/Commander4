@@ -150,21 +150,19 @@ compsep:
 # COMPONENTS
 # ----------------------------------------
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      shortname: "cmb"
       Cl_prior_amplitude: null  # No amplitude prior.
       lmax: 1024
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      shortname: "dust"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: 1.56
       T: 20
@@ -172,45 +170,41 @@ components:
       units: "uK_RJ"
       lmax: 1024
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      shortname: "sync"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: -3.1
       nu_ref: [0.408, 30]  # [I, QU]
       units: "uK_RJ"
       lmax: 512
 
-  FreeFree:
+  ff:
     enabled: true
     component_class: "FreeFree"
     params:
       polarization: "I"
-      shortname: "ff"
       Cl_prior_amplitude: null  # No amplitude prior.
       T: 7000
       nu_ref: 40
       units: "uK_RJ"
       lmax: 512
 
-  RadioSources:
+  radsources:
     enabled: False
     component_class: "RadioSources"
     params:
       polarization: "I"
-      shortname: "radsources"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
       nu_0: 30.0  # Ghz
 
-  SpinningDust:
+  sdust:
     enabled: False
     component_class: "SpinningDust"
     params:
       polarization: "I"
-      shortname: "sdust"
       Cl_prior_amplitude: null  # No amplitude prior.
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
       nu_peak: 25.3  # Ghz

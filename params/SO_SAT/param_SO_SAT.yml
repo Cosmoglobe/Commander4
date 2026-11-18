@@ -242,12 +242,11 @@ compsep:
 # COMPONENTS
 # ----------------------------------------
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      shortname: "cmb"
       init_from: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_100-1_npipe_02048_fullres_full_T.fits"
       units: "uK_CMB"
       # C(l) prior, C3-equivalent 'power_law_gauss' defined in D_l space (see P_Cl_prior):
@@ -264,12 +263,11 @@ components:
       Cl_prior_FWHM: 2.0  # arcmin; optional Gaussian rolloff of D_l, 0 = off
       lmax: 1500
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      shortname: "dust"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1.fits"
       # BP8.1 dust ('gauss' Cl model): T roof 1e7 uK_RJ^2 at BP's 545 GHz reference, scaled by the
       # MBB SED^2 (~1.6) to this file's 857 GHz reference; QU 5e2 at 353 GHz (same reference).
@@ -282,12 +280,11 @@ components:
       units: "uK_RJ"
       lmax: 1500
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      shortname: "sync"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1.fits"
       # BP8.1 synch ('gauss' Cl model): the T roof is effectively off (1e20; the Haslam-scale
       # signal at 408 MHz is only ~1e14 uK_RJ^2), so in T just the 60' rolloff acts; QU roof
@@ -300,12 +297,11 @@ components:
       units: "uK_RJ"
       lmax: 1000
 
-  FreeFree:
+  ff:
     enabled: true
     component_class: "FreeFree"
     params:
       polarization: "I"  # Free-free emission is unpolarized.
-      shortname: "ff"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_ff_amp_BP8.1_v1.fits"
       # BP8.1 free-free ('power_law_gauss' Cl model): rising D_l ~ l^2 roof (1e3 at l=50, 40 GHz)
       # with a 30' Gaussian rolloff.

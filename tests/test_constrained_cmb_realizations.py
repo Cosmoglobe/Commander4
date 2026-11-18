@@ -136,8 +136,8 @@ def test_cli_uses_component_lmax(
     """Carry the component cutoff and optional mask taper through chain loading and sampling."""
     monkeypatch.setattr(cr, "nthreads", 1)
     params = {
-        "components": {"CMB": {"enabled": True, "component_class": "CMB", "params": {
-            "polarization": "I", "shortname": "cmb", "lmax": lmax,
+        "components": {"cmb": {"enabled": True, "component_class": "CMB", "params": {
+            "polarization": "I", "lmax": lmax,
             "Cl_prior_amplitude": None,
         }}},
         "compsep": {"double_precision": True},
@@ -434,12 +434,12 @@ def test_cli_reuses_setup_across_iterations_and_realizations(
         bands[f"Band{band}"] = {"freq": 70.0 + 30.0*band}
     params = {
         "components": {
-            "CMB": {"enabled": True, "component_class": "CMB", "params": {
-                "polarization": "I", "shortname": "cmb", "lmax": lmax,
+            "cmb": {"enabled": True, "component_class": "CMB", "params": {
+                "polarization": "I", "lmax": lmax,
                 "Cl_prior_amplitude": None,
             }},
-            "Dust": {"enabled": True, "component_class": "ThermalDust", "params": {
-                "polarization": "I", "shortname": "dust", "lmax": lmax,
+            "dust": {"enabled": True, "component_class": "ThermalDust", "params": {
+                "polarization": "I", "lmax": lmax,
                 "Cl_prior_amplitude": None,
                 "nu_ref": 100.0, "beta": 1.54, "T": 20.0,
             }},
@@ -591,12 +591,12 @@ def test_cli_uses_thermodynamic_units_throughout(
     cmb_ref = 217.0  # A reference far from the RJ limit also exposes spectrum-unit errors.
     params = {
         "components": {
-            "CMB": {"enabled": True, "component_class": "CMB", "params": {
-                "polarization": "I", "shortname": "cmb", "lmax": lmax, "nu_ref": cmb_ref,
+            "cmb": {"enabled": True, "component_class": "CMB", "params": {
+                "polarization": "I", "lmax": lmax, "nu_ref": cmb_ref,
                 "Cl_prior_amplitude": None,
             }},
-            "Dust": {"enabled": True, "component_class": "ThermalDust", "params": {
-                "polarization": "I", "shortname": "dust", "lmax": lmax,
+            "dust": {"enabled": True, "component_class": "ThermalDust", "params": {
+                "polarization": "I", "lmax": lmax,
                 "nu_ref": 353.0, "beta": 1.54, "T": 20.0,
                 "Cl_prior_amplitude": None,
             }},
@@ -703,13 +703,13 @@ def saved_component_sample(request: pytest.FixtureRequest, tmp_path: Path) -> tu
     """Write a real chain with SEDs different from the configuration and smoothed amplitudes."""
     lmax = 8
     components = {}
-    for name, shortname, component_class, sed in [
-        ("CMB", "cmb", "CMB", {"nu_ref": 1.0}),
-        ("Dust", "dust", "ThermalDust", {"nu_ref": 353.0, "beta": 1.54, "T": 20.0}),
-        ("Sync", "sync", "Synchrotron", {"nu_ref": 30.0, "beta": -3.1}),
+    for name, component_class, sed in [
+        ("cmb", "CMB", {"nu_ref": 1.0}),
+        ("dust", "ThermalDust", {"nu_ref": 353.0, "beta": 1.54, "T": 20.0}),
+        ("sync", "Synchrotron", {"nu_ref": 30.0, "beta": -3.1}),
     ]:
         components[name] = {"enabled": True, "component_class": component_class, "params": {
-            "polarization": request.param, "shortname": shortname, "lmax": lmax,
+            "polarization": request.param, "lmax": lmax,
             "Cl_prior_amplitude": None, **sed,
         }}
     config = {"components": components, "compsep": {"double_precision": True},
@@ -726,14 +726,14 @@ def saved_component_sample(request: pytest.FixtureRequest, tmp_path: Path) -> tu
         alm[hp.Alm.getidx(lmax, 4, 0)] = 10.0
         amp_fwhm = np.radians(6.0)
         if comp.pol == "I":
-            intrinsic[comp.shortname] = alm.copy()
+            intrinsic[comp.comp_name] = alm.copy()
         else:
             alm *= 3.0  # Distinct QU amplitudes expose accidental row selection.
         comp.amps[:] = hp.almxfl(alm, hp.gauss_beam(amp_fwhm, lmax=lmax))
         comp.amp_fwhm_rad = amp_fwhm
-        if comp.shortname == "cmb":
+        if comp.comp_name == "cmb":
             comp.nu_ref = 100.0 if comp.pol == "I" else 217.0
-        elif comp.shortname == "dust":
+        elif comp.comp_name == "dust":
             comp.nu_ref = 70.0 if comp.pol == "I" else 353.0
             comp.beta = 1.9 if comp.pol == "I" else 1.3
             comp.T = 24.0 if comp.pol == "I" else 18.0
@@ -755,9 +755,9 @@ def test_component_restoration_matches_saved_seds_and_beams(saved_component_samp
     for comp in restored:
         assert comp.pol == "I"
         assert comp.amp_fwhm_rad == pytest.approx(np.radians(6.0))
-        for name, value in expected_seds[comp.shortname].items():
+        for name, value in expected_seds[comp.comp_name].items():
             assert getattr(comp, name) == pytest.approx(value)
-        expected_alm = hp.almxfl(intrinsic[comp.shortname], hp.gauss_beam(np.radians(6.0), lmax=8))
+        expected_alm = hp.almxfl(intrinsic[comp.comp_name], hp.gauss_beam(np.radians(6.0), lmax=8))
         np.testing.assert_allclose(comp.amps[0], expected_alm, atol=1e-12)
 
 

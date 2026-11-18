@@ -382,13 +382,13 @@ compsep:
       # accepted or rejected together. The start value of a beta is `beta` in the
       # component's own block. A beta that no group names stays fixed at that value.
       beta:
-        ThermalDust:
+        dust:
           proposal_sigma: 0.01    # Step length in beta of the Gaussian proposal. Required.
           bounds: [1.0, 2.5]      # Hard limits [lowest, highest]. A proposal outside them
                                   # is rejected without a solve. Absent = no limits.
           prior_mean: 1.56        # Mean and rms of a Gaussian prior on beta. Absent = a
           prior_rms: 0.1          # flat prior inside the hard limits.
-        Synchrotron: {proposal_sigma: 0.01, bounds: [-4.0, -2.0]}
+        sync: {proposal_sigma: 0.01, bounds: [-4.0, -2.0]}
       update_amplitude_groups: [sample_amps_CG]
                               # Amplitude groups re-solved inside each accept/reject.
                               # Empty list = propose indices against fixed amplitudes.
@@ -495,15 +495,17 @@ compsep:
 # Diffuse component amplitudes are stored internally as spherical-harmonic coefficients in
 # uK_RJ referenced to `nu_ref`; each component's `get_sed(nu)` is the dimensionless
 # Rayleigh-Jeans ratio between nu and nu_ref.
+#
+# The key of each block is the component's name: the sampling groups refer to it (`comps`,
+# `beta`), and the chain file stores the component under `comps/<name>/`. Keep it short.
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"    # Selects the class, and thereby the SED. Implemented: CMB,
                               # ThermalDust, Synchrotron, FreeFree, SpinningDust,
                               # RadioSources.
     params:
       polarization: "IQU"     # Which Stokes parameters this component is defined in.
-      shortname: "cmb"        # Short name, used as the group key in the chain file.
       lmax: 1024              # Required. Band limit of this component's alms. Keep it at
                               # or below the largest band `lmax` in the run: a multipole
                               # above every band's limit meets no data at all, and a
@@ -553,12 +555,11 @@ components:
       # units: "uK_CMB"       # C3's COMP_UNIT: the unit of that init file, of the prior
                               # mean map and of Cl_prior_amplitude. Default: uK_RJ.
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      shortname: "dust"
       lmax: 1024
       Cl_prior_amplitude: null   # No C(l) prior for this component.
 
@@ -576,12 +577,11 @@ components:
       # map instead of to zero.
       # amp_prior_mean_map: "/path/to/dust_prior_mean.fits"
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      shortname: "sync"
       lmax: 512
       Cl_prior_amplitude: null
       beta: -3.1              # Power-law index in RJ units.
@@ -589,13 +589,12 @@ components:
                               # 30 GHz where Haslam has no polarization information.
       units: "uK_RJ"
 
-  FreeFree:
+  ff:
     enabled: true
     component_class: "FreeFree"
     params:
       polarization: "I"       # Free-free emission is essentially unpolarized, so solving
                               # it in QU would add a component the data cannot constrain.
-      shortname: "ff"
       lmax: 512
       Cl_prior_amplitude: null
       T: 7000                 # [K] Electron temperature.
@@ -603,12 +602,11 @@ components:
       units: "uK_RJ"
 
   # Anomalous microwave emission, from a tabulated spinning-dust spectrum.
-  SpinningDust:
+  sdust:
     enabled: False
     component_class: "SpinningDust"
     params:
       polarization: "I"
-      shortname: "sdust"
       lmax: 1000
       Cl_prior_amplitude: null
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
@@ -620,12 +618,11 @@ components:
   # Point sources. Not a diffuse component: it carries per-source amplitudes rather than
   # alms, and is excluded from both solvers' preconditioners. Only partially supported --
   # there is no amplitude, position or spectral-index sampling for sources yet.
-  RadioSources:
+  radsources:
     enabled: False
     component_class: "RadioSources"
     params:
       polarization: "I"
-      shortname: "radsources"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
                               # The source catalogue: position and flux per source.
       nu_0: 30.0              # [GHz] Reference frequency of the catalogue fluxes.

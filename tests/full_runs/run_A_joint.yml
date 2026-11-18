@@ -105,7 +105,7 @@ compsep:
   cg_sampling_groups:
     cmb_amps:
       enabled: true
-      comps: [CMB]
+      comps: [cmb]
       bands: "all"
       optimize: false
       max_iter: 100
@@ -114,7 +114,7 @@ compsep:
       preconditioner: JointPreconditioner
     foreground_amps:
       enabled: true
-      comps: [ThermalDust, Synchrotron]
+      comps: [dust, sync]
       bands: "all"
       optimize: true
       max_iter: 100
@@ -125,7 +125,7 @@ compsep:
     dust_beta:
       enabled: true
       beta:
-        ThermalDust: {proposal_sigma: 0.02, bounds: [1.0, 2.5], prior_mean: 1.55, prior_rms: 0.2}
+        dust: {proposal_sigma: 0.02, bounds: [1.0, 2.5], prior_mean: 1.55, prior_rms: 0.2}
       update_amplitude_groups: [foreground_amps]
       numstep: 1
   bands:
@@ -158,24 +158,22 @@ compsep:
 # Every component starts at the simulated truth (simgen's input amplitude maps), so the gain and
 # noise steps see a sensible sky from iteration 1.
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      shortname: "cmb"
       lmax: 47
       Cl_prior_amplitude: [1.0e+6, 1.0e+4]
       Cl_prior_beta: [0.0, -0.5]
       Cl_prior_l_pivot: 20
-      init_from: "sim_debug/truth_CMB.fits"
+      init_from: "sim_debug/truth_cmb.fits"
       units: "uK_RJ"
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      shortname: "dust"
       lmax: 47
       Cl_prior_amplitude: [1.0e+8, 1.0e+6]
       Cl_prior_l_pivot: 20
@@ -183,19 +181,18 @@ components:
       T: 20
       nu_ref: 353
       units: "uK_RJ"
-      init_from: "sim_debug/truth_ThermalDust.fits"
-  Synchrotron:
+      init_from: "sim_debug/truth_dust.fits"
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      shortname: "sync"
       lmax: 47
       Cl_prior_amplitude: null
       beta: -3.1
       nu_ref: 30
       units: "uK_RJ"
-      init_from: "sim_debug/truth_Synchrotron.fits"
+      init_from: "sim_debug/truth_sync.fits"
 
 experiments:
   SimSat:

@@ -35,7 +35,6 @@ def _make_component_cfg(polarization: str = "IQU", lmax: int = 2) -> Bunch:
         params=Bunch(
             lmax=lmax,
             polarization=polarization,
-            shortname="cmb",
             Cl_prior_amplitude=None,  # no prior
         ),
     )
@@ -56,7 +55,6 @@ def _make_multi_comp_list() -> CompList:
         params=Bunch(
             lmax=2,
             polarization="IQU",
-            shortname="dust",
             Cl_prior_amplitude=None,  # no prior
         ),
     )
@@ -66,7 +64,6 @@ def _make_multi_comp_list() -> CompList:
         params=Bunch(
             lmax=2,
             polarization="I",
-            shortname="ff",
             Cl_prior_amplitude=None,  # no prior
         ),
     )
@@ -222,14 +219,14 @@ def _make_spectral_comp_list() -> CompList:
         enabled=True,
         component_class="Synchrotron",
         params=Bunch(
-            lmax=2, polarization="IQU", shortname="sync", 
+            lmax=2, polarization="IQU", 
             Cl_prior_amplitude=None, beta=-3.1, nu_ref=30.0),
     )
     dust = Bunch(
         enabled=True,
         component_class="ThermalDust",
         params=Bunch(
-            lmax=2, polarization="IQU", shortname="dust", 
+            lmax=2, polarization="IQU", 
             Cl_prior_amplitude=None, beta=1.56, T=20.0, nu_ref=545.0),
     )
     return CompList.init_from_params(Bunch(

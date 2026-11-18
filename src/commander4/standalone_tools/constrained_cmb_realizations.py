@@ -435,7 +435,7 @@ def _build_intensity_components(params: Bunch, compsep_path: str) -> list[Diffus
     intensity_comps = comp_list.split_for_pol("I")
     with h5py.File(compsep_path, "r") as handle:
         for comp in intensity_comps:
-            group_path = f"comps/{comp.shortname}"
+            group_path = f"comps/{comp.comp_name}"
             required = ["alms", "amp_fwhm_arcmin"]
             required += [f"sed/{param_name}" for param_name in comp.sed_param_names]
             for name in required:

@@ -75,7 +75,7 @@ compsep:
   cg_sampling_groups:
     sample_amps_CG:
       enabled: true
-      comps: [CMB, Synchrotron, ThermalDust]
+      comps: [cmb, sync, dust]
       bands: [Band30GHz, Band44GHz, Band70GHz, Band100GHz, Band217GHz, Band353GHz]
       optimize: false   # was compsep.sample_amplitudes: true
       max_iter: 300
@@ -116,24 +116,22 @@ compsep:
 # ----------------------------------------
 # All spectral parameters equal the simulated truth.
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      shortname: "cmb"
       Cl_prior_amplitude: [1.0e+6, 1.0e+4]  # D_l at l_pivot [I, QU]; uK_RJ^2 (~uK_CMB^2 at 1 GHz)
       Cl_prior_beta: [0.0, -0.5]
       Cl_prior_l_pivot: 20
       units: "uK_RJ"
       lmax: 191
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      shortname: "dust"
       Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
       Cl_prior_l_pivot: 50
       beta: 1.54
@@ -142,12 +140,11 @@ components:
       units: "uK_RJ"
       lmax: 191
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      shortname: "sync"
       Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
       Cl_prior_l_pivot: 50
       Cl_prior_FWHM: 30.0                   # arcmin

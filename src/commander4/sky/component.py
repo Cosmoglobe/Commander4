@@ -33,20 +33,19 @@ class Component:
     # A default of None accepts any value. A default written as a pair [I, QU] marks a setting
     # that is either one value for both polarization views, or such a pair.
     DEFAULTS = {"polarization": None,  # "I", "QU" or "IQU". Must be set.
-                "shortname": "comp",   # The name of the component in the chain file.
                 "init_from": None}     # A chain file or a sky map to start from.
 
     # The polarization views ("I", "QU") that this kind of component can have.
     legal_pols: tuple[str, ...] = ("I", "QU")
 
     # Names of the instance attributes defining this component's SED. The compsep chain writer
-    # stores each under `comps/<shortname>/sed/`, so a chain describes its own SED without the
+    # stores each under `comps/<comp_name>/sed/`, so a chain describes its own SED without the
     # parameter file. Fixed parameters (`nu_ref`, `T`) are listed alongside sampled ones, since
     # which are sampled is a property of the run rather than of the component.
     sed_param_names: tuple[str, ...] = ()
 
     # Names of the instance attributes defining this component's C(l) prior, stored under
-    # `comps/<shortname>/Cl_prior/`. Commander3's `Dl_amp`/`Dl_beta`/`Dl_theta` analogue: the model
+    # `comps/<comp_name>/Cl_prior/`. Commander3's `Dl_amp`/`Dl_beta`/`Dl_theta` analogue: the model
     # parameters, not the evaluated spectrum. Empty for components that carry no such prior.
     Cl_prior_param_names: tuple[str, ...] = ()
 
@@ -60,7 +59,8 @@ class Component:
 
         Args:
             params: The full parameter file.
-            comp_name: The name of the component's block under `components`.
+            comp_name: The name of the component's block under `components`. It is also the name
+                of the component's group in the chain file.
             pol: The view to make, "I" or "QU". A component defined for IQU has both.
         """
         if pol not in self.legal_pols:
@@ -69,7 +69,6 @@ class Component:
         self.comp_name = comp_name
         self.pol = pol
         self.cfg = read_settings(params, "params", (f"components.{comp_name}",), self.DEFAULTS)
-        self.shortname = self.cfg.shortname
         # `init_from: null` and a left-out `init_from` mean different things (see
         # `load_initial_state`), and `self.cfg` holds None for both.
         self.has_init_from = "init_from" in params.components[comp_name].params
@@ -140,13 +139,12 @@ class Component:
         return None
 
     def write_chain(self, group: h5py.Group, band_frequencies: dict[str, float]) -> None:
-        """Write this component's sample into its chain group, `comps/<shortname>/`.
+        """Write this component's sample into its chain group, `comps/<comp_name>/`.
 
         Writes what every component shares; subclasses add their amplitudes. `band_frequencies`
         maps each band name to its centre frequency in GHz, for the per-band mixing coefficients.
         """
         group["comp_name"] = self.comp_name
-        group["shortname"] = self.shortname
         # The beam these amplitudes carry, in arcmin. This is 0.0 if the CG compsep was used,
         # as it solves for the intrinsic sky. However, if the per-pix compsep solver was used,
         # the sky components are smoothed to this resolution.
@@ -212,11 +210,10 @@ class Component:
             self.read_amps_from_map(source)
         elif str(source).lower().endswith((".h5", ".hd5")):
             with h5py.File(source, "r") as file:
-                group_path = f"comps/{self.shortname}"
+                group_path = f"comps/{self.comp_name}"
                 if group_path not in file:
-                    logger.error(f"Component {self.comp_name!r} (shortname {self.shortname!r}) "
-                                 f"not found in {source!r}; keeping its parameter-file "
-                                 "initialization.")
+                    logger.error(f"Component {self.comp_name!r} not found in {source!r}; keeping "
+                                 "its parameter-file initialization.")
                     return
                 self.read_chain(file[group_path], restore_beta)
         else:

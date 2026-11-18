@@ -18,15 +18,14 @@ NU_REF = 100.0
 
 def _simgen_sources(beta=0.0):
     cfg = Bunch(_name="PointSources", component_class="GriddedPointSources", enabled=True,
-                params=Bunch(polarization="I", shortname="ptsrc", amplitude=AMPLITUDE,
+                params=Bunch(polarization="I", amplitude=AMPLITUDE,
                              nlon=12, nlat=6, lat_range_deg=[-70.0, 70.0], beta=beta,
                              nu_ref=NU_REF))
     return GriddedPointSources(cfg, Bunch(nside=NSIDE, units="uK_RJ", double_precision=True))
 
 
 def _radio_sources(catalogue_path):
-    cfg = Bunch(polarization="I", shortname="radsources",
-                template_path=str(catalogue_path), nu_0=NU_REF)
+    cfg = Bunch(polarization="I", template_path=str(catalogue_path), nu_0=NU_REF)
     params = Bunch(components=Bunch(RadioSources=Bunch(params=cfg)),
                    compsep=Bunch(double_precision=True))
     return RadioSources(params, "RadioSources", "I")

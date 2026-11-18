@@ -69,8 +69,8 @@ compsep:
     sample_amps_perpix:
       enabled: true
 
-      # comps: [CMB, Synchrotron, ThermalDust, FreeFree]
-      # comps: [CMB, Synchrotron, ThermalDust]
+      # comps: [cmb, sync, dust, ff]
+      # comps: [cmb, sync, dust]
       # bands: [Planck30GHz, Haslam408MHz, WMAPKa, WMAPQ1, WMAPQ2, WMAPV1, WMAPV2, Planck857GHz, Planck353GHz]
 
   # MCMC sampling groups: Metropolis-Hastings over the spectral indices of the selected
@@ -84,8 +84,8 @@ compsep:
       # `bounds` are hard limits (a proposal outside is rejected). `prior_mean` and `prior_rms`
       # are an optional Gaussian prior (omit both for a flat prior).
       beta:
-        ThermalDust: {proposal_sigma: 0.02, bounds: [1.0, 2.5], prior_mean: 1.56, prior_rms: 0.1}
-        Synchrotron: {proposal_sigma: 0.01, bounds: [-4.0, -2.0]}
+        dust: {proposal_sigma: 0.02, bounds: [1.0, 2.5], prior_mean: 1.56, prior_rms: 0.1}
+        sync: {proposal_sigma: 0.01, bounds: [-4.0, -2.0]}
       update_amplitude_groups: [sample_amps_perpix]
       numstep: 1
 
@@ -130,12 +130,11 @@ compsep:
 # COMPONENTS
 # ----------------------------------------
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      shortname: "cmb"
       Cl_prior_amplitude: null  # No amplitude prior.
       # Optional mean mu of the Gaussian amplitude prior a ~ N(mu, S), as a FITS sky map (C3's
       # COMP_AMP_PRIOR_MAP). Read once at startup and converted exactly like an `init_from` map --
@@ -144,55 +143,50 @@ components:
       # amp_prior_mean_map: "/path/to/cmb_prior_mean.fits"
       lmax: 1024
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      shortname: "dust"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: 1.56
       T: 20
       nu_ref: 545
       lmax: 1024
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      shortname: "sync"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: -3.1
       nu_ref: 30
       lmax: 512
 
-  FreeFree:
+  ff:
     enabled: true
     component_class: "FreeFree"
     params:
       polarization: "I"
-      shortname: "ff"
       Cl_prior_amplitude: null  # No amplitude prior.
       T: 7000
       nu_ref: 40
       lmax: 512
 
-  RadioSources:
+  radsources:
     enabled: False
     component_class: "RadioSources"
     params:
       polarization: "I"
-      shortname: "radsources"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
       nu_0: 30.0  # Ghz
 
-  SpinningDust:
+  sdust:
     enabled: False
     component_class: "SpinningDust"
     params:
       polarization: "I"
-      shortname: "sdust"
       Cl_prior_amplitude: null  # No amplitude prior.
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
       nu_peak: 25.3  # Ghz

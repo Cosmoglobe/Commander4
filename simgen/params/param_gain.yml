@@ -38,33 +38,30 @@ general:
 # determined (3 bands, 3 components) component separation, so `rel_gain`'s `full_sky` calibrator is
 # a sky model that actually fits the data.
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      shortname: "cmb"
       lmax: 191
       solar_dipole: true     # The static l=1 dipole; the *orbital* dipole comes from the pointing.
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      shortname: "dust"
       beta: 1.54
       T: 20
       nu_ref: 353            # GHz; the PySM template is realized here and scaled by the C4 MBB SED.
       lmax: 191
       template: {source: "pysm3", preset: "d0"}
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      shortname: "sync"
       beta: -3.1
       nu_ref: 30
       lmax: 191

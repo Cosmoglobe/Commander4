@@ -36,9 +36,9 @@ def _make_setup(start_beta: float = TRUE_BETA, **beta_settings):
     test names the per-pixel amplitude group "amps" in `group.update_amplitude_groups`.
     """
     sync = Bunch(enabled=True, component_class="Synchrotron",
-                 params=Bunch(lmax=LMAX, polarization="IQU", shortname="sync", nu_ref=30.0,
+                 params=Bunch(lmax=LMAX, polarization="IQU", nu_ref=30.0,
                               Cl_prior_amplitude=None, beta=TRUE_BETA))
-    comp_list = CompList.init_from_params(Bunch(components=Bunch(Synchrotron=sync),
+    comp_list = CompList.init_from_params(Bunch(components=Bunch(sync=sync),
                                                 compsep=Bunch(double_precision=True)))
     comp_list[0].amps[:] = 1.0  # The I view. Real alms, so they are valid at m = 0 too.
 
@@ -52,13 +52,13 @@ def _make_setup(start_beta: float = TRUE_BETA, **beta_settings):
     mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, is_master=True),
                      band=Bunch(name="Band60", identifier="Band60_I", pol="I"))
     # The one rank solves the I view; no rank holds a QU band.
-    amps = Bunch(name="amps", comps=["Synchrotron"], bands=["Band60"],
+    amps = Bunch(name="amps", comps=["sync"], bands=["Band60"],
                  solver_ranks={"I": [0], "QU": []}, solver_comm=MPI.COMM_SELF)
     cfg = Bunch(cg_sampling_groups={}, per_pixel_sampling_groups={"amps": amps},
                 amplitude_groups={"amps": amps}, double_precision=True, num_threads=1)
     settings = Bunch(proposal_sigma=0.1, bounds=None, prior_mean=None, prior_rms=None)
     settings.update(beta_settings)
-    group = Bunch(name="betas", beta={"Synchrotron": settings}, update_amplitude_groups=[],
+    group = Bunch(name="betas", beta={"sync": settings}, update_amplitude_groups=[],
                   numstep=1, chisq_bands=["Band60"], chisq_pixels=slice(None))
     return mpi_info, cfg, group, band_map, comp_list
 

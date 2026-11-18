@@ -133,20 +133,19 @@ maps/cov           (6,npix)    # (opt) the 6 unique elements of P^T N^-1 P (II,I
 ```
 
 #### `chains_compsep/chain<CC>_iter<NNNN>.h5`
-One file per iteration holding every component, plus how well they fit the band maps. `<sn>` is a component's `shortname`, `<view>` a `<band>_<I|QU>` pair.
+One file per iteration holding every component, plus how well they fit the band maps. `<name>` is a component's key under `components` in the parameter file, `<view>` a `<band>_<I|QU>` pair.
 ```YAML
-comps/<sn>/alms          (npol,nalm)  # complex amplitudes in uK_RJ at nu_ref (T/E/B rows)
-comps/<sn>/source_amps   (1,nsrc)     # point-source components carry this instead of alms
-comps/<sn>/sigma_l       (npol,lmax+1)  # realized power spectrum of those alms
-comps/<sn>/lmax          scalar       # band limit of the alms
-comps/<sn>/comp_name     str          # class name, e.g. ThermalDust
-comps/<sn>/shortname     str          # the <sn> used above
-comps/<sn>/defined_pol   str          # polarization the component is defined in
-comps/<sn>/eval_pol      str          # polarization it was evaluated in
-comps/<sn>/amp_fwhm_arcmin  scalar    # beam already in the amplitudes; 0 for the CG solver
-comps/<sn>/sed/<param>                # each SED parameter, including sampled ones (beta)
-comps/<sn>/Cl_prior/<param>           # the C(l) prior's model parameters; absent if the prior is off
-comps/<sn>/mixing/<band> scalar       # this component's SED evaluated at that band
+comps/<name>/alms          (npol,nalm)  # complex amplitudes in uK_RJ at nu_ref (T/E/B rows)
+comps/<name>/source_amps   (1,nsrc)     # point-source components carry this instead of alms
+comps/<name>/sigma_l       (npol,lmax+1)  # realized power spectrum of those alms
+comps/<name>/lmax          scalar       # band limit of the alms
+comps/<name>/comp_name     str          # the <name> used above
+comps/<name>/defined_pol   str          # polarization the component is defined in
+comps/<name>/eval_pol      str          # polarization it was evaluated in
+comps/<name>/amp_fwhm_arcmin  scalar    # beam already in the amplitudes; 0 for the CG solver
+comps/<name>/sed/<param>                # each SED parameter, including sampled ones (beta)
+comps/<name>/Cl_prior/<param>           # the C(l) prior's model parameters; absent if the prior is off
+comps/<name>/mixing/<band> scalar       # this component's SED evaluated at that band
 
 chi2/total               scalar       # all-band sum of the whitened residual squared
 chi2/ndof                scalar       # observed pixels summed over all bands and polarizations

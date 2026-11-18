@@ -220,7 +220,7 @@ class CompSepSolver:
                     for ipol in range(self.band_map.npol):
                         comp.amps[ipol] += gaussian_random_alm(comp.lmax, comp.lmax,
                                                                self.band_map.spin, 1, rng)[0]
-                logger.debug(f"RHS comp-{comp.shortname}: {np.mean(np.abs(comp.amps)):.2e}")
+                logger.debug(f"RHS comp-{comp.comp_name}: {np.mean(np.abs(comp.amps)):.2e}")
 
         return RHS
 

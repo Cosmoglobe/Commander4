@@ -63,7 +63,6 @@ class CompList:
         stays at its starting value.
         """
         comp_list = []
-        comp_name_of_shortname = {}
         for comp_name in params.components:
             component = params.components[comp_name]
             if not component.enabled:
@@ -77,15 +76,7 @@ class CompList:
                 raise ValueError(f"'components.{comp_name}.params.polarization' must be "
                                  f"one of {list(EXECUTION_POLS)}.")
             for pol in EXECUTION_POLS[component.params.polarization]:
-                comp = component_cls(params, comp_name, pol)
-                comp_list.append(comp)
-            # The chain stores each component under its shortname, so two components cannot
-            # share one.
-            if comp.shortname in comp_name_of_shortname:
-                raise ValueError(f"Shortname {comp.shortname!r} is used for both "
-                                 f"{comp_name_of_shortname[comp.shortname]!r} and "
-                                 f"{comp.comp_name!r}.")
-            comp_name_of_shortname[comp.shortname] = comp.comp_name
+                comp_list.append(component_cls(params, comp_name, pol))
         return cls(comp_list)
 
     # ----- Reorganizing -----
@@ -229,13 +220,13 @@ class CompList:
     # ----- The chain file and MPI -----
 
     def write_chain(self, file: h5py.File, band_frequencies: dict[str, float]) -> None:
-        """Write every component's sample into `file`, as one `comps/<shortname>/` group each.
+        """Write every component's sample into `file`, as one `comps/<comp_name>/` group each.
 
         Split I and QU views are joined first, so each component is written once with all its
         polarization rows. `band_frequencies` maps each band name to its centre frequency in GHz.
         """
         for comp in self.joined():
-            comp.write_chain(file.create_group(f"comps/{comp.shortname}"), band_frequencies)
+            comp.write_chain(file.create_group(f"comps/{comp.comp_name}"), band_frequencies)
 
     def broadcast_pol_views(self, comm: MPI.Comm, *, pol: str, source: int) -> None:
         """Broadcast all execution views of `pol` from `source` to every rank in `comm`.

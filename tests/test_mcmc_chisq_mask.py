@@ -22,7 +22,7 @@ NPIX = 12*NSIDE**2
 def _zero_sky() -> CompList:
     """A single CMB component with zero alms, so the realized sky is identically zero."""
     cmb = Bunch(enabled=True, component_class="CMB",
-                params=Bunch(lmax=2, polarization="I", shortname="cmb",
+                params=Bunch(lmax=2, polarization="I", 
                              Cl_prior_amplitude=None))
     comp_list = CompList.init_from_params(Bunch(components=Bunch(CMB=cmb),
                                                 compsep=Bunch(double_precision=True)))

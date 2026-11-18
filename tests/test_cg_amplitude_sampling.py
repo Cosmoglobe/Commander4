@@ -66,7 +66,7 @@ def _make_solver(band_map: DetectorMap, group: Bunch,
 def _make_comp_list(params: Bunch, Cl_prior_amplitude: float | None = None) -> CompList:
     """A single intensity CMB component, by default without a C_l prior."""
     cmb = Bunch(enabled=True, component_class="CMB",
-                params=Bunch(lmax=LMAX, polarization="I", shortname="cmb",
+                params=Bunch(lmax=LMAX, polarization="I", 
                              Cl_prior_amplitude=Cl_prior_amplitude))
     comp_list = CompList.init_from_params(Bunch(components=Bunch(CMB=cmb),
                                                 compsep=params.compsep))
@@ -362,7 +362,7 @@ class TestPriorMean:
     def _comp_list_with_prior(params: Bunch) -> CompList:
         """A component with a genuinely non-flat C_l prior, so S != I."""
         cmb = Bunch(enabled=True, component_class="CMB",
-                    params=Bunch(lmax=LMAX, polarization="I", shortname="cmb",
+                    params=Bunch(lmax=LMAX, polarization="I", 
                                  Cl_prior_amplitude=1.0e3,
                                  Cl_prior_beta=-2.0, Cl_prior_l_pivot=2))
         comp_list = CompList.init_from_params(Bunch(components=Bunch(CMB=cmb),
@@ -429,7 +429,7 @@ class TestPriorMeanMap:
         array.
         """
         params = _make_params()
-        fields = dict(lmax=LMAX, polarization="I", shortname="cmb", 
+        fields = dict(lmax=LMAX, polarization="I", 
                       Cl_prior_amplitude=1.0)
         if not flat_prior:
             fields.update(Cl_prior_amplitude=1.0e3, Cl_prior_beta=-2.0, Cl_prior_l_pivot=2)

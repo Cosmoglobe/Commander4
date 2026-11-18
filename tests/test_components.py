@@ -25,7 +25,6 @@ def _make_component_cfg(polarization: str = "IQU") -> Bunch:
         params=Bunch(
             lmax=1,
             polarization=polarization,
-            shortname="cmb",
             Cl_prior_amplitude=None,  # no prior
         ),
     )
@@ -40,17 +39,11 @@ def _make_comp_list(polarization: str = "IQU") -> CompList:
     return CompList.init_from_params(_make_params(cmb=_make_component_cfg(polarization)))
 
 
-def _make_named_component_cfg(shortname: str, polarization: str = "IQU") -> Bunch:
-    cfg = _make_component_cfg(polarization)
-    cfg.params.shortname = shortname
-    return cfg
-
-
 def test_init_from_params_builds_all_defined_pol_views() -> None:
     # Construction is independent of the MPI/compsep layout: an IQU component always yields both an
     # I and a QU view, even when zero compsep ranks are configured.
     comp_list = CompList.init_from_params(_make_params(
-        cmb=_make_named_component_cfg("cmb", "IQU"), ff=_make_named_component_cfg("ff", "I")))
+        cmb=_make_component_cfg("IQU"), ff=_make_component_cfg("I")))
 
     assert [(comp.comp_name, comp.pol) for comp in comp_list] == [
         ("cmb", "I"), ("cmb", "QU"), ("ff", "I")]
@@ -60,7 +53,6 @@ def test_complist_split_preserves_names_and_join_restores_logical_component() ->
     comp_list = _make_comp_list("IQU")
 
     assert [comp.comp_name for comp in comp_list] == ["cmb", "cmb"]
-    assert [comp.shortname for comp in comp_list] == ["cmb", "cmb"]
     assert [comp.pol for comp in comp_list] == ["I", "QU"]
 
     comp_list[0].amps[:] = 1.0 + 0.0j
@@ -69,7 +61,6 @@ def test_complist_split_preserves_names_and_join_restores_logical_component() ->
 
     assert len(joined) == 1
     assert joined[0].comp_name == "cmb"
-    assert joined[0].shortname == "cmb"
     assert joined[0].pol == "IQU"
     assert np.all(joined[0].amps[0] == 1.0 + 0.0j)
     assert np.all(joined[0].amps[1:] == 2.0 + 0.0j)
@@ -118,7 +109,7 @@ def test_complist_dot_counts_each_real_number_of_the_alms_once() -> None:
 
 
 def test_point_sources_component_rejects_non_intensity_pol() -> None:
-    params = _make_params(ps=Bunch(params=Bunch(polarization="I", shortname="ps")))
+    params = _make_params(ps=Bunch(params=Bunch(polarization="I")))
 
     with pytest.raises(ValueError, match="a PointSourcesComponent has no 'QU' view"):
         PointSourcesComponent(params, "ps", "QU")
@@ -133,15 +124,6 @@ def test_complist_split_for_pol_returns_requested_execution_view() -> None:
     assert qu_only[0].pol == "QU"
 
 
-def test_init_from_params_rejects_one_shortname_for_two_components() -> None:
-    """The chain stores each component under its shortname."""
-    params = _make_params(cmb=_make_named_component_cfg("same", "IQU"),
-                          dust=_make_named_component_cfg("same", "I"))
-
-    with pytest.raises(ValueError, match="Shortname 'same' is used for both 'cmb' and 'dust'"):
-        CompList.init_from_params(params)
-
-
 def _make_list(*configs: tuple[str, str], **settings) -> CompList:
     """A component list of CMB-class components, one per (name, polarization), with lmax 1.
 
@@ -149,7 +131,7 @@ def _make_list(*configs: tuple[str, str], **settings) -> CompList:
     """
     components = Bunch()
     for name, polarization in configs:
-        components[name] = _make_named_component_cfg(name, polarization)
+        components[name] = _make_component_cfg(polarization)
         for key, value in settings.items():
             components[name].params[key] = value
     return CompList.init_from_params(Bunch(components=components, compsep=_make_compsep()))
@@ -219,7 +201,7 @@ def test_load_initial_state_from_fits_map(tmp_path) -> None:
 
     compsep = _make_compsep()
     compsep.double_precision = True  # So component alms keep the map's precision.
-    cmb = _make_named_component_cfg("cmb", "IQU")
+    cmb = _make_component_cfg("IQU")
     cmb.params.lmax = lmax
     cmb.params.init_from = str(fits_path)
     params = Bunch(compsep=compsep, components=Bunch({"cmb": cmb}))
@@ -285,7 +267,7 @@ def test_init_from_null_keeps_the_parameter_file_start(tmp_path) -> None:
 
 
 def _dust_params(**overrides) -> Bunch:
-    params = Bunch(polarization="IQU", shortname="dust", 
+    params = Bunch(polarization="IQU", 
                    Cl_prior_amplitude=None, lmax=2,
                    beta=1.5, T=20.0, nu_ref=[857.0, 353.0], units="uK_RJ")
     for key, value in overrides.items():
@@ -490,7 +472,7 @@ def test_spinning_dust_converts_its_units_at_nu_0(tmp_path) -> None:
 
     template = tmp_path / "spdust.dat"
     np.savetxt(template, np.column_stack([np.logspace(0, 3, 50), np.ones(50)]))
-    params = Bunch(polarization="I", shortname="ame", 
+    params = Bunch(polarization="I", 
                    Cl_prior_amplitude=100.0, lmax=4, units="uK_CMB", template_path=str(template),
                    nu_peak=30.0, nu_0=22.0)
     ame = SpinningDust(_make_params(ame=Bunch(params=params)), "ame", "I")
@@ -507,7 +489,7 @@ def test_spinning_dust_rejects_a_reference_frequency_outside_its_template(tmp_pa
 
     template = tmp_path / "spdust.dat"
     np.savetxt(template, np.column_stack([np.logspace(0, 2, 50), np.ones(50)]))  # 1-100 GHz.
-    params = Bunch(polarization="I", shortname="ame", lmax=4, template_path=str(template),
+    params = Bunch(polarization="I", lmax=4, template_path=str(template),
                    nu_peak=30.0, nu_0=200.0)
     with pytest.raises(ValueError, match="outside the template range"):
         SpinningDust(_make_params(ame=Bunch(params=params)), "ame", "I")
@@ -539,7 +521,6 @@ def _make_dust_cfg(nu_ref, polarization: str = "IQU") -> Bunch:
         params=Bunch(
             lmax=1,
             polarization=polarization,
-            shortname="dust",
             Cl_prior_amplitude=None,
             beta=1.54,
             T=20.0,

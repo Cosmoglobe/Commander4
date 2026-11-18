@@ -12,6 +12,7 @@ import numpy as np
 from pixell.bunch import Bunch
 
 from commander4.sky.component import Component
+from commander4.sky.diffuse_components import CMB
 
 
 @dataclass
@@ -571,7 +572,7 @@ def plot_combo_maps(
         beam_radians = fwhm_arcmin * np.pi / (180 * 60) if np.isfinite(fwhm_arcmin) else 0.0
         for i, component in enumerate(comp_sublist[:max_component_panels]):
             comp_map = _get_component_map(component, nu, nside, npol, ipol, beam_radians)
-            if "cmb" not in component.shortname:
+            if not isinstance(component, CMB):
                 foreground_subtracted -= comp_map
             else:
                 cmb_subtracted -= comp_map
@@ -841,7 +842,7 @@ def plot_components(
 
         for component in comp_sublist:
             comp_map = _get_component_map(component, nu, nside, npol, ipol, beam_radians)
-            if component.shortname != "cmb":
+            if not isinstance(component, CMB):
                 foreground_subtracted -= comp_map
             residual -= comp_map
             if np.all(comp_map == 0):
@@ -863,7 +864,7 @@ def plot_components(
                     map_comp_out,
                     (
                         f"{detector}_chain{chain:02d}_iter{iteration:04d}_"
-                        f"{pol_names[ipol]}_{component.shortname}.png"
+                        f"{pol_names[ipol]}_{component.comp_name}.png"
                     ),
                 ),
                 bbox_inches="tight",
@@ -882,7 +883,7 @@ def plot_components(
                     dl_out,
                     (
                         f"{detector}_chain{chain:02d}_iter{iteration:04d}_"
-                        f"{pol_names[ipol]}_{component.shortname}_Dl.png"
+                        f"{pol_names[ipol]}_{component.comp_name}_Dl.png"
                     ),
                 ),
                 bbox_inches="tight",
@@ -899,7 +900,7 @@ def plot_components(
                     cl_out,
                     (
                         f"{detector}_chain{chain:02d}_iter{iteration:04d}_"
-                        f"{pol_names[ipol]}_{component.shortname}_Cl.png"
+                        f"{pol_names[ipol]}_{component.comp_name}_Cl.png"
                     ),
                 ),
                 bbox_inches="tight",

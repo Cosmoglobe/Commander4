@@ -67,7 +67,7 @@ def sample_spectral_params(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: 
 
     Returns:
         The acceptance record for the chain file (C3's ``nonlin-samples_*.dat``): the number of
-        steps taken and accepted, and the final beta of each sampled component, by its shortname.
+        steps taken and accepted, and the final beta of each sampled component, by its name.
     """
     compsep = mpi_info.compsep
     # The component objects of each sampled component: its I view and its QU view, which share
@@ -140,7 +140,7 @@ def sample_spectral_params(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: 
     if compsep.is_master:
         logger.info(f"MCMC group {group.name!r} finished: {n_accept}/{group.numstep} proposals "
                     "accepted.")
-    final_betas = {views[name][0].shortname: float(views[name][0].beta) for name in group.beta}
+    final_betas = {name: float(views[name][0].beta) for name in group.beta}
     return {"numstep": group.numstep, "n_accept": n_accept,
             "accept_rate": n_accept/group.numstep if group.numstep > 0 else float("nan"),
             "params": final_betas}

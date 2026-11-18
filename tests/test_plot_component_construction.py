@@ -15,7 +15,6 @@ def _cmb_params() -> Bunch:
         component_class="CMB",
         params=Bunch(
             polarization="IQU",
-            shortname="cmb",
             lmax=11,
             Cl_prior_amplitude=None,
         ),

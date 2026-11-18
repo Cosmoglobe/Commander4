@@ -20,7 +20,6 @@ class PointSourcesComponent(Component):
     Intensity only: point sources are unpolarized in the current model.
     """
 
-    DEFAULTS = {**Component.DEFAULTS, "shortname": "pnt"}
     legal_pols: tuple[str, ...] = ("I",)
 
     def write_chain(self, group: h5py.Group, band_frequencies: dict[str, float]) -> None:
@@ -49,8 +48,7 @@ class RadioSources(PointSourcesComponent):
 
     # `template_path` is the table of the sources, and `nu_0` the reference frequency in GHz
     # (`self.nu_ref`).
-    DEFAULTS = {**PointSourcesComponent.DEFAULTS, "shortname": "rdpnt",
-                "template_path": None, "nu_0": None}
+    DEFAULTS = {**PointSourcesComponent.DEFAULTS, "template_path": None, "nu_0": None}
     amplitude_unit = "mJy"
     # `alpha_arr` is deliberately absent from the SED parameter names: it is one spectral index per
     # source, read from `template_path` alongside the source positions and amplitudes, so it belongs

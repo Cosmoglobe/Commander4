@@ -188,7 +188,7 @@ class DiffuseComponent(Component):
         return 1.0 / self.P_Cl_prior
 
     def __repr__(self):
-        return f"Diffuse Component {self.shortname}, with polarization: {self.pol}"\
+        return f"Diffuse Component {self.comp_name}, with polarization: {self.pol}"\
                 f" (originally defined as {self.cfg.polarization})" \
                 f"\n   lmax = {self.lmax} \n   alms: {self.amps}"
 
@@ -308,7 +308,7 @@ class DiffuseComponent(Component):
         """
         super().read_chain(group, restore_beta)
         stored_alms = group["alms"][()]
-        rows = _pol_row_indices(stored_alms, self.pol, self.shortname, group.file.filename)
+        rows = _pol_row_indices(stored_alms, self.pol, self.comp_name, group.file.filename)
         if rows is None:
             logger.debug(f"{group.file.filename!r} has no {self.pol!r} alms for component "
                          f"{self.comp_name!r}; leaving those alms unchanged.")
@@ -434,7 +434,7 @@ class CMB(DiffuseComponent):
     # `nu_ref`. `get_sed` is therefore the *ratio* of the thermodynamic-to-RJ conversion at `nu`
     # relative to `nu_ref`. The choice of `nu_ref` is arbitrary (the sky is invariant to it); the
     # default of 1 GHz keeps the stored amplitudes ~= uK_CMB.
-    DEFAULTS = {**DiffuseComponent.DEFAULTS, "shortname": "cmb", "nu_ref": [1.0, 1.0]}
+    DEFAULTS = {**DiffuseComponent.DEFAULTS, "nu_ref": [1.0, 1.0]}
     sed_param_names = ("nu_ref",)
 
     def get_sed(self, nu):
@@ -462,8 +462,7 @@ class ThermalDust(DiffuseComponent):
     """Thermal dust, a modified blackbody with emissivity index `beta` and temperature `T`."""
 
     # `T` is the dust temperature in K, and `nu_ref` the reference frequency in GHz.
-    DEFAULTS = {**DiffuseComponent.DEFAULTS, "shortname": "dust", "beta": None, "T": None,
-                "nu_ref": None}
+    DEFAULTS = {**DiffuseComponent.DEFAULTS, "beta": None, "T": None, "nu_ref": None}
     sed_param_names = ("beta", "T", "nu_ref")
 
     def get_sed(self, nu):
@@ -484,7 +483,7 @@ class ThermalDust(DiffuseComponent):
 class Synchrotron(DiffuseComponent):
     """Synchrotron emission, a power law in RJ brightness with spectral index `beta`."""
 
-    DEFAULTS = {**DiffuseComponent.DEFAULTS, "shortname": "sync", "beta": None, "nu_ref": None}
+    DEFAULTS = {**DiffuseComponent.DEFAULTS, "beta": None, "nu_ref": None}
     sed_param_names = ("beta", "nu_ref")
 
     def get_sed(self, nu):
@@ -502,7 +501,7 @@ class FreeFree(DiffuseComponent):
     """Free-free (bremsstrahlung) emission from ionized gas at electron temperature `T`."""
 
     # `T` is the electron temperature in K, and `nu_ref` the reference frequency in GHz.
-    DEFAULTS = {**DiffuseComponent.DEFAULTS, "shortname": "ff", "T": None, "nu_ref": None}
+    DEFAULTS = {**DiffuseComponent.DEFAULTS, "T": None, "nu_ref": None}
     sed_param_names = ("T", "nu_ref")
 
     def _gaunt_factor(self, nu, T):
@@ -542,8 +541,7 @@ class SpinningDust(DiffuseComponent):
     `nu_0` setting (`self.nu_ref`) only sets where the amplitude map is normalized.
     """
 
-    DEFAULTS = {**DiffuseComponent.DEFAULTS, "shortname": "spin-dust", "template_path": None,
-                "nu_peak": None, "nu_0": None}
+    DEFAULTS = {**DiffuseComponent.DEFAULTS, "template_path": None, "nu_peak": None, "nu_0": None}
     sed_param_names = ("nu_peak_eval", "nu_peak_ref", "nu_ref")
 
     def __init__(self, params: Bunch, comp_name: str, pol: str):

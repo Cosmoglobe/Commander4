@@ -108,7 +108,7 @@ compsep:
   cg_sampling_groups:
     sample_amps_CG:
       enabled: false
-      comps: [CMB, Synchrotron, ThermalDust]
+      comps: [cmb, sync, dust]
       bands: [Band90GHz, Band150GHz, Band220GHz]
       optimize: false   # was compsep.sample_amplitudes: true
       max_iter: 300
@@ -140,23 +140,21 @@ compsep:
 # outside the patch exposes whether the prior roof is doing its job.  Spectral parameters equal the
 # simulated truth.
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      shortname: "cmb"
       Cl_prior_amplitude: [1.0e+6, 1.0e+4]  # D_l at l_pivot [I, QU]; uK_RJ^2 (~uK_CMB^2 at 1 GHz)
       Cl_prior_beta: [0.0, -0.5]
       Cl_prior_l_pivot: 20
       lmax: 383
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      shortname: "dust"
       Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
       Cl_prior_l_pivot: 50
       Cl_prior_FWHM: 10.0                   # arcmin; tames the l ~ 380 modes the 30' beams miss
@@ -166,12 +164,11 @@ components:
       units: "uK_RJ"
       lmax: 383
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      shortname: "sync"
       Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
       Cl_prior_l_pivot: 50
       Cl_prior_FWHM: 30.0                   # arcmin
@@ -183,7 +180,7 @@ components:
       # the solution is set purely by the prior, so it must relax to mu there rather than to zero.
       # Set to the simulation's own truth map, which makes this a plumbing test (a mu equal to the
       # truth cannot bias the answer) rather than a statement about how the prior is weighted.
-      amp_prior_mean_map: "../c4_sims/simgen_patch_debug/truth_Synchrotron.fits"
+      amp_prior_mean_map: "../c4_sims/simgen_patch_debug/truth_sync.fits"
       units: "uK_RJ"
       lmax: 383
 

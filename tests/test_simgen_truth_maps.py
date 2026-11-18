@@ -49,13 +49,13 @@ def _params(components: dict, bands: dict, nside: int = NSIDE) -> Bunch:
 
 def _dust_cfg(template_path: str, nu_ref: float = 353.0) -> dict:
     return {"enabled": True, "component_class": "ThermalDust",
-            "params": {"polarization": "IQU", "shortname": "dust", "lmax": LMAX,
+            "params": {"polarization": "IQU", "lmax": LMAX,
                        "beta": 1.54, "T": 20.0, "nu_ref": nu_ref,
                        "template": {"source": "fits", "path": template_path}}}
 
 
 def _cmb_cfg(nu_ref: float | None = None) -> dict:
-    params = {"polarization": "IQU", "shortname": "cmb", "lmax": LMAX, "solar_dipole": False}
+    params = {"polarization": "IQU", "lmax": LMAX, "solar_dipole": False}
     if nu_ref is not None:
         params["nu_ref"] = nu_ref
     return {"enabled": True, "component_class": "CMB", "params": params}
@@ -191,7 +191,7 @@ def test_gridded_point_sources_truth_map_is_unsmoothed():
 
     cfg = {"GriddedPointSources": {
         "enabled": True, "component_class": "GriddedPointSources",
-        "params": {"polarization": "I", "shortname": "ps", "amplitude": 1.0e3,
+        "params": {"polarization": "I", "amplitude": 1.0e3,
                    "nlon": 4, "nlat": 3, "lon_range_deg": [0.0, 90.0],
                    "lat_range_deg": [-30.0, 30.0]}}}
     comp = build_components(_params(cfg, {"B100": _band(100.0, 30.0)}))[0]
@@ -285,7 +285,7 @@ def test_truth_map_is_readable_as_a_commander4_init_map(tmp_path):
     write_component_truth_maps(str(tmp_path), [comp], NSIDE, "uK_RJ")
     truth_path = str(tmp_path / "truth_ThermalDust.fits")
 
-    comp_params = Bunch(polarization="IQU", shortname="dust", lmax=3 * NSIDE - 1,
+    comp_params = Bunch(polarization="IQU", lmax=3 * NSIDE - 1,
                         Cl_prior_amplitude=None,
                         beta=1.54, T=20.0, nu_ref=353.0, units="uK_RJ")
     c4_params = Bunch(components=Bunch(ThermalDust=Bunch(params=comp_params)),
