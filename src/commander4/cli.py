@@ -27,6 +27,8 @@ from commander4.parameters.schema import validate_param_schema
 from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
                                                stop_bench, log_memory, increment_count, bench_reset
 
+logger = logging.getLogger(__name__)
+
 
 def parse_command_line() -> str:
     """Return the parameter-file path selected on the command line."""
@@ -78,7 +80,6 @@ def run_tod_side(mpi_info: Bunch, params: Bunch, experiment_data, my_band_tod_id
     from commander4.tod.processing import process_tod
     from commander4.mpi.transfer import receive_compsep, send_tod
 
-    logger = logging.getLogger(__name__)
     for chain, iteration in gibbs_schedule(first_iteration, params.gibbs.num_iterations):
         if mpi_info.tod.is_master:
             logger.verbose(f"Worldrank {mpi_info.world.rank}, subrank {mpi_info.tod.rank} "
@@ -118,7 +119,6 @@ def run_compsep_side(mpi_info: Bunch, params: Bunch, cfg: Bunch, comp_lists_by_c
     from commander4.compsep.processing import process_compsep
     from commander4.mpi.transfer import receive_tod, send_compsep
 
-    logger = logging.getLogger(__name__)
     # Send each chain's initial components to the TOD side, and then get the first band map: the
     # same order (sky out, band map in) as at the end of each step of the loop below.
     for chain in (1, 2):
@@ -159,7 +159,6 @@ def run_commander4(params: Bunch, params_dict: dict):
         params: The Commander4 parameter file, as a 'Bunch' object.
         params_dict: The exact same parameter file, but as a dictionary.
     """
-    logger = logging.getLogger(__name__)  # Access logger, used instead of print() in Commander4.
     if MPI.COMM_WORLD.Get_rank() == 0:
         logger.summary(f"Run date: {date.today().isoformat()}.")
 
@@ -276,7 +275,6 @@ def run_commander4(params: Bunch, params_dict: dict):
 def main() -> None:
     world_comm = MPI.COMM_WORLD
     world_rank = world_comm.Get_rank()
-    logger = logging.getLogger(__name__)
     traceback_dir = None
     run_id = None
     try:
