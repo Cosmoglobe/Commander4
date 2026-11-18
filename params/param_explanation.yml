@@ -354,10 +354,13 @@ compsep:
                               # current amplitudes, as in C3, so later Gibbs iterations
                               # need fewer CG iterations than the first.
       preconditioner: JointPreconditioner
-                              # Working choices: JointPreconditioner (best),
-                              # DiagonalJointPreconditioner (cheaper), NoPreconditioner.
-                              # BeamOnly / NoiseOnly / MixingMatrix are unimplemented and
-                              # crash mid-solve; do not select them.
+                              # JointPreconditioner is the one to use. NoPreconditioner
+                              # applies none. For testing how much each part of
+                              # JointPreconditioner contributes, these leave parts out:
+                              # BeamOnlyPreconditioner (beam only),
+                              # MixingMatrixPreconditioner (mixing matrix only), and
+                              # DiagonalJointPreconditioner (no coupling between
+                              # components).
 
   # The per-pixel solver: solves each pixel independently, using a C backend. Needs a
   # single nside and a single beam across all bands, i.e. `common_res_fwhm` set above.

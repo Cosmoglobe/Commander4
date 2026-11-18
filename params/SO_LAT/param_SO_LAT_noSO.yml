@@ -64,7 +64,7 @@ compsep:
       max_iter: 160
       max_iter_pol: 160
       err_tol: 0.0
-      preconditioner: JointPreconditioner #NoiseOnlyPreconditioner #FullPreconditioner #MixingMatrixPreconditioner #BeamOnlyPreconditioner #
+      preconditioner: JointPreconditioner
 
   bands:
     ###### HASLAM MAPS ######

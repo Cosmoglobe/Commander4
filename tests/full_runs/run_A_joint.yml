@@ -120,7 +120,7 @@ compsep:
       max_iter: 100
       max_iter_pol: 100
       err_tol: 1.0e-10
-      preconditioner: DiagonalJointPreconditioner
+      preconditioner: JointPreconditioner
   mcmc_sampling_groups:
     dust_beta:
       enabled: true

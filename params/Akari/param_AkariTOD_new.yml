@@ -121,7 +121,7 @@ compsep:
       max_iter: 100
       max_iter_pol: 100
       err_tol: 0.0  # No stopping criterium.
-      preconditioner: JointPreconditioner #NoiseOnlyPreconditioner #FullPreconditioner #MixingMatrixPreconditioner #BeamOnlyPreconditioner #
+      preconditioner: JointPreconditioner
 
   mcmc_sampling_groups: {}
 

@@ -64,15 +64,14 @@ def test_diagonal_preconditioner_gives_each_component_its_own_diagonal():
     assert_allclose(result[0].amps, 5.0)
 
 
-def test_diagonal_preconditioner_has_only_the_prior_above_the_band_lmax():
+def test_joint_preconditioner_has_only_the_prior_above_the_band_lmax():
     # The band sees the component only up to its own lmax, as in `comp2band`.
     comp_lmax, band_lmax, npix = 6, 3, 12*4**2
     band_map = _band_map(np.full((1, npix), 2.0), lmax=band_lmax)
     comp_list = CompList([_DummyDiffuseComp(lmax=comp_lmax, npol=1)])
     comp_list[0].amps[:] = 1.0
 
-    result = preconditioners.DiagonalJointPreconditioner(MPI.COMM_SELF, band_map, comp_list)(
-        comp_list)
+    result = JointPreconditioner(MPI.COMM_SELF, band_map, comp_list)(comp_list)
 
     ell = hp.Alm.getlm(comp_lmax)[0]
     assert_allclose(result[0].amps[0, ell <= band_lmax], 1.0/(1.0 + 2.0*npix/(4*np.pi)), rtol=1e-12)
@@ -115,7 +114,8 @@ def _single_band_precond_block(preconditioner_name: str, ell: int):
 
 
 def test_preconditioner_variants_build_the_block_their_name_claims():
-    """`BeamOnly` and `MixingMatrix` are `Joint` with the other factors set to unity.
+    """`BeamOnly` and `MixingMatrix` are `Joint` with the other factors set to unity, and
+    `DiagonalJoint` is `Joint` without the coupling between components.
 
     Each is checked against a hand-built reference at one multipole, so switching a factor off
     cannot silently keep it. Dropping the mixing must give the identity in component space: setting
@@ -133,6 +133,7 @@ def test_preconditioner_variants_build_the_block_their_name_claims():
         "JointPreconditioner": identity + beam_squared*noise_weight*np.outer(mixing, mixing),
         "BeamOnlyPreconditioner": identity + beam_squared*identity,
         "MixingMatrixPreconditioner": identity + np.outer(mixing, mixing),
+        "DiagonalJointPreconditioner": identity + beam_squared*noise_weight*np.diag(mixing**2),
     }
     for name, expected in references.items():
         _, block_inv, _ = _single_band_precond_block(name, ell)
@@ -161,7 +162,8 @@ def test_joint_preconditioner_has_no_prior_term_for_a_component_without_a_prior(
 
 @pytest.mark.parametrize(
     "preconditioner_name",
-    ["JointPreconditioner", "BeamOnlyPreconditioner", "MixingMatrixPreconditioner"],
+    ["JointPreconditioner", "BeamOnlyPreconditioner", "MixingMatrixPreconditioner",
+     "DiagonalJointPreconditioner"],
 )
 def test_preconditioner_variants_apply_to_a_complist(preconditioner_name: str):
     """Every selectable preconditioner takes and returns a CompList, not a bare alm array."""

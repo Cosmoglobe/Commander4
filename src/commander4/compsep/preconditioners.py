@@ -5,11 +5,11 @@ iterations are needed. The classes here trade accuracy against cost: `NoPrecondi
 up to `JointPreconditioner`, which inverts the full per-multipole component-component block.
 
 `JointPreconditioner` keeps three factors of the left-hand side -- the beam, the inverse-noise
-weight and the mixing matrix. `BeamOnlyPreconditioner` and `MixingMatrixPreconditioner` are the
-same construction with the other two set to unity, so they are subclasses rather than separate
-implementations. `NoiseOnlyPreconditioner` is kept commented out at the bottom of this file: it
-needs `py3nj`, which is not a dependency, and its author recorded that it never reproduced the
-noise diagonal in testing.
+weight and the mixing matrix. `BeamOnlyPreconditioner`, `MixingMatrixPreconditioner` and
+`DiagonalJointPreconditioner` are the same construction with parts of it switched off, so they are
+subclasses rather than separate implementations. `NoiseOnlyPreconditioner` is kept commented out
+at the bottom of this file: it needs `py3nj`, which is not a dependency, and its author recorded
+that it never reproduced the noise diagonal in testing.
 
 A sampling group names its preconditioner as a string and it is looked up here by name, so a name
 that is not a class in this module fails when the solver builds it. Every preconditioner is built
@@ -28,98 +28,13 @@ from commander4.sky.diffuse_components import DiffuseComponent
 
 
 class NoPreconditioner:
-    """ Preconditioner for the case where no preconditioner is used.
-        Returns the input array unchanged.
+    """ Preconditioner for the case where no preconditioner is used. Returns an unchanged array.
     """
     def __init__(self, solver_comm: MPI.Comm, band_map: DetectorMap, comp_list: CompList):
         pass
 
     def __call__(self, comp_list: CompList):
         return comp_list.copy()
-
-
-
-class DiagonalJointPreconditioner:
-    """ Preconditioner taking beam, noise, and mixing matrices into account, but all only partially.
-        only the component-l-m-diagonal of A is calculated, and for the noise covariance we assume
-        constant rms across the map (but not across components).
-        #TODO: 1. Get Wigner 3j stuff to work to get full N-diagonal. 2. Get the full mixing matrix
-        # stuff implemented.
-    """
-    def __init__(self, solver_comm: MPI.Comm, band_map: DetectorMap, comp_list: CompList):
-        self.is_master = solver_comm.Get_rank() == 0
-
-        # Gather all necessary per-band information from all ranks (all ranks hold a band).
-        # TODO: Currently the master rank temporarily has to hold ALL inverse-variance bands.
-        # It would be easy to re-write this so they send them one-and-one as we make the diagonal.
-        all_fwhm_rad = solver_comm.gather(band_map.fwhm_rad, root=0)
-        all_map_inv_var = solver_comm.gather(band_map.map_inv_var, root=0)
-        all_freqs = solver_comm.gather(band_map.nu, root=0)
-        all_band_lmax = solver_comm.gather(band_map.lmax, root=0)
-
-        # We can now get rid of the ranks that do not hold components.
-        if not self.is_master:
-            return
-
-        nband = len(all_fwhm_rad)
-        ncomp = len(comp_list)
-        # The mixing matrix M, one row per band and one column per component. The columns of
-        # point-source components stay zero and are not used.
-        M = np.zeros((nband, ncomp), dtype=np.float64)
-        for icomp in range(ncomp):
-            if isinstance(comp_list[icomp], DiffuseComponent):
-                M[:, icomp] = comp_list[icomp].get_sed(np.array(all_freqs, dtype=np.float64))
-
-        self.A_diag_inv_list = []
-        for icomp in range(ncomp):
-            # FIXME: point sources are left out (identity). See C4_issues.md, K4. The list keeps one
-            # entry per component, so that `__call__` can index it by component.
-            if not isinstance(comp_list[icomp], DiffuseComponent):
-                self.A_diag_inv_list.append(None)
-                continue
-
-            # This is our estimate of the inverse of A, which serves as a preconditioner for A.
-            A_diag = np.zeros(hp.Alm.getsize(comp_list[icomp].lmax), dtype=np.complex128)
-            # Loop over all frequency bands to build the diagonal term
-            for iband in range(nband):
-                M_fc = M[iband, icomp]
-
-                # Calculate beam operator for this frequency band
-                beam_window_squared = hp.gauss_beam(all_fwhm_rad[iband],
-                                                    lmax=comp_list[icomp].lmax)**2
-                # A band only sees the component up to its own lmax (`comp2band` truncates there).
-                beam_window_squared[all_band_lmax[iband] + 1:] = 0.0
-                beam_op_complex = hp.almxfl(np.ones(hp.Alm.getsize(comp_list[icomp].lmax),
-                                                    dtype=np.complex128), beam_window_squared)
-
-                mean_weights = np.mean(all_map_inv_var[iband])
-                npix = all_map_inv_var[iband].shape[-1]
-                mean_weights *= npix/(4*np.pi)
-
-                # Add the weighted contribution of this frequency band to the total
-                A_diag += M_fc**2 * beam_op_complex * mean_weights
-
-            hp.almxfl(A_diag, comp_list[icomp].P_Cl_prior, inplace=True)
-            # +1 from the prior term, after the re-writing of the LHS equation with a S^{1/2}
-            # scaling. A component without a prior has no such term.
-            if comp_list[icomp].Cl_prior_amplitude is not None:
-                A_diag += 1
-            # Without a prior, a multipole that no band constrains has a zero diagonal.
-            # The preconditioner leaves it untouched (0).
-            self.A_diag_inv_list.append(np.divide(1.0, A_diag, out=np.zeros_like(A_diag),
-                                                  where=A_diag != 0))
-
-    def __call__(self, comp_list: CompList) -> CompList:
-        if not self.is_master:
-            return comp_list
-
-        comp_list_out = comp_list.copy()
-        for icomp in range(len(comp_list)):
-            if isinstance(comp_list[icomp], DiffuseComponent):
-                # Apply the already calculated diagonal preconditioner.
-                comp_list_out[icomp].amps *= self.A_diag_inv_list[icomp]
-
-        return comp_list_out
 
 
 class JointPreconditioner:
@@ -175,8 +90,8 @@ class JointPreconditioner:
     - Bands only contribute up to their own ``lmax``.
     - This is a preconditioner for the isotropic part of the operator, not an exact inverse of the
       full discrete polarized system.
-    - The three ``include_*`` flags below select which factors are kept. All three subclasses at
-      the bottom of this module are this same construction with two of them switched off.
+    - The class flags below select which parts are kept. The subclasses at the bottom of this
+      module are this same construction with some of them switched off.
     """
 
     # Which factors of the left-hand side this preconditioner models. A factor that is switched
@@ -187,6 +102,9 @@ class JointPreconditioner:
     include_beam = True
     include_noise = True
     include_mixing = True
+    # With this off, each component keeps only its own diagonal entry of the component block, so
+    # the components are preconditioned as if they were independent of each other.
+    couple_components = True
 
     def __init__(self, solver_comm: MPI.Comm, band_map: DetectorMap, comp_list: CompList):
         self.is_master = solver_comm.Get_rank() == 0
@@ -305,6 +223,8 @@ class JointPreconditioner:
                     comp_block = np.outer(scaled_mixing, scaled_mixing)
                 else:
                     comp_block = np.eye(active_local.size, dtype=np.float64)
+                if not self.couple_components:
+                    comp_block = np.diag(np.diag(comp_block))
                 system_block += beam_windows_squared[iband][ell] * np.kron(pol_block, comp_block)
             # Enforce exact symmetry before diagonalization to suppress tiny roundoff asymmetries.
             system_block = 0.5 * (system_block + system_block.T)
@@ -377,9 +297,10 @@ class BeamOnlyPreconditioner(JointPreconditioner):
     harmonic space. Useful when the bands differ mostly in resolution, and as a cheap reference
     point for how much of `JointPreconditioner`'s benefit comes from the beam term alone.
     """
-
+    include_beam = True
     include_noise = False
     include_mixing = False
+    couple_components = True
 
 
 class MixingMatrixPreconditioner(JointPreconditioner):
@@ -394,6 +315,20 @@ class MixingMatrixPreconditioner(JointPreconditioner):
 
     include_beam = False
     include_noise = False
+    include_mixing = True
+    couple_components = True
+
+
+class DiagonalJointPreconditioner(JointPreconditioner):
+    """`JointPreconditioner` without the coupling between components.
+
+    Each component gets only its own term sum_b B_b(l)^2 w_b m_bc^2. The difference from
+    `JointPreconditioner` shows how much of its benefit comes from the coupling.
+    """
+    include_beam = True
+    include_noise = True
+    include_mixing = True
+    couple_components = False
 
 
 # `NoiseOnlyPreconditioner` -- a preconditioner accounting only for the diagonal of the noise
