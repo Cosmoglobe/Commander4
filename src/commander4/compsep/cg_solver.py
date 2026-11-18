@@ -1,9 +1,4 @@
 """The CG amplitude solver: `CompSepSolver` builds and solves the component-amplitude system.
-
-One MPI rank per band, with the LHS operator and its right-hand side both assembled across ranks.
-Depending on the sampling group's `optimize` flag the solution is either the posterior maximum or a
-constrained realization drawn from the amplitude posterior. See the class docstring for the system
-being solved.
 """
 import numpy as np
 import time
@@ -24,23 +19,24 @@ logger = logging.getLogger(__name__)
 
 
 class CompSepSolver:
-    """ Class for performing global component separation using the preconditioned conjugate gradient
-        method. After initializing the class, the solve() method should be called to perform the
-        component separation. solve() leaves the solution in the 'comp_list' argument passed to it,
-        and returns the CG residuals.
+    """ Class for performing global component separation using the preconditioned CG method.
+    
+    After initializing the class, the solve() method should be called to perform the component
+    separation. solve() leaves the solution in the 'comp_list' argument passed to it, and returns
+    the CG residuals.
 
-        The component separation problem is an Ax = b equation on the form
+    The component separation problem is an Ax = b equation on the form
         (S^-1 + Y^T M^T Y^-1^T N^-1 B M Y) a
-            = Y^T M^T Y^-1^T B^T d + Y^T M^T Y^-1^T B^T N^-{1/2} eta_1 + S^-1 mu + S^{-1/2} eta_2,
-        where B is the beam smoothing, M is the mixing matrix, N is the noise covariance matrix,
-        Y is alm->map spherical harmonic synthesis, d is the observed frequency maps (as alms),
-        a is the component maps we want to solve for (as alms), and eta_1 and eta_2 are random
-        numbers drawn from N(0,1). The sampling group's `optimize` switches between a full
-        constrained realization (`optimize: false`, the default) and just optimizing for MAP.
-        For numerical stability, we actually solve the equivalent
+        = Y^T M^T Y^-1^T B^T d + Y^T M^T Y^-1^T B^T N^-{1/2} eta_1 + S^-1 mu + S^{-1/2} eta_2,
+    where B is the beam smoothing, M is the mixing matrix, N is the noise covariance matrix,
+    Y is alm->map spherical harmonic synthesis, d is the observed frequency maps (as alms),
+    a is the component maps we want to solve for (as alms), and eta_1 and eta_2 are random
+    numbers drawn from N(0,1). The sampling group's `optimize` switches between a full
+    constrained realization (`optimize: false`, the default) and just optimizing for MAP.
+    For numerical stability, we actually solve the equivalent
         (1 + S^{1/2} Y^T M^T Y^-1^T B^T N^-1 B Y^-1 M Y S^{1/2})[S^{-1/2} a]
-            = S^{1/2} Y^T M^T {Y^{-1}}^T B^T N^{-1} d
-            + S^{1/2}A^TN^{-1/2} eta_1 + S^{-1/2} mu + eta_2.
+        = S^{1/2} Y^T M^T {Y^{-1}}^T B^T N^{-1} d
+        + S^{1/2}A^TN^{-1/2} eta_1 + S^{-1/2} mu + eta_2.
     """
     def __init__(self, band_map: DetectorMap, solver_comm: MPI.Comm, group: Bunch,
                  double_precision: bool, nthreads: int):

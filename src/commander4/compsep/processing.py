@@ -211,17 +211,17 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
     -> tuple[dict[int, CompList], Bunch]:
     """Build the components and read the settings of component separation, on one CompSep rank.
 
-    Each CompSep rank works on one view of one band (`mpi_info.band`, set by the MPI setup). This
-    function also adds `mpi_info.world.compsep_band_masters`, the world rank of each CompSep view.
+    Each CompSep rank works on one view (I or QU) of one band (`mpi_info.band`). This function also
+    adds `mpi_info.world.compsep_band_masters`, the world rank of each CompSep view.
 
     Args:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
-        params (Bunch): The parameters from the input parameter file.
-        start (ChainStart): Where the two chains start (see `file_io.chain_restart`).
+        params (Bunch): The full parameter file.
+        start (ChainStart): Info about how the two chains start (see `file_io.chain_restart`).
 
     Returns:
-        comp_lists_by_chain (dict[int, CompList]): Each chain's full execution-view component
-            list, initialized and identical on all CompSep ranks.
+        comp_lists_by_chain (dict[int, CompList]): Each chain's full component list, with polarized
+            components split into separate I and QU components. Identical on all CompSep ranks.
         cfg (Bunch): The settings of component separation: the sampling groups (see
             `read_sampling_groups`), `double_precision`, this rank's `num_threads`, and the
             chain-output settings `nside_chisq`, `include_chisq_map` and `include_residual_maps`.

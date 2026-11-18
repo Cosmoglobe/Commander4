@@ -149,11 +149,12 @@ def run_compsep_side(mpi_info: Bunch, params: Bunch, cfg: Bunch, comp_lists_by_c
 
 
 def run_commander4(params: Bunch, params_dict: dict):
-    """
-    Main loop function for Commander 4 Gibbs Sampling. Commander4 splits the Gibbs chain in two;
-    TOD processing steps, and component separation, with dedicated hardware and separate MPI
-    communicators for the two tasks. Commander4 therefore always runs two Gibbs chains in parallel,
-    such that each of the two tasks are always working on one of the two chains.
+    """ Main loop function for Commander 4 Gibbs Sampling.
+
+    Commander4 splits the Gibbs chain in two: (i) TOD processing and (ii) component separation.
+    It dedicates different hardware and separate MPI communicators for the two tasks.
+    Commander4 therefore always runs two Gibbs chains in parallel, such that each of the two tasks
+    are always working on one of the two chains, and swapping them back and forth.
 
     Args:
         params: The Commander4 parameter file, as a 'Bunch' object.
@@ -185,9 +186,7 @@ def run_commander4(params: Bunch, params_dict: dict):
     tod_active = mpi_info.world.tod_master is not None
     compsep_active = mpi_info.world.compsep_master is not None
 
-    # Where the two chains start: from the parameter file, from this run's own saved chains
-    # (`gibbs.chain_status: append`), or from another run (`gibbs.init_chain`). Decided once, by
-    # the world master, before any rank reads data.
+    # Figure out how to initialize the chain (from a previous chain or clean run).
     start = None
     if mpi_info.world.is_master:
         start = resolve_chain_start(params, tod_active, compsep_active)
@@ -198,7 +197,8 @@ def run_commander4(params: Bunch, params_dict: dict):
                            "of gibbs.num_iterations; nothing to do.")
         return 0
 
-    # Import the numerical pipeline after init_mpi has configured this rank's thread counts.
+    # These imports must be after init_mpi because they import libraries (like Numpy) that will not
+    # respect a change in e.g. `OMP_NUM_THREADS` after they have been imported.
     from commander4.tod.processing import init_tod_processing
     from commander4.compsep.processing import init_compsep_processing
     from commander4.mpi.transfer import receive_compsep, get_local_initial_sky
@@ -209,12 +209,12 @@ def run_commander4(params: Bunch, params_dict: dict):
     world_compsep_band_masters_dict = None
     world_tod_band_masters_dict = None
     if mpi_info.world.side == "tod":
-        mpi_info, my_band_tod_id, experiment_data, tod_samples_chain1, tod_samples_chain2\
-                                                    = init_tod_processing(mpi_info, params, start)
         # Even though we're always only working on one of the two chains we still need two sets of
         # samples, as we can't "hot swap" them (both TOD processing and component separation would
-        # have to send and receive from the same local buffer). However, perhaps it would be cleaner
-        # to call these "current_chain" and "other chain" or something.
+        # have to send and receive from the same local buffer).
+        # TODO: However, perhaps it would be cleaner to call these "current_chain" and "other chain"
+        mpi_info, my_band_tod_id, experiment_data, tod_samples_chain1, tod_samples_chain2\
+                                                    = init_tod_processing(mpi_info, params, start)
     elif mpi_info.world.side == "compsep":
         # A Component contains the current sampled amplitudes and spectral parameters, so each
         # Gibbs chain has its own complete component list.
