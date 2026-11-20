@@ -138,7 +138,7 @@ def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
         "commander4.compsep.processing.write_compsep_chain_to_file", lambda *args: None)
 
     with caplog.at_level(SUMMARY, logger="commander4.compsep.processing"):
-        process_compsep(mpi_info, params, {}, {}, band_map, CompList([]), chain=2,
+        process_compsep(mpi_info, params, [], [], band_map, CompList([]), chain=2,
                         iteration=4, rng=np.random.default_rng(0))
 
     chi2 = np.sum((map_sky / 2.0)**2)
@@ -168,11 +168,12 @@ def test_sampling_group_gets_defaults_and_all_names() -> None:
     groups, _ = read_sampling_groups(params)
 
     # "all" and a setting that is left out both select everything.
-    for name in ("all", "missing"):
-        assert groups[name].name == name and groups[name].solver == "CG"
-        assert groups[name].comps == ["CMB", "ThermalDust", "FreeFree"]
-        assert groups[name].bands == ["Planck30GHz"]
-        assert groups[name].cfg.max_iter == 200 and groups[name].cfg.optimize is False
+    assert [group.name for group in groups] == ["all", "missing"]
+    for group in groups:
+        assert group.solver == "CG"
+        assert group.comps == ["CMB", "ThermalDust", "FreeFree"]
+        assert group.bands == ["Planck30GHz"]
+        assert group.cfg.max_iter == 200 and group.cfg.optimize is False
 
 
 def test_sampling_group_names_components_and_bands() -> None:
@@ -180,8 +181,8 @@ def test_sampling_group_names_components_and_bands() -> None:
         selected=Bunch(comps=["CMB"], bands=["Planck30GHz"])))
     groups, _ = read_sampling_groups(params)
 
-    assert groups["selected"].comps == ["CMB"]
-    assert groups["selected"].bands == ["Planck30GHz"]
+    assert groups[0].comps == ["CMB"]
+    assert groups[0].bands == ["Planck30GHz"]
     # A group names a whole band, not one polarization view of it.
     with pytest.raises(ValueError, match="selected.bands' names unknown"):
         read_sampling_groups(_make_group_params(cg_sampling_groups=Bunch(
@@ -206,7 +207,7 @@ def test_sampling_group_with_an_unknown_name_is_rejected() -> None:
 def test_disabled_sampling_groups_are_left_out() -> None:
     params = _make_group_params(cg_sampling_groups=Bunch(
         active=Bunch(enabled=True), disabled=Bunch(enabled=False)))
-    assert list(read_sampling_groups(params)[0]) == ["active"]
+    assert [group.name for group in read_sampling_groups(params)[0]] == ["active"]
 
 
 def _make_spectral_comp_list() -> CompList:
@@ -274,7 +275,7 @@ def test_a_per_pixel_group_with_point_sources_is_rejected_at_start_up() -> None:
     # A per-pixel group that leaves the point sources out is fine.
     params.compsep.per_pixel_sampling_groups.pixels.comps = ["CMB", "ThermalDust"]
     groups, _ = read_sampling_groups(params)
-    assert list(groups) == ["pixels"] and groups["pixels"].solver == "per_pixel"
+    assert [group.name for group in groups] == ["pixels"] and groups[0].solver == "per_pixel"
 
 
 def test_unimplemented_component_classes_are_rejected_during_construction() -> None:
@@ -308,10 +309,10 @@ def test_per_pixel_solver_accepts_resolved_precision() -> None:
 
 def test_mcmc_group_must_name_enabled_amplitude_groups() -> None:
     amplitudes = Bunch(amps=Bunch(comps=["CMB"]), off=Bunch(enabled=False))
-    _, mcmc_groups = read_sampling_groups(_make_group_params(
+    amplitude_groups, mcmc_groups = read_sampling_groups(_make_group_params(
         cg_sampling_groups=amplitudes, mcmc_sampling_groups=Bunch(
             mcmc=Bunch(beta=_dust_beta_block(), update_amplitude_groups=["amps"]))))
-    assert mcmc_groups["mcmc"].cfg.update_amplitude_groups == ["amps"]
+    assert mcmc_groups[0].update_amplitude_groups == amplitude_groups
 
     for group_name in ("does_not_exist", "off"):
         with pytest.raises(ValueError, match="unknown or disabled amplitude group"):
@@ -436,7 +437,7 @@ def test_mcmc_group_reads_its_beta_block() -> None:
     params = _make_group_params(mcmc_sampling_groups=Bunch(mcmc=Bunch(beta=Bunch(
         FreeFree=Bunch(proposal_sigma=0.02, bounds=[-4.0, -2.0]),
         ThermalDust=Bunch(proposal_sigma=0.01, prior_mean=1.5, prior_rms=0.1)))))
-    beta = read_sampling_groups(params)[1]["mcmc"].beta
+    beta = read_sampling_groups(params)[1][0].beta
 
     # The betas are proposed in the order of the block, not in the order of the components.
     assert list(beta) == ["FreeFree", "ThermalDust"]

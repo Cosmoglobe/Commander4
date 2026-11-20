@@ -108,7 +108,7 @@ def run_tod_side(mpi_info: Bunch, params: Bunch, experiment_data, my_band_tod_id
 
 
 def run_compsep_side(mpi_info: Bunch, params: Bunch, comp_lists_by_chain: dict,
-                     amplitude_groups: dict, mcmc_groups: dict,
+                     amplitude_groups: list, mcmc_groups: list,
                      first_iteration: int) -> None:
     """Walk the component-separation half of the Gibbs loop.
     Args:
