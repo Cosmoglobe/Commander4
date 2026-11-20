@@ -32,8 +32,8 @@ class MCMCGroup:
     `cfg` holds the relevant parameter file block. Other attributes are derived quantities.
     """
     name: str
-    cfg: Bunch                             # The group's block of the parameter file, with defaults.
-    chisq_bands: list[str]                 # The bands of the chi-squared, "all" replaced by names.
+    cfg: Bunch                             # The group's block of the parameter file, with defaults
+                                           # and "all" replaced by the names.
     chisq_pixels: NDArray[np.bool_] | slice  # The pixels of this rank's band in the chi-squared.
     update_amplitude_groups: list[AmplitudeGroup]  # The amplitude groups it re-solves when sampled.
 
@@ -42,7 +42,7 @@ class MCMCGroup:
                 "sample": None,                   # Component -> parameter -> settings. Required.
                 "update_amplitude_groups": [],    # Amplitude groups re-solved at each step.
                 "numstep": 1,                     # Metropolis steps per Gibbs iteration.
-                "chisq_bands": None,              # Bands of the chi-squared; None/"all" = all.
+                "chisq_bands": None,              # Bands of the chi-squared; None/"all" -> all.
                 "chisq_mask": None}               # Mask file of the chi-squared; None = no mask.
     # The parameters of one component in `sample`. Only beta can be sampled yet.
     COMP_DEFAULTS = {"beta": None}
@@ -87,7 +87,7 @@ class MCMCGroup:
                                  "or neither.")
             sample[comp_name].beta = settings
         cfg.sample = sample
-        chisq_bands = names_or_all(cfg.chisq_bands, band_names, f"{section}.chisq_bands")
+        cfg.chisq_bands = names_or_all(cfg.chisq_bands, band_names, f"{section}.chisq_bands")
         enabled_groups = {group.name: group for group in amplitude_groups}
         unknown = sorted(set(cfg.update_amplitude_groups) - set(enabled_groups))
         if unknown:
@@ -103,8 +103,8 @@ class MCMCGroup:
             if band.get_from != "file":
                 band = params.experiments[band.get_from].bands[mpi_info.band.name]
             chisq_pixels = _read_chisq_mask(mpi_info.compsep.comm, cfg.chisq_mask, band.eval_nside)
-        return cls(name=name, cfg=cfg, chisq_bands=chisq_bands,
-                   chisq_pixels=chisq_pixels, update_amplitude_groups=update_amplitude_groups)
+        return cls(name=name, cfg=cfg, chisq_pixels=chisq_pixels,
+                   update_amplitude_groups=update_amplitude_groups)
 
 
 def _read_chisq_mask(compsep_comm: MPI.Comm, path: str, nside: int) -> NDArray[np.bool_]:
@@ -133,14 +133,14 @@ def chi2_of_chisq_bands(mpi_info: Bunch, group: MCMCGroup, band_map: DetectorMap
                         comp_list: CompList) -> float:
     """The chi-squared that an MCMC group judges a proposal by. Every CompSep rank calls it.
 
-    It is the sum of ((data - model)/sigma)^2 over the bands in `group.chisq_bands`, as C3's
+    It is the sum of ((data - model)/sigma)^2 over the bands in `group.cfg.chisq_bands`, as C3's
     ``compute_chisq``. The model is the sky of all components in `comp_list`, so the components
     that the group does not sample enter it too. Only the pixels in `group.chisq_pixels` count
     (those the group's `chisq_mask` keeps, set at start-up).
     """
     band = mpi_info.band
     chi2 = 0.0
-    if band.name in group.chisq_bands:
+    if band.name in group.cfg.chisq_bands:
         model_sky = comp_list.get_sky_at_band(band_map)
         pixels = group.chisq_pixels
         residual = band_map.map_sky[:, pixels] - model_sky[:, pixels]

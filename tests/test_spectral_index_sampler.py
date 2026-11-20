@@ -121,7 +121,7 @@ def test_the_gaussian_prior_enters_the_decision(proposal: float, accepted: bool)
     uniform draw of 0.5 accepts a step above log(0.5) = -0.693."""
     mpi_info, params, group, amp_group, band_map, comp_list = _make_setup(
         prior_mean=TRUE_BETA, prior_rms=0.1)
-    group.chisq_bands = []
+    group.cfg.chisq_bands = []
 
     stats = sample_spectral_params(mpi_info, params, group, band_map, comp_list,
                                    _fixed_rng([proposal]))

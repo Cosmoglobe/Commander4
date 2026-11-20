@@ -12,7 +12,7 @@ import numpy as np
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-import commander4.sky as sky
+from commander4 import sky
 from commander4.compsep.cg_solver import CompSepSolver
 from commander4.compsep.perpix_solver import solve_compsep_perpix
 from commander4.data_models.detector_map import DetectorMap
@@ -29,16 +29,15 @@ class AmplitudeGroup:
     """One amplitude sampling group of the parameter file, set up for this CompSep rank."""
     name: str
     solver: str                          # "CG" or "per_pixel", from the section the group is in.
-    cfg: Bunch                           # The group's block of the parameter file, with defaults.
-    comps: list[str]                     # The components it names, "all" replaced by the names.
-    bands: list[str]                     # The bands it names, likewise.
+    cfg: Bunch                           # The group's block of the parameter file, with defaults
+                                         # and "all" replaced by the names.
     solver_ranks: dict[str, list[int]]   # The CompSep ranks that solve it: {"I": [..], "QU": [..]}.
     solver_comm: MPI.Comm | None         # This rank's solve; MPI.COMM_NULL if it does not solve.
 
     # The settings of a group in `compsep.cg_sampling_groups`.
     CG_DEFAULTS = {"enabled": True,
-                   "comps": None,                            # Component names; None/"all" = all.
-                   "bands": None,                            # Band names; None/"all" = all.
+                   "comps": None,                            # Component names; None/"all" -> all.
+                   "bands": None,                            # Band names; None/"all" -> all.
                    "optimize": False,                        # The posterior maximum, not a draw.
                    "max_iter": 200,                          # CG iterations of the I solve,
                    "max_iter_pol": 200,                      # and of the QU solve.
@@ -46,8 +45,8 @@ class AmplitudeGroup:
                    "preconditioner": "JointPreconditioner"}  # A class in preconditioners.py.
     # The settings of a group in `compsep.per_pixel_sampling_groups`.
     PER_PIXEL_DEFAULTS = {"enabled": True,
-                          "comps": None,                     # Component names; None/"all" = all.
-                          "bands": None}                     # Band names; None/"all" = all.
+                          "comps": None,                     # Component names; None/"all" -> all.
+                          "bands": None}                     # Band names; None/"all" -> all.
 
     @classmethod
     def init_from_params(cls, params: Bunch, section: str, name: str,
@@ -63,12 +62,12 @@ class AmplitudeGroup:
                             cls.CG_DEFAULTS if solver == "CG" else cls.PER_PIXEL_DEFAULTS)
         comp_names = [comp for comp in params.components if params.components[comp].enabled]
         band_names = [band for band in params.compsep.bands if params.compsep.bands[band].enabled]
-        comps = names_or_all(cfg.comps, comp_names, f"{section}.{name}.comps")
-        bands = names_or_all(cfg.bands, band_names, f"{section}.{name}.bands")
+        cfg.comps = names_or_all(cfg.comps, comp_names, f"{section}.{name}.comps")
+        cfg.bands = names_or_all(cfg.bands, band_names, f"{section}.{name}.bands")
         if solver == "per_pixel":
             # The per-pixel solver fits component maps pixel by pixel, so it has no model of point
             # sources.
-            for comp_name in comps:
+            for comp_name in cfg.comps:
                 component_class = getattr(sky, params.components[comp_name].component_class)
                 if not issubclass(component_class, DiffuseComponent):
                     raise ValueError(f"'{section}.{name}.comps' names {comp_name!r}, a "
@@ -80,10 +79,10 @@ class AmplitudeGroup:
         solver_ranks = {}
         for pol in ("I", "QU"):
             has_comps = any(pol in EXECUTION_POLS[params.components[comp].params.polarization]
-                            for comp in comps)
+                            for comp in cfg.comps)
             solver_ranks[pol] = [view.rank for view in enabled_compsep_views(params)
                                  if has_comps and view.polarization == pol
-                                 and view.band_name in bands]
+                                 and view.band_name in cfg.bands]
         # The communicator is split from `subcomm`, which holds the ranks of one polarization, so
         # the I and QU views of a group are two separate solves.
         solver_comm = None
@@ -91,8 +90,8 @@ class AmplitudeGroup:
             is_solver = mpi_info.compsep.rank in solver_ranks[mpi_info.band.pol]
             solver_comm = mpi_info.compsep.subcomm.Split(0 if is_solver else MPI.UNDEFINED,
                                                          key=mpi_info.compsep.rank)
-        return cls(name=name, solver=solver, cfg=cfg, comps=comps, bands=bands,
-                   solver_ranks=solver_ranks, solver_comm=solver_comm)
+        return cls(name=name, solver=solver, cfg=cfg, solver_ranks=solver_ranks,
+                   solver_comm=solver_comm)
 
 
 def sample_amplitudes(mpi_info: Bunch, params: Bunch, group: AmplitudeGroup,
@@ -124,13 +123,13 @@ def sample_amplitudes(mpi_info: Bunch, params: Bunch, group: AmplitudeGroup,
     cg_stats: dict = {}
     if compsep.rank in group.solver_ranks[band.pol]:
         active_sublist = CompList([comp for comp in comp_list if comp.pol == band.pol
-                                   and comp.comp_name in group.comps])
+                                   and comp.comp_name in group.cfg.comps])
         # The group is solved conditioned on the components it does not name (C3's
         # `compute_residual`): their sky at this band is subtracted from the band map, and the
         # solvers fit the group's components to what is left. The shallow copy shares the noise
         # map and the band settings with `band_map`; only its sky map is new.
         fixed_comps = CompList([comp for comp in comp_list if comp.pol == band.pol
-                                and comp.comp_name not in group.comps])
+                                and comp.comp_name not in group.cfg.comps])
         residual_map = band_map
         if len(fixed_comps) > 0:
             fixed_sky = fixed_comps.get_sky_at_band(band_map)

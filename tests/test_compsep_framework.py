@@ -171,8 +171,8 @@ def test_sampling_group_gets_defaults_and_all_names() -> None:
     assert [group.name for group in groups] == ["all", "missing"]
     for group in groups:
         assert group.solver == "CG"
-        assert group.comps == ["CMB", "ThermalDust", "FreeFree"]
-        assert group.bands == ["Planck30GHz"]
+        assert group.cfg.comps == ["CMB", "ThermalDust", "FreeFree"]
+        assert group.cfg.bands == ["Planck30GHz"]
         assert group.cfg.max_iter == 200 and group.cfg.optimize is False
 
 
@@ -181,8 +181,8 @@ def test_sampling_group_names_components_and_bands() -> None:
         selected=Bunch(comps=["CMB"], bands=["Planck30GHz"])))
     groups, _ = read_sampling_groups(params)
 
-    assert groups[0].comps == ["CMB"]
-    assert groups[0].bands == ["Planck30GHz"]
+    assert groups[0].cfg.comps == ["CMB"]
+    assert groups[0].cfg.bands == ["Planck30GHz"]
     # A group names a whole band, not one polarization view of it.
     with pytest.raises(ValueError, match="selected.bands' names unknown"):
         read_sampling_groups(_make_group_params(cg_sampling_groups=Bunch(
