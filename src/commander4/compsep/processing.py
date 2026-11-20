@@ -131,7 +131,7 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
     # beta that is not sampled keeps the value of the parameter file.
     sampled_betas = set()
     for group in mcmc_groups:
-        sampled_betas.update(group.beta)
+        sampled_betas.update(group.cfg.sample)
 
     # Read the Gaussian amplitude prior's mean mu (each component's amp_prior_mean_map, else a
     # zero-mean prior) once here; the CG applies S^{-1/2} on every solve. Then give each chain

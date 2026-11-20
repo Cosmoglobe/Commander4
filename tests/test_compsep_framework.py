@@ -157,9 +157,9 @@ def _make_group_params(**sampling_group_sections) -> Bunch:
     return Bunch(components=components, compsep=Bunch(bands=bands, **sampling_group_sections))
 
 
-def _dust_beta_block() -> Bunch:
-    """The smallest `beta` block of an MCMC group: one component with a step length."""
-    return Bunch(ThermalDust=Bunch(proposal_sigma=0.01))
+def _dust_sample_block() -> Bunch:
+    """The smallest `sample` block of an MCMC group: one component's beta, with a step length."""
+    return Bunch(ThermalDust=Bunch(beta=Bunch(proposal_sigma=0.01)))
 
 
 def test_sampling_group_gets_defaults_and_all_names() -> None:
@@ -198,8 +198,11 @@ def test_sampling_group_with_an_unknown_name_is_rejected() -> None:
             per_pixel_sampling_groups=Bunch(g=Bunch(bands=["NoSuchBand"]))))
     with pytest.raises(ValueError, match="g.chisq_bands' names unknown"):
         read_sampling_groups(_make_group_params(
-            mcmc_sampling_groups=Bunch(g=Bunch(beta=_dust_beta_block(),
+            mcmc_sampling_groups=Bunch(g=Bunch(sample=_dust_sample_block(),
                                                chisq_bands=["NoSuchBand"]))))
+    with pytest.raises(ValueError, match="g.sample' names unknown"):
+        read_sampling_groups(_make_group_params(mcmc_sampling_groups=Bunch(
+            g=Bunch(sample=Bunch(NoSuchComp=Bunch(beta=Bunch(proposal_sigma=0.01)))))))
     with pytest.raises(ValueError, match="must be a list of names"):
         read_sampling_groups(_make_group_params(cg_sampling_groups=Bunch(g=Bunch(comps="CMB"))))
 
@@ -311,14 +314,14 @@ def test_mcmc_group_must_name_enabled_amplitude_groups() -> None:
     amplitudes = Bunch(amps=Bunch(comps=["CMB"]), off=Bunch(enabled=False))
     amplitude_groups, mcmc_groups = read_sampling_groups(_make_group_params(
         cg_sampling_groups=amplitudes, mcmc_sampling_groups=Bunch(
-            mcmc=Bunch(beta=_dust_beta_block(), update_amplitude_groups=["amps"]))))
+            mcmc=Bunch(sample=_dust_sample_block(), update_amplitude_groups=["amps"]))))
     assert mcmc_groups[0].update_amplitude_groups == amplitude_groups
 
     for group_name in ("does_not_exist", "off"):
         with pytest.raises(ValueError, match="unknown or disabled amplitude group"):
             read_sampling_groups(_make_group_params(
                 cg_sampling_groups=amplitudes, mcmc_sampling_groups=Bunch(
-                    mcmc=Bunch(beta=_dust_beta_block(), update_amplitude_groups=[group_name]))))
+                    mcmc=Bunch(sample=_dust_sample_block(), update_amplitude_groups=[group_name]))))
 
 
 def test_an_amplitude_group_is_solved_against_the_band_minus_the_fixed_components() -> None:
@@ -433,32 +436,34 @@ def test_band2comp_is_the_transpose_of_comp2band(band_lmax: int, sed_per_pixel: 
     assert lhs == pytest.approx(rhs, rel=1e-5)
 
 
-def test_mcmc_group_reads_its_beta_block() -> None:
-    params = _make_group_params(mcmc_sampling_groups=Bunch(mcmc=Bunch(beta=Bunch(
-        FreeFree=Bunch(proposal_sigma=0.02, bounds=[-4.0, -2.0]),
-        ThermalDust=Bunch(proposal_sigma=0.01, prior_mean=1.5, prior_rms=0.1)))))
-    beta = read_sampling_groups(params)[1][0].beta
+def test_mcmc_group_reads_its_sample_block() -> None:
+    params = _make_group_params(mcmc_sampling_groups=Bunch(mcmc=Bunch(sample=Bunch(
+        FreeFree=Bunch(beta=Bunch(proposal_sigma=0.02, bounds=[-4.0, -2.0])),
+        ThermalDust=Bunch(beta=Bunch(proposal_sigma=0.01, prior_mean=1.5, prior_rms=0.1))))))
+    sample = read_sampling_groups(params)[1][0].cfg.sample
 
-    # The betas are proposed in the order of the block, not in the order of the components.
-    assert list(beta) == ["FreeFree", "ThermalDust"]
+    # The components are stepped in the order of the block, not in the order of the components.
+    assert list(sample) == ["FreeFree", "ThermalDust"]
     # A setting that is left out is None: no bounds, or no prior.
-    assert (beta["FreeFree"].proposal_sigma, beta["FreeFree"].bounds,
-            beta["FreeFree"].prior_mean, beta["FreeFree"].prior_rms) \
-        == (0.02, [-4.0, -2.0], None, None)
-    assert (beta["ThermalDust"].proposal_sigma, beta["ThermalDust"].bounds,
-            beta["ThermalDust"].prior_mean, beta["ThermalDust"].prior_rms) \
+    free_free, dust = sample["FreeFree"].beta, sample["ThermalDust"].beta
+    assert (free_free.proposal_sigma, free_free.bounds, free_free.prior_mean,
+            free_free.prior_rms) == (0.02, [-4.0, -2.0], None, None)
+    assert (dust.proposal_sigma, dust.bounds, dust.prior_mean, dust.prior_rms) \
         == (0.01, None, 1.5, 0.1)
+    # The defaults go into the group's copy, not into the parameter file.
+    assert "prior_mean" not in params.compsep.mcmc_sampling_groups.mcmc.sample.FreeFree.beta
 
 
-@pytest.mark.parametrize("beta_block, message", [
-    (None, "beta' must name the components"),                           # No `beta` block.
-    (Bunch(NoSuchComp=Bunch(proposal_sigma=0.01)), "beta' names unknown"),
-    (Bunch(ThermalDust=Bunch(bounds=[1.0, 2.0])), "proposal_sigma' must be set"),
-    (Bunch(ThermalDust=Bunch(proposal_sigma=0.01, prior=1.5)), "Unknown setting"),
-    (Bunch(ThermalDust=Bunch(proposal_sigma=0.01, prior_mean=1.5)), "both 'prior_mean' and"),
+@pytest.mark.parametrize("dust, message", [
+    (None, "sample' must name the components"),                        # No `sample` block.
+    (Bunch(), "must name a parameter to sample"),                       # Dust, but no parameter.
+    (Bunch(T=Bunch(proposal_sigma=0.01)), "Unknown setting"),           # Only beta can be sampled.
+    (Bunch(beta=Bunch(bounds=[1.0, 2.0])), "proposal_sigma' must be set"),
+    (Bunch(beta=Bunch(proposal_sigma=0.01, prior=1.5)), "Unknown setting"),
+    (Bunch(beta=Bunch(proposal_sigma=0.01, prior_mean=1.5)), "both 'prior_mean' and"),
 ])
-def test_mcmc_group_with_a_wrong_beta_block_fails_at_startup(beta_block, message) -> None:
-    group = Bunch() if beta_block is None else Bunch(beta=beta_block)
+def test_mcmc_group_with_a_wrong_sample_block_fails_at_startup(dust, message) -> None:
+    group = Bunch() if dust is None else Bunch(sample=Bunch(ThermalDust=dust))
     with pytest.raises(ValueError, match=message):
         read_sampling_groups(_make_group_params(mcmc_sampling_groups=Bunch(mcmc=group)))
 

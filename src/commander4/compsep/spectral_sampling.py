@@ -27,26 +27,30 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class MCMCGroup:
-    """One MCMC sampling group of the parameter file, set up for this CompSep rank."""
+    """One MCMC sampling group of the parameter file, set up for this CompSep rank.
+
+    `cfg` holds the relevant parameter file block. Other attributes are derived quantities.
+    """
     name: str
     cfg: Bunch                             # The group's block of the parameter file, with defaults.
-    beta: dict[str, Bunch]                 # Component name -> its beta sampler, with BETA_DEFAULTS.
     chisq_bands: list[str]                 # The bands of the chi-squared, "all" replaced by names.
     chisq_pixels: NDArray[np.bool_] | slice  # The pixels of this rank's band in the chi-squared.
     update_amplitude_groups: list[AmplitudeGroup]  # The amplitude groups it re-solves when sampled.
 
     # The settings of a group in `compsep.mcmc_sampling_groups`.
     DEFAULTS = {"enabled": True,
-                "beta": None,                     # Component name -> the settings below. Required.
+                "sample": None,                   # Component -> parameter -> settings. Required.
                 "update_amplitude_groups": [],    # Amplitude groups re-solved at each step.
                 "numstep": 1,                     # Metropolis steps per Gibbs iteration.
                 "chisq_bands": None,              # Bands of the chi-squared; None/"all" = all.
                 "chisq_mask": None}               # Mask file of the chi-squared; None = no mask.
-    # The settings of one component in the group's `beta` block.
-    BETA_DEFAULTS = {"proposal_sigma": None,      # Step length of the proposal. Required.
-                     "bounds": None,              # Hard bounds [lowest, highest]; None = none.
-                     "prior_mean": None,          # Mean and rms of a Gaussian prior; None = no
-                     "prior_rms": None}           # prior. Set both or neither.
+    # The parameters of one component in `sample`. Only beta can be sampled yet.
+    COMP_DEFAULTS = {"beta": None}
+    # The settings of one sampled parameter.
+    PARAM_DEFAULTS = {"proposal_sigma": None,     # Step length of the proposal. Required.
+                      "bounds": None,             # Hard bounds [lowest, highest]; None = none.
+                      "prior_mean": None,         # Mean and rms of a Gaussian prior; None = no
+                      "prior_rms": None}          # prior. Set both or neither.
 
     @classmethod
     def init_from_params(cls, params: Bunch, name: str, amplitude_groups: list[AmplitudeGroup],
@@ -62,20 +66,27 @@ class MCMCGroup:
         cfg = read_settings(params, name, ("compsep.mcmc_sampling_groups",), cls.DEFAULTS)
         comp_names = [comp for comp in params.components if params.components[comp].enabled]
         band_names = [band for band in params.compsep.bands if params.compsep.bands[band].enabled]
-        # The betas are proposed in the order of the `beta` block.
-        if not cfg.beta:
-            raise ValueError(f"'{section}.beta' must name the components whose beta to sample.")
-        beta = {}
-        for comp_name in names_or_all(list(cfg.beta), comp_names, f"{section}.beta"):
-            settings = read_settings(params, comp_name, (f"compsep.{section}.beta",),
-                                     cls.BETA_DEFAULTS)
+        # Each component and each of its parameters in `sample` gets its defaults. A new dict, so
+        # that the parameter file itself is left as it is. The components are stepped in the
+        # order of the block.
+        if not cfg.sample:
+            raise ValueError(f"'{section}.sample' must name the components to sample.")
+        sample = {}
+        for comp_name in names_or_all(list(cfg.sample), comp_names, f"{section}.sample"):
+            location = f"{section}.sample.{comp_name}"
+            sample[comp_name] = read_settings(params, comp_name, (f"compsep.{section}.sample",),
+                                              cls.COMP_DEFAULTS)
+            if sample[comp_name].beta is None:
+                raise ValueError(f"'{location}' must name a parameter to sample: 'beta'.")
+            settings = read_settings(params, "beta", (f"compsep.{location}",), cls.PARAM_DEFAULTS)
             if settings.proposal_sigma is None:
-                raise ValueError(f"'{section}.beta.{comp_name}.proposal_sigma' must be set.")
+                raise ValueError(f"'{location}.beta.proposal_sigma' must be set.")
             # A prior with only one of its two numbers would be left out without a message.
             if (settings.prior_mean is None) != (settings.prior_rms is None):
-                raise ValueError(f"'{section}.beta.{comp_name}' must set both 'prior_mean' and "
-                                 "'prior_rms', or neither.")
-            beta[comp_name] = settings
+                raise ValueError(f"'{location}.beta' must set both 'prior_mean' and 'prior_rms', "
+                                 "or neither.")
+            sample[comp_name].beta = settings
+        cfg.sample = sample
         chisq_bands = names_or_all(cfg.chisq_bands, band_names, f"{section}.chisq_bands")
         enabled_groups = {group.name: group for group in amplitude_groups}
         unknown = sorted(set(cfg.update_amplitude_groups) - set(enabled_groups))
@@ -92,7 +103,7 @@ class MCMCGroup:
             if band.get_from != "file":
                 band = params.experiments[band.get_from].bands[mpi_info.band.name]
             chisq_pixels = _read_chisq_mask(mpi_info.compsep.comm, cfg.chisq_mask, band.eval_nside)
-        return cls(name=name, cfg=cfg, beta=beta, chisq_bands=chisq_bands,
+        return cls(name=name, cfg=cfg, chisq_bands=chisq_bands,
                    chisq_pixels=chisq_pixels, update_amplitude_groups=update_amplitude_groups)
 
 
@@ -166,13 +177,14 @@ def sample_spectral_params(mpi_info: Bunch, params: Bunch, group: MCMCGroup, ban
     compsep = mpi_info.compsep
     # The component objects of each sampled component: its I view and its QU view, which share
     # one beta.
-    views = {name: [comp for comp in comp_list if comp.comp_name == name] for name in group.beta}
+    views = {name: [comp for comp in comp_list if comp.comp_name == name]
+             for name in group.cfg.sample}
 
     n_accept = 0
     for step in range(group.cfg.numstep):
         # The state before the step, for a rejection. All amplitudes are saved, because the
         # re-solve below changes those of other components too. It must change nothing else.
-        old_betas = {name: float(views[name][0].beta) for name in group.beta}  # beta
+        old_betas = {name: float(views[name][0].beta) for name in group.cfg.sample}  # beta
         old_amps = [comp.amps.copy() for comp in comp_list]
         with benchmark("mcmc-loglike"):
             old_chi2 = chi2_of_chisq_bands(mpi_info, group, band_map, comp_list)
@@ -181,10 +193,10 @@ def sample_spectral_params(mpi_info: Bunch, params: Bunch, group: MCMCGroup, ban
         # leaves the hard bounds of any beta is rejected at once, without a solve (C3's p_uni).
         new_betas, in_bounds = None, True
         if compsep.is_master:
-            new_betas = {name: float(rng.normal(old_betas[name], group.beta[name].proposal_sigma))
-                         for name in group.beta}
-            for name in group.beta:
-                bounds = group.beta[name].bounds
+            new_betas = {name: float(rng.normal(old_betas[name], settings.beta.proposal_sigma))
+                         for name, settings in group.cfg.sample.items()}
+            for name, settings in group.cfg.sample.items():
+                bounds = settings.beta.bounds
                 if bounds is not None and not bounds[0] <= new_betas[name] <= bounds[1]:
                     in_bounds = False
         new_betas, in_bounds = compsep.comm.bcast((new_betas, in_bounds), root=0)
@@ -194,7 +206,7 @@ def sample_spectral_params(mpi_info: Bunch, params: Bunch, group: MCMCGroup, ban
                                f"rejected ({new_betas}).")
             continue
 
-        for name in group.beta:
+        for name in group.cfg.sample:
             for comp in views[name]:
                 comp.beta = new_betas[name]  # beta
         with benchmark("mcmc-amp-resolve"):
@@ -210,8 +222,8 @@ def sample_spectral_params(mpi_info: Bunch, params: Bunch, group: MCMCGroup, ban
         accept = None
         if compsep.is_master:
             old_log_prior, new_log_prior = 0.0, 0.0
-            for name in group.beta:
-                prior_mean, prior_rms = group.beta[name].prior_mean, group.beta[name].prior_rms
+            for name, settings in group.cfg.sample.items():
+                prior_mean, prior_rms = settings.beta.prior_mean, settings.beta.prior_rms
                 if prior_rms is not None:
                     old_log_prior += -0.5*((old_betas[name] - prior_mean)/prior_rms)**2
                     new_log_prior += -0.5*((new_betas[name] - prior_mean)/prior_rms)**2
@@ -224,7 +236,7 @@ def sample_spectral_params(mpi_info: Bunch, params: Bunch, group: MCMCGroup, ban
         if accept:
             n_accept += 1
         else:
-            for name in group.beta:
+            for name in group.cfg.sample:
                 for comp in views[name]:
                     comp.beta = old_betas[name]  # beta
             for comp, saved in zip(comp_list, old_amps):
@@ -233,7 +245,7 @@ def sample_spectral_params(mpi_info: Bunch, params: Bunch, group: MCMCGroup, ban
     if compsep.is_master:
         logger.info(f"MCMC group {group.name!r} finished: {n_accept}/{group.cfg.numstep} proposals "
                     "accepted.")
-    final_betas = {name: float(views[name][0].beta) for name in group.beta}
+    final_betas = {name: float(views[name][0].beta) for name in group.cfg.sample}
     return {"numstep": group.cfg.numstep, "n_accept": n_accept,
             "accept_rate": n_accept/group.cfg.numstep if group.cfg.numstep > 0 else float("nan"),
             "params": final_betas}

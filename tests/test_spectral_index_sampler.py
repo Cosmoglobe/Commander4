@@ -44,7 +44,8 @@ def _make_setup(start_beta: float = TRUE_BETA, **beta_settings):
         double_precision=True, bands=Bunch(Band60=Bunch(enabled=True, polarization="I")),
         per_pixel_sampling_groups=Bunch(amps=Bunch(comps=["sync"])),
         mcmc_sampling_groups=Bunch(betas=Bunch(
-            beta=Bunch(sync=Bunch(proposal_sigma=0.1, **beta_settings)), chisq_bands=["Band60"]))))
+            sample=Bunch(sync=Bunch(beta=Bunch(proposal_sigma=0.1, **beta_settings))),
+            chisq_bands=["Band60"]))))
     comp_list = CompList.init_from_params(params)
     comp_list[0].amps[:] = 1.0  # The I view. Real alms, so they are valid at m = 0 too.
 

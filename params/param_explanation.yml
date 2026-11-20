@@ -380,18 +380,21 @@ compsep:
     sample_spectral_indices:
       enabled: false          # Off here: it adds `numstep` CG solves per iteration, and
                               # one more of every amplitude group at the end.
-      # The components whose spectral index `beta` the group samples, each with the
-      # settings of its sampler. All betas of the group are proposed together, and
-      # accepted or rejected together. The start value of a beta is `beta` in the
-      # component's own block. A beta that no group names stays fixed at that value.
-      beta:
+      # The components the group samples, and for each the parameters it samples, with
+      # the settings of their sampler. Only the spectral index `beta` can be sampled yet.
+      # All parameters of the group are proposed together, and accepted or rejected
+      # together. The start value of a beta is `beta` in the component's own block. A
+      # beta that no group names stays fixed at that value.
+      sample:
         dust:
-          proposal_sigma: 0.01    # Step length in beta of the Gaussian proposal. Required.
-          bounds: [1.0, 2.5]      # Hard limits [lowest, highest]. A proposal outside them
+          beta:
+            proposal_sigma: 0.01  # Step length in beta of the Gaussian proposal. Required.
+            bounds: [1.0, 2.5]    # Hard limits [lowest, highest]. A proposal outside them
                                   # is rejected without a solve. Absent = no limits.
-          prior_mean: 1.56        # Mean and rms of a Gaussian prior on beta. Absent = a
-          prior_rms: 0.1          # flat prior inside the hard limits.
-        sync: {proposal_sigma: 0.01, bounds: [-4.0, -2.0]}
+            prior_mean: 1.56      # Mean and rms of a Gaussian prior on beta. Absent = a
+            prior_rms: 0.1        # flat prior inside the hard limits.
+        sync:
+          beta: {proposal_sigma: 0.01, bounds: [-4.0, -2.0]}
       update_amplitude_groups: [sample_amps_CG]
                               # Amplitude groups re-solved inside each accept/reject.
                               # Empty list = propose indices against fixed amplitudes.

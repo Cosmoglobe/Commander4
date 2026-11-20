@@ -118,12 +118,15 @@ compsep:
   mcmc_sampling_groups:
     sample_spectral_indices:
       enabled: true
-      # The components whose beta the group samples. `proposal_sigma` is the step length in beta
-      # and `bounds` the hard limits. `prior_mean` and `prior_rms` are an optional Gaussian prior
-      # (C3's p_gauss), here wide enough to be non-informative relative to the data.
-      beta:
-        dust: {proposal_sigma: 0.01, bounds: [1.0, 2.2], prior_mean: 1.55, prior_rms: 0.3}
-        sync: {proposal_sigma: 0.01, bounds: [-4.0, -2.2], prior_mean: -3.1, prior_rms: 0.3}
+      # The components the group samples, and the parameter of each. `proposal_sigma` is the
+      # step length in beta and `bounds` the hard limits. `prior_mean` and `prior_rms` are an
+      # optional Gaussian prior (C3's p_gauss), here wide enough to be non-informative relative
+      # to the data.
+      sample:
+        dust:
+          beta: {proposal_sigma: 0.01, bounds: [1.0, 2.2], prior_mean: 1.55, prior_rms: 0.3}
+        sync:
+          beta: {proposal_sigma: 0.01, bounds: [-4.0, -2.2], prior_mean: -3.1, prior_rms: 0.3}
       update_amplitude_groups: [sample_amps_CG]
       numstep: 1
       # Optional: restrict the accept/reject chi^2 to a subset of the bands.

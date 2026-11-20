@@ -81,12 +81,14 @@ compsep:
   mcmc_sampling_groups:
     sample_spectral_indices:
       enabled: true
-      # The components whose beta the group samples. `proposal_sigma` is the step length in beta.
-      # `bounds` are hard limits (a proposal outside is rejected). `prior_mean` and `prior_rms`
-      # are an optional Gaussian prior (omit both for a flat prior).
-      beta:
-        dust: {proposal_sigma: 0.01, bounds: [1.0, 2.5], prior_mean: 1.56, prior_rms: 0.1}
-        sync: {proposal_sigma: 0.01, bounds: [-4.0, -2.0]}
+      # The components the group samples, and the parameter of each. `proposal_sigma` is the
+      # step length in beta. `bounds` are hard limits (a proposal outside is rejected).
+      # `prior_mean` and `prior_rms` are an optional Gaussian prior (omit both for a flat prior).
+      sample:
+        dust:
+          beta: {proposal_sigma: 0.01, bounds: [1.0, 2.5], prior_mean: 1.56, prior_rms: 0.1}
+        sync:
+          beta: {proposal_sigma: 0.01, bounds: [-4.0, -2.0]}
       update_amplitude_groups: [sample_amps_CG]
       numstep: 1
 
