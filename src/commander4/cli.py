@@ -107,13 +107,14 @@ def run_tod_side(mpi_info: Bunch, params: Bunch, experiment_data, my_band_tod_id
                            f"{chain}, iter {iteration}.")
 
 
-def run_compsep_side(mpi_info: Bunch, params: Bunch, cfg: Bunch, comp_lists_by_chain: dict,
+def run_compsep_side(mpi_info: Bunch, params: Bunch, comp_lists_by_chain: dict,
+                     amplitude_groups: dict, mcmc_groups: dict,
                      first_iteration: int) -> None:
     """Walk the component-separation half of the Gibbs loop.
     Args:
-        cfg: The settings of component separation, from `init_compsep_processing`.
         comp_lists_by_chain: Per-chain component lists, updated in place. Each chain needs its own,
             since a `Component` carries the currently sampled amplitudes and spectral parameters.
+        amplitude_groups, mcmc_groups: The sampling groups, from `init_compsep_processing`.
         first_iteration: The first iteration this run samples.
     """
     from commander4.compsep.processing import process_compsep
@@ -132,8 +133,8 @@ def run_compsep_side(mpi_info: Bunch, params: Bunch, cfg: Bunch, comp_lists_by_c
                            f"starting CompSep chain {chain}, iteration {iteration}.")
         rng = make_iteration_rng(params, mpi_info, chain, iteration)
         t0 = time.time()
-        process_compsep(mpi_info, cfg, params, band_map, comp_lists_by_chain[chain], chain,
-                        iteration, rng)
+        process_compsep(mpi_info, params, amplitude_groups, mcmc_groups, band_map,
+                        comp_lists_by_chain[chain], chain, iteration, rng)
         if mpi_info.compsep.is_master:
             logger.verbose(f"CompSep: Rank {mpi_info.compsep.rank} finished chain {chain}, "
                            f"iteration {iteration} in {time.time()-t0:.2f}s. Sending results.")
@@ -221,7 +222,8 @@ def run_commander4(params: Bunch, params_dict: dict):
         # TODO: This means two copies of per-component amplitude alms are held in memory at all
         # times. Under the current design this is needed for sampling steps where some components
         # are excluded, but their amplitudes are still needed to evaluate the relevant chi2.
-        comp_lists_by_chain, compsep_cfg = init_compsep_processing(mpi_info, params, start)
+        comp_lists_by_chain, amplitude_groups, mcmc_groups = init_compsep_processing(mpi_info,
+                                                                                    params, start)
 
     if mpi_info.world.tod_master is not None:
         # All processes, both compsep and tod, need the world-specific band master dict.
@@ -263,7 +265,8 @@ def run_commander4(params: Bunch, params_dict: dict):
                      compsep_active, start.first_iteration)
 
     elif mpi_info.world.side == "compsep":
-        run_compsep_side(mpi_info, params, compsep_cfg, comp_lists_by_chain, start.first_iteration)
+        run_compsep_side(mpi_info, params, comp_lists_by_chain, amplitude_groups, mcmc_groups,
+                         start.first_iteration)
 
     # stop compsep machinery
     if mpi_info.world.is_master and compsep_active:

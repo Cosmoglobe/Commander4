@@ -30,7 +30,7 @@ def solve_compsep_perpix(solver_comm: MPI.Comm, band_map: DetectorMap, comp_list
         arriving at differing resolutions are silently mixed; a warning is logged below.
         The per-pixel solves run on the master rank only, with ``nthreads`` threads, and draw
         their fluctuation terms from the master's ``rng``. All components must be diffuse
-        (`read_sampling_groups` checks this at start-up).
+        (`AmplitudeGroup` checks this at start-up).
     """
     is_master = solver_comm.Get_rank() == 0
     if is_master:

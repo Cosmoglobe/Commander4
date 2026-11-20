@@ -10,7 +10,7 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.compsep.processing import _read_chisq_mask
+from commander4.compsep.spectral_sampling import _read_chisq_mask
 from commander4.compsep.spectral_sampling import chi2_of_chisq_bands
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList

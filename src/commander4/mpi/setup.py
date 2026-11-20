@@ -164,7 +164,7 @@ def init_mpi(params: Bunch) -> Bunch:
         # views); the solver communicators of the amplitude groups are split from it.
         polarization = enabled_compsep_views(params)[proc_rank].polarization
         mpi_info['compsep'] = Bunch(comm=proc_comm, size=proc_comm.Get_size(), rank=proc_rank,
-                                    is_master=proc_rank == 0,
+                                    is_master=proc_rank == 0, num_threads=my_num_threads,
                                     subcomm=proc_comm.Split(0 if polarization == "I" else 1,
                                                             key=proc_rank))
         mpi_info = init_mpi_compsep(mpi_info, params)

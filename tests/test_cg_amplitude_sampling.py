@@ -30,7 +30,7 @@ import pytest
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
-from commander4.compsep.processing import CG_GROUP_DEFAULTS
+from commander4.compsep.amplitude_sampling import AmplitudeGroup
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
 from commander4.compsep.cg_solver import CompSepSolver
@@ -313,7 +313,7 @@ def test_a_fixed_number_of_iterations_stops_when_the_residual_vanishes():
 
 def test_optimize_defaults_to_off_so_the_solver_samples():
     """A group with no `optimize` entry draws a constrained realization (C3 behaviour)."""
-    assert CG_GROUP_DEFAULTS["optimize"] is False
+    assert AmplitudeGroup.CG_DEFAULTS["optimize"] is False
 
 
 class TestPriorScalingContract:

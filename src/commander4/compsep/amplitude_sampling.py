@@ -6,28 +6,106 @@ the new amplitudes.
 """
 import copy
 import logging
+from dataclasses import dataclass
 
 import numpy as np
+from mpi4py import MPI
 from pixell.bunch import Bunch
 
+import commander4.sky as sky
 from commander4.compsep.cg_solver import CompSepSolver
 from commander4.compsep.perpix_solver import solve_compsep_perpix
 from commander4.data_models.detector_map import DetectorMap
+from commander4.parameters.schema import (EXECUTION_POLS, enabled_compsep_views, names_or_all,
+                                          read_settings, resolve_param)
 from commander4.sky.comp_list import CompList
+from commander4.sky.diffuse_components import DiffuseComponent
 
 logger = logging.getLogger(__name__)
 
 
-def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: DetectorMap,
-                      comp_list: CompList, rng: np.random.Generator) -> dict:
+@dataclass
+class AmplitudeGroup:
+    """One amplitude sampling group of the parameter file, set up for this CompSep rank."""
+    name: str
+    solver: str                          # "CG" or "per_pixel", from the section the group is in.
+    cfg: Bunch                           # The group's block of the parameter file, with defaults.
+    comps: list[str]                     # The components it names, "all" replaced by the names.
+    bands: list[str]                     # The bands it names, likewise.
+    solver_ranks: dict[str, list[int]]   # The CompSep ranks that solve it: {"I": [..], "QU": [..]}.
+    solver_comm: MPI.Comm | None         # This rank's solve; MPI.COMM_NULL if it does not solve.
+
+    # The settings of a group in `compsep.cg_sampling_groups`.
+    CG_DEFAULTS = {"enabled": True,
+                   "comps": None,                            # Component names; None/"all" = all.
+                   "bands": None,                            # Band names; None/"all" = all.
+                   "optimize": False,                        # The posterior maximum, not a draw.
+                   "max_iter": 200,                          # CG iterations of the I solve,
+                   "max_iter_pol": 200,                      # and of the QU solve.
+                   "err_tol": 1.0e-8,                        # Relative residual to stop at.
+                   "preconditioner": "JointPreconditioner"}  # A class in preconditioners.py.
+    # The settings of a group in `compsep.per_pixel_sampling_groups`.
+    PER_PIXEL_DEFAULTS = {"enabled": True,
+                          "comps": None,                     # Component names; None/"all" = all.
+                          "bands": None}                     # Band names; None/"all" = all.
+
+    @classmethod
+    def init_from_params(cls, params: Bunch, section: str, name: str,
+                         mpi_info: Bunch | None = None) -> "AmplitudeGroup":
+        """Read and check the group `compsep.<section>.<name>`.
+
+        Every CompSep rank must build every group, in the same order, because `solver_comm` is
+        split from all of them. Without `mpi_info` the group is only read and checked, and
+        `solver_comm` is None.
+        """
+        solver = "CG" if section == "cg_sampling_groups" else "per_pixel"
+        cfg = read_settings(params, name, (f"compsep.{section}",),
+                            cls.CG_DEFAULTS if solver == "CG" else cls.PER_PIXEL_DEFAULTS)
+        comp_names = [comp for comp in params.components if params.components[comp].enabled]
+        band_names = [band for band in params.compsep.bands if params.compsep.bands[band].enabled]
+        comps = names_or_all(cfg.comps, comp_names, f"{section}.{name}.comps")
+        bands = names_or_all(cfg.bands, band_names, f"{section}.{name}.bands")
+        if solver == "per_pixel":
+            # The per-pixel solver fits component maps pixel by pixel, so it has no model of point
+            # sources.
+            for comp_name in comps:
+                component_class = getattr(sky, params.components[comp_name].component_class)
+                if not issubclass(component_class, DiffuseComponent):
+                    raise ValueError(f"'{section}.{name}.comps' names {comp_name!r}, a "
+                                     f"{component_class.__name__}. The per-pixel solver handles "
+                                     "only diffuse components.")
+        # A rank solves the group if its view is of one of the group's bands, in a polarization
+        # that one of the group's components has. View i of `enabled_compsep_views` runs on
+        # CompSep rank i.
+        solver_ranks = {}
+        for pol in ("I", "QU"):
+            has_comps = any(pol in EXECUTION_POLS[params.components[comp].params.polarization]
+                            for comp in comps)
+            solver_ranks[pol] = [view.rank for view in enabled_compsep_views(params)
+                                 if has_comps and view.polarization == pol
+                                 and view.band_name in bands]
+        # The communicator is split from `subcomm`, which holds the ranks of one polarization, so
+        # the I and QU views of a group are two separate solves.
+        solver_comm = None
+        if mpi_info is not None:
+            is_solver = mpi_info.compsep.rank in solver_ranks[mpi_info.band.pol]
+            solver_comm = mpi_info.compsep.subcomm.Split(0 if is_solver else MPI.UNDEFINED,
+                                                         key=mpi_info.compsep.rank)
+        return cls(name=name, solver=solver, cfg=cfg, comps=comps, bands=bands,
+                   solver_ranks=solver_ranks, solver_comm=solver_comm)
+
+
+def sample_amplitudes(mpi_info: Bunch, params: Bunch, group: AmplitudeGroup,
+                      band_map: DetectorMap, comp_list: CompList,
+                      rng: np.random.Generator) -> dict:
     """Sample the amplitudes of one amplitude group. Every CompSep rank calls it.
 
     Updates the components of `comp_list` in place, on every rank.
 
     Args:
         mpi_info: The MPI data of this rank (`compsep` and `band` are used).
-        cfg: The settings of component separation, from `init_compsep_processing`.
-        group: The settings of the group to solve, one of `cfg.amplitude_groups`.
+        params: The full parameter file, for `compsep.double_precision`.
+        group: The group to solve.
         band_map: This rank's band map.
         comp_list: The full component list of the chain.
         rng: This rank's random generator, for the fluctuation terms of the amplitude draw.
@@ -60,10 +138,11 @@ def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: Detec
             residual_map.map_sky = band_map.map_sky - fixed_sky.astype(band_map.map_sky.dtype)
         # Both solvers leave their solution in the components of `active_sublist`, which are the
         # chain's own components.
-        if cfg.cg_sampling_groups:
-            solver = CompSepSolver(residual_map, group.solver_comm, group,
-                                   double_precision=cfg.double_precision,
-                                   nthreads=cfg.num_threads)
+        double_precision = resolve_param(params, "double_precision", ("compsep",), default=False,
+                                         legal_types=bool)
+        if group.solver == "CG":
+            solver = CompSepSolver(residual_map, group.solver_comm, group.cfg,
+                                   double_precision=double_precision, nthreads=compsep.num_threads)
             residuals = solver.solve(active_sublist, rng)
             # The CG runs its scalar recurrence on rank 0 of `solver_comm` and only broadcasts the
             # stopping decision, so that rank alone holds meaningful residuals.
@@ -71,8 +150,8 @@ def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: Detec
                 cg_stats = {"cg_residuals": np.asarray(residuals), "n_iter": len(residuals)}
         else:
             solve_compsep_perpix(group.solver_comm, residual_map, active_sublist,
-                                 double_precision=cfg.double_precision,
-                                 nthreads=cfg.num_threads, rng=rng)
+                                 double_precision=double_precision, nthreads=compsep.num_threads,
+                                 rng=rng)
 
     # The first solver rank of each polarization (rank 0 of its `solver_comm`) gives every rank
     # the new amplitudes of that polarization, and its CG history. I and QU are separate solves
@@ -82,6 +161,6 @@ def sample_amplitudes(mpi_info: Bunch, cfg: Bunch, group: Bunch, band_map: Detec
         if not group.solver_ranks[pol]:
             continue
         comp_list.broadcast_pol_views(compsep.comm, pol=pol, source=group.solver_ranks[pol][0])
-        if cfg.cg_sampling_groups:
+        if group.solver == "CG":
             stats[pol] = compsep.comm.bcast(cg_stats, root=group.solver_ranks[pol][0])
     return stats

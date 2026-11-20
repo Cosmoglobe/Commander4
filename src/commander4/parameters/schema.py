@@ -17,6 +17,7 @@ MPI task counts and the split of the TOD tasks between bands, which the paramete
 states.
 """
 
+import copy
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -248,7 +249,8 @@ def read_settings(params: Bunch, name: str, scopes: Sequence[str],
     Raises:
         ValueError: for a setting without a default, or with the wrong type.
     """
-    settings = Bunch(**defaults)
+    # A copy, so that no two settings blocks share a mutable default such as a list.
+    settings = Bunch(**copy.deepcopy(defaults))
     # The widest scope first, so that each narrower one overrides it.
     for scope in reversed(scopes):
         block = params
@@ -271,6 +273,20 @@ def read_settings(params: Bunch, name: str, scopes: Sequence[str],
                                      f"{type(default).__name__}.")
             settings[key] = value
     return settings
+
+
+def names_or_all(names: list[str] | str | None, known_names: list[str],
+                 setting: str) -> list[str]:
+    """The names a setting selects: `names` itself, or all of `known_names` for "all" or None."""
+    if names is None or names == "all":
+        return list(known_names)
+    if isinstance(names, str):
+        raise ValueError(f"'{setting}' must be a list of names or \"all\", not {names!r}.")
+    unknown = sorted(set(names) - set(known_names))
+    if unknown:
+        raise ValueError(f"'{setting}' names unknown {unknown}. The known names are "
+                         f"{known_names}.")
+    return list(names)
 
 
 def resolve_band_lmax(params: Bunch, band_name: str, experiment: str | None, nside: int) -> int:

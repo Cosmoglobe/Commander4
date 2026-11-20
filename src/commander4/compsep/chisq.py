@@ -53,15 +53,15 @@ def log_fit(mpi_info: Bunch, band_map: DetectorMap, comp_list: CompList, label: 
                     f"red.chi2={total/ndof:.4f}")
 
 
-def collect_fit_diagnostics(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap,
+def collect_fit_diagnostics(mpi_info: Bunch, params: Bunch, band_map: DetectorMap,
                             comp_list: CompList) -> tuple[dict, dict[str, float]]:
     """Gather the fit of the sky model to each band onto the CompSep master, for the chain file.
 
     Called collectively by every CompSep rank, once per Gibbs iteration. Each rank evaluates its
     own band. One small Python `gather` collects the per-band numbers, and one `Reduce` the
-    low-resolution chi-squared map (resolution `cfg.nside_chisq`, C3's `NSIDE_CHISQ`). With
-    `cfg.include_residual_maps`, the full-resolution `data - model` maps go in the same `gather`,
-    which is the expensive case.
+    low-resolution chi-squared map (resolution `output.chains.nside_chisq`, C3's `NSIDE_CHISQ`).
+    With `output.chains.include.compsep_residual_maps`, the full-resolution `data - model` maps go
+    in the same `gather`, which is the expensive case.
 
     Returns:
         `(fit_tree, band_frequencies)` on the master, and two empty dicts elsewhere. `fit_tree`
@@ -70,8 +70,15 @@ def collect_fit_diagnostics(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap,
         mixing coefficient per band.
     """
     compsep = mpi_info.compsep
+    # The chi-squared map resolution should be at or below the coarsest band nside, since the map
+    # only ever sums z^2 into its pixels.
+    chains = params.output.chains
+    nside_chisq = int(getattr(chains, "nside_chisq", 256))
+    include_chisq_map = bool(getattr(chains.include, "chisq_map", False))
+    include_residual_maps = bool(getattr(chains.include, "compsep_residual_maps", False))
+
     residual = band_map.map_sky - comp_list.get_sky_at_band(band_map)
-    npix, npix_chisq = band_map.map_sky.shape[-1], hp.nside2npix(cfg.nside_chisq)
+    npix, npix_chisq = band_map.map_sky.shape[-1], hp.nside2npix(nside_chisq)
     # ud_grade averages, so scaling by how many band pixels fall in a chi-squared pixel turns the
     # average into the sum over them that Commander3's chisq map accumulates (comm_output_mod.f90).
     # For a band coarser than the chi-squared map the factor is below 1: each band pixel's z^2 is
@@ -90,14 +97,14 @@ def collect_fit_diagnostics(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap,
         z2_full = np.zeros(npix)
         z2_full[observed] = z**2
         chi2_row = 1 + ipol if band_map.pol == "QU" else 0
-        chi2_map[chi2_row] += hp.ud_grade(z2_full, cfg.nside_chisq)*subpixels_per_chisq_pixel
+        chi2_map[chi2_row] += hp.ud_grade(z2_full, nside_chisq)*subpixels_per_chisq_pixel
 
     # Commander3's chisq_<postfix>.fits: z^2 from every band added into one low-resolution map.
     chi2_map_total = np.zeros_like(chi2_map) if compsep.is_master else None
     compsep.comm.Reduce(chi2_map, chi2_map_total, op=MPI.SUM, root=0)
     band_fit = Bunch(name=mpi_info.band.name, pol=mpi_info.band.pol,
                      nu=float(band_map.nu), chi2=float(chi2_band), ndof=ndof_band,
-                     residual=residual if cfg.include_residual_maps else None)
+                     residual=residual if include_residual_maps else None)
     band_fits = compsep.comm.gather(band_fit, root=0)
     if not compsep.is_master:
         return {}, {}
@@ -110,7 +117,7 @@ def collect_fit_diagnostics(mpi_info: Bunch, cfg: Bunch, band_map: DetectorMap,
     # whether a fit is good rather than merely large: chi-squared grows with the map size, its
     # z-score does not.
     chi2["z"] = (total - ndof)/np.sqrt(2.0*ndof) if ndof > 0 else float("nan")
-    if cfg.include_chisq_map:
+    if include_chisq_map:
         chi2["map"] = chi2_map_total.astype(np.float32)
 
     residuals: dict = {}
