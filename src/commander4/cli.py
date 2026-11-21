@@ -42,9 +42,6 @@ def parse_command_line() -> str:
 
 def gibbs_schedule(first_iteration: int, num_iterations: int) -> list[tuple[int, int]]:
     """The `(chain, iteration)` steps of the run, in the order both sides walk them.
-
-    `num_iterations` is the total length of the chains (C3's NUM_GIBBS_ITER), so a run that
-    continues saved chains from `first_iteration` > 1 samples only the iterations still missing.
     """
     return [(chain, iteration)
             for iteration in range(first_iteration, num_iterations + 1)
@@ -53,14 +50,8 @@ def gibbs_schedule(first_iteration: int, num_iterations: int) -> list[tuple[int,
 
 def make_iteration_rng(params: Bunch, mpi_info: Bunch, chain: int, iteration: int):
     """Return the random generator for one chain, iteration, and rank.
-
-    Every random draw of the step is taken from this generator, which is passed down explicitly.
-    The stream depends only on the keys below, so a restarted run reproduces the draws of the
-    original run, provided it uses the same MPI layout. The world rank is unique across the TOD
-    and CompSep sides, so it also separates the two sides.
     """
     import numpy as np
-
     root_seed = int(params.gibbs.seed) if "seed" in params.gibbs else 1995
     return np.random.default_rng([root_seed, chain, iteration, mpi_info.world.rank])
 
@@ -213,9 +204,8 @@ def run_commander4(params: Bunch, params_dict: dict):
         # Even though we're always only working on one of the two chains we still need two sets of
         # samples, as we can't "hot swap" them (both TOD processing and component separation would
         # have to send and receive from the same local buffer).
-        # TODO: However, perhaps it would be cleaner to call these "current_chain" and "other chain"
-        mpi_info, my_band_tod_id, experiment_data, tod_samples_chain1, tod_samples_chain2\
-                                                    = init_tod_processing(mpi_info, params, start)
+        mpi_info, my_band_tod_id, experiment_data, tod_samples_by_chain = init_tod_processing(
+            mpi_info, params, start)
     elif mpi_info.world.side == "compsep":
         # A Component contains the current sampled amplitudes and spectral parameters, so each
         # Gibbs chain has its own complete component list.
@@ -260,9 +250,8 @@ def run_commander4(params: Bunch, params_dict: dict):
                                                   mpi_info.world.compsep_band_masters)
         else:
             curr_compsep_output = get_local_initial_sky(mpi_info, experiment_data, params)
-        run_tod_side(mpi_info, params, experiment_data, my_band_tod_id,
-                     {1: tod_samples_chain1, 2: tod_samples_chain2}, curr_compsep_output,
-                     compsep_active, start.first_iteration)
+        run_tod_side(mpi_info, params, experiment_data, my_band_tod_id, tod_samples_by_chain,
+                     curr_compsep_output, compsep_active, start.first_iteration)
 
     elif mpi_info.world.side == "compsep":
         run_compsep_side(mpi_info, params, comp_lists_by_chain, amplitude_groups, mcmc_groups,

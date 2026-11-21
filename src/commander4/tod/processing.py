@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 def init_tod_processing(mpi_info: Bunch, params: Bunch, start: ChainStart) \
-        -> tuple[Bunch, str, DetectorGroupTOD, TODSamples, TODSamples]:
+        -> tuple[Bunch, str, DetectorGroupTOD, dict[int, TODSamples]]:
     """To be run once before starting TOD processing. Determines what data this rank is responsible
     for, reads other relevant parameter file data, and allocates the TODSamples objects, which
     start from a saved sample where `start` names one for this band. Creating them reads and checks
@@ -48,6 +48,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch, start: ChainStart) \
         todproc_my_band_id (str): Unique string identifier for the experiment+band this process is
           responsible for, regardless of polarization.
         experiment_data (DetectorGroupTOD): The TOD data for the band of this process.
+        tod_samples_by_chain (dict[int, TODSamples]): Each chain's samples, by chain number.
     """
 
     experiment_name = mpi_info.experiment.name
@@ -72,12 +73,12 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch, start: ChainStart) \
     if mpi_info.tod.is_master:
         logger.summary(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")
 
-    tod_samples_chain1 = TODSamples(experiment_data, params, my_band, band_comm, 1)
-    tod_samples_chain2 = TODSamples(experiment_data, params, my_band, band_comm, 2)
+    tod_samples_by_chain = {chain: TODSamples(experiment_data, params, my_band, band_comm, chain)
+                            for chain in (1, 2)}
     # Continue from a saved sample, if the run starts from one and it holds this band. A band the
     # saved run never wrote keeps its parameter-file start (`resolve_chain_start` warns about it).
     if start.source_dir is not None:
-        for tod_samples in (tod_samples_chain1, tod_samples_chain2):
+        for tod_samples in tod_samples_by_chain.values():
             chain_file = paths.band_chain_file(
                 start.source_dir, experiment_data.experiment_name, experiment_data.band_name,
                 start.source_chain[tod_samples.chain], start.source_iteration)
@@ -92,7 +93,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch, start: ChainStart) \
                                 (f"experiments.{experiment_data.experiment_name}",),
                                 default=True, legal_types=bool)
     experiment_data.pixel_domain = PixelDomain.from_view(
-        TODView(experiment_data, tod_samples_chain1), band_comm,
+        TODView(experiment_data, tod_samples_by_chain[1]), band_comm,
         "sparse" if sparse_maps else "full", experiment_data.nside)
 
     # Creating "tod_band_masters", an array which maps the band index to the rank of the master
@@ -117,7 +118,7 @@ def init_tod_processing(mpi_info: Bunch, params: Bunch, start: ChainStart) \
     mpi_info['world']['tod_band_masters'] = world_band_masters_dict
     mpi_info['tod']['tod_band_masters'] = tod_band_masters_dict
 
-    return mpi_info, todproc_my_band_id, experiment_data, tod_samples_chain1, tod_samples_chain2
+    return mpi_info, todproc_my_band_id, experiment_data, tod_samples_by_chain
 
 
 
