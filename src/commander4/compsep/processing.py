@@ -1,339 +1,60 @@
-"""The component-separation side of one Gibbs iteration, and the settings that configure it.
+"""The component-separation side of one Gibbs iteration.
 
-`init_compsep_processing` builds the component list and validates the `compsep` block of the
-parameter file once; `process_compsep` runs one iteration's sampling groups over the band maps
-received from TOD processing. A *sampling group* names a set of components and bands to be sampled
-together, by one of three solvers: CG (`cg_solver`), per-pixel (`perpix_solver`), or Metropolis-
-Hastings (`mcmc`). The `*Config` dataclasses here validate each group's parameter block.
+`init_compsep_processing` builds the component list and the sampling groups once;
+`process_compsep` runs one iteration's sampling groups over the band maps received from TOD
+processing. A *sampling group* names a set of components and bands to be sampled together. An
+amplitude group (`AmplitudeGroup`) is solved with CG or per pixel, and an MCMC group (`MCMCGroup`)
+with Metropolis steps.
 """
 import numpy as np
-import healpy as hp
 import logging
 import os
 from copy import deepcopy
-from dataclasses import dataclass, fields
-from numbers import Integral, Real
-from mpi4py import MPI
-from numpy.typing import NDArray
 from pixell.bunch import Bunch
-from typing import Self
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
-from commander4.sky.sky_model import SkyModel
-from commander4.compsep.cg_solver import CompSepSolver
-from commander4.compsep.chisq import ChisqResult, collect_fit_diagnostics, evaluate_chi2
-from commander4.compsep.perpix_solver import solve_compsep_perpix
-from commander4.compsep.spectral_index import SpectralIndexSamplingGroup
+from commander4.compsep.amplitude_sampling import AmplitudeGroup, sample_amplitudes
+from commander4.compsep.chisq import collect_fit_diagnostics, log_fit
+from commander4.compsep.spectral_sampling import MCMCGroup, sample_spectral_params
 from commander4.file_io import paths
 from commander4.file_io.chain_restart import ChainStart
 from commander4.file_io.chain_writer import write_compsep_chain_to_file
-from commander4.polarization import get_execution_band_id, EXECUTION_POLS
-from commander4.parameters.schema import resolve_band_lmax, resolve_param
-from commander4.diagnostics.performance import benchmark, bench_summary, bench_reset, log_memory
+from commander4.parameters.schema import resolve_band_lmax
+from commander4.diagnostics.performance import benchmark, bench_summary, bench_reset
 
 logger = logging.getLogger(__name__)
 
 
-def _normalize_names(value, field_name: str) -> tuple[str, ...] | None:
-    """Normalize an omitted/``all``/list selection into an immutable names-or-all value."""
-    if value is None or value == "all":
-        return None
-    if isinstance(value, str):
-        raise TypeError(f"{field_name} must be a list of names, 'all', or omitted.")
-    names = tuple(value)
-    if any(not isinstance(name, str) for name in names):
-        raise ValueError(f"Every entry in {field_name} must be a string.")
-    return names
+def read_sampling_groups(params: Bunch, mpi_info: Bunch | None = None) \
+        -> tuple[list[AmplitudeGroup], list[MCMCGroup]]:
+    """The enabled amplitude groups and MCMC groups of `compsep`, in the order of the file.
 
-
-@dataclass(frozen=True)
-class SamplingGroupConfig:
-    """Common construction and component selection for one named compsep sampling group."""
-
-    name: str
-    enabled: bool = True
-    comps: tuple[str, ...] | None = None
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.enabled, bool):
-            raise ValueError(f"Sampling group {self.name!r} enabled must be true or false.")
-
-    @classmethod
-    def from_block(cls, name: str, block: Bunch | dict) -> Self:
-        """Construct this group and reject parameters not declared by its config class."""
-        try:
-            values = dict(block)
-        except (TypeError, ValueError) as error:
-            raise ValueError(f"Sampling group {name!r} must be a parameter block.") from error
-        for field_name in ("comps", "bands"):
-            if field_name in values:
-                values[field_name] = _normalize_names(
-                    values[field_name], f"{name}.{field_name}")
-        constructor_fields = {item.name for item in fields(cls) if item.init}
-        parameter_fields = constructor_fields - {"name"}
-        unknown = sorted(set(values) - parameter_fields)
-        if unknown:
-            raise ValueError(f"Unknown key(s) {unknown} in sampling group {name!r}. That group "
-                             f"accepts {sorted(parameter_fields)}.")
-        try:
-            return cls(name=name, **values)
-        except TypeError as error:
-            raise ValueError(f"Invalid sampling group {name!r}: {error}") from error
-
-
-@dataclass(frozen=True)
-class CGSamplingGroupConfig(SamplingGroupConfig):
-    """One C3-style CG amplitude group, including all solver controls."""
-
-    bands: tuple[str, ...] | None = None
-    optimize: bool = False
-    max_iter: int = 200
-    max_iter_pol: int = 200
-    err_tol: float = 1.0e-8
-    preconditioner: str = "JointPreconditioner"
-    dense_matrix_debug_mode: bool = False
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if (not isinstance(self.max_iter, Integral) or isinstance(self.max_iter, bool)
-                or not isinstance(self.max_iter_pol, Integral)
-                or isinstance(self.max_iter_pol, bool)):
-            raise ValueError(f"CG sampling group {self.name!r} iteration limits must be integers.")
-        if self.max_iter < 0 or self.max_iter_pol < 0:
-            raise ValueError(
-                f"CG sampling group {self.name!r} iteration limits cannot be negative.")
-        if not isinstance(self.err_tol, Real) or not np.isfinite(self.err_tol) or self.err_tol < 0:
-            raise ValueError(f"CG sampling group {self.name!r} err_tol must be non-negative and "
-                             "finite.")
-        if (not isinstance(self.optimize, bool)
-                or not isinstance(self.dense_matrix_debug_mode, bool)):
-            raise ValueError(
-                f"CG sampling group {self.name!r} boolean options must be true or false.")
-        if self.dense_matrix_debug_mode:
-            raise ValueError(
-                f"CG sampling group {self.name!r} selects the unsupported dense-matrix debug mode: "
-                "commander4.compsep.dense_matrix_debug predates the CompList-based CG driver and "
-                "builds its unit vectors as plain arrays, so the solve crashes as soon as the "
-                "operator is applied. Leave dense_matrix_debug_mode off until it is ported.")
-
-@dataclass(frozen=True)
-class PerPixelSamplingGroupConfig(SamplingGroupConfig):
-    """One per-pixel amplitude sampling group."""
-
-    bands: tuple[str, ...] | None = None
-
-@dataclass(frozen=True)
-class MCMCSamplingGroupConfig(SamplingGroupConfig):
-    """One MCMC group; currently the sampled parameters are spectral indices."""
-
-    parameters: str = "spectral_indices"
-    update_amplitude_groups: tuple[str, ...] = ()
-    numstep: int = 1
-    chisq_bands: tuple[str, ...] | None = None
-    chisq_mask: str | None = None
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if self.parameters != "spectral_indices":
-            raise ValueError(f"MCMC sampling group {self.name!r} has unsupported parameters "
-                             f"{self.parameters!r}; only 'spectral_indices' is implemented.")
-        if not isinstance(self.numstep, int) or isinstance(self.numstep, bool) or self.numstep < 1:
-            raise ValueError(f"MCMC sampling group {self.name!r} numstep must be at least 1.")
-        if self.chisq_mask is not None and not isinstance(self.chisq_mask, str):
-            raise ValueError(
-                f"MCMC sampling group {self.name!r} chisq_mask must be a path or null.")
-
-    @classmethod
-    def from_block(cls, name: str, block: Bunch | dict) -> Self:
-        values = dict(block)
-        if "update_amplitude_groups" in values:
-            update_groups = _normalize_names(
-                values["update_amplitude_groups"], f"{name}.update_amplitude_groups")
-            values["update_amplitude_groups"] = () if update_groups is None else update_groups
-        if "chisq_bands" in values:
-            values["chisq_bands"] = _normalize_names(
-                values["chisq_bands"], f"{name}.chisq_bands")
-        return super().from_block(name, values)
-
-
-@dataclass(frozen=True)
-class CompSepState:
-    """Resolved rank-local component-separation settings and loaded mask data."""
-
-    band_name: str
-    band_identifier: str
-    target_pol: str
-    amplitude_method: str | None
-    amplitude_groups: dict[str, CGSamplingGroupConfig | PerPixelSamplingGroupConfig]
-    mcmc_groups: dict[str, MCMCSamplingGroupConfig]
-    double_precision: bool
-    num_threads: int
-    chisq_masks: dict[str, NDArray]
-    # Chain-output settings, resolved once here rather than re-read every iteration.
-    nside_chisq: int  # Resolution of the chi-squared map (C3's NSIDE_CHISQ).
-    include_chisq_map: bool
-    include_residual_maps: bool
-
-
-def _read_sampling_groups(params: Bunch, key: str,
-                          config_class: type[SamplingGroupConfig]
-                          ) -> dict[str, SamplingGroupConfig]:
-    """Construct and return the enabled groups from one method-specific compsep section."""
-    raw_groups = params.compsep[key] if key in params.compsep else Bunch()
-    groups = {}
-    for name in raw_groups:
-        config = config_class.from_block(name, raw_groups[name])
-        if config.enabled:
-            groups[name] = config
-    return groups
-
-
-def resolve_sampling_groups(params: Bunch) -> tuple[
-        dict[str, CGSamplingGroupConfig],
-        dict[str, PerPixelSamplingGroupConfig],
-        dict[str, MCMCSamplingGroupConfig]]:
-    """Resolve the three method-specific group sections and enforce amplitude-solver exclusivity."""
-    cg_groups = _read_sampling_groups(params, "cg_sampling_groups", CGSamplingGroupConfig)
-    per_pixel_groups = _read_sampling_groups(
-        params, "per_pixel_sampling_groups", PerPixelSamplingGroupConfig)
-    mcmc_groups = _read_sampling_groups(params, "mcmc_sampling_groups", MCMCSamplingGroupConfig)
-    if cg_groups and per_pixel_groups:
+    The amplitude groups are the CG groups or the per-pixel groups, whichever the run uses. Without
+    `mpi_info` the groups are only read and checked (see `AmplitudeGroup` and `MCMCGroup`).
+    """
+    amplitude_groups = []
+    for section in ("cg_sampling_groups", "per_pixel_sampling_groups"):
+        for name in params.compsep[section] if section in params.compsep else ():
+            block = params.compsep[section][name]
+            if "enabled" in block and not block.enabled:
+                continue
+            amplitude_groups.append(AmplitudeGroup.init_from_params(params, section, name,
+                                                                    mpi_info))
+    # CG and per-pixel are two solvers for the same step, and a run uses one of them.
+    if len({group.solver for group in amplitude_groups}) > 1:
         raise ValueError("CG and per-pixel amplitude sampling groups are mutually exclusive; "
                          "configure only one method.")
-    return cg_groups, per_pixel_groups, mcmc_groups
 
-
-def _read_chisq_masks(compsep_comm: MPI.Comm,
-                      mcmc_groups: dict[str, MCMCSamplingGroupConfig]) -> dict[str, NDArray]:
-    """Read each MCMC group's optional ``chisq_mask`` HEALPix file once, and broadcast it.
-
-    This is C3's ``MCMC_SAMPLING_GROUP_CHISQ_MASK``: one mask per sampling group, applied to every
-    band in that group's chi-squared, restricting which sky the accept/reject decision sees. It is
-    deliberately *not* a per-band data mask: it does not enter the amplitude solve or the noise
-    model, only the MCMC likelihood.
-
-    Read at native resolution and kept as-is; `resolve_chisq_mask` ud_grades and thresholds it to
-    each band's nside when the sampling group is built. Only field 0 is read (as on the TOD side),
-    so a single mask applies to both Q and U for polarization bands.
-
-    Returns:
-        Mapping from group name to its raw mask map, omitting groups that define no mask.
-    """
-    masks: dict[str, NDArray] = {}
-    if compsep_comm.Get_rank() == 0:
-        for group_name in mcmc_groups:
-            group = mcmc_groups[group_name]
-            if not group.chisq_mask:
-                continue
-            masks[group_name] = hp.read_map(group.chisq_mask, field=0, dtype=np.float64)
-            logger.info(f"CompSep: read chisq mask for MCMC group {group_name!r} from "
-                        f"{group.chisq_mask} (fsky = {np.mean(masks[group_name] > 0.5):.3f}).")
-    return compsep_comm.bcast(masks, root=0)
-
-
-def _sampling_group_selects_band(selected_bands: tuple[str, ...] | list[str] | None, band_name: str,
-                                 band_identifier: str) -> bool:
-    """Whether a sampling group acts on a band, matched by base name or execution-view identifier.
-
-    `selected_bands` of None means "all bands".
-    """
-    if selected_bands is None:
-        return True
-    return band_name in selected_bands or band_identifier in selected_bands
-
-
-def _filter_sampling_group_components(comp_list: CompList,
-                                      selected_components: tuple[str, ...] | list[str] | None
-                                      ) -> CompList:
-    """Subset of `comp_list` whose component names are selected by the sampling group.
-
-    `selected_components` of None means "all components". The returned `CompList` shares the
-    underlying `Component` objects with `comp_list` (it is a view, not a copy).
-    """
-    if selected_components is None:
-        return CompList(list(comp_list))
-    selected_names = set(selected_components)
-    return CompList([comp for comp in comp_list if comp.comp_name in selected_names])
-
-
-def _validate_sampling_group_references(sampling_groups: dict[str, SamplingGroupConfig],
-                                        comp_list: CompList,
-                                        params: Bunch) -> None:
-    """Fail fast if any enabled sampling group references a non-existent component or band.
-
-    `comps` and `bands` are expected to be lists of strings naming existing components and bands
-    (bands may be given either as a base name or as an execution-view identifier), the string
-    "all", or omitted. The latter two select everything and are not checked against names.
-    """
-    known_comp_names = {comp.comp_name for comp in comp_list.joined()}
-    known_band_names = set()
-    for band_str in params.compsep.bands:
-        band = params.compsep.bands[band_str]
-        if not band.enabled:
+    mcmc_groups = []
+    section = "mcmc_sampling_groups"
+    for name in params.compsep[section] if section in params.compsep else ():
+        block = params.compsep[section][name]
+        if "enabled" in block and not block.enabled:
             continue
-        known_band_names.add(band_str)
-        for eval_pol in EXECUTION_POLS[band.polarization]:
-            known_band_names.add(get_execution_band_id(band_str, eval_pol))
-
-    for group_name in sampling_groups:
-        group = sampling_groups[group_name]
-        selected_comps = group.comps
-        if selected_comps is not None:
-            unknown = sorted(set(selected_comps) - known_comp_names)
-            if unknown:
-                raise ValueError(
-                    f"Sampling group {group_name!r} references unknown component(s) {unknown}. "
-                    f"Known components: {sorted(known_comp_names)}.")
-        if isinstance(group, (CGSamplingGroupConfig, PerPixelSamplingGroupConfig)):
-            selected_bands = group.bands
-        else:
-            selected_bands = group.chisq_bands
-        if selected_bands is not None:
-            unknown = sorted(set(selected_bands) - known_band_names)
-            if unknown:
-                raise ValueError(
-                    f"Sampling group {group_name!r} references unknown band(s) {unknown}. "
-                    f"Known bands: {sorted(known_band_names)}.")
-
-
-def _validate_sampling_group_dependencies(
-        amplitude_groups: dict[str, CGSamplingGroupConfig | PerPixelSamplingGroupConfig],
-        mcmc_groups: dict[str, MCMCSamplingGroupConfig]) -> None:
-    """Ensure every MCMC amplitude update names an enabled amplitude group."""
-    for group in mcmc_groups.values():
-        unknown = sorted(set(group.update_amplitude_groups) - set(amplitude_groups))
-        if unknown:
-            raise ValueError(
-                f"MCMC sampling group {group.name!r} update_amplitude_groups references unknown "
-                f"or disabled amplitude group(s) {unknown}. Known enabled amplitude groups: "
-                f"{sorted(amplitude_groups)}.")
-
-
-def _validate_mcmc_sampled_components(mcmc_groups: dict[str, MCMCSamplingGroupConfig],
-                                      comp_list: CompList) -> None:
-    """Report components an MCMC group names that have spectral-index sampling switched off.
-    """
-    sampling_off = set()
-    for comp in comp_list.joined():
-        if "sample_spectral_index" not in comp.comp_params \
-                or not bool(comp.comp_params.sample_spectral_index):
-            sampling_off.add(comp.comp_name)
-
-    for group in mcmc_groups.values():
-        if group.comps is None:
-            continue
-        ignored = sorted(set(group.comps) & sampling_off)
-        if ignored:
-            logger.error(
-                f"MCMC sampling group {group.name!r} names component(s) {ignored}, but they do not "
-                "set 'sample_spectral_index: true' in their own params block, so their spectral "
-                "indices are held fixed and the group ignores them. Set the flag on each component "
-                "you want sampled, or drop it from the group's 'comps'.")
-            if not set(group.comps) - sampling_off:
-                logger.error(f"MCMC sampling group {group.name!r} has no component left to sample "
-                             "and will do nothing.")
+        mcmc_groups.append(MCMCGroup.init_from_params(params, name, amplitude_groups, mpi_info))
+    return amplitude_groups, mcmc_groups
 
 
 def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
@@ -387,113 +108,30 @@ def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
                          f"Cl_prior_l_apod <= {highest_lmax} to taper the prior away.")
 
 
-def _build_conditional_residual(detector_data: DetectorMap, comp_list: CompList, target_pol: str,
-                                active_sublist: CompList) -> DetectorMap:
-    """Subtract the components held fixed by a sampling group from this band's map.
-
-    A sampling group that solves only a subset of components must be conditioned on the rest: the
-    fixed components' projected signal is removed from the data so the active components are fit
-    to the residual rather than the full observed sky (C3's ``compute_residual`` convention).
-    The fixed signal is realized at this band's data resolution; each fixed component removes its
-    own ``amp_fwhm_rad`` (deconvolved CG vs. data-resolution per-pixel) so the subtraction matches
-    the data and the solvers' data model. Returns `detector_data` unchanged when no component is
-    fixed.
-    """
-    active_names = {comp.comp_name for comp in active_sublist}
-    fixed_comps = [comp for comp in comp_list.split_for_eval_pol(target_pol)
-                   if comp.comp_name not in active_names]
-    if not fixed_comps:
-        return detector_data
-    band_pol = "QU" if detector_data.pol else "I"
-    fixed_sky = SkyModel(CompList(fixed_comps)).get_sky_at_nu(
-        detector_data.nu, detector_data.nside, band_pol, fwhm=detector_data.fwhm_rad,
-        lmax=detector_data.lmax)
-    residual = deepcopy(detector_data)
-    residual.map_sky = detector_data.map_sky - fixed_sky.astype(detector_data.map_sky.dtype,
-                                                                copy=False)
-    return residual
-
-
 def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
-    -> tuple[dict[int, CompList], Bunch, str, Bunch, CompSepState]:
-    """Set up the rank-local execution view for component separation.
+    -> tuple[dict[int, CompList], list[AmplitudeGroup], list[MCMCGroup]]:
+    """Build the components and the sampling groups, on one CompSep rank.
 
-    Each CompSep rank owns exactly one execution view of one band. The global CompSep rank space is
-    split into a contiguous intensity block (ranks ``[0, QU_master)``) followed by a contiguous QU
-    block (ranks ``[QU_master, size)``), and we match the current rank against those two streams.
-
-    Args:
-        mpi_info (Bunch): The data structure containing all MPI relevant data.
-        params (Bunch): The parameters from the input parameter file.
-        start (ChainStart): Where the two chains start (see `file_io.chain_restart`).
+    Each CompSep rank works on one view (I or QU) of one band (`mpi_info.band`). This function also
+    adds `mpi_info.world.compsep_band_masters`, the world rank of each CompSep view.
 
     Returns:
-        comp_lists_by_chain (dict[int, CompList]): Each chain's full execution-view component
-            list, initialized and identical on all CompSep ranks.
-        mpi_info (Bunch): `mpi_info`, extended with this rank's band name/identifier and the
-            band-master dictionaries.
-        band_identifier (str): Unique string for the band execution view this rank is working on.
-        my_band (Bunch): The parameter-file subset for the band this rank is working on.
-        compsep_state: Resolved component-separation settings for this rank.
+        comp_lists_by_chain: Each chain's full component list, with polarized components split
+            into separate I and QU components. Identical on all CompSep ranks.
+        amplitude_groups, mcmc_groups: The enabled sampling groups.
     """
-    logger.debug(f"CompSep: Hello from CompSep-rank {mpi_info.compsep.rank} (on machine "
-                 f"{mpi_info.processor_name}), dedicated to band {mpi_info.compsep.rank}.")
+    logger.debug(f"CompSep rank {mpi_info.compsep.rank} (on machine {mpi_info.processor_name}) "
+                 f"handles view {mpi_info.band.identifier}.")
 
-    comp_list = CompList.init_from_params(params.components, params)
-    comp_names = [comp.comp_name for comp in comp_list.joined()]
-    if len(comp_names) != len(set(comp_names)):
-        raise ValueError(f"Duplicate component names found in CompSep setup: {comp_names}.")
-
-    # MPI setup already selected this rank's execution view from the same inventory used to count
-    # tasks. Only the parameter block needs copying because its polarization is narrowed to I or QU.
-    band_name = mpi_info.band.name
-    band_identifier = mpi_info.band.identifier
-    my_band = deepcopy(params.compsep.bands[band_name])
-    my_band.identifier = band_identifier
-    my_band.polarization = mpi_info.band.polarization
-    logger.debug(f"Rank {mpi_info.compsep.rank} handles CompSep view {band_identifier}.")
-
-    cg_groups, per_pixel_groups, mcmc_groups = resolve_sampling_groups(params)
-    amplitude_groups = cg_groups if cg_groups else per_pixel_groups
-    _validate_sampling_group_references(amplitude_groups, comp_list, params)
-    _validate_sampling_group_references(mcmc_groups, comp_list, params)
-    _validate_sampling_group_dependencies(amplitude_groups, mcmc_groups)
-    if mpi_info.compsep.rank == mpi_info.compsep.master:  # One report, not one per band.
-        _validate_mcmc_sampled_components(mcmc_groups, comp_list)
+    comp_list = CompList.init_from_params(params)
+    amplitude_groups, mcmc_groups = read_sampling_groups(params, mpi_info)
+    if mpi_info.compsep.is_master:  # One report, not one per band.
         _validate_component_lmax(comp_list, params)
-    if cg_groups:
-        amplitude_method = "cg"
-    elif per_pixel_groups:
-        amplitude_method = "per_pixel"
-    else:
-        amplitude_method = None
-
-    double_precision = resolve_param(
-        params, "double_precision", ("compsep",), default=False, legal_types=bool)
-    nthreads = params.resources.compsep.num_threads
-    if not isinstance(nthreads, int):
-        nthreads = nthreads[mpi_info.compsep.rank]
-    # Read the MCMC groups' chi-squared masks once here, rather than on every Gibbs iteration when
-    # the sampling groups are rebuilt.
-    chisq_masks = _read_chisq_masks(mpi_info.compsep.comm, mcmc_groups)
-    # Chain-output settings. The chi-squared map resolution is C3's NSIDE_CHISQ; it should be at or
-    # below the coarsest band nside, since the map only ever sums z^2 into its pixels.
-    chains = params.output.chains
-    include = chains.include
-    compsep_state = CompSepState(
-        band_name=band_name,
-        band_identifier=band_identifier,
-        target_pol=mpi_info.compsep.polarization,
-        amplitude_method=amplitude_method,
-        amplitude_groups=amplitude_groups,
-        mcmc_groups=mcmc_groups,
-        double_precision=double_precision,
-        num_threads=nthreads,
-        chisq_masks=chisq_masks,
-        nside_chisq=int(getattr(chains, "nside_chisq", 256)),
-        include_chisq_map=bool(getattr(include, "chisq_map", False)),
-        include_residual_maps=bool(getattr(include, "compsep_residual_maps", False)),
-    )
+    # The components whose beta an MCMC group samples. Only they take beta from a saved chain; a
+    # beta that is not sampled keeps the value of the parameter file.
+    sampled_betas = set()
+    for group in mcmc_groups:
+        sampled_betas.update(group.cfg.sample)
 
     # Read the Gaussian amplitude prior's mean mu (each component's amp_prior_mean_map, else a
     # zero-mean prior) once here; the CG applies S^{-1/2} on every solve. Then give each chain
@@ -501,7 +139,8 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
     # else each component's init_from (else zeros). Done identically on every CompSep rank so the
     # lists start globally consistent.
     with benchmark("fileread-compsep"):
-        comp_list.load_amp_prior_means()
+        for comp in comp_list:
+            comp.load_amp_prior_mean()
         comp_lists_by_chain = {}
         for chain in (1, 2):
             chain_file = None
@@ -514,185 +153,77 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
             # over the initial guesses in `init_from`.
             apply_init_from = chain_file is None or start.first_iteration == 1
             comp_lists_by_chain[chain] = deepcopy(comp_list)
-            comp_lists_by_chain[chain].load_initial_state(chain_file, apply_init_from)
+            for comp in comp_lists_by_chain[chain]:
+                comp.load_initial_state(chain_file, apply_init_from,
+                                        restore_beta=comp.comp_name in sampled_betas)
 
-    data_world = (band_identifier, mpi_info.world.rank)
-    data_compsep = (band_identifier, mpi_info.compsep.rank)
-    all_data_world = mpi_info.compsep.comm.allgather(data_world)
-    all_data_compsep = mpi_info.compsep.comm.allgather(data_compsep)
-    world_band_masters_dict = {item[0]: item[1] for item in all_data_world if item is not None}
-    compsep_band_masters_dict = {item[0]: item[1] for item in all_data_compsep if item is not None}
-    mpi_info.world.compsep_band_masters = world_band_masters_dict
-    mpi_info.compsep.compsep_band_masters = compsep_band_masters_dict
+    # The world rank of each view, by view name, for the exchange with the TOD side.
+    mpi_info.world.compsep_band_masters = dict(mpi_info.compsep.comm.allgather(
+        (mpi_info.band.identifier, mpi_info.world.rank)))
 
-    return comp_lists_by_chain, mpi_info, band_identifier, my_band, compsep_state
+    return comp_lists_by_chain, amplitude_groups, mcmc_groups
 
 
+def process_compsep(mpi_info: Bunch, params: Bunch, amplitude_groups: list[AmplitudeGroup],
+                    mcmc_groups: list[MCMCGroup], band_map: DetectorMap, comp_list: CompList,
+                    chain: int, iteration: int, rng: np.random.Generator) -> None:
+    """One Gibbs iteration of component separation. Every CompSep rank calls it.
 
-def _run_amplitude_group(mpi_info: Bunch, compsep_state: CompSepState,
-                         detector_data: DetectorMap, comp_list: CompList,
-                         group: CGSamplingGroupConfig | PerPixelSamplingGroupConfig,
-                         rng: np.random.Generator) -> dict:
-    """Run one amplitude group and broadcast its result to every CompSep rank.
-
-    `rng` is this rank's random generator, for the fluctuation terms of the amplitude draw.
-
-    Returns:
-        On the CompSep master, the CG convergence history of each polarization that was solved,
-        as ``{"I": {...}, "QU": {...}}``. Empty on every other rank, and empty for the per-pixel
-        method, which is a direct solve with no history to report.
-    """
-    compsep = mpi_info.compsep
-    band_is_active = _sampling_group_selects_band(
-        group.bands, compsep_state.band_name, compsep_state.band_identifier)
-    active_sublist = _filter_sampling_group_components(
-        comp_list.split_for_eval_pol(compsep_state.target_pol), group.comps)
-    should_solve = band_is_active and len(active_sublist) > 0
-
-    cg_stats: dict = {}
-    solver_comm = compsep.subcomm.Split(0 if should_solve else MPI.UNDEFINED, key=compsep.rank)
-    if should_solve:
-        residual_data = _build_conditional_residual(
-            detector_data, comp_list, compsep_state.target_pol, active_sublist)
-        if compsep_state.amplitude_method == "cg":
-            solver = CompSepSolver(
-                residual_data, solver_comm, group,
-                double_precision=compsep_state.double_precision,
-                nthreads=compsep_state.num_threads,
-            )
-            solved_sublist = solver.solve(active_sublist, rng)
-            # The CG runs its scalar recurrence on rank 0 of `solver_comm` and only broadcasts the
-            # stopping decision, so that rank alone holds meaningful residuals.
-            if solver_comm.Get_rank() == 0:
-                cg_stats = {"cg_residuals": np.asarray(solver.CG_residuals),
-                            "n_iter": len(solver.CG_residuals)}
-        elif compsep_state.amplitude_method == "per_pixel":
-            solved_sublist = solve_compsep_perpix(
-                solver_comm, residual_data, active_sublist,
-                double_precision=compsep_state.double_precision,
-                nthreads=compsep_state.num_threads, rng=rng,
-            )
-        else:
-            raise ValueError(
-                f"Unknown amplitude sampling method {compsep_state.amplitude_method!r}.")
-        active_sublist.copy_matching_data_from(solved_sublist)
-        solver_comm.Free()
-
-    any_active = compsep.comm.allreduce(1 if should_solve else 0, op=MPI.SUM)
-    if not any_active:
-        if compsep.rank == compsep.master:
-            logger.verbose(f"Sampling group {group.name!r} had no active band/component overlap.")
-        return {}
-
-    # The lowest-ranked solver for each polarization owns the authoritative result.
-    for eval_pol in ("I", "QU"):
-        solved_here = should_solve and compsep_state.target_pol == eval_pol
-        source = compsep.comm.allreduce(compsep.rank if solved_here else compsep.size, op=MPI.MIN)
-        if source < compsep.size:
-            comp_list.broadcast_pol_views(compsep.comm, eval_pol=eval_pol, source=source)
-
-    # `solver_comm` never spans more than one polarization, so exactly one rank per polarization
-    # filled `cg_stats` above and the rest are empty. I and QU are separate solves that converge
-    # differently, so they are reported separately.
-    all_stats = compsep.comm.gather((compsep_state.target_pol, cg_stats), root=compsep.master)
-    if compsep.rank != compsep.master:
-        return {}
-    return {pol: stats for pol, stats in all_stats if stats}
-
-
-def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
-                    detector_data: DetectorMap, iter: int, chain: int,
-                    params: Bunch, comp_list: CompList, rng: np.random.Generator) -> SkyModel:
-    """Perform a single component-separation iteration.
-
-    Runs the configured CG or per-pixel amplitude groups first, followed by MCMC groups. An MCMC
-    group may re-run named amplitude groups between proposal and accept/reject. When there are MCMC
+    Runs the amplitude groups (CG or per-pixel) first, followed by the MCMC groups. An MCMC group
+    may re-run named amplitude groups between proposal and accept/reject. When there are MCMC
     groups, the amplitude groups run once more after them, as in C3.
 
     Args:
-        mpi_info (Bunch): The data structure containing all MPI relevant data.
-        compsep_state: Resolved component-separation settings and masks for this rank.
-        detector_data (DetectorMap): The detector map for this rank's band, cleaned of all "TOD"
-            components (correlated noise and orbital dipole).
-        iter (int): The current Gibbs iteration (used only for logging and the chain file).
-        chain (int): The current chain (used only for logging and the chain file).
-        params (Bunch): The parameters from the input parameter file.
-        comp_list (CompList): The full execution-view component list, updated in place.
+        amplitude_groups, mcmc_groups: The sampling groups, from `init_compsep_processing`.
+        band_map: This rank's band map, cleaned of all "TOD" components (correlated noise and
+            orbital dipole).
+        comp_list: The full component list of the chain, updated in place.
+        chain, iteration: The current chain and Gibbs iteration, for logging and the chain file.
         rng: This rank's random generator for the iteration. Every draw of every group uses it.
-
-    Returns:
-        The full sky realization, wrapping the updated `comp_list`.
     """
     compsep = mpi_info.compsep
-    amplitude_groups = compsep_state.amplitude_groups
-    mcmc_groups = compsep_state.mcmc_groups
-    sky_model = SkyModel(comp_list)
-    # Sampler bookkeeping for the chain: C3's nonlin-samples_*.dat and its CG residual logging. A
-    # tier that sampled nothing adds no key, so this mirrors the file it ends up in.
-    sampler_stats: dict = {}
-    # The fit after the most recent sampling step. Each step's evaluation both logs its own
-    # diagnostic and, being the state after that step, doubles as the final fit once the last one
-    # has run, so the chain costs no extra sky realization. This function (`process_compsep`) is
-    # only called if there is at least one amplitude or MCMC group, so `fit` is guaranteed to be
-    # defined later.
-    fit: ChisqResult
-
-    def evaluate(label: str | None = None) -> ChisqResult:
-        return evaluate_chi2(compsep, detector_data, sky_model, compsep_state.band_name,
-                             compsep_state.target_pol, compsep_state.nside_chisq, label=label,
-                             keep_residual=compsep_state.include_residual_maps)
-
-    def run_amplitude_groups() -> ChisqResult | None:
-        """Solve every amplitude group in order. Returns the fit after the last group."""
-        group_fit = None
-        for group in amplitude_groups.values():
-            with benchmark(f"amp-{group.name}"):
-                cg_stats = _run_amplitude_group(mpi_info, compsep_state, detector_data, comp_list,
-                                                group, rng)
-            if cg_stats:
-                sampler_stats.setdefault("amplitude_groups", {})[group.name] = cg_stats
-            method_label = "CG" if compsep_state.amplitude_method == "cg" else "per-pixel"
-            group_fit = evaluate(f"{method_label} group {group.name!r}")
-        return group_fit
+    # Sampler statistics for the chain file (C3's nonlin-samples_*.dat and CG residual log), by
+    # group name. The second amplitude pass overwrites the first.
+    amplitude_stats, mcmc_stats = {}, {}
 
     # The Gibbs order of C3 (commander.f90): the amplitudes, the spectral parameters, and then the
     # amplitudes again, so that the chain holds amplitudes solved at the final spectral parameters.
-    if amplitude_groups:
-        fit = run_amplitude_groups()
+    for group in amplitude_groups:
+        with benchmark(f"amp-{group.name}"):
+            stats = sample_amplitudes(mpi_info, params, group, band_map, comp_list, rng)
+        if stats:  # Empty for a per-pixel group, and for a group with nothing to solve.
+            amplitude_stats[group.name] = stats
+        log_fit(mpi_info, band_map, comp_list, label=f"{group.solver} group {group.name!r}")
 
-    for group in mcmc_groups.values():
-        def resolve_amplitudes(group_names=group.update_amplitude_groups):
-            for group_name in group_names:
-                _run_amplitude_group(
-                    mpi_info, compsep_state, detector_data, comp_list,
-                    amplitude_groups[group_name], rng)
-
-        chisq_active = _sampling_group_selects_band(
-            group.chisq_bands, compsep_state.band_name, compsep_state.band_identifier)
-        sampler = SpectralIndexSamplingGroup(
-            compsep.comm, detector_data, comp_list, target_pol=compsep_state.target_pol,
-            selected_comps=group.comps, chisq_active=chisq_active,
-            chisq_mask=compsep_state.chisq_masks.get(group.name), root=compsep.master)
+    for group in mcmc_groups:
         with benchmark(f"mcmc-{group.name}"):
-            mcmc_stats = sampler.run(numstep=group.numstep, resolve_amplitudes=resolve_amplitudes,
-                                     rng=rng)
-        if mcmc_stats:
-            sampler_stats.setdefault("mcmc", {})[group.name] = mcmc_stats
-        fit = evaluate(f"MCMC group {group.name!r}")
+            mcmc_stats[group.name] = sample_spectral_params(mpi_info, params, group, band_map,
+                                                            comp_list, rng)
+        log_fit(mpi_info, band_map, comp_list, label=f"MCMC group {group.name!r}")
 
-    if mcmc_groups and amplitude_groups:
-        fit = run_amplitude_groups()
+    if mcmc_groups:
+        for group in amplitude_groups:
+            with benchmark(f"amp-{group.name}"):
+                stats = sample_amplitudes(mpi_info, params, group, band_map, comp_list, rng)
+            if stats:
+                amplitude_stats[group.name] = stats
+            log_fit(mpi_info, band_map, comp_list, label=f"{group.solver} group {group.name!r}")
 
+    # The fit of the final sky model, for the chain file.
     with benchmark("chain-gather"):
-        fit_tree, band_frequencies = collect_fit_diagnostics(compsep, fit,
-                                                             compsep_state.include_chisq_map)
-    if compsep.rank == compsep.master:
-        diagnostics = {**fit_tree, **sampler_stats}
+        fit_tree, band_frequencies = collect_fit_diagnostics(mpi_info, params, band_map, comp_list)
+    if compsep.is_master:
+        # A section is written only if some group filled it.
+        diagnostics = dict(fit_tree)
+        if amplitude_stats:
+            diagnostics["amplitude_groups"] = amplitude_stats
+        if mcmc_stats:
+            diagnostics["mcmc"] = mcmc_stats
         with benchmark("filewrite-compsep"):
-            write_compsep_chain_to_file(comp_list, params, chain, iter, diagnostics,
+            write_compsep_chain_to_file(comp_list, params, chain, iteration, diagnostics,
                                         band_frequencies)
         chi2 = fit_tree["chi2"]
-        logger.summary(f"Chain {chain}, iteration {iter} complete: chi2={chi2['total']:.6e}, "
+        logger.summary(f"Chain {chain}, iteration {iteration} complete: chi2={chi2['total']:.6e}, "
                        f"ndof={chi2['ndof']}, red.chi2={chi2['reduced']:.4f}, z={chi2['z']:.3f}.")
 
     with benchmark("end-barrier"):
@@ -700,5 +231,3 @@ def process_compsep(mpi_info: Bunch, compsep_state: CompSepState,
 
     bench_summary(compsep.comm, label="CompSep")
     bench_reset()
-
-    return sky_model

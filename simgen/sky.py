@@ -17,7 +17,6 @@ Add a new component by mapping its ``component_class`` to a ``SkyComponent`` sub
 import logging
 import os
 from abc import ABC, abstractmethod
-from copy import deepcopy
 import numpy as np
 import healpy as hp
 from numpy.typing import NDArray
@@ -47,21 +46,22 @@ def _scalar_nu_ref(comp_params: Bunch) -> float:
 def _build_c4_component(comp_cfg: Bunch, global_params: Bunch):
     """Instantiate the matching Commander4 component (used only for its ``get_sed``).
 
-    Missing structural keys that ``get_sed`` does not need (smoothing prior, spatially-varying MM)
-    are filled with harmless defaults so a minimal sim ``components`` block also works; the SED
-    parameters (beta/T/nu_ref) must be supplied by the user. ``lmax: "full"`` is resolved as in C4.
+    The C4 component gets the settings of the sim's ``components`` block that its class knows
+    (``cls.DEFAULTS``); the block also holds settings of the simulator itself, such as
+    ``template``. The SED parameters (beta/T/nu_ref) must be supplied by the user. A missing
+    ``polarization`` is IQU, and a missing ``lmax``, or ``lmax: "full"``, is 2.5*nside.
     """
     cls = getattr(c4comp, comp_cfg.component_class)
-    cp = deepcopy(comp_cfg.params)
-    defaults = {"polarization": "IQU", "spatially_varying_MM": False,
-                "Cl_prior_amplitude": None,  # identity C_l prior; get_sed never uses it
-                "lmax": (global_params.nside * 5) // 2}
-    for key, val in defaults.items():
-        if key not in cp:
+    cp = Bunch(polarization="IQU", lmax="full")
+    for key, val in comp_cfg.params.items():
+        if key in cls.DEFAULTS:
             cp[key] = val
     if cp.lmax == "full":
         cp.lmax = (global_params.nside * 5) // 2
-    return cls(cp, global_params, eval_pol="I", comp_name=comp_cfg._name)
+    double_precision = bget(global_params, "double_precision", False)
+    c4_params = Bunch(components=Bunch({comp_cfg._name: Bunch(params=cp)}),
+                      compsep=Bunch(double_precision=double_precision))
+    return cls(c4_params, comp_cfg._name, "I")
 
 
 def _select_pol(iqu_map: NDArray, polarization: str) -> NDArray:

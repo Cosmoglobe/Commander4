@@ -181,8 +181,8 @@ def write_compsep_chain_to_file(comp_list: CompList, params: Bunch, chain: int, 
                                 band_frequencies: dict[str, float] | None = None) -> None:
     """Write one component-separation sample: the components, and how well they fit the data.
 
-    Each component writes its own `comps/<shortname>/` group (`CompList.write_chain`), which is
-    what `CompList.load_initial_state` reads back on a restart.
+    Each component writes its own `comps/<comp_name>/` group (`CompList.write_chain`), which is
+    what `Component.load_initial_state` reads back on a restart.
 
     `diagnostics` is the goodness-of-fit and sampler bookkeeping `process_compsep` collected for
     this iteration -- see `compsep.chisq.collect_fit_diagnostics` for its shape. C3 spreads the same

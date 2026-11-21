@@ -40,13 +40,13 @@ again from the data, as in C3.
 
 **Sampled, not fixed, spectral parameters.** Fixed parameters always come from the parameter
 file, so an edit there takes effect with `init_chain`. C3 instead restores every spectral
-parameter. Which parameters are sampled is decided by explicit code in each class's `read_chain`,
-gated by the switch in the component's own parameters that its sampler uses: `beta` is restored
-when `sample_spectral_index` is on. A name list cannot express this in general. The `FullDust`
-model (branch `update_dust`) samples only the amplitudes in row 1 of its spline-node table,
-carries pieces that are `None` unless configured, and must rebuild its spline after a restore. A
-component with such state overrides `read_chain`, calls `super()`, and restores and rebuilds its
-own state.
+parameter. Which parameters are sampled is decided by explicit code in each class's `read_chain`:
+`beta` is restored when an MCMC sampling group names the component in its `beta` block
+(`init_compsep_processing` passes this as `restore_beta`). A name list cannot express this in
+general. The `FullDust` model (branch `update_dust`) samples only the amplitudes in row 1 of its
+spline-node table, carries pieces that are `None` unless configured, and must rebuild its spline
+after a restore. A component with such state overrides `read_chain`, calls `super()`, and
+restores and rebuilds its own state.
 
 ## Which iteration a run starts from
 

@@ -160,27 +160,13 @@ def init_mpi(params: Bunch) -> Bunch:
 
     elif color == 1:
         proc_rank = proc_comm.Get_rank()
-        mpi_info['compsep'] = Bunch()
-        mpi_info['compsep']['comm'] = proc_comm
-        mpi_info['compsep']['master'] = 0
-        mpi_info['compsep']['size'] = proc_comm.Get_size()
-        mpi_info['compsep']['rank'] = proc_rank
-        mpi_info['compsep']['is_master'] = mpi_info.compsep.rank == mpi_info.compsep.master
-        
-        # Split between I and QU. Numeric colors remain private to MPI setup; scientific code sees
-        # the named polarization below.
+        # `subcomm` holds the CompSep ranks of this rank's polarization (all I views, or all QU
+        # views); the solver communicators of the amplitude groups are split from it.
         polarization = enabled_compsep_views(params)[proc_rank].polarization
-        subcolor = 0 if polarization == "I" else 1
-        sub_comm = proc_comm.Split(subcolor, key=proc_rank)
-        mpi_info['compsep']['subcomm'] = sub_comm
-        mpi_info['compsep']['polarization'] = polarization
-        mpi_info['compsep']['subsize'] = sub_comm.Get_size()
-        mpi_info['compsep']['subrank'] = sub_comm.Get_rank()
-        mpi_info['compsep']['I_master'] = 0  # in compsep_comm numbering
-        mpi_info['compsep']['QU_master'] = mpi_info.compsep.size \
-            - ntasks.compsep_QU   # in compsep_comm numbering
-        mpi_info['compsep']['is_I_master'] = subcolor == 0 and mpi_info.compsep.subrank == 0
-        mpi_info['compsep']['is_QU_master'] = subcolor == 1 and mpi_info.compsep.subrank == 0
+        mpi_info['compsep'] = Bunch(comm=proc_comm, size=proc_comm.Get_size(), rank=proc_rank,
+                                    is_master=proc_rank == 0, num_threads=my_num_threads,
+                                    subcomm=proc_comm.Split(0 if polarization == "I" else 1,
+                                                            key=proc_rank))
         mpi_info = init_mpi_compsep(mpi_info, params)
     return mpi_info
     
@@ -258,7 +244,7 @@ def init_mpi_compsep(mpi_info: Bunch, params: Bunch) -> Bunch:
     mpi_info.band = Bunch(
         name=view.band_name,
         identifier=view.identifier,
-        polarization=view.polarization,
+        pol=view.polarization,
         comm=MPI.COMM_SELF,
         size=1,
         rank=0,

@@ -354,13 +354,13 @@ compsep:
                               # current amplitudes, as in C3, so later Gibbs iterations
                               # need fewer CG iterations than the first.
       preconditioner: JointPreconditioner
-                              # Working choices: JointPreconditioner (best),
-                              # DiagonalJointPreconditioner (cheaper), NoPreconditioner.
-                              # BeamOnly / NoiseOnly / MixingMatrix are unimplemented and
-                              # crash mid-solve; do not select them.
-      dense_matrix_debug_mode: false
-                              # Build and invert the dense system as a cross-check. Only
-                              # feasible below nside 32, and currently broken.
+                              # JointPreconditioner is the one to use. NoPreconditioner
+                              # applies none. For testing how much each part of
+                              # JointPreconditioner contributes, these leave parts out:
+                              # BeamOnlyPreconditioner (beam only),
+                              # MixingMatrixPreconditioner (mixing matrix only), and
+                              # DiagonalJointPreconditioner (no coupling between
+                              # components).
 
   # The per-pixel solver: solves each pixel independently, using a C backend. Needs a
   # single nside and a single beam across all bands, i.e. `common_res_fwhm` set above.
@@ -379,14 +379,22 @@ compsep:
   mcmc_sampling_groups:
     sample_spectral_indices:
       enabled: false          # Off here: it adds `numstep` CG solves per iteration, and
-                              # one more of every amplitude group at the end. Set true,
-                              # plus `sample_spectral_index` on each component below, to
-                              # sample indices.
-      parameters: spectral_indices
-      comps: [ThermalDust, Synchrotron]
-                              # Components whose index is proposed. Each MUST also set
-                              # `sample_spectral_index: True` in its own block, or startup
-                              # fails.
+                              # one more of every amplitude group at the end.
+      # The components the group samples, and for each the parameters it samples, with
+      # the settings of their sampler. Only the spectral index `beta` can be sampled yet.
+      # All parameters of the group are proposed together, and accepted or rejected
+      # together. The start value of a beta is `beta` in the component's own block. A
+      # beta that no group names stays fixed at that value.
+      sample:
+        dust:
+          beta:
+            proposal_sigma: 0.01  # Step length in beta of the Gaussian proposal. Required.
+            bounds: [1.0, 2.5]    # Hard limits [lowest, highest]. A proposal outside them
+                                  # is rejected without a solve. Absent = no limits.
+            prior_mean: 1.56      # Mean and rms of a Gaussian prior on beta. Absent = a
+            prior_rms: 0.1        # flat prior inside the hard limits.
+        sync:
+          beta: {proposal_sigma: 0.01, bounds: [-4.0, -2.0]}
       update_amplitude_groups: [sample_amps_CG]
                               # Amplitude groups re-solved inside each accept/reject.
                               # Empty list = propose indices against fixed amplitudes.
@@ -493,25 +501,22 @@ compsep:
 # Diffuse component amplitudes are stored internally as spherical-harmonic coefficients in
 # uK_RJ referenced to `nu_ref`; each component's `get_sed(nu)` is the dimensionless
 # Rayleigh-Jeans ratio between nu and nu_ref.
+#
+# The key of each block is the component's name: the sampling groups refer to it (`comps`,
+# `beta`), and the chain file stores the component under `comps/<name>/`. Keep it short.
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"    # Selects the class, and thereby the SED. Implemented: CMB,
                               # ThermalDust, Synchrotron, FreeFree, SpinningDust,
                               # RadioSources.
     params:
       polarization: "IQU"     # Which Stokes parameters this component is defined in.
-      longname: "CMB"         # Human-readable name, used in logs and plots.
-      shortname: "cmb"        # Short name, used as the group key in the chain file.
       lmax: 1024              # Required. Band limit of this component's alms. Keep it at
                               # or below the largest band `lmax` in the run: a multipole
                               # above every band's limit meets no data at all, and a
                               # constrained realization then draws it from the C(l) prior
                               # alone, which with a loose prior means junk.
-      spatially_varying_MM: False
-                              # Whether the mixing matrix varies across the sky. No
-                              # component returns a map-valued SED yet, so this is False
-                              # everywhere.
 
       # --- The C(l) prior, S ---
       # Fixed, not sampled. C3's `power_law_gauss` model written in D_l space:
@@ -556,15 +561,12 @@ components:
       # units: "uK_CMB"       # C3's COMP_UNIT: the unit of that init file, of the prior
                               # mean map and of Cl_prior_amplitude. Default: uK_RJ.
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      longname: "Thermal-Dust"
-      shortname: "dust"
       lmax: 1024
-      spatially_varying_MM: False
       Cl_prior_amplitude: null   # No C(l) prior for this component.
 
       # --- SED parameters (modified blackbody) ---
@@ -576,64 +578,42 @@ components:
                               # both.
       units: "uK_RJ"
 
-      # --- Spectral-index sampling (used by mcmc_sampling_groups above) ---
-      # sample_spectral_index: True   # Required for this component to appear in an MCMC
-                                      # group. Without it, naming it there is an error.
-      # spectral_index_proposal_sigma: 0.01   # Gaussian MH step length in beta.
-      # spectral_index_bounds: [1.0, 2.5]     # Hard uniform bounds. A proposal outside
-                                              # them is rejected without a solve.
-      # A soft Gaussian prior on beta, added to the log posterior. Omit it for a flat
-      # prior inside the hard bounds above.
-      # spectral_index_prior:
-      #   type: gaussian
-      #   mean: 1.56
-      #   rms: 0.1
-
       # Mean mu of the Gaussian amplitude prior (C3 COMP_AMP_PRIOR_MAP). Where the data
       # constrain nothing -- outside a survey patch, say -- the solution is pulled to this
       # map instead of to zero.
       # amp_prior_mean_map: "/path/to/dust_prior_mean.fits"
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      longname: "Synchrotron"
-      shortname: "sync"
       lmax: 512
-      spatially_varying_MM: False
       Cl_prior_amplitude: null
       beta: -3.1              # Power-law index in RJ units.
       nu_ref: [0.408, 30]     # Intensity anchored at Haslam's 408 MHz, polarization at
                               # 30 GHz where Haslam has no polarization information.
       units: "uK_RJ"
 
-  FreeFree:
+  ff:
     enabled: true
     component_class: "FreeFree"
     params:
       polarization: "I"       # Free-free emission is essentially unpolarized, so solving
                               # it in QU would add a component the data cannot constrain.
-      longname: "Free-Free"
-      shortname: "ff"
       lmax: 512
-      spatially_varying_MM: False
       Cl_prior_amplitude: null
       T: 7000                 # [K] Electron temperature.
       nu_ref: 40              # [GHz] Scalar reference: one value for every polarization.
       units: "uK_RJ"
 
   # Anomalous microwave emission, from a tabulated spinning-dust spectrum.
-  SpinningDust:
+  sdust:
     enabled: False
     component_class: "SpinningDust"
     params:
       polarization: "I"
-      longname: "SpinningDust"
-      shortname: "sdust"
       lmax: 1000
-      spatially_varying_MM: False
       Cl_prior_amplitude: null
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
                               # The tabulated SED shape, as a two-column text file.
@@ -644,13 +624,11 @@ components:
   # Point sources. Not a diffuse component: it carries per-source amplitudes rather than
   # alms, and is excluded from both solvers' preconditioners. Only partially supported --
   # there is no amplitude, position or spectral-index sampling for sources yet.
-  RadioSources:
+  radsources:
     enabled: False
     component_class: "RadioSources"
     params:
       polarization: "I"
-      longname: "RadioSources"
-      shortname: "radsources"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
                               # The source catalogue: position and flux per source.
       nu_0: 30.0              # [GHz] Reference frequency of the catalogue fluxes.

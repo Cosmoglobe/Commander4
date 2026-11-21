@@ -1,298 +1,158 @@
-import importlib
-import sys
+"""Tests of `sample_spectral_params`, the Metropolis sampler of the spectral indices.
+
+Each test runs the real sampler on one rank, with one synchrotron component (an I and a QU view)
+and one intensity band. Only the random generator is a stand-in, so that a test chooses the
+proposals and the uniform draw of the accept/reject decision.
+"""
 import types
 
 import numpy as np
 import pytest
 from mpi4py import MPI
+from pixell.bunch import Bunch
 
+from commander4.compsep.amplitude_sampling import AmplitudeGroup
+from commander4.compsep.spectral_sampling import MCMCGroup, sample_spectral_params
+from commander4.data_models.detector_map import DetectorMap
+from commander4.sky.comp_list import CompList
 
-class AttrBunch(dict):
-    def __getattr__(self, item):
-        try:
-            return self[item]
-        except KeyError as exc:
-            raise AttributeError(item) from exc
-
-    def __setattr__(self, key, value):
-        self[key] = value
-
-
-class FakeCompList:
-    def __init__(self, comp_list):
-        self.comp_list = list(comp_list)
-
-    def __iter__(self):
-        for item in self.comp_list:
-            yield item
-
-    def __len__(self):
-        return len(self.comp_list)
-
-    def __getitem__(self, index):
-        return self.comp_list[index]
-
-    def split_for_eval_pol(self, target_pol):
-        # The FakeSkyModel filters by `is_pol`, so returning the full list per polarization is
-        # sufficient for the single-band, single-polarization likelihood exercised here.
-        return self
-
-
-class StubComponent:
-    pass
-
-
-class FakeDetectorMap:
-    def __init__(self, map_sky, map_inv_var, nu, fwhm, nside, double_precision=True):
-        self.map_sky = np.array(map_sky, dtype=np.float64, copy=True)
-        self.map_inv_var = np.array(map_inv_var, dtype=np.float64, copy=True)
-        self.nu = nu
-        self.fwhm = fwhm
-        self.fwhm_rad = fwhm  # MCMCSamplingGroup.local_loglike realizes the model at this resolution.
-        self.nside = nside
-        self.lmax = 3*nside - 1
-        self.double_precision = double_precision
-
-    @property
-    def pol(self):
-        return self.map_sky.shape[0] == 2
-
-
-class FakeSkyModel:
-    def __init__(self, components):
-        self._components = components
-
-    def get_sky_at_nu(self, nu, nside, pols_required, fwhm=None, lmax=None):
-        npix = 12 * nside**2
-        if pols_required == "I":
-            skymap = np.zeros((1, npix), dtype=np.float64)
-            for component in self._components:
-                if not component.is_pol:
-                    skymap[0] += component.get_sky(nu, nside, fwhm)[0]
-            return skymap
-        if pols_required == "QU":
-            skymap = np.zeros((2, npix), dtype=np.float64)
-            for component in self._components:
-                if component.is_pol:
-                    skymap += component.get_sky(nu, nside, fwhm)
-            return skymap
-        raise ValueError("Unsupported polarization in test stub.")
-
-
-pixell_module = types.ModuleType("pixell")
-bunch_module = types.ModuleType("pixell.bunch")
-bunch_module.Bunch = AttrBunch
-pixell_module.bunch = bunch_module
-
-component_module = types.ModuleType("commander4.sky.component")
-component_module.Component = StubComponent
-component_module.CompList = FakeCompList
-
-detector_map_module = types.ModuleType("commander4.data_models.detector_map")
-detector_map_module.DetectorMap = FakeDetectorMap
-
-sky_model_module = types.ModuleType("commander4.sky.sky_model")
-sky_model_module.SkyModel = FakeSkyModel
-
-# The sampler is imported against these lightweight stubs so this test does not need the compiled
-# extensions the real component/map classes pull in. The stubs are installed only for the duration
-# of that one import -- the sampler binds what it needs with `from ... import ...` at its own module
-# top -- and sys.modules is restored afterwards. Leaving them installed would poison every test
-# module collected after this one, and any runtime (in-function) import of the real classes.
-_stubs = {"pixell": pixell_module, "pixell.bunch": bunch_module,
-          "commander4.sky.component": component_module,
-          "commander4.sky.sky_model": sky_model_module,
-          "commander4.data_models.detector_map": detector_map_module}
-_saved = {name: sys.modules.get(name) for name in _stubs}
-sys.modules.update(_stubs)
-try:
-    spectral_index_sampler = importlib.import_module("commander4.compsep.spectral_index")
-finally:
-    for name, module in _saved.items():
-        if module is None:
-            del sys.modules[name]
-        else:
-            sys.modules[name] = module
-
-
-class FakeComponent:
-    def __init__(self, shortname, eval_pol, beta, amplitude, comp_params=None, sample=False,
-                 proposal_sigma=None, bounds=None):
-        self.eval_pol = eval_pol
-        self.shortname = shortname
-        self.longname = shortname
-        # Every real Component sets this (see `Component.__init__`); zero means the amplitudes are
-        # deconvolved, which is what the CG solver this test stands in for produces.
-        self.amp_fwhm_rad = 0.0
-        if comp_params is None:
-            comp_params = AttrBunch({"shortname": shortname, "beta": beta})
-            if sample:
-                comp_params["sample_spectral_index"] = True
-                comp_params["spectral_index_proposal_sigma"] = proposal_sigma
-            if bounds is not None:
-                comp_params["spectral_index_bounds"] = bounds
-        self.comp_params = comp_params
-        self.comp_name = comp_params["shortname"]
-        self.beta = beta
-        self.amps = self._make_alms(amplitude)
-
-    @property
-    def is_pol(self):
-        return self.eval_pol == "QU"
-
-    @property
-    def npol(self):
-        return 2 if self.is_pol else 1
-
-    @staticmethod
-    def _make_alms(amplitude, npol=1):
-        return np.full((npol, 1), amplitude, dtype=np.float64)
-
-    def get_sed(self, nu):
-        return np.asarray(nu, dtype=np.float64)**self.beta
-
-    def get_sky(self, nu, nside, fwhm=0.0):
-        npix = 12 * nside**2
-        amplitude = float(self.amps[0, 0])
-        base = np.full((self.npol, npix), amplitude, dtype=np.float64)
-        return base * self.get_sed(nu)
-
-
-def make_detector_data(component, nu=2.0, nside=1, rms=1.0):
-    map_sky = component.get_sky(nu, nside)
-    map_inv_var = np.full_like(map_sky, 1.0/rms**2, dtype=np.float64)
-    return FakeDetectorMap(map_sky, map_inv_var, nu=nu, fwhm=0.0, nside=nside,
-                           double_precision=True)
-
-
-def make_iqu_components(beta=1.5, amplitude=2.0, bounds=(1.0, 2.0), proposal_sigma=0.1):
-    shared_params = AttrBunch({
-        "shortname": "dust",
-        "beta": beta,
-        "sample_spectral_index": True,
-        "spectral_index_proposal_sigma": proposal_sigma,
-        "spectral_index_bounds": list(bounds),
-    })
-    comp_i = FakeComponent("dust_I", "I", beta, amplitude, comp_params=shared_params)
-    comp_qu = FakeComponent("dust_QU", "QU", beta, amplitude,
-                            comp_params=shared_params)
-    comp_qu.amps = FakeComponent._make_alms(amplitude, npol=2)
-    return comp_i, comp_qu
-
-
-def _fixed_rng(proposal: float) -> types.SimpleNamespace:
-    """A stand-in generator whose proposal is always `proposal` and whose uniform draw is 0.5."""
-    return types.SimpleNamespace(normal=lambda loc, scale: proposal, random=lambda: 0.5)
-
-
-def _make_group(detector_data, comp_list, target_pol="I"):
-    """Build a single-rank SpectralIndexSamplingGroup over `comp_list` on COMM_SELF."""
-    return spectral_index_sampler.SpectralIndexSamplingGroup(
-        MPI.COMM_SELF, detector_data, comp_list, target_pol=target_pol,
-        chisq_active=True, selected_comps=None)
-
-
-class TestSampleSpectralIndicesMH:
-    """The MH machinery now lives in ``MCMCSamplingGroup.run``; these drive a real
-    ``SpectralIndexSamplingGroup`` on ``COMM_SELF`` and check the accept/reject side effects on the
-    component ``beta`` (the source of truth ``apply_state`` writes) and the coupled amplitudes.
-
-    The coupled amplitude re-solve is stubbed by the ``resolve_amplitudes`` callback ``run`` invokes;
-    the likelihood is either monkeypatched per step (``local_loglike``) or, in the integration test,
-    left as the real whitened-residual chi-squared."""
-
-    def test_out_of_bounds_rejects_without_resolve(self):
-        comp_i, comp_qu = make_iqu_components()
-        detector_data = make_detector_data(comp_i)
-        group = _make_group(detector_data, FakeCompList([comp_i, comp_qu]))
-
-        def fail_if_called():
-            raise AssertionError("resolve_amplitudes must not run for out-of-bounds proposals")
-
-        # Proposal 2.5 is outside the (1.0, 2.0) bounds -> rejected before the amplitude re-solve.
-        group.run(numstep=1, resolve_amplitudes=fail_if_called, rng=_fixed_rng(2.5))
-
-        assert comp_i.beta == pytest.approx(1.5)
-        assert comp_qu.beta == pytest.approx(1.5)
-        np.testing.assert_allclose(comp_i.amps, np.array([[2.0]]))
-
-    def test_rejection_restores_parameters_and_alms(self, monkeypatch):
-        comp_i, comp_qu = make_iqu_components()
-        detector_data = make_detector_data(comp_i)
-        group = _make_group(detector_data, FakeCompList([comp_i, comp_qu]))
-
-        def resolve():  # The coupled amplitude re-solve mutates the shared component amplitudes.
-            comp_i.amps = np.array([[9.0]])
-
-        # loglike drops on the proposal and random() forces a reject; state must be fully reverted.
-        loglikes = iter([0.0, -5.0])
-        monkeypatch.setattr(group, "local_loglike", lambda: next(loglikes))
-
-        group.run(numstep=1, resolve_amplitudes=resolve, rng=_fixed_rng(1.6))
-
-        assert comp_i.beta == pytest.approx(1.5)
-        assert comp_qu.beta == pytest.approx(1.5)
-        np.testing.assert_allclose(comp_i.amps, np.array([[2.0]]))
-
-    def test_acceptance_keeps_proposed_parameters_and_alms(self, monkeypatch):
-        comp_i, comp_qu = make_iqu_components()
-        detector_data = make_detector_data(comp_i)
-        group = _make_group(detector_data, FakeCompList([comp_i, comp_qu]))
-
-        def resolve():
-            comp_i.amps = np.array([[9.0]])
-
-        # loglike rises on the proposal -> accepted; the proposed beta and re-solved alms are kept.
-        loglikes = iter([0.0, 2.0])
-        monkeypatch.setattr(group, "local_loglike", lambda: next(loglikes))
-
-        group.run(numstep=1, resolve_amplitudes=resolve, rng=_fixed_rng(1.6))
-
-        assert comp_i.beta == pytest.approx(1.6)
-        assert comp_qu.beta == pytest.approx(1.6)
-        np.testing.assert_allclose(comp_i.amps, np.array([[9.0]]))
-
-    def test_the_reference_after_acceptance_is_the_accepted_solve(self):
-        """The step after an accepted one compares against the accepted amplitudes themselves.
-
-        The data are 8 at nu = 2. Step 1 goes from beta = 1 to 1.5 with an exact amplitude fit and
-        is accepted. Step 2 proposes beta = 1.6 with a fit that is off by 1, which lowers the
-        log-likelihood by 6. The uniform draw of 0.5 rejects anything that lowers it by more than
-        0.69, so step 2 is rejected and the exact fit of step 1 comes back.
-        """
-        comp_i, comp_qu = make_iqu_components(beta=1.0, amplitude=2.0)
-        target_map = np.full((1, 12), 8.0, dtype=np.float64)
-        detector_data = FakeDetectorMap(target_map, np.ones_like(target_map), nu=2.0,
-                                        fwhm=0.0, nside=1, double_precision=True)
-        group = _make_group(detector_data, FakeCompList([comp_i, comp_qu]))
-        offsets = iter([0.0, 1.0])  # Offset of the model from the data in the two solves.
-
-        def resolve():
-            comp_i.amps = np.array([[(8.0 + next(offsets)) / detector_data.nu**comp_i.beta]])
-
-        proposals = iter([1.5, 1.6])
-        rng = types.SimpleNamespace(normal=lambda loc, scale: next(proposals), random=lambda: 0.5)
-        stats = group.run(numstep=2, resolve_amplitudes=resolve, rng=rng)
-
-        assert stats["n_accept"] == 1
-        assert comp_i.beta == pytest.approx(1.5)
-        np.testing.assert_allclose(comp_i.amps, np.array([[8.0 / 2.0**1.5]]))
-
-    def test_single_rank_integration_uses_real_likelihood(self):
-        comp_i, comp_qu = make_iqu_components(beta=1.0, amplitude=2.0)
-
-        target_map = np.full((1, 12), 8.0, dtype=np.float64)
-        detector_data = FakeDetectorMap(target_map, np.ones_like(target_map), nu=2.0,
-                        fwhm=0.0, nside=1, double_precision=True)
-        group = _make_group(detector_data, FakeCompList([comp_i, comp_qu]))
-
-        def resolve():  # Fit the amplitude exactly to the proposed index so the residual vanishes.
-            target_amplitude = detector_data.map_sky[0, 0] / (detector_data.nu**comp_i.beta)
-            comp_i.amps = np.array([[target_amplitude]])
-
-        group.run(numstep=1, resolve_amplitudes=resolve, rng=_fixed_rng(1.5))
-
-        # The proposed beta=1.5 gives a perfect fit (higher likelihood), so it is accepted.
-        assert comp_i.beta == pytest.approx(1.5)
-        assert comp_qu.beta == pytest.approx(1.5)
-        np.testing.assert_allclose(comp_i.amps, np.array([[8.0 / (2.0**1.5)]]))
+NSIDE, LMAX, NU, TRUE_BETA = 4, 8, 60.0, -3.0
+
+
+def _fixed_rng(proposals: list[float]) -> types.SimpleNamespace:
+    """A stand-in generator: the proposals come in the given order, the uniform draw is 0.5.
+
+    The per-pixel amplitude solver draws its fluctuations from a real generator.
+    """
+    proposals = iter(proposals)
+    return types.SimpleNamespace(normal=lambda loc, scale: next(proposals), random=lambda: 0.5,
+                                 standard_normal=np.random.default_rng(0).standard_normal)
+
+
+def _make_setup(start_beta: float = TRUE_BETA, **beta_settings):
+    """One synchrotron component, and a band map that it fits exactly at `TRUE_BETA`.
+
+    Returns `(mpi_info, params, group, amp_group, band_map, comp_list)`. The MCMC group samples
+    the component's beta with a step of 0.1, and with `beta_settings` on top. The amplitudes stay
+    fixed, unless a test puts the per-pixel amplitude group `amp_group` in
+    `group.update_amplitude_groups`.
+    """
+    sync = Bunch(enabled=True, component_class="Synchrotron",
+                 params=Bunch(lmax=LMAX, polarization="IQU", nu_ref=30.0,
+                              Cl_prior_amplitude=None, beta=TRUE_BETA))
+    params = Bunch(components=Bunch(sync=sync), compsep=Bunch(
+        double_precision=True, bands=Bunch(Band60=Bunch(enabled=True, polarization="I")),
+        per_pixel_sampling_groups=Bunch(amps=Bunch(comps=["sync"])),
+        mcmc_sampling_groups=Bunch(betas=Bunch(
+            sample=Bunch(sync=Bunch(beta=Bunch(proposal_sigma=0.1, **beta_settings))),
+            chisq_bands=["Band60"]))))
+    comp_list = CompList.init_from_params(params)
+    comp_list[0].amps[:] = 1.0  # The I view. Real alms, so they are valid at m = 0 too.
+
+    npix = 12*NSIDE**2
+    band_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1.0e4), nu=NU, fwhm=0.0,
+                           nside=NSIDE, double_precision=True, lmax=LMAX)
+    band_map.map_sky = comp_list.get_sky_at_band(band_map).astype(np.float64)
+    for comp in comp_list:
+        comp.beta = start_beta
+
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, subcomm=MPI.COMM_SELF, rank=0,
+                                   is_master=True, num_threads=1),
+                     band=Bunch(name="Band60", identifier="Band60_I", pol="I"))
+    # The one rank solves the I view; no rank holds a QU band.
+    amp_group = AmplitudeGroup.init_from_params(params, "per_pixel_sampling_groups", "amps",
+                                                mpi_info)
+    group = MCMCGroup.init_from_params(params, "betas", [amp_group], mpi_info)
+    return mpi_info, params, group, amp_group, band_map, comp_list
+
+
+def test_a_proposal_out_of_bounds_is_rejected_without_a_solve():
+    mpi_info, params, group, amp_group, band_map, comp_list = _make_setup(
+        bounds=[-4.0, -2.0])
+    # A step that reached the amplitude solve would fail on this stand-in for a group.
+    group.update_amplitude_groups = [None]
+
+    stats = sample_spectral_params(mpi_info, params, group, band_map, comp_list,
+                                   _fixed_rng([-1.0]))
+
+    assert stats["n_accept"] == 0
+    assert [comp.beta for comp in comp_list] == [TRUE_BETA, TRUE_BETA]
+
+
+def test_a_better_fit_is_accepted_on_both_views_of_the_component():
+    mpi_info, params, group, amp_group, band_map, comp_list = _make_setup(start_beta=-2.8)
+
+    stats = sample_spectral_params(mpi_info, params, group, band_map, comp_list,
+                                   _fixed_rng([TRUE_BETA]))
+
+    assert [comp.pol for comp in comp_list] == ["I", "QU"]
+    assert [comp.beta for comp in comp_list] == [TRUE_BETA, TRUE_BETA]
+    assert stats == {"numstep": 1, "n_accept": 1, "accept_rate": 1.0,
+                     "params": {"sync": TRUE_BETA}}
+
+
+def test_a_worse_fit_is_rejected_and_beta_is_restored():
+    mpi_info, params, group, amp_group, band_map, comp_list = _make_setup()
+
+    stats = sample_spectral_params(mpi_info, params, group, band_map, comp_list,
+                                   _fixed_rng([-2.8]))
+
+    assert stats["n_accept"] == 0
+    assert [comp.beta for comp in comp_list] == [TRUE_BETA, TRUE_BETA]
+
+
+def test_a_step_starts_from_the_state_the_previous_step_left():
+    """Step 1 moves to the true beta and is accepted. Step 2 moves away from it and is rejected,
+    which must give back the state after step 1, not the state before it."""
+    mpi_info, params, group, amp_group, band_map, comp_list = _make_setup(start_beta=-2.8)
+    group.cfg.numstep = 2
+
+    stats = sample_spectral_params(mpi_info, params, group, band_map, comp_list,
+                                   _fixed_rng([TRUE_BETA, -2.9]))
+
+    assert stats["n_accept"] == 1
+    assert [comp.beta for comp in comp_list] == [TRUE_BETA, TRUE_BETA]
+
+
+@pytest.mark.parametrize("proposal, accepted", [(-3.10, True), (-3.13, False)])
+def test_the_gaussian_prior_enters_the_decision(proposal: float, accepted: bool):
+    """With no band in the chi-squared, the prior alone decides. The step starts at the prior
+    mean, so the log acceptance is -0.5 ((proposal - mean)/rms)^2: -0.5 and -0.845 here. The
+    uniform draw of 0.5 accepts a step above log(0.5) = -0.693."""
+    mpi_info, params, group, amp_group, band_map, comp_list = _make_setup(
+        prior_mean=TRUE_BETA, prior_rms=0.1)
+    group.cfg.chisq_bands = []
+
+    stats = sample_spectral_params(mpi_info, params, group, band_map, comp_list,
+                                   _fixed_rng([proposal]))
+
+    assert stats["n_accept"] == int(accepted)
+    assert comp_list[0].beta == (proposal if accepted else TRUE_BETA)
+
+
+def test_an_accepted_step_keeps_the_resolved_amplitudes():
+    mpi_info, params, group, amp_group, band_map, comp_list = _make_setup(start_beta=-2.8)
+    group.update_amplitude_groups = [amp_group]
+    start_amps = comp_list[0].amps.copy()
+
+    stats = sample_spectral_params(mpi_info, params, group, band_map, comp_list,
+                                   _fixed_rng([TRUE_BETA]))
+
+    assert stats["n_accept"] == 1
+    assert not np.allclose(comp_list[0].amps, start_amps)
+
+
+def test_a_rejected_step_restores_the_amplitudes_after_the_resolve():
+    """The same amplitude re-solve as in the accepted case, but a narrow prior at the starting
+    beta rejects the step. The amplitudes must then be those from before the step."""
+    mpi_info, params, group, amp_group, band_map, comp_list = _make_setup(
+        start_beta=-2.8, prior_mean=-2.8, prior_rms=1.0e-4)
+    group.update_amplitude_groups = [amp_group]
+    start_amps = comp_list[0].amps.copy()
+
+    stats = sample_spectral_params(mpi_info, params, group, band_map, comp_list,
+                                   _fixed_rng([TRUE_BETA]))
+
+    assert stats["n_accept"] == 0
+    assert [comp.beta for comp in comp_list] == [-2.8, -2.8]
+    np.testing.assert_array_equal(comp_list[0].amps, start_amps)

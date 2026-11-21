@@ -193,7 +193,7 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
             # After this, binned.maps holds only the aux maps.
             map_signal = cg.solved_map if use_cg else binned.maps.pop("signal")
             detmap_dict_out, maps_to_file = finalize_band_maps(
-                map_signal, binned.map_inv_var, experiment_data, tod_samples, params, binned.maps,
+                map_signal, binned.map_inv_var, experiment_data, params, binned.maps,
                 binned.map_nhit, binned.map_cov)
 
     return detmap_dict_out, maps_to_file

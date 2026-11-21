@@ -17,6 +17,7 @@ MPI task counts and the split of the TOD tasks between bands, which the paramete
 states.
 """
 
+import copy
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -24,9 +25,12 @@ from collections.abc import Sequence
 
 from pixell.bunch import Bunch
 
-from commander4.polarization import EXECUTION_POLS, get_execution_band_id
-
 logger = logging.getLogger(__name__)
+
+# The views that a `polarization` setting of a band or a component gives. C4 runs one view at a
+# time. The view of a band is named `<band>_<view>`, for example `030GHz_I` and `030GHz_QU`. The
+# MPI routing between the TOD side and the CompSep side uses these names.
+EXECUTION_POLS = {"I": ("I",), "QU": ("QU",), "IQU": ("I", "QU")}
 
 # The legal top-level entries in the YAML parameter file. Explicitly stating them allows us to
 # catch misspelled entries
@@ -139,9 +143,7 @@ def enabled_compsep_views(params: Bunch) -> tuple[CompSepViewConfig, ...]:
                 f"one of {sorted(EXECUTION_POLS)}."
             )
         for polarization in EXECUTION_POLS[band.polarization]:
-            views_by_pol[polarization].append(
-                (band_name, get_execution_band_id(band_name, polarization))
-            )
+            views_by_pol[polarization].append((band_name, f"{band_name}_{polarization}"))
 
     views = []
     for polarization in ("I", "QU"):
@@ -247,7 +249,8 @@ def read_settings(params: Bunch, name: str, scopes: Sequence[str],
     Raises:
         ValueError: for a setting without a default, or with the wrong type.
     """
-    settings = Bunch(**defaults)
+    # A copy, so that no two settings blocks share a mutable default such as a list.
+    settings = Bunch(**copy.deepcopy(defaults))
     # The widest scope first, so that each narrower one overrides it.
     for scope in reversed(scopes):
         block = params
@@ -272,13 +275,27 @@ def read_settings(params: Bunch, name: str, scopes: Sequence[str],
     return settings
 
 
+def names_or_all(names: list[str] | str | None, known_names: list[str],
+                 setting: str) -> list[str]:
+    """The names a setting selects: `names` itself, or all of `known_names` for "all" or None."""
+    if names is None or names == "all":
+        return list(known_names)
+    if isinstance(names, str):
+        raise ValueError(f"'{setting}' must be a list of names or \"all\", not {names!r}.")
+    unknown = sorted(set(names) - set(known_names))
+    if unknown:
+        raise ValueError(f"'{setting}' names unknown {unknown}. The known names are "
+                         f"{known_names}.")
+    return list(names)
+
+
 def resolve_band_lmax(params: Bunch, band_name: str, experiment: str | None, nside: int) -> int:
     """The harmonic bandlimit of one band: its `lmax` parameter, or `3*nside - 1` if unset.
 
     This is C4's equivalent of C3's `BAND_LMAX`, which is likewise stated per band. It is the lmax
     of the band's `DetectorMap`, and thereby the highest multipole at which any component can be
     compared against this band's data: `Component.comp2band` truncates the component alms to it,
-    both in the CG solver and in every realized band sky (`SkyModel.get_sky_at_nu`). `3*nside - 1`
+    both in the CG solver and in every realized band sky (`CompList.get_sky_at_nu`). `3*nside - 1`
     is the full bandlimit of a HEALPix map at this resolution, so the default lets a band constrain
     everything its own pixelization can carry.
 

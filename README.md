@@ -133,20 +133,19 @@ maps/cov           (6,npix)    # (opt) the 6 unique elements of P^T N^-1 P (II,I
 ```
 
 #### `chains_compsep/chain<CC>_iter<NNNN>.h5`
-One file per iteration holding every component, plus how well they fit the band maps. `<sn>` is a component's `shortname`, `<view>` a `<band>_<I|QU>` pair.
+One file per iteration holding every component, plus how well they fit the band maps. `<name>` is a component's key under `components` in the parameter file, `<view>` a `<band>_<I|QU>` pair.
 ```YAML
-comps/<sn>/alms          (npol,nalm)  # complex amplitudes in uK_RJ at nu_ref (T/E/B rows)
-comps/<sn>/source_amps   (1,nsrc)     # point-source components carry this instead of alms
-comps/<sn>/sigma_l       (npol,lmax+1)  # realized power spectrum of those alms
-comps/<sn>/lmax          scalar       # band limit of the alms
-comps/<sn>/comp_name     str          # class name, e.g. ThermalDust
-comps/<sn>/shortname     str          # the <sn> used above
-comps/<sn>/defined_pol   str          # polarization the component is defined in
-comps/<sn>/eval_pol      str          # polarization it was evaluated in
-comps/<sn>/amp_fwhm_arcmin  scalar    # beam already in the amplitudes; 0 for the CG solver
-comps/<sn>/sed/<param>                # each SED parameter, including sampled ones (beta)
-comps/<sn>/Cl_prior/<param>           # the C(l) prior's model parameters; absent if the prior is off
-comps/<sn>/mixing/<band> scalar       # this component's SED evaluated at that band
+comps/<name>/alms          (npol,nalm)  # complex amplitudes in uK_RJ at nu_ref (T/E/B rows)
+comps/<name>/source_amps   (1,nsrc)     # point-source components carry this instead of alms
+comps/<name>/sigma_l       (npol,lmax+1)  # realized power spectrum of those alms
+comps/<name>/lmax          scalar       # band limit of the alms
+comps/<name>/comp_name     str          # the <name> used above
+comps/<name>/defined_pol   str          # polarization the component is defined in
+comps/<name>/eval_pol      str          # polarization it was evaluated in
+comps/<name>/amp_fwhm_arcmin  scalar    # beam already in the amplitudes; 0 for the CG solver
+comps/<name>/sed/<param>                # each SED parameter, including sampled ones (beta)
+comps/<name>/Cl_prior/<param>           # the C(l) prior's model parameters; absent if the prior is off
+comps/<name>/mixing/<band> scalar       # this component's SED evaluated at that band
 
 chi2/total               scalar       # all-band sum of the whitened residual squared
 chi2/ndof                scalar       # observed pixels summed over all bands and polarizations
@@ -171,7 +170,6 @@ An overview the most important directories and files. This is not exhaustive.
 src/commander4/
   cli.py               # Entry point. Splits MPI into a TOD side and a compsep side, runs the Gibbs loop.
   units.py             # Brightness-unit conversions (uK_RJ / uK_CMB / MJy/sr).
-  polarization.py      # The I / QU / IQU vocabulary shared by both sides.
 
   tod/                 # === TOD SIDE: one Gibbs iteration over time-ordered data ===
     processing.py      #   Drives the iteration: gain, jumps, correlated noise, mapmaking, data selection.
@@ -184,9 +182,10 @@ src/commander4/
     mapmaking/         #   binned.py (per-pixel inversion) and cg.py (iterative, deconvolves a transfer function).
 
   compsep/             # === COMPSEP SIDE: solving for component amplitudes and spectral parameters ===
-    processing.py      #   Drives the iteration and validates the sampling groups.
+    processing.py      #   Reads the sampling groups, and drives the iteration in Gibbs order.
+    amplitude_sampling.py  # Samples the amplitudes of one sampling group, with one of the two solvers below.
     cg_solver.py       #   The global CG amplitude solve; perpix_solver.py is the common-resolution alternative.
-    mcmc.py            #   Metropolis-Hastings machinery; spectral_index.py is its one concrete user.
+    spectral_sampling.py   # Metropolis sampling of the spectral indices of one sampling group.
     preconditioners.py #   Preconditioners for the compsep CG (the mapmaker's live in tod/mapmaking/).
 
   sky/                 # The sky model that compsep solves for and the TOD side subtracts.

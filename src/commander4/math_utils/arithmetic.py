@@ -73,15 +73,6 @@ def inplace_arr_add(arr_main, arr_add):
         flat1[i] += flat2[i]
 
 @njit(fastmath=True, parallel=True)
-def inplace_arr_sub(arr_main, arr_add):
-    if arr_main.shape != arr_add.shape:
-        raise ValueError("Input arrays must have matching shapes.")
-    flat1 = arr_main.ravel()
-    flat2 = arr_add.ravel()
-    for i in prange(arr_main.size):
-        flat1[i] -= flat2[i]
-
-@njit(fastmath=True, parallel=True)
 def inplace_arr_prod(arr_main, arr_prod):
     len = arr_main.size
     if arr_main.shape != arr_prod.shape:
@@ -90,16 +81,6 @@ def inplace_arr_prod(arr_main, arr_prod):
     flat2 = arr_prod.ravel()
     for i in prange(len):
         flat1[i] *= flat2[i]
-
-@njit(fastmath=True, parallel=True)
-def inplace_arr_truediv(arr_main, arr_prod):
-    len = arr_main.size
-    if arr_main.shape != arr_prod.shape:
-        raise ValueError("Input arrays must have matching shapes.")
-    flat1 = arr_main.ravel()
-    flat2 = arr_prod.ravel()
-    for i in prange(len):
-        flat1[i] /= flat2[i]
 
 @njit(fastmath=True, parallel=True)
 def inplace_scale(arr_main, scalar_prod):

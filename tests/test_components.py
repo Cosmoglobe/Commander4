@@ -1,4 +1,4 @@
-from copy import deepcopy
+import warnings
 
 import h5py
 import healpy as hp
@@ -11,7 +11,6 @@ from commander4.sky.diffuse_components import CMB, ThermalDust
 from commander4.sky.point_sources import PointSourcesComponent
 from commander4.math_utils.alm import gaussian_random_alm
 from commander4.math_utils.sht import alm_to_map
-from commander4.sky.comp_list import complist_dot, complist_norm
 
 
 def _make_compsep(ntask_compsep_qu: int = 1, ntask_compsep_i: int = 1) -> Bunch:
@@ -26,55 +25,27 @@ def _make_component_cfg(polarization: str = "IQU") -> Bunch:
         params=Bunch(
             lmax=1,
             polarization=polarization,
-            shortname="cmb",
-            spatially_varying_MM=False,
             Cl_prior_amplitude=None,  # no prior
         ),
     )
 
 
-def _make_comp_list(polarization: str = "IQU", ntask_compsep_qu: int = 1) -> CompList:
-    params = Bunch(compsep=_make_compsep(ntask_compsep_qu))
-    cmb = _make_component_cfg(polarization)
-    object.__setattr__(cmb, "_name", "cmb")
-    components = Bunch({"cmb": cmb})
-    return CompList.init_from_params(components, params)
+def _make_params(**components: Bunch) -> Bunch:
+    """A parameter file with the given component blocks, by component name."""
+    return Bunch(components=Bunch(**components), compsep=_make_compsep())
 
 
-def _make_named_component_cfg(shortname: str, polarization: str = "IQU") -> Bunch:
-    cfg = _make_component_cfg(polarization)
-    cfg.params.shortname = shortname
-    return cfg
-
-
-def _make_multi_comp_list() -> CompList:
-    params = Bunch(compsep=_make_compsep())
-    cmb = _make_named_component_cfg("cmb", "IQU")
-    object.__setattr__(cmb, "_name", "cmb")
-    dust = _make_named_component_cfg("dust", "IQU")
-    object.__setattr__(dust, "_name", "dust")
-    components = Bunch(
-        {
-            "cmb": cmb,
-            "dust": dust,
-        }
-    )
-    return CompList.init_from_params(components, params)
+def _make_comp_list(polarization: str = "IQU") -> CompList:
+    return CompList.init_from_params(_make_params(cmb=_make_component_cfg(polarization)))
 
 
 def test_init_from_params_builds_all_defined_pol_views() -> None:
     # Construction is independent of the MPI/compsep layout: an IQU component always yields both an
     # I and a QU view, even when zero compsep ranks are configured.
-    params = Bunch(compsep=_make_compsep(ntask_compsep_qu=0, ntask_compsep_i=0))
-    cmb = _make_named_component_cfg("cmb", "IQU")
-    object.__setattr__(cmb, "_name", "cmb")
-    ff = _make_named_component_cfg("ff", "I")
-    object.__setattr__(ff, "_name", "ff")
-    components = Bunch({"cmb": cmb, "ff": ff})
+    comp_list = CompList.init_from_params(_make_params(
+        cmb=_make_component_cfg("IQU"), ff=_make_component_cfg("I")))
 
-    comp_list = CompList.init_from_params(components, params)
-
-    assert [(comp.comp_name, comp.eval_pol) for comp in comp_list] == [
+    assert [(comp.comp_name, comp.pol) for comp in comp_list] == [
         ("cmb", "I"), ("cmb", "QU"), ("ff", "I")]
 
 
@@ -82,9 +53,7 @@ def test_complist_split_preserves_names_and_join_restores_logical_component() ->
     comp_list = _make_comp_list("IQU")
 
     assert [comp.comp_name for comp in comp_list] == ["cmb", "cmb"]
-    assert [comp.shortname for comp in comp_list] == ["cmb", "cmb"]
-    assert [comp.eval_pol for comp in comp_list] == ["I", "QU"]
-    assert [comp.is_split_view for comp in comp_list] == [True, True]
+    assert [comp.pol for comp in comp_list] == ["I", "QU"]
 
     comp_list[0].amps[:] = 1.0 + 0.0j
     comp_list[1].amps[:] = 2.0 + 0.0j
@@ -92,136 +61,80 @@ def test_complist_split_preserves_names_and_join_restores_logical_component() ->
 
     assert len(joined) == 1
     assert joined[0].comp_name == "cmb"
-    assert joined[0].shortname == "cmb"
-    assert joined[0].eval_pol == "IQU"
-    assert not joined[0].is_split_view
+    assert joined[0].pol == "IQU"
     assert np.all(joined[0].amps[0] == 1.0 + 0.0j)
     assert np.all(joined[0].amps[1:] == 2.0 + 0.0j)
 
 
-def test_component_itruediv_divides_data() -> None:
-    comp_list = _make_comp_list("I")
-    comp = comp_list[0]
-    other = deepcopy(comp)
-    comp.amps[:] = 6.0 + 0.0j
-    other.amps[:] = 3.0 + 0.0j
-
-    comp /= other
-
-    assert np.all(comp.amps == 2.0 + 0.0j)
-
-
-def test_complist_add_returns_full_complist() -> None:
+def test_complist_copy_has_its_own_amplitudes_and_shares_the_rest() -> None:
+    """A CG vector is a copy of the list. It must not change the original's amplitudes, and it
+    must not duplicate what the components hold besides them."""
     comp_list = _make_comp_list("IQU")
-    for idx, comp in enumerate(comp_list, start=1):
-        comp.amps[:] = idx + 0.0j
-
-    summed = comp_list + comp_list
-
-    assert isinstance(summed, CompList)
-    assert len(summed) == 2
-    assert np.all(summed[0].amps == 2.0 + 0.0j)
-    assert np.all(summed[1].amps == 4.0 + 0.0j)
-
-
-def test_complist_norm_is_the_square_root_of_the_self_dot_product() -> None:
-    """`complist_norm` must return |x|, not |x|^2, so a ratio of two is a relative L2 error."""
-    comp_list = _make_comp_list("IQU")
-    for idx, comp in enumerate(comp_list, start=1):
-        comp.amps[:] = idx + 0.0j
-
-    self_dot = complist_dot(comp_list, comp_list)
-
-    assert self_dot > 0.0
-    assert complist_norm(comp_list) == pytest.approx(np.sqrt(self_dot))
-
-
-def test_complist_norm_ratio_scales_linearly_with_the_perturbation() -> None:
-    """The CG diagnostic divides two norms and reports it as an L2 error, so it must be linear."""
-    truth = _make_comp_list("IQU")
-    for comp in truth:
+    for comp in comp_list:
         comp.amps[:] = 1.0 + 0.0j
-    perturbed = deepcopy(truth)
-    for comp in perturbed:
-        comp.amps[:] = 1.1 + 0.0j  # a uniform 10% deviation
 
-    relative_error = complist_norm(perturbed - truth)/complist_norm(truth)
+    copied = comp_list.copy()
+    zeros = comp_list.zeros_like()
+    for comp in copied:
+        comp.amps[:] = 5.0 + 0.0j
 
-    assert relative_error == pytest.approx(0.1, rel=1e-6)
+    assert [comp.pol for comp in copied] == ["I", "QU"]
+    assert all(np.all(comp.amps == 1.0 + 0.0j) for comp in comp_list)
+    assert all(np.all(comp.amps == 0.0) for comp in zeros)
+    assert all(new.cfg is old.cfg for new, old in zip(copied, comp_list))
 
 
-def test_complist_ops_require_matching_execution_views() -> None:
+def test_complist_vector_arithmetic_acts_on_every_component() -> None:
+    x = _make_comp_list("IQU")
+    y = x.copy()
+    for value, (comp_x, comp_y) in enumerate(zip(x, y), start=1):
+        comp_x.amps[:] = value + 0.0j        # 1 in the I view, 2 in the QU view.
+        comp_y.amps[:] = 10.0*value + 0.0j
+
+    x.add_scaled(y, 0.5)                     # x = x + 0.5*y = 6*value
+    assert np.all(x[0].amps == 6.0 + 0.0j) and np.all(x[1].amps == 12.0 + 0.0j)
+    x.scale_and_add(y, 2.0)                  # x = 2*x + y = 22*value
+    assert np.all(x[0].amps == 22.0 + 0.0j) and np.all(x[1].amps == 44.0 + 0.0j)
+
+
+def test_complist_dot_counts_each_real_number_of_the_alms_once() -> None:
+    """With every alm equal to 1, the dot product is the number of real numbers behind the alms
+    that the solver uses: (lmax+1)^2 per polarization row. Here lmax = 1, and the QU view has two
+    rows, so I and QU together give 4 + 2*4."""
     comp_list = _make_comp_list("IQU")
-    other = deepcopy(comp_list)
-    other.comp_list.reverse()
+    for comp in comp_list:
+        comp.amps[:] = 1.0 + 0.0j
 
-    with pytest.raises(ValueError, match="same execution views"):
-        _ = comp_list + other
-    with pytest.raises(ValueError, match="same execution views"):
-        _ = complist_dot(comp_list, other)
+    assert comp_list.dot(comp_list) == pytest.approx(12.0)
 
 
-def test_complist_split_for_eval_pol_rejects_invalid_polarization() -> None:
+def test_point_sources_component_rejects_non_intensity_pol() -> None:
+    params = _make_params(ps=Bunch(params=Bunch(polarization="I")))
+
+    with pytest.raises(ValueError, match="a PointSourcesComponent has no 'QU' view"):
+        PointSourcesComponent(params, "ps", "QU")
+
+
+def test_complist_split_for_pol_returns_requested_execution_view() -> None:
     comp_list = _make_comp_list("IQU")
 
-    with pytest.raises(ValueError, match="Unsupported polarization string 'bad'"):
-        comp_list.split_for_eval_pol("bad")
-
-
-def test_point_sources_component_rejects_non_intensity_eval_pol() -> None:
-    params = Bunch(shortname="ps")
-
-    with pytest.raises(ValueError, match="does not support evaluation polarization 'QU'"):
-        PointSourcesComponent(params, _make_compsep(), comp_name="ps", eval_pol="QU")
-
-
-def test_complist_split_for_eval_pol_returns_requested_execution_view() -> None:
-    comp_list = _make_comp_list("IQU")
-
-    qu_only = comp_list.split_for_eval_pol("QU")
+    qu_only = comp_list.split_for_pol("QU")
 
     assert len(qu_only) == 1
-    assert qu_only[0].eval_pol == "QU"
+    assert qu_only[0].pol == "QU"
 
 
-def test_complist_constructor_rejects_duplicate_unsplit_comp_names() -> None:
-    comp = _make_comp_list("I")[0]
-    duplicate = deepcopy(comp)
+def _make_list(*configs: tuple[str, str], **settings) -> CompList:
+    """A component list of CMB-class components, one per (name, polarization), with lmax 1.
 
-    with pytest.raises(ValueError, match="Duplicate logical component"):
-        CompList([comp, duplicate])
-
-
-def test_complist_constructor_rejects_reused_shortname_for_distinct_comp_names() -> None:
-    comp = _make_comp_list("I")[0]
-    other = deepcopy(comp)
-    other.comp_name = "dust"
-
-    with pytest.raises(ValueError, match="Shortname"):
-        CompList([comp, other])
-
-
-def test_copy_matching_data_from_leaves_omitted_components_unchanged() -> None:
-    comp_list = _make_multi_comp_list()
-    intensity = comp_list.split_for_eval_pol("I")
-    original_other = intensity[1].amps.copy()
-    updated_subset = CompList([deepcopy(intensity[0])])
-    updated_subset[0].amps[:] = 7.0 + 0.0j
-
-    intensity.copy_matching_data_from(updated_subset)
-
-    assert np.all(intensity[0].amps == 7.0 + 0.0j)
-    assert np.array_equal(intensity[1].amps, original_other)
-
-
-def _make_list(*configs: tuple[str, str]) -> CompList:
-    """A component list of CMB-class components, one per (name, polarization), with lmax 1."""
+    `settings` are further settings for the `params` block of every component.
+    """
     components = Bunch()
     for name, polarization in configs:
-        cfg = _make_named_component_cfg(name, polarization)
-        object.__setattr__(cfg, "_name", name)
-        components[name] = cfg
-    return CompList.init_from_params(components, Bunch(compsep=_make_compsep()))
+        components[name] = _make_component_cfg(polarization)
+        for key, value in settings.items():
+            components[name].params[key] = value
+    return CompList.init_from_params(Bunch(components=components, compsep=_make_compsep()))
 
 
 def _write_chain(path, comp_list: CompList) -> str:
@@ -238,11 +151,12 @@ def test_load_initial_state_reads_and_splits_from_chain(tmp_path) -> None:
     chain = _write_chain(tmp_path / "init_chain.h5", source)
 
     comp_list = _make_list(("cmb", "IQU"), ("ff", "I"))
-    comp_list.load_initial_state(chain, apply_init_from=True)
+    for comp in comp_list:
+        comp.load_initial_state(chain, apply_init_from=True, restore_beta=False)
 
     # The chain holds the joined IQU alms; each view gets back exactly its own rows.
     for comp, saved in zip(comp_list, source):
-        assert (comp.comp_name, comp.eval_pol) == (saved.comp_name, saved.eval_pol)
+        assert (comp.comp_name, comp.pol) == (saved.comp_name, saved.pol)
         assert np.array_equal(comp.amps, saved.amps)
 
 
@@ -255,13 +169,13 @@ def test_per_component_init_from_wins_only_for_a_new_chain(tmp_path) -> None:
         comp.amps[:] = 5.0
     special_chain = _write_chain(tmp_path / "special.h5", source)
 
-    comp_list = _make_list(("cmb", "IQU"))
+    comp_list = _make_list(("cmb", "IQU"), init_from=special_chain)
     for comp in comp_list:
-        comp.comp_params.init_from = special_chain
-    comp_list.load_initial_state(global_chain, apply_init_from=True)
+        comp.load_initial_state(global_chain, apply_init_from=True, restore_beta=False)
     assert all(np.all(comp.amps == 5.0) for comp in comp_list)
 
-    comp_list.load_initial_state(global_chain, apply_init_from=False)
+    for comp in comp_list:
+        comp.load_initial_state(global_chain, apply_init_from=False, restore_beta=False)
     assert all(np.all(comp.amps == 0.0) for comp in comp_list)
 
 
@@ -287,26 +201,25 @@ def test_load_initial_state_from_fits_map(tmp_path) -> None:
 
     compsep = _make_compsep()
     compsep.double_precision = True  # So component alms keep the map's precision.
-    cmb = _make_named_component_cfg("cmb", "IQU")
+    cmb = _make_component_cfg("IQU")
     cmb.params.lmax = lmax
-    object.__setattr__(cmb, "_name", "cmb")
     cmb.params.init_from = str(fits_path)
     params = Bunch(compsep=compsep, components=Bunch({"cmb": cmb}))
 
-    comp_list = CompList.init_from_params(params.components, params)
-    comp_list.load_initial_state(None, apply_init_from=True)
+    comp_list = CompList.init_from_params(params)
+    for comp in comp_list:
+        comp.load_initial_state(None, apply_init_from=True, restore_beta=False)
 
-    views = {(comp.comp_name, comp.eval_pol): comp for comp in comp_list}
+    views = {(comp.comp_name, comp.pol): comp for comp in comp_list}
     assert np.allclose(views[("cmb", "I")].amps, alms_I, rtol=1e-6, atol=1e-7)
     assert np.allclose(views[("cmb", "QU")].amps, alms_QU, rtol=1e-6, atol=1e-7)
 
 
 def test_load_initial_state_rejects_unknown_extension(tmp_path) -> None:
-    comp_list = _make_list(("cmb", "IQU"))
-    for comp in comp_list:
-        comp.comp_params.init_from = str(tmp_path / "init_map.txt")
+    comp_list = _make_list(("cmb", "IQU"), init_from=str(tmp_path / "init_map.txt"))
     with pytest.raises(ValueError, match="expected a .h5/.hd5 chain or a .fits map"):
-        comp_list.load_initial_state(None, apply_init_from=True)
+        for comp in comp_list:
+            comp.load_initial_state(None, apply_init_from=True, restore_beta=False)
 
 
 def test_load_initial_state_partial_source_leaves_missing_pol_zero(tmp_path) -> None:
@@ -317,9 +230,10 @@ def test_load_initial_state_partial_source_leaves_missing_pol_zero(tmp_path) -> 
     chain = _write_chain(tmp_path / "intensity_only.h5", source)
 
     comp_list = _make_list(("cmb", "IQU"))
-    comp_list.load_initial_state(chain, apply_init_from=True)
+    for comp in comp_list:
+        comp.load_initial_state(chain, apply_init_from=True, restore_beta=False)
 
-    views = {(comp.comp_name, comp.eval_pol): comp for comp in comp_list}
+    views = {(comp.comp_name, comp.pol): comp for comp in comp_list}
     assert np.array_equal(views[("cmb", "I")].amps, source[0].amps)
     assert np.all(views[("cmb", "QU")].amps == 0)
 
@@ -330,7 +244,9 @@ def test_load_initial_state_missing_component_logs_error_and_continues(tmp_path,
 
     comp_list = _make_list(("cmb", "IQU"))
     with caplog.at_level("ERROR"):
-        comp_list.load_initial_state(chain, apply_init_from=True)  # must not raise
+        for comp in comp_list:
+            # Must not raise.
+            comp.load_initial_state(chain, apply_init_from=True, restore_beta=False)
 
     assert all(np.all(comp.amps == 0) for comp in comp_list)
     assert "not found" in caplog.text
@@ -343,29 +259,31 @@ def test_init_from_null_keeps_the_parameter_file_start(tmp_path) -> None:
         comp.amps[:] = 5.0
     chain = _write_chain(tmp_path / "chain.h5", source)
 
-    comp_list = _make_list(("cmb", "IQU"))
+    comp_list = _make_list(("cmb", "IQU"), init_from=None)
     for comp in comp_list:
-        comp.comp_params.init_from = None
-    comp_list.load_initial_state(chain, apply_init_from=True)
+        comp.load_initial_state(chain, apply_init_from=True, restore_beta=False)
 
     assert all(np.all(comp.amps == 0) for comp in comp_list)
 
 
 def _dust_params(**overrides) -> Bunch:
-    params = Bunch(polarization="IQU", shortname="dust", spatially_varying_MM=False,
+    params = Bunch(polarization="IQU", 
                    Cl_prior_amplitude=None, lmax=2,
                    beta=1.5, T=20.0, nu_ref=[857.0, 353.0], units="uK_RJ")
     for key, value in overrides.items():
         params[key] = value
-    object.__setattr__(params, "_name", "dust")
     return params
 
 
+def _dust(pol: str, **overrides) -> ThermalDust:
+    """One view of a thermal dust component. `overrides` are settings of its `params` block."""
+    params = _make_params(dust=Bunch(params=_dust_params(**overrides)))
+    return ThermalDust(params, "dust", pol)
+
+
 def test_diffuse_component_resolves_per_pol_reference_frequency() -> None:
-    compsep = _make_compsep()
-    gibbs = Bunch()
-    dust_I = ThermalDust(_dust_params(), compsep, eval_pol="I", comp_name="dust")
-    dust_QU = ThermalDust(_dust_params(), compsep, eval_pol="QU", comp_name="dust")
+    dust_I = _dust("I")
+    dust_QU = _dust("QU")
 
     # nu_ref = [nu_I, nu_QU]: each view picks its own entry.
     assert dust_I.nu_ref == 857.0
@@ -376,10 +294,8 @@ def test_diffuse_component_resolves_per_pol_reference_frequency() -> None:
 
 
 def test_scalar_reference_frequency_is_shared_by_both_polarizations() -> None:
-    compsep = _make_compsep()
-    gibbs = Bunch()
-    dust_I = ThermalDust(_dust_params(nu_ref=545.0), compsep, eval_pol="I", comp_name="dust")
-    dust_QU = ThermalDust(_dust_params(nu_ref=545.0), compsep, eval_pol="QU", comp_name="dust")
+    dust_I = _dust("I", nu_ref=545.0)
+    dust_QU = _dust("QU", nu_ref=545.0)
 
     # A scalar nu_ref applies to both I and QU.
     assert dust_I.nu_ref == 545.0 and dust_QU.nu_ref == 545.0
@@ -388,9 +304,8 @@ def test_scalar_reference_frequency_is_shared_by_both_polarizations() -> None:
 def test_P_Cl_prior_flat_Dl_falls_as_ell_squared_in_Cl() -> None:
     # C3 convention (comm_cl_mod.f90): the prior is defined in D_l space, so a flat amplitude
     # "roof" corresponds to C_l = 2*pi*amp/(l(l+1)), with C_0 := D_0 := D_1.
-    params = _dust_params(lmax=16, Cl_prior_amplitude=100.0, Cl_prior_beta=0.0,
-                          Cl_prior_l_pivot=50, Cl_prior_FWHM=0.0)
-    comp = ThermalDust(params, _make_compsep(), eval_pol="I", comp_name="dust")
+    comp = _dust("I", lmax=16, Cl_prior_amplitude=100.0, Cl_prior_beta=0.0, Cl_prior_l_pivot=50,
+                 Cl_prior_FWHM=0.0)
 
     ells = np.arange(1, 17)
     np.testing.assert_allclose(comp.P_Cl_prior[1:], 100.0 * 2 * np.pi / (ells * (ells + 1)))
@@ -398,9 +313,8 @@ def test_P_Cl_prior_flat_Dl_falls_as_ell_squared_in_Cl() -> None:
 
 
 def test_P_Cl_prior_power_law_pivot_and_tilt() -> None:
-    params = _dust_params(lmax=100, Cl_prior_amplitude=7.0, Cl_prior_beta=-0.5,
-                          Cl_prior_l_pivot=10, Cl_prior_FWHM=0.0)
-    comp = ThermalDust(params, _make_compsep(), eval_pol="I", comp_name="dust")
+    comp = _dust("I", lmax=100, Cl_prior_amplitude=7.0, Cl_prior_beta=-0.5, Cl_prior_l_pivot=10,
+                 Cl_prior_FWHM=0.0)
 
     # D_l equals the amplitude at the pivot, and scales as (l/l_pivot)^beta away from it.
     assert np.isclose(comp.P_Cl_prior[10], 7.0 * 2 * np.pi / (10 * 11))
@@ -410,8 +324,7 @@ def test_P_Cl_prior_power_law_pivot_and_tilt() -> None:
 
 def test_P_Cl_prior_gaussian_rolloff_floors_at_1e_minus_10() -> None:
     # 600 arcmin FWHM: at l=100 the exponential is ~1e-24, far below C3's relative 1e-10 floor.
-    params = _dust_params(lmax=100, Cl_prior_amplitude=1.0, Cl_prior_FWHM=600.0)
-    comp = ThermalDust(params, _make_compsep(), eval_pol="I", comp_name="dust")
+    comp = _dust("I", lmax=100, Cl_prior_amplitude=1.0, Cl_prior_FWHM=600.0)
 
     sigma = np.deg2rad(10.0) / np.sqrt(8 * np.log(2))
     np.testing.assert_allclose(comp.P_Cl_prior[5], np.exp(-30 * sigma**2) * 2 * np.pi / 30)
@@ -423,10 +336,9 @@ def test_P_Cl_prior_gaussian_rolloff_floors_at_1e_minus_10() -> None:
 
 def test_P_Cl_prior_resolves_per_pol_lists() -> None:
     # Like nu_ref, every Cl_prior parameter can be an [I, QU] pair resolved per execution view.
-    def make(eval_pol):
-        params = _dust_params(lmax=4, Cl_prior_amplitude=[2.0, 8.0], Cl_prior_beta=[0.0, -0.5],
-                              Cl_prior_FWHM=[0.0, 10.0])
-        return ThermalDust(params, _make_compsep(), eval_pol=eval_pol, comp_name="dust")
+    def make(pol):
+        return _dust(pol, lmax=4, Cl_prior_amplitude=[2.0, 8.0], Cl_prior_beta=[0.0, -0.5],
+                     Cl_prior_FWHM=[0.0, 10.0])
 
     dust_I, dust_QU = make("I"), make("QU")
     assert (dust_I.Cl_prior_amplitude, dust_I.Cl_prior_beta, dust_I.Cl_prior_FWHM) == (2.0, 0.0, 0.0)
@@ -437,8 +349,7 @@ def test_P_Cl_prior_resolves_per_pol_lists() -> None:
 def test_P_Cl_prior_l_apod_defaults_to_no_taper() -> None:
     # C3's own parameter files nearly always set COMP_L_APOD equal to COMP_AMP_LMAX, which makes
     # get_Cl_apod unity everywhere; that is our default too.
-    params = _dust_params(lmax=32, Cl_prior_amplitude=1.0)
-    comp = ThermalDust(params, _make_compsep(), eval_pol="I", comp_name="dust")
+    comp = _dust("I", lmax=32, Cl_prior_amplitude=1.0)
 
     assert comp.Cl_prior_l_apod == 32
     np.testing.assert_array_equal(comp.Cl_prior_apodization, np.ones(33))
@@ -447,10 +358,8 @@ def test_P_Cl_prior_l_apod_defaults_to_no_taper() -> None:
 def test_P_Cl_prior_l_apod_tapers_to_1e_minus_6_in_power_at_lmax() -> None:
     # get_Cl_apod (comm_cl_mod.f90): unity up to l_apod, then a Gaussian reaching exp(-ln(1000))
     # in amplitude at lmax, i.e. 1e-6 in power. The prior enters as C_l * f^2.
-    params = _dust_params(lmax=100, Cl_prior_amplitude=1.0, Cl_prior_l_apod=50)
-    comp = ThermalDust(params, _make_compsep(), eval_pol="I", comp_name="dust")
-    unapodized = ThermalDust(_dust_params(lmax=100, Cl_prior_amplitude=1.0), _make_compsep(),
-                             eval_pol="I", comp_name="dust")
+    comp = _dust("I", lmax=100, Cl_prior_amplitude=1.0, Cl_prior_l_apod=50)
+    unapodized = _dust("I", lmax=100, Cl_prior_amplitude=1.0)
 
     f = comp.Cl_prior_apodization
     np.testing.assert_array_equal(f[:51], np.ones(51))
@@ -466,10 +375,8 @@ def test_P_Cl_prior_l_apod_tapers_to_1e_minus_6_in_power_at_lmax() -> None:
 def test_P_Cl_prior_l_tighten_shrinks_the_prior_below_it() -> None:
     # get_Cl_apod (comm_cl_mod.f90) with COMP_AMP_PRIOR_LMAX: below that multipole the factor on
     # S^{1/2} is (0.5 (cos(pi (max(l, 1) - l_tighten) / l_tighten) + 1))^2. The prior is C_l * f^2.
-    params = _dust_params(lmax=100, Cl_prior_amplitude=1.0, Cl_prior_l_tighten=60)
-    comp = ThermalDust(params, _make_compsep(), eval_pol="I", comp_name="dust")
-    untightened = ThermalDust(_dust_params(lmax=100, Cl_prior_amplitude=1.0), _make_compsep(),
-                              eval_pol="I", comp_name="dust")
+    comp = _dust("I", lmax=100, Cl_prior_amplitude=1.0, Cl_prior_l_tighten=60)
+    untightened = _dust("I", lmax=100, Cl_prior_amplitude=1.0)
     assert untightened.Cl_prior_l_tighten == 0                # The default: no tightening.
 
     ells = np.arange(101)
@@ -487,7 +394,7 @@ def test_P_Cl_prior_l_tighten_shrinks_the_prior_below_it() -> None:
 def test_P_Cl_prior_none_amplitude_gives_identity() -> None:
     # Cl_prior_amplitude=None: no prior (C3's CL_TYPE 'none'). The S^{1/2} scaling of the CG
     # reparameterization then does nothing; the CG solver leaves out the prior terms itself.
-    comp = ThermalDust(_dust_params(lmax=8), _make_compsep(), eval_pol="I", comp_name="dust")
+    comp = _dust("I", lmax=8)
 
     np.testing.assert_array_equal(comp.P_Cl_prior, np.ones(9))
     np.testing.assert_array_equal(comp.P_Cl_prior_inv, np.ones(9))
@@ -495,10 +402,8 @@ def test_P_Cl_prior_none_amplitude_gives_identity() -> None:
 
 def test_P_Cl_prior_amplitude_is_given_in_the_component_units() -> None:
     """As C3's COMP_UNIT: an amplitude in uK_CMB^2 is converted to uK_RJ^2 at the view's nu_ref."""
-    in_rj = ThermalDust(_dust_params(lmax=8, Cl_prior_amplitude=100.0), _make_compsep(),
-                        eval_pol="QU", comp_name="dust")
-    in_cmb = ThermalDust(_dust_params(lmax=8, Cl_prior_amplitude=100.0, units="uK_CMB"),
-                         _make_compsep(), eval_pol="QU", comp_name="dust")
+    in_rj = _dust("QU", lmax=8, Cl_prior_amplitude=100.0)
+    in_cmb = _dust("QU", lmax=8, Cl_prior_amplitude=100.0, units="uK_CMB")
 
     # dT_RJ/dT_CMB = x^2 e^x/(e^x - 1)^2, with x = h nu/(k T_CMB), at the QU nu_ref of 353 GHz.
     x = 6.62607015e-34*353.0e9/(1.380649e-23*2.7255)
@@ -508,15 +413,23 @@ def test_P_Cl_prior_amplitude_is_given_in_the_component_units() -> None:
 
 def test_old_smoothing_prior_params_are_rejected() -> None:
     # The old C_l-space 'smoothing_prior_*' parameters changed semantics; fail loudly on stale files.
-    with pytest.raises(ValueError, match=r"smoothing_prior_\*"):
-        ThermalDust(_dust_params(smoothing_prior_amplitude=1.0e7), _make_compsep(),
-                    eval_pol="I", comp_name="dust")
+    with pytest.raises(ValueError, match="Unknown setting 'components.dust.params.smoothing_prior"):
+        _dust("I", smoothing_prior_amplitude=1.0e7)
+
+
+def test_a_component_setting_that_is_left_out_or_misspelled_fails_at_startup() -> None:
+    """The settings of a component are those in the `DEFAULTS` of its class."""
+    with pytest.raises(ValueError, match="'components.dust.params.T' must be set"):
+        _dust("I", T=None)
+    with pytest.raises(ValueError, match="Unknown setting 'components.dust.params.betta'"):
+        _dust("I", betta=1.6)
+    with pytest.raises(ValueError, match="'components.dust.params.polarization' must be one of"):
+        CompList.init_from_params(_make_params(dust=Bunch(
+            enabled=True, component_class="ThermalDust", params=_dust_params(polarization="P"))))
 
 
 def test_init_map_to_amplitude_is_noop_when_units_match() -> None:
-    compsep = _make_compsep()
-    gibbs = Bunch()
-    dust = ThermalDust(_dust_params(units="uK_RJ"), compsep, eval_pol="I", comp_name="dust")
+    dust = _dust("I", units="uK_RJ")
     arr = np.ones((1, 12))
 
     # uK_RJ already equals the dust amplitude unit, so the same array is returned untouched.
@@ -526,10 +439,7 @@ def test_init_map_to_amplitude_is_noop_when_units_match() -> None:
 def test_init_map_to_amplitude_converts_to_amplitude_unit() -> None:
     import pysm3.units as pysm3u
 
-    compsep = _make_compsep()
-    gibbs = Bunch()
-    dust = ThermalDust(_dust_params(units="uK_CMB", nu_ref=100.0), compsep,
-                       eval_pol="I", comp_name="dust")
+    dust = _dust("I", units="uK_CMB", nu_ref=100.0)
     expected = (1 * pysm3u.Unit("uK_CMB")).to(
         pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(100.0 * pysm3u.GHz)).value
 
@@ -541,11 +451,9 @@ def test_init_map_to_amplitude_converts_to_amplitude_unit() -> None:
 def test_cmb_init_map_to_amplitude_converts_uK_CMB_at_nu_ref() -> None:
     import pysm3.units as pysm3u
 
-    compsep = _make_compsep()
-    gibbs = Bunch()
-    cmb_params = _make_component_cfg("IQU").params
-    cmb_params.units = "uK_CMB"
-    cmb = CMB(cmb_params, compsep, eval_pol="I", comp_name="cmb")
+    cmb_cfg = _make_component_cfg("IQU")
+    cmb_cfg.params.units = "uK_CMB"
+    cmb = CMB(_make_params(cmb=cmb_cfg), "cmb", "I")
 
     # CMB amplitudes are stored in uK_RJ referenced to nu_ref (default 1 GHz), so a uK_CMB disk map
     # is converted to uK_RJ at nu_ref.
@@ -564,11 +472,10 @@ def test_spinning_dust_converts_its_units_at_nu_0(tmp_path) -> None:
 
     template = tmp_path / "spdust.dat"
     np.savetxt(template, np.column_stack([np.logspace(0, 3, 50), np.ones(50)]))
-    params = Bunch(polarization="I", shortname="ame", spatially_varying_MM=False,
+    params = Bunch(polarization="I", 
                    Cl_prior_amplitude=100.0, lmax=4, units="uK_CMB", template_path=str(template),
                    nu_peak=30.0, nu_0=22.0)
-    object.__setattr__(params, "_name", "ame")
-    ame = SpinningDust(params, _make_compsep(), eval_pol="I", comp_name="ame")
+    ame = SpinningDust(_make_params(ame=Bunch(params=params)), "ame", "I")
 
     cmb_to_rj = (1*pysm3u.uK_CMB).to(pysm3u.uK_RJ,
                                      equivalencies=pysm3u.cmb_equivalencies(22.0*pysm3u.GHz)).value
@@ -576,14 +483,24 @@ def test_spinning_dust_converts_its_units_at_nu_0(tmp_path) -> None:
     assert np.all(np.isfinite(ame.P_Cl_prior))
 
 
+def test_spinning_dust_rejects_a_reference_frequency_outside_its_template(tmp_path) -> None:
+    """The SED divides by the template at `nu_0`, which is zero outside the tabulated range."""
+    from commander4.sky import SpinningDust
+
+    template = tmp_path / "spdust.dat"
+    np.savetxt(template, np.column_stack([np.logspace(0, 2, 50), np.ones(50)]))  # 1-100 GHz.
+    params = Bunch(polarization="I", lmax=4, template_path=str(template),
+                   nu_peak=30.0, nu_0=200.0)
+    with pytest.raises(ValueError, match="outside the template range"):
+        SpinningDust(_make_params(ame=Bunch(params=params)), "ame", "I")
+
+
 def test_cmb_get_sed_is_unity_at_nu_ref_and_ratio_elsewhere() -> None:
     import pysm3.units as pysm3u
 
-    compsep = _make_compsep()
-    gibbs = Bunch()
-    cmb_params = _make_component_cfg("IQU").params
-    cmb_params.nu_ref = 100.0
-    cmb = CMB(cmb_params, compsep, eval_pol="I", comp_name="cmb")
+    cmb_cfg = _make_component_cfg("IQU")
+    cmb_cfg.params.nu_ref = 100.0
+    cmb = CMB(_make_params(cmb=cmb_cfg), "cmb", "I")
 
     # The SED is normalized to 1 at the reference frequency and is the ratio of the
     # thermodynamic-to-RJ conversion elsewhere.
@@ -604,15 +521,12 @@ def _make_dust_cfg(nu_ref, polarization: str = "IQU") -> Bunch:
         params=Bunch(
             lmax=1,
             polarization=polarization,
-            shortname="dust",
-            spatially_varying_MM=False,
             Cl_prior_amplitude=None,
             beta=1.54,
             T=20.0,
             nu_ref=nu_ref,
         ),
     )
-    object.__setattr__(cfg, "_name", "dust")
     return cfg
 
 
@@ -628,8 +542,7 @@ def test_every_component_class_declares_its_sed_parameters() -> None:
 
 def test_sed_parameters_are_readable_off_a_joined_component() -> None:
     """The names the chain writer stores must all resolve on the component it is handed."""
-    params = Bunch(compsep=_make_compsep())
-    comp_list = CompList.init_from_params(Bunch({"dust": _make_dust_cfg(353.0)}), params)
+    comp_list = CompList.init_from_params(_make_params(dust=_make_dust_cfg(353.0)))
     dust = comp_list.joined()[0]
 
     stored = {name: getattr(dust, name) for name in dust.sed_param_names}
@@ -642,8 +555,7 @@ def test_joining_restores_a_per_polarization_nu_ref() -> None:
     Joining deep-copies the intensity view, whose `nu_ref` has already been resolved by `_per_pol`,
     so without care an Akari-style `[857, 353]` would be recorded in the chain as 857.
     """
-    params = Bunch(compsep=_make_compsep())
-    comp_list = CompList.init_from_params(Bunch({"dust": _make_dust_cfg([857.0, 353.0])}), params)
+    comp_list = CompList.init_from_params(_make_params(dust=_make_dust_cfg([857.0, 353.0])))
 
     assert [comp.nu_ref for comp in comp_list] == [857.0, 353.0]  # the split views
     np.testing.assert_array_equal(comp_list.joined()[0].nu_ref, [857.0, 353.0])
@@ -651,23 +563,23 @@ def test_joining_restores_a_per_polarization_nu_ref() -> None:
     assert comp_list.joined()[0].beta == 1.54
 
 
-def _saved_dust_chain(tmp_path, sample_spectral_index: bool) -> tuple[CompList, str]:
+def _saved_dust_chain(tmp_path) -> tuple[CompList, str]:
     """A dust chain whose beta, T and nu_ref all differ from `_make_dust_cfg`, and a fresh list
     to read it into."""
-    cfg = _make_dust_cfg(353.0)
-    cfg.params.sample_spectral_index = sample_spectral_index
-    source = CompList.init_from_params(Bunch({"dust": cfg}), Bunch(compsep=_make_compsep()))
+    params = _make_params(dust=_make_dust_cfg(353.0))
+    source = CompList.init_from_params(params)
     for comp in source:
         comp.beta, comp.T, comp.nu_ref = 1.5311, 25.0, 217.0
     chain = _write_chain(tmp_path / "chain01_iter0007.h5", source)
-    return CompList.init_from_params(Bunch({"dust": cfg}), Bunch(compsep=_make_compsep())), chain
+    return CompList.init_from_params(params), chain
 
 
 def test_restarting_from_a_chain_restores_a_sampled_spectral_index(tmp_path):
     """Continuing a chain must continue its MH index walk, not reset beta to the start value."""
-    comp_list, chain = _saved_dust_chain(tmp_path, sample_spectral_index=True)
+    comp_list, chain = _saved_dust_chain(tmp_path)
     assert all(comp.beta == 1.54 for comp in comp_list)
-    comp_list.load_initial_state(chain, apply_init_from=False)
+    for comp in comp_list:
+        comp.load_initial_state(chain, apply_init_from=False, restore_beta=True)
 
     for comp in comp_list:
         assert comp.beta == pytest.approx(1.5311)   # sampled: taken from the chain
@@ -676,10 +588,11 @@ def test_restarting_from_a_chain_restores_a_sampled_spectral_index(tmp_path):
 
 
 def test_a_fixed_spectral_index_is_not_restored_from_a_chain(tmp_path):
-    """Without `sample_spectral_index`, beta stays a parameter-file setting the chain cannot
+    """A beta that the run does not sample stays a parameter-file setting the chain cannot
     override."""
-    comp_list, chain = _saved_dust_chain(tmp_path, sample_spectral_index=False)
-    comp_list.load_initial_state(chain, apply_init_from=False)
+    comp_list, chain = _saved_dust_chain(tmp_path)
+    for comp in comp_list:
+        comp.load_initial_state(chain, apply_init_from=False, restore_beta=False)
     assert all(comp.beta == 1.54 for comp in comp_list)
 
 
@@ -691,7 +604,8 @@ def test_the_amplitudes_beam_is_restored_from_a_chain(tmp_path):
     chain = _write_chain(tmp_path / "chain.h5", source)
 
     comp_list = _make_list(("cmb", "IQU"))
-    comp_list.load_initial_state(chain, apply_init_from=False)
+    for comp in comp_list:
+        comp.load_initial_state(chain, apply_init_from=False, restore_beta=False)
     assert all(comp.amp_fwhm_rad == pytest.approx(np.radians(1.0)) for comp in comp_list)
 
 
@@ -708,8 +622,8 @@ def _write_radio_source_table(path, glon=0.0, glat=0.0, flux_mjy=1000.0, alpha=-
 
 def _make_radio_sources(template_path, nu_ref=30.0):
     from commander4.sky import RadioSources
-    cfg = Bunch(shortname="radsources", nu_0=nu_ref, template_path=str(template_path))
-    return RadioSources(cfg, _make_compsep(), comp_name="radsources")
+    cfg = Bunch(polarization="I", nu_0=nu_ref, template_path=str(template_path))
+    return RadioSources(_make_params(radsources=Bunch(params=cfg)), "radsources", "I")
 
 
 def test_radio_source_amplitudes_round_trip_through_a_chain(tmp_path) -> None:
@@ -720,7 +634,8 @@ def test_radio_source_amplitudes_round_trip_through_a_chain(tmp_path) -> None:
     chain = _write_chain(tmp_path / "chain.h5", source)
 
     comp_list = CompList([_make_radio_sources(template)])
-    comp_list.load_initial_state(chain, apply_init_from=False)
+    for comp in comp_list:
+        comp.load_initial_state(chain, apply_init_from=False, restore_beta=False)
     assert np.all(comp_list[0].amps == 1234.0)
 
 
@@ -735,8 +650,8 @@ def test_radio_sources_component_map_scales_with_the_reference_frequency(tmp_pat
     _write_radio_source_table(template)
 
     beam = np.deg2rad(2.0)
-    low = _make_radio_sources(template, nu_ref=30.0).get_component_map(nside=64, fwhm=beam)
-    high = _make_radio_sources(template, nu_ref=60.0).get_component_map(nside=64, fwhm=beam)
+    low = _make_radio_sources(template, nu_ref=30.0).get_component_map(nside=64, fwhm_rad=beam)
+    high = _make_radio_sources(template, nu_ref=60.0).get_component_map(nside=64, fwhm_rad=beam)
 
     assert low.max() > 0.0
     assert high.max() == pytest.approx(low.max()/4.0, rel=1e-5)
@@ -762,9 +677,9 @@ def test_radio_sources_sky_equals_amplitude_times_sed(tmp_path) -> None:
     _write_radio_source_table(template)
     comp = _make_radio_sources(template, nu_ref=30.0)
 
-    amplitude = comp.get_component_map(nside=64, fwhm=np.deg2rad(2.0))
+    amplitude = comp.get_component_map(nside=64, fwhm_rad=np.deg2rad(2.0))
     for nu in (30.0, 100.0, 353.0):
-        sky = comp.get_sky(nu, nside=64, fwhm=np.deg2rad(2.0))
+        sky = comp.get_sky(nu, nside=64, fwhm_rad=np.deg2rad(2.0))
         expected = amplitude*comp.get_sed(nu)[0]
         assert sky == pytest.approx(expected, rel=1e-5)
 
@@ -775,7 +690,7 @@ def test_radio_sources_conserve_flux_across_resolutions(tmp_path) -> None:
     _write_radio_source_table(template)
 
     integrals = [_map_integral(_make_radio_sources(template).get_component_map(
-                     nside=n, fwhm=np.deg2rad(1.0)), n)
+                     nside=n, fwhm_rad=np.deg2rad(1.0)), n)
                  for n in (16, 64, 256)]
 
     assert integrals[0] > 0.0
@@ -792,15 +707,28 @@ def test_radio_sources_beam_narrower_than_a_pixel_still_paints_the_source(tmp_pa
     _write_radio_source_table(template)
     comp = _make_radio_sources(template)
 
-    narrow = comp.get_component_map(nside=16, fwhm=np.deg2rad(1.0/60))
-    resolved = _make_radio_sources(template).get_component_map(nside=16, fwhm=np.deg2rad(1.0))
+    narrow = comp.get_component_map(nside=16, fwhm_rad=np.deg2rad(1.0/60))
+    resolved = _make_radio_sources(template).get_component_map(nside=16, fwhm_rad=np.deg2rad(1.0))
 
     assert np.count_nonzero(narrow) == 1
     assert _map_integral(narrow, 16) == pytest.approx(_map_integral(resolved, 16), rel=1e-4)
 
 
+def test_radio_sources_with_a_zero_beam_paint_one_pixel_without_warnings(tmp_path) -> None:
+    """A band with `fwhm` 0 (the default of `get_component_map`) gives the delta limit directly,
+    without a division by zero in the Gaussian."""
+    template = tmp_path / "radio.dat"
+    _write_radio_source_table(template)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        point = _make_radio_sources(template).get_component_map(nside=16, fwhm_rad=0.0)
+    narrow = _make_radio_sources(template).get_component_map(nside=16, fwhm_rad=np.deg2rad(1/60))
+
+    np.testing.assert_array_equal(point, narrow)
+
+
 def test_radio_sources_take_fwhm_in_radians_like_diffuse_components(tmp_path) -> None:
-    """`SkyModel.get_sky_at_nu` passes the band's `fwhm_rad` to whatever components it holds, so
+    """`CompList.get_sky_at_nu` passes the band's `fwhm_rad` to whatever components it holds, so
     both families have to read that argument the same way.
 
     `RadioSources` used to take arcmin here. Given radians it then painted every source through a
@@ -810,13 +738,13 @@ def test_radio_sources_take_fwhm_in_radians_like_diffuse_components(tmp_path) ->
     template = tmp_path / "radio.dat"
     _write_radio_source_table(template)
     one_degree = np.deg2rad(1.0)
-    painted = _make_radio_sources(template).get_component_map(nside=64, fwhm=one_degree)
+    painted = _make_radio_sources(template).get_component_map(nside=64, fwhm_rad=one_degree)
 
     # A one-degree beam at nside 64 (55' pixels) must cover more than the source's own pixel.
     assert np.count_nonzero(painted) > 1
     # And it must be broader than what the old arcmin reading of the same number would give.
     as_arcmin = _make_radio_sources(template).get_component_map(nside=64,
-                                                                fwhm=np.deg2rad(1.0/60))
+                                                                fwhm_rad=np.deg2rad(1.0/60))
     assert np.count_nonzero(painted) > np.count_nonzero(as_arcmin)
 
 
@@ -828,17 +756,20 @@ def test_radio_sources_are_added_to_the_band_in_pixel_space(tmp_path) -> None:
     _write_radio_source_table(template)
     source = _make_radio_sources(template, nu_ref=30.0)
     nside = 16
-    band = Band(np.zeros((1, hp.Alm.getsize(3*nside - 1)), dtype=np.complex128), 30.0, 120.0, nside)
+    band = Band(np.zeros((1, hp.Alm.getsize(3*nside - 1)), dtype=np.complex128), 30.0,
+                np.deg2rad(2.0), nside)
     x = source.amps.copy()
 
-    painted = source.comp2band(band).copy()
+    source.comp2band(band)
+    painted = band.map.copy()
 
     assert np.all(band.alms == 0)
     # At nu_ref the SED is 1, and the beam integrates to 1: the map holds the full flux.
     assert _map_integral(painted, nside) == pytest.approx(x[0, 0]*source.mJysr_to_uKRJ, rel=1e-5)
     y = np.random.default_rng(0).normal(size=band.map.shape)
     band.map = y
-    transpose_y = source.band2comp(band).copy()
+    source.band2comp(band)
+    transpose_y = source.amps.copy()
     assert np.sum(painted*y) == pytest.approx(np.sum(x*transpose_y), rel=1e-5)
 
 
@@ -852,57 +783,57 @@ def test_overlapping_radio_sources_add_up(tmp_path) -> None:
         handle.write("# Glon(deg) Glat(deg) I(mJy) alpha_I\n0.0 0.0 2000.0 -0.7\n0.0 0.0 3000.0 -0.7\n")
     _write_radio_source_table(single, flux_mjy=5000.0)
     fwhm = np.deg2rad(5.0)
-    pair_map = _make_radio_sources(pair).get_sky(nu=44.0, nside=16, fwhm=fwhm)
-    single_map = _make_radio_sources(single).get_sky(nu=44.0, nside=16, fwhm=fwhm)
+    pair_map = _make_radio_sources(pair).get_sky(nu=44.0, nside=16, fwhm_rad=fwhm)
+    single_map = _make_radio_sources(single).get_sky(nu=44.0, nside=16, fwhm_rad=fwhm)
     np.testing.assert_allclose(pair_map, single_map, rtol=1e-6)
 
 
-def _sky_model_at_amp_fwhm(amp_fwhm_rad):
-    """A two-component sky model whose amplitudes carry `amp_fwhm_rad` of smoothing."""
-    from commander4.sky.sky_model import SkyModel
+def _comp_list_at_amp_fwhm(amp_fwhm_rad):
+    """Two components whose amplitudes carry `amp_fwhm_rad` of smoothing."""
     comp_list = _make_comp_list("I")   # intensity only: lmax here is 1, too low for spin-2 QU
     for comp in comp_list:
         comp.amp_fwhm_rad = amp_fwhm_rad
-    return SkyModel(comp_list)
+    return comp_list
 
 
-def test_sky_model_amp_fwhm_is_the_coarsest_component() -> None:
-    """A model is only as sharp as its blurriest component, or the sky mixes two resolutions."""
-    sky = _sky_model_at_amp_fwhm(0.0)
-    assert sky.amp_fwhm_rad == 0.0
+def test_the_sky_is_only_as_sharp_as_the_coarsest_component() -> None:
+    """One component with a beam makes the whole sky that coarse, or it mixes two resolutions."""
+    comp_list = _comp_list_at_amp_fwhm(0.0)
+    comp_list[0].amp_fwhm_rad = np.deg2rad(100.0/60)
 
-    sky._components[0].amp_fwhm_rad = np.deg2rad(100.0/60)
-    assert sky.amp_fwhm_rad == pytest.approx(np.deg2rad(100.0/60))
+    with pytest.raises(ValueError, match="cannot be realized any sharper"):
+        comp_list.get_sky_at_nu(100.0, 2, "I", fwhm_rad=np.deg2rad(30.0/60))
 
 
 def test_deconvolved_amplitudes_can_be_realized_at_any_beam() -> None:
     """The CG solver leaves `amp_fwhm_rad` zero, so nothing is out of reach."""
-    sky = _sky_model_at_amp_fwhm(0.0)
+    comp_list = _comp_list_at_amp_fwhm(0.0)
     for fwhm in (0.0, np.deg2rad(1.0), None):
-        assert sky.get_sky_at_nu(100.0, 2, "I", fwhm=fwhm).shape == (1, 12*2**2)
+        assert comp_list.get_sky_at_nu(100.0, 2, "I", fwhm_rad=fwhm).shape == (1, 12*2**2)
 
 
 def test_asking_for_a_sharper_sky_than_the_amplitudes_hold_is_refused() -> None:
     """Per-pixel amplitudes carry the common beam; a finer sky simply does not exist, and
     silently handing back a coarser one hides that from whoever asked."""
-    sky = _sky_model_at_amp_fwhm(np.deg2rad(100.0/60))
+    comp_list = _comp_list_at_amp_fwhm(np.deg2rad(100.0/60))
 
     with pytest.raises(ValueError, match="cannot be realized any sharper"):
-        sky.get_sky_at_nu(100.0, 2, "I", fwhm=np.deg2rad(30.0/60))
+        comp_list.get_sky_at_nu(100.0, 2, "I", fwhm_rad=np.deg2rad(30.0/60))
 
 
-def test_none_means_the_sharpest_this_model_can_give() -> None:
+def test_none_means_the_sharpest_these_amplitudes_can_give() -> None:
     """The way for a caller to say "best available" without naming a number."""
-    sky = _sky_model_at_amp_fwhm(np.deg2rad(100.0/60))
+    comp_list = _comp_list_at_amp_fwhm(np.deg2rad(100.0/60))
 
-    at_none = sky.get_sky_at_nu(100.0, 2, "I", fwhm=None)
-    at_amp = sky.get_sky_at_nu(100.0, 2, "I", fwhm=sky.amp_fwhm_rad)
+    at_none = comp_list.get_sky_at_nu(100.0, 2, "I", fwhm_rad=None)
+    at_amp = comp_list.get_sky_at_nu(100.0, 2, "I", fwhm_rad=np.deg2rad(100.0/60))
 
     assert np.array_equal(at_none, at_amp)
 
 
 def test_the_amplitudes_own_beam_is_not_treated_as_too_sharp() -> None:
     """`amp_fwhm_rad` is set from a band's own fwhm, so equality here must not trip the check."""
-    sky = _sky_model_at_amp_fwhm(np.deg2rad(100.0/60))
+    comp_list = _comp_list_at_amp_fwhm(np.deg2rad(100.0/60))
 
-    assert sky.get_sky_at_nu(100.0, 2, "I", fwhm=np.deg2rad(100.0/60)).shape == (1, 12*2**2)
+    sky = comp_list.get_sky_at_nu(100.0, 2, "I", fwhm_rad=np.deg2rad(100.0/60))
+    assert sky.shape == (1, 12*2**2)

@@ -10,6 +10,7 @@ from commander4.file_io.tod_reader import experiment_tod_readers
 from commander4.parameters.parse import load_params
 from commander4.parameters.schema import (
     TOP_LEVEL_BLOCKS,
+    compsep_enabled,
     derive_task_counts,
     enabled_compsep_views,
     enabled_tod_bands,
@@ -62,7 +63,6 @@ def _validate_components(params) -> None:
     from commander4.sky.component import Component
     from commander4.sky.diffuse_components import (
         CMB,
-        DiffuseComponent,
         FreeFree,
         SpinningDust,
         Synchrotron,
@@ -112,32 +112,12 @@ def _validate_components(params) -> None:
                 "corresponding 'Cl_prior_*' settings."
             )
 
-        common_fields = {"polarization", "longname", "shortname"}
-        diffuse_fields = {
-            "lmax", "spatially_varying_MM", "Cl_prior_amplitude", "Cl_prior_beta",
-            "Cl_prior_FWHM", "Cl_prior_l_pivot", "Cl_prior_l_apod", "Cl_prior_l_tighten", "units",
-            "init_from", "amp_prior_mean_map",
-        }
-        spectral_index_fields = {
-            "sample_spectral_index", "spectral_index_bounds", "spectral_index_prior",
-            "spectral_index_proposal_sigma",
-        }
-        class_fields = {
-            CMB: {"nu_ref"},
-            ThermalDust: {"beta", "T", "nu_ref"} | spectral_index_fields,
-            Synchrotron: {"beta", "nu_ref"} | spectral_index_fields,
-            FreeFree: {"T", "nu_ref"},
-            SpinningDust: {"template_path", "nu_peak", "nu_0"},
-            RadioSources: {"template_path", "nu_0"},
-        }
-        allowed_fields = common_fields | class_fields[component_class]
-        if issubclass(component_class, DiffuseComponent):
-            allowed_fields |= diffuse_fields
-        unknown = sorted(set(component_params) - allowed_fields)
+        # Each component class lists the settings it accepts in its `DEFAULTS`.
+        unknown = sorted(set(component_params) - set(component_class.DEFAULTS))
         if unknown:
             raise ValueError(
                 f"components.{component_name}.params has unused field(s) {unknown}. "
-                f"{component.component_class} accepts {sorted(allowed_fields)}."
+                f"{component.component_class} accepts {sorted(component_class.DEFAULTS)}."
             )
 
 
@@ -351,10 +331,10 @@ def validate_parameter_file(
     _validate_components(params)
     _validate_experiments(params)
     enabled_compsep_views(params)
-    if "compsep" in params:
-        from commander4.compsep.processing import resolve_sampling_groups
+    if compsep_enabled(params):  # As in a run: a TOD-only run does not read the sampling groups.
+        from commander4.compsep.processing import read_sampling_groups
 
-        resolve_sampling_groups(params)
+        read_sampling_groups(params)
     counts = derive_task_counts(params)
     if counts.min_total < 1:
         raise ValueError("The parameter file enables no TOD bands or CompSep views.")

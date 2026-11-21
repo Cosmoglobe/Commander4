@@ -107,14 +107,13 @@ compsep:
   cg_sampling_groups:
     sample_amps_CG:
       enabled: true
-      comps: [CMB, Synchrotron, ThermalDust]
+      comps: [cmb, sync, dust]
       bands: [Band30GHz, Band100GHz, Band217GHz]
       optimize: false   # was compsep.sample_amplitudes: true
       max_iter: 200
       max_iter_pol: 200
       err_tol: 0.0
       preconditioner: JointPreconditioner
-      dense_matrix_debug_mode: false
 
   mcmc_sampling_groups: {}
 
@@ -140,26 +139,21 @@ compsep:
 # signal power at the quoted nu_ref -- so the prior only regularizes the modes the data leave
 # unconstrained and never shrinks the solution.
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      longname: "CMB"
-      shortname: "cmb"
       Cl_prior_amplitude: [1.0e+6, 1.0e+4]  # D_l at l_pivot [I, QU]; uK_RJ^2 (~uK_CMB^2 at 1 GHz)
       Cl_prior_beta: [0.0, -0.5]
       Cl_prior_l_pivot: 20
       lmax: 191
-      spatially_varying_MM: False
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      longname: "Thermal-Dust"
-      shortname: "dust"
       Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
       Cl_prior_l_pivot: 50
       beta: 1.54
@@ -167,15 +161,12 @@ components:
       nu_ref: 353
       units: "uK_RJ"
       lmax: 191
-      spatially_varying_MM: False
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      longname: "Synchrotron"
-      shortname: "sync"
       # Synchrotron is constrained almost entirely by the 30 GHz band, whose 70' beam has little
       # power left at l ~ 190; the Gaussian rolloff keeps those prior-dominated modes finite.
       Cl_prior_amplitude: [1.0e+8, 1.0e+6]  # D_l at l_pivot [I, QU]; uK_RJ^2 at nu_ref
@@ -185,7 +176,6 @@ components:
       nu_ref: 30
       units: "uK_RJ"
       lmax: 191
-      spatially_varying_MM: False
 
 # ----------------------------------------
 # EXPERIMENTS

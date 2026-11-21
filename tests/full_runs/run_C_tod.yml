@@ -99,47 +99,38 @@ compsep:
   enabled: false
 
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      longname: "CMB"
-      shortname: "cmb"
       lmax: 47
-      spatially_varying_MM: false
       Cl_prior_amplitude: null
-      init_from: "sim_debug/truth_CMB.fits"
+      init_from: "sim_debug/truth_cmb.fits"
       units: "uK_RJ"
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      longname: "Thermal-Dust"
-      shortname: "dust"
       lmax: 47
-      spatially_varying_MM: false
       Cl_prior_amplitude: null
       beta: 1.54
       T: 20
       nu_ref: 353
       units: "uK_RJ"
-      init_from: "sim_debug/truth_ThermalDust.fits"
-  Synchrotron:
+      init_from: "sim_debug/truth_dust.fits"
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      longname: "Synchrotron"
-      shortname: "sync"
       lmax: 47
-      spatially_varying_MM: false
       Cl_prior_amplitude: null
       beta: -3.1
       nu_ref: 30
       units: "uK_RJ"
-      init_from: "sim_debug/truth_Synchrotron.fits"
+      init_from: "sim_debug/truth_sync.fits"
 
 experiments:
   SimSat:

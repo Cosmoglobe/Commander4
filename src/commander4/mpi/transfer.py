@@ -1,6 +1,6 @@
 """Moving data between the TOD-processing and component-separation communicators each iteration.
 
-TOD processing sends `DetectorMap`s (one per band) and receives back a `SkyModel`. Both directions
+TOD processing sends `DetectorMap`s (one per band) and receives back a `CompList`. Both directions
 go band master to band master, since the two sides may split their bands over different numbers of
 ranks; the receiving master then distributes within its own band communicator.
 """
@@ -14,8 +14,7 @@ from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pixel_domain import DistributedMap
 from commander4.file_io.map_reader import read_data_map_from_file
-from commander4.polarization import get_execution_band_id
-from commander4.sky.sky_model import build_initial_sky_model
+from commander4.sky.comp_list import CompList
 
 logger = logging.getLogger(__name__)
 
@@ -25,14 +24,11 @@ def _get_compsep_sender_id_for_tod_band(todproc_my_band_id: str,
     """Return the CompSep execution-view ID that sends the sky model back to a TOD band.
 
     For bands that have both intensity and QU execution views, the intensity rank sends the
-    already reassembled `SkyModel`. QU-only bands fall back to their `_QU` identifier.
+    full component list. QU-only bands fall back to their `_QU` identifier.
     """
-    intensity_key = get_execution_band_id(todproc_my_band_id, "I")
-    if intensity_key in senders:
-        return intensity_key
-    pol_key = get_execution_band_id(todproc_my_band_id, "QU")
-    if pol_key in senders:
-        return pol_key
+    for view_name in (f"{todproc_my_band_id}_I", f"{todproc_my_band_id}_QU"):
+        if view_name in senders:
+            return view_name
     raise KeyError(f"No CompSep sender found for TOD band '{todproc_my_band_id}'.")
 
 
@@ -42,10 +38,7 @@ def _should_send_compsep_result(compsep_my_band_id: str,
     if destinations is None or compsep_my_band_id not in destinations:
         return False
     if compsep_my_band_id.endswith("_QU"):
-        paired_intensity_id = get_execution_band_id(
-            compsep_my_band_id.removesuffix("_QU"),
-            "I",
-        )
+        paired_intensity_id = compsep_my_band_id.removesuffix("_QU") + "_I"
         if paired_intensity_id in destinations:
             return False
     return True
@@ -55,16 +48,16 @@ def _should_send_compsep_result(compsep_my_band_id: str,
 # ON TOD SIDE
 ###########################################################
 
-def _realize_and_distribute_sky(sky_model, experiment_data: DetectorGroupTOD,
+def _realize_and_distribute_sky(comp_list: CompList | None, experiment_data: DetectorGroupTOD,
                                 band_comm) -> DistributedMap:
-    """Realize the band sky model on the master and hand each rank only the pixels it needs.
+    """Realize the band sky on the master and hand each rank only the pixels it needs.
 
-    The band master realizes the full-sky ``(npols, npix)`` detector map and keeps it, for the
-    chain output and the far-sidelobe transform. Every rank, the master included, then receives
-    through the band's ``PixelDomain`` the sky values at its local pixels, the same pixels its map
-    buffers hold. Only the master needs the ``SkyModel`` object, so it is never broadcast, avoiding
-    a full-sky realization and a copy of the model on every other rank (the dominant TOD-side
-    memory cost at high nside).
+    The band master realizes the full-sky ``(npols, npix)`` detector map from `comp_list` and keeps
+    it, for the chain output and the far-sidelobe transform. Every rank, the master included, then
+    receives through the band's ``PixelDomain`` the sky values at its local pixels, the same pixels
+    its map buffers hold. Only the master needs the component list (None elsewhere), so it is never
+    broadcast, avoiding a full-sky realization and a copy of the components on every other rank
+    (the dominant TOD-side memory cost at high nside).
     """
     is_band_master = band_comm.Get_rank() == 0
     pols = experiment_data.pols
@@ -73,9 +66,10 @@ def _realize_and_distribute_sky(sky_model, experiment_data: DetectorGroupTOD,
         # This detectors FWHM is used to realize the sky model, unless the per-pixel solver was
         # used with common-resolution smoothing, in which case the sky carries an intrinsic
         # resolution `amp_fwhm_rad`, and we simply have to use that, even though it's wrong.
-        fwhm = max(np.deg2rad(experiment_data.fwhm / 60.0), sky_model.amp_fwhm_rad)
-        full_map = sky_model.get_sky_at_nu(experiment_data.nu, experiment_data.nside, pols, fwhm,
-                                           lmax=experiment_data.lmax)
+        fwhm_rad = max([np.deg2rad(experiment_data.fwhm/60.0)]
+                       + [comp.amp_fwhm_rad for comp in comp_list])
+        full_map = comp_list.get_sky_at_nu(experiment_data.nu, experiment_data.nside, pols,
+                                           fwhm_rad, lmax=experiment_data.lmax)
     else:
         full_map = None
     local_map = experiment_data.pixel_domain.scatter_from_full(full_map, ncomp, dtype=np.float32)
@@ -84,9 +78,9 @@ def _realize_and_distribute_sky(sky_model, experiment_data: DetectorGroupTOD,
 
 def receive_compsep(mpi_info: Bunch, experiment_data: DetectorGroupTOD, todproc_my_band_id: str,
                     senders: dict[str, int]) -> DistributedMap:
-    """Receive the CompSep sky model and distribute the realized band map within TOD.
+    """Receive the CompSep components and distribute the realized band map within TOD.
 
-    The band master receives the ``SkyModel`` from the CompSep side and realizes it at the band
+    The band master receives the ``CompList`` from the CompSep side and realizes it at the band
     frequency/resolution; the result is distributed to all band ranks (see
     ``_realize_and_distribute_sky``).
 
@@ -106,25 +100,28 @@ def receive_compsep(mpi_info: Bunch, experiment_data: DetectorGroupTOD, todproc_
     band_comm = mpi_info.band.comm
     if mpi_info.band.is_master:
         source_band_id = _get_compsep_sender_id_for_tod_band(todproc_my_band_id, senders)
-        sky_model = world_comm.recv(source=senders[source_band_id])
+        comp_list = world_comm.recv(source=senders[source_band_id])
     else:
-        sky_model = None
-    return _realize_and_distribute_sky(sky_model, experiment_data, band_comm)
+        comp_list = None
+    return _realize_and_distribute_sky(comp_list, experiment_data, band_comm)
 
 
 def get_local_initial_sky(mpi_info: Bunch, experiment_data: DetectorGroupTOD,
                           params: Bunch) -> DistributedMap:
-    """Build the initial sky model locally and realize it at this TOD band.
+    """Build the initial components locally and realize them at this TOD band.
 
-    Used when there are no CompSep ranks: the band master builds the SkyModel from the component
-    parameters and init files and realizes it; the realized map is distributed to all band ranks
-    (see `_realize_and_distribute_sky`). Mirrors `receive_compsep`, minus the cross-world receive.
+    Used when there are no CompSep ranks: the band master builds the component list from the
+    component parameters and init files and realizes it; the realized map is distributed to all
+    band ranks (see `_realize_and_distribute_sky`). Mirrors `receive_compsep`, minus the
+    cross-world receive.
     """
+    comp_list = None
     if mpi_info.band.is_master:
-        sky_model = build_initial_sky_model(params)
-    else:
-        sky_model = None
-    return _realize_and_distribute_sky(sky_model, experiment_data, mpi_info.band.comm)
+        comp_list = CompList.init_from_params(params)
+        for comp in comp_list:
+            # Nothing samples beta in a TOD-only run, so beta is that of the parameter file.
+            comp.load_initial_state(None, apply_init_from=True, restore_beta=False)
+    return _realize_and_distribute_sky(comp_list, experiment_data, mpi_info.band.comm)
 
 
 def send_tod(mpi_info: Bunch, tod_map_dict: dict[DetectorMap], todproc_my_band_id: str,
@@ -144,7 +141,7 @@ def send_tod(mpi_info: Bunch, tod_map_dict: dict[DetectorMap], todproc_my_band_i
         logger.debug(f"CompSep band masters: {mpi_info.world.compsep_band_masters}")
     if mpi_info.band.is_master:
         for pol, detector_map in tod_map_dict.items():
-            target_band = get_execution_band_id(todproc_my_band_id, pol)
+            target_band = f"{todproc_my_band_id}_{pol}"
             if target_band in receivers.keys():
                 mpi_info.world.comm.send(detector_map, dest=receivers[target_band])
             else:
@@ -156,61 +153,50 @@ def send_tod(mpi_info: Bunch, tod_map_dict: dict[DetectorMap], todproc_my_band_i
 # ON COMPSEP SIDE
 ###########################################################
 
-def receive_tod(mpi_info: Bunch, senders: dict[str,int], my_band: Bunch, compsep_band_id: str,
-                curr_tod_output: DetectorMap|None, params: Bunch) -> DetectorMap:
-    """ MPI-receive the results from the TOD processing (used in conjunction with send_tod).
+def receive_tod(mpi_info: Bunch, band_map: DetectorMap|None, params: Bunch) -> DetectorMap:
+    """Return this CompSep rank's band map of the next iteration (the counterpart of `send_tod`).
 
-    Input:
+    A band with `get_from: file` reads its map on the first call, and keeps it after that. Any
+    other band receives its map from the TOD side.
+
+    Args:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
-        senders: (dict[str->int]): A dictionary mapping a string uniquely identifying each
-                 band to the world rank of the sender task (on the CompSep side).
-        my_band (Bunch): The section of the parameter file corresponding to this CompSep band,
-                 as a "Bunch" type, it also has an 'identifier' field.
-        compsep_band_id (str): The string uniquely indentifying the band+pol of this
-                 rank (example: '30GHz_I').
-        curr_tod_output (DetectorMap): The current map output from the TOD process.
-                 Should be None unless map is read from file already in a previous iteration.
-        params (Bunch): Full parameter file, forwarded to the file reader for common-res smoothing.
-
-    Returns:
-        data (list of DetectorMaps): nbands (DetectorMap)
+        band_map (DetectorMap): This rank's band map of the previous iteration. None before
+                 the first iteration.
+        params (Bunch): The full parameter file.
     """
-    my_compsep_rank = mpi_info.compsep.rank
+    band = mpi_info.band
+    my_band = params.compsep.bands[band.name]
     if my_band.get_from == "file":
-        if curr_tod_output is None:
-            logger.info(f"CompSep: Rank {my_compsep_rank} reading static map data from file.")
-            curr_tod_output = read_data_map_from_file(my_band, params)
-        else:
-            logger.debug(f"CompSep: Rank {my_compsep_rank} already has static map data.")
+        if band_map is None:
+            logger.info(f"CompSep: Rank {mpi_info.compsep.rank} reading static map data from file.")
+            band_map = read_data_map_from_file(my_band, band.pol, params)
     else:
-        logger.debug(f"CompSep: Rank {my_compsep_rank} receiving TOD data for "
-                     f"{compsep_band_id} from world rank {senders[compsep_band_id]}.")
-        curr_tod_output = mpi_info.world.comm.recv(source=senders[compsep_band_id])
-    
-    
-    return curr_tod_output
+        sender = mpi_info.world.tod_band_masters[band.identifier]
+        logger.debug(f"CompSep: Rank {mpi_info.compsep.rank} receiving TOD data for "
+                     f"{band.identifier} from world rank {sender}.")
+        band_map = mpi_info.world.comm.recv(source=sender)
+    return band_map
 
-def send_compsep(mpi_info: Bunch, compsep_my_band_id: str, sky_model,
-                 destinations: dict[str, int]|None) -> None:
-    """Send the CompSep sky model back to TOD when this execution view owns the return path.
 
-    Before this boundary, ``process_compsep`` broadcasts every polarization view solved by a
+def send_compsep(mpi_info: Bunch, comp_list: CompList) -> None:
+    """Send the CompSep components back to TOD when this execution view owns the return path.
+
+    Before this boundary, ``sample_amplitudes`` broadcasts every polarization view solved by a
     sampling group across the CompSep communicator. Every rank therefore holds the same complete
-    component list, and the supplied ``sky_model`` already contains both I and QU amplitudes; this
-    function performs no additional QU-to-I transfer.
+    component list, with both I and QU amplitudes; this function performs no additional QU-to-I
+    transfer.
 
-    An IQU TOD band needs only one copy of that complete model. Its `_I` execution view is chosen as
+    An IQU TOD band needs only one copy of that complete list. Its `_I` execution view is chosen as
     the sender and the paired `_QU` view is suppressed. A QU-only band has no intensity sender, so
     its `_QU` execution view sends directly.
 
     Args:
         mpi_info (Bunch): The data structure containing all MPI relevant data.
-        compsep_my_band_id (str): The string uniquely indentifying the band+pol of this
-                      rank (example: '30GHz_I').
-        sky_model: The realized sky model object for this Gibbs sample.
-        destinations (dict[str->int]): A dictionary mapping the string in 'compsep_my_band_id' to
-                                       the world rank of the destination task (on the TOD side)
-                                       (This is the same as is found in mpi_info)
+        comp_list: The components of this Gibbs sample.
     """
-    if _should_send_compsep_result(compsep_my_band_id, destinations):
-        mpi_info.world.comm.send(sky_model, dest=destinations[compsep_my_band_id])
+    # Maps a view name (example: '30GHz_I') to the world rank of the band's master on the TOD
+    # side. Empty when the run has no TOD side.
+    destinations = mpi_info.world.tod_band_masters
+    if _should_send_compsep_result(mpi_info.band.identifier, destinations):
+        mpi_info.world.comm.send(comp_list, dest=destinations[mpi_info.band.identifier])

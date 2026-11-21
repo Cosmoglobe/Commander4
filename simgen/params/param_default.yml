@@ -23,12 +23,11 @@ general:
 # QU, or IQU rows; missing rows are padded with zeros. `nu_ref` may be scalar or [I, QU], although
 # simgen realizes its one spatial template at the I reference frequency.
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      shortname: "cmb"
       lmax: 191              # Integer, or "full" for 5*nside/2.
       nu_ref: 1.0            # GHz; amplitude-map reference, nearly uK_CMB at this frequency.
       solar_dipole: true     # Add the static BeyondPlanck solar dipole to the CMB realization.
@@ -42,12 +41,11 @@ components:
         As: 2.0e-9
         ns: 0.965
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "IQU"
-      shortname: "dust"
       beta: 1.54
       T: 20.0                # Modified-blackbody temperature [K].
       nu_ref: 353.0          # GHz.
@@ -56,12 +54,11 @@ components:
         source: "pysm3"      # Alternative: source: "fits", path: "/path/to/dust.fits".
         preset: "d0"
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "IQU"
-      shortname: "sync"
       beta: -3.1
       nu_ref: 30.0           # GHz.
       lmax: 191
@@ -69,12 +66,11 @@ components:
         source: "pysm3"      # Alternative: source: "fits", path: "/path/to/sync.fits".
         preset: "s5"
 
-  FreeFree:
+  ff:
     enabled: true
     component_class: "FreeFree"
     params:
       polarization: "I"
-      shortname: "ff"
       T: 7000.0              # Electron temperature [K].
       nu_ref: 40.0           # GHz.
       lmax: 191
@@ -84,12 +80,11 @@ components:
 
   # Spinning dust additionally needs the two-column SpDust2 SED table used by Commander4. It is
   # disabled so this reference remains portable; provide the path and enable it to include AME.
-  SpinningDust:
+  ame:
     enabled: false
     component_class: "SpinningDust"
     params:
       polarization: "I"
-      shortname: "ame"
       nu_ref: 22.8           # Template-map reference used by simgen; keep equal to nu_0.
       nu_0: 22.8             # GHz; amplitude normalization used by the Commander4 SED.
       nu_peak: 25.3          # GHz; desired peak of the shifted SpDust2 spectrum.
@@ -101,12 +96,11 @@ components:
 
   # A synthetic point-source grid. The truth output includes both a HEALPix map and a Commander4
   # RadioSources catalogue. The power-law SED is (nu/nu_ref)^beta; beta=0 is frequency-flat.
-  PointSources:
+  ptsrc:
     enabled: true
     component_class: "GriddedPointSources"
     params:
       polarization: "I"
-      shortname: "ptsrc"
       amplitude: 1000.0      # Per-source pixel amplitude at nu_ref in `general.units`.
       nlon: 12
       nlat: 6

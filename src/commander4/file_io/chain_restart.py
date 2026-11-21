@@ -39,10 +39,12 @@ CHAIN_FILE_NAME = re.compile(r"^(?:(.*)_)?chain(\d+)_iter(\d+)\.h5$")
 class ChainStart:
     """Where the two chains of a run start. Resolved once, on the world master, and broadcast."""
 
-    first_iteration: int                  # The first iteration this run samples.
-    source_dir: str | None = None         # Directory of the saved sample; None = parameter file.
-    source_iteration: int = 0             # Iteration of the saved sample in `source_dir`.
-    source_chain: dict[int, int] = field(default_factory=dict)  # Chain here -> saved chain.
+    first_iteration: int           # The first iteration this run should produce (typically 1).
+    source_dir: str | None = None  # Directory of the sample we are initializing this chain from.
+                                   # None = initialize a fresh run from parameter file values.
+    source_iteration: int = 0      # Iteration we are initializing from, in `source_dir`.
+    source_chain: dict[int, int] = field(default_factory=dict)  # Which chain numbers should the
+                # chains initialize from. E.g. if only chain 1 exists on disk we get {1: 1, 2: 1}.
 
 
 def _saved_files(run_dir: str) -> set[tuple[str, int, int]]:
@@ -88,10 +90,6 @@ def resolve_chain_start(params: Bunch, tod_active: bool, compsep_active: bool) -
     Args:
         tod_active, compsep_active: Whether this run has TOD and CompSep ranks. They decide which
             files of a saved sample the run reads: the band files, the sky file, or both.
-
-    Raises:
-        ValueError: If `init_chain` names a run without a complete iteration, or an iteration
-            that is not complete.
     """
     output_dir = paths.resolve_output_dir(params.output)
     chain_status = params.gibbs.chain_status if "chain_status" in params.gibbs else "new"

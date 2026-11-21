@@ -6,7 +6,6 @@ truth on a real scan strategy. The standalone ``simgen`` package is the more gen
 alternative, writing simulated scan files rather than patching them at read time.
 """
 import numpy as np
-from copy import deepcopy
 import camb
 import healpy as hp
 import pysm3
@@ -32,6 +31,12 @@ def _scalar_nu_ref(comp_params):
     value), since the in-place simulator uses one reference frequency per component."""
     nu_ref = comp_params.nu_ref
     return nu_ref[0] if isinstance(nu_ref, (list, tuple)) else nu_ref
+
+
+def _comp_name(params, component_class: str) -> str:
+    """The name, under `components`, of the component of class `component_class`."""
+    return next(name for name in params.components
+                if params.components[name].component_class == component_class)
 
 
 def generate_cmb(freq, fwhm, units, nside, lmax, params):
@@ -101,18 +106,16 @@ def generate_cmb(freq, fwhm, units, nside, lmax, params):
 
 
 def generate_thermal_dust(freq, fwhm, units, nside, params):
-    nu_dust = _scalar_nu_ref(params.components.ThermalDust.params)
+    name = _comp_name(params, "ThermalDust")
+    nu_dust = _scalar_nu_ref(params.components[name].params)
 
     #d0 = constant beta 1.54 and T = 20
     dust = pysm3.Sky(nside=min(1024,nside), preset_strings=["d0"], output_unit=units)
     dust_ref = dust.get_emission(nu_dust*u.GHz)
     dust_ref_smoothed = hp.smoothing(dust_ref, fwhm=fwhm)*dust_ref.unit
 
-    dust_params = deepcopy(params.components.ThermalDust.params)
-    dust_params.nu_ref = nu_dust  # single reference frequency for the in-place sim
-    dust_params.polarized = True
-
-    dust = ThermalDust(dust_params, params, comp_name="ThermalDust")
+    # The I view has the I value of `nu_ref`, which is the single reference frequency used here.
+    dust = ThermalDust(params, name, "I")
     dust_s = dust_ref_smoothed*dust.get_sed(freq)
     dust_s = hp.ud_grade(dust_s.value, nside)*dust_s.unit
 
@@ -120,18 +123,16 @@ def generate_thermal_dust(freq, fwhm, units, nside, params):
 
 
 def generate_sync(freq, fwhm, units, nside, params):
-    nu_sync = _scalar_nu_ref(params.components.Synchrotron.params)
+    name = _comp_name(params, "Synchrotron")
+    nu_sync = _scalar_nu_ref(params.components[name].params)
 
     # s5 = const beta -3.1
     sync = pysm3.Sky(nside=min(1024,nside), preset_strings=["s5"], output_unit=units)
     sync_ref = sync.get_emission(nu_sync*u.GHz)
     sync_ref_smoothed = hp.smoothing(sync_ref, fwhm=fwhm)*sync_ref.unit
 
-    sync_params = deepcopy(params.components.Synchrotron.params)
-    sync_params.nu_ref = nu_sync  # single reference frequency for the in-place sim
-    sync_params.polarized = True
-
-    sync = Synchrotron(sync_params, params, comp_name="Synchrotron")
+    # The I view has the I value of `nu_ref`, which is the single reference frequency used here.
+    sync = Synchrotron(params, name, "I")
     sync_s = sync_ref_smoothed*sync.get_sed(freq)
     sync_s = hp.ud_grade(sync_s.value, nside)*sync_s.unit
 
@@ -139,17 +140,15 @@ def generate_sync(freq, fwhm, units, nside, params):
 
 
 def generate_ff(freq, fwhm, units, nside, params):
-    nu_ff = _scalar_nu_ref(params.components.FreeFree.params)
+    name = _comp_name(params, "FreeFree")
+    nu_ff = _scalar_nu_ref(params.components[name].params)
 
     ff = pysm3.Sky(nside=min(1024,nside), preset_strings=["f1"], output_unit=units)
     ff_ref = ff.get_emission(nu_ff*u.GHz)
     ff_ref_smoothed = hp.smoothing(ff_ref, fwhm=fwhm)*ff_ref.unit
 
-    ff_params = deepcopy(params.components.FreeFree.params)
-    ff_params.nu_ref = nu_ff  # single reference frequency for the in-place sim
-    ff_params.polarized = False
-
-    ff = FreeFree(ff_params, params, comp_name="FreeFree")
+    # The I view has the I value of `nu_ref`, which is the single reference frequency used here.
+    ff = FreeFree(params, name, "I")
     ff_s = ff_ref_smoothed*ff.get_sed(freq)
     ff_s = hp.ud_grade(ff_s.value, nside)*ff_s.unit
 
@@ -163,10 +162,7 @@ def generate_spdust(freq, fwhm, units, nside, params):
     spdust_ref = spdust.get_emission(nu_spdust*u.GHz)
     spdust_ref_smoothed = hp.smoothing(spdust_ref, fwhm=fwhm)
 
-    spdust_params = deepcopy(params.components.SpinningDust.params)
-    spdust_params.polarized = False
-
-    spdust = SpinningDust(spdust_params, params, comp_name="SpinningDust")
+    spdust = SpinningDust(params, _comp_name(params, "SpinningDust"), "I")
     spdust_s = spdust_ref_smoothed*spdust.get_sed(freq)
     spdust_s = hp.ud_grade(spdust_s.value, nside)*spdust_s.unit
 

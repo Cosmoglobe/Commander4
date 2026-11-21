@@ -18,25 +18,15 @@ from scipy.interpolate import interp1d
 
 from commander4.data_models.band import Band
 from commander4.sky.component import Component
-from commander4.sky.comp_io import _pol_row_indices
-from commander4.polarization import get_npol
+from commander4.sky.comp_io import _pol_row_indices, _read_view_alms_from_fits
 from commander4.math_utils.arithmetic import inplace_scale
 from commander4.math_utils.alm import project_alms, almxfl, _dot_complex_alm_1D_arrays
 from commander4.math_utils.sht import alm_to_map, map_to_alm, alm_to_map_adjoint, map_to_alm_adjoint
 
 logger = logging.getLogger(__name__)
 
-# Blackbody and thermodynamic-to-brightness conversions shared by the SEDs below.
-A = (2*c.h*u.GHz**3/c.c**2).to('MJy').value
+# h/k_B in GHz^-1 K, for the blackbody of the thermal-dust SED.
 h_over_k = (c.h/c.k_B/(1*u.K)).to('GHz-1').value
-h_over_kTCMB = (c.h/c.k_B/(2.7255*u.K)).to('GHz-1').value
-def blackbody(nu, T):
-    return A*nu**3/np.expm1(nu*h_over_k/T)
-def g(nu):
-    # From uK_CMB to MJy/sr
-    x = nu*h_over_kTCMB
-    return np.expm1(x)**2/(x**4*np.exp(x))
-
 
 
 class DiffuseComponent(Component):
@@ -47,126 +37,67 @@ class DiffuseComponent(Component):
     and its spectral parameters.
     """
 
-    requires_defined_pol = True
+    DEFAULTS = {
+        **Component.DEFAULTS,
+        "lmax": None,                   # The highest multipole of the alms. Must be set.
+        # C3's COMP_UNIT: the unit of what the parameter file gives for this component, which is
+        # an init_from sky map, the prior mean map and `Cl_prior_amplitude`. None means that they
+        # are in `amplitude_unit`. Compsep chains are always in `amplitude_unit`.
+        "units": None,
+        "amp_prior_mean_map": None,     # A sky map with the mean of the amplitude prior.
+        # The C(l) prior (C3's 'power_law_gauss', see `P_Cl_prior`).
+        "Cl_prior_amplitude": None,     # None is no prior (C3's `CL_TYPE = none`).
+        "Cl_prior_beta": [0.0, 0.0],
+        "Cl_prior_FWHM": [0.0, 0.0],
+        "Cl_prior_l_pivot": 50,
+        # C3's COMP_L_APOD: the multipole above which the prior is tapered towards zero. None is
+        # the component's lmax, where the taper does nothing.
+        "Cl_prior_l_apod": None,
+        # C3's COMP_AMP_PRIOR_LMAX: the multipole below which the prior is tightened, so that the
+        # large scales are held to the prior mean. 0 is no tightening.
+        "Cl_prior_l_tighten": [0, 0]}
+
     # The unit the amplitude alms are internally represented in, always uK_RJ for diffuse
     # components (including the CMB). Init sky maps are converted to it from their own ``units``
     # (at the component's reference frequency); chain alms are already stored in it.
     amplitude_unit = "uK_RJ"
 
-    def __init__(self, comp_params: Bunch, global_params: Bunch,
-                 allocate_empty_amps=False, eval_pol:None|str=None,
-                 comp_name: str | None = None, shortname: str | None = None):
-        super().__init__(
-            comp_params,
-            global_params,
-            shortname=shortname,
-            comp_name=comp_name,
-            eval_pol=eval_pol,
-            allocate_empty_amps=allocate_empty_amps,
-        )
-        self.spatially_varying_MM = comp_params.spatially_varying_MM
-        self.lmax = comp_params.lmax
-        if ("smoothing_prior_FWHM" in comp_params
-                or "smoothing_prior_amplitude" in comp_params):
-            raise ValueError(
-                f"Component {self.comp_name!r}: the 'smoothing_prior_*' parameters were replaced "
-                "by the C3-equivalent 'Cl_prior_*' parameters, which are defined in D_l space "
-                "(see DiffuseComponent.P_Cl_prior). Update the parameter file.")
-        # C(l) prior (C3 'power_law_gauss' equivalent, see P_Cl_prior). Each parameter may be a
-        # scalar or an [I, QU] pair, resolved per execution view like nu_ref; amplitude None means
-        # no prior (C3's `CL_TYPE = none`).
-        self.Cl_prior_amplitude = self._per_pol(comp_params.Cl_prior_amplitude)
-        self.Cl_prior_beta = self._per_pol(
-            comp_params.Cl_prior_beta if "Cl_prior_beta" in comp_params else 0.0)
-        self.Cl_prior_FWHM = self._per_pol(
-            comp_params.Cl_prior_FWHM if "Cl_prior_FWHM" in comp_params else 0.0)
-        self.Cl_prior_l_pivot = (
-            comp_params.Cl_prior_l_pivot if "Cl_prior_l_pivot" in comp_params else 50)
-        # C3's COMP_L_APOD: the multipole above which the prior is tapered towards zero. Defaults
-        # to this component's lmax, which makes the taper a no-op (C3's own parameter files almost
-        # always set it that way too).
-        self.Cl_prior_l_apod = self._per_pol(
-            comp_params.Cl_prior_l_apod if "Cl_prior_l_apod" in comp_params else self.lmax)
-        # C3's COMP_AMP_PRIOR_LMAX: the multipole below which the prior is tightened, so that the
-        # large scales are held to the prior mean. 0 means no tightening.
-        self.Cl_prior_l_tighten = self._per_pol(
-            comp_params.Cl_prior_l_tighten if "Cl_prior_l_tighten" in comp_params else 0)
-        # C3's COMP_UNIT: the unit of what the parameter file gives for this component, which is
-        # an init_from sky map, the prior mean map and `Cl_prior_amplitude` (None -> they are
-        # already in `amplitude_unit`). Compsep chains are always in `amplitude_unit`.
-        self.units = comp_params.units if "units" in comp_params else None
-        # Cached prior mean mu, filled from `amp_prior_mean_map` by CompList.load_amp_prior_means;
+    def __init__(self, params: Bunch, comp_name: str, pol: str):
+        """One polarization view of the component `comp_name`, with its alms set to zero."""
+        super().__init__(params, comp_name, pol)
+        self.lmax = self.cfg.lmax
+        # The C(l) prior parameters are attributes, as the SED parameters, because they are
+        # resolved to this view's value and written to the chain.
+        self.Cl_prior_amplitude = self._per_pol(self.cfg.Cl_prior_amplitude)
+        self.Cl_prior_beta = self._per_pol(self.cfg.Cl_prior_beta)
+        self.Cl_prior_FWHM = self._per_pol(self.cfg.Cl_prior_FWHM)
+        self.Cl_prior_l_pivot = self.cfg.Cl_prior_l_pivot
+        self.Cl_prior_l_apod = self._per_pol(self.cfg.Cl_prior_l_apod)
+        if self.Cl_prior_l_apod is None:
+            self.Cl_prior_l_apod = self.lmax
+        self.Cl_prior_l_tighten = self._per_pol(self.cfg.Cl_prior_l_tighten)
+        # Cached prior mean mu, filled from `amp_prior_mean_map` by `load_amp_prior_mean`;
         # None means a zero-mean prior. See the amp_prior_mean property.
         self._amp_prior_mean_alms = None
-        self.amps = None  # Alm data is not allocated by default.
-        if allocate_empty_amps:
-            self.allocate_empty_amps()
-
-    def _per_pol(self, value):
-        """Resolve a scalar-or-``[I, QU]`` parameter to this view's value (I -> first entry)."""
-        if isinstance(value, (list, tuple)):
-            return value[0] if self.eval_pol == "I" else value[1]
-        return value
-
-    def _reference_frequency(self, comp_params: Bunch) -> float:
-        """Reference frequency (GHz) for this view's polarization.
-
-        ``nu_ref`` is either a scalar (shared by I and QU) or a 2-element list ``[nu_I, nu_QU]``.
-        """
-        return self._per_pol(comp_params.nu_ref)
+        self.amps = np.zeros((self.npol, hp.Alm.getsize(self.lmax)),
+                             dtype=np.complex128 if self.double_precision else np.complex64)
 
     def init_map_to_amplitude(self, sky_map: NDArray) -> NDArray:
-        """Convert an init sky map (in ``self.units``) to this component's amplitude unit.
+        """Convert an init sky map (in the `units` setting) to this component's amplitude unit.
 
         The conversion is done at the component's reference frequency (``self.nu_ref``) using pysm3's
         CMB equivalencies. It is a no-op when the units are unspecified or already equal to the
         amplitude unit.
         """
-        if self.units is None or self.units == self.amplitude_unit:
+        if self.cfg.units is None or self.cfg.units == self.amplitude_unit:
             return sky_map
-        ref_freq = getattr(self, "nu_ref", None)
-        if ref_freq is None:
-            raise ValueError(
-                f"Component {self.comp_name!r}: converting an init map from {self.units!r} to "
-                f"{self.amplitude_unit!r} requires a reference frequency, but none is defined.")
-        factor = (1*pysm3u.Unit(self.units)).to(
+        factor = (1*pysm3u.Unit(self.cfg.units)).to(
             pysm3u.Unit(self.amplitude_unit),
-            equivalencies=pysm3u.cmb_equivalencies(ref_freq*pysm3u.GHz)).value
+            equivalencies=pysm3u.cmb_equivalencies(self.nu_ref*pysm3u.GHz)).value
         return sky_map * factor
-
-    @property
-    def npol(self):
-        return get_npol(self.eval_pol)
-
-    @property
-    def spin(self):
-        if self.eval_pol == "I":
-            return 0
-        if self.eval_pol in ("QU", "IQU"):
-            return 2
-        raise ValueError(f"Unsupported polarization '{self.eval_pol}'.")
-    
-    @property
-    def is_pol(self):
-        if self.eval_pol == "I":
-            return False
-        elif self.eval_pol == "QU":
-            return True
-        else:
-            raise ValueError("Specific polarization undefined, or set as IQU.")
-
-    def allocate_empty_amps(self):
-        """ Allocates a zeroed alm array of the correct shape. Useful for e.g. MPI receiving.
-        """
-        self.amps = np.zeros((self.npol, self.alm_len_complex),
-                             dtype = (np.complex128 if self.double_prec else np.complex64))
 
     Cl_prior_param_names = ("Cl_prior_amplitude", "Cl_prior_beta", "Cl_prior_FWHM",
                             "Cl_prior_l_pivot", "Cl_prior_l_apod", "Cl_prior_l_tighten")
-
-    @property
-    def alm_len_complex(self):
-        return ((self.lmax+1)*(self.lmax+2))//2
 
     @property
     def sigma_l(self) -> NDArray[np.floating]:
@@ -257,8 +188,8 @@ class DiffuseComponent(Component):
         return 1.0 / self.P_Cl_prior
 
     def __repr__(self):
-        return f"Diffuse Component {self.shortname}, with polarization: {self.eval_pol}"\
-                f" (originally defined as {self.defined_pol})" \
+        return f"Diffuse Component {self.comp_name}, with polarization: {self.pol}"\
+                f" (originally defined as {self.cfg.polarization})" \
                 f"\n   lmax = {self.lmax} \n   alms: {self.amps}"
 
     def apply_Cl_prior_sqrt(self, alms: NDArray[np.complexfloating]) \
@@ -307,10 +238,50 @@ class DiffuseComponent(Component):
 
     @amp_prior_mean.setter
     def amp_prior_mean(self, alms: NDArray[np.complexfloating]) -> None:
-        if alms.shape != (self.npol, self.alm_len_complex):
+        if alms.shape != self.amps.shape:
             raise ValueError(f"Component {self.comp_name!r}: prior mean has shape {alms.shape}, "
-                             f"expected {(self.npol, self.alm_len_complex)}.")
+                             f"expected {self.amps.shape}.")
         self._amp_prior_mean_alms = alms
+
+    def load_amp_prior_mean(self) -> None:
+        """Read the prior mean mu from the `amp_prior_mean_map` parameter, if it is set.
+
+        This is C3's ``COMP_AMP_PRIOR_MAP``: a FITS sky map giving the mean of the Gaussian
+        amplitude prior a ~ N(mu, S). It goes through the same conversion as an ``init_from`` map
+        (unit conversion at the component's reference frequency, truncation to l = 3*nside-1, and
+        the iterative LSMR inverse SHT), because mu and the amplitudes live in the same space and
+        must be treated identically. C3 instead uses a single non-iterative `YtW` analysis here,
+        which is the less accurate of the two on a HEALPix grid.
+
+        Read once and cached (C3 likewise transforms its mu once, at component initialization).
+        The S^{-1/2} that turns mu into a right-hand-side term is *not* applied here but per solve,
+        since the prior S may change between Gibbs iterations while mu does not.
+        """
+        source_path = self.cfg.amp_prior_mean_map
+        if not source_path:
+            return  # Zero-mean prior.
+        if not str(source_path).lower().endswith(".fits"):
+            raise ValueError(
+                f"Component {self.comp_name!r}: 'amp_prior_mean_map' must be a .fits sky map, "
+                f"but got {source_path!r}.")
+        if self.Cl_prior_amplitude is None:
+            raise ValueError(
+                f"Component {self.comp_name!r} ({self.pol}): 'amp_prior_mean_map' needs a "
+                "prior to be the mean of, but 'Cl_prior_amplitude' is null (no prior).")
+        view_alms = _read_view_alms_from_fits(self, source_path)
+        if view_alms is not None:
+            self.amp_prior_mean = view_alms.astype(self.amps.dtype, copy=False)
+            logger.info(f"Component {self.comp_name!r} ({self.pol}): prior mean read from "
+                        f"{source_path!r}.")
+
+    def read_amps_from_map(self, map_file: str) -> None:
+        """Set this view's alms from a FITS sky map, given in the component's `units`.
+
+        If the map lacks this view's polarization, the alms keep their current value.
+        """
+        view_alms = _read_view_alms_from_fits(self, map_file)
+        if view_alms is not None:
+            self.amps = view_alms.astype(self.amps.dtype, copy=False)
 
     def write_chain(self, group: h5py.Group, band_frequencies: dict[str, float]) -> None:
         """Write the shared component sample (see `Component.write_chain`), plus the alms."""
@@ -328,58 +299,58 @@ class DiffuseComponent(Component):
             if value is not None:
                 group[f"Cl_prior/{param_name}"] = value
 
-    def read_chain(self, group: h5py.Group) -> None:
+    def read_chain(self, group: h5py.Group, restore_beta: bool) -> None:
         """Restore the shared sampled state (see `Component.read_chain`), plus this view's alms.
 
         The stored alms are those of the joined component, so only the rows of this view's
         polarization are taken, and they are cut or zero-padded to this component's lmax. If the
         file lacks this view's polarization, the alms keep their current value.
         """
-        super().read_chain(group)
+        super().read_chain(group, restore_beta)
         stored_alms = group["alms"][()]
-        rows = _pol_row_indices(stored_alms, self.eval_pol, self.shortname, group.file.filename)
+        rows = _pol_row_indices(stored_alms, self.pol, self.comp_name, group.file.filename)
         if rows is None:
-            logger.debug(f"{group.file.filename!r} has no {self.eval_pol!r} alms for component "
+            logger.debug(f"{group.file.filename!r} has no {self.pol!r} alms for component "
                          f"{self.comp_name!r}; leaving those alms unchanged.")
             return
         view_alms = project_alms(np.ascontiguousarray(stored_alms[rows]), self.lmax)
         self.amps = view_alms.astype(self.amps.dtype, copy=False)
 
-    def get_component_map(self, nside: int, fwhm: float = 0.0, lmin: int = 0) -> NDArray:
-        """The amplitude map at `nside`, smoothed by a Gaussian beam of `fwhm` radians.
+    def get_component_map(self, nside: int, fwhm_rad: float = 0.0, lmin: int = 0) -> NDArray:
+        """The amplitude map at `nside`, smoothed by a Gaussian beam of `fwhm_rad` radians.
 
         For plotting, where there is no band: the alms are cut at min(lmax, 3*nside - 1), and the
         beam is one window on every Stokes row, as in `comp2band`. Multipoles below `lmin` are left
-        out. A band's sky is made by `SkyModel.get_sky_at_nu` instead, through `comp2band`.
+        out. A band's sky is made by `CompList.get_sky_at_nu` instead, through `comp2band`.
         """
-        if self.amps is None:
-            raise ValueError("component_alms property not set.")
         lmax = min(self.lmax, 3*nside - 1)
-        window = hp.gauss_beam(fwhm, lmax=lmax)
+        window = hp.gauss_beam(fwhm_rad, lmax=lmax)
         window[:lmin] = 0.0
         alms = np.array([almxfl(alm, window) for alm in project_alms(self.amps, lmax)])
-        if self.eval_pol != "IQU":
+        if self.pol != "IQU":
             return alm_to_map(alms, nside, lmax, spin=self.spin)
         # A joined IQU component needs separate spin-0 and spin-2 synthesis calls.
         return np.concatenate((alm_to_map(alms[:1], nside, lmax, spin=0),
                                alm_to_map(alms[1:], nside, lmax, spin=2)), axis=0)
 
-    def get_sky(self, nu: float, nside: int, fwhm: float = 0.0) -> NDArray:
-        """The component map at frequency `nu`, seen through a beam of `fwhm` radians, for plotting.
+    def get_sky(self, nu: float, nside: int, fwhm_rad: float = 0.0) -> NDArray:
+        """The component map at frequency `nu`, seen through a beam of `fwhm_rad`, for plotting.
 
         Amplitudes that already carry a beam (`amp_fwhm_rad`) get only the rest of it. A band's sky
-        is made by `SkyModel.get_sky_at_nu` instead, which also cuts at the band lmax.
+        is made by `CompList.get_sky_at_nu` instead, which also cuts at the band lmax.
         """
-        applied_fwhm = np.sqrt(max(fwhm**2 - self.amp_fwhm_rad**2, 0.0))
-        return self.get_component_map(nside, applied_fwhm)*self.get_sed(nu)
+        applied_fwhm_rad = np.sqrt(max(fwhm_rad**2 - self.amp_fwhm_rad**2, 0.0))
+        return self.get_component_map(nside, applied_fwhm_rad)*self.get_sed(nu)
 
     def get_sed(self, nu):
         raise NotImplementedError(f"{type(self).__name__}.get_sed() is not implemented.")
 
-    # Overrides the base-class dot product: diffuse-component amps holds complex alms, whose inner
-    # product must account for the m>0 coefficients each standing for two real degrees of freedom.
-    def __matmul__(self, other):
-        self._assert_consistent_comp(other)
+    def dot(self, other: "DiffuseComponent") -> float:
+        """The dot product of this component's alms with those of `other`, the same view.
+
+        The alms are complex and stored for m >= 0 only, so each m > 0 coefficient stands for two
+        real numbers and is counted twice.
+        """
         res = 0.0
         for ipol in range(self.npol):
             res += _dot_complex_alm_1D_arrays(self.amps[ipol], other.amps[ipol], self.lmax)
@@ -391,8 +362,8 @@ class DiffuseComponent(Component):
         Amplitudes that already carry a beam (`amp_fwhm_rad`, from the per-pixel solver) get only
         the rest of it: Gaussian beams multiply, so their widths add in quadrature.
         """
-        fwhm = np.sqrt(max(np.deg2rad(band.fwhm/60.0)**2 - self.amp_fwhm_rad**2, 0.0))
-        return hp.gauss_beam(fwhm, lmax=band.lmax)
+        fwhm_rad = np.sqrt(max(band.fwhm_rad**2 - self.amp_fwhm_rad**2, 0.0))
+        return hp.gauss_beam(fwhm_rad, lmax=band.lmax)
 
     def comp2band(self, band: Band, nthreads: int = 1):
         """Add this component to the band's alms: B Y^-1 M Y a (C3's `evalBand`).
@@ -403,88 +374,68 @@ class DiffuseComponent(Component):
         rows to a polarization band.
         """
         alms = self.amps
-        if self.eval_pol == "IQU":
-            alms = alms[1:] if band.is_pol else alms[:1]
-        if (alms.shape[0] == 2) != band.is_pol:
+        if self.pol == "IQU":
+            alms = alms[1:] if band.pol == "QU" else alms[:1]
+        elif self.pol != band.pol:
             raise ValueError("Band and component polarization must match.")
-        spin = 2 if band.is_pol else 0
+        spin = 0 if band.pol == "I" else 2
         alms = project_alms(alms, band.lmax)
-        if self.spatially_varying_MM:  # The mixing matrix is pixel-dependent: Y^-1 M Y a.
+        sed = self.get_sed(band.nu)
+        # The SED is one number when the spectral parameters are the same over the whole sky, and a
+        # map (at the band's nside) when they vary between pixels. Then M acts in pixel space.
+        if np.ndim(sed) > 0:  # Y^-1 M Y a
             comp_map = alm_to_map(alms, band.nside, band.lmax, spin=spin, nthreads=nthreads)
-            for ipol in range(len(comp_map)):
-                inplace_scale(comp_map[ipol], self.get_sed(band.nu))
+            comp_map *= sed
             alms = map_to_alm(comp_map, band.nside, band.lmax, spin=spin, nthreads=nthreads)
         else:
-            # M a. The SED is cast to the precision of the alms: a NumPy double would raise
+            # M a. `float` keeps the precision of the alms: a NumPy float64 would raise
             # single-precision alms to double precision, and everything after would run slower.
-            alms = alms*np.asarray(self.get_sed(band.nu), dtype=alms.real.dtype)
+            alms = alms*float(sed)
         beam = self._band_beam(band)
         for ipol in range(len(alms)):
             # B M a. `alms` is a new array in both branches above, so it can be changed in place.
             band.alms[ipol] += almxfl(alms[ipol], beam, inplace=True)
-        return band.alms
 
-    def band2comp(self, band: Band, nthreads: int = 1, inplace=True):
+    def band2comp(self, band: Band, nthreads: int = 1):
         """The transpose of `comp2band`: Y^T M^T Y^-1^T B^T applied to the band's alms
-        (C3's `projectBand`). Stores the result in this component by default and returns it.
+        (C3's `projectBand`). The result replaces `amps`.
 
         Each rank evaluates its own band; the master sums the contributions of all bands.
         """
-        if self.is_pol != band.is_pol:
+        if self.pol != band.pol:
             raise ValueError("Band and component polarization must match.")
         beam = self._band_beam(band)
         tmp_alm = band.alms.copy()
         for ipol in range(self.npol):
             almxfl(tmp_alm[ipol], beam, inplace=True)  # B^T a (B^T = B: diagonal in l).
 
-        if self.spatially_varying_MM:  # If this component's mixing matrix is pixel-dependent.
+        sed = self.get_sed(band.nu)
+        if np.ndim(sed) > 0:  # The SED varies between pixels (see `comp2band`).
             # Y^-1^T B^T a
-            band_map = map_to_alm_adjoint(tmp_alm, band.nside, band.lmax, spin=self.spin,
-                                          out=None, nthreads=nthreads)
-
-            # M^T Y^-1 B^T a
-            for ipol in range(self.npol):
-                inplace_scale(band_map[ipol], self.get_sed(band.nu))
-
+            pix_map = map_to_alm_adjoint(tmp_alm, band.nside, band.lmax, spin=self.spin,
+                                         out=None, nthreads=nthreads)
+            pix_map *= sed  # M^T Y^-1^T B^T a
             # Y^T M^T Y^-1^T B^T a
-            tmp_alm = alm_to_map_adjoint(band_map, band.nside, band.lmax, spin=self.spin, out=None,
+            tmp_alm = alm_to_map_adjoint(pix_map, band.nside, band.lmax, spin=self.spin, out=None,
                                          nthreads=nthreads)
         else:
             for ipol in range(self.npol):  # M^T B^T a
-                inplace_scale(tmp_alm[ipol], self.get_sed(band.nu))
+                inplace_scale(tmp_alm[ipol], sed)
 
         # Project alm from band to component lmax.
-        contrib_to_comp_alm = project_alms(tmp_alm, self.lmax)
-        
-        if inplace:
-            self.amps = contrib_to_comp_alm
-
-        return contrib_to_comp_alm
+        self.amps = project_alms(tmp_alm, self.lmax)
     
 
 
 class CMB(DiffuseComponent):
     """The CMB, whose SED is flat in thermodynamic units."""
 
-    default_shortname = "cmb"
-    sed_param_names = ("nu_ref",)
     # Like all diffuse components, the CMB amplitude is stored internally in uK_RJ, referenced to
-    # `nu_ref` (default 1 GHz, where uK_RJ ~= uK_CMB). `get_sed` is therefore the *ratio* of the
-    # thermodynamic-to-RJ conversion at `nu` relative to `nu_ref`.
-
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_amps=False,
-                 shortname = None, eval_pol = None, comp_name: str | None = None):
-        super().__init__(
-            comp_params,
-            global_params,
-            allocate_empty_amps=allocate_empty_amps,
-            eval_pol=eval_pol,
-            comp_name=comp_name,
-            shortname=shortname,
-        )
-        # The CMB blackbody is polarization-independent, so a scalar reference suffices. The choice
-        # is arbitrary (the sky is invariant to it); 1 GHz keeps stored amplitudes ~= uK_CMB.
-        self.nu_ref = self._reference_frequency(comp_params) if "nu_ref" in comp_params else 1.0
+    # `nu_ref`. `get_sed` is therefore the *ratio* of the thermodynamic-to-RJ conversion at `nu`
+    # relative to `nu_ref`. The choice of `nu_ref` is arbitrary (the sky is invariant to it); the
+    # default of 1 GHz keeps the stored amplitudes ~= uK_CMB.
+    DEFAULTS = {**DiffuseComponent.DEFAULTS, "nu_ref": [1.0, 1.0]}
+    sed_param_names = ("nu_ref",)
 
     def get_sed(self, nu):
         """SED for CMB emission: the thermodynamic-to-RJ conversion at `nu` relative to `nu_ref`.
@@ -502,30 +453,17 @@ class CMB(DiffuseComponent):
                 pysm3u.uK_RJ, equivalencies=pysm3u.cmb_equivalencies(f*u.GHz)).value
         return cmb_to_rj(nu) / cmb_to_rj(self.nu_ref)
     
-    def get_sky_anisotropies(self, nu, nside, fwhm=0):
+    def get_sky_anisotropies(self, nu, nside, fwhm_rad=0.0):
         """The CMB map at `nu` without monopole, dipole and quadrupole, for plotting."""
-        return self.get_component_map(nside, fwhm, lmin=3) * self.get_sed(nu)
+        return self.get_component_map(nside, fwhm_rad, lmin=3) * self.get_sed(nu)
 
 
 class ThermalDust(DiffuseComponent):
     """Thermal dust, a modified blackbody with emissivity index `beta` and temperature `T`."""
 
-    default_shortname = "term-dust"
+    # `T` is the dust temperature in K, and `nu_ref` the reference frequency in GHz.
+    DEFAULTS = {**DiffuseComponent.DEFAULTS, "beta": None, "T": None, "nu_ref": None}
     sed_param_names = ("beta", "T", "nu_ref")
-
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_amps=False,
-                 shortname = None, eval_pol = None, comp_name: str | None = None):
-        super().__init__(
-            comp_params,
-            global_params,
-            allocate_empty_amps=allocate_empty_amps,
-            eval_pol=eval_pol,
-            comp_name=comp_name,
-            shortname=shortname,
-        )
-        self.beta = comp_params.beta
-        self.T = comp_params.T
-        self.nu_ref = self._reference_frequency(comp_params)
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for Thermal Dust emission.
@@ -535,7 +473,8 @@ class ThermalDust(DiffuseComponent):
         Returns:
             The SED scaling factor (float or np.ndarray).
         """
-        # Modified blackbody, in uK_CMB
+        # Modified blackbody, as a ratio of RJ brightness temperatures: nu^beta B_nu(T), divided
+        # by the nu^2 of the RJ relation, and normalized to 1 at nu_ref.
         x = (h_over_k*nu)/(self.T)
         x0 = (h_over_k*self.nu_ref)/(self.T)
         return (nu / self.nu_ref)**(self.beta + 1.0) * np.expm1(x0) / np.expm1(x)
@@ -544,22 +483,8 @@ class ThermalDust(DiffuseComponent):
 class Synchrotron(DiffuseComponent):
     """Synchrotron emission, a power law in RJ brightness with spectral index `beta`."""
 
-    default_shortname = "sync"
+    DEFAULTS = {**DiffuseComponent.DEFAULTS, "beta": None, "nu_ref": None}
     sed_param_names = ("beta", "nu_ref")
-
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_amps=False,
-                 shortname = None, eval_pol = None, comp_name: str | None = None):
-        super().__init__(
-            comp_params,
-            global_params,
-            allocate_empty_amps=allocate_empty_amps,
-            eval_pol=eval_pol,
-            comp_name=comp_name,
-            shortname=shortname,
-        )
-        self.beta = comp_params.beta
-        self.nu_ref = self._reference_frequency(comp_params)
-        self.nside_comp_map = 512
 
     def get_sed(self, nu):
         """Calculates the spectral energy distribution (SED) for Synchrotron emission.
@@ -575,21 +500,9 @@ class Synchrotron(DiffuseComponent):
 class FreeFree(DiffuseComponent):
     """Free-free (bremsstrahlung) emission from ionized gas at electron temperature `T`."""
 
-    default_shortname = "ff"
+    # `T` is the electron temperature in K, and `nu_ref` the reference frequency in GHz.
+    DEFAULTS = {**DiffuseComponent.DEFAULTS, "T": None, "nu_ref": None}
     sed_param_names = ("T", "nu_ref")
-
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_amps=False,
-                 shortname = None, eval_pol = None, comp_name: str | None = None):
-        super().__init__(
-            comp_params,
-            global_params,
-            allocate_empty_amps=allocate_empty_amps,
-            eval_pol=eval_pol,
-            comp_name=comp_name,
-            shortname=shortname,
-        )
-        self.T = comp_params.T  # Electron temperature in K
-        self.nu_ref = self._reference_frequency(comp_params) # Reference frequency in GHz
 
     def _gaunt_factor(self, nu, T):
         """Calculates the Gaunt factor for free-free emission, as per Eq. 18 in BP1.
@@ -624,29 +537,28 @@ class SpinningDust(DiffuseComponent):
     """Spinning dust, whose spectral shape comes from a tabulated SpDust2 template.
 
     The template is the Cold Neutral Medium model, which peaks at 30 GHz. It is shifted in
-    frequency so its peak lands at `nu_peak` (`comp_params.nu_peak`), which is the one shape
-    parameter; `nu_ref` (`comp_params.nu_0`) only sets where the amplitude map is normalized.
+    frequency so its peak lands at the `nu_peak` setting, which is the one shape parameter; the
+    `nu_0` setting (`self.nu_ref`) only sets where the amplitude map is normalized.
     """
 
-    default_shortname = "spin-dust"
+    DEFAULTS = {**DiffuseComponent.DEFAULTS, "template_path": None, "nu_peak": None, "nu_0": None}
     sed_param_names = ("nu_peak_eval", "nu_peak_ref", "nu_ref")
 
-    def __init__(self, comp_params: Bunch, global_params: Bunch, allocate_empty_amps=False,
-                 shortname = None, eval_pol = None, comp_name: str | None = None):
-        super().__init__(
-            comp_params,
-            global_params,
-            allocate_empty_amps=allocate_empty_amps,
-            eval_pol=eval_pol,
-            comp_name=comp_name,
-            shortname=shortname,
-        )
-
+    def __init__(self, params: Bunch, comp_name: str, pol: str):
+        """One polarization view of the component `comp_name`, with its template read."""
+        super().__init__(params, comp_name, pol)
         # Two-column SpDust2 template: frequency (GHz) and emissivity (proportional to intensity).
-        freqs, SED = np.loadtxt(comp_params.template_path).T
+        freqs, SED = np.loadtxt(self.cfg.template_path).T
         self.nu_peak_ref = 30.0  # Peak frequency of the template as tabulated.
-        self.nu_peak_eval = comp_params.nu_peak
-        self.nu_ref = comp_params.nu_0  # Reference frequency for the amplitude map in GHz
+        self.nu_peak_eval = self.cfg.nu_peak
+        self.nu_ref = self.cfg.nu_0  # Reference frequency for the amplitude map in GHz
+        # The SED is normalized by the template at `nu_ref`, shifted to the peak frequency. Outside
+        # the tabulated range the template is zero, and the SED would divide by zero.
+        nu_ref_shifted = self.nu_ref*self.nu_peak_ref/self.nu_peak_eval
+        if not freqs.min() <= nu_ref_shifted <= freqs.max():
+            raise ValueError(f"{comp_name}: nu_0 = {self.nu_ref} GHz, shifted to the template's "
+                             f"peak, is {nu_ref_shifted:.3g} GHz, outside the template range "
+                             f"{freqs.min():.3g}-{freqs.max():.3g} GHz ({self.cfg.template_path}).")
 
         # Interpolate in log-log space, where the template is smooth and spans many decades.
         log_nu = np.log(freqs)

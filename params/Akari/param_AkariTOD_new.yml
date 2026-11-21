@@ -121,8 +121,7 @@ compsep:
       max_iter: 100
       max_iter_pol: 100
       err_tol: 0.0  # No stopping criterium.
-      preconditioner: JointPreconditioner #NoiseOnlyPreconditioner #FullPreconditioner #MixingMatrixPreconditioner #BeamOnlyPreconditioner #
-      dense_matrix_debug_mode: false
+      preconditioner: JointPreconditioner
 
   mcmc_sampling_groups: {}
 
@@ -151,25 +150,20 @@ compsep:
 # COMPONENTS
 # ----------------------------------------
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "I"
-      longname: "CMB"
-      shortname: "cmb"
       init_from: "/mn/stornext/d23/cmbco/globe/planck/maps/map_planck_100-1_npipe_02048_fullres_full_T.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
       lmax: 1024
-      spatially_varying_MM: False
 
-  ThermalDust:
+  dust:
     enabled: true
     component_class: "ThermalDust"
     params:
       polarization: "I"
-      longname: "Thermal-Dust"
-      shortname: "dust"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_dust_amp_BP8.1_v1.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: 1.56
@@ -177,61 +171,49 @@ components:
       nu_ref: [857, 353]  # [I, QU]
       units: "uK_RJ"
       lmax: 1024
-      spatially_varying_MM: False
 
-  Synchrotron:
+  sync:
     enabled: true
     component_class: "Synchrotron"
     params:
       polarization: "I"
-      longname: "Synchrotron"
-      shortname: "sync"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_synch_amp_BP8.1_v1.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
       beta: -3.1
       nu_ref: [0.408, 30]  # [I, QU]
       units: "uK_RJ"
       lmax: 512
-      spatially_varying_MM: False
 
-  FreeFree:
+  ff:
     enabled: true
     component_class: "FreeFree"
     params:
       polarization: "I"
-      longname: "Free-Free"
-      shortname: "ff"
       init_from: "/mn/stornext/d23/cmbco/hfi/common/data/init_ff_amp_BP8.1_v1.fits"
       Cl_prior_amplitude: null  # No amplitude prior.
       T: 7000
       nu_ref: 40
       units: "uK_RJ"
       lmax: 512
-      spatially_varying_MM: False
 
-  RadioSources:
+  radsources:
     enabled: False
     component_class: "RadioSources"
     params:
       polarization: "I"
-      longname: "RadioSources"
-      shortname: "radsources"
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/init_radio_BP8.11.dat"
       nu_0: 30.0  # Ghz
 
-  SpinningDust:
+  sdust:
     enabled: False
     component_class: "SpinningDust"
     params:
       polarization: "I"
-      longname: "SpinningDust"
-      shortname: "sdust"
       Cl_prior_amplitude: null  # No amplitude prior.
       template_path: "/mn/stornext/d5/data/duncanwa/WMAP/data/spdust2_cnm.dat"
       nu_peak: 25.3  # Ghz
       nu_0: 22.0  # Ghz
       lmax: 1000
-      spatially_varying_MM: False
 
 # ----------------------------------------
 # EXPERIMENTS
