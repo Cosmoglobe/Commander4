@@ -170,19 +170,18 @@ def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[Amp
 
     Args:
         amplitude_groups, mcmc_groups: The sampling groups, from `init_compsep_processing`.
-        band_map: This rank's band map, cleaned of all "TOD" components (correlated noise and
-            orbital dipole).
+        band_map: This rank's band map, cleaned of all "TOD" components (correlated noise,
+            orbital dipole, sidelobes...).
         comp_list: The full component list of the chain, updated in place.
         chain, iteration: The current chain and Gibbs iteration, for logging and the chain file.
-        rng: This rank's random generator for the iteration. Every draw of every group uses it.
     """
     compsep = mpi_info.compsep
     # Sampler statistics for the chain file (C3's nonlin-samples_*.dat and CG residual log), by
     # group name. The second amplitude pass overwrites the first.
     amplitude_stats, mcmc_stats = {}, {}
 
-    # The Gibbs order of C3 (commander.f90): the amplitudes, the spectral parameters, and then the
-    # amplitudes again, so that the chain holds amplitudes solved at the final spectral parameters.
+    # The Gibbs order: (i) amplitude sampling, (ii) spectral parameters, (iii) then the amplitudes
+    # again, so that the chain holds amplitudes solved at the final spectral parameters.
     for group in amplitude_groups:
         with benchmark(f"amp-{group.name}"):
             stats = sample_amplitudes(mpi_info, params, group, band_map, comp_list, rng)
@@ -196,7 +195,7 @@ def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[Amp
                                                             comp_list, rng)
         log_fit(mpi_info, band_map, comp_list, label=f"MCMC group {group.name!r}")
 
-    if mcmc_groups:
+    if mcmc_groups:  # If any MCMC group ran.
         for group in amplitude_groups:
             with benchmark(f"amp-{group.name}"):
                 stats = sample_amplitudes(mpi_info, params, group, band_map, comp_list, rng)

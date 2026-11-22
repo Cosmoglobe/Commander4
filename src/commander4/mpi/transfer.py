@@ -130,20 +130,11 @@ def receive_tod(mpi_info: MPIInfo, band_map: DetectorMap|None, params: Bunch) ->
 
 
 def send_compsep(mpi_info: MPIInfo, comp_list: CompList) -> None:
-    """Send the CompSep components back to TOD when this rank's polband owns the return path.
+    """Send the newly solved components (i.e. the sky model) to the TOD side.
 
-    Before this boundary, ``sample_amplitudes`` broadcasts every polarization part solved by a
-    sampling group across the CompSep communicator. Every rank therefore holds the same complete
-    component list, with both I and QU amplitudes; this function performs no additional QU-to-I
-    transfer.
-
-    An IQU TOD band needs only one copy of that complete list, so only its I rank sends it. A
-    QU-only band has no I rank, so its QU rank sends. A band read from file sends nothing.
-    (`mpi_info.compsep.tod_receiver` is None on the ranks that do not send.)
-
-    Args:
-        mpi_info (MPIInfo): Where this rank sits in the run.
-        comp_list: The components of this Gibbs sample.
+    Before this function, all compsep ranks are expected to hold an updated list of all components.
     """
+    # Because the compsep splits bands in I and QU, two compsep ranks often work on the same band.
+    # Only one of these two ranks needs to send. Check if our rank has a TOD "partner":
     if mpi_info.compsep.tod_receiver is not None:
         mpi_info.world.comm.send(comp_list, dest=mpi_info.compsep.tod_receiver)

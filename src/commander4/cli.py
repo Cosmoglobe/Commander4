@@ -63,13 +63,12 @@ def run_tod_side(mpi_info: MPIInfo, params: Bunch, start: ChainStart) -> None:
     # Both chains' samples are held at once, because the two sides send and receive independently,
     # so a step cannot swap one chain's samples for the other's in place.
     experiment_data, tod_samples_by_chain = init_tod_processing(mpi_info, params, start)
-    # The CompSep side builds each chain's initial sky and sends it, as for every later iteration:
-    # chain 1's arrives here, chain 2's at the end of the first step. Without CompSep ranks the
-    # band master builds the sky from the parameter file, and it stays fixed.
+
+    # Setting up initial sky model, before the first TOD iteration.
     compsep_active = mpi_info.world.has_compsep
-    if compsep_active:
+    if compsep_active:  # Receive initial sky from CompSep, if it's running.
         compsep_output = receive_compsep(mpi_info, experiment_data)
-    else:
+    else:  # If compsep isn't running fetch initial sky model ourselves.
         compsep_output = get_local_initial_sky(mpi_info, experiment_data, params)
 
     for chain, iteration in gibbs_schedule(start.first_iteration, params.gibbs.num_iterations):
@@ -83,10 +82,10 @@ def run_tod_side(mpi_info: MPIInfo, params: Bunch, start: ChainStart) -> None:
         if mpi_info.tod.rank == 0:
             logger.summary(f"Chain {chain}, iteration {iteration} completed TOD-proc in "
                            f"{time.time()-t0:.2f}s).")
-        if not compsep_active:
-            continue
-        # Receive the sky the next step runs against: on the first step, chain 2's initial sky;
-        # after that, the CompSep sample of the other chain, finished while this step ran.
+        if not compsep_active:  # No communication happens if the compsep side isn't running.
+            continue            # The sky model will simply remain at its initial state.
+
+        # Receive the sky that the next Gibbs iteration (and opposite chain) will run with.
         t0 = time.time()
         compsep_output = receive_compsep(mpi_info, experiment_data)
         if mpi_info.band.rank == 0:
@@ -104,13 +103,10 @@ def run_compsep_side(mpi_info: MPIInfo, params: Bunch, start: ChainStart) -> Non
     from commander4.compsep.processing import init_compsep_processing, process_compsep
     from commander4.mpi.transfer import receive_tod, send_compsep
 
-    # Each chain has its own component list, since a `Component` carries the sampled amplitudes
-    # and spectral parameters.
-    # TODO: This means two copies of per-component amplitude alms are held in memory at all
-    # times. Under the current design this is needed for sampling steps where some components
-    # are excluded, but their amplitudes are still needed to evaluate the relevant chi2.
+    # Get a dict holding the Components of both chains, and lists of both the amplitude (linear) and
+    # the MCMC (nonlinear) sampling groups.
     comp_lists_by_chain, amplitude_groups, mcmc_groups = init_compsep_processing(mpi_info, params,
-                                                                                start)
+                                                                                 start)
     # Send each chain's initial components to the TOD side, and then get the first band map: the
     # same order (sky out, band map in) as at the end of each step of the loop below.
     for chain in (1, 2):
@@ -129,8 +125,8 @@ def run_compsep_side(mpi_info: MPIInfo, params: Bunch, start: ChainStart) -> Non
         if mpi_info.compsep.rank == 0:
             logger.verbose(f"CompSep: Rank {mpi_info.compsep.rank} finished chain {chain}, "
                            f"iteration {iteration} in {time.time()-t0:.2f}s. Sending results.")
-        if step == len(schedule) - 1:
-            continue
+        if step == len(schedule) - 1:  # Last compsep iteration.
+            continue                   # TOD has already finished: Skip communication with TOD.
         send_compsep(mpi_info, comp_lists_by_chain[chain])
         logger.debug(f"CompSep rank {mpi_info.compsep.rank} finished sending results for chain "
                      f"{chain}, iter {iteration}. Waiting for TOD results.")
@@ -161,7 +157,7 @@ def run_commander4(params: Bunch, params_dict: dict):
 
     if mpi_info.world.rank == 0:
         # Print the entire parameter file to log.
-        if logger.isEnabledFor(logging.DEBUG):  # Just to avoid the yaml.dump if debug is off.
+        if logger.isEnabledFor(logging.DEBUG):  # Avoiding the yaml.dump if debug is off.
             logger.debug("### PARAMETERS ###\n%s", yaml.dump(
                 params_dict, allow_unicode=True, default_flow_style=False))
         # Print Commander4 text. Color chosen from hashed username.
@@ -187,13 +183,8 @@ def run_commander4(params: Bunch, params_dict: dict):
         return 0
 
     if mpi_info.world.rank == 0:
-        if tod_active and compsep_active:
-            mode = "TOD and CompSep"
-        elif tod_active:
-            mode = "TOD-only"
-        else:
-            mode = "CompSep-only"
-        logger.summary(f"Running in {mode} mode with two interleaved chains.")
+        logger.summary("TOD side enabled: {tod_active}.")
+        logger.summary("CompSep side enabled: {tod_active}.")
         component_names: list[str] = []
         for component_name in params.components:
             component = params.components[component_name]
@@ -201,8 +192,6 @@ def run_commander4(params: Bunch, params_dict: dict):
                 component_names.append(component_name)
         logger.summary(f"Enabled sky components: {', '.join(component_names)}.")
 
-    # The two sides import their modules inside these functions, after `init_mpi` has set the
-    # thread counts: NumPy and the libraries under it ignore a later change of `OMP_NUM_THREADS`.
     if mpi_info.world.side == "tod":
         run_tod_side(mpi_info, params, start)
     else:
