@@ -18,6 +18,7 @@ from commander4.compsep.perpix_solver import solve_compsep_perpix
 from commander4.data_models.detector_map import DetectorMap
 from commander4.parameters.schema import (EXECUTION_POLS, enabled_compsep_views, names_or_all,
                                           read_settings, resolve_param)
+from commander4.mpi.setup import MPIInfo
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
 
@@ -50,7 +51,7 @@ class AmplitudeGroup:
 
     @classmethod
     def init_from_params(cls, params: Bunch, section: str, name: str,
-                         mpi_info: Bunch | None = None) -> "AmplitudeGroup":
+                         mpi_info: MPIInfo | None = None) -> "AmplitudeGroup":
         """Read and check the group `compsep.<section>.<name>`.
 
         Every CompSep rank must build every group, in the same order, because `solver_comm` is
@@ -87,14 +88,14 @@ class AmplitudeGroup:
         # the I and QU views of a group are two separate solves.
         solver_comm = None
         if mpi_info is not None:
-            is_solver = mpi_info.compsep.rank in solver_ranks[mpi_info.band.pol]
+            is_solver = mpi_info.compsep.rank in solver_ranks[mpi_info.compsep.pol]
             solver_comm = mpi_info.compsep.subcomm.Split(0 if is_solver else MPI.UNDEFINED,
                                                          key=mpi_info.compsep.rank)
         return cls(name=name, solver=solver, cfg=cfg, solver_ranks=solver_ranks,
                    solver_comm=solver_comm)
 
 
-def sample_amplitudes(mpi_info: Bunch, params: Bunch, group: AmplitudeGroup,
+def sample_amplitudes(mpi_info: MPIInfo, params: Bunch, group: AmplitudeGroup,
                       band_map: DetectorMap, comp_list: CompList,
                       rng: np.random.Generator) -> dict:
     """Sample the amplitudes of one amplitude group. Every CompSep rank calls it.
@@ -102,7 +103,7 @@ def sample_amplitudes(mpi_info: Bunch, params: Bunch, group: AmplitudeGroup,
     Updates the components of `comp_list` in place, on every rank.
 
     Args:
-        mpi_info: The MPI data of this rank (`compsep` and `band` are used).
+        mpi_info: The MPI data of this rank (`compsep` is used).
         params: The full parameter file, for `compsep.double_precision`.
         group: The group to solve.
         band_map: This rank's band map.
@@ -114,21 +115,21 @@ def sample_amplitudes(mpi_info: Bunch, params: Bunch, group: AmplitudeGroup,
         ``{"I": {...}, "QU": {...}}``, on every rank. Empty for the per-pixel method, which is a
         direct solve with no history to report.
     """
-    compsep, band = mpi_info.compsep, mpi_info.band
+    compsep = mpi_info.compsep
     if not group.solver_ranks["I"] and not group.solver_ranks["QU"]:
-        if compsep.is_master:
+        if compsep.rank == 0:
             logger.verbose(f"Sampling group {group.name!r} had no active band/component overlap.")
         return {}
 
     cg_stats: dict = {}
-    if compsep.rank in group.solver_ranks[band.pol]:
-        active_sublist = CompList([comp for comp in comp_list if comp.pol == band.pol
+    if compsep.rank in group.solver_ranks[compsep.pol]:
+        active_sublist = CompList([comp for comp in comp_list if comp.pol == compsep.pol
                                    and comp.comp_name in group.cfg.comps])
         # The group is solved conditioned on the components it does not name (C3's
         # `compute_residual`): their sky at this band is subtracted from the band map, and the
         # solvers fit the group's components to what is left. The shallow copy shares the noise
         # map and the band settings with `band_map`; only its sky map is new.
-        fixed_comps = CompList([comp for comp in comp_list if comp.pol == band.pol
+        fixed_comps = CompList([comp for comp in comp_list if comp.pol == compsep.pol
                                 and comp.comp_name not in group.cfg.comps])
         residual_map = band_map
         if len(fixed_comps) > 0:

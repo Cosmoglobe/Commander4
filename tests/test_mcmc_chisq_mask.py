@@ -36,8 +36,7 @@ def _chi2(map_sky, inv_var, keep=slice(None), chisq_bands=("Band100",)) -> float
     band_map = DetectorMap(np.asarray(map_sky, dtype=np.float64),
                            np.asarray(inv_var, dtype=np.float64),
                            nu=100.0, fwhm=0.0, nside=NSIDE, double_precision=True, lmax=2)
-    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF),
-                     band=Bunch(name="Band100", identifier="Band100_I"))
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, band_name="Band100", pol="I"))
     group = Bunch(cfg=Bunch(chisq_bands=list(chisq_bands)), chisq_pixels=keep)
     return chi2_of_chisq_bands(mpi_info, group, band_map, _zero_sky())
 

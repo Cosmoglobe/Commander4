@@ -1,8 +1,9 @@
 """Split MPI ranks between the TOD and CompSep sides and the enabled bands."""
 import itertools
 import os
-import time
 import logging
+from dataclasses import dataclass
+
 import mpi4py
 from mpi4py import MPI
 from pixell.bunch import Bunch
@@ -19,24 +20,79 @@ from commander4.parameters.schema import (
 
 logger = logging.getLogger(__name__)
 
-def init_mpi(params: Bunch) -> Bunch:
-    """Validate the task count and build this rank's world, side, and band contexts.
 
-    The returned ``Bunch`` contains the common ``world`` context, one named ``tod`` or ``compsep``
-    context, and the selected ``band``. Every context uses the same direct fields: communicator,
-    rank, size, master, and ``is_master`` where applicable.
+@dataclass(frozen=True)
+class WorldInfo:
+    """The world communicator: every rank of the run."""
+    comm: MPI.Comm
+    rank: int
+    size: int
+    side: str                            # "tod" or "compsep".
+    has_tod: bool                        # Whether the run has a TOD side,
+    has_compsep: bool                    # and a CompSep side.
+
+
+@dataclass(frozen=True)
+class TODInfo:
+    """The TOD communicator: every TOD rank. Also the band this rank works on, and its partners."""
+    comm: MPI.Comm
+    rank: int
+    size: int
+    num_threads: int
+    experiment_name: str                 # The band this rank works on.
+    band_name: str
+    compsep_sender: int | None           # World rank that sends the band its sky.
+    compsep_receivers: dict[str, int]    # World rank of each CompSep view of the band, by pol.
+
+
+@dataclass(frozen=True)
+class BandInfo:
+    """The band communicator: the TOD ranks of this rank's band."""
+    comm: MPI.Comm
+    rank: int
+    size: int
+    node_comm: MPI.Comm                  # The band's ranks on this physical node.
+
+
+@dataclass(frozen=True)
+class CompSepInfo:
+    """The CompSep communicator: every CompSep rank. Also the band this rank works on, and its
+    partners."""
+    comm: MPI.Comm
+    rank: int
+    size: int
+    num_threads: int
+    subcomm: MPI.Comm                    # The CompSep ranks of this rank's polarization.
+    band_name: str                       # The band this rank works on,
+    pol: str                             # and its polarization, "I" or "QU".
+    tod_sender: int | None               # World rank of the band's TOD master; None if none.
+    tod_receiver: int | None             # Where this rank sends the sky; None if it does not.
+
+
+@dataclass(frozen=True)
+class MPIInfo:
+    """Where this rank sits in the run: one block per communicator it belongs to."""
+    world: WorldInfo
+    tod: TODInfo | None = None           # On a TOD rank.
+    band: BandInfo | None = None         # On a TOD rank.
+    compsep: CompSepInfo | None = None   # On a CompSep rank.
+
+
+def init_mpi(params: Bunch) -> MPIInfo:
+    """Split the ranks between the TOD and CompSep sides and the bands, and build `MPIInfo`.
+
+    Also checks the task count, and sets this rank's thread counts in the environment, which must
+    happen before NumPy is imported. Rank 0 of a communicator is its master.
     """
-    mpi_info = Bunch()
     world_comm = MPI.COMM_WORLD
-    worldsize, worldrank = world_comm.Get_size(), world_comm.Get_rank()
-    is_world_master = worldrank == 0
+    world_size, world_rank = world_comm.Get_size(), world_comm.Get_rank()
     # The task counts are derived from the band configuration rather than stated in the parameter
     # file: CompSep takes one task per enabled band view (one for I, one for QU), and every other
-    # task is a TOD task. `init_mpi_tod` splits those between the bands.
+    # task is a TOD task. The TOD tasks are split between the bands below.
     ntasks = derive_task_counts(params)
-    tot_num_CompSep_ranks = ntasks.compsep_I + ntasks.compsep_QU
-    ntask_tod = worldsize - tot_num_CompSep_ranks
-    if is_world_master:
+    ntask_compsep = ntasks.compsep_I + ntasks.compsep_QU
+    ntask_tod = world_size - ntask_compsep
+    if world_rank == 0:  # One report and one error, not one per rank.
         mpi4py_version = tuple(map(int, mpi4py.__version__.split('.')))
         MPI_version = MPI.Get_version()
         logger.info(f"MPI version: {MPI_version}. mpi4py version: {mpi4py_version}.")
@@ -47,7 +103,6 @@ def init_mpi(params: Bunch) -> Bunch:
         if mpi4py_version < (4,0):
             logger.warning(f"mpi4py version ({mpi4py_version}) is below (4,0)!")
 
-    if is_world_master:  # Every rank doesn't need to throw an error.
         # Check if compsep.enabled is False (if the compsep group exist at all).
         turned_off = "compsep" in params and "enabled" in params.compsep \
             and not params.compsep.enabled
@@ -56,9 +111,9 @@ def init_mpi(params: Bunch) -> Bunch:
             raise RuntimeError("Enabled compsep sampling groups are configured, but "
                                "'compsep.enabled' is false, so no CompSep MPI ranks are "
                                "allocated to run them. Enable compsep, or disable the groups.")
-        if worldsize < ntasks.min_total or (ntasks.tod_bands == 0 and ntask_tod > 0):
+        if world_size < ntasks.min_total or (ntasks.tod_bands == 0 and ntask_tod > 0):
             raise RuntimeError(f"This run needs {task_count_breakdown(ntasks)} MPI tasks, "
-                               f"but was started with {worldsize}. The counts follow from the "
+                               f"but was started with {world_size}. The counts follow from the "
                                "parameter file: one CompSep task per enabled 'compsep.bands' view, "
                                "and at least one TOD task per enabled band.")
         # Otherwise CompSep is simply off (TOD-only) and compsep.bands is ignored.
@@ -69,39 +124,35 @@ def init_mpi(params: Bunch) -> Bunch:
             logger.info(f"Running TOD-only: {reason}. Any 'compsep.bands' are ignored, and TOD "
                         "ranks use the initial sky model built from the components.")
 
-    # Split the world communicator into a communicator for compsep and one for TOD (with "color"
-    # being the keyword for the split).
+    # The first ntask_tod world ranks are TOD ranks, the rest CompSep ranks.
     nthreads_compsep = params.resources.compsep.num_threads
-    if worldrank < ntask_tod:
-        color = 0
+    if world_rank < ntask_tod:
         side = "tod"
-        my_num_threads = params.resources.tod.num_threads
-        my_num_threads_numba = my_num_threads
-
+        num_threads = params.resources.tod.num_threads
+        num_threads_numba = num_threads
     else:
-        color = 1  # Compsep
         side = "compsep"
         # num_threads is either an int, or a list specifying nthreads for each rank.
         if isinstance(nthreads_compsep, int):  # If int, all ranks have same nthreads.
-            my_num_threads = nthreads_compsep
+            num_threads = nthreads_compsep
         else:
-            if len(nthreads_compsep) != tot_num_CompSep_ranks:
+            if len(nthreads_compsep) != ntask_compsep:
                 raise ValueError(
                     f"Length of resources.compsep.num_threads ({len(nthreads_compsep)}) does not "
-                    f"match the number of CompSep ranks ({tot_num_CompSep_ranks}).")
-            my_num_threads = nthreads_compsep[worldrank - ntask_tod]
+                    f"match the number of CompSep ranks ({ntask_compsep}).")
+            num_threads = nthreads_compsep[world_rank - ntask_tod]
         # Testing revealed 24 to be a good number (regardless of nside), but I tested this on the
         # new 384-core nodes, the optimal number is probably slightly lower on the older owls.
-        my_num_threads_numba = min(24,my_num_threads)
+        num_threads_numba = min(24, num_threads)
 
     # It's important to set these environment variables before importing any package that might
     # use them, such as Numpy or Scipy, as they will not apply retroactively!
-    os.environ["OMP_NUM_THREADS"] = f"{my_num_threads}"
-    os.environ["OPENBLAS_NUM_THREADS"] = f"{my_num_threads}" 
-    os.environ["MKL_NUM_THREADS"] = f"{my_num_threads}"
-    os.environ["VECLIB_MAXIMUM_THREADS"] = f"{my_num_threads}"
-    os.environ["NUMEXPR_NUM_THREADS"] = f"{my_num_threads}"
-    os.environ["NUMBA_NUM_THREADS"] = f"{my_num_threads_numba}"
+    os.environ["OMP_NUM_THREADS"] = f"{num_threads}"
+    os.environ["OPENBLAS_NUM_THREADS"] = f"{num_threads}"
+    os.environ["MKL_NUM_THREADS"] = f"{num_threads}"
+    os.environ["VECLIB_MAXIMUM_THREADS"] = f"{num_threads}"
+    os.environ["NUMEXPR_NUM_THREADS"] = f"{num_threads}"
+    os.environ["NUMBA_NUM_THREADS"] = f"{num_threads_numba}"
     # I tried using numba.set_num_threads(x) here instead (or as well) but that
     # resulted in some weirdeties, like many duplicate open file handles even when x=1.
 
@@ -111,98 +162,75 @@ def init_mpi(params: Bunch) -> Bunch:
 
         pool_info = threadpool_info()
         for pool in pool_info:
-            if pool["num_threads"] != my_num_threads:
+            if pool["num_threads"] != num_threads:
                 raise RuntimeError(f"Loaded library {pool} has {pool['num_threads']} threads, "
-                                   f"expected {my_num_threads}.")
-        if numba.get_num_threads() != my_num_threads_numba:
+                                   f"expected {num_threads}.")
+        if numba.get_num_threads() != num_threads_numba:
             raise RuntimeError(f"Numba has {numba.get_num_threads()} threads, expected "
-                               f"{my_num_threads_numba}.")
+                               f"{num_threads_numba}.")
 
 
-    proc_comm = world_comm.Split(color, key=worldrank)
-    if color == MPI.UNDEFINED:
-        return -1
-    world_comm.barrier()
-    time.sleep(worldrank*1e-5)  # Small sleep to get prints in nice order.
-    logger.debug(f"MPI split performed, hi from worldrank {worldrank} (on machine "\
-                f"{MPI.Get_processor_name()}) subcomrank {proc_comm.Get_rank()} from color "\
-                f"{color} of size {proc_comm.Get_size()}. Threads = {my_num_threads}.")
+    # The side communicator. The key keeps the world order, so TOD rank i is world rank i.
+    side_comm = world_comm.Split(0 if side == "tod" else 1, key=world_rank)
+    logger.debug(f"MPI split performed, hi from world rank {world_rank} (on machine "
+                 f"{MPI.Get_processor_name()}), {side} rank {side_comm.Get_rank()} of "
+                 f"{side_comm.Get_size()}. Threads = {num_threads}.")
 
-    # Determine the world ranks of the respective master tasks for compsep and TOD
-    # We ensured that this works by the "key=worldrank" in the split command.
-    tod_master = 0 if ntask_tod > 0 else None
-    compsep_master = ntask_tod if tot_num_CompSep_ranks > 0 else None
-
-    world_comm.barrier()
-    time.sleep(worldrank*1e-5)  # Small sleep to get prints in nice order.
-
-    mpi_info['world'] = Bunch()
-    mpi_info['world']['comm'] = world_comm
-    mpi_info['world']['master'] = 0
-    mpi_info['world']['size'] = worldsize
-    mpi_info['world']['rank'] = worldrank
-    mpi_info['world']['side'] = side
-    mpi_info['world']['tod_master'] = tod_master
-    mpi_info['world']['compsep_master'] = compsep_master
-    mpi_info['world']['is_master'] = is_world_master
-    mpi_info['world']['tod_band_masters'] = Bunch()
-    mpi_info['world']['compsep_band_masters'] = Bunch()
-    mpi_info['processor_name'] = MPI.Get_processor_name()
-
-    if color == 0:
-        mpi_info['tod'] = Bunch()
-        mpi_info['tod']['comm'] = proc_comm
-        mpi_info['tod']['master'] = 0
-        mpi_info['tod']['size'] = proc_comm.Get_size()
-        mpi_info['tod']['rank'] = proc_comm.Get_rank()
-        mpi_info['tod']['is_master'] = mpi_info.tod.rank == mpi_info.tod.master
-        mpi_info = init_mpi_tod(mpi_info, params)
-
-    elif color == 1:
-        proc_rank = proc_comm.Get_rank()
-        # `subcomm` holds the CompSep ranks of this rank's polarization (all I views, or all QU
-        # views); the solver communicators of the amplitude groups are split from it.
-        polarization = enabled_compsep_views(params)[proc_rank].polarization
-        mpi_info['compsep'] = Bunch(comm=proc_comm, size=proc_comm.Get_size(), rank=proc_rank,
-                                    is_master=proc_rank == 0, num_threads=my_num_threads,
-                                    subcomm=proc_comm.Split(0 if polarization == "I" else 1,
-                                                            key=proc_rank))
-        mpi_info = init_mpi_compsep(mpi_info, params)
-    return mpi_info
-    
-
-def init_mpi_tod(mpi_info: Bunch, params: Bunch) -> Bunch:
-    """Split the TOD ranks between the enabled bands, and create this rank's band communicator.
-
-    The TOD master weighs the bands (see `tod_band_weights`) and splits the ranks by these weights
-    (see `split_tod_ranks`). Each band gets a contiguous block of ranks, in the order of the
-    parameter file.
-    """
-    tod_rank = mpi_info.tod.rank
+    # Where each band runs. The TOD ranks are world ranks 0 to ntask_tod-1, and each TOD band has a
+    # contiguous block of them, in the order of `enabled_tod_bands`. World rank 0 weighs the bands
+    # (see `tod_band_weights`) and splits the ranks by these weights (see `split_tod_ranks`).
+    # CompSep view i is world rank ntask_tod + i.
     tod_bands = enabled_tod_bands(params)
-    rank_counts: list[int] | None = None
-    if tod_rank == 0:
-        # Imported here: the readers import numba, which has to come after `init_mpi` has set the
-        # thread counts.
+    rank_counts = []
+    if world_rank == 0 and tod_bands:
+        # Imported here: the readers import numba, which has to come after the thread counts are
+        # set above.
         from commander4.file_io.tod_reader import tod_band_weights
         weights = tod_band_weights(params, tod_bands)
-        rank_counts = split_tod_ranks(weights, mpi_info.tod.size)
-        mean_weight_per_rank = sum(weights)/mpi_info.tod.size
-        logger.info(f"TOD: split {mpi_info.tod.size} ranks between {len(tod_bands)} bands: "
+        rank_counts = split_tod_ranks(weights, ntask_tod)
+        mean_weight_per_rank = sum(weights)/ntask_tod
+        logger.info(f"TOD: split {ntask_tod} ranks between {len(tod_bands)} bands: "
                     + ", ".join(f"{band.band_name} {count}"
                                 for band, count in zip(tod_bands, rank_counts))
                     + ". The band with the most weight per rank has "
                     f"{max(w/n for w, n in zip(weights, rank_counts))/mean_weight_per_rank:.2f} x "
                     "the mean.")
-    rank_counts = mpi_info.tod.comm.bcast(rank_counts, root=0)
+    rank_counts = world_comm.bcast(rank_counts, root=0)
+    # The world rank of each TOD band's master, by band name.
+    band_starts = [0, *itertools.accumulate(rank_counts)]
+    tod_masters = {band.band_name: start for band, start in zip(tod_bands, band_starts)}
+    # The world rank of each CompSep view, by band name and then polarization.
+    compsep_ranks = {}
+    for view in enabled_compsep_views(params):
+        if view.band_name not in compsep_ranks:
+            compsep_ranks[view.band_name] = {}
+        compsep_ranks[view.band_name][view.polarization] = ntask_tod + view.rank
+
+    world = WorldInfo(comm=world_comm, rank=world_rank, size=world_size, side=side,
+                      has_tod=ntask_tod > 0, has_compsep=ntask_compsep > 0)
+    if side == "tod":
+        tod, band = init_mpi_tod(params, side_comm, num_threads, rank_counts, compsep_ranks)
+        return MPIInfo(world=world, tod=tod, band=band)
+    compsep = init_mpi_compsep(params, side_comm, num_threads, tod_masters, compsep_ranks)
+    return MPIInfo(world=world, compsep=compsep)
+
+
+def init_mpi_tod(params: Bunch, tod_comm: MPI.Comm, num_threads: int, rank_counts: list[int],
+                 compsep_ranks: dict[str, dict[str, int]]) -> tuple[TODInfo, BandInfo]:
+    """The TOD and band communicators of a TOD rank (see `init_mpi`).
+
+    Args:
+        rank_counts: The number of ranks of each band of `enabled_tod_bands`.
+        compsep_ranks: The world rank of each CompSep view, by band name and polarization.
+    """
+    tod_rank = tod_comm.Get_rank()
+    tod_bands = enabled_tod_bands(params)
     rank_stops = list(itertools.accumulate(rank_counts))
     my_band = tod_bands[next(iband for iband, stop in enumerate(rank_stops) if tod_rank < stop)]
 
     # The global inventory index is the communicator color. Unlike the old per-experiment index,
     # it cannot merge bands from different experiments.
-    band_comm = mpi_info.tod.comm.Split(my_band.index, key=tod_rank)
-    band_rank = band_comm.Get_rank()
-    band_size = band_comm.Get_size()
+    band_comm = tod_comm.Split(my_band.index, key=tod_rank)
 
     # The band's ranks that sit on one physical node, for data identical across the band that is
     # too large to hold per rank (the far-sidelobe cubes). Splitting the band rather than the world
@@ -211,44 +239,57 @@ def init_mpi_tod(mpi_info: Bunch, params: Bunch) -> Bunch:
 
     logger.debug(
         f"TOD rank {tod_rank} (on {MPI.Get_processor_name()}) handles "
-        f"{my_band.experiment_name}/{my_band.band_name}, band rank {band_rank}/{band_size}, "
-        f"node rank {node_comm.Get_rank()}/{node_comm.Get_size()}."
+        f"{my_band.experiment_name}/{my_band.band_name}, band rank "
+        f"{band_comm.Get_rank()}/{band_comm.Get_size()}, node rank "
+        f"{node_comm.Get_rank()}/{node_comm.Get_size()}."
     )
 
-    mpi_info.experiment = Bunch(name=my_band.experiment_name)
-    mpi_info.band = Bunch(
-        index=my_band.index,
-        name=my_band.band_name,
-        master=0,
-        comm=band_comm,
-        size=band_size,
-        rank=band_rank,
-        is_master=band_rank == 0,
-        node_comm=node_comm,
-        node_size=node_comm.Get_size(),
-        node_rank=node_comm.Get_rank(),
-        is_node_master=node_comm.Get_rank() == 0,
-    )
-    return mpi_info
+    # Each CompSep view of the band takes the band's map in its polarization. The I view sends the
+    # band its sky, or the QU view if the band has no I view.
+    compsep_receivers = compsep_ranks.get(my_band.band_name, {})
+    if compsep_ranks and not compsep_receivers:
+        raise RuntimeError(f"TOD band {my_band.band_name!r} has no enabled entry in "
+                           "'compsep.bands', so no CompSep rank would send it a sky model.")
+    compsep_sender = compsep_receivers["I"] if "I" in compsep_receivers \
+        else compsep_receivers.get("QU")
+
+    tod = TODInfo(comm=tod_comm, rank=tod_rank, size=tod_comm.Get_size(), num_threads=num_threads,
+                  experiment_name=my_band.experiment_name, band_name=my_band.band_name,
+                  compsep_sender=compsep_sender, compsep_receivers=compsep_receivers)
+    band = BandInfo(comm=band_comm, rank=band_comm.Get_rank(), size=band_comm.Get_size(),
+                    node_comm=node_comm)
+    return tod, band
 
 
-def init_mpi_compsep(mpi_info: Bunch, params: Bunch) -> Bunch:
-    """Attach the CompSep view assigned to this rank from the shared ordered inventory."""
+def init_mpi_compsep(params: Bunch, compsep_comm: MPI.Comm, num_threads: int,
+                     tod_masters: dict[str, int],
+                     compsep_ranks: dict[str, dict[str, int]]) -> CompSepInfo:
+    """The CompSep communicator of a CompSep rank (see `init_mpi`).
+
+    CompSep rank i works on view i of `enabled_compsep_views`: one band in one polarization.
+
+    Args:
+        tod_masters: The world rank of each TOD band's master, by band name.
+        compsep_ranks: The world rank of each CompSep view, by band name and polarization.
+    """
     views = enabled_compsep_views(params)
-    if len(views) != mpi_info.compsep.size:
-        raise RuntimeError(
-            f"Enabled CompSep views require {len(views)} ranks, but the CompSep side has "
-            f"{mpi_info.compsep.size}."
-        )
-    view = views[mpi_info.compsep.rank]
-    mpi_info.band = Bunch(
-        name=view.band_name,
-        identifier=view.identifier,
-        pol=view.polarization,
-        comm=MPI.COMM_SELF,
-        size=1,
-        rank=0,
-        master=0,
-        is_master=True,
-    )
-    return mpi_info
+    rank = compsep_comm.Get_rank()
+    if len(views) != compsep_comm.Get_size():
+        raise RuntimeError(f"Enabled CompSep views require {len(views)} ranks, but the CompSep "
+                           f"side has {compsep_comm.Get_size()}.")
+    view = views[rank]
+    # A band read from file has no TOD side. A band's I view sends its sky to the TOD side, or its
+    # QU view if the band has no I view.
+    get_from = params.compsep.bands[view.band_name].get_from
+    if get_from != "file" and view.band_name not in tod_masters:
+        raise RuntimeError(f"'compsep.bands.{view.band_name}' takes its map from {get_from!r}, "
+                           f"but that experiment has no enabled TOD band {view.band_name!r}.")
+    tod_sender = None if get_from == "file" else tod_masters[view.band_name]
+    sends_sky = view.polarization == "I" or "I" not in compsep_ranks[view.band_name]
+    # `subcomm` holds all I views, or all QU views; the solver communicators of the amplitude
+    # groups are split from it.
+    return CompSepInfo(comm=compsep_comm, rank=rank, size=compsep_comm.Get_size(),
+                       num_threads=num_threads,
+                       subcomm=compsep_comm.Split(0 if view.polarization == "I" else 1, key=rank),
+                       band_name=view.band_name, pol=view.polarization, tod_sender=tod_sender,
+                       tod_receiver=tod_sender if sends_sky else None)

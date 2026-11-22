@@ -14,7 +14,6 @@ from commander4.compsep.processing import (
 )
 from commander4.compsep.chisq import collect_fit_diagnostics
 from commander4.diagnostics.log import SUMMARY
-from commander4.mpi.transfer import _get_compsep_sender_id_for_tod_band, _should_send_compsep_result
 from commander4.data_models.band import Band
 from commander4.data_models.detector_map import DetectorMap
 from commander4.math_utils.alm import _dot_complex_alm_1D_arrays
@@ -76,26 +75,6 @@ def _make_multi_comp_list() -> CompList:
     return CompList.init_from_params(Bunch(components=components, compsep=_make_compsep()))
 
 
-def test_tod_receive_source_prefers_intensity_and_falls_back_to_qu() -> None:
-    senders = {"30GHz_I": 3, "30GHz_QU": 4}
-    assert _get_compsep_sender_id_for_tod_band("30GHz", senders) == "30GHz_I"
-
-    senders = {"Planck353GHz_QU": 8}
-    assert _get_compsep_sender_id_for_tod_band("Planck353GHz", senders) == "Planck353GHz_QU"
-
-    with pytest.raises(KeyError, match="No CompSep sender"):
-        _get_compsep_sender_id_for_tod_band("MissingBand", {})
-
-
-def test_should_send_compsep_result_skips_qu_when_i_sender_exists() -> None:
-    destinations = {"LFT_I": 1, "LFT_QU": 2}
-
-    assert _should_send_compsep_result("LFT_I", destinations)
-    assert not _should_send_compsep_result("LFT_QU", destinations)
-    assert _should_send_compsep_result("Planck353GHz_QU", {"Planck353GHz_QU": 5})
-    assert not _should_send_compsep_result("Unused_I", None)
-
-
 def test_joined_comp_list_realizes_iqu_components() -> None:
     sky = _make_comp_list("IQU").joined().get_sky_at_nu(30.0, 2, "IQU", fwhm_rad=0.0)
 
@@ -109,8 +88,8 @@ def test_iteration_chi2_uses_all_observed_map_samples(nside_chisq: int) -> None:
     map_inv_var = np.full_like(map_sky, 1.0/2.0**2)
     map_inv_var[0, -1] = 0.0  # An unobserved pixel.
     band_map = DetectorMap(map_sky, map_inv_var, nu=30.0, fwhm=60.0, nside=1)
-    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, is_master=True),
-                     band=Bunch(name="Planck30GHz", pol="I"))
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0,
+                                   band_name="Planck30GHz", pol="I"))
     params = Bunch(output=Bunch(chains=Bunch(nside_chisq=nside_chisq,
                                              include=Bunch(chisq_map=True))))
 
@@ -130,8 +109,8 @@ def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
     map_sky = np.arange(1.0, 13.0).reshape(1, -1)
     map_inv_var = np.full_like(map_sky, 1.0/2.0**2)
     band_map = DetectorMap(map_sky, map_inv_var, nu=30.0, fwhm=60.0, nside=1)
-    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0, is_master=True),
-                     band=Bunch(name="Planck30GHz", identifier="Planck30GHz_I", pol="I"))
+    mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0,
+                                   band_name="Planck30GHz", pol="I"))
     # With no sampling groups the sky stays zero, and its fit is the final fit.
     params = Bunch(output=Bunch(chains=Bunch(nside_chisq=1, include=Bunch(chisq_map=True))))
     monkeypatch.setattr(
@@ -350,8 +329,7 @@ def test_an_amplitude_group_is_solved_against_the_band_minus_the_fixed_component
     params.compsep.bands.Planck30GHz.polarization = "I"
     params.compsep.double_precision = False
     mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, subcomm=MPI.COMM_SELF, rank=0,
-                                   is_master=True, num_threads=1),
-                     band=Bunch(name="Planck30GHz", pol="I"))
+                                   num_threads=1, band_name="Planck30GHz", pol="I"))
     group = AmplitudeGroup.init_from_params(params, "cg_sampling_groups", "cmb", mpi_info)
     assert group.solver_ranks == {"I": [0], "QU": []}
 

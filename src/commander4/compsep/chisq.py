@@ -21,12 +21,13 @@ from mpi4py import MPI
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
+from commander4.mpi.setup import MPIInfo
 from commander4.sky.comp_list import CompList
 
 logger = logging.getLogger(__name__)
 
 
-def log_fit(mpi_info: Bunch, band_map: DetectorMap, comp_list: CompList, label: str) -> None:
+def log_fit(mpi_info: MPIInfo, band_map: DetectorMap, comp_list: CompList, label: str) -> None:
     """Log how well the current sky model fits this band and all bands, after the step `label`.
 
     Called collectively by every CompSep rank.
@@ -48,12 +49,12 @@ def log_fit(mpi_info: Bunch, band_map: DetectorMap, comp_list: CompList, label: 
 
     total = compsep.comm.allreduce(chi2_band, op=MPI.SUM)
     ndof = compsep.comm.allreduce(ndof_band, op=MPI.SUM)
-    if compsep.is_master:
+    if compsep.rank == 0:
         logger.info(f"Fit after {label}, all bands: chi2={total:.6e}, ndof={ndof}, "
                     f"red.chi2={total/ndof:.4f}")
 
 
-def collect_fit_diagnostics(mpi_info: Bunch, params: Bunch, band_map: DetectorMap,
+def collect_fit_diagnostics(mpi_info: MPIInfo, params: Bunch, band_map: DetectorMap,
                             comp_list: CompList) -> tuple[dict, dict[str, float]]:
     """Gather the fit of the sky model to each band onto the CompSep master, for the chain file.
 
@@ -100,13 +101,13 @@ def collect_fit_diagnostics(mpi_info: Bunch, params: Bunch, band_map: DetectorMa
         chi2_map[chi2_row] += hp.ud_grade(z2_full, nside_chisq)*subpixels_per_chisq_pixel
 
     # Commander3's chisq_<postfix>.fits: z^2 from every band added into one low-resolution map.
-    chi2_map_total = np.zeros_like(chi2_map) if compsep.is_master else None
+    chi2_map_total = np.zeros_like(chi2_map) if compsep.rank == 0 else None
     compsep.comm.Reduce(chi2_map, chi2_map_total, op=MPI.SUM, root=0)
-    band_fit = Bunch(name=mpi_info.band.name, pol=mpi_info.band.pol,
+    band_fit = Bunch(name=compsep.band_name, pol=compsep.pol,
                      nu=float(band_map.nu), chi2=float(chi2_band), ndof=ndof_band,
                      residual=residual if include_residual_maps else None)
     band_fits = compsep.comm.gather(band_fit, root=0)
-    if not compsep.is_master:
+    if compsep.rank != 0:
         return {}, {}
 
     total = sum(band_fit.chi2 for band_fit in band_fits)

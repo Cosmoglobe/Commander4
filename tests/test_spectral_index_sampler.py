@@ -57,8 +57,7 @@ def _make_setup(start_beta: float = TRUE_BETA, **beta_settings):
         comp.beta = start_beta
 
     mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, subcomm=MPI.COMM_SELF, rank=0,
-                                   is_master=True, num_threads=1),
-                     band=Bunch(name="Band60", identifier="Band60_I", pol="I"))
+                                   num_threads=1, band_name="Band60", pol="I"))
     # The one rank solves the I view; no rank holds a QU band.
     amp_group = AmplitudeGroup.init_from_params(params, "per_pixel_sampling_groups", "amps",
                                                 mpi_info)

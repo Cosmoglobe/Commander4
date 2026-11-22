@@ -13,6 +13,7 @@ from copy import deepcopy
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
+from commander4.mpi.setup import MPIInfo
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.compsep.amplitude_sampling import AmplitudeGroup, sample_amplitudes
@@ -27,7 +28,7 @@ from commander4.diagnostics.performance import benchmark, bench_summary, bench_r
 logger = logging.getLogger(__name__)
 
 
-def read_sampling_groups(params: Bunch, mpi_info: Bunch | None = None) \
+def read_sampling_groups(params: Bunch, mpi_info: MPIInfo | None = None) \
         -> tuple[list[AmplitudeGroup], list[MCMCGroup]]:
     """The enabled amplitude groups and MCMC groups of `compsep`, in the order of the file.
 
@@ -108,24 +109,23 @@ def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
                          f"Cl_prior_l_apod <= {highest_lmax} to taper the prior away.")
 
 
-def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
+def init_compsep_processing(mpi_info: MPIInfo, params: Bunch, start: ChainStart)\
     -> tuple[dict[int, CompList], list[AmplitudeGroup], list[MCMCGroup]]:
     """Build the components and the sampling groups, on one CompSep rank.
 
-    Each CompSep rank works on one view (I or QU) of one band (`mpi_info.band`). This function also
-    adds `mpi_info.world.compsep_band_masters`, the world rank of each CompSep view.
+    Each CompSep rank works on one band in one polarization (`mpi_info.compsep.band_name`, `.pol`).
 
     Returns:
         comp_lists_by_chain: Each chain's full component list, with polarized components split
             into separate I and QU components. Identical on all CompSep ranks.
         amplitude_groups, mcmc_groups: The enabled sampling groups.
     """
-    logger.debug(f"CompSep rank {mpi_info.compsep.rank} (on machine {mpi_info.processor_name}) "
-                 f"handles view {mpi_info.band.identifier}.")
+    logger.debug(f"CompSep rank {mpi_info.compsep.rank} handles band {mpi_info.compsep.band_name}, "
+                 f"{mpi_info.compsep.pol}.")
 
     comp_list = CompList.init_from_params(params)
     amplitude_groups, mcmc_groups = read_sampling_groups(params, mpi_info)
-    if mpi_info.compsep.is_master:  # One report, not one per band.
+    if mpi_info.compsep.rank == 0:  # One report, not one per band.
         _validate_component_lmax(comp_list, params)
     # The components whose beta an MCMC group samples. Only they take beta from a saved chain; a
     # beta that is not sampled keeps the value of the parameter file.
@@ -156,15 +156,10 @@ def init_compsep_processing(mpi_info: Bunch, params: Bunch, start: ChainStart)\
             for comp in comp_lists_by_chain[chain]:
                 comp.load_initial_state(chain_file, apply_init_from,
                                         restore_beta=comp.comp_name in sampled_betas)
-
-    # The world rank of each view, by view name, for the exchange with the TOD side.
-    mpi_info.world.compsep_band_masters = dict(mpi_info.compsep.comm.allgather(
-        (mpi_info.band.identifier, mpi_info.world.rank)))
-
     return comp_lists_by_chain, amplitude_groups, mcmc_groups
 
 
-def process_compsep(mpi_info: Bunch, params: Bunch, amplitude_groups: list[AmplitudeGroup],
+def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[AmplitudeGroup],
                     mcmc_groups: list[MCMCGroup], band_map: DetectorMap, comp_list: CompList,
                     chain: int, iteration: int, rng: np.random.Generator) -> None:
     """One Gibbs iteration of component separation. Every CompSep rank calls it.
@@ -212,7 +207,7 @@ def process_compsep(mpi_info: Bunch, params: Bunch, amplitude_groups: list[Ampli
     # The fit of the final sky model, for the chain file.
     with benchmark("chain-gather"):
         fit_tree, band_frequencies = collect_fit_diagnostics(mpi_info, params, band_map, comp_list)
-    if compsep.is_master:
+    if compsep.rank == 0:
         # A section is written only if some group filled it.
         diagnostics = dict(fit_tree)
         if amplitude_stats:
