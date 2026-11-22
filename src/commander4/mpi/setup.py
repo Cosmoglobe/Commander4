@@ -8,6 +8,7 @@ import mpi4py
 from mpi4py import MPI
 from pixell.bunch import Bunch
 
+from commander4.diagnostics.performance import benchmark
 from commander4.parameters.schema import (
     compsep_enabled,
     enabled_compsep_polbands,
@@ -75,6 +76,7 @@ class MPIInfo:
     compsep: CompSepInfo | None = None   # On a CompSep rank.
 
 
+@benchmark("init-mpi")
 def init_mpi(params: Bunch) -> MPIInfo:
     """Split the ranks between the TOD and CompSep sides and the bands, and build `MPIInfo`.
 

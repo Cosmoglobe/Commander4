@@ -130,6 +130,7 @@ def _read_chisq_mask(compsep_comm: MPI.Comm, path: str, nside: int) -> NDArray[n
     return mask > 0.5
 
 
+@benchmark("mcmc-loglike")
 def chi2_of_chisq_bands(mpi_info: MPIInfo, group: MCMCGroup, band_map: DetectorMap,
                         comp_list: CompList) -> float:
     """The chi-squared that an MCMC group judges a proposal by. Every CompSep rank calls it.
@@ -187,8 +188,7 @@ def sample_spectral_params(mpi_info: MPIInfo, params: Bunch, group: MCMCGroup,
         # re-solve below changes those of other components too. It must change nothing else.
         old_betas = {name: float(views[name][0].beta) for name in group.cfg.sample}  # beta
         old_amps = [comp.amps.copy() for comp in comp_list]
-        with benchmark("mcmc-loglike"):
-            old_chi2 = chi2_of_chisq_bands(mpi_info, group, band_map, comp_list)
+        old_chi2 = chi2_of_chisq_bands(mpi_info, group, band_map, comp_list)
 
         # The master proposes a Gaussian step from the current value of each beta. A step that
         # leaves the hard bounds of any beta is rejected at once, without a solve (C3's p_uni).
@@ -213,8 +213,7 @@ def sample_spectral_params(mpi_info: MPIInfo, params: Bunch, group: MCMCGroup,
         with benchmark("mcmc-amp-resolve"):
             for amplitude_group in group.update_amplitude_groups:
                 sample_amplitudes(mpi_info, params, amplitude_group, band_map, comp_list, rng)
-        with benchmark("mcmc-loglike"):
-            new_chi2 = chi2_of_chisq_bands(mpi_info, group, band_map, comp_list)
+        new_chi2 = chi2_of_chisq_bands(mpi_info, group, band_map, comp_list)
 
         # The Metropolis rule: accept with probability min(1, P_new/P_old). The proposal is
         # symmetric, so log(P_new/P_old) is the difference of -chi2/2 plus the difference of the

@@ -1,3 +1,5 @@
+import pytest
+
 from commander4.diagnostics.log import VERBOSE
 from commander4.diagnostics.performance import PerfLogger
 
@@ -27,6 +29,39 @@ def test_same_tag_under_different_parents_is_distinct() -> None:
                 pass
     assert ("a", "leaf") in b.data
     assert ("b", "leaf") in b.data
+
+
+def test_a_decorated_function_that_calls_itself_records_each_call() -> None:
+    b = PerfLogger()
+
+    @b.benchmark("count-down")
+    def count_down(n):
+        if n > 0:
+            count_down(n - 1)
+
+    count_down(2)
+    assert b.data[("count-down",)]["count"] == 1
+    assert b.data[("count-down", "count-down")]["count"] == 1
+    assert b.data[("count-down", "count-down", "count-down")]["count"] == 1
+    assert b._stack == []
+
+
+def test_a_block_left_by_an_exception_is_recorded() -> None:
+    b = PerfLogger()
+    with pytest.raises(ValueError):
+        with b.benchmark("outer"):
+            with b.benchmark("inner"):
+                raise ValueError
+    assert b.data[("outer", "inner")]["count"] == 1
+    assert b._stack == []
+
+
+def test_benchmark_without_a_tag_fails() -> None:
+    b = PerfLogger()
+    with pytest.raises(TypeError, match="needs a tag"):
+        @b.benchmark
+        def f():
+            pass
 
 
 def test_log_memory_same_name_as_block_attaches_to_block() -> None:

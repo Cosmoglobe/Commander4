@@ -17,7 +17,7 @@ from pixell.bunch import Bunch
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.tod_samples import TODSamples
-from commander4.diagnostics.performance import benchmark, log_memory, start_bench, stop_bench
+from commander4.diagnostics.performance import benchmark, log_memory
 from commander4.parameters.schema import resolve_param
 from commander4.tod.mapmaking.binned import BinnedMapmaker
 from commander4.tod.mapmaking.cg import CGMapmaker
@@ -25,6 +25,7 @@ from commander4.tod.mapmaking.output import finalize_band_maps
 from commander4.tod.view import TODView
 
 
+@benchmark("mapmaker")
 def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_output: NDArray,
             iteration: int, params: Bunch,
             rng: np.random.Generator) -> tuple[dict[str, DetectorMap], dict[str, NDArray]]:
@@ -46,7 +47,6 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
         The detector maps for component separation and the maps for the chain file (both empty on
         all ranks but the master).
     """
-    start_bench("setup")
     band_comm = tod_samples.band_comm
     noise, selection = tod_samples.noise, tod_samples.selection
     far_sidelobes = tod_samples.far_sidelobes
@@ -76,9 +76,10 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
     if getattr(include, "residual_maps", False):
         map_names.append("res")
     count_hits = getattr(include, "hit_maps", False)
-    binned = BinnedMapmaker(experiment_data.pixel_domain, pols, map_names, count_hits=count_hits)
-    cg = CGMapmaker(experiment_data, tod_samples, params) if use_cg else None
-    stop_bench("setup")
+    with benchmark("setup"):
+        binned = BinnedMapmaker(experiment_data.pixel_domain, pols, map_names,
+                                count_hits=count_hits)
+        cg = CGMapmaker(experiment_data, tod_samples, params) if use_cg else None
 
     ### MAIN SCAN LOOP ###
     # Each scan's wall time in this loop is recorded as its measured cost, for spreading the scans
@@ -92,29 +93,22 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
             diagnostics.scan_runtime[last_iscan] += now - last_start
         last_iscan, last_start = view.iscan, now
 
-        start_bench("pix-psi")
         good_data_mask = view.get_mask(proc_mask=False)
         psi = view.psi
         response_I_P = view.response_I_P
         gain = view.get_gain()
-        stop_bench("pix-psi")
 
         ### DATA-SELECTION VETO 1 (too little unflagged data).
-        start_bench("data-select-1")
         if selection.veto_low_good_fraction(view, good_data_mask, selection_active):
-            stop_bench("data-select-1")
             continue
-        stop_bench("data-select-1")
 
         ### CORRELATED NOISE / SIGMA0 SAMPLING (first, so the weights below use the new sigma0) ###
         n_corr_est = None
         if corr_noise_active:
-            with benchmark("ncorr"):
-                n_corr_est = noise.sample_scan(view, rng)
+            n_corr_est = noise.sample_scan(view, rng)
         elif noise.cfg.sample_sigma0:
             # No correlated noise this iteration: estimate sigma0 alone.
-            with benchmark("sigma0-samp"):
-                noise.sample_sigma0(view)
+            noise.sample_sigma0(view)
 
         ### THE SKY TOD AND THE NOISE RESIDUAL, in detector units ###
         # TODO: Known bug with a bolometer transfer function T (`tf_tau_sec`). The data hold
@@ -125,21 +119,16 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
         # `d_sky` is the data with every model but the sky removed (the far sidelobes included),
         # which the maps are made from. Removing the sky model as well leaves the noise residual,
         # which data selection judges and the residual map holds (Commander3's `tod_<freq>_res`).
-        with benchmark("misc"):
-            d_sky = view.get_tod(keep=("sky",))
-            if corr_noise_active:
-                d_sky -= n_corr_est
-            residual_tod = d_sky - gain * view.get_sky_tod()
-        with benchmark("tod-diagnostics"):
-            diagnostics.record_scan(view, residual_tod, n_corr_est)
+        d_sky = view.get_tod(keep=("sky",))
+        if corr_noise_active:
+            d_sky -= n_corr_est
+        residual_tod = d_sky - gain * view.get_sky_tod()
+        diagnostics.record_scan(view, residual_tod, n_corr_est)
 
         ### DATA-SELECTION VETO 2 (catastrophic chi^2), applied in-loop so this iteration's maps
         ### already exclude the scan (the CG operator passes re-read `accept`).
-        start_bench("data-select-2")
         if selection.veto_high_chisq(view, residual_tod, selection_active):
-            stop_bench("data-select-2")
             continue
-        stop_bench("data-select-2")
 
         # sigma0 (just sampled above) is in detector units; dividing it by the gain gives the
         # noise of a sample in uK_RJ.
@@ -169,8 +158,7 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
         if use_cg:
             # The CG takes the full-length TOD, since its transfer function needs the whole time
             # axis, and gives the flagged samples zero weight itself.
-            with benchmark("cg-rhs"):
-                cg.accum_to_RHS(view, d_sky/gain)
+            cg.accum_to_RHS(view, d_sky/gain)
     if last_iscan is not None:
         diagnostics.scan_runtime[last_iscan] += time.perf_counter() - last_start
 
@@ -178,11 +166,9 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
         band_comm.Barrier()
 
     ### GATHER AND SOLVE MAPS ###
-    with benchmark("map-gather"):
-        binned.finalize()
+    binned.finalize()
     if use_cg:
-        with benchmark("cg-solve"):
-            cg.solve(binned.map_cov)
+        cg.solve(binned.map_cov)
     log_memory("mapmaker")
 
     ### FINAL CLEANUP ON MASTER RANK ###

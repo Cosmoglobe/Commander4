@@ -21,6 +21,7 @@ from mpi4py import MPI
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
+from commander4.diagnostics.performance import benchmark
 from commander4.mpi.setup import MPIInfo
 from commander4.sky.comp_list import CompList
 
@@ -54,6 +55,7 @@ def log_fit(mpi_info: MPIInfo, band_map: DetectorMap, comp_list: CompList, label
                     f"red.chi2={total/ndof:.4f}")
 
 
+@benchmark("chain-gather")
 def collect_fit_diagnostics(mpi_info: MPIInfo, params: Bunch, band_map: DetectorMap,
                             comp_list: CompList) -> tuple[dict, dict[str, float]]:
     """Gather the fit of the sky model to each band onto the CompSep master, for the chain file.

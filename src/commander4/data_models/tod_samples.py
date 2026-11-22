@@ -16,6 +16,7 @@ from pixell.bunch import Bunch
 import logging
 import typing
 
+from commander4.diagnostics.performance import benchmark
 from commander4.file_io.chain_writer import should_write_chain
 from commander4.mpi.helpers import gather_scan_distributed_array
 from commander4.tod.data_selection import DataSelection
@@ -94,6 +95,7 @@ class TODSamples:
                                      if isinstance(value, TODStep)]
 
 
+    @benchmark("chain-gather")
     def gather_chain_arrays(self, params: Bunch, itr: int) -> dict[str, NDArray] | None:
         """Collect every per-band chain array onto the band master, keyed by dataset path.
 

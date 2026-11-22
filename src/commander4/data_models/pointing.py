@@ -11,6 +11,7 @@ import os
 from pixell.bunch import Bunch
 from pixell import coordsys
 from commander4.compression.huffman_decoding import HuffmanCompressedArray
+from commander4.diagnostics.performance import benchmark
 
 
 def remap_pix_nside(pix: NDArray[np.integer], nside_from: int, nside_to: int,
@@ -116,6 +117,7 @@ class ScanBoresightPointing:
         return dec, ra, psi
 
 
+    @benchmark("pointing")
     def get_pix_psi(
         self,
         idet: int,
@@ -227,5 +229,6 @@ class PixelPointing:
             return self.psi.decode()[:self.ntod]
         return self.psi[:self.ntod]
 
+    @benchmark("pointing")
     def get_pix_psi(self, nside: int | None = None) -> tuple[NDArray, NDArray]:
         return self.get_pix(nside), self.get_psi(nside)

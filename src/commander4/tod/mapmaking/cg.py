@@ -23,6 +23,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.backend import mapmaker as cpp_mapmaker
+from commander4.diagnostics.performance import benchmark
 from commander4.tod.view import TODView
 from commander4.math_utils.cg_driver import DistributedCG
 from commander4.tod.mapmaking.preconditioners import InvNPreconditionerI,\
@@ -221,6 +222,7 @@ class CGMapmaker:
         """
         return self.apply_W(scan_tod_arr)
 
+    @benchmark("cg-rhs")
     def accum_to_RHS(self, view: TODView, scan_tod_arr: NDArray):
         """Add one detector-scan's contribution P^T T^T W^T N^-1 d to the right-hand side.
 
@@ -315,6 +317,7 @@ class CGMapmaker:
         # Sum the local contributions back to the full-sky map on the master (None on other ranks).
         return self.domain.reduce_to_full(out_local)
 
+    @benchmark("cg-solve")
     def solve(self, map_cov: NDArray | None, x_true=None):
         """Sum the right-hand side onto the master and solve for the sky map there (collective).
 

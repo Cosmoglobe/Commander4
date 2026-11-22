@@ -21,8 +21,7 @@ from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.sky.diffuse_components import ThermalDust, Synchrotron, FreeFree,\
         SpinningDust
-from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
-                                               stop_bench, log_memory, increment_count, bench_reset
+from commander4.diagnostics.performance import benchmark
 from commander4.tod.sky_projection import project_sky_to_tod
 
 
@@ -215,50 +214,46 @@ def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetectorGroupTOD, b
     # Convert per-root-second RMS to per-sample RMS.
     sigma0_persamp = KCMB_to_KRJ*band_params.sigma0_rts*np.sqrt(band_params.fsamp)
 
-    start_bench("sky")
     comps_sum_smoothed = np.zeros((3, npix), dtype=np.float32)
-    if band_comm.Get_rank() == 0:
-        if sim_params.include_CMB:
-            comps_sum_smoothed += generate_cmb(freq, fwhm, units, nside, 3*nside, params)
-            gc.collect()
-        if sim_params.include_ThermalDust:
-            comps_sum_smoothed += generate_thermal_dust(freq, fwhm, units, nside, params)
-            gc.collect()
-        if sim_params.include_Synchrotron:
-            comps_sum_smoothed += generate_sync(freq, fwhm, units, nside, params)
-            gc.collect()
-        if sim_params.include_FreeFree:
-            comps_sum_smoothed += generate_ff(freq, fwhm, units, nside, params)
-            gc.collect()
-    stop_bench("sky")
+    with benchmark("sky"):
+        if band_comm.Get_rank() == 0:
+            if sim_params.include_CMB:
+                comps_sum_smoothed += generate_cmb(freq, fwhm, units, nside, 3*nside, params)
+                gc.collect()
+            if sim_params.include_ThermalDust:
+                comps_sum_smoothed += generate_thermal_dust(freq, fwhm, units, nside, params)
+                gc.collect()
+            if sim_params.include_Synchrotron:
+                comps_sum_smoothed += generate_sync(freq, fwhm, units, nside, params)
+                gc.collect()
+            if sim_params.include_FreeFree:
+                comps_sum_smoothed += generate_ff(freq, fwhm, units, nside, params)
+                gc.collect()
 
-    start_bench("bcast")
-    band_comm.Bcast(comps_sum_smoothed, root=0)
-    stop_bench("bcast")
+    with benchmark("bcast"):
+        band_comm.Bcast(comps_sum_smoothed, root=0)
 
     for scan in detector_data.scans:
         for det in scan.detectors:
-            start_bench("orbdip")
-            pix, psi = det.get_pix_psi()
-            ntod = det.tod.size
-            det.tod[:] = project_sky_to_tod(comps_sum_smoothed, pix, psi, det.response_I_P)
-            if sim_params.include_OrbitalDipole:
-                det.tod[:] += get_orbital_dipole(det, pix, freq, units)
-            stop_bench("orbdip")
+            with benchmark("orbdip"):
+                pix, psi = det.pointing.get_pix_psi()
+                ntod = det.tod.size
+                det.tod[:] = project_sky_to_tod(comps_sum_smoothed, pix, psi, det.response_I_P)
+                if sim_params.include_OrbitalDipole:
+                    det.tod[:] += get_orbital_dipole(det, pix, freq, units)
 
-            start_bench("noise")
-            # Create some white noise.
-            noise = np.random.normal(0, sigma0_persamp, ntod)
+            with benchmark("noise"):
+                # Create some white noise.
+                noise = np.random.normal(0, sigma0_persamp, ntod)
 
-            if sim_params.include_corr_noise:
-                # 1/f power spectrum, without sigma0**2 factor (which is already in the data).
-                PS_freqs = rfftfreq(ntod, 1.0/band_params.fsamp)
-                PS_freqs[0] = 0.5*PS_freqs[1]  # Add some DC power while avoiding divide by 0.
-                PS = 1.0 + (PS_freqs/fknee_ncorr)**alpha_ncorr
-                # Morph the shape of the noise power spectrum to be 1/f + white noise.
-                det.tod[:] += irfft(rfft(noise)*np.sqrt(PS))
-                del(PS_freqs, PS, noise)
-                gc.collect()
-            stop_bench("noise")
+                if sim_params.include_corr_noise:
+                    # 1/f power spectrum, without sigma0**2 factor (which is already in the data).
+                    PS_freqs = rfftfreq(ntod, 1.0/band_params.fsamp)
+                    PS_freqs[0] = 0.5*PS_freqs[1]  # Add some DC power while avoiding divide by 0.
+                    PS = 1.0 + (PS_freqs/fknee_ncorr)**alpha_ncorr
+                    # Morph the shape of the noise power spectrum to be 1/f + white noise.
+                    det.tod[:] += irfft(rfft(noise)*np.sqrt(PS))
+                    del(PS_freqs, PS, noise)
+                    gc.collect()
 
     return detector_data

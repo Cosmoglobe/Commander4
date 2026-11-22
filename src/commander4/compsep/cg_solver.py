@@ -145,6 +145,7 @@ class CompSepSolver:
         return comp_list
 
 
+    @benchmark("cg-rhs")
     def calc_RHS(self, comp_list: CompList, rng: np.random.Generator) -> CompList:
         """ Calculates the right-hand-side b-vector of the Ax=b CompSep equation, and returns it as
             a new list with the same components as `comp_list`, which is not changed:
@@ -255,8 +256,7 @@ class CompSepSolver:
             for comp in comp_list:
                 comp.apply_Cl_prior_inv_sqrt(comp.amps)
 
-        with benchmark("cg-rhs"):
-            RHS = self.calc_RHS(comp_list, rng)
+        RHS = self.calc_RHS(comp_list, rng)
 
         # Find the chosen preconditioner, as named in the parameter file.
         with benchmark("cg-precond-init"):

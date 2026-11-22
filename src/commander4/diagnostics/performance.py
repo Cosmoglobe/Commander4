@@ -1,7 +1,7 @@
 """`PerfLogger`: wall-clock profiling of named code blocks, aggregated across MPI ranks.
 
-The module-level functions (`benchmark`, `start_bench`, `stop_bench`, `bench_summary`) wrap a
-single global instance, which is what callers should use.
+The module-level functions (`benchmark`, `bench_summary`, ...) wrap a single global instance,
+which is what callers should use.
 """
 import math
 import time
@@ -19,21 +19,14 @@ class PerfLogger:
     Nesting is tracked automatically through call paths: each tag is keyed by the full tuple of
     active benchmark tags at the moment it starts, e.g. ("outer", "inner"). The same tag name called
     from different parents therefore produces separate entries, each reported under its own parent.
-    Active frames live on a single stack; `stop_bench` closes the matching frame and unwinds any
-    inner frame left open above it, so an unbalanced or non-LIFO start/stop pair cannot desync the
-    stack and corrupt later call paths.
 
-    Four ways to record a measurement::
-
-        with benchmark("io_write"):             # a block
-            write_data()
+    Three ways to record a measurement::
 
         @benchmark("compute_step")              # a whole function
         def compute(): ...
 
-        start_bench("initialization")           # a long linear stretch
-        ...
-        stop_bench("initialization")
+        with benchmark("io_write"):             # a block inside a function
+            write_data()
 
         for i in range(N):                      # an inner loop, counted once per outer iteration
             with benchmark("scan/io", increment_count=False): ...
@@ -64,18 +57,13 @@ class PerfLogger:
         self._path_order = []
         self._path_order_set = set()
 
-        # Stack of currently-active frames, each [tag, t_start_ns, path]. Both the manual
-        # start/stop API and the benchmark() context manager push/pop on this single stack, so
-        # nesting (and the resulting call paths) is tracked uniformly. stop_bench unwinds any
-        # leaked inner frames, so a single unbalanced/non-LIFO call cannot permanently desync the
-        # stack and poison the call paths (hence the report tree) of everything recorded after it.
+        # Stack of the currently active blocks, each (tag, t_start_ns, path). A block always ends
+        # before the block it is nested in (also when an exception passes through), so the block
+        # that ends is always the top one.
         self._stack = []
 
     def reset(self):
-        """
-        Clears all accumulated timing and memory data, resetting to a clean slate.
-        Any timers that are currently running (via start_bench) are also cancelled.
-        """
+        """Clears all accumulated timing and memory data."""
         self.data.clear()
         self.mem_data.clear()
         self._path_order.clear()
@@ -88,32 +76,15 @@ class PerfLogger:
             self._path_order_set.add(path)
             self._path_order.append(path)
 
-    def _start_frame(self, tag: str) -> list:
-        """Pushes a new active frame for tag and returns it.
-
-        A frame is [tag, t_start_ns, path], where path is the tuple of all ancestor tags plus
-        tag. The same tag opened under different parents therefore produces distinct, correctly
-        nested entries. The returned frame is held by the caller so it can be closed by identity.
-        """
+    def _start_block(self, tag: str):
+        """Pushes a new active block. Its path is the tags of all enclosing blocks plus `tag`."""
         path = tuple(f[0] for f in self._stack) + (tag,)
-        frame = [tag, time.perf_counter_ns(), path]
-        self._stack.append(frame)
-        return frame
+        self._stack.append((tag, time.perf_counter_ns(), path))
 
-    def _close_frame(self, idx: int, increment_count: bool, end_ns: int):
-        """Records the frame at stack position idx and pops it (along with anything above it).
-
-        Frames left open *above* idx are leaks (an inner start_bench with no matching stop_bench).
-        They are discarded with a warning rather than absorbed, so an unbalanced inner call cannot
-        leave a stray tag prefixing every subsequent call path.
-        """
-        stack = self._stack
-        if idx != len(stack) - 1:
-            stranded = [f[0] for f in stack[idx + 1:]]
-            logger.error(f"Closing performance tag '{stack[idx][0]}' discarded un-stopped "
-                         f"inner tags {stranded}.")
-        _, t_start, path = stack[idx]
-        del stack[idx:]
+    def _end_block(self, increment_count: bool):
+        """Records the time of the innermost active block and pops it."""
+        end_ns = time.perf_counter_ns()
+        _, t_start, path = self._stack.pop()
         entry = self.data[path]
         if increment_count:
             entry['count'] += 1
@@ -141,37 +112,9 @@ class PerfLogger:
                 Set to False inside a tight loop and call increment_count(tag)
                 once per outer iteration instead.
         """
+        if not isinstance(tag, str):  # `@benchmark` written without its tag.
+            raise TypeError("benchmark needs a tag, e.g. @benchmark(\"mapmaker\").")
         return _BenchmarkContext(self, tag, increment_count)
-
-    def start_bench(self, tag: str):
-        """
-        Manually starts a timer for 'tag' by pushing an active frame.
-
-        Re-entrant starts of the same tag are supported: each start/stop is matched LIFO, so a
-        tag may legitimately nest inside another instance of itself.
-        """
-        self._start_frame(tag)
-
-    def stop_bench(self, tag: str, increment_count: bool = True):
-        """
-        Manually stops the timer for 'tag' and records the duration.
-
-        Closes the innermost active frame carrying this tag, unwinding (and warning about) any
-        inner frames left open above it. Logs a warning if no matching start() is on the stack.
-
-        Args:
-            tag: The label passed to start_bench.
-            increment_count: Whether to bump the call counter.
-                Set to False inside a tight loop and call increment_count(tag)
-                once per outer iteration instead.
-        """
-        end = time.perf_counter_ns()
-        idx = next((i for i in range(len(self._stack) - 1, -1, -1) if self._stack[i][0] == tag),
-                   None)
-        if idx is None:
-            logger.error(f"Performance stop('{tag}') called without start().")
-            return
-        self._close_frame(idx, increment_count, end)
 
     def increment_count(self, tag: str, n: int = 1):
         """
@@ -397,29 +340,23 @@ def _get_current_memory_bytes():
 class _BenchmarkContext(ContextDecorator):
     """ Handles the context manager protocol for a single benchmarked block.
 
-    Inherits from ContextDecorator so the same object also works as an @decorator.
+    Inherits from ContextDecorator so the same object also works as an @decorator. A decorator
+    enters the same object on every call, so the object keeps no state of a running block: the
+    running blocks live on the parent's stack.
     """
-    __slots__ = ('parent', 'tag', '_increment_count', '_frame')
+    __slots__ = ('parent', 'tag', '_increment_count')
 
     def __init__(self, parent, tag, increment_count=True):
         self.parent = parent
         self.tag = tag
         self._increment_count = increment_count
-        self._frame = None
 
     def __enter__(self):
-        self._frame = self.parent._start_frame(self.tag)
+        self.parent._start_block(self.tag)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        end = time.perf_counter_ns()
-        # Locate our own frame by identity (not by tag), so a same-named inner benchmark is never
-        # mistaken for this one. A missing frame means it was already unwound by an outer
-        # stop_bench (and warned about); _close_frame discards any frames leaked inside the block.
-        stack = self.parent._stack
-        idx = next((i for i in range(len(stack) - 1, -1, -1) if stack[i] is self._frame), None)
-        if idx is not None:
-            self.parent._close_frame(idx, self._increment_count, end)
+        self.parent._end_block(self._increment_count)
         return False
 
 
@@ -427,8 +364,6 @@ class _BenchmarkContext(ContextDecorator):
 _bench = PerfLogger()
 
 benchmark       = _bench.benchmark       # Context Manager / Decorator
-start_bench     = _bench.start_bench     # Manual Start
-stop_bench      = _bench.stop_bench      # Manual Stop
 increment_count = _bench.increment_count # Manually bump a tag's call counter
 log_memory      = _bench.log_memory      # Memory snapshot
 bench_reset     = _bench.reset           # Clear all accumulated data

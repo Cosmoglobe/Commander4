@@ -16,6 +16,7 @@ import datetime
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
+from commander4.diagnostics.performance import benchmark
 from commander4.file_io import paths
 from commander4.sky.comp_list import CompList
 
@@ -112,6 +113,7 @@ def should_write_chain(params: Bunch, kind: str, iter: int) -> bool:
     return (iter - 1) % int(interval[kind]) == 0 if kind in interval else True
 
 
+@benchmark("filewrite-band")
 def write_band_chain_to_file(params: Bunch, chain: int, iter: int, exp_name: str, band_name: str,
                              tod_arrays: dict[str, NDArray], maps_to_file: dict,
                              band_unit_factor: float = 1.0) -> None:
@@ -176,6 +178,7 @@ def _write_nested(group: h5py.Group, tree: dict) -> None:
             group[str(key)] = value
 
 
+@benchmark("filewrite-compsep")
 def write_compsep_chain_to_file(comp_list: CompList, params: Bunch, chain: int, iter: int,
                                 diagnostics: dict | None = None,
                                 band_frequencies: dict[str, float] | None = None) -> None:

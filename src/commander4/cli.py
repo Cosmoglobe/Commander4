@@ -24,7 +24,6 @@ from commander4.file_io import paths
 from commander4.file_io.chain_restart import ChainStart, resolve_chain_start
 from commander4.mpi.setup import MPIInfo, init_mpi
 from commander4.parameters.schema import validate_param_schema
-from commander4.diagnostics.performance import benchmark
 
 logger = logging.getLogger(__name__)
 
@@ -152,8 +151,7 @@ def run_commander4(params: Bunch, params_dict: dict):
         logger.summary(f"Run date: {date.today().isoformat()}.")
 
     # Perform initial MPI setup, assigning tasks to different MPI ranks and deciding master ranks.
-    with benchmark("init-mpi"):
-        mpi_info = init_mpi(params)
+    mpi_info = init_mpi(params)
 
     if mpi_info.world.rank == 0:
         # Print the entire parameter file to log.

@@ -204,8 +204,7 @@ def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[Amp
             log_fit(mpi_info, band_map, comp_list, label=f"{group.solver} group {group.name!r}")
 
     # The fit of the final sky model, for the chain file.
-    with benchmark("chain-gather"):
-        fit_tree, band_frequencies = collect_fit_diagnostics(mpi_info, params, band_map, comp_list)
+    fit_tree, band_frequencies = collect_fit_diagnostics(mpi_info, params, band_map, comp_list)
     if compsep.rank == 0:
         # A section is written only if some group filled it.
         diagnostics = dict(fit_tree)
@@ -213,9 +212,8 @@ def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[Amp
             diagnostics["amplitude_groups"] = amplitude_stats
         if mcmc_stats:
             diagnostics["mcmc"] = mcmc_stats
-        with benchmark("filewrite-compsep"):
-            write_compsep_chain_to_file(comp_list, params, chain, iteration, diagnostics,
-                                        band_frequencies)
+        write_compsep_chain_to_file(comp_list, params, chain, iteration, diagnostics,
+                                    band_frequencies)
         chi2 = fit_tree["chi2"]
         logger.summary(f"Chain {chain}, iteration {iteration} complete: chi2={chi2['total']:.6e}, "
                        f"ndof={chi2['ndof']}, red.chi2={chi2['reduced']:.4f}, z={chi2['z']:.3f}.")

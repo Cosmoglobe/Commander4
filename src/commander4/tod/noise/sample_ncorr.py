@@ -15,7 +15,7 @@ from commander4.tod.noise.gap_filling import fill_all_masked
 from commander4.tod.noise.psd import NoisePSD
 from commander4.tod.noise.sigma0 import calc_sigma0_robust, calc_sigma0_binned_psd
 
-from commander4.diagnostics.performance import start_bench, stop_bench, log_memory
+from commander4.diagnostics.performance import benchmark, log_memory
 
 SIGMA0_METHODS = ("pairwise", "binned_psd")
 
@@ -58,14 +58,10 @@ def corr_noise_realization_with_gaps(TOD: NDArray, mask: NDArray[np.bool_], sigm
         """Mirrored filter, evaluated in single precision. `Fourier_filter` must be float32,
         and must have `nfilt` entries (see below), matching the transform in use.
         """
-        start_bench("FFT")
         vec32 = np.asarray(vec, dtype=np.float32)  # a no-op for the CG's own float32 buffer
         if use_dct:
-            res = backward_dct(forward_dct(vec32) * Fourier_filter)
-        else:
-            res = backward_rfft_mirrored(forward_rfft_mirrored(vec32) * Fourier_filter, ntod=ntod)
-        stop_bench("FFT")
-        return res
+            return backward_dct(forward_dct(vec32) * Fourier_filter)
+        return backward_rfft_mirrored(forward_rfft_mirrored(vec32) * Fourier_filter, ntod=ntod)
 
     out_dtype = TOD.dtype
     ntod = TOD.shape[0]
@@ -293,74 +289,71 @@ def sample_correlated_noise(tod: NDArray, mask: NDArray[np.bool_], noise_params:
         parameters), ``residual`` (CG residual; 0 when no masked CG ran), ``niter`` (CG iterations),
         ``converged`` (bool), and ``high_var`` (variance sanity check failed).
     """
-    start_bench("ncorr-samp-setup")
     if sigma0_method not in SIGMA0_METHODS:
         raise ValueError(f"sigma0_method must be one of {SIGMA0_METHODS}, got {sigma0_method!r}.")
     noise_params = np.array(noise_params, dtype=np.float64, copy=True)
     Ntod = tod.shape[0]
 
-    # Binned-PSD sigma0 is a "before n_corr" estimate (Commander3 ordering): estimate it up front on
-    # the signal-subtracted residual so C_corr_inv and the n_corr draw use the refreshed value.
-    if sample_sigma0 and sigma0_method == "binned_psd":
-        noise_params[0] = calc_sigma0_binned_psd(tod, mask, fsamp)
-    sigma0 = float(noise_params[0])
+    with benchmark("ncorr-samp-setup"):
+        # Binned-PSD sigma0 is a "before n_corr" estimate (Commander3 ordering): estimate it up
+        # front on the signal-subtracted residual so C_corr_inv and the n_corr draw use the
+        # refreshed value.
+        if sample_sigma0 and sigma0_method == "binned_psd":
+            noise_params[0] = calc_sigma0_binned_psd(tod, mask, fsamp)
+        sigma0 = float(noise_params[0])
 
-    # "Only monopole" mode: model the correlated noise as just the per-scan offset.
-    if onlymono:
-        mono = float(np.mean(tod[mask])) if mask.any() else 0.0
-        n_corr = np.full(Ntod, mono, dtype=tod.dtype)
-        if sample_sigma0 and sigma0_method == "pairwise":
-            noise_params[0] = _estimate_sigma0(tod, n_corr, mask, sigma0_dec)
-        stop_bench("ncorr-samp-setup")
-        return Bunch(n_corr=n_corr, noise_params=noise_params, residual=0.0, niter=0,
-                     converged=True, high_var=False)
-    freq = rfftfreq(2 * Ntod, d=1.0/fsamp)  # Mirrored-FFT grid: nfft=2*Ntod -> length Ntod+1.
-    C_corr_inv = noise_model.compute_inv_corr_spectrum(freq, noise_params)
-    # Inpaint masked regions: seeds the CG warm-start and feeds the stationary fallback solve.
-    fill_all_masked(tod, mask, sigma0, rng)
-    if nomono and mask.any():
-        tod = tod - np.mean(tod[mask])  # Solve for a mean-zero correlated noise component.
-    stop_bench("ncorr-samp-setup")
+        # "Only monopole" mode: model the correlated noise as just the per-scan offset.
+        if onlymono:
+            mono = float(np.mean(tod[mask])) if mask.any() else 0.0
+            n_corr = np.full(Ntod, mono, dtype=tod.dtype)
+            if sample_sigma0 and sigma0_method == "pairwise":
+                noise_params[0] = _estimate_sigma0(tod, n_corr, mask, sigma0_dec)
+            return Bunch(n_corr=n_corr, noise_params=noise_params, residual=0.0, niter=0,
+                         converged=True, high_var=False)
+        freq = rfftfreq(2 * Ntod, d=1.0/fsamp)  # Mirrored-FFT grid: nfft=2*Ntod -> length Ntod+1.
+        C_corr_inv = noise_model.compute_inv_corr_spectrum(freq, noise_params)
+        # Inpaint masked regions: seeds the CG warm-start and feeds the stationary fallback solve.
+        fill_all_masked(tod, mask, sigma0, rng)
+        if nomono and mask.any():
+            tod = tod - np.mean(tod[mask])  # Solve for a mean-zero correlated noise component.
 
-    start_bench("ncorr-tod-samp")
-    high_var = False
-    if cg_max_iter == 0:
-        # User requested no CG steps: use the stationary (full-mask) Wiener solution directly.
-        n_corr, residual, niter, converged = corr_noise_realization_with_gaps(
-            tod, np.ones_like(mask), sigma0, C_corr_inv, rng, use_dct=use_dct)
-    else:
-        n_corr, residual, niter, converged = corr_noise_realization_with_gaps(
-            tod, mask, sigma0, C_corr_inv, rng, err_tol=cg_err_tol, max_iter=cg_max_iter,
-            use_dct=use_dct)
-        # Sanity check: the residual (data minus n_corr) should not carry more power than data.
-        resid = (tod - n_corr) * mask
-        high_var = bool(np.dot(resid, resid) > np.dot(tod*mask, tod*mask))
-        if high_var or not converged:
-            # Fall back to the stationary solution that ignores the gaps.
-            n_corr, _, _, _ = corr_noise_realization_with_gaps(
+    with benchmark("ncorr-tod-samp"):
+        high_var = False
+        if cg_max_iter == 0:
+            # User requested no CG steps: use the stationary (full-mask) Wiener solution directly.
+            n_corr, residual, niter, converged = corr_noise_realization_with_gaps(
                 tod, np.ones_like(mask), sigma0, C_corr_inv, rng, use_dct=use_dct)
+        else:
+            n_corr, residual, niter, converged = corr_noise_realization_with_gaps(
+                tod, mask, sigma0, C_corr_inv, rng, err_tol=cg_err_tol, max_iter=cg_max_iter,
+                use_dct=use_dct)
+            # Sanity check: the residual (data minus n_corr) should not carry more power than data.
+            resid = (tod - n_corr) * mask
+            high_var = bool(np.dot(resid, resid) > np.dot(tod*mask, tod*mask))
+            if high_var or not converged:
+                # Fall back to the stationary solution that ignores the gaps.
+                n_corr, _, _, _ = corr_noise_realization_with_gaps(
+                    tod, np.ones_like(mask), sigma0, C_corr_inv, rng, use_dct=use_dct)
 
-    if nomono and mask.any():
-        n_corr = n_corr - np.mean(n_corr[mask])
-    stop_bench("ncorr-tod-samp")
+        if nomono and mask.any():
+            n_corr = n_corr - np.mean(n_corr[mask])
 
-    start_bench("sigma0-samp")
     # Re-estimate sigma0 (pairwise) from the fully-cleaned residual (after subtracting n_corr).
     if sample_sigma0 and sigma0_method == "pairwise":
-        noise_params[0] = _estimate_sigma0(tod, n_corr, mask, sigma0_dec)
-    stop_bench("sigma0-samp")
+        with benchmark("sigma0-samp"):
+            noise_params[0] = _estimate_sigma0(tod, n_corr, mask, sigma0_dec)
 
     # Fit the PSD parameters to the residual periodogram (full model), inpainting masked samples
     # with the n_corr realization plus white noise (Commander3 sample_noise_psd convention).
-    start_bench("ncorr-psd-samp")
     if sample_params:
-        residual_tod = tod.copy()
-        ngap = int(np.count_nonzero(~mask))
-        if ngap > 0:
-            residual_tod[~mask] = n_corr[~mask] + float(noise_params[0]) * rng.standard_normal(ngap)
-        noise_params = noise_model.sample_params(residual_tod, noise_params, fsamp, rng,
-                                                 bin_psd=psd_bin)
-    stop_bench("ncorr-psd-samp")
+        with benchmark("ncorr-psd-samp"):
+            residual_tod = tod.copy()
+            ngap = int(np.count_nonzero(~mask))
+            if ngap > 0:
+                residual_tod[~mask] = (n_corr[~mask]
+                                       + float(noise_params[0])*rng.standard_normal(ngap))
+            noise_params = noise_model.sample_params(residual_tod, noise_params, fsamp, rng,
+                                                     bin_psd=psd_bin)
 
     return Bunch(n_corr=n_corr, noise_params=noise_params, residual=float(residual),
                  niter=int(niter), converged=bool(converged), high_var=high_var)

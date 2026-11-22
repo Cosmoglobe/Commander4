@@ -50,8 +50,7 @@ def init_tod_processing(mpi_info: MPIInfo, params: Bunch, start: ChainStart) \
     band_comm = mpi_info.band.comm
 
     t0 = time.time()
-    with benchmark("fileread-tod"):
-        experiment_data = read_tods_from_file(band_comm, params, my_experiment, my_band)
+    experiment_data = read_tods_from_file(band_comm, params, my_experiment, my_band)
     mpi_info.tod.comm.Barrier()
     if mpi_info.tod.rank == 0:
         logger.summary(f"TOD: Finished reading all files in {time.time()-t0:.1f}s.")
@@ -126,48 +125,40 @@ def process_tod(mpi_info: MPIInfo, experiment_data: DetectorGroupTOD, tod_sample
     # scope does not release an MPI window.
     far_sidelobes_active = far_sidelobes.cfg.enabled and iter >= far_sidelobes.cfg.from_iter
     if far_sidelobes_active:
-        with benchmark("far-beam"):
-            far_sidelobes.build(tod_samples, compsep_output.full, mpi_info.band.node_comm)
+        far_sidelobes.build(tod_samples, compsep_output.full, mpi_info.band.node_comm)
 
     # HFI baselines use the previous iteration's gain and sigma0, like Commander3. The first pass
     # also determines whether Python's even or odd sample indices carry the positive half-cycle.
     if hfi.cfg.enabled:
-        with benchmark("hfi-baselines"):
-            hfi.sample(tod_samples, compsep_output.local, rng)
+        hfi.sample(tod_samples, compsep_output.local, rng)
 
     # Jumps are steps of the demodulated TOD, so they are measured once the HFI phase is known, as
     # Commander3 stitches its HFI DC levels after demodulation.
     if jumps.cfg.enabled and iter >= jumps.cfg.from_iter:
-        with benchmark("jump-detect"):
-            jumps.sample(tod_samples, compsep_output.local, iter)
+        jumps.sample(tod_samples, compsep_output.local, iter)
 
     # Glitch detection, performed after HFI demodulation.
     if glitches.cfg.enabled and iter >= glitches.cfg.from_iter:
-        with benchmark("glitches"):
-            glitches.sample(tod_samples, compsep_output.local, rng)
+        glitches.sample(tod_samples, compsep_output.local, rng)
 
     # Gain uses the previous iteration's sigma0. The new sigma0 is estimated later, inside the
     # mapmaker scan loop, matching Commander3's gain -> n_corr -> bin_TOD order.
     if gain.cfg.abs_gain.enabled and iter >= gain.cfg.abs_gain.from_iter:
-        with benchmark("abs-gain"):
-            gain.sample_absolute(tod_samples, compsep_output.local, iter, rng)
+        gain.sample_absolute(tod_samples, compsep_output.local, iter, rng)
 
     if gain.cfg.rel_gain.enabled and iter >= gain.cfg.rel_gain.from_iter:
-        with benchmark("rel-gain"):
-            gain.sample_relative(tod_samples, compsep_output.local, iter, rng)
+        gain.sample_relative(tod_samples, compsep_output.local, iter, rng)
 
     if gain.cfg.temporal_gain.enabled and iter >= gain.cfg.temporal_gain.from_iter:
-        with benchmark("temp-gain"):
-            gain.sample_temporal(tod_samples, compsep_output.local, iter, rng)
+        gain.sample_temporal(tod_samples, compsep_output.local, iter, rng)
 
     ###############################################################################################
     ### Part 2 : Execute the mapmaking loop, including the sampling steps it contains.          ###
     ### Some sampling steps are inside the mapmaking loop, because they sample a quantity that  ###
     ### is too large to store, or need information only available inside this loop, etc.        ###
     ###############################################################################################
-    with benchmark("mapmaker"):
-        detmap_dict, maps_to_file = tod2map(experiment_data, tod_samples, compsep_output.local,
-                                            iter, params, rng)
+    detmap_dict, maps_to_file = tod2map(experiment_data, tod_samples, compsep_output.local,
+                                        iter, params, rng)
     if is_master and params.output.chains.include.sky_model_maps:
         maps_to_file["skymodel"] = compsep_output.full
 
@@ -175,8 +166,7 @@ def process_tod(mpi_info: MPIInfo, experiment_data: DetectorGroupTOD, tod_sample
     ### Part 3 : Cleanup, logging, and communication                                            ###
     ###############################################################################################
     if noise.cfg.enabled and iter >= noise.cfg.from_iter:
-        with benchmark("log-corr-noise-stats"):
-            noise.log_summary(tod_samples, iter)
+        noise.log_summary(tod_samples, iter)
 
     # Report during data-selection warm-up as well as active-cut iterations.
     report_selection, apply_cuts = selection.status(iter, noise.cfg)
@@ -185,13 +175,11 @@ def process_tod(mpi_info: MPIInfo, experiment_data: DetectorGroupTOD, tod_sample
 
     # The samples and the maps go into one band file, written last so it records the final
     # `accept` flags. The gather is collective over band_comm and applies the write gate.
-    with benchmark("chain-gather"):
-        tod_arrays = tod_samples.gather_chain_arrays(params, iter)
+    tod_arrays = tod_samples.gather_chain_arrays(params, iter)
     if is_master and tod_arrays is not None:
-        with benchmark("filewrite-band"):
-            write_band_chain_to_file(params, tod_samples.chain, iter,
-                                     experiment_data.experiment_name, experiment_data.band_name,
-                                     tod_arrays, maps_to_file, experiment_data.band_unit_factor)
+        write_band_chain_to_file(params, tod_samples.chain, iter,
+                                 experiment_data.experiment_name, experiment_data.band_name,
+                                 tod_arrays, maps_to_file, experiment_data.band_unit_factor)
 
     with benchmark("end-barrier"):
         tod_comm.Barrier()

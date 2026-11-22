@@ -89,7 +89,7 @@ def test_instrument_percentages_follow_detector_names_into_sky_projection(
     for det, efficiency in zip(detectors, [0.92, 0.0]):
         assert det.response_I_P == pytest.approx((1.0, efficiency))
         view = TODView(result, SimpleNamespace(), sky).focus(0, det)
-        psi = det.get_psi()
+        psi = det.pointing.get_psi()
         expected = 2.0 + efficiency * (3.0 * np.cos(2 * psi) + 5.0 * np.sin(2 * psi))
         np.testing.assert_allclose(view.get_sky_tod(), expected, rtol=1e-6)
 

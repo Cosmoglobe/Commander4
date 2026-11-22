@@ -16,6 +16,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.diagnostics.performance import benchmark
 from commander4.parameters.schema import read_settings
 from commander4.tod.noise.sample_ncorr import sample_correlated_noise, SIGMA0_METHODS
 from commander4.tod.noise.sigma0 import _estimate_standalone_sigma0
@@ -133,6 +134,7 @@ class Noise(TODStep):
         self.ncorr_high_var[:] = -1
 
 
+    @benchmark("ncorr")
     def sample_scan(self, view: TODView, rng: np.random.Generator) -> NDArray:
         """Draw the correlated noise of the focused detector-scan, and its noise parameters.
 
@@ -156,6 +158,7 @@ class Noise(TODStep):
         return res.n_corr
 
 
+    @benchmark("sigma0-samp")
     def sample_sigma0(self, view: TODView) -> None:
         """Estimate sigma0 alone for the focused detector-scan, when correlated noise is not
         sampled. It runs at the same point in the chain (after gain) as the n_corr-coupled
@@ -164,6 +167,7 @@ class Noise(TODStep):
             view, self.cfg.sigma0_method)
 
 
+    @benchmark("log-corr-noise-stats")
     def log_summary(self, tod_samples: TODSamples, iteration: int) -> None:
         """Log one per-band summary of this iteration's correlated-noise draws (collective).
 

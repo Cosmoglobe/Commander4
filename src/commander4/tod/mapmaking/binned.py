@@ -13,6 +13,7 @@ from numpy.typing import NDArray
 
 from commander4.backend import mapmaker as cpp_mapmaker
 from commander4.data_models.pixel_domain import PixelDomain
+from commander4.diagnostics.performance import benchmark
 
 
 class BinnedMapmaker:
@@ -90,6 +91,7 @@ class BinnedMapmaker:
         """Add one hit per sample to the hit map."""
         cpp_mapmaker.hit_accumulator(self._hits, np.asarray(pix_local, dtype=np.int64))
 
+    @benchmark("map-gather")
     def finalize(self):
         """Sum the buffers of all ranks onto the master and solve each pixel there (collective).
 
