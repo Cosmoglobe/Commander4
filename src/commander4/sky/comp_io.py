@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 # Stokes channels stored, in order, for each polarization mode. Used to map the rows of a stored
-# (npol, ...) array (whose layout follows its polarization mode) onto the rows an execution view
+# (npol, ...) array (whose layout follows its polarization mode) onto the rows a polarization view
 # needs. Applies equally to chain alm arrays and FITS maps, since both are laid out by polarization.
 POL_CHANNELS = {"I": ("I",), "QU": ("Q", "U"), "IQU": ("I", "Q", "U")}
 

@@ -1,7 +1,7 @@
 """How well the current sky model fits the band maps, and the record of it the chain keeps.
 
-Commander4's analogue of Commander3's `comm_chisq_mod.f90`. Every CompSep rank owns one
-`(band, polarization)` view, so the fit is evaluated locally and then combined over all bands:
+Commander4's analogue of Commander3's `comm_chisq_mod.f90`. Every CompSep rank owns one polband
+(a band in I or in QU), so the fit is evaluated locally and then combined over all bands:
 after each sampling step into the all-band chi-squared the log shows (`log_fit`), and once per
 Gibbs iteration into the per-band terms and maps the chain stores (`collect_fit_diagnostics`).
 
@@ -86,8 +86,8 @@ def collect_fit_diagnostics(mpi_info: MPIInfo, params: Bunch, band_map: Detector
     # spread evenly over the chi-squared pixels inside it, so the map's total is kept either way.
     subpixels_per_chisq_pixel = npix/npix_chisq
 
-    # z^2 in `nside_chisq` pixels. Row 0 is intensity and rows 1-2 are Q/U, so summing an I view
-    # and a QU view of the same sky cannot make them collide.
+    # z^2 in `nside_chisq` pixels. Row 0 is intensity and rows 1-2 are Q/U, so summing an I polband
+    # and a QU polband of the same band cannot make them collide.
     chi2_map = np.zeros((3, npix_chisq))
     chi2_band, ndof_band = 0.0, 0
     for ipol in range(band_map.npol):

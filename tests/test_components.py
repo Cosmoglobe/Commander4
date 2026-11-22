@@ -115,7 +115,7 @@ def test_point_sources_component_rejects_non_intensity_pol() -> None:
         PointSourcesComponent(params, "ps", "QU")
 
 
-def test_complist_split_for_pol_returns_requested_execution_view() -> None:
+def test_complist_split_for_pol_returns_requested_polarization_view() -> None:
     comp_list = _make_comp_list("IQU")
 
     qu_only = comp_list.split_for_pol("QU")
@@ -335,7 +335,7 @@ def test_P_Cl_prior_gaussian_rolloff_floors_at_1e_minus_10() -> None:
 
 
 def test_P_Cl_prior_resolves_per_pol_lists() -> None:
-    # Like nu_ref, every Cl_prior parameter can be an [I, QU] pair resolved per execution view.
+    # Like nu_ref, every Cl_prior parameter can be an [I, QU] pair resolved per polarization view.
     def make(pol):
         return _dust(pol, lmax=4, Cl_prior_amplitude=[2.0, 8.0], Cl_prior_beta=[0.0, -0.5],
                      Cl_prior_FWHM=[0.0, 10.0])

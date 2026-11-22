@@ -16,7 +16,7 @@ from commander4 import sky
 from commander4.compsep.cg_solver import CompSepSolver
 from commander4.compsep.perpix_solver import solve_compsep_perpix
 from commander4.data_models.detector_map import DetectorMap
-from commander4.parameters.schema import (EXECUTION_POLS, enabled_compsep_views, names_or_all,
+from commander4.parameters.schema import (SPLIT_POLS, enabled_compsep_polbands, names_or_all,
                                           read_settings, resolve_param)
 from commander4.mpi.setup import MPIInfo
 from commander4.sky.comp_list import CompList
@@ -74,18 +74,17 @@ class AmplitudeGroup:
                     raise ValueError(f"'{section}.{name}.comps' names {comp_name!r}, a "
                                      f"{component_class.__name__}. The per-pixel solver handles "
                                      "only diffuse components.")
-        # A rank solves the group if its view is of one of the group's bands, in a polarization
-        # that one of the group's components has. View i of `enabled_compsep_views` runs on
-        # CompSep rank i.
+        # A rank solves the group if its polband is one of the group's bands, in a polarization
+        # that one of the group's components has. CompSep rank i works on polband i.
         solver_ranks = {}
+        polbands = enabled_compsep_polbands(params)
         for pol in ("I", "QU"):
-            has_comps = any(pol in EXECUTION_POLS[params.components[comp].params.polarization]
+            has_comps = any(pol in SPLIT_POLS[params.components[comp].params.polarization]
                             for comp in cfg.comps)
-            solver_ranks[pol] = [view.rank for view in enabled_compsep_views(params)
-                                 if has_comps and view.polarization == pol
-                                 and view.band_name in cfg.bands]
+            solver_ranks[pol] = [rank for rank, polband in enumerate(polbands) if has_comps
+                                 and polband.pol == pol and polband.band_name in cfg.bands]
         # The communicator is split from `subcomm`, which holds the ranks of one polarization, so
-        # the I and QU views of a group are two separate solves.
+        # the I and QU parts of a group are two separate solves.
         solver_comm = None
         if mpi_info is not None:
             is_solver = mpi_info.compsep.rank in solver_ranks[mpi_info.compsep.pol]

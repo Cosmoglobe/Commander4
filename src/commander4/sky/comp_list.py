@@ -28,7 +28,7 @@ from commander4.data_models.band import Band
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.component import Component
 from commander4.sky.diffuse_components import DiffuseComponent
-from commander4.parameters.schema import EXECUTION_POLS
+from commander4.parameters.schema import SPLIT_POLS
 from commander4.math_utils.arithmetic import inplace_scale_add, inplace_add_scaled_vec
 from commander4.math_utils.sht import alm_to_map
 
@@ -72,10 +72,10 @@ class CompList:
                 raise ValueError(f"Unknown component_class {component.component_class!r} for "
                                  f"component {comp_name!r}.")
             if ("polarization" not in component.params
-                    or component.params.polarization not in EXECUTION_POLS):
+                    or component.params.polarization not in SPLIT_POLS):
                 raise ValueError(f"'components.{comp_name}.params.polarization' must be "
-                                 f"one of {list(EXECUTION_POLS)}.")
-            for pol in EXECUTION_POLS[component.params.polarization]:
+                                 f"one of {list(SPLIT_POLS)}.")
+            for pol in SPLIT_POLS[component.params.polarization]:
                 comp_list.append(component_cls(params, comp_name, pol))
         return cls(comp_list)
 
@@ -229,7 +229,7 @@ class CompList:
             comp.write_chain(file.create_group(f"comps/{comp.comp_name}"), band_frequencies)
 
     def broadcast_pol_views(self, comm: MPI.Comm, *, pol: str, source: int) -> None:
-        """Broadcast all execution views of `pol` from `source` to every rank in `comm`.
+        """Broadcast all polarization views of `pol` from `source` to every rank in `comm`.
 
         Used after a sampling step: only the ranks that actually solved a given polarization hold
         the updated component data, so broadcasting that polarization's views from one authoritative

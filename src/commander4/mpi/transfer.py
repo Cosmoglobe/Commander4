@@ -89,7 +89,7 @@ def send_tod(mpi_info: MPIInfo, tod_map_dict: dict[str, DetectorMap]) -> None:
     """Send this band's maps to its CompSep ranks, one per polarization (see `receive_tod`).
 
     `tod_map_dict` holds the band's maps from `process_tod`, by polarization ("I", "QU"). A map in
-    a polarization that the band has no CompSep view of is not sent.
+    a polarization that the band has no CompSep polband of is not sent.
     """
     if mpi_info.band.rank == 0:
         for pol, detector_map in tod_map_dict.items():
@@ -130,9 +130,9 @@ def receive_tod(mpi_info: MPIInfo, band_map: DetectorMap|None, params: Bunch) ->
 
 
 def send_compsep(mpi_info: MPIInfo, comp_list: CompList) -> None:
-    """Send the CompSep components back to TOD when this execution view owns the return path.
+    """Send the CompSep components back to TOD when this rank's polband owns the return path.
 
-    Before this boundary, ``sample_amplitudes`` broadcasts every polarization view solved by a
+    Before this boundary, ``sample_amplitudes`` broadcasts every polarization part solved by a
     sampling group across the CompSep communicator. Every rank therefore holds the same complete
     component list, with both I and QU amplitudes; this function performs no additional QU-to-I
     transfer.
