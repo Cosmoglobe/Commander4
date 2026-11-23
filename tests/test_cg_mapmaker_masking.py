@@ -19,7 +19,7 @@ from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import PixelPointing
-from commander4.data_models.tod_samples import TODSamples
+from commander4.tod.samples import TODSamples
 from commander4.data_models.pixel_domain import PixelDomain
 from commander4.tod.data_selection import DataSelection
 from commander4.tod.glitches.sampling import Glitches

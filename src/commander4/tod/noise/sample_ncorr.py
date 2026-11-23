@@ -190,9 +190,10 @@ def realize_noise_in_gaps(noise_resid: NDArray, mask: NDArray[np.bool_], noise_m
         The returned array equals *noise_resid* at valid samples and a fresh, surrounding-data-aware
         noise draw (correlated 1/f from the constrained realization, plus white) at the gaps.
 
-        The 1/f model is evaluated at *samprate* with ``sigma0`` rescaled by ``sqrt(samprate/fsamp)``
-        (the same downsampling scaling ``apply_N_inv`` applies to the whole PSD), so the draw is
-        statistically consistent with the noise weighting used in the gain solve.
+        The 1/f model is evaluated at *samprate* with ``sigma0`` rescaled by
+        ``sqrt(samprate/fsamp)`` (the same downsampling scaling ``apply_N_inv`` applies to the whole
+        PSD), so the draw is statistically consistent with the noise weighting used in the gain
+        solve.
 
     Args:
         noise_resid: Block-averaged residual (data minus full sky model at full gain), 1D. Valid

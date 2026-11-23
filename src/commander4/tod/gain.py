@@ -26,7 +26,7 @@ from commander4.tod.view import TODView
 from commander4.units import rj_to_band_unit_factor
 
 if TYPE_CHECKING:
-    from commander4.data_models.tod_samples import TODSamples
+    from commander4.tod.samples import TODSamples
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +49,8 @@ def _solve_relative_gain_system(s_weights: NDArray, r_weights: NDArray, prev_rel
         their current relative gain.
 
     Args:
-        s_weights (NDArray): Per-detector ``sum_scans s^T N^-1 s`` (calibration weight), shape (ndet,).
-        r_weights (NDArray): Per-detector ``sum_scans r^T N^-1 s`` (residual projection), shape (ndet,).
+        s_weights (NDArray): Per-detector ``sum_scans s^T N^-1 s`` (calibration weight), (ndet,).
+        r_weights (NDArray): Per-detector ``sum_scans r^T N^-1 s`` (residual projection), (ndet,).
         prev_rel_gain (NDArray): Current relative gains, kept for excluded detectors, shape (ndet,).
         rng: Random generator for the fluctuation term.
 
@@ -157,9 +157,9 @@ class Gain(TODStep):
         # are present. Default to None in case there are no scans.
         rep_det = next((det for _, det in experiment_data.iter_detector_scans()), None)
 
+        # NaN so detector-scans with no data are excluded from the gain means below.
+        all_det_gains = np.full((nscans, ndet), np.nan)
         if rep_det is not None:
-            # NaN so detector-scans with no data are excluded from the gain means below.
-            all_det_gains = np.full((nscans, ndet), np.nan)
             if "gain" in my_band.detectors[rep_det.name]:
                 for iscan, det in experiment_data.iter_detector_scans():
                     all_det_gains[iscan, det.det_idx_fullband] = my_band.detectors[det.name].gain
@@ -173,13 +173,17 @@ class Gain(TODStep):
             # (gain multiplies by D on read) before decomposing into abs/rel/temporal.
             all_det_gains *= self.band_unit_factor
 
-            self.abs_gain = float(np.nanmean(all_det_gains))
-            # Relative gain only for detectors with data in >=1 local scan; detectors absent
-            # from every local scan get 0 (never used downstream) and are kept out of the
-            # empty-slice mean. temporal_gain holes (absent detector-scans) collapse to 0.
-            present_any = np.isfinite(all_det_gains).any(axis=0)
-            self.rel_gain[present_any] = (np.nanmean(all_det_gains[:, present_any], axis=0)
-                                          - self.abs_gain)
+        # The absolute gain is the mean over all detector-scans of the band, and a relative gain
+        # the mean of one detector minus that. Both are summed over all ranks, so every rank gets
+        # the same values. The temporal gain is what is left of each detector-scan's gain (0 where
+        # a detector has no data).
+        observed = np.isfinite(all_det_gains)
+        det_sums = band_comm.allreduce(np.where(observed, all_det_gains, 0.0).sum(axis=0))
+        det_counts = band_comm.allreduce(observed.sum(axis=0))
+        if det_counts.sum() > 0:
+            self.abs_gain = float(det_sums.sum()/det_counts.sum())
+            present = det_counts > 0
+            self.rel_gain[present] = det_sums[present]/det_counts[present] - self.abs_gain
             self.temporal_gain = np.nan_to_num(all_det_gains - self.rel_gain - self.abs_gain,
                                                nan=0.0)
 
@@ -257,7 +261,7 @@ class Gain(TODStep):
                 sum_s_T_N_inv_d += np.dot(N_inv_s, residual_tod)
                 sum_s_T_N_inv_s += np.dot(s_cal, N_inv_s)
 
-        # The g0 term is fully global, so we reduce across both all scans and all bands:
+        # g0 is common to all detector-scans of the band, so the sums run over all its ranks.
         with benchmark("MPI-comm"):
             sum_s_T_N_inv_d = band_comm.reduce(sum_s_T_N_inv_d, op=MPI.SUM, root=0)
             sum_s_T_N_inv_s = band_comm.reduce(sum_s_T_N_inv_s, op=MPI.SUM, root=0)
@@ -308,11 +312,8 @@ class Gain(TODStep):
 
         #### 1. Local Calculation (on each rank) ###
         # Each rank calculates the sum of terms for its local subset of scans.
-        # local_s_T_N_inv_s = 0.0
-        local_s_T_N_inv_s = np.zeros(ndet, dtype=np.float32)
-
-        # local_r_T_N_inv_s = 0.0
-        local_r_T_N_inv_s = np.zeros(ndet, dtype=np.float32)
+        local_s_T_N_inv_s = np.zeros(ndet, dtype=np.float64)
+        local_r_T_N_inv_s = np.zeros(ndet, dtype=np.float64)
         # Convert the requested averaging time [s] to a number of native samples.
         downsample_factor = max(1, round(gain_cfg.downsample_time * experiment_data.fsamp))
         scan_view = TODView(experiment_data, tod_samples, compsep_output=det_compsep_map,
@@ -520,16 +521,17 @@ class Gain(TODStep):
 
                     RHS = b + fluctuation1 + fluctuation2
 
-                    ### Simpler sanity check solution  ##
-                    epsilon = 1e-12
-                    g_mean = b / (A_diag + epsilon)
-                    g_std = 1.0 / np.sqrt(np.maximum(A_diag, 0) + epsilon)
-
+                    # The CG starts from the solution without the prior.
+                    g_mean = b / (A_diag + 1e-12)
                     CG_solver = pixell.utils.CG(matvec, RHS, x0=g_mean)
                     for i in range(200):
                         CG_solver.step()
                         if CG_solver.err < 1e-10:
                             break
+                    if CG_solver.err >= 1e-10:
+                        logger.warning(f"Band {experiment_data.band_name} detector {idet}: the "
+                                       f"temporal-gain CG stopped after 200 steps with error "
+                                       f"{CG_solver.err:.1e}, above its target of 1e-10.")
 
                     delta_g_sample = CG_solver.x
                     delta_g_sample -= np.mean(delta_g_sample)

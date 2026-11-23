@@ -192,7 +192,7 @@ src/commander4/
     component.py       #   Component base class; diffuse_components.py and point_sources.py are the families.
     comp_list.py       #   CompList: a list of components usable as a single vector by the CG driver.
 
-  data_models/         # The containers the two sides pass around (band TOD, band maps, pointing, samples).
+  data_models/         # The containers the two sides pass around (band TOD, band maps, pointing).
   file_io/             # Everything that touches disk: chain writing, map reading, and:
     experiments/       #   TOD readers: base_reader.py reads the standard scan files. Each other
                        #   module is named after an `experiment_id` and subclasses it.
@@ -215,9 +215,9 @@ and stored in `TODSamples`.
 
 ### 3.2 Output, logs and error handling
 
-Commander4 uses Python's logging system instead of `print`. A record has the form `time - rank - module - level - message`. Note that the `module` tells you what file the message came from. For example, the following message comes from `src/commander4/data_models/tod_samples.py` (the `src/commander4/` is implicit):
+Commander4 uses Python's logging system instead of `print`. A record has the form `time - rank - module - level - message`. Note that the `module` tells you what file the message came from. For example, the following message comes from `src/commander4/tod/samples.py` (the `src/commander4/` is implicit):
 ```bash
-16:32:06 - rank   1 - data_models.tod_samples - INFO - Band Band44GHz, chain 2: starting fresh Gibbs chain.
+16:32:06 - rank   1 - tod.samples - INFO - Band Band44GHz, chain 2: continuing from run/chains_bands/LFI_Band44GHz_chain02_iter0010.h5.
 ```
 
 The console handler writes to `stderr`, while the file handler writes to `<output_dir>/logs/run-<run-id>.log`. Console and file levels are configured independently under `output.logging`. Each level also includes every level below it in this table:

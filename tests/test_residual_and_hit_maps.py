@@ -21,7 +21,7 @@ from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pixel_domain import PixelDomain
 from commander4.data_models.pointing import PixelPointing
-from commander4.data_models.tod_samples import TODSamples
+from commander4.tod.samples import TODSamples
 import commander4.tod.processing as tod_processing
 import commander4.tod.mapmaking.tod2map as tod2map_module
 from commander4.tod.sky_projection import get_s_orb_tod
@@ -168,6 +168,29 @@ def test_response_split_detectors_recover_sky_and_zero_residual(monkeypatch):
     expected_hits = np.zeros(_NPIX, dtype=np.int64)
     np.add.at(expected_hits, pix, 2)
     np.testing.assert_array_equal(maps["nhit"], expected_hits)
+
+
+def test_a_detector_scan_with_infinite_sigma0_is_rejected(monkeypatch):
+    """sigma0 = inf rejects the detector-scan, and the other detector alone makes the map."""
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    rng = np.random.default_rng(18)
+    n = 256
+    pix = rng.integers(0, _NPIX, n).astype(np.int64)
+    psi = rng.uniform(0.0, np.pi, n)
+    sky = rng.normal(scale=50.0, size=(3, _NPIX))
+    good = _build_band(pix, psi, _GAIN*_project(sky, pix, psi)).scans[0].detectors[0]
+    bad = _build_band(pix, psi, np.full(n, 1e3)).scans[0].detectors[0]
+    bad.name, bad.det_idx_fullband = "bad", 1
+    band = DetectorGroupTOD([ScanTOD([good, bad], 0.0, 0)], "EXP", "B", nside=_NSIDE, nu=30.0,
+                            fwhm=0.0, fsamp=1.0, ndet=2, pols="IQU",
+                            noise_model=SimpleNamespace(npar=1, params=np.array([np.nan])))
+    tod_samples = fake_tod_samples(band, sigma0=2.0, abs_gain=_GAIN)
+    tod_samples.noise.noise_params[0, 1, 0] = np.inf
+
+    maps = _run(band, sky, tod_samples=tod_samples)
+
+    np.testing.assert_array_equal(tod_samples.selection.accept, [[True, False]])
+    np.testing.assert_allclose(maps["observed_sky"], sky, rtol=0, atol=1e-3)
 
 
 def test_residual_map_recovers_an_injected_offset(monkeypatch):

@@ -185,10 +185,9 @@ def calc_sigma0_binned_psd(tod: NDArray, mask: NDArray[np.bool_], fsamp: float,
     mirrored-FFT periodogram of the (signal-subtracted) TOD is averaged into ``dnu``-Hz bins, and
     the bottom of that spectrum defines sigma0.
 
-    Reading off the *bottom* of the spectrum is intrinsically robust to glitch/spike power (spikes
-    only raise bins), so ``mask`` is accepted for signature parity with the other estimators but is
-    not applied. Selecting the lowest bins biases the estimate low; ``_lowest_bins_bias`` corrects
-    for this.
+    ``mask`` is not applied, so glitches bias the estimate high: a glitch is short in time, and
+    raises every bin of the spectrum by the same amount. Selecting the lowest bins biases the
+    estimate low; ``_lowest_bins_bias`` corrects for this.
 
     Args:
         tod: Signal-subtracted residual TOD (1D); masked samples may still carry data.
@@ -231,22 +230,17 @@ def _estimate_standalone_sigma0(view: TODView, sigma0_method: str) -> float:
     """ White-noise sigma0 for one detector-scan when correlated noise is *not* being sampled.
 
     Estimated from the sky- and orbital-dipole-subtracted residual (which still contains the 1/f
-    component; both estimators target the white floor). This mirrors the sigma0 estimate that
-    ``sample_correlated_noise`` performs when n_corr is sampled, so sigma0 is always (re)estimated at
-    the same point in the chain (inside the mapmaker scan loop, after gain), matching Commander3.
+    component; both estimators target the white floor). It runs at the same point in the chain as
+    the estimate in ``sample_correlated_noise`` (in the mapmaking scan loop, after gain), as in C3.
 
     Args:
         view: The focused TODView for one detector-scan.
         sigma0_method: ``'pairwise'`` (first-difference) or ``'binned_psd'`` (bottom of binned PSD).
     Returns:
-        The estimated white-noise level (float).
+        The estimated white-noise level (float), or ``np.inf`` if too few samples are valid.
     """
     residual = view.get_tod()
     mask = view.get_mask(proc_mask_type="ncorr")
     if sigma0_method == "binned_psd":
-        sigma0 = calc_sigma0_binned_psd(residual, mask, view.fsamp)
-    else:
-        sigma0 = calc_sigma0_robust(residual, mask)
-    if not np.isfinite(sigma0) or sigma0 <= 0:
-        raise RuntimeError(f"sigma0 must be positive and finite, got {sigma0}.")
-    return sigma0
+        return calc_sigma0_binned_psd(residual, mask, view.fsamp)
+    return calc_sigma0_robust(residual, mask)

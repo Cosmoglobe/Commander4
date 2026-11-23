@@ -18,7 +18,7 @@ from commander4.parameters.schema import resolve_param
 from commander4.data_models.detector_map import DetectorMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pixel_domain import DistributedMap, PixelDomain
-from commander4.data_models.tod_samples import TODSamples
+from commander4.tod.samples import TODSamples
 from commander4.tod.view import TODView
 from commander4.tod.mapmaking.tod2map import tod2map
 from commander4.file_io.tod_reader import read_tods_from_file

@@ -25,7 +25,7 @@ from commander4.parameters.schema import read_settings
 from commander4.tod.step import ChainArrays, SavedBandSample, TODStep
 
 if TYPE_CHECKING:
-    from commander4.data_models.tod_samples import TODSamples
+    from commander4.tod.samples import TODSamples
     from commander4.tod.view import TODView
 
 logger = logging.getLogger(__name__)
