@@ -9,8 +9,8 @@ Unobserved pixels have to stay unobserved: zero signal, zero weight.
 import healpy as hp
 import numpy as np
 
-from commander4.data_models.detector_map import (DetectorMap, smooth_inv_var_map_noiseweighted,
-                                                 smooth_signal_map_noiseweighted)
+from commander4.data_models.band_map import (BandMap, smooth_inv_var_map_noiseweighted,
+                                             smooth_signal_map_noiseweighted)
 
 NSIDE = 32
 NPIX = hp.nside2npix(NSIDE)
@@ -90,19 +90,20 @@ def test_smoothing_a_full_sky_band_is_unchanged():
     assert (smooth_inv_var_map_noiseweighted(inv_var, fwhm) > 0).all()
 
 
-def test_detector_map_smooth_to_resolution_on_a_patch():
+def test_band_map_smooth_to_resolution_on_a_patch():
     """The end-to-end path the parameter `general.common_res_fwhm` drives."""
     signal, inv_var, observed = _partial_sky_maps()
-    detmap = DetectorMap(map_sky=signal[None, :], map_inv_var=inv_var[None, :], nu=90.0, fwhm=30.0,
-                         nside=NSIDE)
+    band_map = BandMap(map_sky=signal[None, :], map_inv_var=inv_var[None, :], nu=90.0,
+                       fwhm_arcmin=30.0, nside=NSIDE)
 
-    detmap.smooth_to_resolution(60.0)
+    band_map.smooth_to_resolution(60.0)
 
-    assert detmap.fwhm == 60.0
-    assert np.isfinite(detmap.map_sky).all(), "signal map must not go NaN outside the footprint"
-    assert np.isfinite(detmap.map_inv_var).all(), "unobserved pixels must have zero weight, not NaN"
-    assert (detmap.map_inv_var >= 0).all()
-    assert detmap.map_inv_var[0][observed].max() > 0.0
+    assert band_map.fwhm_arcmin == 60.0
+    assert np.isfinite(band_map.map_sky).all(), "signal map must not go NaN outside the footprint"
+    assert np.isfinite(band_map.map_inv_var).all(), \
+        "unobserved pixels must have zero weight, not NaN"
+    assert (band_map.map_inv_var >= 0).all()
+    assert band_map.map_inv_var[0][observed].max() > 0.0
 
 
 def test_q_and_u_are_smoothed_as_one_spin2_field():
@@ -116,26 +117,26 @@ def test_q_and_u_are_smoothed_as_one_spin2_field():
     alms = [np.zeros(hp.Alm.getsize(lmax), dtype=complex), hp.synalm(cl, lmax=lmax),
             hp.synalm(cl, lmax=lmax)]
     qu = hp.alm2map(alms, NSIDE, lmax=lmax)[1:]
-    detmap = DetectorMap(map_sky=qu.copy(), map_inv_var=np.ones_like(qu), nu=90.0, fwhm=60.0,
-                         nside=NSIDE)
+    band_map = BandMap(map_sky=qu.copy(), map_inv_var=np.ones_like(qu), nu=90.0, fwhm_arcmin=60.0,
+                       nside=NSIDE)
 
-    detmap.smooth_to_resolution(300.0)
+    band_map.smooth_to_resolution(300.0)
 
     window = hp.gauss_beam(np.deg2rad(np.sqrt(300.0**2 - 60.0**2)/60.0), lmax=lmax)
     expected = hp.alm2map([alms[0]] + [hp.almxfl(alm, window) for alm in alms[1:]], NSIDE,
                           lmax=lmax)[1:]
-    assert np.abs(detmap.map_sky - expected).max() < 0.03*expected.std()
+    assert np.abs(band_map.map_sky - expected).max() < 0.03*expected.std()
 
 
 def test_smoothing_to_a_finer_beam_is_refused(caplog):
     """Smoothing only coarsens; a finer target leaves the band alone rather than sharpening it."""
     signal, inv_var, _ = _partial_sky_maps()
-    detmap = DetectorMap(map_sky=signal[None, :], map_inv_var=inv_var[None, :], nu=90.0, fwhm=30.0,
-                         nside=NSIDE)
-    before = detmap.map_sky.copy()
+    band_map = BandMap(map_sky=signal[None, :], map_inv_var=inv_var[None, :], nu=90.0,
+                       fwhm_arcmin=30.0, nside=NSIDE)
+    before = band_map.map_sky.copy()
 
-    detmap.smooth_to_resolution(10.0)
+    band_map.smooth_to_resolution(10.0)
 
-    assert detmap.fwhm == 30.0
-    np.testing.assert_array_equal(detmap.map_sky, before)
+    assert band_map.fwhm_arcmin == 30.0
+    np.testing.assert_array_equal(band_map.map_sky, before)
     assert "finer" in caplog.text

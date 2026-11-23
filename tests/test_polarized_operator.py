@@ -4,19 +4,19 @@ import pytest
 from mpi4py import MPI
 from numpy.testing import assert_allclose
 
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.compsep import preconditioners
 from commander4.compsep.preconditioners import JointPreconditioner
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
 
 
-def _band_map(map_inv_var: np.ndarray, lmax: int, fwhm_arcmin: float = 0.0) -> DetectorMap:
+def _band_map(map_inv_var: np.ndarray, lmax: int, fwhm_arcmin: float = 0.0) -> BandMap:
     """A 100 GHz band with the given inverse-noise map; its sky map, which the preconditioners do
     not read, is zero."""
     nside = hp.npix2nside(map_inv_var.shape[-1])
-    return DetectorMap(np.zeros_like(map_inv_var), map_inv_var, nu=100.0, fwhm=fwhm_arcmin,
-                       nside=nside, lmax=lmax)
+    return BandMap(np.zeros_like(map_inv_var), map_inv_var, nu=100.0, fwhm_arcmin=fwhm_arcmin,
+                   nside=nside, lmax=lmax)
 
 
 class _DummyDiffuseComp(DiffuseComponent):

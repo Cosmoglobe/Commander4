@@ -15,13 +15,13 @@ def identity_preconditioner(x):     return x.copy()
 class DistributedCG:
     """Preconditioned CG iteration for A x = b, on `CompList` vectors or NumPy arrays.
 
-    Every rank calls `A`, which does the MPI communication, but only the master gets its result
-    and does the rest of the iteration. Call `step()` until ``err`` is small enough, and read the
-    solution from ``x``. ``err`` is ``(r^T M r) / (b^T M b)``, the squared preconditioned residual
-    relative to that of the right-hand side, as in C3. It means the same with and without a
-    starting guess.
+    `lhs` applies A, and `precond` the preconditioner. Every rank calls `lhs`, which does the MPI
+    communication, but only the master gets its result and does the rest of the iteration. Call
+    `step()` until ``err`` is small enough, and read the solution from ``x``. ``err`` is
+    ``(r . precond(r)) / (b . precond(b))``, the squared preconditioned residual relative to that
+    of the right-hand side, as in C3. It means the same with and without a starting guess.
     """
-    def __init__(self, A, b, is_master: bool, x0=None, M=identity_preconditioner,
+    def __init__(self, lhs, b, is_master: bool, x0=None, precond=identity_preconditioner,
                  destroy_b: bool = False):
         """Set up the iteration from the starting guess `x0` (zero if None).
 
@@ -29,8 +29,8 @@ class DistributedCG:
         `destroy_b`, `b` becomes the residual vector and is changed in place too.
         """
         self.is_master = is_master
-        self.A   = A
-        self.M   = M
+        self.lhs     = lhs
+        self.precond = precond
         # The vector arithmetic. Both kinds run the same numba kernels (a CompList applies them
         # component by component), with the number of threads set per rank in `mpi/setup.py`.
         # Both kinds also have a `copy()` method.
@@ -55,20 +55,20 @@ class DistributedCG:
             self.r = b.copy() if not destroy_b else b
         else:
             if is_master:  # Before `b` is changed in place below.
-                self.rz0 = float(self.dot(b, self.M(b)))
+                self.rz0 = float(self.dot(b, self.precond(b)))
             self.x = x0
-            Ax = self.A(self.x)  # Collective: every rank calls A, only the master gets the result.
+            Ax = self.lhs(self.x)  # Collective: every rank calls it, only the master gets Ax.
             self.r = b.copy() if not destroy_b else b
             if is_master:
                 self.add_scaled(self.r, Ax, -1.0)  # r = b - A x0
         if is_master:  # Only the master needs these.
-            z = self.M(self.r)
+            z = self.precond(self.r)
             self.rz  = self.dot(self.r, z)
             if x0 is None:
                 self.rz0 = float(self.rz)  # Here r = b.
             self.p   = z
         else:
-            # The other ranks pass `p` to A only as a work buffer, and never use `r`. So the two
+            # The other ranks pass `p` to `lhs` only as a work buffer, and never use `r`. So the two
             # share one vector.
             self.p = self.r
 
@@ -81,7 +81,7 @@ class DistributedCG:
         # Full vectors: p, Ap, x, r, z. Ap and z not in memory at the
         # same time. Total memory cost: 4 vectors + 1 temporary = 5 vectors
         self.i += 1
-        Ap = self.A(self.p)
+        Ap = self.lhs(self.p)
         if not self.is_master:  # The rest of the CG iteration is done by the master alone.
             return
         pAp = self.dot(self.p, Ap)
@@ -94,7 +94,7 @@ class DistributedCG:
         self.add_scaled(self.x, self.p, alpha)  # x += alpha*p
         self.add_scaled(self.r, Ap, -alpha)     # r -= alpha*Ap
         del Ap
-        z       = self.M(self.r)
+        z       = self.precond(self.r)
         next_rz = self.dot(self.r, z)
         self.err = next_rz/self.rz0
         beta = next_rz/self.rz

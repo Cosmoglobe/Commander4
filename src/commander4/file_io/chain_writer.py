@@ -64,7 +64,7 @@ def _degrade_map(value: NDArray, kind: str, nside_out: int) -> NDArray:
 
 def _to_band_unit(value: NDArray, kind: str, band_unit_factor: float) -> NDArray:
     """Return one `maps/` dataset converted from uK_RJ to the band's own unit."""
-    # Out of place: the caller's arrays are shared with the uK_RJ `DetectorMap` sent to CompSep.
+    # Out of place: the caller's arrays are shared with the uK_RJ `BandMap` sent to CompSep.
     if kind == "count":  # A sample count carries no thermodynamic unit.
         return value
     if kind == "weight":  # An inverse variance, i.e. uK_RJ^-2.

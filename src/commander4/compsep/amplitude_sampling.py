@@ -13,9 +13,9 @@ from mpi4py import MPI
 from pixell.bunch import Bunch
 
 from commander4 import sky
-from commander4.compsep.cg_solver import CompSepSolver
+from commander4.compsep.cg_solver import CGAmplitudeSolver
 from commander4.compsep.perpix_solver import solve_compsep_perpix
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.parameters.schema import (SPLIT_POLS, enabled_compsep_polbands, names_or_all,
                                           read_settings)
 from commander4.mpi.setup import MPIInfo
@@ -94,7 +94,7 @@ class AmplitudeGroup:
                    solver_comm=solver_comm)
 
 
-def sample_amplitudes(mpi_info: MPIInfo, group: AmplitudeGroup, band_map: DetectorMap,
+def sample_amplitudes(mpi_info: MPIInfo, group: AmplitudeGroup, band_map: BandMap,
                       comp_list: CompList, rng: np.random.Generator) -> dict:
     """Sample the amplitudes of one amplitude group, updating `comp_list` in place.
 
@@ -126,12 +126,13 @@ def sample_amplitudes(mpi_info: MPIInfo, group: AmplitudeGroup, band_map: Detect
         # Both solvers leave their solution in the components of `active_sublist`, which are the
         # chain's own components.
         if group.solver == "CG":
-            solver = CompSepSolver(residual_map, group, nthreads=compsep.num_threads)
-            residuals = solver.solve(active_sublist, rng)
+            cg_solver = CGAmplitudeSolver(residual_map, group, nthreads=compsep.num_threads)
+            cg_residual_history = cg_solver.solve(active_sublist, rng)
             # The CG runs its scalar recurrence on rank 0 of `solver_comm` and only broadcasts the
-            # stopping decision, so that rank alone holds meaningful residuals.
-            if solver.is_master:
-                cg_stats = {"cg_residuals": np.asarray(residuals), "n_iter": len(residuals)}
+            # stopping decision, so that rank alone holds a meaningful history.
+            if cg_solver.is_master:
+                cg_stats = {"cg_residuals": np.asarray(cg_residual_history),
+                            "n_iter": len(cg_residual_history)}
         else:
             solve_compsep_perpix(group.solver_comm, residual_map, active_sublist,
                                  nthreads=compsep.num_threads, rng=rng)

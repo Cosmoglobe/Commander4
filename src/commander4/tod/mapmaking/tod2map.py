@@ -16,7 +16,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.tod.samples import TODSamples
 from commander4.diagnostics.performance import benchmark, log_memory
 from commander4.parameters.schema import resolve_param
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 @benchmark("mapmaker")
 def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_output: NDArray,
             iteration: int, params: Bunch,
-            rng: np.random.Generator) -> tuple[dict[str, DetectorMap], dict[str, NDArray]]:
+            rng: np.random.Generator) -> tuple[dict[str, BandMap], dict[str, NDArray]]:
     """Make the band maps from the TOD with the binned or the CG mapmaker (collective).
 
     All ranks of the band's communicator hold TOD of the same band and build its maps together.
@@ -179,14 +179,14 @@ def tod2map(experiment_data: DetectorGroupTOD, tod_samples: TODSamples, compsep_
     log_memory("mapmaker")
 
     ### FINAL CLEANUP ON MASTER RANK ###
-    detmap_dict_out = {}
+    band_maps = {}
     maps_to_file = {}
     with benchmark("finalize"):
         if band_comm.Get_rank() == 0:
             # After this, binned.maps holds only the aux maps.
             map_signal = cg.solved_map if use_cg else binned.maps.pop("signal")
-            detmap_dict_out, maps_to_file = finalize_band_maps(
+            band_maps, maps_to_file = finalize_band_maps(
                 map_signal, binned.map_inv_var, experiment_data, params, binned.maps,
                 binned.map_nhit, binned.map_cov)
 
-    return detmap_dict_out, maps_to_file
+    return band_maps, maps_to_file

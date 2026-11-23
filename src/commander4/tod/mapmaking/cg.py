@@ -322,12 +322,13 @@ class CGMapmaker:
         ismaster = self.map_comm.Get_rank() == 0
         # Only the master runs the CG arithmetic, so only it needs the preconditioner.
         if ismaster:
-            M = (BlockInvNPreconditionerIQU(map_cov) if self._ncomp == 3
-                 else InvNPreconditionerI(map_cov))
+            precond = (BlockInvNPreconditionerIQU(map_cov) if self._ncomp == 3
+                       else InvNPreconditionerI(map_cov))
         else:
-            M = None
+            precond = None
 
-        CG_solver = DistributedCG(self.apply_LHS, RHS_map, ismaster, M=M, destroy_b=True)
+        CG_solver = DistributedCG(self.apply_LHS, RHS_map, ismaster, precond=precond,
+                                  destroy_b=True)
 
         # Every collective below has to be entered by all ranks, so the two conditions guarding one
         # are made rank-independent up front: the iteration index already is, and whether a true

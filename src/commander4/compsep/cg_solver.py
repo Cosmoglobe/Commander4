@@ -1,4 +1,4 @@
-"""The CG amplitude solver: `CompSepSolver` builds and solves the component-amplitude system.
+"""The CG amplitude solver: `CGAmplitudeSolver` builds and solves the component-amplitude system.
 """
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import logging
 from typing import TYPE_CHECKING
 from mpi4py import MPI
 
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.sky.comp_list import CompList
 from commander4.math_utils.alm import gaussian_random_alm
 from commander4.math_utils.sht import alm_to_map, alm_to_map_adjoint
@@ -23,12 +23,12 @@ if TYPE_CHECKING:  # For the type hint only; a real import would be circular.
 logger = logging.getLogger(__name__)
 
 
-class CompSepSolver:
+class CGAmplitudeSolver:
     """ Class for performing global component separation using the preconditioned CG method.
     
     After initializing the class, the solve() method should be called to perform the component
     separation. solve() leaves the solution in the 'comp_list' argument passed to it, and returns
-    the CG residuals.
+    the CG residual history.
 
     The component separation problem is an Hx = b equation on the form
         (S^-1 + A^T N^-1 A) a = A^T N^-1 d + A^T N^{-1/2} eta_1 + S^-1 mu + S^{-1/2} eta_2,
@@ -56,7 +56,7 @@ class CompSepSolver:
     the matrices (N^-1 and sometimes M) have to be applied in real-space. There are therefore
     several implicit spherical harmonic transformations in this equation, around these matrices.
     """
-    def __init__(self, band_map: DetectorMap, group: AmplitudeGroup, nthreads: int):
+    def __init__(self, band_map: BandMap, group: AmplitudeGroup, nthreads: int):
         """Set up the CG solve of one amplitude group on this rank.
 
         Args:
@@ -106,7 +106,7 @@ class CompSepSolver:
         # Each component adds itself to an empty band, in the components' precision: a diffuse
         # component to its alms, point sources to its pixel map.
         with benchmark("lhs-project"):
-            band_alms = BandAlms.init_from_detector(self.band_map,
+            band_alms = BandAlms.init_from_band_map(self.band_map,
                                                 double_precision=comp_list[0].double_precision)
             for comp in comp_list:
                 comp.comp2band(band_alms, nthreads=self.nthreads)
@@ -176,7 +176,7 @@ class CompSepSolver:
         # Y^T [N^-1 d + N^{-1/2} eta_1]
         b_alm = alm_to_map_adjoint(b_map, self.band_map.nside, self.band_map.lmax,
                                    spin=self.band_map.spin, nthreads=self.nthreads)
-        b_band = BandAlms.init_from_detector(self.band_map,
+        b_band = BandAlms.init_from_band_map(self.band_map,
                                          double_precision=comp_list[0].double_precision)
         b_band.alms[:] = b_alm
         # Point sources read the pixel map itself, as in the LHS.
@@ -248,37 +248,38 @@ class CompSepSolver:
                 self.solver_comm, self.band_map, comp_list)
 
         # The CG changes `comp_list` (its x) and `RHS` (its residual) in place.
-        CG_solver = DistributedCG(self.apply_LHS_matrix, RHS, self.is_master, x0=comp_list,
-                                  M=precond, destroy_b=True)
+        cg = DistributedCG(self.apply_LHS_matrix, RHS, self.is_master, x0=comp_list,
+                           precond=precond, destroy_b=True)
         if self.is_master:
             logger.verbose(f"{pol_name} CG starting up.")
         checkpt_int = 30
-        residuals = []
+        cg_residual_history = []
         t0 = time.time()
         for iteration in range(1, max_iter + 1):
             # Counted per step, so the report's N column is the number of CG iterations taken.
             with benchmark("cg-iter"):
-                CG_solver.step()
+                cg.step()
             log_memory("cg-iter")
-            residuals.append(CG_solver.err)
+            cg_residual_history.append(cg.err)
             if iteration%checkpt_int == 0 and self.is_master:
                 logger.verbose(f"{pol_name} CG iter {iteration:3d} - Squared residual "
-                               f"{np.mean(residuals[-checkpt_int:]):.6e} "
+                               f"{np.mean(cg_residual_history[-checkpt_int:]):.6e} "
                                f"({(time.time() - t0)/checkpt_int:.2f}s/iter)")
                 t0 = time.time()
             # Only the master holds the error, so it decides for all ranks.
-            if self.solver_comm.bcast(CG_solver.err <= self.group.cfg.err_tol, root=0):
+            if self.solver_comm.bcast(cg.err <= self.group.cfg.err_tol, root=0):
                 break
         if self.is_master:
             # With err_tol 0 the user asks for exactly max_iter iterations, so that is no warning.
-            if self.group.cfg.err_tol > 0.0 and CG_solver.err > self.group.cfg.err_tol:
+            if self.group.cfg.err_tol > 0.0 and cg.err > self.group.cfg.err_tol:
                 logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
-            logger.info(f"{pol_name} CG finished after {len(residuals)} iterations with a squared "
-                        f"residual of {CG_solver.err:.3e} (err tol = {self.group.cfg.err_tol})")
+            logger.info(f"{pol_name} CG finished after {len(cg_residual_history)} iterations with "
+                        f"a squared residual of {cg.err:.3e} "
+                        f"(err tol = {self.group.cfg.err_tol})")
 
         # a = S^{1/2} x on the master, which then sends the solution to the other ranks.
         for comp in comp_list:
             if self.is_master:
                 comp.apply_Cl_prior_sqrt(comp.amps)
             comp.bcast_amps(self.solver_comm)
-        return residuals
+        return cg_residual_history

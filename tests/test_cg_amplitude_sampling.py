@@ -31,9 +31,9 @@ from mpi4py import MPI
 from pixell.bunch import Bunch
 
 from commander4.compsep.amplitude_sampling import AmplitudeGroup
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.sky.comp_list import CompList
-from commander4.compsep.cg_solver import CompSepSolver
+from commander4.compsep.cg_solver import CGAmplitudeSolver
 from commander4.math_utils.alm import gaussian_random_alm, _dot_complex_alm_1D_arrays
 from commander4.math_utils.sht import alm_to_map
 
@@ -55,13 +55,13 @@ def _make_cfg(optimize: bool = False) -> Bunch:
                  preconditioner="NoPreconditioner")
 
 
-def _make_solver(band_map: DetectorMap, cfg: Bunch,
-                 comm: MPI.Comm = MPI.COMM_SELF) -> CompSepSolver:
+def _make_solver(band_map: BandMap, cfg: Bunch,
+                 comm: MPI.Comm = MPI.COMM_SELF) -> CGAmplitudeSolver:
     """A solver for a CG group with settings `cfg`, solved by the ranks of `comm`."""
     group = AmplitudeGroup(name="test", solver="CG", cfg=cfg,
                            solver_ranks={"I": list(range(comm.Get_size())), "QU": []},
                            solver_comm=comm)
-    return CompSepSolver(band_map, group, nthreads=1)
+    return CGAmplitudeSolver(band_map, group, nthreads=1)
 
 
 def _make_comp_list(params: Bunch, Cl_prior_amplitude: float | None = None) -> CompList:
@@ -76,11 +76,11 @@ def _make_comp_list(params: Bunch, Cl_prior_amplitude: float | None = None) -> C
     return comp_list
 
 
-def _make_band_map(seed: int = 0) -> DetectorMap:
+def _make_band_map(seed: int = 0) -> BandMap:
     npix = 12*NSIDE**2
     rng = np.random.default_rng(seed)
-    return DetectorMap(rng.normal(0.0, 1.0, (1, npix)), np.full((1, npix), 1.0/3.0**2),
-                       nu=100.0, fwhm=0.0, nside=NSIDE, lmax=LMAX)
+    return BandMap(rng.normal(0.0, 1.0, (1, npix)), np.full((1, npix), 1.0/3.0**2),
+                   nu=100.0, fwhm_arcmin=0.0, nside=NSIDE, lmax=LMAX)
 
 
 # A prior amplitude of 1 gives a prior weight per alm that is comparable to the data weight of
@@ -91,7 +91,7 @@ def realizations(request):
     band_map = _make_band_map()
     comm = MPI.COMM_SELF
 
-    def solve_for_x(solver: CompSepSolver, seed: int) -> CompList:
+    def solve_for_x(solver: CGAmplitudeSolver, seed: int) -> CompList:
         """One solve, scaled back from the amplitudes a = S^{1/2}x to the variable x."""
         solution = _make_comp_list(_make_params(), request.param)
         solver.solve(solution, np.random.default_rng(seed))
@@ -114,7 +114,7 @@ def test_gaussian_random_alm_is_white_under_the_alm_inner_product():
     """E[<eta,eta>] must equal the number of real degrees of freedom, not twice it."""
     rng = np.random.default_rng(20260811)
     for lmax, spin in ((6, 0), (10, 0), (6, 2)):
-        # The ncomp axis doubles as the sample axis, so this is one vectorized draw.
+        # The npol axis doubles as the sample axis, so this is one vectorized draw.
         draws = gaussian_random_alm(lmax, lmax, spin, 4000, rng)
         nm0 = lmax + 1
         # <a,a> for the convention of `_dot_complex_alm_1D_arrays`; m=0 entries are real.
@@ -189,8 +189,8 @@ def test_without_a_prior_the_solution_is_the_data_alone():
     rng = np.random.default_rng(4)
     input_alms = gaussian_random_alm(LMAX, LMAX, 0, 1, rng)
     sky = alm_to_map(input_alms, NSIDE, LMAX, spin=0, nthreads=1)
-    band_map = DetectorMap(sky, np.full(sky.shape, 1.0e-6), nu=100.0, fwhm=0.0, nside=NSIDE,
-                           lmax=LMAX)
+    band_map = BandMap(sky, np.full(sky.shape, 1.0e-6), nu=100.0, fwhm_arcmin=0.0, nside=NSIDE,
+                       lmax=LMAX)
     solver = _make_solver(band_map, _make_cfg(optimize=True))
 
     no_prior = _make_comp_list(_make_params())[0]
@@ -244,9 +244,9 @@ def test_the_cg_applies_the_full_band_beam_to_amplitudes_from_a_per_pixel_chain(
     """Amplitudes from a per-pixel chain carry a beam (`amp_fwhm_rad`). The CG must still fit the
     unsmoothed sky through the full band beam, so the solution does not depend on that beam."""
     npix = 12*NSIDE**2
-    band_map = DetectorMap(np.random.default_rng(0).normal(0.0, 1.0, (1, npix)),
-                           np.full((1, npix), 1.0/3.0**2), nu=100.0, fwhm=600.0, nside=NSIDE,
-                           lmax=LMAX)
+    band_map = BandMap(np.random.default_rng(0).normal(0.0, 1.0, (1, npix)),
+                       np.full((1, npix), 1.0/3.0**2), nu=100.0, fwhm_arcmin=600.0, nside=NSIDE,
+                       lmax=LMAX)
     solver = _make_solver(band_map, _make_cfg(optimize=True))
     sharp, from_per_pixel = _make_comp_list(_make_params()), _make_comp_list(_make_params())
     solver.solve(sharp, np.random.default_rng(0))
@@ -294,8 +294,8 @@ def test_a_fixed_number_of_iterations_stops_when_the_residual_vanishes():
     next step would otherwise divide by zero."""
     npix = 12*NSIDE**2
     rng = np.random.default_rng(0)
-    band_map = DetectorMap(rng.normal(0.0, 1.0, (1, npix)), np.full((1, npix), 1.0/3.0**2),
-                           nu=100.0, fwhm=0.0, nside=NSIDE, lmax=LMAX)
+    band_map = BandMap(rng.normal(0.0, 1.0, (1, npix)), np.full((1, npix), 1.0/3.0**2),
+                       nu=100.0, fwhm_arcmin=0.0, nside=NSIDE, lmax=LMAX)
     params = Bunch(resources=Bunch(compsep=Bunch(num_threads=1)),
                    compsep=Bunch(double_precision=False))
     cfg = Bunch(optimize=True, max_iter=300, max_iter_pol=300, err_tol=0.0,
@@ -386,8 +386,8 @@ class TestPriorMean:
 
         # Enormous noise: A^T N^-1 A is negligible against S^-1, so only the prior informs the fit.
         npix = 12*NSIDE**2
-        band_map = DetectorMap(np.full((1, npix), 5.0), np.full((1, npix), 1e-16),
-                               nu=100.0, fwhm=0.0, nside=NSIDE, lmax=LMAX)
+        band_map = BandMap(np.full((1, npix), 5.0), np.full((1, npix), 1e-16),
+                           nu=100.0, fwhm_arcmin=0.0, nside=NSIDE, lmax=LMAX)
         _make_solver(band_map, _make_cfg(optimize=True)).solve(comp_list,
                                                                  np.random.default_rng(0))
 
@@ -396,8 +396,8 @@ class TestPriorMean:
     def test_prior_mean_enters_the_sampled_solve_too(self, monkeypatch):
         """mu shifts the constrained realization as well, not just the MAP solve."""
         params = _make_params()
-        band_map = DetectorMap(np.zeros((1, 12*NSIDE**2)), np.full((1, 12*NSIDE**2), 1e-16),
-                               nu=100.0, fwhm=0.0, nside=NSIDE, lmax=LMAX)
+        band_map = BandMap(np.zeros((1, 12*NSIDE**2)), np.full((1, 12*NSIDE**2), 1e-16),
+                           nu=100.0, fwhm_arcmin=0.0, nside=NSIDE, lmax=LMAX)
 
         # `amp_prior_mean` is a property, so it can only be patched on the class -- which every
         # component instance shares. The unpatched control therefore has to run first.
@@ -502,8 +502,8 @@ class TestPriorMeanMap:
         mu = comp_list[0].amp_prior_mean
 
         npix = 12*NSIDE**2
-        band_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1e-16),
-                               nu=100.0, fwhm=0.0, nside=NSIDE, lmax=LMAX)
+        band_map = BandMap(np.zeros((1, npix)), np.full((1, npix), 1e-16),
+                           nu=100.0, fwhm_arcmin=0.0, nside=NSIDE, lmax=LMAX)
         _make_solver(band_map, _make_cfg(optimize=True)).solve(comp_list,
                                                                  np.random.default_rng(0))
 
@@ -523,8 +523,8 @@ class TestPriorMeanMap:
         npix = 12*NSIDE**2
         data_alms = gaussian_random_alm(LMAX, LMAX, 0, 1, np.random.default_rng(6))
         data_map = alm_to_map(data_alms, NSIDE, LMAX, spin=0, nthreads=1)
-        band_map = DetectorMap(data_map, np.full((1, npix), 1e6),
-                               nu=100.0, fwhm=0.0, nside=NSIDE, lmax=LMAX)
+        band_map = BandMap(data_map, np.full((1, npix), 1e6),
+                           nu=100.0, fwhm_arcmin=0.0, nside=NSIDE, lmax=LMAX)
 
         solutions = {}
         for l_tighten in (0, 4000):

@@ -29,7 +29,7 @@ def nalm(lmax: int, mmax: int) -> int:
     return ((mmax+1)*(mmax+2))//2 + (mmax+1)*(lmax-mmax)
 
 
-def gaussian_random_alm(lmax: int, mmax: int, spin: int, ncomp: int,
+def gaussian_random_alm(lmax: int, mmax: int, spin: int, npol: int,
                         rng: np.random.Generator) -> NDArray:
     """Draw unit-variance white-noise alms in the Healpy complex convention (m<0 dropped).
 
@@ -43,8 +43,8 @@ def gaussian_random_alm(lmax: int, mmax: int, spin: int, ncomp: int,
 
     For spin>0 fields the first `spin` multipoles are not defined and are zeroed.
     """
-    res = rng.normal(0., 1., (ncomp, nalm(lmax, mmax))) \
-     + 1j*rng.normal(0., 1., (ncomp, nalm(lmax, mmax)))
+    res = rng.normal(0., 1., (npol, nalm(lmax, mmax))) \
+     + 1j*rng.normal(0., 1., (npol, nalm(lmax, mmax)))
     # make a_lm with m==0 real-valued
     res[:, 0:lmax+1].imag = 0.
     ofs=0

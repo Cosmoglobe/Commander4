@@ -15,7 +15,7 @@ from commander4.compsep.processing import (
 from commander4.compsep.chisq import collect_fit_diagnostics
 from commander4.diagnostics.log import SUMMARY
 from commander4.data_models.band_alms import BandAlms
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.math_utils.alm import _dot_complex_alm_1D_arrays
 from commander4.sky.comp_list import CompList
 from commander4.compsep.perpix_solver import solve_compsep_perpix
@@ -87,7 +87,7 @@ def test_iteration_chi2_uses_all_observed_map_samples(nside_chisq: int) -> None:
     map_sky = np.arange(1.0, 13.0).reshape(1, -1)
     map_inv_var = np.full_like(map_sky, 1.0/2.0**2)
     map_inv_var[0, -1] = 0.0  # An unobserved pixel.
-    band_map = DetectorMap(map_sky, map_inv_var, nu=30.0, fwhm=60.0, nside=1)
+    band_map = BandMap(map_sky, map_inv_var, nu=30.0, fwhm_arcmin=60.0, nside=1)
     mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0,
                                    band_name="Planck30GHz", pol="I"))
     params = Bunch(output=Bunch(chains=Bunch(nside_chisq=nside_chisq,
@@ -108,7 +108,7 @@ def test_iteration_chi2_uses_all_observed_map_samples(nside_chisq: int) -> None:
 def test_compsep_summary_includes_final_chi2_and_z(monkeypatch, caplog) -> None:
     map_sky = np.arange(1.0, 13.0).reshape(1, -1)
     map_inv_var = np.full_like(map_sky, 1.0/2.0**2)
-    band_map = DetectorMap(map_sky, map_inv_var, nu=30.0, fwhm=60.0, nside=1)
+    band_map = BandMap(map_sky, map_inv_var, nu=30.0, fwhm_arcmin=60.0, nside=1)
     mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, rank=0,
                                    band_name="Planck30GHz", pol="I"))
     # With no sampling groups the sky stays zero, and its fit is the final fit.
@@ -279,9 +279,9 @@ def test_cg_and_per_pixel_groups_are_mutually_exclusive() -> None:
 
 def test_per_pixel_solver_stores_the_solution_in_the_precision_of_the_components() -> None:
     comp_list = _make_comp_list("I")
-    band_map = DetectorMap(
+    band_map = BandMap(
         map_sky=np.ones((1, 48)), map_inv_var=np.ones((1, 48)),
-        nu=30.0, fwhm=0.0, nside=2,
+        nu=30.0, fwhm_arcmin=0.0, nside=2,
     )
     solve_compsep_perpix(MPI.COMM_SELF, band_map, comp_list, nthreads=1,
                          rng=np.random.default_rng(0))
@@ -315,7 +315,7 @@ def test_an_amplitude_group_is_solved_against_the_band_minus_the_fixed_component
     for comp in comp_list.split_for_pol("I"):  # Real alms, so they are valid at m = 0 too.
         comp.amps[:] = rng.normal(0.0, 1.0, comp.amps.shape)
     npix = 12*2**2
-    band_map = DetectorMap(np.zeros((1, npix)), np.ones((1, npix)), nu=30.0, fwhm=0.0, nside=2)
+    band_map = BandMap(np.zeros((1, npix)), np.ones((1, npix)), nu=30.0, fwhm_arcmin=0.0, nside=2)
     band_map.map_sky = comp_list.get_sky_at_band(band_map).astype(np.float64)
     band_sky = band_map.map_sky.copy()
     true_amps = [comp.amps.copy() for comp in comp_list]
@@ -396,9 +396,9 @@ def test_band2comp_is_the_transpose_of_comp2band(band_lmax: int, sed_per_pixel: 
     if sed_per_pixel:
         sed_map = rng.uniform(0.5, 2.0, 12*nside**2)
         comp.get_sed = lambda nu: sed_map
-    band_map = DetectorMap(np.zeros((1, 12*nside**2)), np.ones((1, 12*nside**2)), nu=30.0,
-                           fwhm=600.0, nside=nside, lmax=band_lmax)
-    band = BandAlms.init_from_detector(band_map, double_precision=True)
+    band_map = BandMap(np.zeros((1, 12*nside**2)), np.ones((1, 12*nside**2)), nu=30.0,
+                       fwhm_arcmin=600.0, nside=nside, lmax=band_lmax)
+    band = BandAlms.init_from_band_map(band_map, double_precision=True)
 
     x = comp.amps.astype(complex)
     band.alms[:] = 0

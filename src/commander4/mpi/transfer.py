@@ -1,13 +1,13 @@
 """Moving data between the TOD-processing and component-separation communicators each iteration.
 
-TOD processing sends `DetectorMap`s (one per band) and receives back a `CompList`. Both directions
+TOD processing sends `BandMap`s (one per band) and receives back a `CompList`. Both directions
 go band master to band master, and the receiving master distributes within its band communicator.
 """
 import numpy as np
 import logging
 from pixell.bunch import Bunch
 
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pixel_domain import DistributedMap
 from commander4.file_io.map_reader import read_data_map_from_file
@@ -32,18 +32,18 @@ def _realize_and_distribute_sky(comp_list: CompList | None, experiment_data: Det
     # the chain output and the far-sidelobe transform.
     is_band_master = band_comm.Get_rank() == 0
     pols = experiment_data.pols
-    ncomp = {"I": 1, "QU": 2, "IQU": 3}[pols]
+    npol = {"I": 1, "QU": 2, "IQU": 3}[pols]
     if is_band_master:
         # The band beam, or the beam the amplitudes already carry if it is larger (after the
         # per-pixel solver with common-resolution smoothing). The sky is then too smooth for the
         # band, but it cannot be sharpened.
-        fwhm_rad = max([np.deg2rad(experiment_data.fwhm/60.0)]
+        fwhm_rad = max([np.deg2rad(experiment_data.fwhm_arcmin/60.0)]
                        + [comp.amp_fwhm_rad for comp in comp_list])
         full_map = comp_list.get_sky_at_nu(experiment_data.nu, experiment_data.nside, pols,
                                            fwhm_rad, lmax=experiment_data.lmax)
     else:
         full_map = None
-    local_map = experiment_data.pixel_domain.scatter_from_full(full_map, ncomp, dtype=np.float32)
+    local_map = experiment_data.pixel_domain.scatter_from_full(full_map, npol, dtype=np.float32)
     return DistributedMap(local=local_map, full=full_map)
 
 
@@ -74,16 +74,16 @@ def get_local_initial_sky(mpi_info: MPIInfo, experiment_data: DetectorGroupTOD,
     return _realize_and_distribute_sky(comp_list, experiment_data, mpi_info.band.comm)
 
 
-def send_tod(mpi_info: MPIInfo, tod_map_dict: dict[str, DetectorMap]) -> None:
+def send_tod(mpi_info: MPIInfo, band_maps: dict[str, BandMap]) -> None:
     """Send this band's maps, by polarization ("I", "QU"), from the band master to CompSep.
 
     The counterpart of `receive_tod`. A map is dropped if CompSep does not use that polarization of
     the band.
     """
     if mpi_info.band.rank == 0:
-        for pol, detector_map in tod_map_dict.items():
+        for pol, band_map in band_maps.items():
             if pol in mpi_info.tod.compsep_receivers:
-                mpi_info.world.comm.send(detector_map, dest=mpi_info.tod.compsep_receivers[pol])
+                mpi_info.world.comm.send(band_map, dest=mpi_info.tod.compsep_receivers[pol])
             else:
                 logger.debug(f"Pol-{pol} TOD-processing result discarded because band "
                              f"{mpi_info.tod.band_name} does not require it on the CompSep side.")
@@ -93,7 +93,7 @@ def send_tod(mpi_info: MPIInfo, tod_map_dict: dict[str, DetectorMap]) -> None:
 # ON COMPSEP SIDE
 ###########################################################
 
-def receive_tod(mpi_info: MPIInfo, band_map: DetectorMap|None, params: Bunch) -> DetectorMap:
+def receive_tod(mpi_info: MPIInfo, band_map: BandMap|None, params: Bunch) -> BandMap:
     """Return this CompSep rank's band map for the next iteration.
 
     The counterpart of `send_tod`. A band with `get_from: file` reads its map on the first call

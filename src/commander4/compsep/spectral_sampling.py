@@ -12,7 +12,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.compsep.amplitude_sampling import AmplitudeGroup, sample_amplitudes
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.diagnostics.performance import benchmark
 from commander4.parameters.schema import names_or_all, read_settings
 from commander4.mpi.setup import MPIInfo
@@ -117,7 +117,7 @@ def _read_chisq_mask(compsep_comm: MPI.Comm, path: str, nside: int) -> NDArray[n
 
 
 @benchmark("mcmc-loglike")
-def chi2_of_chisq_bands(mpi_info: MPIInfo, group: MCMCGroup, band_map: DetectorMap,
+def chi2_of_chisq_bands(mpi_info: MPIInfo, group: MCMCGroup, band_map: BandMap,
                         comp_list: CompList) -> float:
     """The chi-squared that an MCMC group judges a proposal by. Every CompSep rank must call it.
 
@@ -136,7 +136,7 @@ def chi2_of_chisq_bands(mpi_info: MPIInfo, group: MCMCGroup, band_map: DetectorM
     return float(mpi_info.compsep.comm.allreduce(chi2, op=MPI.SUM))
 
 
-def sample_spectral_params(mpi_info: MPIInfo, group: MCMCGroup, band_map: DetectorMap,
+def sample_spectral_params(mpi_info: MPIInfo, group: MCMCGroup, band_map: BandMap,
                            comp_list: CompList, rng: np.random.Generator) -> dict:
     """Metropolis steps on the spectral indices of one MCMC group. Every CompSep rank must call it.
 

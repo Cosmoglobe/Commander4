@@ -21,7 +21,7 @@ from pixell.bunch import Bunch
 
 import commander4.sky as sky
 from commander4.data_models.band_alms import BandAlms
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.sky.component import Component
 from commander4.sky.diffuse_components import DiffuseComponent
 from commander4.parameters.schema import SPLIT_POLS
@@ -103,7 +103,7 @@ class CompList:
 
     # ----- The sky at a band -----
 
-    def get_sky_at_band(self, band_map: DetectorMap) -> NDArray:
+    def get_sky_at_band(self, band_map: BandMap) -> NDArray:
         """The sky as one band map sees it: at its frequency, resolution, beam and lmax.
 
         The result has the shape and precision of `band_map.map_sky`, so `band_map.map_sky` minus
@@ -144,19 +144,19 @@ class CompList:
         nrows = len(pols_required)
         skymap = np.zeros((nrows, hp.nside2npix(nside)), dtype=dtype)
         diffuse = [comp for comp in self.components if isinstance(comp, DiffuseComponent)]
-        # One band per view: intensity (map row 0, spin 0) and polarization (the last two rows,
-        # spin 2). A joined IQU component contributes to both.
-        for view, rows, spin in (("I", slice(0, 1), 0), ("QU", slice(nrows - 2, nrows), 2)):
-            if view[0] not in pols_required:
+        # One BandAlms per polband: intensity (map row 0, spin 0) and polarization (the last two
+        # rows, spin 2). A joined IQU component contributes to both.
+        for pol, rows, spin in (("I", slice(0, 1), 0), ("QU", slice(nrows - 2, nrows), 2)):
+            if pol[0] not in pols_required:
                 continue
             # The alms in the precision of `skymap`, which the result goes into.
             alm_dtype = np.complex128 if dtype == np.float64 else np.complex64
-            band = BandAlms(np.zeros((len(view), hp.Alm.getsize(lmax)), dtype=alm_dtype), nu,
-                        fwhm_rad, nside)
+            band_alms = BandAlms(np.zeros((len(pol), hp.Alm.getsize(lmax)), dtype=alm_dtype), nu,
+                                 fwhm_rad, nside)
             for comp in diffuse:
-                if comp.pol in (view, "IQU"):
-                    comp.comp2band(band)
-            skymap[rows] += alm_to_map(band.alms, nside, lmax, spin=spin)
+                if comp.pol in (pol, "IQU"):
+                    comp.comp2band(band_alms)
+            skymap[rows] += alm_to_map(band_alms.alms, nside, lmax, spin=spin)
         if "I" in pols_required:
             for comp in self.components:  # Point sources.
                 if not isinstance(comp, DiffuseComponent) and comp.pol == "I":

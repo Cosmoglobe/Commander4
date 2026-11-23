@@ -1,4 +1,4 @@
-"""`DetectorMap`: one band's maps as component separation sees them, plus common-beam smoothing.
+"""`BandMap`: one polband's maps as component separation sees them, plus common-beam smoothing.
 
 This is the object TOD processing sends across the communicator each iteration: the binned or
 CG-solved sky map, its inverse noise variance, and the band metadata (frequency, beam, nside...).
@@ -61,15 +61,15 @@ def smooth_inv_var_map_noiseweighted(map_inv_var: NDArray, fwhm_rad: float) -> N
     return np.divide(smoothed_inv_var**2, numerator, out=np.zeros_like(numerator), where=observed)
 
 
-class DetectorMap:
-    """The sky map of one band and polarization ("I" or "QU"), its inverse noise variance, beam."""
-    def __init__(self, map_sky:NDArray, map_inv_var:NDArray, nu:float, fwhm:float, nside:int,
-                 lmax:int|None = None):
+class BandMap:
+    """The sky map of one polband (a band in "I" or "QU"), its inverse noise variance, and beam."""
+    def __init__(self, map_sky:NDArray, map_inv_var:NDArray, nu:float, fwhm_arcmin:float,
+                 nside:int, lmax:int|None = None):
         """Store the maps of one band.
 
         `map_sky` (uK_RJ) and `map_inv_var` (uK_RJ^-2, 0 in unobserved pixels) have shape (npix,)
         or (1, npix) for intensity, and (2, npix) for Q and U. Both are stored as float32, with
-        shape (npol, npix). `nu` is the band frequency in GHz, `fwhm` the beam FWHM in arcmin.
+        shape (npol, npix). `nu` is the band frequency in GHz, `fwhm_arcmin` the beam FWHM.
         `lmax` defaults to 3*nside - 1.
         """
         # A 1-d intensity map becomes one row.
@@ -89,7 +89,7 @@ class DetectorMap:
         self.map_sky = map_sky.astype(np.float32, copy=False)
         self.map_inv_var = map_inv_var.astype(np.float32, copy=False)
         self.nu = nu
-        self.fwhm = fwhm
+        self.fwhm_arcmin = fwhm_arcmin
         self.nside = nside
         # Components are truncated to this lmax in the band, so a component multipole above the
         # lmax of every band is constrained by its C(l) prior alone.
@@ -98,7 +98,7 @@ class DetectorMap:
     @property
     def fwhm_rad(self):
         """Beam FWHM in radians."""
-        return np.deg2rad(self.fwhm/60.0)
+        return np.deg2rad(self.fwhm_arcmin/60.0)
     
     @property
     def pol(self) -> str:
@@ -118,16 +118,17 @@ class DetectorMap:
     def smooth_to_resolution(self, target_fwhm_arcmin: float) -> None:
         """Smooth this band, in place and noise-weighted, to a Gaussian beam of the given FWHM.
 
-        Updates the sky map, the inverse variance and `fwhm`. A target finer than the current beam
-        is skipped with a warning.
+        Updates the sky map, the inverse variance and `fwhm_arcmin`. A target finer than the
+        current beam is skipped with a warning.
         """
-        if self.fwhm == target_fwhm_arcmin:
+        if self.fwhm_arcmin == target_fwhm_arcmin:
             return
-        if target_fwhm_arcmin < self.fwhm:
+        if target_fwhm_arcmin < self.fwhm_arcmin:
             logger.warning(f"Requested smoothing to {target_fwhm_arcmin} arcmin, finer than this "
-                           f"band's beam of {self.fwhm} arcmin; leaving the band unchanged.")
+                           f"band's beam of {self.fwhm_arcmin} arcmin; leaving the band "
+                           "unchanged.")
             return
-        extra_fwhm_rad = np.deg2rad(np.sqrt(target_fwhm_arcmin**2 - self.fwhm**2)/60.0)
+        extra_fwhm_rad = np.deg2rad(np.sqrt(target_fwhm_arcmin**2 - self.fwhm_arcmin**2)/60.0)
         sky, inv_var = self.map_sky.astype(np.float64), self.map_inv_var.astype(np.float64)
         # Intensity is smoothed as one scalar map, Q and U together as one spin-2 field.
         smoothed_sky = smooth_signal_map_noiseweighted(sky[0] if self.npol == 1 else sky,
@@ -136,7 +137,7 @@ class DetectorMap:
         smoothed_inv_var = [smooth_inv_var_map_noiseweighted(w, extra_fwhm_rad) for w in inv_var]
         self.map_sky = np.reshape(smoothed_sky, sky.shape).astype(self.map_sky.dtype, copy=False)
         self.map_inv_var = np.array(smoothed_inv_var).astype(self.map_inv_var.dtype, copy=False)
-        self.fwhm = target_fwhm_arcmin
+        self.fwhm_arcmin = target_fwhm_arcmin
 
     def apply_inv_N_map(self, map: NDArray, inplace = True):
         """Multiply `map` by the inverse noise variance, in place unless `inplace=False`, and

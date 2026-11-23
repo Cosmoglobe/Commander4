@@ -13,7 +13,7 @@ from pixell.bunch import Bunch
 
 from commander4.compsep.amplitude_sampling import AmplitudeGroup
 from commander4.compsep.spectral_sampling import MCMCGroup, sample_spectral_params
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.sky.comp_list import CompList
 
 NSIDE, LMAX, NU, TRUE_BETA = 4, 8, 60.0, -3.0
@@ -50,8 +50,8 @@ def _make_setup(start_beta: float = TRUE_BETA, **beta_settings):
     comp_list[0].amps[:] = 1.0  # The I view. Real alms, so they are valid at m = 0 too.
 
     npix = 12*NSIDE**2
-    band_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1.0e4), nu=NU, fwhm=0.0,
-                           nside=NSIDE, lmax=LMAX)
+    band_map = BandMap(np.zeros((1, npix)), np.full((1, npix), 1.0e4), nu=NU, fwhm_arcmin=0.0,
+                       nside=NSIDE, lmax=LMAX)
     band_map.map_sky = comp_list.get_sky_at_band(band_map).astype(np.float64)
     for comp in comp_list:
         comp.beta = start_beta

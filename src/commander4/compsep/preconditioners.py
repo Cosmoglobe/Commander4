@@ -8,14 +8,14 @@ import numpy as np
 import healpy as hp
 from mpi4py import MPI
 
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
 
 
 class NoPreconditioner:
     """No preconditioning: returns a copy of the input."""
-    def __init__(self, solver_comm: MPI.Comm, band_map: DetectorMap, comp_list: CompList):
+    def __init__(self, solver_comm: MPI.Comm, band_map: BandMap, comp_list: CompList):
         pass
 
     def __call__(self, comp_list: CompList):
@@ -53,7 +53,7 @@ class JointPreconditioner:
     # components were independent of each other.
     couple_components = True
 
-    def __init__(self, solver_comm: MPI.Comm, band_map: DetectorMap, comp_list: CompList):
+    def __init__(self, solver_comm: MPI.Comm, band_map: BandMap, comp_list: CompList):
         self.is_master = solver_comm.Get_rank() == 0
         self.ell_block_data = []
         self.npol = 0
@@ -252,12 +252,12 @@ class DiagonalJointPreconditioner(JointPreconditioner):
 # `NoiseOnlyPreconditioner`: the diagonal of Y^T N^-1 Y, with its ell dependence from Wigner 3j
 # symbols. A starting point that does not run: it never reproduced the diagonal in testing, needs
 # `py3nj` (not a dependency), and is written for the solver before `CompList` (one component per
-# rank, `CompSepSolver` attributes that no longer exist, plain alm arrays). Its ell_3 = 0 term is
+# rank, attributes of the CG solver that no longer exist, plain alm arrays). Its ell_3 = 0 term is
 # the constant weight `JointPreconditioner` uses, so with constant noise a noise-only variant is
 # just `JointPreconditioner` with `include_noise` alone; this version adds the ell dependence.
 #
 # class NoiseOnlyPreconditioner:
-#     def __init__(self, solver: CompSepSolver):
+#     def __init__(self, solver: CGAmplitudeSolver):
 #         import py3nj
 #         self.solver = solver
 #         mycomp = solver.solver_comm.Get_rank()

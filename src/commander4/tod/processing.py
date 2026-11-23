@@ -15,7 +15,7 @@ from pixell.bunch import Bunch
 from commander4.file_io import paths
 from commander4.file_io.chain_restart import ChainStart
 from commander4.parameters.schema import resolve_param
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pixel_domain import DistributedMap, PixelDomain
 from commander4.tod.samples import TODSamples
@@ -83,8 +83,8 @@ def init_tod_processing(mpi_info: MPIInfo, params: Bunch, start: ChainStart) \
 
 
 def process_tod(mpi_info: MPIInfo, experiment_data: DetectorGroupTOD, tod_samples: TODSamples,
-                compsep_output: DistributedMap, params: Bunch,
-                iter: int, rng: np.random.Generator) -> dict[str, DetectorMap]:
+                band_sky: DistributedMap, params: Bunch,
+                iter: int, rng: np.random.Generator) -> dict[str, BandMap]:
     """Run one TOD iteration for one band and chain, updating `tod_samples` in place.
 
     The function states the scientific order directly. Each step decides from its own settings
@@ -95,13 +95,13 @@ def process_tod(mpi_info: MPIInfo, experiment_data: DetectorGroupTOD, tod_sample
     Args:
         experiment_data: The band's TOD.
         tod_samples: The chain's state of the band.
-        compsep_output: The band's realized sky model. The samplers and mapmakers read it along
+        band_sky: The band's realized sky model. The samplers and mapmakers read it along
             the pointing, so they get its local form; the far-sidelobe transform and the chain
             output need the whole sky, so they get the master's full-sky form.
         rng: This rank's random generator for the iteration. Every draw of every step uses it.
 
     Returns:
-        The detector maps for component separation.
+        The band maps for component separation, by polarization ("I", "QU").
     """
     band_comm = mpi_info.band.comm
     tod_comm = mpi_info.tod.comm
@@ -125,42 +125,42 @@ def process_tod(mpi_info: MPIInfo, experiment_data: DetectorGroupTOD, tod_sample
     # scope does not release an MPI window.
     far_sidelobes_active = far_sidelobes.cfg.enabled and iter >= far_sidelobes.cfg.from_iter
     if far_sidelobes_active:
-        far_sidelobes.build(tod_samples, compsep_output.full, mpi_info.band.node_comm)
+        far_sidelobes.build(tod_samples, band_sky.full, mpi_info.band.node_comm)
 
     # HFI baselines use the previous iteration's gain and sigma0, like Commander3. The first pass
     # also determines whether Python's even or odd sample indices carry the positive half-cycle.
     if hfi.cfg.enabled:
-        hfi.sample(tod_samples, compsep_output.local, rng)
+        hfi.sample(tod_samples, band_sky.local, rng)
 
     # Jumps are steps of the demodulated TOD, so they are measured once the HFI phase is known, as
     # Commander3 stitches its HFI DC levels after demodulation.
     if jumps.cfg.enabled and iter >= jumps.cfg.from_iter:
-        jumps.sample(tod_samples, compsep_output.local, iter)
+        jumps.sample(tod_samples, band_sky.local, iter)
 
     # Glitch detection, performed after HFI demodulation.
     if glitches.cfg.enabled and iter >= glitches.cfg.from_iter:
-        glitches.sample(tod_samples, compsep_output.local, rng)
+        glitches.sample(tod_samples, band_sky.local, rng)
 
     # Gain uses the previous iteration's sigma0. The new sigma0 is estimated later, inside the
     # mapmaker scan loop, matching Commander3's gain -> n_corr -> bin_TOD order.
     if gain.cfg.abs_gain.enabled and iter >= gain.cfg.abs_gain.from_iter:
-        gain.sample_absolute(tod_samples, compsep_output.local, iter, rng)
+        gain.sample_absolute(tod_samples, band_sky.local, iter, rng)
 
     if gain.cfg.rel_gain.enabled and iter >= gain.cfg.rel_gain.from_iter:
-        gain.sample_relative(tod_samples, compsep_output.local, iter, rng)
+        gain.sample_relative(tod_samples, band_sky.local, iter, rng)
 
     if gain.cfg.temporal_gain.enabled and iter >= gain.cfg.temporal_gain.from_iter:
-        gain.sample_temporal(tod_samples, compsep_output.local, iter, rng)
+        gain.sample_temporal(tod_samples, band_sky.local, iter, rng)
 
     ###############################################################################################
     ### Part 2 : Execute the mapmaking loop, including the sampling steps it contains.          ###
     ### Some sampling steps are inside the mapmaking loop, because they sample a quantity that  ###
     ### is too large to store, or need information only available inside this loop, etc.        ###
     ###############################################################################################
-    detmap_dict, maps_to_file = tod2map(experiment_data, tod_samples, compsep_output.local,
-                                        iter, params, rng)
+    band_maps, maps_to_file = tod2map(experiment_data, tod_samples, band_sky.local, iter, params,
+                                      rng)
     if is_master and params.output.chains.include.sky_model_maps:
-        maps_to_file["skymodel"] = compsep_output.full
+        maps_to_file["skymodel"] = band_sky.full
 
     ###############################################################################################
     ### Part 3 : Cleanup, logging, and communication                                            ###
@@ -194,4 +194,4 @@ def process_tod(mpi_info: MPIInfo, experiment_data: DetectorGroupTOD, tod_sample
     bench_reset()
     tod_comm.Barrier()
 
-    return detmap_dict
+    return band_maps

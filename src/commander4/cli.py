@@ -66,9 +66,9 @@ def run_tod_side(mpi_info: MPIInfo, params: Bunch, start: ChainStart) -> None:
     # Setting up initial sky model, before the first TOD iteration.
     compsep_active = mpi_info.world.has_compsep
     if compsep_active:  # Receive initial sky from CompSep, if it's running.
-        compsep_output = receive_compsep(mpi_info, experiment_data)
+        band_sky = receive_compsep(mpi_info, experiment_data)
     else:  # If compsep isn't running fetch initial sky model ourselves.
-        compsep_output = get_local_initial_sky(mpi_info, experiment_data, params)
+        band_sky = get_local_initial_sky(mpi_info, experiment_data, params)
 
     for chain, iteration in gibbs_schedule(start.first_iteration, params.gibbs.num_iterations):
         if mpi_info.tod.rank == 0:
@@ -76,8 +76,8 @@ def run_tod_side(mpi_info: MPIInfo, params: Bunch, start: ChainStart) -> None:
                            f"starting TOD chain {chain}, iteration {iteration}.")
         rng = make_iteration_rng(params, mpi_info, chain, iteration)
         t0 = time.time()
-        tod_output = process_tod(mpi_info, experiment_data, tod_samples_by_chain[chain],
-                                 compsep_output, params, iteration, rng)
+        band_maps = process_tod(mpi_info, experiment_data, tod_samples_by_chain[chain], band_sky,
+                                params, iteration, rng)
         if mpi_info.tod.rank == 0:
             logger.summary(f"Chain {chain}, iteration {iteration} completed TOD-proc in "
                            f"{time.time()-t0:.2f}s).")
@@ -86,11 +86,11 @@ def run_tod_side(mpi_info: MPIInfo, params: Bunch, start: ChainStart) -> None:
 
         # Receive the sky that the next Gibbs iteration (and opposite chain) will run with.
         t0 = time.time()
-        compsep_output = receive_compsep(mpi_info, experiment_data)
+        band_sky = receive_compsep(mpi_info, experiment_data)
         if mpi_info.band.rank == 0:
             logger.verbose(f"TOD: Rank {mpi_info.tod.rank} received the sky for the next step "
                            f"(time spent waiting+receiving = {time.time()-t0:.1f}s).")
-        send_tod(mpi_info, tod_output)
+        send_tod(mpi_info, band_maps)
         if mpi_info.tod.rank == 0:
             logger.verbose(f"TOD: Rank {mpi_info.tod.rank} finished sending results for chain "
                            f"{chain}, iter {iteration}.")

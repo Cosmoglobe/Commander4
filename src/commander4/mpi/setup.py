@@ -54,14 +54,14 @@ class BandInfo:
 
 @dataclass(frozen=True)
 class CompSepInfo:
-    """The CompSep communicator: every CompSep rank. Also the band this rank works on, and its
+    """The CompSep communicator: every CompSep rank. Also the polband this rank works on, and its
     partners."""
     comm: MPI.Comm
     rank: int
     size: int
     num_threads: int
     subcomm: MPI.Comm                    # The CompSep ranks of this rank's polarization.
-    band_name: str                       # The band this rank works on,
+    band_name: str                       # The polband this rank works on: its band,
     pol: str                             # and its polarization, "I" or "QU".
     tod_sender: int | None               # World rank of the band's TOD master; None if none.
     tod_receiver: int | None             # Where this rank sends the sky; None if it does not.
@@ -90,7 +90,7 @@ def init_mpi(params: Bunch) -> MPIInfo:
     # are split between the bands below.
     tod_bands = enabled_tod_bands(params)
     compsep_polbands = enabled_compsep_polbands(params)
-    ntask_compsep = len(compsep_polbands)  # Compsep has 1 MPI rank per "effective" band (I and QU).
+    ntask_compsep = len(compsep_polbands)
     ntask_tod = world_size - ntask_compsep  # The remaining MPI ranks are all TOD ranks.
     if world_rank == 0:
         mpi4py_version = tuple(map(int, mpi4py.__version__.split('.')))

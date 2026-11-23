@@ -12,7 +12,7 @@ import os
 from copy import deepcopy
 from pixell.bunch import Bunch
 
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.mpi.setup import MPIInfo
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
@@ -113,7 +113,7 @@ def init_compsep_processing(mpi_info: MPIInfo, params: Bunch, start: ChainStart)
     -> tuple[dict[int, CompList], list[AmplitudeGroup], list[MCMCGroup]]:
     """Build the components and the sampling groups, on one CompSep rank.
 
-    Each CompSep rank works on one band in one polarization (`mpi_info.compsep.band_name`, `.pol`).
+    Each CompSep rank works on one polband (`mpi_info.compsep.band_name`, `.pol`).
 
     Returns:
         comp_lists_by_chain: Each chain's full component list, with polarized components split
@@ -160,7 +160,7 @@ def init_compsep_processing(mpi_info: MPIInfo, params: Bunch, start: ChainStart)
 
 
 def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[AmplitudeGroup],
-                    mcmc_groups: list[MCMCGroup], band_map: DetectorMap, comp_list: CompList,
+                    mcmc_groups: list[MCMCGroup], band_map: BandMap, comp_list: CompList,
                     chain: int, iteration: int, rng: np.random.Generator) -> None:
     """One Gibbs iteration of component separation. Every CompSep rank calls it.
 

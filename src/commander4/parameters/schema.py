@@ -45,7 +45,7 @@ class TODBandConfig:
 
 @dataclass(frozen=True)
 class CompSepPolBandConfig:
-    """Info about one CompSep polband (the I or in QU half of a band)."""
+    """Info about one CompSep polband (the I or the QU part of a band)."""
     band_name: str          # Unique name of this band (e.g. "LFI_30GHz"). Used to match with TOD.
     pol: str                # "I" or "QU".
 
@@ -227,7 +227,7 @@ def resolve_band_lmax(params: Bunch, band_name: str, experiment: str | None, nsi
     """The harmonic bandlimit of one band: its `lmax` parameter, or `3*nside - 1` if unset.
 
     This is C4's equivalent of C3's `BAND_LMAX`, which is likewise stated per band. It is the lmax
-    of the band's `DetectorMap`, and thereby the highest multipole at which any component can be
+    of the band's `BandMap`, and thereby the highest multipole at which any component can be
     compared against this band's data: `Component.comp2band` truncates the component alms to it,
     both in the CG solver and in every realized band sky (`CompList.get_sky_at_nu`). `3*nside - 1`
     is the full bandlimit of a HEALPix map at this resolution, so the default lets a band constrain

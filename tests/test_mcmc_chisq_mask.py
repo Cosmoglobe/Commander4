@@ -12,7 +12,7 @@ from pixell.bunch import Bunch
 
 from commander4.compsep.spectral_sampling import _read_chisq_mask
 from commander4.compsep.spectral_sampling import chi2_of_chisq_bands
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 from commander4.sky.comp_list import CompList
 
 NSIDE = 2
@@ -33,9 +33,9 @@ def _zero_sky() -> CompList:
 
 def _chi2(map_sky, inv_var, keep=slice(None), chisq_bands=("Band100",)) -> float:
     """The sampler's chi-squared of one band map against a zero sky, on one rank."""
-    band_map = DetectorMap(np.asarray(map_sky, dtype=np.float64),
-                           np.asarray(inv_var, dtype=np.float64),
-                           nu=100.0, fwhm=0.0, nside=NSIDE, lmax=2)
+    band_map = BandMap(np.asarray(map_sky, dtype=np.float64),
+                       np.asarray(inv_var, dtype=np.float64),
+                       nu=100.0, fwhm_arcmin=0.0, nside=NSIDE, lmax=2)
     mpi_info = Bunch(compsep=Bunch(comm=MPI.COMM_SELF, band_name="Band100", pol="I"))
     group = Bunch(cfg=Bunch(chisq_bands=list(chisq_bands)), chisq_pixels=keep)
     return chi2_of_chisq_bands(mpi_info, group, band_map, _zero_sky())

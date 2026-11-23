@@ -115,7 +115,7 @@ def test_scatter_from_full_round_trips(mode):
     dom = PixelDomain(comm, nside, mode, local_pix=local_pix)
 
     full = rng.normal(size=(2, npix)) if rank == 0 else None
-    local = dom.scatter_from_full(full, ncomp=2)
+    local = dom.scatter_from_full(full, npol=2)
     # Each rank must receive exactly the master's values at its own pixels.
     full_b = comm.bcast(full, root=0)
     assert_allclose(local, full_b[:, local_pix], rtol=1e-12, atol=1e-12)
@@ -131,7 +131,7 @@ def test_scatter_from_full_float32_round_trips():
     dom = _sparse_domain(comm, nside, local_pix)
 
     full = rng.normal(size=(3, npix)).astype(np.float32) if rank == 0 else None
-    local = dom.scatter_from_full(full, ncomp=3, dtype=np.float32)
+    local = dom.scatter_from_full(full, npol=3, dtype=np.float32)
     assert local.dtype == np.float32
     full_b = comm.bcast(full, root=0)
     # A scatter only moves values (no arithmetic), so the f32 result must match bit-for-bit.
@@ -148,7 +148,7 @@ def test_sky_model_local_slice_matches_full_at_pointing():
     local_pix = rng.permutation(np.unique(rng.integers(0, npix, size=30)))  # unsorted, as in use
     dom = _sparse_domain(comm, nside, local_pix)
     full_map = rng.normal(size=(3, npix)).astype(np.float32)
-    local_map = dom.scatter_from_full(full_map, ncomp=3, dtype=np.float32)
+    local_map = dom.scatter_from_full(full_map, npol=3, dtype=np.float32)
 
     pix = rng.choice(local_pix, size=200)  # the pointing only ever hits observed pixels
     assert_allclose(local_map[:, dom.to_local(pix)], full_map[:, pix], rtol=0, atol=0)

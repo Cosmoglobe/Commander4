@@ -2,7 +2,7 @@
 import numpy as np
 import healpy as hp
 from numpy.typing import NDArray
-from commander4.data_models.detector_map import DetectorMap
+from commander4.data_models.band_map import BandMap
 
 
 class BandAlms:
@@ -29,7 +29,7 @@ class BandAlms:
         self.map = None
 
     @classmethod
-    def init_from_detector(cls, band_map: DetectorMap, double_precision: bool = False):
+    def init_from_band_map(cls, band_map: BandMap, double_precision: bool = False):
         """A BandAlms with the metadata of `band_map` and alms of zeros."""
         dtype = np.complex128 if double_precision else np.complex64
         return cls(np.zeros((band_map.npol, hp.Alm.getsize(band_map.lmax)), dtype=dtype),

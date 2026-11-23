@@ -133,7 +133,7 @@ maps/cov           (6,npix)    # (opt) the 6 unique elements of P^T N^-1 P (II,I
 ```
 
 #### `chains_compsep/chain<CC>_iter<NNNN>.h5`
-One file per iteration holding every component, plus how well they fit the band maps. `<name>` is a component's key under `components` in the parameter file, `<view>` a `<band>_<I|QU>` pair.
+One file per iteration holding every component, plus how well they fit the band maps. `<name>` is a component's key under `components` in the parameter file, `<polband>` a `<band>_<I|QU>` pair.
 ```YAML
 comps/<name>/alms          (npol,nalm)  # complex amplitudes in uK_RJ at nu_ref (T/E/B rows)
 comps/<name>/source_amps   (1,nsrc)     # point-source components carry this instead of alms
@@ -148,12 +148,12 @@ comps/<name>/Cl_prior/<param>           # the C(l) prior's model parameters; abs
 comps/<name>/mixing/<band> scalar       # this component's SED evaluated at that band
 
 chi2/total               scalar       # all-band sum of the whitened residual squared
-chi2/ndof                scalar       # observed pixels summed over all bands and polarizations
+chi2/ndof                scalar       # observed pixels summed over all polbands
 chi2/reduced             scalar       # total / ndof
 chi2/z                   scalar       # (total - ndof) / sqrt(2 ndof); ~N(0,1) for a good fit
-chi2/bands/<view>/{chi2,ndof,reduced,nu}   # the same, per band and polarization
-chi2/map                 (3,npix)     # (opt) z^2 summed into output.chains.nside_chisq pixels
-residuals/<view>         (npol,npix)  # (opt) full-resolution data minus model
+chi2/bands/<polband>/{chi2,ndof,reduced,nu}   # the same, per polband
+chi2/map                 (3,npix)     # (opt) chi^2 summed into output.chains.nside_chisq pixels
+residuals/<polband>      (npol,npix)  # (opt) full-resolution data minus model
 amplitude_groups/<group>/<I|QU>/{n_iter,cg_residuals}   # CG convergence, per polarization
 mcmc/<group>/{numstep,n_accept,accept_rate}             # Metropolis-Hastings acceptance
 mcmc/<group>/params/<comp>            # the accepted parameter value per component
