@@ -1,11 +1,7 @@
 """`DetectorMap`: one band's maps as component separation sees them, plus common-beam smoothing.
 
 This is the object TOD processing sends across the communicator each iteration: the binned or
-CG-solved sky map, its inverse noise variance, and the band metadata (frequency, beam, nside)
-needed to build the mixing matrix. The two smoothing helpers bring a band to a coarser common beam.
-
-The noise is held as inverse variance throughout, with 0 marking an unobserved pixel. RMS maps only
-exist in files, so they are converted when read or written.
+CG-solved sky map, its inverse noise variance, and the band metadata (frequency, beam, nside...).
 """
 import logging
 import numpy as np
@@ -21,25 +17,15 @@ def smooth_signal_map_noiseweighted(map_signal: NDArray, map_inv_var: NDArray,
                                     fwhm_rad: float) -> NDArray:
     """Inverse-variance-weighted Gaussian smoothing of a signal map.
 
-    Each pixel is weighted by its inverse variance before smoothing (so noisy pixels contribute
-    less) and the result is renormalized by the smoothed weights. Used to bring a band to a coarser
-    common beam.
-
     `map_signal` and `map_inv_var` have shape (npix,) for intensity, or (2, npix) for Q and U.
-    Q and U are one spin-2 field, so they are smoothed together through E and B, with the same
-    Gaussian window on both. That is the beam `comp2band` puts on the model, so smoothed
-    data and model stay consistent; smoothing Q and U as two scalar maps would not be.
-
-    A band covering only part of the sky has zero weight outside its footprint, and far enough from
-    it the smoothed weight is zero (or slightly negative, from beam ringing) as well. Those pixels
-    are left at zero rather than divided into a NaN: they are unobserved, which the paired
-    ``smooth_inv_var_map_noiseweighted`` records as zero inverse variance.
     """
+    # Each pixel is weighted by its inverse variance before smoothing, and the result is
+    # renormalized by the smoothed weights.
     weighted = map_signal*map_inv_var
-    if map_signal.ndim == 1:
+    if map_signal.ndim == 1:  # Intensity map
         smoothed_signal = hp.smoothing(weighted, fwhm=fwhm_rad)
         smoothed_weight = hp.smoothing(map_inv_var, fwhm=fwhm_rad)
-    else:
+    else:  # Q and U are one spin-2 field, so they are smoothed together through E and B.
         npix = map_signal.shape[-1]
         window = hp.gauss_beam(fwhm_rad, lmax=3*hp.npix2nside(npix) - 1)
         smoothed_signal = hp.smoothing([np.zeros(npix), *weighted], beam_window=window)[1:]
@@ -52,12 +38,8 @@ def smooth_signal_map_noiseweighted(map_signal: NDArray, map_inv_var: NDArray,
 def smooth_inv_var_map_noiseweighted(map_inv_var: NDArray, fwhm_rad: float) -> NDArray:
     """Per-pixel inverse noise variance of a map smoothed by `smooth_signal_map_noiseweighted`.
 
-    Propagates the inverse-variance-weighted Gaussian smoothing analytically, accounting for the
-    beam and pixel windows, so the returned map is the correct inverse noise variance of the
-    smoothed signal.
-
-    Pixels the smoothed weight does not reach (outside a partial-sky band's footprint) get zero
-    inverse variance, which is how an unobserved pixel is represented.
+    Note that because of SHT effects like ringing this analytical calculation is a fragile.
+    The more robust solution is to do noise simulations to determine the smoothed inverse variance.
     """
     npix = map_inv_var.shape[0]
     nside = hp.npix2nside(npix)
@@ -85,33 +67,10 @@ class DetectorMap:
     Stores the sky signal map, inverse noise variance map, beam properties, and
     resolution parameters. Derived quantities like ``pol`` and ``spin`` are computed on the fly
     via properties.
-
-    Both maps are stored in float32. They are the results of float64 accumulations (the TOD
-    mapmaker, the downgrading of file maps), and single precision is enough after that.
-
-    Attributes:
-        map_sky (NDArray): Sky signal map of shape ``(npol, npix)``.
-        map_inv_var (NDArray): Inverse noise variance map, same shape as ``map_sky``; 0 where
-            unobserved.
-        nu (float): Band centre frequency in GHz.
-        fwhm (float): Beam full-width-at-half-maximum in arcminutes.
-        nside (int): HEALPix nside of the map.
-        lmax (int): Maximum multipole for harmonic transforms.
     """
     def __init__(self, map_sky:NDArray, map_inv_var:NDArray, nu:float, fwhm:float, nside:int,
                  lmax:int|None = None):
-        """Construct a DetectorMap.
-
-        Args:
-            map_sky: Sky signal map, shape ``(npol, npix)`` or ``(npix,)``.
-            map_inv_var: Inverse noise variance map (same shape as ``map_sky``), 0 where unobserved.
-            nu: Band centre frequency in GHz.
-            fwhm: Beam FWHM in arcminutes.
-            nside: HEALPix nside of the maps.
-            lmax: Maximum multipole. Defaults to ``3*nside - 1``, the full bandlimit of a
-                HEALPix map at this resolution (C3's ``BAND_LMAX``, which is likewise set per band
-                and typically sits between 2*nside and 3*nside).
-        """
+        """Construct a DetectorMap."""
         #cast dimensions correctly to allow constructer with 1-d array for intensity maps.
         map_sky = map_sky.reshape((1,-1)) if map_sky.ndim == 1 else map_sky
         map_inv_var = map_inv_var.reshape((1,-1)) if map_inv_var.ndim == 1 else map_inv_var
