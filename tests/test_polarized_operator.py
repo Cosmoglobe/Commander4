@@ -16,7 +16,7 @@ def _band_map(map_inv_var: np.ndarray, lmax: int, fwhm_arcmin: float = 0.0) -> D
     not read, is zero."""
     nside = hp.npix2nside(map_inv_var.shape[-1])
     return DetectorMap(np.zeros_like(map_inv_var), map_inv_var, nu=100.0, fwhm=fwhm_arcmin,
-                       nside=nside, double_precision=True, lmax=lmax)
+                       nside=nside, lmax=lmax)
 
 
 class _DummyDiffuseComp(DiffuseComponent):

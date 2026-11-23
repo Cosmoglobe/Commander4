@@ -312,12 +312,12 @@ compsep:
                               # TOD side runs against a static sky model.
 
   double_precision: false     # Work in float64/complex128 rather than float32/complex64.
-                              # Optional, false by default. It covers the component alms, the
-                              # band alms, DetectorMap.map_inv_var, the per-pixel solver's maps,
-                              # and the point-source amplitudes. Map precision is NOT separately
-                              # settable: the SHT returns a map in the precision of the alms it
-                              # was given, so alm and map space always match. False halves the
-                              # memory and is enough in practice.
+                              # Optional, false by default. It covers the alms of the diffuse
+                              # components, and the CG and per-pixel solvers, which work in the
+                              # precision of the components. The band
+                              # maps (sky and inverse variance) are always float32. False halves
+                              # the memory of the components on every CompSep rank and is enough
+                              # in practice.
 
   common_res_fwhm: 0          # [arcmin] Smooth every band -- signal AND rms, through the
                               # same kernel -- to one common resolution before solving,

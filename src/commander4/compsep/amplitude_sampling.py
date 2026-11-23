@@ -1,8 +1,8 @@
-"""Sampling the component amplitudes of one amplitude group, with the CG or per-pixel solver.
+"""Config/setup stuff for component amplitude sampling, common to both the CG and per-pixel solvers.
 
-An amplitude group names the components and the bands of one solve. `sample_amplitudes` holds the
-other components fixed, lets the ranks of the group's bands solve, and gives every CompSep rank
-the new amplitudes.
+Contains one class and one function, both called from `compsep/processing.py`:
+- `AmplitudeGroup` is a dataclass holding the settings for one amplitude sampling step.
+- `sample_amplitudes` sets up and executes one provided `AmplitudeGroup`.
 """
 import copy
 import logging
@@ -17,7 +17,7 @@ from commander4.compsep.cg_solver import CompSepSolver
 from commander4.compsep.perpix_solver import solve_compsep_perpix
 from commander4.data_models.detector_map import DetectorMap
 from commander4.parameters.schema import (SPLIT_POLS, enabled_compsep_polbands, names_or_all,
-                                          read_settings, resolve_param)
+                                          read_settings)
 from commander4.mpi.setup import MPIInfo
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import DiffuseComponent
@@ -94,25 +94,13 @@ class AmplitudeGroup:
                    solver_comm=solver_comm)
 
 
-def sample_amplitudes(mpi_info: MPIInfo, params: Bunch, group: AmplitudeGroup,
-                      band_map: DetectorMap, comp_list: CompList,
-                      rng: np.random.Generator) -> dict:
-    """Sample the amplitudes of one amplitude group. Every CompSep rank calls it.
-
-    Updates the components of `comp_list` in place, on every rank.
-
-    Args:
-        mpi_info: The MPI data of this rank (`compsep` is used).
-        params: The full parameter file, for `compsep.double_precision`.
-        group: The group to solve.
-        band_map: This rank's band map.
-        comp_list: The full component list of the chain.
-        rng: This rank's random generator, for the fluctuation terms of the amplitude draw.
+def sample_amplitudes(mpi_info: MPIInfo, group: AmplitudeGroup, band_map: DetectorMap,
+                      comp_list: CompList, rng: np.random.Generator) -> dict:
+    """Sample the amplitudes of one amplitude group, updating `comp_list` in place.
 
     Returns:
         The CG convergence history of each polarization that was solved, as
-        ``{"I": {...}, "QU": {...}}``, on every rank. Empty for the per-pixel method, which is a
-        direct solve with no history to report.
+        ``{"I": {...}, "QU": {...}}``, on every rank. Empty for the per-pixel method.
     """
     compsep = mpi_info.compsep
     if not group.solver_ranks["I"] and not group.solver_ranks["QU"]:
@@ -134,14 +122,11 @@ def sample_amplitudes(mpi_info: MPIInfo, params: Bunch, group: AmplitudeGroup,
         if len(fixed_comps) > 0:
             fixed_sky = fixed_comps.get_sky_at_band(band_map)
             residual_map = copy.copy(band_map)
-            residual_map.map_sky = band_map.map_sky - fixed_sky.astype(band_map.map_sky.dtype)
+            residual_map.map_sky = band_map.map_sky - fixed_sky
         # Both solvers leave their solution in the components of `active_sublist`, which are the
         # chain's own components.
-        double_precision = resolve_param(params, "double_precision", ("compsep",), default=False,
-                                         legal_types=bool)
         if group.solver == "CG":
-            solver = CompSepSolver(residual_map, group.solver_comm, group.cfg,
-                                   double_precision=double_precision, nthreads=compsep.num_threads)
+            solver = CompSepSolver(residual_map, group, nthreads=compsep.num_threads)
             residuals = solver.solve(active_sublist, rng)
             # The CG runs its scalar recurrence on rank 0 of `solver_comm` and only broadcasts the
             # stopping decision, so that rank alone holds meaningful residuals.
@@ -149,8 +134,7 @@ def sample_amplitudes(mpi_info: MPIInfo, params: Bunch, group: AmplitudeGroup,
                 cg_stats = {"cg_residuals": np.asarray(residuals), "n_iter": len(residuals)}
         else:
             solve_compsep_perpix(group.solver_comm, residual_map, active_sublist,
-                                 double_precision=double_precision, nthreads=compsep.num_threads,
-                                 rng=rng)
+                                 nthreads=compsep.num_threads, rng=rng)
 
     # The first solver rank of each polarization (rank 0 of its `solver_comm`) gives every rank
     # the new amplitudes of that polarization, and its CG history. I and QU are separate solves

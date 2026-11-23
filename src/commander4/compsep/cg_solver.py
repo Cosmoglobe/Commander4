@@ -1,10 +1,12 @@
 """The CG amplitude solver: `CompSepSolver` builds and solves the component-amplitude system.
 """
+from __future__ import annotations
+
 import numpy as np
 import time
 import logging
+from typing import TYPE_CHECKING
 from mpi4py import MPI
-from pixell.bunch import Bunch
 
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.comp_list import CompList
@@ -14,6 +16,9 @@ from commander4.math_utils.cg_driver import DistributedCG
 from commander4.compsep import preconditioners
 from commander4.data_models.band import Band
 from commander4.diagnostics.performance import benchmark, log_memory
+
+if TYPE_CHECKING:  # For the type hint only; a real import would be circular.
+    from commander4.compsep.amplitude_sampling import AmplitudeGroup
 
 logger = logging.getLogger(__name__)
 
@@ -25,45 +30,45 @@ class CompSepSolver:
     separation. solve() leaves the solution in the 'comp_list' argument passed to it, and returns
     the CG residuals.
 
-    The component separation problem is an Ax = b equation on the form
-        (S^-1 + Y^T M^T Y^-1^T N^-1 B M Y) a
-        = Y^T M^T Y^-1^T B^T d + Y^T M^T Y^-1^T B^T N^-{1/2} eta_1 + S^-1 mu + S^{-1/2} eta_2,
-    where B is the beam smoothing, M is the mixing matrix, N is the noise covariance matrix,
-    Y is alm->map spherical harmonic synthesis, d is the observed frequency maps (as alms),
-    a is the component maps we want to solve for (as alms), and eta_1 and eta_2 are random
-    numbers drawn from N(0,1). The sampling group's `optimize` switches between a full
-    constrained realization (`optimize: false`, the default) and just optimizing for MAP.
-    For numerical stability, we actually solve the equivalent
-        (1 + S^{1/2} Y^T M^T Y^-1^T B^T N^-1 B Y^-1 M Y S^{1/2})[S^{-1/2} a]
-        = S^{1/2} Y^T M^T {Y^{-1}}^T B^T N^{-1} d
-        + S^{1/2}A^TN^{-1/2} eta_1 + S^{-1/2} mu + eta_2.
+    The component separation problem is an Hx = b equation on the form
+        (S^-1 + A^T N^-1 A) a = A^T N^-1 d + A^T N^{-1/2} eta_1 + S^-1 mu + S^{-1/2} eta_2,
+    where:
+        - A = B M, and equivalently A^T = M^T B^T
+        - a is the sky solution, mostly diffuse component alms, but also e.g. point sources.
+        - B is the beam smoothing
+        - M is the mixing matrix
+        - N is the noise covariance matrix
+        - mu is the mean spatial prior, typically 0
+        - S is the power spectrum prior on each component (i.e. a prior on the variance around mu)
+    For numerical stability, we actually solve the equivalent equation:
+        (1 + S^{1/2} A^T N^-1 A S^{1/2}) a' = S^{1/2} A^T N^{-1} d
+                                            + S^{1/2} A^T N^{-1/2} eta_1 + S^{-1/2} mu + eta_2
+    which is solved for a' = [S^{-1/2} a], from which we can recover a = S^{1/2} a'.
+    The eta_1 and eta_2 terms are drawn from random Gaussians, and setting them to 0 gives the
+    maximum posterior, as opposed to drawing a constrained realization from the posterior.
+
+    The solution, a, is in spherical harmonic (alm) space for all diffuse components, while some of
+    the matrices (N^-1 and sometimes M) have to be applied in real-space. There are therefore
+    several implicit spherical harmonic transformations in this equation, around these matrices.
     """
-    def __init__(self, band_map: DetectorMap, solver_comm: MPI.Comm, group: Bunch,
-                 double_precision: bool, nthreads: int):
+    def __init__(self, band_map: DetectorMap, group: AmplitudeGroup, nthreads: int):
         """
         Args:
             band_map: This rank's band data (the conditional residual for this sampling group).
-            solver_comm: The communicator of the ranks collaborating on this solve.
-            group: The settings of this CG sampling group (`compsep.cg_sampling_groups.<name>`
-                in the parameter file, with defaults filled in). `group.optimize` chooses the
-                maximum a posteriori solution (True) or a constrained realization (False).
-            double_precision: Whether maps and alms use double precision.
+            group: The config class holding the settings for this solve.
             nthreads: Number of computational threads used on this rank.
         """
-        self.solver_comm = solver_comm
-        self.is_master = solver_comm.Get_rank() == 0
+        self.solver_comm = group.solver_comm
+        self.is_master = self.solver_comm.Get_rank() == 0
         self.band_map = band_map
         self.group = group
         self.nthreads = nthreads
-        # This rank's band in harmonic space: the alms (and the pixel map of the point sources)
-        # that the components are projected to and read back from in each CG iteration.
-        self.band_alms = Band.init_from_detector(band_map, double_precision=double_precision)
 
 
     def apply_LHS_matrix(self, comp_list_in: CompList) -> CompList:
-        """Apply A, the left-hand side of the Ax=b system, to the vector `comp_list_in`.
+        """Apply H, the left-hand side of the Hx=b system, to the vector `comp_list_in`.
 
-        The full A matrix is (1 + S^{1/2} Y^T M^T Y^-1^T B^T N^-1 B Y^-1 M Y S^{1/2}).
+        The full H matrix is (1 + S^{1/2} A^T N^-1 A S^{1/2}), with A = B M.
         For a component without a prior (`Cl_prior_amplitude: null`, C3's `CL_TYPE = none`)
         the "1 +" is left out and S = 1. For point sources, `B Y^-1 M Y` is replaced by painting
         the sources into the band map, and the Y and Y^T around N^-1 are left out.
@@ -87,7 +92,7 @@ class CompSepSolver:
         comp_list = comp_list_in.copy() if self.is_master else comp_list_in
 
         if self.is_master:  # Only the master holds the values of the vector.
-            # S^{1/2} a
+            # S^{1/2} [a]
             for comp in comp_list:
                 comp.apply_Cl_prior_sqrt(comp.amps)
 
@@ -96,20 +101,20 @@ class CompSepSolver:
             for comp in comp_list:
                 comp.bcast_amps(self.solver_comm)
 
-        # B Y^-1 M Y S^{1/2} a. Each component adds itself to the emptied band: a diffuse component
-        # to its alms, point sources to its pixel map.
+        # B M [S^{1/2} a].
+        # Each component adds itself to an empty band, in the components' precision: a diffuse
+        # component to its alms, point sources to its pixel map.
         with benchmark("lhs-project"):
-            self.band_alms.alms[:] = 0
-            if self.band_alms.map is not None:
-                self.band_alms.map[:] = 0
+            band_alms = Band.init_from_detector(self.band_map,
+                                                double_precision=comp_list[0].double_precision)
             for comp in comp_list:
-                comp.comp2band(self.band_alms, nthreads=self.nthreads)
+                comp.comp2band(band_alms, nthreads=self.nthreads)
 
         # Y^T N^-1 Y B Y^-1 M Y S^{1/2} a. Point sources are added in pixel space, as in C3:
         # comp2band painted them into `band_alms.map` (None without point sources), and they read
         # N^-1 (...) back from it. Diffuse components go through Y and Y^T.
         with benchmark("lhs-inv-N"):
-            band_alms, band_map = self.band_alms, self.band_map
+            band_map = self.band_map
             pix_map = alm_to_map(band_alms.alms, band_map.nside, band_map.lmax, spin=band_map.spin,
                                  nthreads=self.nthreads)
             if band_alms.map is not None:
@@ -123,7 +128,7 @@ class CompSepSolver:
         # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
         with benchmark("lhs-eval"):
             for comp in comp_list:
-                comp.band2comp(self.band_alms, nthreads=self.nthreads)
+                comp.band2comp(band_alms, nthreads=self.nthreads)
 
         # Accumulate the result on the master. The reduces are non-blocking, so the master can work
         # on each component as soon as it has arrived, while later ones are still on their way.
@@ -147,12 +152,12 @@ class CompSepSolver:
 
     @benchmark("cg-rhs")
     def calc_RHS(self, comp_list: CompList, rng: np.random.Generator) -> CompList:
-        """ Calculates the right-hand-side b-vector of the Ax=b CompSep equation, and returns it as
+        """ Calculates the right-hand-side b-vector of the Hx=b CompSep equation, and returns it as
             a new list with the same components as `comp_list`, which is not changed:
 
                 b = S^{1/2} A^T (N^-1 d + N^{-1/2} eta_1) + S^{-1/2} mu + eta_2,
 
-            where the two eta terms are left out when `group.optimize` is set. Without them
+            where the two eta terms are left out when `group.cfg.optimize` is set. Without them
             b gives the deterministic Wiener-filtered (maximum a posteriori) mean, whose power
             spectrum is biased low; with them the CG solution is a constrained realization, i.e. a
             draw from the full conditional posterior of the amplitudes.
@@ -169,7 +174,7 @@ class CompSepSolver:
 
         # N^-1 d
         b_map = self.band_map.apply_inv_N_map(self.band_map.map_sky, inplace=False)
-        if not self.group.optimize:
+        if not self.group.cfg.optimize:
             # + N^{-1/2} eta_1. Drawn per band and independently on every rank, as it must be:
             # eta_1 is the white-noise realization of *this* band's data. Zero-weight pixels
             # (unobserved, map_inv_var = 0) get no fluctuation, matching their absence from the LHS.
@@ -181,8 +186,9 @@ class CompSepSolver:
         # Y^T (N^-1 d + N^{-1/2} eta_1)
         b_alm = alm_to_map_adjoint(b_map, self.band_map.nside, self.band_map.lmax,
                                    spin=self.band_map.spin, nthreads=self.nthreads)
-        b_band = Band(b_alm.astype(self.band_alms.alms.dtype, copy=False), self.band_map.nu,
-                      self.band_map.fwhm_rad, self.band_map.nside)
+        b_band = Band.init_from_detector(self.band_map,
+                                         double_precision=comp_list[0].double_precision)
+        b_band.alms[:] = b_alm
         # Point sources read the pixel map itself, as in the LHS.
         b_band.map = b_map
 
@@ -210,7 +216,7 @@ class CompSepSolver:
                 amp_prior_mean = comp.amp_prior_mean
                 if amp_prior_mean is not None:
                     comp.amps += comp.apply_Cl_prior_inv_sqrt(amp_prior_mean)
-                if not self.group.optimize:
+                if not self.group.cfg.optimize:
                     # + eta_2, the prior's own fluctuation. In the preconditioned variable it enters
                     # unmodified: substituting a = S^{1/2}x into the S^{-1/2}eta_2 term and
                     # left-multiplying by S^{1/2} leaves it alone.
@@ -233,9 +239,9 @@ class CompSepSolver:
         Every rank of the solver's communicator must call this. Rank 0 (the master) runs the CG,
         and the other ranks apply their band's part of the operator.
 
-        With `group.optimize` False (the default) the solution is a constrained realization, i.e.
-        the Wiener mean plus two fluctuation terms, i.e. the amplitudes are a draw from the
-        conditional posterior. With `group.optimize` True, only the mean term is used and the
+        With `group.cfg.optimize` False (the default) the solution is a constrained realization,
+        i.e. the Wiener mean plus two fluctuation terms, i.e. the amplitudes are a draw from the
+        conditional posterior. With `group.cfg.optimize` True, only the mean term is used and the
         result is the deterministic maximum a posteriori solution, which is biased low in power.
 
         `rng` is this rank's random generator. Each rank must have its own stream: eta_1 is *this*
@@ -243,7 +249,7 @@ class CompSepSolver:
         bands.
         """
         pol_name = self.band_map.pol
-        max_iter = self.group.max_iter_pol if self.band_map.pol == "QU" else self.group.max_iter
+        max_iter = self.group.cfg.max_iter_pol if pol_name == "QU" else self.group.cfg.max_iter
 
         # Set comp beams to 0 (in theory they could be non-zero if the per-pix solver has ran).
         for comp in comp_list:
@@ -260,7 +266,7 @@ class CompSepSolver:
 
         # Find the chosen preconditioner, as named in the parameter file.
         with benchmark("cg-precond-init"):
-            precond = getattr(preconditioners, self.group.preconditioner)(
+            precond = getattr(preconditioners, self.group.cfg.preconditioner)(
                 self.solver_comm, self.band_map, comp_list)
 
         # The CG changes `comp_list` (its x) and `RHS` (its residual) in place.
@@ -283,14 +289,14 @@ class CompSepSolver:
                                f"({(time.time() - t0)/checkpt_int:.2f}s/iter)")
                 t0 = time.time()
             # Only the master holds the error, so it decides for all ranks.
-            if self.solver_comm.bcast(CG_solver.err <= self.group.err_tol, root=0):
+            if self.solver_comm.bcast(CG_solver.err <= self.group.cfg.err_tol, root=0):
                 break
         if self.is_master:
             # With err_tol 0 the user asks for exactly max_iter iterations, so that is no warning.
-            if self.group.err_tol > 0.0 and CG_solver.err > self.group.err_tol:
+            if self.group.cfg.err_tol > 0.0 and CG_solver.err > self.group.cfg.err_tol:
                 logger.warning(f"Maximum number of iterations ({max_iter}) reached in CG.")
             logger.info(f"{pol_name} CG finished after {len(residuals)} iterations with a squared "
-                        f"residual of {CG_solver.err:.3e} (err tol = {self.group.err_tol})")
+                        f"residual of {CG_solver.err:.3e} (err tol = {self.group.cfg.err_tol})")
 
         # a = S^{1/2} x on the master, which then sends the solution to the other ranks.
         for comp in comp_list:

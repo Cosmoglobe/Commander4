@@ -277,13 +277,13 @@ def test_cg_and_per_pixel_groups_are_mutually_exclusive() -> None:
         read_sampling_groups(params)
 
 
-def test_per_pixel_solver_accepts_resolved_precision() -> None:
+def test_per_pixel_solver_stores_the_solution_in_the_precision_of_the_components() -> None:
     comp_list = _make_comp_list("I")
     band_map = DetectorMap(
         map_sky=np.ones((1, 48)), map_inv_var=np.ones((1, 48)),
         nu=30.0, fwhm=0.0, nside=2,
     )
-    solve_compsep_perpix(MPI.COMM_SELF, band_map, comp_list, double_precision=False, nthreads=1,
+    solve_compsep_perpix(MPI.COMM_SELF, band_map, comp_list, nthreads=1,
                          rng=np.random.default_rng(0))
     assert comp_list[0].amps.dtype == np.complex64
     assert np.all(np.isfinite(comp_list[0].amps))
@@ -333,7 +333,7 @@ def test_an_amplitude_group_is_solved_against_the_band_minus_the_fixed_component
     group = AmplitudeGroup.init_from_params(params, "cg_sampling_groups", "cmb", mpi_info)
     assert group.solver_ranks == {"I": [0], "QU": []}
 
-    sample_amplitudes(mpi_info, params, group, band_map, comp_list, np.random.default_rng(0))
+    sample_amplitudes(mpi_info, group, band_map, comp_list, np.random.default_rng(0))
 
     assert cmb.comp_name == "CMB"
     np.testing.assert_allclose(cmb.amps, true_amps[0], atol=1e-3)

@@ -136,7 +136,7 @@ def run_compsep_side(mpi_info: MPIInfo, params: Bunch, start: ChainStart) -> Non
 
 
 def run_commander4(params: Bunch, params_dict: dict):
-    """ Main loop function for Commander 4 Gibbs Sampling.
+    """Set up MPI and the chain start, then run this rank's side (TOD or CompSep) of the Gibbs loop.
 
     Commander4 splits the Gibbs chain in two: (i) TOD processing and (ii) component separation.
     It dedicates different hardware and separate MPI communicators for the two tasks.
@@ -150,7 +150,7 @@ def run_commander4(params: Bunch, params_dict: dict):
     if MPI.COMM_WORLD.Get_rank() == 0:
         logger.summary(f"Run date: {date.today().isoformat()}.")
 
-    # Perform initial MPI setup, assigning tasks to different MPI ranks and deciding master ranks.
+    # Perform initial MPI setup, assigning each MPI rank to the TOD or CompSep side and to a band.
     mpi_info = init_mpi(params)
 
     if mpi_info.world.rank == 0:
@@ -181,8 +181,8 @@ def run_commander4(params: Bunch, params_dict: dict):
         return 0
 
     if mpi_info.world.rank == 0:
-        logger.summary("TOD side enabled: {tod_active}.")
-        logger.summary("CompSep side enabled: {tod_active}.")
+        logger.summary(f"TOD side enabled: {tod_active}.")
+        logger.summary(f"CompSep side enabled: {compsep_active}.")
         component_names: list[str] = []
         for component_name in params.components:
             component = params.components[component_name]

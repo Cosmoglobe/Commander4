@@ -86,6 +86,9 @@ class DetectorMap:
     resolution parameters. Derived quantities like ``pol`` and ``spin`` are computed on the fly
     via properties.
 
+    Both maps are stored in float32. They are the results of float64 accumulations (the TOD
+    mapmaker, the downgrading of file maps), and single precision is enough after that.
+
     Attributes:
         map_sky (NDArray): Sky signal map of shape ``(npol, npix)``.
         map_inv_var (NDArray): Inverse noise variance map, same shape as ``map_sky``; 0 where
@@ -96,7 +99,7 @@ class DetectorMap:
         lmax (int): Maximum multipole for harmonic transforms.
     """
     def __init__(self, map_sky:NDArray, map_inv_var:NDArray, nu:float, fwhm:float, nside:int,
-                 double_precision:bool=False, lmax:int|None = None):
+                 lmax:int|None = None):
         """Construct a DetectorMap.
 
         Args:
@@ -105,7 +108,6 @@ class DetectorMap:
             nu: Band centre frequency in GHz.
             fwhm: Beam FWHM in arcminutes.
             nside: HEALPix nside of the maps.
-            double_precision: If True, store ``map_inv_var`` in float64.
             lmax: Maximum multipole. Defaults to ``3*nside - 1``, the full bandlimit of a
                 HEALPix map at this resolution (C3's ``BAND_LMAX``, which is likewise set per band
                 and typically sits between 2*nside and 3*nside).
@@ -124,7 +126,8 @@ class DetectorMap:
             raise ValueError(f"Map pixel count {map_sky.shape[-1]} does not match nside {nside} "
                              f"({expected_npix} pixels).")
 
-        self.map_sky = map_sky
+        self.map_sky = map_sky.astype(np.float32, copy=False)
+        self.map_inv_var = map_inv_var.astype(np.float32, copy=False)
         self.nu = nu
         self.fwhm = fwhm #stored in arcmin
         self.nside = nside
@@ -133,8 +136,6 @@ class DetectorMap:
         # invisible to the data and left to the C(l) prior alone; `_validate_component_lmax` in
         # compsep/processing.py reports that at startup.
         self.lmax = (3*nside - 1) if lmax is None else lmax
-        self.map_inv_var = map_inv_var.astype(np.float64 if double_precision else np.float32,
-                                              copy=False)
 
     @property
     def fwhm_rad(self):

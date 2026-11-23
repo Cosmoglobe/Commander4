@@ -184,7 +184,7 @@ def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[Amp
     # again, so that the chain holds amplitudes solved at the final spectral parameters.
     for group in amplitude_groups:
         with benchmark(f"amp-{group.name}"):
-            stats = sample_amplitudes(mpi_info, params, group, band_map, comp_list, rng)
+            stats = sample_amplitudes(mpi_info, group, band_map, comp_list, rng)
         if stats:  # Empty for a per-pixel group, and for a group with nothing to solve.
             amplitude_stats[group.name] = stats
         log_fit(mpi_info, band_map, comp_list, label=f"{group.solver} group {group.name!r}")
@@ -198,7 +198,7 @@ def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[Amp
     if mcmc_groups:  # If any MCMC group ran.
         for group in amplitude_groups:
             with benchmark(f"amp-{group.name}"):
-                stats = sample_amplitudes(mpi_info, params, group, band_map, comp_list, rng)
+                stats = sample_amplitudes(mpi_info, group, band_map, comp_list, rng)
             if stats:
                 amplitude_stats[group.name] = stats
             log_fit(mpi_info, band_map, comp_list, label=f"{group.solver} group {group.name!r}")

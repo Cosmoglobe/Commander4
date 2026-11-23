@@ -212,7 +212,7 @@ def sample_spectral_params(mpi_info: MPIInfo, params: Bunch, group: MCMCGroup,
                 comp.beta = new_betas[name]  # beta
         with benchmark("mcmc-amp-resolve"):
             for amplitude_group in group.update_amplitude_groups:
-                sample_amplitudes(mpi_info, params, amplitude_group, band_map, comp_list, rng)
+                sample_amplitudes(mpi_info, amplitude_group, band_map, comp_list, rng)
         new_chi2 = chi2_of_chisq_bands(mpi_info, group, band_map, comp_list)
 
         # The Metropolis rule: accept with probability min(1, P_new/P_old). The proposal is

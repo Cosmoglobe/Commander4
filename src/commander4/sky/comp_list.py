@@ -111,14 +111,16 @@ class CompList:
     def get_sky_at_band(self, band_map: DetectorMap) -> NDArray:
         """The sky as one band map sees it: at its frequency, resolution, beam and lmax.
 
-        The result has the shape of `band_map.map_sky`, so `band_map.map_sky` minus it is the
-        residual of the band.
+        The result has the shape and precision of `band_map.map_sky`, so `band_map.map_sky` minus
+        it is the residual of the band.
         """
         return self.get_sky_at_nu(band_map.nu, band_map.nside, band_map.pol,
-                                  fwhm_rad=band_map.fwhm_rad, lmax=band_map.lmax)
+                                  fwhm_rad=band_map.fwhm_rad, lmax=band_map.lmax,
+                                  dtype=band_map.map_sky.dtype)
 
     def get_sky_at_nu(self, nu: float, nside: int, pols_required: str,
-                      fwhm_rad: float | None = None, lmax: int | None = None) -> NDArray:
+                      fwhm_rad: float | None = None, lmax: int | None = None,
+                      dtype: type = np.float32) -> NDArray:
         """The sky of all components at one frequency, resolution, beam and lmax.
 
         Diffuse components go through `comp2band`, the CG solver's own operator (cut at the band
@@ -135,6 +137,7 @@ class CompList:
                 amplitudes can give: the largest `amp_fwhm_rad` of the components (normally 0.0).
             lmax: The band lmax (`DetectorMap.lmax`). `None` means `3*nside - 1`, the default band
                 lmax.
+            dtype: The precision of the result, float32 or float64.
 
         Raises:
             ValueError: If `fwhm_rad` is finer than the beam the amplitudes already carry.
@@ -152,15 +155,16 @@ class CompList:
                 f"available.")
         lmax = 3*nside - 1 if lmax is None else lmax
         nrows = len(pols_required)
-        skymap = np.zeros((nrows, hp.nside2npix(nside)), dtype=np.float32)
+        skymap = np.zeros((nrows, hp.nside2npix(nside)), dtype=dtype)
         diffuse = [comp for comp in self.components if isinstance(comp, DiffuseComponent)]
         # One band per view: intensity (map row 0, spin 0) and polarization (the last two rows,
         # spin 2). A joined IQU component contributes to both.
         for view, rows, spin in (("I", slice(0, 1), 0), ("QU", slice(nrows - 2, nrows), 2)):
             if view[0] not in pols_required:
                 continue
-            # Single precision, like `skymap`, which the result goes into.
-            band = Band(np.zeros((len(view), hp.Alm.getsize(lmax)), dtype=np.complex64), nu,
+            # The alms in the precision of `skymap`, which the result goes into.
+            alm_dtype = np.complex128 if dtype == np.float64 else np.complex64
+            band = Band(np.zeros((len(view), hp.Alm.getsize(lmax)), dtype=alm_dtype), nu,
                         fwhm_rad, nside)
             for comp in diffuse:
                 if comp.pol in (view, "IQU"):

@@ -51,7 +51,7 @@ def _make_setup(start_beta: float = TRUE_BETA, **beta_settings):
 
     npix = 12*NSIDE**2
     band_map = DetectorMap(np.zeros((1, npix)), np.full((1, npix), 1.0e4), nu=NU, fwhm=0.0,
-                           nside=NSIDE, double_precision=True, lmax=LMAX)
+                           nside=NSIDE, lmax=LMAX)
     band_map.map_sky = comp_list.get_sky_at_band(band_map).astype(np.float64)
     for comp in comp_list:
         comp.beta = start_beta
