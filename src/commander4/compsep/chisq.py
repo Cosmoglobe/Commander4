@@ -1,17 +1,7 @@
-"""How well the current sky model fits the band maps, and the record of it the chain keeps.
+"""How well the current sky model fits the band maps, for the log and for the chain file.
 
-Commander4's analogue of Commander3's `comm_chisq_mod.f90`. Every CompSep rank owns one polband
-(a band in I or in QU), so the fit is evaluated locally and then combined over all bands:
-after each sampling step into the all-band chi-squared the log shows (`log_fit`), and once per
-Gibbs iteration into the per-band terms and maps the chain stores (`collect_fit_diagnostics`).
-
-Commander3 spreads the same information over three outputs -- the chisq columns of
-`fg_ind_mean_c<CCCC>.dat`, the `chisq_<postfix>.fits` map, and `res_<band>_<postfix>.fits`. All of
-it comes from one quantity, the whitened residual
-
-    z = (d - s(theta)) / sigma,
-
-evaluated over the pixels a band actually observed.
+Each CompSep rank evaluates its own polband, and the results are combined over all ranks. The fit
+is measured by the whitened residual z = (d - s) / sigma, over the pixels a band observed.
 """
 import logging
 
@@ -31,7 +21,7 @@ logger = logging.getLogger(__name__)
 def log_fit(mpi_info: MPIInfo, band_map: DetectorMap, comp_list: CompList, label: str) -> None:
     """Log how well the current sky model fits this band and all bands, after the step `label`.
 
-    Called collectively by every CompSep rank.
+    Every CompSep rank must call it.
     """
     compsep = mpi_info.compsep
     sky_at_band = comp_list.get_sky_at_band(band_map)
@@ -60,21 +50,16 @@ def collect_fit_diagnostics(mpi_info: MPIInfo, params: Bunch, band_map: Detector
                             comp_list: CompList) -> tuple[dict, dict[str, float]]:
     """Gather the fit of the sky model to each band onto the CompSep master, for the chain file.
 
-    Called collectively by every CompSep rank, once per Gibbs iteration. Each rank evaluates its
-    own band. One small Python `gather` collects the per-band numbers, and one `Reduce` the
-    low-resolution chi-squared map (resolution `output.chains.nside_chisq`, C3's `NSIDE_CHISQ`).
-    With `output.chains.include.compsep_residual_maps`, the full-resolution `data - model` maps go
-    in the same `gather`, which is the expensive case.
+    Every CompSep rank must call it. The chi-squared map has the resolution
+    `output.chains.nside_chisq`. With `output.chains.include.compsep_residual_maps`, the
+    full-resolution `data - model` maps are gathered too, which is expensive.
 
     Returns:
         `(fit_tree, band_frequencies)` on the master, and two empty dicts elsewhere. `fit_tree`
-        holds the `chi2` group and, when kept, the `residuals` group; `band_frequencies` maps each
-        band name to its centre frequency in GHz, which is what lets the chain writer record a
-        mixing coefficient per band.
+        holds the `chi2` group and, when kept, the `residuals` group. `band_frequencies` maps each
+        band name to its frequency in GHz.
     """
     compsep = mpi_info.compsep
-    # The chi-squared map resolution should be at or below the coarsest band nside, since the map
-    # only ever sums z^2 into its pixels.
     chains = params.output.chains
     nside_chisq = int(getattr(chains, "nside_chisq", 256))
     include_chisq_map = bool(getattr(chains.include, "chisq_map", False))
@@ -82,14 +67,13 @@ def collect_fit_diagnostics(mpi_info: MPIInfo, params: Bunch, band_map: Detector
 
     residual = band_map.map_sky - comp_list.get_sky_at_band(band_map)
     npix, npix_chisq = band_map.map_sky.shape[-1], hp.nside2npix(nside_chisq)
-    # ud_grade averages, so scaling by how many band pixels fall in a chi-squared pixel turns the
-    # average into the sum over them that Commander3's chisq map accumulates (comm_output_mod.f90).
-    # For a band coarser than the chi-squared map the factor is below 1: each band pixel's z^2 is
-    # spread evenly over the chi-squared pixels inside it, so the map's total is kept either way.
+    # `ud_grade` averages, so scaling by the number of band pixels per chi-squared pixel turns the
+    # average into a sum. For a band coarser than the map the factor is below 1, which spreads each
+    # band pixel's z^2 over the map pixels inside it. The map's total is kept either way.
     subpixels_per_chisq_pixel = npix/npix_chisq
 
-    # z^2 in `nside_chisq` pixels. Row 0 is intensity and rows 1-2 are Q/U, so summing an I polband
-    # and a QU polband of the same band cannot make them collide.
+    # z^2 in `nside_chisq` pixels. Row 0 is I and rows 1-2 are Q and U, so the I and QU ranks of one
+    # band do not collide in the sum over ranks.
     chi2_map = np.zeros((3, npix_chisq))
     chi2_band, ndof_band = 0.0, 0
     for ipol in range(band_map.npol):
@@ -102,7 +86,7 @@ def collect_fit_diagnostics(mpi_info: MPIInfo, params: Bunch, band_map: Detector
         chi2_row = 1 + ipol if band_map.pol == "QU" else 0
         chi2_map[chi2_row] += hp.ud_grade(z2_full, nside_chisq)*subpixels_per_chisq_pixel
 
-    # Commander3's chisq_<postfix>.fits: z^2 from every band added into one low-resolution map.
+    # z^2 of every band, added into one low-resolution map.
     chi2_map_total = np.zeros_like(chi2_map) if compsep.rank == 0 else None
     compsep.comm.Reduce(chi2_map, chi2_map_total, op=MPI.SUM, root=0)
     band_fit = Bunch(name=compsep.band_name, pol=compsep.pol,
@@ -116,9 +100,8 @@ def collect_fit_diagnostics(mpi_info: MPIInfo, params: Bunch, band_map: Detector
     ndof = sum(band_fit.ndof for band_fit in band_fits)
     chi2: dict = {"total": total, "ndof": ndof, "bands": {}}
     chi2["reduced"] = total/ndof if ndof > 0 else float("nan")
-    # Commander3's fg_ind_mean.dat also reports the chi-squared as a z-score, which is what says
-    # whether a fit is good rather than merely large: chi-squared grows with the map size, its
-    # z-score does not.
+    # The z-score says whether the fit is good: chi-squared grows with the map size, its z-score
+    # does not.
     chi2["z"] = (total - ndof)/np.sqrt(2.0*ndof) if ndof > 0 else float("nan")
     if include_chisq_map:
         chi2["map"] = chi2_map_total.astype(np.float32)

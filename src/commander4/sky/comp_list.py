@@ -1,16 +1,12 @@
-"""`CompList`: an ordered list of component views, which the CG can use as a vector.
+"""`CompList`: the container of all sky components, which the CG also uses as its vector.
 
-A component defined for IQU is stored as two views, one for I and one for QU, because the two are
-solved on separate MPI ranks. `CompList` holds five kinds of method, and nothing else:
-
+A component defined for IQU is stored as two views, one for I and one for QU.
+`CompList` holds five kinds of method, and nothing else:
 - building the views from the parameter file (`init_from_params`),
 - reorganizing them (`split_for_pol`, `joined`),
 - the sky that all the components together give at a band (`get_sky_at_band`, `get_sky_at_nu`),
 - the vector arithmetic of the CG (`zeros_like`, `copy`, `dot`, `add_scaled`, `scale_and_add`),
 - writing the chain and keeping the MPI ranks in step (`write_chain`, `broadcast_pol_views`).
-
-Work on one component at a time (`comp2band`, the C_l prior, loading its starting state, ...) is
-not passed down through the list: the code that needs it loops over the components itself.
 """
 from __future__ import annotations
 
@@ -58,9 +54,8 @@ class CompList:
     def init_from_params(cls, params: Bunch) -> CompList:
         """The views of every enabled component under `components` in the parameter file.
 
-        A component has one view per polarization it is defined for: I, QU, or both for IQU. The
-        list does not depend on the MPI layout: a view whose polarization the run does not solve
-        stays at its starting value.
+        Every rank gets the same list, whatever part of it the rank solves. A view that no rank
+        solves (such as the QU view in a run without polarized bands) keeps its starting value.
         """
         comp_list = []
         for comp_name in params.components:
@@ -123,27 +118,19 @@ class CompList:
                       dtype: type = np.float32) -> NDArray:
         """The sky of all components at one frequency, resolution, beam and lmax.
 
-        Diffuse components go through `comp2band`, the CG solver's own operator (cut at the band
-        lmax, mixing matrix, beam), and are then synthesized at `nside`, as C3's `evalBand` does:
-        the sky compared with a band's data is exactly the model the amplitudes were solved for.
-        Point sources are painted in pixel space and added, as in C3's `compute_residual`.
-
-        The list may be the split views used during CompSep (`I` and `QU`) or a joined list
-        with `IQU` components.
+        The list may hold split views (I and QU) or joined IQU components.
 
         Args:
             pols_required: The Stokes rows of the result: "I", "QU" or "IQU".
             fwhm_rad: Beam to realize the sky through, in radians. `None` asks for the sharpest the
-                amplitudes can give: the largest `amp_fwhm_rad` of the components (normally 0.0).
-            lmax: The band lmax (`DetectorMap.lmax`). `None` means `3*nside - 1`, the default band
-                lmax.
+                amplitudes can give: the largest `amp_fwhm_rad` of the components (0 after the
+                CG, the common beam after the per-pixel solver).
+            lmax: The band lmax. `None` means `3*nside - 1`.
             dtype: The precision of the result, float32 or float64.
-
-        Raises:
-            ValueError: If `fwhm_rad` is finer than the beam the amplitudes already carry.
         """
-        # The beam the amplitudes carry: 0.0 after the CG solver, which gives a deconvolved sky,
-        # and `compsep.common_res_fwhm` after the per-pixel solver.
+        # Diffuse components go through `comp2band`, the CG's own operator, so the sky compared
+        # with a band's data is exactly the model the amplitudes were solved for. Point sources are
+        # painted in pixel space.
         amp_fwhm_rad = max((comp.amp_fwhm_rad for comp in self.components), default=0.0)
         if fwhm_rad is None:
             fwhm_rad = amp_fwhm_rad
@@ -201,11 +188,7 @@ class CompList:
         return zeros
 
     def dot(self, other: CompList) -> float:
-        """The dot product of two lists: the sum of the dot products of their components.
-
-        Each component class defines its own dot product (`Component.dot`), because complex alms
-        and point-source amplitudes need different ones.
-        """
+        """The dot product of two lists: the sum of `Component.dot` over their components."""
         res = 0.0
         for comp, other_comp in zip(self.components, other.components):
             res += float(comp.dot(other_comp))
@@ -233,18 +216,12 @@ class CompList:
             comp.write_chain(file.create_group(f"comps/{comp.comp_name}"), band_frequencies)
 
     def broadcast_pol_views(self, comm: MPI.Comm, *, pol: str, source: int) -> None:
-        """Broadcast all polarization views of `pol` from `source` to every rank in `comm`.
+        """Broadcast the amplitudes and `amp_fwhm_rad` of the `pol` views from rank `source`.
 
-        Used after a sampling step: only the ranks that actually solved a given polarization hold
-        the updated component data, so broadcasting that polarization's views from one authoritative
-        `source` rank restores a globally consistent component list.
+        After a solve, only the ranks that solved `pol` hold its new values. This gives them to
+        every rank in `comm`.
         """
         for comp in self.split_for_pol(pol):
             comp.bcast_amps(comm, root=source)
-            # The amplitudes' resolution travels with them: the solving rank's value is authoritative.
             comp.amp_fwhm_rad = comm.bcast(comp.amp_fwhm_rad, root=source)
-            # FIXME: The above feels fragile: if we add more attributes that could change during
-            # the amplitude solve, they would have to be added here. We could either introduce an
-            # amplitude object that holds related information as well as the alms, or at least make
-            # things more visible by specifying what must be transferred in __init__:
-            #     _amp_metadata_attrs: tuple[str, ...] = ("amp_fwhm_rad",)
+            # TODO: Fragile: any other attribute a solver changes must also be broadcast here.
