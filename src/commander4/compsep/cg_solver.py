@@ -40,12 +40,17 @@ class CompSepSolver:
         - N is the noise covariance matrix
         - mu is the mean spatial prior, typically 0
         - S is the power spectrum prior on each component (i.e. a prior on the variance around mu)
-    For numerical stability, we actually solve the equivalent equation:
+
+    For numerical stability, we rewrite the above equation to:
         (1 + S^{1/2} A^T N^-1 A S^{1/2}) a' = S^{1/2} A^T N^{-1} d
                                             + S^{1/2} A^T N^{-1/2} eta_1 + S^{-1/2} mu + eta_2
     which is solved for a' = [S^{-1/2} a], from which we can recover a = S^{1/2} a'.
-    The eta_1 and eta_2 terms are drawn from random Gaussians, and setting them to 0 gives the
-    maximum posterior, as opposed to drawing a constrained realization from the posterior.
+    
+    The eta_1 and eta_2 terms are random Gaussians. If `group.cfg.optimize=True` they are set to 0,
+    which gives the maximum posterior (Wiener filtered) map solution, with a PS that is biased low.
+
+    For components with no prior (S -> infinity) we do *not* rewrite the equation, and instead get:
+        (A^T N^-1 A) a = A^T N^-1 d + A^T N^{-1/2} eta_1
 
     The solution, a, is in spherical harmonic (alm) space for all diffuse components, while some of
     the matrices (N^-1 and sometimes M) have to be applied in real-space. There are therefore
@@ -66,18 +71,13 @@ class CompSepSolver:
 
 
     def apply_LHS_matrix(self, comp_list_in: CompList) -> CompList:
-        """Apply H, the left-hand side of the Hx=b system, to the vector `comp_list_in`.
-
-        The full H matrix is (1 + S^{1/2} A^T N^-1 A S^{1/2}), with A = B M.
-        For a component without a prior (`Cl_prior_amplitude: null`, C3's `CL_TYPE = none`)
-        the "1 +" is left out and S = 1. For point sources, `B Y^-1 M Y` is replaced by painting
-        the sources into the band map, and the Y and Y^T around N^-1 are left out.
+        """Apply H, the left-hand side of the Hx = b system, to the vector `comp_list_in`.
 
         Every rank of the solver's communicator must call this, because each rank applies the
-        part of A that belongs to its band.
+        part of H that belongs to its band. See class docstrings for details on the equation.
 
         Args:
-            comp_list_in: The vector to apply A to. Only the master's amplitudes are used, and
+            comp_list_in: The vector to apply H to. Only the master's amplitudes are used, and
                 they are not changed. On the other ranks the list is a work buffer, and its
                 amplitudes are overwritten.
         Returns:
@@ -92,7 +92,7 @@ class CompSepSolver:
         comp_list = comp_list_in.copy() if self.is_master else comp_list_in
 
         if self.is_master:  # Only the master holds the values of the vector.
-            # S^{1/2} [a]
+            # a' = S^{1/2} [a']
             for comp in comp_list:
                 comp.apply_Cl_prior_sqrt(comp.amps)
 
@@ -101,7 +101,7 @@ class CompSepSolver:
             for comp in comp_list:
                 comp.bcast_amps(self.solver_comm)
 
-        # B M [S^{1/2} a].
+        # B M [S^{1/2} a']
         # Each component adds itself to an empty band, in the components' precision: a diffuse
         # component to its alms, point sources to its pixel map.
         with benchmark("lhs-project"):
@@ -110,9 +110,7 @@ class CompSepSolver:
             for comp in comp_list:
                 comp.comp2band(band_alms, nthreads=self.nthreads)
 
-        # Y^T N^-1 Y B Y^-1 M Y S^{1/2} a. Point sources are added in pixel space, as in C3:
-        # comp2band painted them into `band_alms.map` (None without point sources), and they read
-        # N^-1 (...) back from it. Diffuse components go through Y and Y^T.
+        # N^-1 [B M S^{1/2} a']
         with benchmark("lhs-inv-N"):
             band_map = self.band_map
             pix_map = alm_to_map(band_alms.alms, band_map.nside, band_map.lmax, spin=band_map.spin,
@@ -125,7 +123,7 @@ class CompSepSolver:
             band_alms.alms = alm_to_map_adjoint(pix_map, band_map.nside, band_map.lmax,
                                                 spin=band_map.spin, nthreads=self.nthreads)
 
-        # Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
+        # M^T B^T [N^-1 B M S^{1/2} a']
         with benchmark("lhs-eval"):
             for comp in comp_list:
                 comp.band2comp(band_alms, nthreads=self.nthreads)
@@ -137,10 +135,11 @@ class CompSepSolver:
             if self.is_master:
                 for icomp in range(len(comp_list)):
                     requests[icomp].Wait()
-                    # S^{1/2} Y^T M^T Y^-1^T B^T Y^T N^-1 Y B Y^-1 M Y S^{1/2} a
+                    # S^{1/2} [M^T B^T N^-1 B M S^{1/2} a']
                     comp = comp_list[icomp]
                     comp.apply_Cl_prior_sqrt(comp.amps)
-                    # The prior term adds the input vector: (1 + S^{1/2}...)a = a + (S^{1/2}...)a.
+                    # The +1 term is equivalent to simply adding the input a' vector to the result:
+                    # (1 + S^{1/2}...)a' = a' + (S^{1/2}...)a'
                     if comp.Cl_prior_amplitude is not None:
                         comp.amps += comp_list_in[icomp].amps
             else: # Worker ranks just wait for all their sends to complete.
@@ -152,38 +151,28 @@ class CompSepSolver:
 
     @benchmark("cg-rhs")
     def calc_RHS(self, comp_list: CompList, rng: np.random.Generator) -> CompList:
-        """ Calculates the right-hand-side b-vector of the Hx=b CompSep equation, and returns it as
-            a new list with the same components as `comp_list`, which is not changed:
+        """ Calculates RHS of the Hx = b CompSep equation, and returns it as a new CompList.
 
-                b = S^{1/2} A^T (N^-1 d + N^{-1/2} eta_1) + S^{-1/2} mu + eta_2,
-
-            where the two eta terms are left out when `group.cfg.optimize` is set. Without them
-            b gives the deterministic Wiener-filtered (maximum a posteriori) mean, whose power
-            spectrum is biased low; with them the CG solution is a constrained realization, i.e. a
-            draw from the full conditional posterior of the amplitudes.
-
-            The data and the eta_1 fluctuation are summed in *map* space, before the single shared
-            application of S^{1/2}A^T: they differ only in which map-space vector they start from,
-            and the operator between there and the component alms is linear, so one adjoint SHT, one
-            MPI reduce and one prior application serve both terms. The prior mean mu and the prior
-            fluctuation eta_2 need none of that (they live directly in the component alm space)
-            so they are added afterwards, on the rank that holds the accumulated result. A component
-            without a prior (`Cl_prior_amplitude: null`) gets neither of the two.
+        The RHS can be written as
+            b = S^{1/2} A^T Y^T (N^-1 d + N^{-1/2} eta_1) + S^{-1/2} mu + eta_2,
+        (explicitly including the Y^T SHT needed to get from map to alm space).
         """
-        #FIXME: how will eta_2 work for point sources?
-
-        # N^-1 d
+        # N^-1 [d]
         b_map = self.band_map.apply_inv_N_map(self.band_map.map_sky, inplace=False)
+        
+        # + N^{-1/2} eta_1, unless we want the Wiener filtered solution.
         if not self.group.cfg.optimize:
-            # + N^{-1/2} eta_1. Drawn per band and independently on every rank, as it must be:
+            #  Drawn per band and independently on every rank, as it must be:
             # eta_1 is the white-noise realization of *this* band's data. Zero-weight pixels
             # (unobserved, map_inv_var = 0) get no fluctuation, matching their absence from the LHS.
             eta_1 = rng.normal(0.0, 1.0, b_map.shape)*np.sqrt(self.band_map.map_inv_var)
             logger.debug(f"RHS |N^-1 d| = {np.mean(np.abs(b_map)):.2e}, "
                          f"|N^-1/2 eta_1| = {np.mean(np.abs(eta_1)):.2e}")
+            # The data and the eta_1 fluctuation are summed in *map* space, before the single shared
+            # application of S^{1/2}A^T
             b_map += eta_1.astype(b_map.dtype, copy=False)
 
-        # Y^T (N^-1 d + N^{-1/2} eta_1)
+        # Y^T [N^-1 d + N^{-1/2} eta_1]
         b_alm = alm_to_map_adjoint(b_map, self.band_map.nside, self.band_map.lmax,
                                    spin=self.band_map.spin, nthreads=self.nthreads)
         b_band = Band.init_from_detector(self.band_map,
@@ -192,7 +181,7 @@ class CompSepSolver:
         # Point sources read the pixel map itself, as in the LHS.
         b_band.map = b_map
 
-        # (Y^T M^T Y^-1^T B^T) Y^T (...)
+        # M^T B^T [Y^T N^-1 d + N^{-1/2} eta_1]
         RHS = comp_list.zeros_like()
         for comp in RHS:
             comp.band2comp(b_band, nthreads=self.nthreads)
@@ -205,48 +194,36 @@ class CompSepSolver:
 
         if self.is_master:
             for comp in RHS:
-                if comp.Cl_prior_amplitude is None:
-                    continue  # No prior: no prior mean and no prior draw.
-                # + S^{-1/2} mu, the prior mean. Added whether or not we are sampling: unlike the
+                if comp.Cl_prior_amplitude is None:  # No prior: no prior mean and no prior draw.
+                    continue
+
+                # + S^{-1/2} mu, the prior mean, added whether or not we are sampling: unlike the
                 # eta terms this belongs to the *mean* solution, so a non-zero prior mean shifts the
-                # Wiener filter itself and must be present in the MAP solve too. mu is an alm
-                # vector, None unless the component sets `amp_prior_mean_map` (read as a sky map
-                # and transformed once at startup by `load_amp_prior_mean`); the usual
-                # zero-mean prior therefore costs one None check, not a full-size scale-and-add.
+                # Wiener filter itself and must be present in the MAP solve too.
                 amp_prior_mean = comp.amp_prior_mean
                 if amp_prior_mean is not None:
                     comp.amps += comp.apply_Cl_prior_inv_sqrt(amp_prior_mean)
+
+                #FIXME: how will eta_2 work for point sources?
+                # + eta_2, the prior's own fluctuation, unless we want the Wiener filtered solution.
                 if not self.group.cfg.optimize:
-                    # + eta_2, the prior's own fluctuation. In the preconditioned variable it enters
-                    # unmodified: substituting a = S^{1/2}x into the S^{-1/2}eta_2 term and
-                    # left-multiplying by S^{1/2} leaves it alone.
-                    for ipol in range(self.band_map.npol):
-                        comp.amps[ipol] += gaussian_random_alm(comp.lmax, comp.lmax,
-                                                               self.band_map.spin, 1, rng)[0]
+                    comp.amps += gaussian_random_alm(comp.lmax, comp.lmax, self.band_map.spin,
+                                                     self.band_map.npol, rng)
                 logger.debug(f"RHS comp-{comp.comp_name}: {np.mean(np.abs(comp.amps)):.2e}")
 
         return RHS
 
 
     def solve(self, comp_list: CompList, rng: np.random.Generator) -> list[float]:
-        """Solve the amplitudes of `comp_list` for this rank's band, in place, with the CG.
+        """Solve the amplitudes of `comp_list` for this rank's band, in place, with a CG.
 
-        The CG starts from the amplitudes that `comp_list` holds on entry, and leaves the solution
-        in them. It stops at the sampling group's `err_tol`, or after `max_iter` iterations
+        The CG starts from the amplitudes that `comp_list` holds on entry, and places the 
+        solution in them. It stops at the sampling group's `err_tol`, or after `max_iter` iterations
         (`max_iter_pol` for QU). Returns the squared residual after each iteration; only the
         master's values are meaningful.
 
-        Every rank of the solver's communicator must call this. Rank 0 (the master) runs the CG,
-        and the other ranks apply their band's part of the operator.
-
-        With `group.cfg.optimize` False (the default) the solution is a constrained realization,
-        i.e. the Wiener mean plus two fluctuation terms, i.e. the amplitudes are a draw from the
-        conditional posterior. With `group.cfg.optimize` True, only the mean term is used and the
-        result is the deterministic maximum a posteriori solution, which is biased low in power.
-
-        `rng` is this rank's random generator. Each rank must have its own stream: eta_1 is *this*
-        band's white-noise realization, so shared draws would correlate the fluctuation across
-        bands.
+        Every rank of the solver's communicator must call this function. Rank 0 (the master) runs
+        the CG, and the other ranks apply their band's part of the operator.
         """
         pol_name = self.band_map.pol
         max_iter = self.group.cfg.max_iter_pol if pol_name == "QU" else self.group.cfg.max_iter
