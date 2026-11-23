@@ -17,7 +17,6 @@ from pixell.bunch import Bunch
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.pointing import remap_pix_nside
-from commander4.diagnostics.performance import benchmark
 from commander4.tod.noise.sample_ncorr import realize_noise_in_gaps
 from commander4.tod.sky_projection import project_sky_to_tod, get_s_orb_tod
 
@@ -304,7 +303,7 @@ class TODView:
     def _fullres_pix(self) -> NDArray[np.integer]:
         """Full-rate pixel pointing (used internally for model evaluation and mask projection)."""
         if self._pix is None:
-            self._pix, self._psi = self.detector.get_pix_psi()
+            self._pix, self._psi = self.detector.pointing.get_pix_psi()
         return self._pix
 
     @property
@@ -322,7 +321,7 @@ class TODView:
     def _fullres_psi(self) -> NDArray[np.floating] | NDArray[np.integer]:
         """Full-rate polarization angle (used internally for model evaluation)."""
         if self._psi is None:
-            self._pix, self._psi = self.detector.get_pix_psi()
+            self._pix, self._psi = self.detector.pointing.get_pix_psi()
         return self._psi
 
     @property
@@ -519,9 +518,8 @@ class TODView:
         if self._far_sidelobes is None:
             far_sidelobes = self.tod_samples.far_sidelobes
             if far_sidelobes.cfg.enabled and far_sidelobes.cubes:
-                with benchmark("far-beam-proj"):
-                    full = far_sidelobes.get_projection(self._fullres_pix, self._fullres_psi,
-                                                        self.idet)
+                full = far_sidelobes.get_projection(self._fullres_pix, self._fullres_psi,
+                                                    self.idet)
             else:
                 full = np.zeros(self.detector.ntod)
             self._far_sidelobes = self._downsample_mean(full)

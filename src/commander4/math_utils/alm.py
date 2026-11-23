@@ -8,10 +8,8 @@ from math import sqrt
 
 import healpy as hp
 import numpy as np
-from numba import njit
+from numba import njit, prange
 from numpy.typing import NDArray
-
-from commander4.math_utils.arithmetic import dot, inplace_scale_add, inplace_add_scaled_vec
 
 
 @njit(fastmath=True, parallel=True)
@@ -23,74 +21,12 @@ def _dot_complex_alm_1D_arrays(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArr
     return np.sum((alm1[:nm0] * alm2[:nm0]).real)\
            + np.sum((alm1[nm0:] * np.conj(alm2[nm0:])).real * 2)
 
-###### ALM-LIST FUNCTIONS ######
-# These functions are common array operations, but made to work on the alm-lists, which are
-# lists of arrays, with each array being the alms of a certain component.
-
-def inplace_almlist_add_scaled_array(list_inplace, list_other, value):
-    """ `list_inplace += value*list_other`
-    """
-    for i in range(len(list_inplace)):
-        inplace_add_scaled_vec(list_inplace[i], list_other[i], value)
-
-def inplace_almlist_scale_and_add(list_inplace, list_other, value):
-    """ `list_inplace = value*list_inplace + list_other`
-    """
-    for i in range(len(list_inplace)):
-        inplace_scale_add(list_inplace[i], list_other[i], value)
-
-def almlist_dot_complex(alm_list1, alm_list2):
-    """ `dot(alm_list1, alm_list2)`. Calculates the correct dot product between two alm lists where
-        the alms follow the Healpy convention of not storing negative ms.
-    """
-    res = 0.0
-    for i in range(len(alm_list1)):
-        npol, nalm = alm_list1[i].shape
-        lmax = hp.Alm.getlmax(nalm)
-        for ipol in range(npol):
-            res += _dot_complex_alm_1D_arrays(alm_list1[i][ipol], alm_list2[i][ipol], lmax)
-    return res
-
-def almlist_dot_real(alm_list1, alm_list2):
-    """ `list_inplace = value*list_inplace + list_other`
-    """
-    res = 0.0
-    for i in range(len(alm_list1)):
-        npol, nalm = alm_list1[i].shape
-        for ipol in range(npol):
-            res += dot(alm_list1[i][ipol], alm_list2[i][ipol])
-    return res
-
-
-
 
 def nalm(lmax: int, mmax: int) -> int:
     """ Calculates the number of a_lm elements for a spherical harmonic representation up to
         l<=lmax and m<=mmax.
     """
     return ((mmax+1)*(mmax+2))//2 + (mmax+1)*(lmax-mmax)
-
-
-def get_mmax(alm: NDArray, lmax: int) -> int:
-    """ Finds the mmax of an alm array from the length of its last axis, given the lmax.
-
-        Alms are stored m-major, so the length is the sum of the block lengths (lmax+1-m) over
-        m = 0..mmax. That sum grows with mmax, so the first mmax reaching the length is the answer.
-        Args:
-            alm (np.array): Alm array in the complex convention, with the alms on the last axis.
-            lmax (int): The lmax of the alm array.
-        Returns:
-            mmax (int): The mmax of the alm array.
-    """
-    if alm.dtype not in (np.complex128, np.complex64):
-        raise TypeError(f"Alms must be complex64 or complex128, got {alm.dtype}. A real-convention "
-                        f"alm array has a different length, and can silently give a wrong mmax.")
-    length = 0
-    for mmax in range(lmax+1):
-        length += lmax + 1 - mmax
-        if length == alm.shape[-1]:
-            return mmax
-    raise ValueError(f"Alms of length {alm.shape[-1]} do not match any mmax for lmax={lmax}.")
 
 
 def gaussian_random_alm(lmax: int, mmax: int, spin: int, ncomp: int,
@@ -119,47 +55,19 @@ def gaussian_random_alm(lmax: int, mmax: int, spin: int, ncomp: int,
     return res
 
 
-@njit(cache=True, fastmath=True)
+@njit(cache=True, fastmath=True, parallel=True)
 def _almxfl_numba(res, lmax, mmax, fl):
-    ofs = 0
-    for m in range(mmax+1):
-        next = ofs + lmax + 1 - m
-        res[ofs:next] *= fl[m:lmax+1]
-        ofs = next
+    for m in prange(mmax + 1):
+        ofs = m*(lmax + 1) - m*(m - 1)//2  # Where the m block starts in healpy's alm ordering.
+        res[ofs:ofs + lmax + 1 - m] *= fl[m:lmax + 1]
 
 def almxfl(alm, fl, lmax=None, mmax=None, inplace=False):
+    """Multiply the 1D array `alm` by the per-multipole window `fl` (as `hp.almxfl`)."""
     res = alm if inplace else alm.copy()
     lmax = hp.Alm.getlmax(alm.shape[-1]) if lmax is None else lmax
     mmax = lmax if mmax is None else mmax
     _almxfl_numba(res, lmax, mmax, fl)
     return res
-
-# Parallel implementation of almxfl. Feel free to optimize.
-
-# @njit(parallel=True, cache=True, fastmath=True)
-# def _almxfl_numba_schedule(alm, lmax, mmax, m_offsets,  fl,  num_threads, inplace=False):
-#     res = alm if inplace else alm.copy()
-
-#     for thread_idx in prange(num_threads):
-#         for m in range(thread_idx, mmax + 1, num_threads):
-#             start = m_offsets[m]
-#             end = m_offsets[m+1]
-#             num_l = lmax + 1 - m
-#             res[start:end] *= fl[m : m + num_l]
-#     return res
-
-
-# def almxfl(alm, fl, lmax=None, mmax=None, inplace=False):
-#     res = alm if inplace else alm.copy()
-#     lmax = hp.Alm.getlmax(alm.shape[-1]) if lmax is None else lmax
-#     mmax = lmax if mmax is None else mmax
-#     m_offsets = np.zeros(mmax + 2, dtype=np.int64)
-#     for m in range(mmax + 1):
-#         m_offsets[m+1] = m_offsets[m] + (lmax - m + 1)
-#     n_threads = numba.get_num_threads()
-
-#     _almxfl_numba_schedule(alm, lmax, mmax, m_offsets, fl, n_threads, inplace=True)
-#     return res
 
 
 @njit(cache=True, fastmath=True)
@@ -188,40 +96,6 @@ def project_alms(alms_in, lmax_out):
     nalm_out = hp.Alm.getsize(lmax_out)
     alms_out = _project_alms_numba(alms_in, lmax_in, lmax_out, nalm_out)
     return alms_out
-
-
-def project_alms_mmax(alms_in: NDArray, lmax: int, mmax_in: int, mmax_out: int) -> NDArray:
-    """ Projects alms from one mmax to another at fixed lmax, handling truncation or zero-padding.
-        Like project_alms, this function is the adjoint of itself. Takes complex alms as input.
-        Args:
-            alms_in (np.array): Complex alms where the last axis has length nalm(lmax, mmax_in).
-            lmax (int): The lmax of the alms, which the projection leaves unchanged.
-            mmax_in (int): The mmax of the input alms.
-            mmax_out (int): The mmax of the returned alms.
-        Returns:
-            alms_out (np.array): Complex alms where the last axis has length nalm(lmax, mmax_out).
-    """
-    if alms_in.shape[-1] != nalm(lmax, mmax_in):
-        raise ValueError(f"Alms of length {alms_in.shape[-1]} do not match lmax={lmax}, "
-                         f"mmax={mmax_in} (expected {nalm(lmax, mmax_in)}).")
-    if mmax_in == mmax_out:
-        return alms_in
-    # Alms are stored m-major, and at fixed lmax the block for a given m has the same length
-    # (lmax+1-m) in both arrays. The shared m <= min(mmax_in, mmax_out) modes are therefore a
-    # contiguous prefix of both, so the projection is a single copy rather than a loop over m.
-    n_copy = nalm(lmax, min(mmax_in, mmax_out))
-    alms_out = np.zeros((*alms_in.shape[:-1], nalm(lmax, mmax_out)), dtype=alms_in.dtype)
-    alms_out[..., :n_copy] = alms_in[..., :n_copy]
-    return alms_out
-
-
-def alm_dot_product(alm1: NDArray, alm2: NDArray, lmax: int) -> NDArray:
-    """ Function calculating the dot product of two alms, given that they follow the Healpy standard
-        where alms are represented as complex numbers, but with the conjugate 'negative' ms missing.
-    """
-    nm0 = lmax + 1
-    return np.sum((alm1[:nm0] * alm2[:nm0]).real)\
-        + np.sum((alm1[nm0:] * np.conj(alm2[nm0:])).real * 2)
 
 
 def alm_complex2real(alm: NDArray[np.complexfloating], lmax: int,

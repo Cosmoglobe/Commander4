@@ -50,17 +50,17 @@ class HuffmanCompressedArray:
         self.vmin = vmin
         self.vmax = vmax
 
+    @benchmark("huffman")
     def decode(self) -> NDArray:
         """Return the original array: integers in the symbol dtype, or float32 bin centers."""
-        with benchmark("huffman"):
-            diffs = np.empty(self.nsamp, dtype=self.symbols.dtype)
-            cpp_compression.huffman_decode(self.payload, self.tree, self.symbols, diffs)
-            # Undo the differences in the symbol dtype, as the writer took them in it: SO SAT
-            # stores a step of -1 as uint8 255, which only sums back correctly with the same
-            # wrap-around.
-            values = np.cumsum(diffs, dtype=diffs.dtype)
-            if self.nbins is None:  # If not quantized we're done.
-                return values
-            else:  # If quantized we spread it across its bin range. (typically only true for psi).
-                width = (self.vmax - self.vmin)/self.nbins
-                return (self.vmin + (values - 0.5)*width).astype(np.float32)
+        diffs = np.empty(self.nsamp, dtype=self.symbols.dtype)
+        cpp_compression.huffman_decode(self.payload, self.tree, self.symbols, diffs)
+        # Undo the differences in the symbol dtype, as the writer took them in it: SO SAT
+        # stores a step of -1 as uint8 255, which only sums back correctly with the same
+        # wrap-around.
+        values = np.cumsum(diffs, dtype=diffs.dtype)
+        if self.nbins is None:  # If not quantized we're done.
+            return values
+        else:  # If quantized we spread it across its bin range. (typically only true for psi).
+            width = (self.vmax - self.vmin)/self.nbins
+            return (self.vmin + (values - 0.5)*width).astype(np.float32)

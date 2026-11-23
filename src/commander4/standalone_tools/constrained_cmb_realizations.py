@@ -79,7 +79,6 @@ from commander4.file_io import paths
 from commander4.parameters.bunch import as_bunch_recursive
 from commander4.sky.comp_list import CompList
 from commander4.sky.diffuse_components import CMB, DiffuseComponent
-from commander4.sky.sky_model import SkyModel
 from commander4.units import rj_to_band_unit_factor
 
 logger = logging.getLogger("cmb_realizations")
@@ -432,11 +431,11 @@ def _build_intensity_components(params: Bunch, compsep_path: str) -> list[Diffus
     parameters, defines the foregrounds to subtract. Joined IQU parameters use their I value.
     Missing state is an error: initial parameter values cannot replace a saved Gibbs sample.
     """
-    comp_list = CompList.init_from_params(params.components, params)
-    intensity_comps = comp_list.components_for_eval_pol("I")
+    comp_list = CompList.init_from_params(params)
+    intensity_comps = comp_list.split_for_pol("I")
     with h5py.File(compsep_path, "r") as handle:
         for comp in intensity_comps:
-            group_path = f"comps/{comp.shortname}"
+            group_path = f"comps/{comp.comp_name}"
             required = ["alms", "amp_fwhm_arcmin"]
             required += [f"sed/{param_name}" for param_name in comp.sed_param_names]
             for name in required:
@@ -444,11 +443,11 @@ def _build_intensity_components(params: Bunch, compsep_path: str) -> list[Diffus
                 if dataset not in handle:
                     raise ValueError(f"Missing component state {dataset!r} in {compsep_path!r}.")
             # The intensity alms and the beam they carry, read as the component reads its own
-            # chain group. SkyModel subtracts that beam in quadrature from the requested band
+            # chain group. `get_sky_at_nu` subtracts that beam in quadrature from the requested band
             # beam, so restoring it prevents smoothing the already-smoothed amplitudes twice.
-            comp.read_chain(handle[group_path])
-            # `read_chain` restores only the sampled SED parameters; here the saved values of
-            # all of them define the foregrounds to subtract. The component resolver expects a
+            comp.read_chain(handle[group_path], restore_beta=False)
+            # `read_chain` restores no SED parameter here; the saved values of all of them
+            # define the foregrounds to subtract. The component resolver expects a
             # Python scalar or an [I, QU] list, whereas HDF5 supplies numpy scalars/arrays.
             for param_name in comp.sed_param_names:
                 value = np.asarray(handle[f"{group_path}/sed/{param_name}"][()]).tolist()
@@ -489,16 +488,10 @@ def _load_iteration(params: Bunch, iteration: int, compsep_path: str,
     Map lists retain each band's native pixel grid; beam_sizes contains FWHMs in radians.
     """
     components = _build_intensity_components(params, compsep_path)
-    cmb_comps = []
-    foreground_comps = []
-    for component in components:
-        if isinstance(component, CMB):
-            cmb_comps.append(component)
-        else:
-            foreground_comps.append(component)
+    cmb_comps = [comp for comp in components if isinstance(comp, CMB)]
+    foreground_comps = CompList([comp for comp in components if not isinstance(comp, CMB)])
     if len(cmb_comps) != 1:
         raise ValueError(f"Expected exactly one CMB component, found {len(cmb_comps)}.")
-    foreground_sky = SkyModel(foreground_comps)
     signal_maps: list[NDArray] = []
     ivar_maps: list[NDArray] = []
     beam_sizes: list[float] = []
@@ -520,7 +513,7 @@ def _load_iteration(params: Bunch, iteration: int, compsep_path: str,
         rms *= band_to_uK_CMB
         # Condition on this Gibbs sample's foregrounds. Foreground uncertainty is represented
         # by processing multiple Gibbs samples, not by perturbing foregrounds within a CMB draw.
-        foreground = foreground_sky.get_sky_at_nu(nu, nside, "I", fwhm=beam)[0]
+        foreground = foreground_comps.get_sky_at_nu(nu, nside, "I", fwhm_rad=beam)[0]
         observed -= foreground.astype(np.float64) * rj_to_uK_CMB
         ivar = np.zeros_like(rms)
         valid = rms > 0
@@ -531,7 +524,7 @@ def _load_iteration(params: Bunch, iteration: int, compsep_path: str,
         logger.info(f"iter {iteration}: read {band} ({nu:g} GHz, {stored_unit}) at nside {nside}.")
 
     # Chain CMB amplitudes are uK_RJ at their reference frequency, including for spectrum plots.
-    cmb_alms = np.ascontiguousarray(cmb_comps[0].alms[0]).astype(np.complex128)
+    cmb_alms = np.ascontiguousarray(cmb_comps[0].amps[0]).astype(np.complex128)
     cmb_alms *= rj_to_band_unit_factor(cmb_comps[0].nu_ref, "uK_CMB")
     return Bunch(signal_maps=signal_maps, ivar_maps=ivar_maps,
                  beam_sizes=np.array(beam_sizes), cmb_alms=cmb_alms, lmax=cmb_comps[0].lmax)

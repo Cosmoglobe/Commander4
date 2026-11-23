@@ -23,8 +23,9 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.backend import mapmaker as cpp_mapmaker
+from commander4.diagnostics.performance import benchmark
 from commander4.tod.view import TODView
-from commander4.compsep.cg_driver import DistributedCGArray
+from commander4.math_utils.cg_driver import DistributedCG
 from commander4.tod.mapmaking.preconditioners import InvNPreconditionerI,\
     BlockInvNPreconditionerIQU
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
@@ -227,6 +228,7 @@ class CGMapmaker:
         """
         return self.apply_W(scan_tod_arr)
 
+    @benchmark("cg-rhs")
     def accum_to_RHS(self, view: TODView, scan_tod_arr: NDArray):
         """Add one detector-scan's contribution P^T T^T W^T N^-1 d to the right-hand side.
 
@@ -324,6 +326,7 @@ class CGMapmaker:
         # Sum the local contributions back to the full-sky map on the master (None on other ranks).
         return self.domain.reduce_to_full(out_local)
 
+    @benchmark("cg-solve")
     def solve(self, map_cov: NDArray | None, x_true=None):
         """Sum the right-hand side onto the master and solve for the sky map there (collective).
 
@@ -346,12 +349,7 @@ class CGMapmaker:
         else:
             M = None
 
-        CG_solver = DistributedCGArray(self.apply_LHS,
-                                       RHS_map,
-                                       ismaster,
-                                       M = M,
-                                       dot = dot,
-                                       destroy_b=True)
+        CG_solver = DistributedCG(self.apply_LHS, RHS_map, ismaster, M=M, destroy_b=True)
 
         # Every collective below has to be entered by all ranks, so the two conditions guarding one
         # are made rank-independent up front: the iteration index already is, and whether a true
@@ -379,7 +377,8 @@ class CGMapmaker:
                     self.logger.debug(f"CG iter {i:3d} - True A-norm error: {CG_Anorm_error:.3e} "
                                       f"- True L2 error: {CG_L2_error:.3e}")
             # Only the master updates CG_solver.err, so the stopping decision has to be broadcast.
-            converged = self.map_comm.bcast(CG_solver.err < self.CG_tol, root=0)
+            # `<=`: err is exactly 0 once the CG has converged to machine precision.
+            converged = self.map_comm.bcast(CG_solver.err <= self.CG_tol, root=0)
             if converged:
                 break
         self._map_signal = CG_solver.x

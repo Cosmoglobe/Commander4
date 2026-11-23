@@ -1,0 +1,240 @@
+# Full-run test A: the joint run. Two TOD bands and one file band, both sides active, 9 MPI tasks
+# (2 TOD tasks per band, CompSep 2 + 2 + 1). Every TOD step that simgen data can drive is on from
+# iteration 1, the two bands use different mapmakers, and CompSep runs two CG groups and one MCMC
+# group. test_full_runs.py also restarts this run from iteration 1 (chain_status: append), which
+# must reproduce iteration 2 exactly. Paths are relative to the test's working directory.
+gibbs:
+  num_iterations: 2
+  seed: 1995
+  chain_status: new
+
+resources:
+  tod:
+    num_threads: 1
+  compsep:
+    num_threads: 1
+
+output:
+  dir: "out_A"
+  logging:
+    console:
+      level: "info"
+    file:
+      level: "verbose"
+  profiling: false
+  plots:
+    enabled: false
+  chains:
+    write: [1, 2]
+    interval:
+      bands: 1
+      compsep: 1
+      maps: 1
+    maps_nside: "native"
+    nside_chisq: 16
+    include:
+      orbital_dipole_maps: true
+      corr_noise_maps: true
+      sky_model_maps: true
+      residual_maps: true
+      sidelobe_maps: false
+      hit_maps: true
+      cov_maps: true
+      chisq_map: true
+      compsep_residual_maps: true
+      tod_power_spectra: true
+      ncorr_tods: true
+      residual_tods: true
+      jump_events: false
+      glitch_events: false
+
+tod_processing:
+  mapmaker: "bin"
+  cg_mapmaker:
+    max_iter: 20
+    err_tol: 1.0e-8
+  jump_detection:
+    enabled: false
+  glitches:
+    enabled: false
+  abs_gain:
+    enabled: true
+    from_iter: 1
+    calibrate_against: orbital_dipole
+    gap_fill_method: wn
+    downsample_time: 1.0
+  rel_gain:
+    enabled: true
+    from_iter: 1
+    calibrate_against: sky
+    gap_fill_method: fallback
+    downsample_time: 1.0
+  temporal_gain:
+    enabled: true
+    from_iter: 1
+    calibrate_against: sky
+    gap_fill_method: full_cg
+    downsample_time: 2.0
+  corr_noise:
+    enabled: true
+    from_iter: 1
+    sample_psd_params: true
+    sample_sigma0: true
+    sigma0_method: pairwise
+    sigma0_decimation: 1
+    nomono: false
+    onlymono: false
+    psd_fit_nu_min: 0.0
+    psd_fit_nu_max: 4.0
+    psd_bin: false
+    use_dct: false
+    cg:
+      max_iter: 30
+      err_tol: 1.0e-4
+  far_beam_deconvolution:
+    enabled: false
+  data_selection:
+    enabled: true
+    from_iter: 2
+    chisq_abs_threshold: 1.0e+4
+    min_good_fraction: 0.1
+
+compsep:
+  enabled: true
+  double_precision: false
+  cg_sampling_groups:
+    cmb_amps:
+      enabled: true
+      comps: [cmb]
+      bands: "all"
+      optimize: false
+      max_iter: 100
+      max_iter_pol: 100
+      err_tol: 0.0
+      preconditioner: JointPreconditioner
+    foreground_amps:
+      enabled: true
+      comps: [dust, sync]
+      bands: "all"
+      optimize: true
+      max_iter: 100
+      max_iter_pol: 100
+      err_tol: 1.0e-10
+      preconditioner: JointPreconditioner
+  mcmc_sampling_groups:
+    dust_beta:
+      enabled: true
+      sample:
+        dust:
+          beta: {proposal_sigma: 0.02, bounds: [1.0, 2.5], prior_mean: 1.55, prior_rms: 0.2}
+      update_amplitude_groups: [foreground_amps]
+      numstep: 1
+  bands:
+    Band030:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
+    Band100:
+      get_from: SimSat
+      enabled: true
+      polarization: "IQU"
+    # An nside-8 map among nside-16 bands: the CG solver gets bands at two resolutions.
+    Band353:
+      get_from: "file"
+      enabled: true
+      eval_nside: 8
+      add_signal_fraction_to_rms: 0.001
+      signal_map:
+        path: "sim_maps/Band353_map.fits"
+        dataset_names: ["TEMPERATURE", null, null]
+      rms_map:
+        type: "rms"
+        path: "sim_maps/Band353_rms.fits"
+        dataset_names: ["TEMPERATURE", null, null]
+      fwhm: 200.0
+      freq: 353.0
+      polarization: "I"
+      units: "uK_RJ"
+
+# Every component starts at the simulated truth (simgen's input amplitude maps), so the gain and
+# noise steps see a sensible sky from iteration 1.
+components:
+  cmb:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      lmax: 47
+      Cl_prior_amplitude: [1.0e+6, 1.0e+4]
+      Cl_prior_beta: [0.0, -0.5]
+      Cl_prior_l_pivot: 20
+      init_from: "sim_debug/truth_cmb.fits"
+      units: "uK_RJ"
+  dust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      lmax: 47
+      Cl_prior_amplitude: [1.0e+8, 1.0e+6]
+      Cl_prior_l_pivot: 20
+      beta: 1.60
+      T: 20
+      nu_ref: 353
+      units: "uK_RJ"
+      init_from: "sim_debug/truth_dust.fits"
+  sync:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      lmax: 47
+      Cl_prior_amplitude: null
+      beta: -3.1
+      nu_ref: 30
+      units: "uK_RJ"
+      init_from: "sim_debug/truth_sync.fits"
+
+experiments:
+  SimSat:
+    enabled: true
+    experiment_id: "general"
+    bad_data_bitmask: 6111232
+    mapmaker: "bin"
+    sparse_maps: true
+    bands:
+      # Start gains 3 % away from the truth (1.0), so the gain steps have something to do.
+      Band030:
+        enabled: true
+        band_weight: 1
+        eval_nside: 16
+        fwhm: 300.0
+        freq: 30.0
+        band_unit: "uK_RJ"
+        polarization: "IQU"
+        initial_noise_params: [60.0, 0.1, -1.0]
+        filelist: "sim/Band030/filelist.txt"
+        detectors:
+          d030a: {gain: 1.03}
+          d030b: {gain: 1.03}
+          d030c: {gain: 1.03}
+          d030d: {gain: 1.03}
+      Band100:
+        enabled: true
+        band_weight: 1
+        mapmaker: "CG"
+        eval_nside: 16
+        fwhm: 240.0
+        freq: 100.0
+        band_unit: "uK_RJ"
+        polarization: "IQU"
+        initial_noise_params: [60.0, 0.1, -1.0]
+        noise_prior_bounds:
+          fknee: [0.01, 2.0]
+          alpha: [-3.0, -0.5]
+        filelist: "sim/Band100/filelist.txt"
+        detectors:
+          d100a: {gain: 0.97}
+          d100b: {gain: 0.97}
+          d100c: {gain: 0.97}
+          d100d: {gain: 0.97}

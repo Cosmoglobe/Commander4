@@ -12,6 +12,7 @@ import numpy as np
 from pixell.bunch import Bunch
 
 from commander4.sky.component import Component
+from commander4.sky.diffuse_components import CMB
 
 
 @dataclass
@@ -380,12 +381,12 @@ def plot_noise_parameter_density(
 def _components_for_pol(comp_list: list[Component], npol: int) -> list[Component]:
     """The components whose polarization view matches the maps being plotted.
 
-    Maps are plotted one execution view at a time, so `npol` is 1 for an I map and 2 for a QU one,
-    and the components are filtered to the matching view. This is `CompList.components_for_eval_pol`
+    Maps are plotted one polarization at a time, so `npol` is 1 for an I map and 2 for a QU one,
+    and the components are filtered to the matching view. This is `CompList.split_for_pol`
     written out, because the chain plotter builds a plain list rather than a `CompList`.
     """
-    target_pol = "QU" if npol > 1 else "I"
-    return [comp for comp in comp_list if comp.eval_pol == target_pol]
+    pol = "QU" if npol > 1 else "I"
+    return [comp for comp in comp_list if comp.pol == pol]
 
 
 def _ensure_2d_map(map_data: np.ndarray | None) -> np.ndarray | None:
@@ -447,16 +448,16 @@ def _get_component_map(
     npix = 12 * nside**2
     use_raw = not np.isfinite(freq)
     if npol == 1:
-        if component.is_pol:
+        if component.pol == "QU":
             return np.zeros((npix,))
         if use_raw:
-            return component.get_component_map(nside, fwhm=smoothing_scale_radians)[0]
-        return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[0]
+            return component.get_component_map(nside, fwhm_rad=smoothing_scale_radians)[0]
+        return component.get_sky(freq, nside, fwhm_rad=smoothing_scale_radians)[0]
 
-    if component.is_pol:
+    if component.pol == "QU":
         if use_raw:
-            return component.get_component_map(nside, fwhm=smoothing_scale_radians)[ipol]
-        return component.get_sky(freq, nside, fwhm=smoothing_scale_radians)[ipol]
+            return component.get_component_map(nside, fwhm_rad=smoothing_scale_radians)[ipol]
+        return component.get_sky(freq, nside, fwhm_rad=smoothing_scale_radians)[ipol]
     return np.zeros((npix,))
 
 
@@ -571,14 +572,14 @@ def plot_combo_maps(
         beam_radians = fwhm_arcmin * np.pi / (180 * 60) if np.isfinite(fwhm_arcmin) else 0.0
         for i, component in enumerate(comp_sublist[:max_component_panels]):
             comp_map = _get_component_map(component, nu, nside, npol, ipol, beam_radians)
-            if "cmb" not in component.shortname:
+            if not isinstance(component, CMB):
                 foreground_subtracted -= comp_map
             else:
                 cmb_subtracted -= comp_map
                 cmb_maps = component.get_sky_anisotropies(
                     nu,
                     nside,
-                    fwhm=beam_radians,
+                    fwhm_rad=beam_radians,
                 )
                 cmb_map_anisotropies = cmb_maps[ipol if npol > 1 else 0]
             residual -= comp_map
@@ -588,7 +589,7 @@ def plot_combo_maps(
                 comp_map,
                 hold=True,
                 cmap="RdBu_r",
-                title=f"{component.longname} {pol_names[ipol]} at {nu:.2f} GHz",
+                title=f"{component.comp_name} {pol_names[ipol]} at {nu:.2f} GHz",
                 min=limdown,
                 max=limup,
             )
@@ -841,7 +842,7 @@ def plot_components(
 
         for component in comp_sublist:
             comp_map = _get_component_map(component, nu, nside, npol, ipol, beam_radians)
-            if component.shortname != "cmb":
+            if not isinstance(component, CMB):
                 foreground_subtracted -= comp_map
             residual -= comp_map
             if np.all(comp_map == 0):
@@ -852,7 +853,7 @@ def plot_components(
                 comp_map,
                 cmap="RdBu_r",
                 title=(
-                    f"{component.longname} {pol_names[ipol]} at {nu:.2f} GHz, "
+                    f"{component.comp_name} {pol_names[ipol]} at {nu:.2f} GHz, "
                     f"det {detector}, chain {chain}, iter {iteration}"
                 ),
                 min=limdown,
@@ -863,7 +864,7 @@ def plot_components(
                     map_comp_out,
                     (
                         f"{detector}_chain{chain:02d}_iter{iteration:04d}_"
-                        f"{pol_names[ipol]}_{component.shortname}.png"
+                        f"{pol_names[ipol]}_{component.comp_name}.png"
                     ),
                 ),
                 bbox_inches="tight",
@@ -873,7 +874,7 @@ def plot_components(
             Cl = hp.alm2cl(hp.map2alm(comp_map))
             Dl = Z * Cl
             plt.figure()
-            plt.plot(ells, Dl, label=component.longname)
+            plt.plot(ells, Dl, label=component.comp_name)
             plt.xscale("log")
             if np.any(Dl > 0):
                 plt.yscale("log")
@@ -882,7 +883,7 @@ def plot_components(
                     dl_out,
                     (
                         f"{detector}_chain{chain:02d}_iter{iteration:04d}_"
-                        f"{pol_names[ipol]}_{component.shortname}_Dl.png"
+                        f"{pol_names[ipol]}_{component.comp_name}_Dl.png"
                     ),
                 ),
                 bbox_inches="tight",
@@ -890,7 +891,7 @@ def plot_components(
             plt.close()
 
             plt.figure()
-            plt.plot(ells, Cl, label=component.longname)
+            plt.plot(ells, Cl, label=component.comp_name)
             plt.xscale("log")
             if np.any(Cl > 0):
                 plt.yscale("log")
@@ -899,7 +900,7 @@ def plot_components(
                     cl_out,
                     (
                         f"{detector}_chain{chain:02d}_iter{iteration:04d}_"
-                        f"{pol_names[ipol]}_{component.shortname}_Cl.png"
+                        f"{pol_names[ipol]}_{component.comp_name}_Cl.png"
                     ),
                 ),
                 bbox_inches="tight",

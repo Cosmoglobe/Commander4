@@ -17,7 +17,6 @@ Add a new component by mapping its ``component_class`` to a ``SkyComponent`` sub
 import logging
 import os
 from abc import ABC, abstractmethod
-from copy import deepcopy
 import numpy as np
 import healpy as hp
 from numpy.typing import NDArray
@@ -47,21 +46,22 @@ def _scalar_nu_ref(comp_params: Bunch) -> float:
 def _build_c4_component(comp_cfg: Bunch, global_params: Bunch):
     """Instantiate the matching Commander4 component (used only for its ``get_sed``).
 
-    Missing structural keys that ``get_sed`` does not need (smoothing prior, spatially-varying MM)
-    are filled with harmless defaults so a minimal sim ``components`` block also works; the SED
-    parameters (beta/T/nu_ref) must be supplied by the user. ``lmax: "full"`` is resolved as in C4.
+    The C4 component gets the settings of the sim's ``components`` block that its class knows
+    (``cls.DEFAULTS``); the block also holds settings of the simulator itself, such as
+    ``template``. The SED parameters (beta/T/nu_ref) must be supplied by the user. A missing
+    ``polarization`` is IQU, and a missing ``lmax``, or ``lmax: "full"``, is 2.5*nside.
     """
     cls = getattr(c4comp, comp_cfg.component_class)
-    cp = deepcopy(comp_cfg.params)
-    defaults = {"polarization": "IQU", "spatially_varying_MM": False,
-                "Cl_prior_amplitude": None,  # identity C_l prior; get_sed never uses it
-                "lmax": (global_params.nside * 5) // 2}
-    for key, val in defaults.items():
-        if key not in cp:
+    cp = Bunch(polarization="IQU", lmax="full")
+    for key, val in comp_cfg.params.items():
+        if key in cls.DEFAULTS:
             cp[key] = val
     if cp.lmax == "full":
         cp.lmax = (global_params.nside * 5) // 2
-    return cls(cp, global_params, eval_pol="I", comp_name=comp_cfg._name)
+    double_precision = bget(global_params, "double_precision", False)
+    c4_params = Bunch(components=Bunch({comp_cfg._name: Bunch(params=cp)}),
+                      compsep=Bunch(double_precision=double_precision))
+    return cls(c4_params, comp_cfg._name, "I")
 
 
 def _select_pol(iqu_map: NDArray, polarization: str) -> NDArray:
@@ -93,11 +93,28 @@ class SkyComponent(ABC):
             "or set simulation.write_component_truth_maps: false.")
 
 
+def _synthesize(alms: NDArray, nside: int, fwhm_rad: float = 0.0) -> NDArray[np.float32]:
+    """IQU map at `nside` from TEB `alms`, Gaussian-smoothed and cut at the band limit 3*nside-1.
+
+    This is the B*Y*a model C4 fits: the same Gaussian window multiplies T, E and B, as in
+    `DiffuseComponent.comp2band` (healpy's own `fwhm` smoothing gives E and B a slightly different
+    spin-2 window), there is no pixel window, and nothing above the band limit is left to fold into
+    it.
+    Smoothing at a finer nside and averaging pixels down with `ud_grade` would break all three.
+    """
+    lmax_in = hp.Alm.getlmax(alms.shape[-1])
+    lmax = min(lmax_in, 3*nside - 1)
+    window = hp.gauss_beam(fwhm_rad, lmax=lmax)
+    alms = [hp.almxfl(hp.resize_alm(alm, lmax_in, lmax_in, lmax, lmax), window) for alm in alms]
+    return hp.alm2map(alms, nside, lmax=lmax, pixwin=False).astype(np.float32)
+
+
 class DiffuseComponent(SkyComponent):
     """Foreground with a PySM3-preset (or FITS) spatial template scaled by a C4 SED.
 
-    The IQU template is realized once at the component's reference frequency, then for each band it
-    is beam-smoothed, downgraded to the band nside and multiplied by the C4 ``get_sed(band.freq)``.
+    The IQU template is realized once at the component's reference frequency and turned into alms;
+    for each band they are beam-smoothed, synthesized at the band nside (see `_synthesize`) and
+    multiplied by the C4 ``get_sed(band.freq)``.
     """
     def __init__(self, comp_cfg: Bunch, global_params: Bunch):
         super().__init__(comp_cfg, global_params)
@@ -106,6 +123,7 @@ class DiffuseComponent(SkyComponent):
         self.template_cfg = bget(comp_cfg.params, "template", Bunch())
         self.units = bget(global_params, "units", "uK_RJ")
         self._template_iqu: NDArray | None = None   # (3, npix_base), uK_RJ, unsmoothed
+        self._alms: NDArray | None = None           # (3, nalm), TEB alms of the template
 
     def _template(self) -> NDArray:
         if self._template_iqu is not None:
@@ -127,14 +145,20 @@ class DiffuseComponent(SkyComponent):
         self._template_iqu = iqu
         return iqu
 
+    def _template_alms(self) -> NDArray:
+        """The template's TEB alms, up to the band limit of the template's nside (the transform
+        `hp.smoothing` would make, done once for all bands)."""
+        if self._alms is None:
+            self._alms = hp.map2alm(self._template().astype(np.float64))
+        return self._alms
+
     def band_map(self, band) -> NDArray[np.floating]:
-        template = self._template()
-        smoothed = hp.smoothing(template, fwhm=band.fwhm_rad)
-        m = hp.ud_grade(smoothed, band.eval_nside).astype(np.float32) * self.c4.get_sed(band.freq)
-        return _select_pol(m, band.polarization)
+        m = _synthesize(self._template_alms(), band.eval_nside, band.fwhm_rad)
+        return _select_pol(m * self.c4.get_sed(band.freq), band.polarization)
 
     def truth_map(self, nside: int) -> NDArray[np.floating]:
         # The template is already realized at nu_ref in the run's unit, so it *is* the amplitude.
+        # Kept in pixel space: a round trip through alms up to 3*nside-1 is only good to ~1 %.
         return hp.ud_grade(self._template(), nside).astype(np.float32)
 
 
@@ -189,9 +213,7 @@ class CMBComponent(SkyComponent):
 
     def band_map(self, band) -> NDArray[np.floating]:
         import pysm3.units as u
-        alms = self._build_alms()
-        smoothed = hp.smoothalm(alms, fwhm=band.fwhm_rad, inplace=False)
-        cmb = hp.alm2map(smoothed, band.eval_nside, pixwin=False).astype(np.float32)  # uK_CMB
+        cmb = _synthesize(self._build_alms(), band.eval_nside, band.fwhm_rad)  # uK_CMB
         cmb = (cmb * u.uK_CMB).to(u.Unit(band.units),
                                   equivalencies=u.cmb_equivalencies(band.freq * u.GHz)).value
         return _select_pol(np.asarray(cmb, dtype=np.float32), band.polarization)

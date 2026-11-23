@@ -13,8 +13,6 @@ import healpy as hp
 from copy import deepcopy
 from numpy.typing import NDArray
 from commander4.math_utils.arithmetic import inplace_arr_prod
-from commander4.math_utils.alm import almxfl
-from commander4.math_utils.sht import alm_to_map, alm_to_map_adjoint
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +25,25 @@ def smooth_signal_map_noiseweighted(map_signal: NDArray, map_inv_var: NDArray,
     less) and the result is renormalized by the smoothed weights. Used to bring a band to a coarser
     common beam.
 
+    `map_signal` and `map_inv_var` have shape (npix,) for intensity, or (2, npix) for Q and U.
+    Q and U are one spin-2 field, so they are smoothed together through E and B, with the same
+    Gaussian window on both. That is the beam `comp2band` puts on the model, so smoothed
+    data and model stay consistent; smoothing Q and U as two scalar maps would not be.
+
     A band covering only part of the sky has zero weight outside its footprint, and far enough from
     it the smoothed weight is zero (or slightly negative, from beam ringing) as well. Those pixels
     are left at zero rather than divided into a NaN: they are unobserved, which the paired
     ``smooth_inv_var_map_noiseweighted`` records as zero inverse variance.
     """
-    smoothed_weight = hp.smoothing(map_inv_var, fwhm=fwhm_rad)
-    smoothed_signal = hp.smoothing(map_signal*map_inv_var, fwhm=fwhm_rad)
+    weighted = map_signal*map_inv_var
+    if map_signal.ndim == 1:
+        smoothed_signal = hp.smoothing(weighted, fwhm=fwhm_rad)
+        smoothed_weight = hp.smoothing(map_inv_var, fwhm=fwhm_rad)
+    else:
+        npix = map_signal.shape[-1]
+        window = hp.gauss_beam(fwhm_rad, lmax=3*hp.npix2nside(npix) - 1)
+        smoothed_signal = hp.smoothing([np.zeros(npix), *weighted], beam_window=window)[1:]
+        smoothed_weight = np.array([hp.smoothing(w, fwhm=fwhm_rad) for w in map_inv_var])
     observed = smoothed_weight > 0.0
     return np.divide(smoothed_signal, smoothed_weight, out=np.zeros_like(smoothed_signal),
                      where=observed)
@@ -73,7 +83,7 @@ class DetectorMap:
     """Holds a sky map and associated metadata for a single detector or band.
 
     Stores the sky signal map, inverse noise variance map, beam properties, and
-    resolution parameters. Derived quantities such as ``pol`` and ``spin`` are computed on the fly
+    resolution parameters. Derived quantities like ``pol`` and ``spin`` are computed on the fly
     via properties.
 
     Attributes:
@@ -84,7 +94,6 @@ class DetectorMap:
         fwhm (float): Beam full-width-at-half-maximum in arcminutes.
         nside (int): HEALPix nside of the map.
         lmax (int): Maximum multipole for harmonic transforms.
-        double_precision (bool): Whether the inverse noise map is stored in float64.
     """
     def __init__(self, map_sky:NDArray, map_inv_var:NDArray, nu:float, fwhm:float, nside:int,
                  double_precision:bool=False, lmax:int|None = None):
@@ -120,12 +129,10 @@ class DetectorMap:
         self.fwhm = fwhm #stored in arcmin
         self.nside = nside
         # The band's harmonic bandlimit. Components are truncated to this lmax on their way into
-        # the band (Component.project_comp_to_band), so any component multipole above it is
-        # invisible to the data and left to the C(l) prior alone; compsep_processing's
-        # _validate_component_lmax reports that at startup.
+        # the band (Component.comp2band), so any component multipole above it is
+        # invisible to the data and left to the C(l) prior alone; `_validate_component_lmax` in
+        # compsep/processing.py reports that at startup.
         self.lmax = (3*nside - 1) if lmax is None else lmax
-        self._beam_Cl = hp.gauss_beam(np.deg2rad(fwhm/60.0), self.lmax)
-        self.double_precision = double_precision
         self.map_inv_var = map_inv_var.astype(np.float64 if double_precision else np.float32,
                                               copy=False)
 
@@ -135,20 +142,19 @@ class DetectorMap:
         return np.deg2rad(self.fwhm/60.0)
     
     @property
-    def pol(self):
-        """Whether the map is polarised (True for Q/U, False for I only)."""
-        #polarization: True->Q/U, False->I
-        return len(self.map_sky) != 1
-    
-    @property
-    def spin(self):
-        """Spin weight of the map (2 for polarised, 0 for intensity)."""
-        return 2 if self.pol else 0
+    def pol(self) -> str:
+        """The polarization of the map: "I" for one map row, "QU" for two."""
+        return "I" if len(self.map_sky) == 1 else "QU"
 
     @property
-    def npol(self):
+    def spin(self) -> int:
+        """Spin weight of the map (2 for "QU", 0 for "I")."""
+        return 0 if self.pol == "I" else 2
+
+    @property
+    def npol(self) -> int:
         """Number of polarisation components (1 or 2)."""
-        return len(self.map_sky) # 2 if self.pol else 1
+        return len(self.map_sky)
 
     def smooth_to_resolution(self, target_fwhm_arcmin: float) -> None:
         """Noise-weighted in-place smoothing of this band to a target Gaussian beam.
@@ -165,18 +171,15 @@ class DetectorMap:
                            f"band's beam of {self.fwhm} arcmin; leaving the band unchanged.")
             return
         extra_fwhm_rad = np.deg2rad(np.sqrt(target_fwhm_arcmin**2 - self.fwhm**2)/60.0)
-        sky_dtype, inv_dtype = self.map_sky.dtype, self.map_inv_var.dtype
-        smoothed_sky = np.empty(self.map_sky.shape, dtype=np.float64)
-        smoothed_inv_var = np.empty(self.map_inv_var.shape, dtype=np.float64)
-        for ipol in range(self.npol):
-            smoothed_sky[ipol] = smooth_signal_map_noiseweighted(
-                self.map_sky[ipol], self.map_inv_var[ipol], extra_fwhm_rad)
-            smoothed_inv_var[ipol] = smooth_inv_var_map_noiseweighted(self.map_inv_var[ipol],
-                                                                    extra_fwhm_rad)
-        self.map_sky = smoothed_sky.astype(sky_dtype, copy=False)
-        self.map_inv_var = smoothed_inv_var.astype(inv_dtype, copy=False)
+        sky, inv_var = self.map_sky.astype(np.float64), self.map_inv_var.astype(np.float64)
+        # Intensity is smoothed as one scalar map, Q and U together as one spin-2 field.
+        smoothed_sky = smooth_signal_map_noiseweighted(sky[0] if self.npol == 1 else sky,
+                                                       inv_var[0] if self.npol == 1 else inv_var,
+                                                       extra_fwhm_rad)
+        smoothed_inv_var = [smooth_inv_var_map_noiseweighted(w, extra_fwhm_rad) for w in inv_var]
+        self.map_sky = np.reshape(smoothed_sky, sky.shape).astype(self.map_sky.dtype, copy=False)
+        self.map_inv_var = np.array(smoothed_inv_var).astype(self.map_inv_var.dtype, copy=False)
         self.fwhm = target_fwhm_arcmin
-        self._beam_Cl = hp.gauss_beam(self.fwhm_rad, self.lmax)
 
     def apply_inv_N_map(self, map: NDArray, inplace = True):
         """
@@ -188,49 +191,3 @@ class DetectorMap:
             inplace_arr_prod(map_out[ipol,:], self.map_inv_var[ipol,:])
 
         return map_out
-
-    def apply_inv_N_alm(self, a: NDArray, nthreads:int = 1, inplace = True):
-        """
-        Applies the inverse noise variance matrix to a set of alm `a` and returns the result.
-
-        """
-        if a.shape[0] != self.npol:
-            raise ValueError("Can not apply inv_N to alms with different polarization")
-
-        a_out = a if inplace else deepcopy(a)
-
-        # Y a
-        a_out = alm_to_map(a_out, self.nside, self.lmax, spin=self.spin, nthreads=nthreads)
-
-        # N^-1 Y a
-        self.apply_inv_N_map(a_out)
-
-        # Y^T N^-1 Y a
-        a_out = alm_to_map_adjoint(a_out, self.nside, self.lmax, spin=self.spin, nthreads=nthreads)
-
-        return a_out
-
-    def apply_B(self, a: NDArray):
-        """ Applies in-place the beam operator in harmonic space to a set of alm `a`,
-            which are also returned.
-        """
-        for ipol in range(self.npol):
-            almxfl(a[ipol], self._beam_Cl, inplace=True)
-        return a
-
-    @property
-    def blm(self):
-        """Returns the spherical harmonic coefficients of the beam associated
-           with the detector, plus lmax and mmax. One component for
-           temperature-only, three components for polarization."""
-        raise NotImplementedError()
-
-    @property
-    def noiseProperties(self):
-        """Returns parameters describing the noise properties of the detector. TBD"""
-        raise NotImplementedError()
-
-    @property
-    def bandShape(self):
-        """Returns some description of the band's frequency response. TBD."""
-        raise NotImplementedError()

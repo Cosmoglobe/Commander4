@@ -3,20 +3,15 @@
 A parameter file is seven blocks, each named after the part of the program that reads it:
 
     gibbs           how long the chain runs
-    resources       thread counts (MPI task counts are derived, see `derive_task_counts`)
+    resources       thread counts (the MPI task counts follow from the enabled bands)
     output          where everything is written, and what
     components      the sky model (shared: compsep samples it, TOD processing consumes it)
     experiments     the instrument and its data
     tod_processing  what the TOD side does to that data
     compsep         what the component-separation side does with the resulting maps
-
-They replace the old `general` grab-bag, which mixed MPI resources, Gibbs loop control, TOD
-sampling steps, compsep solver settings and output paths. `notes/proposed_param_layout.yml` shows
-the full layout. This module owns the block list, rejects the old schema loudly, and derives the
-MPI task counts and the split of the TOD tasks between bands, which the parameter file no longer
-states.
 """
 
+import copy
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -24,9 +19,12 @@ from collections.abc import Sequence
 
 from pixell.bunch import Bunch
 
-from commander4.polarization import EXECUTION_POLS, get_execution_band_id
-
 logger = logging.getLogger(__name__)
+
+# How a `polarization` setting of a band or a component splits into the polarizations that C4
+# handles separately. An IQU band gives two polbands (a band in one polarization), and each
+# CompSep rank works on one polband.
+SPLIT_POLS = {"I": ("I",), "QU": ("QU",), "IQU": ("I", "QU")}
 
 # The legal top-level entries in the YAML parameter file. Explicitly stating them allows us to
 # catch misspelled entries
@@ -39,34 +37,21 @@ NO_DEFAULT = object()
 
 @dataclass(frozen=True)
 class TODBandConfig:
-    """One enabled TOD band, and its ``band_weight`` (None for "auto")."""
-
-    index: int
-    experiment_name: str
-    band_name: str
-    weight: float | None
+    """Info about one TOD band."""
+    experiment_name: str    # Name of the experiment this band is on (e.g. "PlanckLFI").
+    band_name: str          # Unique name of this band (e.g. "LFI_30GHz").
+    weight: float | None    # How expensive TOD processing of this band is. Used for load balancing.
 
 
 @dataclass(frozen=True)
-class CompSepViewConfig:
-    """One enabled CompSep execution view, handled by exactly one rank."""
-
-    rank: int
-    band_name: str
-    polarization: str
-    identifier: str
+class CompSepPolBandConfig:
+    """Info about one CompSep polband (the I or in QU half of a band)."""
+    band_name: str          # Unique name of this band (e.g. "LFI_30GHz"). Used to match with TOD.
+    pol: str                # "I" or "QU".
 
 
 def enabled_tod_bands(params: Bunch) -> tuple[TODBandConfig, ...]:
-    """Return the single ordered inventory used for all TOD rank allocation.
-
-    Band names are routing identifiers between the TOD and CompSep sides, so enabled TOD band
-    names must be unique across experiments. This explicit rule is clearer than silently merging
-    equal per-experiment band indices into one MPI communicator.
-
-    Each band's ``band_weight`` is a positive number or "auto" (the default), and either every band
-    sets a number or none does: an "auto" weight counts detector-samples, which is not on the scale
-    of numbers set by hand.
+    """Returns the enabled TOD bands of all experiments, as a tuple of `TODBandConfig`s.
     """
     bands = []
     seen_names: dict[str, str] = {}
@@ -94,7 +79,6 @@ def enabled_tod_bands(params: Bunch) -> tuple[TODBandConfig, ...]:
                                  f"{weight!r}; expected a positive number or 'auto'.")
             seen_names[band_name] = experiment_name
             bands.append(TODBandConfig(
-                index=len(bands),
                 experiment_name=experiment_name,
                 band_name=band_name,
                 weight=None if weight == "auto" else float(weight),
@@ -105,54 +89,24 @@ def enabled_tod_bands(params: Bunch) -> tuple[TODBandConfig, ...]:
     return tuple(bands)
 
 
-def split_tod_ranks(weights: Sequence[float], ntask_tod: int) -> list[int]:
-    """The number of TOD ranks of each band, in proportion to the bands' weights.
-
-    Every band gets one rank, and each further rank goes to the band that has the most weight per
-    rank at that point. This gives the smallest possible largest weight per rank, and whole-number
-    weights that sum to ``ntask_tod`` give exactly those numbers.
-
-    Args:
-        weights: Each band's weight, e.g. its number of detector-samples.
-        ntask_tod: The number of TOD ranks, at least one per band.
-    """
-    counts = [1]*len(weights)
-    for _ in range(ntask_tod - len(weights)):
-        busiest = max(range(len(weights)), key=lambda iband: weights[iband]/counts[iband])
-        counts[busiest] += 1
-    return counts
-
-
-def enabled_compsep_views(params: Bunch) -> tuple[CompSepViewConfig, ...]:
-    """Return CompSep views in rank order: all I views, followed by all QU views."""
+def enabled_compsep_polbands(params: Bunch) -> tuple[CompSepPolBandConfig, ...]:
+    """Returns a tuple of CompSep "polbands" (bands in either I or QU), all I polbands first."""
     if not compsep_enabled(params) or "bands" not in params.compsep:
         return ()
 
-    views_by_pol: dict[str, list[tuple[str, str]]] = {"I": [], "QU": []}
+    polbands_by_pol: dict[str, list[CompSepPolBandConfig]] = {"I": [], "QU": []}
     for band_name in params.compsep.bands:
         band = params.compsep.bands[band_name]
         if not band.enabled:
             continue
-        if band.polarization not in EXECUTION_POLS:
+        if band.polarization not in SPLIT_POLS:
             raise ValueError(
                 f"compsep.bands.{band_name}.polarization is {band.polarization!r}; expected "
-                f"one of {sorted(EXECUTION_POLS)}."
+                f"one of {sorted(SPLIT_POLS)}."
             )
-        for polarization in EXECUTION_POLS[band.polarization]:
-            views_by_pol[polarization].append(
-                (band_name, get_execution_band_id(band_name, polarization))
-            )
-
-    views = []
-    for polarization in ("I", "QU"):
-        for band_name, identifier in views_by_pol[polarization]:
-            views.append(CompSepViewConfig(
-                rank=len(views),
-                band_name=band_name,
-                polarization=polarization,
-                identifier=identifier,
-            ))
-    return tuple(views)
+        for pol in SPLIT_POLS[band.polarization]:
+            polbands_by_pol[pol].append(CompSepPolBandConfig(band_name=band_name, pol=pol))
+    return tuple(polbands_by_pol["I"] + polbands_by_pol["QU"])
 
 
 def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any = NO_DEFAULT,
@@ -247,7 +201,8 @@ def read_settings(params: Bunch, name: str, scopes: Sequence[str],
     Raises:
         ValueError: for a setting without a default, or with the wrong type.
     """
-    settings = Bunch(**defaults)
+    # A copy, so that no two settings blocks share a mutable default such as a list.
+    settings = Bunch(**copy.deepcopy(defaults))
     # The widest scope first, so that each narrower one overrides it.
     for scope in reversed(scopes):
         block = params
@@ -272,14 +227,29 @@ def read_settings(params: Bunch, name: str, scopes: Sequence[str],
     return settings
 
 
+def names_or_all(names: list[str] | str | None, known_names: list[str],
+                 setting: str) -> list[str]:
+    """The names a setting selects: `names` itself, or all of `known_names` for "all" or None."""
+    if names is None or names == "all":
+        return list(known_names)
+    if isinstance(names, str):
+        raise ValueError(f"'{setting}' must be a list of names or \"all\", not {names!r}.")
+    unknown = sorted(set(names) - set(known_names))
+    if unknown:
+        raise ValueError(f"'{setting}' names unknown {unknown}. The known names are "
+                         f"{known_names}.")
+    return list(names)
+
+
 def resolve_band_lmax(params: Bunch, band_name: str, experiment: str | None, nside: int) -> int:
     """The harmonic bandlimit of one band: its `lmax` parameter, or `3*nside - 1` if unset.
 
     This is C4's equivalent of C3's `BAND_LMAX`, which is likewise stated per band. It is the lmax
     of the band's `DetectorMap`, and thereby the highest multipole at which any component can be
-    compared against this band's data: `Component.project_comp_to_band` truncates the component
-    alms to it. `3*nside - 1` is the full bandlimit of a HEALPix map at this resolution, so the
-    default lets a band constrain everything its own pixelization can carry.
+    compared against this band's data: `Component.comp2band` truncates the component alms to it,
+    both in the CG solver and in every realized band sky (`CompList.get_sky_at_nu`). `3*nside - 1`
+    is the full bandlimit of a HEALPix map at this resolution, so the default lets a band constrain
+    everything its own pixelization can carry.
 
     Args:
         band_name: Key of the band under `compsep.bands` (and under its experiment, if it has one).
@@ -324,47 +294,10 @@ def has_enabled_sampling_group(params: Bunch) -> bool:
 
 
 def compsep_enabled(params: Bunch) -> bool:
-    """Whether component separation runs at all (default true).
-
-    False means TOD-only mode: no compsep ranks are allocated and `compsep.bands` is ignored, so the
-    TOD side runs against the fixed initial sky model it builds itself from `components`. There are
-    two ways to get there, and they mean the same thing operationally:
-
-    * `compsep.enabled: false`, stated outright.
-    * No enabled sampling group. Compsep ranks exist only to run those groups, so allocating ranks
-      that would sample nothing just reserves nodes and memory to forward maps and evaluate a
-      chi-squared. TOD-only reaches the same fixed sky far more cheaply.
-    """
-    if "compsep" not in params:
+    """Whether component separation runs at all (default true)."""
+    if "compsep" not in params:  # Block missing from parameter file entirely.
         return False
-    if "enabled" in params.compsep and not params.compsep.enabled:
+    if "enabled" in params.compsep and not params.compsep.enabled:  # enbaled = False in param-file.
         return False
+    # Even if both checks above pass, compsep is implicitly disabled if there are no sampling groups
     return has_enabled_sampling_group(params)
-
-
-def derive_task_counts(params: Bunch) -> Bunch:
-    """MPI task counts, derived from the band configuration rather than stated in the file.
-
-    Compsep needs exactly one task per enabled band view, one for I and one for QU. Every other
-    task is a TOD task, and each enabled TOD band needs at least one (see `split_tod_ranks`).
-
-    Returns:
-        Bunch with `tod_bands` (the number of enabled TOD bands), `compsep_I`, `compsep_QU`, and
-        `min_total`, their sum: the smallest number of tasks the run can use.
-    """
-    ntod_bands = len(enabled_tod_bands(params))
-    compsep_views = enabled_compsep_views(params)
-    ntask_I = sum(view.polarization == "I" for view in compsep_views)
-    ntask_QU = sum(view.polarization == "QU" for view in compsep_views)
-
-    return Bunch(tod_bands=ntod_bands, compsep_I=ntask_I, compsep_QU=ntask_QU,
-                 min_total=ntod_bands + ntask_I + ntask_QU)
-
-
-def task_count_breakdown(counts: Bunch) -> str:
-    """The derived task counts as one line, for the 'wrong mpirun -n' error message.
-
-    Without TOD bands the count is exact; with them, any further tasks go to the TOD bands.
-    """
-    return (f"{'at least ' if counts.tod_bands else ''}{counts.min_total} = {counts.tod_bands} TOD "
-            f"+ {counts.compsep_I} CompSep-I + {counts.compsep_QU} CompSep-QU")

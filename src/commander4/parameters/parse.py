@@ -13,6 +13,24 @@ from commander4.parameters.bunch import as_bunch_recursive
 INCLUDE_PATTERN = re.compile(r"^(\s*)!import\s+(.+?)(?:\s+#.*)?$")
 
 
+class UniqueKeyLoader(yaml.SafeLoader):
+    """PyYAML's safe loader, except that a key given twice in one mapping is an error.
+
+    Plain PyYAML keeps the last of two equal keys without a message, so a copied block (a
+    component, a band, a sampling group) whose key was not changed would replace the first one.
+    """
+    def construct_mapping(self, node, deep=False):
+        keys = set()
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if key in keys:
+                raise yaml.constructor.ConstructorError("while reading a mapping", node.start_mark,
+                                                        f"key {key!r} is given twice",
+                                                        key_node.start_mark)
+            keys.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
 # TODO: Below is code for finding either the Commander4 PIP version number, or the git hash in case
 # of an editable install. I don't want to introduce this code yet because I'm unsure about having
 # tons of MPI tasks thrashing the file system just to get a git hash. Ideally this should be done
@@ -170,7 +188,8 @@ def load_params(parameter_file: str) -> tuple[Bunch, dict, str]:
     parameter_file = os.path.abspath(parameter_file)
     expanded_lines = expand_includes(parameter_file)
     try:
-        params_dict = yaml.safe_load("\n".join(line for line, _, _ in expanded_lines))
+        params_dict = yaml.load("\n".join(line for line, _, _ in expanded_lines),
+                                Loader=UniqueKeyLoader)
     except yaml.MarkedYAMLError as err:
         # Because of our custom "!import" syntax we need some custom error handling.
         # By default PyYAML would point to line numbers in a constructed parameter file.

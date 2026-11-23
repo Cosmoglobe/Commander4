@@ -1,0 +1,105 @@
+# The simulation behind the full-run tests (test_full_runs.py). Kept as small as a run allows:
+# nside 16, 24 scans of 30 min at 8 Hz, three bands. The Planck-like scan is sped up (one anti-Sun
+# turn per day, fast precession) so that the 12 hours of data hit every pixel.
+# Band353 is intensity only, at nside 8 (band lmax 23, below the components' 47), with a narrow
+# beam and a signal-to-noise of ~250. Its TOD is not analysed: the test turns its binned map into a
+# file band. It guards the band lmax cut: a model sky realized above lmax 23 gives this band a
+# reduced chi^2 of ~12000.
+# All paths are relative to the working directory the test runs in.
+general:
+  nside: 16
+  units: "uK_RJ"
+  double_precision: false
+  seed: 7
+  output_dir: "sim"
+
+components:
+  cmb:
+    enabled: true
+    component_class: "CMB"
+    params: {polarization: "IQU", lmax: 47, solar_dipole: false}
+  dust:
+    enabled: true
+    component_class: "ThermalDust"
+    params: {polarization: "IQU", beta: 1.54, T: 20, nu_ref: 353, lmax: 47,
+             template: {source: "pysm3", preset: "d0"}}
+  sync:
+    enabled: true
+    component_class: "Synchrotron"
+    params: {polarization: "IQU", beta: -3.1, nu_ref: 30, lmax: 47,
+             template: {source: "pysm3", preset: "s5"}}
+
+simulation:
+  nscans: 24
+  scan_duration_sec: 1800
+  orbital_dipole: true
+  compress: true
+  debug_output_dir: "sim_debug"
+  pointing:
+    strategy: "planck_scan"
+    anti_sun_period_days: 1.0
+    precession_period_days: 0.05
+  noise:
+    white: true
+    oof: {enabled: true, fknee: 0.2, alpha: -1.5}
+  modifiers:
+    crosstalk: {enabled: false}
+  transfer_function:
+    enabled: false
+
+experiments:
+  SimSat:
+    enabled: true
+    bands:
+      Band030:
+        enabled: true
+        freq: 30.0
+        fwhm: 300.0
+        fsamp: 8.0
+        eval_nside: 16
+        sigma0: 60.0
+        polarization: "IQU"
+        detectors:
+          d030a: {psi_offset_deg: 0.0}
+          d030b: {psi_offset_deg: 45.0}
+          d030c: {psi_offset_deg: 90.0}
+          d030d: {psi_offset_deg: 135.0}
+      Band100:
+        enabled: true
+        freq: 100.0
+        fwhm: 240.0
+        fsamp: 8.0
+        eval_nside: 16
+        sigma0: 60.0
+        polarization: "IQU"
+        detectors:
+          d100a: {psi_offset_deg: 0.0}
+          d100b: {psi_offset_deg: 45.0}
+          d100c: {psi_offset_deg: 90.0}
+          d100d: {psi_offset_deg: 135.0}
+      Band353:
+        enabled: true
+        freq: 353.0
+        fwhm: 200.0
+        fsamp: 8.0
+        eval_nside: 8
+        sigma0: 60.0
+        polarization: "I"
+        detectors:
+          d353a: {}
+          d353b: {}
+      # The same band at nside 16, for run B: the per-pixel solver needs one nside, and regridding
+      # Band353 with `ud_grade` adds a pixel window that the model does not describe.
+      # Noisier (signal-to-noise ~8): at ~250 the error of storing the per-pixel solution as alms
+      # up to 3*nside - 1 shows.
+      Band353_16:
+        enabled: true
+        freq: 353.0
+        fwhm: 200.0
+        fsamp: 8.0
+        eval_nside: 16
+        sigma0: 2000.0
+        polarization: "I"
+        detectors:
+          d353a: {}
+          d353b: {}

@@ -140,8 +140,8 @@ def _extract_chain_iter(filename: str) -> tuple[int | None, int | None]:
 
 
 def _build_component_list(params: Bunch) -> list[Component]:
-    """Build the same component execution views used by the live CompSep pipeline."""
-    return list(CompList.init_from_params(params.components, params))
+    """Build the same component polarization views used by the live CompSep pipeline."""
+    return list(CompList.init_from_params(params))
 
 
 def _match_band_info(

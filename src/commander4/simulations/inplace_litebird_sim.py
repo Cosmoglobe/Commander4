@@ -6,7 +6,6 @@ truth on a real scan strategy. The standalone ``simgen`` package is the more gen
 alternative, writing simulated scan files rather than patching them at read time.
 """
 import numpy as np
-from copy import deepcopy
 import camb
 import healpy as hp
 import pysm3
@@ -22,8 +21,7 @@ from commander4.data_models.detector_tod import DetectorTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.sky.diffuse_components import ThermalDust, Synchrotron, FreeFree,\
         SpinningDust
-from commander4.diagnostics.performance import benchmark, bench_summary, start_bench,\
-                                               stop_bench, log_memory, increment_count, bench_reset
+from commander4.diagnostics.performance import benchmark
 from commander4.tod.sky_projection import project_sky_to_tod
 
 
@@ -32,6 +30,12 @@ def _scalar_nu_ref(comp_params):
     value), since the in-place simulator uses one reference frequency per component."""
     nu_ref = comp_params.nu_ref
     return nu_ref[0] if isinstance(nu_ref, (list, tuple)) else nu_ref
+
+
+def _comp_name(params, component_class: str) -> str:
+    """The name, under `components`, of the component of class `component_class`."""
+    return next(name for name in params.components
+                if params.components[name].component_class == component_class)
 
 
 def generate_cmb(freq, fwhm, units, nside, lmax, params):
@@ -101,18 +105,16 @@ def generate_cmb(freq, fwhm, units, nside, lmax, params):
 
 
 def generate_thermal_dust(freq, fwhm, units, nside, params):
-    nu_dust = _scalar_nu_ref(params.components.ThermalDust.params)
+    name = _comp_name(params, "ThermalDust")
+    nu_dust = _scalar_nu_ref(params.components[name].params)
 
     #d0 = constant beta 1.54 and T = 20
     dust = pysm3.Sky(nside=min(1024,nside), preset_strings=["d0"], output_unit=units)
     dust_ref = dust.get_emission(nu_dust*u.GHz)
     dust_ref_smoothed = hp.smoothing(dust_ref, fwhm=fwhm)*dust_ref.unit
 
-    dust_params = deepcopy(params.components.ThermalDust.params)
-    dust_params.nu_ref = nu_dust  # single reference frequency for the in-place sim
-    dust_params.polarized = True
-
-    dust = ThermalDust(dust_params, params, comp_name="ThermalDust")
+    # The I view has the I value of `nu_ref`, which is the single reference frequency used here.
+    dust = ThermalDust(params, name, "I")
     dust_s = dust_ref_smoothed*dust.get_sed(freq)
     dust_s = hp.ud_grade(dust_s.value, nside)*dust_s.unit
 
@@ -120,18 +122,16 @@ def generate_thermal_dust(freq, fwhm, units, nside, params):
 
 
 def generate_sync(freq, fwhm, units, nside, params):
-    nu_sync = _scalar_nu_ref(params.components.Synchrotron.params)
+    name = _comp_name(params, "Synchrotron")
+    nu_sync = _scalar_nu_ref(params.components[name].params)
 
     # s5 = const beta -3.1
     sync = pysm3.Sky(nside=min(1024,nside), preset_strings=["s5"], output_unit=units)
     sync_ref = sync.get_emission(nu_sync*u.GHz)
     sync_ref_smoothed = hp.smoothing(sync_ref, fwhm=fwhm)*sync_ref.unit
 
-    sync_params = deepcopy(params.components.Synchrotron.params)
-    sync_params.nu_ref = nu_sync  # single reference frequency for the in-place sim
-    sync_params.polarized = True
-
-    sync = Synchrotron(sync_params, params, comp_name="Synchrotron")
+    # The I view has the I value of `nu_ref`, which is the single reference frequency used here.
+    sync = Synchrotron(params, name, "I")
     sync_s = sync_ref_smoothed*sync.get_sed(freq)
     sync_s = hp.ud_grade(sync_s.value, nside)*sync_s.unit
 
@@ -139,17 +139,15 @@ def generate_sync(freq, fwhm, units, nside, params):
 
 
 def generate_ff(freq, fwhm, units, nside, params):
-    nu_ff = _scalar_nu_ref(params.components.FreeFree.params)
+    name = _comp_name(params, "FreeFree")
+    nu_ff = _scalar_nu_ref(params.components[name].params)
 
     ff = pysm3.Sky(nside=min(1024,nside), preset_strings=["f1"], output_unit=units)
     ff_ref = ff.get_emission(nu_ff*u.GHz)
     ff_ref_smoothed = hp.smoothing(ff_ref, fwhm=fwhm)*ff_ref.unit
 
-    ff_params = deepcopy(params.components.FreeFree.params)
-    ff_params.nu_ref = nu_ff  # single reference frequency for the in-place sim
-    ff_params.polarized = False
-
-    ff = FreeFree(ff_params, params, comp_name="FreeFree")
+    # The I view has the I value of `nu_ref`, which is the single reference frequency used here.
+    ff = FreeFree(params, name, "I")
     ff_s = ff_ref_smoothed*ff.get_sed(freq)
     ff_s = hp.ud_grade(ff_s.value, nside)*ff_s.unit
 
@@ -163,10 +161,7 @@ def generate_spdust(freq, fwhm, units, nside, params):
     spdust_ref = spdust.get_emission(nu_spdust*u.GHz)
     spdust_ref_smoothed = hp.smoothing(spdust_ref, fwhm=fwhm)
 
-    spdust_params = deepcopy(params.components.SpinningDust.params)
-    spdust_params.polarized = False
-
-    spdust = SpinningDust(spdust_params, params, comp_name="SpinningDust")
+    spdust = SpinningDust(params, _comp_name(params, "SpinningDust"), "I")
     spdust_s = spdust_ref_smoothed*spdust.get_sed(freq)
     spdust_s = hp.ud_grade(spdust_s.value, nside)*spdust_s.unit
 
@@ -219,50 +214,46 @@ def replace_tod_with_sim(band_comm: MPI.Comm, detector_data: DetectorGroupTOD, b
     # Convert per-root-second RMS to per-sample RMS.
     sigma0_persamp = KCMB_to_KRJ*band_params.sigma0_rts*np.sqrt(band_params.fsamp)
 
-    start_bench("sky")
     comps_sum_smoothed = np.zeros((3, npix), dtype=np.float32)
-    if band_comm.Get_rank() == 0:
-        if sim_params.include_CMB:
-            comps_sum_smoothed += generate_cmb(freq, fwhm, units, nside, 3*nside, params)
-            gc.collect()
-        if sim_params.include_ThermalDust:
-            comps_sum_smoothed += generate_thermal_dust(freq, fwhm, units, nside, params)
-            gc.collect()
-        if sim_params.include_Synchrotron:
-            comps_sum_smoothed += generate_sync(freq, fwhm, units, nside, params)
-            gc.collect()
-        if sim_params.include_FreeFree:
-            comps_sum_smoothed += generate_ff(freq, fwhm, units, nside, params)
-            gc.collect()
-    stop_bench("sky")
+    with benchmark("sky"):
+        if band_comm.Get_rank() == 0:
+            if sim_params.include_CMB:
+                comps_sum_smoothed += generate_cmb(freq, fwhm, units, nside, 3*nside, params)
+                gc.collect()
+            if sim_params.include_ThermalDust:
+                comps_sum_smoothed += generate_thermal_dust(freq, fwhm, units, nside, params)
+                gc.collect()
+            if sim_params.include_Synchrotron:
+                comps_sum_smoothed += generate_sync(freq, fwhm, units, nside, params)
+                gc.collect()
+            if sim_params.include_FreeFree:
+                comps_sum_smoothed += generate_ff(freq, fwhm, units, nside, params)
+                gc.collect()
 
-    start_bench("bcast")
-    band_comm.Bcast(comps_sum_smoothed, root=0)
-    stop_bench("bcast")
+    with benchmark("bcast"):
+        band_comm.Bcast(comps_sum_smoothed, root=0)
 
     for scan in detector_data.scans:
         for det in scan.detectors:
-            start_bench("orbdip")
-            pix, psi = det.get_pix_psi()
-            ntod = det.tod.size
-            det.tod[:] = project_sky_to_tod(comps_sum_smoothed, pix, psi, det.response_I_P)
-            if sim_params.include_OrbitalDipole:
-                det.tod[:] += get_orbital_dipole(det, pix, freq, units)
-            stop_bench("orbdip")
+            with benchmark("orbdip"):
+                pix, psi = det.pointing.get_pix_psi()
+                ntod = det.tod.size
+                det.tod[:] = project_sky_to_tod(comps_sum_smoothed, pix, psi, det.response_I_P)
+                if sim_params.include_OrbitalDipole:
+                    det.tod[:] += get_orbital_dipole(det, pix, freq, units)
 
-            start_bench("noise")
-            # Create some white noise.
-            noise = np.random.normal(0, sigma0_persamp, ntod)
+            with benchmark("noise"):
+                # Create some white noise.
+                noise = np.random.normal(0, sigma0_persamp, ntod)
 
-            if sim_params.include_corr_noise:
-                # 1/f power spectrum, without sigma0**2 factor (which is already in the data).
-                PS_freqs = rfftfreq(ntod, 1.0/band_params.fsamp)
-                PS_freqs[0] = 0.5*PS_freqs[1]  # Add some DC power while avoiding divide by 0.
-                PS = 1.0 + (PS_freqs/fknee_ncorr)**alpha_ncorr
-                # Morph the shape of the noise power spectrum to be 1/f + white noise.
-                det.tod[:] += irfft(rfft(noise)*np.sqrt(PS))
-                del(PS_freqs, PS, noise)
-                gc.collect()
-            stop_bench("noise")
+                if sim_params.include_corr_noise:
+                    # 1/f power spectrum, without sigma0**2 factor (which is already in the data).
+                    PS_freqs = rfftfreq(ntod, 1.0/band_params.fsamp)
+                    PS_freqs[0] = 0.5*PS_freqs[1]  # Add some DC power while avoiding divide by 0.
+                    PS = 1.0 + (PS_freqs/fknee_ncorr)**alpha_ncorr
+                    # Morph the shape of the noise power spectrum to be 1/f + white noise.
+                    det.tod[:] += irfft(rfft(noise)*np.sqrt(PS))
+                    del(PS_freqs, PS, noise)
+                    gc.collect()
 
     return detector_data

@@ -105,6 +105,28 @@ def test_detector_map_smooth_to_resolution_on_a_patch():
     assert detmap.map_inv_var[0][observed].max() > 0.0
 
 
+def test_q_and_u_are_smoothed_as_one_spin2_field():
+    """Smoothing Q and U must equal putting the Gaussian window on E and B, which is what the
+    CompSep beam operator does to the model. Smoothing Q and U as two scalar maps misses this by
+    about the map rms; the 1 % left is the accuracy of the map-to-alm transform."""
+    lmax = 3*NSIDE - 1
+    np.random.seed(3)
+    cl = np.zeros(lmax + 1)
+    cl[2:] = 1.0/np.arange(2, lmax + 1)**2
+    alms = [np.zeros(hp.Alm.getsize(lmax), dtype=complex), hp.synalm(cl, lmax=lmax),
+            hp.synalm(cl, lmax=lmax)]
+    qu = hp.alm2map(alms, NSIDE, lmax=lmax)[1:]
+    detmap = DetectorMap(map_sky=qu.copy(), map_inv_var=np.ones_like(qu), nu=90.0, fwhm=60.0,
+                         nside=NSIDE)
+
+    detmap.smooth_to_resolution(300.0)
+
+    window = hp.gauss_beam(np.deg2rad(np.sqrt(300.0**2 - 60.0**2)/60.0), lmax=lmax)
+    expected = hp.alm2map([alms[0]] + [hp.almxfl(alm, window) for alm in alms[1:]], NSIDE,
+                          lmax=lmax)[1:]
+    assert np.abs(detmap.map_sky - expected).max() < 0.03*expected.std()
+
+
 def test_smoothing_to_a_finer_beam_is_refused(caplog):
     """Smoothing only coarsens; a finer target leaves the band alone rather than sharpening it."""
     signal, inv_var, _ = _partial_sky_maps()

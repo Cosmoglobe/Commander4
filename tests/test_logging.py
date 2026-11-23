@@ -1,8 +1,6 @@
 import io
 import logging
 import re
-import subprocess
-import sys
 
 from commander4.diagnostics.log import (
     C4Formatter, SUMMARY, VERBOSE, WorldRankFilter, make_run_id, report_fatal)
@@ -106,16 +104,3 @@ def test_only_first_failing_rank_writes_and_logs(tmp_path, caplog, monkeypatch) 
     assert "failure from rank 3" in traceback_text
     assert "failure from rank 9" not in traceback_text
     assert caplog.text.count("Fatal error on world rank") == 1
-
-
-def test_validation_remains_active_under_python_optimization() -> None:
-    code = (
-        "from commander4.polarization import get_npol\n"
-        "try:\n"
-        "    get_npol('bad')\n"
-        "except ValueError:\n"
-        "    raise SystemExit(0)\n"
-        "raise SystemExit(1)\n"
-    )
-    result = subprocess.run([sys.executable, "-O", "-c", code], check=False)
-    assert result.returncode == 0

@@ -10,12 +10,11 @@ from pixell.bunch import Bunch
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.detector_map import DetectorMap
-from commander4.data_models.tod_samples import TODSamples
 from commander4.parameters.schema import resolve_band_lmax
 
 
 def finalize_band_maps(map_signal: NDArray, map_inv_var: NDArray,
-                       experiment_data: DetectorGroupTOD, tod_samples: TODSamples, params: Bunch,
+                       experiment_data: DetectorGroupTOD, params: Bunch,
                        aux_maps: dict[str, NDArray], map_nhit: NDArray | None,
                        map_cov: NDArray) -> tuple[dict, dict]:
     """Split the solved band maps into `DetectorMap`s, and collect what goes to the chain file.
@@ -25,7 +24,6 @@ def finalize_band_maps(map_signal: NDArray, map_inv_var: NDArray,
             band. Solved in float64, and passed on and stored as float32 like the other sky maps.
         map_inv_var: Per-pixel white-noise inverse variance, same shape; 0 where unobserved.
         experiment_data: The band's TOD, for its polarizations, frequency and beam.
-        tod_samples: The chain state; the maps carry its absolute gain.
         params: The full parameter file, for the common resolution (`compsep.common_res_fwhm`, in
             arcminutes), the band's lmax and whether the chain gets the covariance map.
         aux_maps: Binned debug maps in uK_RJ, keyed by their name in the chain file and shaped
@@ -68,14 +66,12 @@ def finalize_band_maps(map_signal: NDArray, map_inv_var: NDArray,
     if "I" in pols:
         detmap_I = DetectorMap(map_signal[0,:], map_inv_var[0,:], experiment_data.nu,
                                experiment_data.fwhm, experiment_data.nside, lmax=band_lmax)
-        detmap_I.g0 = tod_samples.gain.abs_gain
         if common_res_fwhm:
             detmap_I.smooth_to_resolution(common_res_fwhm)
         detmap_dict_out["I"] = detmap_I
     if "QU" in pols:
         detmap_QU = DetectorMap(map_signal[1:3,:], map_inv_var[1:3,:], experiment_data.nu,
                                 experiment_data.fwhm, experiment_data.nside, lmax=band_lmax)
-        detmap_QU.g0 = tod_samples.gain.abs_gain
         if common_res_fwhm:
             detmap_QU.smooth_to_resolution(common_res_fwhm)
         detmap_dict_out["QU"] = detmap_QU

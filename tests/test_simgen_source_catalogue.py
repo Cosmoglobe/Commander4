@@ -18,18 +18,17 @@ NU_REF = 100.0
 
 def _simgen_sources(beta=0.0):
     cfg = Bunch(_name="PointSources", component_class="GriddedPointSources", enabled=True,
-                params=Bunch(polarization="I", shortname="ptsrc", amplitude=AMPLITUDE,
+                params=Bunch(polarization="I", amplitude=AMPLITUDE,
                              nlon=12, nlat=6, lat_range_deg=[-70.0, 70.0], beta=beta,
                              nu_ref=NU_REF))
     return GriddedPointSources(cfg, Bunch(nside=NSIDE, units="uK_RJ", double_precision=True))
 
 
 def _radio_sources(catalogue_path):
-    cfg = Bunch(_name="RadioSources", polarization="I", longname="RadioSources",
-                shortname="radsources", template_path=str(catalogue_path), nu_0=NU_REF,
-                lmax="full", smoothing_scale=0, sample_alphas=False)
-    return RadioSources(cfg, Bunch(nside=NSIDE, double_precision=True, lmax=3*NSIDE-1,
-                                   polarization="I"))
+    cfg = Bunch(polarization="I", template_path=str(catalogue_path), nu_0=NU_REF)
+    params = Bunch(components=Bunch(RadioSources=Bunch(params=cfg)),
+                   compsep=Bunch(double_precision=True))
+    return RadioSources(params, "RadioSources", "I")
 
 
 @pytest.fixture
@@ -65,8 +64,8 @@ def test_total_brightness_survives_the_round_trip(catalogue):
     beam_rad = np.deg2rad(1.0)
     band = Bunch(freq=217.0, eval_nside=NSIDE, fwhm_rad=beam_rad, polarization="I")
     sim_map = comp.band_map(band)[0]
-    # `get_sky` takes the beam in radians, the same unit `SkyModel` passes both component families.
-    c4_map = _radio_sources(path).get_sky(band.freq, NSIDE, fwhm=beam_rad)[0]
+    # `get_sky` takes the beam in radians, as `CompList.get_sky_at_nu` passes it to both families.
+    c4_map = _radio_sources(path).get_sky(band.freq, NSIDE, fwhm_rad=beam_rad)[0]
     assert c4_map.sum() == pytest.approx(sim_map.sum(), rel=1e-3)
 
 

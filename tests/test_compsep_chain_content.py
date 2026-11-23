@@ -26,13 +26,11 @@ def _params(output_dir: str) -> Bunch:
 def _comp_list(lmax: int = 4) -> CompList:
     """One IQU CMB component with a power-law C(l) prior, at a small lmax."""
     cmb = Bunch(enabled=True, component_class="CMB",
-                params=Bunch(lmax=lmax, polarization="IQU", shortname="cmb",
-                             spatially_varying_MM=False, Cl_prior_amplitude=1e3,
+                params=Bunch(lmax=lmax, polarization="IQU", 
+                             Cl_prior_amplitude=1e3,
                              Cl_prior_beta=-0.5, nu_ref=100.0))
-    object.__setattr__(cmb, "_name", "CMB")
-    params = Bunch(compsep=Bunch(bands=Bunch(), double_precision=True,
-                                 ntask_compsep_QU=1))
-    return CompList.init_from_params(Bunch({"cmb": cmb}), params)
+    return CompList.init_from_params(Bunch(
+        components=Bunch(cmb=cmb), compsep=Bunch(bands=Bunch(), double_precision=True)))
 
 
 def _write(tmp_path, diagnostics=None, band_frequencies=None, lmax=4) -> str:
@@ -40,9 +38,8 @@ def _write(tmp_path, diagnostics=None, band_frequencies=None, lmax=4) -> str:
     paths.create_output_dirs(params.output)
     comp_list = _comp_list(lmax)
     for comp in comp_list.components:
-        comp.allocate_empty_alms()
         rng = np.random.default_rng(0)
-        comp.alms[:] = rng.normal(size=comp.alms.shape) + 1j*rng.normal(size=comp.alms.shape)
+        comp.amps[:] = rng.normal(size=comp.amps.shape) + 1j*rng.normal(size=comp.amps.shape)
     write_compsep_chain_to_file(comp_list, params, chain=1, iter=1,
                                 diagnostics=diagnostics, band_frequencies=band_frequencies)
     return os.path.join(paths.subdir(params, paths.CHAINS_COMPSEP), "chain01_iter0001.h5")
@@ -72,7 +69,8 @@ def test_the_cl_prior_parameters_are_recorded(tmp_path) -> None:
         prior = f["comps/cmb/Cl_prior"]
         assert f["comps/cmb/Cl_prior/Cl_prior_amplitude"][()] == pytest.approx(1e3)
         assert f["comps/cmb/Cl_prior/Cl_prior_beta"][()] == pytest.approx(-0.5)
-        assert {"Cl_prior_FWHM", "Cl_prior_l_pivot", "Cl_prior_l_apod"} <= set(prior.keys())
+        assert {"Cl_prior_FWHM", "Cl_prior_l_pivot", "Cl_prior_l_apod",
+                "Cl_prior_l_tighten"} <= set(prior.keys())
 
 
 def test_a_disabled_cl_prior_writes_nothing(tmp_path) -> None:
@@ -80,14 +78,10 @@ def test_a_disabled_cl_prior_writes_nothing(tmp_path) -> None:
     params = _params(str(tmp_path))
     paths.create_output_dirs(params.output)
     cmb = Bunch(enabled=True, component_class="CMB",
-                params=Bunch(lmax=2, polarization="I", shortname="cmb",
-                             spatially_varying_MM=False, Cl_prior_amplitude=None, nu_ref=100.0))
-    object.__setattr__(cmb, "_name", "CMB")
-    comp_list = CompList.init_from_params(
-        Bunch({"cmb": cmb}),
-        Bunch(compsep=Bunch(bands=Bunch(), double_precision=True, ntask_compsep_QU=1)))
-    for comp in comp_list.components:
-        comp.allocate_empty_alms()
+                params=Bunch(lmax=2, polarization="I", 
+                             Cl_prior_amplitude=None, nu_ref=100.0))
+    comp_list = CompList.init_from_params(Bunch(
+        components=Bunch(cmb=cmb), compsep=Bunch(bands=Bunch(), double_precision=True)))
     write_compsep_chain_to_file(comp_list, params, chain=1, iter=1)
 
     path = os.path.join(paths.subdir(params, paths.CHAINS_COMPSEP), "chain01_iter0001.h5")

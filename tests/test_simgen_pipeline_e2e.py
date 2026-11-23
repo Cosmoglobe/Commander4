@@ -34,10 +34,10 @@ def test_end_to_end_transfer_function(tmp_path, compress):
                     "seed": 3, "output_dir": out_dir},
         "components": {
             "CMB": {"enabled": True, "component_class": "CMB",
-                    "params": {"polarization": "IQU", "shortname": "cmb", "lmax": 47,
+                    "params": {"polarization": "IQU", "lmax": 47,
                                "solar_dipole": True}},
             "ThermalDust": {"enabled": True, "component_class": "ThermalDust",
-                            "params": {"polarization": "IQU", "shortname": "dust", "beta": 1.54,
+                            "params": {"polarization": "IQU", "beta": 1.54,
                                        "T": 20, "nu_ref": 857, "lmax": 47,
                                        "template": {"source": "pysm3", "preset": "d0"}}}},
         "simulation": {

@@ -111,19 +111,17 @@ def retrieve_map_from_fits_file(band: Bunch, pol: str, maptype: str):
 
 
 
-def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
+def read_data_map_from_file(my_band: Bunch, pols: str, params: Bunch) -> DetectorMap:
     """ Reads the map data for a given band from disk. Used for bands that do not have a TOD
         processing component. The map is smoothed to the common resolution on read (when enabled).
     Args:
         my_band (Bunch): A parameter file subset for the band to read from file.
+        pols (str): The Stokes maps to read: "I", "QU" or "IQU".
         params (Bunch): Full parameter file, for the common-resolution smoothing settings.
     Returns:
         detector_map (DetectorMap): Object holding signal map and other relevant data (inverse
             variance, nu...)
     """
-    pols = my_band.polarization
-    if pols not in ("I", "QU", "IQU"):
-        raise ValueError(f"Specified polarization {pols!r} is not recognized.")
     maps_sky = []
     maps_inv_var = []
     rms_map_type = _get_map_info(my_band, "rms")[2]
@@ -146,6 +144,10 @@ def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
         # zero inverse variance.
         map_rms = np.asarray(map_rms, dtype=np.float64)
         map_inv_var = np.divide(1.0, map_rms**2, out=np.zeros_like(map_rms), where=map_rms > 0)
+        # A signal pixel that is UNSEEN or NaN is unobserved too, whatever its RMS says.
+        unseen = ~np.isfinite(map_sky) | (map_sky == hp.UNSEEN)
+        map_sky = np.where(unseen, 0.0, map_sky)
+        map_inv_var[unseen] = 0.0
 
         try:
             nside = hp.npix2nside(map_sky.size)
@@ -156,7 +158,14 @@ def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
         if "eval_nside" in my_band and nside != my_band.eval_nside:
             logger.info(f"Converting map {my_band._name} from nside {nside} to "\
                         f"{my_band.eval_nside}.")
-            map_sky = hp.ud_grade(map_sky, my_band.eval_nside)
+            # Merged pixels are combined in their inverse-variance-weighted mean, whose inverse
+            # variance is the sum below. Unobserved pixels (zero weight) contribute no signal, even
+            # a NaN one; a merged pixel with no weight at all is left at zero signal.
+            weight = hp.ud_grade(map_inv_var, my_band.eval_nside)
+            weighted_sky = hp.ud_grade(np.where(map_inv_var > 0, map_sky*map_inv_var, 0.0),
+                                       my_band.eval_nside)
+            map_sky = np.divide(weighted_sky, weight, out=np.zeros_like(weighted_sky),
+                                where=weight > 0)
             # power=-2 keeps the map's sum fixed, so merged pixels add their inverse variances.
             map_inv_var = hp.ud_grade(map_inv_var, my_band.eval_nside, power=-2)
             nside = my_band.eval_nside
@@ -167,8 +176,6 @@ def read_data_map_from_file(my_band: Bunch, params: Bunch) -> DetectorMap:
     lmax = resolve_band_lmax(params, my_band._name, None, nside)
     detmap = DetectorMap(np.array(maps_sky), np.array(maps_inv_var), my_band.freq, my_band.fwhm,
                          nside, lmax=lmax)
-    detmap.g0 = 0.0
-    detmap.gain = 0.0
     # Smooth to the common analysis resolution on read; 0 leaves the band at its native beam.
     common_res_fwhm = float(resolve_param(params, "common_res_fwhm", ("compsep",), default=0.0))
     if common_res_fwhm:

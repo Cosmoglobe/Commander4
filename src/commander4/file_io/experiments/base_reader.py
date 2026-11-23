@@ -40,7 +40,7 @@ from commander4.data_models.scan_tod import ScanTOD
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.data_models.pointing import (PixelPointing, ScanBoresightPointing,
                                              DetectorBoresightPointing)
-from commander4.parameters.schema import resolve_param
+from commander4.parameters.schema import resolve_band_lmax, resolve_param
 from commander4.tod.noise.psd import NoisePSD, NoisePSDOof
 from commander4.math_utils.transfer_func import _tau_sec, _build_from_node
 
@@ -86,6 +86,7 @@ class TODReader:
         self.experiment = experiment
         self.band = band
         self.det_names = list(band.detectors)
+        self.lmax = resolve_band_lmax(params, band._name, experiment._name, band.eval_nside)
         # The unit the band quotes its gains and maps in (see `DetectorGroupTOD.band_unit`).
         if "band_unit" in band:
             self.band_unit = band.band_unit
@@ -172,7 +173,8 @@ class TODReader:
                                 tf=_build_from_node(self.band.transfer_function),
                                 instrument_filepath=getattr(self.experiment, "instrument_file",
                                                             None),
-                                hfi_demodulation=self.hfi_demodulation, band_unit=self.band_unit)
+                                hfi_demodulation=self.hfi_demodulation, band_unit=self.band_unit,
+                                lmax=self.lmax)
 
 
     def read_scan_header(self, f: h5py.File, scan_id: int) -> Bunch | None:

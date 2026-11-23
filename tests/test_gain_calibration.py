@@ -470,7 +470,8 @@ def _make_real_view(monkeypatch, good=None, sidelobe=None):
     pix = rng.integers(0, 12, size=NTOD)        # Valid pixels for the nside=1 experiment below.
     psi = rng.uniform(0.0, np.pi, size=NTOD)
     det = SimpleNamespace(tod=rng.normal(size=NTOD), ntod=NTOD, fsamp=float(FACTOR), nside=1,
-                          det_idx_fullband=0, get_pix_psi=lambda: (pix, psi),
+                          det_idx_fullband=0,
+                          pointing=SimpleNamespace(get_pix_psi=lambda: (pix, psi)),
                           response_I_P=(1.0, 1.0),
                           orbital_velocity_m_per_s=np.array([1.0, 0.0, 0.0], dtype=np.float32),
                           good_data_mask=np.ones(NTOD, dtype=bool) if good is None else good)

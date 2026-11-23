@@ -27,12 +27,11 @@ general:
   output_dir: "../c4_sims/simgen_corrnoise/"
 
 components:
-  CMB:
+  cmb:
     enabled: true
     component_class: "CMB"
     params:
       polarization: "IQU"
-      shortname: "cmb"
       lmax: 191
       solar_dipole: false    # A clean CAMB realization; no l=1 monopole/dipole to fight the 1/f.
 

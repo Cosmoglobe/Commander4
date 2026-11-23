@@ -10,10 +10,9 @@ from commander4.file_io.tod_reader import experiment_tod_readers
 from commander4.parameters.parse import load_params
 from commander4.parameters.schema import (
     TOP_LEVEL_BLOCKS,
-    derive_task_counts,
-    enabled_compsep_views,
+    compsep_enabled,
+    enabled_compsep_polbands,
     enabled_tod_bands,
-    task_count_breakdown,
     validate_param_schema,
 )
 
@@ -62,7 +61,6 @@ def _validate_components(params) -> None:
     from commander4.sky.component import Component
     from commander4.sky.diffuse_components import (
         CMB,
-        DiffuseComponent,
         FreeFree,
         SpinningDust,
         Synchrotron,
@@ -112,32 +110,12 @@ def _validate_components(params) -> None:
                 "corresponding 'Cl_prior_*' settings."
             )
 
-        common_fields = {"polarization", "longname", "shortname"}
-        diffuse_fields = {
-            "lmax", "spatially_varying_MM", "Cl_prior_amplitude", "Cl_prior_beta",
-            "Cl_prior_FWHM", "Cl_prior_l_pivot", "Cl_prior_l_apod", "units", "init_from",
-            "amp_prior_mean_map",
-        }
-        spectral_index_fields = {
-            "sample_spectral_index", "spectral_index_bounds", "spectral_index_prior",
-            "spectral_index_proposal_sigma",
-        }
-        class_fields = {
-            CMB: {"nu_ref"},
-            ThermalDust: {"beta", "T", "nu_ref"} | spectral_index_fields,
-            Synchrotron: {"beta", "nu_ref"} | spectral_index_fields,
-            FreeFree: {"T", "nu_ref"},
-            SpinningDust: {"template_path", "nu_peak", "nu_0"},
-            RadioSources: {"template_path", "nu_0"},
-        }
-        allowed_fields = common_fields | class_fields[component_class]
-        if issubclass(component_class, DiffuseComponent):
-            allowed_fields |= diffuse_fields
-        unknown = sorted(set(component_params) - allowed_fields)
+        # Each component class lists the settings it accepts in its `DEFAULTS`.
+        unknown = sorted(set(component_params) - set(component_class.DEFAULTS))
         if unknown:
             raise ValueError(
                 f"components.{component_name}.params has unused field(s) {unknown}. "
-                f"{component.component_class} accepts {sorted(allowed_fields)}."
+                f"{component.component_class} accepts {sorted(component_class.DEFAULTS)}."
             )
 
 
@@ -183,13 +161,13 @@ def estimate_compsep_sht_work(nside: int, polarization: str) -> float:
     if isinstance(nside, bool) or not isinstance(nside, int) or nside < 1:
         raise ValueError("nside must be an integer of at least 1.")
     if polarization not in {"I", "QU"}:
-        raise ValueError(f"Unknown CompSep execution polarization {polarization!r}.")
+        raise ValueError(f"Unknown CompSep polarization {polarization!r}; expected 'I' or 'QU'.")
     effective_nside = max(nside, SHT_NSIDE_FLOOR)
     spin_factor = SHT_SPIN2_FACTOR if polarization == "QU" else 1.0
     return spin_factor * (effective_nside / SHT_NSIDE_FLOOR)**SHT_NSIDE_EXPONENT
 
 
-def _compsep_view_nside(params: Bunch, band_name: str) -> int:
+def _compsep_band_nside(params: Bunch, band_name: str) -> int:
     """Return the resolution known from parameters before any map is read."""
     band = params.compsep.bands[band_name]
     if "get_from" not in band:
@@ -322,21 +300,21 @@ def suggest_compsep_thread_counts(
     Returns:
         Thread counts in CompSep rank order, ready for ``resources.compsep.num_threads``.
     """
-    views = enabled_compsep_views(params)
-    if not views:
+    polbands = enabled_compsep_polbands(params)
+    if not polbands:
         return []
     if isinstance(num_nodes, bool) or not isinstance(num_nodes, int) or num_nodes < 1:
         raise ValueError("num_nodes must be an integer of at least 1.")
     if threads_per_node is None:
-        threads_per_node = _default_compsep_threads(params, len(views))
+        threads_per_node = _default_compsep_threads(params, len(polbands))
     if (isinstance(threads_per_node, bool) or not isinstance(threads_per_node, int)
             or threads_per_node < 1):
         raise ValueError("threads_per_node must be an integer of at least 1.")
 
     weights = []
-    for view in views:
-        nside = _compsep_view_nside(params, view.band_name)
-        weights.append(estimate_compsep_sht_work(nside, view.polarization))
+    for polband in polbands:
+        nside = _compsep_band_nside(params, polband.band_name)
+        weights.append(estimate_compsep_sht_work(nside, polband.pol))
     total_threads = threads_per_node * num_nodes
     return _allocate_threads(weights, total_threads, threads_per_node)
 
@@ -350,17 +328,20 @@ def validate_parameter_file(
     _validate_structure(params_dict)
     _validate_components(params)
     _validate_experiments(params)
-    enabled_compsep_views(params)
-    if "compsep" in params:
-        from commander4.compsep.processing import resolve_sampling_groups
+    ntod_bands = len(enabled_tod_bands(params))
+    ntask_compsep = len(enabled_compsep_polbands(params))
+    if compsep_enabled(params):  # As in a run: a TOD-only run does not read the sampling groups.
+        from commander4.compsep.processing import read_sampling_groups
 
-        resolve_sampling_groups(params)
-    counts = derive_task_counts(params)
-    if counts.min_total < 1:
-        raise ValueError("The parameter file enables no TOD bands or CompSep views.")
+        read_sampling_groups(params)
+    if ntod_bands + ntask_compsep < 1:
+        raise ValueError("The parameter file enables no TOD bands or CompSep polbands.")
     if check_paths:
         _check_referenced_paths(params_dict, os.path.dirname(os.path.abspath(parameter_file)))
-    return task_count_breakdown(counts), list(_iter_enabled_groups(params))
+    # With TOD bands, any further tasks go to them.
+    task_summary = (f"{'at least ' if ntod_bands else ''}{ntod_bands + ntask_compsep} = "
+                    f"{ntod_bands} TOD + {ntask_compsep} CompSep")
+    return task_summary, list(_iter_enabled_groups(params))
 
 
 def main() -> int:

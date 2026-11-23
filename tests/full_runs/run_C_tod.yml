@@ -1,0 +1,181 @@
+# Full-run test C: TOD processing only (CompSep disabled, fixed sky model), 4 MPI tasks. Covers
+# the TOD options run A leaves out: the CG mapmaker everywhere with a transfer function, full-sky
+# map buffers, jump and glitch detection, processing masks, the other noise options, a uK_CMB band
+# unit, gains and noise parameters read from the scan files, a scan-ID range, read-time cuts,
+# downgraded and thinned map output, debug logging and profiling.
+# Paths are relative to the test's working directory.
+gibbs:
+  num_iterations: 2
+  seed: 1995
+  chain_status: new
+
+resources:
+  tod:
+    num_threads: 1
+  compsep:
+    num_threads: 1
+
+output:
+  dir: "out_C"
+  logging:
+    console:
+      level: "info"
+    file:
+      level: "debug"
+  profiling: true
+  plots:
+    enabled: false
+  chains:
+    write: [1]
+    interval:
+      bands: 1
+      compsep: 1
+      maps: 2
+    maps_nside: 8
+    include:
+      orbital_dipole_maps: true
+      corr_noise_maps: true
+      sky_model_maps: true
+      residual_maps: true
+      hit_maps: true
+      cov_maps: false
+      tod_power_spectra: false
+      jump_events: true
+      glitch_events: true
+
+tod_processing:
+  mapmaker: "CG"
+  cg_mapmaker:
+    max_iter: 30
+    err_tol: 1.0e-8
+  jump_detection:
+    enabled: true
+    from_iter: 1
+    window: 10
+  glitches:
+    enabled: true
+    from_iter: 1
+  abs_gain:
+    enabled: true
+    from_iter: 1
+    calibrate_against: sky
+    gap_fill_method: full_cg
+    downsample_time: 0.0
+  rel_gain:
+    enabled: true
+    from_iter: 2
+    calibrate_against: sky_no_dipole
+    gap_fill_method: wn
+    downsample_time: 1.0
+    mask_threshold: 0.8
+  temporal_gain:
+    enabled: false
+  corr_noise:
+    enabled: true
+    from_iter: 1
+    sample_psd_params: true
+    sample_sigma0: true
+    sigma0_method: binned_psd
+    sigma0_decimation: 2
+    nomono: true
+    onlymono: false
+    psd_fit_nu_min: 0.01
+    psd_fit_nu_max: 4.0
+    psd_bin: true
+    use_dct: true
+    cg:
+      max_iter: 40
+      err_tol: 1.0e-5
+  far_beam_deconvolution:
+    enabled: false
+  data_selection:
+    enabled: true
+    from_iter: 1
+    until_iter: 1
+    chisq_abs_threshold: 1.0e+4
+    min_good_fraction: 0.1
+
+compsep:
+  enabled: false
+
+components:
+  cmb:
+    enabled: true
+    component_class: "CMB"
+    params:
+      polarization: "IQU"
+      lmax: 47
+      Cl_prior_amplitude: null
+      init_from: "sim_debug/truth_cmb.fits"
+      units: "uK_RJ"
+  dust:
+    enabled: true
+    component_class: "ThermalDust"
+    params:
+      polarization: "IQU"
+      lmax: 47
+      Cl_prior_amplitude: null
+      beta: 1.54
+      T: 20
+      nu_ref: 353
+      units: "uK_RJ"
+      init_from: "sim_debug/truth_dust.fits"
+  sync:
+    enabled: true
+    component_class: "Synchrotron"
+    params:
+      polarization: "IQU"
+      lmax: 47
+      Cl_prior_amplitude: null
+      beta: -3.1
+      nu_ref: 30
+      units: "uK_RJ"
+      init_from: "sim_debug/truth_sync.fits"
+
+experiments:
+  SimSat:
+    enabled: true
+    experiment_id: "general"
+    bad_data_bitmask: 6111232
+    jump_bitmask: 2
+    sparse_maps: false
+    min_unmasked_fraction: 0.5
+    max_rms_ratio: 6.0
+    bands:
+      Band030:
+        enabled: true
+        eval_nside: 16
+        fwhm: 300.0
+        freq: 30.0
+        tau_ms: 20.0
+        band_unit: "uK_CMB"
+        polarization: "IQU"
+        initial_noise_params: [60.0, 0.1, -1.0]
+        processing_masks:
+          gain: "sim_maps/procmask_gain.fits"
+          ncorr: "sim_maps/procmask_ncorr.fits"
+        filelist: "sim/Band030/filelist.txt"
+        abs_gain:
+          calibrate_against: "orbital_dipole"
+        detectors:
+          d030a: {gain: 1.0}
+          d030b: {gain: 1.0}
+          d030c: {gain: 1.0}
+          d030d: {gain: 1.0}
+      # No gain or noise parameters given: both come from the scan files' `scalars`.
+      Band100:
+        enabled: true
+        eval_nside: 16
+        fwhm: 240.0
+        freq: 100.0
+        band_unit: "uK_RJ"
+        polarization: "IQU"
+        processing_mask: "sim_maps/procmask_ncorr.fits"
+        scan_id_start: 3
+        scan_id_stop: 23
+        filelist: "sim/Band100/filelist.txt"
+        detectors:
+          d100a: {}
+          d100b: {}
+          d100c: {}
+          d100d: {}

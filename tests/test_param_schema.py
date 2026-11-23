@@ -4,8 +4,8 @@ Three things here would otherwise fail late or silently: a parameter file still 
 old `general` layout (every key would resolve to something else, or to nothing), the MPI task counts
 that used to be stated and are now computed, and which mapmaker a band ends up using.
 
-The `optimize` / `sample_amplitudes` polarity is pinned in test_cg_amplitude_sampling.py, next to
-the solver whose behaviour it actually changes.
+The polarity of `optimize` is pinned in test_cg_amplitude_sampling.py, next to the solver whose
+behaviour it actually changes.
 """
 import pytest
 from pixell.bunch import Bunch
@@ -16,7 +16,7 @@ from commander4.tod.noise.psd import NoisePSDOof
 from commander4.tod.noise.sampling import Noise
 from tod_step_fakes import make_step
 from commander4.parameters.schema import (TOP_LEVEL_BLOCKS, validate_param_schema, compsep_enabled,
-                                     derive_task_counts, task_count_breakdown, resolve_param,
+                                     enabled_compsep_polbands, enabled_tod_bands, resolve_param,
                                      resolve_band_lmax)
 
 
@@ -81,29 +81,20 @@ def test_double_precision_accepts_booleans_and_may_be_omitted():
 # --------------------------------------------------------------------------------------
 # Derived MPI task counts
 # --------------------------------------------------------------------------------------
-def test_task_counts_are_derived_from_the_band_configuration():
-    params = _params(compsep_bands=(("BandA", "IQU", True), ("BandB", "I", True)))
-    counts = derive_task_counts(params)
-    assert (counts.tod_bands, counts.compsep_I, counts.compsep_QU) == (2, 2, 1)
-    assert counts.min_total == 5
-
-
 def test_disabled_bands_and_experiments_contribute_nothing():
     params = _params(compsep_bands=(("BandA", "IQU", True), ("BandB", "IQU", False)))
     params.experiments.EXP.bands.BandB.enabled = False
-    counts = derive_task_counts(params)
-    assert (counts.tod_bands, counts.compsep_I, counts.compsep_QU, counts.min_total) == (1, 1, 1, 3)
+    assert (len(enabled_tod_bands(params)), len(enabled_compsep_polbands(params))) == (1, 2)
 
     params.experiments.EXP.enabled = False
-    assert derive_task_counts(params).tod_bands == 0
+    assert enabled_tod_bands(params) == ()
 
 
 def test_tod_only_mode_allocates_no_compsep_ranks():
     """`compsep.enabled: false` is how TOD-only runs are spelled now that the counts are derived."""
     bands = (("BandA", "IQU", True), ("BandB", "IQU", True))
-    assert derive_task_counts(_params(compsep_bands=bands)).min_total == 2 + 4
-    counts = derive_task_counts(_params(compsep_bands=bands, enabled=False))
-    assert (counts.compsep_I, counts.compsep_QU, counts.min_total) == (0, 0, 2)
+    assert len(enabled_compsep_polbands(_params(compsep_bands=bands))) == 4
+    assert enabled_compsep_polbands(_params(compsep_bands=bands, enabled=False)) == ()
     assert compsep_enabled(_params(compsep_bands=bands)) is True       # defaults to on
     assert compsep_enabled(_params(compsep_bands=bands, enabled=False)) is False
 
@@ -115,10 +106,9 @@ def test_no_enabled_sampling_group_allocates_no_compsep_ranks():
     chi-squared, when TOD-only reaches the same fixed sky model on its own.
     """
     bands = (("BandA", "IQU", True), ("BandB", "IQU", True))
-    assert derive_task_counts(_params(compsep_bands=bands)).min_total == 2 + 4
+    assert len(enabled_compsep_polbands(_params(compsep_bands=bands))) == 4
 
-    counts = derive_task_counts(_params(compsep_bands=bands, groups=False))
-    assert (counts.compsep_I, counts.compsep_QU, counts.min_total) == (0, 0, 2)
+    assert enabled_compsep_polbands(_params(compsep_bands=bands, groups=False)) == ()
     assert compsep_enabled(_params(compsep_bands=bands, groups=False)) is False
 
     # A group present but switched off counts as none enabled.
@@ -140,11 +130,15 @@ def test_a_sampling_group_with_compsep_switched_off_is_refused():
         init_mpi(params)
 
 
-def test_the_breakdown_names_every_term():
+def test_the_wrong_task_count_error_names_every_term():
     """The 'wrong mpirun -n' message must be actionable without hand-counting bands."""
-    counts = derive_task_counts(_params(compsep_bands=(("BandA", "IQU", True),)))
-    text = task_count_breakdown(counts)
-    assert text == "at least 4 = 2 TOD + 1 CompSep-I + 1 CompSep-QU"
+    import commander4.diagnostics.log  # noqa: F401  -- registers the SUMMARY/VERBOSE levels.
+    from commander4.mpi.setup import init_mpi
+
+    params = _params(compsep_bands=(("BandA", "IQU", True),))
+    params.resources = Bunch(tod=Bunch(num_threads=1), compsep=Bunch(num_threads=1))
+    with pytest.raises(RuntimeError, match=r"needs at least 4 = 2 TOD \+ 2 CompSep MPI tasks"):
+        init_mpi(params)
 
 
 # --------------------------------------------------------------------------------------

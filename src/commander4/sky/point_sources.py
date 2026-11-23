@@ -1,41 +1,17 @@
 """Point-source components: amplitudes living on discrete sky positions rather than in alms.
 
 A point-source component stores one amplitude per source and paints it onto the sky through the
-band beam, so its map/alm operations are unrelated to the diffuse machinery. The helpers at the top
-do that painting and its adjoint over the cached per-source beam discs.
+band beam, so its map/alm operations are unrelated to the diffuse machinery.
 """
 import h5py
 import healpy as hp
 import numpy as np
 import pysm3.units as pysm3u
-from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 from commander4.data_models.band import Band
 from commander4.sky.component import Component
 from commander4.sky.beams import gauss_beam, get_gauss_beam_radius
-from commander4.math_utils.sht import map_to_alm, map_to_alm_adjoint
-
-
-def _project_sources_to_map(skymap: NDArray, pixel_discs: list[NDArray],
-                            beam_discs: list[NDArray], amps: NDArray,
-                            sed_s: NDArray | None = None) -> NDArray:
-    """Add each beam-painted source to ``skymap``; source discs may overlap."""
-    scales = amps if sed_s is None else amps*sed_s
-    for pixels, beam, scale in zip(pixel_discs, beam_discs, scales):
-        # query_disc returns unique pixels within one source. The outer loop is sequential, so
-        # sources whose discs overlap accumulate rather than overwrite one another.
-        skymap[pixels] += beam*scale
-    return skymap
-
-def _evaluate_sources_from_map(skymap: NDArray, pixel_discs: list[NDArray],
-                               beam_discs: list[NDArray], amps: NDArray,
-                               sed_s: NDArray | None = None) -> NDArray:
-    """Evaluate the adjoint beam projection for every source into ``amps``."""
-    sed = np.ones(amps.size) if sed_s is None else sed_s
-    for src_i, (pixels, beam) in enumerate(zip(pixel_discs, beam_discs)):
-        amps[src_i] = np.dot(skymap[pixels], beam)*sed[src_i]
-    return amps
 
 
 class PointSourcesComponent(Component):
@@ -44,30 +20,7 @@ class PointSourcesComponent(Component):
     Intensity only: point sources are unpolarized in the current model.
     """
 
-    default_shortname = "pscomp"
     legal_pols: tuple[str, ...] = ("I",)
-
-    def __init__(self, comp_params: Bunch, global_params: Bunch, *,
-                 shortname: str | None = None, comp_name: str | None = None,
-                 eval_pol: str | None = None, allocate_empty_alms: bool = False):
-        super().__init__(
-            comp_params,
-            global_params,
-            shortname=shortname,
-            comp_name=comp_name,
-            eval_pol="I" if eval_pol is None else eval_pol,
-            allocate_empty_alms=allocate_empty_alms,
-        )
-        self.defined_pol = "I"
-        self.eval_pol = "I"
-
-    @property
-    def is_pol(self) -> bool:
-        return False
-    
-    @property
-    def npol(self) -> int:
-        return 1
 
     def write_chain(self, group: h5py.Group, band_frequencies: dict[str, float]) -> None:
         """Write the shared component sample (see `Component.write_chain`), plus the amplitudes.
@@ -76,16 +29,16 @@ class PointSourcesComponent(Component):
         so they are not written.
         """
         super().write_chain(group, band_frequencies)
-        group["source_amps"] = self._data
+        group["source_amps"] = self.amps
 
-    def read_chain(self, group: h5py.Group) -> None:
+    def read_chain(self, group: h5py.Group, restore_beta: bool) -> None:
         """Restore the shared sampled state (see `Component.read_chain`), plus the amplitudes.
 
         The catalogue must list the same sources, in the same order, as the run that wrote the
         chain.
         """
-        super().read_chain(group)
-        self._data[:] = group["source_amps"][()]
+        super().read_chain(group, restore_beta)
+        self.amps[:] = group["source_amps"][()]
 
 class RadioSources(PointSourcesComponent):
     """Radio point sources, each a power law with its own spectral index.
@@ -93,39 +46,33 @@ class RadioSources(PointSourcesComponent):
     Positions, flux amplitudes and spectral indices all come from the `template_path` table.
     """
 
-    default_shortname = "radsources"
+    # `template_path` is the table of the sources, and `nu_0` the reference frequency in GHz
+    # (`self.nu_ref`).
+    DEFAULTS = {**PointSourcesComponent.DEFAULTS, "template_path": None, "nu_0": None}
     amplitude_unit = "mJy"
     # `alpha_arr` is deliberately absent from the SED parameter names: it is one spectral index per
     # source, read from `template_path` alongside the source positions and amplitudes, so it belongs
     # with the template rather than in every iteration of the chain.
     sed_param_names = ("nu_ref",)
 
-    def __init__(self, comp_params: Bunch, global_params: Bunch, *,
-                 shortname: str | None = None, comp_name: str | None = None,
-                 eval_pol: str | None = None, allocate_empty_alms: bool = False):
-        super().__init__(
-            comp_params,
-            global_params,
-            shortname=shortname,
-            comp_name=comp_name,
-            eval_pol=eval_pol,
-            allocate_empty_alms=allocate_empty_alms,
-        )
-        self.nu_ref = comp_params.nu_0  # Reference frequency (GHz)
+    def __init__(self, params: Bunch, comp_name: str, pol: str):
+        """The component `comp_name`, with its sources read from the `template_path` table."""
+        super().__init__(params, comp_name, pol)
+        self.nu_ref = self.cfg.nu_0  # Reference frequency (GHz)
         # Flux density to brightness temperature, evaluated once at `nu_ref` (C3's `getScale`).
         # This factor must NOT be re-evaluated at the band frequency: `get_sed` already carries the
         # full frequency dependence, including the nu^-2 of the RJ relation (hence its `alpha - 2`).
         # Applying the conversion at `nu` as well would scale the sources as nu^(alpha-4).
         self.mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ,
                             equivalencies=pysm3u.cmb_equivalencies(self.nu_ref*pysm3u.GHz))
-        ps_bunch = self.read_dat_to_bunch(comp_params.template_path)
-        self._data = np.array(ps_bunch['I(mJy)'], dtype=np.float32).reshape((1,-1))  # Amplitudes
+        ps_bunch = self.read_dat_to_bunch(self.cfg.template_path)
+        self.amps = np.array(ps_bunch['I(mJy)'], dtype=np.float32).reshape((1,-1))  # Amplitudes
         self.alpha_arr = np.array(ps_bunch['alpha_I'], dtype=np.float32)  # Spectral indices
         self.lonlat_arr = np.array((ps_bunch['Glon(deg)'], ps_bunch['Glat(deg)']),
                                    dtype=np.float32).T  # Per-source coordinates
         del ps_bunch
         if self.alpha_arr.shape[0] != self.lonlat_arr.shape[0]\
-        or self.alpha_arr.shape[0] != self._data.shape[1]:
+        or self.alpha_arr.shape[0] != self.amps.shape[1]:
             raise RuntimeError("Point Source tabulated data must be uniform in length.")
 
         # Ragged per-source beam discs, cached because they depend only on the band resolution and
@@ -133,7 +80,7 @@ class RadioSources(PointSourcesComponent):
         self.pix_disc_idx_list = None
         self.beam_disc_val_list = None
         self.band_eval_nside = None  # nside the cached discs were computed at.
-        self.band_fwhm_r = None      # Beam FWHM (radians) used for the cached discs.
+        self.band_fwhm_rad = None    # Beam FWHM (radians) used for the cached discs.
 
     def read_dat_to_bunch(self, file_path):
         """ Reads a .dat point source raw table and stores it in a Bunch object which is returned.
@@ -152,7 +99,7 @@ class RadioSources(PointSourcesComponent):
         rows = np.array(rows)       
         return Bunch(zip(head,[rows[:,i] for i in range(rows.shape[1])]))
 
-    def compute_pix_beams(self, band_fwhm_r, band_nside, recompute=False):
+    def compute_pix_beams(self, band_fwhm_rad, band_nside):
         """ Computes the map-space beam values around every point source, for the given band nside
             and FWHM, updating the per-source beam arrays and the band members in place.
 
@@ -161,43 +108,40 @@ class RadioSources(PointSourcesComponent):
         a pixel loses essentially all of its flux, because `gauss_beam` is then evaluated only at
         pixel centres that all sit far out in the beam's tail.
 
-        If `recompute` is True the computation always runs; otherwise it runs only when the beam
-        lists are uninitialized or the band specs have changed.
+        The computation runs only when the beam lists are uninitialized or the band has changed.
         """
-        if band_fwhm_r != self.band_fwhm_r \
+        if band_fwhm_rad != self.band_fwhm_rad \
         or band_nside != self.band_eval_nside \
         or self.pix_disc_idx_list is None \
-        or self.beam_disc_val_list is None \
-        or recompute:
-            self.band_fwhm_r = band_fwhm_r
+        or self.beam_disc_val_list is None:
+            self.band_fwhm_rad = band_fwhm_rad
             self.band_eval_nside = band_nside
             pixel_area = hp.nside2pixarea(band_nside)
             self.pix_disc_idx_list = []
             self.beam_disc_val_list = []
             # Compute the beam disc for each source; these stay fixed until the band changes.
             for i in range(self.lonlat_arr.shape[0]):
-                # `inclusive` keeps every pixel the disc touches, so a disc smaller than a pixel
-                # still selects the pixels around the source rather than none at all.
-                disc_pix_i_s = hp.query_disc(self.band_eval_nside, hp.ang2vec(self.lonlat_arr[i,0],
-                        self.lonlat_arr[i,1], lonlat=True), get_gauss_beam_radius(self.band_fwhm_r),
-                        inclusive=True)
-                beam_disc = gauss_beam(hp.rotator.angdist(self.lonlat_arr[i,:],
-                            hp.pix2ang(self.band_eval_nside, disc_pix_i_s, lonlat=True),
-                            lonlat=True), self.band_fwhm_r)
-                beam_integral = beam_disc.sum()*pixel_area
+                beam_integral = 0.0
+                if self.band_fwhm_rad > 0.0:  # A zero beam would divide by zero in `gauss_beam`.
+                    # `inclusive` keeps every pixel the disc touches, so a disc smaller than a pixel
+                    # still selects the pixels around the source rather than none at all.
+                    disc_pix_i_s = hp.query_disc(self.band_eval_nside,
+                            hp.ang2vec(self.lonlat_arr[i,0], self.lonlat_arr[i,1], lonlat=True),
+                            get_gauss_beam_radius(self.band_fwhm_rad), inclusive=True)
+                    beam_disc = gauss_beam(hp.rotator.angdist(self.lonlat_arr[i,:],
+                                hp.pix2ang(self.band_eval_nside, disc_pix_i_s, lonlat=True),
+                                lonlat=True), self.band_fwhm_rad)
+                    beam_integral = beam_disc.sum()*pixel_area
                 if beam_integral > 0.0:
                     beam_disc = beam_disc/beam_integral
                 else:
-                    # Beam far below the pixel scale: every pixel centre sits in the far tail, so
-                    # put the whole source in the single pixel containing it (the delta limit).
+                    # A zero beam, or one far below the pixel scale (every pixel centre sits in the
+                    # far tail): put the whole source in the pixel containing it (the delta limit).
                     disc_pix_i_s = np.array([hp.ang2pix(self.band_eval_nside,
                             self.lonlat_arr[i,0], self.lonlat_arr[i,1], lonlat=True)])
                     beam_disc = np.array([1.0/pixel_area])
                 self.pix_disc_idx_list.append(np.asarray(disc_pix_i_s, dtype=np.int64))
                 self.beam_disc_val_list.append(np.asarray(beam_disc, dtype=np.float64))
-            return True
-        else:
-            return False
 
     def get_sed(self, nu:float):
         """ Returns one SED value per source, evaluated at `nu` relative to `nu_ref` (both GHz).
@@ -206,109 +150,69 @@ class RadioSources(PointSourcesComponent):
         """
         return (nu/self.nu_ref)**(self.alpha_arr - 2)
 
-    def get_sky(self, nu:float, nside:int, fwhm:float=0.0):
+    def get_sky(self, nu:float, nside:int, fwhm_rad:float=0.0):
         """ Returns the sky at frequency `nu` (GHz) from the point sources, at a certain `nside`,
-            observed through a Gaussian beam of `fwhm` **radians**.
+            observed through a Gaussian beam of `fwhm_rad` radians.
 
-        The beam is applied by painting each source through it, so unlike a `DiffuseComponent` there
-        is no separate smoothing step: `fwhm` selects the beam the sources are painted with. The
-        unit matches `DiffuseComponent.get_sky`, because `SkyModel.get_sky_at_nu` calls both through
-        the same interface and passes the band's `fwhm_rad`.
+        The beam is applied by painting each source through it: `fwhm_rad` selects the beam the
+        sources are painted with. `CompList.get_sky_at_nu` adds this map, in pixel space, to the
+        diffuse components it builds through `comp2band` (as C3's `compute_residual` adds point
+        sources), so the unit is uK_RJ at `nu`, like theirs.
         """
-        self.compute_pix_beams(fwhm, nside)
+        self.compute_pix_beams(fwhm_rad, nside)
         map = np.zeros((1, hp.nside2npix(nside)),
-                       dtype=np.float64 if self.double_prec else np.float32)
-        _project_sources_to_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                                self._data[0,:], self.get_sed(nu))
-        map *= self.mJysr_to_uKRJ
+                       dtype=np.float64 if self.double_precision else np.float32)
+        scales = self.amps[0]*self.get_sed(nu)*self.mJysr_to_uKRJ
+        for pixels, beam, scale in zip(self.pix_disc_idx_list, self.beam_disc_val_list, scales):
+            map[0, pixels] += beam*scale  # Overlapping sources add up: the loop is sequential.
         return map
 
-    def get_component_map(self, nside:int, fwhm:float=0.0):
-        """ This component's *amplitude* map at a certain `nside` and `fwhm` (radians), in uK_RJ at
+    def get_component_map(self, nside:int, fwhm_rad:float=0.0):
+        """ This component's *amplitude* map at a certain `nside` and `fwhm_rad`, in uK_RJ at
             `nu_ref`.
 
-        No SED is applied, so the result is frequency-independent, which is why the mJy/sr to uK_RJ
-        conversion is evaluated at the component's own reference frequency. That matches what a
+        This is the sky at `nu_ref`, where the SED is 1 for every source. That matches what a
         `DiffuseComponent` returns here: its alms are likewise stored in uK_RJ referenced to
         `nu_ref`, with `get_sed(nu)` carrying the amplitude to any other frequency.
         """
-        self.compute_pix_beams(fwhm, nside)
-        map = np.zeros((1, hp.nside2npix(nside)),
-                       dtype=np.float64 if self.double_prec else np.float32)
-        _project_sources_to_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                                self._data[0,:])
-        map *= self.mJysr_to_uKRJ
-        return map
+        return self.get_sky(self.nu_ref, nside, fwhm_rad)
     
-    def _project_to_band_map(self, map:NDArray, nu:float):
-        """ Computes the point source contribution in uK_RJ for the band's frequency and beam, and
-            sums it into `map`, which must have shape [1, npix].
-        """
-        _project_sources_to_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                                self._data[0,:], sed_s=self.get_sed(nu))
-        map *= self.mJysr_to_uKRJ
-    
-    def _eval_from_band_map(self, map, nu):
-        """ Computes the amplitude contribution from the local band to each point source, given
-            `map`, which must have shape [1, npix].
+    def comp2band(self, band:Band, nthreads: int = 1):
+        """ Add the point sources to the band's pixel map `band.map`.
 
-        All the contributions will be summed to the total proper amplitudes by the master node.
+        Each source is painted through the band beam, in uK_RJ at the band frequency. The sources
+        are added in pixel space, as in C3, so they are not cut at the band lmax. `band.map` is
+        allocated here if no component has written to it yet.
         """
-        _evaluate_sources_from_map(map[0,:], self.pix_disc_idx_list, self.beam_disc_val_list,
-                                   self._data[0,:], sed_s=self.get_sed(nu))
-        self._data *= self.mJysr_to_uKRJ
-
-    def project_comp_to_band(self, band:Band, nthreads: int = 1):
-        """ Project the point sources contribution to the given band in-place, summing it into the
-            alm array of the band object.
-
-        NB: this function does not include the beam smoothing.
-        """
-        if band.is_pol:
+        if band.pol == "QU":
             raise ValueError("Point-source components can only be projected to intensity bands.")
-        band_fwhm_r, band_nside = np.deg2rad(band.fwhm/60.0), band.nside
-        self.compute_pix_beams(band_fwhm_r, band_nside)  # No-op unless the band has changed.
+        self.compute_pix_beams(band.fwhm_rad, band.nside)  # No-op unless the band has changed.
+        if band.map is None:
+            band.map = np.zeros((1, hp.nside2npix(band.nside)), dtype=band.alms.real.dtype)
+        # The unit factor goes into the per-source scale, not onto the map, because the map may
+        # already hold other components.
+        scales = self.amps[0]*self.get_sed(band.nu)*self.mJysr_to_uKRJ
+        for pixels, beam, scale in zip(self.pix_disc_idx_list, self.beam_disc_val_list, scales):
+            band.map[0, pixels] += beam*scale  # Overlapping sources add up: the loop is sequential.
 
-        # The point-source equivalent of: M Y a
-        ps_map = np.zeros((1,hp.nside2npix(band_nside)),   # Empty band map
-                          dtype=np.float64 if self.double_prec else np.float32)
-        self._project_to_band_map(ps_map, band.nu)
+    def band2comp(self, band:Band, nthreads: int = 1):
+        """ The transpose of `comp2band`: reads the band's pixel map into the amplitudes `amps`.
 
-        # Y^-1 M Y a
-        map_to_alm(ps_map, band_nside, band.lmax, spin=0, out=band.alms, acc=True,
-                   nthreads=nthreads)
-        
-        return band.alms
-
-    def eval_comp_from_band(self, band:Band, nthreads: int = 1):
-        """ Evaluate the band's alm contribution to the point sources' amplitudes, storing it in
-            `_data` as well as returning it.
-
-        All the contributions will be summed to the total proper amplitudes when reducing on the
-        master node.
-
-        NB: this function does not include the beam smoothing.
+        All the contributions will be summed to the total amplitudes when reducing on the master.
         """
-        if band.is_pol:
+        if band.pol == "QU":
             raise ValueError("Point-source components can only be evaluated from intensity bands.")
-        band_fwhm_r, band_nside = np.deg2rad(band.fwhm/60.0), band.nside
-        self.compute_pix_beams(band_fwhm_r, band_nside)  # No-op unless the band has changed.
-
-        # Y^-1^T B^T a
-        band_map = map_to_alm_adjoint(band.alms, band.nside, band.lmax, spin=0, out=None,
-                                      nthreads=nthreads)
-
-        # M^T Y^-1 B^T a
-        self._eval_from_band_map(band_map, band.nu)  # Updates self._data in place.
-
-        return self._data
+        self.compute_pix_beams(band.fwhm_rad, band.nside)  # No-op unless the band has changed.
+        scales = self.get_sed(band.nu)*self.mJysr_to_uKRJ
+        for i, (pixels, beam) in enumerate(zip(self.pix_disc_idx_list, self.beam_disc_val_list)):
+            self.amps[0, i] = np.dot(band.map[0, pixels], beam)*scales[i]
 
     def apply_Cl_prior_sqrt(self, alms):
-        """ A dummy for point sources: the input is simply returned.
+        """ A dummy for point sources (S = 1): the input is simply returned.
 
-        NB: point-source support in compsep is unfinished and awaiting review. In particular these
-        components expose no ``alms`` attribute, so the ``comp.apply_Cl_prior_sqrt(comp.alms)``
-        calls in the CG solver would not reach this dummy for a point source in the first place.
+        Point sources have no amplitude prior (`Cl_prior_amplitude` is None), as in C3, where the
+        per-source prior `P_x` is switched off. Point-source support in the CG is unfinished; see
+        C4_issues.md, K4.
         """
         return alms
 
@@ -318,4 +222,4 @@ class RadioSources(PointSourcesComponent):
         return alms
 
     def __repr__(self):
-        return f"Radio Source \n amps: {self._data}"
+        return f"Radio Source \n amps: {self.amps}"

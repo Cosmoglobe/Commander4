@@ -1,273 +1,242 @@
-"""`CompList`: the list of components the samplers treat as a single vector.
+"""`CompList`: an ordered list of component views, which the CG can use as a vector.
 
-Component separation solves for all component amplitudes at once, so the CG driver needs to add,
-scale and dot whole lists of components as if they were vectors. `CompList` provides that view,
-plus construction of the components named in the parameter file and the per-polarization execution
-views. The free functions at the end are the vector operations the CG driver calls.
+A component defined for IQU is stored as two views, one for I and one for QU, because the two are
+solved on separate MPI ranks. `CompList` holds five kinds of method, and nothing else:
+
+- building the views from the parameter file (`init_from_params`),
+- reorganizing them (`split_for_pol`, `joined`),
+- the sky that all the components together give at a band (`get_sky_at_band`, `get_sky_at_nu`),
+- the vector arithmetic of the CG (`zeros_like`, `copy`, `dot`, `add_scaled`, `scale_and_add`),
+- writing the chain and keeping the MPI ranks in step (`write_chain`, `broadcast_pol_views`).
+
+Work on one component at a time (`comp2band`, the C_l prior, loading its starting state, ...) is
+not passed down through the list: the code that needs it loops over the components itself.
 """
 from __future__ import annotations
 
-import logging
-from copy import deepcopy
+import copy
 
 import h5py
+import healpy as hp
 import numpy as np
 from mpi4py import MPI
 from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
-from commander4.data_models.band import Band
 import commander4.sky as sky
-from commander4.sky.comp_io import _read_view_alms_from_fits
+from commander4.data_models.band import Band
+from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.component import Component
 from commander4.sky.diffuse_components import DiffuseComponent
-from commander4.polarization import EXECUTION_POLS
-from commander4.polarization import assert_pol_supported
+from commander4.parameters.schema import SPLIT_POLS
 from commander4.math_utils.arithmetic import inplace_scale_add, inplace_add_scaled_vec
-from commander4.parameters.schema import resolve_param
-
-logger = logging.getLogger(__name__)
+from commander4.math_utils.sht import alm_to_map
 
 
 class CompList:
-    """A list of component execution views, usable as a single vector.
+    """An ordered list of component views, which the CG can use as a vector.
 
-    Supports the arithmetic the CG driver needs (add, scale, dot) by applying it componentwise, and
-    owns construction of the components named in the parameter file.
+    It behaves like a list: `len(comp_list)`, `comp_list[i]` and `for comp in comp_list` all act
+    on `comp_list.components`.
     """
 
-    def __init__(self, comp_list:list[Component]):
-        self._validate_comp_list(comp_list)
-        self.comp_list:list[Component] = comp_list
+    def __init__(self, components: list[Component]):
+        self.components = components
 
-    @staticmethod
-    def _group_by_logical_key(
-        comp_list: list[Component],
-    ) -> list[tuple[tuple[type[Component], str], list[Component]]]:
-        grouped_components = {}
-        logical_order = []
-        for comp in comp_list:
-            if comp.logical_key not in grouped_components:
-                grouped_components[comp.logical_key] = []
-                logical_order.append(comp.logical_key)
-            grouped_components[comp.logical_key].append(comp)
-        return [(logical_key, grouped_components[logical_key]) for logical_key in logical_order]
+    def __len__(self):
+        return len(self.components)
 
-    @staticmethod
-    def _partition_execution_views(
-        group: list[Component],
-    ) -> tuple[list[Component], list[Component]]:
-        split_views = [comp for comp in group if comp.is_split_view]
-        unsplit_views = [comp for comp in group if not comp.is_split_view]
-        return split_views, unsplit_views
+    def __getitem__(self, index):
+        return self.components[index]
 
-    @staticmethod
-    def _validate_comp_list(comp_list: list[Component]) -> None:
-        """Check that a component list has a coherent logical and execution-view layout."""
-        if not isinstance(comp_list, list):
-            raise TypeError("comp_list must be a list of Component objects.")
+    def __iter__(self):
+        return iter(self.components)
 
-        shortname_to_comp_name = {}
-        for idx, comp in enumerate(comp_list):
-            if not isinstance(comp, Component):
-                raise TypeError(f"comp_list[{idx}] must be a Component.")
-            if comp.defined_pol is not None:
-                assert_pol_supported(comp.defined_pol)
-            if comp.eval_pol is not None:
-                assert_pol_supported(comp.eval_pol)
-
-            prev_comp_name = shortname_to_comp_name.get(comp.shortname)
-            if prev_comp_name is not None and prev_comp_name != comp.comp_name:
-                raise ValueError(
-                    f"Shortname {comp.shortname!r} is used for both {prev_comp_name!r} and "
-                    f"{comp.comp_name!r}."
-                )
-            shortname_to_comp_name[comp.shortname] = comp.comp_name
-
-        for logical_key, group in CompList._group_by_logical_key(comp_list):
-            comp_name = logical_key[1]
-            component_types = {type(comp) for comp in group}
-            if len(component_types) > 1:
-                raise ValueError(
-                    f"Component name {comp_name!r} is shared across multiple component classes."
-                )
-
-            shortnames = {comp.shortname for comp in group}
-            if len(shortnames) > 1:
-                raise ValueError(
-                    f"Component name {comp_name!r} is associated with multiple shortnames: "
-                    f"{sorted(shortnames)!r}."
-                )
-
-            split_views, unsplit_views = CompList._partition_execution_views(group)
-            if split_views and unsplit_views:
-                raise ValueError(
-                    f"Component name {comp_name!r} mixes split and unsplit execution views."
-                )
-            if len(unsplit_views) > 1:
-                raise ValueError(f"Duplicate logical component {comp_name!r}.")
-            if len(split_views) > 2:
-                raise ValueError(f"Component {comp_name!r} has too many split execution views.")
-            split_pols = [comp.eval_pol for comp in split_views]
-            if len(set(split_pols)) != len(split_pols):
-                raise ValueError(f"Component {comp_name!r} repeats a split execution view.")
+    # ----- Building -----
 
     @classmethod
-    def init_from_params(cls, components:Bunch, params:Bunch):
-        # Build the full logical component list: every enabled component contributes one execution
-        # view per polarization it defines (I, QU, or both for an IQU component). Construction is
-        # deliberately independent of the MPI/compsep layout: a view whose polarization is not
-        # actually solved or used in a given run stays inert at its initial value.
-        resolve_param(params, "double_precision", ("compsep",), default=False, legal_types=bool)
+    def init_from_params(cls, params: Bunch) -> CompList:
+        """The views of every enabled component under `components` in the parameter file.
+
+        A component has one view per polarization it is defined for: I, QU, or both for IQU. The
+        list does not depend on the MPI layout: a view whose polarization the run does not solve
+        stays at its starting value.
+        """
         comp_list = []
-        for component_str in components:
-            component = components[component_str]
+        for comp_name in params.components:
+            component = params.components[comp_name]
             if not component.enabled:
                 continue
             component_cls = getattr(sky, component.component_class, None)
             if not isinstance(component_cls, type) or not issubclass(component_cls, Component):
                 raise ValueError(f"Unknown component_class {component.component_class!r} for "
-                                 f"component {component._name!r}.")
-            component_pol = component.params.polarization if "polarization" in component.params \
-                else "I"
-            if component_pol not in EXECUTION_POLS:
-                raise ValueError(
-                    f"Unrecognized polarization in parameter file for component {component_str}")
-            for eval_pol in EXECUTION_POLS[component_pol]:
-                comp_list.append(component_cls(component.params, params.compsep, eval_pol=eval_pol,
-                                               comp_name=component._name, allocate_empty_alms=True))
+                                 f"component {comp_name!r}.")
+            if ("polarization" not in component.params
+                    or component.params.polarization not in SPLIT_POLS):
+                raise ValueError(f"'components.{comp_name}.params.polarization' must be "
+                                 f"one of {list(SPLIT_POLS)}.")
+            for pol in SPLIT_POLS[component.params.polarization]:
+                comp_list.append(component_cls(params, comp_name, pol))
         return cls(comp_list)
 
+    # ----- Reorganizing -----
+
+    def split_for_pol(self, pol: str) -> CompList:
+        """Return the views evaluated for one polarization, "I" or "QU".
+
+        The returned list holds the same component objects as this one, not copies.
+        """
+        return CompList([comp for comp in self.components if comp.pol == pol])
+
+    def joined(self) -> CompList:
+        """Return one component per component name, with the I and QU views of each joined.
+
+        The joined components are copies, with all polarization rows in `amps`.
+        """
+        views_of_name = {}  # Keeps the order in which the names first appear.
+        for comp in self.components:
+            if comp.comp_name not in views_of_name:
+                views_of_name[comp.comp_name] = []
+            views_of_name[comp.comp_name].append(comp)
+        joined_components = []
+        for views in views_of_name.values():
+            if len(views) == 1:
+                joined_components.append(copy.deepcopy(views[0]))
+            else:
+                joined_components.append(views[0].join_split_views(views[1]))
+        return CompList(joined_components)
+
+    # ----- The sky at a band -----
+
+    def get_sky_at_band(self, band_map: DetectorMap) -> NDArray:
+        """The sky as one band map sees it: at its frequency, resolution, beam and lmax.
+
+        The result has the shape of `band_map.map_sky`, so `band_map.map_sky` minus it is the
+        residual of the band.
+        """
+        return self.get_sky_at_nu(band_map.nu, band_map.nside, band_map.pol,
+                                  fwhm_rad=band_map.fwhm_rad, lmax=band_map.lmax)
+
+    def get_sky_at_nu(self, nu: float, nside: int, pols_required: str,
+                      fwhm_rad: float | None = None, lmax: int | None = None) -> NDArray:
+        """The sky of all components at one frequency, resolution, beam and lmax.
+
+        Diffuse components go through `comp2band`, the CG solver's own operator (cut at the band
+        lmax, mixing matrix, beam), and are then synthesized at `nside`, as C3's `evalBand` does:
+        the sky compared with a band's data is exactly the model the amplitudes were solved for.
+        Point sources are painted in pixel space and added, as in C3's `compute_residual`.
+
+        The list may be the split views used during CompSep (`I` and `QU`) or a joined list
+        with `IQU` components.
+
+        Args:
+            pols_required: The Stokes rows of the result: "I", "QU" or "IQU".
+            fwhm_rad: Beam to realize the sky through, in radians. `None` asks for the sharpest the
+                amplitudes can give: the largest `amp_fwhm_rad` of the components (normally 0.0).
+            lmax: The band lmax (`DetectorMap.lmax`). `None` means `3*nside - 1`, the default band
+                lmax.
+
+        Raises:
+            ValueError: If `fwhm_rad` is finer than the beam the amplitudes already carry.
+        """
+        # The beam the amplitudes carry: 0.0 after the CG solver, which gives a deconvolved sky,
+        # and `compsep.common_res_fwhm` after the per-pixel solver.
+        amp_fwhm_rad = max((comp.amp_fwhm_rad for comp in self.components), default=0.0)
+        if fwhm_rad is None:
+            fwhm_rad = amp_fwhm_rad
+        elif fwhm_rad < amp_fwhm_rad and not np.isclose(fwhm_rad, amp_fwhm_rad):
+            raise ValueError(
+                f"Asked for the sky at a beam of {np.degrees(fwhm_rad)*60:.4g} arcmin, but these "
+                f"amplitudes already carry {np.degrees(amp_fwhm_rad)*60:.4g} arcmin of smoothing "
+                f"and cannot be realized any sharper. Pass fwhm_rad=None for the sharpest "
+                f"available.")
+        lmax = 3*nside - 1 if lmax is None else lmax
+        nrows = len(pols_required)
+        skymap = np.zeros((nrows, hp.nside2npix(nside)), dtype=np.float32)
+        diffuse = [comp for comp in self.components if isinstance(comp, DiffuseComponent)]
+        # One band per view: intensity (map row 0, spin 0) and polarization (the last two rows,
+        # spin 2). A joined IQU component contributes to both.
+        for view, rows, spin in (("I", slice(0, 1), 0), ("QU", slice(nrows - 2, nrows), 2)):
+            if view[0] not in pols_required:
+                continue
+            # Single precision, like `skymap`, which the result goes into.
+            band = Band(np.zeros((len(view), hp.Alm.getsize(lmax)), dtype=np.complex64), nu,
+                        fwhm_rad, nside)
+            for comp in diffuse:
+                if comp.pol in (view, "IQU"):
+                    comp.comp2band(band)
+            skymap[rows] += alm_to_map(band.alms, nside, lmax, spin=spin)
+        if "I" in pols_required:
+            for comp in self.components:  # Point sources.
+                if not isinstance(comp, DiffuseComponent) and comp.pol == "I":
+                    skymap[0] += comp.get_sky(nu, nside, fwhm_rad)[0]
+        return skymap
+
+    # ----- The vector arithmetic of the CG -----
+    # Two lists that are combined must hold the same views in the same order. Every CG vector is
+    # made from the right-hand side with `copy` or `zeros_like`, which guarantees it.
+
+    def copy(self) -> CompList:
+        """Return a copy with its own amplitude arrays.
+
+        Only `amps` is copied. Everything else in a component (settings, the C_l prior, the pixel
+        discs of point sources) is shared with the original, and must not be changed in place.
+        """
+        new_components = []
+        for comp in self.components:
+            new_comp = copy.copy(comp)  # A new object whose attributes are the original's.
+            new_comp.amps = comp.amps.copy()
+            new_components.append(new_comp)
+        return CompList(new_components)
+
+    def zeros_like(self) -> CompList:
+        """As `copy`, but with all amplitudes set to zero."""
+        zeros = self.copy()
+        for comp in zeros:
+            comp.amps[:] = 0
+        return zeros
+
+    def dot(self, other: CompList) -> float:
+        """The dot product of two lists: the sum of the dot products of their components.
+
+        Each component class defines its own dot product (`Component.dot`), because complex alms
+        and point-source amplitudes need different ones.
+        """
+        res = 0.0
+        for comp, other_comp in zip(self.components, other.components):
+            res += float(comp.dot(other_comp))
+        return res
+
+    def add_scaled(self, other: CompList, scalar: float) -> None:
+        """`self += scalar*other`, in place."""
+        for comp, other_comp in zip(self.components, other.components):
+            inplace_add_scaled_vec(comp.amps, other_comp.amps, scalar)
+
+    def scale_and_add(self, other: CompList, scalar: float) -> None:
+        """`self = scalar*self + other`, in place."""
+        for comp, other_comp in zip(self.components, other.components):
+            inplace_scale_add(comp.amps, other_comp.amps, scalar)
+
+    # ----- The chain file and MPI -----
+
     def write_chain(self, file: h5py.File, band_frequencies: dict[str, float]) -> None:
-        """Write every component's sample into `file`, as one `comps/<shortname>/` group each.
+        """Write every component's sample into `file`, as one `comps/<comp_name>/` group each.
 
         Split I and QU views are joined first, so each component is written once with all its
         polarization rows. `band_frequencies` maps each band name to its centre frequency in GHz.
         """
         for comp in self.joined():
-            comp.write_chain(file.create_group(f"comps/{comp.shortname}"), band_frequencies)
+            comp.write_chain(file.create_group(f"comps/{comp.comp_name}"), band_frequencies)
 
-    def load_initial_state(self, chain_file: str | None, apply_init_from: bool) -> None:
-        """Set each component's starting state from a CompSep chain file or its own `init_from`.
-
-        Per component, the source is its `init_from` parameter if `apply_init_from` is set and the
-        component has one, and `chain_file` otherwise. So `init_from: null` keeps a component at its
-        parameter-file initialization. The file type decides how it is read: a `.h5`/`.hd5` chain
-        file goes through the component's own `read_chain`, and a `.fits` sky map is transformed to
-        diffuse alms. Without a source, a component keeps its parameter-file values and zero
-        amplitudes.
-
-        Args:
-            chain_file: The CompSep chain file this chain starts from, or None.
-            apply_init_from: False when `chain_file` is this chain's own saved state (on
-                `gibbs.chain_status: append`), which must win over the initial guesses.
-        """
-        for comp in self.comp_list:
-            source = chain_file
-            if apply_init_from and "init_from" in comp.comp_params:
-                source = comp.comp_params.init_from
-            if not source:
-                continue
-            if str(source).lower().endswith(".fits"):
-                if not isinstance(comp, DiffuseComponent):
-                    raise ValueError(f"Component {comp.comp_name!r}: a FITS 'init_from' map only "
-                                     "works for diffuse (alm-based) components.")
-                view_alms = _read_view_alms_from_fits(comp, source)
-                if view_alms is not None:
-                    comp.alms = view_alms.astype(comp.dtype, copy=False)
-            elif str(source).lower().endswith((".h5", ".hd5")):
-                with h5py.File(source, "r") as file:
-                    group_path = f"comps/{comp.shortname}"
-                    if group_path not in file:
-                        logger.error(f"Component {comp.comp_name!r} (shortname "
-                                     f"{comp.shortname!r}) not found in {source!r}; keeping its "
-                                     "parameter-file initialization.")
-                        continue
-                    comp.read_chain(file[group_path])
-            else:
-                raise ValueError(f"Unsupported init file {source!r} for component "
-                                 f"{comp.comp_name!r}: expected a .h5/.hd5 chain or a .fits map.")
-
-    def load_amp_prior_means(self) -> None:
-        """Populate each component's prior mean mu from its ``amp_prior_mean_map`` parameter.
-
-        This is C3's ``COMP_AMP_PRIOR_MAP``: a FITS sky map giving the mean of the Gaussian
-        amplitude prior a ~ N(mu, S). It goes through the same conversion as an ``init_from`` map
-        (unit conversion at the component's reference frequency, truncation to l = 3*nside-1, and
-        the iterative LSMR inverse SHT), because mu and the amplitudes live in the same space and
-        must be treated identically. C3 instead uses a single non-iterative `YtW` analysis here,
-        which is the less accurate of the two on a HEALPix grid.
-
-        Read once and cached on the component (C3 likewise transforms its mu once, at component
-        initialization). The S^{-1/2} that turns mu into a right-hand-side term is *not* applied
-        here but per solve, since the prior S may change between Gibbs iterations while mu does not.
-        """
-        for comp in self.comp_list:
-            source_path = comp.comp_params.amp_prior_mean_map \
-                if "amp_prior_mean_map" in comp.comp_params else None
-            if not source_path:
-                continue  # Zero-mean prior.
-            if not isinstance(comp, DiffuseComponent):
-                raise ValueError(
-                    f"Component {comp.comp_name!r}: 'amp_prior_mean_map' is only supported for "
-                    "diffuse (alm-based) components.")
-            if not str(source_path).lower().endswith(".fits"):
-                raise ValueError(
-                    f"Component {comp.comp_name!r}: 'amp_prior_mean_map' must be a .fits sky map, "
-                    f"but got {source_path!r}.")
-            view_alms = _read_view_alms_from_fits(comp, source_path)
-            if view_alms is not None:
-                comp.amp_prior_mean = view_alms.astype(comp.dtype, copy=False)
-                logger.info(f"Component {comp.comp_name!r} ({comp.eval_pol}): prior mean read from "
-                            f"{source_path!r}.")
-
-    def _assert_consistent_comps(self, other: "CompList") -> None:
-        if not isinstance(other, CompList):
-            raise TypeError("Both operands must be CompList objects.")
-        if len(self.comp_list) != len(other.comp_list):
-            raise ValueError("Component lists must match in length.")
-        self_keys = [comp.execution_key for comp in self.comp_list]
-        other_keys = [comp.execution_key for comp in other.comp_list]
-        if self_keys != other_keys:
-            raise ValueError("Component lists must contain the same execution views in the same order.")
-
-    def components_for_eval_pol(self, target_pol: str) -> list[Component]:
-        assert_pol_supported(target_pol)
-        return [comp for comp in self.comp_list if comp.eval_pol == target_pol]
-
-    def split_for_eval_pol(self, target_pol: str) -> "CompList":
-        """Return the execution-view subset evaluated for one polarization stream."""
-        return CompList(self.components_for_eval_pol(target_pol))
-
-    def copy_matching_data_from(self, other: "CompList") -> None:
-        if not isinstance(other, CompList):
-            raise TypeError("Input must be a CompList.")
-        other_by_key = {}
-        for comp in other.comp_list:
-            if comp.execution_key in other_by_key:
-                raise ValueError(f"Duplicate component execution key {comp.execution_key!r}.")
-            other_by_key[comp.execution_key] = comp
-        self_keys = {comp.execution_key for comp in self.comp_list}
-        extra_keys = [key for key in other_by_key if key not in self_keys]
-        if extra_keys:
-            raise ValueError(f"Found unknown components in source CompList: {extra_keys!r}")
-        for comp in self.comp_list:
-            other_comp = other_by_key.get(comp.execution_key)
-            if other_comp is None:
-                continue
-            comp._assert_consistent_comp(other_comp)
-            np.copyto(comp._data, other_comp._data)
-            comp.amp_fwhm_rad = other_comp.amp_fwhm_rad
-
-    def broadcast_pol_views(self, comm: MPI.Comm, *, eval_pol: str, source: int) -> None:
-        """Broadcast all execution views of `eval_pol` from `source` to every rank in `comm`.
+    def broadcast_pol_views(self, comm: MPI.Comm, *, pol: str, source: int) -> None:
+        """Broadcast all polarization views of `pol` from `source` to every rank in `comm`.
 
         Used after a sampling step: only the ranks that actually solved a given polarization hold
         the updated component data, so broadcasting that polarization's views from one authoritative
         `source` rank restores a globally consistent component list.
         """
-        for comp in self.components_for_eval_pol(eval_pol):
-            comp.bcast_data_blocking(comm, root=source)
+        for comp in self.split_for_pol(pol):
+            comp.bcast_amps(comm, root=source)
             # The amplitudes' resolution travels with them: the solving rank's value is authoritative.
             comp.amp_fwhm_rad = comm.bcast(comp.amp_fwhm_rad, root=source)
             # FIXME: The above feels fragile: if we add more attributes that could change during
@@ -275,205 +244,3 @@ class CompList:
             # amplitude object that holds related information as well as the alms, or at least make
             # things more visible by specifying what must be transferred in __init__:
             #     _amp_metadata_attrs: tuple[str, ...] = ("amp_fwhm_rad",)
-
-    def joined(self) -> "CompList":
-        """Collapse split execution views back to one logical component per `comp_name`."""
-        joined_components = []
-        for logical_key, group in self._group_by_logical_key(self.comp_list):
-            split_views, unsplit_views = self._partition_execution_views(group)
-            if unsplit_views and split_views:
-                raise ValueError(
-                    f"Logical component {logical_key[1]!r} mixes split and unsplit execution views."
-                )
-            if len(unsplit_views) > 1:
-                raise ValueError(f"Duplicate unsplit component {logical_key[1]!r}.")
-            if unsplit_views:
-                joined_components.append(deepcopy(unsplit_views[0]))
-                continue
-            if len(split_views) == 1:
-                joined_components.append(deepcopy(split_views[0]))
-                continue
-            if len(split_views) != 2:
-                raise ValueError(
-                    f"Expected one or two execution views for {logical_key[1]!r}, got {len(group)}."
-                )
-            joined_components.append(split_views[0].join_split_views(split_views[1]))
-
-        return CompList(joined_components)
-    
-    @property
-    def components(self):
-        return self.comp_list
-    
-    def __len__(self):
-        return len(self.comp_list)
-    
-    def __matmul__(self, other) -> float:
-        """ `dot(comp_list1, comp_list2)`. Calculates the correct dot product between two lists of
-            Component objects where the alms follow the Healpy complex storing convention, for
-            components with alms. It will automatically handle the correct dot product definition for
-            each type of Component.
-        """
-        self._assert_consistent_comps(other)
-        res = 0.0
-        for c1, c2 in zip(self.components, other.components):
-            res += float(c1 @ c2)
-        return res
-
-    def _apply_componentwise_op(self, other: "CompList", component_op, *, inplace: bool) -> "CompList":
-        self._assert_consistent_comps(other)
-        target = self if inplace else deepcopy(self)
-        for target_comp, other_comp in zip(target.components, other.components):
-            component_op(target_comp, other_comp)
-        return target
-    
-    def __add__(self, other):
-        return self._apply_componentwise_op(other, Component.__iadd__, inplace=False)
-
-    def __iadd__(self, other):
-        return self._apply_componentwise_op(other, Component.__iadd__, inplace=True)
-
-    def __sub__(self, other):
-        return self._apply_componentwise_op(other, Component.__isub__, inplace=False)
-
-    def __isub__(self, other):
-        return self._apply_componentwise_op(other, Component.__isub__, inplace=True)
-
-    def __mul__(self, other):
-        return self._apply_componentwise_op(other, Component.__imul__, inplace=False)
-
-    def __imul__(self, other):
-        return self._apply_componentwise_op(other, Component.__imul__, inplace=True)
-
-    def __truediv__(self, other):
-        return self._apply_componentwise_op(other, Component.__itruediv__, inplace=False)
-
-    def __itruediv__(self, other):
-        return self._apply_componentwise_op(other, Component.__itruediv__, inplace=True)
-
-    def __getitem__(self, index):
-        return self.comp_list[index]
-
-    def __iter__(self):
-        for item in self.comp_list:
-            yield item
-
-    def __array_function__(self, func, types, args, kwargs):
-        # Lets numpy functions such as np.zeros_like dispatch onto CompList.
-        if not all(issubclass(t, CompList) for t in types):
-            return NotImplemented
-
-        if func is np.zeros_like:
-            return self._zeros_like(*args, **kwargs)
-
-        return NotImplemented
-
-    def _zeros_like(self, other, dtype=None, order='K', subok=True, shape=None):
-        out = deepcopy(other)
-        out.comp_list = [
-            np.zeros_like(c,
-            dtype=dtype,
-            order=order,
-            subok=subok,
-            shape=shape) for c in other
-            ]
-        return out
-
-    # MPI functions
-    def bcast_data_blocking(self, comm:MPI.Comm, root:int=0):
-        for comp in self.comp_list:
-            comp.bcast_data_blocking(comm, root=root)
-    
-    def accum_data_blocking(self, comm:MPI.Comm, root:int=0):
-        for comp in self.comp_list:
-            comp.accum_data_blocking(comm, root=root)
-
-    def accum_data_non_blocking(self, comm:MPI.Comm, root:int=0) -> list[MPI.Request]:
-        requests = []
-        for comp in self.comp_list:
-            req = comp.accum_data_non_blocking(comm, root=root)
-            requests.append(req)
-        return requests
-
-    # CompSep solver functions
-    def eval_comp_from_band(self, band_in:Band, nthreads:int=1):
-        """ Evaluates the band_in's contribution to all the comp_list_out objects, and stores them
-            in-place.
-        """
-        for comp in self.comp_list:
-            comp.eval_comp_from_band(band_in, nthreads=nthreads)
-    
-    def project_comp_to_band(self, band_out:Band, nthreads:int=1) -> NDArray[np.complexfloating]:
-        """ Projects all the components in this list, overwriting the `band_out` object's alms.
-        """
-        band_out.alms = np.zeros_like(band_out.alms)
-        for comp in self.comp_list:
-            comp.project_comp_to_band(band_out, nthreads=nthreads)
-
-    def apply_Cl_prior_sqrt(self):
-        """ Applies to each component its own C_l prior square root (S^{1/2}), acting on its alms.
-
-        Takes no target argument, unlike the per-component method: each component has its own C_l
-        prior and its own alms, so there is no single array a list-level call could scale.
-        """
-        for comp in self.comp_list:
-            comp.apply_Cl_prior_sqrt(comp.alms)
-
-    def inplace_add_scaled(self, list_other, scalar):
-        """ `list_inplace += scalar*list_other`
-        """
-        self._assert_consistent_comps(list_other)
-        
-        for ci, co in zip(self.comp_list, list_other.comp_list):
-            inplace_add_scaled_vec(ci._data, co._data, scalar)
-    
-    def inplace_scale_and_add(self, list_other, scalar):
-        """ `list_inplace = scalar*list_inplace + list_other`
-        """
-        self._assert_consistent_comps(list_other)
-
-        for ci, co in zip(self.comp_list, list_other.comp_list):
-            inplace_scale_add(ci._data, co._data, scalar)
-
-
-# These functions are common array operations, but made to work on the comp-lists, which are
-# lists of Component objects, each containing component-specifically formatted data.
-
-def inplace_complist_add_scaled_array(list_inplace:list[Component], list_other:list[Component],
-                                      scalar):
-    """ `list_inplace += scalar*list_other`
-    """
-    if len(list_inplace) != len(list_other):
-        raise ValueError("Component lists must match in length.")
-    
-    for ci, co in zip(list_inplace, list_other):
-        inplace_add_scaled_vec(ci._data, co._data, scalar)
-
-def inplace_complist_scale_and_add(list_inplace:list[Component], list_other:list[Component], scalar):
-    """ `list_inplace = scalar*list_inplace + list_other`
-    """
-    if len(list_inplace) != len(list_other):
-        raise ValueError("Component lists must match in length.")
-
-    for ci, co in zip(list_inplace, list_other):
-        inplace_scale_add(ci._data, co._data, scalar)
-
-def complist_dot(comp_list1:CompList, comp_list2:CompList) -> float:
-    """ `dot(comp_list1, comp_list2)`. Calculates the correct dot product between two lists of
-        Component objects where the alms follow the Healpy complex storing convention, for
-        components with alms. It will automatically handle the correct dot product definition for
-        each type of Component.
-    """
-    comp_list1._assert_consistent_comps(comp_list2)
-    if len(comp_list1) == 0:
-        logger.warning("Dot product between empty component lists; result is 0.")
-    res = 0.0
-    for c1, c2 in zip(comp_list1, comp_list2):
-        res += float(c1 @ c2)
-    return res
-
-def complist_norm(comp_list:list[Component]) -> float:
-    """ `norm(comp_list)`. The Euclidean (L2) norm of a list of Component objects, treating it as a
-        single vector of values.
-    """
-    return float(np.sqrt(complist_dot(comp_list, comp_list)))

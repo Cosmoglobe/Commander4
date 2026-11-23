@@ -8,7 +8,6 @@ from numpy.typing import NDArray
 
 from commander4.compression.huffman_decoding import HuffmanCompressedArray
 from commander4.data_models.pointing import PixelPointing, DetectorBoresightPointing
-from commander4.diagnostics.performance import start_bench, stop_bench
 
 
 class DetectorTOD:
@@ -133,29 +132,6 @@ class DetectorTOD:
             return self._tod.decode()[:self.ntod].astype(np.float32)
         return self._tod[:self.ntod]
 
-
-    def get_pix(self, nside: int | None = None) -> NDArray[np.integer]:
-        start_bench("pointing")
-        pix = self.pointing.get_pix(nside)
-        stop_bench("pointing")
-        return pix
-
-    def get_psi(self, nside: int | None = None) -> NDArray[np.integer] | NDArray[np.floating]:
-        start_bench("pointing")
-        psi = self.pointing.get_psi(nside)
-        stop_bench("pointing")
-        return psi
-
-
-    def get_pix_psi(
-        self,
-        nside: int | None = None,
-    ) -> tuple[NDArray[np.integer], NDArray[np.integer] | NDArray[np.floating]]:
-        start_bench("pointing")
-        pix_psi = self.pointing.get_pix_psi(nside)
-        stop_bench("pointing")
-        return pix_psi
-        
 
     @property
     def flag(self) -> NDArray[np.integer]:

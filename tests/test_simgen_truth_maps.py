@@ -49,13 +49,13 @@ def _params(components: dict, bands: dict, nside: int = NSIDE) -> Bunch:
 
 def _dust_cfg(template_path: str, nu_ref: float = 353.0) -> dict:
     return {"enabled": True, "component_class": "ThermalDust",
-            "params": {"polarization": "IQU", "shortname": "dust", "lmax": LMAX,
+            "params": {"polarization": "IQU", "lmax": LMAX,
                        "beta": 1.54, "T": 20.0, "nu_ref": nu_ref,
                        "template": {"source": "fits", "path": template_path}}}
 
 
 def _cmb_cfg(nu_ref: float | None = None) -> dict:
-    params = {"polarization": "IQU", "shortname": "cmb", "lmax": LMAX, "solar_dipole": False}
+    params = {"polarization": "IQU", "lmax": LMAX, "solar_dipole": False}
     if nu_ref is not None:
         params["nu_ref"] = nu_ref
     return {"enabled": True, "component_class": "CMB", "params": params}
@@ -72,8 +72,9 @@ def _band(freq: float, fwhm: float, nside: int = NSIDE) -> dict:
 def test_diffuse_truth_map_is_the_band_map_amplitude(tmp_path):
     """beam(truth) * SED must reproduce band_map for a template-based foreground.
 
-    The band's ``eval_nside`` equals ``general.nside``, so the ``ud_grade`` in both paths is the
-    identity and the two sides are comparable to float32 rounding rather than to a tolerance.
+    The beam is C4's: one Gaussian window on T, E and B (`comp2band`). The band's
+    ``eval_nside`` equals ``general.nside``, so both sides make the same transforms and agree to
+    float32 rounding.
     """
     from simgen.instrument import build_bands
     from simgen.sky import build_components
@@ -86,12 +87,41 @@ def test_diffuse_truth_map_is_the_band_map_amplitude(tmp_path):
 
     truth = comp.truth_map(NSIDE)
     assert truth.shape == (3, hp.nside2npix(NSIDE))
-    # Exactly the operations band_map applies, but starting from the truth map.
-    expected = hp.smoothing(truth, fwhm=band.fwhm_rad).astype(np.float32) * comp.c4.get_sed(217.0)
-
-    np.testing.assert_allclose(comp.band_map(band), expected, rtol=1e-5, atol=1e-5)
+    window = hp.gauss_beam(band.fwhm_rad, lmax=3*NSIDE - 1)
+    smoothed_truth = hp.smoothing(truth, beam_window=window).astype(np.float32)
+    np.testing.assert_allclose(comp.band_map(band), smoothed_truth * comp.c4.get_sed(217.0),
+                               rtol=1e-5, atol=1e-5)
     # The SED at 217 GHz is far from unity, so this is not a vacuous comparison.
-    assert not np.allclose(comp.band_map(band), hp.smoothing(truth, fwhm=band.fwhm_rad))
+    assert not np.allclose(comp.band_map(band), smoothed_truth)
+
+
+def test_band_map_below_the_template_nside_is_the_band_limited_model(tmp_path):
+    """A band at half the template nside is B*Y*a of the template's alms, cut at its own band limit.
+
+    This is what C4 fits. Smoothing at the template nside and averaging pixels down with
+    `ud_grade` adds a pixel window and folds in power above the band limit, a large error here.
+    """
+    from simgen.instrument import build_bands
+    from simgen.sky import build_components
+
+    template_path = str(tmp_path / "dust_template.fits")
+    template = _write_smooth_iqu_template(template_path)
+    band_nside = NSIDE//2
+    band_lmax = 3*band_nside - 1
+    params = _params({"ThermalDust": _dust_cfg(template_path)},
+                     {"B353": _band(353.0, 120.0, nside=band_nside)})
+    comp = build_components(params)[0]
+    band = build_bands(params)[0]
+
+    # The template's alms (up to 3*NSIDE-1), cut at the band limit, beam-smoothed, synthesized.
+    window = hp.gauss_beam(band.fwhm_rad, lmax=band_lmax)
+    alms = [hp.resize_alm(alm, 3*NSIDE - 1, 3*NSIDE - 1, band_lmax, band_lmax)
+            for alm in hp.map2alm(template.astype(np.float64))]
+    expected = hp.alm2map([hp.almxfl(alm, window) for alm in alms], band_nside, lmax=band_lmax)
+    np.testing.assert_allclose(comp.band_map(band), expected*comp.c4.get_sed(353.0),
+                               rtol=1e-5, atol=1e-5)
+    averaged = hp.ud_grade(hp.smoothing(template, beam_window=window), band_nside)
+    assert np.abs(averaged - expected).max() > 0.05*expected.std()
 
 
 def test_diffuse_truth_map_is_the_template_at_nu_ref(tmp_path):
@@ -161,7 +191,7 @@ def test_gridded_point_sources_truth_map_is_unsmoothed():
 
     cfg = {"GriddedPointSources": {
         "enabled": True, "component_class": "GriddedPointSources",
-        "params": {"polarization": "I", "shortname": "ps", "amplitude": 1.0e3,
+        "params": {"polarization": "I", "amplitude": 1.0e3,
                    "nlon": 4, "nlat": 3, "lon_range_deg": [0.0, 90.0],
                    "lat_range_deg": [-30.0, 30.0]}}}
     comp = build_components(_params(cfg, {"B100": _band(100.0, 30.0)}))[0]
@@ -255,17 +285,15 @@ def test_truth_map_is_readable_as_a_commander4_init_map(tmp_path):
     write_component_truth_maps(str(tmp_path), [comp], NSIDE, "uK_RJ")
     truth_path = str(tmp_path / "truth_ThermalDust.fits")
 
-    global_params = Bunch(nside=NSIDE, double_precision=False,
-                          MPI_config=Bunch(ntask_compsep_I=1, ntask_compsep_QU=1))
-    comp_params = Bunch(polarization="IQU", shortname="dust", lmax=3 * NSIDE - 1,
-                        spatially_varying_MM=False, Cl_prior_amplitude=None,
+    comp_params = Bunch(polarization="IQU", lmax=3 * NSIDE - 1,
+                        Cl_prior_amplitude=None,
                         beta=1.54, T=20.0, nu_ref=353.0, units="uK_RJ")
-    object.__setattr__(comp_params, "_name", "ThermalDust")
-    c4_comp = ThermalDust(comp_params, global_params, allocate_empty_alms=True, eval_pol="I",
-                          comp_name="ThermalDust")
+    c4_params = Bunch(components=Bunch(ThermalDust=Bunch(params=comp_params)),
+                      compsep=Bunch(double_precision=False))
+    c4_comp = ThermalDust(c4_params, "ThermalDust", "I")
 
-    c4_comp.alms = _read_view_alms_from_fits(c4_comp, truth_path).astype(c4_comp.dtype)
+    c4_comp.amps = _read_view_alms_from_fits(c4_comp, truth_path).astype(c4_comp.amps.dtype)
 
-    recovered = hp.alm2map(c4_comp.alms[0].astype(np.complex128), NSIDE, lmax=c4_comp.lmax)
+    recovered = hp.alm2map(c4_comp.amps[0].astype(np.complex128), NSIDE, lmax=c4_comp.lmax)
     truth_I = comp.truth_map(NSIDE)[0]
     assert np.std(recovered - truth_I) < 1e-3 * np.std(truth_I)

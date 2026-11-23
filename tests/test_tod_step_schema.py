@@ -257,7 +257,7 @@ def _pipeline(monkeypatch: pytest.MonkeyPatch, params: Bunch) -> Bunch:
     import commander4.tod.processing as processing
 
     comm = Mock()
-    mpi = Bunch(band=Bunch(comm=comm, node_comm=comm, is_master=True), tod=Bunch(comm=comm))
+    mpi = Bunch(band=Bunch(comm=comm, node_comm=comm, rank=0), tod=Bunch(comm=comm))
     samples = _steps(params)
     samples.chain = 1
     # The HFI step is switched on, so that its place in the order is checked too (its sampling

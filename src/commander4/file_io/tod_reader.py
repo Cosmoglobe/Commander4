@@ -18,6 +18,7 @@ import logging
 import numpy as np
 
 from commander4.data_models.detector_group_tod import DetectorGroupTOD
+from commander4.diagnostics.performance import benchmark
 from commander4.parameters.schema import TODBandConfig, resolve_param
 from commander4.simulations.inplace_litebird_sim import replace_tod_with_sim
 from commander4.file_io.experiments.base_reader import TODReader
@@ -154,6 +155,7 @@ def tod_band_weights(params: Bunch, tod_bands: Sequence[TODBandConfig]) -> list[
     return [ndet*len(band_ntods) for ndet, band_ntods in zip(ndets, ntods)]
 
 
+@benchmark("fileread-tod")
 def read_tods_from_file(band_comm: MPI.Comm, params: Bunch, my_experiment: Bunch,
                         my_band: Bunch) -> DetectorGroupTOD:
     """Read this rank's share of one band's scans.

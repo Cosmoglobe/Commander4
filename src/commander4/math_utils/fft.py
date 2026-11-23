@@ -13,7 +13,10 @@ import ducc0
 import numpy as np
 from numpy.typing import NDArray
 
+from commander4.diagnostics.performance import benchmark
 
+
+@benchmark("FFT")
 def forward_rfft(data:NDArray[np.floating], nthreads:int = None) -> NDArray:
     """ Forward real Fourier transform, equivalent to scipy.fft.rfft.
         Args:
@@ -26,6 +29,7 @@ def forward_rfft(data:NDArray[np.floating], nthreads:int = None) -> NDArray:
     nthreads = int(os.environ.get("OMP_NUM_THREADS", 1)) if nthreads is None else nthreads
     return ducc0.fft.r2c(data, nthreads=nthreads)
 
+@benchmark("FFT")
 def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray:
     """ Backward real Fourier transform, equivalent to scipy.fft.irfft.
         Args:
@@ -44,6 +48,7 @@ def backward_rfft(data_f:NDArray, ntod:int, nthreads:int = None) -> NDArray:
     return ducc0.fft.c2r(data_f, lastsize=ntod, forward=False, nthreads=nthreads, inorm=2)
 
 
+@benchmark("FFT")
 def forward_rfft_mirrored(data: NDArray, nthreads: int = None) -> NDArray:
     """Forward real FFT on a mirrored (reflected) copy of the input.
 
@@ -71,6 +76,7 @@ def forward_rfft_mirrored(data: NDArray, nthreads: int = None) -> NDArray:
     return ducc0.fft.r2c(dt, nthreads=nthreads)
 
 
+@benchmark("FFT")
 def backward_rfft_mirrored(data_f: NDArray, ntod: int, nthreads: int = None) -> NDArray:
     """Inverse real FFT returning only the first *ntod* samples.
 
@@ -97,6 +103,7 @@ def backward_rfft_mirrored(data_f: NDArray, ntod: int, nthreads: int = None) -> 
     return dt[:ntod] / nfft
 
 
+@benchmark("FFT")
 def forward_dct(data: NDArray[np.floating], nthreads: int | None = None) -> NDArray:
     """Forward DCT-II: the mirrored real FFT of `data`, at half the transform length.
 
@@ -119,6 +126,7 @@ def forward_dct(data: NDArray[np.floating], nthreads: int | None = None) -> NDAr
     return ducc0.fft.dct(data, type=2, nthreads=nthreads)
 
 
+@benchmark("FFT")
 def backward_dct(data_f: NDArray[np.floating], nthreads: int | None = None) -> NDArray:
     """Inverse of `forward_dct` (a DCT-III), normalized to match `backward_rfft_mirrored`.
 
