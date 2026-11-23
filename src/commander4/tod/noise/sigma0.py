@@ -15,14 +15,7 @@ from numba import njit
 from scipy.fft import rfftfreq
 from scipy.special import ndtri
 
-from typing import TYPE_CHECKING
-
 from commander4.math_utils.fft import forward_rfft_mirrored
-
-# `tod.view` imports the correlated-noise sampler, which imports this module, so TODView can only
-# be imported here for annotations.
-if TYPE_CHECKING:
-    from commander4.tod.view import TODView
 
 @njit(fastmath=True)
 def calc_sigma0_simple(tod: NDArray, mask: NDArray[np.bool_]) -> float:
@@ -224,23 +217,3 @@ def calc_sigma0_binned_psd(tod: NDArray, mask: NDArray[np.bool_], fsamp: float,
     floor = bin_power[lowest].mean() / _lowest_bins_bias(n_lowest, bin_power.size,
                                                          bin_modes[lowest].mean())
     return float(sqrt(floor))
-
-
-def _estimate_standalone_sigma0(view: TODView, sigma0_method: str) -> float:
-    """ White-noise sigma0 for one detector-scan when correlated noise is *not* being sampled.
-
-    Estimated from the sky- and orbital-dipole-subtracted residual (which still contains the 1/f
-    component; both estimators target the white floor). It runs at the same point in the chain as
-    the estimate in ``sample_correlated_noise`` (in the mapmaking scan loop, after gain), as in C3.
-
-    Args:
-        view: The focused TODView for one detector-scan.
-        sigma0_method: ``'pairwise'`` (first-difference) or ``'binned_psd'`` (bottom of binned PSD).
-    Returns:
-        The estimated white-noise level (float), or ``np.inf`` if too few samples are valid.
-    """
-    residual = view.get_tod()
-    mask = view.get_mask(proc_mask_type="ncorr")
-    if sigma0_method == "binned_psd":
-        return calc_sigma0_binned_psd(residual, mask, view.fsamp)
-    return calc_sigma0_robust(residual, mask)

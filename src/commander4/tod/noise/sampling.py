@@ -19,7 +19,7 @@ from commander4.data_models.detector_group_tod import DetectorGroupTOD
 from commander4.diagnostics.performance import benchmark
 from commander4.parameters.schema import read_settings
 from commander4.tod.noise.sample_ncorr import sample_correlated_noise, SIGMA0_METHODS
-from commander4.tod.noise.sigma0 import _estimate_standalone_sigma0
+from commander4.tod.noise.sigma0 import calc_sigma0_binned_psd, calc_sigma0_robust
 from commander4.tod.step import ChainArrays, SavedBandSample, TODStep
 from commander4.tod.view import TODView
 
@@ -160,11 +160,18 @@ class Noise(TODStep):
 
     @benchmark("sigma0-samp")
     def sample_sigma0(self, view: TODView) -> None:
-        """Estimate sigma0 alone for the focused detector-scan, when correlated noise is not
-        sampled. It runs at the same point in the chain (after gain) as the n_corr-coupled
-        estimate, not in a separate pre-gain pass."""
-        self.noise_params[view.iscan, view.idet, 0] = _estimate_standalone_sigma0(
-            view, self.cfg.sigma0_method)
+        """Estimate sigma0 of the focused detector-scan without sampling n_corr.
+
+        Sets it to inf if too few samples are valid.
+        """
+        # The residual still holds the 1/f noise; both estimators measure the white floor.
+        residual = view.get_tod()
+        mask = view.get_mask(proc_mask_type="ncorr")
+        if self.cfg.sigma0_method == "binned_psd":
+            sigma0 = calc_sigma0_binned_psd(residual, mask, view.fsamp)
+        else:
+            sigma0 = calc_sigma0_robust(residual, mask)
+        self.noise_params[view.iscan, view.idet, 0] = sigma0
 
 
     @benchmark("log-corr-noise-stats")
