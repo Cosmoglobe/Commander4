@@ -61,7 +61,7 @@ def read_sampling_groups(params: Bunch, mpi_info: MPIInfo | None = None) \
 def _validate_component_lmax(comp_list: CompList, params: Bunch) -> None:
     """Report component multipoles that no band can constrain.
 
-    `Component.comp2band` truncates a component to the band's lmax, so a component
+    `comp2band` truncates a component to the band's lmax, so a component
     multipole above *every* enabled band's lmax never meets the data. In a constrained realization
     (`optimize: false`) the CG solver then draws it straight from the C(l) prior, which is usually
     set orders of magnitude above the true signal, so the amplitudes come back dominated by prior
@@ -191,8 +191,8 @@ def process_compsep(mpi_info: MPIInfo, params: Bunch, amplitude_groups: list[Amp
 
     for group in mcmc_groups:
         with benchmark(f"mcmc-{group.name}"):
-            mcmc_stats[group.name] = sample_spectral_params(mpi_info, params, group, band_map,
-                                                            comp_list, rng)
+            mcmc_stats[group.name] = sample_spectral_params(mpi_info, group, band_map, comp_list,
+                                                            rng)
         log_fit(mpi_info, band_map, comp_list, label=f"MCMC group {group.name!r}")
 
     if mcmc_groups:  # If any MCMC group ran.

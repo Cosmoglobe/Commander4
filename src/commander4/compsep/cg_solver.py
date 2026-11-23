@@ -57,10 +57,11 @@ class CompSepSolver:
     several implicit spherical harmonic transformations in this equation, around these matrices.
     """
     def __init__(self, band_map: DetectorMap, group: AmplitudeGroup, nthreads: int):
-        """
+        """Set up the CG solve of one amplitude group on this rank.
+
         Args:
             band_map: This rank's band data (the conditional residual for this sampling group).
-            group: The config class holding the settings for this solve.
+            group: The amplitude group: its settings (`cfg`) and its solver communicator.
             nthreads: Number of computational threads used on this rank.
         """
         self.solver_comm = group.solver_comm
@@ -81,7 +82,7 @@ class CompSepSolver:
                 they are not changed. On the other ranks the list is a work buffer, and its
                 amplitudes are overwritten.
         Returns:
-            On the master, a new list holding A applied to the input. On the other ranks, an
+            On the master, a new list holding H applied to the input. On the other ranks, an
             empty list.
         """
 
@@ -92,7 +93,7 @@ class CompSepSolver:
         comp_list = comp_list_in.copy() if self.is_master else comp_list_in
 
         if self.is_master:  # Only the master holds the values of the vector.
-            # a' = S^{1/2} [a']
+            # S^{1/2} [a']
             for comp in comp_list:
                 comp.apply_Cl_prior_sqrt(comp.amps)
 
@@ -181,12 +182,12 @@ class CompSepSolver:
         # Point sources read the pixel map itself, as in the LHS.
         b_band.map = b_map
 
-        # M^T B^T [Y^T N^-1 d + N^{-1/2} eta_1]
+        # M^T B^T [Y^T (N^-1 d + N^{-1/2} eta_1)]
         RHS = comp_list.zeros_like()
         for comp in RHS:
             comp.band2comp(b_band, nthreads=self.nthreads)
 
-        # Accumulate on master and apply the prior there: S^{1/2} Y^T M^T Y^-1^T B^T Y^T (...)
+        # Accumulate on the master and apply the prior there: S^{1/2} [M^T B^T Y^T (...)]
         for comp in RHS:
             comp.reduce_amps(self.solver_comm)
             if self.is_master:
@@ -204,8 +205,8 @@ class CompSepSolver:
                 if amp_prior_mean is not None:
                     comp.amps += comp.apply_Cl_prior_inv_sqrt(amp_prior_mean)
 
-                #FIXME: how will eta_2 work for point sources?
                 # + eta_2, the prior's own fluctuation, unless we want the Wiener filtered solution.
+                # It is an alm draw; point sources have no prior, and are skipped above.
                 if not self.group.cfg.optimize:
                     comp.amps += gaussian_random_alm(comp.lmax, comp.lmax, self.band_map.spin,
                                                      self.band_map.npol, rng)
@@ -215,9 +216,9 @@ class CompSepSolver:
 
 
     def solve(self, comp_list: CompList, rng: np.random.Generator) -> list[float]:
-        """Solve the amplitudes of `comp_list` for this rank's band, in place, with a CG.
+        """Solve for the amplitudes of `comp_list` with a CG, in place.
 
-        The CG starts from the amplitudes that `comp_list` holds on entry, and places the 
+        The CG starts from the amplitudes that `comp_list` holds on entry, and places the
         solution in them. It stops at the sampling group's `err_tol`, or after `max_iter` iterations
         (`max_iter_pol` for QU). Returns the squared residual after each iteration; only the
         master's values are meaningful.

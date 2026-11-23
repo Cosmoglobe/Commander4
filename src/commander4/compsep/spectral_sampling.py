@@ -151,9 +151,8 @@ def chi2_of_chisq_bands(mpi_info: MPIInfo, group: MCMCGroup, band_map: DetectorM
     return float(mpi_info.compsep.comm.allreduce(chi2, op=MPI.SUM))
 
 
-def sample_spectral_params(mpi_info: MPIInfo, params: Bunch, group: MCMCGroup,
-                           band_map: DetectorMap, comp_list: CompList,
-                           rng: np.random.Generator) -> dict:
+def sample_spectral_params(mpi_info: MPIInfo, group: MCMCGroup, band_map: DetectorMap,
+                           comp_list: CompList, rng: np.random.Generator) -> dict:
     """Metropolis steps on the spectral indices of one MCMC group. Every CompSep rank calls it.
 
     Each of the `group.cfg.numstep` steps proposes a new `beta` for all components of the group at
@@ -164,8 +163,7 @@ def sample_spectral_params(mpi_info: MPIInfo, params: Bunch, group: MCMCGroup,
     left out on purpose.)
 
     Args:
-        mpi_info: The MPI data of this rank (`compsep` and `band` are used).
-        params: The full parameter file, for the amplitude re-solves.
+        mpi_info: The MPI data of this rank (only `compsep` is used).
         group: The group to sample.
         band_map: This rank's band map.
         comp_list: The full component list of the chain, updated in place.

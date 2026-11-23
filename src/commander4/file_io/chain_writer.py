@@ -43,9 +43,7 @@ def _degrade_map(value: NDArray, kind: str, nside_out: int) -> NDArray:
     `hp.ud_grade` averages the sub-pixels it merges, which is right for a brightness but wrong for
     the other kinds: a weight, a count, and an rms (through its inverse variance) all add.
 
-    Only downgrading is defined here: the sub-pixel count below is what turns the average back
-    into a sum, and it is zero (silently collapsing rms to inf and the counts to zero) for a finer
-    `nside_out`. The caller is responsible for not asking for one.
+    Only downgrading is defined for the additive kinds: a finer `nside_out` raises `ValueError`.
     """
     if kind == "brightness":
         return hp.ud_grade(value, nside_out, dtype=np.float32)

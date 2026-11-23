@@ -38,7 +38,7 @@ def smooth_signal_map_noiseweighted(map_signal: NDArray, map_inv_var: NDArray,
 def smooth_inv_var_map_noiseweighted(map_inv_var: NDArray, fwhm_rad: float) -> NDArray:
     """Per-pixel inverse noise variance of a map smoothed by `smooth_signal_map_noiseweighted`.
 
-    Note that because of SHT effects like ringing this analytical calculation is a fragile.
+    Note that because of SHT effects like ringing this analytical calculation is fragile.
     The more robust solution is to do noise simulations to determine the smoothed inverse variance.
     """
     npix = map_inv_var.shape[0]
@@ -91,7 +91,7 @@ class DetectorMap:
         self.fwhm = fwhm #stored in arcmin
         self.nside = nside
         # The band's harmonic bandlimit. Components are truncated to this lmax on their way into
-        # the band (Component.comp2band), so any component multipole above it is
+        # the band (`comp2band`), so any component multipole above it is
         # invisible to the data and left to the C(l) prior alone; `_validate_component_lmax` in
         # compsep/processing.py reports that at startup.
         self.lmax = (3*nside - 1) if lmax is None else lmax
@@ -142,10 +142,8 @@ class DetectorMap:
         self.fwhm = target_fwhm_arcmin
 
     def apply_inv_N_map(self, map: NDArray, inplace = True):
-        """
-        Applies in-place the inverse noise variance matrix to a `map`.
-
-        """
+        """Multiply `map` by the inverse noise variance, in place unless `inplace=False`, and
+        return the result."""
         map_out = map if inplace else deepcopy(map)
         for ipol in range(self.npol):
             inplace_arr_prod(map_out[ipol,:], self.map_inv_var[ipol,:])

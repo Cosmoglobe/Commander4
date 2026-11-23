@@ -42,7 +42,7 @@ class AmplitudeGroup:
                    "optimize": False,                        # The posterior maximum, not a draw.
                    "max_iter": 200,                          # CG iterations of the I solve,
                    "max_iter_pol": 200,                      # and of the QU solve.
-                   "err_tol": 1.0e-8,                        # Relative residual to stop at.
+                   "err_tol": 1.0e-8,                        # Stop at this `DistributedCG.err`.
                    "preconditioner": "JointPreconditioner"}  # A class in preconditioners.py.
     # The settings of a group in `compsep.per_pixel_sampling_groups`.
     PER_PIXEL_DEFAULTS = {"enabled": True,
