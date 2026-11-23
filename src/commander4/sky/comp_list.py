@@ -20,7 +20,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 
 import commander4.sky as sky
-from commander4.data_models.band import Band
+from commander4.data_models.band_alms import BandAlms
 from commander4.data_models.detector_map import DetectorMap
 from commander4.sky.component import Component
 from commander4.sky.diffuse_components import DiffuseComponent
@@ -151,7 +151,7 @@ class CompList:
                 continue
             # The alms in the precision of `skymap`, which the result goes into.
             alm_dtype = np.complex128 if dtype == np.float64 else np.complex64
-            band = Band(np.zeros((len(view), hp.Alm.getsize(lmax)), dtype=alm_dtype), nu,
+            band = BandAlms(np.zeros((len(view), hp.Alm.getsize(lmax)), dtype=alm_dtype), nu,
                         fwhm_rad, nside)
             for comp in diffuse:
                 if comp.pol in (view, "IQU"):

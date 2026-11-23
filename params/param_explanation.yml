@@ -103,7 +103,8 @@ output:
     maps_nside: "native"      # Resolution the maps/ group is written at. "native" keeps
                               # each band's own eval_nside; an integer downgrades to it.
     nside_chisq: 128          # Resolution of the CompSep chi^2 map (C3 NSIDE_CHISQ).
-                              # Default 256. Only used if chisq_map is on, below.
+                              # Default 256. Only used if chisq_map is on, below. Best at
+                              # or below the coarsest band nside.
 
     # Optional datasets. Each costs memory, disk, or both, so each is opt-in.
     include:

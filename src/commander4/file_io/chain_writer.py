@@ -51,8 +51,9 @@ def _degrade_map(value: NDArray, kind: str, nside_out: int) -> NDArray:
     if subpixels < 1:
         raise ValueError(f"_degrade_map cannot upgrade a '{kind}' map to nside {nside_out}.")
     summed = hp.ud_grade(additive.astype(np.float64), nside_out)*subpixels
-    if kind == "rms":
-        return (1.0/np.sqrt(summed)).astype(np.float32)
+    if kind == "rms":  # A pixel with no observed sub-pixel keeps an infinite rms.
+        rms = np.divide(1.0, np.sqrt(summed), out=np.full_like(summed, np.inf), where=summed > 0)
+        return rms.astype(np.float32)
     elif kind == "count":
         return np.round(summed).astype(np.int64)
     elif kind == "weight":  # A summed inverse variance, left as float64.

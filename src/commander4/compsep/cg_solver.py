@@ -14,7 +14,7 @@ from commander4.math_utils.alm import gaussian_random_alm
 from commander4.math_utils.sht import alm_to_map, alm_to_map_adjoint
 from commander4.math_utils.cg_driver import DistributedCG
 from commander4.compsep import preconditioners
-from commander4.data_models.band import Band
+from commander4.data_models.band_alms import BandAlms
 from commander4.diagnostics.performance import benchmark, log_memory
 
 if TYPE_CHECKING:  # For the type hint only; a real import would be circular.
@@ -106,7 +106,7 @@ class CompSepSolver:
         # Each component adds itself to an empty band, in the components' precision: a diffuse
         # component to its alms, point sources to its pixel map.
         with benchmark("lhs-project"):
-            band_alms = Band.init_from_detector(self.band_map,
+            band_alms = BandAlms.init_from_detector(self.band_map,
                                                 double_precision=comp_list[0].double_precision)
             for comp in comp_list:
                 comp.comp2band(band_alms, nthreads=self.nthreads)
@@ -176,7 +176,7 @@ class CompSepSolver:
         # Y^T [N^-1 d + N^{-1/2} eta_1]
         b_alm = alm_to_map_adjoint(b_map, self.band_map.nside, self.band_map.lmax,
                                    spin=self.band_map.spin, nthreads=self.nthreads)
-        b_band = Band.init_from_detector(self.band_map,
+        b_band = BandAlms.init_from_detector(self.band_map,
                                          double_precision=comp_list[0].double_precision)
         b_band.alms[:] = b_alm
         # Point sources read the pixel map itself, as in the LHS.

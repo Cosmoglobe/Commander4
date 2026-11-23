@@ -62,16 +62,17 @@ def smooth_inv_var_map_noiseweighted(map_inv_var: NDArray, fwhm_rad: float) -> N
 
 
 class DetectorMap:
-    """Holds a sky map and associated metadata for a single detector or band.
-
-    Stores the sky signal map, inverse noise variance map, beam properties, and
-    resolution parameters. Derived quantities like ``pol`` and ``spin`` are computed on the fly
-    via properties.
-    """
+    """The sky map of one band and polarization ("I" or "QU"), its inverse noise variance, beam."""
     def __init__(self, map_sky:NDArray, map_inv_var:NDArray, nu:float, fwhm:float, nside:int,
                  lmax:int|None = None):
-        """Construct a DetectorMap."""
-        #cast dimensions correctly to allow constructer with 1-d array for intensity maps.
+        """Store the maps of one band.
+
+        `map_sky` (uK_RJ) and `map_inv_var` (uK_RJ^-2, 0 in unobserved pixels) have shape (npix,)
+        or (1, npix) for intensity, and (2, npix) for Q and U. Both are stored as float32, with
+        shape (npol, npix). `nu` is the band frequency in GHz, `fwhm` the beam FWHM in arcmin.
+        `lmax` defaults to 3*nside - 1.
+        """
+        # A 1-d intensity map becomes one row.
         map_sky = map_sky.reshape((1,-1)) if map_sky.ndim == 1 else map_sky
         map_inv_var = map_inv_var.reshape((1,-1)) if map_inv_var.ndim == 1 else map_inv_var
 
@@ -88,12 +89,10 @@ class DetectorMap:
         self.map_sky = map_sky.astype(np.float32, copy=False)
         self.map_inv_var = map_inv_var.astype(np.float32, copy=False)
         self.nu = nu
-        self.fwhm = fwhm #stored in arcmin
+        self.fwhm = fwhm
         self.nside = nside
-        # The band's harmonic bandlimit. Components are truncated to this lmax on their way into
-        # the band (`comp2band`), so any component multipole above it is
-        # invisible to the data and left to the C(l) prior alone; `_validate_component_lmax` in
-        # compsep/processing.py reports that at startup.
+        # Components are truncated to this lmax in the band, so a component multipole above the
+        # lmax of every band is constrained by its C(l) prior alone.
         self.lmax = (3*nside - 1) if lmax is None else lmax
 
     @property
@@ -117,12 +116,10 @@ class DetectorMap:
         return len(self.map_sky)
 
     def smooth_to_resolution(self, target_fwhm_arcmin: float) -> None:
-        """Noise-weighted in-place smoothing of this band to a target Gaussian beam.
+        """Smooth this band, in place and noise-weighted, to a Gaussian beam of the given FWHM.
 
-        Degrades the band from its native beam to ``target_fwhm_arcmin``, updating the signal map,
-        the propagated inverse-noise map, and the stored beam. A no-op if the band is already at the
-        target beam. Smoothing can only coarsen resolution, so a target finer (smaller FWHM) than the
-        current beam is skipped with a warning rather than applied.
+        Updates the sky map, the inverse variance and `fwhm`. A target finer than the current beam
+        is skipped with a warning.
         """
         if self.fwhm == target_fwhm_arcmin:
             return

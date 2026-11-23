@@ -14,7 +14,7 @@ from numpy.typing import NDArray
 from pixell.bunch import Bunch
 from scipy.interpolate import interp1d
 
-from commander4.data_models.band import Band
+from commander4.data_models.band_alms import BandAlms
 from commander4.sky.component import Component
 from commander4.sky.comp_io import _pol_row_indices, _read_view_alms_from_fits
 from commander4.math_utils.arithmetic import inplace_scale
@@ -284,14 +284,14 @@ class DiffuseComponent(Component):
             res += _dot_complex_alm_1D_arrays(self.amps[ipol], other.amps[ipol], self.lmax)
         return res
 
-    def _band_beam(self, band: Band) -> NDArray:
+    def _band_beam(self, band: BandAlms) -> NDArray:
         """The band's Gaussian beam window, up to the band lmax, less the beam the amplitudes carry.
         """
         # Gaussian beams multiply, so their widths add in quadrature.
         fwhm_rad = np.sqrt(max(band.fwhm_rad**2 - self.amp_fwhm_rad**2, 0.0))
         return hp.gauss_beam(fwhm_rad, lmax=band.lmax)
 
-    def comp2band(self, band: Band, nthreads: int = 1):
+    def comp2band(self, band: BandAlms, nthreads: int = 1):
         """Add B M a to the band's alms: the alms cut or padded to the band lmax, times the SED,
         smoothed by the band beam.
 
@@ -321,7 +321,7 @@ class DiffuseComponent(Component):
             # B M a. `alms` is a new array in both branches above, so it can be changed in place.
             band.alms[ipol] += almxfl(alms[ipol], beam, inplace=True)
 
-    def band2comp(self, band: Band, nthreads: int = 1):
+    def band2comp(self, band: BandAlms, nthreads: int = 1):
         """The transpose of `comp2band`: replace `amps` with M^T B^T applied to the band's alms."""
         if self.pol != band.pol:
             raise ValueError("Band and component polarization must match.")

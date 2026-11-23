@@ -1,11 +1,11 @@
-"""`Band`: one frequency band's alms, plus the metadata compsep needs to project onto it."""
+"""`BandAlms`: one frequency band's alms, plus the metadata compsep needs to project onto it."""
 import numpy as np
 import healpy as hp
 from numpy.typing import NDArray
 from commander4.data_models.detector_map import DetectorMap
 
 
-class Band:
+class BandAlms:
     """Holds spherical-harmonic coefficients (alms) and metadata for a frequency band.
 
     Attributes:
@@ -20,7 +20,7 @@ class Band:
             point-source component writes to it.
     """
     def __init__(self, alms: NDArray[np.complexfloating], nu: float, fwhm_rad: float, nside: int):
-        """Construct a Band from its alms, centre frequency (GHz), FWHM (radians) and nside."""
+        """Construct a BandAlms from its alms, centre frequency (GHz), FWHM (radians) and nside."""
         self.alms = alms
         self.lmax = hp.Alm.getlmax(alms.shape[1])
         self.nu = nu
@@ -30,7 +30,7 @@ class Band:
 
     @classmethod
     def init_from_detector(cls, band_map: DetectorMap, double_precision: bool = False):
-        """A Band with the metadata of `band_map` and alms of zeros."""
+        """A BandAlms with the metadata of `band_map` and alms of zeros."""
         dtype = np.complex128 if double_precision else np.complex64
         return cls(np.zeros((band_map.npol, hp.Alm.getsize(band_map.lmax)), dtype=dtype),
                    band_map.nu, band_map.fwhm_rad, band_map.nside)

@@ -751,12 +751,12 @@ def test_radio_sources_take_fwhm_in_radians_like_diffuse_components(tmp_path) ->
 def test_radio_sources_are_added_to_the_band_in_pixel_space(tmp_path) -> None:
     """`comp2band` paints the sources into `band.map`, not into the alms, so no flux is cut at the
     band lmax. `band2comp` is its transpose: <comp2band(x), y> = <x, band2comp(y)>."""
-    from commander4.data_models.band import Band
+    from commander4.data_models.band_alms import BandAlms
     template = tmp_path / "radio.dat"
     _write_radio_source_table(template)
     source = _make_radio_sources(template, nu_ref=30.0)
     nside = 16
-    band = Band(np.zeros((1, hp.Alm.getsize(3*nside - 1)), dtype=np.complex128), 30.0,
+    band = BandAlms(np.zeros((1, hp.Alm.getsize(3*nside - 1)), dtype=np.complex128), 30.0,
                 np.deg2rad(2.0), nside)
     x = source.amps.copy()
 

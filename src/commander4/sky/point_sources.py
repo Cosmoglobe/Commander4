@@ -6,7 +6,7 @@ import numpy as np
 import pysm3.units as pysm3u
 from pixell.bunch import Bunch
 
-from commander4.data_models.band import Band
+from commander4.data_models.band_alms import BandAlms
 from commander4.sky.component import Component
 from commander4.sky.beams import gauss_beam, get_gauss_beam_radius
 
@@ -51,7 +51,8 @@ class RadioSources(PointSourcesComponent):
         self.mJysr_to_uKRJ = (pysm3u.mJy / pysm3u.steradian).to(pysm3u.uK_RJ,
                             equivalencies=pysm3u.cmb_equivalencies(self.nu_ref*pysm3u.GHz))
         ps_bunch = self.read_dat_to_bunch(self.cfg.template_path)
-        self.amps = np.array(ps_bunch['I(mJy)'], dtype=np.float32).reshape((1,-1))
+        self.amps = np.array([ps_bunch['I(mJy)']],
+                             dtype=np.float64 if self.double_precision else np.float32)
         self.alpha_arr = np.array(ps_bunch['alpha_I'], dtype=np.float32)
         self.lonlat_arr = np.array((ps_bunch['Glon(deg)'], ps_bunch['Glat(deg)']),
                                    dtype=np.float32).T
@@ -144,7 +145,7 @@ class RadioSources(PointSourcesComponent):
         diffuse component."""
         return self.get_sky(self.nu_ref, nside, fwhm_rad)
 
-    def comp2band(self, band:Band, nthreads: int = 1):
+    def comp2band(self, band:BandAlms, nthreads: int = 1):
         """Paint the sources into the band's pixel map `band.map` (allocated if None), in uK_RJ at
         the band frequency.
 
@@ -161,7 +162,7 @@ class RadioSources(PointSourcesComponent):
         for pixels, beam, scale in zip(self.pix_disc_idx_list, self.beam_disc_val_list, scales):
             band.map[0, pixels] += beam*scale
 
-    def band2comp(self, band:Band, nthreads: int = 1):
+    def band2comp(self, band:BandAlms, nthreads: int = 1):
         """The transpose of `comp2band`: replace `amps` with the beam-weighted sums of `band.map`.
         """
         if band.pol == "QU":

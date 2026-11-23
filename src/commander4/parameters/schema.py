@@ -115,34 +115,16 @@ def resolve_param(params: Bunch, key: str, scopes: Sequence[str], default: Any =
                   raise_on_missing_scope: bool = True):
     """The value of `key`, taken from the first of `scopes` that defines it.
 
-    Several settings may be given at more than one level, the narrower overriding the wider (a
-    mapmaker on the band, the experiment, or globally, for instance). `scopes` are dotted paths
-    into `params` listed most specific first, e.g.::
-
-        resolve_param(params, "mapmaker", (f"experiments.{exp}.bands.{band}",
-                                           f"experiments.{exp}", "tod_processing"))
-
-    Scopes can include "", which just means to look for the key at the root node of `params`.
-                                           
-    Presence decides, not truthiness: a scope setting ``0`` or ``false`` answers the lookup rather
-    than deferring to a wider one. Which scope supplied the value is logged at debug level, since an
-    overridden setting is otherwise invisible, and "why did this band use the CG mapmaker" is worth
-    being able to answer from a chain's log file.
+    `scopes` are dotted paths into `params`, most specific first, for example
+    `(f"experiments.{exp}.bands.{band}", f"experiments.{exp}", "tod_processing")`. The scope ""
+    is `params` itself. A scope that sets `0` or `false` still answers.
 
     Args:
-        default: Returned when no scope defines `key`. Omit it to make that an error instead.
-        legal_values: If given, the resolved value (or default) must be one of these, so a typo in
-            the *value* is caught here rather than as strange behaviour later.
-        legal_types: If given, the resolved value (or default) must have one of these types.
-        raise_on_missing_scope: What to do about a scope that does not exist in `params` at all.
-            There is usually no good reason to list one, so this is an error by default. Pass
-            False for a scope that is legitimately optional (a per-band override block that most
-            bands do not carry, say), and its absence is then logged at debug level instead.
-
-    Raises:
-        ValueError: if no scope defines `key` and no `default` was given, naming every scope that
-            was searched; if the resolved value is not in `legal_values`; or if a scope does not
-            exist and `raise_on_missing_scope` is set.
+        default: Returned when no scope defines `key`. Without it, that raises `ValueError`.
+        legal_values: The value (or default) must be one of these.
+        legal_types: The value (or default) must have one of these types.
+        raise_on_missing_scope: Raise on a scope that does not exist in `params`. Pass False for an
+            optional override block, which is then skipped.
     """
     def checked(value, source):
         if legal_types is not None and not isinstance(value, legal_types):
@@ -275,7 +257,8 @@ def validate_param_schema(params_dict: dict) -> None:
 
 # The three method-specific sections a sampling group can live in. Compsep exists to run these, so
 # with none of them enabled there is nothing for a compsep rank to do.
-SAMPLING_GROUP_SECTIONS = ("cg_sampling_groups", "per_pixel_sampling_groups", "mcmc_sampling_groups")
+SAMPLING_GROUP_SECTIONS = ("cg_sampling_groups", "per_pixel_sampling_groups",
+                           "mcmc_sampling_groups")
 
 
 def has_enabled_sampling_group(params: Bunch) -> bool:

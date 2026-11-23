@@ -14,7 +14,7 @@ from commander4.compsep.processing import (
 )
 from commander4.compsep.chisq import collect_fit_diagnostics
 from commander4.diagnostics.log import SUMMARY
-from commander4.data_models.band import Band
+from commander4.data_models.band_alms import BandAlms
 from commander4.data_models.detector_map import DetectorMap
 from commander4.math_utils.alm import _dot_complex_alm_1D_arrays
 from commander4.sky.comp_list import CompList
@@ -398,7 +398,7 @@ def test_band2comp_is_the_transpose_of_comp2band(band_lmax: int, sed_per_pixel: 
         comp.get_sed = lambda nu: sed_map
     band_map = DetectorMap(np.zeros((1, 12*nside**2)), np.ones((1, 12*nside**2)), nu=30.0,
                            fwhm=600.0, nside=nside, lmax=band_lmax)
-    band = Band.init_from_detector(band_map, double_precision=True)
+    band = BandAlms.init_from_detector(band_map, double_precision=True)
 
     x = comp.amps.astype(complex)
     band.alms[:] = 0
